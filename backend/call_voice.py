@@ -69,6 +69,9 @@ FRAGMENT_SPEECH_MS = 600
 QUESTION_MAX_MS = 60_000  # an utterance is cut here even without a pause
 PREROLL_MS = 200  # kept from before the first loud frame, so a soft first syllable is not clipped
 MIN_SPEECH_MS = 200  # less speech than this (a cough, a click) is not sent
+# A person who has said this much over a bot's voice has the floor: the bot stops at once and listens (barge-in). Longer
+# than a cough or a click, short enough that the voice stops within a few hundred milliseconds of them starting.
+BARGE_IN_MS = 300
 
 # --- questions and answers
 ANSWER_SECONDS = 30  # a bot that has not answered this long after it was asked does not answer
@@ -83,15 +86,22 @@ SPOKEN_CHARS = 600  # the part of a reply that is spoken; the whole reply is in 
 VOICE_CAP_MS = 30 * 60 * 1000  # the bots' spoken time in one call
 SPOKEN_CHARS_PER_SECOND = 14  # a little slower than the Gateway's voices speak, so the estimate errs long
 PLAYED_KEEP = 200  # reply ids remembered per call, so a reply is spoken once
+# An utterance heard this soon after a bot said nearly the same words is the bot's own voice coming back through a
+# speaker (echo the browser did not cancel): it is never asked, or the bot would answer itself.
+ECHO_SECONDS = 20
+ECHO_SHARE = 0.8  # the share of an utterance's words that were just said for it to count as echo
+ECHO_MIN_WORDS = 3  # "yes", "go on": too short to tell from echo, always asked
 
 STATES = ("listening", "waiting", "thinking", "making_voice", "speaking")
 SPOKEN_PROMPT = (
     "This meeting is a live voice call: your reply is read aloud to the people in it. Answer in plain spoken "
-    "sentences, at most about 80 words. No markdown, lists, headings, links, code or emoji.\n"
-    "Use your usual tools and permissions. Answer from what you know and the call notes. "
-    "If you need to look something up or do work, use "
-    'tico call follow-up --call {call_id} "<what to find out or do>" and reply "Let me check." '
-    "The normal task returns its answer to this call. Use the command only when you cannot answer from what you know.\n"
+    "sentences, at most about 80 words, and say each thing once. No markdown, lists, headings, links, code or emoji.\n"
+    "On a call you answer and discuss. You may read to answer a question. Start no work on your own: no tasks, "
+    "messages to anyone, edits or settings changes unless the person clearly asks for that one action. When they "
+    "do, say in one short sentence what you will do and wait for their yes. Never offer a list of things to do.\n"
+    "When they ask you to look into something you cannot answer now, confirm it, then run "
+    'tico call follow-up --call {call_id} "<what they asked for>" and say "I\'ll look into it." '
+    "The task's answer comes back to this call.\n"
 )
 
 
@@ -114,6 +124,7 @@ class Segmenter:
         self.pcm: bytearray | None = None  # the utterance under way, or None between utterances
         self.end: int | None = None  # byte position of the next sample on the audio timeline
         self.start = self.voiced = self.quiet = 0
+        self.barges = 0  # utterances that reached BARGE_IN_MS of speech: each one takes the floor from a bot's voice
         self.at = 0.0  # wall time of the last piece fed (the call's idle flush reads it)
         # (start_ms, pcm) of the utterance under way once its pause reaches PREROLL_MS: byte for byte the clip `_take`
         # returns if no loud frame comes first, so its transcription can start before the pause ends. None otherwise.
@@ -176,6 +187,8 @@ class Segmenter:
             if loud:
                 self.voiced, self.quiet = self.voiced + FRAME_MS, 0
                 self.early = None
+                if self.voiced == BARGE_IN_MS:
+                    self.barges += 1
             else:
                 self.quiet += FRAME_MS
                 if self.quiet == PREROLL_MS and self.voiced >= MIN_SPEECH_MS:
@@ -218,11 +231,22 @@ def spoken(text: object) -> str:
     return cut[: end + 1] if end > SPOKEN_CHARS // 3 else cut.rsplit(" ", 1)[0] + "…"
 
 
+def words(text: str) -> list[str]:
+    """A sentence's words, lower case, without punctuation: what two sayings of it share."""
+    return re.findall(r"[a-z0-9]+(?:'[a-z]+)?", text.lower())
+
+
 def sentences(text: str) -> list[str]:
-    """Text split into sentences to speak one at a time; a fragment too short to be worth a request joins the next."""
+    """Text split into sentences to speak one at a time; a fragment too short to be worth a request joins the next. A
+    sentence the reply already said (a model that restates its answer after a tool call) is said once."""
     parts: list[str] = []
+    seen: set[tuple[str, ...]] = set()
     carry = ""
     for piece in re.split(r"(?<=[.!?…])\s+", text):
+        key = tuple(words(piece))
+        if key and key in seen:
+            continue
+        seen.add(key)
         carry = (carry + " " + piece).strip() if carry else piece.strip()
         if len(carry) >= 24:
             parts.append(carry)
@@ -235,6 +259,16 @@ def sentences(text: str) -> list[str]:
     return parts
 
 
+def echoes(heard: str, said: list[str]) -> bool:
+    """Whether an utterance is a bot's own recent words heard back through someone's speaker: nearly all its words were
+    just said. A short one ("yes") never counts."""
+    found = words(heard)
+    if len(found) < ECHO_MIN_WORDS:
+        return False
+    known = {word for sentence in said for word in words(sentence)}
+    return sum(word in known for word in found) >= ECHO_SHARE * len(found)
+
+
 class ReplyStream:
     """A bounded producer of complete spoken sentences. Writers hold the call's voice lock."""
 
@@ -245,6 +279,7 @@ class ReplyStream:
         self.consumed = 0
         self.count = 0
         self.closed = False
+        self.said: set[tuple[str, ...]] = set()  # the sentences sent, by their words: none is said twice
         self.buffer: list[str] = []
         self.send: Callable[[str | None], None] = self._buffer
 
@@ -280,6 +315,10 @@ class ReplyStream:
         clean = spoken(text)
         if not clean or live_meetings._is_pass(clean):
             return
+        key = tuple(words(clean))
+        if key in self.said:
+            return
+        self.said.add(key)
         left = SPOKEN_CHARS - self.count
         if left:
             self.timing.setdefault("sentence", at)
@@ -317,6 +356,7 @@ class CallVoice:
         self.states: dict[str, tuple[str, str | None]] = {}  # bot -> (state, caption)
         self.note: tuple[str, float] | None = None  # (text, wall time)
         self.played: deque[str] = deque(maxlen=PLAYED_KEEP)
+        self.heard: deque[tuple[float, str]] = deque(maxlen=40)  # (when, sentence) the bots began saying, for echo
         self.generation = 0  # bumped by a cancel of the whole call: a playback that started before it stops
         self.epochs: dict[str, int] = {}  # bot -> cancels of that bot alone: only its own playback stops
 
@@ -489,6 +529,9 @@ class Voice:
             return []
         if question.get("spoken"):
             question["stored"] = self.clock()  # an utterance's text is stored in the transaction that calls here
+            if self._echo(row["id"], question["text"]):
+                log.info("call_voice_echo call=%s seq=%s", row["id"], question.get("seq"))
+                return []
         rid = row["live_meeting_id"]
         only = self.answers_all(c, row) if question.get("spoken") else None
         targets = [only] if only else live_meetings._named_bots(c, rid, question["text"])
@@ -513,6 +556,17 @@ class Voice:
                     asked.append(bot)
         self.touch(row["id"], c)
         return asked
+
+    def _echo(self, call_id: str, text: str) -> bool:
+        """Whether a person's utterance is a bot's own voice heard back: nearly the words a bot began saying in the last
+        ECHO_SECONDS."""
+        voice = self._found(call_id)
+        if voice is None:
+            return False
+        now = self.clock()
+        with voice.lock:
+            said = [sentence for at, sentence in voice.heard if now - at <= ECHO_SECONDS]
+        return echoes(text, said)
 
     def _ask(self, c: Any, voice: CallVoice, rid: str, bot: str, question: dict[str, Any]) -> bool:
         """Put one bot's turn on the queue as the call's open question (voice.lock held, inside a transaction)."""
@@ -741,14 +795,49 @@ class Voice:
         self._play(call_id, bot, reply_id, text, epoch, None, {})
 
     def human_speaking(self, call_id: str) -> None:
-        """Leave the room's voice track to the person if they speak over a follow-up."""
+        """A person has said BARGE_IN_MS over the call's voice: the voice stops at once and the call listens (barge-in).
+        A follow-up being read yields and is read again at the next pause. A bot answering (its words streaming or
+        playing) is cut off: what it has not said yet is never said, its turn ends as `interrupted`, and its resident
+        stops writing, so the person's next words are asked at once. A bot still thinking, with nothing to say yet,
+        goes on: what the person says next waits behind it. Called with calls.lock held: it opens no transaction."""
         voice = self._found(call_id)
         if voice is None:
             return
         with voice.lock:
-            if voice.open and voice.open.get("follow_up"):
-                voice.open["yielded"] = True
+            current = voice.open
+            if current is None:
+                return
+            if current.get("follow_up"):
+                current["yielded"] = True
                 self.calls.media.hush(call_id)
+                return
+            if current.get("stream") is None and current["phase"] != "making_voice":
+                return
+            bot = current["bot"]
+            voice.epochs[bot] = voice.epochs.get(bot, 0) + 1  # playback of this answer stops at its next frame
+            current["skip_reason"] = "interrupted"
+            if stream := current.get("stream"):
+                stream.close()
+            voice.open = None
+            self._set(voice, bot, "listening")
+            turn = current.get("turn")
+        self.calls.media.hush(call_id)
+        if turn:
+            self.makers.submit(self._interrupted, call_id, bot, turn)
+        self.wake.set()
+
+    def _interrupted(self, call_id: str, bot: str, turn_id: str) -> None:
+        """A turn cut off by the person: if its reply was not stored yet it ends `interrupted`, and its resident is woken
+        to drop the rest of it."""
+        report: Any = _report()
+        try:
+            with self.store.transaction(notify=True) as c:
+                turn = c.execute("SELECT * FROM live_meeting_turns WHERE id=?", (turn_id,)).fetchone()
+                if turn and live_meetings._finish_pass(c, turn["meeting_id"], turn, "interrupted"):
+                    events.queue_voice_inputs(c, self.store, call_id, bot)
+                self.touch(call_id, c)
+        except Exception as exc:  # noqa: BLE001 - the voice already stopped; a failed write leaves the turn to its deadline
+            report("calls_voice", call_id, exc, logger="tico.call_voice")
 
     def reply(self, call_id: str, bot: str, reply_id: str, text: str, turn_id: str | None = None) -> None:
         """A bot's reply, stored and posted (after its commit): speak it, once, if it answers the call's open question
@@ -938,6 +1027,7 @@ class Voice:
                 if index == 0:
                     timing["audio"] = self.clock()
                 with voice.lock:
+                    voice.heard.append((self.clock(), parts[index]))
                     changed = _epoch(voice, bot) == epoch and self._set(voice, bot, "speaking", parts[index])
                 if changed:
                     self.makers.submit(self.touch, call_id)

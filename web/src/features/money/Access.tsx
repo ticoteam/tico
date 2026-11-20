@@ -153,7 +153,7 @@ export function AccessPage({ search }: { search: FinanceSearch }) {
 /** A small face in the fold of those who see nothing. */
 function Face({ id }: { id: string }) {
   const a = useActor(id);
-  return <Avatar kind={a?.kind ?? (id.startsWith('bot:') ? 'agent' : 'person')} name={a?.name ?? 'Teammate'} hue={a?.hue} size={16} decorative />;
+  return <Avatar kind={a?.kind ?? (id.startsWith('bot:') ? 'agent' : 'person')} name={a?.name ?? (id.startsWith('bot:') ? 'Agent' : 'Person')} hue={a?.hue} size={16} decorative />;
 }
 
 /** One teammate: where they sit, what they see by default and each view given, with Take back for whoever gave it

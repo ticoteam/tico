@@ -46,7 +46,7 @@ function WebChip({ p }: { p: Extract<Pointer, { kind: 'web' }> }) {
 function AppWords({ p }: { p: Extract<Pointer, { kind: 'app' }> }) {
   const path = new URL(p.to, 'http://app').pathname.split('/').filter(Boolean);
   const who = useActor(p.what === 'teammate' ? decodeURIComponent(path[1] ?? '') : undefined);
-  if (p.what === 'teammate') return who?.name ?? titleCase(decodeURIComponent(path[1] ?? 'Teammate'));
+  if (p.what === 'teammate') return who?.name ?? titleCase(decodeURIComponent(path[1] ?? 'Person'));
   if (p.what === 'task') return 'Task';
   if (p.what === 'thread') return 'Thread';
   if (p.what === 'doc') return 'Doc';

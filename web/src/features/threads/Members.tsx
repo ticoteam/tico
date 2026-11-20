@@ -119,9 +119,9 @@ export function AddPeople({ thread: t, have, onClose }: { thread: Thread; have: 
       }
     >
       <Combobox
-        label={agents ? 'Agent' : 'Teammate'}
+        label={agents ? 'Agent' : 'Person'}
         labelHidden
-        placeholder={agents ? 'Name an agent' : 'Name a teammate'}
+        placeholder={agents ? 'Name an agent' : 'Name a person'}
         items={left.map((a) => ({ value: a.id, label: a.name, lead: <Avatar kind={a.kind} name={a.name} hue={a.hue} size={16} decorative /> }))}
         value={null}
         onValueChange={(v) => {

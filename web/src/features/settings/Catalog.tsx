@@ -34,7 +34,7 @@ const KIND_NAME: Record<string, string> = {
   url: 'Link',
   personal_name: 'Name',
   rating: 'Rating',
-  actor: 'Teammate',
+  actor: 'Person or agent',
 };
 
 // ---------------------------------------------------------------- tasks

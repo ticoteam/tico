@@ -231,7 +231,7 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
       <Conversation
         id={t.conversation_id}
         variant="page"
-        title={owner?.name ?? 'Teammate'}
+        title={owner?.name}
         actor={t.owner_id ?? undefined}
         foot={<Decision t={t} flow={flow} onAsking={setAsking} />}
         canPost={!asking}
@@ -293,7 +293,7 @@ export function TaskChat({ task, flow = false }: TaskChatProps) {
   // Its conversation is the task's own, or (a task filed in its owner's room) the owner's main chat: the head says which.
   const room = useQuery({ ...threadQuery(t?.conversation_id ?? ''), enabled: !!t?.conversation_id });
   if (!t) return <MessageBones />;
-  const name = owner?.name ?? 'Teammate';
+  const name = owner?.name ?? (t.owner_id?.startsWith('bot:') ? 'Agent' : 'Person');
   const session: Session | null = !room.data ? null : room.data.task_id === t.id ? { task: t.id, title: t.title } : 'main';
   const sub = session && <SessionLine session={session} />;
   return (

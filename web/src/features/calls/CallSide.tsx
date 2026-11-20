@@ -1,7 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
 import { useEffect, useState, type MouseEvent } from 'react';
-import { Conversation } from '@/conversation';
-import { useDirectory, type Directory } from '@/data';
+import type { Call } from '@/api/schema';
+import { Conversation, ticoRoomQuery } from '@/conversation';
+import { meQuery, useDirectory, type Directory } from '@/data';
+import { threadQuery } from '@/features/threads/exports';
 import { followFromSmallWindow, smallWindowLink } from '@/desktop';
 import { Avatar } from '@/kit/Avatar';
 import { Count } from '@/kit/Count';
@@ -43,7 +45,7 @@ export function CallSide({ room }: CallSideProps) {
           ]}
         />
       </div>
-      {tab === 'chat' && call && <Conversation id={call.thread_id} variant="side" />}
+      {tab === 'chat' && call && <Chat call={call} me={s.me} />}
       {tab === 'transcript' && call && <Transcript meeting={call.meeting_id} room={room} live={live} />}
       {tab === 'people' && (
         <div className="chat-body">
@@ -57,6 +59,23 @@ export function CallSide({ room }: CallSideProps) {
       )}
     </aside>
   );
+}
+
+/** The call's chat, under the tabs (no head of its own). In Tico's own room it is Tico's chat: Tico's name and face, and
+    "Message Tico". Elsewhere the box names who it goes to: the one other on the call, else the thread. */
+function Chat({ call, me }: { call: Call; me: string | null }) {
+  const ticoRoom = useQuery(ticoRoomQuery).data;
+  const myId = useQuery(meQuery).data?.id ?? me;
+  const nameOf = useNameOf();
+  const isTico = !!ticoRoom && ticoRoom === call.thread_id;
+  const others = [
+    ...call.participants.map((p) => p.actor).filter((a) => a !== myId),
+    ...call.bots.map((b) => (b.startsWith('bot:') ? b : `bot:${b}`)),
+  ];
+  const thread = useQuery({ ...threadQuery(call.thread_id), enabled: !isTico && others.length !== 1 });
+  if (isTico) return <Conversation id={call.thread_id} variant="tico" />;
+  const to = others.length === 1 ? nameOf(others[0]!) : thread.data?.title || 'everyone';
+  return <Conversation id={call.thread_id} variant="task" title={to} />;
 }
 
 /** In the desktop app's small window a link never moves the window off its call (desktop smallWindowLink). */

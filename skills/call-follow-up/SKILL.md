@@ -1,11 +1,11 @@
 ---
 name: call-follow-up
-description: Hand a live Tico Meet question to your normal task when you need to look something up or do work before you can answer.
+description: Hand a live Tico Meet question to your normal task when the person asks you to look into something you cannot answer on the call.
 ---
 
 # Call follow-up
 
-Answer right away when you know. When you need to look something up or do work, say “Let me check” and file one follow-up with the call ID and the specific ask.
+Answer right away when you know. File a follow-up only when the person asks you to look into or do something you cannot answer on the call: confirm it in one short sentence, file one follow-up with the call ID and their specific ask, and say “I'll look into it.” Never start work they did not ask for.
 
 ```sh
 tico call follow-up --call <id> "Check the rollout date"

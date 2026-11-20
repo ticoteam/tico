@@ -94,6 +94,44 @@ def test_voice_stream_plays_the_final_suffix_after_a_trimmed_prefix():
     assert start == 0 and len(pcm) == len(ms(600, SPEECH))
 
 
+def test_a_reply_says_each_sentence_once_even_when_the_model_restates_it():
+    # A model that answers, reads something, then gives its answer again: the second saying is never heard.
+    stream = call_voice.ReplyStream({})
+    stream.add("Rental Meta ads haven't started yet. ", 1)
+    stream.add("Rental meta ads haven't started yet! They start Monday. ", 2)
+    stream.finish("Rental Meta ads haven't started yet. They start Monday.", 3)
+    assert stream.buffer == ["Rental Meta ads haven't started yet.", "They start Monday."]
+    assert call_voice.sentences("The review is Friday at noon. The review is Friday at noon.") == [
+        "The review is Friday at noon."
+    ]
+
+
+def test_echo_is_nearly_the_words_just_said_and_a_short_answer_never_is():
+    said = ["Rental Meta ads haven't started yet.", "They start Monday."]
+    assert call_voice.echoes("rental meta ads haven't started yet", said)
+    assert call_voice.echoes("they start monday", said)
+    assert not call_voice.echoes("why haven't the rental ads started", said)
+    assert not call_voice.echoes("yes", said) and not call_voice.echoes("start monday", said)
+
+
+def test_speech_takes_the_floor_after_300_ms_and_a_cough_does_not():
+    cut = call_voice.Segmenter()
+    cut.feed(ms(200, SPEECH) + ms(800, QUIET), 0)  # a cough: not enough to stop a bot
+    assert cut.barges == 0
+    cut.feed(ms(280, SPEECH), 1000)
+    assert cut.barges == 0
+    cut.feed(ms(20, SPEECH), 1280)  # 300 ms of speech: the floor is theirs, once per utterance
+    cut.feed(ms(400, SPEECH), 1300)
+    assert cut.barges == 1
+
+
+def test_a_call_prompt_answers_and_waits_to_be_asked_before_doing_anything():
+    prompt = call_voice.SPOKEN_PROMPT.format(call_id="call-1")
+    assert "Start no work on your own" in prompt and "wait for their yes" in prompt
+    assert "say each thing once" in prompt
+    assert 'tico call follow-up --call call-1 "' in prompt
+
+
 def test_a_long_utterance_is_cut_at_a_minute_and_a_click_is_not_speech():
     cut = call_voice.Segmenter()
     second = ms(1000, SPEECH)
@@ -879,6 +917,87 @@ def test_a_warm_reply_that_stalls_mid_sentence_is_cut_off_at_its_deadline(meet, 
     _speak(meet, call["id"], 10_000)
     next_turn = post(meet, f"{path}/inputs", {}, token)["call_voice"]["turn"]
     assert next_turn["id"] != turn["id"]
+
+
+def _warm(meet):
+    """A 1:1 call with Ops on a resident session that has claimed the first question."""
+    credential_setup(meet)
+    company(meet)
+    default = get(meet, "providers")["default"]
+    on(meet, "ops", default["runtime"], default["model"])
+    worker = machine(meet, caps=("model_subscriptions_v1", "private_lanes_v1", "voice_sessions_v1", "voice_inputs_v1"))
+    give(meet, worker, "claude", add(meet)["id"])
+    call = start_call(meet, _dm(meet), bots=["ops"])
+    attempt = _claim(meet, worker, "ops")
+    path, token = f"attempts/{attempt['id']}", worker["token"]
+    _speak(meet, call["id"], 0)
+    turn = post(meet, f"{path}/inputs", {}, token)["call_voice"]["turn"]
+    return call, worker, attempt, path, token, turn
+
+
+def test_speaking_over_a_bot_stops_its_voice_at_once_and_what_they_say_is_asked_next(meet):
+    call, worker, attempt, path, token, turn = _warm(meet)
+    call_id, media, voice = call["id"], meet.app.state.call_media, meet.app.state.calls.voice
+    post(
+        meet,
+        f"{path}/events",
+        {
+            "events": [
+                {"seq": 1, "kind": "delta", "payload": {"voice_turn": turn["id"], "text": "Well, the long answer"}}
+            ]
+        },
+        token,
+    )
+    assert _states(meet, call_id)[0][1] == "making_voice"
+    store, rid = meet.app.state.store, worker["runner_id"]
+    with store.read() as c:
+        start = events.latest(c)
+    calls_ = meet.app.state.calls
+    calls_.ingest(call_id, "human:ana", ms(200, SPEECH), 5_000)  # not yet: a cough is not a barge-in
+    assert media.hushed == []
+    calls_.ingest(call_id, "human:ana", ms(200, SPEECH), 5_200)  # 400 ms: the person has the floor
+    assert media.hushed == [call_id]
+    wait_until(lambda: _turns(meet, call["meeting_id"])[0]["status"] == "skipped")
+    [cut] = _turns(meet, call["meeting_id"])
+    assert cut["skip_reason"] == "interrupted"
+    assert _states(meet, call_id) == [("ops", "listening", None)]
+    with store.read() as c:  # the resident is woken to drop the rest of its answer
+        frames = events.runner_read(c, rid, "runner:" + rid, start)[0]
+    assert [data["attempt_id"] for _, data in frames if data["kind"] == "voice_inputs"] == [attempt["id"]]
+    post(  # what it writes after being cut off is never heard
+        meet,
+        f"{path}/events",
+        {"events": [{"seq": 2, "kind": "delta", "payload": {"voice_turn": turn["id"], "text": " goes on. "}}]},
+        token,
+    )
+    assert voice.settle(5) and media.said == []
+    # The pause after their words: asked at once, with nothing open before it.
+    calls_.ingest(call_id, "human:ana", SILENCE_ONE_SECOND, 5_400)
+    assert calls_.settle()
+    turns = _turns(meet, call["meeting_id"])
+    assert len(turns) == 2 and turns[1]["status"] == "pending"
+    assert _states(meet, call_id) == [("ops", "thinking", None)]
+
+
+def test_a_bot_still_thinking_is_not_cut_off_by_more_speech(meet):
+    call, _worker, _attempt, _path, _token, _turn = _warm(meet)
+    meet.app.state.calls.ingest(call["id"], "human:ana", ms(600, SPEECH), 5_000)
+    assert meet.app.state.call_media.hushed == []
+    assert _turns(meet, call["meeting_id"])[0]["status"] == "claimed"
+
+
+def test_the_bots_own_voice_heard_back_is_never_asked(meet):
+    cid = _dm(meet)
+    call = start_call(meet, cid, bots=["ops"])
+    call_id, media = call["id"], meet.app.state.call_media
+    _speak(meet, call_id, 0)
+    words = "Rental Meta ads haven't started yet. They start on Monday."
+    _answer(meet, _machine(meet, "ops"), "ops", words)
+    assert len(media.said) == 1
+    _speak(meet, call_id, 10_000, text="Rental Meta ads haven't started yet")  # the phone's speaker, heard back
+    assert len(_turns(meet, call["meeting_id"])) == 1
+    _speak(meet, call_id, 20_000, text="Why haven't the rental ads started")
+    assert len(_turns(meet, call["meeting_id"])) == 2
 
 
 def test_speech_made_after_the_call_began_ending_is_never_played(meet, monkeypatch):
