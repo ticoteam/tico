@@ -1,11 +1,14 @@
-import { defineAction, refusalFor, s } from '@/actions';
+import { defineAction, refusalFor, s, type Ctx } from '@/actions';
 import { ApiError } from '@/api/client';
 import { directoryQuery } from '@/data';
 import { toast } from '@/kit/Toast';
 import {
   addAgent,
+  addCloudAgent,
   archiveAgent,
+  cancelCloudRequest,
   cancelLogin,
+  cloudAgentsQuery,
   changeAgent,
   computersQuery,
   controlAgent,
@@ -14,6 +17,7 @@ import {
   agentsQuery,
   instructionsQuery,
   invitePerson,
+  isOpenRequest,
   makeCopy,
   makePassword,
   moveAgent,
@@ -22,8 +26,11 @@ import {
   openBrowser,
   openScreenSession,
   removePerson,
+  peopleRosterQuery,
   renamePerson,
+  requestCloudAgent,
   restartComputer,
+  seatsQuery,
   sendBrowserInput,
   sendLoginCode,
   setBrowserControl,
@@ -50,7 +57,7 @@ import {
   TICO_TEXT_MAX,
   type TaskTab,
 } from './queries';
-import { instructionsChange, LIST_FIELDS, resolveWho, rowOf, type ListLine } from './model';
+import { instructionsChange, LIST_FIELDS, managerOf, resolveWho, rowOf, type ListLine } from './model';
 
 const slug = s.string({ min: 1, max: 100, what: "an agent's slug" });
 const person = s.string({ min: 1, max: 100, what: "a person's id" });
@@ -90,7 +97,7 @@ export const openTeammate = defineAction({
     })),
 });
 
-export const ADD_STEPS = ['pick', 'new', 'template', 'person'] as const;
+export const ADD_STEPS = ['pick', 'new', 'template', 'person', 'cloud'] as const;
 export type AddStep = (typeof ADD_STEPS)[number];
 
 /** Add teammate: the dialog over the team page on screen (`?add=`). */
@@ -367,6 +374,65 @@ export const add = defineAction({
   },
   did: ({ name }) => `Added ${name}`,
   target: (_input, out) => (out ? onPage(out.slug) : null),
+});
+
+/* ---------------------------------------------------------------- cloud agents */
+
+const cloudAgent = s.string({ min: 1, max: 40, what: "a cloud agent's id, as the cloud agents list names it (claude, codex, devin…)" });
+const onCloud = (agent: string) => ({ kind: 'cloud', id: agent });
+type Cache = Ctx['queryClient'];
+
+/** Where an agent from the list lands: in the team, under its lead; with no team, under the person who adds it. */
+function placeIn(qc: Cache, team: string | undefined) {
+  const group = team ? qc.getQueryData(groupsQuery.queryKey)?.find((g) => g.id === team) : undefined;
+  const lead = group ? managerOf(group, qc.getQueryData(agentsQuery.queryKey) ?? [], qc.getQueryData(peopleRosterQuery.queryKey)?.people ?? []) : null;
+  return { team: team ?? '', reports_to: lead ?? '' };
+}
+const agentName = (qc: Cache, id: string) => qc.getQueryData(cloudAgentsQuery.queryKey)?.find((a) => a.id === id)?.name ?? id;
+
+export const addCloud = defineAction({
+  id: 'agents.addCloud',
+  title: 'Add a cloud agent Tico connects (Claude Code, Codex) to a team',
+  kind: 'change',
+  input: s.object({ agent: cloudAgent, team: s.optional(team) }),
+  can: ({ queryClient }, { agent }) => queryClient.getQueryData(cloudAgentsQuery.queryKey)?.find((a) => a.id === agent)?.supported !== false,
+  run: async ({ router, queryClient }, { agent, team }) => {
+    const made = await said("Couldn't add the agent", () => addCloudAgent(agent, placeIn(queryClient, team)));
+    await router.navigate({ to: page(made.slug) });
+    return { ...made, name: agentName(queryClient, agent) };
+  },
+  did: ({ agent }, out) => `Added ${out?.name ?? agent}`,
+  target: (_input, out) => (out ? onPage(out.slug) : null),
+  offer: ({ queryClient }) =>
+    (queryClient.getQueryData(cloudAgentsQuery.queryKey) ?? []).filter((a) => a.supported).map((a) => ({ input: { agent: a.id }, title: `Add ${a.name}` })),
+});
+
+export const requestCloud = defineAction({
+  id: 'agents.requestCloud',
+  title: 'Request a cloud agent Tico does not connect yet (Devin, Jules…): a seat holds its place and Tico support builds it',
+  kind: 'change',
+  input: s.object({ agent: cloudAgent, team: s.optional(team) }),
+  can: ({ queryClient }, { agent }) => queryClient.getQueryData(cloudAgentsQuery.queryKey)?.find((a) => a.id === agent)?.supported !== true,
+  run: ({ queryClient }, { agent, team }) => said("Couldn't send the request", () => requestCloudAgent(agent, placeIn(queryClient, team))),
+  did: ({ agent }, out) => `Requested ${out?.agent_name || agent}`,
+  target: ({ agent }) => onCloud(agent),
+});
+
+export const cancelCloud = defineAction({
+  id: 'agents.cancelCloudRequest',
+  title: "Cancel a cloud agent request: Tico support hears of it and its seat closes",
+  kind: 'change',
+  input: s.object({ seat: s.string({ min: 1, max: 200, what: "the request's seat id" }) }),
+  can: ({ queryClient }, { seat }) => {
+    const seats = queryClient.getQueryData(seatsQuery.queryKey);
+    return !seats || seats.some((x) => x.id === seat && isOpenRequest(x));
+  },
+  run: ({ queryClient }, { seat }) => {
+    const agent = queryClient.getQueryData(seatsQuery.queryKey)?.find((x) => x.id === seat)?.agent ?? '';
+    return said("Couldn't cancel the request", async () => ({ ...(await cancelCloudRequest(seat)), agent }));
+  },
+  did: () => 'Canceled the request',
+  target: (_input, out) => (out?.agent ? onCloud(out.agent) : null),
 });
 
 /* ---------------------------------------------------------------- its own lists */

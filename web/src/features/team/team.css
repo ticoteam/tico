@@ -107,6 +107,11 @@
 /* The mock draws these as links; here they are buttons, and the base reset (parts.css) keeps the browser's border and fill. */
 button.add-pick,button.add-person,button.tpl{border:0;background:none;text-align:left}
 button.add-pick:hover,button.add-person:hover,button.tpl:hover,button.tpl.is-on{background:var(--raised-hover)}
+/* a cloud agent: the template row's face, name and line, with its one verb at the right; the row itself is not pressed */
+.cloud{grid-template-columns:var(--av-md) 164px minmax(0,1fr) auto;padding-right:var(--s-2)}
+.cloud:hover{background:none}
+.cloud-act{display:flex;align-items:center;justify-content:flex-end;gap:var(--s-1)}
+.cloud-mark{padding:0 var(--s-1);font-size:var(--t-sm);color:var(--muted)}
 
 /* ---------- a copy of an agent: the pick beside its name (mates.css .copy-pick) ---------- */
 .copy-pick{margin:var(--s-1) 0 0 calc(var(--s-0) * -1);flex:none}
@@ -313,7 +318,7 @@ button.add-pick:hover,button.add-person:hover,button.tpl:hover,button.tpl.is-on{
   .rec .foot{flex-wrap:wrap;gap:0 calc(var(--s-6) + var(--s-0));padding:var(--s-1h) var(--s-2) 0}
   .rec .foot .verb{height:auto;min-height:var(--ctl);display:inline-flex;align-items:center}
   .mp-list .radio{min-height:var(--ctl)}
-  .modal.add{--pad-t:var(--s-5)}
+  .modal.add{--pad-t:var(--s-5);width:auto}
   .add-picks{grid-template-columns:minmax(0,1fr);grid-auto-flow:row;gap:var(--s-2)}
   .add-pick{height:56px;flex-direction:row;justify-content:flex-start;align-items:center;gap:var(--s-3);border-radius:var(--r-pane)}
   .add-person{height:52px;margin:0 0 calc(var(--s-1)*-1);padding:0 var(--s-3h)}
@@ -322,6 +327,8 @@ button.add-pick:hover,button.add-person:hover,button.tpl:hover,button.tpl.is-on{
   .tpl-name{grid-area:name}
   .tpl-line{grid-area:line}
   .tpl-check{grid-area:check}
+  .cloud{grid-template-columns:var(--av-md) minmax(0,1fr) auto;grid-template-areas:"av name act" "av line act";padding-right:var(--s-2)}
+  .cloud-act{grid-area:act}
   .status{padding:var(--s-3) var(--s-2)}
   .bm{grid-template-columns:20px var(--av-sm) minmax(0,1fr) auto}
   .bm .mate-now{display:none}

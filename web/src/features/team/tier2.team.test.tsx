@@ -217,16 +217,69 @@ describe('Learnings panel: Dream @s623', () => {
   });
 });
 
-/* ---------------------------------------------------------------- external agents */
+/* ---------------------------------------------------------------- cloud agents */
 
-describe('External agents @s632 @s722 @s739', () => {
-  it('are one Coming soon line in Add teammate that cannot be pressed', async () => {
+describe('Cloud agents @s629 @s733 @s734 @s735', () => {
+  const agents = [
+    { id: 'claude', name: 'Claude Code', maker: 'Anthropic', site: 'claude.com', line: 'Codes in your repo', supported: true, connect_id: 'claude' },
+    { id: 'devin', name: 'Devin', maker: 'Cognition', site: 'devin.ai', line: 'Works in its own VM', supported: false, connect_id: null },
+  ];
+  const seat = { id: 's9', kind: 'seat', stage: 'recruiting', title: 'Devin', description: '', reports_to: 'human:p1', team: 'g1', agent: 'devin', agent_name: 'Devin', request_state: 'requested' };
+  const cloud = (seats: unknown[] = [], more?: (url: string, method: string, body: unknown) => Reply | undefined) =>
+    serve((url, method, body) => {
+      const r = more?.(url, method, body);
+      if (r) return r;
+      if (url.endsWith('/api/v2/cloud-agents')) return ok({ agents });
+      if (url.endsWith('/api/v2/seats')) return ok({ seats });
+      return undefined;
+    });
+  const row = async (name: string) => (await screen.findByText(name)).closest('.cloud') as HTMLElement;
+
+  it('is a line in Add teammate that opens its step', async () => {
     serve();
-    show(<AddTeammate step="pick" team="" onStep={() => {}} onClose={() => {}} />, '/team/design');
-    const line = (await screen.findByText('External agent')).closest('.add-person');
-    expect(line?.getAttribute('aria-disabled')).toBe('true');
-    expect(within(line as HTMLElement).getByText('Coming soon')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /External agent/ })).toBeNull();
+    const onStep = vi.fn();
+    show(<AddTeammate step="pick" team="g1" onStep={onStep} onClose={() => {}} />, '/team/design');
+    fireEvent.click(await screen.findByRole('button', { name: 'Cloud agents' }));
+    expect(onStep).toHaveBeenCalledWith('cloud');
+    expect(screen.queryByText('Coming soon')).toBeNull();
+  });
+
+  it('adds a supported one under the team lead and opens its page', async () => {
+    cloud([], (url, method) => (method === 'POST' && url.includes('/cloud-agents/claude/add') ? ok({ bot: 'b9', slug: 'claude-code', seat: 's1', harness: 'claude', model: 'm' }) : undefined));
+    show(<AddTeammate step="cloud" team="g1" onStep={() => {}} onClose={() => {}} />, '/team/design');
+    expect(within(await row('Devin')).queryByRole('button', { name: 'Add' })).toBeNull();
+    fireEvent.click(within(await row('Claude Code')).getByRole('button', { name: 'Add' }));
+    await waitFor(() => expect(posted('/cloud-agents/claude/add')?.body).toEqual({ team: 'g1', reports_to: 'human:p1' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/team/claude-code'));
+  });
+
+  it('requests one Tico does not connect, then marks it Requested', async () => {
+    let seats: unknown[] = [];
+    cloud([], (url, method) => {
+      if (url.endsWith('/api/v2/seats')) return ok({ seats });
+      if (method === 'POST' && url.includes('/cloud-agents/devin/request')) {
+        seats = [seat];
+        return ok(seat);
+      }
+      return undefined;
+    });
+    show(<AddTeammate step="cloud" team="g1" onStep={() => {}} onClose={() => {}} />, '/team/design');
+    fireEvent.click(within(await row('Devin')).getByRole('button', { name: 'Request' }));
+    await waitFor(() => expect(posted('/cloud-agents/devin/request')?.body).toEqual({ team: 'g1', reports_to: 'human:p1' }));
+    expect(await within(await row('Devin')).findByText('Requested')).toBeTruthy();
+    expect(within(await row('Devin')).queryByRole('button', { name: 'Request' })).toBeNull();
+  });
+
+  it('cancels a pending request from its ⋯', async () => {
+    cloud([seat], (url, method) =>
+      method === 'POST' && url.includes('/seats/s9/cancel-request') ? ok({ id: 's9', closed: true, request_state: 'canceled' }) : undefined,
+    );
+    show(<AddTeammate step="cloud" team="g1" onStep={() => {}} onClose={() => {}} />, '/team/design');
+    const devin = await row('Devin');
+    expect(await within(devin).findByText('Requested')).toBeTruthy();
+    fireEvent.click(within(devin).getByRole('button', { name: 'More on Devin' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Cancel request' }));
+    await waitFor(() => expect(posted('/seats/s9/cancel-request')?.method).toBe('POST'));
   });
 });
 

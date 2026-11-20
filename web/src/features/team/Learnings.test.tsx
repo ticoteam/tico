@@ -6,7 +6,6 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { directoryQuery, queryClient, type Actor } from '@/data';
-import { AddTeammate } from './AddTeammate';
 import { decisionsOf, dreamCards, dreamReply } from './model';
 import { agentsQuery, groupsQuery, peopleQuery, type AgentRow, type Dream } from './queries';
 import { TeamWho } from './TeamWho';
@@ -188,17 +187,5 @@ describe('s623 Dream', () => {
     await waitFor(() => expect(sent.some((s) => s.url.endsWith('/tasks/t7/move'))).toBe(true));
     expect(await within(section).findByRole('button', { name: 'Stop' })).toBeTruthy();
     expect(within(section).queryByRole('button', { name: 'Wake up' })).toBeNull();
-  });
-});
-
-describe('s722 External agents', () => {
-  it('are one dimmed Coming soon line in Add teammate, with nothing to press', async () => {
-    serve(() => undefined);
-    show(<AddTeammate step="pick" team="" onStep={() => {}} onClose={() => {}} />, '/team/ana');
-    const line = (await screen.findByText('External agent')).closest('.add-person');
-    expect(line?.getAttribute('aria-disabled')).toBe('true');
-    expect(line?.tagName).toBe('SPAN');
-    expect(within(line as HTMLElement).getByText('Coming soon')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /External agent/ })).toBeNull();
   });
 });
