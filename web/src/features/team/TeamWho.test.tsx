@@ -145,21 +145,21 @@ describe('Team pages', () => {
     await act(async () => finish({ status: 200, body: roster }));
   });
 
-  it("counts every page of the members' open tasks, late ones included", async () => {
+  it("runs every page of the members' open tasks", async () => {
     const reads: URLSearchParams[] = [];
-    const open = (id: string, late = false) => ({ id, number: null, title: id, status: 'open', owner_id: ana.id, late: late ? { level: 'told' } : null });
+    const open = (id: string, updated_at: string) => ({ id, number: null, title: id, status: 'open', owner_id: ana.id, updated_at });
     serve((url) => {
       if (!url.startsWith('/api/v2/tasks?')) return;
       const params = new URLSearchParams(url.split('?')[1]);
       if (params.get('status') !== 'open') return;
       reads.push(params);
       return params.get('after') === 'k1'
-        ? { status: 200, body: { tasks: [open('t2', true), open('t3', true)], next_after: null } }
-        : { status: 200, body: { tasks: [open('t1')], next_after: 'k1' } };
+        ? { status: 200, body: { tasks: [open('t2', '2026-11-18T10:00:00Z'), open('t3', '2026-11-17T10:00:00Z')], next_after: null } }
+        : { status: 200, body: { tasks: [open('t1', '2026-11-19T10:00:00Z')], next_after: 'k1' } };
     });
     show(<TeamWho who="design" />, '/team/design');
-    expect(await screen.findByText('2 late')).toBeTruthy();
-    expect(link('Ana')?.querySelector('.count')?.textContent).toBe('3');
+    const running = await screen.findByRole('region', { name: 'Running' });
+    await waitFor(() => expect(within(running).getAllByRole('link').map((a) => a.getAttribute('title'))).toEqual(['t1', 't2', 't3']));
     expect(reads.map((p) => p.get('after'))).toEqual([null, 'k1']);
     expect(reads[0]?.get('owners')?.split(',')).toEqual([ana.id, bo.id, pat.id]);
   });
