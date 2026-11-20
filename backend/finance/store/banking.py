@@ -239,11 +239,16 @@ def feed_row(c: sqlite3.Connection, money_account_id: str, provider_id: str) -> 
 
 
 def feed_by_entry(c: sqlite3.Connection, entry_ids: Sequence[str]) -> dict[str, Any]:
+    """{entry id: the feed row that stands for it}: its latest, one row even when a payout's entry has hundreds."""
     if not entry_ids:
         return {}
     return {
         str(r["entry_id"]): r
-        for r in c.execute(f"SELECT * FROM fin_feed_txns WHERE entry_id IN ({_marks(entry_ids)})", list(entry_ids))
+        for r in c.execute(
+            "SELECT * FROM fin_feed_txns WHERE rowid IN (SELECT max(rowid) FROM fin_feed_txns "
+            f"WHERE entry_id IN ({_marks(entry_ids)}) GROUP BY entry_id)",
+            list(entry_ids),
+        )
     }
 
 
@@ -269,22 +274,12 @@ def feed_page(
 ) -> list[Any]:
     """Feed rows newest first, keyset-paged on (txn_date, id), on these money accounts (or cards, or entries). Rows the
     bank failed, canceled or returned show only as status "failed"; "ignored" is a person's ignore. With
-    `line_account_ids`, only rows whose entry has a line on one of those accounts."""
-    where: list[str] = ["1=1"]
+    `line_account_ids`, only rows whose entry has a line on one of those accounts.
+
+    Each money account is read on its own, newest first along fin_feed_txns_account_day, and the reads are merged: one
+    read over all of them sorted every row of the window (a payments account holds tens of thousands) for each page."""
+    where: list[str] = []
     args: list[object] = []
-    scopes: list[str] = []
-    if money_account_ids:
-        scopes.append(f"money_account_id IN ({_marks(money_account_ids)})")
-        args += list(money_account_ids)
-    if card_ids:
-        scopes.append(f"card_id IN ({_marks(card_ids)})")
-        args += list(card_ids)
-    if entry_ids:
-        scopes.append(f"entry_id IN ({_marks(entry_ids)})")
-        args += list(entry_ids)
-    if not scopes:
-        return []
-    where.append("(" + " OR ".join(scopes) + ")")
     gone = f"(status='ignored' AND provider_status IN ({_marks(GONE)}))"
     if status == "pending":
         where.append("pending=1")
@@ -317,9 +312,20 @@ def feed_page(
     if before:
         where.append("(txn_date<? OR (txn_date=? AND id<?))")
         args += [before[0], before[0], before[1]]
+    scopes = [("money_account_id=?", [m]) for m in dict.fromkeys(money_account_ids)]
+    scopes += [(f"card_id IN ({_marks(card_ids)})", list(card_ids))] if card_ids else []
+    scopes += [(f"entry_id IN ({_marks(entry_ids)})", list(entry_ids))] if entry_ids else []
+    if not scopes:
+        return []
+    order = "ORDER BY txn_date DESC, id DESC LIMIT ?"
+    arms = [
+        f"SELECT * FROM (SELECT * FROM fin_feed_txns WHERE {' AND '.join([pick, *where])} {order})"
+        for pick, _ in scopes
+    ]
+    # UNION, not UNION ALL: a card row on a money account the viewer also sees is one row.
     return c.execute(
-        f"SELECT * FROM fin_feed_txns WHERE {' AND '.join(where)} ORDER BY txn_date DESC, id DESC LIMIT ?",
-        [*args, most],
+        f"{' UNION '.join(arms)} {order}",
+        [x for _, picked in scopes for x in [*picked, *args, most]] + [most],
     ).fetchall()
 
 

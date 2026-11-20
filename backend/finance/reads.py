@@ -98,30 +98,32 @@ def _cells(
     wide_start, _, wide_end = dates.quarters_around(a, z, fy, budgeting.horizon(s.ctx))
     wide = (wide_start, wide_end)
     out: list[VW.Cell] = []
-    vendors: dict[str, str] = {}  # a name a contact took counts as that contact (fin_vendor_aliases)
+    rows: list[Any] = []
     for ids_, (p, q) in ((plain, (a, z)), (hidden, wide)):
-        rows = SL.rollup_rows(s.ctx.c, s.ctx.book.id, p.isoformat(), q.isoformat(), ids_)
+        rows += SL.rollup_rows(s.ctx.c, s.ctx.book.id, p.isoformat(), q.isoformat(), ids_)
         if basis == "cash":
-            rows = [*rows, *SAP.cash_rows(s.ctx.c, s.ctx.book.id, p.isoformat(), q.isoformat(), ids_)]
-        for r in rows:
-            account = s.ctx.accounts.get(r["account_id"])
-            if account is None or not s.view.sees(account, {"team": r["team"], "teammate": r["teammate"]}):
-                continue
-            location, klass, project = _located(str(r["tagset"]))
-            out.append(
-                VW.Cell(
-                    account_id=r["account_id"],
-                    day=r["day"],
-                    team=r["team"],
-                    teammate=r["teammate"],
-                    vendor=_vendor(s, vendors, str(r["vendor"])),
-                    amount=int(r["amount"]),
-                    location=location,
-                    class_id=klass,
-                    project=project,
-                    lines=int(r["line_count"]) if "line_count" in r.keys() else 0,  # cash rollups count no lines
-                )
+            rows += SAP.cash_rows(s.ctx.c, s.ctx.book.id, p.isoformat(), q.isoformat(), ids_)
+    # A name a contact took counts as that contact (fin_vendor_aliases): every vendor is resolved in one read.
+    vendors = _vendors(s, [str(r["vendor"]) for r in rows])
+    for r in rows:
+        account = s.ctx.accounts.get(r["account_id"])
+        if account is None or not s.view.sees(account, {"team": r["team"], "teammate": r["teammate"]}):
+            continue
+        location, klass, project = _located(str(r["tagset"]))
+        out.append(
+            VW.Cell(
+                account_id=r["account_id"],
+                day=r["day"],
+                team=r["team"],
+                teammate=r["teammate"],
+                vendor=vendors[str(r["vendor"])],
+                amount=int(r["amount"]),
+                location=location,
+                class_id=klass,
+                project=project,
+                lines=int(r["line_count"]) if "line_count" in r.keys() else 0,  # cash rollups count no lines
             )
+        )
     return _without_settled(s, vendors, out, tab.settled_lines(s.ctx, s.view, a, z, plain, basis))
 
 
@@ -155,6 +157,9 @@ def _without_settled(s: _Seen, vendors: dict[str, str], cells: list[VW.Cell], li
     if not lines:
         return cells
     tags = SL.line_tags(s.ctx.c, [str(r["id"]) for r in lines])
+    vendors.update(
+        _vendors(s, [str(r["contact_id"] or "") for r in lines if str(r["contact_id"] or "") not in vendors])
+    )
     removed: dict[_Key, int] = {}
     for r in lines:
         account = s.ctx.accounts.get(r["account_id"])
@@ -167,7 +172,7 @@ def _without_settled(s: _Seen, vendors: dict[str, str], cells: list[VW.Cell], li
             str(r["entry_date"]),
             team,
             teammate,
-            _vendor(s, vendors, str(r["contact_id"] or "")),
+            vendors[str(r["contact_id"] or "")],
             mine.get("location", ""),
             mine.get("class", ""),
             mine.get("project", ""),
@@ -202,10 +207,11 @@ def _without_settled(s: _Seen, vendors: dict[str, str], cells: list[VW.Cell], li
     return kept
 
 
-def _vendor(s: _Seen, seen: dict[str, str], key: str) -> str:
-    if key not in seen:
-        seen[key] = SAP.vendor_resolved(s.ctx.c, s.ctx.book.id, key)
-    return seen[key]
+def _vendors(s: _Seen, keys: Iterable[str]) -> dict[str, str]:
+    """{key: the vendor it resolves to} for these keys, in one read (an empty key stays empty)."""
+    wanted = list(dict.fromkeys(keys))
+    found = SAP.vendors_resolved(s.ctx.c, s.ctx.book.id, wanted)
+    return {k: found.get(k, k) for k in wanted}
 
 
 def _suppress(s: _Seen, cells: list[VW.Cell], narrow: bool, a: date, z: date) -> VW.Suppressed:

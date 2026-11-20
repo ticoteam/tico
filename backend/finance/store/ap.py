@@ -341,13 +341,30 @@ def vendor_resolved(c: sqlite3.Connection, book_id: str, key: str) -> str:
     """The vendor a budget or a charge means: a name aliased to a contact (even one no longer active: its history still
     maps) is that contact's id, and so is a contact id a merge moved onto another vendor (vendors.py). A contact's id
     with no alias stays; any other name is its name key."""
-    if not key:
-        return key
-    nk = name_key(key)
-    alias = alias_of(c, book_id, nk)
-    if alias:
-        return alias
-    return key if is_contact(c, key) else nk
+    return vendors_resolved(c, book_id, [key]).get(key, key)
+
+
+def vendors_resolved(c: sqlite3.Connection, book_id: str, keys: Sequence[str]) -> dict[str, str]:
+    """vendor_resolved for many keys at once: {key: vendor} for each non-empty key, in two reads whatever their number."""
+    nks = {k: name_key(k) for k in dict.fromkeys(keys) if k}
+    aliases: dict[str, str] = {}
+    contacts: set[str] = set()
+    names, ids = sorted(set(nks.values())), sorted(nks)
+    for i in range(0, len(names), 400):
+        chunk = names[i : i + 400]
+        aliases.update(
+            (str(r[0]), str(r[1]))
+            for r in c.execute(
+                f"SELECT name_key, contact_id FROM fin_vendor_aliases WHERE book_id=? AND name_key IN ({_marks(chunk)})",
+                [book_id, *chunk],
+            )
+        )
+    for i in range(0, len(ids), 400):
+        chunk = ids[i : i + 400]
+        contacts.update(
+            str(r[0]) for r in c.execute(f"SELECT id FROM fin_contacts WHERE id IN ({_marks(chunk)})", chunk)
+        )
+    return {k: aliases.get(nk) or (k if k in contacts else nk) for k, nk in nks.items()}
 
 
 def vendor_keys(c: sqlite3.Connection, book_id: str, key: str) -> list[str]:
@@ -434,6 +451,28 @@ def expected(
         f"s.settled_on BETWEEN ? AND ? AND s.voided_at IS NULL{only} ORDER BY s.created_at, s.id LIMIT ?",
         (kind, money_account_id, amount, amount, start, end, *ids, most),
     ).fetchall()
+
+
+def bills_settled(
+    c: sqlite3.Connection, feed_ids: Sequence[str], entry_ids: Sequence[str]
+) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """The bills these feed rows settled and the bills these entries settled, voided settlements included (a privacy
+    link must outlive them): ({feed row id: bill ids}, {entry id: bill ids}), two reads per 400 ids."""
+    by_feed: dict[str, list[str]] = {}
+    by_entry: dict[str, list[str]] = {}
+    for column, ids, out, extra in (
+        ("from_id", sorted(set(feed_ids)), by_feed, " AND from_kind='feed'"),
+        ("entry_id", sorted(set(entry_ids)), by_entry, ""),
+    ):
+        for i in range(0, len(ids), 400):
+            chunk = ids[i : i + 400]
+            for r in c.execute(
+                f"SELECT {column}, to_id FROM fin_settlements WHERE {column} IN ({_marks(chunk)}){extra} "
+                "AND to_kind='bill' ORDER BY created_at",
+                chunk,
+            ):
+                out.setdefault(str(r[0]), []).append(str(r[1]))
+    return by_feed, by_entry
 
 
 def settlements_by_entry(c: sqlite3.Connection, entry_id: str, *, voided: bool = False) -> list[Any]:
