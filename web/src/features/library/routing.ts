@@ -10,11 +10,13 @@ import {
   externalDocAtQuery,
   externalDocQuery,
   fileQuery,
+  fileSearchQuery,
   filesQuery,
   proposalQuery,
   proposalsQuery,
   skillQuery,
   skillsQuery,
+  skillUsageQuery,
   sourcesQuery,
   toolsQuery,
   typesQuery,
@@ -62,16 +64,26 @@ export const loadDoc = (qc: QueryClient, doc: string, revision: string | undefin
   const id = doc.slice(4);
   return qc.ensureQueryData(revision ? externalDocAtQuery(id, revision) : externalDocQuery(id));
 };
-export const loadFiles = (qc: QueryClient, s: Pick<FilesSearch, 'kind' | 'file'>) =>
-  s.file ? qc.ensureQueryData(fileQuery(s.file)) : qc.ensureInfiniteQueryData(filesQuery(s.kind ?? ''));
+export const loadFiles = (qc: QueryClient, s: Pick<FilesSearch, 'kind' | 'file' | 'q'>) => {
+  if (s.file) return qc.ensureQueryData(fileQuery(s.file));
+  const kind = s.kind ?? '';
+  if (s.q && s.q.trim().length > 1) {
+    void qc.prefetchQuery(fileSearchQuery(s.q, kind));
+    return;
+  }
+  return qc.ensureInfiniteQueryData(filesQuery(kind));
+};
 export const loadSkills = (qc: QueryClient, s: Pick<SkillsSearch, 'skill' | 'proposal'>) => {
   if (s.proposal) return qc.ensureQueryData(proposalQuery(s.proposal));
+  void qc.prefetchQuery(skillUsageQuery);
   if (s.skill) return qc.ensureQueryData(skillQuery(s.skill));
   // Waiting changes decide the empty state, so they come in with the list (a failure leaves them out).
   return Promise.all([qc.ensureQueryData(skillsQuery), qc.prefetchQuery(proposalsQuery)]);
 };
-export const loadTools = (qc: QueryClient, s: Pick<ToolsSearch, 'tool'>) =>
-  Promise.all([qc.ensureQueryData(toolsQuery), s.tool?.startsWith('api:') && qc.prefetchQuery(apiToolQuery(s.tool.slice(4)))]);
+export const loadTools = (qc: QueryClient, s: Pick<ToolsSearch, 'tool'>) => {
+  if (s.tool?.startsWith('api:')) void qc.prefetchQuery(apiToolQuery(s.tool.slice(4)));
+  return qc.ensureQueryData(toolsQuery);
+};
 // The tabs and an open card come in after the list.
 export const loadContacts = (qc: QueryClient, s: Pick<ContactsSearch, 'type' | 'q' | 'panel'> & { link?: string }) => {
   void qc.prefetchQuery(typesQuery);

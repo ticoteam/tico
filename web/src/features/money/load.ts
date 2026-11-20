@@ -1,18 +1,23 @@
 import type { QueryClient } from '@tanstack/react-query';
 import { budgetDay, monthSpan, pnlRange } from './model';
-import { budgetsQuery, growthReadQuery, pnlQuery, segmentsQuery, sourcesQuery } from './queries';
+import { accessQuery, budgetsQuery, growthReadQuery, pnlQuery, segmentsQuery, sourcesQuery } from './queries';
 import type { FinanceSearch, GrowthSearch } from './search';
 
 /* What each page reads first, before it draws. Finance's pages draw their own states (a refusal there keeps the
    view-as Stop), so its reads are only warmed. */
 
-export function loadFinance(qc: QueryClient, search: FinanceSearch): Promise<unknown> {
+export function loadFinance(qc: QueryClient, search: FinanceSearch): Promise<unknown> | undefined {
+  void qc.prefetchQuery(accessQuery);
   const ym = budgetDay().slice(0, 7);
   const as = search.as;
   const month = pnlQuery({ ...monthSpan(ym), period: 'month', basis: 'accrual' }, as);
+  if (!search.tab) {
+    // Access picks the landing tab. A figure from the overview can arrive after that tab opens.
+    void qc.prefetchQuery(month);
+    return;
+  }
   const reads: Promise<unknown>[] = [];
   if (search.tab === 'sources') reads.push(qc.ensureQueryData(sourcesQuery(as)));
-  if (!search.tab) reads.push(qc.ensureQueryData(month));
   if (search.tab === 'budgets') reads.push(qc.ensureQueryData(budgetsQuery(budgetDay(), as)), qc.ensureQueryData(month));
   if (search.tab === 'pnl') {
     const period = search.period ?? 'month';

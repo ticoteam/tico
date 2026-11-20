@@ -9,6 +9,7 @@ import { queryClient } from '@/data';
 import { agentsQuery } from '@/features/team/exports';
 import { Toasts } from '@/kit/Toast';
 import { agentUsageQuery, billingQuery, historyQuery, limitsQuery, taskCapsQuery, usageQuery } from './queries';
+import { loadUsage } from './routing';
 import { SettingsPage } from './SettingsPage';
 import { UsagePage } from './Usage';
 
@@ -31,12 +32,12 @@ vi.mock('@/tico/dot', () => ({ Dot: () => null, dot: { set: vi.fn(() => () => {}
 type Reply = { status: number; body: unknown };
 let sent: { url: string; method: string; body: unknown }[] = [];
 let read: string[] = [];
-function serve(reply: (url: string, method: string) => Reply) {
+function serve(reply: (url: string, method: string) => Reply | Promise<Reply>) {
   vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET';
     if (method === 'GET') read.push(String(url));
     else sent.push({ url: String(url), method, body: typeof init?.body === 'string' ? JSON.parse(init.body) : init?.body });
-    const r = reply(String(url), method);
+    const r = await reply(String(url), method);
     return new Response(JSON.stringify(r.body), { status: r.status, headers: { 'Content-Type': 'application/json' } });
   });
 }
@@ -106,10 +107,6 @@ const DIRECTORY = {
   byId: { 'human:p1': { id: 'human:p1', name: 'Ana Sample', kind: 'person' }, 'bot:builder': { id: 'bot:builder', name: 'Builder', kind: 'agent' } },
 };
 
-function seedUsage() {
-  queryClient.setQueryData(usageQuery('7d', 'bot').queryKey, { from: '2026-11-13', to: '2026-11-19', totals: FIG, rows: [{ ...FIG, bot: 'builder', name: 'Builder', runs: 4, est_cost_usd: 2.5 }] });
-  queryClient.setQueryData(usageQuery('7d', 'day').queryKey, { from: '2026-11-13', to: '2026-11-19', totals: FIG, rows: [] });
-}
 function seedLimits() {
   queryClient.setQueryData(limitsQuery.queryKey, { bots: { builder: LIM }, default: { ...NONE, monthly_usd: 50, count_subscription: false }, may_edit_default: true, pools: POOLS });
 }
@@ -142,21 +139,37 @@ describe('History: older pages', () => {
 describe('Usage › Spend: a filter', () => {
   it('the filter narrows the read by a team or a model, nothing else @s1086', async () => {
     serve(() => ok({ from: '', to: '', totals: FIG, rows: [], departments: ['Eng', 'Ops'], dimensions: { model: ['haiku', 'opus'], harness: ['claude', 'codex'] }, dimension_labels: {} }));
-    seedUsage();
     show(<UsagePage search={{}} />, '/company/usage');
     fireEvent.click(await screen.findByRole('button', { name: 'Filter' }));
     expect(screen.queryByRole('combobox', { name: 'Harness' })).toBeNull();
     await pick(await screen.findByRole('combobox', { name: 'Model' }), /^haiku$/);
     await waitFor(() => expect(read.some((u) => u.includes('model=haiku') && u.includes('group=bot'))).toBe(true));
+    expect(read.filter((u) => u.includes('group=bot') && !u.includes('model=')).length).toBe(1);
     expect(await screen.findByRole('button', { name: 'Filter, 1 on', hidden: true })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Custom' })).toBeNull();
+  });
+});
+
+describe('Loading Usage', () => {
+  it('starts the chart and the selected model grouping together', async () => {
+    let releaseDay!: () => void;
+    const day = new Promise<void>((resolve) => { releaseDay = resolve; });
+    serve(async (url) => {
+      if (url.includes('group=day')) await day;
+      return ok({ from: '', to: '', totals: FIG, rows: [] });
+    });
+    await loadUsage(queryClient, { by: 'model' });
+    expect(read.map((url) => new URLSearchParams(url.split('?')[1]).get('group'))).toEqual(['day', 'model']);
+    expect(queryClient.getQueryData(usageQuery('7d', 'model').queryKey)?.totals).toEqual(FIG);
+    const chart = queryClient.ensureQueryData(usageQuery('7d', 'day'));
+    releaseDay();
+    await chart;
   });
 });
 
 describe('Usage › Limits: company, teams, Add limit, the panel', () => {
   it('shows the company and the team tree, and Add limit sets a team’s @s1087 @s312', async () => {
     serve(() => ok({}));
-    seedUsage();
     seedLimits();
     show(<UsagePage search={{ view: 'limits' }} />, '/company/usage?view=limits');
     expect((await screen.findByTitle('Whole company')).getAttribute('href')).toContain('open=pool');
@@ -169,6 +182,7 @@ describe('Usage › Limits: company, teams, Add limit, the panel', () => {
     fireEvent.change(within(dlg).getByLabelText('Dollars a month'), { target: { value: '40' } });
     fireEvent.click(within(dlg).getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(sent[0]).toMatchObject({ url: '/api/v2/usage/pools/groups/g2', method: 'PUT', body: { monthly_usd: 40 } }));
+    expect(read.some((u) => u.startsWith('/api/v2/usage?'))).toBe(false);
   });
 
   it('Tico may lower a limit but never raise or remove one @s313', async () => {
@@ -198,7 +212,6 @@ describe('Usage › Limits: company, teams, Add limit, the panel', () => {
 
   it('an opened agent shows where its money went, its models and its task caps @s368 @s1087', async () => {
     serve((url, method) => (method === 'GET' && url === '/api/v2/task-caps' ? ok(CAPS) : ok({})));
-    seedUsage();
     seedLimits();
     queryClient.setQueryData(['directory'], DIRECTORY);
     queryClient.setQueryData(agentsQuery.queryKey, [AGENT] as never);
@@ -236,7 +249,6 @@ describe('Usage › Limits: company, teams, Add limit, the panel', () => {
 
   it('a team opened shows its teams, and Remove limit takes its limit off @s1087', async () => {
     serve(() => ok({}));
-    seedUsage();
     seedLimits();
     queryClient.setQueryData(agentsQuery.queryKey, [AGENT] as never);
     show(<UsagePage search={{ view: 'limits', open: 'pool:g1' }} />, '/company/usage?view=limits&open=pool:g1');

@@ -55,7 +55,7 @@ beforeEach(() => {
   });
   queryClient.setQueryData(groupsQuery.queryKey, groups);
   queryClient.setQueryData(agentsQuery.queryKey, roster);
-  queryClient.setQueryData(peopleQuery.queryKey, [{ id: 'p2', name: 'Kim Roe' }]);
+  queryClient.setQueryData(peopleQuery.queryKey, { people: [{ id: 'p2', name: 'Kim Roe' }], seats: [] });
 });
 afterEach(() => vi.unstubAllGlobals());
 

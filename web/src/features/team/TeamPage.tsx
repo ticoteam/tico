@@ -18,8 +18,7 @@ import {
   allTasksQuery,
   groupsQuery,
   monthSpendQuery,
-  peopleQuery,
-  seatsQuery,
+  peopleRosterQuery,
   teamDoneCountQueries,
   teammateAccessQuery,
   type AgentRow,
@@ -41,7 +40,7 @@ export function TeamPage({ group, path, add }: TeamPageProps) {
   const { data: dir } = useSuspenseQuery(directoryQuery);
   const { data: all } = useSuspenseQuery(groupsQuery);
   const roster = useQuery(agentsQuery);
-  const people = useQuery(peopleQuery);
+  const { data: peopleRoster } = useQuery(peopleRosterQuery);
   const [since] = useState(() => startOfWeek(new Date()).toISOString());
   const openTasks = useQuery(allTasksQuery());
   const addOpen = useAction('team.addTeammate');
@@ -49,7 +48,7 @@ export function TeamPage({ group, path, add }: TeamPageProps) {
   const [access, setAccess] = useState(false);
 
   const actorOf = (key: string) => dir.byId[key];
-  const lead = managerOf(group, roster.data ?? [], people.data ?? []);
+  const lead = managerOf(group, roster.data ?? [], peopleRoster?.people ?? []);
   const manager = lead ? actorOf(lead) : undefined;
   const under = membersUnder(all, group.id);
   const everyone = new Set(memberIds(under).map((k) => actorOf(k)?.id).filter((id): id is string => !!id));
@@ -59,16 +58,19 @@ export function TeamPage({ group, path, add }: TeamPageProps) {
     const by = new Map<string, OwnTask[]>();
     for (const t of tasks ?? []) {
       const who = t.owner_id ? actorOf(t.owner_id)?.id : undefined;
-      if (who) by.set(who, [...(by.get(who) ?? []), t]);
+      if (!who) continue;
+      const owned = by.get(who);
+      if (owned) owned.push(t);
+      else by.set(who, [t]);
     }
     return by;
   };
   const openBy = tally(openTasks.data?.tasks);
   const openTotal = [...everyone].reduce((n, id) => n + (openBy.get(id)?.length ?? 0), 0);
   const paused = new Set((roster.data ?? []).filter((r: AgentRow) => r.status === 'paused').map((r) => r.slug));
-  const slugs = (roster.data ?? []).filter((r) => everyone.has(`bot:${r.id}`)).map((r) => r.slug);
+  const slugs = [...everyone].map((id) => actorOf(id)?.slug).filter((slug): slug is string => !!slug);
   const spend = useQuery(monthSpendQuery(slugs)).data;
-  const seats = useQuery(seatsQuery).data ?? [];
+  const seats = peopleRoster?.seats ?? [];
 
   const row = (a: Actor) => {
     const mine = openBy.get(a.id) ?? [];

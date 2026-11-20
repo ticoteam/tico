@@ -14,8 +14,12 @@ export const Route = createFileRoute('/company/usage')({
     ...(raw.by === 'model' ? { by: 'model' as const } : {}),
     ...(typeof raw.open === 'string' && raw.open ? { open: raw.open } : {}),
   }),
-  loaderDeps: ({ search }) => ({ view: search.view, range: search.range }),
-  loader: ({ deps, context: { queryClient } }) => loadUsage(queryClient, deps),
+  loaderDeps: ({ search }) => ({ view: search.view, range: search.range, by: search.by }),
+  loader: ({ deps, cause, context: { queryClient } }) => {
+    // On the open Spend page, the component knows which local filters its queries need.
+    if (cause === 'stay' && deps.view !== 'limits') return;
+    return loadUsage(queryClient, deps);
+  },
   component: UsageRoute,
 });
 

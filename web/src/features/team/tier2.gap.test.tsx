@@ -83,7 +83,7 @@ beforeEach(() => {
   queryClient.setQueryData(directoryQuery.queryKey, { actors, byId });
   queryClient.setQueryData(groupsQuery.queryKey, groups);
   queryClient.setQueryData(agentsQuery.queryKey, roster);
-  queryClient.setQueryData(peopleQuery.queryKey, [{ id: 'p1', name: 'Pat Doe' }]);
+  queryClient.setQueryData(peopleQuery.queryKey, { people: [{ id: 'p1', name: 'Pat Doe' }], seats: [] });
   queryClient.setQueryData(computersQuery.queryKey, [studio]);
 });
 afterEach(() => {

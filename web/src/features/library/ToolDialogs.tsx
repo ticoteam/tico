@@ -14,8 +14,8 @@ import { Segmented } from '@/kit/Segmented';
 import { Select } from '@/kit/Select';
 import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
-import { Foot, SCHEMES, trimmed, useGo, type Scheme } from './AddTool';
-import { More, press } from './parts';
+import { SCHEMES, type Scheme } from './AddTool';
+import { More, press, Foot, trimmed, useGo } from './parts';
 import { eventTypesQuery, readMessage, type Inbox, type PasteItem } from './queries';
 
 /* The dialogs an open tool raises (the old app's tools-api, tools-website and inboxes dialogs). A secret shown here

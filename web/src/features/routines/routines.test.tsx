@@ -10,12 +10,11 @@ import { PageFault } from '@/shell/PageFault';
 import { ListeningPage } from './ListeningPage';
 import { validateListeningSearch, validateRoutinesSearch, validateRulesSearch } from './load';
 import { dueQuery, hooksQuery, orgRulesQuery, routinesQuery, stageRulesQuery, watchesQuery, type StageRules } from './queries';
-import { runLink } from './RoutinePanel';
 import { RoutinesPage } from './RoutinesPage';
 import { RulesPage } from './RulesPage';
 import { StageRules as StageRulesList } from './StageRules';
 import type { Hook, OrgRule, Routine, StageRule } from './types';
-import { cronWords, orgParts, stageParts } from './words';
+import { cronWords, orgParts, runLink, stageParts } from './words';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 

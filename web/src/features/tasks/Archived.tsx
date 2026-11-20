@@ -1,8 +1,9 @@
 import { useSuspenseQuery } from '@tanstack/react-query';
 import { Ago } from '@/kit/Ago';
+import { useCards } from '@/kit/Popover';
 import { Row } from '@/kit/Row';
 import { Section } from '@/pagekinds';
-import { Capped, LIST_CAP, LIST_SHOW, RowMore, ROW_H } from './capped';
+import { Capped, LIST_CAP, LIST_SHOW, PHONE_ROW_H, RowMore, ROW_H } from './capped';
 import { Face, taskHref } from './parts';
 import { loadMoreOf, shelfParams, shelfQuery, shelfTotal, type Filters, type Pipeline, type Shelf, type TaskItem, type TaskPage } from './queries';
 
@@ -23,6 +24,7 @@ export function useShelves(pipeline: string, f: Filters): Record<Shelf, TaskPage
 
 /** Archived (list.js `archivedBody`): Snoozed, Done, Closed, each a section of rows that name their stage. */
 export function ArchivedSections({ p, filters, shelves }: { p: Pipeline; filters: Filters; shelves: ReturnType<typeof useShelves> }) {
+  const cards = useCards();
   const names = new Map<string, string>([...p.stages, ...(p.done ? [p.done] : []), ...(p.closed ? [p.closed] : [])].map((s) => [s.id, s.name]));
   return SHELVES.map(([shelf, name]) => {
     const page = shelves[shelf];
@@ -34,7 +36,8 @@ export function ArchivedSections({ p, filters, shelves }: { p: Pipeline; filters
           list={page.tasks}
           cap={LIST_CAP}
           show={LIST_SHOW}
-          height={ROW_H}
+          height={cards ? PHONE_ROW_H : ROW_H}
+          measure={cards}
           more={cut ? () => void loadMoreOf(shelfParams(p.id, shelf, filters)) : undefined}
           draw={(t) => <ArchRow key={t.id} t={t} p={p} stage={t.stage_id ? names.get(t.stage_id) : undefined} />}
           moreRow={(n, open) => <RowMore key="more" n={n} cut={cut} onClick={open} />}

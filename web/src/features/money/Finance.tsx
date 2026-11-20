@@ -37,7 +37,9 @@ export function FinancePage({ search }: { search: FinanceSearch }) {
   const tab: FinanceTab = search.tab ?? (shown('overview') ? 'overview' : (FINANCE_TAB_IDS.find(shown) ?? 'overview'));
   // My budget is a tab only for a teammate who sees nothing else, but whoever reads every budget (the owner) may open it
   if (!shown(tab) && !(tab === 'mine' && caps?.budgets)) return <Closed />;
-  if (tab === 'overview') return <Overview mayReadSources={shown('sources')} />;
+  if (tab === 'overview') {
+    return <Overview mayReadSources={shown('sources')} mayReadPayables={shown('payables')} mayReadReceivables={shown('receivables')} />;
+  }
   if (tab === 'pnl') return <PnlPage search={search} />;
   if (tab === 'budgets') return <BudgetsPage search={search} />;
   if (tab === 'mine') return <BudgetsPage search={search} mine />;
@@ -75,7 +77,7 @@ const KIND_TAB: Record<string, FinanceTab> = {
 /** The overview: four figures, then one column of sections as the mock stacks them (finance.js `overview`): revenue and
     spend by week, what waits on you, what changed. Each Section puts its name on the page edge itself, so none sits in
     the kind's padded chart slot or its two-column widget grid. */
-function Overview({ mayReadSources }: { mayReadSources: boolean }) {
+function Overview({ mayReadSources, mayReadPayables, mayReadReceivables }: { mayReadSources: boolean; mayReadPayables: boolean; mayReadReceivables: boolean }) {
   const press = usePress();
   const head = useFinanceHead();
   const as = useViewAs();
@@ -87,13 +89,13 @@ function Overview({ mayReadSources }: { mayReadSources: boolean }) {
   const month = useQuery(pnlQuery({ ...monthSpan(ym), period: 'month', basis: 'accrual' }, as));
   const weekly = useQuery(pnlQuery({ start: dayOf(weeks), end: dayOf(now), period: 'week', basis: 'accrual' }, as));
   const cashNow = useQuery(metricQuery('cash', as));
-  const invoices = useQuery(invoicesQuery(as));
-  const bills = useQuery(billsQuery(as));
+  const invoices = useQuery({ ...invoicesQuery(as), enabled: mayReadReceivables, select: (data) => data.open }).data;
+  const bills = useQuery({ ...billsQuery(as), enabled: mayReadPayables, select: (data) => data.open }).data;
   const inbox = useQuery(inboxQuery(as));
-  const brief = useQuery(briefQuery(as));
 
   const live = connected(sources.data?.groups);
   const state = mayReadSources ? readState(sources, !live) : 'ready';
+  const brief = useQuery({ ...briefQuery(as), enabled: state === 'ready' });
   const m = month.data;
   const net = m ? (m.net[nowCol(m.columns)] ?? null) : null;
   const cv = cashNow.data?.value;
@@ -105,6 +107,8 @@ function Overview({ mayReadSources }: { mayReadSources: boolean }) {
   const xl = w ? [0, 4, 8, n - 1].filter((i, k, a) => i >= 0 && i < n && a.indexOf(i) === k).map((i) => [i, fmtDate(w.columns[i]?.start ?? '', now)] as const) : [];
   const waits = inbox.data?.items ?? [];
   const changed = brief.data?.lines ?? [];
+  const owed = mayReadReceivables ? invoices : undefined;
+  const due = mayReadPayables ? bills : undefined;
 
   return (
     <Dashboard
@@ -133,14 +137,14 @@ function Overview({ mayReadSources }: { mayReadSources: boolean }) {
               },
               {
                 label: 'Owed to you',
-                value: invoices.data ? cash(invoices.data.open.remaining) : '',
-                sub: invoices.data ? plural(invoices.data.open.count, 'invoice') : undefined,
+                value: owed ? cash(owed.remaining) : '',
+                sub: owed ? plural(owed.count, 'invoice') : undefined,
                 target: 'figure:owed',
               },
               {
                 label: 'You owe',
-                value: bills.data ? cash(bills.data.open.remaining) : '',
-                sub: bills.data ? plural(bills.data.open.count, 'bill') : undefined,
+                value: due ? cash(due.remaining) : '',
+                sub: due ? plural(due.count, 'bill') : undefined,
                 target: 'figure:owe',
               },
             ]}

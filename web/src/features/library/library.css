@@ -117,6 +117,8 @@
 .lib .skillrow .row-fig{color:var(--ink-2);font-size:var(--t-sm)}
 .lib .skillrow.is-ask .row-title{font-weight:var(--w-strong)}
 .lib .skillrow.is-ask .row-ctx{color:var(--ink-2)}
+.lib .vl-item:has(>.skillrow)+.vl-item>.skillrow::before{content:"";position:absolute;left:var(--rule-from);right:8px;top:0;height:1px;background:var(--line);pointer-events:none}
+.lib .vl-item:has(>.skillrow:hover)+.vl-item>.skillrow::before{opacity:0}
 .lib .sp-side .fact{height:28px}
 .lib .sp-side .fact-v{min-width:0}
 .lib .sp-h{height:36px;display:flex;align-items:center;margin-top:var(--s-2h);font-size:var(--t-sm);font-weight:var(--w-strong);color:var(--ink)}

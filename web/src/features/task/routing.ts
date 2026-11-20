@@ -1,7 +1,32 @@
+import type { QueryClient } from '@tanstack/react-query';
+import { CHAT, decisionOf, defaultTab, isPage, tabsOf } from './model';
+import { pageShownQuery, taskDetailQuery, taskFilesQuery, taskRefQuery, type TaskData } from './queries';
+
 // What the routes use before a task's code loads: its first read, its address and the address check. No components
 // here: the first load imports this file, and the task page comes through exports.ts with its route.
-export { loadTask, taskRefQuery, taskDetailQuery } from './queries';
+export { taskRefQuery, taskDetailQuery };
 export { tabAddress as taskAddress } from './model';
+
+/** Load the task while the route loads its code. A refused read leaves the page to show the error. */
+export async function loadTask(client: QueryClient, param: string, tab?: string): Promise<{ task: TaskData; tab: string } | null> {
+  try {
+    const id = await client.ensureQueryData(taskRefQuery(param));
+    const t = await client.ensureQueryData(taskDetailQuery(id));
+    const fileQuery = taskFilesQuery(id);
+    const files = client.prefetchQuery(fileQuery);
+    const tabs = tabsOf(t);
+    const selected = tab ? tabs.find((x) => x.slug === tab) : tabs[0];
+    // An attached file can outrank the default document when the task is waiting for an answer.
+    const doc = selected?.doc && (tab || selected.mark === 'ask' || !decisionOf(t)) ? selected.doc : undefined;
+    if (doc && isPage(doc)) void client.prefetchQuery(pageShownQuery(id, doc.file_id));
+    // Details includes the file list in its body, where inserting the section late shifts the content.
+    if (selected && (doc || (tab === CHAT && selected.chat))) return { task: t, tab: selected.slug };
+    await files;
+    return { task: t, tab: tab ?? defaultTab(tabsOf(t, client.getQueryData(fileQuery.queryKey))) };
+  } catch {
+    return null;
+  }
+}
 
 /**
  * What a task's address may carry: a file opened from Details (`full` shows a picture full size), in Flow the open

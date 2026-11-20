@@ -5,7 +5,8 @@ import { loadTask, taskSearch } from '@/features/task/routing';
 /* `/flow/<n>`: the task inside Flow, with Flow's previous and next. The tab is in the search: `?tab=details`. */
 export const Route = createFileRoute('/flow/$task')({
   validateSearch: taskSearch,
-  loader: ({ params, context: { queryClient } }) => loadTask(queryClient, params.task),
+  loaderDeps: ({ search }) => ({ tab: search.tab }),
+  loader: ({ params, deps, context: { queryClient } }) => loadTask(queryClient, params.task, deps.tab),
   component: FlowTaskRoute,
 });
 

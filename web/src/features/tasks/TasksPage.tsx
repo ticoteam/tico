@@ -21,7 +21,7 @@ import { Board, BoardColumn, FilterRow, List, PageMore, Section, type FilterChip
 import { usePref, writePref } from '@/prefs';
 import { ArchivedSections, useShelves } from './Archived';
 import { BoardFit } from './BoardFit';
-import { Capped, CARD_H, COL_CAP, COL_SHOW, LIST_CAP, LIST_SHOW, moreText, RowMore, ROW_H } from './capped';
+import { Capped, CARD_H, COL_CAP, COL_SHOW, LIST_CAP, LIST_SHOW, moreText, PHONE_ROW_H, RowMore, ROW_H } from './capped';
 import { useCardDrag } from './drag';
 import { DropDialog } from './DropDialog';
 import { DUE_NAMES, FilterItems, FilterMenu } from './FilterMenu';
@@ -79,7 +79,6 @@ function OpenPage({ pipeline, p, pipes, search, view, head }: PageProps & { view
   const filters = filtersOf(search);
   const tasks = useSuspenseQuery(pipelineTasksQuery(pipeline, filters)).data;
   const me = useQuery(meQuery).data?.id;
-  const flow = useQuery(flowQuery).data?.count ?? 0;
   const [folds, setFolds] = usePref<string[]>(`${FOLD_PREF}:${pipeline}`, []);
   const edit = useAction('tasks.editPipeline');
   const [newIn, setNewIn] = useState<{ stage: string | null } | null>(null);
@@ -94,14 +93,14 @@ function OpenPage({ pipeline, p, pipes, search, view, head }: PageProps & { view
   const filtered = isFiltered(filters);
   const cut = !!tasks.next_after;
   // A stage's count is the server's (under the filters, past what was read); a read without counts has only its rows.
-  const countOf = (stage: string, loaded: number) => stageCount(tasks, stage) ?? (cut ? undefined : loaded);
+  const countOf = (stage: string, loaded: number) => stageCount(tasks, stage, loaded) ?? (cut ? undefined : loaded);
   const onNew = () => setNewIn({ stage: null });
 
   const page = {
     ...head,
     title: 'Tasks',
     search: !cards || finding || search.q ? <TaskFind search={search} /> : undefined,
-    actions: <HeadActions pipeline={pipeline} view={view} search={search} flow={flow} p={p} onNew={onNew} />,
+    actions: <HeadActions pipeline={pipeline} view={view} search={search} p={p} onNew={onNew} />,
     more: p && (
       <MoreMenu
         p={p}
@@ -157,7 +156,6 @@ function OpenPage({ pipeline, p, pipes, search, view, head }: PageProps & { view
 function ArchivedPage({ pipeline, p, search, head }: Omit<PageProps, 'pipes'>) {
   const filters: Filters = filtersOf(search);
   const shelves = useShelves(pipeline, filters);
-  const flow = useQuery(flowQuery).data?.count ?? 0;
   const empty = !p || (Object.values(shelves).every((x) => !x.tasks.length) && !isFiltered(filters));
   return (
     <List
@@ -165,7 +163,7 @@ function ArchivedPage({ pipeline, p, search, head }: Omit<PageProps, 'pipes'>) {
       title="Archived"
       crumb={[{ label: 'Tasks', to: `/tasks/${encodeURIComponent(pipeline)}` }]}
       search={<TaskFind search={search} />}
-      actions={<HeadActions pipeline={pipeline} view="archived" search={search} flow={flow} p={p} />}
+      actions={<HeadActions pipeline={pipeline} view="archived" search={search} p={p} />}
       state={empty ? 'empty' : 'ready'}
       empty={{ title: p ? `Nothing archived in ${p.name}` : 'No such pipeline' }}
       filter={<Chips search={search} />}
@@ -267,14 +265,12 @@ function HeadActions({
   pipeline,
   view,
   search,
-  flow,
   p,
   onNew,
 }: {
   pipeline: string;
   view: View;
   search: TasksSearch;
-  flow: number;
   p: Pipeline | undefined;
   onNew?: () => void;
 }) {
@@ -298,10 +294,15 @@ function HeadActions({
         </span>
       )}
       {onNew && <IconButton icon="plus" label="New task" onClick={onNew} data-target="tasks:new" />}
-      {view !== 'archived' && <FlowButton on={false} count={flow} />}
+      {view !== 'archived' && <OpenFlowButton />}
       {p?.owner && <OwnerButton actor={p.owner} />}
     </>
   );
+}
+
+function OpenFlowButton() {
+  const { data = 0 } = useQuery({ ...flowQuery, select: (flow) => flow.count });
+  return <FlowButton on={false} count={data} />;
 }
 
 /** The filters that are set, one chip each, then Clear. */
@@ -447,7 +448,7 @@ function Columns({ p, rows, me, folds, fold, more, cut, countOf, picking, toggle
               show={COL_SHOW}
               more={more}
               height={CARD_H}
-              cards
+              measure
               draw={(t) => (
                 <Movable key={t.id} task={t} stages={p.stages} wrap={picking ? undefined : drag(t)}>
                   <Card t={t} p={p} me={me} picked={picking?.has(t.id)} onPick={picker(toggle, t.id)} />
@@ -469,6 +470,7 @@ function Columns({ p, rows, me, folds, fold, more, cut, countOf, picking, toggle
 }
 
 function Sections({ p, rows, me, folds, fold, more, cut, countOf, picking, toggle, onNew, onEdit, edit }: BodyProps & { edit?: boolean }) {
+  const cards = useCards();
   const groups = byStage(p.stages, rows);
   const none = p.stages.filter((s) => !groups.get(s.id)?.length);
   return (
@@ -497,7 +499,8 @@ function Sections({ p, rows, me, folds, fold, more, cut, countOf, picking, toggl
                 cap={LIST_CAP}
                 show={LIST_SHOW}
                 more={more}
-                height={ROW_H}
+                height={cards ? PHONE_ROW_H : ROW_H}
+                measure={cards}
                 draw={(t) => (
                   <Movable key={t.id} task={t} stages={p.stages}>
                     <TaskRow

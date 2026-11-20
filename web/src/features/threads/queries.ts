@@ -53,11 +53,13 @@ export const threadListQuery = infiniteQueryOptions({
   getNextPageParam: (last) => last.next ?? undefined,
 });
 
+const readThread = (id: string, signal: AbortSignal) => api.get<Thread>(`/api/v2/threads/${enc(id)}`, { signal });
+
 /** One thread: the view and its first page of members. */
 export const threadQuery = (id: string) =>
   queryOptions({
     queryKey: threadKeys.view(id),
-    queryFn: ({ signal }) => api.get<Thread>(`/api/v2/threads/${enc(id)}`, { signal }),
+    queryFn: ({ signal }) => readThread(id, signal),
   });
 
 export interface CatchUpItem {
@@ -84,18 +86,18 @@ export const catchUpQuery = queryOptions({
  * The second chat's thread. `thread:<id>` is the thread itself; `agent:<slug>` and `person:<id>` are the viewer's DM
  * with them, which the server opens when there is none yet (as the old app's "Message" does).
  */
-export const chatQuery = (chat: string) =>
-  queryOptions({
-    queryKey: threadKeys.chat(chat),
+export const chatQuery = (chat: string) => {
+  const thread = chat.startsWith('thread:') ? chat.slice('thread:'.length) : undefined;
+  return queryOptions({
+    queryKey: thread === undefined ? threadKeys.chat(chat) : threadKeys.view(thread),
     queryFn: async ({ signal }): Promise<Thread> => {
-      const [kind, ...rest] = chat.split(':');
-      const id = rest.join(':');
-      if (kind === 'thread') return api.get<Thread>(`/api/v2/threads/${enc(id)}`, { signal });
+      if (thread !== undefined) return readThread(thread, signal);
       const actor = chatActor(chat);
       if (!actor) throw new Error('not a chat address');
       return api.get<Thread>(`/api/v2/threads/dm${qs({ with: actor })}`, { signal });
     },
   });
+};
 
 /** A team's own thread: its Home (`group:<id>`), which the server makes the first time it is opened. */
 export const teamThreadQuery = (group: string) =>

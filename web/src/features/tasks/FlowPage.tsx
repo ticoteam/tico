@@ -56,7 +56,8 @@ function FlowSection({ g }: { g: FlowGroup }) {
 /** Flow: every task that waits on you, in every pipeline, one after another. A row opens it in Flow. It is Tasks with
     the Flow button pressed (list.js flow). */
 export function FlowPage() {
-  useFollow({ allTasks: true }, [['tasks', 'list'], ['flow']]);
+  // The always-followed needs topic keeps the Flow query current across pages.
+  useFollow({ allTasks: true });
   const flow = useSuspenseQuery(flowQuery).data;
   const pipes = useSuspenseQuery(pipelinesQuery).data;
   return (

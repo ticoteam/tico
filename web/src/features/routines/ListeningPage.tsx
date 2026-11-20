@@ -17,9 +17,8 @@ import { List, PageMore, Record as RecordPage, Section, type PageTab } from '@/p
 import { LISTENING } from './actions';
 import { Face, Find, HeadSwitch, PageOwner, press, pressOut, RemoveItem, Rows, RuleRow, useConfirmRemove, Verb, Word } from './parts';
 import { matchesQuery, runsQuery, sourcesQuery, watchesQuery, watchQuery } from './queries';
-import { runLink } from './RoutinePanel';
 import type { ListenSource, Match, Routine, WatchSource } from './types';
-import { agentWords, cap, limitsWords } from './words';
+import { agentWords, cap, limitsWords, runLink } from './words';
 import './routines.css';
 
 /* Listening (rules.js listeningScreen, watchScreen): the watches as a List; one watch as a Record with two tabs, its

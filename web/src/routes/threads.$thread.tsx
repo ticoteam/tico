@@ -4,7 +4,7 @@ import { loadThreads } from '@/features/threads/routing';
 
 /* One thread. New message, Mail and Messaging have routes of their own, which win over this one. */
 export const Route = createFileRoute('/threads/$thread')({
-  loader: ({ params, context: { queryClient } }) => loadThreads(queryClient, { thread: params.thread }),
+  loader: ({ params, context: { queryClient }, preload }) => loadThreads(queryClient, { thread: params.thread, preload }),
   component: ThreadRoute,
 });
 

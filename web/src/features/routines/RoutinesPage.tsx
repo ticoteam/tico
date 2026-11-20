@@ -19,7 +19,7 @@ import { RoutinePanel } from './RoutinePanel';
 import { RunsTab } from './RunsTab';
 import type { Hook, Routine, SystemJob } from './types';
 import { HookDialog, WebhookPanel } from './WebhookPanel';
-import { maintenanceWords, startsWords, triggerWords } from './words';
+import { maintenanceWords, runnerOf, startsWords, triggerWords } from './words';
 import './routines.css';
 
 /* Routines (pages/3-company/rules.js routinesScreen, webhooksScreen): a List. Routines in sections by what starts
@@ -72,9 +72,6 @@ const SECTIONS: [string, string][] = [
   ['task_received', 'Tasks received'],
 ];
 
-/** Who runs it: the agent that takes the turn, or the owner. */
-export const runnerOf = (r: Routine) => r.steps?.find((s) => s.type === 'bot_turn')?.bot ?? r.owner_id ?? null;
-
 /** The filter's states (old automations-overview.ts AU_STATES): on, last run failed, on hold, off or paused. */
 const STATE_WORDS: Record<RoutineState, string> = { on: 'On', failed: 'Failed', hold: 'On hold', off: 'Off' };
 const stateOf = (r: Routine): RoutineState => (r.last_run?.status === 'failed' ? 'failed' : r.hold ? 'hold' : r.enabled === false || r.paused ? 'off' : 'on');
@@ -82,11 +79,11 @@ const has = (words: string, q: string | undefined) => !q || words.toLowerCase().
 
 function RoutinesTab({ panel, q, state }: { panel?: string; q?: string; state?: RoutineState }) {
   const all = useSuspenseQuery(routinesQuery).data;
-  const hooks = useQuery(hooksQuery);
+  const hooks = useQuery({ ...hooksQuery, enabled: all.some((r) => r.trigger.type === 'webhook' && !!r.trigger.id) });
   const open = panel?.startsWith('routine:') ? panel.slice(8) : null;
   const built = panel?.startsWith('builtin:') ? (BUILTINS.find((b) => `builtin:${b}` === panel) ?? null) : null;
   const hookName = (id: string) => hooks.data?.find((h) => h.id === id)?.name;
-  const routines = all.filter((r) => (!state || stateOf(r) === state) && has(`${r.name ?? ''} ${triggerWords(r.trigger, { hook: hookName })}`, q));
+  const routines = all.filter((r) => (!state || stateOf(r) === state) && (!q || has(`${r.name ?? ''} ${triggerWords(r.trigger, { hook: hookName })}`, q)));
   const listed = (to: { q?: string; state?: RoutineState }) => void press('routines.list', to);
   const known = new Set(SECTIONS.map(([t]) => t));
   const groups: [string, Routine[]][] = [

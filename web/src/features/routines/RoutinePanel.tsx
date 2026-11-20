@@ -17,8 +17,8 @@ import { routineBoard, takesTemplate } from './board';
 import { Face, HeadSwitch, PanelRead, press, pressOut, RemoveItem, useConfirmRemove, useName, Verb, Word } from './parts';
 import { routineQuery, routinesQuery, runsQuery, versionsQuery } from './queries';
 import { ApplyTemplate } from './Templates';
-import type { Routine, Run, Trigger, Version } from './types';
-import { EVERY, eventWords, flowLines, lineDiff, parseSchedule, scheduleCron, timeChoices, triggerWords, WEEKDAYS, runWords, type Every } from './words';
+import type { Routine, Trigger, Version } from './types';
+import { EVERY, eventWords, flowLines, lineDiff, parseSchedule, runLink, runWords, scheduleCron, timeChoices, triggerWords, WEEKDAYS, type Every } from './words';
 
 /* One routine, as a panel (rules.js routinePanel): its facts, the instruction, the last runs and Run now. Edit turns
    the panel into the editor; `routine:new` opens the editor empty. "⋯" also holds a test run with sample input and its
@@ -345,17 +345,6 @@ function LimitEditor({ routine, onDone }: { routine: Routine; onDone: () => void
 function Runner({ id }: { id: string | null | undefined }) {
   const name = useName(id);
   return <span>{name || 'An agent'}</span>;
-}
-
-/** The task or thread a run made: the first one a step names. */
-export function runLink(run: Pick<Run, 'steps'>): string | undefined {
-  for (const s of run.steps ?? []) {
-    const o = s.outputs;
-    const task = o?.ref ?? o?.turn?.task;
-    if (typeof task === 'string' && task) return `/task/${encodeURIComponent(task)}`;
-    if (typeof o?.thread === 'string' && o.thread) return `/threads/${encodeURIComponent(o.thread)}`;
-  }
-  return undefined;
 }
 
 function Runs({ id }: { id: string }) {
