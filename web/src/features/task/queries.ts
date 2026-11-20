@@ -551,8 +551,31 @@ export const emailSendQuery = (task: string, send: string) =>
     queryKey: [...keys.tasks.detail(task), 'email', send] as const,
     queryFn: async ({ signal }) => {
       const r = await api.get<EmailPreview>(`/api/v2/email/sends/${enc(send)}`, { signal });
+      queryClient.setQueryData(sendStateQuery(send).queryKey, r.send);
       return { ...r, files: r.send.attachments as unknown as EmailFile[] };
     },
+  });
+
+/** A send's states on its way out once its OK is given: in its undo window, being handed to the mail provider. */
+const OUTGOING: readonly string[] = ['pending', 'dispatching'];
+
+/** How often a send is read again while it may still go. */
+export const SEND_POLL_MS = 3000;
+
+/** Where a send is (GET /api/v2/email/sends/{sid}): `pending` until `send_after` (the undo window), then `sent` at
+    `finished_at`, or `failed`, `canceled`, `blocked` with `detail`. Read again every few seconds while it is on its way,
+    one read per send however many places show it; `approved` (its OK was just given here) reads it while it still
+    waits on the OK too, which the server takes into the send within seconds. The email's preview fills it. */
+export const sendStateQuery = (send: string, approved = false) =>
+  queryOptions({
+    queryKey: ['email-send-state', send] as const,
+    queryFn: async ({ signal }): Promise<MailSend> => (await api.get<EmailPreview>(`/api/v2/email/sends/${enc(send)}`, { signal })).send,
+    refetchInterval: (q) => {
+      const state = q.state.data?.state ?? '';
+      return OUTGOING.includes(state) || (approved && state === 'waiting_approval') ? SEND_POLL_MS : false;
+    },
+    staleTime: SEND_POLL_MS,
+    enabled: !!send,
   });
 
 /** Who an email goes to, copies and blind copies apart once the preview says so; before, every address is under To. */

@@ -626,7 +626,7 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
     const router = open();
     fireEvent.click(await ready(await decision()));
     await waitFor(() => expect(sent).toEqual([{ url: `/api/v2/tasks/b78be168/asks/${rid}/ok`, body: { shown_hash: 'h-mail' } }]));
-    await waitFor(() => expect(document.querySelector('.toasts')?.textContent).toContain('Approved: Email to Dana Ruiz'));
+    await waitFor(() => expect(document.querySelector('.toasts')?.textContent).toContain('Sending to dana@example.test'));
     expect(screen.getByRole('button', { name: 'Undo' })).toBeTruthy();
     // the email went with its ask: the matter's own page opens in its place, never a blank page
     await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/legal-responses/36461/review-page'));

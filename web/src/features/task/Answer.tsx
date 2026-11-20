@@ -10,6 +10,7 @@ import { FlowMark } from '@/kit/FlowMark';
 import { toast } from '@/kit/Toast';
 import { changesAskedOf, decisionName, decisionOf, effectOf, emailOf, failedToast, personOf, reasonOf, sendTitle, tabAddress } from './model';
 import { Face } from './parts';
+import { followSend } from './sending';
 import { addressesOf, decisionShownQuery, emailSendQuery, waitingQuery, type TaskData } from './queries';
 
 /* The decision (plan/approvals.html): one box wherever a request waits on the person. It names the thing, who asks and
@@ -57,8 +58,9 @@ export function Decision({ t, flow, dock = false, onAsking }: DecisionProps) {
 function useNamed(t: TaskData, r: TaskRequirement) {
   const send = emailOf(r);
   const mail = useQuery({ ...emailSendQuery(t.id, send ?? ''), enabled: !!send });
-  const to = (mail.data && addressesOf(mail.data).to[0]) ?? sendTitle(t.title)?.to;
-  return { name: decisionName(t, r, to ? personOf(to) : undefined), effect: effectOf(t, r) };
+  const all = mail.data ? addressesOf(mail.data).to : [];
+  const to = all[0] ?? sendTitle(t.title)?.to;
+  return { name: decisionName(t, r, to ? personOf(to) : undefined), effect: effectOf(t, r), send, recipients: all.length ? all : to ? [to] : [] };
 }
 
 /** The face of who asks: the agent that asked, else whoever has the task. */
@@ -84,7 +86,7 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
   const navigate = useNavigate();
   const waiting = useQuery({ ...waitingQuery, enabled: flow });
   const shown = useQuery(decisionShownQuery(t.id, r.requirement_id, t.version, emailOf(r)));
-  const { name, effect } = useNamed(t, r);
+  const { name, effect, send, recipients } = useNamed(t, r);
   const [error, setError] = useState('');
   const [asking, setAsking] = useState(false);
   const [note, setNote] = useState('');
@@ -142,16 +144,19 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
     // The answer to take back: a plain answer names it; an OK bound to what was shown leaves it on the task's request.
     const out = res.out as { answer_id?: string; task?: TaskData } | undefined;
     const answer = out?.answer_id ?? out?.task?.to_leave?.find((x) => x.requirement_id === r.requirement_id)?.answer?.id;
-    toast({
-      text: 'Approved',
-      name,
-      ...(answer && {
-        action: {
-          label: 'Undo',
-          run: () => void run('task.undoAnswer', { task: t.id, answer }, { via: 'click' }).then((u) => (u.ok ? undefined : toast(failedToast(u)))),
-        },
-      }),
-    });
+    // An email: the toast follows it through its undo window until it has gone.
+    if (send) followSend({ send, to: recipients, task: t.id, answer });
+    else
+      toast({
+        text: 'Approved',
+        name,
+        ...(answer && {
+          action: {
+            label: 'Undo',
+            run: () => void run('task.undoAnswer', { task: t.id, answer }, { via: 'click' }).then((u) => (u.ok ? undefined : toast(failedToast(u)))),
+          },
+        }),
+      });
     if (!flow) return;
     const to = next ? tabAddress(next, undefined, true) : { to: '/flow', search: {} };
     void navigate({ to: to.to as never, search: to.search as never });
