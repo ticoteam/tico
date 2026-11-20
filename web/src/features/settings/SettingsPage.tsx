@@ -5,7 +5,6 @@ import { meQuery } from '@/data';
 import { AddAgentButton } from '@/features/team/exports';
 import { Empty } from '@/kit/Empty';
 import { Search } from '@/kit/Field';
-import { Icon } from '@/kit/Icon';
 import { Link as To } from '@/kit/Link';
 import { useCards } from '@/kit/Popover';
 import { Section, Settings } from '@/pagekinds';
@@ -66,14 +65,7 @@ function Nav({ current }: { current: SectionId }) {
           <div key={`gap-${i}`} className="set-gap" role="separator" />
         ),
       )}
-      {/* The style guide: a reference page, open to everyone, after the sections. */}
-      <div className="set-gap" role="separator" />
-      <Link to="/settings/style-guide" className="row set-link">
-        <span className="row-title">Style guide</span>
-        <span className="set-out">
-          <Icon name="arrow" />
-        </span>
-      </Link>
+      {/* The style guide (/settings/style-guide) stays as a page reached by its address; it has no row here. */}
     </>
   );
 }
