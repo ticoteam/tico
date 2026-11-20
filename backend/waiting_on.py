@@ -35,6 +35,7 @@ from . import (
     pipeline_rights,
     pr_conflicts,
     question_marks,
+    questions,
     read_cache,
     task_depends,
 )
@@ -116,7 +117,9 @@ def unnamed(said: Said, shown: Callable[[str], bool]) -> Said:
         if said.state == TASKS and merge_order.is_order_wait(said.requirement_id):
             return replace(said, who=None, line=merge_order.UNNAMED, about=None)
         if said.state == TASKS and task_depends.is_wait(said.requirement_id):
-            return replace(said, who=None, line=task_depends.UNNAMED, about=None)
+            # Its wait id ends with the task it depends on: that goes too.
+            unnamed_id = str(said.requirement_id).rsplit(":", 1)[0] + ":"
+            return replace(said, who=None, line=task_depends.UNNAMED, about=None, requirement_id=unnamed_id)
         if said.state == TASKS:
             return replace(said, who=None, line=SUB_TASK, about=None)
         return replace(said, line=SUB_TASK_CLOSED, about=None)
@@ -448,12 +451,15 @@ def of(
     # A ❓ on the task's chat waits on the person it names (backend/question_marks.py), and the bot that put it there
     # is not chased while it waits: its own ❓ is a question it asked.
     marks = question_marks.on_task(conn, row["id"])
+    # A question filed as a task under this one (backend/questions.py) waits on its person the same way.
+    asking_questions = questions.on_parent(conn, row)
     asked = theirs and (
         any(
             s.state == R.WAITING and s.requirement.get("visit_id") and s.requirement.get("added_by_id") == has
             for s in unmet
         )
         or any(m["bot_id"] == has for m in marks)
+        or any(q["asker_id"] == has for q in asking_questions)
     )
     filed: list[tuple[str, str]] | None = None
     on_tasks: set[str] = set()
@@ -571,13 +577,17 @@ def of(
         line = f"{'Late' if late else 'Stuck'} in {stage['name']}: {_share_line(conn, shut)}"
         since = late or visit.get("last_change_at") or entered
         out.insert(0, Wait(PERSON, person_for(conn, row), line, None, since, share=shut))
-    if marks:
-        # Any bot with an open ❓ here (the holder, or a reviewer asked for its OK) is not chased for anything on the
-        # task while it waits: the wait is the person's. It is chased again once the ❓ clears.
-        asking = {m["bot_id"] for m in marks}
+    if marks or asking_questions:
+        # Any bot with an open ❓ or question here (the holder, or a reviewer asked for its OK) is not chased for
+        # anything on the task while it waits: the wait is the person's. It is chased again once it is answered.
+        asking = {m["bot_id"] for m in marks} | {q["asker_id"] for q in asking_questions}
         out = [wait for wait in out if not (wait.state in (BOT, PAUSED) and not wait.fix and wait.who in asking)]
     for m in marks:
         out.append(Wait(PERSON, m["person_id"], m["line"], question_marks.wait_id(m), m["created_at"], ask=True))
+    for q in asking_questions:
+        # Said the same to every reader, list, wake and note: never its words, task or a name, which only a reader of the
+        # question reads (its own task, and the parent's `questions`).
+        out.append(Wait(PERSON, q["person_id"], questions.LINE, questions.parent_wait_id(q), q["updated_at"], ask=True))
     blockers = task_depends.blockers(conn, str(row["id"]))
     if blockers:
         # It depends on a task still open: that is all it waits on, nobody's turn, until the task ends (task_depends).
@@ -1365,7 +1375,10 @@ def _lists(
             mine = [
                 wait
                 for wait in waits
-                if wait.state == PERSON and wait.who == person and not question_marks.mark_id(wait.requirement_id)
+                if wait.state == PERSON
+                and wait.who == person
+                and not question_marks.mark_id(wait.requirement_id)
+                and not questions.is_wait(wait.requirement_id)
             ]
             if any(wait.about for wait in mine):  # said to them: a sub-task they may not open is not named
                 shown = _shown(conn, row, person)
@@ -1434,8 +1447,11 @@ def _lists(
     for fixer, entries in paused.items():
         out.setdefault(fixer, []).extend(entries.values())
     # Each open ❓ for the person, on a task's chat or in a direct chat with a bot.
-    for person, questions in question_marks.items(conn, only, snoozed, only_people).items():
-        out.setdefault(person, []).extend(questions)
+    for person, marked in question_marks.items(conn, only, snoozed, only_people).items():
+        out.setdefault(person, []).extend(marked)
+    # And each open question filed as a task for the person (backend/questions.py), whatever tasks were read.
+    for person, asked in questions.items(conn, only, snoozed).items():
+        out.setdefault(person, []).extend(asked)
     return {
         person: sorted(items, key=lambda item: (item["since"] or "", item.get("task_id") or "", item["line"]))
         for person, items in out.items()

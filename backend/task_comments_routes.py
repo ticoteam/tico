@@ -11,6 +11,9 @@ from . import counsel
 from . import delivery
 from . import org_rule_check
 from . import question_marks
+from . import questions
+from . import reach
+from . import threads
 from . import task_privacy as privacy
 from . import teammate_access
 from . import visuals
@@ -333,6 +336,15 @@ def register(
 
             return mutate(request, body, answered)
         text = f"{body.text}\n\n{known.checked_line()}" if known else body.text
+        # A link goes only on a question task (backend/questions.py), where the rules read it as part of what is asked.
+        # A ❓ (the switch off) is written and checked exactly as before links: its words alone.
+        with store.read() as c:
+            try:
+                as_task = questions.asks_as_task(c, auth.resolve_task(c, who, tid))
+            except Problem:
+                as_task = False  # the write below refuses it as it always did
+        link = body.link if as_task else None
+        checked = f"{text}\n\n{link}" if link else text
         if shape := ask_shape.line_refusal(body.text):  # in plain code, before the rule check's call
             mutate(
                 request,
@@ -342,13 +354,14 @@ def register(
         rc = rule_check(
             who,
             "question",
-            text,
+            checked,
+            # Who it reaches is read from its words alone, as its Send anyway replay reads it: never from the link.
             lambda c: rule_comment_audience(c, who, auth.task(c, who, auth.resolve_task(c, who, tid)), text, to),
             place=question_marks.Asking(task_place(who, tid)),
         )
 
         def write(c):
-            done = question_write(c, who, tid, text, to, rc)
+            done = question_write(c, who, tid, text, to, rc, link=link)
             if body.not_known and (done.get("comment") or {}).get("id"):
                 # Counted: Tico's answer did not cover it (Tasks spec criterion 12).
                 H.history_event(c, "task", auth.resolve_task(c, who, tid), who.actor, "ask_not_known", data={"to": to})
@@ -359,15 +372,53 @@ def register(
     # An older client's question on the asks route is asked here (task_moves_routes.task_ask).
     app.state.task_question = task_question
 
-    def question_write(c, who, tid, text, to, rc, ingest=None):
+    def question_write(c, who, tid, text, to, rc, ingest=None, link=None):
         """A ❓ on a task's chat, as the route writes it and Send anyway replays it: the comment, then its mark, in one
-        transaction. Held by a rule, nothing is written and nothing is marked."""
+        transaction. Held by a rule, nothing is written and nothing is marked. With the company's questions_as_tasks
+        on, the question is a task filed under this one instead (`question_task_write`); `link` goes on it, and a ❓
+        has none."""
+        if questions.asks_as_task(c, auth.resolve_task(c, who, tid)):
+            return question_task_write(c, who, tid, text, to, rc, link)
         done = comment_write(c, who, tid, M.TaskComment(text=text), ingest, rc, who, ask_to=to)
         said = done.get("comment") or {}
         if not said.get("id"):
             return done
         mark = question_marks.mark(c, who.actor, said["id"], to)
         return question_marks.with_warning({**done, "question": question_marks.public(mark)}, mark)
+
+    def question_task_write(c, who, tid, text, to, rc, link):
+        """A bot's question filed as a task under the task (backend/questions.py), after the org rule check the ❓ would
+        have had (its `kind:ask`, with the person in its audience): held, nothing is filed. The answer carries the
+        question's opening message as `comment`, as a ❓'s does, and the question as `question_task`."""
+        task_id = auth.resolve_task(c, who, tid)
+        row = auth.task(c, who, task_id)
+        from .task_reads import comment_rights
+
+        comment_rights(c, auth, who, task_id)  # as the ❓'s comment would be refused
+        # An @name in its words is checked against the bot's reach as the ❓'s comment's would be (reach.check_post).
+        thread = threads.thread_row(c, row["conversation_id"])
+        if thread and who.role == "bot":
+            reach.check_post(c, who, thread, [a for a, _ in threads.mentions(c, thread, text, author=who.actor)], None)
+        checked = f"{text}\n\n{link}" if link else text
+        audience = rule_comment_audience(c, who, row, text, to) if rc is not None else None
+        replay = {"task": task_id, "body": M.TaskComment(text=text).model_dump(mode="json", by_alias=True), "to": to}
+        rule = org_rule_check.apply(
+            c, rc, checked, {**replay, **({"link": link} if link else {})}, audience_now=audience
+        )
+        if rule and rule.get("moved"):
+            raise Problem("moved", "Who this goes to changed while it was checked; send it again", 409, retryable=True)
+        if rule and rule.get("held"):
+            return org_rule_check.held_answer(c, who, rule, auth=auth)
+        asked = questions.ask(c, who.actor, task_id, to, org_rule_check.warned_text(rule, text), link_url=link)
+        said = visual_view(c, who, H.task_comments(c, asked["task_id"], actor=privacy.actor(who)))
+        mine = [m for m in said if m.get("sender_id") == who.actor]
+        return {
+            "comment": mine[-1] if mine else None,
+            "comments": said,
+            "woke": False,
+            "question_task": asked,
+            **org_rule_check.answer(rule),
+        }
 
     def rule_question_audience(c, bot, replay):
         row = auth.task(c, bot, auth.resolve_task(c, bot, replay["task"]))
@@ -376,7 +427,9 @@ def register(
     @org_rule_check.replayer("question", audience=rule_question_audience)
     def rule_replay_question(c, bot, hold, replay, ingest, gate=None):
         text = replay["body"].get("text") or ""
-        return question_write(c, bot, replay["task"], text, replay["to"], org_rule_check.decided(gate), ingest)
+        return question_write(
+            c, bot, replay["task"], text, replay["to"], org_rule_check.decided(gate), ingest, replay.get("link")
+        )
 
     @app.get("/api/v2/tasks/{tid}/tree")
     def task_tree(request: Request, tid: str):

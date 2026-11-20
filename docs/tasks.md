@@ -144,6 +144,30 @@ tico chat ask --to <person> "Should the launch note go out on Friday?"        # 
   the task is back on the ladder; a bot's snooze of the task ends.
 - Give to… hands it to another person; Snooze hides it from you until then, and a new ❓ is a new item.
 
+### Questions as tasks
+
+With the company switch `questions_as_tasks` on (off by default), a bot's question to a person on a task is a task of
+its own, filed under it: the person owns it, the bot asked for it, its title is the question's first line and its
+description the rest. The same `tico task ask <id> --to <person> "line"` asks it; `--link <url>` adds an "Open ↗" to
+where they do it. A ❓ in a direct chat, and one that shows a live browser to take over, stay ❓.
+
+- It runs every check a ❓ does, and lets the person into a private task the same way.
+- It is in the person's Needs you until they answer it with Answer (a post in its chat is a comment). Answering
+  closes it (shown as answered), posts the answer on the task it was asked on as their message ("Re: <question>: <answer>", an @name in
+  it wakes no one), and wakes whoever has that task's turn now, once. Where that task's readers may not read the
+  answer, it stays on the question and the bot is pointed to it.
+- The same bot asking the same person again on the same task reopens the question with the new words; two bots asking
+  are two questions.
+- While it is open the task it was asked on is the person's turn, as with a ❓: never Late, the bot not chased, and the
+  bot can't finish, move or close it. The bot takes it back with `tico task close <question> -m "why"`.
+- It stays in the stage it was filed in: it is answered or closed, never moved on, refiled or marked Done. It ends
+  when that task ends or moves on, or when the bot or the person can no longer take part; Give to hands it to another
+  person who may be asked it, as a new round. Only the person snoozes it.
+
+Turn it on, and turn a company's open task ❓ into questions, with `python -m backend.manage questions <db> on` and
+`python -m backend.manage questions <db> backfill` (safe to run again; it prints counts before and after, and what it
+skipped and why). Questions already filed stay answerable with the switch off.
+
 ## Snooze
 
 Snooze is the only hold. It sets a task aside until a date, or with no end. While snoozed, nothing wakes
@@ -555,7 +579,7 @@ tico task close <id> -m "why" --version N
 tico task reassign <id> <owner> -m "why" --version N
 tico task ask <id> --to <person> "line" [--kind ok] [--show page:12] --version N
 tico task ask <id> --withdraw
-tico task ask <id> --to <person> "line"          # a ❓ on the task's chat
+tico task ask <id> --to <person> "line" [--link URL]  # a ❓ on the task's chat, or a question (questions_as_tasks)
 tico chat ask --to <person> "line" [--conversation <id>]
 tico task answer <id> <requirement> ok|no [-m "note"] --version N
 tico task give <id> <requirement> --to <person> --version N
@@ -594,7 +618,10 @@ refusal never counts toward a bot's quarantine.
 | `POST /api/v2/tasks/{id}/asks/{requirement_id}/give` | `to, version` | give it to another person |
 | `POST /api/v2/answers/{id}/undo` | | take an answer back |
 | `POST /api/v2/task-bulk` | `filter, action, ...` | people only |
-| `POST /api/v2/tasks/{id}/questions` | `to, text` | a bot's ❓ on the task's chat |
+| `POST /api/v2/tasks/{id}/questions` | `to, text, link?` | a bot's ❓ on the task's chat, or a question task |
+| `POST /api/v2/tasks/{id}/question/answer` | `text, round` | answer a question task; 409 when its round moved on |
+| `POST /api/v2/tasks/{id}/question/withdraw` | `reason?` | the bot that asked takes it back |
+| `POST /api/v2/tasks/{id}/question/give` | `to` | give a question task to another person |
 | `POST /api/v2/questions` | `to, text, conversation_id?` | a bot's ❓ in a direct chat |
 | `POST /api/v2/questions/{id}/give` | `to` | give a ❓ to another person |
 | `GET /api/v2/needs-you` | | Needs you |

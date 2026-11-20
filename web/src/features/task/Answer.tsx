@@ -12,7 +12,8 @@ import { changesAskedOf, decisionName, decisionOf, effectOf, emailOf, failedToas
 import { answered } from './answered';
 import { Face } from './parts';
 import { followSend } from './sending';
-import { addressesOf, decisionShownQuery, emailSendQuery, waitingQuery, type TaskData } from './queries';
+import { nextAfter, useFlowRows } from './flowOrder';
+import { addressesOf, decisionShownQuery, emailSendQuery, type TaskData } from './queries';
 
 /* The decision (plan/approvals.html): one box wherever a request waits on the person. It names the thing, who asks and
    what Approve does; Request changes opens one line in it; Approve is the one filled button, bound to exactly what was
@@ -85,7 +86,7 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
   const approve = useAction('task.approve');
   const request = useAction('task.requestChanges');
   const navigate = useNavigate();
-  const waiting = useQuery({ ...waitingQuery, enabled: flow });
+  const waiting = useFlowRows(flow);
   const shown = useQuery(decisionShownQuery(t.id, r.requirement_id, t.version, emailOf(r)));
   const { name, effect, send, recipients } = useNamed(t, r);
   const [error, setError] = useState('');
@@ -124,11 +125,7 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
   }, [asking, onAsking]);
 
   // Picked before answering: the answered row leaves the list at once.
-  const nextUp = () => {
-    const rows = waiting.data ?? [];
-    const i = rows.findIndex((w) => w.id === t.id);
-    return (i >= 0 ? (rows[i + 1] ?? rows[i - 1]) : rows[0]) ?? null;
-  };
+  const nextUp = () => nextAfter(waiting.rows, t.id);
 
   const onApprove = async () => {
     setError('');

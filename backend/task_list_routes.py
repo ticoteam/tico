@@ -635,6 +635,17 @@ def readers(auth):
             )
         ]
         value["links"] = H.task_links(c, row["id"])
+        from . import questions
+
+        # A question task's own question, and the open questions asked on this one (backend/questions.py): read only
+        # where the company asks questions as tasks or this task has one, and left out when there are none.
+        if questions.enabled(c) or questions.touches(c, [row["id"]]):
+            asked = questions.read(c, row["id"], rule)
+            if asked:
+                value["question"] = asked
+            listed = questions.listed_on(c, row["id"], rule)
+            if listed:
+                value["questions"] = listed
         value["children_summary"] = H.children_summary(c, row["id"], visible_sql)
         value["pr_state"] = H.pr_state(value["links"])
         counts = c.execute(

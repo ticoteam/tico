@@ -642,6 +642,8 @@ class Question(Contract):
     text: Text
     # A question Tico answered itself (backend/ask_known.py), sent again because the answer did not cover it.
     not_known: bool = False
+    # Where the person does what is asked ("Open ↗" on the question, backend/questions.py); a ❓ carries it in its words.
+    link: Annotated[str, Field(min_length=8, max_length=2000, pattern="^https?://")] | None = None
 
 
 class ChatQuestion(Question):
@@ -651,9 +653,22 @@ class ChatQuestion(Question):
 
 
 class QuestionGive(Contract):
-    """Give to: the person an open ❓ is for."""
+    """Give to: the person an open ❓, or an open question task (backend/questions.py), is for."""
 
     to: ID
+
+
+class QuestionAnswer(Contract):
+    """A person's answer to a question task (backend/questions.py), at the `round` they were shown."""
+
+    text: Text
+    round: Annotated[int, Field(ge=1)]
+
+
+class QuestionWithdraw(Contract):
+    """The bot that asked a question task takes it back."""
+
+    reason: Annotated[str, Field(max_length=300)] | None = None
 
 
 class TaskReaders(Contract):

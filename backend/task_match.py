@@ -122,7 +122,9 @@ def parse(
                 "AND NOT EXISTS (SELECT 1 FROM answers a WHERE a.visit_id=v.id AND a.by_id LIKE 'human:%' "
                 "AND a.created_at > v.late_told_at) "
                 "AND NOT EXISTS (SELECT 1 FROM question_marks q WHERE q.task_id=tasks.id "
-                "AND q.cleared_at IS NOT NULL AND q.cleared_at > v.late_told_at))))",
+                "AND q.cleared_at IS NOT NULL AND q.cleared_at > v.late_told_at) "
+                "AND NOT EXISTS (SELECT 1 FROM questions qt WHERE qt.visit_id=v.id "
+                "AND qt.answered_at IS NOT NULL AND qt.answered_at > v.late_told_at))))",
                 [now, now],
             )
         )

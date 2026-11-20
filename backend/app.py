@@ -85,6 +85,7 @@ from . import (
     task_list_routes,
     task_moves_routes,
     task_links_routes,
+    questions_routes,
     bot_seats_routes,
     fleet_runner_routes,
     web_routes,
@@ -322,6 +323,7 @@ def _configure_app(
             raise Problem("forbidden", "Only a person, signed in as themselves, " + doing, 403)
 
     task_links_routes.register(app, auth, mover, mutate, person_only, settings, store, task_view)
+    questions_routes.register(app, auth, mutate)  # a question task's answer, withdrawal and Give to
 
     bot_seats_routes.register_lifecycle(
         app,

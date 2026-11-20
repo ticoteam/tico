@@ -162,6 +162,10 @@ def moved(
     if before.get("owner_id") != after.get("owner_id"):
         # The next stage has another owner. What follows the owner already happened (`owner_moved`).
         _publish_owner(conn, before, after, actor, revision)
+    from . import questions
+
+    # A question task ended by any road, or a task whose questions' visit ended (backend/questions.py).
+    questions.moved(conn, before, after, by)
     if old == new:
         return
     from . import delivery, reconnects, rule_due, run_triggers

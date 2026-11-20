@@ -28,6 +28,7 @@ import { changesAskedOf, decisionOf, defaultTab, DETAILS, emailOf, failedToast, 
 import { FlowMark } from '@/kit/FlowMark';
 import { Face } from './parts';
 import { taskDetailQuery, taskFilesQuery, taskRefQuery, type TaskData } from './queries';
+import { answersHere, QuestionReply, TaskLead } from './Question';
 import { approvalCard, useApprovalCards } from './ThreadCards';
 import { PageView, useVersions, VersionBar } from './Versions';
 import { Brief, MatterBrief, useWaiting, WaitingOnYou, type Waiting } from './Waiting';
@@ -233,8 +234,13 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
         variant="page"
         title={owner?.name ?? 'Teammate'}
         actor={t.owner_id ?? undefined}
-        foot={<Decision t={t} flow={flow} onAsking={setAsking} />}
-        canPost={!asking}
+        foot={
+          <>
+            <Decision t={t} flow={flow} onAsking={setAsking} />
+            <QuestionReply t={t} flow={flow} />
+          </>
+        }
+        canPost={!asking && !answersHere(t, me)}
         extra={approvals}
         card={approvalCard}
       />
@@ -264,10 +270,13 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
       framed
       body={
         <div className="tv-view">
+          {/* A question's card, or the task's description and the questions asked on it, over every page but an approval's. */}
+          {!quiet && !current?.wait && <TaskLead t={t} />}
           {/* An email's OK filed apart from the matter it answers waits on the person here too, at the top. */}
           {!quiet && !current?.wait && <WaitingOnYou items={tabs.flatMap((x) => (x.wait && x.email ? [{ sub: x.wait, send: x.email, to: tabAddress(t, x.slug, flow).to }] : []))} />}
           {body}
           {!current?.chat && <Decision t={t} flow={flow} dock />}
+          {!current?.chat && <QuestionReply t={t} flow={flow} dock />}
         </div>
       }
     />
@@ -287,6 +296,7 @@ export interface TaskChatProps {
 export function TaskChat({ task, flow = false }: TaskChatProps) {
   const { t } = useTask(task);
   const owner = useActor(t?.owner_id);
+  const me = useQuery(meQuery).data?.id;
   const [asking, setAsking] = useState(false);
   // An email's OK hung on this task waits on the person: a card in its chat, pointing to the email.
   const approvals = useApprovalCards({ task: t });
@@ -331,13 +341,22 @@ export function TaskChat({ task, flow = false }: TaskChatProps) {
           variant="task"
           title={name}
           actor={t.owner_id ?? undefined}
-          foot={<Decision key={t.id} t={t} flow={flow} onAsking={setAsking} />}
-          canPost={!asking}
+          foot={
+            <>
+              <Decision key={t.id} t={t} flow={flow} onAsking={setAsking} />
+              <QuestionReply key={`q:${t.id}`} t={t} flow={flow} />
+            </>
+          }
+          // The person an open question asks answers in its box: a message here would not answer it.
+          canPost={!asking && !answersHere(t, me)}
           extra={approvals}
           card={approvalCard}
         />
       ) : (
-        <Decision key={t.id} t={t} flow={flow} />
+        <>
+          <Decision key={t.id} t={t} flow={flow} />
+          <QuestionReply key={`q:${t.id}`} t={t} flow={flow} />
+        </>
       )}
     </>
   );

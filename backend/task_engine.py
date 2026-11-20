@@ -1165,6 +1165,9 @@ def move(
     target, kind = _target(conn, by, row, to)
     if not target or kind is None:
         return row
+    from . import questions
+
+    questions.refuse_move(conn, row, kind, by)  # an open question moves only to Closed (backend/questions.py)
     side = kind == "side" or (kind == "done" and bool(row["stage"].get("side")))
     if kind in ("forward", "done", "closed") and not cascade and not side:
         from . import question_marks
@@ -1403,6 +1406,9 @@ def refile(
     if not row:
         _refuse(conn, by, "not-found", "No such task")
     check_version(conn, by, row, seen_version)
+    from . import questions
+
+    questions.refuse_move(conn, row, "refile", by)  # a question stays in the stage it was filed in
     pipe = pipeline_named(conn, by, to_pipeline, task_id)
     target = _refile_target(conn, by, row, pipe, to)
     _need_why(conn, by, why, "move it to another pipeline", task_id)
@@ -1937,6 +1943,9 @@ def reassign(
     if owner == row.get("owner_id"):
         return row
     _may_name(conn, by, owner, task_id)
+    from . import questions
+
+    questions.reassigning(conn, row, owner, by)  # a question goes only to a person who may be asked it
     overturned = _owner_rule(conn, row, owner, by, set_anyway)
     ts = H.now()
     fields: Row = {"owner_id": owner, "version": int(row.get("version") or 0) + 1, "updated_at": ts}
@@ -1994,7 +2003,7 @@ def progress_mark(conn: "sqlite3.Connection", visit_id: str, standings: Sequence
     `person_spoke`). Nor is a snooze or its end: setting a task aside earns no more runs. Nor is the task's version: it
     says the row changed since someone looked, and a field edit (a new title, a label) raises it. A move and a reassign
     start the ladder again themselves. `standings` saves reading them again when the caller has them."""
-    from . import question_marks, read_cache
+    from . import question_marks, questions, read_cache
 
     found = cast("Any", read_cache).one(conn, PROGRESS_SQL, (visit_id,))  # a pass reads them for many (never_stuck)
     if not found:
@@ -2007,7 +2016,10 @@ def progress_mark(conn: "sqlite3.Connection", visit_id: str, standings: Sequence
     # A person's reply to a ❓ on it is progress too (backend/question_marks.py). Only a task that has one says so,
     # so every other task keeps the mark it had.
     replies = question_marks.replies(conn, found[0])
-    return f"{mark}.q{replies}" if replies else mark
+    mark = f"{mark}.q{replies}" if replies else mark
+    # So is a person's answer to a question filed as a task under it (backend/questions.py).
+    answered = questions.answered_marks(conn, visit_id)
+    return f"{mark}.a{answered}" if answered else mark
 
 
 def _reset_ladder(conn: "sqlite3.Connection", visit: Row, ts: str, by: str) -> None:
@@ -2124,9 +2136,10 @@ def on_delete(conn: "sqlite3.Connection", task_ids: Sequence[str], by: str) -> i
     conn.execute(f"DELETE FROM related_inputs WHERE task_id IN ({marks})", ids)  # likewise Jev's related bots
     conn.execute(f"DELETE FROM ask_opinions WHERE task_id IN ({marks})", ids)  # and Flow's opinion on each ask
     conn.execute(f"DELETE FROM ask_snoozes WHERE task_id IN ({marks})", ids)  # and each person's snooze of an ask
-    from . import question_marks
+    from . import question_marks, questions
 
     question_marks.end_tasks(conn, ids, "deleted", by)  # and each ❓ on its chat
+    questions.on_delete(conn, ids, by)  # and each question asked on it, or that it was (backend/questions.py)
     return conn.execute(f"DELETE FROM visits WHERE task_id IN ({marks})", ids).rowcount
 
 
@@ -2247,6 +2260,9 @@ def snooze(
     if row["status"] != "open":
         _refuse(conn, by, "task_ended", f"The task is {row['stage']['name']}. Reopen it first.", task_id)
     _need_why(conn, by, why, "snooze it", task_id)
+    from . import questions
+
+    questions.refuse_snooze(conn, row, by)
     ts = H.now()
     visit = row["visit"]
     # A stage rule on a bot's snooze whose If is fixed conditions only (no model call inside a write) blocks it here;

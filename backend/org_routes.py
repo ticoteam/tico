@@ -294,7 +294,10 @@ def register(app, auth, settings, settings_admin, store):
         task = {"id": row["id"], "title": row.get("title") or ""} if privacy.task_readable(c, who, row) else None
         if ask:
             # A ❓ on the task's chat waits for an answer (question_marks.wait_id), any other ask for an OK.
-            what = "answer" if question_marks.mark_id(ask.requirement_id) else "OK"
+            from . import questions
+
+            asked = question_marks.mark_id(ask.requirement_id) or questions.is_wait(ask.requirement_id)
+            what = "answer" if asked else "OK"
             mine = ask.who == who.actor
             whose = "your" if mine else H.actor_name(c, ask.who) + "'s"
             out = {

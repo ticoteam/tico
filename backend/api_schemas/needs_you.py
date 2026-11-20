@@ -10,11 +10,12 @@ NEEDS_ITEM = obj(
         "id": "s",
         "kind": {
             "type": "string",
-            "enum": ["task", "ask", "paused", "mention", "question"],
+            "enum": ["task", "ask", "paused", "mention", "question", "question_task"],
             "description": "task: a private task they must let someone see (`task.turn.share`); ask: a requirement "
             "with their name (its fields in "
             "`ask`); paused: a bot that cannot run, which they can fix; mention: an @ of them by a person they have "
-            "not replied to; question: a bot's ❓ on its message for them, until they reply in that chat",
+            "not replied to; question: a bot's ❓ on its message for them, until they reply in that chat; "
+            "question_task: a bot's question filed as a task for them (`task_id`), until they answer it",
         },
         "line": "s",
         "since": "n",
@@ -31,7 +32,14 @@ NEEDS_ITEM = obj(
         "items": {"type": "string"},
         "description": "A ❓'s website browser to take over (`browser:<tool>/<account>`)",
     },
-    from_id={"type": "string", "description": "Who wrote it: a mention's person, a ❓'s bot"},
+    from_id={"type": "string", "description": "Who wrote it: a mention's person, a ❓'s or a question's bot"},
+    number={"type": ["integer", "null"], "description": "A question task's number"},
+    title={"type": "string", "description": "A question task's title: the question"},
+    asker={"type": "string", "description": "A question task's bot that asked it"},
+    round={"type": "integer", "description": "A question task's round: answer it at this round"},
+    link_url={"type": ["string", "null"], "description": "A question task's link, where it is done"},
+    owner_id={"type": "string", "description": "A question task's owner: the person it is for"},
+    missing={"type": "array", "items": {"type": "string"}},
     conversation_id={"type": "string", "description": "The thread a mention was written in"},
     root_id={"type": "string", "description": "A mention's root thread: the rail row it moves"},
     href={"type": "string", "description": "A paused cause a person fixes in the app: where (Connect GitHub)"},

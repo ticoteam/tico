@@ -748,6 +748,7 @@ def parser():
         help="ok: approve or send back what --show names (a question is the default)",
     )
     s.add_argument("--show", action="append", metavar="REF", help="what they look at: page:12, file:ID@N; repeat")
+    s.add_argument("--link", metavar="URL", help="a question: where they do what you ask (an https:// address)")
     s.add_argument("--for", dest="subject", metavar="KIND:ID", help="an OK bound to what you will do, with --content")
     s.add_argument("--content", type=json_value, help="with --for: exactly what the OK covers, as JSON")
     s.add_argument("--withdraw", action="store_true", default=None, help="take back your open ask instead")

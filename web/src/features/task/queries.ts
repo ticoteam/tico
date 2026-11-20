@@ -2,7 +2,7 @@ import { keepPreviousData, queryOptions, type QueryKey } from '@tanstack/react-q
 import { ApiError, api } from '@/api/client';
 import type { OkPreview, PagePublished, PageShown, PipelineSettingsResult, PublishPageBody, TaskDetail, TaskFileList, TaskLinkView, TaskResult } from '@/api/schema';
 import { keys, meQuery, queryClient, quietRoot, write } from '@/data';
-import { flowQuery, pipelinesQuery } from '@/features/tasks/routing';
+import { pipelinesQuery } from '@/features/tasks/routing';
 import type { FileLibrary, FileSearch, TaskFileResult, TaskFileView } from '@/api/schema';
 
 /* One open task: its detail (GET /api/v2/tasks/{tid}, kept current by the stream under keys.tasks.detail), the files
@@ -100,13 +100,6 @@ export const retiredStagesQuery = (id: string) =>
     queryKey: [...pipelinesQuery.queryKey, 'stages', id] as const,
     queryFn: async ({ signal }) => (await api.get<PipelineSettingsResult>(`/api/v2/pipelines/${enc(id)}`, { signal })).pipeline.stages,
   });
-
-/** The tasks that wait on the person, in Flow's order: Flow's next and previous. The same read as Flow's list (GET
-    /api/v2/needs-you, one of the slowest), so a task opened from Flow does not read it a second time. */
-export const waitingQuery = queryOptions({
-  ...flowQuery,
-  select: ({ items }) => items.map(({ id, number, pipeline_id }) => ({ id, number, pipeline_id })),
-});
 
 /* ---------------------------------------------------------------- writes */
 
@@ -272,6 +265,27 @@ const rereadNamed = (other: string) => {
     predicate: (q) => q.queryKey[2] === ref || String((q.state.data as TaskData | undefined)?.number ?? '') === ref,
   });
 };
+
+/** Answer a question, given to the round the person was shown (POST /api/v2/tasks/{tid}/question/answer). It leaves Flow once
+    the server has it; then the question, the task it was asked on and Flow are read again. A question asked again, or
+    given to someone else, since it was shown is refused (409): it is read again first, and the refusal is
+    `question_stale`, so the person reads it before they answer. */
+export async function answerQuestion(id: string, text: string, round: number): Promise<void> {
+  try {
+    await api.post<unknown>(`${taskPath(id)}/question/answer`, { text, round });
+  } catch (e) {
+    if (!(e instanceof ApiError && e.status === 409)) throw e;
+    await reread(id);
+    throw new ApiError(409, 'question_stale', 'Look again');
+  }
+  queryClient.setQueriesData<{ count: number; items: { id: string }[] }>({ queryKey: ['flow'] }, (f) => {
+    if (!f?.items) return f;
+    const items = f.items.filter((w) => w.id !== id);
+    return { ...f, items, count: items.length };
+  });
+  const parent = queryClient.getQueryData<TaskData>(keys.tasks.detail(id))?.question?.parent?.id;
+  await Promise.all([reread(id), parent && reread(parent), queryClient.invalidateQueries({ queryKey: ['flow'] })]);
+}
 
 /** Put a task (as a person names it) under `parent` as its subtask: both are read again, the one for its parent, the
     other for its subtasks. */

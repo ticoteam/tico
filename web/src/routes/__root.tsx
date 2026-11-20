@@ -611,7 +611,7 @@ function TaskList({ open }: { open: string }) {
                         {it.late ? <LatePill /> : null}
                       </span>
                       <span className="li-who">
-                        <ListFace id={it.owner_id} />
+                        <ListFace id={it.question?.asker ?? it.owner_id} />
                         <Ago at={it.since} className="row-age" />
                       </span>
                     </Link>

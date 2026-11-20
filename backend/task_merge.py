@@ -455,6 +455,9 @@ def merge(
     from . import question_marks
 
     question_marks.end_tasks(conn, [a["id"]], "merged", actor)  # its ❓ end with it (backend/question_marks.py)
+    from . import questions
+
+    questions.end_for_parents(conn, [a["id"]], actor)  # and the questions asked on it (backend/questions.py)
     H.task_close(conn, actor, a["id"], note, mover=mover)
     H.task_comment(conn, actor, a["id"], note, wake=False)
     # The note on B: what came in, the comments left on A and each question that ended with it.

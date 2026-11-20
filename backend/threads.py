@@ -46,6 +46,7 @@ Every message gets an `origin_id` ('<uuid v7>@<install id>') and a `revision`; `
 (origin_id, revision) seen, so a replicated edit or delete is applied once and an older one never wins.
 """
 
+import contextlib
 import contextvars
 import json
 import os
@@ -128,6 +129,20 @@ BRANCH_CHECKS = 200  # restricted rows a branch count checks one by one per leve
 # Set while `post` writes, so `record` knows the message came through the new door: only then do mentions of other
 # teammates wake them and the loop guard count it. A legacy writer (hubdb.say from an older route) keeps its own rules.
 POSTING = contextvars.ContextVar("threads_posting", default=None)
+# Set only by the server while it writes a question's answer (backend/questions.py), on the question and copied onto
+# the chat of the task it was asked on: those words address nobody (an @name in them wakes no one) and answer no ❓
+# there. Never read from a message's refs, which a client writes.
+RELAYING = contextvars.ContextVar("threads_relaying", default=False)
+
+
+@contextlib.contextmanager
+def relaying():
+    token = RELAYING.set(True)
+    try:
+        yield
+    finally:
+        RELAYING.reset(token)
+
 
 _MEETING_PREFIX = "live-meeting:"  # live_privacy.ROOM_PREFIX (test_threads_privacy checks they agree)
 
@@ -1242,7 +1257,7 @@ def _record(c, message, conv):
         return {}
     author = message.get("sender_id") or ""
     # A generated notice (refs.no_mentions, a task roundup) names people in its text as data: it makes no mention.
-    named = "@" in str(message.get("body") or "") and not refs.get("no_mentions")
+    named = "@" in str(message.get("body") or "") and not refs.get("no_mentions") and not RELAYING.get()
     found = mentions(c, thread, message.get("body") or "", author=author) if named else []
     warnings, in_audience = [], []
     now = _now()
@@ -2725,7 +2740,7 @@ def _post(
         refs["origin"] = {k: origin.get(k) for k in ("origin_id", "revision", "install", "actor") if origin.get(k)}
     if attachments:
         refs["attachments"] = list(attachments)
-    found = mentions(c, thread, text, author=actor)
+    found = [] if RELAYING.get() else mentions(c, thread, text, author=actor)
     target = None
     if to_actor:
         target = H.resolve_actor(c, to_actor) or (to_actor if str(to_actor).startswith(OUTSIDE_PREFIXES) else None)

@@ -2018,6 +2018,19 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
             continue
         if it["task_id"] not in readable:
             continue
+        if it["kind"] == "question_task":
+            # A question filed as a task for the reader (backend/questions.py): its own task alone, never the task it
+            # was asked on, so neither the item nor a list held from it (needs_cache) names a task they may lose.
+            items.append(
+                {
+                    **{k: it[k] for k in ("kind", "id", "task_id", "number", "title", "line", "since", "round")},
+                    **{k: it[k] for k in ("asker", "link_url", "owner_id", "missing")},
+                    "from_id": it["asker"],
+                    "task": briefs.get(it["task_id"]),
+                    **({"snoozed_until": it["snoozed_until"]} if it.get("snoozed_until") else {}),
+                }
+            )
+            continue
         items.append(
             {
                 "kind": it["kind"],
@@ -2189,7 +2202,7 @@ def needs_bots(items, me):
 
 # The items a stage's review walks (the ▶ on a stage): asks, tasks and @s on a task in that stage. A Paused cause is the
 # person's to fix in settings, whatever stage its first task is in.
-NEEDS_STAGE_KINDS = ("ask", "task", "mention", "question")
+NEEDS_STAGE_KINDS = ("ask", "task", "mention", "question", "question_task")
 
 
 def needs_stage(it):
@@ -2229,7 +2242,7 @@ def needs_actor(it, me):
     task = it.get("task") or {}
     if it.get("kind") == "paused":
         return next(iter(it.get("bots") or ()), None)
-    if it.get("kind") == "question":
+    if it.get("kind") in ("question", "question_task"):
         return it.get("from_id") if H.is_bot(it.get("from_id")) else None
     if it.get("kind") == "ask":
         asked = (it.get("ask") or {}).get("asked_by")
@@ -3547,7 +3560,11 @@ def install_views(app, store, auth, mutate, task_view):
             # When an ask this person snoozed comes back: the page reads the list again then (backend/ask_snoozes.py).
             from . import ask_snoozes
 
-            woken = {"snoozed_until": ask_snoozes.next_end(c, who)}
+            # And when a question they snoozed comes back (backend/questions.py).
+            from . import questions
+
+            ends = [e for e in (ask_snoozes.next_end(c, who), questions.next_snooze_end(c, who.actor)) if e]
+            woken = {"snoozed_until": min(ends) if ends else None}
         counts = {}  # the page counts, worked out by the first page, kept for the next ones
         held.keep(viewer, current, items, woken["snoozed_until"], began, counts)
         if version and version == current and not cursor:
