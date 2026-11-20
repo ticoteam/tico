@@ -74,7 +74,7 @@ class _FreezeAfterStartup(_UvicornServer):
 def run(*, host="127.0.0.1", port=8765, settings=None, log_level="info"):
     from .config import Settings
     from .screen_binary import prepare
-    from . import ui_build
+    from . import background, ui_build
 
     # A server never starts on a UI build that is missing or out of date (backend/ui_build.py).
     try:
@@ -113,7 +113,7 @@ def run(*, host="127.0.0.1", port=8765, settings=None, log_level="info"):
             lines.put(line)
         lines.put("")
 
-    threading.Thread(target=output, daemon=True).start()
+    background.start("tico-screen-relay-output", output)
     server = None
     stopping = threading.Event()
     previous_signals = {}
@@ -177,7 +177,7 @@ def run(*, host="127.0.0.1", port=8765, settings=None, log_level="info"):
             process.wait()
             server.should_exit = True
 
-        threading.Thread(target=watch, daemon=True).start()
+        background.start("tico-screen-relay-watch", watch)
         server.run(sockets=[listener])
         if process.poll() is not None and not stopping.is_set():
             raise RuntimeError("Rust screen relay exited; the supervisor must restart the server")

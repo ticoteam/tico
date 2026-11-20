@@ -21,6 +21,7 @@ import time
 from collections.abc import Callable
 from typing import Any, Protocol
 
+from . import background
 from .store import H, encode
 
 LOG = logging.getLogger("tico.drains")
@@ -278,11 +279,7 @@ class Drains:
 
     def start(self) -> "Drains":
         """Each worker on a daemon thread of its own; the automation hub's doorbell and manual run wake its worker."""
-        self.threads: list[threading.Thread] = []
-        for worker in self.all:
-            thread = threading.Thread(target=worker.run, name="tico-drain-" + worker.name, daemon=True)
-            thread.start()
-            self.threads.append(thread)
+        self.threads = [background.start("tico-drain-" + worker.name, worker.run) for worker in self.all]
         self.hub.worker = self.automations
         return self
 
@@ -300,7 +297,5 @@ class Drains:
             self.hub.worker = None
         for worker in self.all:
             worker.halt()
-        end = None if timeout is None else _monotonic() + timeout
-        for thread in getattr(self, "threads", ()):
-            # One deadline for all of them: a shutdown waits at most `timeout`, not `timeout` per worker.
-            thread.join(None if end is None else max(0.0, end - _monotonic()))
+        # One deadline for all of them: a shutdown waits at most `timeout`, not `timeout` per worker.
+        background.join(getattr(self, "threads", ()), timeout)

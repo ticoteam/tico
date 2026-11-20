@@ -40,6 +40,7 @@ from concurrent.futures import Future, ThreadPoolExecutor, wait
 from contextlib import aclosing
 from typing import Any
 
+from . import background
 from . import call_media as _call_media
 from . import call_sessions as _call_sessions
 from . import events as _events
@@ -365,8 +366,7 @@ class Voice:
 
     def _start_ticker(self) -> None:
         if self.ticking and (self.ticker is None or not self.ticker.is_alive()) and not self.stopped:
-            self.ticker = threading.Thread(target=self._run, name="tico-meet-voice-tick", daemon=True)
-            self.ticker.start()
+            self.ticker = background.start("tico-meet-voice-tick", self._run)
 
     def _run(self) -> None:
         report: Any = _report()

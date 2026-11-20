@@ -792,15 +792,10 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
             if recorder_thread:
                 await asyncio.to_thread(recorder_thread.stop)
             if webhooks_on:
-                await asyncio.to_thread(webhook_delivery.stop)
-                await asyncio.to_thread(finance.gateway_stop)
-                await asyncio.to_thread(finance.banking_stop)
-                from .finance import books_sync as books_worker
+                # The webhook deliveries and Finance's workers, all stopped together (backend/background.py).
+                from . import background
 
-                await asyncio.to_thread(books_worker.stop)
-                from .finance import ad_import as ad_worker
-
-                await asyncio.to_thread(ad_worker.stop)
+                await asyncio.to_thread(background.stop_all)
             telemetry.close()
             # Every task above has stopped, so no read is in flight: the store's idle connections close with the server.
             store.close()

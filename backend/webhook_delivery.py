@@ -21,11 +21,10 @@ import hashlib
 import hmac
 import logging
 import random
-import threading
 import time
 from typing import NamedTuple
 
-from . import egress
+from . import background, egress
 from . import hubdb as H
 from . import outbox as O
 from . import runs
@@ -92,63 +91,30 @@ def retry_delay(failed, rng=random):
 
 
 # ----------------------------------------------------------------------------------------------------- the workers
-class Bell:
-    """A doorbell for threads: `ring` wakes every waiter, and one that was busy when it rang does not sleep through it."""
-
-    def __init__(self):
-        self.cond, self.rung = threading.Condition(), 0
-
-    def ring(self):
-        with self.cond:
-            self.rung += 1
-            self.cond.notify_all()
-
-    def wait(self, seen, timeout):
-        with self.cond:
-            if self.rung == seen:
-                self.cond.wait(timeout)
-            return self.rung
-
-
-BELL = Bell()
-_workers = {"threads": [], "stop": threading.Event(), "lock": threading.Lock(), "recovered": 0.0, "args": None}
-
-
 def ring():
     BELL.ring()
 
 
+BELL = background.Bell()
+_workers = background.Loop("webhook-delivery", ring)
+_state = {"recovered": 0.0, "args": None}
+
+
 def start(store, vault, *, rehearsal=False, transport=None, workers=WORKERS):
     """Start (or restart, the ones that died) the delivery threads. Safe to call again on every scheduler tick."""
-    with _workers["lock"]:
-        _workers["args"] = (store, vault, rehearsal, transport, workers)
-        _workers["threads"] = [t for t in _workers["threads"] if t.is_alive()]
-        if _workers["stop"].is_set() and not _workers["threads"]:
-            _workers["stop"] = threading.Event()
-        while len(_workers["threads"]) < workers:
-            t = threading.Thread(
-                target=_loop,
-                args=(store, vault, rehearsal, transport, _workers["stop"]),
-                name=f"webhook-delivery-{len(_workers['threads'])}",
-                daemon=True,
-            )
-            t.start()
-            _workers["threads"].append(t)
+    _state["args"] = (store, vault, rehearsal, transport, workers)
+    _workers.start(_loop, store, vault, rehearsal, transport, count=workers)
 
 
 def ensure():
     """Restart a worker that died. The scheduler's tick calls it; it does nothing before the first `start`."""
-    if _workers["args"] and not _workers["stop"].is_set():
-        store, vault, rehearsal, transport, workers = _workers["args"]
+    if _state["args"] and not _workers.stopped():
+        store, vault, rehearsal, transport, workers = _state["args"]
         start(store, vault, rehearsal=rehearsal, transport=transport, workers=workers)
 
 
 def stop():
-    _workers["stop"].set()
-    BELL.ring()
-    for t in list(_workers["threads"]):
-        t.join(5)
-    _workers["threads"] = []
+    _workers.stop()
 
 
 def _loop(store, vault, rehearsal, transport, halt):
@@ -166,8 +132,8 @@ def _loop(store, vault, rehearsal, transport, halt):
 def step(store, vault, *, rehearsal=False, transport=None, now=None):
     """Claim one due send and deliver it. True when it did one (so the caller looks again at once)."""
     stamp = now or H.now()
-    if time.monotonic() - _workers["recovered"] > 30:
-        _workers["recovered"] = time.monotonic()
+    if time.monotonic() - _state["recovered"] > 30:
+        _state["recovered"] = time.monotonic()
         recover(store, stamp)
     if rehearsal:
         withhold(store, stamp)

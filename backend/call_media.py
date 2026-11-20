@@ -35,6 +35,8 @@ from http.cookiejar import CookieJar, DefaultCookiePolicy
 
 import httpx
 
+from . import background
+
 log = logging.getLogger("tico.call_media")
 
 TOKEN_TTL_SECONDS = 300
@@ -506,7 +508,7 @@ class LiveKitMedia:
                     return
                 if self.loop is None:
                     self.loop = asyncio.new_event_loop()
-                    threading.Thread(target=self.loop.run_forever, name="tico-meet-media", daemon=True).start()
+                    background.start("tico-meet-media", self.loop.run_forever)
                 loop = self.loop
             token = recorder_token(self.config, room, RECORDER_PREFIX + call_id)
             recorder = Recorder(sdk, loop, _ws_url(self.config.internal_url), token, on_audio, on_quiet)

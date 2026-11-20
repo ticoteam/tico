@@ -4,7 +4,7 @@ budget is spent, and never runs beside another pass of the same drain."""
 import threading
 import time
 
-from backend import automations, drains
+from backend import automations, background, drains
 from backend.scheduler import Scheduler
 from backend.tests.helpers.api import post
 from backend.tests.helpers.automation_runs import make, queued, run_row
@@ -243,7 +243,7 @@ def test_a_shutdown_waits_one_deadline_for_all_workers_not_one_each(api, monkeyp
             waits.append(timeout)
             clock[0] += timeout
 
-    monkeypatch.setattr(drains, "_monotonic", lambda: clock[0])
+    monkeypatch.setattr(background, "_monotonic", lambda: clock[0])
     workers = drains.Drains(api.app.state.store, api.app.state.auth)
     workers.threads = [Stuck(), Stuck(), Stuck()]
     workers.stop(0.5)

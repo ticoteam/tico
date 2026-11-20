@@ -8,7 +8,7 @@ import threading
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
-from .gateway_sync import Bell
+from .. import background
 from .core import mirror as M
 from .store import banking as SK
 from .store import ledger as SL
@@ -23,12 +23,14 @@ ENVELOPE = "tico.finance.webhook"  # the body HQ relays for one provider event
 REFUSED, KEPT, SEEN = "refused", "kept", "seen"
 SWEEP = 300.0  # seconds between passes without a ring
 REHEARSAL_WHY = "rehearsal copy: the write is held here and never sent to the provider"
-BELL = Bell()
-_worker: dict[str, Any] = {"thread": None, "stop": threading.Event(), "lock": threading.Lock(), "args": None}
 
 
 def ring() -> None:
     BELL.ring()
+
+
+BELL = background.Bell()
+_worker = background.Loop("finance-books", ring)
 
 
 def _maps(values: list[Any]) -> list[dict[str, Any]]:
@@ -205,27 +207,11 @@ def _sync_pass(store: Any, vault: object, settings: Any, *, now: str) -> list[st
 def start(store: Any, vault: object, settings: Any, *, rehearsal: bool = False) -> None:
     """Start the worker (or restart it if it died). Safe to call on every scheduler tick."""
     tico.use_vault(vault)
-    with _worker["lock"]:
-        _worker["args"] = (store, vault, settings, rehearsal)
-        thread = _worker["thread"]
-        if thread is not None and thread.is_alive():
-            return
-        if _worker["stop"].is_set():
-            _worker["stop"] = threading.Event()
-        made = threading.Thread(
-            target=_loop, args=(store, vault, settings, rehearsal, _worker["stop"]), name="finance-books", daemon=True
-        )
-        made.start()
-        _worker["thread"] = made
+    _worker.start(_loop, store, vault, settings, rehearsal)
 
 
 def stop() -> None:
-    _worker["stop"].set()
-    BELL.ring()
-    thread = _worker["thread"]
-    if thread is not None:
-        thread.join(5)
-    _worker["thread"] = None
+    _worker.stop()
 
 
 def withhold(store: Any, *, now: str) -> int:

@@ -64,6 +64,7 @@ import urllib.request
 from typing import Any
 
 
+from . import background
 from . import hubdb as H
 from . import people as P
 from . import task_privacy as privacy
@@ -2146,7 +2147,7 @@ class Gateway:
 
         # Bots' history reads and file downloads (backend/slack_bots.py) are answered on their own thread: a tick can
         # wait on the decision model, and a bot's read must not.
-        threading.Thread(target=slack_requests.serve_forever, args=(self,), name="slack-requests", daemon=True).start()
+        background.start("slack-requests", slack_requests.serve_forever, self)
         while not self.stop.is_set():
             try:
                 self.tick()
@@ -2371,10 +2372,7 @@ def main(argv=None, make_slack=None):
                 gateway.stop.set()
 
         gateway.heartbeat = heartbeat
-        stopper = threading.Thread(
-            target=lambda: (stopping.wait(), gateway.stop.set(), gateway.wake.set()), daemon=True
-        )
-        stopper.start()
+        background.start("slack-stopper", lambda: (stopping.wait(), gateway.stop.set(), gateway.wake.set()))
         try:
             gateway.run()
         finally:
