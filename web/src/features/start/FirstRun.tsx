@@ -140,7 +140,7 @@ function PathStep() {
       <Foot
         error={choose.error}
         right={
-          <Button variant="primary" busy={choose.pending} onClick={() => void choose.press({ path })}>
+          <Button variant="primary" busy={choose.pending} onClick={() => choose.press({ path })}>
             Continue
           </Button>
         }
@@ -214,7 +214,7 @@ function ModelStep() {
         variant={first && !any && !going ? 'primary' : 'plain'}
         busy={going?.kind === plan.kind}
         disabled={!!going}
-        onClick={() => void connect.press({ kind: plan.kind })}
+        onClick={() => connect.press({ kind: plan.kind })}
       >
         Connect
       </Button>
@@ -244,13 +244,13 @@ function ModelStep() {
       <Foot
         error={connect.error ?? failed}
         left={
-          <Button variant="quiet" onClick={() => void run('setup.open', { step: 'paste' }, click)}>
+          <Button variant="quiet" onClick={() => run('setup.open', { step: 'paste' }, click)}>
             Paste key
           </Button>
         }
         right={
           any ? (
-            <Button variant="primary" onClick={() => void run('setup.next', { from: 'model' }, click)}>
+            <Button variant="primary" onClick={() => run('setup.next', { from: 'model' }, click)}>
               Continue
             </Button>
           ) : undefined
@@ -326,12 +326,12 @@ function TeamStep() {
       <Foot
         error={finish.error}
         left={
-          <Button variant="quiet" disabled={finish.pending} onClick={() => void finish.press({ job: '' })}>
+          <Button variant="quiet" disabled={finish.pending} onClick={() => finish.press({ job: '' })}>
             Skip
           </Button>
         }
         right={
-          <Button variant="primary" busy={finish.pending} onClick={() => void finish.press({ job })}>
+          <Button variant="primary" busy={finish.pending} onClick={() => finish.press({ job })}>
             Start
           </Button>
         }
@@ -390,7 +390,7 @@ function GithubForm() {
             </Button>
           }
           right={
-            <Button variant="primary" busy={replace.pending} onClick={() => void press(replace, input)}>
+            <Button variant="primary" busy={replace.pending} onClick={() => press(replace, input)}>
               Replace key
             </Button>
           }
@@ -414,7 +414,7 @@ function GithubForm() {
         error={error}
         left={
           pending ? (
-            <Button variant="quiet" busy={finish.pending} onClick={() => void press(finish, {})}>
+            <Button variant="quiet" busy={finish.pending} onClick={() => press(finish, {})}>
               Finish
             </Button>
           ) : undefined
@@ -449,11 +449,11 @@ function GithubConnected({ org, installed }: { org: string; installed: boolean }
         error={install.error}
         right={
           installed ? (
-            <Button variant="primary" onClick={() => void run('setup.close', {}, click)}>
+            <Button variant="primary" onClick={() => run('setup.close', {}, click)}>
               Done
             </Button>
           ) : (
-            <Button variant="primary" busy={install.pending} onClick={() => void install.press({})}>
+            <Button variant="primary" busy={install.pending} onClick={() => install.press({})}>
               Install
             </Button>
           )

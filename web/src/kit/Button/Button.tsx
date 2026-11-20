@@ -1,18 +1,21 @@
 import { createContext, use, type ComponentProps, type ReactNode } from 'react';
 import { Icon } from '@/kit/Icon';
+import { usePress, type PressHandler } from './press';
 import './Button.css';
 
 export type ButtonVariant = 'plain' | 'primary' | 'quiet';
 
 type IconName = ComponentProps<typeof Icon>['name'];
 
-export type ButtonProps = Omit<ComponentProps<'button'>, 'children'> & {
+export type ButtonProps = Omit<ComponentProps<'button'>, 'children' | 'onClick'> & {
   /** `primary` is the filled button: one to a sheet. */
   variant?: ButtonVariant;
   /** A leading icon. */
   icon?: IconName;
-  /** Waiting on the server: the label dims and breathes; no spinner. */
+  /** Waiting on the server: the label dims and breathes; no spinner. A busy button takes no press. */
   busy?: boolean;
+  /** Return the promise of the work it starts: the button is busy until it settles, and a failure is said (press.ts). */
+  onClick?: PressHandler<HTMLButtonElement>;
   children: ReactNode;
 };
 
@@ -24,8 +27,9 @@ const VARIANT: Record<ButtonVariant, string | undefined> = { plain: undefined, p
  */
 export const FillContext = createContext(true);
 
-export function Button({ variant = 'plain', icon, busy = false, className, children, ref, type = 'button', ...rest }: ButtonProps) {
+export function Button({ variant = 'plain', icon, busy: told = false, onClick, disabled, className, children, ref, type = 'button', ...rest }: ButtonProps) {
   const fill = use(FillContext);
+  const { busy, onClick: press } = usePress(onClick, told);
   const look = variant === 'primary' && !fill ? 'plain' : variant;
   const own = look === 'primary' && import.meta.env.DEV ? warnOnSecondPrimary : undefined;
   return (
@@ -42,6 +46,8 @@ export function Button({ variant = 'plain', icon, busy = false, className, child
       }
       type={type}
       className={['btn', VARIANT[look], className].filter(Boolean).join(' ')}
+      onClick={press}
+      disabled={disabled || busy}
       aria-busy={busy || undefined}
     >
       {icon && <Icon name={icon} />}

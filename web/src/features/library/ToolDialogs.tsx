@@ -83,7 +83,7 @@ export function SettingDialog({ tool, setting, onClose }: { tool: string; settin
         <>
           {setting && (
             <>
-              <Button variant="quiet" disabled={busy} onClick={() => void go('tools.removeSetting', { tool, setting: setting.id }, 'Not removed')}>
+              <Button variant="quiet" disabled={busy} onClick={() => go('tools.removeSetting', { tool, setting: setting.id }, 'Not removed')}>
                 Remove
               </Button>
               <span className="grow" />
@@ -117,7 +117,7 @@ type Key = ApiTool['keys'][number];
 export function ExpiryDialog({ tool, keyRow, onClose }: { tool: string; keyRow: Key; onClose: () => void }) {
   const [day, setDay] = useState<Date | null>(fromIso(keyRow.expires_on));
   const [busy, go] = useGo(onClose);
-  const set = (expires_on: string) => void go('tools.setKeyExpiry', { tool, key: keyRow.id, expires_on }, 'Not saved');
+  const set = (expires_on: string) => go('tools.setKeyExpiry', { tool, key: keyRow.id, expires_on }, 'Not saved');
   return (
     <Dialog
       open
@@ -163,7 +163,7 @@ export function Secret({ label, value, onHide }: { label: string; value: string;
   return (
     <div className="connect-cmd" role="group" aria-label={label}>
       <code>{value}</code>
-      <IconButton icon="copy" label="Copy" size="sm" onClick={() => void copy(value)} />
+      <IconButton icon="copy" label="Copy" size="sm" onClick={() => copy(value)} />
     </div>
   );
 }
@@ -342,7 +342,7 @@ export function MessageDialog({ message, title, hasCode = false, onClose }: { me
       actions={
         <>
           {hasCode && code === null && (
-            <Button busy={revealing} disabled={revealing} onClick={() => void reveal()}>
+            <Button busy={revealing} disabled={revealing} onClick={() => reveal()}>
               Reveal code
             </Button>
           )}
@@ -357,7 +357,7 @@ export function MessageDialog({ message, title, hasCode = false, onClose }: { me
         ) : (
           <div className="fv-main">
             <pre className="fv-text">{pages.join('')}</pre>
-            {next !== null && next > 0 && !busy && <More onClick={() => void more(next)}>Read more</More>}
+            {next !== null && next > 0 && !busy && <More onClick={() => more(next)}>Read more</More>}
           </div>
         )}
       </div>

@@ -254,7 +254,7 @@ export function MeetingPanel({ id, onClose }: { id: string; onClose: () => void 
     return (
       <SidePanel title="Meeting" target={`meeting:${id}`} onClose={onClose}>
         <Empty title="Meeting did not load" icon="alert">
-          <Button onClick={() => void m.refetch()}>Try again</Button>
+          <Button onClick={() => m.refetch()}>Try again</Button>
         </Empty>
       </SidePanel>
     );
@@ -293,7 +293,7 @@ export function MeetingPanel({ id, onClose }: { id: string; onClose: () => void 
                 <ShareBox m={mm} />
               ) : (
                 <div className="mv-review">
-                  <Button onClick={() => void press('calls.review', { meeting: id, action: 'restore' })}>Restore</Button>
+                  <Button onClick={() => press('calls.review', { meeting: id, action: 'restore' })}>Restore</Button>
                 </div>
               )}
             </section>
@@ -437,10 +437,10 @@ function ShareBox({ m }: { m: MeetingMore }) {
         <Select label="Agent that files its tasks" labelHidden look="quiet" options={sends} value={send} onValueChange={setSend} />
       </div>
       <div className="mv-review">
-        <Button onClick={() => void press('calls.review', { meeting: m.id, action: 'dismiss' })}>Dismiss</Button>
+        <Button onClick={() => press('calls.review', { meeting: m.id, action: 'dismiss' })}>Dismiss</Button>
         <Button
           variant="primary"
-          onClick={() => void press('calls.review', { meeting: m.id, action: 'approve', private: seen === 'private', ...(send ? { send } : {}) })}
+          onClick={() => press('calls.review', { meeting: m.id, action: 'approve', private: seen === 'private', ...(send ? { send } : {}) })}
         >
           Share
         </Button>
@@ -695,13 +695,13 @@ function Item({ meeting, it, task, canPush, canEdit }: { meeting: string; it: Me
           Open task
         </Link>
       ) : task && canPush && it.status !== 'pushed' ? (
-        <Button className="btn-sm" disabled={tmp} onClick={() => void press('calls.makeTask', { meeting, item: it.id })}>
+        <Button className="btn-sm" disabled={tmp} onClick={() => press('calls.makeTask', { meeting, item: it.id })}>
           Create task
         </Button>
       ) : (
         <span />
       )}
-      <IconButton icon="close" label="Hide" size="sm" quiet disabled={tmp} onClick={() => void press('calls.dismissItem', { meeting, item: it.id })} />
+      <IconButton icon="close" label="Hide" size="sm" quiet disabled={tmp} onClick={() => press('calls.dismissItem', { meeting, item: it.id })} />
     </li>
   );
 }

@@ -204,7 +204,7 @@ function DueEditor({ due, rule: preset, onDone, onClose }: { due?: DueDetail; ru
       onClose={onClose}
       foot={
         <>
-          <Button variant="primary" busy={busy} disabled={!ready} onClick={() => void save()}>
+          <Button variant="primary" busy={busy} disabled={!ready} onClick={() => save()}>
             {due ? 'Save' : 'Add'}
           </Button>
           <Button variant="quiet" onClick={onDone}>

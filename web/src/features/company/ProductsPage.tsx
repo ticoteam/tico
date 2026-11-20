@@ -53,7 +53,7 @@ export function ProductsPage({ search }: { search: ProductsSearch }) {
   const panel = search.panel;
   const shown = panel && panel !== 'new' ? products.find((p) => p.key === panel) : undefined;
   const add = (
-    <Button variant={panel ? 'plain' : 'primary'} onClick={() => void open.run({ panel: 'new' })}>
+    <Button variant={panel ? 'plain' : 'primary'} onClick={() => open.run({ panel: 'new' })}>
       Add product
     </Button>
   );
@@ -138,7 +138,7 @@ function ProductRecord({ p }: { p: Product }) {
   const [naming, setNaming] = useState<string | null>(null);
   const actors = useActors();
   const off = (field: ProductListField, value: string, name: string) => (
-    <IconButton icon="close" label={`Remove ${name}`} size="sm" quiet onClick={() => void remove.run({ product: p.key, field, value })} />
+    <IconButton icon="close" label={`Remove ${name}`} size="sm" quiet onClick={() => remove.run({ product: p.key, field, value })} />
   );
   const saveName = async () => {
     const name = naming?.trim();
@@ -306,10 +306,10 @@ function NewProduct() {
       onClose={() => void close.run({})}
       foot={
         <>
-          <Button variant="primary" busy={create.pending} onClick={() => void save()}>
+          <Button variant="primary" busy={create.pending} onClick={() => save()}>
             Save
           </Button>
-          <Button variant="quiet" onClick={() => void close.run({})}>
+          <Button variant="quiet" onClick={() => close.run({})}>
             Cancel
           </Button>
         </>

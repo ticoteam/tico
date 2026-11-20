@@ -1,4 +1,4 @@
-import { defineAction, refusalFor, s, type Schema } from '@/actions';
+import { defineAction, refusalFor, s, toldOf, type Schema } from '@/actions';
 import { toast } from '@/kit/Toast';
 import { writePref } from '@/prefs';
 import {
@@ -105,7 +105,7 @@ async function said<T>(run: () => Promise<T>, fallback: string): Promise<T> {
     return await run();
   } catch (e) {
     toast(reason(e, fallback));
-    throw e;
+    throw toldOf(e);
   }
 }
 
@@ -385,7 +385,7 @@ function fieldsOf(json: string | undefined): Record<string, unknown> | undefined
   }
   if (!v || typeof v !== 'object' || Array.isArray(v)) {
     toast({ text: 'Metadata must be a JSON object', kind: 'failed' });
-    throw new Error('metadata');
+    throw toldOf(new Error('metadata'));
   }
   return v as Record<string, unknown>;
 }

@@ -27,7 +27,7 @@ export function Email({ task, send, part, at, lead }: { task: string; send: stri
   if (q.isError || q.data?.preview_complete === false)
     return (
       <Empty icon="alert" title="The email did not load">
-        {q.isError && <Button onClick={() => void q.refetch()}>Try again</Button>}
+        {q.isError && <Button onClick={() => q.refetch()}>Try again</Button>}
       </Empty>
     );
   if (!q.data) return <PageBones />;

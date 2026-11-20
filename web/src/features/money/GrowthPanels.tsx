@@ -44,7 +44,7 @@ export function ManagerFace() {
 function Failed({ what, retry }: { what: string; retry: () => unknown }) {
   return (
     <Empty title={`${what} did not load`} icon="alert">
-      <Button variant="quiet" onClick={() => void retry()}>
+      <Button variant="quiet" onClick={() => retry()}>
         Try again
       </Button>
     </Empty>

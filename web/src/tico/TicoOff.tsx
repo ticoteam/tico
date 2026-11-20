@@ -20,7 +20,7 @@ export function TicoOff({ canTurnOn }: { canTurnOn: boolean }) {
     <div className="chat-body">
       <Empty icon="asleep" title="Tico is off" text={canTurnOn ? note || undefined : 'Ask the owner to turn it on.'}>
         {canTurnOn ? (
-          <Button variant="primary" busy={pending} disabled={pending} onClick={() => void press()}>
+          <Button variant="primary" busy={pending} disabled={pending} onClick={() => press()}>
             Turn on
           </Button>
         ) : null}

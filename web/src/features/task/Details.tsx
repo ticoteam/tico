@@ -12,11 +12,12 @@ import { ContextMenu, Menu, MenuItem, MenuRule } from '@/kit/Menu';
 import { LatePill, Pill } from '@/kit/Pill';
 import { Row } from '@/kit/Row';
 import { Section as Group } from '@/kit/SectionHead';
+import { toast } from '@/kit/Toast';
 import { PageBody, Section } from '@/pagekinds';
 import { ActorItems, OwnerMenu, tagsOf } from './Head';
 import { EditKv, Inline, Kv, saved } from './Fact';
 import { Meetings, MoreFacts, PublicFacts, SizeFact } from './Facts';
-import { DETAILS, tabAddress } from './model';
+import { DETAILS, failedToast, tabAddress } from './model';
 import { NewPage } from './NewPage';
 import { Face, Mark, NameOf, Go } from './parts';
 import { taskFilesQuery, type TaskData } from './queries';
@@ -384,7 +385,7 @@ export function Details({ t, flow, adding = null, onAdding = () => undefined }: 
       {(web.length > 0 || adding === 'link') && (
         <Section name="Links" count={web.length || undefined} actions={plus('Add a link', () => onAdding('link'))} open={linksOpen} onOpenChange={setLinksOpen} target={`task-links:${t.id}`}>
           {web.map((l) => (
-            <ContextMenu key={l.id} items={<MenuItem label="Remove" icon="close" onSelect={() => void run('task.removeLink', { task: t.id, link: l.id }, { via: 'click' })} />}>
+            <ContextMenu key={l.id} items={<MenuItem label="Remove" icon="close" onSelect={() => void run('task.removeLink', { task: t.id, link: l.id }, { via: 'click' }).then((r) => r.ok || toast(failedToast(r)))} />}>
               <a className="row dt-link" href={l.url} target="_blank" rel="noreferrer" title={l.title || l.url}>
                 <span className="row-mark">
                   <Icon name="link" />

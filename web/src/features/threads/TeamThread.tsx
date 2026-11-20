@@ -76,7 +76,7 @@ export function TeamThread({ who }: TeamThreadProps) {
   if (groups.isError || thread.isError)
     return (
       <Empty icon="alert" title="This thread did not load">
-        <Button onClick={() => void (groups.isError ? groups.refetch() : thread.refetch())}>Try again</Button>
+        <Button onClick={() => (groups.isError ? groups.refetch() : thread.refetch())}>Try again</Button>
       </Empty>
     );
   if (groups.data && !group) return <Empty icon="people" title="No such team" />;

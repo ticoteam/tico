@@ -158,7 +158,7 @@ function TestRun({ routine, onClose }: { routine: Routine; onClose: () => void }
           <Button variant="quiet" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" busy={busy} onClick={() => void go()}>
+          <Button variant="primary" busy={busy} onClick={() => go()}>
             Run
           </Button>
         </>
@@ -272,7 +272,7 @@ function VersionRow({ v, children }: { v: Version; children: ReactNode }) {
 /** The run guard held its runs: how many, and Release or Drop for whoever may change it (Drop asks first). */
 function HoldLine({ routine, held, dropped }: { routine: Routine; held: number; dropped: number }) {
   const [asking, setAsking] = useState(false);
-  const end = (action: 'release' | 'drop') => void press('routines.endHold', { routine: routine.id, action });
+  const end = (action: 'release' | 'drop') => press('routines.endHold', { routine: routine.id, action });
   return (
     <div className="rr-field" data-target={`hold:${routine.id}`}>
       <Word icon="pause">On hold</Word>
@@ -329,11 +329,11 @@ function LimitEditor({ routine, onDone }: { routine: Routine; onDone: () => void
         autoFocus
       />
       <div className="rr-field">
-        <Button variant="primary" disabled={bad} onClick={() => void save(typed)}>
+        <Button variant="primary" disabled={bad} onClick={() => save(typed)}>
           Save
         </Button>
         {/* blank is the agent's own limit (the placeholder says so) */}
-        <Button onClick={() => void save(null)}>Clear</Button>
+        <Button onClick={() => save(null)}>Clear</Button>
         <Button variant="quiet" onClick={onDone}>
           Cancel
         </Button>
@@ -424,7 +424,7 @@ function RoutineEditor({ routine, onDone, onClose }: { routine?: Routine; onDone
       onClose={onClose}
       foot={
         <>
-          <Button variant="primary" busy={busy} disabled={!ready} onClick={() => void save()}>
+          <Button variant="primary" busy={busy} disabled={!ready} onClick={() => save()}>
             {routine ? 'Save' : 'Add routine'}
           </Button>
           <Button variant="quiet" onClick={onDone}>

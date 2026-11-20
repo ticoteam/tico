@@ -97,7 +97,7 @@ function Page({ search, asked, state, retry, empty, dialogs, children }: Omit<Ta
   const [reading, setReading] = useState(false);
   const kind = t === 'stages' ? 'stage' : t === 'outside' ? 'outside' : 'org';
   const add = (
-    <Button variant="primary" onClick={() => void press('rules.new', { kind })}>
+    <Button variant="primary" onClick={() => press('rules.new', { kind })}>
       Add rule
     </Button>
   );
@@ -473,7 +473,7 @@ function AcceptWho({ rule, onClose }: { rule: OrgRule; onClose: () => void }) {
           <Button variant="quiet" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" busy={busy} disabled={!who.length} onClick={() => void add()}>
+          <Button variant="primary" busy={busy} disabled={!who.length} onClick={() => add()}>
             Add
           </Button>
         </>

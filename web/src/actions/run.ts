@@ -101,7 +101,14 @@ function allowed(a: AnyAction, ctx: Ctx, input: unknown): boolean {
 /** A thrown error as a refused result: its code, and the server's reason when it gave a safe one. */
 export function refused(e: unknown): Result {
   const why = whyOf(e);
-  return why ? { ok: false, error: problem(e), why } : { ok: false, error: problem(e) };
+  const told = (e as { told?: unknown } | null)?.told === true;
+  return { ok: false, error: problem(e), ...(why && { why }), ...(told && { told }) };
+}
+
+/** Mark a refusal the action has said itself (its toast), so the button that ran it does not say it again. */
+export function toldOf<E>(e: E): E {
+  if (typeof e === 'object' && e !== null) Object.assign(e, { told: true });
+  return e;
 }
 
 const MAX_WHY = 140;

@@ -4,7 +4,7 @@ import { useState, type ReactNode } from 'react';
 import { refusal, run } from '@/actions';
 import { useActor, type Directory } from '@/data';
 import { Avatar } from '@/kit/Avatar';
-import { Button } from '@/kit/Button';
+import { Button, usePress, type PressHandler } from '@/kit/Button';
 import { SettledSearch } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { OwnerButton as KitOwnerButton } from '@/kit/OwnerButton';
@@ -263,10 +263,11 @@ export function Held() {
   );
 }
 
-/** A section's quiet "N more" row (tools.css `.stage-more`). */
-export function More({ onClick, children }: { onClick: () => void; children: ReactNode }) {
+/** A section's quiet "N more" row (tools.css `.stage-more`). Busy while the read it starts is out. */
+export function More({ onClick, children }: { onClick: PressHandler<HTMLButtonElement>; children: ReactNode }) {
+  const { busy, onClick: press } = usePress(onClick, false);
   return (
-    <button type="button" className="stage-more" onClick={onClick}>
+    <button type="button" className="stage-more" onClick={press} disabled={busy} aria-busy={busy || undefined}>
       {children}
     </button>
   );

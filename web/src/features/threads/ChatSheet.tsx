@@ -28,7 +28,7 @@ export function ChatSheet({ chat }: ChatSheetProps) {
   if (isError)
     return (
       <Empty icon="alert" title="This chat did not load">
-        <Button onClick={() => void refetch()}>Try again</Button>
+        <Button onClick={() => refetch()}>Try again</Button>
       </Empty>
     );
   if (!t) return <MessageBones />;

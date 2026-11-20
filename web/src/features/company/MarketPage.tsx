@@ -291,7 +291,7 @@ function Estimate({ e, accepted, owner }: { e: MarketEstimate; accepted: boolean
         <span className="row-fig">{e.spend_usd != null ? usdShort(e.spend_usd) : (e.error ?? '')}</span>
         <Pill>{accepted ? 'Accepted' : 'Proposed'}</Pill>
         {owner && !accepted && (
-          <Button variant="quiet" busy={accept.pending} onClick={() => void accept.run({ size: e.id })}>
+          <Button variant="quiet" busy={accept.pending} onClick={() => accept.run({ size: e.id })}>
             Accept
           </Button>
         )}

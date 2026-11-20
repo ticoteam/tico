@@ -117,7 +117,7 @@ function ModelsDialog({ agents, onClose, onDone }: { agents: string[]; onClose: 
           <Button variant="quiet" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" busy={busy} disabled={!model} onClick={() => void apply()}>
+          <Button variant="primary" busy={busy} disabled={!model} onClick={() => apply()}>
             Change
           </Button>
         </>
@@ -183,7 +183,7 @@ function OwnersDialog({ bot, name, listed, onClose }: { bot: BotListed; name: st
           <Button variant="quiet" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" busy={busy} disabled={!add.length && !remove.length} onClick={() => void save()}>
+          <Button variant="primary" busy={busy} disabled={!add.length && !remove.length} onClick={() => save()}>
             Save
           </Button>
         </>
@@ -290,7 +290,7 @@ function AccessDialog({ bot, name, now, onClose }: { bot: string; name: string; 
           <Button variant="quiet" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" busy={busy} onClick={() => void save()}>
+          <Button variant="primary" busy={busy} onClick={() => save()}>
             Save
           </Button>
         </>
@@ -356,10 +356,10 @@ function StoppedDialog({ bot, jobs, onClose }: { bot: string; jobs: StoppedRun[]
               {!SAFE_RETRY.includes(j.stopped) && <span className="set-cmd-note">Trying again could repeat work that already finished.</span>}
               {pending && <Word fine>Saved</Word>}
               <div className="open-foot">
-                <Button disabled={off} onClick={() => void decide(j, 'resume')}>
+                <Button disabled={off} onClick={() => decide(j, 'resume')}>
                   Try again
                 </Button>
-                <Button disabled={off} onClick={() => void decide(j, 'dismiss')}>
+                <Button disabled={off} onClick={() => decide(j, 'dismiss')}>
                   Dismiss
                 </Button>
               </div>
@@ -515,7 +515,7 @@ function TasksDialog({ slug, name, now, onClose }: { slug: string; name: string;
           <Button variant="quiet" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" busy={busy} onClick={() => void save()}>
+          <Button variant="primary" busy={busy} onClick={() => save()}>
             Save
           </Button>
         </>
@@ -565,7 +565,7 @@ function LimitDialog({ slug, name, now, onClose }: { slug: string; name: string;
           <Button variant="quiet" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" busy={busy} disabled={bad} onClick={() => void save()}>
+          <Button variant="primary" busy={busy} disabled={bad} onClick={() => save()}>
             Save
           </Button>
         </>

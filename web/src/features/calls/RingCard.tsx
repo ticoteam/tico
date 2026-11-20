@@ -30,8 +30,8 @@ export function RingCard() {
         </span>
       </div>
       <div className="ring-row">
-        <Button onClick={() => void press('calls.decline', { id: c.id })}>Decline</Button>
-        <Button variant="primary" icon="call" onClick={() => void press('calls.join', { id: c.id })}>
+        <Button onClick={() => press('calls.decline', { id: c.id })}>Decline</Button>
+        <Button variant="primary" icon="call" onClick={() => press('calls.join', { id: c.id })}>
           Answer
         </Button>
       </div>

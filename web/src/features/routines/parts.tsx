@@ -69,7 +69,7 @@ export function PanelRead({ q, what }: { q: { isPending: boolean; isError: boole
   if (q.isError)
     return (
       <Empty icon="alert" title={`${what} did not load`}>
-        <Button variant="quiet" onClick={() => void q.refetch()}>
+        <Button variant="quiet" onClick={() => q.refetch()}>
           Try again
         </Button>
       </Empty>

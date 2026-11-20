@@ -141,7 +141,7 @@ export function SupportChat() {
           ) : null}
         </Menu>
       )}
-      <IconButton icon="close" label="Close" quiet onClick={() => void press('shell.closeChat')} />
+      <IconButton icon="close" label="Close" quiet onClick={() => press('shell.closeChat')} />
     </header>
   );
 
@@ -151,7 +151,7 @@ export function SupportChat() {
         {head}
         {list.isError ? (
           <Empty icon="alert" title="Tico support did not load">
-            <Button onClick={() => void list.refetch()}>Try again</Button>
+            <Button onClick={() => list.refetch()}>Try again</Button>
           </Empty>
         ) : (
           <div className="chat-body">

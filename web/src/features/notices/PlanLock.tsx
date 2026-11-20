@@ -42,15 +42,15 @@ function Locked({ reason }: { reason: string | null }) {
         actions={
           <>
             {me?.role === 'owner' && (
-              <Button variant="quiet" onClick={() => void run('notices.downloadFiles', {}, click)}>
+              <Button variant="quiet" onClick={() => run('notices.downloadFiles', {}, click)}>
                 Download files
               </Button>
             )}
             <span className="nt-pair">
-              <Button busy={check.pending} onClick={() => void again()}>
+              <Button busy={check.pending} onClick={() => again()}>
                 Check again
               </Button>
-              <Button variant="primary" onClick={() => void run('notices.openBilling', {}, click)}>
+              <Button variant="primary" onClick={() => run('notices.openBilling', {}, click)}>
                 Open billing
               </Button>
             </span>
@@ -61,7 +61,7 @@ function Locked({ reason }: { reason: string | null }) {
             <a href={SUPPORT_URL} target="_blank" rel="noopener noreferrer">
               Contact Tico support
             </a>
-            <Button variant="quiet" onClick={() => void run('start.signOut', {}, click)}>
+            <Button variant="quiet" onClick={() => run('start.signOut', {}, click)}>
               Sign out
             </Button>
           </span>

@@ -438,7 +438,7 @@ describe('a page’s versions, a new page and a picture', () => {
     const selected = holdReply();
     serve((url) => {
       if (url.includes('/api/v2/tasks/%2312')) return { status: 200, body: detail(t) };
-      if (url.endsWith('/api/v2/files/f1?v=1')) return { status: 503, body: {} };
+      if (url.endsWith('/api/v2/files/f1?v=1')) return { status: 500, body: {} };
       if (url.endsWith('/api/v2/files/f1?v=2')) return selected.promise;
       return base(url);
     });

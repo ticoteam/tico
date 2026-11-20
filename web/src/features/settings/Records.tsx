@@ -141,7 +141,7 @@ export function Billing() {
       );
     return (
       <Empty icon="alert" title="Billing did not load">
-        <Button onClick={() => void billing.refetch()}>Try again</Button>
+        <Button onClick={() => billing.refetch()}>Try again</Button>
       </Empty>
     );
   }
@@ -244,7 +244,7 @@ export function CheckNow() {
     if (!r.ok) toast(refusal(r, "Couldn't check"));
   };
   return (
-    <Button busy={busy} onClick={() => void check()}>
+    <Button busy={busy} onClick={() => check()}>
       Check now
     </Button>
   );
@@ -334,7 +334,7 @@ function AddUpdate() {
             <Button variant="quiet" onClick={() => setOpen(false)}>
               Cancel
             </Button>
-            <Button variant="primary" busy={busy} disabled={!ready} onClick={() => void publish()}>
+            <Button variant="primary" busy={busy} disabled={!ready} onClick={() => publish()}>
               Publish
             </Button>
           </>

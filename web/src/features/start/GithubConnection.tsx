@@ -79,11 +79,11 @@ function NotConnected() {
           trail={
             <>
               {pending && (
-                <Button busy={finish.pending} onClick={() => void finish.press()}>
+                <Button busy={finish.pending} onClick={() => finish.press()}>
                   Finish
                 </Button>
               )}
-              <Button variant="primary" onClick={() => void run('setup.open', { step: 'github' }, click)}>
+              <Button variant="primary" onClick={() => run('setup.open', { step: 'github' }, click)}>
                 Connect
               </Button>
             </>
@@ -113,7 +113,7 @@ function Connected({ app }: { app: GitHubApp }) {
           label="Installed"
           trail={
             !app.installed && (
-              <Button variant="primary" busy={install.pending} onClick={() => void install.press()}>
+              <Button variant="primary" busy={install.pending} onClick={() => install.press()}>
                 Install
               </Button>
             )
@@ -131,12 +131,12 @@ function Connected({ app }: { app: GitHubApp }) {
                     Permissions
                   </a>
                 )}
-                <Button busy={check.pending} onClick={() => void check.press()}>
+                <Button busy={check.pending} onClick={() => check.press()}>
                   Check again
                 </Button>
               </>
             ) : needsAuthorizing ? (
-              <Button busy={authorize.pending} onClick={() => void authorize.press()}>
+              <Button busy={authorize.pending} onClick={() => authorize.press()}>
                 Authorize
               </Button>
             ) : undefined
@@ -189,7 +189,7 @@ function More({ app }: { app: GitHubApp }) {
             <Button disabled={disconnect.pending} onClick={() => setAsking(false)}>
               Cancel
             </Button>
-            <Button variant="primary" busy={disconnect.pending} onClick={() => void yes()}>
+            <Button variant="primary" busy={disconnect.pending} onClick={() => yes()}>
               Disconnect
             </Button>
           </>

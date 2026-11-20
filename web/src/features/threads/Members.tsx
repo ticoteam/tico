@@ -26,7 +26,7 @@ export function Members({ thread: t, onClose, onAdd }: { thread: Thread; onClose
   const rows = q.data?.pages.flatMap((p) => p.members) ?? [];
   const manage = t.me?.can_manage === true;
   const name = (m: MemberRow) => (m.actor === me ? 'You' : (nameOf(m.actor) ?? bare(m.actor)));
-  const remove = (m: MemberRow) => void press('threads.removePerson', { thread: t.id, actor: m.actor });
+  const remove = (m: MemberRow) => press('threads.removePerson', { thread: t.id, actor: m.actor });
   const leave = async (m: MemberRow) => {
     if (await press('threads.removePerson', { thread: t.id, actor: m.actor })) onClose();
   };
@@ -39,7 +39,7 @@ export function Members({ thread: t, onClose, onAdd }: { thread: Thread; onClose
       {m.role === 'owner' ? (
         <span />
       ) : m.actor === me ? (
-        <Button onClick={() => void leave(m)}>Leave</Button>
+        <Button onClick={() => leave(m)}>Leave</Button>
       ) : manage ? (
         <IconButton icon="close" label={`Remove ${name(m)}`} onClick={() => remove(m)} />
       ) : (
@@ -72,7 +72,7 @@ export function Members({ thread: t, onClose, onAdd }: { thread: Thread; onClose
       ) : q.isError ? (
         <p className="mb-note">
           Couldn't load who is in it.{' '}
-          <Button variant="quiet" onClick={() => void q.refetch()}>
+          <Button variant="quiet" onClick={() => q.refetch()}>
             Try again
           </Button>
         </p>
@@ -112,7 +112,7 @@ export function AddPeople({ thread: t, have, onClose }: { thread: Thread; have: 
       actions={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" disabled={!picked.length} busy={busy} onClick={() => void add()}>
+          <Button variant="primary" disabled={!picked.length} busy={busy} onClick={() => add()}>
             Add
           </Button>
         </>

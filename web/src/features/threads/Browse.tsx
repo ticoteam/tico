@@ -30,7 +30,7 @@ export function Browse({ onClose }: { onClose: () => void }) {
     onClose();
     await press('threads.open', { thread: t.id });
   };
-  const back = (t: BrowseRow) => void press('threads.unarchive', { thread: t.id });
+  const back = (t: BrowseRow) => press('threads.unarchive', { thread: t.id });
   // Its name opens it to read before joining (ui thread-rail browse); the link stays real for a new tab.
   const read = (e: MouseEvent, t: BrowseRow) => {
     if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
@@ -55,7 +55,7 @@ export function Browse({ onClose }: { onClose: () => void }) {
         <SkeletonRows rows={4} />
       ) : list.isError ? (
         <Empty icon="alert" title="Threads did not load">
-          <Button onClick={() => void list.refetch()}>Try again</Button>
+          <Button onClick={() => list.refetch()}>Try again</Button>
         </Empty>
       ) : shown.length === 0 ? (
         <Empty icon="threads" title={view === 'open' ? 'No threads to join' : 'Nothing archived'} />
@@ -77,7 +77,7 @@ export function Browse({ onClose }: { onClose: () => void }) {
               </a>
               {t.member_count ? <Count n={t.member_count} label={`${t.member_count} in it`} /> : <span />}
               {view === 'open' ? (
-                <Button onClick={() => void join(t)}>Join</Button>
+                <Button onClick={() => join(t)}>Join</Button>
               ) : (
                 <Button onClick={() => back(t)}>Move back</Button>
               )}

@@ -121,14 +121,14 @@ export function Settings({ thread: t, onClose }: { thread: Thread; onClose: () =
           )}
         </Facts>
         <div className="ts-acts">
-          <Button icon="spark" onClick={() => void press('threads.summarize', { thread: t.id })}>
+          <Button icon="spark" onClick={() => press('threads.summarize', { thread: t.id })}>
             Summarize
           </Button>
-          <Button icon="check" onClick={() => void press('threads.markRead', { threads: [t.id] })}>
+          <Button icon="check" onClick={() => press('threads.markRead', { threads: [t.id] })}>
             Mark read
           </Button>
           {manage && t.earlier && t.earlier.count > 0 && (
-            <Button icon="clock" onClick={() => void press('threads.openEarlier', { thread: t.id })}>
+            <Button icon="clock" onClick={() => press('threads.openEarlier', { thread: t.id })}>
               Open earlier
             </Button>
           )}
@@ -148,7 +148,7 @@ export function Settings({ thread: t, onClose }: { thread: Thread; onClose: () =
         actions={
           <>
             <Button onClick={() => setDeleting(false)}>Cancel</Button>
-            <Button variant="primary" onClick={() => void del()}>
+            <Button variant="primary" onClick={() => del()}>
               Delete thread
             </Button>
           </>

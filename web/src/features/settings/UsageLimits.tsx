@@ -96,7 +96,7 @@ function ClearQueue({ teams }: { teams: [string, UsagePool, number][] }) {
             <Button variant="quiet" onClick={() => setAsking(false)}>
               Cancel
             </Button>
-            <Button variant="primary" busy={busy} onClick={() => void clear()}>
+            <Button variant="primary" busy={busy} onClick={() => clear()}>
               Clear queue
             </Button>
           </>
@@ -389,7 +389,7 @@ function AgentPanel({ slug, onClose }: { slug: string; onClose: () => void }) {
             Open in Usage
           </Link>
           {l.may_edit && l.own_monthly_usd != null && (
-            <Button variant="quiet" onClick={() => void act('usage.setLimit', { agent: slug })}>
+            <Button variant="quiet" onClick={() => act('usage.setLimit', { agent: slug })}>
               Use default
             </Button>
           )}

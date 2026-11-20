@@ -51,7 +51,7 @@ function Bar({ room, s }: { room: string; s: CallState }) {
   const talker = who.find((x) => x.talks && x.id !== s.me) ?? who.find((x) => x.talks);
   const first = (id: string) => nameOf(id).split(' ')[0];
   const word = s.muted ? 'Unmute' : 'Mute';
-  const mic = <IconButton icon={s.muted ? 'micoff' : 'mic'} label={word} on={s.muted} onClick={() => void press('calls.toggleMute', {})} />;
+  const mic = <IconButton icon={s.muted ? 'micoff' : 'mic'} label={word} on={s.muted} onClick={() => press('calls.toggleMute', {})} />;
 
   if (cards)
     return (
@@ -64,7 +64,7 @@ function Bar({ room, s }: { room: string; s: CallState }) {
           </span>
         </Link>
         {mic}
-        <IconButton icon="leave" label="Leave" className="cb-hang" onClick={() => void press('calls.leave', {})} />
+        <IconButton icon="leave" label="Leave" className="cb-hang" onClick={() => press('calls.leave', {})} />
       </header>
     );
 
@@ -106,10 +106,10 @@ function Bar({ room, s }: { room: string; s: CallState }) {
             icon="share"
             label={s.sharing ? 'Stop sharing' : 'Share screen'}
             on={s.sharing}
-            onClick={() => void press('calls.share', { id: room, on: !s.sharing })}
+            onClick={() => press('calls.share', { id: room, on: !s.sharing })}
           />
         )}
-        <IconButton icon="cc" label="Captions" on={s.captions} onClick={() => void press('calls.captions', { on: !s.captions })} />
+        <IconButton icon="cc" label="Captions" on={s.captions} onClick={() => press('calls.captions', { on: !s.captions })} />
         <Link to="/call/$room" params={{ room }} className="ib" aria-label="Open call" title="Open call">
           <Icon name="popout" />
         </Link>

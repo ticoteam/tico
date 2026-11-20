@@ -280,7 +280,7 @@ function SourcePanel({ row: r, group, all, admin, onReconnect }: { row: Src; gro
           </Button>
         ) : (
           on && (
-            <Button variant="primary" onClick={() => void press('finance.syncSource', { connection: conn })}>
+            <Button variant="primary" onClick={() => press('finance.syncSource', { connection: conn })}>
               Sync now
             </Button>
           )

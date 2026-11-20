@@ -239,8 +239,8 @@ function Proposal({ aid }: { aid: string }) {
         steps={[]}
         act={data.summary}
         busy={yes.pending || no.pending}
-        onAct={() => void yes.run({ action: aid })}
-        onNotNow={() => void no.run({ action: aid })}
+        onAct={() => yes.run({ action: aid })}
+        onNotNow={() => no.run({ action: aid })}
       />
     </div>
   );

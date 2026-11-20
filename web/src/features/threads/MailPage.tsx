@@ -126,7 +126,7 @@ export function MailPage({ box, open, view, q: words }: MailPageProps) {
         none || unconnected
           ? {
               title: unconnected ? 'Mail is not connected' : 'No mail yet',
-              action: <Button onClick={() => void press('tools.open', { tool: 'mailbox' })}>Connect mail</Button>,
+              action: <Button onClick={() => press('tools.open', { tool: 'mailbox' })}>Connect mail</Button>,
             }
           : { title: 'No mail' }
       }
@@ -196,7 +196,7 @@ function LetterHead({ box, id, back }: { box: Mailbox; id: string; back: ItemHea
           {first?.from_addr && first.from_addr !== from && <span className="lt-addr">{first.from_addr}</span>}
           {typeof box.agent_bot === 'string' && <ChatWith actor={`bot:${box.agent_bot}`} />}
           {organize && data && (
-            <IconButton icon="archive" label="Archive" onClick={() => void press('mail.archive', { box: box.address, letter: id, ids: data.map((l) => l.msg_id) })} />
+            <IconButton icon="archive" label="Archive" onClick={() => press('mail.archive', { box: box.address, letter: id, ids: data.map((l) => l.msg_id) })} />
           )}
         </>
       }
@@ -217,7 +217,7 @@ function LetterBody({ box, id }: { box: string; id: string }) {
   if (isError)
     return (
       <Empty icon="alert" title="This mail did not load">
-        <Button onClick={() => void refetch()}>Try again</Button>
+        <Button onClick={() => refetch()}>Try again</Button>
       </Empty>
     );
   return (
@@ -249,7 +249,7 @@ function Instructions({ box }: { box: string }) {
   if (isError)
     return (
       <Empty icon="alert" title="The instructions did not load">
-        <Button onClick={() => void refetch()}>Try again</Button>
+        <Button onClick={() => refetch()}>Try again</Button>
       </Empty>
     );
   if (!data.instructions.trim()) return <Empty icon="rules" title="No instructions" />;
@@ -368,13 +368,13 @@ function Texts({ from }: { from: string }) {
   if (list.isError)
     return (
       <Empty icon="alert" title="These texts did not load">
-        <Button onClick={() => void list.refetch()}>Try again</Button>
+        <Button onClick={() => list.refetch()}>Try again</Button>
       </Empty>
     );
   return (
     <div className="mg-list">
       {list.hasNextPage && (
-        <Button onClick={() => void list.fetchNextPage()} busy={list.isFetchingNextPage}>
+        <Button onClick={() => list.fetchNextPage()} busy={list.isFetchingNextPage}>
           Older texts
         </Button>
       )}

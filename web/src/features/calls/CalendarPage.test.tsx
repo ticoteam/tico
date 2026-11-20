@@ -75,9 +75,12 @@ function show(path: string): AnyRouter {
 
 const fetches: string[] = [];
 let refuse: () => void = () => {};
+/** A removal sent and not yet answered. */
+let removing = false;
 beforeEach(() => {
   queryClient.clear();
   fetches.length = 0;
+  removing = false;
   queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'person', slug: null });
   queryClient.setQueryData(['directory'], { actors: [], byId: {} });
   queryClient.setQueryData(liveCallsQuery.queryKey, { calls: [] });
@@ -86,6 +89,7 @@ beforeEach(() => {
   vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
     fetches.push(String(url));
     if (init?.method === 'DELETE') {
+      removing = true;
       await new Promise<void>((r) => (refuse = r));
       return new Response(JSON.stringify({ error: { code: 'forbidden', detail: 'Only the organizer can remove it' } }), { status: 403, headers: { 'Content-Type': 'application/json' } });
     }
@@ -220,7 +224,7 @@ describe('Calendar', () => {
     expect(fetches).not.toContain('/api/v2/calendar/search?q=sync');
   });
 
-  it('opens an event found by search outside the default week and restores it if removal is refused', async () => {
+  it('opens an event found by search outside the default week and keeps it while a refused removal is out', async () => {
     const future = new Date(Date.now() + 14 * 86_400_000);
     const o = occ({ start: future.toISOString(), end: new Date(future.getTime() + 3_600_000).toISOString() });
     queryClient.setQueryData(meetingsQuery('live', 'pricing').queryKey, { meetings: [], count: 0, pending_count: 0 });
@@ -231,9 +235,12 @@ describe('Calendar', () => {
     fireEvent.click(within(panel).getByRole('button', { name: 'More' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Remove' }));
     fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Remove' }));
-    await waitFor(() => expect(queryClient.getQueryData(findEventsQuery('pricing').queryKey)?.occurrences).toEqual([]));
+    await waitFor(() => expect(removing).toBe(true));
+    expect(queryClient.getQueryData(findEventsQuery('pricing').queryKey)?.occurrences).toEqual([o]);
     refuse();
-    expect(await screen.findByRole('complementary', { name: 'Pricing review' })).toBeTruthy();
+    expect(await screen.findByText('Only the organizer can remove it')).toBeTruthy();
+    expect(screen.getByRole('complementary', { name: 'Pricing review' })).toBeTruthy();
+    expect(queryClient.getQueryData(findEventsQuery('pricing').queryKey)?.occurrences).toEqual([o]);
     expect(fetches.some((u) => u.startsWith('/api/v2/calendar/events?'))).toBe(false);
   });
 
@@ -258,7 +265,7 @@ describe('Calendar', () => {
     expect(screen.getByRole('button', { name: /Shared with me/ })).toBeTruthy();
   });
 
-  it('a removed event goes at once and comes back when the server refuses', async () => {
+  it('an event being removed stays until the server answers, and stays with the reason when it refuses', async () => {
     seed('week', [occ({})]);
     show(`/calendar?view=week&date=${DAY}&panel=event%3Ao1`);
     const panel = await screen.findByRole('complementary', { name: 'Pricing review' });
@@ -266,9 +273,9 @@ describe('Calendar', () => {
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Remove' }));
     const ask = await screen.findByRole('alertdialog');
     fireEvent.click(within(ask).getByRole('button', { name: 'Remove' }));
-    await waitFor(() => expect(screen.queryAllByTitle(/^Pricing review,/)).toHaveLength(0));
+    await waitFor(() => expect(removing).toBe(true));
+    expect(block('Pricing review')).toBeTruthy();
     refuse();
-    await waitFor(() => expect(block('Pricing review')).toBeTruthy());
     const reason = await screen.findByText('Only the organizer can remove it');
     expect(reason.parentElement?.textContent).toBe("Couldn't save: Only the organizer can remove it");
   });

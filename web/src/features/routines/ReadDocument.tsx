@@ -99,7 +99,7 @@ export function ReadDocument({ onClose }: { onClose: () => void }) {
           <Button variant="quiet" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" busy={busy} disabled={!ready} onClick={() => void go()}>
+          <Button variant="primary" busy={busy} disabled={!ready} onClick={() => go()}>
             Read it
           </Button>
         </>

@@ -79,7 +79,7 @@ function Contact({ kind, value, onChange }: { kind: 'vendor' | 'customer'; value
       {value === NEW && (
         <div className="dlg-pair">
           <Field label="Name" value={name} onValueChange={(v) => setName(v.slice(0, 120))} autoComplete="off" error={error || undefined} />
-          <Button busy={busy} onClick={() => void add()}>
+          <Button busy={busy} onClick={() => add()}>
             Add
           </Button>
         </div>

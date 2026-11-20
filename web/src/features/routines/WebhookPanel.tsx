@@ -199,7 +199,7 @@ function Signing({ hook, onSecret, onClose }: { hook: Hook; onSecret: (s: string
             <Button variant="quiet" onClick={() => setAsk(null)}>
               Cancel
             </Button>
-            <Button variant="primary" busy={busy} onClick={() => void (replace ? save() : off())}>
+            <Button variant="primary" busy={busy} onClick={() => (replace ? save() : off())}>
               {replace ? 'Replace' : 'Turn off'}
             </Button>
           </>
@@ -222,7 +222,7 @@ function Signing({ hook, onSecret, onClose }: { hook: Hook; onSecret: (s: string
           <Button variant="quiet" onClick={close}>
             Cancel
           </Button>
-          <Button variant="primary" busy={busy} onClick={() => void save()}>
+          <Button variant="primary" busy={busy} onClick={() => save()}>
             Save
           </Button>
         </>
@@ -299,7 +299,7 @@ export function HookDialog({ hook, onMade, onClose }: { hook?: Hook; onMade?: (m
           <Button variant="quiet" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" busy={busy} disabled={!ready} onClick={() => void save()}>
+          <Button variant="primary" busy={busy} disabled={!ready} onClick={() => save()}>
             {hook ? 'Save' : 'Add'}
           </Button>
         </>

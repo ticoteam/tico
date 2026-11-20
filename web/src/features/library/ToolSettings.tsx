@@ -165,7 +165,7 @@ export function SetupDialog({ domain: was, onClose }: { domain: string; onClose:
       {command ? (
         <div className="connect-cmd" role="group" aria-label="Setup command">
           <code>{command}</code>
-          <IconButton icon="copy" label="Copy" size="sm" onClick={() => void navigator.clipboard?.writeText(command)} />
+          <IconButton icon="copy" label="Copy" size="sm" onClick={() => navigator.clipboard?.writeText(command)} />
         </div>
       ) : (
         <Field label="Domain" value={domain} onValueChange={setDomain} placeholder="example.com" autoFocus />
@@ -421,8 +421,8 @@ export function NumberRequests({ always = false }: { always?: boolean }) {
       <div key={r.request_id} className="row urow" title={r.name} data-target={`number-request:${r.request_id}`}>
         <span className="row-title">{r.name}</span>
         <span className="row-ctx">{w.text}</span>
-        {w.quote !== null && <Button onClick={() => void press('tools.acceptQuote', { request: r.request_id, price_micros: w.quote }, 'Not accepted')}>Accept</Button>}
-        <IconButton icon="close" label="Cancel request" size="sm" onClick={() => void press('tools.cancelNumberRequest', { request: r.request_id }, 'Not canceled')} />
+        {w.quote !== null && <Button onClick={() => press('tools.acceptQuote', { request: r.request_id, price_micros: w.quote }, 'Not accepted')}>Accept</Button>}
+        <IconButton icon="close" label="Cancel request" size="sm" onClick={() => press('tools.cancelNumberRequest', { request: r.request_id }, 'Not canceled')} />
       </div>
     );
   });

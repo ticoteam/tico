@@ -314,6 +314,7 @@ export const setBudgetAmount = (at: string, id: string, cents: number) =>
 export const removeBudget = (at: string, id: string) =>
   write({
     key: budgetsKey(at),
+    wait: true,
     optimistic: mapBudgets((l) => l.filter((b) => b.id !== id)),
     send: () => act('budget_update', { budget_id: id, active: false, effective_from: `${at.slice(0, 7)}-01` }),
   });

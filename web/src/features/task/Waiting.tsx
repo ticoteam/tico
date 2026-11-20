@@ -58,7 +58,7 @@ function Pointer({ sub, send, to }: { sub: TaskData; send: string; to: string })
         <b className="an-name">{decisionName(sub, r, who ? personOf(who) : undefined)}</b>
         <span className="dcx-eff">waits on you</span>
         <span className="grow" />
-        <Button onClick={() => void navigate({ to: to as never })}>Open</Button>
+        <Button onClick={() => navigate({ to: to as never })}>Open</Button>
       </div>
     </section>
   );

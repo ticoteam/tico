@@ -111,12 +111,12 @@ describe('changes taken back when refused', () => {
     expect(queryClient.getQueryData<Card>(cardQuery('c1').queryKey)?.values.role).toMatchObject({ value: 'Buyer' });
   });
 
-  it('puts a removed key back on a refusal', async () => {
+  it('keeps a key being removed until the server takes it, and keeps it on a refusal', async () => {
     serve(refuse);
     const key = { id: 'k1', name: 'Main', preview: '••••abcd' };
     queryClient.setQueryData(apiToolQuery('t1').queryKey, { id: 't1', keys: [key] } as never);
     const sent = removeKey('t1', 'k1');
-    expect((queryClient.getQueryData(apiToolQuery('t1').queryKey) as { keys: unknown[] }).keys).toHaveLength(0);
+    expect((queryClient.getQueryData(apiToolQuery('t1').queryKey) as { keys: unknown[] }).keys).toEqual([key]);
     await expect(sent).rejects.toBeTruthy();
     expect((queryClient.getQueryData(apiToolQuery('t1').queryKey) as { keys: unknown[] }).keys).toEqual([key]);
   });

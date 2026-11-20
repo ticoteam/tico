@@ -19,7 +19,8 @@ const QA = { id: 'bot:qa', kind: 'agent', name: 'QA Owner', slug: 'qa', team: 'E
 
 beforeEach(() => {
   queryClient.setQueryData(['directory'], { actors: [QA], byId: { [QA.id]: QA } });
-  vi.stubGlobal('fetch', () => Promise.reject(new TypeError('offline')));
+  // The server's own search fails (a 500: not a restart or a drop, which the client would send again for a minute).
+  vi.stubGlobal('fetch', async () => new Response(null, { status: 500 }));
 });
 afterEach(() => {
   act(() => closeSearch());

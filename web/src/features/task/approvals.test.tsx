@@ -31,8 +31,10 @@ vi.mock('@/conversation', async (orig) => ({
 }));
 
 type Conversations = typeof conversations;
-type Reply = { status?: number; body: unknown };
+type Reply = { status?: number; body: unknown; text?: string };
 const sent: { url: string; body: Record<string, unknown> }[] = [];
+/** The Idempotency-Key of each write, in order. */
+const keysSent: (string | null)[] = [];
 let reply: (url: string, method: string) => Reply | Promise<Reply> | null = () => null;
 
 const req = (more: Partial<TaskRequirement> = {}) =>
@@ -82,6 +84,7 @@ function base(url: string): Reply {
 beforeAll(() => queryClient.setDefaultOptions({ queries: { ...queryClient.getDefaultOptions().queries, retry: false } }));
 beforeEach(() => {
   sent.length = 0;
+  keysSent.length = 0;
   shown = task();
   reply = () => null;
   queryClient.clear();
@@ -91,7 +94,9 @@ beforeEach(() => {
   vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET';
     if (method !== 'GET') sent.push({ url: String(url), body: typeof init?.body === 'string' ? (JSON.parse(init.body) as Record<string, unknown>) : {} });
+    if (method !== 'GET') keysSent.push(new Headers(init?.headers).get('Idempotency-Key'));
     const r = await (reply(String(url), method) ?? base(String(url)));
+    if (r.text !== undefined) return new Response(r.text, { status: r.status ?? 200 });
     return new Response(JSON.stringify(r.body), { status: r.status ?? 200, headers: { 'Content-Type': 'application/json' } });
   });
 });
@@ -228,6 +233,27 @@ describe('the decision', () => {
     await waitFor(() => expect(sent.at(-1)?.url).toBe('/api/v2/answers/a1/undo'));
   });
 
+  it('holds the box with Approve busy while the server restarts, then sends the same answer again @approvals', async () => {
+    let restarting = true;
+    reply = (url, method) => {
+      if (method !== 'POST' || !url.endsWith('/asks/r1/ok')) return null;
+      // The proxy's answer while the server restarts (backend/caddy_assets.py HOLD_BODY), without its 5 s Retry-After.
+      if (restarting) return { status: 503, body: null, text: 'Tico is starting. Try again in a few seconds.' };
+      return { body: { task: task({ to_leave: [req({ met: true, may: [] })] }), answer_id: 'a9' } };
+    };
+    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    const box = await decision();
+    const approve = await ready(box);
+    fireEvent.click(approve);
+    await waitFor(() => expect(keysSent).toHaveLength(1));
+    expect(approve.getAttribute('aria-busy')).toBe('true');
+    expect(approve).toHaveProperty('disabled', true);
+    fireEvent.click(approve);
+    restarting = false;
+    expect(await screen.findByRole('button', { name: 'Undo' })).toBeTruthy();
+    expect(keysSent).toEqual([keysSent[0], keysSent[0]]);
+  });
+
   it('Undo takes back the answer the OK names, when the server gives its id @approvals', async () => {
     reply = (url, method) => {
       if (method === 'POST' && url.endsWith('/asks/r1/ok')) return { body: { task: task({ to_leave: [req({ met: true, may: [] })] }), answer_id: 'a9' } };
@@ -315,7 +341,7 @@ describe('an email waiting to send', () => {
   });
 
   it.each([
-    { problem: 'fails', response: { status: 503, body: { error: { code: 'busy', detail: 'Try again', retryable: true } } } },
+    { problem: 'fails', response: { status: 500, body: { error: { code: 'internal', detail: 'Try again' } } } },
     { problem: 'is incomplete', response: { body: { ...mail, body: '', preview_complete: false, shown_hash: null } } },
   ])('offers a retry when the email preview $problem @approvals', async ({ response }) => {
     shown = task({ title: titled });

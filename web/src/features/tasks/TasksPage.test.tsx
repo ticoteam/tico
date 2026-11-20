@@ -465,7 +465,7 @@ describe('Tasks: more of the page @s0 @s9 @s10', () => {
     let reads = 0;
     serve((url) => {
       if (!url.includes('after=next')) return { status: 200, body: {} };
-      if (++reads === 1) return { status: 503, body: {} };
+      if (++reads === 1) return { status: 500, body: {} };
       return { status: 200, body: { tasks: [task('a2', 8, 'Review the export', 's2')], cursor: 'c2' } };
     });
     seed([]);

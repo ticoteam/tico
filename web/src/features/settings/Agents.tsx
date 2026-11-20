@@ -170,7 +170,7 @@ function KeyDialog({ kind, label, onClose }: { kind: string; label: string; onCl
           <Button variant="quiet" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" busy={busy} disabled={secret.trim().length < 8} onClick={() => void save()}>
+          <Button variant="primary" busy={busy} disabled={secret.trim().length < 8} onClick={() => save()}>
             Add
           </Button>
         </>
@@ -214,7 +214,7 @@ function EditSubDialog({ s, owned, onClose }: { s: Subscription; owned: boolean;
           <Button variant="quiet" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" busy={busy} disabled={!name.trim() || name.trim().length > 80} onClick={() => void save()}>
+          <Button variant="primary" busy={busy} disabled={!name.trim() || name.trim().length > 80} onClick={() => save()}>
             Save
           </Button>
         </>
@@ -439,7 +439,7 @@ function CommandLine({ c }: { c: Command }) {
           label="Copy"
           size="sm"
           quiet
-          onClick={() => void navigator.clipboard?.writeText(c.line).then(() => toast({ text: 'Copied', kind: 'done' }))}
+          onClick={() => navigator.clipboard?.writeText(c.line).then(() => toast({ text: 'Copied', kind: 'done' }))}
         />
       </div>
     </div>
@@ -488,7 +488,7 @@ export function AddComputer() {
               <Button variant="quiet" onClick={close}>
                 Cancel
               </Button>
-              <Button variant="primary" busy={busy} disabled={!label.trim()} onClick={() => void start()}>
+              <Button variant="primary" busy={busy} disabled={!label.trim()} onClick={() => start()}>
                 Get code
               </Button>
             </>

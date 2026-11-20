@@ -173,7 +173,7 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
     unresolved ? (
       files.isError ? (
         <Empty icon="alert" title="This file did not load">
-          <Button onClick={() => void files.refetch()}>Try again</Button>
+          <Button onClick={() => files.refetch()}>Try again</Button>
         </Empty>
       ) : (
         <PageBones />

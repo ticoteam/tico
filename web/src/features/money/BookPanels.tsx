@@ -207,7 +207,7 @@ export function CardPanel({ id }: { id: string }) {
         can && (
           <>
             {toggle && (
-              <Button busy={busy} onClick={() => void flip()}>
+              <Button busy={busy} onClick={() => flip()}>
                 {toggle}
               </Button>
             )}

@@ -84,7 +84,7 @@ export function CredentialDialog({ open, onOpenChange, slug, name, row }: Open &
         actions={
           <>
             <Button onClick={() => close(false)}>Cancel</Button>
-            <Button variant="primary" busy={make.pending} onClick={() => void run()}>
+            <Button variant="primary" busy={make.pending} onClick={() => run()}>
               Make it
             </Button>
           </>
@@ -234,7 +234,7 @@ export function PasswordDialog({ open, onOpenChange, person, name }: Open & { pe
         actions={
           <>
             <Button onClick={() => close(false)}>Cancel</Button>
-            <Button variant="primary" busy={make.pending} onClick={() => void run()}>
+            <Button variant="primary" busy={make.pending} onClick={() => run()}>
               Make it
             </Button>
           </>

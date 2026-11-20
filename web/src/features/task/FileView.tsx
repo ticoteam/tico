@@ -155,7 +155,7 @@ export function FileView({ t, file, full, flow }: { t: TaskData; file: string; f
   const remove = async (x: TaskFileView) => {
     const r = await run('task.archiveFile', { task: t.id, file: x.id, archived: true }, { via: 'click' });
     if (!r.ok) return void toast(failedToast(r));
-    toast({ text: 'Removed', name: x.title || x.name, action: { label: 'Undo', run: () => void run('task.archiveFile', { task: t.id, file: x.id, archived: false }, { via: 'click' }) } });
+    toast({ text: 'Removed', name: x.title || x.name, action: { label: 'Undo', run: () => void run('task.archiveFile', { task: t.id, file: x.id, archived: false }, { via: 'click' }).then((u) => u.ok || toast(failedToast(u))) } });
     void navigate({ to: details.to as never, search: back as never });
   };
 

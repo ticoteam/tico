@@ -358,7 +358,7 @@ export function MailboxView({ id, row }: { id: string; row: ToolIndexRow }) {
           </Facts>
         )
       }
-      connectsActions={m?.status === 'active' && <IconButton icon="refresh" label="Check now" size="sm" onClick={() => void check('tools.checkMailbox', { mailbox: id })} />}
+      connectsActions={m?.status === 'active' && <IconButton icon="refresh" label="Check now" size="sm" onClick={() => check('tools.checkMailbox', { mailbox: id })} />}
       who={d?.accesses.map((a) => (
         <WhoRow
           key={`${a.grantee_type}:${a.grantee_id}`}
@@ -410,7 +410,7 @@ export function MailboxView({ id, row }: { id: string; row: ToolIndexRow }) {
                 {x.state !== 'sent' && <Pill>{SEND_STATE[x.state] ?? x.state}</Pill>}
               </UseRow>
             ))}
-            {sends.hasNextPage && <More onClick={() => void sends.fetchNextPage()}>More</More>}
+            {sends.hasNextPage && <More onClick={() => sends.fetchNextPage()}>More</More>}
           </>
         )
       }
@@ -447,7 +447,7 @@ export function InboxView({ inbox, row, number }: { inbox: string; row: ToolInde
   const editable = !number || admin;
   const team = box?.audience === 'team' ? teams.find((t) => t.id === box.group_id) : undefined;
   const readers = box?.audience === 'team' ? (team?.name ?? 'One team') : 'Everyone';
-  const pick = (audience: 'company' | 'team', group?: string) => void press('tools.setInboxReaders', { inbox, audience, group }, 'Not saved');
+  const pick = (audience: 'company' | 'team', group?: string) => press('tools.setInboxReaders', { inbox, audience, group }, 'Not saved');
   return (
     <ToolPage
       name={box?.name ?? row?.name ?? (number ? 'Phone number' : 'Tico address')}
@@ -509,9 +509,9 @@ export function InboxView({ inbox, row, number }: { inbox: string; row: ToolInde
           {number && <NumberRequests />}
         </>
       }
-      connectsActions={<IconButton icon="refresh" label="Check connection" size="sm" onClick={() => void check('tools.checkInbox', {})} />}
+      connectsActions={<IconButton icon="refresh" label="Check connection" size="sm" onClick={() => check('tools.checkInbox', {})} />}
       recent={!!messages.data?.length && <Messages list={messages.data as unknown as InMessage[]} onOpen={setReading} />}
-      recentActions={!!messages.data?.length && <IconButton icon="chevron" label="All messages" size="sm" onClick={() => void press('tools.open', { tool: 'messages' })} />}
+      recentActions={!!messages.data?.length && <IconButton icon="chevron" label="All messages" size="sm" onClick={() => press('tools.open', { tool: 'messages' })} />}
     >
       {reading && <MessageDialog message={reading.message_id} title={reading.subject || reading.preview || 'Message'} hasCode={!!reading.has_code} onClose={() => setReading(null)} />}
       {dialog === 'join' && <SharedInboxDialog onClose={() => setDialog(null)} />}
@@ -596,7 +596,7 @@ export function MessagesView() {
       <FilterRow filters={chips} onClearAll={() => setPick({})} />
       {!rows.length && <Empty title={chips.length || q ? 'Nothing matches' : 'No messages yet'} />}
       <Messages list={rows} onOpen={setReading} />
-      {list.hasNextPage && !list.isFetchingNextPage && <More onClick={() => void list.fetchNextPage()}>Older messages</More>}
+      {list.hasNextPage && !list.isFetchingNextPage && <More onClick={() => list.fetchNextPage()}>Older messages</More>}
       {reading && <MessageDialog message={reading.message_id} title={reading.subject || reading.preview || 'Message'} hasCode={!!reading.has_code} onClose={() => setReading(null)} />}
     </ToolPage>
   );
@@ -651,7 +651,7 @@ export function WebhookView({ id, row }: { id: string; row: ToolIndexRow | undef
       recent={sends.data?.map((x) => (
         <UseRow key={x.id} title={x.subject || x.type} ctx={x.last_status ? `${SENT[x.state] ?? x.state} (${x.last_status})` : (SENT[x.state] ?? x.state)} at={x.delivered_at ?? x.created_at}>
           {w?.can_change && (x.state === 'failed' || x.state === 'canceled') && (
-            <IconButton icon="refresh" label="Retry" size="sm" onClick={() => void press('tools.retrySend', { webhook: id, send: x.id }, 'Not sent again')} />
+            <IconButton icon="refresh" label="Retry" size="sm" onClick={() => press('tools.retrySend', { webhook: id, send: x.id }, 'Not sent again')} />
           )}
         </UseRow>
       ))}

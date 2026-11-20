@@ -127,12 +127,13 @@ describe('tool changes', () => {
     ]);
   });
 
-  it('takes a removed source off the list at once', async () => {
+  it('takes a removed source off the list once the server has', async () => {
     const sent = serve();
     queryClient.setQueryData(sourcesQuery.queryKey, { next_cursor: null, sources: [{ id: 'src1', title: 'Handbook' }] } as never);
     const done = editSource('src1', { archived: true });
-    expect(queryClient.getQueryData<{ sources: unknown[] }>(sourcesQuery.queryKey)?.sources).toEqual([]);
+    expect(queryClient.getQueryData<{ sources: unknown[] }>(sourcesQuery.queryKey)?.sources).toHaveLength(1);
     await done;
+    expect(queryClient.getQueryData<{ sources: unknown[] }>(sourcesQuery.queryKey)?.sources).toEqual([]);
     expect(sent.find((x) => x.method === 'PATCH')).toMatchObject({ url: '/api/v2/doc-sources/src1', body: { archived: true } });
   });
 });

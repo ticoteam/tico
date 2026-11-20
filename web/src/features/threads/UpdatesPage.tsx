@@ -87,7 +87,7 @@ function UpdatesList({ tab }: { tab: UpdateTab }) {
       search={<Search label="Find an update" placeholder="Search" value={words} onValueChange={setWords} />}
       actions={
         archive ? undefined : (
-          <Button variant="primary" disabled={!unread} onClick={() => void press('updates.markRead', {})}>
+          <Button variant="primary" disabled={!unread} onClick={() => press('updates.markRead', {})}>
             Mark read
           </Button>
         )
@@ -159,7 +159,7 @@ function Steps({ id, tab }: { id: string; tab: UpdateTab }) {
   return (
     <>
       <IconButton icon="chevdown" className="flip" label="Newer" disabled={i <= 0} onClick={() => go(rows[i - 1])} />
-      <IconButton icon="chevdown" label="Older" disabled={i < 0 || (!rows[i + 1] && !list.hasNextPage)} onClick={() => void older()} />
+      <IconButton icon="chevdown" label="Older" disabled={i < 0 || (!rows[i + 1] && !list.hasNextPage)} onClick={() => older()} />
     </>
   );
 }

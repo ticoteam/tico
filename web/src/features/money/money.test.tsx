@@ -212,7 +212,8 @@ describe('Budgets @s404 @s463', () => {
         sent.push(new Headers(init.headers).get('Idempotency-Key'));
         // Each answer waits for the test, so the change shows first.
         await new Promise<void>((r) => (release = r));
-        if (answers[sent.length - 1] === 'lost') throw new TypeError('connection reset');
+        // A gateway's 502: the answer is lost, and the client does not send it again on its own (only a 503 or a drop).
+        if (answers[sent.length - 1] === 'lost') return new Response('Bad gateway', { status: 502 });
         return json({ kind: 'budget_update', status: 'refused', code: 'over_limit', reason: 'Over the limit' });
       }
       if (String(url).includes('budget_vs_actual')) return json({ columns: [], budgets: [] });
@@ -356,8 +357,8 @@ describe('Finance dialogs @s449 @s461 @s453 @s454', () => {
       if (init?.method === 'POST' && body.dry_run) return json({ kind: 'payment_create', status: 'committed' });
       if (init?.method === 'POST') {
         sent.push(new Headers(init.headers).get('Idempotency-Key'));
-        // the server may have queued it; the answer is lost
-        if (answers[sent.length - 1] === 'lost') throw new TypeError('connection reset');
+        // the server may have queued it; a gateway's 502 loses the answer (a drop or a 503 the client sends again itself)
+        if (answers[sent.length - 1] === 'lost') return new Response('Bad gateway', { status: 502 });
         return json({ error: { code: 'over_budget', detail: 'Over budget' } }, 422);
       }
       if (String(url).endsWith('/finance/access')) return json(access);
@@ -454,7 +455,7 @@ describe('Finance books @s420 @s455 @s456 @s458 @s459 @s464 @s465', () => {
       if (url.endsWith('/finance/access')) return ok(access);
       if (!url.includes('/finance/transactions')) return { status: 404, body: {} };
       if (!url.includes('cursor=')) return ok({ rows: [tx('t1', 'Ink Co', -1000)], next: 'page 2' });
-      if (++attempts === 1) return { status: 503, body: {} };
+      if (++attempts === 1) return { status: 500, body: {} };
       return ok({ rows: [tx('t2', 'Paper Co', -2000)], next: null });
     });
     show('finance', '/company/finance?tab=transactions');

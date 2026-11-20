@@ -36,7 +36,7 @@ export function TicoSheet() {
           <div className="empty">
             <Fault label="Tico did not load" size={16} />
             <div className="q-row">
-              <Button onClick={() => void room.refetch()}>Try again</Button>
+              <Button onClick={() => room.refetch()}>Try again</Button>
             </div>
           </div>
         </div>

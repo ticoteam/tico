@@ -299,11 +299,11 @@ export function ShareDialog({ line, onOpenChange }: { line: string; onOpenChange
       {a && <Shares rows={now} onChange={setRows} />}
       {a?.can_change && (
         <div className="share-foot">
-          <Button variant="quiet" onClick={() => void other('finance.attribute', { line, splits: [] })}>
+          <Button variant="quiet" onClick={() => other('finance.attribute', { line, splits: [] })}>
             Clear
           </Button>
           {a.history.length > 1 && (
-            <Button variant="quiet" onClick={() => void other('finance.undoAttribution', { line })}>
+            <Button variant="quiet" onClick={() => other('finance.undoAttribution', { line })}>
               Undo
             </Button>
           )}
