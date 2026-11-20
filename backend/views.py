@@ -1992,7 +1992,6 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
     raw = list(waiting_on.needs(c, who.actor, snoozed))
     mentions = _mentions(c, who) if snoozed != "only" else []  # an @ is not snoozed: only asks are
     wanted = {i["task_id"] for i in raw if i.get("task_id")} | {t for i in raw for t in i.get("tasks") or ()}
-    wanted |= {i["parent"]["id"] for i in raw if i["kind"] == "question_task" and i.get("parent")}
     wanted |= {m["task_id"] for m in mentions if m.get("task_id")}
     readable = _readable_task_ids(c, visible, wanted)
     briefs = {} if count_only else _briefs(c, readable, visible)
@@ -2020,14 +2019,12 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
         if it["task_id"] not in readable:
             continue
         if it["kind"] == "question_task":
-            # A question filed as a task for the reader (backend/questions.py): its task, and the task it was asked
-            # on, named only when the reader may read it.
-            parent = it.get("parent") if (it.get("parent") or {}).get("id") in readable else None
+            # A question filed as a task for the reader (backend/questions.py): its own task alone, never the task it
+            # was asked on, so neither the item nor a list held from it (needs_cache) names a task they may lose.
             items.append(
                 {
                     **{k: it[k] for k in ("kind", "id", "task_id", "number", "title", "line", "since", "round")},
                     **{k: it[k] for k in ("asker", "link_url", "owner_id", "missing")},
-                    "parent": parent,
                     "from_id": it["asker"],
                     "task": briefs.get(it["task_id"]),
                     **({"snoozed_until": it["snoozed_until"]} if it.get("snoozed_until") else {}),
@@ -3563,7 +3560,11 @@ def install_views(app, store, auth, mutate, task_view):
             # When an ask this person snoozed comes back: the page reads the list again then (backend/ask_snoozes.py).
             from . import ask_snoozes
 
-            woken = {"snoozed_until": ask_snoozes.next_end(c, who)}
+            # And when a question they snoozed comes back (backend/questions.py).
+            from . import questions
+
+            ends = [e for e in (ask_snoozes.next_end(c, who), questions.next_snooze_end(c, who.actor)) if e]
+            woken = {"snoozed_until": min(ends) if ends else None}
         counts = {}  # the page counts, worked out by the first page, kept for the next ones
         held.keep(viewer, current, items, woken["snoozed_until"], began, counts)
         if version and version == current and not cursor:

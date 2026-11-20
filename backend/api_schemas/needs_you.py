@@ -35,13 +35,6 @@ NEEDS_ITEM = obj(
     from_id={"type": "string", "description": "Who wrote it: a mention's person, a ❓'s or a question's bot"},
     number={"type": ["integer", "null"], "description": "A question task's number"},
     title={"type": "string", "description": "A question task's title: the question"},
-    parent={
-        "oneOf": [
-            obj({"id": "s", "title": "s"}, required=["id", "title"], number={"type": ["integer", "null"]}),
-            {"type": "null"},
-        ],
-        "description": "A question task's task it was asked on; null to a reader who may not read it",
-    },
     asker={"type": "string", "description": "A question task's bot that asked it"},
     round={"type": "integer", "description": "A question task's round: answer it at this round"},
     link_url={"type": ["string", "null"], "description": "A question task's link, where it is done"},
