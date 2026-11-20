@@ -149,7 +149,7 @@ def _reply(status: int, raw: bytes, retry: str | None) -> Reply:
     return Reply(status, as_map(body) or {}, wait)
 
 
-def _send(method: str, url: str, headers: Mapping[str, str], data: bytes | None) -> Reply:
+def _http(method: str, url: str, headers: Mapping[str, str], data: bytes | None) -> Reply:
     try:
         reply = outbound_http.send(method, url, headers=headers, content=data, timeout=TIMEOUT)
     except outbound_http.Failed:
@@ -298,7 +298,7 @@ class Xero:
     ) -> None:
         self.tenant, self.tokens = tenant, tokens
         self.base = (base or base_url()).rstrip("/")
-        self.transport = transport or _send
+        self.transport = transport or _http
         self.sleep = sleep
         self.hold = 0.0  # seconds the books wait before the next pass: the Retry-After that stopped this one
         self._location = location  # the tracking category whose options are locations ("" for none)

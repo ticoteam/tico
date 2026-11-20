@@ -105,7 +105,7 @@ def base_url() -> str:
     return PRODUCTION
 
 
-def _send(method: str, url: str, headers: Mapping[str, str], data: bytes | None) -> Reply:
+def _http(method: str, url: str, headers: Mapping[str, str], data: bytes | None) -> Reply:
     try:
         reply = outbound_http.send(method, url, headers=headers, content=data, timeout=TIMEOUT)
     except outbound_http.Failed:
@@ -164,7 +164,7 @@ class QuickBooks:
     ) -> None:
         self.realm, self.tokens = realm, tokens
         self.base = (base or base_url()).rstrip("/")
-        self.transport = transport or _send
+        self.transport = transport or _http
         self.sleep = sleep
         self._items: dict[str, dict[str, str]] | None = None  # one read of the items per pass, when a document needs it
         self._per_line: bool | None = None  # whether the company tracks a class on each line, read once

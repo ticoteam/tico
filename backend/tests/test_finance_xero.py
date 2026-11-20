@@ -1003,15 +1003,15 @@ def test_the_default_transport_keeps_decimals_the_retry_after_and_a_redirect_as_
         return answers.pop(0)
 
     monkeypatch.setattr(outbound_http, "TRANSPORT", httpx.MockTransport(handle))
-    limited = xero._send("GET", BASE + "/Accounts", {"Authorization": "Bearer t"}, None)
+    limited = xero._http("GET", BASE + "/Accounts", {"Authorization": "Bearer t"}, None)
     assert (limited.status, limited.retry_after, limited.body) == (429, 7.0, {"Amount": Decimal("10.10")})
-    assert xero._send("POST", BASE + "/Invoices", {}, b"{}").status == 302 and len(seen) == 2
+    assert xero._http("POST", BASE + "/Invoices", {}, b"{}").status == 302 and len(seen) == 2
 
     def down(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("down")
 
     monkeypatch.setattr(outbound_http, "TRANSPORT", httpx.MockTransport(down))
-    assert xero._send("GET", BASE + "/Accounts", {}, None) == xero.Reply(0, note="Xero did not answer")
+    assert xero._http("GET", BASE + "/Accounts", {}, None) == xero.Reply(0, note="Xero did not answer")
 
 
 def test_a_backfill_that_meets_an_edit_mid_way_reads_every_contact_once(books):
