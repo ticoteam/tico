@@ -126,9 +126,11 @@ export const sourcesQuery = queryOptions({
 });
 
 export const sourceDocsQuery = (id: string) =>
-  queryOptions({
+  infiniteQueryOptions({
     queryKey: ['docs', 'source', id],
-    queryFn: () => api.get<SourceDocumentList>(`/api/v2/doc-sources/${enc(id)}/documents?limit=200`),
+    queryFn: ({ pageParam, signal }) => api.get<SourceDocumentList>(`/api/v2/doc-sources/${enc(id)}/documents${q({ limit: 200, cursor: pageParam })}`, { signal }),
+    initialPageParam: '',
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
   });
 
 export const externalDocQuery = (id: string) =>

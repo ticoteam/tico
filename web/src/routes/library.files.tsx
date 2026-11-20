@@ -4,7 +4,7 @@ import { filesSearch, loadFiles } from '@/features/library/routing';
 
 export const Route = createFileRoute('/library/files')({
   validateSearch: filesSearch,
-  loaderDeps: ({ search }) => ({ kind: search.kind, file: search.file }),
+  loaderDeps: ({ search }) => ({ kind: search.kind, file: search.file, q: search.file ? undefined : search.q }),
   loader: ({ deps, context: { queryClient } }) => loadFiles(queryClient, deps),
   component: Files,
 });

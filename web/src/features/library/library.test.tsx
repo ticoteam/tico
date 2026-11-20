@@ -5,7 +5,7 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data';
 import { ContactsPage, shown } from './ContactsPage';
-import { cardQuery, contactsQuery, countsQuery, proposalsQuery, removeKey, saveFact, skillsQuery, skillUsageQuery, typesQuery, apiToolQuery, type Card } from './queries';
+import { cardQuery, contactsQuery, countsQuery, proposalsQuery, removeKey, saveFact, skillsQuery, skillUsageQuery, toolsQuery, typesQuery, apiToolQuery, type Card } from './queries';
 import { diffLines, mainText, SkillsPage } from './SkillsPage';
 import { nameFromUrl, ReplaceLoginDialog } from './AddTool';
 import { replaceLogin } from './queries';
@@ -187,6 +187,36 @@ describe('Skills', () => {
     expect(screen.queryByRole('tab')).toBeNull();
   });
 
+  it('uses one virtual list for a large catalog, with proposals first', async () => {
+    serve(nothing);
+    queryClient.setQueryData(
+      skillsQuery.queryKey,
+      Array.from({ length: 60 }, (_, i) => ({ id: `s${i}`, name: `Skill ${i}`, description: '', latest: null, installs_count: 0, on: [] })),
+    );
+    queryClient.setQueryData(proposalsQuery.queryKey, [
+      {
+        id: 'p1',
+        name: 'Proposed skill',
+        status: 'pending',
+        description: '',
+        note: null,
+        base_version: null,
+        version: 1,
+        proposed_by: { type: 'Bot', id: 'b1' },
+        task_id: null,
+        created_at: '2026-11-01T00:00:00Z',
+        updated_at: '2026-11-01T00:00:00Z',
+      },
+    ]);
+    queryClient.setQueryData(skillUsageQuery.queryKey, []);
+    show(<SkillsPage search={{}} />, '/library/skills');
+    const list = await screen.findByRole('list', { name: 'Skills' });
+    const links = within(list).getAllByRole('link');
+    expect(links).toHaveLength(61);
+    expect(links[0]?.getAttribute('href')).toBe('/library/skills?proposal=p1');
+    expect(links.at(-1)?.getAttribute('href')).toBe('/library/skills?skill=Skill%2059');
+  });
+
   it('draws skills Tico ships (no id) once each, with no duplicate keys', async () => {
     serve(nothing);
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -308,6 +338,30 @@ describe("Connect Claude Code from the helper's old link", () => {
 });
 
 describe('Loading a Library page', () => {
+  it('opens the Tools list while the selected API tool is still loading', async () => {
+    let respond = (_r: Response) => {};
+    const toolResponse = new Promise<Response>((resolve) => {
+      respond = resolve;
+    });
+    vi.stubGlobal('fetch', (url: string) =>
+      url === '/api/v2/api-tools/t1'
+        ? toolResponse
+        : Promise.resolve(new Response(JSON.stringify({ rows: [] }), { headers: { 'Content-Type': 'application/json' } })),
+    );
+    let opened = false;
+    const loading = loadTools(queryClient, { tool: 'api:t1' }).then(() => {
+      opened = true;
+    });
+    try {
+      await waitFor(() => expect(opened).toBe(true));
+      expect(queryClient.getQueryData(toolsQuery.queryKey)).toEqual({ rows: [] });
+      expect(queryClient.getQueryState(apiToolQuery('t1').queryKey)?.fetchStatus).toBe('fetching');
+    } finally {
+      respond(new Response(null, { status: 403 }));
+      await loading;
+    }
+  });
+
   it('lets a failed main read through to the router, and leaves an open tool’s failure in its place', async () => {
     queryClient.clear();
     serve((url) => (url.startsWith('/api/v2/tool-index') ? { status: 200, body: { rows: [] } } : { status: 403, body: { detail: 'no' } }));

@@ -15,8 +15,7 @@ import { Row } from '@/kit/Row';
 import { Select } from '@/kit/Select';
 import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
-import { Foot, useGo } from './AddTool';
-import { press, when } from './parts';
+import { press, when, Foot, useGo } from './parts';
 import { Confirm } from './ToolDialogs';
 import {
   agentSendingQuery,
