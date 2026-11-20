@@ -5,8 +5,9 @@ directory or the environment. It sets its memory limit before it parses anything
 before it writes a result, so a file that expands past the limit never reaches the server's own process. The parent
 kills it at the time limit and removes the work directory after it exits.
 
-Importing this module has no side effects. Run as a script, it puts its own folder on sys.path to find docs_import,
-which is standard library only; imported as backend.docs_import_worker, it imports docs_import from the package.
+Importing this module has no side effects. Run as a script, it puts its own folder on sys.path to find docs_import
+and the html_convert.py it imports (-I still reads site-packages, so their libraries load); imported as
+backend.docs_import_worker, it imports docs_import from the package.
 """
 
 import json

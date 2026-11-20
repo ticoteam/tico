@@ -17,6 +17,7 @@ from datetime import datetime, timezone, tzinfo
 from email.utils import getaddresses, parsedate_to_datetime
 from typing import Any
 
+from ..html_convert import to_text
 from . import DEFAULT_TZ, INTERNAL_DOMAIN, MAX_BODY, TRUNCATED, Failure, zone
 
 Json = dict[str, Any]
@@ -36,10 +37,6 @@ UNSUB_WORDS = (
     "list-unsubscribe",
 )
 URL_RE = re.compile(r"https?://[^\s<>()\[\]\"']+", re.I)
-TAG_RE = re.compile(r"<[^>]+>")
-DROP_RE = re.compile(r"<(script|style|head)\b.*?</\1>", re.I | re.S)
-BREAK_RE = re.compile(r"(?i)<\s*(br|/p|/div|/tr|/li|/h[1-6]|/table)[^>]*>")
-BLANKS_RE = re.compile(r"\n{3,}")
 UNSUB_LINE_RE = re.compile(r"(?im)^\s*unsubscribe\s*:\s*(\S+)")
 
 
@@ -65,13 +62,8 @@ def decode(part_body: Json | None, charset: str = "utf-8") -> str:
 
 
 def strip_html(source: str | None) -> str:
-    """HTML -> readable plain text. Deliberately dumb: no parser, no dependency."""
-    s = DROP_RE.sub(" ", source or "")
-    s = BREAK_RE.sub("\n", s)
-    s = TAG_RE.sub(" ", s)
-    s = html.unescape(s)
-    s = "\n".join(re.sub(r"[ \t\xa0]+", " ", ln).strip() for ln in s.split("\n"))
-    return BLANKS_RE.sub("\n\n", s).strip()
+    """HTML -> readable plain text: a line per paragraph, list item or table row; nothing hidden or in a tag."""
+    return to_text(source or "")[0]
 
 
 def headers_of(part: Json | None) -> dict[str, Any]:

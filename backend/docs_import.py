@@ -1,16 +1,21 @@
 """Files to Markdown for `POST /api/v2/docs/import` (docs/docs.md).
 
-Markdown and text pass through, HTML and Word (.docx) are walked with the standard library, and a
-PDF's text comes out through pypdf. Nothing here runs code from the file: a Word file is read as
-XML from its zip (DOCTYPE and entities refused, sizes capped) and a PDF is only text-extracted.
+Markdown and text pass through, HTML becomes Markdown through html_convert.py (beautifulsoup4 and
+markdownify), Word (.docx) is walked with the standard library, and a PDF's text comes out through
+pypdf. Nothing here runs code from the file: a Word file is read as XML from its zip (DOCTYPE and
+entities refused, sizes capped) and a PDF is only text-extracted.
 Every failure is a ValueError whose message a person can act on.
 """
 
 import io
 import re
 import zipfile
-from html.parser import HTMLParser
 from xml.etree import ElementTree as ET
+
+if __package__:
+    from . import html_convert
+else:  # docs_import_worker.py runs it as a script, with this folder on sys.path
+    import html_convert
 
 EXTENSIONS = (".md", ".markdown", ".txt", ".html", ".htm", ".docx", ".pdf")
 MAX_BYTES = 20_000_000
@@ -33,183 +38,9 @@ def normalize(text):
 
 
 # ---------------------------------------------------------------------------- HTML
-class _Html(HTMLParser):
-    SKIP = {"script", "style", "head", "noscript", "template", "svg", "iframe"}
-    BLOCKS = {
-        "p",
-        "div",
-        "section",
-        "article",
-        "main",
-        "header",
-        "footer",
-        "nav",
-        "aside",
-        "figure",
-        "figcaption",
-        "table",
-        "tr",
-        "dl",
-        "dt",
-        "dd",
-    }
-
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self.out, self.skip, self.lists, self.href, self.pre = [], 0, [], [], 0
-        self.cells, self.row_open, self.table_rows, self.title, self.in_title = None, False, None, "", False
-        self.link_text = []
-        self.nested = 0  # tables open inside the current table's cell: their words go into that cell, flattened
-
-    def end_row(self):
-        if self.table_rows is not None and self.cells is not None:
-            self.table_rows.append([" ".join("".join(c).split()).replace("|", "\\|") for c in self.cells])
-        self.cells, self.row_open = None, False
-
-    def add(self, text):
-        if self.cells is not None and self.row_open:
-            self.cells[-1].append(text)
-        else:
-            self.out.append(text)
-
-    def blank(self):
-        if self.out and not "".join(self.out[-2:]).endswith("\n\n"):
-            self.out.append("\n\n" if not "".join(self.out[-1:]).endswith("\n") else "\n")
-
-    def handle_starttag(self, tag, attrs):
-        a = dict(attrs)
-        if tag == "title":
-            self.in_title = True
-        if tag in self.SKIP:
-            self.skip += 1
-            return
-        if self.skip:
-            return
-        if re.fullmatch(r"h[1-6]", tag):
-            self.blank()
-            self.add("#" * int(tag[1]) + " ")
-        elif tag in ("ul", "ol"):
-            self.lists.append([tag, 0])
-            if len(self.lists) == 1:
-                self.blank()
-        elif tag == "li":
-            depth = max(len(self.lists) - 1, 0)
-            mark = "- "
-            if self.lists and self.lists[-1][0] == "ol":
-                self.lists[-1][1] += 1
-                mark = f"{self.lists[-1][1]}. "
-            if self.out and not self.out[-1].endswith("\n"):
-                self.add("\n")
-            self.add("  " * depth + mark)
-        elif tag == "br":
-            self.add("  \n")
-        elif tag == "hr":
-            self.blank()
-            self.add("---\n\n")
-        elif tag in ("strong", "b"):
-            self.add("**")
-        elif tag in ("em", "i"):
-            self.add("*")
-        elif tag == "pre":
-            self.blank()
-            self.add("```\n")
-            self.pre += 1
-        elif tag == "code" and not self.pre:
-            self.add("`")
-        elif tag == "blockquote":
-            self.blank()
-            self.add("> ")
-        elif tag == "a":
-            self.href.append(a.get("href") or "")
-            self.add("[")
-        elif tag == "img":
-            if a.get("alt"):
-                self.add(a["alt"])
-        elif tag == "table" and self.table_rows is not None:
-            self.nested += 1
-            self.add(" ")
-        elif tag in ("tr", "td", "th") and self.nested:
-            self.add(" ")
-        elif tag == "table":
-            self.blank()
-            self.table_rows = []
-        elif tag == "tr" and self.table_rows is not None:
-            self.end_row()
-            self.cells = []
-        elif tag in ("td", "th") and self.cells is not None:
-            self.cells.append([])
-            self.row_open = True
-        elif tag in self.BLOCKS:
-            self.blank()
-
-    def handle_endtag(self, tag):
-        if tag == "title":
-            self.in_title = False
-        if tag in self.SKIP:
-            self.skip = max(0, self.skip - 1)
-            return
-        if self.skip:
-            return
-        if re.fullmatch(r"h[1-6]", tag):
-            self.add("\n\n")
-        elif tag in ("ul", "ol"):
-            if self.lists:
-                self.lists.pop()
-            self.add("\n")
-        elif tag == "li":
-            self.add("\n")
-        elif tag in ("strong", "b"):
-            self.add("**")
-        elif tag in ("em", "i"):
-            self.add("*")
-        elif tag == "pre":
-            self.pre = max(0, self.pre - 1)
-            self.add("\n```\n\n")
-        elif tag == "code" and not self.pre:
-            self.add("`")
-        elif tag == "a":
-            href = self.href.pop() if self.href else ""
-            self.add("](" + href + ")" if href and not href.lower().startswith("javascript:") else "]")
-        elif tag in ("tr", "td", "th") and self.nested:
-            self.add(" ")
-        elif tag == "table" and self.nested:
-            self.nested -= 1
-            self.add(" ")
-        elif tag in ("td", "th"):
-            self.row_open = False
-        elif tag == "tr" and self.table_rows is not None and self.cells is not None:
-            self.end_row()
-        elif tag == "table" and self.table_rows is not None:
-            self.end_row()
-            rows = [r for r in self.table_rows if r]
-            self.table_rows = None
-            if rows:
-                width = max(len(r) for r in rows)
-                rows = [r + [""] * (width - len(r)) for r in rows]
-                lines = ["| " + " | ".join(rows[0]) + " |", "|" + " --- |" * width]
-                lines += ["| " + " | ".join(r) + " |" for r in rows[1:]]
-                self.out.append("\n".join(lines) + "\n\n")
-        elif tag in self.BLOCKS or tag == "blockquote":
-            self.blank()
-
-    def handle_data(self, data):
-        if self.in_title:
-            self.title += data
-        if self.skip:
-            return
-        self.add(data if self.pre else re.sub(r"\s+", " ", data))
-
-
 def from_html(text):
-    parser = _Html()
-    parser.feed(text)
-    parser.close()
-    parser.skip = 0
-    while parser.table_rows is not None:  # a table left open at the end still gives its words
-        parser.handle_endtag("table")
-    body = "".join(parser.out)
-    lines = [line.rstrip() for line in body.split("\n")]
-    return normalize("\n".join(lines)), " ".join(parser.title.split())
+    markdown, title = html_convert.to_markdown(text)
+    return normalize("\n".join(line.rstrip() for line in markdown.split("\n"))), title
 
 
 # ---------------------------------------------------------------------------- Word
