@@ -26,11 +26,7 @@
 /* a second chat: the thread layer */
 .chat-2{--lift-here:var(--lift-chat);box-shadow:var(--lift-here)}
 
-/* what a chat is looking at, and what Tico did: quiet lines */
-.look{display:inline-flex;align-items:center;gap:6px;max-width:100%;min-width:0;height:26px;padding:0 8px;border-radius:var(--r-chip);background:var(--well);color:var(--ink-2);font-size:var(--t-xs)}
-.look-ico{flex:none;display:grid;place-items:center;color:var(--muted)}
-.look-text{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}   /* a long name is cut with an ellipsis: the chip never grows past its column */
-.look .ico{width:13px;height:13px}
+/* what Tico did: quiet lines */
 .did{display:flex;align-items:center;gap:10px;margin:2px 0;color:var(--muted);font-size:var(--t-sm);min-height:24px}
 .did+.msg,.msg+.did{margin-top:var(--s-3)}
 .did-ico{width:22px;height:22px;display:grid;place-items:center;flex:none}

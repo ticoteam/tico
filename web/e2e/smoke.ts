@@ -68,6 +68,24 @@ async function desktop(browser: Browser) {
     check(msgs, `Tico's room: ${msgs} messages drawn`, "Tico's room shows no messages");
     check(streams === settled && settled <= 2, `stream opened ${settled}× at boot, then stayed 8 s`, `stream opened ${streams} times (${settled} at boot)`);
     await shot(page, 'desktop-home');
+
+    // Scrolled up: the asks over the box fade, Jump to latest comes, and a press glides back to the end
+    const log = page.locator('[data-sheet="tico"] .chat-body').first();
+    const fromEnd = () => log.evaluate((el) => Math.round(el.scrollHeight - el.scrollTop - el.clientHeight));
+    check((await fromEnd()) <= 24, "Tico's chat opens at its end", `Tico's chat opened ${await fromEnd()}px above its end`);
+    check(!(await page.locator('[data-sheet="tico"] .look').count()), 'no page chip over the box', 'a page chip is over the box');
+    if (msgs > 3 && (await log.evaluate((el) => el.scrollHeight > el.clientHeight * 3))) {
+      await log.evaluate((el) => el.scrollBy({ top: -el.clientHeight * 2 }));
+      await settle(page, 600);
+      const jump = page.getByRole('button', { name: /^Jump to latest/ });
+      check(await jump.isVisible(), 'two windows up: Jump to latest shows', 'two windows up: no Jump to latest');
+      check(!(await page.locator('[data-sheet="tico"] .qchips').isVisible()), 'two windows up: the asks are away', 'two windows up: the asks still show');
+      await shot(page, 'desktop-tico-up');
+      await jump.click();
+      await settle(page, 1500);
+      check((await fromEnd()) <= 2, 'Jump to latest lands on the end', `Jump to latest stopped ${await fromEnd()}px short`);
+      check(!(await jump.isVisible()), 'at the end, Jump to latest is gone', 'at the end, Jump to latest still shows');
+    } else note("  Tico's chat is too short to scroll up");
   }
 
   if (want('menu')) {

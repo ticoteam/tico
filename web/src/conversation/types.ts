@@ -1,7 +1,7 @@
 /** Where the conversation sits: Tico's sheet, the 320 second chat, an agent's page (stretching), a task's chat. */
 export type Variant = 'tico' | 'side' | 'page' | 'task';
 
-/** The page a message was sent from: the look chip, and `refs.page` on the message. */
+/** The page a message was sent from, as `refs.page` on the message: Tico reads what the person was looking at. */
 export interface PageRef {
   path: string;
   title: string;

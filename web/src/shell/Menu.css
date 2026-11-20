@@ -72,9 +72,12 @@ button.me{border:0;padding:0;background:none;font:inherit;color:inherit;cursor:p
 .head-ic{width:22px;display:grid;place-items:center;color:var(--muted);flex:none}
 .head-ic .ico{width:16px;height:16px}
 
-/* Tico's chips, over its box: what to ask about the open page. They go while the person types. */
-.qchips{display:flex;flex-wrap:wrap;gap:var(--s-2)}
-.chat-foot:has(.composer.is-typing) .qchips{display:none}
+/* Tico's chips, over its box: what to ask about the open page. */
+.qchips{display:flex;flex-wrap:wrap;gap:var(--s-2);transition:opacity var(--dur-enter) var(--ease),display var(--dur-enter) allow-discrete}
+@starting-style{.qchips{opacity:0}}
+/* scrolled up in the chat (Conversation's data-up), the asks fade away; at the end they come back. Typing hides them at once. */
+.chat-foot[data-up] .qchips{display:none;opacity:0;transition:opacity var(--dur-leave) var(--ease-in),display var(--dur-leave) allow-discrete}
+.chat-foot:has(.composer.is-typing) .qchips{display:none;transition:none}
 .qchip{align-self:start;display:inline-flex;align-items:center;gap:var(--s-1h);height:30px;padding:0 var(--s-3);border:0;border-radius:var(--r-pill);background:var(--well-2);color:var(--ink-2);font:inherit;font-size:var(--t-sm);cursor:pointer}
 .qchip .ico{width:14px;height:14px;color:var(--muted)}
 .qchip:hover{color:var(--ink)}

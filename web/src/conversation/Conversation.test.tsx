@@ -10,6 +10,7 @@ import { Conversation } from './Conversation';
 import { Message } from './Message';
 import { showPageName } from '@/tico/pageName';
 import type { Session } from './Session';
+import type { Timeline } from './queries';
 import type { ChatMessage } from './types';
 
 /* The stream, stood in for: handlers register as they do in the app; `emit` applies one frame. A `messages` frame
@@ -343,17 +344,88 @@ describe('Composer', () => {
   });
 });
 
-describe('the page chip', () => {
-  it('names the page beside the chat once its head does, not the window title', async () => {
+describe('the page it sits beside', () => {
+  it('draws no chip for it, and sends it with each message by its head name, not the window title', async () => {
     seed([]);
     serve(() => ({ status: 200, body: {} }));
+    document.title = 'Records production - Tico';
     render(<Conversation id={T} variant="side" title="Ana" actor="bot:qa" />, {
       wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
     });
     act(() => showPageName('Records production'));
-    expect((await screen.findByText('Records production')).className).toBe('look-text');
+    expect(screen.queryByText('Records production')).toBeNull();
+    expect(document.querySelector('.look')).toBeNull();
+    type('Is this right?');
+    await waitFor(() => expect(sends()).toHaveLength(1));
+    expect((sends()[0]?.body as { refs: { page: { title: string } } }).refs.page.title).toBe('Records production');
     act(() => showPageName(''));
-    await waitFor(() => expect(screen.queryByText('Records production')).toBeNull());
+  });
+});
+
+describe('scrolled up', () => {
+  const settle = () => act(async () => {});
+  const foot = () => document.querySelector('.chat-foot')!;
+  const jump = () => document.querySelector('.jump')!;
+  async function long() {
+    serve(() => ({ status: 200, body: {} }));
+    seed(Array.from({ length: 20 }, (_, i) => msg(i + 1, 'bot:qa', `Line ${i + 1}`)));
+    show();
+    await settle();
+    const log = screen.getByRole('log', { name: 'Chat with Ana' });
+    const to = async (fromEnd: number) => {
+      log.scrollTo({ top: log.scrollHeight - VIEW - fromEnd });
+      await settle();
+    };
+    return { log, to };
+  }
+
+  it('marks the foot while up past the asks, so they fade, and clears it only back at the end', async () => {
+    const { to } = await long();
+    expect(foot().hasAttribute('data-up')).toBe(false);
+    await to(80);
+    expect(foot().hasAttribute('data-up')).toBe(false);
+    await to(150);
+    expect(foot().hasAttribute('data-up')).toBe(true);
+    // the room the asks give back brings the end nearer: it stays up until the reader is at the end
+    await to(60);
+    expect(foot().hasAttribute('data-up')).toBe(true);
+    await to(0);
+    expect(foot().hasAttribute('data-up')).toBe(false);
+  });
+
+  it('shows Jump to latest a window up, counts what came in since, and goes to the end on a press', async () => {
+    const { log, to } = await long();
+    expect(jump().classList.contains('is-on')).toBe(false);
+    await to(VIEW - 20);
+    expect(jump().classList.contains('is-on')).toBe(false);
+    await to(VIEW * 2);
+    expect(jump().classList.contains('is-on')).toBe(true);
+    const button = screen.getByRole('button', { name: 'Jump to latest' });
+    expect(button.textContent).toBe('');
+
+    emit('messages', [{ id: 'm21', conversation_id: T, message: msg(21, 'bot:qa', 'One more thing') }]);
+    emit('messages', [{ id: 'm22', conversation_id: T, message: msg(22, ME, 'Mine, from another tab') }]);
+    emit('messages', [{ id: 'm23', conversation_id: T, message: msg(23, 'bot:qa', 'And another') }]);
+    await settle();
+    expect(screen.getByRole('button', { name: 'Jump to latest, 2 new' })).toBe(button);
+    expect(document.querySelector('.jump-n')?.textContent).toBe('2');
+
+    fireEvent.click(button);
+    await waitFor(() => expect(log.scrollTop).toBe(log.scrollHeight - VIEW));
+    await settle();
+    expect(jump().classList.contains('is-on')).toBe(false);
+    expect(document.querySelector('.jump-n')).toBeNull();
+    expect(foot().hasAttribute('data-up')).toBe(false);
+  });
+
+  it('counts nothing for older messages loaded above', async () => {
+    const { to } = await long();
+    await to(VIEW * 2);
+    act(() => {
+      queryClient.setQueryData<Timeline>(key, (d) => d && { pages: [...d.pages, { messages: [msg(0, 'bot:qa', 'Older')], next_cursor: null }], pageParams: [...d.pageParams, 'c'] });
+    });
+    await settle();
+    expect(screen.getByRole('button', { name: 'Jump to latest' })).toBeTruthy();
   });
 });
 

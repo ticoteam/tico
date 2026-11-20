@@ -2,13 +2,19 @@ import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type
 import { useVirtualizer } from '@tanstack/react-virtual';
 import './VirtualList.css';
 
+/** Within this many px of its end, a timeline counts as at it: a change in its window's height keeps it there. */
+const END_PX = 24;
+
 /** What a list's owner may do to it: a chat goes to its end when the person sends. */
 export type VirtualListHandle = {
-  scrollToEnd: () => void;
+  /** `smooth`: glide there (Jump to latest), landing on the true end as rows are measured on the way. */
+  scrollToEnd: (smooth?: boolean) => void;
   /** Bring one row to the middle of the window; false when no row has that key. */
   scrollToKey: (key: string) => boolean;
   /** How far the scroller is from its end, in px (0 before it is drawn). */
   fromEnd: () => number;
+  /** The window's height in px (0 before it is drawn). */
+  height: () => number;
 };
 
 export type VirtualListProps<T> = {
@@ -99,8 +105,9 @@ export function VirtualList<T>({
     useCachedMeasurements: !measure,
   });
   useImperativeHandle(ref, () => ({
-    scrollToEnd: () => {
-      if (scrollParent) v.scrollToIndex(items.length - 1, { align: 'end' });
+    scrollToEnd: (smooth) => {
+      if (smooth) v.scrollToEnd({ behavior: 'smooth' });
+      else if (scrollParent) v.scrollToIndex(items.length - 1, { align: 'end' });
       else {
         const el = scrollRef.current;
         el?.scrollTo({ top: el.scrollHeight });
@@ -115,18 +122,44 @@ export function VirtualList<T>({
       const el = scroller();
       return el ? (scrollParent ? v.getTotalSize() + scrollMargin : el.scrollHeight) - el.scrollTop - el.clientHeight : 0;
     },
+    height: () => scroller()?.clientHeight ?? 0,
   }));
   const rows = v.getVirtualItems();
   const first = rows[0]?.index;
   const last = rows[rows.length - 1]?.index;
 
-  // A timeline opens at its newest message.
+  /* A timeline opens at its newest message. To the end, not to a row by its index: an older page that loads above while
+     the rows are still being measured moves every index, and a scroll aimed at row N would settle mid-way up. */
   const opened = useRef(false);
+  // Unmounted, it opens at the end again when it comes back (StrictMode's second mount, which reattaches at the top).
+  useLayoutEffect(
+    () => () => {
+      opened.current = false;
+    },
+    [],
+  );
   useLayoutEffect(() => {
     if (opened.current || anchor !== 'end' || items.length === 0) return;
     opened.current = true;
-    v.scrollToIndex(items.length - 1, { align: 'end' });
+    v.scrollToEnd();
   }, [anchor, items.length, v]);
+
+  /* A timeline whose window changes height (the box under it grows, the asks over the box come or go) stays at its end
+     if it was there. A window that shrinks keeps its top, so how far it was from the end is read with the old height. */
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (anchor !== 'end' || scrollParent || !el || typeof ResizeObserver === 'undefined') return;
+    let was = el.clientHeight;
+    const resize = new ResizeObserver(() => {
+      const h = el.clientHeight;
+      if (h === was) return;
+      const fromEnd = el.scrollHeight - el.scrollTop - was;
+      was = h;
+      if (fromEnd <= END_PX) el.scrollTop = el.scrollHeight;
+    });
+    resize.observe(el);
+    return () => resize.disconnect();
+  }, [anchor, scrollParent]);
 
   useEffect(() => {
     if (first === 0 && items.length > 0) onReachStart?.();

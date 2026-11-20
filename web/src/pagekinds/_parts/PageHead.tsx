@@ -37,7 +37,7 @@ export function PageHead({ title, path, crumb, lead, after, actions, search, mor
   const big = size === 'large' ? 't-figure' : undefined;
   const back = crumb?.at(-1);
   const [renaming, setRenaming] = useState(false);
-  // a name that arrives after the route drew (its data came later, a rename) reaches the tab title and Tico's chip
+  // a name that arrives after the route drew (its data came later, a rename) reaches the tab title and the page a message to Tico names
   useEffect(() => showPageName(title), [title]);
   const trail = crumb && crumb.length > 0 && (
     <nav className={sub ? 'pk-crumb' : 'pk-crumb is-inline'} aria-label="Breadcrumb">

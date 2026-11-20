@@ -9,7 +9,8 @@ import { arrangementFor } from '@/shell';
 
 /* What to ask Tico, over its box (plan/threads-team.html "Catch up", widened): at most a few plain asks that follow
    the open page. A press sends the words through tico.ask, which carries the page as `refs.page`. The row hides while
-   the person types (CSS: the box is `is-typing`) and while Tico answers. A chip pressed on a page goes until that page
+   the person types (CSS: the box is `is-typing`), fades while the chat is scrolled up (the foot's `data-up`), and
+   is gone while Tico answers. A chip pressed on a page goes until that page
    is left; Catch up goes until something else comes in. */
 export interface Chip {
   text: string;
