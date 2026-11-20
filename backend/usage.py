@@ -10,6 +10,7 @@ Who sees what: the owner and the bot administrators see every bot; anyone else s
 run or own. A bot's own credentials see nothing here.
 """
 
+import json
 import re
 from datetime import date, datetime, time, timedelta, timezone
 
@@ -336,14 +337,12 @@ def runs_in(slugs, first, last, filters=None):
 def dimension_values(c, slugs, first, last):
     """{dimension: its values among the window's runs on these bots}, each list in the order `query` groups them (text
     by its bytes, which is Python's order for str), from one read: the filter menus need the values, not their sums."""
-    found = {key: set() for key in DIMENSIONS}
-    if slugs:
-        where, args = runs_in(slugs, first, last)
-        columns = ", ".join(f"{expression} AS {key}" for key, expression in DIMENSIONS.items())
-        for row in c.execute(f"SELECT DISTINCT {columns} FROM {RUNS} t WHERE {where}", args):
-            for key in DIMENSIONS:
-                found[key].add(row[key])
-    return {key: sorted(values) for key, values in found.items()}
+    if not slugs:
+        return {key: [] for key in DIMENSIONS}
+    where, args = runs_in(slugs, first, last)
+    columns = ", ".join(f"json_group_array(DISTINCT {expression})" for expression in DIMENSIONS.values())
+    row = c.execute(f"SELECT {columns} FROM {RUNS} t WHERE {where}", args).fetchone()
+    return {key: sorted(json.loads(values)) for key, values in zip(DIMENSIONS, row, strict=True)}
 
 
 def install(app, store, auth, mutate, settings):

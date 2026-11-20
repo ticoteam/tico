@@ -394,9 +394,7 @@ def prime_spent(c, windows, subscription, default):
         return
     from .usage_records import RUNS
 
-    sums = ", ".join(
-        "sum(CASE WHEN started_at >= ? AND started_at < ? THEN coalesce(est_cost_usd, 0) END)" for _ in wanted
-    )
+    sums = ", ".join("sum(coalesce(est_cost_usd, 0)) FILTER (WHERE started_at >= ? AND started_at < ?)" for _ in wanted)
     found = [{} for _ in wanted]
     for row in c.execute(
         f"SELECT bot, {sums} FROM {RUNS} WHERE started_at >= ? AND started_at < ? "
