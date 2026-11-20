@@ -68,7 +68,6 @@ async function desktop(browser: Browser) {
     note('menu');
     for (const [label, path] of [
       ['Calendar', '/calendar'],
-      ['Threads', '/threads'],
       ['Company', '/company'],
       ['Library', '/library'],
       ['Tasks', '/tasks'],

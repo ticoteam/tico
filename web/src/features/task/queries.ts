@@ -1,7 +1,6 @@
 import { keepPreviousData, queryOptions, type QueryKey } from '@tanstack/react-query';
 import { ApiError, api } from '@/api/client';
 import type { OkPreview, PagePublished, PageShown, PipelineSettingsResult, PublishPageBody, TaskDetail, TaskFileList, TaskLinkView, TaskResult } from '@/api/schema';
-import { sendMessage } from '@/conversation';
 import { keys, meQuery, queryClient, quietRoot, write } from '@/data';
 import { flowQuery, pipelinesQuery } from '@/features/tasks/routing';
 import type { FileLibrary, FileSearch, TaskFileResult, TaskFileView } from '@/api/schema';
@@ -228,16 +227,10 @@ export const decisionShownQuery = (task: string, rid: string, version: number) =
     placeholderData: keepPreviousData,
   });
 
-/** Request changes (plan/approvals.html): the person's words go to the agent as their message in the task's chat, and
-    the request is answered `no` with them, which marks it Changes asked and takes it out of Flow until a new version.
-    The answer goes first: a refused one posts nothing. */
-export async function requestChanges(id: string, rid: string, note: string): Promise<TaskResult> {
-  const r = await answerAsk(id, rid, 'no', note);
-  const chat = queryClient.getQueryData<TaskData>(keys.tasks.detail(id))?.conversation_id;
-  const me = queryClient.getQueryData(meQuery.queryKey)?.id;
-  if (chat && me) await sendMessage({ id: chat, variant: 'task', text: note, me });
-  return r;
-}
+/** Request changes (plan/approvals.html): the request is answered `no` with the person's words, which marks it Changes
+    asked and takes it out of Flow until a new version. The server posts the words in the task's chat ("<Name> sent
+    this back: <note>"), so the agent hears them once. */
+export const requestChanges = (id: string, rid: string, note: string): Promise<TaskResult> => answerAsk(id, rid, 'no', note);
 
 /** Take an answer back (POST /api/v2/answers/{aid}/undo): the task is read again, and Flow with it. */
 export async function undoAnswer(id: string, answer: string): Promise<TaskResult> {
@@ -531,16 +524,53 @@ export interface EmailFile {
   type?: string;
 }
 
+/** The send as its preview gives it. `reply_to_id` (the Gmail message it answers) is read when the server gives it:
+    backend/email_sending.py `public` keeps it on the row but leaves it out today. */
+export type MailSend = EmailSendDetail['send'] & { reply_to_id?: string | null; thread_id?: string | null };
+
+/** The preview's answer: what the schema has, and what the server adds when it carries them (PR #4540): the hash the
+    OK sends back, and the frozen copy's To, Cc and Bcc apart (`send.recipients` is all of them in one list). */
+type EmailPreview = Omit<EmailSendDetail, 'send'> & { send: MailSend; shown_hash?: string | null; to?: string[]; cc?: string[]; bcc?: string[] };
+
 /** The email as it will be sent, frozen (GET /api/v2/email/sends/{sid}). Reading it is what lets the person's OK count:
     the server records that it showed them the whole email. */
 export const emailSendQuery = (task: string, send: string) =>
   queryOptions({
     queryKey: [...keys.tasks.detail(task), 'email', send] as const,
     queryFn: async ({ signal }) => {
-      // The answer carries `shown_hash` too (backend/email_sending.py send_detail), which the schema leaves out.
-      const r = await api.get<EmailSendDetail & { shown_hash?: string | null }>(`/api/v2/email/sends/${enc(send)}`, { signal });
+      const r = await api.get<EmailPreview>(`/api/v2/email/sends/${enc(send)}`, { signal });
       return { ...r, files: r.send.attachments as unknown as EmailFile[] };
     },
+  });
+
+/** Who an email goes to, copies and blind copies apart once the preview says so; before, every address is under To. */
+export function addressesOf(d: Pick<EmailPreview, 'send' | 'to' | 'cc' | 'bcc'>): { to: string[]; cc: string[]; bcc: string[] } {
+  const split = [d.to, d.cc, d.bcc].some((x) => !!x?.length);
+  return split ? { to: d.to ?? [], cc: d.cc ?? [], bcc: d.bcc ?? [] } : { to: d.send.recipients, cc: [], bcc: [] };
+}
+
+/** One received email (backend/mail.py `message_public`, with its body). */
+export interface Letter {
+  msg_id: string;
+  thread_id?: string;
+  epoch?: number;
+  date?: string;
+  from_addr?: string;
+  from_header?: string;
+  subject?: string;
+  snippet?: string;
+  body?: string;
+}
+
+/** The email a send answers, read live from the mailbox (GET /api/v2/mail/messages/{id}?mailbox=). It needs the
+    person's own read of that mailbox and a live mail connection: without either it is simply not shown. */
+export const answeredQuery = (task: string, send: string, mailbox: string, id: string) =>
+  queryOptions({
+    queryKey: [...keys.tasks.detail(task), 'email', send, 'answers', id] as const,
+    queryFn: ({ signal }) => api.get<Letter>(`/api/v2/mail/messages/${enc(id)}?mailbox=${enc(mailbox)}`, { signal }),
+    enabled: !!id && !!mailbox,
+    retry: false,
+    staleTime: Infinity,
   });
 
 /** Where one of its frozen files downloads from (GET /api/v2/email/sends/{sid}/attachments/{part}). */

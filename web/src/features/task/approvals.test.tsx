@@ -228,6 +228,18 @@ describe('the decision', () => {
     await waitFor(() => expect(sent.at(-1)?.url).toBe('/api/v2/answers/a1/undo'));
   });
 
+  it('Undo takes back the answer the OK names, when the server gives its id @approvals', async () => {
+    reply = (url, method) => {
+      if (method === 'POST' && url.endsWith('/asks/r1/ok')) return { body: { task: task({ to_leave: [req({ met: true, may: [] })] }), answer_id: 'a9' } };
+      if (method === 'POST' && url.includes('/undo')) return { body: { task: task() } };
+      return null;
+    };
+    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    fireEvent.click(await ready(await decision()));
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo' }));
+    await waitFor(() => expect(sent.at(-1)?.url).toBe('/api/v2/answers/a9/undo'));
+  });
+
   it('says Changed when what it shows moved, and takes a new press for the new one @approvals', async () => {
     let hash = 'h1';
     reply = (url, method) => {
@@ -276,8 +288,9 @@ describe('the decision', () => {
     fireEvent.change(line, { target: { value: 'Ask for a replacement' } });
     fireEvent.click(send);
     await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/tasks/t1/asks/r1/answer', body: { value: 'no', note: 'Ask for a replacement' } }));
-    await waitFor(() => expect(vi.mocked(sendMessage)).toHaveBeenCalledWith({ id: 'c7', variant: 'task', text: 'Ask for a replacement', me: 'human:me' }));
     expect(await within(chat).findByText(/^Changes asked/)).toBeTruthy();
+    // the server posts the note in the chat itself: the app adds no second copy
+    expect(vi.mocked(sendMessage)).not.toHaveBeenCalled();
     expect(within(chat).queryByRole('button', { name: 'Approve' })).toBeNull();
     expect(within(chat).getByRole('textbox', { name: 'Message Legal Owner' })).toBeTruthy();
   });
@@ -319,6 +332,105 @@ describe('an email waiting to send', () => {
     await ready(box);
     expect(within(box).getByText('Sends now')).toBeTruthy();
     expect(within(box).queryByText('Part of it did not load')).toBeNull();
+  });
+});
+
+describe('what the person needs beside the email', () => {
+  const header = () => document.querySelector('.ap-hdr') as HTMLElement;
+  const pairs = (dl: HTMLElement) => [...dl.querySelectorAll('dt')].map((dt) => [dt.textContent, dt.nextElementSibling?.textContent]);
+  const withMail = (more: Record<string, unknown>, send: Record<string, unknown> = {}) => {
+    const body = { ...mail, ...more, send: { ...mail.send, ...send } };
+    return (url: string) => (url.endsWith('/api/v2/email/sends/s1') ? { body } : null);
+  };
+
+  it('names To, Cc and Bcc apart once the preview gives them, and names the email by its To @approvals', async () => {
+    reply = withMail(
+      { to: ['Dana Ruiz <dana@example.test>'], cc: ['counsel@example.test'], bcc: ['files@example.test'] },
+      { recipients: ['counsel@example.test', 'Dana Ruiz <dana@example.test>', 'files@example.test'] },
+    );
+    show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1/12/email');
+    await screen.findByText('Dear Ms. Ruiz, our response is attached.');
+    expect(pairs(header())).toEqual([
+      ['From', 'legal@example.test'],
+      ['To', 'Dana Ruiz <dana@example.test>'],
+      ['Cc', 'counsel@example.test'],
+      ['Bcc', 'files@example.test'],
+    ]);
+    expect(await within(await decision()).findByText('Email to Dana Ruiz')).toBeTruthy();
+  });
+
+  it('before the preview splits them, every address is under To @approvals', async () => {
+    reply = withMail({}, { recipients: ['Dana Ruiz <dana@example.test>', 'counsel@example.test'] });
+    show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1/12/email');
+    await screen.findByText('Dear Ms. Ruiz, our response is attached.');
+    expect(pairs(header())).toEqual([
+      ['From', 'legal@example.test'],
+      ['To', 'Dana Ruiz <dana@example.test>, counsel@example.test'],
+    ]);
+  });
+
+  it('shows the letter it carries under the message, without a press; the other files stay cards @approvals', async () => {
+    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:letter') }));
+    const files = [
+      { part: 1, name: 'photo.jpg', size: 2048, type: 'image/jpeg' },
+      { part: 2, name: 'letter.pdf', size: 4096, type: 'application/pdf' },
+      { part: 3, name: 'exhibit.pdf', size: 8192, type: 'application/pdf' },
+    ];
+    reply = withMail({}, { attachments: files });
+    show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1/12/email');
+    const letter = await screen.findByRole('group', { name: 'letter.pdf' });
+    await waitFor(() => expect(letter.querySelector('iframe')?.getAttribute('src')).toBe('blob:letter'));
+    expect(screen.queryByRole('group', { name: 'exhibit.pdf' })).toBeNull();
+    for (const name of ['photo.jpg', 'letter.pdf', 'exhibit.pdf']) expect(screen.getByRole('link', { name: new RegExp(name.replace('.', '\\.')) })).toBeTruthy();
+  });
+
+  it('a Word letter is drawn as its sheet under the message @approvals', async () => {
+    reply = withMail({}, { attachments: [{ part: 2, name: 'letter.docx', size: 4096, type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }] });
+    show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1/12/email');
+    await screen.findByText('Dear Ms. Ruiz, our response is attached.');
+    // the stub answers no .docx bytes: the sheet's own place says so, under the message
+    expect(await screen.findByText('letter.docx did not load')).toBeTruthy();
+  });
+
+  it('shows the email it answers under it, a few lines until pressed @approvals', async () => {
+    const original = { msg_id: 'm1', thread_id: 'th1', from_header: 'Dana Ruiz <dana@example.test>', from_addr: 'dana@example.test', epoch: 1763400000, body: 'Dear Legal,\nYour delivery was late.\nI want a refund.\nPlease reply by Friday.' };
+    const mailRead = withMail({}, { reply_to_id: 'm1', thread_id: 'th1' });
+    reply = (url) => (url.includes('/api/v2/mail/messages/m1?mailbox=legal%40example.test') ? { body: original } : mailRead(url));
+    show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1/12/email');
+    const answered = await screen.findByRole('region', { name: 'In reply to' });
+    const head = within(answered).getByRole('button', { expanded: false });
+    expect(head.textContent).toContain('Dana Ruiz');
+    expect(within(answered).getByText(/Your delivery was late/)).toBeTruthy();
+    fireEvent.click(head);
+    expect(within(answered).getByRole('button', { expanded: true })).toBeTruthy();
+    expect(answered.classList.contains('is-open')).toBe(true);
+  });
+
+  it('when the email it answers cannot be read here, shows nothing of it @approvals', async () => {
+    const mailRead = withMail({}, { reply_to_id: 'm1' });
+    reply = (url) => (url.includes('/api/v2/mail/messages/') ? { status: 403, body: { error: { code: 'forbidden', detail: 'No access to this mailbox' } } } : mailRead(url));
+    show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1/12/email');
+    await screen.findByText('Dear Ms. Ruiz, our response is attached.');
+    await waitFor(() => expect(sent).toEqual([]));
+    expect(screen.queryByRole('region', { name: 'In reply to' })).toBeNull();
+    expect(screen.queryByText(/No access/)).toBeNull();
+  });
+
+  it('links the task the email came from, once, in the quiet line @approvals', async () => {
+    const matter = task({ id: 't5', number: 40, title: 'Late-delivery claim: Dana Ruiz', pipeline_id: 'p9', to_leave: [] });
+    const mailRead = withMail({}, { task_id: 't5' });
+    reply = (url) => (url.endsWith('/api/v2/tasks/t5') ? { body: { task: matter, runs: [], children: [] } } : mailRead(url));
+    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    const from = await screen.findByRole('link', { name: 'From Late-delivery claim: Dana Ruiz' });
+    expect(from.getAttribute('href')).toBe('/tasks/p9/40');
+    expect(screen.getAllByRole('link', { name: /^From / })).toHaveLength(1);
+  });
+
+  it('names no source when the email was queued on the task that is open @approvals', async () => {
+    reply = withMail({}, { task_id: 't1' });
+    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    await within(await decision()).findByText('Email to Dana Ruiz');
+    expect(screen.queryByRole('link', { name: /^From / })).toBeNull();
   });
 });
 

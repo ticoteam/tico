@@ -40,7 +40,7 @@ class Probe:
 
     def __init__(self, base, token, query):
         self.base, self.token, self.query = base, token, query
-        self.headers_at = self.ready_at = None
+        self.headers_at = self.ready_at = self.done_at = None
         self.text, self.error = "", None
 
     def run(self, began):
@@ -64,11 +64,13 @@ class Probe:
                     self.ready_at = time.perf_counter() - began
                     target = json.loads(line[6:])["seq"]
                     if "after=" not in self.query:
+                        self.done_at = self.ready_at
                         return
                 elif line.startswith("id: ") and target is not None and int(line[4:]) >= target:
                     while lines[-1] != "\n":  # the rest of that frame
                         lines.append(response.readline().decode())
                     self.text = "".join(lines)
+                    self.done_at = time.perf_counter() - began
                     return
         finally:
             conn.close()

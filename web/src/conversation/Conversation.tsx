@@ -43,6 +43,8 @@ export interface ConversationProps {
   card?: (m: ChatMessage) => ReactNode;
   /** false: the person may read but not write here (an archived, closed or meeting thread): no box. */
   canPost?: boolean;
+  /** Not the thread's own messages, drawn among them by time (a team's updates, through `card`): no reply, no rating. */
+  extra?: ChatMessage[];
 }
 
 type Item =
@@ -110,14 +112,30 @@ const herePage = (): PageRef => ({
 
 installConversationLive();
 
-export function Conversation({ id, variant, title, actor, page, foot, card, canPost = true }: ConversationProps) {
+/** The thread's rows with `extra` among them by time; while older pages are left, none from before the oldest loaded. */
+function withExtra(rows: ChatMessage[], extra: ChatMessage[] | undefined, more: boolean): ChatMessage[] {
+  if (!extra?.length) return rows;
+  const at = (m: ChatMessage) => m.created_at ?? '';
+  const from = more ? (rows[0]?.created_at ?? '') : '';
+  const left = extra.filter((m) => at(m) >= from).sort((a, b) => (at(a) < at(b) ? -1 : 1));
+  const out: ChatMessage[] = [];
+  for (const m of rows) {
+    while (left.length && at(left[0]!) < at(m)) out.push(left.shift()!);
+    out.push(m);
+  }
+  return [...out, ...left];
+}
+
+export function Conversation({ id, variant, title, actor, page, foot, card, canPost = true, extra }: ConversationProps) {
   useFollow(variant === 'tico' ? { conversation: id } : { thread: id });
 
   const { data: me } = useQuery(meQuery);
   const myId = me?.id;
   const timeline = useInfiniteQuery(timelineQuery(id));
   const { data: live = [] } = useQuery(liveQuery(id));
-  const rows = rowsOf(timeline.data);
+  const own = rowsOf(timeline.data);
+  const rows = withExtra(own, extra, !!timeline.hasNextPage);
+  const extraIds = new Set(extra?.map((m) => m.id));
 
   // Flat pages can hold replies from several threads, each with its own read mark.
   const [opened, setOpened] = useState<{ id: string; pages: typeof timeline.data; marks: Map<string, number> } | null>(null);
@@ -255,7 +273,7 @@ export function Conversation({ id, variant, title, actor, page, foot, card, canP
             cont={it.cont}
             onRetry={(m) => send(m.body ?? '', m.files ?? [], m)}
             card={card}
-            onReply={canReply ? startReply : undefined}
+            onReply={canReply && !extraIds.has(it.m.id) ? startReply : undefined}
             quote={quoteOf(it.m, byId)}
             onQuote={toQuoted}
           />

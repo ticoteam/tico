@@ -38,6 +38,8 @@ export const ICONS = {
   lock: [['rect', { x: '5', y: '10.5', width: '14', height: '10', rx: '2.5' }], ['path', { d: 'M8.5 10.5V8a3.5 3.5 0 017 0v2.5' }]],
   // pages/5-library/tools.js
   mail: [['path', { d: 'M3.5 18.5V11a4 4 0 0 1 8 0v7.5' }], ['path', { d: 'M7.5 7h9a4 4 0 0 1 4 4v7.5h-17' }], ['path', { d: 'M15.5 11.5v-7h3' }]],
+  // plan/threads-team.html (Message: a new thread)
+  message: [['path', { d: 'M5 5h14a2 2 0 012 2v8a2 2 0 01-2 2h-8l-4 3v-3H5a2 2 0 01-2-2V7a2 2 0 012-2z' }], ['path', { d: 'M12 8.5v5M9.5 11h5' }]],
   mic: [['rect', { x: '9', y: '3.5', width: '6', height: '11', rx: '3' }], ['path', { d: 'M5.5 11.5a6.5 6.5 0 0013 0M12 18v3' }]],
   micoff: [['path', { d: 'M15 9.5V6.5a3 3 0 00-5.6-1.5M9 9v2.5a3 3 0 004.7 2.5M5.5 11.5a6.5 6.5 0 0010.4 5.2M18.5 11.5a6.5 6.5 0 01-.5 2.5M12 18v3M4 4l16 16' }]],
   more: [['circle', { cx: '5', cy: '12', r: '1.2' }], ['circle', { cx: '12', cy: '12', r: '1.2' }], ['circle', { cx: '19', cy: '12', r: '1.2' }]],

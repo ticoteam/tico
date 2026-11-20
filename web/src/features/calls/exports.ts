@@ -1,5 +1,5 @@
 // Calendar, meetings and calls. The only file other code imports from this feature.
-export { CalendarPage } from './CalendarPage';
+export { CalendarPage, StartCall } from './CalendarPage';
 export { CallBar } from './CallBar';
 export { CallPage, type CallPageProps } from './CallPage';
 export { CallSide, type CallSideProps } from './CallSide';

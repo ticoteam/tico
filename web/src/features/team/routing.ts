@@ -1,4 +1,4 @@
-import { isCancelledError, type QueryClient } from '@tanstack/react-query';
+import type { QueryClient } from '@tanstack/react-query';
 import { directoryQuery } from '@/data';
 import { ADD_STEPS, TABS, type AddStep, type Tab } from './actions';
 import { bareId, resolveWho } from './model';
@@ -25,12 +25,7 @@ export function validateTeamSearch(raw: Record<string, unknown>): TeamSearch {
 /** `/team/<who>`'s first paint: who it is, then the one read the page it opens on draws. A failed read is the router's
     fault page (no access on a 403, as a person's Slack is for anyone but them and the owner). */
 export async function loadWho(qc: QueryClient, who: string, tab: Tab | undefined): Promise<unknown> {
-  const directory = qc.ensureQueryData(directoryQuery).catch((error: unknown) => {
-    // The shell's observer can detach during mount while the route is still waiting on its directory read.
-    if (isCancelledError(error)) return qc.ensureQueryData(directoryQuery);
-    throw error;
-  });
-  const [dir, groups] = await Promise.all([directory, qc.ensureQueryData(groupsQuery)]);
+  const [dir, groups] = await Promise.all([qc.ensureQueryData(directoryQuery), qc.ensureQueryData(groupsQuery)]);
   const found = resolveWho(who, dir, groups);
   if (found?.kind === 'agent') {
     if (tab === 'computer' || tab === 'screen') return qc.ensureQueryData(computersQuery);

@@ -396,7 +396,8 @@ export interface Group {
 
 export const groupsQuery = queryOptions({
   queryKey: ['team', 'groups'] as const,
-  queryFn: ({ signal }) => api.get<Group[]>('/api/v2/groups', { signal }),
+  // The team page's loader shares this request with the menu and a team's thread, even while they unmount: no signal.
+  queryFn: () => api.get<Group[]>('/api/v2/groups'),
 });
 
 export interface AccessPerson {

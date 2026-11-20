@@ -229,13 +229,22 @@ def no_cached_calendar_reads():
     connectors.forget_live()
 
 
+# What tests attach as ("summary", text) to request.node.user_properties, printed at the end of the run: a report a passing
+# test keeps (backend/tests/test_query_budgets.py's timings), which xdist would otherwise drop with the test's output.
+SUMMARIES = []
+
+
 def pytest_runtest_logreport(report):
     """Under xdist the workers' teardown reports reach the controller here, so the check's cost is summed over them."""
     if report.when == "teardown":
         connection_guard.add_report(report)
+    if report.when == "call":
+        SUMMARIES.extend(str(value) for key, value in report.user_properties if key == "summary")
 
 
 def pytest_terminal_summary(terminalreporter):
+    for text in SUMMARIES:
+        terminalreporter.write_line(text)
     cost = connection_guard.SUMMED
     terminalreporter.write_line(
         f"pooled connection check: {cost['tests']} tests, {cost['seconds']:.1f} s of its own work "

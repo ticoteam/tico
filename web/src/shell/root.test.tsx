@@ -15,7 +15,7 @@ import type { flowGroups as FlowGroups } from '@/features/tasks/routing';
 const { gate, q, catchUpRead } = vi.hoisted(() => ({
   gate: { screen: null as string | null, setup: false },
   q: <T,>(key: string, data: T) => ({ queryKey: [key], queryFn: async () => data, staleTime: Infinity }),
-  catchUpRead: vi.fn(async () => ({ count: 0 })),
+  catchUpRead: vi.fn(async () => ({ count: 0, items: [] })),
 }));
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
@@ -58,6 +58,7 @@ vi.mock('@/features/calls/exports', () => ({
   CallBar: () => <div>call bar</div>,
   CallSide: () => null,
   RingCard: () => null,
+  StartCall: ({ open }: { open: boolean }) => (open ? <p>start call</p> : null),
 }));
 vi.mock('@/features/calls/routing', () => ({
   ringingQuery: q('ringing', { calls: [] }),
@@ -76,11 +77,16 @@ vi.mock('@/features/tasks/routing', async () => ({
 }));
 vi.mock('@/features/team/exports', () => ({ TeammateChat: () => null }));
 vi.mock('@/features/task/exports', () => ({ TaskChat: () => <p>task chat</p> }));
-vi.mock('@/features/team/routing', () => ({ teamSlug: (t: string) => t, whoHref: () => '/' }));
-vi.mock('@/features/threads/exports', () => ({ ChatSheet: () => <p>a teammate chat</p> }));
-vi.mock('@/features/threads/routing', () => ({
-  catchUpQuery: { ...q('catch-up', { count: 0 }), queryFn: catchUpRead },
-  updateListQuery: () => ({ queryKey: ['updates'], queryFn: async () => ({ unread: 0 }), initialPageParam: '', getNextPageParam: () => undefined }),
+vi.mock('@/features/team/routing', () => ({ teamSlug: (t: string) => t, whoHref: () => '/', groupsQuery: q('groups', []) }));
+vi.mock('@/features/threads/exports', () => ({
+  ChatSheet: () => <p>a teammate chat</p>,
+  MenuThreads: () => <p>the threads</p>,
+  TeamThread: () => <p>the team thread</p>,
+}));
+vi.mock('@/features/threads/routing', async () => ({
+  asksOf: (await vi.importActual<{ asksOf: unknown }>('@/features/threads/routing')).asksOf,
+  catchUpQuery: { ...q('catch-up', { count: 0, items: [] }), queryFn: catchUpRead },
+  threadListQuery: { queryKey: ['threads-list'], queryFn: async () => ({ rows: [], next: null }), initialPageParam: null, getNextPageParam: () => undefined, staleTime: Infinity },
 }));
 vi.mock('@/features/support/exports', () => ({ SupportChat: () => <p>support chat</p> }));
 vi.mock('@/features/support/routing', () => ({ SUPPORT_CHAT: 'support', supportUnreadQuery: q('support-unread', 2) }));

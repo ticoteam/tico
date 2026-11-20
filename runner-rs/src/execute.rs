@@ -1879,24 +1879,27 @@ impl Runner {
         }
     }
 
-    /// Steer this attempt's new inputs into the running turn; one the turn refused as it ended is carried.
-    pub(crate) async fn receive_inputs(
+    /// This attempt's inputs the hub holds for it: what `steer_inputs` takes.
+    pub(crate) async fn fetch_inputs(&self, aid: &str) -> Result<Vec<Value>, Fail> {
+        let result = self
+            .client
+            .post(&format!("attempts/{aid}/inputs"), &json!({}), None)
+            .await?;
+        Ok(result["messages"].as_array().cloned().unwrap_or_default())
+    }
+
+    /// Steer inputs `fetch_inputs` read into the running turn, each acknowledged once applied; one the turn refused as
+    /// it ended is carried.
+    pub(crate) async fn steer_inputs(
         &self,
         aid: &str,
         host: &Host,
         thread: &str,
         turn: &str,
         carried: &mut BTreeMap<String, Value>,
-    ) -> Result<Vec<Value>, Fail> {
-        if !host.supports_steer() {
-            return Ok(vec![]);
-        }
-        let result = self
-            .client
-            .post(&format!("attempts/{aid}/inputs"), &json!({}), None)
-            .await?;
-        let messages = result["messages"].as_array().cloned().unwrap_or_default();
-        for message in &messages {
+        messages: &[Value],
+    ) -> Result<(), Fail> {
+        for message in messages {
             let mid = text_of(&message["id"]);
             let phase = self.state.input_phase(aid, &mid, None)?;
             if phase.as_deref() == Some("dispatching") {
@@ -1919,7 +1922,7 @@ impl Runner {
             }
             self.ack_input(aid, &mid).await?;
         }
-        Ok(messages)
+        Ok(())
     }
 
     pub(crate) async fn carry_inputs(

@@ -271,9 +271,9 @@ function FilterItems({ search, at }: { search: CalendarSearch; at: At }) {
 
 /* ---------------------------------------------------------------- Start call: who to call */
 
-/** The head's Start call (t-cal-pick): a picker under the filled button; on a phone the same pick as a sheet, opened
-    from the ⋯. Nobody picked is a call with Tico. */
-function StartCall({ open, onOpenChange, sheet }: { open: boolean; onOpenChange: (open: boolean) => void; sheet?: boolean }) {
+/** The head's Start call (t-cal-pick): a picker under the filled button; on a phone, and from the menu's Call, the same
+    pick as a sheet. Nobody picked is a call with Tico. */
+export function StartCall({ open, onOpenChange, sheet }: { open: boolean; onOpenChange: (open: boolean) => void; sheet?: boolean }) {
   const [who, setWho] = useState<string[]>([]);
   const meet = useTicoMeet();
   const set = (o: boolean) => {

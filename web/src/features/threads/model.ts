@@ -89,6 +89,43 @@ export function titleOf(t: Thread, me: string | undefined, nameOf: (actor: strin
 export const unreadOf = (t: Thread | undefined) => Number(t?.me?.unread) || 0;
 export const isMuted = (t: Thread | undefined) => t?.me?.notify === 'muted';
 
+/* ---------------------------------------------------------------- what asks you */
+
+/** What asks the viewer something: the Dot on a row (plan/threads-team.html "What needs you"). No number. */
+export interface Asks {
+  /** Thread ids. */
+  threads: ReadonlySet<string>;
+  /** Teammates (actor ids) whose DM with the viewer asks them. */
+  mates: ReadonlySet<string>;
+  /** The owners of Homes that ask (`group:<id>` for a team's thread). */
+  homes: ReadonlySet<string>;
+}
+
+/**
+ * A conversation asks you when Catch up flags it `mention` (an @mention, an ask, an assignment, or a person's reply to
+ * you, past your read mark), or when it is a DM from a person with something you have not read. An agent's DM counts
+ * only through the flag: its unread status lines ask nothing. `catchUp` is Catch up's first page (mentions come first
+ * in it); `rows` the loaded list. A task's thread is the task's, not a conversation's.
+ */
+export function asksOf(catchUp: { items: { thread: Thread; mention?: boolean }[] } | undefined, rows: readonly Thread[], me: string | undefined): Asks {
+  const threads = new Set<string>();
+  const mates = new Set<string>();
+  const homes = new Set<string>();
+  const add = (t: Thread) => {
+    if (t.task_id) return;
+    threads.add(t.id);
+    const other = t.audience === 'personal' ? othersOf(t, me)[0] : undefined;
+    if (other) mates.add(other);
+    if (t.audience === 'home' && typeof t.home?.actor === 'string') homes.add(t.home.actor);
+  };
+  for (const it of catchUp?.items ?? []) if (it.mention) add(it.thread);
+  for (const t of rows) if (t.audience === 'personal' && unreadOf(t) > 0 && othersOf(t, me)[0]?.startsWith('human:')) add(t);
+  return { threads, mates, homes };
+}
+
+/** The menu's Threads list: every conversation you are in, newest first. A task's thread belongs to its task. */
+export const conversationsOf = (rows: readonly Thread[]) => rows.filter((t) => !t.task_id);
+
 /* ---------------------------------------------------------------- mail and texts */
 
 export interface Letter {
@@ -161,6 +198,10 @@ export interface Update {
   bot: string;
   kind: 'daily' | 'weekly' | string;
   day?: string;
+  /** Its one-line summary (the body's first line, as written). */
+  headline?: string;
+  /** How many replies it has. */
+  replies?: number;
   body?: string;
   slides?: { goal?: string; done?: string; focus?: string; blockers?: string } | null;
   read?: boolean;

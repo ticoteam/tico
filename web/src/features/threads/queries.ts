@@ -21,7 +21,7 @@ export const threadKeys = {
   view: keys.threads.view,
   catchUp: keys.threads.catchUp(),
   chat: (chat: string) => ['threads', 'chat', chat] as const,
-  search: (q: string) => ['threads', 'search', q] as const,
+  team: (group: string) => ['threads', 'team', group] as const,
 };
 const mailKeys = {
   boxes: ['mail', 'boxes'] as const,
@@ -46,8 +46,9 @@ const PAGE = 50;
 /** The list: threads and DMs, newest activity first, a page at a time. */
 export const threadListQuery = infiniteQueryOptions({
   queryKey: threadKeys.list,
-  queryFn: async ({ pageParam, signal }): Promise<ListPage> =>
-    toPage(await api.get<Parameters<typeof toPage>[0]>(`/api/v2/threads${qs({ sort: 'recent', limit: PAGE, cursor: pageParam })}`, { signal })),
+  // Route loaders share this request with the menu's Threads tab, even while its observers unmount: no signal.
+  queryFn: async ({ pageParam }): Promise<ListPage> =>
+    toPage(await api.get<Parameters<typeof toPage>[0]>(`/api/v2/threads${qs({ sort: 'recent', limit: PAGE, cursor: pageParam })}`)),
   initialPageParam: null as string | null,
   getNextPageParam: (last) => last.next ?? undefined,
 });
@@ -74,38 +75,12 @@ export interface CatchUp {
   next_cursor?: string | null;
 }
 
-/** What is new, thread by thread (the "Catch up" row's count and its pane). */
+/** What is new, thread by thread, mentions first: which conversations ask you (the Dot), and whether Tico has
+    something to catch you up on. */
 export const catchUpQuery = queryOptions({
   queryKey: threadKeys.catchUp,
   queryFn: ({ signal }) => api.get<CatchUp>('/api/v2/threads/catch-up?limit=20', { signal }),
 });
-
-export interface SearchHit {
-  thread_id: string;
-  message_id: string;
-  title?: string;
-  excerpt: string;
-  created_at?: string;
-}
-interface SearchPage {
-  hits: SearchHit[];
-  next_cursor: string | null;
-}
-
-/**
- * Threads whose messages hold every word of `q`, newest first, from the server's search (a company has far more
- * threads than the list loads). Not live: read again when it is stale.
- */
-export const threadSearchQuery = (q: string) =>
-  infiniteQueryOptions({
-    queryKey: threadKeys.search(q),
-    queryFn: ({ pageParam, signal }) =>
-      api.get<SearchPage>(`/api/v2/threads/search${qs({ q, limit: PAGE, before: pageParam })}`, { signal }),
-    initialPageParam: null as string | null,
-    getNextPageParam: (last) => last.next_cursor ?? undefined,
-    staleTime: 30_000,
-    enabled: q.length > 0,
-  });
 
 /**
  * The second chat's thread. `thread:<id>` is the thread itself; `agent:<slug>` and `person:<id>` are the viewer's DM
@@ -123,6 +98,14 @@ export const chatQuery = (chat: string) => {
     },
   });
 };
+
+/** A team's own thread: its Home (`group:<id>`), which the server makes the first time it is opened. */
+export const teamThreadQuery = (group: string) =>
+  queryOptions({
+    queryKey: threadKeys.team(group),
+    queryFn: ({ signal }) => api.get<Thread>(`/api/v2/threads/home/${enc(`group:${group}`)}`, { signal }),
+    staleTime: Infinity,
+  });
 
 /* ---------------------------------------------------------------- thread changes */
 

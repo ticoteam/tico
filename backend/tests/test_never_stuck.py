@@ -4,6 +4,7 @@ Synthetic rows only (backend/tests/helpers/engine.py): the fictional company's p
 General pipeline whose stage expects a bot to take a day, and a clock the test moves.
 """
 
+import contextlib
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -1185,6 +1186,70 @@ def test_the_heartbeat_runs_the_check_and_reports_a_task_it_could_not_check(api,
     # The pass's failures reach service_health, which everyone reads: the error type and a count, never the task's id.
     assert ctx.failures == [{"never_stuck": "ValueError", "tasks": "1"}]
     assert task_id not in repr(ctx.failures)
+
+
+def test_a_pass_with_nothing_to_write_takes_no_write_lock_and_one_that_writes_runs_under_it(api, time_machine):
+    """Nearly every pass writes nothing: it runs in a read snapshot and never takes the write lock, which held every
+    writer behind it for the whole pass. A pass with something to do is run again under the lock, with the same result."""
+    from backend import heartbeat as HB
+    from backend import scheduler as S
+    from backend.scheduler import Scheduler
+
+    time_machine.move_to(START, tick=False)
+    with api.app.state.store.transaction() as c:
+        X.bot(c, "builder")
+        X.pipeline(c)
+        task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+        X.ran(c, task_id, BUILDER)
+    scheduler = Scheduler(api.app.state.store, api.app.state.execution)
+    at = START + timedelta(seconds=900)
+    time_machine.move_to(at, tick=False)
+    first, second = HB.Context(scheduler, at), HB.Context(scheduler, at)
+
+    def wakes():
+        with api.app.state.store.read() as c:
+            return c.execute("SELECT count(*) FROM messages WHERE wake_key IS NOT NULL").fetchone()[0]
+
+    assert S.step_never_stuck(first) == ("1 woken", False)
+    assert [hold[2] for hold in first.holds] == ["never_stuck"]
+    woken = wakes()
+    assert S.step_never_stuck(second)[1]
+    assert second.holds == [] and wakes() == woken
+
+
+def test_a_write_the_engine_catches_still_sends_the_pass_to_the_write_lock_and_its_logs_are_not_doubled(
+    api, monkeypatch, caplog
+):
+    """A refused write may surface as a task's own error, which the pass records and goes past: the refusal is
+    remembered all the same, and the pass runs again under the lock. The thrown-away pass's log lines are dropped, so
+    nothing is logged twice and no refused write reads as a failure."""
+    import logging
+
+    store = api.app.state.store
+    with store.transaction() as c:
+        X.bot(c, "builder")
+        X.pipeline(c)
+        task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+
+    def touch(conn, tid, *rest):
+        logging.getLogger("tico.task_engine").warning("touched %s", tid)
+        conn.execute("UPDATE tasks SET note='checked' WHERE id=?", (tid,))
+
+    monkeypatch.setattr(NS, "_one", touch)
+    holds, failures = [], []
+
+    @contextlib.contextmanager
+    def locked():
+        with store.transaction() as c:
+            holds.append(1)
+            yield c
+
+    with caplog.at_level(logging.WARNING, logger="tico.task_engine"):
+        NS.check_read_first(store, locked, H.now(), failures)
+    assert holds == [1] and failures == []
+    assert [r.getMessage() for r in caplog.records if r.name == "tico.task_engine"] == [f"touched {task_id}"]
+    with store.read() as c:
+        assert c.execute("SELECT note FROM tasks WHERE id=?", (task_id,)).fetchone()[0] == "checked"
 
 
 def test_a_private_rows_failure_keeps_its_id_and_words_out_of_service_health(c):
