@@ -234,6 +234,19 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
 .dcx.is-asked .hollow{flex:none;margin:0 var(--s-0)}
 .dcx.is-asked .dcx-eff{margin-left:var(--s-1)}
 
+/* a held message's decision (Held.tsx): what was held, its part that breaks the rule marked, then the rule and its Why */
+.hold-body{display:flex;flex-direction:column;gap:var(--s-2);margin:var(--s-2) var(--s-1) 0 0}
+.hold-text{margin:0;max-height:min(40vh,320px);overflow:auto;padding:var(--s-2) var(--s-3);border-radius:var(--r-ctl);background:var(--well);color:var(--ink);line-height:var(--lh-read);white-space:pre-wrap;overflow-wrap:anywhere}
+.hold-text.is-bones{height:48px}
+.hold-text mark{background:var(--well-2);color:inherit;text-decoration:underline 2px var(--ink-2);text-underline-offset:3px}
+.hold-note,.hold-why{margin:0;font-size:var(--t-sm);color:var(--muted)}
+.hold-why{color:var(--ink-2);overflow-wrap:anywhere}
+.hold-rule{display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--s-0) var(--s-2);margin:0;font-size:var(--t-sm);color:var(--ink-2);line-height:var(--lh)}
+.hold-rule>span:first-child{color:var(--ink)}
+.hold-reason{flex-basis:100%;color:var(--muted)}
+.hold-edit{color:var(--muted);text-decoration:underline;text-underline-offset:2px}
+.hold-edit:hover{color:var(--ink)}
+
 /* an email's OK hung on the matter, at the top of its other pages: a pointer to its Email tab, no Approve */
 .tv-waits{flex:none;display:flex;flex-direction:column;gap:var(--s-2);padding:var(--s-3) var(--pad-task)}
 

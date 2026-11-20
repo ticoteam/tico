@@ -437,7 +437,8 @@ function StageEditor({ rule, onDone, onClose }: { rule?: StageRule; onDone: () =
 
 // ---------------------------------------------------------------- what a rule holds
 
-const HOLD_MARK: Record<string, string> = { held: 'Waits on you', approved: 'OK given', allowed: 'OK given', ok: 'OK given' };
+/** A hold's state, as its row's mark says it: held until its reviewer sends it anyway or keeps it blocked. */
+const HOLD_MARK: Record<string, string> = { held: 'Waits on you', sent: 'Sent anyway', kept: 'Kept blocked' };
 
 function Holds({ id }: { id: string }) {
   const q = useQuery(holdsQuery);
@@ -454,13 +455,13 @@ function Holds({ id }: { id: string }) {
 }
 
 function HoldRow({ h }: { h: RuleHold }) {
-  const ok = HOLD_MARK[h.outcome ?? ''] === 'OK given';
-  const mark = h.state === 'held' ? 'Waits on you' : ok ? 'OK given' : 'Sent back';
+  const ok = h.state === 'sent';
+  const mark = HOLD_MARK[h.state] ?? 'Kept blocked';
   const title = h.to?.length ? h.to.join(', ') : h.operation ? agentWords(h.operation.replace(/[._]+/g, ' ')) : 'A held step';
   return (
     <Row className="hold" title={title} href={h.task_id ? `/task/${encodeURIComponent(h.task_id)}` : undefined} target={`hold:${h.id}`}>
       <span className="hold-mark" title={mark}>
-        {h.state === 'held' ? <FlowMark /> : <Icon name={ok ? 'check' : 'reply'} />}
+        {h.state === 'held' ? <FlowMark /> : <Icon name={ok ? 'send' : 'lock'} />}
       </span>
       <span className="row-title">{title}</span>
       <Face id={h.author ?? null} />
