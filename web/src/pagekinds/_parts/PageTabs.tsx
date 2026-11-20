@@ -54,6 +54,8 @@ export function PageTabs({ tabs, label, after }: PageTabsProps) {
   const at = useLocation();
   const search = at.search as Record<string, unknown>;
   const rowKeys = [...new Set(tabs.flatMap((t) => Object.keys(t.search ?? {})))];
+  // a page opened from a thread keeps it beside every tab (lib besideThread)
+  const beside = search.via === 'thread' && typeof search.chat === 'string' ? { chat: search.chat, via: 'thread' } : null;
   const keyOf = (t: PageTab) => `${t.to}?${new URLSearchParams(t.search).toString()}`;
   const onKey = tabs.filter((t) => isOn(t, at.pathname, search, rowKeys)).map(keyOf)[0] ?? '';
   const row = useRef<HTMLDivElement>(null);
@@ -105,7 +107,7 @@ export function PageTabs({ tabs, label, after }: PageTabsProps) {
               on={on}
               activeProps={NO_ACTIVE}
               to={t.to as LinkProps['to']}
-              search={t.search as never}
+              search={(beside ? { ...t.search, ...beside } : t.search) as never}
               data-target={t.target}
             >
               {t.mark}

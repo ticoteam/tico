@@ -11,7 +11,7 @@ import { Icon, type IconName } from '@/kit/Icon';
 import { VirtualList, type VirtualListHandle } from '@/kit/VirtualList';
 import { SheetHead } from '@/shell';
 import { dot, type DotState } from '@/tico/dot';
-import { pageName } from '@/tico/pageName';
+import { usePageName } from '@/tico/pageName';
 import { MessageBones } from './Bones';
 import { Composer } from './Composer';
 import { dayKey, dayLabel } from './dates';
@@ -105,11 +105,12 @@ function teammateHref(actor: string | undefined, a: Actor | undefined): string |
   return `/team/${encodeURIComponent(a?.kind === 'agent' && a.slug ? a.slug : actor.slice(actor.indexOf(':') + 1))}`;
 }
 
-/* the page the person is on, by its own name (its h1, as Tico's chip says it), not the window's "<name> - Tico" */
-const herePage = (): PageRef => ({
-  path: typeof location === 'undefined' ? '/' : location.pathname,
-  title: typeof document === 'undefined' ? '' : pageName(),
-});
+/* the page the person is on, by its own name (its h1, as Tico's chip says it), not the window's "<name> - Tico". Kept
+   current: a page whose data comes after the chat drew (a task opened beside its thread) names itself once it has. */
+function useHerePage(): PageRef {
+  const title = usePageName();
+  return { path: typeof location === 'undefined' ? '/' : location.pathname, title };
+}
 
 
 installConversationLive();
@@ -154,7 +155,8 @@ export function Conversation({ id, variant, title, actor, page, foot, card, canP
   const name = variant === 'tico' ? 'Tico' : (title ?? 'Teammate');
   const mate = useActor(actor);
   const mateHref = teammateHref(actor, mate);
-  const at = page === undefined ? herePage() : page;
+  const here = useHerePage();
+  const at = page === undefined ? here : page;
 
   /* VirtualList follows the end while the person is at it (a new row, a reply growing) and keeps their place
      otherwise, and when older pages load above. */

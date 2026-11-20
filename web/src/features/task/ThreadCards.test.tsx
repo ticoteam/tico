@@ -41,10 +41,36 @@ const matter = { id: 'm1', number: 7, title: 'Ruiz: reply letter', status: 'open
 
 let theMatter: unknown = matter;
 
+/* Other OKs: a page the task's stage needs approved (asked by no one, held by the task's owner) and a finance item the
+   agent asked for by its slug. */
+const otherAsk = (task: string, kind: 'page' | 'ok', by: string | null, owner: string, shows: string[]) => ({
+  kind: 'ask',
+  id: `${task}:r2`,
+  task_id: task,
+  line: 'OK this?',
+  since: '2026-11-19T10:00:00Z',
+  task: { id: task, number: 41, title: kind === 'page' ? 'Release report' : 'Pay the rent', pipeline_id: 'ops', stage_id: 'review', owner_id: owner },
+  ask: { requirement_id: 'r2', kind, line: 'OK this?', met: false, asked_by: by, shows, may: ['ok', 'no'] },
+});
+const otherTask = (id: string, title: string, shows: string[]) => ({
+  id,
+  number: 41,
+  title,
+  status: 'open',
+  pipeline_id: 'ops',
+  owner_id: 'bot:lo',
+  children: [],
+  to_leave: [{ requirement_id: 'r2', kind: 'page', line: 'OK this?', met: false, may: ['ok', 'no'], shows, asked_by: null }],
+});
+
 function answer(url: string): Reply {
   if (url.includes('/needs-you')) return { body: { actor: 'human:me', items: needs } };
   if (url.endsWith('/api/v2/tasks/t1')) return { body: { task: okTask('t1') } };
   if (url.endsWith('/api/v2/tasks/t2')) return { body: { task: okTask('t2', 'bot:other') } };
+  if (url.endsWith('/api/v2/tasks/p1')) return { body: { task: otherTask('p1', 'Release report', ['page:file-a@2']) } };
+  if (url.endsWith('/api/v2/tasks/p1/files?all=1'))
+    return { body: { files: [{ id: 'file-a', name: 'release-report.md', title: 'Release report', mime: 'text/markdown', archived: false, current_version: 2, links: [], versions: [], writers: [] }, { id: 'file-b', name: 'notes.md', title: 'Notes', mime: 'text/markdown', archived: false, current_version: 1, links: [], versions: [], writers: [] }] } };
+  if (url.endsWith('/api/v2/tasks/f1')) return { body: { task: otherTask('f1', 'Pay the rent', ['finance:x1']) } };
   if (url.endsWith('/api/v2/tasks/m1')) return { body: { task: theMatter, children: (theMatter as { children: unknown[] }).children } };
   if (url.endsWith('/api/v2/email/sends/s1'))
     return {
@@ -115,6 +141,25 @@ describe('an approval waiting, as a card in the agent’s thread @approvals', ()
     const card = await screen.findByRole('link', { name: /Approve/ });
     expect(card.getAttribute('href')).toBe('/task/m1?chat=agent%3Alo&via=thread');
     expect(card.dataset.target).toBe('approval:/task/m1');
+  });
+
+  it('a page its task needs approved is a card in the owner’s thread, the page as a chip', async () => {
+    needs = [otherAsk('p1', 'page', null, 'bot:lo', ['page:file-a@2'])];
+    show({ agent: 'bot:lo' });
+    const card = await screen.findByRole('link', { name: /Approve/ });
+    expect(card.textContent).toContain('Release report');
+    expect(card.querySelectorAll('.file')).toHaveLength(1);
+    expect(card.querySelector('.file em')?.textContent).toBe('MD');
+    expect(card.getAttribute('href')).toBe('/tasks/ops/41');
+    expect(card.parentElement?.dataset.from).toBe('bot:lo');
+  });
+
+  it('an OK the agent asked for by its slug, on a finance item, is a card with no chips', async () => {
+    needs = [otherAsk('f1', 'ok', 'bot:legal-owner', 'bot:lo', ['finance:x1'])];
+    show({ agent: 'bot:lo' });
+    const card = await screen.findByRole('link', { name: /Approve/ });
+    expect(card.textContent).toContain('Pay the rent');
+    expect(card.querySelector('.file')).toBeNull();
   });
 
   it('has no Approve of its own: nothing decides from the thread', async () => {
