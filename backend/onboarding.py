@@ -410,6 +410,10 @@ def config_view(c, settings, who=None):
     value["default_runtime"] = providers.default_runtime(chosen)
     if who is not None:
         value["enabled_providers"] = list(chosen["enabled"])  # older runners install these providers' harnesses
+        # The team icon's digest, empty when none is set: Settings asks GET /api/v2/team/icon only for one that is there.
+        from . import team_icon
+
+        value["team_icon"] = team_icon.current_digest(c) or ""
         # Where a runner sends a turn whose subscription hit its limit, when the bot names no fallback.
         value["fallback_models"] = providers.default_fallbacks(chosen)
         if getattr(who, "runner_id", None):

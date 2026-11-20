@@ -144,21 +144,35 @@ export function VirtualList<T>({
     v.scrollToEnd();
   }, [anchor, items.length, v]);
 
-  /* A timeline whose window changes height (the box under it grows, the asks over the box come or go) stays at its end
-     if it was there. A window that shrinks keeps its top, so how far it was from the end is read with the old height. */
+  /* A timeline at its end stays there: when its rows grow (a long last message measured after the first scroll, a
+     picture that loads, a new message) and when its window changes height (the box under it grows, the asks over the
+     box come or go). Scrolled up, it keeps its place. Read from the scroller itself, not the virtualizer's guesses, so
+     however late a row is measured the chat lands on its true end. A window that shrinks keeps its top, so how far it
+     was from the end is read with the old height. */
   useLayoutEffect(() => {
     const el = scrollRef.current;
+    const space = el?.firstElementChild;
     if (anchor !== 'end' || scrollParent || !el || typeof ResizeObserver === 'undefined') return;
     let was = el.clientHeight;
+    let atEnd = true; // it opens at its end
+    const onScroll = () => {
+      atEnd = el.scrollHeight - el.scrollTop - el.clientHeight <= END_PX;
+    };
     const resize = new ResizeObserver(() => {
       const h = el.clientHeight;
-      if (h === was) return;
-      const fromEnd = el.scrollHeight - el.scrollTop - was;
-      was = h;
-      if (fromEnd <= END_PX) el.scrollTop = el.scrollHeight;
+      if (h !== was) {
+        atEnd = el.scrollHeight - el.scrollTop - was <= END_PX;
+        was = h;
+      }
+      if (atEnd && el.scrollHeight - el.scrollTop - h > 0) el.scrollTop = el.scrollHeight;
     });
+    el.addEventListener('scroll', onScroll, { passive: true });
     resize.observe(el);
-    return () => resize.disconnect();
+    if (space) resize.observe(space);
+    return () => {
+      el.removeEventListener('scroll', onScroll);
+      resize.disconnect();
+    };
   }, [anchor, scrollParent]);
 
   useEffect(() => {

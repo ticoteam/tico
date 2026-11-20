@@ -79,6 +79,24 @@ describe('search', () => {
     expect(both.map((g) => [g.name, g.hits.map((h) => h.run)])).toEqual([['Actions', [{ id: 'shell.goTo', input: { to: '/settings' } }]]]);
   });
 
+  it('shows providers that share a group as one group, a thing they both find once', async () => {
+    const open = (thread: string) => ({ id: 'threads.open', input: { thread } });
+    const byName = defineSearch({ group: 'Threads', order: 3, find: () => [{ key: 'thread:a', title: 'Frost dates', run: open('a') }] });
+    const bySaid = defineSearch({
+      group: 'Threads',
+      order: 4,
+      find: () => [
+        { key: 'thread:a', title: 'the frost came early', run: open('a') },
+        { key: 'thread:b', title: 'no frost this week', name: 'Seed order', run: open('b') },
+      ],
+    });
+    const groups = await gather('frost', [byName, bySaid, tasks], [], ctx, new AbortController().signal);
+    expect(groups.map((g) => [g.name, g.hits.map((h) => h.title)])).toEqual([
+      ['Threads', ['Frost dates', 'no frost this week']],
+      ['Tasks', ['Frost dates']],
+    ]);
+  });
+
   it('opens on what was used last, newest first, once each', async () => {
     remember({ key: 'task:7', title: 'Frost dates', run: { id: 'task.open', input: { task: 7 } } });
     remember({ key: 'page:/settings', title: 'Settings', run: { id: 'shell.goTo', input: { to: '/settings' } } });

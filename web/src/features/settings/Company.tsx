@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useRef, useState } from 'react';
 import { refusal, run } from '@/actions';
+import { configQuery } from '@/data';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
@@ -21,6 +22,9 @@ import {
 // ---------------------------------------------------------------- the team icon (owner changes it)
 
 export function TeamIcon({ owner }: { owner: boolean }) {
+  // The config says whether one is set (its digest, '' when none), so a company without one is never asked for it.
+  // An older server that does not say: ask, and a 404 is "None".
+  const set = useQuery({ ...configQuery, select: (c) => c.team_icon });
   const [at, setAt] = useState(0);
   const [none, setNone] = useState(false);
   const pick = useRef<HTMLInputElement>(null);
@@ -32,12 +36,16 @@ export function TeamIcon({ owner }: { owner: boolean }) {
     setNone(false);
     setAt(Date.now());
   };
+  const version = at || set.data;
+  const missing = none || (!at && set.data === '');
   return (
     <Line label="Icon" target="setting:icon">
-      {none ? (
+      {missing ? (
         <span className="fact-dim">None</span>
       ) : (
-        <img src={`/api/v2/team/icon${at ? `?v=${at}` : ''}`} alt="Team icon" width={22} height={22} onError={() => setNone(true)} />
+        (at > 0 || !set.isPending) && (
+          <img src={`/api/v2/team/icon${version ? `?v=${version}` : ''}`} alt="Team icon" width={22} height={22} onError={() => setNone(true)} />
+        )
       )}
       {owner && (
         <>

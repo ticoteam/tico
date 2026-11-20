@@ -81,6 +81,11 @@ SCHEMAS.update(
                     "pages and SVG show from when there is no visual address, else empty; grants no "
                     "native IPC permission.",
                 },
+                "team_icon": {
+                    "type": "string",
+                    "description": "Signed-in callers: the team icon's digest, or empty when none is set "
+                    "(GET /api/v2/team/icon answers 404 then)",
+                },
                 "s3_view_urls": {
                     "type": "object",
                     "additionalProperties": {"type": "string"},

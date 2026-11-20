@@ -16,7 +16,8 @@
 /* a group's name is bigger and heavier than its rows (Chris, Nov 18); its count stays small */
 .pal-group{height:38px;display:flex;align-items:flex-end;gap:var(--s-2);padding:0 var(--s-2) calc(var(--s-2) - 1px);color:var(--ink)}
 .pal-group .count{font-weight:var(--w-text)}
-.sr em{font-style:normal;font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
+/* the right column is short (an age, a stage); a thread's name beside a message found in it is cut, not the words */
+.sr em{max-width:clamp(96px,30vw,220px);overflow:hidden;text-overflow:ellipsis;font-style:normal;font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
 .pal-ask{position:relative;margin-top:calc(var(--s-3) - 1px);color:var(--ink)}
 .pal-ask::before{content:"";position:absolute;left:-6px;right:-6px;top:-6px;border-top:1px solid var(--line-strong)}
 .pal-ask b{font-weight:var(--w-strong)}
