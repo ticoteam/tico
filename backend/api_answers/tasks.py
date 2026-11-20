@@ -10,7 +10,7 @@ from typing_extensions import TypeAliasType
 
 from ..hubdb import LinkKind
 from ..task_documents import NAMES as DOCUMENT_NAMES
-from ._base import DateTime, Matter, Message, MessageSource, PageLinkView, PageWriter, SentAs, Tag, answer
+from ._base import ONE_OF, DateTime, Matter, Message, MessageSource, PageLinkView, PageWriter, SentAs, Tag, answer
 
 
 # A task is a title and a chat: its request is the first message on its chat, on a full read only. `from` is a Python
@@ -114,8 +114,10 @@ class TaskRelationView(TypedDict):
     """depends_on only: when the dependency was written"""
 
 
-@answer
-class Task(TypedDict):
+class TaskFields(TypedDict):
+    """What every read of a task carries; Task and TaskDetailTask add stage_since, which only the task's own read
+    always has. Not published: each answer names Task or TaskDetailTask."""
+
     private: NotRequired[bool]
     id: str
     title: str
@@ -164,8 +166,6 @@ class Task(TypedDict):
     """On a list row with a dependency: the open tasks it depends on ("Blocked by E304"), oldest first, each with its label (null with no number) and the start of its title; one the reader may not open has a null id, number, label and title. Absent when there are none"""
     blocks: NotRequired[list[TaskBlocked]]
     """On a list row: the open tasks that depend on it and the reader may open ("Blocks #307"). Absent when there are none"""
-    stage_since: NotRequired[DateTime | None]
-    """On the task's own read, when it entered its current open visit, or null if it has none. On a list row, when it entered its stage, falling back to when it was filed."""
     visit_id: NotRequired[str | None]
     """Its open visit: on the task's own read, null when it has none; on a list row, only when its turn is an ask. With a requirement id it names that ask in Needs you (`ids=<visit>:<requirement>`)"""
     waits: NotRequired[list[TaskWait]]
@@ -207,6 +207,12 @@ class Task(TypedDict):
     internal_requesters: NotRequired[int]
     important_requesters: NotRequired[int]
     matter: NotRequired[Matter]
+
+
+@answer
+class Task(TaskFields):
+    stage_since: NotRequired[DateTime | None]
+    """On the task's own read, when it entered its current open visit, or null if it has none. On a list row, when it entered its stage, falling back to when it was filed."""
 
 
 @answer
@@ -507,9 +513,9 @@ class CommentDelivery(TypedDict):
 # The task's own read declares its chat and its links here, not on the shared Task: the old app's task types extend Task
 # with their own spellings of both, which a declaration there would contradict.
 @answer
-class TaskDetailTask(Task):
-    # Always present on this read. Typing forbids making an inherited key required; the document must say it is.
-    stage_since: DateTime | None  # pyright: ignore[reportGeneralTypeIssues]
+class TaskDetailTask(TaskFields):
+    stage_since: DateTime | None
+    """On the task's own read, when it entered its current open visit, or null if it has none. On a list row, when it entered its stage, falling back to when it was filed."""
     conversation_id: str | None
     """The task's chat: the conversation its request, comments and bot replies are in (this read carries its messages). Null for a task with no chat"""
     links: list[TaskLinkView]
@@ -572,7 +578,7 @@ class ReviewTextAnswer(TypedDict):
     at: str
 
 
-ReviewAnswer = TypeAliasType("ReviewAnswer", ReviewAskAnswer | ReviewTextAnswer)
+ReviewAnswer = TypeAliasType("ReviewAnswer", Annotated[ReviewAskAnswer | ReviewTextAnswer, ONE_OF])
 
 
 @answer

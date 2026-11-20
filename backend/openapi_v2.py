@@ -174,6 +174,20 @@ def _refs(node, found):
             _refs(value, found)
 
 
+def _closure(components, names):
+    """The components named and every one they refer to, by name; a name with no component is left out."""
+    keep, queue = {}, sorted(names)
+    while queue:
+        name = queue.pop()
+        if name in keep or name not in components:
+            continue
+        keep[name] = components[name]
+        more = set()
+        _refs(components[name], more)
+        queue.extend(sorted(more))
+    return keep
+
+
 def operations(app):
     """Each stable operation as (path, method, tag, operationId, summary, contract): the routes whose decorator
     carries api_v2(...), in the order the app serves them, with what api_v2 says about each (backend/api_contract.py)."""
@@ -273,24 +287,26 @@ def spec(app):
     if stand_ins - SCHEMAS.keys():
         raise RuntimeError("No hand-written schema for: " + ", ".join(sorted(stand_ins - SCHEMAS.keys())))
     generated = {name: schema for name, schema in generated.items() if name not in stand_ins}
-    # Two classes of one name (an answer and a request body) make FastAPI rename both ("Name-Input", "Name-Output"),
-    # which would rename a published schema without a word.
-    renamed = sorted(name for name in generated if not re.fullmatch(r"[A-Za-z0-9_]+", name))
-    if renamed:
-        raise RuntimeError("Two schemas share a name, so FastAPI renamed them: " + ", ".join(renamed))
-    collisions = SCHEMAS.keys() & generated.keys()
+    collisions = (SCHEMAS.keys() | {"Problem"}) & generated.keys()
     if collisions:
         raise RuntimeError("Generated and hand-written schema names collide: " + ", ".join(sorted(collisions)))
     components = {"Problem": PROBLEM, **SCHEMAS, **generated}
-    keep, queue = {}, sorted(used | {"Problem"})
-    while queue:
-        name = queue.pop()
-        if name in keep or name not in components:
-            continue
-        keep[name] = components[name]
-        more = set()
-        _refs(components[name], more)
-        queue.extend(sorted(more))
+    keep = _closure(components, used | {"Problem"})
+    published = set()
+    _refs(list(keep.values()), published)
+    if (used | published) - keep.keys():
+        raise RuntimeError(
+            "The document refers to schemas it does not have: " + ", ".join(sorted((used | published) - keep.keys()))
+        )
+    # Two classes of one name (an answer and a request body) make FastAPI rename both ("Name-Input", "Name-Output", or
+    # "backend__module__Name"), which would rename a published answer without a word.
+    answers = set()
+    _refs([op["responses"].get("200") for ops in paths.values() for op in ops.values()], answers)
+    renamed = sorted(name for name in _closure(components, answers) if not re.fullmatch(r"[A-Za-z0-9]+", name))
+    if renamed:
+        raise RuntimeError(
+            "An answer shares its name with another schema, so FastAPI renamed it: " + ", ".join(renamed)
+        )
     return {
         "openapi": full["openapi"],
         "info": {"title": "Tico API (v2)", "version": VERSION, "description": DESCRIPTION},

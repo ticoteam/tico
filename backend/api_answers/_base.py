@@ -19,7 +19,7 @@ import inspect
 import textwrap
 from typing import Annotated, Any, TypedDict, is_typeddict
 
-from pydantic import ConfigDict, WithJsonSchema, with_config
+from pydantic import ConfigDict, GetJsonSchemaHandler, WithJsonSchema, with_config
 
 
 JsonSchema = dict[str, Any]
@@ -43,14 +43,19 @@ def _tidy(node: JsonSchema) -> None:
         return
     for option in options:
         _tidy(option)
+    kinds = [o.get("type") for o in options]
     formats = [o["format"] for o in options if "format" in o]
-    if all(isinstance(o.get("type"), str) and set(o) <= {"type", "format"} for o in options) and len(formats) <= 1:
+    if (
+        all(isinstance(k, str) and set(o) <= {"type", "format"} for k, o in zip(kinds, options, strict=True))
+        and len(set(kinds)) == len(kinds)  # DateTime | str would say "string" twice
+        and len(formats) <= 1
+    ):
         del node["anyOf"]
-        node["type"] = [o["type"] for o in options]
+        node["type"] = kinds
         if formats:
             node["format"] = formats[0]
-    elif {"type": "null"} in options:
-        node["oneOf"] = node.pop("anyOf")  # null overlaps nothing else, so one of them is any of them
+    elif len(options) == 2 and {"type": "null"} in options:
+        node["oneOf"] = node.pop("anyOf")  # one value or null: they never overlap, so oneOf says the same
 
 
 def _docstrings(cls: type) -> dict[str, str]:
@@ -90,6 +95,20 @@ def _contract_style(schema: JsonSchema, cls: type) -> None:
 
 # Open objects (fields are added within v2, never removed), field docstrings as descriptions, the contract's spelling.
 answer = with_config(ConfigDict(extra="allow", use_attribute_docstrings=True, json_schema_extra=_contract_style))
+
+
+class OneOf:
+    """`Annotated[A | B, ONE_OF]`: the union is published as oneOf, exactly one of them, where pydantic writes anyOf.
+    Only for options that cannot both match (a person's review answer is one shape or the other)."""
+
+    def __get_pydantic_json_schema__(self, core_schema: Any, handler: GetJsonSchemaHandler) -> JsonSchema:
+        schema = handler(core_schema)
+        if "anyOf" in schema:
+            schema["oneOf"] = schema.pop("anyOf")
+        return schema
+
+
+ONE_OF = OneOf()
 
 # A timestamp the contract marks as date-time; on the wire and in Python it is an ISO string.
 DateTime = Annotated[str, WithJsonSchema({"type": "string", "format": "date-time"})]
