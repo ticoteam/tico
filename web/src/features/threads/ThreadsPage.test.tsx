@@ -322,6 +322,20 @@ describe('A thread head', () => {
   });
 });
 
+describe('The head\'s Archive', () => {
+  it('a manager archives a team thread from its head; a DM or group DM has no Archive', async () => {
+    const team = { ...thread('h1', 'Growth', 2), audience: 'home' as const, home: { actor: 'group:g1' }, me: { can_manage: true, can_post: true } };
+    const group = { ...thread('d2', '', 2), audience: 'personal' as const, dm_with: [{ actor: 'human:ana' }, { actor: 'human:jo' }], me: { can_manage: true, can_post: true } };
+    serve((url) => ({ status: 200, body: url.endsWith('/threads/h1') ? team : url.endsWith('/threads/d2') ? group : {} }));
+    show(<ThreadHead id="h1" />, '/threads/h1');
+    expect(await screen.findByRole('button', { name: 'Archive' })).toBeTruthy();
+    document.body.innerHTML = '';
+    show(<ThreadHead id="d2" />, '/threads/d2');
+    expect(await screen.findByRole('heading', { name: 'ana, jo' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Archive' })).toBeNull();
+  });
+});
+
 describe('Updates @s972', () => {
   it('says so when there are none', async () => {
     serve(() => ({ status: 200, body: { updates: [], unread: 0, next_before: null } }));
