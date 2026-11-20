@@ -1,3 +1,5 @@
+import { Radio } from '@base-ui/react/radio';
+import { RadioGroup } from '@base-ui/react/radio-group';
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useAction } from '@/actions';
@@ -102,22 +104,15 @@ export function ModelPicker({
       )}
       <div className="f">
         <span className="f-label">Model</span>
-        <div className="mp-list" role="radiogroup" aria-label="Model">
+        <RadioGroup className="mp-list" value={model} onValueChange={(id) => pickModel(id as string)} aria-label="Model">
           {models.map((m) => (
-            <button
-              key={m.id}
-              type="button"
-              role="radio"
-              aria-checked={m.id === model}
-              className={m.id === model ? 'radio is-on' : 'radio'}
-              onClick={() => pickModel(m.id)}
-            >
-              <span className="radio-box" />
-              <span>{modelName(m.label)}</span>
+            <label key={m.id} className={m.id === model ? 'radio is-on' : 'radio'}>
+              <Radio.Root value={m.id} className="radio-box" />
+              <span className="mp-name">{modelName(m.label)}</span>
               {m.id === data?.default?.model && <em>Default</em>}
-            </button>
+            </label>
           ))}
-        </div>
+        </RadioGroup>
       </div>
       {efforts.length > 0 && (
         <div className="f">

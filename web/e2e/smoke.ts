@@ -276,10 +276,26 @@ async function responsive(browser: Browser) {
       return rect.left >= 0 && rect.right <= innerWidth;
     });
     assert(fits, 'the Flow back button is clipped at 390');
+
+    // an agent's Model dialog, a sheet at 390: nothing runs off its side, the radios are 16px rings in full-width rows
+    await mobile.page.goto(`${APP}/settings/agents`);
+    await mobile.page.getByRole('button', { name: /^More for / }).first().tap();
+    await mobile.page.getByRole('menuitem', { name: /^Model/ }).first().tap();
+    const dialog = mobile.page.getByRole('dialog', { name: 'Model' });
+    await dialog.getByRole('radio').first().waitFor();
+    const sheet = await dialog.evaluate((el) => ({
+      wide: el.scrollWidth - el.clientWidth,
+      boxes: [...el.querySelectorAll('.radio-box')].map((b) => Math.round(b.getBoundingClientRect().width)),
+      rows: [...el.querySelectorAll('.mp-list .radio')].map((r) => Math.round(r.getBoundingClientRect().width)),
+      list: Math.round(el.querySelector('.mp-list')?.parentElement?.getBoundingClientRect().width ?? 0),
+    }));
+    assert(sheet.wide <= 0, `the Model dialog is ${sheet.wide}px too wide at 390`);
+    assert(sheet.boxes.every((w) => w === 16), `the Model dialog's radios are not 16px: ${sheet.boxes.join(', ')}`);
+    assert(sheet.rows.every((w) => w === sheet.list), `the Model dialog's rows are not full width: ${sheet.rows.join(', ')} of ${sheet.list}`);
   } finally {
     await mobile.ctx.close();
   }
-  ok('P&L, Calendar and Flow controls fit their sheets');
+  ok('P&L, Calendar, Flow and the Model dialog fit their sheets');
 }
 
 async function dev(browser: Browser) {

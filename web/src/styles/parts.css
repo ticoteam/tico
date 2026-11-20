@@ -509,6 +509,7 @@ span.li-play.is-on:hover{background:var(--well-2)}
 .opt{display:flex;align-items:center;gap:10px;min-height:var(--ctl);cursor:pointer}
 .opt>.switch{margin-left:auto}
 .check,.radio{display:inline-flex;align-items:center;gap:var(--s-2);min-height:var(--ctl);cursor:pointer}
+:where(button.check,button.radio){padding:0;border:0;background:none;text-align:start}   /* a row that is a button looks the same */
 .check-box,.radio-box{width:16px;height:16px;flex:none;display:grid;place-items:center;border-radius:5px;background:var(--surface);color:var(--on-fill);box-shadow:inset 0 0 0 1.5px var(--faint);
   transition:background var(--dur-fast) var(--ease),box-shadow var(--dur-fast) var(--ease)}
 .radio-box{border-radius:50%}
@@ -633,7 +634,8 @@ span.li-play.is-on:hover{background:var(--well-2)}
 .modal{--surface:var(--raised);--pad-t:var(--s-5);--pad-x:var(--s-5);--pad-b:var(--s-5);width:400px;max-width:calc(100% - 32px);max-height:calc(100dvh - var(--s-5) * 2);overflow-y:auto;overscroll-behavior:contain;padding:var(--pad-t) var(--pad-x) var(--pad-b);border-radius:var(--r-pane);background:var(--raised);box-shadow:var(--lift-3);display:grid;grid-template-columns:minmax(0,1fr);gap:var(--s-4)}
 /* a dialog taller than the window scrolls between its title and its buttons, which stay (the pads are the modal's own) */
 .modal>h2:first-child,.modal-row{position:sticky;z-index:1;margin-inline:calc(var(--pad-x) * -1);padding-inline:var(--pad-x);background:var(--raised)}
-.modal>h2:first-child{top:calc(var(--pad-t) * -1);margin-top:calc(var(--pad-t) * -1);padding-top:var(--pad-t)}
+/* stuck, the title keeps a little room under it, so what scrolls up goes out of sight there, not under its words */
+.modal>h2:first-child{top:calc(var(--pad-t) * -1);margin-block:calc(var(--pad-t) * -1) calc(var(--s-2) * -1);padding-block:var(--pad-t) var(--s-2)}
 .modal h2{font-family:var(--font-text);font-size:var(--t-md);font-weight:var(--w-title);line-height:var(--lh-meta);text-wrap:balance}
 .modal h2+p{margin-top:calc(var(--s-2)*-1);color:var(--muted);overflow-wrap:anywhere}
 .modal .field{width:100%}
@@ -666,7 +668,8 @@ span.li-play.is-on:hover{background:var(--well-2)}
   /* the bottom gap clears the home indicator (tokens-app.css --sheet-gap; 10px where there is none, as drawn) */
   .menu.is-sheet,.modal{position:relative;width:auto;max-width:none;margin:0 10px var(--sheet-gap);border-radius:24px}
   .menu.is-sheet{padding:var(--s-5) var(--s-2) var(--s-2);max-height:calc(100dvh - var(--s-10) - var(--sheet-gap));overflow-y:auto;overscroll-behavior:contain}
-  .menu.is-sheet::before,.modal::before{content:"";position:absolute;z-index:2;left:50%;top:var(--s-2);width:36px;height:4px;margin-left:-18px;border-radius:2px;background:var(--line-strong)}
+  .menu.is-sheet::before,.modal::before,.modal>h2:first-child::before{content:"";position:absolute;z-index:2;left:50%;top:var(--s-2);width:36px;height:4px;margin-left:-18px;border-radius:2px;background:var(--line-strong)}
+  .modal:has(>h2:first-child)::before{content:none}   /* the handle rides on the stuck title, so it stays when the sheet scrolls */
   .menu.is-sheet a{border-radius:14px;padding:0 var(--s-3);gap:var(--s-3)}
   .menu.is-sheet hr{margin:6px var(--s-3)}
   .modal{--pad-t:var(--s-6);--pad-x:var(--s-4);--pad-b:var(--s-4);max-height:calc(100dvh - var(--s-10) - var(--sheet-gap))}
