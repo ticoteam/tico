@@ -1,6 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query';
 import { CHAT, decisionOf, defaultTab, isPage, tabsOf } from './model';
 import { pageShownQuery, taskDetailQuery, taskFilesQuery, taskRefQuery, type TaskData } from './queries';
+import { waitSlugs, waitsOnYou } from './waits';
 
 // What the routes use before a task's code loads: its first read, its address and the address check. No components
 // here: the first load imports this file, and the task page comes through exports.ts with its route.
@@ -15,6 +16,11 @@ export async function loadTask(client: QueryClient, param: string, tab?: string)
     const fileQuery = taskFilesQuery(id);
     const files = client.prefetchQuery(fileQuery);
     const tabs = tabsOf(t);
+    // An email's OK hung on it waits on the person: it opens on the email (TaskPage's first tab).
+    if (!tab && (await waitsOnYou(client, t))) {
+      await files;
+      return { task: t, tab: waitSlugs(1, tabsOf(t, client.getQueryData(fileQuery.queryKey)).map((x) => x.slug))[0]! };
+    }
     const selected = tab ? tabs.find((x) => x.slug === tab) : tabs[0];
     // An attached file can outrank the default document when the task is waiting for an answer.
     const doc = selected?.doc && (tab || selected.mark === 'ask' || !decisionOf(t)) ? selected.doc : undefined;

@@ -183,7 +183,7 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
 .ap-desk{flex:1;padding:var(--pad-paper);background:var(--desk);box-shadow:var(--lift-desk);display:flex;flex-direction:column;align-items:center;gap:var(--s-3)}
 .ap-env{padding:var(--s-4) var(--pad-task)}
 .ap-subj{font-size:var(--t-md);font-weight:var(--w-title);line-height:var(--lh-tight);overflow-wrap:anywhere}
-.ap-hdr{display:grid;grid-template-columns:40px minmax(0,1fr);gap:var(--s-0) var(--s-2h);margin-top:var(--s-2h);font-size:var(--t-sm);line-height:var(--lh)}
+.ap-hdr{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:var(--s-0) var(--s-2h);margin-top:var(--s-2h);font-size:var(--t-sm);line-height:var(--lh)}
 .ap-hdr dt{color:var(--muted)}
 .ap-hdr dd{margin:0;color:var(--ink-2);min-width:0;overflow-wrap:anywhere}
 .ap-atts{display:flex;gap:var(--s-2);margin-top:var(--s-3h);flex-wrap:wrap}
@@ -208,16 +208,16 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
 .ap-doc{flex:none;width:100%;max-width:640px;height:min(860px,110vh);display:flex;flex-direction:column}
 .ap-doc .lib.fv-embed .fv-frame{margin:0;border-radius:var(--r-paper);box-shadow:var(--lift-paper);background:var(--shot-page)}
 .ap-doc .lib.fv-embed .fv-none{border-radius:var(--r-paper);background:var(--surface)}
-/* the email it answers: who and when, its first lines, the whole of it on a press */
-.ap-orig{flex:none;padding:var(--s-3) var(--s-8) var(--s-5);font-size:var(--t-sm)}
-.ap-orig-head{display:flex;align-items:center;gap:var(--s-2);width:100%;min-height:var(--ctl);padding:0;border:0;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer}
-.ap-orig-head small{flex:none;font-size:var(--t-xs);opacity:.6}
+/* the email it answers, a row of the envelope: who and when, its first line, the whole of it on a press */
+.ap-orig{display:contents}
+.ap-orig-head{display:flex;align-items:center;gap:var(--s-1);max-width:100%;padding:0;border:0;background:none;color:var(--ink-2);font:inherit;text-align:left;cursor:pointer}
+.ap-orig-head:hover{color:var(--ink)}
 .ap-orig-head b{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:var(--w-strong)}
-.ap-orig-head time{flex:none;margin-left:auto;font-size:var(--t-xs);opacity:.6;font-variant-numeric:tabular-nums}
 .ap-orig-head .ico{flex:none;width:14px;height:14px;opacity:.6;transform:rotate(90deg);transition:transform var(--dur-fast) var(--ease)}
 .ap-orig.is-open .ap-orig-head .ico{transform:rotate(-90deg)}
-.ap-orig-body{margin-top:var(--s-1);white-space:pre-wrap;overflow-wrap:anywhere;opacity:.8}
-.ap-orig:not(.is-open) .ap-orig-body{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;line-clamp:3;overflow:hidden}
+.ap-orig-body{color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere}
+.ap-orig:not(.is-open) .ap-orig-body{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ap-orig.is-open .ap-orig-body{margin-top:var(--s-1);max-height:50vh;overflow:auto;color:var(--ink-2)}
 
 /* ---------- the decision (plan/approvals.html): the answer card, grown by one line: what Approve does, and who asks ---------- */
 .answer.dcx{position:relative;padding:var(--s-2h) var(--s-2) var(--s-2) var(--s-3h)}
@@ -236,6 +236,19 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
 .dcx.is-asked .hollow{flex:none;margin:0 var(--s-0)}
 .dcx.is-asked .dcx-eff{margin-left:var(--s-1)}
 
+/* an email's OK hung on the matter, at the top of its other pages: a pointer to its Email tab, no Approve */
+.tv-waits{flex:none;display:flex;flex-direction:column;gap:var(--s-2);padding:var(--s-3) var(--pad-task)}
+.tv-pointer .dcx-top .dcx-eff{position:static;line-height:inherit}
+
+/* the case in brief, then the decision, read before the email itself */
+.tv-lead{display:flex;flex-direction:column;gap:var(--s-3);padding:var(--s-4) var(--pad-task) 0}
+.tv-brief{font-size:var(--t-sm);line-height:var(--lh-read);color:var(--ink-2)}
+.tv-brief-from{display:inline-block;margin-bottom:var(--s-1);color:var(--ink);font-weight:var(--w-strong)}
+.tv-brief-from:hover{text-decoration:underline}
+.tv-brief-text{overflow-wrap:anywhere}
+.tv-brief-text>:first-child{margin-top:0}
+.ap-scroll>.tv-brief{padding:var(--s-4) var(--pad-task) 0}
+
 /* ---------- an approval's head: the title, then one quiet line (pipeline · stage · how long) ---------- */
 .tv.is-quiet .pk-where{order:1;margin-top:var(--s-1h)}
 .tv.is-quiet .pk-where>.pk-crumb{display:none}
@@ -250,18 +263,21 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
   .ap-paper{border-radius:0;box-shadow:none;max-width:none}
   .ap-env{padding:var(--s-3h) var(--s-4)}
   .ap-att{width:100%}
+  .ap-orig-head{min-height:32px}
   .ap-mail{padding:var(--s-5) var(--s-4) var(--s-6)}
   .ap-sheet{padding:var(--s-8) var(--s-6)}
   .ap-doc{height:min(720px,90vh)}
   .ap-doc .lib.fv-embed .fv-frame{border-radius:0;box-shadow:none}
-  .ap-orig{padding:var(--s-2h) var(--s-4) var(--s-4)}
-  .ap-orig-head{min-height:44px}
   /* the decision holds the bottom: name, what Approve does and the face on one line, two buttons half the width each */
   .answer.dcx{padding:var(--s-0) 0 0 var(--s-1h)}
   .dcx .an-row{margin-top:var(--s-2)}
   .dcx .an-row .btn{flex:1;height:44px}
   .dcx .an-row .grow{display:none}
   .dcx-ask{margin-right:0}
+  .tv-waits{padding:var(--s-2) var(--s-3)}
+  .tv-lead,.ap-scroll>.tv-brief{padding:var(--s-3h) var(--s-4) 0}
+  .tv-lead .answer.dcx{padding:var(--s-2h) var(--s-3) var(--s-3) var(--s-3h)}
+  .tv-waits .answer.dcx{padding:var(--s-2) var(--s-2) var(--s-2) var(--s-3h)}
   .dcx:not(.is-asked) .dcx-top .dcx-eff{position:static;line-height:inherit}
   .dcx.is-asking .dcx-top .dcx-eff{display:inline}
   .dcx.is-asked{padding:var(--s-1h) 0 var(--s-1) var(--s-1h)}

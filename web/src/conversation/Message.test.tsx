@@ -175,3 +175,23 @@ describe('A message that came from a Slack thread @s190', () => {
     expect(screen.queryByRole('button', { name: 'Slack' })).toBeNull();
   });
 });
+
+describe('Who said it, when the message names no one', () => {
+  const BOT = 'bot:01a1d25e-6716-71f9-8c8a-06486add5ed1';
+
+  it('an agent the directory knows is named by it, never by its id', async () => {
+    serve(() => ({ status: 200, body: { items: [], counts: [] } }));
+    const actors = [{ id: BOT, kind: 'agent', name: 'Legal Owner' }];
+    queryClient.setQueryData(['directory'], { actors, byId: Object.fromEntries(actors.map((a) => [a.id, a])) });
+    show([msg(1, BOT, 'The letter is queued')]);
+    expect(await screen.findByText('Legal Owner')).toBeTruthy();
+    expect(screen.queryByText(/01a1d25e/)).toBeNull();
+  });
+
+  it('one it does not know reads "Agent"', async () => {
+    serve(() => ({ status: 200, body: { items: [], counts: [] } }));
+    show([msg(1, BOT, 'The letter is queued')]);
+    expect(await screen.findByText('Agent')).toBeTruthy();
+    expect(screen.queryByText(/01a1d25e/)).toBeNull();
+  });
+});

@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState, type MouseEvent, type ReactElement, type ReactNode } from 'react';
 import { run, useAction } from '@/actions';
-import { meQuery } from '@/data';
+import { meQuery, useActor } from '@/data';
 import { Avatar, type AvatarKind, type AvatarSize } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
 import { ConfirmCard } from '@/kit/ConfirmCard';
@@ -17,7 +17,7 @@ import { Dot } from '@/tico/dot';
 import { clock, took } from './dates';
 import { Markdown } from '@/kit/Markdown';
 import { PictureViewer, type Picture } from '@/kit/PictureViewer';
-import { Quote } from './Quote';
+import { agentWords, Quote } from './Quote';
 import { fromSlack, proposalQuery, slackPlaceOf, slackThreadQuery, type SlackPlace } from './queries';
 import type { Attachment, ChatMessage, LiveRun, ReplyQuote, Variant } from './types';
 
@@ -40,20 +40,19 @@ const hueOf = (s: string) => {
   return h;
 };
 
-const titled = (slug: string) => slug.replace(/[-_]+/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
 
 /**
- * Who said it. Tico's own sheet speaks as Tico. Without a directory of teammates (not in this module) a name falls
- * back to what the message carries, then to the agent's slug.
+ * Who said it. Tico's own sheet speaks as Tico. A name is what the message carries, else `known` (the directory's name
+ * for the sender, which a row from the stream or a reply being written needs), else the agent's slug in words.
  */
-export function whoOf(m: Pick<ChatMessage, 'sender_id' | 'sender_name'>, variant: Variant, me: string | undefined): Who {
+export function whoOf(m: Pick<ChatMessage, 'sender_id' | 'sender_name'>, variant: Variant, me: string | undefined, known?: string): Who {
   const actor = m.sender_id ?? '';
   if (actor && actor === me) return { name: 'You', kind: 'person', hue: hueOf(actor) };
   if (actor.startsWith('bot:') || actor === 'keeper') {
     if (variant === 'tico' || actor === 'keeper') return { name: 'Tico', kind: 'tico', hue: 0 };
-    return { name: m.sender_name || titled(actor.slice(4)), kind: 'agent', hue: hueOf(actor) };
+    return { name: m.sender_name || known || agentWords(actor), kind: 'agent', hue: hueOf(actor) };
   }
-  return { name: m.sender_name || 'Teammate', kind: 'person', hue: hueOf(actor) };
+  return { name: m.sender_name || known || 'Teammate', kind: 'person', hue: hueOf(actor) };
 }
 
 /* ---------------------------------------------------------------- parts inside a message */
@@ -306,6 +305,7 @@ function Acts({ reply }: { reply: (() => void) | null }) {
 /** What someone said. Yours sits in a bubble at the right; a failed send says so and offers Retry. */
 export function Message({ m, variant, me, cont, onRetry, card, onReply, quote, onQuote }: MessageProps) {
   const [reading, setReading] = useState(false);
+  const known = useActor(m.sender_name ? undefined : m.sender_id)?.name;
   const text = m.deleted ? 'Deleted' : (m.body ?? '');
   const shown = m.deleted ? null : card?.(m);
   // What Copy takes: the words as written, not a card drawn in their place.
@@ -357,7 +357,7 @@ export function Message({ m, variant, me, cont, onRetry, card, onReply, quote, o
       </>
     );
   }
-  const who = whoOf(m, variant, me);
+  const who = whoOf(m, variant, me, known);
   const aid = typeof m.refs?.action === 'string' ? m.refs.action : null;
   return (
     <>
@@ -388,7 +388,7 @@ export function Message({ m, variant, me, cont, onRetry, card, onReply, quote, o
 
 /** A reply being written: its text so far, or what it is doing, with the typing dots. Heard once, when posted. */
 export function LiveRow({ r, variant, text }: { r: LiveRun; variant: Variant; text: string }) {
-  const who = whoOf({ sender_id: r.bot }, variant, undefined);
+  const who = whoOf({ sender_id: r.bot }, variant, undefined, useActor(r.bot)?.name);
   const dots = (
     <span className="typing">
       <i />
