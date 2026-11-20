@@ -86,8 +86,7 @@ def register(app, auth, settings):
         )
         return file_reply(request, bundle_dir / name, media_type, ui_build.IMMUTABLE, bundle_dir / f"{name}.gz")
 
-    @app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
-    @app.api_route("/index.html", methods=["GET", "HEAD"], include_in_schema=False)
+    # The old app's page, no longer at /: the web app is (backend/web_routes.py).
     @app.api_route("/tico/ui/", methods=["GET", "HEAD"], include_in_schema=False)
     @app.api_route("/tico/ui/index.html", methods=["GET", "HEAD"], include_in_schema=False)
     def ui_page(request: Request):
@@ -121,7 +120,10 @@ def register(app, auth, settings):
         return file_reply(request, path, "application/json" if is_map else "text/javascript; charset=utf-8")
 
     app.mount("/tico/ui", StaticFiles(directory=settings.ui_dir, html=True), name="ui-prefixed")
-    app.mount("/", StaticFiles(directory=settings.ui_dir, html=True), name="ui")
+    # The icons (backend/brand_icons.py, the web manifest, a push's icon) and the files the old page asks for at the
+    # root. Every other address at / is the web app's (backend/web_routes.py register_page, registered after these).
+    for folder in ("assets", "vendor", "styles"):
+        app.mount("/" + folder, StaticFiles(directory=settings.ui_dir / folder, check_dir=False), name="ui-" + folder)
     if settings.demo:
         from . import demo
 

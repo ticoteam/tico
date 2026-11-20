@@ -566,10 +566,10 @@ def bot_app_view(api, args):
     "tico_bot_app_shot",
     "A screenshot of the app as you see it, read only, signed in as yourself: for the screenshots on a spec or "
     "Checked in production page. Opens a read-only view (a person turned on “Can view the app” for you; nothing can "
-    "be changed from it), opens `path` (an app address such as /#/tasks or /#/task/<id>) at `width` (390 for a "
+    "be changed from it), opens `path` (an app address such as /tasks or /task/<number>) at `width` (390 for a "
     "phone, 1280 for a desktop) and writes a PNG to `out`. Runs Chrome on this computer.",
     {
-        "path": _s("The app address to open, such as /#/tasks; / for home"),
+        "path": _s("The app address to open, such as /tasks; / for home"),
         "out": _s("Where to write the PNG"),
         "width": {
             "type": "integer",
@@ -598,7 +598,7 @@ def bot_app_shot(api, args):
 
     path = str(args.get("path") or "/")
     if not path.startswith("/"):
-        raise APIError("validation", "path is an app address that starts with /, such as /#/tasks")
+        raise APIError("validation", "path is an app address that starts with /, such as /tasks")
     view = api.post("app-view", {}, key=_key(args))
     out = str(Path(args["out"]).expanduser().resolve())
     width = int(args.get("width") or 390)

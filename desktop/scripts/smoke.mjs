@@ -1,5 +1,5 @@
 // Smoke run (platforms.md 8, the Electron row): starts the built app against two tiny local servers standing in for
-// two companies' /next, and checks that
+// two companies' app pages, and checks that
 // - the window opens and company A's page gets `window.tico` and no Node, and a frame from another origin gets no bridge;
 // - the bridge refuses a bad argument;
 // - the companies are sealed apart: a cookie A's server sets is never sent to B (cookies ignore ports, so only the
@@ -33,7 +33,7 @@ function finish(ok, message) {
 }
 setTimeout(() => finish(false, `stopped after 40 seconds; passed so far: ${passed.join(', ') || 'nothing'}`), 40_000).unref();
 
-// Company A's stand-in /next page: reports what it can see, and what a frame from another origin (localhost, not
+// Company A's stand-in app page: reports what it can see, and what a frame from another origin (localhost, not
 // 127.0.0.1) can see, then posts both back here.
 const pageA = `<!doctype html><meta charset="utf-8"><title>A</title><body>
 <iframe id="f" src="http://localhost:PORT/frame"></iframe>
@@ -77,12 +77,12 @@ const html = (res, body) => res.writeHead(200, { 'content-type': 'text/html' }).
 const a = createServer((req, res) => {
   const port = a.address().port;
   const path = req.url.split('?')[0];
-  if (path === '/next/' || path === '/next') {
+  if (path === '/') {
     res.setHeader('set-cookie', 'tico_smoke=a; Path=/; HttpOnly');
     html(res, pageA.replaceAll('PORT', String(port)));
   } else if (path === '/frame') {
     html(res, framePage);
-  } else if (path === '/next/call/smoke-call' && new URL(req.url, 'http://x').searchParams.get('window') === '1') {
+  } else if (path === '/call/smoke-call' && new URL(req.url, 'http://x').searchParams.get('window') === '1') {
     html(res, '<!doctype html><title>call</title>');
     seen.call = true;
     step();
@@ -102,7 +102,7 @@ const a = createServer((req, res) => {
 
 const b = createServer((req, res) => {
   const path = req.url.split('?')[0];
-  if (path === '/next/' || path === '/next') {
+  if (path === '/') {
     html(res, pageB);
   } else if (path === '/wait') {
     // answered once A's page has reported, so A's cookie is set by then
@@ -113,7 +113,7 @@ const b = createServer((req, res) => {
     seen.bCookie = req.headers.cookie ?? '';
     res.writeHead(204).end();
     step();
-  } else if (path === '/next/deep') {
+  } else if (path === '/deep') {
     html(res, '<!doctype html><title>deep</title>');
     seen.deep = true;
     step();
@@ -126,7 +126,7 @@ const b = createServer((req, res) => {
 let cUp = false;
 const c = createServer((req, res) => {
   if (!cUp) return req.socket.destroy();
-  if (req.url.split('?')[0] === '/next/') {
+  if (req.url.split('?')[0] === '/') {
     html(res, '<!doctype html><title>C</title>');
     seen.recovered = true;
     step();
@@ -171,7 +171,7 @@ function step() {
   // The deep link goes last, once the rest is in: a second launch hands it over and quits.
   if (passed.length === 3 && !deepSent) {
     deepSent = true;
-    launch(`tico://open?u=${encodeURIComponent(`${origin(b)}/next/deep`)}`).on('exit', (code) => {
+    launch(`tico://open?u=${encodeURIComponent(`${origin(b)}/deep`)}`).on('exit', (code) => {
       if (code !== 0) finish(false, `the second launch exited with ${code}`);
     });
   }
@@ -180,7 +180,7 @@ function step() {
   // nothing new to load) brings it forward: the app must try it again.
   if (passed.length === 4 && !cUp) {
     cUp = true;
-    launch(`tico://open?u=${encodeURIComponent(`${origin(c)}/next/`)}`);
+    launch(`tico://open?u=${encodeURIComponent(`${origin(c)}/`)}`);
   }
   if (seen.recovered && !passed.includes('recovered')) passed.push('recovered');
   if (passed.length === 5) {

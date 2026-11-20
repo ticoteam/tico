@@ -55,6 +55,10 @@ from backend.store import H, encode  # noqa: E402
 from backend.tests.helpers.cloud_access import signals  # noqa: E402
 from backend.tests.helpers.cloud_machines import FakeHQ  # noqa: E402
 
+# The old page stays at / for the browser scripts that open it there; the web app's build is what / serves otherwise
+# (backend/web_routes.py).
+CLASSIC_PAGE = Path(__file__).resolve().parents[3] / "build" / "ui"
+
 STATES = ("no-computer", "no-credit", "setup-halfway", "sign-off", "bot-waiting")
 TOKEN = "owner-test"
 BOT_TOKEN = "botops-test"
@@ -98,6 +102,7 @@ class Hub:
                 ),  # BotOps signed in as an agent, to ask as a bot does
             },
         )
+        self.settings.web_dir = CLASSIC_PAGE
         self.app = create_app(self.settings)
         self.client = TestClient(self.app)
         self.client.__enter__()

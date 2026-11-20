@@ -37,7 +37,9 @@ def test_off_by_default_and_only_an_owner_or_admin_turns_it_on(api):
     assert get(api, "bots/ops/app-view")["on"] is True
 
 
-def test_the_view_reads_as_the_bot_and_sees_only_what_it_already_reads(api):
+def test_the_view_reads_as_the_bot_and_sees_only_what_it_already_reads(api, tmp_path):
+    (tmp_path / "index.html").write_text("<!doctype html><html><title>Tico</title></html>")
+    api.app.state.store.settings.web_dir = tmp_path  # the web app's build (backend/web_routes.py)
     _, _, attempt = setup_attempt(api)
     turned_on(api)
     view = opened(api, attempt)

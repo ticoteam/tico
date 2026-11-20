@@ -1,14 +1,11 @@
-"""The new web app at /next (backend/web_routes.py): its build's files, the page for any other /next path, and today's
-UI at / untouched."""
-
-from pathlib import Path
+"""The web app at / (backend/web_routes.py): its build's files under /next/, its page for every app address, and an
+address from when it lived at /next sent on to the same page without it."""
 
 import pytest
 
 from backend import ui_build
 
 AUTH = {"Authorization": "Bearer ana-test"}
-ROOT = Path(__file__).resolve().parents[2]
 PAGE = '<!doctype html><title>Tico</title><script type="module" src="/next/assets/index-1a2b3c.js"></script>'
 
 
@@ -39,17 +36,54 @@ def test_a_built_file_is_sent_and_hashed_assets_are_kept_for_a_year(web):
     assert web.get("/next/assets/index-1a2b3c.js").status_code == 401
 
 
-def test_every_other_next_path_is_the_page_revalidated_under_the_page_policy(web):
-    for path in ("/next", "/next/", "/next/tasks", "/next/tasks/t-1/chat", "/next/assets"):
+def test_every_app_address_is_the_page_revalidated_under_the_page_policy(web):
+    for path in ("/", "/tasks", "/tasks/engineering/12/chat", "/library/skills", "/no-such-page"):
         r = web.get(path, headers=AUTH)
         assert r.status_code == 200 and r.text == PAGE, path
         assert r.headers["content-type"] == "text/html; charset=utf-8"
         assert r.headers["cache-control"] == "private, no-cache"
         policy = r.headers["content-security-policy"]
         assert "script-src 'self'" in policy and "object-src 'none'" in policy and "base-uri 'none'" in policy
-    assert web.head("/next/tasks", headers=AUTH).status_code == 200
-    assert web.get("/next/tasks").status_code == 401
-    assert web.get("/", headers=AUTH).text == (ui_build.out_dir(ROOT / "ui") / "index.html").read_text()
+    assert web.head("/tasks", headers=AUTH).status_code == 200
+    assert (
+        web.get("/", headers={**AUTH, "If-None-Match": web.get("/", headers=AUTH).headers["etag"]}).status_code == 304
+    )
+    assert web.get("/").status_code == 401 and web.get("/tasks").status_code == 401
+
+
+def test_the_server_s_own_addresses_never_fall_through_to_the_page(web):
+    for path in ("/api", "/api/v2/no-such-thing", "/auth/no-such-thing", "/tico/ui/no-such-file", "/assets/none.png"):
+        r = web.get(path, headers=AUTH)
+        assert r.status_code == 404 and PAGE not in r.text, path
+    # A route that takes only a write is still refused as one, not answered with the page.
+    assert PAGE not in web.get("/api/v2/tasks/t-1/archive", headers=AUTH).text
+    assert web.get("/api/v2/me", headers=AUTH).json()["actor"] == "human:ana"
+    assert web.get("/assets/tico/tico-mark.svg").headers["content-type"] == "image/svg+xml"
+    assert web.get("/manifest.webmanifest", headers=AUTH).json()["start_url"] == "/"
+
+
+def test_an_address_under_next_goes_to_the_same_page_at_the_root(web):
+    for old, new in (
+        ("/next", "/"),
+        ("/next/", "/"),
+        ("/next/tasks", "/tasks"),
+        ("/next/tasks/engineering/12/chat?view=list&q=a%20b", "/tasks/engineering/12/chat?view=list&q=a%20b"),
+        ("/next/library/caf%C3%A9", "/library/caf%C3%A9"),
+        ("/next/assets", "/assets"),
+    ):
+        r = web.get(old, headers=AUTH, follow_redirects=False)
+        assert r.status_code == 308 and r.headers["location"] == new, old
+    assert web.get("/next/tasks", headers=AUTH).text == PAGE
+    assert web.head("/next/tasks", headers=AUTH, follow_redirects=False).status_code == 308
+    # Signed out, the sign-in comes first; it returns to the /next address, which is sent on from there.
+    assert web.get("/next/tasks", follow_redirects=False).status_code == 401
+
+
+def test_a_next_address_never_leads_off_the_server(web):
+    for old in ("/next//evil.example/x", "/next/\\evil.example", "/next/%5Cevil.example", "/next///evil.example"):
+        r = web.get(old, headers=AUTH, follow_redirects=False)
+        location = r.headers["location"]
+        assert r.status_code == 308 and location.startswith("/") and location[1:2] not in ("/", "\\"), old
 
 
 def test_a_path_outside_the_build_is_never_sent(web, tmp_path):
@@ -57,17 +91,18 @@ def test_a_path_outside_the_build_is_never_sent(web, tmp_path):
     for path in ("/next/%2e%2e/secret.txt", "/next/..%2fsecret.txt", "/next/assets/..%2f..%2fsecret.txt"):
         r = web.get(path, headers=AUTH)
         assert r.status_code == 404 and "not for the web" not in r.text, path
-    # A link in the build that leads out of it is not followed: the path is the page's.
+    # A link in the build that leads out of it is not followed: the address is the app's.
     (tmp_path / "build" / "web" / "leak.txt").symlink_to(tmp_path / "build" / "secret.txt")
-    r = web.get("/next/leak.txt", headers=AUTH)
-    assert r.status_code == 200 and r.text == PAGE
+    r = web.get("/next/leak.txt", headers=AUTH, follow_redirects=False)
+    assert r.status_code == 308 and r.headers["location"] == "/leak.txt"
+    assert "not for the web" not in web.get("/next/leak.txt", headers=AUTH).text
 
 
-def test_without_a_build_next_is_a_404_and_today_s_ui_answers_as_before(api, tmp_path):
+def test_without_a_build_the_page_is_a_404_and_the_old_page_stays_at_tico_ui(api, tmp_path):
     api.app.state.store.settings.web_dir = tmp_path / "no-build"
-    assert api.get("/next", headers=AUTH).status_code == 404
-    assert api.get("/next/tasks", headers=AUTH).status_code == 404
-    page = api.get("/", headers=AUTH)
-    assert page.status_code == 200 and page.text == (ui_build.out_dir(ROOT / "ui") / "index.html").read_text()
-    assert api.get("/tico/ui/", headers=AUTH).text == page.text
+    assert api.get("/", headers=AUTH).status_code == 404
+    assert api.get("/tasks", headers=AUTH).status_code == 404
+    assert api.get("/next/tasks", headers=AUTH, follow_redirects=False).status_code == 308
+    old = api.get("/tico/ui/", headers=AUTH)
+    assert old.status_code == 200 and old.text == (ui_build.out_dir(ui_build.ROOT / "ui") / "index.html").read_text()
     assert api.get("/sw.js", headers=AUTH).status_code == 200

@@ -29,7 +29,7 @@ export function startHub({ company, port = 8765, refresh = false }: { company: C
   });
 }
 
-/** A new page signed in as the copy's owner (the only identity a copy has), opened at `at` (default: /next/). */
+/** A new page signed in as the copy's owner (the only identity a copy has), opened at `at` (default: the app's home). */
 export async function pageAs(browser: Browser, hub: Hub, { phone = false, at }: { phone?: boolean; at?: string } = {}): Promise<Page> {
   const context = await browser.newContext(
     phone
@@ -37,8 +37,8 @@ export async function pageAs(browser: Browser, hub: Hub, { phone = false, at }: 
       : { viewport: { width: 1440, height: 900 } },
   );
   const page = await context.newPage();
-  // The cookie ignores the port, so this also signs in a Vite page at 127.0.0.1:5173. Land on /healthz, not the old app.
+  // The cookie ignores the port, so this also signs in a Vite page at 127.0.0.1:5173. Land on /healthz, not a page.
   await page.goto(`${hub.url}/api/v2/local-signin?token=${encodeURIComponent(hub.token)}&next=/healthz`);
-  await page.goto(at ?? `${hub.url}/next/`);
+  await page.goto(at ?? `${hub.url}/`);
   return page;
 }

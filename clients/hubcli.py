@@ -1182,7 +1182,7 @@ def parser():
     s = bot.add_parser(
         "app-shot", help="a screenshot of the app as you see it, read only: --width 390 for a phone, 1280 for a desktop"
     )
-    s.add_argument("path", nargs="?", default="/", help="the app address, such as /#/tasks")
+    s.add_argument("path", nargs="?", default="/", help="the app address, such as /tasks")
     s.add_argument("--out", required=True, help="where to write the PNG")
     s.add_argument("--width", type=int, default=390)
     s.add_argument("--height", type=int, default=argparse.SUPPRESS)

@@ -9,7 +9,7 @@ export type DeepLink =
 /**
  * - `tico://open?u=<encoded https URL>`: the company whose origin matches, at that URL; an unknown server opens
  *   Add company prefilled with it. A local copy's sign-in link (http on loopback, address.ts) opens as it is.
- * - `tico://<path>` (today's form): the active company at /next/<path>.
+ * - `tico://<path>` (today's form): the active company at /<path>, when that is one of its pages.
  * Anything else only brings the window forward.
  */
 export function parseDeepLink(
@@ -44,7 +44,7 @@ export function parseDeepLink(
   const active = companies.find((c) => c.id === activeId);
   const path = `${link.hostname}${link.pathname}`.replace(/^\/+|\/+$/g, '');
   if (!active || !path) return { kind: 'focus' };
-  // An encoded slash or a dot segment could step a server that decodes paths out of /next/.
+  // An encoded slash or a dot segment could step a server that decodes paths onto another one.
   if (/%2f|%5c/i.test(path) || path.split('/').some((s) => s === '..' || s === '.')) return { kind: 'focus' };
   let target: URL;
   try {
@@ -52,8 +52,8 @@ export function parseDeepLink(
   } catch {
     return { kind: 'focus' };
   }
-  // A path can never leave the company (`//evil.example`, `..` out of /next/).
-  if (target.origin !== active.origin || !target.pathname.startsWith(APP_PATH)) return { kind: 'focus' };
+  // A path can never leave the company (`//evil.example`) or reach its API or sign-in (`tico://api/v2/logout`).
+  if (target.origin !== active.origin || !isPageUrl(target.href, active.origin)) return { kind: 'focus' };
   return { kind: 'open', companyId: active.id, url: target.href };
 }
 

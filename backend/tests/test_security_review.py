@@ -40,13 +40,15 @@ def test_dot_segments_do_not_carry_a_sign_in_exemption_to_the_page(api):
     assert raw_get(api.app, "/download/./../changelog.js") == 404
 
 
-def test_pages_and_api_refuse_foreign_framing(api):
+def test_pages_and_api_refuse_foreign_framing(api, tmp_path):
+    (tmp_path / "index.html").write_text('<!doctype html><script type="module" src="/next/assets/a.js"></script>')
+    api.app.state.store.settings.web_dir = tmp_path  # the web app's build (backend/web_routes.py)
     for path in ("/api/v2/me", "/"):
         headers = api.get(path, headers={"Authorization": "Bearer ana-test"}).headers
         assert headers["x-frame-options"] == "SAMEORIGIN"
         assert "frame-ancestors 'self'" in headers["content-security-policy"]
     page = api.get("/", headers={"Authorization": "Bearer ana-test"}).headers["content-security-policy"]
-    # The page has no inline script (its code is ui/app/*.js), so only our own files may run.
+    # The page has no inline script (its code is the build's files), so only our own files may run.
     assert page.startswith("script-src 'self';") and "unsafe-inline" not in page and "sha256-" not in page
 
 

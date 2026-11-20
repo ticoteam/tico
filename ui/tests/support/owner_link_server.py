@@ -25,6 +25,10 @@ from backend.app import create_app  # noqa: E402
 from backend.config import Settings  # noqa: E402
 from backend.store import H, digest, encode  # noqa: E402
 
+# The old page stays at / for the browser scripts that open it there; the web app's build is what / serves otherwise
+# (backend/web_routes.py).
+CLASSIC_PAGE = Path(__file__).resolve().parents[3] / "build" / "ui"
+
 PUBLIC = "https://acme.hosted.test"
 OWNER = "ana@acme.example"
 
@@ -49,6 +53,7 @@ def main():
         owner_email=OWNER,
         owner_link_hash=digest(token),
     )
+    settings.web_dir = CLASSIC_PAGE
     app = create_app(settings)
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
     threading.Thread(target=server.run, daemon=True).start()

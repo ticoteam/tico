@@ -28,11 +28,11 @@ function Frame({ name, children }: { name: string; children: ReactNode }) {
 }
 
 const TABS = [
-  { label: 'One', to: '/next/dev/pagekinds' },
-  { label: 'Two', to: '/next/dev/pagekinds/two' },
+  { label: 'One', to: '/dev/pagekinds' },
+  { label: 'Two', to: '/dev/pagekinds/two' },
 ];
 const FIGS = ['One', 'Two', 'Three', 'Four'].map((label) => ({ label, value: '0' }));
-const CRUMB = [{ label: 'Up', to: '/next/dev/pagekinds' }];
+const CRUMB = [{ label: 'Up', to: '/dev/pagekinds' }];
 
 /** Dev only: the nine kinds with grey blocks in every slot, to check edges, heights and the phone collapse. */
 export function Gallery() {

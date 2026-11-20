@@ -1,6 +1,7 @@
 """The UI as the server sends it: the files scripts/build-ui.cjs wrote to build/ui, and nothing it builds itself
 (backend/ui_bundle_routes.py, backend/ui_build.py). The build's own rules (order, parts, maps) are checked in
-scripts/tests/test_build_ui.py; here the real build of this checkout is served (conftest builds it when it can)."""
+scripts/tests/test_build_ui.py; here the real build of this checkout is served (conftest builds it when it can), at /tico/ui/: the web app is at /
+(backend/web_routes.py)."""
 
 import gzip
 import hashlib
@@ -29,7 +30,7 @@ def parts_table(page):
 
 
 def test_the_page_names_the_bundle_files_by_their_content(api):
-    r = api.get("/", headers=AUTH)
+    r = api.get("/tico/ui/", headers=AUTH)
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/html")
     assert r.text == (ui_build.out_dir(UI) / "index.html").read_text() and "bundle:" not in r.text
     files = page_files(r.text)
@@ -42,16 +43,16 @@ def test_the_page_names_the_bundle_files_by_their_content(api):
         and "sha256-" not in r.headers["content-security-policy"]
     )
     assert "<script>" not in r.text  # no inline code (the parts list is a JSON block, which runs nothing)
-    assert api.get("/", headers={**AUTH, "If-None-Match": r.headers["etag"]}).status_code == 304
-    assert api.get("/", headers={**AUTH, "If-None-Match": "W/" + r.headers["etag"]}).status_code == 304  # Cloudflare's
-    assert api.get("/tico/ui/", headers=AUTH).text == r.text
+    etag = r.headers["etag"].removeprefix("W/")  # weak when sent gzipped (backend/ui_compression.py)
+    assert api.get("/tico/ui/", headers={**AUTH, "If-None-Match": etag}).status_code == 304
+    assert api.get("/tico/ui/", headers={**AUTH, "If-None-Match": "W/" + etag}).status_code == 304  # Cloudflare's
     # An open tab compares the build it loaded with the config's (ui/app/notices.ts).
     assert parts_table(r.text)["build"] == api.get("/api/v2/config", headers=AUTH).json()["ui_build"] != ""
-    assert api.get("/").status_code == 401
+    assert api.get("/tico/ui/").status_code == 401
 
 
 def test_bundle_files_are_kept_for_a_year_and_sent_as_their_gzip_copies(api):
-    page = api.get("/", headers=AUTH).text
+    page = api.get("/tico/ui/", headers=AUTH).text
     first_script = True
     for name in page_files(page):
         url = f"/tico/ui/{name}"
@@ -81,7 +82,7 @@ def test_bundle_files_are_kept_for_a_year_and_sent_as_their_gzip_copies(api):
 
 
 def test_theme_and_marked_load_on_their_own_named_by_content(api):
-    page = api.get("/", headers=AUTH).text
+    page = api.get("/tico/ui/", headers=AUTH).text
     theme = re.search(r'src="/tico/ui/(app\.bundle\.theme\.[0-9a-f]{16}\.js)"', page).group(1)
     marked = re.search(r'src="/tico/ui/(app\.bundle\.marked\.[0-9a-f]{16}\.js)"', page).group(1)
     # theme.ts holds up the first paint: in the head, before the stylesheets and the bundle.
@@ -138,7 +139,7 @@ def test_a_typescript_file_outside_the_bundle_is_served_compiled_with_its_map(ap
 
 
 def test_the_served_bundle_is_minified_and_maps_to_its_source(api):
-    page = api.get("/", headers=AUTH).text
+    page = api.get("/tico/ui/", headers=AUTH).text
     names = [n for n in page_files(page) if ".marked." not in n]
     names += [p["url"].removeprefix("/tico/ui/") for p in parts_table(page)["parts"].values()]
     assert len(names) > len(page_files(page))  # the page parts, each under its own address
@@ -170,7 +171,7 @@ def test_the_served_bundle_is_minified_and_maps_to_its_source(api):
 
 
 def test_a_page_part_is_served_at_its_address_and_an_old_address_is_gone(api):
-    table = parts_table(api.get("/", headers=AUTH).text)
+    table = parts_table(api.get("/tico/ui/", headers=AUTH).text)
     assert table["parts"]
     for name, part in table["parts"].items():
         assert re.fullmatch(rf"/tico/ui/app\.bundle\.{re.escape(name)}\.[0-9a-f]{{16}}\.js", part["url"]), name

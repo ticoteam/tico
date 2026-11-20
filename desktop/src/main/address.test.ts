@@ -6,7 +6,7 @@ describe('server addresses', () => {
   it('takes a Cloud name, a host, or a pasted link, and keeps only the origin', () => {
     expect(checkAddress('acme')).toEqual({ ok: true, origin: 'https://acme.tico.team' });
     expect(checkAddress(' tico.example.com ')).toEqual({ ok: true, origin: 'https://tico.example.com' });
-    expect(checkAddress('https://acme.tico.team/next/tasks/eng?chat=1#x')).toEqual({ ok: true, origin: 'https://acme.tico.team' });
+    expect(checkAddress('https://acme.tico.team/tasks/eng?chat=1#x')).toEqual({ ok: true, origin: 'https://acme.tico.team' });
     expect(checkAddress('https://tico.example.com:8443')).toEqual({ ok: true, origin: 'https://tico.example.com:8443' });
   });
 
@@ -18,7 +18,7 @@ describe('server addresses', () => {
 
   it('takes a local copy’s sign-in link only on loopback over http, at exactly its path', () => {
     for (const host of ['127.0.0.1:8766', 'localhost:8766', '[::1]:8766']) {
-      const link = `http://${host}/api/v2/local-signin?token=t0k&next=/next/`;
+      const link = `http://${host}/api/v2/local-signin?token=t0k&next=/`;
       expect(localSignInUrl(` ${link} `), host).toBe(link);
       expect(checkAddress(link), host).toEqual({ ok: true, origin: `http://${host}` });
     }
@@ -48,11 +48,14 @@ describe('server addresses', () => {
     expect(checkAddress('x'.repeat(3000)).ok).toBe(false);
   });
 
-  it('knows the new app’s own pages', () => {
-    expect(appUrl('https://acme.tico.team')).toBe('https://acme.tico.team/next/');
+  it('knows the app’s own pages', () => {
+    expect(appUrl('https://acme.tico.team')).toBe('https://acme.tico.team/');
+    expect(isAppUrl('https://acme.tico.team/tasks', 'https://acme.tico.team')).toBe(true);
+    // a place kept from when the app was at /next/: the server sends it on to the same page at /
     expect(isAppUrl('https://acme.tico.team/next/tasks', 'https://acme.tico.team')).toBe(true);
+    expect(isAppUrl('https://acme.tico.team/api/v2/logout', 'https://acme.tico.team')).toBe(false);
     expect(isAppUrl('https://acme.tico.team/auth/login', 'https://acme.tico.team')).toBe(false);
-    expect(isAppUrl('https://evil.example/next/', 'https://acme.tico.team')).toBe(false);
+    expect(isAppUrl('https://evil.example/', 'https://acme.tico.team')).toBe(false);
   });
 });
 

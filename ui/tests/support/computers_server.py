@@ -38,6 +38,10 @@ from backend.getting_started import save_state  # noqa: E402
 from backend.store import H, encode  # noqa: E402
 from backend.tests.helpers.credentials import FakeKMS  # noqa: E402
 
+# The old page stays at / for the browser scripts that open it there; the web app's build is what / serves otherwise
+# (backend/web_routes.py).
+CLASSIC_PAGE = Path(__file__).resolve().parents[3] / "build" / "ui"
+
 MOVE = importlib.import_module("backend.migrations.20261117061243_computer_keys_to_subscriptions")
 OWN = "sk-ant-api03-own-test-key-0123456789"
 SHARED = "sk-ant-api03-shared-test-key-0123456789"
@@ -175,6 +179,7 @@ def main():
         credential_admins=(OWNER,),
         test_identities={"admin": Identity("human:ana", "owner", OWNER)},
     )
+    settings.web_dir = CLASSIC_PAGE
     app = create_app(settings)
 
     @app.post("/test/signed-out/{runner_id}")

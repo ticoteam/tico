@@ -12,15 +12,15 @@ const ctx: NavContext = {
 
 describe('navigation in a company view', () => {
   it('stays on the company origin and starts a sign-in chain at /auth/login', () => {
-    expect(decideNavigation('https://acme.tico.team/next/tasks', ctx)).toEqual({ kind: 'stay' });
-    expect(decideNavigation('https://acme.tico.team/auth/login?next=/next/', ctx)).toEqual({ kind: 'sign-in' });
+    expect(decideNavigation('https://acme.tico.team/tasks', ctx)).toEqual({ kind: 'stay' });
+    expect(decideNavigation('https://acme.tico.team/auth/login?next=/', ctx)).toEqual({ kind: 'sign-in' });
   });
 
   it('keeps the whole sign-in chain in the view, then ends it back on the company', () => {
     expect(decideNavigation('https://login.provider.example/authorize', ctx).kind).toBe('external');
     expect(decideNavigation('https://login.provider.example/authorize', { ...ctx, signingIn: true })).toEqual({ kind: 'stay' });
     expect(decideNavigation('http://login.provider.example/authorize', { ...ctx, signingIn: true }).kind).toBe('block');
-    expect(signInOver('https://acme.tico.team/next/', ctx.origin)).toBe(true);
+    expect(signInOver('https://acme.tico.team/', ctx.origin)).toBe(true);
     expect(signInOver('https://acme.tico.team.evil.example/', ctx.origin)).toBe(false);
   });
 
@@ -33,7 +33,7 @@ describe('navigation in a company view', () => {
   });
 
   it('switches to another known company, and never shows the files origin top level', () => {
-    expect(decideNavigation('https://beta.tico.team/next/flow', ctx)).toEqual({ kind: 'switch', companyId: 'cother', url: 'https://beta.tico.team/next/flow' });
+    expect(decideNavigation('https://beta.tico.team/flow', ctx)).toEqual({ kind: 'switch', companyId: 'cother', url: 'https://beta.tico.team/flow' });
     expect(decideNavigation('https://files.acme.example/page.html', ctx)).toEqual({ kind: 'block' });
   });
 
@@ -45,12 +45,12 @@ describe('navigation in a company view', () => {
 
   it('keeps companies and the files origin apart in the middle of a sign-in chain too', () => {
     const chain = { ...ctx, signingIn: true };
-    expect(decideNavigation('https://beta.tico.team/next/', chain)).toEqual({ kind: 'switch', companyId: 'cother', url: 'https://beta.tico.team/next/' });
+    expect(decideNavigation('https://beta.tico.team/', chain)).toEqual({ kind: 'switch', companyId: 'cother', url: 'https://beta.tico.team/' });
     expect(decideNavigation('https://files.acme.example/page.html', chain)).toEqual({ kind: 'block' });
   });
 
   it('opens another company at a link only when it is one of its app pages, never its API or sign-in', () => {
-    for (const path of ['/api/v2/logout', '/auth/login?next=/next/', '/auth/signed-out', '/API/v2/logout', '/%61pi/v2/logout', '//api/v2/logout', '/next/..%2Fapi/v2/logout']) {
+    for (const path of ['/api/v2/logout', '/auth/login?next=/', '/auth/signed-out', '/API/v2/logout', '/%61pi/v2/logout', '//api/v2/logout', '/next/..%2Fapi/v2/logout']) {
       const raw = `https://beta.tico.team${path}`;
       expect(decideNavigation(raw, ctx), path).toEqual({ kind: 'switch', companyId: 'cother' });
       expect(decideNewWindow(raw, ctx), path).toEqual({ kind: 'switch', companyId: 'cother' });
@@ -68,21 +68,21 @@ describe('navigation in a company view', () => {
 
   it('gives no page a new window', () => {
     expect(decideNewWindow('https://example.com/', ctx)).toEqual({ kind: 'external', url: 'https://example.com/' });
-    expect(decideNewWindow('https://beta.tico.team/next/', ctx).kind).toBe('switch');
+    expect(decideNewWindow('https://beta.tico.team/', ctx).kind).toBe('switch');
     expect(decideNewWindow('about:blank', ctx)).toEqual({ kind: 'block' });
     expect(decideNewWindow('data:text/html,hi', ctx)).toEqual({ kind: 'block' });
   });
 });
 
 describe('the small call window', () => {
-  const call = { ...ctx, companyId: 'cacme', callPath: '/next/call/r1' };
+  const call = { ...ctx, companyId: 'cacme', callPath: '/call/r1' };
   const nav = (url: string, c = call) => keepOnCall(url, decideNavigation(url, c), c);
   const pop = (url: string) => keepOnCall(url, decideNewWindow(url, call), call);
 
   it('stays on its call, and opens the company’s other pages in the main window', () => {
-    expect(nav('https://acme.tico.team/next/call/r1?window=1')).toEqual({ kind: 'stay' });
-    expect(nav('https://acme.tico.team/next/task/412')).toEqual({ kind: 'switch', companyId: 'cacme', url: 'https://acme.tico.team/next/task/412' });
-    expect(pop('https://acme.tico.team/next/docs/plan')).toEqual({ kind: 'switch', companyId: 'cacme', url: 'https://acme.tico.team/next/docs/plan' });
+    expect(nav('https://acme.tico.team/call/r1?window=1')).toEqual({ kind: 'stay' });
+    expect(nav('https://acme.tico.team/task/412')).toEqual({ kind: 'switch', companyId: 'cacme', url: 'https://acme.tico.team/task/412' });
+    expect(pop('https://acme.tico.team/docs/plan')).toEqual({ kind: 'switch', companyId: 'cacme', url: 'https://acme.tico.team/docs/plan' });
   });
 
   it('sends outside https pages and files to the browser, and follows nothing else', () => {
@@ -93,16 +93,16 @@ describe('the small call window', () => {
   });
 
   it('leaves a sign-in chain and other companies to the usual rules', () => {
-    expect(nav('https://acme.tico.team/auth/login?next=/next/')).toEqual({ kind: 'sign-in' });
+    expect(nav('https://acme.tico.team/auth/login?next=/')).toEqual({ kind: 'sign-in' });
     expect(nav('https://acme.tico.team/auth/callback')).toEqual({ kind: 'stay' });
-    expect(nav('https://acme.tico.team/next/', { ...call, signingIn: true })).toEqual({ kind: 'stay' });
-    expect(nav('https://beta.tico.team/next/flow').kind).toBe('switch');
-    expect(nav('https://beta.tico.team/next/flow')).toMatchObject({ companyId: 'cother' });
+    expect(nav('https://acme.tico.team/', { ...call, signingIn: true })).toEqual({ kind: 'stay' });
+    expect(nav('https://beta.tico.team/flow').kind).toBe('switch');
+    expect(nav('https://beta.tico.team/flow')).toMatchObject({ companyId: 'cother' });
   });
 });
 
 describe('permissions', () => {
-  const top = { requestingUrl: 'https://acme.tico.team/next/call/1', isMainFrame: true };
+  const top = { requestingUrl: 'https://acme.tico.team/call/1', isMainFrame: true };
   it('grants the microphone, camera, notifications to the company’s own top frame', () => {
     expect(permissionAllowed('media', { ...top, mediaTypes: ['audio'] }, ctx.origin)).toBe(true);
     expect(permissionAllowed('media', { ...top, mediaTypes: ['audio', 'video'] }, ctx.origin)).toBe(true);
@@ -123,9 +123,9 @@ describe('tico:// links', () => {
     { id: 'cbeta', origin: 'https://beta.tico.team' },
   ];
   it('opens a full link in its company, or offers to add an unknown server', () => {
-    const u = encodeURIComponent('https://beta.tico.team/next/threads/t1?x=1');
-    expect(parseDeepLink(`tico://open?u=${u}`, companies, 'cacme')).toEqual({ kind: 'open', companyId: 'cbeta', url: 'https://beta.tico.team/next/threads/t1?x=1' });
-    expect(parseDeepLink(`tico://open?u=${encodeURIComponent('https://new.example/next/')}`, companies, 'cacme')).toEqual({ kind: 'add', server: 'https://new.example' });
+    const u = encodeURIComponent('https://beta.tico.team/threads/t1?x=1');
+    expect(parseDeepLink(`tico://open?u=${u}`, companies, 'cacme')).toEqual({ kind: 'open', companyId: 'cbeta', url: 'https://beta.tico.team/threads/t1?x=1' });
+    expect(parseDeepLink(`tico://open?u=${encodeURIComponent('https://new.example/')}`, companies, 'cacme')).toEqual({ kind: 'add', server: 'https://new.example' });
     expect(parseDeepLink(`tico://open?u=${encodeURIComponent('javascript:alert(1)')}`, companies, 'cacme')).toEqual({ kind: 'focus' });
     // a link to its API (sign-out) or sign-in only brings that company forward
     expect(parseDeepLink(`tico://open?u=${encodeURIComponent('https://beta.tico.team/api/v2/logout')}`, companies, 'cacme')).toEqual({ kind: 'open', companyId: 'cbeta' });
@@ -133,7 +133,7 @@ describe('tico:// links', () => {
   });
   it('opens a local copy’s sign-in link on loopback only, and no other /api/ address', () => {
     const local = [...companies, { id: 'clocal', origin: 'http://127.0.0.1:8766' }];
-    const link = 'http://127.0.0.1:8766/api/v2/local-signin?token=t0k&next=/next/';
+    const link = 'http://127.0.0.1:8766/api/v2/local-signin?token=t0k&next=/';
     const open = (u: string) => parseDeepLink(`tico://open?u=${encodeURIComponent(u)}`, local, 'cacme');
     expect(open(link)).toEqual({ kind: 'open', companyId: 'clocal', url: link });
     // an unknown local copy: Add company, prefilled with the whole link
@@ -148,12 +148,14 @@ describe('tico:// links', () => {
     expect(open('https://beta.tico.team/api/v2/local-signin?token=t0k')).toEqual({ kind: 'open', companyId: 'cbeta' });
     expect(parseDeepLink(`tico://open?u=${encodeURIComponent('https://new.example/api/v2/local-signin?token=t')}`, companies, 'cacme')).toEqual({ kind: 'add', server: 'https://new.example' });
   });
-  it('maps today’s tico://<path> onto the active company’s /next/, and never off it', () => {
-    expect(parseDeepLink('tico://meetings/abc', companies, 'cacme')).toEqual({ kind: 'open', companyId: 'cacme', url: 'https://acme.tico.team/next/meetings/abc' });
+  it('maps today’s tico://<path> onto a page of the active company, and never off it', () => {
+    expect(parseDeepLink('tico://meetings/abc', companies, 'cacme')).toEqual({ kind: 'open', companyId: 'cacme', url: 'https://acme.tico.team/meetings/abc' });
     expect(parseDeepLink('tico://..%2F..%2Fapi/v2/logout', companies, 'cacme')?.kind).not.toBe('open');
     const dots = parseDeepLink('tico://a/../../api/v2/logout', companies, 'cacme');
-    expect(dots?.kind !== 'open' || !!dots.url?.startsWith('https://acme.tico.team/next/')).toBe(true);
-    expect(parseDeepLink('tico:////evil.example/x', companies, 'cacme')).toMatchObject({ url: 'https://acme.tico.team/next/evil.example/x' });
+    expect(dots?.kind !== 'open' || !dots.url?.startsWith('https://acme.tico.team/api/')).toBe(true);
+    expect(parseDeepLink('tico://api/v2/logout', companies, 'cacme')).toEqual({ kind: 'focus' });
+    expect(parseDeepLink('tico://auth/login', companies, 'cacme')).toEqual({ kind: 'focus' });
+    expect(parseDeepLink('tico:////evil.example/x', companies, 'cacme')).toMatchObject({ url: 'https://acme.tico.team/evil.example/x' });
     expect(parseDeepLink('tico://', companies, 'cacme')).toEqual({ kind: 'focus' });
     expect(parseDeepLink('https://acme.tico.team/', companies, 'cacme')).toBeNull();
   });
