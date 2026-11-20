@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState, type MouseEvent, type ReactElement, type ReactNode } from 'react';
-import { run, useAction } from '@/actions';
+import { useAction } from '@/actions';
 import { meQuery, useActor } from '@/data';
 import { Avatar, type AvatarKind, type AvatarSize } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
@@ -17,7 +17,9 @@ import { Dot } from '@/tico/dot';
 import { clock, took } from './dates';
 import { Markdown } from '@/kit/Markdown';
 import { PictureViewer, type Picture } from '@/kit/PictureViewer';
+import { Viewer } from '@/kit/Viewer';
 import { agentWords, Quote } from './Quote';
+import { isPicture, linkRender, richText, Shelf } from './Rich';
 import { fromSlack, proposalQuery, slackPlaceOf, slackThreadQuery, type SlackPlace } from './queries';
 import type { Attachment, ChatMessage, LiveRun, ReplyQuote, Variant } from './types';
 
@@ -57,17 +59,14 @@ export function whoOf(m: Pick<ChatMessage, 'sender_id' | 'sender_name'>, variant
 
 /* ---------------------------------------------------------------- parts inside a message */
 
-const fileHref = (f: Attachment) => `/api/v2/files/${encodeURIComponent(f.id)}`;
-const fileMeta = (f: Attachment) => (f.content_type?.split('/')[1] ?? '').toUpperCase();
-const fileLabel = (f: Attachment) => f.title?.trim() || f.name || 'File';
-const isPicture = (f: Attachment) => /^image\//.test(f.content_type ?? '');
 const MD_PICTURE = /!\[([^\]]*)\]\((\/api\/[^()\s]+)\)/g;
+const pictureHref = (f: Attachment) => (typeof f.url === 'string' && /^\/api\/v2\/files\//.test(f.url) ? f.url : `/api/v2/files/${encodeURIComponent(f.id)}`);
 
 /** Every picture a message holds, in the order it reads: those in its text, then its attached ones. */
 export function picturesOf(m: Pick<ChatMessage, 'body' | 'refs' | 'pending' | 'deleted'>): Picture[] {
   if (m.pending || m.deleted) return [];
   const inText = [...(m.body ?? '').matchAll(MD_PICTURE)].map((x) => ({ src: x[2]!, name: x[1] || 'Picture' }));
-  const attached = (m.refs?.attachments ?? []).filter(isPicture).map((f) => ({ src: fileHref(f), name: fileLabel(f) }));
+  const attached = (m.refs?.attachments ?? []).filter(isPicture).map((f) => ({ src: pictureHref(f), name: f.title?.trim() || f.name || 'Picture' }));
   return [...inText, ...attached];
 }
 
@@ -89,35 +88,22 @@ function usePictures(m: ChatMessage) {
   return { openAt, onClick, viewer };
 }
 
-function Files({ files, pending, onPicture }: { files: Attachment[] | undefined; pending: boolean; onPicture?: (src: string) => boolean }) {
-  if (!files?.length) return null;
-  return files.map((f) => {
-    const label = fileLabel(f);
-    const inner = (
-      <>
-        <Icon name="file" />
-        <span>{label}</span>
-        {fileMeta(f) && <em>{fileMeta(f)}</em>}
-      </>
-    );
-    if (pending) return <span key={f.id} className="file">{inner}</span>;
-    const href = fileHref(f);
-    // A picture opens full size here; any other file opens over the page. The link stays real for a new tab or a copy.
-    const open = (e: MouseEvent) => {
-      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-      if (isPicture(f) && onPicture) {
-        if (onPicture(href)) e.preventDefault();
-        return;
-      }
-      e.preventDefault();
-      void run('files.view', { file: f.id }, { via: 'click' });
-    };
-    return (
-      <a key={f.id} className="file" href={href} target="_blank" rel="noreferrer" onClick={open}>
-        {inner}
-      </a>
-    );
-  });
+/** Past this many characters a message is a report: Read shows it full screen as a page (never cut in the chat). */
+const LONG = 1500;
+
+/** A long message as a page of its own, in the full-screen layer: its words at a reading measure. */
+function Reading({ text, title, onClose }: { text: string; title: string; onClose: () => void }) {
+  return (
+    <Viewer open onClose={onClose} title={title}>
+      <div className="vw-scroll">
+        <div className="msg msg-read">
+          <div className="msg-main">
+            <Markdown text={richText(text)} compact link={linkRender} />
+          </div>
+        </div>
+      </div>
+    </Viewer>
+  );
 }
 
 const slackHref = (m: ChatMessage) => {
@@ -275,7 +261,7 @@ const copy = (text: string) =>
  * On a phone there is no hover: a long press on a message opens its actions as a sheet, the same ones a computer
  * shows on it (Reply), and Copy, since the press takes the place of selecting the text.
  */
-function Held({ text, reply, children }: { text: string; reply: (() => void) | null; children: ReactElement }) {
+function Held({ text, reply, read, children }: { text: string; reply: (() => void) | null; read: (() => void) | null; children: ReactElement }) {
   const cards = useCards();
   if (!cards || (!text && !reply)) return children;
   return (
@@ -284,6 +270,7 @@ function Held({ text, reply, children }: { text: string; reply: (() => void) | n
         <>
           {text && <MenuItem icon="copy" label="Copy" onSelect={() => copy(text)} />}
           {reply && <MenuItem icon="reply" label="Reply" onSelect={reply} />}
+          {read && <MenuItem icon="expand" label="Read" onSelect={read} />}
         </>
       }
     >
@@ -292,12 +279,13 @@ function Held({ text, reply, children }: { text: string; reply: (() => void) | n
   );
 }
 
-/** Reply on the message under the pointer (a phone has the long press instead). */
-function Acts({ reply }: { reply: (() => void) | null }) {
-  if (!reply) return null;
+/** Reply, and Read for a long one, on the message under the pointer (a phone has the long press instead). */
+function Acts({ reply, read }: { reply: (() => void) | null; read: (() => void) | null }) {
+  if (!reply && !read) return null;
   return (
     <div className="msg-acts">
-      <IconButton icon="reply" label="Reply" size="sm" quiet onClick={reply} />
+      {read && <IconButton icon="expand" label="Read" size="sm" quiet onClick={read} />}
+      {reply && <IconButton icon="reply" label="Reply" size="sm" quiet onClick={reply} />}
     </div>
   );
 }
@@ -305,40 +293,41 @@ function Acts({ reply }: { reply: (() => void) | null }) {
 /** What someone said. Yours sits in a bubble at the right; a failed send says so and offers Retry. */
 export function Message({ m, variant, me, cont, onRetry, card, onReply, quote, onQuote }: MessageProps) {
   const [reading, setReading] = useState(false);
+  const [full, setFull] = useState(false);
   const known = useActor(m.sender_name ? undefined : m.sender_id)?.name;
   const text = m.deleted ? 'Deleted' : (m.body ?? '');
   const shown = m.deleted ? null : card?.(m);
   // What Copy takes: the words as written, not a card drawn in their place.
   const words = m.deleted || m.pending || shown ? '' : text.trim();
-  const files = m.refs?.attachments;
   const pics = usePictures(m);
   const place = reading ? slackPlaceOf(m) : null;
   const real = !m.pending && !m.deleted && !m.id.startsWith('tmp:');
   const reply = real && onReply ? () => onReply(m) : null;
   const quoted = quote && !m.deleted ? <Quote q={quote} me={me} onOpen={onQuote} /> : null;
+  const read = words.length > LONG ? () => setFull(true) : null;
+  const md = <Markdown text={richText(text)} compact link={m.pending ? undefined : linkRender} />;
   // What opens over the page stays outside the long-pressed row: a press inside it is not a press on the message.
   const over = (
     <>
       {pics.viewer}
       {place && <SlackThread place={place} m={m} onClose={() => setReading(false)} />}
+      {full && <Reading text={text} title={whoOf(m, variant, me, known).name} onClose={() => setFull(false)} />}
     </>
   );
   if (m.pending || (me && m.sender_id === me)) {
     const failed = m.pending === 'failed' || m.pending === 'held';
     return (
       <>
-        <Held text={words} reply={reply}>
+        <Held text={words} reply={reply} read={read}>
           <div className={['msg', 'is-mine', cont && 'is-cont', failed && 'is-failed'].filter(Boolean).join(' ')} data-target={`message:${m.id}`}>
-            <Acts reply={reply} />
+            <Acts reply={reply} read={read} />
             <div className="mine-col" onClick={pics.onClick}>
               {quoted}
               {shown ??
                 (text && (
-                  <div className="bubble">
-                    <Markdown text={text} compact />
-                  </div>
+                  <div className="bubble">{md}</div>
                 ))}
-              <Files files={files} pending={!!m.pending} onPicture={pics.openAt} />
+              <Shelf m={m} onPicture={pics.openAt} />
               {failed && (
                 <div className="msg-fail">
                   <Icon name="alert" />
@@ -361,9 +350,9 @@ export function Message({ m, variant, me, cont, onRetry, card, onReply, quote, o
   const aid = typeof m.refs?.action === 'string' ? m.refs.action : null;
   return (
     <>
-      <Held text={words} reply={reply}>
+      <Held text={words} reply={reply} read={read}>
         <div className={['msg', cont && 'is-cont'].filter(Boolean).join(' ')} data-target={`message:${m.id}`}>
-          <Acts reply={reply} />
+          <Acts reply={reply} read={read} />
           {cont ? <span className="av-gap av-22" /> : <Face who={who} size={22} />}
           <div className="msg-main" onClick={pics.onClick}>
             {!cont && (
@@ -373,9 +362,9 @@ export function Message({ m, variant, me, cont, onRetry, card, onReply, quote, o
               </div>
             )}
             {quoted}
-            {shown ?? (text && <Markdown text={text} compact />)}
+            {shown ?? (text && md)}
             <Steps run={m.run} />
-            <Files files={files} pending={false} onPicture={pics.openAt} />
+            <Shelf m={m} onPicture={pics.openAt} />
             {aid && <Proposal aid={aid} />}
             {m.refs?.slack && <FromSlack m={m} onRead={() => setReading(true)} />}
           </div>

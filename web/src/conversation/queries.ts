@@ -408,3 +408,30 @@ export const slackThreadQuery = ({ bot, channel, thread }: SlackPlace) =>
         )
       ).messages ?? [],
   });
+
+/** A file's facts for its chip and preview: the same read and cache entry as Files' (`['files', 'info', id]`). */
+export interface FileFacts {
+  id: string;
+  title: string;
+  name: string | null;
+  mime: string | null;
+  library_kind?: string;
+  size: number | null;
+  version?: number;
+}
+export const fileFactsQuery = (id: string) =>
+  queryOptions({
+    queryKey: ['files', 'info', id],
+    queryFn: () => api.get<{ file: FileFacts }>(`/api/v2/files/${enc(id)}/info`).then((r) => r.file),
+    staleTime: 60_000,
+    retry: false,
+  });
+
+/** A page's own words (HTML), for its small live preview in a message. Read once; a page is not edited under it. */
+export const pageTextQuery = (url: `/api/${string}`) =>
+  queryOptions({
+    queryKey: ['files', 'page-text', url],
+    queryFn: ({ signal }) => api.get<string>(url, { signal }).then((t) => (typeof t === 'string' ? t : '')),
+    staleTime: Infinity,
+    retry: false,
+  });

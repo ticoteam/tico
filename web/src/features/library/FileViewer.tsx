@@ -2,12 +2,14 @@ import { useQuery } from '@tanstack/react-query';
 import { useSyncExternalStore } from 'react';
 import { Empty } from '@/kit/Empty';
 import { Icon } from '@/kit/Icon';
+import { Link } from '@/kit/Link';
 import { Markdown } from '@/kit/Markdown';
 import { PictureViewer } from '@/kit/PictureViewer';
+import { Viewer } from '@/kit/Viewer';
 import { size } from './parts';
 import { PdfView } from './PdfView';
 import { fileQuery, fileTextQuery, fileUrl, fileVersionsQuery, heldFileQuery } from './queries';
-import { viewing } from './viewing';
+import { viewing, type Viewing } from './viewing';
 import './library.css';
 
 /* A file wherever it opens (the old app's viewer.ts and file-review.ts): Files, a task's tab or Details, an email's
@@ -296,9 +298,56 @@ export function FilePreview({ file, version }: { file: string; version?: number 
   );
 }
 
-/** Mounted once at the app's root: the picture `files.view` opened, full size over the page. Any other file opens as
-    its page in Files. */
+/** What a file is, in a word beside its name: "PDF", "Page", its ending, else nothing. */
+function kindWord(mime: string, kind: string | undefined, name: string): string {
+  const view = viewOf(mime, kind, name);
+  if (view === 'html') return 'Page';
+  if (view === 'pdf') return 'PDF';
+  const end = /\.([a-z0-9]{1,5})$/i.exec(name)?.[1];
+  return (end ?? mime.split('/')[1]?.split(/[;+]/)[0] ?? '').toUpperCase();
+}
+
+/** A file in the full-screen layer, whatever it is: a message's own by its address, else the library's by its id. */
+function FullFile({ v }: { v: Viewing & { full: NonNullable<Viewing['full']> } }) {
+  const { full } = v;
+  const close = () => viewing.set(null);
+  const url = full.url ?? fileUrl(v.file, v.version);
+  return (
+    <Viewer
+      open
+      onClose={close}
+      title={v.name}
+      meta={kindWord(full.mime, full.kind, v.name) || undefined}
+      actions={
+        <>
+          {!full.url && (
+            <Link className="ib" href={`/library/files?file=${encodeURIComponent(v.file)}`} aria-label="Open in Files" title="Open in Files" onClick={close}>
+              <Icon name="popout" />
+            </Link>
+          )}
+          <a className="ib" href={url} download={v.name} aria-label="Download" title="Download">
+            <Icon name="download" />
+          </a>
+        </>
+      }
+    >
+      {full.url ? (
+        <FileFrame id={v.file} mime={full.mime} title={v.name} url={full.url} name={v.name} size={full.size} held />
+      ) : (
+        <FilePreview file={v.file} version={v.version} />
+      )}
+    </Viewer>
+  );
+}
+
+const pictureOf = (v: Viewing) => !v.full || viewOf(v.full.mime, v.full.kind, v.name) === 'image';
+
+/** Mounted once at the app's root: the picture `files.view` opened, full size over the page (any other file opens as
+    its page in Files), or any file `files.preview` opened, in the full-screen layer. */
 export function FileViewerHost() {
   const v = useSyncExternalStore(viewing.subscribe, viewing.get, viewing.get);
-  return v ? <PictureViewer pictures={[{ src: fileUrl(v.file, v.version), name: v.name }]} at={0} onAtChange={(at) => at == null && viewing.set(null)} /> : null;
+  if (!v) return null;
+  if (v.full && !pictureOf(v)) return <FullFile v={{ ...v, full: v.full }} />;
+  const src = v.full?.url ?? fileUrl(v.file, v.version);
+  return <PictureViewer pictures={[{ src, name: v.name }]} at={0} onAtChange={(at) => at == null && viewing.set(null)} />;
 }

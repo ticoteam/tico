@@ -353,6 +353,34 @@ export const filesView = defineAction({
   target: () => null,
 });
 
+/** A file from a chat, full screen over the page whatever it is (a page, a PDF, a picture, text): the message's own file
+    by its address, or one of the library's by its id. Closed with `file: null`. */
+export const filesPreview = defineAction({
+  id: 'files.preview',
+  title: 'Preview a file',
+  kind: 'view',
+  tico: false,
+  input: z.strictObject({
+    file: z.nullable(id),
+    version: z.optional(z.int().check(z.minimum(1))),
+    held: z.optional(
+      z.strictObject({
+        url: z.string().check(z.regex(/^\/api\/v2\/files\/[^/?#]+(\/versions\/\d+)?(\?v=\d+)?$/)),
+        mime: text(200),
+        name: text(500),
+        size: z.optional(z.number()),
+      }),
+    ),
+  }),
+  run: async ({ queryClient }, i) => {
+    if (!i.file) return viewing.set(null);
+    if (i.held) return viewing.set({ file: i.file, name: i.held.name, full: { mime: i.held.mime, size: i.held.size, url: i.held.url } });
+    const f = await queryClient.ensureQueryData(fileQuery(i.file)).catch(() => null);
+    viewing.set({ file: i.file, version: i.version, name: f?.title || f?.name || 'File', full: { mime: f?.mime ?? '', kind: f?.library_kind, size: f?.size } });
+  },
+  target: () => null,
+});
+
 export const filesUpload = defineAction({
   id: 'files.upload',
   title: 'Add a file to a task',

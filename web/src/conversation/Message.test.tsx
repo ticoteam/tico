@@ -95,11 +95,13 @@ describe('A picture in a message @s197', () => {
 });
 
 describe('A picture attached to a chat message @s218', () => {
-  it('opens full size from its file chip, with Download', async () => {
+  it('shows as a picture in the message, and opens full size from it, with Download', async () => {
     serve();
     const shot = { id: 'f2', name: 'shot.png', content_type: 'image/png' };
     show([{ ...msg(1, 'bot:qa', 'The new header'), refs: { attachments: [shot] } } as ChatMessage]);
-    fireEvent.click(await screen.findByRole('link', { name: /shot\.png/ }));
+    const pic = await screen.findByRole('button', { name: 'shot.png' });
+    expect(pic.querySelector('img')?.getAttribute('src')).toBe('/api/v2/files/f2');
+    fireEvent.click(pic);
     const dialog = await screen.findByRole('dialog', { name: 'shot.png' });
     expect(dialog.querySelector('img')?.getAttribute('src')).toBe('/api/v2/files/f2');
     expect(within(dialog).getByRole('link', { name: 'Download' }).getAttribute('href')).toBe('/api/v2/files/f2');
@@ -286,5 +288,71 @@ describe('Reply with quote @s157', () => {
     show([msg(2, 'bot:tico', 'Done')], { variant: 'tico' });
     await screen.findByText('Done');
     expect(screen.queryByRole('button', { name: 'Reply' })).toBeNull();
+  });
+});
+
+describe('What a message holds besides words (thread-content.html)', () => {
+  it('draws a bare web address as a chip naming the thing, opening in a new tab', async () => {
+    serve();
+    show([msg(1, 'bot:qa', 'Merged https://github.com/fernhill/shop/pull/412 today')]);
+    const chip = await screen.findByRole('link', { name: 'shop #412' });
+    expect(chip.className).toContain('lchip');
+    expect(chip.getAttribute('href')).toBe('https://github.com/fernhill/shop/pull/412');
+    expect(chip.getAttribute('target')).toBe('_blank');
+  });
+
+  it('keeps words someone chose as a link, and opens an app link beside this thread', async () => {
+    serve();
+    show([msg(1, 'bot:qa', 'Read [the brief](https://fernhill.example/brief) and [Fix the cart](#/task/t7)')]);
+    expect((await screen.findByRole('link', { name: 'the brief' })).className).toBe('lnk');
+    const task = screen.getByRole('link', { name: 'Fix the cart' });
+    expect(task.className).toContain('lchip');
+    expect(task.getAttribute('href')).toBe('/task/t7?chat=thread%3At1&via=thread');
+  });
+
+  it('names a page ref by its title, and shows the page small and live under the words', async () => {
+    serve((url) => {
+      if (url.endsWith('/info')) return { status: 200, body: { file: { id: 'file-0123456789abcdef', title: 'Spring catalog', name: 'catalog.html', mime: 'text/html', library_kind: 'page', size: 10 } } };
+      if (url.includes('/versions/2')) return { status: 200, body: '<h1>Spring catalog</h1>' };
+      return undefined;
+    });
+    show([msg(1, 'bot:qa', 'Spec: page:file-0123456789abcdef@2')]);
+    const chip = await screen.findByRole('link', { name: 'Spring catalog' });
+    expect(chip.getAttribute('href')).toBe('/api/v2/files/file-0123456789abcdef/versions/2');
+    const card = await screen.findByRole('button', { name: 'Spring catalog' });
+    const frame = await waitFor(() => {
+      const f = card.closest('.pcard')?.querySelector('iframe');
+      expect(f).toBeTruthy();
+      return f!;
+    });
+    expect(frame.getAttribute('sandbox')).toBe('');
+  });
+
+  it('shows a picture that does not load as its name', async () => {
+    serve();
+    show([msg(1, 'bot:qa', 'Shot', { refs: { attachments: [{ id: 'f3', name: 'gone.png', content_type: 'image/png' }] } })]);
+    const img = (await screen.findByRole('button', { name: 'gone.png' })).querySelector('img')!;
+    fireEvent.error(img);
+    expect((await screen.findByRole('link', { name: 'gone.png' })).getAttribute('href')).toBe('/api/v2/files/f3');
+  });
+
+  it('a long message offers Read, which shows it full screen', async () => {
+    serve();
+    show([msg(1, 'bot:qa', `Report. ${'Beds sold well this week. '.repeat(80)}`)]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Read' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Qa' });
+    expect(dialog.textContent).toContain('Beds sold well');
+  });
+
+  it('a table expands full screen; code copies', async () => {
+    const writeText = vi.fn(async (_t: string) => {});
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    serve();
+    show([msg(1, 'bot:qa', '| Bed | Sold |\n| --- | --- |\n| Cedar | 40 |\n\n```\nmake ship\n```')]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy' }));
+    expect(writeText).toHaveBeenCalledWith('make ship');
+    fireEvent.click(screen.getByRole('button', { name: 'Expand' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Table' });
+    expect(within(dialog).getByText('Cedar')).toBeTruthy();
   });
 });

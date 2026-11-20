@@ -1,6 +1,9 @@
-import { Fragment, type ReactNode } from 'react';
+import { Fragment, useState, type ReactNode } from 'react';
 import { Lexer, Tokenizer, type MarkedToken, type Token, type Tokens } from 'marked';
+import { IconButton } from '@/kit/IconButton';
 import { Link } from '@/kit/Link';
+import { toast } from '@/kit/Toast';
+import { Viewer } from '@/kit/Viewer';
 import './Markdown.css';
 
 /* The one Markdown: a chat message (compact) and a doc or a skill (the reading page's `.read` parts). marked's lexer
@@ -61,10 +64,18 @@ export function headings(text: string): Heading[] {
 
 // ---------------------------------------------------------------- drawing
 
+/** Draws one safe link its own way (a chat's chips): its address, its words drawn, and whether the words are only the
+    address written bare. Only addresses that pass SAFE_URL reach it. */
+export type LinkRender = (href: string, words: ReactNode, bare: boolean) => ReactNode;
+
 interface Ctx {
   compact: boolean;
   ids: Map<Tokens.Heading, string>;
+  link?: LinkRender;
 }
+
+/** A bare address (`https://…`, `<https://…>`) is written as its own words. */
+const bareLink = (t: Tokens.Link) => t.raw === t.href || t.raw === `<${t.href}>` || t.text === t.href;
 
 function inline(tokens: Token[] | undefined, k: string, c: Ctx): ReactNode[] {
   return (tokens as MarkedToken[] | undefined ?? []).map((t, i) => {
@@ -82,6 +93,7 @@ function inline(tokens: Token[] | undefined, k: string, c: Ctx): ReactNode[] {
       case 'br':
         return <br key={key} />;
       case 'link':
+        if (SAFE_URL.test(t.href) && c.link) return <Fragment key={key}>{c.link(t.href, kids(), bareLink(t))}</Fragment>;
         return SAFE_URL.test(t.href) ? (
           <Link key={key} className="lnk" href={t.href} {...(OUTSIDE.test(t.href) && away)}>
             {kids()}
@@ -140,8 +152,9 @@ function blocks(tokens: Token[], k: string, c: Ctx, tail?: ReactNode): ReactNode
         );
       }
       case 'code':
+        if (c.compact) return <ChatCode key={key} text={t.text} />;
         return (
-          <pre key={key} className={c.compact ? undefined : 'read-code'}>
+          <pre key={key} className="read-code">
             <code>{t.text}</code>
           </pre>
         );
@@ -163,9 +176,8 @@ function blocks(tokens: Token[], k: string, c: Ctx, tail?: ReactNode): ReactNode
       }
       case 'checkbox':
         return t.raw;
-      case 'table':
-        return (
-          <div key={key} className="md-table">
+      case 'table': {
+        const table = (
             <table className="table">
               <thead>
                 <tr>
@@ -184,12 +196,56 @@ function blocks(tokens: Token[], k: string, c: Ctx, tail?: ReactNode): ReactNode
                 ))}
               </tbody>
             </table>
+        );
+        return c.compact ? (
+          <ChatTable key={key} table={table} />
+        ) : (
+          <div key={key} className="md-table">
+            {table}
           </div>
         );
+      }
       default:
         return null;
     }
   });
+}
+
+/** Code in a chat: Copy at its corner, under the pointer (always there on a phone). */
+function ChatCode({ text }: { text: string }) {
+  const copy = () =>
+    (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject(new Error('no clipboard'))).then(
+      () => toast({ text: 'Copied' }),
+      () => toast({ text: "Couldn't copy", kind: 'failed' }),
+    );
+  return (
+    <div className="md-block">
+      <pre>
+        <code>{text}</code>
+      </pre>
+      <span className="md-tools">
+        <IconButton icon="copy" label="Copy" size="sm" quiet onClick={() => void copy()} />
+      </span>
+    </div>
+  );
+}
+
+/** A table in a chat scrolls sideways in the message; Expand shows it full screen, every column at its width. */
+function ChatTable({ table }: { table: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="md-block">
+      <div className="md-table">{table}</div>
+      <span className="md-tools">
+        <IconButton icon="expand" label="Expand" size="sm" quiet onClick={() => setOpen(true)} />
+      </span>
+      {open && (
+        <Viewer open onClose={() => setOpen(false)} title="Table">
+          <div className="md-table is-full">{table}</div>
+        </Viewer>
+      )}
+    </div>
+  );
 }
 
 export interface MarkdownProps {
@@ -201,14 +257,16 @@ export interface MarkdownProps {
   compact?: boolean;
   /** Ends the last paragraph (a chat's typing dots). */
   tail?: ReactNode;
+  /** Draws each safe link its own way (a chat's chips); a plain link when left out. */
+  link?: LinkRender;
 }
 
-export function Markdown({ text, compact = false, tail }: MarkdownProps) {
+export function Markdown({ text, compact = false, tail, link }: MarkdownProps) {
   const tokens = lex(text, compact).filter((t) => t.type !== 'space' && t.type !== 'def');
   const tailOwn = tail != null && tokens[tokens.length - 1]?.type !== 'paragraph';
   return (
     <>
-      {blocks(tokens, 'b', { compact, ids: ids(tokens) }, tail)}
+      {blocks(tokens, 'b', { compact, ids: ids(tokens), link }, tail)}
       {tailOwn && <p>{tail}</p>}
     </>
   );

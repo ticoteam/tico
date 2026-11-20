@@ -6,3 +6,13 @@
 .md-table .table th,.md-table .table td{height:auto;padding:var(--s-2) var(--s-3) var(--s-2) 0;white-space:normal;vertical-align:top;line-height:1.45}
 .md-table .table td{color:var(--ink-2)}
 .md-table .table td:first-child{color:var(--ink)}
+/* A chat's code and tables carry their one tool at the top corner, under the pointer (always there on a phone):
+   Copy, or Expand to the full-screen layer (kit/Viewer). */
+.md-block{position:relative}
+.md-block>.md-tools{position:absolute;top:var(--s-1);right:var(--s-1);display:flex;border-radius:var(--r-ctl);background:var(--surface);opacity:0;transition:opacity var(--dur-fast) var(--ease)}
+.md-block:hover>.md-tools,.md-tools:focus-within{opacity:1}
+.md-block>.md-table+.md-tools{top:var(--s-3)}
+@media (hover:none){.md-block>.md-tools{opacity:1}}
+.md-table.is-full{max-width:none;height:100%;margin:0;padding:var(--s-4) var(--s-6);overflow:auto;overscroll-behavior:contain;scrollbar-width:auto}
+.md-table.is-full .table th{white-space:nowrap}
+.md-table.is-full .table td{min-width:16ch}

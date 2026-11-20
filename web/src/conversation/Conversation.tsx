@@ -17,6 +17,7 @@ import { Composer } from './Composer';
 import { dayKey, dayLabel } from './dates';
 import { Face, LiveRow, Message, whoOf } from './Message';
 import { onJump } from './Outline';
+import { ChatPlace } from './Rich';
 import { quoteFrom, quoteOf, Replying } from './Quote';
 import { SessionLine, type Session } from './Session';
 import { installConversationLive, liveQuery, liveText, markRead, rowsOf, sendMessage, timelineQuery } from './queries';
@@ -49,6 +50,9 @@ export interface ConversationProps {
   canPost?: boolean;
   /** Not the thread's own messages, drawn among them by time (a team's updates, through `card`): no reply, no rating. */
   extra?: ChatMessage[];
+  /** This thread as the shell's `?chat=` (a second chat's own address): a page a message links to opens beside it.
+      Defaults to `thread:<id>`; Tico's sheet has none (it is always there). */
+  chat?: string;
 }
 
 type Item =
@@ -132,7 +136,7 @@ function withExtra(rows: ChatMessage[], extra: ChatMessage[] | undefined, more: 
   return [...out, ...left];
 }
 
-export function Conversation({ id, variant, title, actor, session, page, foot, card, canPost = true, extra }: ConversationProps) {
+export function Conversation({ id, variant, title, actor, session, page, foot, card, canPost = true, extra, chat }: ConversationProps) {
   useFollow(variant === 'tico' ? { conversation: id } : { thread: id });
 
   const { data: me } = useQuery(meQuery);
@@ -248,45 +252,47 @@ export function Conversation({ id, variant, title, actor, session, page, foot, c
   };
 
   const list = (
-    <VirtualList
-      key={id}
-      ref={scroller}
-      items={items}
-      getKey={(it) => it.key}
-      estimateSize={ROW_PX}
-      measure
-      anchor="end"
-      role="log"
-      label={`Chat with ${name}`}
-      className="chat-body"
-      onScroll={readAtEnd}
-      onReachStart={() => {
-        if (timeline.hasNextPage && !timeline.isFetchingNextPage) void timeline.fetchNextPage();
-      }}
-      renderItem={(it) => {
-        if (it.k === 'day')
+    <ChatPlace value={variant === 'tico' ? undefined : (chat ?? `thread:${id}`)}>
+      <VirtualList
+        key={id}
+        ref={scroller}
+        items={items}
+        getKey={(it) => it.key}
+        estimateSize={ROW_PX}
+        measure
+        anchor="end"
+        role="log"
+        label={`Chat with ${name}`}
+        className="chat-body"
+        onScroll={readAtEnd}
+        onReachStart={() => {
+          if (timeline.hasNextPage && !timeline.isFetchingNextPage) void timeline.fetchNextPage();
+        }}
+        renderItem={(it) => {
+          if (it.k === 'day')
+            return (
+              <div className={it.isNew ? 'day is-new' : 'day'}>
+                <span>{it.label}</span>
+              </div>
+            );
+          if (it.k === 'did') return <DidLine text={it.text} fault={it.fault} />;
+          if (it.k === 'live') return <LiveRow r={it.r} variant={variant} text={it.text} />;
           return (
-            <div className={it.isNew ? 'day is-new' : 'day'}>
-              <span>{it.label}</span>
-            </div>
+            <Message
+              m={it.m}
+              variant={variant}
+              me={myId}
+              cont={it.cont}
+              onRetry={(m) => send(m.body ?? '', m.files ?? [], m)}
+              card={card}
+              onReply={canReply && !extraIds.has(it.m.id) ? startReply : undefined}
+              quote={quoteOf(it.m, byId)}
+              onQuote={toQuoted}
+            />
           );
-        if (it.k === 'did') return <DidLine text={it.text} fault={it.fault} />;
-        if (it.k === 'live') return <LiveRow r={it.r} variant={variant} text={it.text} />;
-        return (
-          <Message
-            m={it.m}
-            variant={variant}
-            me={myId}
-            cont={it.cont}
-            onRetry={(m) => send(m.body ?? '', m.files ?? [], m)}
-            card={card}
-            onReply={canReply && !extraIds.has(it.m.id) ? startReply : undefined}
-            quote={quoteOf(it.m, byId)}
-            onQuote={toQuoted}
-          />
-        );
-      }}
-    />
+        }}
+      />
+    </ChatPlace>
   );
 
   // Bones while the first page loads; a read that failed says so with Try again (the box stays).

@@ -46,6 +46,7 @@ export function ChatSheet({ chat }: ChatSheetProps) {
       key={t.id}
       id={t.id}
       variant="side"
+      chat={chat}
       title={name}
       actor={actor}
       session={session}

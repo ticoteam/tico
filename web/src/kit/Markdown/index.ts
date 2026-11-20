@@ -1,1 +1,1 @@
-export { Markdown, headings, type Heading, type MarkdownProps } from './Markdown';
+export { Markdown, headings, type Heading, type LinkRender, type MarkdownProps } from './Markdown';
