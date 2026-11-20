@@ -40,6 +40,7 @@ def test_subtree_counters_and_oldest_unread_take_one_statement_together(api):
     with api.app.state.store.read_transaction() as c:
         viewer = threads.Viewer(api.app.state.auth, Identity("human:ana", "owner", "ana@acme.example"))
         threads._backfill_floor(c, viewer)
+        threads._many_deliveries(c, viewer)  # read once a Viewer, like the floor
         c.set_trace_callback(seen.append)
         try:
             summaries = threads.subtree_summaries(c, viewer, [thread["id"], empty["id"]])

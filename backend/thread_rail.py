@@ -764,7 +764,7 @@ def _hidden_window(c, v, hidden, low, high, most):
             (r["root"], r["id"])
             for r in c.execute(
                 f"WITH unread AS ({unread_sql}) SELECT root, id FROM (SELECT root, id, ROW_NUMBER() OVER "
-                "(PARTITION BY thread ORDER BY seq) AS k FROM unread WHERE thread IN (SELECT value FROM "
+                "(PARTITION BY thread ORDER BY seq, id) AS k FROM unread WHERE thread IN (SELECT value FROM "
                 "json_each(:wanted)) AND (NOT plain OR thread IN (SELECT value FROM json_each(:legacy)))) "
                 "WHERE k>:low AND k<=:high ORDER BY k, root, id LIMIT :most",
                 {
