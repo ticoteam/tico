@@ -473,6 +473,16 @@ def test_the_owner_lists_and_decides_a_hold_whose_reviewer_lost_sign_in_and_a_me
     assert hold_row(api, row["id"])["state"] == "sent"
 
 
+def test_an_opened_hold_says_each_rules_why_and_its_list_row_does_not(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="escalate", description="Our brand book keeps it secret")
+    held = say(api, "Our favorite color is gold")["held"]
+    [rule_seen] = get(api, f"rule-holds/{held['id']}")["rules"]
+    assert rule_seen["description"] == "Our brand book keeps it secret" and rule_seen["text"] == COLOR
+    [card] = get(api, f"rule-holds?task={hold_row(api, held['id'])['task_id']}")["holds"]
+    assert "description" not in card["rules"][0]
+
+
 def test_an_escalate_with_nobody_near_the_bot_files_its_review_task_for_the_owner(ruled):
     api, _ = ruled
     _nobody_near_ops(api)
