@@ -1,5 +1,5 @@
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { MenuItem } from '@/kit/Menu';
 import { Menu, type MenuProps } from './Menu';
@@ -112,6 +112,68 @@ describe('Menu', () => {
     expect(nav.queryByRole('link', { name: child })).toBeNull();
     fireEvent.click(section);
     expect(nav.getByRole('link', { name: child }).getAttribute('aria-current')).toBe('page');
+  });
+
+  /* Going deeper never changes the menu (plan/layers.html): what is open is the person's, never the address's. */
+  describe('going deeper', () => {
+    async function at(path: string) {
+      const root = createRootRoute({ component: () => <Menu {...PROPS} /> });
+      const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: [path] }) });
+      const view = render(<RouterProvider router={router} />);
+      const go = (to: string) => act(() => router.navigate({ to } as never));
+      const nav = () => within(screen.getByRole('navigation', { name: 'Main' }));
+      // what the person sees: every row, which are open, which is marked, and each team's fold
+      const shape = () =>
+        [...document.querySelectorAll('.nav-items > *, .tree-team, .org > *')].map(
+          (e) => `${e.className}|${e.getAttribute('aria-expanded')}|${e.getAttribute('aria-current')}|${e.textContent}`,
+        );
+      await screen.findByRole('navigation', { name: 'Main' });
+      return { router, view, go, nav, shape };
+    }
+
+    it('opening a routine, a doc or a strategy page changes nothing in the menu', async () => {
+      const m = await at('/company/routines');
+      const before = m.shape();
+      await m.go('/company/routines?panel=builtin%3Amaintenance');
+      expect(m.shape()).toEqual(before);
+      await m.go('/company/routines/r1');
+      expect(m.shape().filter((r) => !r.includes('Routines'))).toEqual(before.filter((r) => !r.includes('Routines')));
+      expect(m.nav().getByRole('button', { name: 'Company', expanded: true })).toBeTruthy();
+    });
+
+    it('a section the person shut stays shut on a deeper page, which only marks it', async () => {
+      const m = await at('/company/strategy');
+      fireEvent.click(await m.nav().findByRole('button', { name: 'Company', expanded: true }));
+      const before = m.shape();
+      expect(m.nav().queryByRole('link', { name: 'Strategy' })).toBeNull();
+      await m.go('/company/strategy/market');
+      expect(m.nav().getByRole('button', { name: 'Company', expanded: false }).getAttribute('aria-current')).toBe('page');
+      expect(m.nav().queryByRole('link', { name: 'Strategy' })).toBeNull();
+      expect(m.shape()).toEqual(before);
+    });
+
+    it('a page reached by a link opens no other section and no team; choosing a section in the menu does', async () => {
+      const m = await at('/company/finance');
+      await m.nav().findByRole('link', { name: 'Finance' });
+      await m.go('/library/doc-1');
+      expect(m.nav().queryByRole('link', { name: 'Docs' })).toBeNull();
+      expect(m.nav().getByRole('link', { name: 'Finance' })).toBeTruthy();
+      await m.go('/team/qa');
+      expect(m.nav().getByRole('link', { name: /Engineering/ }).getAttribute('aria-expanded')).toBe('false');
+      expect(m.nav().queryByRole('link', { name: 'QA Owner' })).toBeNull();
+      fireEvent.click(m.nav().getByRole('link', { name: /^Library/ }));
+      expect(await m.nav().findByRole('link', { name: 'Docs' })).toBeTruthy();
+      expect(m.nav().queryByRole('link', { name: 'Finance' })).toBeNull();
+    });
+
+    it("keeps the person's choice when the menu is drawn again on another page", async () => {
+      const m = await at('/library/docs');
+      fireEvent.click(await m.nav().findByRole('button', { name: 'Library', expanded: true }));
+      m.view.unmount();
+      const n = await at('/library/doc-1');
+      expect(n.nav().getByRole('button', { name: 'Library', expanded: false }).getAttribute('aria-current')).toBe('page');
+      expect(n.nav().queryByRole('link', { name: 'Docs' })).toBeNull();
+    });
   });
 
   it('the Team tab: each team; a shut team shows faces, opening it lists its teammates @s1200', async () => {

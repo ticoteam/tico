@@ -7,19 +7,24 @@ const KEY = 'tico-next:sheets.v1';
 const width = (L: ReturnType<typeof layout>, id: string) => L.sheets.find(s => s.id === id)?.width;
 
 describe('sheet memory', () => {
-  it('keeps sizes per arrangement and Tico as one number, through storage and back', () => {
+  it('keeps sizes per arrangement, and Tico and the menu as one value, through storage and back', () => {
     const { result } = renderHook(() => useSheetMemory());
     act(() => result.current[1](s => withWidth(s, 'page', 'tico', 340)));
     act(() => result.current[1](s => withWidth(s, 'chat', 'chat', 400)));
+    act(() => result.current[1](s => withWidth(s, 'chat', 'menu', 300)));
     act(() => result.current[1](s => withFold(s, 'agent', 'menu', true)));
 
-    expect(JSON.parse(localStorage.getItem(KEY) ?? '{}')).toEqual({ v: 1, tico: 340, chat: { w: { chat: 400 } }, agent: { fold: { menu: true } } });
+    expect(JSON.parse(localStorage.getItem(KEY) ?? '{}')).toEqual({ v: 1, tico: 340, menu: 300, chat: { w: { chat: 400 } }, fold: { menu: true } });
     const saved = renderHook(() => useSheetMemory()).result.current[0];
     expect(width(layout(1920, 'page', saved), 'tico')).toBe(340);
     expect(width(layout(1920, 'agent', saved), 'tico')).toBe(340);
     expect(width(layout(1920, 'chat', saved), 'chat')).toBe(400);
-    expect(layout(1920, 'agent', saved).sheets.find(s => s.id === 'menu')?.state).toBe('fold');
-    expect(layout(1920, 'page', saved).sheets.find(s => s.id === 'menu')?.state).toBe('open');
+    for (const n of ['page', 'chat', 'agent'] as const) expect(layout(1920, n, saved).sheets.find(s => s.id === 'menu')?.state).toBe('fold');
+    act(() => result.current[1](s => withFold(s, 'page', 'menu', false)));
+    expect(width(layout(1920, 'agent', result.current[0]), 'menu')).toBe(300);
+    // its width from before it was one value goes with it
+    act(() => result.current[1](s => withoutWidth({ ...s, page: { w: { menu: 260 } } }, 'agent', 'menu')));
+    expect(width(layout(1920, 'page', result.current[0]), 'menu')).toBe(248);
 
     act(() => result.current[1](s => withoutWidth(s, 'chat', 'chat')));
     expect(width(layout(1920, 'chat', result.current[0]), 'chat')).toBe(320);

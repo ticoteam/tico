@@ -28,6 +28,25 @@ export interface Memory {
 export interface Saved extends Partial<Record<Arrangement, Memory>> {
   v?: number;
   tico?: number;
+  /* the menu's width, on every arrangement */
+  menu?: number;
+  /* Tico's and the menu's hand folds, on every arrangement (Tico's on a call is the call's own) */
+  fold?: Partial<Record<SheetId, boolean>>;
+}
+
+/* Tico and the menu are the same sheets on every page: going deeper (a panel, a second chat, a teammate's page) never
+   opens, folds or resizes them (plan/layers.html). So their widths and hand folds are kept once, not per arrangement;
+   only a call keeps its own Tico fold, as Tico tucks there by default. Until the person sets one, the page's is read
+   (they were kept per arrangement before). */
+export const shared = (arr: Arrangement, id: SheetId): boolean => id === 'menu' || (id === 'tico' && arr !== 'call');
+export const foldOf = (s: Saved | null | undefined, arr: Arrangement, id: SheetId): boolean | undefined =>
+  shared(arr, id) ? (s?.fold?.[id] ?? s?.page?.fold?.[id]) : s?.[arr]?.fold?.[id];
+export const widthOf = (s: Saved | null | undefined, arr: Arrangement, id: SheetId): number | undefined =>
+  id === 'tico' ? s?.tico : id === 'menu' ? (s?.menu ?? s?.page?.w?.menu) : s?.[arr]?.w?.[id];
+export function withFold(s: Saved, arr: Arrangement, id: SheetId, folded: boolean): Saved {
+  if (shared(arr, id)) return { ...s, fold: { ...s.fold, [id]: folded } };
+  const m = s[arr] ?? {};
+  return { ...s, [arr]: { ...m, fold: { ...m.fold, [id]: folded } } };
 }
 
 export interface SheetLayout {
@@ -126,9 +145,7 @@ export const openCount = (width: number): number => {
 export function layout(width: number, arrangement: ArrangementSpec, saved: Saved | null | undefined, forward?: SheetId | null): Layout {
   const a = typeof arrangement === 'string' ? { name: arrangement } : arrangement;
   const A = ARR[a.name];
-  const mem = saved?.[a.name] ?? {};
-  const hand = mem.fold ?? {};
-  const sw = mem.w ?? {};
+  const hand = (id: SheetId) => foldOf(saved, a.name, id);
   if (width <= C.CARDS_AT) return { mode: 'cards', arr: a.name, width, sheets: [], acting: [`cards: the window is ${C.CARDS_AT} or under`] };
 
   // 1. which sheets are showing, and the width each one wants: saved or default, inside its floor and ceiling
@@ -143,7 +160,7 @@ export function layout(width: number, arrangement: ArrangementSpec, saved: Saved
       return;
     }
     const sp = specOf(a.name, id);
-    const want = id === 'tico' ? saved?.tico : sw[id];
+    const want = widthOf(saved, a.name, id);
     const w = clamp(want == null ? sp.def : want, sp.min, sp.max);
     S[id] = { id, state: 'open', why: '', width: w, z, depth: 0, wanted: w, def: sp.def, min: sp.min, max: sp.max, canFold: !!sp.fold };
   });
@@ -166,9 +183,9 @@ export function layout(width: number, arrangement: ArrangementSpec, saved: Saved
 
   // 2. tucks the person chose, then the defaults for the ones they have not touched; a sheet opened by its edge stays
   // open, and the sheets above it collapse to edges
-  for (const id of fixed) if (S[id].canFold && hand[id] === true && id !== F) set(id, 'fold', 'hand');
+  for (const id of fixed) if (S[id].canFold && hand(id) === true && id !== F) set(id, 'fold', 'hand');
   for (const id of A.foldByDefault ?? []) {
-    if (hand[id] == null && id !== F) {
+    if (hand(id) == null && id !== F) {
       set(id, 'fold', 'default');
       acting.push(`${id} tucked: the default here`);
     }
@@ -275,19 +292,12 @@ export function press(
   id: SheetId,
   forward: SheetId | null = null,
 ): { saved: Saved; forward: SheetId | null } {
-  const name = nameOf(arrangement);
   const now = layout(width, arrangement, saved, forward);
   const cur = now.sheets.find(s => s.id === id);
-  const withFold = (v: boolean): Saved => {
-    const n: Saved = structuredClone(saved ?? {});
-    n.v = 1;
-    const m = n[name] ?? {};
-    n[name] = { ...m, fold: { ...m.fold, [id]: v } };
-    return n;
-  };
+  const fold = (v: boolean): Saved => ({ ...withFold(saved ?? {}, nameOf(arrangement), id, v), v: 1 });
   if (!cur) return { saved, forward };
-  if (cur.state === 'open') return { saved: cur.canFold ? withFold(true) : saved, forward: forward === id ? null : forward };
-  const next = cur.canFold ? withFold(false) : saved;
+  if (cur.state === 'open') return { saved: cur.canFold ? fold(true) : saved, forward: forward === id ? null : forward };
+  const next = cur.canFold ? fold(false) : saved;
   const then = layout(width, arrangement, next);
   const same = then.sheets.every(s => (s.id === id ? s.state === 'open' : s.state === now.sheets.find(o => o.id === s.id)?.state));
   return same ? { saved: next, forward: null } : { saved, forward: id };
