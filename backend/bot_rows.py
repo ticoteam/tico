@@ -192,7 +192,7 @@ class BotRows:
         # A bot's activity (its computer, status, queue and tasks) is read only for the bots the caller may read, and
         # not at all for an answer that leaves it out (`activity=False`: GET /api/v2/bots?fields= naming none of it).
         self.assignments, self.draining, self.scopes, self.statuses, self.status_inputs = {}, set(), {}, {}, {}
-        self.queued, self.notes, self.task_flow = {}, {}, {}
+        self.queued, self.notes, self.task_flow, self.slim_tasks = {}, {}, {}, {}
         if read and activity:
             if self.wants("assignment", "online"):
                 self.assignments = _by(
@@ -212,22 +212,24 @@ class BotRows:
                 self.queued = {slug: q["queued"] for slug, q in job_queues(c, who, read).items()}
             if self.wants("notes"):
                 self.notes = H.notes_waiting_counts(c, read, limit=500)
-            if self.wants("task_flow", "goal_active"):
+            if self.wants("task_flow"):
+                from . import waiting_on as W
+
                 stored = []
                 for part in H.chunks(read):
                     stored += c.execute(
-                        "SELECT * FROM tasks WHERE owner_id IN (" + ",".join("?" * len(part)) + ") AND status='open'",
+                        f"SELECT {W.SLIM_TASK_COLUMNS} FROM tasks WHERE owner_id IN ("
+                        + ",".join("?" * len(part))
+                        + ") AND status='open'",
                         ["bot:" + slug for slug in part],
                     ).fetchall()
                 tasks = {}
                 for task in map(dict, stored):
+                    self.slim_tasks[task["id"]] = task
                     tasks.setdefault(H.actor_id(task["owner_id"]), []).append(task)
-                # The rows just read stand for every one-task read of these tasks (H.task_untagged, the privacy checks,
-                # the waits' waiting_on.prime, a goal's room check). Their tags are not read: nothing here shows or
-                # checks one.
-                H.prime_task_rows(c, stored)
-                if self.wants("task_flow"):
-                    self.task_flow = task_flow(c, {slug: tasks.get(slug, []) for slug in read}, who)
+                # Prime only the slim wait cache (never SELECT *), so waiting_on_many reuses these rows directly.
+                W.prime_slim_tasks(c, stored)
+                self.task_flow = task_flow(c, {slug: tasks.get(slug, []) for slug in read}, who)
             if self.wants("claim_scoped", "claim_task"):
                 self.scopes = {
                     bot: row["claim_task"]
@@ -236,8 +238,10 @@ class BotRows:
                     ).items()
                 }
                 if self.wants("claim_task"):
-                    # For the reader's check on each scoped task (H.task_untagged), which reads none of its tags.
-                    H.prime_tasks(c, list(self.scopes.values()), with_tags=False)
+                    # Only prime tasks not already read in slim_tasks above.
+                    missing = [tid for tid in self.scopes.values() if tid not in self.slim_tasks]
+                    if missing:
+                        H.prime_tasks(c, missing, with_tags=False)
         self.goals = {}
         for part in H.chunks(slugs if activity and self.wants("goal_active") else []):
             for row in c.execute(

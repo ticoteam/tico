@@ -748,36 +748,83 @@ def waiting_on(conn: "sqlite3.Connection", task_id: str) -> list[Wait]:
     return of(conn, row) if row else []
 
 
+# The columns waiting_on.of, task_engine checks and bot_rows.task_flow read from a task row: no body, title,
+# acceptance, note or checkpoint, so hot reads (GET /api/v2/bots) stay on the covering partial index.
+SLIM_TASK_COLUMNS = (
+    "id,owner_id,requester_id,status,conversation_id,private,readers,"
+    "pipeline_id,stage_id,assignee_id,human_id,version,created_at,live_meeting_id"
+)
+SLIM_TASK_SQL = f"SELECT {SLIM_TASK_COLUMNS} FROM tasks WHERE id=?"
+
 # task_engine.task()'s reads, word for word, so `prime` can seed them.
+# visits_open and snoozes_open are unique partial indexes on task_id, so each task has at most one open row
+# and no ORDER BY rowid sort is needed.
 _TASK_READS = (
     ("SELECT * FROM tasks WHERE id=?", "SELECT * FROM tasks WHERE id IN (%s)", "id"),
     (
         "SELECT * FROM visits WHERE task_id=? AND left_at IS NULL",
-        "SELECT * FROM visits WHERE task_id IN (%s) AND left_at IS NULL ORDER BY rowid",
+        "SELECT * FROM visits WHERE task_id IN (%s) AND left_at IS NULL",
         "task_id",
     ),
     (
         "SELECT * FROM snoozes WHERE task_id=? AND ended_at IS NULL",
-        "SELECT * FROM snoozes WHERE task_id IN (%s) AND ended_at IS NULL ORDER BY rowid",
+        "SELECT * FROM snoozes WHERE task_id IN (%s) AND ended_at IS NULL",
         "task_id",
     ),
 )
 
 
+def prime_slim_tasks(conn: "sqlite3.Connection", rows: Iterable[Any]) -> None:
+    """Seed SLIM_TASK_SQL in this snapshot without putting partial rows into SELECT * caches."""
+    read_cache.prime(conn, SLIM_TASK_SQL, {(str(row["id"]),): row for row in rows})
+
+
+def _engine_task(conn: "sqlite3.Connection", raw: Any) -> Row | None:
+    """Assemble an engine task dict from an already-read task row (full or slim) using the primed visit/stage/pipeline/snooze."""
+    if not raw or not raw["pipeline_id"]:
+        return None
+    row: Row = dict(raw)
+    task_id = str(row["id"])
+    row["visit"] = read_cache.one_dict(conn, _TASK_READS[1][0], (task_id,))
+    row["stage"] = E.stage(conn, row["stage_id"])
+    row["pipeline"] = E.pipeline(conn, row["pipeline_id"])
+    row["snooze"] = read_cache.one_dict(conn, _TASK_READS[2][0], (task_id,))
+    return row
+
+
 _PRIMED = ("waiting_on.prime",)  # the tasks whose waits this snapshot has read already
 
 
-def prime(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> dict[str, Row]:
+def prime(conn: "sqlite3.Connection", task_ids: Iterable[str], *, slim: bool = False) -> dict[str, Row]:
     """Read many tasks as `task_engine.task()` and `task_requirements.standings` read each one, a few statements in
     all, for the reads of each task that follow in this snapshot: a list of waits costs what one task's does. Gives
-    the tasks it read, by id (none where nothing is kept for the snapshot)."""
+    the tasks it read, by id (none where nothing is kept for the snapshot). `slim=True` reads only SLIM_TASK_COLUMNS
+    for unread tasks and reuses any already-primed full or slim row."""
     import sqlite3
 
     values = read_cache.cache(conn)
     if values is None or conn.row_factory is not sqlite3.Row:
         return {}
     ids = sorted({str(task_id) for task_id in task_ids if task_id})
-    for one_sql, many_sql, column in _TASK_READS:
+    full_sql = _TASK_READS[0][0]
+    if slim:
+        unread_tasks = [
+            task_id
+            for task_id in ids
+            if ("one", full_sql, (task_id,)) not in values and ("one", SLIM_TASK_SQL, (task_id,)) not in values
+        ]
+        if unread_tasks:
+            found_tasks: dict[str, Any] = {}
+            for raw in conn.execute(
+                f"SELECT {SLIM_TASK_COLUMNS} FROM tasks WHERE id IN (SELECT value FROM json_each(?))",
+                (json.dumps(unread_tasks),),
+            ).fetchall():
+                found_tasks.setdefault(str(raw["id"]), raw)
+            read_cache.prime(conn, SLIM_TASK_SQL, {(task_id,): found_tasks.get(task_id) for task_id in unread_tasks})
+        reads = _TASK_READS[1:]
+    else:
+        reads = _TASK_READS
+    for one_sql, many_sql, column in reads:
         unread = [task_id for task_id in ids if ("one", one_sql, (task_id,)) not in values]
         if unread:  # one statement however many (the ids go in as one JSON list)
             found: dict[str, Any] = {}
@@ -786,9 +833,17 @@ def prime(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> dict[str, Row]
                 found.setdefault(str(row[column]), row)
             read_cache.prime(conn, one_sql, {(task_id,): found.get(task_id) for task_id in unread})
     # Their stages and pipelines, which `task_engine.task()` reads by id: one statement a table.
-    stored = [read_cache.one(conn, _TASK_READS[0][0], (task_id,)) for task_id in ids]
-    E.prime_parts(conn, (r["stage_id"] for r in stored if r), (r["pipeline_id"] for r in stored if r))
-    rows = [row for row in (E.task(conn, task_id) for task_id in ids) if row]
+    if slim:
+        stored = [
+            values.get(("one", full_sql, (task_id,))) or values.get(("one", SLIM_TASK_SQL, (task_id,)))
+            for task_id in ids
+        ]
+        E.prime_parts(conn, (r["stage_id"] for r in stored if r), (r["pipeline_id"] for r in stored if r))
+        rows = [row for row in (_engine_task(conn, r) for r in stored) if row]
+    else:
+        stored = [read_cache.one(conn, full_sql, (task_id,)) for task_id in ids]
+        E.prime_parts(conn, (r["stage_id"] for r in stored if r), (r["pipeline_id"] for r in stored if r))
+        rows = [row for row in (E.task(conn, task_id) for task_id in ids) if row]
     # What follows reads for each task only once a snapshot: Needs you primes the whole list, then its briefs and the
     # reader's views prime parts of it again. The set lives in the read cache, so a write drops it with the rest.
     primed: set[str] = values.setdefault(_PRIMED, set())
@@ -839,7 +894,7 @@ def prime(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> dict[str, Row]
 def waiting_on_many(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> dict[str, list[Wait]]:
     """`waiting_on` for each task of a list, by task id."""
     ids = list(task_ids)
-    read = prime(conn, ids)
+    read = prime(conn, ids, slim=True)
     seen = _seen(conn)  # "can this bot run", once for the whole list
     out: dict[str, list[Wait]] = {}
     for task_id in ids:
