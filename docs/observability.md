@@ -20,6 +20,7 @@ one PostHog project between several apps by filtering on the `app` property (Tic
 | `TICO_POSTHOG_HOST` | Exactly `https://us.i.posthog.com` or `https://eu.i.posthog.com`, matching the chosen project's region |
 | `TICO_SENTRY_DSN` | Public HTTPS Sentry ingestion DSN for the Tico project; enables browser errors with the required common settings |
 | `TICO_SENTRY_SERVER_DSN` | Public HTTPS ingestion DSN for the same Tico project; enables API/scheduler errors with the environment setting |
+| `TICO_SENTRY_TRACES_SAMPLE_RATE` | Hosted installs only (`TICO_HOSTED`): the share of requests sent to the server DSN as transactions, from `0` (off) to `1`; unset or not such a number: `0.01`. A self-hosted install sends none whatever it says |
 | `TICO_INSTANCE_NAME` | Optional name for this install on its error reports (`instance` tag, made a lowercase slug such as `acme-co`); unset: the team's name is sent (`TICO_TEAM_NAME`), or the opaque `TICO_ENVIRONMENT_ID` when it has none |
 | `TICO_RELEASE` | Optional release label; only letters, numbers, dots, underscores and hyphens, up to 100 characters; unset: the Tico version |
 
@@ -130,8 +131,8 @@ are dropped and cannot report under a new identity.
 This uses the existing per-install `TICO_SENTRY_DSN` and required browser settings above. Leave
 them unset on installs outside an authorized rollout; adding this instrumentation does not enable
 reporting on stock installs. Team and Tidy activation remains a separate operator rollout.
-Defaults, request/context capture, logs, tracing, replay,
-breadcrumbs and local/source variables are disabled. Events are reconstructed before sending:
+Defaults, request/context capture, logs, browser tracing, replay,
+breadcrumbs and local/source variables are disabled; server tracing is on hosted installs only (below). Events are reconstructed before sending:
 fixed error labels, app/environment, status/source on the server and allowlisted stack
 locations; frontend events include the same opaque identity. Exception messages, customer
 values, URLs, headers, tokens, payload bodies and arbitrary SDK enrichment are discarded.
@@ -164,6 +165,13 @@ It prints the event id to look for in Sentry, or says reporting is off. Each eve
 headers, cookies, query strings, addresses, emails, tokens or any message, task, document or comment text: each
 event is rebuilt from those fields before the SDK sees it and again in its last hook, and breadcrumbs are off.
 
+A hosted install (`TICO_HOSTED` `own` or `invited`) with server reporting on also sends one request in a hundred as a
+transaction (`TICO_SENTRY_TRACES_SAMPLE_RATE` sets the share, `0` turns it off); a self-hosted install sends none. Each
+holds only the route's template, the status, the caller's kind (`human`, `bot`, `runner`, `service` or `anonymous`),
+the duration, the sign-in, SQL and write-lock milliseconds, `release`, `instance` and environment. It has no spans, so
+no SQL, addresses, query strings, headers or people; requests without a route template (static files, unmatched
+addresses) are not sent. Like an error, each transaction is rebuilt before the SDK sees it and again in its last hook.
+
 PostHog autocapture, replay, heatmaps, dead/rage clicks, error capture, surveys, performance,
 remote flags and external dependency loading are disabled. The last-mile hook allows only
 our named events and fixed properties, plus SDK event IDs/timestamps and the configured
@@ -191,6 +199,7 @@ services:
       TICO_POSTHOG_HOST: ${TICO_POSTHOG_HOST:-}
       TICO_SENTRY_DSN: ${TICO_SENTRY_DSN:-}
       TICO_SENTRY_SERVER_DSN: ${TICO_SENTRY_SERVER_DSN:-}
+      TICO_SENTRY_TRACES_SAMPLE_RATE: ${TICO_SENTRY_TRACES_SAMPLE_RATE:-}
       TICO_INSTANCE_NAME: ${TICO_INSTANCE_NAME:-}
       TICO_RELEASE: ${TICO_RELEASE:-}
 ```

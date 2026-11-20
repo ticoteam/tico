@@ -3,13 +3,21 @@
 import hashlib
 import hmac
 import json
+import math
 import os
+import random
 import re
 import threading
 import time
+import uuid
+from contextlib import suppress
 from pathlib import Path
+from typing import TYPE_CHECKING, cast
 
 from .config import DEFAULT_COMPANY_NAME, ROOT
+
+if TYPE_CHECKING:
+    from sentry_sdk._types import Event
 
 ENVIRONMENTS = frozenset({"development", "staging", "production", "test"})
 POSTHOG_HOSTS = frozenset({"https://us.i.posthog.com", "https://eu.i.posthog.com"})
@@ -165,6 +173,89 @@ def sanitize_event(event, hint=None):
     return clean
 
 
+# A hosted server's share of requests sent as transactions when TICO_SENTRY_TRACES_SAMPLE_RATE does not set one: runner
+# heartbeats and bot polls make most of its requests, so one in a hundred still samples every busy route many times an
+# hour while keeping Sentry's volume, and its bill, small.
+TRACE_RATE = 0.01
+CALLERS = frozenset({"human", "bot", "runner", "service", "anonymous"})
+# A transaction's timings beside its duration, each in milliseconds: sign-in, SQL and the write-lock wait.
+MEASUREMENTS = ("auth", "sql", "lock_wait")
+
+
+def trace_rate(settings):
+    """The share of requests sent as Sentry transactions. A self-hosted server sends none; a hosted one (TICO_HOSTED)
+    sends TICO_SENTRY_TRACES_SAMPLE_RATE, a number from 0 (off) to 1, or TRACE_RATE when that is unset or not one."""
+    if not settings.hosted:
+        return 0.0
+    try:
+        rate = float(settings.sentry_traces_sample_rate)
+    except ValueError:
+        return TRACE_RATE
+    return rate if 0 <= rate <= 1 else TRACE_RATE
+
+
+def _ms(value):
+    return type(value) in (int, float) and math.isfinite(value) and 0 <= value < 86_400_000
+
+
+def sanitize_transaction(event, hint=None) -> "Event | None":
+    """`sanitize_event` for a transaction: rebuilt from the route's template, the status, the caller's kind and the
+    timings. Spans, request, user, breadcrumbs, extra, contexts other than the trace's ids and every other SDK-added
+    field never cross, so no SQL, address, query string, header or person does either."""
+    tags = event.get("tags", {})
+    name = event.get("transaction")
+    start, end = event.get("start_timestamp"), event.get("timestamp")
+    trace = event.get("contexts", {}).get("trace", {})
+    if (
+        event.get("type") != "transaction"
+        or not isinstance(name, str)
+        or not ROUTE.fullmatch(name)
+        or not (type(start) is float and type(end) is float and 0 < start <= end)
+        or not (isinstance(trace.get("trace_id"), str) and re.fullmatch(r"[a-f0-9]{32}", trace["trace_id"]))
+        or not (isinstance(trace.get("span_id"), str) and re.fullmatch(r"[a-f0-9]{16}", trace["span_id"]))
+    ):
+        return None
+    status = trace.get("status")
+    clean = {
+        "type": "transaction",
+        "platform": "python",
+        "transaction": name,
+        "transaction_info": {"source": "route"},
+        "start_timestamp": start,
+        "timestamp": end,
+        "contexts": {
+            "trace": {
+                "trace_id": trace["trace_id"],
+                "span_id": trace["span_id"],
+                "op": "http.server",
+                "status": status if isinstance(status, str) and SOURCE.fullmatch(status) else "unknown",
+            }
+        },
+        "tags": {"app": "tico", "source": "request"},
+    }
+    if tags.get("status") in {str(n) for n in range(100, 600)}:
+        clean["tags"]["status"] = tags["status"]
+    if tags.get("caller") in CALLERS:
+        clean["tags"]["caller"] = tags["caller"]
+    if tags.get("instance") and instance(tags["instance"]) == tags["instance"]:
+        clean["tags"]["instance"] = tags["instance"]
+    if event.get("environment") in ENVIRONMENTS:
+        clean["environment"] = event["environment"]
+    if release(event.get("release")):
+        clean["release"] = release(event["release"])
+    measurements = event.get("measurements", {})
+    kept = {
+        key: {"value": measurements[key]["value"], "unit": "millisecond"}
+        for key in MEASUREMENTS
+        if isinstance(measurements.get(key), dict) and _ms(measurements[key].get("value"))
+    }
+    if kept:
+        clean["measurements"] = kept
+    if isinstance(event.get("event_id"), str) and re.fullmatch(r"[a-f0-9]{32}", event["event_id"]):
+        clean["event_id"] = event["event_id"]
+    return cast("Event", clean)
+
+
 def no_breadcrumb(crumb, hint=None):
     return None
 
@@ -175,6 +266,7 @@ class Observability:
         self.client = None
         self.release = ""
         self.instance = ""
+        self.trace_rate = 0.0
         self.runner_sent = {}  # (runner, file, line) -> when, then (runner,) -> [when, ...]
         self.runner_lock = threading.Lock()
 
@@ -190,6 +282,7 @@ class Observability:
         self.instance = (
             instance(self.settings.instance_name) or instance(named) or instance(self.settings.environment_id)
         )
+        rate = trace_rate(self.settings)
         try:
             from sentry_sdk import Client
 
@@ -215,7 +308,7 @@ class Observability:
                 include_local_variables=False,
                 include_source_context=False,
                 max_breadcrumbs=0,
-                traces_sample_rate=0,
+                traces_sample_rate=rate,
                 profiles_sample_rate=0,
                 auto_session_tracking=False,
                 send_client_reports=False,
@@ -223,8 +316,10 @@ class Observability:
                 enable_metrics=False,
                 server_name="",
                 before_send=sanitize_event,
+                before_send_transaction=sanitize_transaction,
                 before_breadcrumb=no_breadcrumb,
             )
+            self.trace_rate = rate
         except Exception:
             self.client = None
 
@@ -268,6 +363,40 @@ class Observability:
                 return self.client.capture_event(clean)
         except Exception:
             pass
+        return None
+
+    def trace(self, route, status, ms, auth_ms=0.0, cost=None, caller=""):
+        """Send one request as a transaction, a `trace_rate` share of them: its route template, status, caller kind and
+        timings (`cost` is the flight recorder's SQL and write-lock milliseconds). Built here rather than by the SDK's
+        tracing, which needs a global client and would add spans with SQL and addresses."""
+        if self.client is None or not self.trace_rate or random.random() >= self.trace_rate:
+            return None
+        with suppress(Exception):  # a report that fails to build or send never fails the request
+            from sentry_sdk.tracing import get_span_status_from_http_code
+
+            end = time.time()
+            timings = {"auth": auth_ms, **({"sql": cost[0], "lock_wait": cost[1]} if cost is not None else {})}
+            event = {
+                "type": "transaction",
+                "transaction": route,
+                "start_timestamp": end - ms / 1000,
+                "timestamp": end,
+                "contexts": {
+                    "trace": {
+                        "trace_id": uuid.uuid4().hex,
+                        "span_id": uuid.uuid4().hex[:16],
+                        "status": get_span_status_from_http_code(status),
+                    }
+                },
+                "tags": {"status": str(status), "caller": caller, "instance": self.instance},
+                "environment": self.settings.observability_environment,
+                "release": self.release,
+                "measurements": {k: {"value": float(v), "unit": "millisecond"} for k, v in timings.items()},
+            }
+            # Sanitize before handing anything to the SDK, and again at its final hook.
+            clean = sanitize_transaction(event)
+            if clean:
+                return self.client.capture_event(clean)
         return None
 
     def capture_runner(self, runner, version, panics, now=None):

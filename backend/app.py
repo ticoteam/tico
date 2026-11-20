@@ -91,7 +91,6 @@ from . import (
     web_routes,
 )
 from .api_contract import api_v2
-from . import timing
 from backend.task_actions_routes import register_core as register_task_routes
 
 
@@ -185,11 +184,11 @@ def _configure_app(
 
     may_edit_routines = _routine_permissions(auth, lambda *args, **kwargs: delegated_identity(*args, **kwargs))
 
-    timing.install_middleware(app, flight, recorder)
+    flight.install_middleware(app, recorder, telemetry)
 
     actor_names.install_route_class(app, store)
 
-    timing.register(app)
+    flight.register_timing(app)
 
     mutate = _mutation(auth, store)
 
@@ -544,9 +543,7 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
         if settings.screen_relay_url:
             await asyncio.to_thread(screen_sessions.start)
             screen_relay_task = asyncio.create_task(screen_sessions.run(stop))
-        from .timing import watch_loop
-
-        timing_task = asyncio.create_task(watch_loop(app.state.timing, stop))
+        timing_task = asyncio.create_task(flight.watch_loop(app.state.timing, stop))
         recorder_thread = flight.Flight(recorder, store, settings) if recorder else None
         if recorder_thread:
             recorder_thread.start()
@@ -974,7 +971,7 @@ def _install_request_guard(
         "script-src " + " ".join(["'self'", *hashes]) + "; object-src 'none'; base-uri 'none'; frame-ancestors 'self'"
     )
 
-    from .timing import Timing
+    from .flight import Timing
 
     app.state.auth_pool = None  # the lifespan's own, while it runs; outside it sign-in uses the loop's default pool
     app.state.needs_lane = None  # the same for Needs you's builds (backend/needs_lane.py)

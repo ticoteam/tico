@@ -23,6 +23,7 @@ Retention: minutes for two days, then hours; requests, browser timings, slow req
 database and events 90 days (`sweep`, run by the scheduler's hourly sweep).
 """
 
+import asyncio
 import bisect
 import collections
 import contextvars
@@ -294,6 +295,156 @@ def client_of(who):
     return "assistant" if getattr(who, "via", "") == "assistant" else "browser"
 
 
+def _pct(values, q):
+    if not values:
+        return 0
+    ordered = sorted(values)
+    return round(ordered[min(len(ordered) - 1, int(q * len(ordered)))], 1)
+
+
+class Timing:
+    """Where a request's time goes (is it the backend or the frontend?), in memory since the start: per route, the last
+    300 requests' sign-in time (it waits for a worker thread) and whole answer time on the server; how late the event
+    loop wakes (a blocked loop delays every request); and how many requests are in flight. Numbers only: no paths with
+    ids, no bodies, no people. `GET /api/v2/operations/timing` reads it, every answer carries `Server-Timing`, and with
+    the recorder on each request and loop wake is also handed to it, which keeps the history."""
+
+    def __init__(self, keep=300):
+        self.lock = threading.Lock()
+        self.routes = collections.defaultdict(lambda: collections.deque(maxlen=keep))
+        self.lag = collections.deque(maxlen=keep)
+        self.inflight = self.peak = 0
+        self.since = time.time()
+        self.recorder = None
+
+    def begin(self):
+        with self.lock:
+            self.inflight += 1
+            self.peak = max(self.peak, self.inflight)
+
+    def end(self, route, auth_ms, total_ms, caller="anonymous", status=200, nbytes=0, actor="", cost=None, client=""):
+        with self.lock:
+            self.inflight -= 1
+            self.routes[route].append((auth_ms, total_ms))
+        if self.recorder is not None:
+            self.recorder.request(route, caller, status, total_ms, nbytes, actor, cost, client)
+
+    def summary(self):
+        with self.lock:
+            rows = []
+            for route, samples in self.routes.items():
+                auth = [a for a, _ in samples]
+                total = [t for _, t in samples]
+                rows.append(
+                    {
+                        "route": route,
+                        "n": len(samples),
+                        "auth_p50": _pct(auth, 0.5),
+                        "auth_p95": _pct(auth, 0.95),
+                        "p50": _pct(total, 0.5),
+                        "p95": _pct(total, 0.95),
+                        "max": round(max(total), 1),
+                    }
+                )
+            lag = list(self.lag)
+            return {
+                "since": self.since,
+                "inflight": self.inflight,
+                "peak_inflight": self.peak,
+                "loop_lag_p50": _pct(lag, 0.5),
+                "loop_lag_p95": _pct(lag, 0.95),
+                "loop_lag_max": round(max(lag), 1) if lag else 0,
+                "routes": sorted(rows, key=lambda r: -r["p95"] * r["n"]),
+            }
+
+
+async def watch_loop(timing, stop, every=0.5):
+    """How late the event loop wakes from a short sleep: anything blocking it shows here."""
+    try:
+        while not stop.is_set():
+            started = time.perf_counter()
+            await asyncio.sleep(every)
+            lag = (time.perf_counter() - started - every) * 1000
+            timing.lag.append(lag)
+            if timing.recorder is not None:
+                timing.recorder.tick(lag)
+    finally:
+        if timing.recorder is not None:
+            timing.recorder.beat = None  # a probe that stopped is not a stalled loop
+
+
+def install_middleware(app, recorder, telemetry):
+    """Times every request for `Timing` and the recorder, and hands it to `telemetry` (backend/observability.py), which
+    sends a sampled share as Sentry transactions on a hosted server."""
+
+    @app.middleware("http")
+    async def request_timing(request, call_next):
+        started = time.perf_counter()
+        request.state.auth_ms = 0.0
+        app.state.timing.begin()
+        # This request's SQL time and write-lock wait, added to by the threads it runs on.
+        cost, cost_token = request_started(request.method, request.scope) if recorder is not None else (None, None)
+        route = request.url.path
+        response = None
+        try:
+            response = await call_next(request)
+            found = request.scope.get("route")
+            route = getattr(found, "path", None) or ("static" if not route.startswith("/api") else "unmatched")
+            total = (time.perf_counter() - started) * 1000
+            extra = getattr(request.state, "server_timing", "")
+            response.headers["Server-Timing"] = (
+                f"auth;dur={request.state.auth_ms:.1f}, app;dur={total:.1f}"
+                + (f", sql;dur={cost[0]:.1f}, wait;dur={cost[1]:.1f}" if cost is not None else "")
+                + (", " + extra if extra else "")
+            )
+            return response
+        finally:
+            found = request.scope.get("route")
+            key = (
+                request.method
+                + " "
+                + (
+                    getattr(found, "path", None)
+                    or ("static" if not request.url.path.startswith("/api") else "unmatched")
+                )
+            )
+            # The recorder's caller kind, status and size; a raised error counts as a 500.
+            who = getattr(request.state, "identity", None)
+            caller = caller_kind(who)
+            status = response.status_code if response is not None else 500
+            size = response.headers.get("content-length") if response is not None else None
+            # Screen long-polls wait for new pixels; retain SQL/lock/processing time, exclude only deliberate sleeps.
+            active_ms = max(0, (time.perf_counter() - started) * 1000 - getattr(request.state, "idle_wait_ms", 0))
+            app.state.timing.end(
+                key,
+                request.state.auth_ms,
+                active_ms,
+                caller,
+                status,
+                int(size) if size and size.isdigit() else 0,
+                getattr(who, "actor", "") or "",
+                cost,
+                client_of(who),
+            )
+            telemetry.trace(key, status, active_ms, request.state.auth_ms, cost, caller)
+            if cost_token is not None:
+                request_finished(cost_token)
+
+
+def register_timing(app):
+    from fastapi import Request
+
+    from .store import Problem
+
+    @app.get("/api/v2/operations/timing")
+    def request_timings(request: Request):
+        """Where requests spend their time (`Timing`): the owner, or BotOps."""
+        who = request.state.identity
+        if who.role != "owner" and who.actor != "bot:botops":
+            raise Problem("forbidden", "Request timings are for the owner and BotOps", 403)
+        return app.state.timing.summary()
+
+
 class Recorder:
     """In-memory collection. The request and SQL paths only append; `drain` (the background thread) does the rest."""
 
@@ -386,7 +537,7 @@ class Recorder:
         self.samples.append(("e", int(time.time()), kind, detail))
 
     def tick(self, lag_ms):
-        """The event loop woke `lag_ms` late (backend/timing.py watch_loop)."""
+        """The event loop woke `lag_ms` late (`watch_loop`)."""
         self.beat = time.monotonic()
         if self.loop_thread is None:
             self.loop_thread = threading.get_ident()
