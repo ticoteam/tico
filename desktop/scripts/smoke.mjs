@@ -5,7 +5,8 @@
 // - the companies are sealed apart: a cookie A's server sets is never sent to B (cookies ignore ports, so only the
 //   per-company session keeps it out);
 // - the small call window opens on A's call route;
-// - a tico://open link handed to a second launch switches the running app to B at that page (single instance).
+// - a tico://open link handed to a second launch switches the running app to B at that page (single instance);
+// - company C, whose server failed while it was not shown, loads again when it is switched to once its server answers.
 // It quits on its own within 40 seconds whatever happens. Run after `npm run build` (npm run smoke does both).
 import { spawn } from 'node:child_process';
 import { mkdtempSync, writeFileSync } from 'node:fs';
@@ -18,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const electron = createRequire(import.meta.url)('electron');
 const children = [];
-const seen = { report: null, bCookie: null, call: false, deep: false };
+const seen = { report: null, bCookie: null, call: false, deep: false, recovered: false };
 const passed = [];
 let releaseB = null;
 
@@ -27,6 +28,7 @@ function finish(ok, message) {
   for (const c of children) if (c.exitCode === null) c.kill('SIGKILL');
   a.close();
   b.close();
+  c.close();
   process.exit(ok ? 0 : 1);
 }
 setTimeout(() => finish(false, `stopped after 40 seconds; passed so far: ${passed.join(', ') || 'nothing'}`), 40_000).unref();
@@ -120,6 +122,19 @@ const b = createServer((req, res) => {
   }
 });
 
+// Company C's server drops every connection (the page cannot load) until `cUp`, then serves its page.
+let cUp = false;
+const c = createServer((req, res) => {
+  if (!cUp) return req.socket.destroy();
+  if (req.url.split('?')[0] === '/next/') {
+    html(res, '<!doctype html><title>C</title>');
+    seen.recovered = true;
+    step();
+  } else {
+    res.writeHead(404).end();
+  }
+});
+
 const origin = (server) => `http://127.0.0.1:${server.address().port}`;
 let deepSent = false;
 
@@ -131,7 +146,7 @@ function checkReport(r) {
   if (r.require !== 'undefined' || r.process !== 'undefined') problems.push('Node reached the page');
   const list = r.companies ?? [];
   const me = list.find((c) => c.self);
-  if (list.length !== 2 || !me || me.origin !== origin(a) || !me.active || list.some((c) => !c.self && c.origin !== '')) {
+  if (list.length !== 3 || !me || me.origin !== origin(a) || !me.active || list.some((c) => !c.self && c.origin !== '')) {
     problems.push(`companies.list ${JSON.stringify(r.companies ?? r.listError)}`);
   }
   if (r.badCallId !== 'refused') problems.push('a bad call id was accepted');
@@ -161,7 +176,14 @@ function step() {
     });
   }
   if (seen.deep && !passed.includes('deep link')) passed.push('deep link');
-  if (passed.length === 4) {
+  // C failed at start. Its server comes back, and a link to the very page it failed on (so the switch itself has
+  // nothing new to load) brings it forward: the app must try it again.
+  if (passed.length === 4 && !cUp) {
+    cUp = true;
+    launch(`tico://open?u=${encodeURIComponent(`${origin(c)}/next/`)}`);
+  }
+  if (seen.recovered && !passed.includes('recovered')) passed.push('recovered');
+  if (passed.length === 5) {
     const r = seen.report;
     finish(true, `${passed.join(', ')}; bridge ${r.version} on ${r.platform}, html data-desktop=${r.desktop}, inset ${r.insetLeft}, ${r.width}px wide`);
   }
@@ -177,10 +199,11 @@ function launch(...args) {
 
 let listening = 0;
 const ready = () => {
-  if (++listening < 2) return;
+  if (++listening < 3) return;
   const company = (id, server) => ({ id, url: origin(server), partition: `persist:company-${id}`, name: id, email: '' });
-  writeFileSync(join(userData, 'companies.json'), JSON.stringify({ version: 1, active: 'ca', companies: [company('ca', a), company('cb', b)] }));
+  writeFileSync(join(userData, 'companies.json'), JSON.stringify({ version: 1, active: 'ca', companies: [company('ca', a), company('cb', b), company('cc', c)] }));
   launch().on('exit', (code) => finish(false, `the app quit early (code ${code})`));
 };
 a.listen(0, '127.0.0.1', ready);
 b.listen(0, '127.0.0.1', ready);
+c.listen(0, '127.0.0.1', ready);

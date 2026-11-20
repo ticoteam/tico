@@ -57,7 +57,9 @@ def hold(c: sqlite3.Connection, bot: str, job_id: str, at: str | None = None) ->
     book = SL.book(c)
     if book is None:
         return RunHold()
-    account = next((a.id for a in SL.accounts(c, book.id).values() if a.code == AI), None)
+    # The AI services account by its code (unique in a book), not the whole chart: this runs in every claim's write.
+    found = c.execute("SELECT id FROM fin_accounts WHERE book_id=? AND code=?", (book.id, AI)).fetchone()
+    account = found[0] if found else None
     live = [b.id for b in SB.budgets(c, book.id).values() if b.active]
     versions = SB.versions(c, live) if account is not None and live else {}
     if not any(versions.get(bid) for bid in live):

@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { app, BaseWindow, dialog, nativeImage, nativeTheme, screen, session, WebContentsView, type NativeImage, type Session, type WebContents } from 'electron';
+import { app, BaseWindow, dialog, nativeImage, nativeTheme, powerMonitor, screen, session, WebContentsView, type NativeImage, type Session, type WebContents } from 'electron';
 import type { CallWindowState, CompanyRef } from '../bridge';
 import { appUrl, checkAddress, hostOf, localSignInUrl } from './address';
 import { anyCallLive, badgeFor, dotBitmap } from './badge';
@@ -23,6 +23,9 @@ import { loadWindowState, MIN_HEIGHT, MIN_WIDTH, restoreFrame, saveWindowState }
 const TRAFFIC_LIGHTS = { x: 22, y: 31 };
 /** What the page keeps clear of the buttons, from the window's top left corner (handed to the page as CSS vars). */
 export const BUTTONS_INSET = { left: 92, top: 52 };
+
+/** How often a company whose page could not load is tried again, shown or not (a Mac that woke before its network). */
+const RETRY_MS = 30_000;
 
 const LOCAL_DIR = path.join(__dirname, '..', 'local');
 const LOCAL_PRELOAD = path.join(__dirname, '..', 'localPreload.js');
@@ -87,6 +90,8 @@ export class Shell {
     const active = this.file.active;
     if (active) this.switchTo(active);
     else this.showLocal({ page: 'add' });
+    setInterval(() => this.retryFailed(), RETRY_MS).unref();
+    powerMonitor.on('resume', () => this.retryFailed());
   }
 
   // ------------------------------------------------------------------------------------------------ the window
@@ -213,11 +218,22 @@ export class Shell {
         this.persistSoon();
       },
     });
+    // A failed load finishes too (its error page): only a load that did not fail counts as loaded.
+    let loadFailed = false;
+    wc.on('did-start-loading', () => (loadFailed = false));
     wc.on('did-fail-load', (_e, code, _description, _url, isMainFrame) => {
       if (!isMainFrame || code === -3) return; // -3: a navigation replaced by another
+      loadFailed = true;
       entry.failed = true;
       log('warn', `could not load ${company.url} (error ${code})`);
-      if (this.file.active === company.id) this.showLocal({ page: 'unreachable', companyId: company.id });
+      // a quiet retry that failed again leaves the page as it is (it never brings the window forward again)
+      if (this.file.active === company.id && !this.showingUnreachable(company.id)) this.showLocal({ page: 'unreachable', companyId: company.id });
+    });
+    // Loaded (a retry, Reload, the network back): Cannot reach goes.
+    wc.on('did-finish-load', () => {
+      if (loadFailed) return;
+      entry.failed = false;
+      if (this.showingUnreachable(company.id)) this.hideLocal();
     });
     wc.on('dom-ready', () => wc.send('frame:fullscreen', this.win.isFullScreen()));
     // A new document has no room: whatever call the old one reported is over.
@@ -272,6 +288,9 @@ export class Shell {
       entry.failed = false;
       entry.loaded = true;
       void wc.loadURL(to).catch(() => undefined);
+    } else if (entry.failed) {
+      // it may answer by now: Cannot reach shows until it does
+      this.retry(entry);
     }
     this.unloadExtra();
     if (entry.failed) this.showLocal({ page: 'unreachable', companyId: id });
@@ -279,6 +298,17 @@ export class Shell {
     this.showWindow();
     wc.focus();
     this.changed();
+  }
+
+  /** Loads a company whose page failed again, where it was; nothing while a load is under way. */
+  private retry(entry: Entry): void {
+    const wc = entry.view.webContents;
+    if (wc.isDestroyed() || wc.isLoading()) return;
+    void wc.loadURL(entry.company.lastUrl ?? appUrl(entry.company.url)).catch(() => undefined);
+  }
+
+  private retryFailed(): void {
+    for (const e of this.entries.values()) if (e.failed && e.loaded) this.retry(e);
   }
 
   /** Past six loaded companies, the one shown longest ago with no call unloads; it loads again where it was when shown. */
@@ -487,6 +517,11 @@ export class Shell {
 
   get localState(): LocalState | null {
     return this.local?.view.getVisible() ? this.local.state : null;
+  }
+
+  private showingUnreachable(companyId: string): boolean {
+    const state = this.localState;
+    return state?.page === 'unreachable' && state.companyId === companyId;
   }
 
   isLocalPage(wc: WebContents, frameUrl: string | null, isTopFrame: boolean): boolean {

@@ -2,7 +2,13 @@
 explicitly. The claim (execution.candidate) reads it once per pass, before its per-bot checks; Health reads it once per
 page (health._prime_claims). Both run the same checks with it (execution._claim_refusal). A lookup the object does not
 hold, a bot it was not loaded for, is asked of the database the way the check always asked it, so a caller without the
-object keeps the same answers."""
+object keeps the same answers.
+
+A claim's recheck of the one job it selected (execution.candidate with `job_id`, under the write lock) reads `narrow`:
+the open holds of that job's bot and the holds of no bot, and that computer's grants, not every open hold and every
+computer's grants. Both are `Part`s: the same answers for those keys, the whole read for any other."""
+
+from collections.abc import Iterator, Mapping
 
 
 class Loads:
@@ -54,18 +60,68 @@ class Loads:
         return start_places.bot_held(c, bot)
 
 
-def read(c, settings, runners, bots):
+class Part(Mapping):
+    """A mapping read for some of its keys: `rows` holds every entry whose key is `inside(key)`, exactly as the whole
+    mapping has it. Any other key, an iteration or a length reads the whole (`whole()`), once. Its truth is the
+    whole's: `rows`, else `any_` (whether the whole has an entry, read with the rows), else the whole read."""
+
+    def __init__(self, rows, inside, whole, any_=None):
+        self.rows, self.inside, self._read, self._any = rows, inside, whole, any_
+        self._whole = None
+
+    def joined(self, other):
+        """This and `other`, read in the same snapshot with no write between: the rows of both, inside either. Another
+        kind of mapping (an earlier whole read, or none yet) is replaced, as a later read always replaced it."""
+        if not isinstance(other, Part):
+            return self
+        return Part(
+            {**other.rows, **self.rows},
+            lambda key: self.inside(key) or other.inside(key),
+            self._read,
+            self._any if self._any is not None else other._any,
+        )
+
+    def whole(self):
+        if self._whole is None:
+            self._whole = self._read()
+        return self._whole
+
+    def __getitem__(self, key):
+        return self.rows[key] if self.inside(key) else self.whole()[key]
+
+    def get(self, key, default=None):
+        return self.rows.get(key, default) if self.inside(key) else self.whole().get(key, default)
+
+    def __contains__(self, key):
+        return key in self.rows if self.inside(key) else key in self.whole()
+
+    def __iter__(self) -> Iterator:
+        return iter(self.whole())
+
+    def __len__(self):
+        return len(self.whole())
+
+    def __bool__(self) -> bool:
+        if self.rows:
+            return True
+        if self._whole is None and self._any is not None:
+            return bool(self._any)
+        return bool(self.whole())
+
+
+def read(c, settings, runners, bots, narrow=False):
     """The Loads for `bots` (their ids) and `runners` ({id: runners row}), in fixed set queries: the company's values
-    once, then each bot's rows in chunks of 500 bots (one statement while there are fewer)."""
+    once, then each bot's rows in chunks of 500 bots (one statement while there are fewer). `narrow`: the holds and
+    grants of these bots and computers only (`Part`), for a check of one job."""
     from . import providers, cloud_access, usage_limits, start_places
     from . import model_subscriptions, company_pause
 
     bots = list(dict.fromkeys(bots))
     record = providers.load(c, settings)
-    given = model_subscriptions._given(c)
+    given = model_subscriptions.given_of(c, list(runners)) if narrow else model_subscriptions._given(c)
     plain = providers.load(c) if given else None
     access = cloud_access.access(c)
-    holds = open_holds(c)
+    holds = open_holds_of(c, bots) if narrow else open_holds(c)
     return Loads(
         record,
         plain,
@@ -88,3 +144,21 @@ def open_holds(c):
         (row["kind"], row["holdable_type"], row["holdable_id"], row["bot_id"] or ""): dict(row)
         for row in c.execute("SELECT * FROM holds INDEXED BY holds_bot WHERE released_at IS NULL")
     }
+
+
+def open_holds_of(c, bots):
+    """open_holds for the keys of these bots and of no bot (bot_id NULL or ''), the only keys a claim's check of one
+    job asks (holds.job_hold, login_holds, the claim's own claim_error keys): read together through holds_bot, so the
+    answers are the snapshot's, as one read of every open hold gives them. Any other key reads every open hold."""
+    names = sorted({str(bot) for bot in bots})
+    rows = {
+        (row["kind"], row["holdable_type"], row["holdable_id"], row["bot_id"] or ""): dict(row)
+        for row in c.execute(
+            "SELECT * FROM holds INDEXED BY holds_bot WHERE released_at IS NULL "
+            f"AND bot_id IN ({','.join('?' * (len(names) + 1))}) UNION ALL "
+            "SELECT * FROM holds INDEXED BY holds_bot WHERE released_at IS NULL AND bot_id IS NULL",
+            [*names, ""],
+        )
+    }
+    inside = set(names) | {""}
+    return Part(rows, lambda key: isinstance(key, tuple) and len(key) == 4 and key[3] in inside, lambda: open_holds(c))

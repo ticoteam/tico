@@ -296,8 +296,8 @@ def step_never_stuck(ctx: "Context") -> tuple[str, bool]:
     from .heartbeat import Failed
 
     failed: list[tuple[str, Exception]] = []
-    with ctx.locked("never_stuck") as c:
-        done = never_stuck.check(c, stamp(ctx.at), failed)
+    # In a read snapshot first: a pass with nothing to write never takes the write lock (never_stuck.check_read_first).
+    done = never_stuck.check_read_first(ctx.store, lambda: ctx.locked("never_stuck"), stamp(ctx.at), failed)
     # service_health (the pass's failures) is readable by everyone (sql.py): it holds error types and counts, never a
     # task's id, which may be a private task's. The server log names the task.
     kinds: dict[str, int] = {}
