@@ -60,10 +60,10 @@ const didsOf = (m: ChatMessage): string[] => {
 };
 
 /** The list as it reads, oldest first: day breaks, the "New" line, what Tico did, messages, and replies being written. */
-export function itemsOf(rows: ChatMessage[], live: LiveRun[], me: string | undefined, newAfter: number | null): Item[] {
+function itemsOf(rows: ChatMessage[], live: LiveRun[], me: string | undefined, id: string, marks: Map<string, number> | null): Item[] {
   const out: Item[] = [];
   let day = '';
-  let newShown = newAfter == null;
+  let newShown = false;
   let last: ChatMessage | null = null;
   for (const m of rows) {
     if (m.hidden) continue;
@@ -73,7 +73,8 @@ export function itemsOf(rows: ChatMessage[], live: LiveRun[], me: string | undef
       out.push({ k: 'day', key: `day:${d}`, label: dayLabel(m.created_at), isNew: false });
       last = null;
     }
-    if (!newShown && typeof m.seq === 'number' && m.seq > (newAfter as number) && m.sender_id !== me && !m.pending) {
+    const mark = marks?.get(m.thread_id || id) ?? marks?.get(id);
+    if (!newShown && mark != null && typeof m.seq === 'number' && m.seq > mark && m.sender_id !== me && !m.pending) {
       newShown = true;
       out.push({ k: 'day', key: 'new', label: 'New', isNew: true });
       last = null;
@@ -137,13 +138,18 @@ export function Conversation({ id, variant, title, actor, page, foot, card, canP
   const rows = withExtra(own, extra, !!timeline.hasNextPage);
   const extraIds = new Set(extra?.map((m) => m.id));
 
-  // The "New" line sits where the person had read to when the chat opened, and stays there while it is open.
-  const [opened, setOpened] = useState<{ id: string; mark: number | null } | null>(null);
-  const first = timeline.data?.pages[0];
-  if (first && opened?.id !== id) setOpened({ id, mark: first.read_marks?.[id] ?? null });
-  const newAfter = opened?.id === id ? opened.mark : null;
+  // Flat pages can hold replies from several threads, each with its own read mark.
+  const [opened, setOpened] = useState<{ id: string; pages: typeof timeline.data; marks: Map<string, number> } | null>(null);
+  if (timeline.data && (opened?.id !== id || opened.pages !== timeline.data)) {
+    const marks = new Map(opened?.id === id ? opened.marks : undefined);
+    for (const page of timeline.data.pages)
+      for (const [thread, seq] of Object.entries(page.read_marks ?? {}))
+        if (!marks.has(thread)) marks.set(thread, seq);
+    setOpened({ id, pages: timeline.data, marks });
+  }
+  const marks = opened?.id === id ? opened.marks : null;
 
-  const items = itemsOf(rows, live, myId, newAfter);
+  const items = itemsOf(rows, live, myId, id, marks);
   const name = variant === 'tico' ? 'Tico' : (title ?? 'Teammate');
   const mate = useActor(actor);
   const mateHref = teammateHref(actor, mate);
@@ -201,13 +207,18 @@ export function Conversation({ id, variant, title, actor, page, foot, card, canP
   const { data: ratings = [] } = useQuery(feedbackQuery(id, rateable));
 
   /* ---- read up to the last message shown, while it is in view */
-  const lastSeq = rows.reduce((n, m) => (typeof m.seq === 'number' && m.seq > n ? m.seq : n), 0);
   const readAtEnd = () => {
-    if (!lastSeq || (scroller.current?.fromEnd() ?? 0) > READ_PX || document.visibilityState !== 'visible') return;
-    markRead(id, lastSeq);
+    if ((scroller.current?.fromEnd() ?? 0) > READ_PX || document.visibilityState !== 'visible') return;
+    const newest = new Map<string, number>();
+    for (const m of rows) {
+      if (m.hidden || typeof m.seq !== 'number') continue;
+      const thread = m.thread_id || id;
+      if (m.seq > (newest.get(thread) ?? marks?.get(thread) ?? 0)) newest.set(thread, m.seq);
+    }
+    for (const [thread, seq] of newest) markRead(thread, seq);
   };
   const readOnMessage = useEffectEvent(readAtEnd);
-  useEffect(() => readOnMessage(), [id, lastSeq]);
+  useEffect(() => readOnMessage(), [id, timeline.data]);
 
   /* ---- the Dot, for Tico's own chat only */
   const doing = variant === 'tico' ? dotFor(rows, live) : null;
@@ -306,7 +317,7 @@ export function Conversation({ id, variant, title, actor, page, foot, card, canP
       {foot}
       {look}
       {canReply && replyTo && myId && <Replying q={quoteFrom(replyTo)} me={myId} onDrop={() => setReplying(null)} />}
-      {myId && canPost && <Composer id={id} me={myId} to={name} onSend={(text, files) => send(text, files)} />}
+      {myId && canPost && <Composer id={id} me={myId} to={name} canSend={!!timeline.data} onSend={(text, files) => send(text, files)} />}
     </footer>
   );
 

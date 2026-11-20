@@ -86,8 +86,10 @@
 .lt:last-child{border-bottom:0}
 .lt .msg-meta{margin-bottom:calc(var(--s-1) + var(--s-0));display:flex;align-items:baseline;gap:var(--s-2)}
 .lt .msg-meta time,.lt .msg-meta .pill{margin-left:auto}
-.lt .file{margin-top:var(--s-3)}
-.lt .file+.file{margin-left:calc(var(--s-1) + var(--s-0))}
+.lt .file{margin-top:var(--s-3);max-width:100%;height:auto;min-height:36px}
+.lt .file+.file{margin-left:calc(var(--s-1) + var(--s-0));max-width:calc(100% - var(--s-1) - var(--s-0))}
+.lt .file>span{overflow-wrap:anywhere}
+.lt .file>em{flex:none}
 /* a reply waiting in Gmail as a draft: the same letter, inside a line */
 .lt.is-draft{margin-top:var(--s-4);padding:calc(var(--s-3) + var(--s-0)) calc(var(--s-3) + var(--s-0)) var(--s-4) var(--s-3);border-bottom:0;border-radius:var(--r-card);box-shadow:inset 0 0 0 1px var(--line-strong)}
 .conv-head .lt-addr{flex:0 1000 auto;margin-left:var(--s-2);color:var(--muted);font-size:var(--t-sm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
@@ -123,6 +125,7 @@
   .ml-row{padding:0 var(--s-2) 0 var(--s-3)}
   .lt-top{padding:calc(var(--s-2) + var(--s-0)) var(--s-4) 0}
   .lt .msg-meta{flex-wrap:wrap}
+  .lt .file{min-height:var(--ctl)}
   .lt-to{flex:1 1 100%;order:3}
   .conv-head .lt-addr{display:none}
 }

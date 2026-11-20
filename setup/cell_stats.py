@@ -28,6 +28,7 @@ import argparse
 import calendar
 import concurrent.futures as cf
 import errno
+import fcntl
 import getpass
 import gzip
 import http.client
@@ -1258,6 +1259,7 @@ TOOLS: dict[str, dict] = {
     "db": {"company": ("company", True)},
     "stacks": {"company": ("company", True)},
     "tracemalloc": {"company": ("company", True), "action": (("start", "dump"), True)},
+    "profile": {"company": ("company", True), "seconds": ((5, 60), True)},
     "journal": {"unit": ("unit", True), "minutes": ((1, 60), True)},
 }
 TIMEOUTS = {
@@ -1269,6 +1271,7 @@ TIMEOUTS = {
     "db": 60,
     "stacks": 8,
     "tracemalloc": 20,
+    "profile": 75,  # the most seconds it samples, and the time py-spy takes to attach and write
     "journal": 20,
 }
 
@@ -1487,6 +1490,47 @@ def tracing(root: Path, now: float) -> bool:
     return state
 
 
+PROFILES = "profiles"  # under the cell root: each profile's folded stacks, the newest PROFILES_KEPT kept
+PROFILES_KEPT = 20
+PROFILE_TOP = 40  # stacks a profile's output lists
+
+
+def t_profile(box: Box, view: View, a: dict, timeout: float) -> tuple[bool, str]:
+    """`seconds` of py-spy (setup/cell.py PY_SPY, installed by `cell init`) on the server process: only threads holding
+    the GIL (--gil, where a slow server spends its time), sampled without pausing it (--nonblocking), one profile on the
+    host at a time. The folded stacks go to <cell root>/profiles/<company>-<time>.txt, the newest PROFILES_KEPT kept;
+    the output is the hottest PROFILE_TOP of them, with their share."""
+    pid, why = server_pid(box, view, a["company"])
+    if not pid:
+        return False, why
+    folder = box.cell_root / PROFILES
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with open(folder / ".lock", "w") as held:
+        try:
+            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False, "another profile is running on this host"
+        target = folder / f"{a['company']}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}-{os.getpid()}.txt"
+        argv = [str(box.path(cell.PY_SPY)), "record", "--gil", "--nonblocking", "--pid", str(pid)]
+        r = box.run([*argv, "--duration", str(a["seconds"]), "--format", "raw", "--output", str(target)], timeout)
+        if r.returncode or not target.exists():
+            target.unlink(missing_ok=True)
+            return False, f"py-spy failed ({r.returncode}): " + _out(r)
+        kept = sorted(folder.glob("*.txt"), key=lambda f: f.stat().st_mtime)
+        for old in [f for f in kept if f != target][: max(0, len(kept) - PROFILES_KEPT)]:
+            old.unlink(missing_ok=True)
+        stacks = []
+        with open(target, errors="replace") as f:
+            for line in f:
+                stack, _, n = line.rstrip("\n").rpartition(" ")
+                if stack and n.isdigit() and int(n):
+                    stacks.append((int(n), stack))
+    total = sum(n for n, _ in stacks)
+    lines = [f"{target} ({total} samples of threads holding the GIL over {a['seconds']} s)"]
+    lines += [f"{100 * n / total:5.1f}%  {stack}" for n, stack in sorted(stacks, reverse=True)[:PROFILE_TOP]]
+    return True, "\n".join(lines)
+
+
 def t_tracemalloc(box: Box, view: View, a: dict, timeout: float) -> tuple[bool, str]:
     root = view.root(a["company"])
     on = tracing(root, box.time())
@@ -1549,6 +1593,7 @@ RUNNERS = {
     "db": t_db,
     "stacks": t_stacks,
     "tracemalloc": t_tracemalloc,
+    "profile": t_profile,
     "journal": t_journal,
 }
 

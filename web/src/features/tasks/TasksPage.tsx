@@ -283,7 +283,7 @@ function HeadActions({
   const tags = useQuery(tagsQuery).data ?? [];
   return (
     <>
-      <FilterMenu filters={search} actors={actors} tags={tags.map((t) => t.key)} />
+      <FilterMenu filters={search} actors={actors} tags={tags.map((t) => t.key)} phone={view === 'archived'} />
       {view !== 'archived' && (
         <span data-target="tasks:view">
           <Segmented

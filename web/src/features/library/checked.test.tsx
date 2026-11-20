@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query';
-import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider } from '@tanstack/react-router';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider, useSearch } from '@tanstack/react-router';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { run } from '@/actions';
@@ -25,6 +25,7 @@ import {
   typesQuery,
   type Card,
 } from './queries';
+import { contactsSearch } from './search';
 import { viewing } from './viewing';
 
 /* One test per Library page the old app had, by what a person sees and presses there, and what is sent. */
@@ -140,6 +141,38 @@ describe('a file', () => {
     at('/tasks/7', <FilePreview file="f1" version={1} />);
     expect(await screen.findByText('first words')).toBeTruthy();
     expect(sent.map((x) => x.url)).toEqual(['/api/v2/files/f1/versions/1']);
+  });
+
+  it('uses the historical version’s file type instead of the latest one', async () => {
+    serve(() => 'first words');
+    queryClient.setQueryData(fileQuery('f1').queryKey, file({ mime: 'image/png', library_kind: 'image', name: 'notes.png' }) as never);
+    queryClient.setQueryData(fileVersionsQuery('f1').queryKey, [
+      { ...version(2, true), mime: 'image/png', name: 'notes.png' },
+      version(1),
+    ]);
+    at('/library/files?file=f1&v=1', <FilesPage search={{ file: 'f1', v: 1 }} />);
+    expect(await screen.findByText('first words')).toBeTruthy();
+    expect(screen.queryByRole('img', { name: 'Sample notes' })).toBeNull();
+  });
+
+  it('keeps quoted CSV data in its original cells', async () => {
+    const csv = '\uFEFFName,Notes\r\n"Acme, Inc.","First line\r\nSecond ""quoted"" line"';
+    serve(() => new Response(csv, { headers: { 'Content-Type': 'text/csv' } }));
+    queryClient.setQueryData(fileQuery('f1').queryKey, file({ mime: 'text/csv', name: 'notes.csv' }) as never);
+    queryClient.setQueryData(fileVersionsQuery('f1').queryKey, [{ ...version(2, true), mime: 'text/csv', name: 'notes.csv' }]);
+    at('/library/files?file=f1', <FilesPage search={{ file: 'f1' }} />);
+    const table = await screen.findByRole('table');
+    expect(within(table).getAllByRole('row')).toHaveLength(2);
+    expect(within(table).getAllByRole('cell').map((cell) => cell.textContent)).toEqual(['Acme, Inc.', 'First line\r\nSecond "quoted" line']);
+  });
+
+  it('keeps the desktop Files filters when opening an older version', async () => {
+    serve(() => 'plain words');
+    queryClient.setQueryData(fileQuery('f1').queryKey, file() as never);
+    queryClient.setQueryData(fileVersionsQuery('f1').queryKey, [version(2, true), version(1)]);
+    at('/library/files?file=f1&kind=document&q=notes', <FilesPage search={{ file: 'f1', kind: 'document', q: 'notes' }} />);
+    const link = await screen.findByRole('link', { name: /v1/ });
+    expect(link.getAttribute('href')).toBe('/library/files?kind=document&q=notes&file=f1&v=1');
   });
 
   it('waits for the selected file version before previewing or offering a download', async () => {
@@ -307,6 +340,43 @@ describe('Contacts', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Search' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Search contacts' }), { target: { value: 'seed' } });
     await waitFor(() => expect(router.state.location.search).toMatchObject({ q: 'seed', link: 'customer_of' }));
+  });
+
+  it('retains the relationship filter when opening a list row', async () => {
+    serve(() => ({ rows: [], next: null, types: [], counts: [] }));
+    queryClient.setQueryData(contactsQuery('person', '', 'customer_of').queryKey, {
+      pages: [{ rows: [row({ id: 'c1', name: 'Ada Sample' })], next: null }],
+      pageParams: [''],
+    } as never);
+    at('/library/contacts?link=customer_of', <ContactsPage search={{ link: 'customer_of' }} />);
+    const link = (await screen.findByText('Ada Sample')).closest('a');
+    expect(link?.getAttribute('href')).toBe('/library/contacts?link=customer_of&panel=c1');
+
+  });
+
+  it('does not carry an unsent note to another contact', async () => {
+    serve(() => ({ rows: [], next: null, types: [], counts: [] }));
+    queryClient.setQueryData(contactsQuery('person', '').queryKey, { pages: [{ rows: [], next: null }], pageParams: [''] });
+    queryClient.setQueryData(attributesQuery('person').queryKey, []);
+    for (const id of ['c1', 'c2']) {
+      queryClient.setQueryData(cardQuery(id).queryKey, {
+        ...row({}),
+        id,
+        name: id === 'c1' ? 'Ada Sample' : 'Bo Sample',
+        summary: null,
+        values: {},
+        links: [],
+        notes: [],
+      });
+    }
+    function CurrentContact() {
+      return <ContactsPage search={contactsSearch(useSearch({ strict: false }))} />;
+    }
+    const router = at('/library/contacts?panel=c1', <CurrentContact />);
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Add a note' }), { target: { value: 'Unsaved note' } });
+    await act(() => router.navigate({ to: '/library/contacts', search: { panel: 'c2' } }));
+    const panel = await screen.findByRole('complementary', { name: 'Bo Sample' });
+    expect((within(panel).getByRole('textbox', { name: 'Add a note' }) as HTMLInputElement).value).toBe('');
   });
 
   it('shows what each contact is to us, and filters by relationship @s785', async () => {

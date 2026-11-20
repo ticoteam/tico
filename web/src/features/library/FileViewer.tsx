@@ -180,6 +180,37 @@ export function Preview({ id = '', version = 0, mime, kind, title, url, name, si
   return <iframe className="fv-frame" src={src} title={title} />;
 }
 
+/** A quoted field can hold commas, line breaks, and a literal quote written twice. */
+function csvRows(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = '';
+  let quoted = false;
+  let start = text.charCodeAt(0) === 0xfeff ? 1 : 0;
+  for (let i = start; i < text.length && rows.length < 500; i++) {
+    const c = text.charAt(i);
+    if (quoted) {
+      if (c !== '"') cell += c;
+      else if (text[i + 1] === '"') {
+        cell += '"';
+        i++;
+      } else quoted = false;
+    } else if (c === '"' && !cell) quoted = true;
+    else if (c === ',') {
+      row.push(cell);
+      cell = '';
+    } else if (c === '\n' || c === '\r') {
+      if (i > start) rows.push([...row, cell]);
+      if (c === '\r' && text[i + 1] === '\n') i++;
+      row = [];
+      cell = '';
+      start = i + 1;
+    } else cell += c;
+  }
+  if (start < text.length && rows.length < 500) rows.push([...row, cell]);
+  return rows;
+}
+
 function TextPreview({ text, view, title }: { text: string; view: View; title: string }) {
   if (view === 'html') return <iframe className="fv-frame" srcDoc={text} title={title} sandbox={HTML_SANDBOX} referrerPolicy="no-referrer" />;
   if (view === 'markdown')
@@ -191,8 +222,7 @@ function TextPreview({ text, view, title }: { text: string; view: View; title: s
       </div>
     );
   if (view === 'csv') {
-    const lines = text.split(/\r?\n/).filter(Boolean).slice(0, 500);
-    const cells = lines.map((l) => l.split(','));
+    const cells = csvRows(text);
     return (
       <div className="fv-main">
         <table className="table">
@@ -240,19 +270,20 @@ export function FilePreview({ file, version }: { file: string; version?: number 
   const shown = versions.data?.find((v) => (version === undefined ? v.current : v.version === version));
   if (f.isError) return <Empty title="This file did not load" icon="alert" />;
   if (!f.data) return null;
-  if (version !== undefined && version !== f.data.version && !shown)
+  const older = version !== undefined && version !== f.data.version;
+  if (older && !shown)
     return versions.isPending ? null : <Empty title="This file did not load" icon="alert" />;
   const n = version ?? shown?.version ?? f.data.version;
   return (
     <FileFrame
       id={file}
       version={n ?? 1}
-      mime={shown?.mime ?? f.data.mime ?? ''}
-      kind={f.data.library_kind}
+      mime={shown?.mime ?? (older ? '' : f.data.mime ?? '')}
+      kind={older ? undefined : f.data.library_kind}
       title={f.data.title}
       url={fileUrl(file, n)}
-      name={shown?.name ?? f.data.name}
-      size={shown?.size ?? f.data.size}
+      name={shown?.name ?? (older ? '' : f.data.name)}
+      size={shown?.size ?? (older ? undefined : f.data.size)}
       link={linkOf(f.data)}
     />
   );

@@ -866,6 +866,7 @@ class Store:
         # which on a large install cost more than most reads themselves.
         self.pooled = _pooled(self.factory)
         self.pool, self.pool_file, self.pool_lock = [], None, threading.Lock()
+        self.pool_age = 0  # retire_pool's count, part of the pool's identity
         self._pool_finalizer = weakref.finalize(self, _close_idle, self.pool)
         # In-process writers queue before BEGIN instead of competing in SQLite's busy-handler sleeps.
         # Reads still use independent WAL snapshots; other processes remain governed by busy_timeout.
@@ -1148,11 +1149,18 @@ class Store:
             return None
         return stat.st_dev, stat.st_ino
 
-    def _take(self):
-        identity = self._file()
+    def retire_pool(self):
+        """Every connection opened before now is closed instead of reused: the idle ones at the next read, the rest when
+        given back. A connection reads the planner statistics when it opens and keeps them (backend/planner_stats.py)."""
         with self.pool_lock:
+            self.pool_age += 1
+
+    def _take(self):
+        file = self._file()
+        with self.pool_lock:
+            identity = (file, self.pool_age)
             if identity != self.pool_file:
-                # A restored or replaced database file: connections to the old one are not reused.
+                # A restored or replaced database file, or retire_pool: connections opened before are not reused.
                 stale = list(self.pool)
                 self.pool.clear()  # in place: the finalizer registered in __init__ holds this list
                 self.pool_file = identity

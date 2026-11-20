@@ -81,6 +81,28 @@ function list(rows: unknown[]) {
 }
 
 describe('a skill', () => {
+  it('reads a shipped skill and shows which teammates have it', async () => {
+    const sent = serve((url) =>
+      url === '/api/v2/skills/triage'
+        ? {
+            skill: { id: null, name: 'triage', description: 'Sort new mail', latest: null },
+            versions: [],
+            installs: [],
+            shipped: {
+              files: [{ path: 'SKILL.md', content: 'Read each letter.' }],
+              bots: [{ type: 'Bot', id: 'b1', name: 'Mail helper' }],
+            },
+          }
+        : undefined,
+    );
+    queryClient.setQueryData(skillUsageQuery.queryKey, []);
+    queryClient.setQueryData(proposalsQuery.queryKey, []);
+    at('/library/skills?skill=triage', <SkillsPage search={{ skill: 'triage' }} />);
+    expect(await screen.findByText('Read each letter.')).toBeTruthy();
+    expect(screen.getByText('Mail helper')).toBeTruthy();
+    expect(sent.some(({ url }) => url.includes('/versions/'))).toBe(false);
+  });
+
   it('takes a skill off a teammate from the page’s ⋯, with each one’s runs beside it @s782', async () => {
     const detail = {
       skill: { id: 's1', name: 'triage', description: 'Sort new mail', latest: v(1) },

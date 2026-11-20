@@ -145,7 +145,7 @@ function PersonWidgets({ actor, id, head }: { actor: Actor; id: string; head: He
                 <OwnRows tasks={done.data?.tasks ?? []} me={me?.id} label="Done tasks" />
               </Fold>
             )}
-            <GiveTaskDialog open={giving} onOpenChange={setGiving} person={id} name={actor.name} />
+            {giving && <GiveTaskDialog open onOpenChange={setGiving} person={id} name={actor.name} />}
           </Section>
           {manages.length > 0 && (
             <Section name="Manages" count={manages.length}>
@@ -246,26 +246,22 @@ function PersonSettings({ actor, id, head }: { actor: Actor; id: string; head: H
               )}
             </Foot>
           )}
-          {reach?.you?.manage && <AccessDialog open={editing === 'access'} onOpenChange={close} kind="person" id={id} name={actor.name} now={reach} />}
+          {reach?.you?.manage && editing === 'access' && <AccessDialog open onOpenChange={close} kind="person" id={id} name={actor.name} now={reach} />}
           <PasswordDialog open={editing === 'password'} onOpenChange={close} person={id} name={actor.name} />
-          <EditDialog
-            open={editing === 'title'}
-            onOpenChange={close}
-            title="Role"
-            label="Role"
-            value={title}
-            action="people.setTitle"
-            input={(t) => ({ person: id, title: t })}
-          />
-          <EditDialog
-            open={editing === 'github'}
-            onOpenChange={close}
-            title="GitHub"
-            label="GitHub login"
-            value={p?.github ?? ''}
-            action="people.setGithub"
-            input={(t) => ({ person: id, login: t })}
-          />
+          {editing === 'title' && (
+            <EditDialog open onOpenChange={close} title="Role" label="Role" value={title} action="people.setTitle" input={(t) => ({ person: id, title: t })} />
+          )}
+          {editing === 'github' && (
+            <EditDialog
+              open
+              onOpenChange={close}
+              title="GitHub"
+              label="GitHub login"
+              value={p?.github ?? ''}
+              action="people.setGithub"
+              input={(t) => ({ person: id, login: t })}
+            />
+          )}
           <ConfirmDialog
             open={editing === 'remove'}
             onOpenChange={close}

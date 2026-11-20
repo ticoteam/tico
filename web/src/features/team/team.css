@@ -179,7 +179,8 @@ button.add-pick:hover,button.add-person:hover,button.tpl:hover,button.tpl.is-on{
 .ins-text:hover{color:var(--ink)}
 .ins-text p+p{margin-top:var(--s-2)}
 .ins-by{margin-top:var(--s-2);font-size:var(--t-sm);color:var(--muted)}
-.ins-bar{display:flex;align-items:center;gap:var(--s-1h);height:36px;margin:0 calc(-1 * var(--s-2)) var(--s-2h) calc(-1 * var(--s-3));color:var(--ink)}
+/* Keep the controls inside the sheet's resize handles. */
+.ins-bar{display:flex;align-items:center;gap:var(--s-1h);height:36px;margin:0 var(--s-1) var(--s-2h);color:var(--ink)}
 .ins-bar .ib{color:var(--muted)}
 /* a person's Slack, not connected (mates.css) */
 .line.is-quiet .row-title{color:var(--muted)}

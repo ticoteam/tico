@@ -1,4 +1,4 @@
-import type { FetchQueryOptions, QueryClient } from '@tanstack/react-query';
+import { isCancelledError, type FetchQueryOptions, type QueryClient } from '@tanstack/react-query';
 import { configQuery, meQuery } from '@/data';
 import {
   accessQuery,
@@ -21,16 +21,24 @@ export const isForbidden = (e: unknown) => (e as { status?: number } | null)?.st
 /** For the route's loader: the person and the section's read before the first paint. A fault is the router's to show;
     a 403 is not thrown, since the section says it beside the section list. A section read before draws from the cache
     at once; one gone stale (the quiet reads) is read again behind it. */
-export const loadSection = (qc: QueryClient, section: SectionId) =>
-  Promise.all([
+export const loadSection = (qc: QueryClient, section: SectionId) => {
+  const read = () => Promise.all([
     qc.ensureQueryData(meQuery),
     qc.ensureQueryData({ ...(mainQuery(section) as FetchQueryOptions<unknown, Error, unknown, readonly unknown[]>), revalidateIfStale: true }),
-  ]).then(
-    () => undefined,
-    (e: unknown) => {
-      if (!isForbidden(e)) throw e;
-    },
-  );
+  ]);
+  return read()
+    .catch((error: unknown) => {
+      // A shell observer can detach during mount while the route is waiting for the same read.
+      if (isCancelledError(error)) return read();
+      throw error;
+    })
+    .then(
+      () => undefined,
+      (e: unknown) => {
+        if (!isForbidden(e)) throw e;
+      },
+    );
+};
 
 /** The one read a section cannot draw without: the route loads it first, and its state is the page's state. */
 export function mainQuery(section: SectionId) {

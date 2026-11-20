@@ -3,7 +3,7 @@ import { fmtDate } from '@/lib';
 import { defineSearch } from '@/search/define';
 import { fetchFor, HITS } from '@/search/helpers';
 import { matches } from '@/search/results';
-import { contactSearchQuery, countsQuery, docsListQuery, fileSearchQuery, skillsQuery, toolsQuery, typesQuery } from './queries';
+import { contactSearchQuery, countsQuery, docRows, docsListQuery, fileSearchQuery, skillsQuery, toolsQuery, typesQuery } from './queries';
 
 /* What each Library address may carry, and the `validateSearch` for its route: keeps the words it knows, drops the rest. */
 
@@ -109,8 +109,8 @@ export const docsFind = defineSearch({
   order: 60,
   find: async (q) => {
     if (!q.trim()) return [];
-    const { docs } = await queryClient.ensureQueryData(docsListQuery);
-    return docs
+    const docs = await queryClient.ensureInfiniteQueryData(docsListQuery);
+    return docRows(docs)
       .filter((d) => matches(d.title, q))
       .slice(0, HITS)
       .map((d) => ({

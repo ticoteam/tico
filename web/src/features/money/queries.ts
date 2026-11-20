@@ -1,4 +1,4 @@
-import { keepPreviousData, queryOptions, type QueryClient } from '@tanstack/react-query';
+import { infiniteQueryOptions, keepPreviousData, queryOptions, type InfiniteData, type QueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '@/api/client';
 import type {
   FinanceAction,
@@ -179,7 +179,6 @@ export const metricQuery = (name: 'cash', as?: string) =>
    status still owed (bills: open, scheduled; invoices: sent, partial). Invoices have no `open` status, so it 422s. */
 export const BILLS_URL = '/api/v2/finance/bills?status=unpaid&limit=200';
 export const INVOICES_URL = '/api/v2/finance/invoices?status=unpaid&limit=200';
-export const TRANSACTIONS_URL = '/api/v2/finance/transactions?limit=200';
 
 export const billsQuery = (as?: string) =>
   queryOptions({
@@ -205,30 +204,26 @@ export const briefQuery = (as?: string) =>
     queryFn: ({ signal }) => orNull(api.get<FinanceBrief>(viewAs('/api/v2/finance/brief', as), { signal })),
   });
 
-export const transactionsQuery = (as?: string) =>
-  queryOptions({
-    queryKey: ['finance', 'transactions', ...asKey(as)],
-    queryFn: ({ signal }) => api.get<FinanceTransactions>(viewAs(TRANSACTIONS_URL, as), { signal }),
-  });
-
-const loadingTx = new Set<string>();
-/** The next 200 transactions, after the ones already read (the answer's `next` cursor), added to the same list. */
-export async function loadMoreTransactions(as?: string): Promise<void> {
-  const key = transactionsQuery(as).queryKey;
-  const have = queryClient.getQueryData<FinanceTransactions>(key);
-  if (!have?.next || loadingTx.has(as ?? '')) return;
-  loadingTx.add(as ?? '');
-  try {
-    const page = await api.get<FinanceTransactions>(viewAs(`${TRANSACTIONS_URL}&cursor=${enc(have.next)}`, as));
-    queryClient.setQueryData<FinanceTransactions>(key, (cur) => {
-      if (!cur) return cur;
-      const seen = new Set(cur.rows.map((r) => r.id));
-      return { ...cur, rows: [...cur.rows, ...page.rows.filter((r) => !seen.has(r.id))], next: page.next ?? null };
-    });
-  } finally {
-    loadingTx.delete(as ?? '');
-  }
+/** What the Transactions filter holds: the source, a status, a line. */
+interface TxFilter {
+  src?: 'feed' | 'entry';
+  status?: string;
+  line?: string;
 }
+
+/** The server filters and pages the list together, keeping the same filter and viewer through each cursor. */
+export const transactionsQuery = (as?: string, f: TxFilter = {}) =>
+  infiniteQueryOptions({
+    queryKey: ['finance', 'transactions', { src: f.src, status: f.status, line: f.line }, ...asKey(as)],
+    initialPageParam: null as string | null,
+    getNextPageParam: (page: FinanceTransactions) => page.next ?? undefined,
+    queryFn: ({ signal, pageParam }) => {
+      const params = qs({ limit: 200, cursor: pageParam ?? undefined, source: f.src, status: f.status, account_id: f.line });
+      return api.get<FinanceTransactions>(viewAs(`/api/v2/finance/transactions?${params}`, as), { signal });
+    },
+    // another filter keeps the last rows on screen until the answer comes, rather than the list's loading state
+    placeholderData: keepPreviousData,
+  });
 
 export const cardsQuery = (as?: string) =>
   queryOptions({
@@ -846,24 +841,6 @@ export const docQuery = (kind: DocKind, id: string, as?: string) =>
     queryFn: ({ signal }) => api.get<Doc>(viewAs(`/api/v2/finance/${DOCS[kind]}/${enc(id)}`, as), { signal }),
   });
 
-/** What the Transactions filter holds: the source, a status, a line. */
-export interface TxFilter {
-  src?: 'feed' | 'entry';
-  status?: string;
-  line?: string;
-}
-export const filtered = (f: TxFilter) => !!(f.src || f.status || f.line);
-
-/** The first 200 transactions the filter keeps, read by the server (the route's source, status and account_id). */
-export const txFilteredQuery = (f: TxFilter, as?: string) =>
-  queryOptions({
-    queryKey: ['finance', 'transactions', 'filtered', { src: f.src, status: f.status, line: f.line }, ...asKey(as)],
-    queryFn: ({ signal }) =>
-      api.get<FinanceTransactions>(viewAs(`${TRANSACTIONS_URL}&${qs({ source: f.src, status: f.status, account_id: f.line })}`, as), { signal }),
-    // another filter keeps the last rows on screen until the answer comes, rather than the list's loading state
-    placeholderData: keepPreviousData,
-  });
-
 /** Customers, as vendorsQuery reads vendors. */
 export const customersQuery = queryOptions({
   queryKey: ['finance', 'contacts', 'customer'],
@@ -888,9 +865,11 @@ export function cachedCard(qc: QueryClient, id: string): Card | undefined {
 
 /** A transaction as any transactions list last read it. */
 export function cachedTx(qc: QueryClient, id: string): Tx | undefined {
-  for (const [, d] of qc.getQueriesData<FinanceTransactions>({ queryKey: ['finance', 'transactions'] })) {
-    const t = d?.rows?.find((x) => x.id === id);
-    if (t) return t;
+  for (const [, d] of qc.getQueriesData<InfiniteData<FinanceTransactions>>({ queryKey: ['finance', 'transactions'] })) {
+    for (const page of d?.pages ?? []) {
+      const t = page.rows.find((x) => x.id === id);
+      if (t) return t;
+    }
   }
   return undefined;
 }

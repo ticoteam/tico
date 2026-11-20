@@ -80,7 +80,7 @@ function NewPill({ m }: { m: MatterRow }) {
 }
 
 export function RiskPage({ view = 'risks', search }: { view?: RiskView; search: RiskSearch }) {
-  if (search.risk) return <OneRisk id={search.risk} panel={search.panel} />;
+  if (search.risk) return <OneRisk key={search.risk} id={search.risk} panel={search.panel} />;
   return view === 'disputes' ? <Disputes search={search} /> : <Risks search={search} />;
 }
 
@@ -88,7 +88,7 @@ function panelFor(panel: string | undefined, rows: MatterRow[]) {
   if (panel === 'new') return <NewRisk />;
   const task = panel?.startsWith('matter:') ? panel.slice(7) : null;
   const row = task ? rows.find((m) => m.task.id === task) : undefined;
-  return row ? <MatterPanel row={row} /> : null;
+  return row ? <MatterPanel key={row.task.id} row={row} /> : null;
 }
 
 /** One risk's own panels: a matter, a new matter, Edit, one date (`due:<id>:<day>`). */
@@ -98,7 +98,7 @@ function onePanel(panel: string | undefined, d: RiskDetail) {
   if (panel?.startsWith('due:')) {
     const [, due, on] = panel.split(':');
     const date = d.obligations.find((o) => o.id === due && o.due_on === on);
-    return date ? <DatePanel risk={d.risk.id} d={date} /> : null;
+    return date ? <DatePanel key={panel} risk={d.risk.id} d={date} /> : null;
   }
   return panelFor(panel, d.matters);
 }
@@ -369,7 +369,7 @@ function MatterFacts({ row }: { row: MatterRow }) {
         label="Party"
         name={m?.party?.name}
         to="/library/contacts"
-        search={m?.party ? { contact: m.party.id } : undefined}
+        search={m?.party ? { ...(m.party.id.startsWith('organization/') && { type: 'organization' }), panel: m.party.id } : undefined}
         choose={(close) => <PartyPick onPick={(id, name) => (set({ party: id, ...(name && { party_name: name }) }), close())} clearable={!!m?.party} />}
       />
       {typed('Amount', m ? money(m.amount, m.currency) : '', m?.amount != null ? `${m.amount / 100}${m.currency && m.currency !== 'USD' ? ` ${m.currency}` : ''}` : '', (v) => {
@@ -687,7 +687,7 @@ function RiskSections({ d, open }: { d: RiskDetail; open?: string }) {
           {rules.length > 0 && (
             <Section name="Rules" count={rules.length}>
               {rules.map((r) => (
-                <Go key={r.link_id} to="/company/rules" search={{ rule: r.id }} className="row rk-l">
+                <Go key={r.link_id} to="/company/rules" search={{ panel: `org:${r.id}` }} className="row rk-l">
                   <span className="row-mark" />
                   <span className="row-title">
                     <Icon name="rules" />
@@ -700,7 +700,7 @@ function RiskSections({ d, open }: { d: RiskDetail; open?: string }) {
           {sources.length > 0 && (
             <Section name="Sources" count={sources.length}>
               {sources.map((s) => (
-                <Go key={s.link_id} to="/library/contacts" search={{ contact: s.id }} className="row rk-l">
+                <Go key={s.link_id} to="/library/contacts" search={{ ...(s.id?.startsWith('organization/') && { type: 'organization' }), panel: s.id }} className="row rk-l">
                   <span className="row-mark" />
                   <span className="row-title">
                     <Icon name="people" />
@@ -896,7 +896,7 @@ function DatePanel({ risk, d }: { risk: string; d: RiskDate }) {
         {fact('Basis', BASIS[d.basis])}
         {fact(
           'Rule',
-          <Go to="/company/rules" search={{ rule: d.rule.id }} className="fld-link">
+          <Go to="/company/rules" search={{ panel: `org:${d.rule.id}` }} className="fld-link">
             {d.rule.text}
           </Go>,
         )}

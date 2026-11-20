@@ -4,10 +4,16 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { bind } from '@/actions/bind';
 import { queryClient } from '@/data';
+import * as results from './results';
+import type { Group } from './results';
 import { SearchDialog } from './SearchDialog';
 import { closeSearch, openSearch } from './state';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
+vi.mock('./results', async (importOriginal) => {
+  const original = await importOriginal<typeof results>();
+  return { ...original, gather: vi.fn(original.gather) };
+});
 
 const QA = { id: 'bot:qa', kind: 'agent', name: 'QA Owner', slug: 'qa', team: 'Engineering' };
 
@@ -23,6 +29,24 @@ afterEach(() => {
 });
 
 describe('Search @s1209', () => {
+  it('anchors to the menu inside the desktop frame', async () => {
+    render(
+      <>
+        <div className="shell-frame">
+          <div className="shell-place" data-sheet="menu">
+            <nav className="nav" />
+          </div>
+        </div>
+        <SearchDialog />
+      </>,
+    );
+    vi.spyOn(screen.getByRole('navigation'), 'getBoundingClientRect').mockReturnValue(new DOMRect(320, 12, 240, 800));
+    act(() => openSearch());
+    const popup = await screen.findByRole('dialog', { name: 'Search' });
+    expect(popup.style.left).toBe('320px');
+    expect(popup.style.top).toBe('12px');
+  });
+
   it('finds a teammate by name and opens their page; the last row hands the words to Tico', async () => {
     // a choice runs through the action layer (shell.goTo), which moves this router
     const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ['/tasks'] }) });
@@ -42,5 +66,50 @@ describe('Search @s1209', () => {
     fireEvent.click(within(people).getByRole('option', { name: /QA Owner/ }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/team/qa'));
     expect(screen.queryByRole('combobox', { name: 'Search' })).toBeNull();
+  });
+
+  it('does not open a result from before the query was cleared', async () => {
+    render(<SearchDialog />);
+    act(() => openSearch('QA'));
+    const field = await screen.findByRole('combobox', { name: 'Search' });
+    expect(await screen.findByRole('option', { name: /QA Owner/ })).toBeTruthy();
+    fireEvent.change(field, { target: { value: '' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(screen.getByRole('combobox', { name: 'Search' })).toBeTruthy();
+    expect(screen.queryByRole('option', { name: /QA Owner/ })).toBeNull();
+  });
+
+  it('keeps the selected person when a higher-ranked result arrives', async () => {
+    const people: Group = {
+      name: 'People',
+      hits: [
+        { key: 'bot:qa', title: 'QA Owner', run: { id: 'shell.goTo', input: { to: '/team/qa' } } },
+        { key: 'bot:qa-reviewer', title: 'QA Reviewer', run: { id: 'shell.goTo', input: { to: '/team/qa-reviewer' } } },
+      ],
+    };
+    const tasks: Group = { name: 'Tasks', hits: [{ key: 'task:1', title: 'QA task', run: { id: 'shell.goTo', input: { to: '/task/1' } } }] };
+    let respond!: (groups: Group[]) => void;
+    const answer = new Promise<Group[]>((resolve) => (respond = resolve));
+    const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ['/tasks'] }) });
+    bind({ router });
+    await vi.mocked(results.gather).withImplementation(
+      (_q, _from, _actions, _ctx, _signal, early) => {
+        early?.([people]);
+        return answer;
+      },
+      async () => {
+        render(<SearchDialog />);
+        act(() => openSearch('QA'));
+        const field = await screen.findByRole('combobox', { name: 'Search' });
+        const reviewer = await screen.findByRole('option', { name: /QA Reviewer/ });
+        fireEvent.keyDown(field, { key: 'ArrowDown' });
+        expect(reviewer.getAttribute('aria-selected')).toBe('true');
+        await act(async () => respond([tasks, people]));
+        expect(await screen.findByRole('option', { name: /QA task/ })).toBeTruthy();
+        expect(reviewer.getAttribute('aria-selected')).toBe('true');
+        fireEvent.keyDown(field, { key: 'Enter' });
+        await waitFor(() => expect(router.state.location.pathname).toBe('/team/qa-reviewer'));
+      },
+    );
   });
 });

@@ -82,6 +82,8 @@ export function CalendarPage() {
   const events = useQuery(eventsQuery(range.from, range.to));
   // List's own read (ListView reads the same): a refusal there is the page's fault, not "No meetings yet".
   const past = useQuery({ ...meetingsQuery(search.review ?? 'live', search.q ?? ''), enabled: view === 'list' });
+  const finding = view === 'list' && !!search.q;
+  const found = useQuery({ ...findEventsQuery(search.q ?? ''), enabled: finding });
   const [adding, setAdding] = useState(false);
   const [calling, setCalling] = useState(false);
   const cards = useCards();
@@ -91,13 +93,17 @@ export function CalendarPage() {
     return next;
   };
   const list = events.data?.occurrences ?? [];
+  const listed = finding ? (found.data?.occurrences ?? []) : list;
   const open = panelOf(search.panel);
+  const openEvent = open?.kind === 'event'
+    ? list.find((o) => o.occurrence_id === open.id) ?? found.data?.occurrences.find((o) => o.occurrence_id === open.id)
+    : undefined;
   const close = () => void navigate({ to: '/calendar', search: at({}, 'panel') });
   const show = (v: CalView) => void navigate({ to: '/calendar', search: at({ view: v }) });
 
   const panel =
     open?.kind === 'event' ? (
-      <EventPanel id={open.id} list={list} pending={events.isPending} now={now} onClose={close} />
+      <EventPanel id={open.id} event={openEvent} pending={events.isPending || (finding && found.isPending)} now={now} onClose={close} />
     ) : open?.kind === 'meeting' ? (
       <MeetingPanel id={open.id} onClose={close} />
     ) : undefined;
@@ -118,7 +124,7 @@ export function CalendarPage() {
     view === 'month' ? (
       <MonthGrid days={range.days} weeks={range.weeks} month={day.getMonth()} list={list} now={now} today={today} at={at} />
     ) : view === 'list' ? (
-      <ListView list={list} now={now} today={today} at={at} search={search} />
+      <ListView list={listed} now={now} today={today} at={at} search={search} finding={finding && found.isPending} />
     ) : (
       <TimeGrid view={view} days={range.days} list={list} now={now} today={today} at={at} open={open?.kind === 'event' ? open.id : null} />
     );
@@ -588,7 +594,7 @@ const kept = (m: Meeting, h: (typeof HAS)[number]) =>
 
 const REVIEW_WORDS: Record<Review, string> = { live: 'Past', pending: 'Pending', dismissed: 'Dismissed', shared: 'Shared with me' };
 
-function ListView({ list, now, today, at, search }: GridProps & { search: CalendarSearch }) {
+function ListView({ list, now, today, at, search, finding }: GridProps & { search: CalendarSearch; finding: boolean }) {
   const q = search.q ?? '';
   const has = hasOf(search.has);
   // Only past meetings are shared, pending or dismissed, and only they keep a summary: those filters show the Past alone.
@@ -596,14 +602,13 @@ function ListView({ list, now, today, at, search }: GridProps & { search: Calend
   const kinds = new Set<string>(['event', ...alsoOf(search.also)]);
   const live = useQuery(liveCallsQuery);
   const past = useQuery(meetingsQuery(search.review ?? 'live', q));
-  const found = useQuery({ ...findEventsQuery(q), enabled: !!q });
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
   const fold = (k: string) => {
     const next = new Set(folded);
     if (!next.delete(k)) next.add(k);
     setFolded(next);
   };
-  const meetings = pastOnly ? [] : (q ? (found.data?.occurrences ?? []) : list).filter((o) => kinds.has(o.kind));
+  const meetings = pastOnly ? [] : list.filter((o) => kinds.has(o.kind));
   const onNow = meetings.filter((o) => isLive(o, now));
   const coming = meetings.filter((o) => !isLive(o, now) && !isPast(o, now));
   const booked = new Set(onNow.map(callOf));
@@ -616,7 +621,7 @@ function ListView({ list, now, today, at, search }: GridProps & { search: Calend
   const pastDays = groupBy(done, (m) => dayKey(new Date(m.started ?? m.created ?? 0)));
 
   if (!onNow.length && !calls.length && !coming.length && !done.length)
-    return past.isPending || (q && found.isPending) ? null : (
+    return past.isPending || finding ? null : (
       <div className="page-body cl-body is-empty">
         <Empty
           title={search.review === 'shared' && !q && !has.length ? 'Nothing shared with you' : q || pastOnly || kinds.size > 1 ? 'Nothing found' : 'No meetings or calls yet'}

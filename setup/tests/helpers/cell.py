@@ -45,6 +45,8 @@ class FakeSystem:
         self.input = ["-A INPUT -i lo -j ACCEPT"]  # INPUT as `iptables -S` prints it; the firewall script edits it
         self.firewall_works = True  # False: running the firewall script leaves INPUT as it is
         self.meet_cert = True  # `up` of an edge project with Tico Meet: the certificate Caddy gets its certificate
+        # py-spy's download: what each url answers (missing: it fails), and the machine type
+        self.downloads, self.arch = {}, "aarch64"
 
     def run(self, argv, *, input=None, timeout=900):
         self.calls.append(list(argv))
@@ -147,6 +149,14 @@ class FakeSystem:
 
     def linux(self):
         return True
+
+    def fetch(self, url, limit=64 << 20):
+        if url not in self.downloads:
+            raise OSError(f"{url}: unreachable")
+        return self.downloads[url]
+
+    def machine(self):
+        return self.arch
 
     def latest_release(self):
         return self.release

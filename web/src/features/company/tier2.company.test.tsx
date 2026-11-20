@@ -19,6 +19,7 @@ import {
   marketCountQuery,
   marketSpendQuery,
   mattersQuery,
+  moveTeammate,
   productsQuery,
   riskQuery,
   risksQuery,
@@ -247,6 +248,35 @@ describe('Org @s309', () => {
     expect(within(sales).queryByText('Ana Ruiz')).toBeNull();
   });
 
+  it('opens an agent lead in its own group when its slug differs from its ID', async () => {
+    serve(nothing);
+    const agent = { ...actor('bot:agent-id', 'Builder', 'agent'), slug: 'builder' };
+    queryClient.setQueryData(['directory'], { actors: [agent], byId: { [agent.id]: agent, 'bot:builder': agent } });
+    queryClient.setQueryData(groupsQuery.queryKey, [g('ops', 'Operations', { bots: ['agent-id'], bot_slugs: ['builder'], lead: agent.id })]);
+    const router = show(strategy('org'), '/company/strategy/org');
+    const ops = await screen.findByRole('region', { name: 'Operations' });
+    expect(within(ops).getAllByText('Builder')).toHaveLength(1);
+    fireEvent.click(within(ops).getByRole('link', { name: 'Operations lead' }));
+    const lead = within(await screen.findByRole('complementary', { name: 'Builder' }));
+    expect(lead.getByText('Group').nextElementSibling?.textContent).toBe('Operations');
+    expect(href(lead.getByRole('link', { name: 'Open' }))).toBe('/team/builder');
+    await router.navigate({ to: '.', search: { panel: 'mate:bot:builder' } as never });
+    expect(lead.getByText('Group').nextElementSibling?.textContent).toBe('Operations');
+  });
+
+  it('moves one agent without replacing its ID or slug in the group cache', async () => {
+    const sent = serve((_url, method) => method === 'PATCH' ? { status: 200, body: {} } : nothing());
+    const ops = g('ops', 'Operations', { bots: ['agent-id', 'peer-id'], bot_slugs: ['builder', 'peer'] });
+    const support = g('support', 'Support');
+    queryClient.setQueryData(groupsQuery.queryKey, [ops, support]);
+    await moveTeammate('bot:builder', 'ops', 'support');
+    expect(sent).toEqual([{ url: '/api/v2/groups/support', method: 'PATCH', body: { add: { bots: ['agent-id'] } } }]);
+    expect(queryClient.getQueryData(groupsQuery.queryKey)).toEqual([
+      { ...ops, bots: ['peer-id'], bot_slugs: ['peer'] },
+      { ...support, bots: ['agent-id'], bot_slugs: ['builder'] },
+    ]);
+  });
+
   it('says so when there are no teams, and offers Try again when the groups fail', async () => {
     serve(nothing);
     queryClient.setQueryData(groupsQuery.queryKey, []);
@@ -390,7 +420,7 @@ describe('One risk @n:re:risk-one', () => {
       next_offset: null,
       obligations: [{ id: 'o1', rule: { text: 'Send evidence within 7 days' }, basis: 'Contract', mark: null, due_on: '2026-11-24' }],
       rules: [{ link_id: 'l1', id: 'ru1', text: 'A chargeback opens, send evidence' }],
-      sources: [{ link_id: 'l2', id: 'c1', name: 'Card network rules' }],
+      sources: [{ link_id: 'l2', id: 'document/card-network-rules', name: 'Card network rules' }],
       coverage: [],
     } as unknown as RiskDetail;
     queryClient.setQueryData(riskQuery('r1').queryKey, detail);
@@ -399,8 +429,8 @@ describe('One risk @n:re:risk-one', () => {
     expect(figures.textContent).toContain('$412');
     expect(href(within(screen.getByRole('region', { name: 'Matters' })).getByText('Refund dispute A'))).toBe('/company/risk?risk=r1&panel=matter:t1');
     expect(within(screen.getByRole('region', { name: 'Dates' })).getByText('Send evidence within 7 days')).toBeTruthy();
-    expect(href(within(screen.getByRole('region', { name: 'Rules' })).getByText('A chargeback opens, send evidence'))).toBe('/company/rules?rule=ru1');
-    expect(href(within(screen.getByRole('region', { name: 'Sources' })).getByText('Card network rules'))).toBe('/library/contacts?contact=c1');
+    expect(href(within(screen.getByRole('region', { name: 'Rules' })).getByText('A chargeback opens, send evidence'))).toBe('/company/rules?panel=org:ru1');
+    expect(href(within(screen.getByRole('region', { name: 'Sources' })).getByText('Card network rules'))).toBe('/library/contacts?panel=document/card-network-rules');
     expect(screen.getByText('Most say the kit did not arrive.')).toBeTruthy();
     // the owner pick is only for those who may change the risk
     expect(screen.queryByRole('combobox', { name: 'Owner' })).toBeNull();

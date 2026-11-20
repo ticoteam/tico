@@ -345,6 +345,21 @@ describe('a page’s versions, a new page and a picture', () => {
     expect(screen.getByRole('button', { name: 'Next change' })).toBeTruthy();
   });
 
+  it('lets the reader leave a linked comparison with no text changes', async () => {
+    serve((url) => {
+      if (url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1')) {
+        return { status: 200, body: detail(withVersions()) };
+      }
+      if (/\/api\/v2\/files\/f1\?v=[12]$/.test(url)) return { status: 200, body: '<p>Review the draft.</p>' };
+      return base(url);
+    });
+    const router = show(<TaskPage task="12" pipeline="p1" tab="spec" />, '/tasks/p1/12/spec?vs=1');
+    const changes = await screen.findByRole('button', { name: 'No changes' });
+    expect(changes.getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(changes);
+    await waitFor(() => expect(router.state.location.search).not.toHaveProperty('vs'));
+  });
+
   it('writes a new page from Add and opens it @s79', async () => {
     serve((url, method) => {
       if (method === 'POST' && url.endsWith('/api/v2/pages'))

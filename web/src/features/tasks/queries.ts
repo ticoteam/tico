@@ -22,6 +22,7 @@ import type {
   TagList,
 } from '@/api/schema';
 import { keys, queryClient, quietRoot, write } from '@/data';
+import { toast } from '@/kit/Toast';
 import { newId } from '@/lib';
 
 // Pipelines, tags and Flow's list have no live topic of their own: read again after the person's writes, on
@@ -214,6 +215,8 @@ export async function loadMoreOf(params: Record<string, string | number>): Promi
       const counted = cur.counted && perStage(fresh, { ...cur.counted });
       return { ...cur, tasks: [...cur.tasks, ...fresh], next_after: page.next_after ?? null, ...(counted && { counted }) };
     });
+  } catch {
+    toast({ text: "Couldn't read more", kind: 'failed' });
   } finally {
     loading.delete(id);
   }
@@ -368,7 +371,11 @@ export interface Skipped {
 const skippedOf = (skipped: readonly { reason: string }[]): Skipped => ({ n: skipped.length, why: skipped[0]?.reason ?? '' });
 
 /** Every key that shows one of `ids`: each changes at once; a skipped task comes back when its list is read again. */
-async function many<T>(ids: readonly string[], change: (t: TaskItem) => TaskItem | null, send: (k: string) => Promise<T>, left: (out: T) => readonly { reason: string }[]) {
+async function many<T extends { skipped: readonly { reason: string }[] }>(
+  ids: readonly string[],
+  change: (t: TaskItem) => TaskItem | null,
+  send: (k: string) => Promise<T>,
+) {
   const set = new Set(ids);
   const shown = listsHoldingAny(set);
   const out = await write<T>({
@@ -377,41 +384,40 @@ async function many<T>(ids: readonly string[], change: (t: TaskItem) => TaskItem
       cur?.tasks && { ...cur, tasks: cur.tasks.flatMap((t) => (set.has(t.id) ? [change(t)].filter((x) => x !== null) : [t])) },
     send,
   });
-  const skipped = left(out);
-  if (skipped.length) for (const k of shown) void queryClient.invalidateQueries({ queryKey: k });
-  return skippedOf(skipped);
+  if (out.skipped.length) for (const k of shown) void queryClient.invalidateQueries({ queryKey: k });
+  return out;
 }
 
 /** Move tasks to a stage of their pipeline, or to `done`, `closed` or `reopen`, in one write. */
-export function moveMany(ids: readonly string[], to: string): Promise<Skipped> {
+export async function moveMany(ids: readonly string[], to: string) {
   const now = new Date().toISOString();
   const leaves = to === 'done' || to === 'closed';
-  return many(
+  const { moved, moved_unseen, skipped } = await many(
     ids,
-    (t) => (leaves ? null : { ...t, stage_id: to, stage_since: now }),
+    (t) => (leaves ? null : to === 'reopen' ? t : { ...t, stage_id: to, stage_since: now }),
     (idempotencyKey) => api.post<TaskMoveResult>('/api/v2/tasks/move', { ids, to }, { idempotencyKey }),
-    (out) => out.skipped,
   );
+  return { moved, movedUnseen: moved_unseen, skipped: skippedOf(skipped) };
 }
 
 /** Give tasks to one owner, in one write. */
-export function assignMany(ids: readonly string[], owner: string): Promise<Skipped> {
-  return many(
+export async function assignMany(ids: readonly string[], owner: string): Promise<Skipped> {
+  const { skipped } = await many(
     ids,
     (t) => ({ ...t, owner_id: owner }),
     (idempotencyKey) => api.post<TaskManyResult>('/api/v2/tasks/owner', { ids, owner }, { idempotencyKey }),
-    (out) => out.skipped,
   );
+  return skippedOf(skipped);
 }
 
 /** Snooze tasks until a time: they leave the board (Archived holds them under Snoozed). */
-export function snoozeMany(ids: readonly string[], until: string): Promise<Skipped> {
-  return many(
+export async function snoozeMany(ids: readonly string[], until: string): Promise<Skipped> {
+  const { skipped } = await many(
     ids,
     () => null,
     (idempotencyKey) => api.post<TaskManyResult>('/api/v2/tasks/snooze', { ids, until }, { idempotencyKey }),
-    (out) => out.skipped,
   );
+  return skippedOf(skipped);
 }
 
 /* ---------------------------------------------------------------- Archived: snoozed, done, closed */

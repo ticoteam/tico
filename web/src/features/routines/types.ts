@@ -163,6 +163,8 @@ export interface Delivery {
   reason?: string | null;
   type?: string | null;
   tasks?: number;
+  /** Successful rule and automation results, as counted by the delivery log. */
+  rules?: number;
   /** Its body is still kept, so it can be read. */
   stored?: boolean;
 }
