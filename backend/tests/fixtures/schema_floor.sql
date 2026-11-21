@@ -996,7 +996,7 @@ CREATE TABLE factory_manager_actions (
     id TEXT PRIMARY KEY,
     factory_id TEXT NOT NULL,
     factory_manager_run_id TEXT NOT NULL,
-    action TEXT NOT NULL CHECK (action IN ('ask_manager','open_agent_ops','propose_rule','post_note')),
+    action TEXT NOT NULL CHECK (action IN ('ask_manager','open_botops','propose_rule','post_note')),
     target_actor TEXT,
     note TEXT,
     created_at TEXT NOT NULL
