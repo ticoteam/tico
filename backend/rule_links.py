@@ -3,7 +3,8 @@
 log-only for now.
 
 A link is one way out: a proxied tool (`tool:<id>`, backend/tool_proxy.py), outgoing webhooks (`webhook`), a release
-(`release`) and email (`email`). An agent's write on a link is checked the way a task
+(`release`), a report to Tico support (`support`, checked at its first delivery to HQ: backend/support.py) and email
+(`email`). An agent's write on a link is checked the way a task
 write is (`org_rule_check.check_as`, outside any transaction, on a budget of one call: needing more is unchecked) and
 leaves exactly one outcome event on `link:<id>`: `rules.passed`, `rules.refused` (a Block rule broken), `rules.held`
 (an Escalate rule broken) or `rules.unchecked` (not judged, or the judge out: the reason in its detail), with the rules
@@ -27,8 +28,8 @@ path, query, header or value is read, so no credential can reach the judge. It r
 Events never carry the text. A proxied write is judged with or without an Idempotency-Key; with one, a retry under it
 within KEY_DAYS logs no second event.
 
-Not covered: reports to Tico support (#4869), a tool whose key goes to computers, a website tool's browser sign-in, and
-any call a computer makes straight out. Rules › Links lists them, unmeasured.
+Not covered: a tool whose key goes to computers, a website tool's browser sign-in, and any call a computer makes
+straight out. Rules › Links lists them, unmeasured.
 """
 
 import hashlib
@@ -36,6 +37,7 @@ import json
 import logging
 import re
 from collections.abc import Callable
+from types import SimpleNamespace
 from typing import Any, cast
 
 from fastapi import FastAPI, Request
@@ -51,8 +53,8 @@ Found = dict[str, Any]  # what `check_as` found and `record` writes
 LOG = logging.getLogger("tico.rule_links")
 ENFORCED, INFORMED, NOT_COVERED = "enforced", "informed", "not_covered"
 ENFORCED_LINKS = frozenset({"email"})  # the links whose path really stops a write; every other is Informed only
-FIXED = {"email": "Email", "webhook": "Outgoing webhooks", "release": "Releases"}
-UNCOVERED = {"support": "Tico support", "computer": "Calls straight from computers"}  # unmeasured paths, besides tools
+FIXED = {"email": "Email", "webhook": "Outgoing webhooks", "release": "Releases", "support": "Tico support"}
+UNCOVERED = {"computer": "Calls straight from computers"}  # unmeasured paths, besides tools
 CALLS_READ = 50  # the MCP calls of one batch the check reads (each one line), however many the batch holds
 MAX_JUDGED = 1024 * 1024  # a proxied body over this is not parsed for its key names (the check reads the rest)
 OUTCOMES = ("rules.passed", "rules.refused", "rules.held", "rules.unchecked")
@@ -67,6 +69,7 @@ for _op, _words in (
     ("tool_call", "a call to an outside tool's API"),
     ("webhook", "an outgoing webhook"),
     ("release", "a request for a release"),
+    ("support_report", "a report to Tico support"),
 ):
     ORC.OPERATIONS.setdefault(_op, _words)
 
@@ -165,10 +168,22 @@ def check_as(
     }
 
 
+def agent_of(store: Any, who: Any) -> tuple[str, str, str] | None:
+    """(principal, sender, via) of a write made by `who` when it is an agent's (its sender a bot), else None. `who` may
+    be any object with an `actor` (Maintenance's BotOps is one)."""
+    seen = SimpleNamespace(
+        actor=str(who.actor), task_actor=str(getattr(who, "task_actor", "") or ""), via=getattr(who, "via", "") or ""
+    )
+    found: Any = ORC.checked_as(seen, store.settings.assistant_bot)
+    if not found or not H.is_bot(found[1]):
+        return None
+    return str(found[0]), str(found[1]), str(found[2])
+
+
 def check(store: Any, primary: Any, who: Any, link: str, operation: str, output: str) -> Found | None:
     """`check_as` for a write made by `who`: None when its sender is not a bot (a person's own write is never gated)."""
-    found: Any = ORC.checked_as(who, store.settings.assistant_bot)
-    if not found or not H.is_bot(found[1]):
+    found = agent_of(store, who)
+    if not found:
         return None
     return check_as(store, primary, found[0], found[1], found[2], link, operation, output)
 

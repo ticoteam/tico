@@ -1241,3 +1241,83 @@ def test_a_retry_across_the_upgrade_finds_the_ticket_filed_under_the_bare_key(en
     assert len(hq.seen) == sent  # nothing new reached HQ
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM support_tickets").fetchone()[0] == 1
+
+
+def _lose_the_first_answer(monkeypatch):
+    """HQ keeps the first ticket but its answer never arrives; later sends reach HQ as they are."""
+    real, lost = support._ask_hq, [True]
+
+    def flaky(method, path, **kw):
+        answer = real(method, path, **kw)
+        if method == "POST" and path == "/v1/support" and lost:
+            lost.pop()
+            raise support.Problem("support_unreachable", "Could not reach Tico support.", 502, retryable=True)
+        return answer
+
+    monkeypatch.setattr(support, "_ask_hq", flaky)
+
+
+def test_a_send_retried_after_a_lost_answer_gets_the_ticket_its_first_send_made(environment, hq, monkeypatch):  # noqa: F811
+    """A bot's report under the team rule and a person's own ticket (same Idempotency-Key) give HQ a stable key of their
+    own: the retry after a lost answer is the first ticket, never a second one."""
+    api = environment()
+    bot = as_bot(api)
+    _lose_the_first_answer(monkeypatch)
+    assert draft(api, bot).status_code == 502
+    again = draft(api, bot)
+    assert again.status_code == 200 and again.json()["sent"] is True
+    assert len(hq.tickets) == 1
+    _lose_the_first_answer(monkeypatch)
+    headers = {**signed_in(), "Idempotency-Key": "form-1"}
+    assert file(api, headers=headers).status_code == 502
+    assert file(api, headers=headers).status_code == 200
+    assert len(hq.tickets) == 2
+    sent = [r.headers.get("idempotency-key") for r in hq.seen if r.url.path == "/v1/support"]
+    assert len(sent) == 4 and sent[0] == sent[1] and sent[2] == sent[3] and sent[0] != sent[2]
+
+
+def test_an_agents_first_support_delivery_logs_one_event_and_a_draft_or_a_retry_none(environment, hq, monkeypatch):  # noqa: F811
+    """Rules › Links: a bot's report is checked on the support link at its first delivery to HQ, as the bot, under the
+    team rule or from a person's OK (the bot kept with the OK when it was asked); a draft waiting for its OK, and a
+    retry that finds its ticket, log nothing."""
+    from backend import rule_links
+
+    api = environment()
+    bot = as_bot(api)
+    checks, real = [], rule_links.check_as
+    monkeypatch.setattr(rule_links, "check_as", lambda *a, **kw: checks.append(a[2:5]) or real(*a, **kw))
+
+    def logged():
+        with api.app.state.store.read() as c:
+            rows = c.execute("SELECT actor, action FROM events WHERE target='link:support' ORDER BY rowid")
+            return [tuple(r) for r in rows]
+
+    assert draft(api, bot).json()["sent"] is True  # under the team rule
+    assert draft(api, bot).status_code == 200  # the same report again: its ticket back
+    assert logged() == [("bot:assistant", "rules.passed")]
+    drafts_only(api)
+    approval = draft(api, bot, message="Another report, with other words").json()
+    assert approval["status"] == "pending" and len(logged()) == 1
+    decide(api, approval["id"])
+    assert send(api, bot, approval["id"]).status_code == 200
+    assert send(api, bot, approval["id"]).json()["again"]
+    assert logged() == [("bot:assistant", "rules.passed")] * 2
+    assert checks == [("bot:assistant", "bot:assistant", "")] * 2  # judged once each, as the bot
+    with api.app.state.store.read() as c:  # each delivery's kept state goes with its ticket
+        assert not c.execute("SELECT 1 FROM registry_metadata WHERE key LIKE 'support-link:%'").fetchone()
+
+
+def test_a_first_check_kept_for_a_delivery_is_not_judged_again_after_a_restart(environment, hq, monkeypatch):  # noqa: F811
+    from backend import rule_links
+
+    api = environment()
+    bot = as_bot(api)
+    _lose_the_first_answer(monkeypatch)
+    checks, real = [], rule_links.check_as
+    monkeypatch.setattr(rule_links, "check_as", lambda *a, **kw: checks.append(1) or real(*a, **kw))
+    assert draft(api, bot).status_code == 502
+    kept = api.app.state.support
+    kept.__init__(kept.store, kept.settings, kept.census, kept.vault)
+    api.app.state.support.app = api.app  # a new process: nothing held in memory, only what the database keeps
+    assert draft(api, bot).json()["sent"] is True
+    assert len(checks) == 1 and len(hq.tickets) == 1
