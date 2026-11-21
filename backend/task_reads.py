@@ -155,6 +155,33 @@ def gone(c, visible_sql, was, matched):
 _SUMMARY_LABELS = {"closed": "Closed with it", "open": "Still open", "kept": "Still closed from when it closed"}
 
 
+def readable_history(c, who, history, visible_sql):
+    """A task's history rows (H.task_history) as `who` may read them, as the task's own read gives them: rows whose
+    content they may not read go, and so does a row naming a task they may not open; a subtask summary names only
+    subtasks they may open; and a bound OK keeps no words for anyone but its parties. `visible_sql` is their task rule
+    (Auth.task_sql). The caller still runs files.readable_page_refs on what it shows: an ask's words come from the
+    pages it showed."""
+    from . import task_asks
+    from . import task_privacy as privacy
+
+    history = privacy.content_readable_rows(c, privacy.actor(who), history)
+    named = sorted({str(e[k]) for e in history for k in ("old", "new") if e.get(k)})
+    if named:
+        # The named tasks that exist and that the reader may not read, in one statement.
+        hidden = {
+            r[0]
+            for r in c.execute(
+                "SELECT id FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND NOT coalesce(("
+                + visible_sql
+                + "),0)",
+                (json.dumps(named),),
+            )
+        }
+        history = [e for e in history if not ({str(e.get(k)) for k in ("old", "new")} & hidden)]
+    history = children_text(c, visible_sql, history)
+    return task_asks.private_history(c, who.actor, history)
+
+
 def children_text(c, visible_sql, history):
     """The task's history with each subtask summary's text written for this reader. A summary keeps the ids of its
     subtasks, not their titles (hubdb._finish_children): a title shows only where the reader may open that subtask

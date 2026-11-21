@@ -40,8 +40,9 @@ Claim retries rebuild the reference list using current access ([Pages](pages.md#
 Claim attempts may include `run_header`: at most 2,000 characters on where the turn's card stands now (stage, time in
 it, version, whose turn, what is met and missing, what others changed since the bot's last run there, the stage's
 rules) and, in a person's own Assistant turn, their Needs you count, its first five items and the open tasks their
-Assistant filed for them. The server reads it just after the claim's write, as whoever the turn acts for, and leaves it
-out when it cannot be read within 300 ms. The runner puts it at the start of the turn's own part of the prompt, never
+Assistant filed for them. A Make page turn's card is the task it makes the page for. The server reads it just after
+the claim's write, as whoever the turn acts for and as the task's own read shows it to them, and leaves it out when it
+is not ready within 300 ms. The runner puts it at the start of the turn's own part of the prompt, never
 in the standing part, so a resumed session's cached prefix stays the same.
 Every saved runner receipt for a Make-page attempt uses the person stored on that attempt, including after it
 finishes. Replays require that person's current task access and the same computer assignment and generation;

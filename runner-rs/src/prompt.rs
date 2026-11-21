@@ -388,14 +388,6 @@ fn parts(
             format!(" End each memory/ or knowledge/ commit message of this turn with the line `Tico-Run: {run}`.")
         };
         lines.push((Part::Turn, format!("This turn's run is {run}; its conversation is {conv_id} (`tico conversation show {conv_id}`).{kept}")));
-        // The card and the person's snapshot, read as the run starts (backend/run_header.py). It changes from turn to
-        // turn, so it is this turn's own part: the standing part a resumed session already holds stays byte-identical.
-        if let Some(header) = attempt["run_header"]
-            .as_str()
-            .filter(|h| !h.trim().is_empty())
-        {
-            lines.push((Part::Turn, header.to_string()));
-        }
     }
     if make_page {
         lines = [
@@ -407,6 +399,15 @@ fn parts(
         .into_iter()
         .map(|l: String| (Part::Standing, l))
         .collect();
+    }
+    // The card (and the person's snapshot), read as the run starts (backend/run_header.py), right after the opening. It
+    // changes from turn to turn, so it is this turn's own part: the standing part a resumed session already holds stays
+    // byte-identical.
+    if let Some(header) = attempt["run_header"]
+        .as_str()
+        .filter(|h| !h.trim().is_empty())
+    {
+        lines.push((Part::Turn, header.to_string()));
     }
     let tools = proxied_tools(&attempt["_proxied_tools"]);
     if !tools.is_empty() {
@@ -1413,6 +1414,32 @@ mod tests {
         assert!(t.starts_with(STANDING_SEEN), "{t}");
         assert!(t.contains(now) && !t.contains(was), "{t}");
         assert!(!short.restore.contains(now), "{}", short.restore);
+    }
+
+    #[test]
+    fn a_make_page_turn_keeps_its_run_header_after_the_opening() {
+        let header = "Run header, read as this run starts (newer than anything earlier in this conversation):\nCard now: Launch plan is in Spec (Product); version 2.";
+        let attempt = json!({"id": "a9", "bot": "assistant", "run_header": header,
+            "conversation": {"id": "c9", "kind": "chat", "scope": "personal"},
+            "message": {"id": "m9", "from_actor": "human:ana", "body": "Make a page of the plan", "refs": {"assistant": true, "make_page": {"task": "t9"}}},
+            "make_page": {"task": {"id": "t9", "title": "Launch plan"}}, "history": []});
+        let names = Names::from_config(None);
+        let given = prompt(&attempt, &names, None, false);
+        let at = given
+            .find(header)
+            .expect("the header is in a Make page prompt");
+        let opened = given.find("Continue until the page is published").unwrap();
+        assert!(opened < at, "{given}");
+        assert!(
+            at < given.find("Make a page for task t9").unwrap(),
+            "{given}"
+        );
+        let mut bare = attempt.clone();
+        bare.as_object_mut().unwrap().remove("run_header");
+        assert_eq!(
+            build(&attempt, &names, None, false, "", &Seen::default(), "").standing,
+            build(&bare, &names, None, false, "", &Seen::default(), "").standing
+        );
     }
 
     #[test]

@@ -259,29 +259,9 @@ def register_core(
                 can_comment = True
             except Problem:
                 can_comment = False
-            history = privacy.content_readable_rows(c, privacy.actor(who), H.task_history(c, tid, provenance=True))
-            # An event that names a ticket the reader may not open (a hidden child, say) is no detail of this one: it goes.
-            named = sorted({str(e[k]) for e in history for k in ("old", "new") if e.get(k)})
-            if named:
-                # The named tasks that exist and that the reader may not read, in one statement.
-                hidden_refs = {
-                    r[0]
-                    for r in c.execute(
-                        "SELECT id FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND NOT coalesce(("
-                        + related_sql
-                        + "),0)",
-                        (json.dumps(named),),
-                    )
-                }
-                history = [e for e in history if not ({str(e.get(k)) for k in ("old", "new")} & hidden_refs)]
-            # A subtask summary's text names its subtasks only where the reader may open them (task_reads.children_text).
             from . import task_reads
 
-            history = task_reads.children_text(c, related_sql, history)
-            # What a bound OK is for is its parties' alone: its ask and answers keep no words for anyone else.
-            from . import task_asks
-
-            history = task_asks.private_history(c, who.actor, history)
+            history = task_reads.readable_history(c, who, H.task_history(c, tid, provenance=True), related_sql)
             lines = SRC.lookup(c, SRC.actors_of(history))
             for event in history:
                 event["source"] = SRC.source_of(lines, event)  # reads `data`, which the answer leaves out

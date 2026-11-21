@@ -108,6 +108,8 @@ class Standing:
     notices: tuple[str, ...] = ()
     # A document approval whose decision-model check could not run (three tries): it reaches the person anyway, marked.
     unchecked: bool = False
+    # Met by an approval: the page versions it was given on (`page:<id>@<version>`), a carried one's included.
+    approved: tuple[str, ...] = ()
 
     @property
     def met(self) -> bool:
@@ -398,7 +400,8 @@ def _ok(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | N
     person = person_of(conn, requirement, task["visit"]["id"])
     what = requirement.get("line") or "OK"
     if answer and answer["answer"] == "ok":
-        return Standing(requirement, MET, line="OK'd")
+        shows = tuple(str(r) for r in requirement.get("shows") or () if str(r).startswith("page:"))
+        return Standing(requirement, MET, line="OK'd", approved=shows)
     if answer and answer["answer"] == "no":
         notes = (answer.get("notes") or "").strip()
         return Standing(requirement, NOT_MET, task.get("owner_id"), f"Sent back: {notes}" if notes else "Sent back")
@@ -673,6 +676,8 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
     result = result or next((r for r in results if not r.met), results[0])
     result.notices = tuple(dict.fromkeys(n for r in results for n in r.notices))
     result.unchecked = any(r.unchecked for r in results)
+    if result.met:
+        result.approved = tuple(v for r in results for v in r.approved)
     if result.state == NOT_MET and len(pages) > 1 and result.line != STALE_REVIEW:
         result.line = sentences(result.line, _pages_read(task, document, pages, results))
     return result
@@ -739,7 +744,12 @@ def _one_page(
         # Only on the visit where it was given: an OK brought back from Merge is the Merge return's to judge.
         if signoff and answer is not carried and _same_code_ok(conn, task, requirement, answer, page):
             name, was = _name(conn, answer["by_id"]), answer["page_version"]
-            return Standing(requirement, MET, line=f"OK'd by {name} on version {was}; no new commits since")
+            return Standing(
+                requirement,
+                MET,
+                line=f"OK'd by {name} on version {was}; no new commits since",
+                approved=(f"page:{page['file_id']}@{was}",),
+            )
         answer = None
     if signoff and carried and answer is carried and (held := _queued_as_is(conn, task, requirement)):
         return held  # back from Merge at the commits the queue just ran: the OK waits for a fix (task #344)
@@ -749,6 +759,8 @@ def _one_page(
         # once a bot read them and OK'd them (`_after_ok`). Otherwise it lapses: the same person is asked again.
         kept, since_ok = _after_ok(conn, task, requirement, answer)
         if kept:
+            if kept.met:
+                kept.approved = (f"page:{page['file_id']}@{page['version']}",)
             return kept
         lapsed_by, lapsed_ok = str(answer["by_id"]), answer
         answer, lapsed = None, sentence(f"New commits since {_name(conn, lapsed_by)}'s OK") + " "
@@ -759,7 +771,7 @@ def _one_page(
             line = f"{_name(conn, back['by_id'])} sent back the new commits: {said}" if back else lapsed.strip()
             return Standing(requirement, NOT_MET, owner, sentences(line, ATTACH_AGAIN))
     if answer and answer["answer"] == "ok":
-        return Standing(requirement, MET, line="OK'd")
+        return Standing(requirement, MET, line="OK'd", approved=(f"page:{page['file_id']}@{page['version']}",))
     if answer and answer["answer"] == "no":
         notes = (answer.get("notes") or "").strip()
         line = f"Sent back: {notes}" if notes else "Sent back"
