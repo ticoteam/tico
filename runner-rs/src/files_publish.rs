@@ -2,7 +2,7 @@
 //! clients/bot_files.py; docs/files.md).
 //!
 //! The folders are `files: {publish: [...]}` (the attempt's config, else bot.yaml), else `reports/` and
-//! `artifacts/`. What goes is decided here: allowed types, 25 MB at most, no credential-like names, no symbolic
+//! `artifacts/`. What goes is decided here: any work file but a program, 25 MB at most, no credential-like names, no symbolic
 //! or hard links, nothing outside the checkout. Each upload is a row in an outbox in the runner's state database
 //! keyed by bot, path and content digest; the key is also the request's idempotency key, so a retry lands once.
 //! A file that could not go is reported as not synced, never shown with a link that opens nothing.
@@ -40,39 +40,60 @@ pub const GIVE_UP_AFTER: i64 = 20;
 pub const UPLOAD_TIMEOUT: u64 = 120;
 pub const MAX_BYTES: u64 = 25 * 1024 * 1024;
 pub const DEFAULT_FOLDERS: &[&str] = &["reports", "artifacts"];
-pub const TYPES: &[&str] = &[
-    ".mp4",
-    ".webm",
-    ".mov",
-    ".mp3",
-    ".wav",
-    ".m4a",
-    ".ogg",
-    ".md",
-    ".markdown",
-    ".txt",
-    ".csv",
-    ".tsv",
-    ".json",
-    ".yaml",
-    ".yml",
-    ".html",
-    ".htm",
-    ".pdf",
-    ".rtf",
-    ".doc",
-    ".docx",
-    ".xls",
-    ".xlsx",
-    ".ppt",
-    ".pptx",
-    ".odt",
-    ".ods",
-    ".png",
-    ".jpg",
-    ".jpeg",
-    ".gif",
-    ".webp",
+/// Programs, installers and scripts a computer runs: never published (bot_files.EXECUTABLE).
+pub const EXECUTABLE: &[&str] = &[
+    ".app",
+    ".apk",
+    ".appimage",
+    ".bat",
+    ".cmd",
+    ".com",
+    ".command",
+    ".cpl",
+    ".deb",
+    ".dll",
+    ".dmg",
+    ".dylib",
+    ".elf",
+    ".exe",
+    ".hta",
+    ".ipa",
+    ".jar",
+    ".lnk",
+    ".msi",
+    ".msp",
+    ".mpkg",
+    ".pif",
+    ".pkg",
+    ".ps1",
+    ".psm1",
+    ".reg",
+    ".rpm",
+    ".run",
+    ".scr",
+    ".sh",
+    ".bash",
+    ".zsh",
+    ".csh",
+    ".ksh",
+    ".so",
+    ".sys",
+    ".vbe",
+    ".vbs",
+    ".wsf",
+    ".wsh",
+];
+/// The first bytes of a program: ELF and Mach-O (either byte order, 32 or 64 bit, and universal)
+/// (bot_files.PROGRAM_MAGIC).
+pub const PROGRAM_MAGIC: &[&[u8]] = &[
+    b"\x7fELF",
+    b"\xfe\xed\xfa\xce",
+    b"\xfe\xed\xfa\xcf",
+    b"\xce\xfa\xed\xfe",
+    b"\xcf\xfa\xed\xfe",
+    b"\xca\xfe\xba\xbe",
+    b"\xca\xfe\xba\xbf",
+    b"\xbf\xba\xfe\xca",
 ];
 
 pub const TABLES: &str = "
@@ -115,8 +136,7 @@ pub fn check_name(name: &str) -> Result<String, String> {
         .filter(|c| !matches!(*c as u32, 0..=0x1f | 0x7f))
         .take(200)
         .collect();
-    let ext = suffix(&base);
-    if base.is_empty() || (base.starts_with('.') && !TYPES.contains(&ext.as_str())) {
+    if base.is_empty() || base == "." || base == ".." {
         return Err(format!(
             "{} is not a file name Tico publishes",
             if base.is_empty() { "that name" } else { &base }
@@ -127,16 +147,21 @@ pub fn check_name(name: &str) -> Result<String, String> {
             "{base} looks like a credential, so it is never published"
         ));
     }
-    if !TYPES.contains(&ext.as_str()) {
-        let mut sorted = TYPES.to_vec();
-        sorted.sort();
-        return Err(format!(
-            "{} files are not published. Allowed types: {}",
-            if ext.is_empty() { &base } else { &ext },
-            sorted.join(", ")
-        ));
-    }
+    check_program(&base, b"")?;
     Ok(base)
+}
+
+/// Why a file is a program, or Ok (bot_files.check_program): an EXECUTABLE extension, a program's first bytes, or a
+/// script (`#!`) with no extension. Trailing dots are no extension (`run.` is `run`, `tool.exe.` is `tool.exe`).
+pub fn check_program(base: &str, head: &[u8]) -> Result<(), String> {
+    let ext = suffix(base.trim_end_matches('.'));
+    if EXECUTABLE.contains(&ext.as_str())
+        || PROGRAM_MAGIC.iter().any(|m| head.starts_with(m))
+        || (ext.is_empty() && head.starts_with(b"#!"))
+    {
+        return Err(format!("{base} is a program, so it is never published"));
+    }
+    Ok(())
 }
 
 pub fn check_size(size: u64) -> Result<(), String> {
@@ -195,7 +220,7 @@ pub fn local_file(root: &Path, rel: &str) -> Result<(PathBuf, String), String> {
     {
         return Err("That path is outside the bot's checkout".into());
     }
-    check_name(
+    let base = check_name(
         &walk
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -207,6 +232,11 @@ pub fn local_file(root: &Path, rel: &str) -> Result<(PathBuf, String), String> {
         ));
     }
     check_size(meta.len())?;
+    let mut head = Vec::with_capacity(16);
+    std::fs::File::open(&walk)
+        .and_then(|f| std::io::Read::read_to_end(&mut std::io::Read::take(f, 16), &mut head))
+        .map_err(|e| e.to_string())?;
+    check_program(&base, &head)?;
     Ok((walk, joined))
 }
 
@@ -289,8 +319,8 @@ pub fn candidates(
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default();
-                if name.starts_with('.') && !TYPES.contains(&suffix(&name).as_str()) {
-                    continue;
+                if name == ".DS_Store" {
+                    continue; // the Mac's folder settings, not anything the bot made
                 }
                 let rel = entry
                     .strip_prefix(&root)
@@ -300,7 +330,8 @@ pub fn candidates(
                 if meta.as_ref().is_ok_and(|m| m.file_type().is_symlink()) {
                     found.push((mtime(&entry), rel, "is a symbolic link".into()));
                 } else if meta.as_ref().is_ok_and(|m| m.is_dir()) {
-                    if depth < MAX_DEPTH {
+                    // A hidden folder (.git, .cache) is never walked; a hidden file is a file like any other.
+                    if depth < MAX_DEPTH && !name.starts_with('.') {
                         stack.push((entry, depth + 1));
                     }
                 } else {
@@ -852,7 +883,12 @@ mod tests {
     #[test]
     fn names_types_links_and_sizes_are_refused_with_reasons() {
         assert_eq!(check_name("reports/q3.md").unwrap(), "q3.md");
-        assert!(check_name(".env").unwrap_err().contains("not a file name"));
+        assert!(check_name(".env")
+            .unwrap_err()
+            .contains("looks like a credential"));
+        for hidden in [".gitignore", ".editorconfig", ".launch.srt", "raw.bin"] {
+            assert_eq!(check_name(hidden).unwrap(), hidden);
+        }
         assert_eq!(
             check_name("prod.env.md").unwrap_err(),
             "prod.env.md looks like a credential, so it is never published"
@@ -860,12 +896,12 @@ mod tests {
         assert!(check_name("api_keys.csv")
             .unwrap_err()
             .contains("looks like a credential"));
-        assert!(check_name("tool.exe")
-            .unwrap_err()
-            .starts_with(".exe files are not published. Allowed types: .csv, .doc"));
-        assert!(check_name("Makefile")
-            .unwrap_err()
-            .starts_with("Makefile files are not published"));
+        assert_eq!(
+            check_name("tool.exe").unwrap_err(),
+            "tool.exe is a program, so it is never published"
+        );
+        assert_eq!(check_name("captions.srt").unwrap(), "captions.srt");
+        assert_eq!(check_name("Makefile").unwrap(), "Makefile");
         assert_eq!(check_size(0).unwrap_err(), "An empty file is not published");
         assert_eq!(
             check_size(26 * 1024 * 1024).unwrap_err(),
@@ -889,6 +925,54 @@ mod tests {
         assert!(local_file(&dir, "reports/hard.md")
             .unwrap_err()
             .contains("more than one hard link"));
+        // A program is known by its first bytes too; a script without `#!` or with an extension is a work file.
+        // The first 16 bytes of a 64-bit little-endian ELF and of a 64-bit Mach-O.
+        std::fs::write(
+            dir.join("reports/tool"),
+            b"\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("reports/mac"),
+            b"\xcf\xfa\xed\xfe\x0c\x00\x00\x01\x00\x00\x00\x00\x02\x00\x00\x00",
+        )
+        .unwrap();
+        std::fs::write(dir.join("reports/run."), "#!/bin/sh\n").unwrap();
+        std::fs::write(dir.join("reports/cities.csv"), "MZ,Maputo\n").unwrap();
+        std::fs::write(dir.join("reports/run"), "#!/bin/sh\necho hi\n").unwrap();
+        std::fs::write(dir.join("reports/Makefile"), "all:\n").unwrap();
+        std::fs::write(dir.join("reports/fit.py"), "#!/usr/bin/env python3\n").unwrap();
+        assert_eq!(
+            local_file(&dir, "reports/tool").unwrap_err(),
+            "tool is a program, so it is never published"
+        );
+        assert!(local_file(&dir, "reports/run").is_err());
+        assert!(local_file(&dir, "reports/mac").is_err());
+        // A universal (fat) 64-bit Mach-O, in either byte order.
+        for fat in [
+            b"\xca\xfe\xba\xbf\x00\x00\x00\x02",
+            b"\xbf\xba\xfe\xca\x02\x00\x00\x00",
+        ] {
+            assert!(check_program("universal", fat).is_err());
+        }
+        assert!(local_file(&dir, "reports/run.").is_err());
+        assert!(local_file(&dir, "reports/cities.csv").is_ok());
+        assert!(check_name("tool.exe.").is_err());
+        assert!(local_file(&dir, "reports/Makefile").is_ok());
+        assert!(local_file(&dir, "reports/fit.py").is_ok());
+        // A hidden file is a candidate; a hidden folder is never walked.
+        std::fs::write(dir.join("reports/.gitignore"), "*.log\n").unwrap();
+        std::fs::create_dir_all(dir.join("reports/.cache")).unwrap();
+        std::fs::write(dir.join("reports/.cache/x.md"), "x").unwrap();
+        let found: Vec<String> = candidates(&dir, &["reports".to_string()], &HashSet::new())
+            .into_iter()
+            .map(|(rel, _)| rel)
+            .collect();
+        assert!(
+            found.contains(&"reports/.gitignore".to_string()),
+            "{found:?}"
+        );
+        assert!(!found.iter().any(|rel| rel.contains(".cache")), "{found:?}");
         std::fs::remove_dir_all(dir).ok();
     }
 

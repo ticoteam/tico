@@ -669,6 +669,8 @@ def task_attach(api, args):
         from clients import bot_files as BF
 
         path, _ = BF.local_file(BF.checkout_root(), args["path"])
+        with path.open("rb") as source:
+            BF.check_program(path.name, source.read(16))
         fields = {k: args[k] for k in ("name", "note") if args.get(k) is not None}
         if api.features().get("task_files_multipart"):
             uploads = {"file": path}

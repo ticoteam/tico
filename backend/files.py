@@ -1978,9 +1978,12 @@ class Files:
                     # A filename must not overwrite another person’s page from the shared Assistant.
                     identity += ":person:" + who.actor
             name, mime = BF.check_name(name)
-            # A streamed video or audio file was checked against the server's limit when it was spooled.
+            # A streamed video or audio file was checked against the server's limit and its first bytes when it was
+            # spooled. An agent's file is never a program (clients/bot_files.py check_program); a person's is not looked at.
             if not failed and not staged:
                 BF.check_size(len(data), name)
+                if who.role in ("bot", "runner"):
+                    BF.check_program(name, data[:16])
         except BF.Refused as exc:
             raise refused(exc) from exc
         digest = None
@@ -2161,6 +2164,11 @@ class Files:
                 raise Problem("blob_storage", "Upload staging failed; free disk space and retry", 503, True) from None
             if size == 0:
                 raise refused(BF.Refused("An empty file is not published"))
+            if who.role in ("bot", "runner"):
+                try:
+                    BF.check_program(name, head)
+                except BF.Refused as exc:
+                    raise refused(exc) from exc
             if not BF.media_matches(name, head):
                 raise refused(BF.Refused(f"{name} is not that kind of file: its first bytes do not match"))
             stream.seek(0)

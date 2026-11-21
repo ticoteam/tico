@@ -193,6 +193,16 @@ def replay_upload(store, request, payload):
     return result
 
 
+def refuse_agent_file(name, head):
+    """What an agent never attaches to a task (clients/bot_files.py): a credential-like name or a program, by its name
+    or first bytes. Anything else goes, as it does for a person."""
+    try:
+        BF.check_name(name)
+        BF.check_program(name, head)
+    except BF.Refused as exc:
+        raise Problem("file_refused", str(exc), 422) from exc
+
+
 def guessed_type(name):
     """The stored type for a file name, or None: mimetypes' guess under its common name (visuals.stored_type)."""
     return visuals.stored_type(mimetypes.guess_type(name)[0])
@@ -827,10 +837,9 @@ def install_media(
                 )
                 size = upload["size"]
                 if who.role == "bot":
-                    try:
-                        BF.check_name(name)
-                    except BF.Refused as exc:
-                        raise Problem("file_refused", str(exc), 422) from exc
+                    head = upload["stream"].read(16)
+                    upload["stream"].seek(0)
+                    refuse_agent_file(name, head)
                 digest = upload["digest"]
                 if "poster" in uploads:
                     supplied = uploads["poster"]
@@ -889,10 +898,7 @@ def install_media(
                 raise Problem("validation", "A file is at least one byte and at most 10 MB", 422)
             content_type = guessed_type(name) or ("text/plain" if body.text is not None else "application/octet-stream")
             if who.role == "bot":
-                try:
-                    BF.check_name(name)
-                except BF.Refused as exc:
-                    raise Problem("file_refused", str(exc), 422) from exc
+                refuse_agent_file(name, data[:16])
             payload = body.model_dump()
             if not body.note:
                 payload.pop("note")

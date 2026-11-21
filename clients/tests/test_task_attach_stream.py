@@ -78,7 +78,7 @@ def test_multipart_retry_replays_same_parts_and_key(tmp_path, monkeypatch):
     assert int(first[0].get_header('Content-length')) == len(first[1])
 
 
-@pytest.mark.parametrize('bad', ['symlink', 'credential'])
+@pytest.mark.parametrize('bad', ['symlink', 'credential', 'program'])
 def test_local_mcp_attach_refuses_unsafe_paths(monkeypatch, tmp_path, bad):
     from clients import bot_files as BF
 
@@ -92,13 +92,28 @@ def test_local_mcp_attach_refuses_unsafe_paths(monkeypatch, tmp_path, bad):
     secret.write_text('example only')
     link = root / 'link.txt'
     link.symlink_to(outside)
+    program = root / 'tool'  # no extension: known by its first bytes
+    program.write_bytes(b'\x7fELF\x02\x01\x01\x00' + bytes(8))  # a 64-bit ELF's first 16 bytes
+    (root / 'Makefile').write_text('all:\n')
+    assert BF.local_file(root, 'Makefile')[1] == 'Makefile'
+    assert BF.local_file(root, 'tool')[1] == 'tool'  # a website upload (tico browser upload) is not inspected
+    with pytest.raises(BF.Refused, match='is a program'):
+        BF.read_local(root, 'tool')  # publishing a file reads its first bytes
+    with pytest.raises(BF.Refused):
+        BF.check_program('run.', b'#!/bin/sh')  # a trailing dot is no extension, as in the runner
+    for fat in (b'\xca\xfe\xba\xbf\x00\x00\x00\x02', b'\xbf\xba\xfe\xca\x02\x00\x00\x00'):  # universal 64-bit Mach-O
+        with pytest.raises(BF.Refused):
+            BF.check_program('universal', fat)
+    assert BF.check_name('.gitignore') == ('.gitignore', 'application/octet-stream')
+    with pytest.raises(BF.Refused):
+        BF.check_name('..')
     monkeypatch.chdir(root)  # not a git checkout, so the command's checkout is this folder
     wire = Wire()
     args = {'id': 'task', 'name': 'safe.txt', 'path': str(safe)}
     if bad == 'poster':
         args['poster'] = str(outside)
     else:
-        args['path'] = str({'outside': outside, 'symlink': link, 'credential': secret}[bad])
+        args['path'] = str({'outside': outside, 'symlink': link, 'credential': secret, 'program': program}[bad])
     with pytest.raises(BF.Refused):
         hubtools.task_attach(wire.client(), args)
     assert wire.writes() == []

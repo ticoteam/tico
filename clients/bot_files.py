@@ -1,11 +1,15 @@
 """What a bot may publish as a file, checked the same way by the hub, the runner and `tico file`.
 
+The rule people have: any work file goes, whatever its type. An agent is refused only secrets (credential-like
+names) and programs a computer runs (check_program).
+
 Pure stdlib. The server repeats every rule here (backend/files.py): this module is what lets the
 client refuse early, with a reason, before any bytes are sent. See docs/files.md.
 """
 
 import hashlib
 import io
+import mimetypes
 import os
 import posixpath
 import re
@@ -31,6 +35,7 @@ DOCUMENTS = (
 )
 DEFAULT_FOLDERS = ("reports/", "artifacts/")
 
+# The content type each common extension is stored with; any other file goes as the platform guesses it.
 TYPES = {
     ".mp4": "video/mp4",
     ".webm": "video/webm",
@@ -67,7 +72,27 @@ TYPES = {
     ".svg": "image/svg+xml",
     ".m4v": "video/x-m4v",
     ".aac": "audio/aac",
+    ".srt": "application/x-subrip",
+    ".vtt": "text/vtt",
 }
+# Programs, installers and scripts a computer runs: never published, whatever else the file is.
+EXECUTABLE = frozenset(
+    ".app .apk .appimage .bat .cmd .com .command .cpl .deb .dll .dmg .dylib .elf .exe .hta .ipa .jar "
+    ".lnk .msi .msp .mpkg .pif .pkg .ps1 .psm1 .reg .rpm .run .scr .sh .bash .zsh .csh .ksh .so .sys .vbe .vbs "
+    ".wsf .wsh".split()
+)
+# The first bytes of a program: ELF and Mach-O (either byte order, 32 or 64 bit, and universal). A Windows program
+# carries its extension (.exe, .dll), and "MZ" alone also starts ordinary text.
+PROGRAM_MAGIC = (
+    b"\x7fELF",
+    b"\xfe\xed\xfa\xce",
+    b"\xfe\xed\xfa\xcf",
+    b"\xce\xfa\xed\xfe",
+    b"\xcf\xfa\xed\xfe",
+    b"\xca\xfe\xba\xbe",
+    b"\xca\xfe\xba\xbf",
+    b"\xbf\xba\xfe\xca",
+)
 KINDS = {
     ".mp4": "video",
     ".webm": "video",
@@ -125,14 +150,23 @@ def check_name(name):
     """The display name and content type of an allowed file, or Refused."""
     base = posixpath.basename(str(name or "").replace("\\", "/")).strip()
     base = re.sub(r"[\x00-\x1f\x7f]", "", base)[:200]
-    if not base or base.startswith(".") and Path(base).suffix.lower() not in TYPES:
+    if base in ("", ".", ".."):
         raise Refused(f"{base or 'that name'} is not a file name Tico publishes")
     if CREDENTIAL_NAME.search(base) or base.lower().startswith(".env"):
         raise Refused(f"{base} looks like a credential, so it is never published")
-    suffix = Path(base).suffix.lower()
-    if suffix not in TYPES:
-        raise Refused(f"{suffix or base} files are not published. Allowed types: " + ", ".join(sorted(TYPES)))
-    return base, TYPES[suffix]
+    check_program(base)
+    return base, TYPES.get(Path(base).suffix.lower()) or mimetypes.guess_type(base)[0] or "application/octet-stream"
+
+
+def check_program(name, head=b""):
+    """Refuses a program an agent would publish: an EXECUTABLE extension, a program's first bytes (`head`, when
+    known), or a script (`#!`) with no extension. A `.py` that starts with `#!` is source, so it goes. Trailing dots
+    are no extension (`run.` is `run`, `tool.exe.` is `tool.exe`), as the runner reads them."""
+    base = posixpath.basename(str(name or "").replace("\\", "/")).strip()
+    suffix = Path(base.rstrip(".") or "x").suffix.lower()
+    head = bytes(head[:16])
+    if suffix in EXECUTABLE or head.startswith(PROGRAM_MAGIC) or (not suffix and head.startswith(b"#!")):
+        raise Refused(f"{base} is a program, so it is never published")
 
 
 def is_media(name):
@@ -185,7 +219,7 @@ def local_file(root, rel, extra_types=()):
     """(real path, relative posix name) of a file inside `root` a bot may publish, or Refused.
 
     Refuses a path that leaves the root, any symlink on the way, anything that is not a regular
-    file, a hard-linked file, a credential-like name, a type outside the list and a file over the size cap.
+    file, a hard-linked file, a credential-like name, a program and a file over the size cap.
     """
     root = Path(root).resolve()
     text = str(rel)
@@ -231,6 +265,7 @@ def read_local(root, rel):
         raise Refused(f"A file read whole is at most {MAX_BYTES // MB} MB; {path.name} is larger")
     check_size(len(data), path.name)
     name, content_type = check_name(path.name)
+    check_program(name, data)
     if not media_matches(name, data):
         raise Refused(f"{name} is not that kind of file: its first bytes do not match")
     return name, content_type, data, relative
