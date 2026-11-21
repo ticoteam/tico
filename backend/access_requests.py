@@ -161,11 +161,30 @@ def resource(c: Any, who: Any, ref: Any, admins: Any = (), auth: Any = None) -> 
     kind = prefix.lower() if colon and prefix.lower() in ("tool", "api", "repo", "repository", "github") else ""
     name = rest.strip() if kind else text
     if kind in ("", "tool", "api"):
-        row = _tool(c, name if kind != "api" else "api:" + name)
-        if row is not None and (row["audience"] is None or api_tools.visible(c, who, row, admins, auth)):
-            if api_tools.kind_of(row) != "api":
-                raise Problem("resource", f"{row['name']} is a website tool: ask for its account in Tools", 422)
-            return TOOL, str(row["id"]), str(row["name"]), row
+        wanted = name.removeprefix("api:")
+        # Only the tools the asker may see are candidates, so a hidden tool never hides a visible one of the same name
+        # and an answer never tells a hidden tool from no tool.
+        seen = [
+            row
+            for row in c.execute("SELECT * FROM tools WHERE id=? OR lower(name)=lower(?) ORDER BY id", (wanted, wanted))
+            if row["audience"] is None or api_tools.visible(c, who, row, admins, auth)
+        ]
+        named = [row for row in seen if row["id"] == wanted] or seen
+        apis = [row for row in named if api_tools.kind_of(row) == "api"]
+        if len(apis) > 1:
+            choices = [{"resource": "tool:" + str(row["id"]), "name": str(row["name"])} for row in apis]
+            raise Problem(
+                "ambiguous",
+                f"Several tools are named {name}: ask again for one of "
+                + ", ".join(choice["resource"] for choice in choices),
+                409,
+                extra={"choices": choices},
+            )
+        if apis:
+            return TOOL, str(apis[0]["id"]), str(apis[0]["name"]), apis[0]
+        if named:
+            row = named[0]
+            raise Problem("resource", f"{row['name']} is a website tool: ask for its account in Tools", 422)
     if kind in ("", "repo", "repository", "github"):
         row = _repository(c, name)
         if row is not None:

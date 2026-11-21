@@ -234,6 +234,29 @@ def test_who_may_ask_for_whom_and_the_counts_for_the_weekly_review(api):
     assert numbers["by_kind"] == {"tool_write": 1} and numbers["open"] == 1
 
 
+def test_a_name_finds_the_tool_the_asker_may_see_and_two_it_may_see_are_offered_as_choices(api):
+    world(api)
+    nobody = {"audience": {"everyone": False, "people": [], "teams": [], "bots": []}}
+    hidden = tool(api, "Acme Bank", base_url="https://api.bank.acme.example")["id"]
+    vault = tool(api, "Acme Vault", base_url="https://vault.acme.example")["id"]
+    for tid in (hidden, vault):
+        key(api, tid, SECRET + "-" + tid)
+        assert api.patch(f"/api/v2/api-tools/{tid}", json=nobody, headers=headers()).status_code == 200
+    seen = tool(api, "Acme Bank", base_url="https://api2.bank.acme.example")["id"]
+    key(api, seen, OTHER)
+    # Cara, a member, may not see the hidden twin: the name reaches the one she may see.
+    assert ask(api, "Acme Bank", "read_write", token="cara-test")["resource_id"] == seen
+    # A tool hidden from her answers as no tool does.
+    gone = ask(api, "Acme Vault", token="cara-test", expected=404)["error"]
+    absent = ask(api, "Acme Nothing", token="cara-test", expected=404)["error"]
+    assert {**gone, "detail": gone["detail"].replace("Vault", "Nothing")} == absent
+    # Two she may see: Tico offers both rather than picking one.
+    twin = tool(api, "Acme Bank", base_url="https://api3.bank.acme.example")["id"]
+    both = ask(api, "acme bank", token="cara-test", expected=409)
+    assert sorted(choice["resource"] for choice in both["error"]["choices"]) == sorted(["tool:" + seen, "tool:" + twin])
+    assert ask(api, "tool:" + twin, token="cara-test")["resource_id"] == twin
+
+
 def test_titles_of_old_access_tasks_tie_only_when_certain(api):
     assert AR.parse_title("Give Sentry Triage read access to gotidy?") == ("Sentry Triage", ["gotidy"], "read", "")
     assert AR.parse_title(
