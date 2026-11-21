@@ -331,7 +331,7 @@ def test_real_assistant_lease_keeps_actual_bot_private_boundaries_and_revocation
         api,
         'tasks',
         {
-            'owner': 'human:ben',
+            'owner': 'human:cara',  # one Ben does not read, so neither does his Assistant's run
             'title': 'Review the confidential packet',
             'body': 'Confidential packet.',
             'private': True,
@@ -387,8 +387,8 @@ def test_the_assistant_sends_back_what_a_bot_asks_the_person_and_no_one_elses_as
         mine = ok_ask(c, ship["id"], "bot:ops", "human:ben", "OK to ship the zip fix in the next release?")
         budget = H.task_create(c, "human:ana", "Plan the budget", "Q4.", "bot:ops", private=True)
         hers = ok_ask(c, budget["id"], "bot:ops", "human:ana", "OK the Q4 budget?")
-        secret = H.task_create(
-            c, "human:ben", "Review the confidential packet", "Confidential packet.", "human:ben", private=True
+        secret = H.task_create(  # one Ben does not read, so neither does his Assistant's run
+            c, "human:ana", "Review the confidential packet", "Confidential packet.", "human:cara", private=True
         )
         ship_version, budget_version = H.task(c, ship["id"])["version"], H.task(c, budget["id"])["version"]
     r, attempt = assistant_turn(api, "ben-test", "Send the zip fix back: not this release")

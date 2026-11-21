@@ -138,8 +138,13 @@ def test_a_run_that_is_not_the_persons_own_chat_lends_nothing(api):
 
 
 def test_two_peoples_private_work_stays_apart_and_a_private_handoff_is_filed_as_the_person(api):
-    """One Assistant serves everyone. Ana's own chat neither reads nor writes Ben's private task, and her private handoff
-    is filed as Ana for that one request: the shared Assistant becomes no reader or owner of it, so it still reads none."""
+    """One Assistant serves everyone and acts with the rights of the person its run is for. Ana's own chat neither reads
+    nor writes Ben's private task, and her private handoff is filed as Ana: the shared Assistant becomes no reader or
+    owner of it, and only Ana's runs read it, as she does."""
+    from backend.tests.helpers.api import unrelated_task_managers
+
+    with api.app.state.store.transaction() as c:
+        unrelated_task_managers(c)  # no org-chart line lets Ana read Ben's work
     ben = post(api, "tasks", {"owner": "ops", "title": "Ben's raise", "body": "Salary.", "private": True}, "ben-test")
     post(api, "tasks", {"owner": "ops", "title": "Ana's offer", "body": "Offer.", "private": True})
     r, attempt = assistant_turn(api, "ana-test", text="Hand the payroll check to Ops, privately")
@@ -154,7 +159,7 @@ def test_two_peoples_private_work_stays_apart_and_a_private_handoff_is_filed_as_
     with api.app.state.store.read() as c:
         row = H.task(c, handed["id"])
         assert not H.task_private_readable(c, "bot:assistant", row) and H.task_private_readable(c, "human:ana", row)
-    get(api, "tasks/" + handed["id"], token, expected=404)
+    get(api, "tasks/" + handed["id"], token)  # her run reads what she reads
     get(api, "tasks/" + handed["id"], "ben-test", expected=404)
 
 

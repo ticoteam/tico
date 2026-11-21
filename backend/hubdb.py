@@ -2393,11 +2393,12 @@ def task_private_readable(conn, actor, row):
         if not row:
             return False
     if actor == assistant_actor(conn) and RUN.get():
-        # One Assistant serves everyone: its run reads a private task only when it works for that task's person (its
-        # requester): a person's own message routine's turn, or a run in their own room (rooms.run_person).
+        # One Assistant serves everyone and acts with the rights of the person its run works for (rooms.run_person): it
+        # reads exactly the private tasks that person reads, by their own rule, and none in a run for nobody.
         from .rooms import run_person
 
-        return actor in (row["owner_id"], row["requester_id"]) and row["requester_id"] == run_person(conn, RUN.get())
+        person = run_person(conn, RUN.get())
+        return bool(person) and task_private_readable(conn, person, row)
     if actor in (row["owner_id"], row["requester_id"]):
         return True
     from .task_rights import private_subjects

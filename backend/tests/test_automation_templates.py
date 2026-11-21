@@ -388,8 +388,9 @@ def test_a_persons_message_routine_turn_stays_the_assistants_and_runs_as_a_perso
 
 
 def test_an_assistant_run_reads_a_routine_turn_only_for_the_person_it_works_for(api):
-    """One Assistant serves everyone: Ana's routine turn task is hers (its requester) and her routine's run reads it;
-    the Assistant's run for Ben, and its manager, read none of it."""
+    """One Assistant serves everyone and acts with the rights of the person its run works for: Ana's routine turn task is
+    hers (its requester), and her routine's run reads it and every private task she reads; the Assistant's run for Ben,
+    and its manager, read none of hers."""
     from backend.tests.helpers.api import assign, claim, ready, runner
 
     set_templates(api, STAFF)
@@ -411,6 +412,8 @@ def test_an_assistant_run_reads_a_routine_turn_only_for_the_person_it_works_for(
             "SELECT generation FROM assignments WHERE bot=?", (H.resolve_bot(c, "assistant")["id"],)
         ).fetchone()
         assert not H.task_private_readable(c, "bot:cpo", turns["ana"])  # the Assistant's manager
+    with api.app.state.store.transaction() as c:  # shared with Ana, asked for by Cara
+        shared = H.task_create(c, "human:cara", "Offer", "Ours.", "bot:ops", private=True, readers=["human:ana"])
     assign(api, machine, "assistant", held["generation"] if held else 0)
     ready(api, machine, ["assistant"])
     runs = {}
@@ -424,6 +427,10 @@ def test_an_assistant_run_reads_a_routine_turn_only_for_the_person_it_works_for(
         assert api.get("/api/v2/tasks/" + turns[other]["id"], headers=headers(token)).status_code == 404
         listed = api.get("/api/v2/tasks", headers=headers(token)).text
         assert turns[other]["id"] not in listed
+        # It acts with its person's rights: what Ana reads, Ana's run reads; Ben's does not.
+        reads_shared = api.get("/api/v2/tasks/" + shared["id"], headers=headers(token)).status_code
+        assert reads_shared == (200 if person == "ana" else 404), (person, reads_shared)
+        assert (shared["id"] in listed) is (person == "ana")
     assert api.get("/api/v2/tasks/" + turns["ana"]["id"], headers=headers("ana-test")).status_code == 200
 
 
