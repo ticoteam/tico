@@ -357,13 +357,15 @@ that started a job can read it.
 
 One charge per shot: before a video is sent, the server writes down its shot (who asks, the card's stage visit, the
 input and the shot name) and sends that key to the Gateway as the Idempotency-Key. Asking for the same shot again answers
-the same job without a second call, even when the Gateway or the budget would refuse a new one. Only a certain refusal
-(by status and code) lets a shot be sent again. When the outcome is unknown (no answer, a provider timeout, a restart mid-call) the shot is
-never sent again: the request is refused with `reconcile_shot`, and the task gets one sub-task, "Reconcile shots",
-for the person it falls to, listing every such shot; closing it reconciles them. A shot a restart left unanswered is asked about within minutes, with no
-request needed. A request with no shot name outside a task is keyed to its own Idempotency-Key (one without is refused),
-and a retry under the same key is the same shot even after the task moved on; the same key with another video is a
-409 `idempotency_conflict`. A new take needs a new shot name.
+the same job without a second call, even when the Gateway or the budget would refuse a new one. Only a certain refusal,
+judged by status and code (a 4xx, `503 unconfigured`, `502 auth`, `502 http`), lets a shot be sent again. When the
+outcome is unknown (no answer, a timeout, any other 5xx, a restart mid-call; a shot a restart left unanswered is marked
+unknown within minutes) the shot is never sent again: the request is refused with `reconcile_shot`, and its `shots`
+name every unknown shot of the card by key and name. The agent then asks the card's person with its normal question,
+"Reconcile shot NAME: check Gateway usage before re-rendering", and never renders that shot again under another name to
+get around it. A request with no shot name outside a task is keyed to its own Idempotency-Key (one without is refused),
+and a retry under the same key is the same shot, on the card and visit it was first asked on, even after the task moved
+on; the same key with another video or shot name is a 409 `idempotency_conflict`.
 
 Bots use the same two things with the `tico_gateway_video` and `tico_gateway_video_status` tools. The video is priced per
 second at what the video model costs plus 25% (`tico gateway catalog video`), held when the job starts and charged when it

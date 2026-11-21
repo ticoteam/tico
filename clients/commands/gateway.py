@@ -450,7 +450,8 @@ VIDEO_JOB = re.compile(r"gv_[0-9a-f]{24}")
     "tico_gateway_video_status, since a video takes minutes. `first_frame` and `last_frame` are "
     "optional PNG or JPEG files on this computer. It spends from the company's Gateway cap, held "
     "until the job ends. Name the `shot`: the same shot is made once, and one the Gateway never "
-    "confirmed is not sent again (a person is asked to reconcile it; a new take needs a new name).",
+    "confirmed is refused with reconcile_shot: ask the task's person to reconcile it (check Gateway "
+    "usage), and never render it again under another name.",
     {
         "prompt": _s("What the video shows"),
         "seconds": {
