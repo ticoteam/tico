@@ -86,6 +86,32 @@ def test_a_memory_commit_from_a_persons_own_assistant_chat_is_never_recorded(api
     assert shown["updates"] == [] and "90k" not in json.dumps(shown)
 
 
+def test_the_assistants_documents_and_rows_of_unknown_runs_are_never_shown(api):
+    """A document names no run, so none of the Assistant's is kept or shown, even from a report of documents alone or
+    stored by an older server; nor is a row an older server stored before its run was known."""
+    machine = runner(api)
+    assign(api, machine, "assistant")
+    alone = {"documents": {"memory/learnings.md": "- Ben earns 90k\n"}}
+    post(api, "bots/assistant/memory/report", alone, machine["token"])
+    with api.app.state.store.transaction() as c:
+        assert c.execute("SELECT count(*) FROM bot_memory_documents WHERE bot='assistant'").fetchone()[0] == 0
+        c.execute(
+            "INSERT INTO bot_memory_documents(bot,path,content,updated_at) VALUES('assistant','memory/learnings.md',?,?)",
+            ("- Ana earns 80k\n", H.now()),
+        )
+        c.execute(
+            "INSERT INTO bot_memory_updates(bot,sha,subject,author,committed_at,files,diff,truncated,attempt_id,shared,"
+            "runner_id,reported_at) VALUES('assistant',?,'Ana earns 80k','',?,'[]','',0,'',1,'',?)",
+            (SHA, H.now(), H.now()),
+        )
+    shown = history(api, "ana-test", "assistant")
+    assert (
+        shown["updates"] == [] and shown["unseen"] == 0 and shown["documents"] == {} and "80k" not in json.dumps(shown)
+    )
+    files = api.get("/api/employees/assistant/files", headers=headers("ana-test")).json()
+    assert "80k" not in json.dumps(files)
+
+
 def test_only_the_assigned_computer_reports_and_runs_must_be_the_bots_own(api):
     machine, other = runner(api), runner(api, label="Other Mac")
     assign(api, machine, "ops")

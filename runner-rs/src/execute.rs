@@ -2473,7 +2473,7 @@ impl Runner {
                 }
             }
             // A hub that sends the retired meeting lane still scopes GitHub tokens to that turn.
-            let own = if p.disposable { crate::client::Client::new(&self.config.url(), &token, 10, 0).ok() } else { None };
+            let own = if p.disposable && !p.personal { crate::client::Client::new(&self.config.url(), &token, 10, 0).ok() } else { None };
             let own_tokens = crate::gitcred::TokenCache::new();
             let (client, tokens) = own.as_ref().map_or((&self.client, &*self.tokens), |c| (c, &own_tokens));
             let separation = crate::gateway_relay::separation();
@@ -2726,15 +2726,15 @@ impl Runner {
             let own = tx.clone();
             // Every turn's checkouts get their own groups, so a leased turn of another bot cannot enter them; a leased
             // turn is given exactly these (crate::checkout_groups).
-            // A person's own chat is given its copy alone, never the shared checkout it was made from.
-            let mut paths = if p.personal { vec![] } else { vec![p.main_path.clone()] };
-            paths.push(execution_path.clone());
-            paths.extend(p.add_dirs.iter().map(PathBuf::from));
+            let paths = p.granted_paths();
             let gids = crate::checkout_groups::gate(paths.clone()).await;
             if let Some((uid, _)) = turn_identity {
                 crate::checkout_groups::grant(uid, &gids);
                 self.turn_git(&mut vault, &mut env, &paths)?;
                 crate::turn_users::share_workspace(paths).await.map_err(Fail::runtime)?;
+            }
+            if p.personal {
+                crate::gitcred::without_credentials(&mut env); // the turn user's credential socket included
             }
             // The ask before a harness is allocated. Claude allocates at its spawn, after `started`.
             if late_allocation {
@@ -3382,11 +3382,14 @@ impl Runner {
                 receivers.push((tx.clone(), rx));
                 let rx = &mut receivers.last_mut().unwrap().1;
                 if let Some((uid, _)) = turn_identity {
-                    let mut paths = vec![execution_path.clone()];
-                    paths.extend(place.as_ref().into_iter().flat_map(|p| std::iter::once(p.main_path.clone()).chain(p.add_dirs.iter().map(PathBuf::from))));
+                    // The primary's own grants: a person's own chat gets its copy alone (sessions::Place::granted_paths).
+                    let paths = place.as_ref().map_or_else(|| vec![execution_path.clone()], |p| p.granted_paths());
                     crate::checkout_groups::grant(uid, &crate::checkout_groups::gate(paths.clone()).await);
                     self.turn_git(&mut vault, &mut hop_env, &paths)?;
                     crate::turn_users::share_workspace(paths).await.map_err(Fail::runtime)?;
+                }
+                if personal {
+                    crate::gitcred::without_credentials(&mut hop_env);
                 }
                 if !flags.harness_allocated.load(Ordering::SeqCst) {
                     self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
@@ -8956,6 +8959,60 @@ for line in sys.stdin:
     }
 
     #[tokio::test]
+    async fn a_personal_turn_is_granted_its_own_copy_alone_and_the_copy_goes_while_its_lane_is_held(
+    ) {
+        let (runner, dir) = runner_at("http://127.0.0.1:1", "personal-copy");
+        let env = crate::env::Env::new();
+        let config = json!({"session": "bot"});
+        let main = crate::sessions::local_path(&runner.config, "assistant", &config);
+        std::fs::create_dir_all(&main).unwrap();
+        repo_git(&main, &["init", "-q"]);
+        std::fs::write(main.join("AGENTS.md"), "# Assistant\n").unwrap();
+        repo_git(&main, &["add", "-A"]);
+        repo_git(&main, &["commit", "-qm", "start"]);
+        let mut attempt = json!({"id": "a-personal", "bot": "assistant", "config": config, "personal": true,
+            "lane": "task:t1", "task": {"id": "t1"}, "conversation": {"id": "c1", "scope": "personal"},
+            "worktrees": [{"path": main.display().to_string()}]});
+        let lost = AtomicBool::new(false);
+        let mut place = runner.enter_lanes(&attempt, &lost).await.unwrap();
+        runner
+            .place_turn(&mut place, &mut attempt, &env, &lost)
+            .await
+            .unwrap();
+        let copy = place.execution_path.clone();
+        // Its copy alone, for the primary harness and any fallback: never the shared checkout or the claim's worktrees.
+        assert_eq!(place.granted_paths(), vec![copy.clone()]);
+        assert!(place.add_dirs.is_empty() && place.session_path.is_none() && place.disposable);
+        assert!(!copy.starts_with(dir.join("projects")) && copy.join("AGENTS.md").exists());
+        // Objects of its own (`--no-local`): no alternates and no object hard-linked to the shared checkout's.
+        assert!(!copy.join(".git/objects/info/alternates").exists());
+        let object = repo_git(&main, &["rev-parse", "HEAD"]);
+        let loose = main
+            .join(".git/objects")
+            .join(&object[..2])
+            .join(&object[2..]);
+        use std::os::unix::fs::MetadataExt;
+        assert_eq!(
+            std::fs::metadata(loose).unwrap().nlink(),
+            1,
+            "an object is shared with the copy"
+        );
+        assert_eq!(repo_git(&copy, &["remote"]), "");
+        assert!(
+            !runner
+                .finish_place(&place, &attempt, &env, &[], false)
+                .await
+        );
+        // The copy goes before the lane is let go: once another turn can take the lane, the copy is already gone.
+        let lane = runner
+            .lanes
+            .lane("assistant", &crate::sessions::turn_lane(&attempt));
+        drop(place);
+        assert!(lane.try_lock().is_ok() && !copy.exists());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
     async fn a_memory_pass_without_a_checkout_of_its_own_is_refused_and_an_ordinary_task_still_falls_back_to_the_bots_checkout(
     ) {
         let (url, _seen, server) = recording_server().await;
@@ -9357,6 +9414,9 @@ for line in sys.stdin:
         let mut env: Env = [
             ("GH_TOKEN", "t"),
             ("GITHUB_TOKEN", "t"),
+            ("GH_ENTERPRISE_TOKEN", "t"),
+            ("SSH_AUTH_SOCK", "/agent"),
+            ("GIT_ASKPASS", "/askpass"),
             (crate::gitcred::SOCKET_ENV, "/s"),
             ("HUB_TOKEN", "h"),
         ]
@@ -9365,7 +9425,14 @@ for line in sys.stdin:
         .collect();
         crate::gitcred::git_environment(&mut env, "t", "!helper");
         crate::gitcred::without_credentials(&mut env);
-        for key in ["GH_TOKEN", "GITHUB_TOKEN", crate::gitcred::SOCKET_ENV] {
+        for key in [
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+            "GH_ENTERPRISE_TOKEN",
+            "SSH_AUTH_SOCK",
+            "GIT_ASKPASS",
+            crate::gitcred::SOCKET_ENV,
+        ] {
             assert!(!env.contains_key(key), "{key}");
         }
         assert_eq!(
@@ -9376,6 +9443,14 @@ for line in sys.stdin:
             env["GIT_CONFIG_VALUE_2"], "true",
             "an unrelated setting changed"
         );
+        assert_eq!(
+            (
+                env["GIT_CONFIG_KEY_3"].as_str(),
+                env["GIT_CONFIG_VALUE_3"].as_str()
+            ),
+            ("credential.helper", "")
+        );
+        assert_eq!(env["GIT_CONFIG_NOSYSTEM"], "1");
         assert_eq!(env["HUB_TOKEN"], "h", "the Tico token is the turn's own");
     }
 

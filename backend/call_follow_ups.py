@@ -344,9 +344,10 @@ def install(app: FastAPI, auth: Any, write: Any) -> None:
     )
     def follow_up(request: Request, call_id: str, body: FollowUp) -> Any:
         # A follow-up is a private task: the person's own Assistant turn files it and reads its receipt as the person
-        # (task_privacy.as_the_person), so the shared Assistant becomes no reader of it.
-        who: Identity = task_privacy.as_the_person(request.state.identity) or request.state.identity
-        request.state.identity = who
+        # (task_privacy.as_the_person), so the shared Assistant becomes no reader of it. The turn's own identity (its
+        # lease) is still validated under the write lock.
+        person: Identity | None = task_privacy.as_the_person(request.state.identity)
+        who: Identity = person or request.state.identity
 
         def work(c: Connection) -> dict[str, str]:
             row, bot = may_file(c, auth, who, call_id, body.bot)
@@ -355,4 +356,4 @@ def install(app: FastAPI, auth: Any, write: Any) -> None:
         def check(c: Connection) -> None:
             may_file(c, auth, who, call_id, body.bot)
 
-        return write(request, body, work, check=check)
+        return write(request, body, work, check=check, receipt=(lambda _: person) if person else None)

@@ -82,6 +82,16 @@ def personal_turn(c, attempt, assistant_bot):
     return bool(row) and row["bot_id"] == assistant_bot and row["scope"] == rooms.PERSONAL
 
 
+# Rows of the Assistant's history shown to readers: only those whose run is known and is not a person's own chat, so a
+# row an older server stored before its run was known, or one from a person's own chat, is never shown (`personal_turn`).
+# The other bots' rows are all shown. Takes the Assistant's slug.
+SHOWN = (
+    "(bot<>? OR (attempt_id<>'' AND NOT EXISTS (SELECT 1 FROM attempts a JOIN jobs j ON j.id=a.job_id "
+    "JOIN messages m ON m.id=j.message_id JOIN conversations v ON v.id=m.conversation_id "
+    "WHERE a.id=bot_memory_updates.attempt_id AND v.scope='personal')))"
+)
+
+
 def record(c, who, bot, report, assistant_bot):
     """Store what a computer reported for a bot assigned to it. Returns how many commits were new or changed."""
     if not c.execute("SELECT 1 FROM assignments WHERE bot=? AND runner_id=?", (bot, who.runner_id)).fetchone():
@@ -134,7 +144,9 @@ def record(c, who, bot, report, assistant_bot):
             ),
         )
         changed += 1
-    if withheld:
+    if withheld or bot == assistant_bot:
+        # A document says nothing of which runs wrote it, so the Assistant's, which a person's own chat may have written
+        # (an older runner), are never kept: not even from a report that carries documents alone.
         return changed
     oversized = {path for path in report.oversized if path in DOCUMENTS}
     for path, content in report.documents.items():
@@ -164,14 +176,19 @@ def commit_base(c, bot, github_owner=""):
     return base.removesuffix(".git") if base.startswith("https://github.com/") else ""
 
 
-def documents(c, bot):
+def documents(c, bot, assistant_bot):
+    """The bot's stored memory documents; never the Assistant's, whose provenance is not known (`record`)."""
+    if bot == assistant_bot:
+        return {}
     return {
         row["path"]: row["content"]
         for row in c.execute("SELECT path,content FROM bot_memory_documents WHERE bot=?", (bot,))
     }
 
 
-def document_status(c, bot):
+def document_status(c, bot, assistant_bot):
+    if bot == assistant_bot:
+        return {}
     saved = {
         r["path"]: r["updated_at"]
         for r in c.execute("SELECT path,updated_at FROM bot_memory_documents WHERE bot=?", (bot,))
@@ -245,9 +262,9 @@ def install_memory_history(app, store, auth, mutate):
             auth.require_read(c, who, bot)
             limit = max(1, min(limit, 50))
             rows = c.execute(
-                "SELECT * FROM bot_memory_updates WHERE bot=? AND (?='' OR committed_at<?) "
+                f"SELECT * FROM bot_memory_updates WHERE bot=? AND (?='' OR committed_at<?) AND {SHOWN} "
                 "ORDER BY committed_at DESC, sha LIMIT ?",
-                (bot, before, before, limit + 1),
+                (bot, before, before, store.settings.assistant_bot, limit + 1),
             ).fetchall()
             row = c.execute("SELECT seen_at FROM bot_memory_seen WHERE actor=? AND bot=?", (who.actor, bot)).fetchone()
             # Before a first visit, only the last few days count as new, not years of history reported at once.
@@ -255,7 +272,8 @@ def install_memory_history(app, store, auth, mutate):
                 (row["seen_at"], "reported_at") if row else (H.shift(H.now(), days=-NEW_DAYS), "committed_at")
             )
             unseen = c.execute(
-                f"SELECT count(*) FROM bot_memory_updates WHERE bot=? AND {column}>?", (bot, seen)
+                f"SELECT count(*) FROM bot_memory_updates WHERE bot=? AND {column}>? AND {SHOWN}",
+                (bot, seen, store.settings.assistant_bot),
             ).fetchone()[0]
             base = commit_base(c, bot, store.settings.github_owner)
             # Only a commit that reached the shared repository has an address to open.
@@ -278,8 +296,8 @@ def install_memory_history(app, store, auth, mutate):
             return {
                 "updates": updates,
                 "unseen": unseen,
-                "documents": documents(c, bot) if include_documents else {},
-                "document_status": document_status(c, bot),
+                "documents": documents(c, bot, store.settings.assistant_bot) if include_documents else {},
+                "document_status": document_status(c, bot, store.settings.assistant_bot),
                 "next_before": rows[limit - 1]["committed_at"] if len(rows) > limit else None,
             }
 

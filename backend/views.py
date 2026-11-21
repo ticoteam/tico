@@ -3476,7 +3476,7 @@ def install_views(app, store, auth, mutate, task_view):
             instructions = instruction["content"] if instruction and instruction["content"].strip() else ""
             from .memory_history import documents
 
-            memory = documents(c, bot)
+            memory = documents(c, bot, auth.settings.assistant_bot)
             return {
                 "AGENTS.md": instructions,
                 "memory/learnings.md": memory.get("memory/learnings.md", ""),

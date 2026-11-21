@@ -1649,10 +1649,11 @@ pub struct Place {
     pub personal: bool,
     /// The turn is a person's: it goes first for the checkout and never waits for its worktree.
     person: bool,
+    // Fields drop in this order: the copy goes while the lane and the checkout are still held.
+    _copy: Option<PersonalCopy>,
     _lane: OwnedMutexGuard<()>,
     checkout: Option<OwnedMutexGuard<()>>,
     _scratch: Option<MakePageScratch>,
-    _copy: Option<PersonalCopy>,
 }
 
 /// Outside every checkout and scan root; all outcomes, including a canceled future, discard the turn's files.
@@ -1713,7 +1714,8 @@ impl PersonalCopy {
         crate::checkout_groups::prepare(copy.0.clone()).await;
         let env = crate::safegit::clean_environment(&crate::env::process_environment());
         let (from, to) = (main.display().to_string(), copy.0.display().to_string());
-        let cloned = g(main, &env, &["clone", "-q", "--local", ".", &to], 120)
+        // `--no-local`: objects of its own, never hard links into the shared checkout's, and any filesystem.
+        let cloned = g(main, &env, &["clone", "-q", "--no-local", ".", &to], 120)
             .await
             .map_err(|f| fault_name(&f))?;
         if !cloned.ok() {
@@ -1757,6 +1759,17 @@ impl Drop for PersonalCopy {
 }
 
 impl Place {
+    /// The folders a leased turn user is given, for the primary harness and any fallback alike: the turn's own, the bot's
+    /// checkout and the task's set-up worktrees; a person's own chat its PersonalCopy alone, never the shared checkout.
+    pub fn granted_paths(&self) -> Vec<PathBuf> {
+        if self.personal {
+            return vec![self.execution_path.clone()];
+        }
+        let mut paths = vec![self.main_path.clone(), self.execution_path.clone()];
+        paths.extend(self.add_dirs.iter().map(PathBuf::from));
+        paths
+    }
+
     pub fn has_checkout(&self) -> bool {
         self.checkout.is_some()
     }
@@ -1848,10 +1861,10 @@ impl Runner {
             disposable: legacy_meeting || make_page || personal,
             personal,
             person,
+            _copy: None,
             _lane: lane_guard,
             checkout,
             _scratch: scratch,
-            _copy: None,
         })
     }
 
@@ -1916,6 +1929,9 @@ impl Runner {
             let copy = PersonalCopy::make(&place.main_path, attempt).await?;
             place.execution_path = copy.0.clone();
             place._copy = Some(copy);
+            // No other folder: the claim's worktrees are not this chat's to reach (granted_paths).
+            attempt["_repo_rules"] = json!("");
+            return Ok("");
         }
         let mut suffix = "";
         if !place.task.is_empty() {

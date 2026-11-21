@@ -895,17 +895,19 @@ def register_core(
         return ask_ingest.judged(
             store,
             ingest,
-            lambda: mutate(request, body, lambda c: filed(c, request, body, ingest, rc)),
+            lambda: mutate(
+                request,
+                body,
+                lambda c: task_create(c, request.state.identity, body, ingest=ingest, rule=rc),
+                receipt=handoff_receipt(request.state.identity),
+            ),
         )
 
-    def filed(c, request, body, ingest, rc):
-        """task_create, and its receipt: a private handoff the person's own Assistant turn filed is returned as the person
-        (privacy.as_the_person), for this request only."""
-        made = task_create(c, request.state.identity, body, ingest=ingest, rule=rc)
-        person = privacy.as_the_person(request.state.identity)
-        if person and (made.get("task") or {}).get("private"):
-            request.state.identity = person
-        return made
+    def handoff_receipt(who):
+        """Who reads back a task the person's own Assistant turn filed (privacy.as_the_person): the person, when it is
+        private, first time and on a retry; the turn's own identity is still the one validated under the write lock."""
+        person = privacy.as_the_person(who)
+        return (lambda made: person if (made.get("task") or {}).get("private") else None) if person else None
 
     def rule_prepare_task(store_, bot, replay):
         body = replay.get("body") or {}

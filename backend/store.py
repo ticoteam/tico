@@ -1370,7 +1370,9 @@ class Store:
             is not None
         )
 
-    def mutate(self, identity, operation, key, body, fn, check=None, durable=False, retry_body=None):
+    def mutate(self, identity, operation, key, body, fn, check=None, durable=False, retry_body=None, receipt=None):
+        """`receipt(result)`: who a saved answer is read back as on a retry, when not `identity` (the person a turn of
+        their own Assistant filed a private handoff for, task_privacy.as_the_person); `identity` is still validated."""
         if not key or len(key) > 200:
             raise Problem("idempotency_key", "Provide an Idempotency-Key of 1–200 characters", 422)
         hashed = digest(encode(body))
@@ -1408,7 +1410,9 @@ class Store:
                         aid = operation.split("/")[4]
                     elif operation in ("/api/v2/files/uploads", "/api/v2/files/imports", "/api/v2/files/dates"):
                         aid = body.get("attempt") or aid
-                replay_principal = replay_auth.runner_receipt_principal(c, identity, aid)
+                replay_principal = (receipt and receipt(result)) or replay_auth.runner_receipt_principal(
+                    c, identity, aid
+                )
                 if identity.role == "runner" and operation == "/api/v2/jobs/claim" and isinstance(saved, dict):
                     from . import task_context
 

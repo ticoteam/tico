@@ -584,30 +584,46 @@ pub(crate) fn git_environment(env: &mut Env, token: &str, helper: &str) {
 }
 
 /// A turn that must push nothing (a person's own Assistant chat, crate::sessions::PersonalCopy): no GitHub token, no
-/// credential socket and no credential helper, so neither git nor gh has anything to sign in with.
+/// credential socket, no SSH agent or askpass program, no system git config and no credential helper (an empty
+/// `credential.helper` read last clears every helper the user's own config names), so git and gh have nothing to sign in
+/// with. Keys left on disk under the user's HOME are beyond what an environment can take away.
 pub fn without_credentials(env: &mut Env) {
-    for key in [
-        "GH_TOKEN",
-        "GITHUB_TOKEN",
-        OTHER_TOKEN_KEY,
-        TOKENS_KEY,
-        SOCKET_ENV,
-        REPOSITORY_KEY,
-    ] {
-        env.remove(key);
+    let dropped: Vec<String> = env
+        .keys()
+        .filter(|k| {
+            k.starts_with("GH_")
+                || k.starts_with("GITHUB_")
+                || k.starts_with("TICO_GITHUB_")
+                || [
+                    SOCKET_ENV,
+                    "SSH_AUTH_SOCK",
+                    "GIT_ASKPASS",
+                    "SSH_ASKPASS",
+                    "GIT_SSH",
+                    "GIT_SSH_COMMAND",
+                ]
+                .contains(&k.as_str())
+        })
+        .cloned()
+        .collect();
+    for key in dropped {
+        env.remove(&key);
     }
     let count: usize = env
         .get("GIT_CONFIG_COUNT")
         .and_then(|c| c.parse().ok())
         .unwrap_or(0);
     for i in 0..count {
-        let helper = env.get(&format!("GIT_CONFIG_KEY_{i}")).is_some_and(|k| {
-            k.starts_with("credential.") && k.ends_with(".helper") || k == "credential.helper"
-        });
+        let helper = env
+            .get(&format!("GIT_CONFIG_KEY_{i}"))
+            .is_some_and(|k| k.starts_with("credential.") && k.ends_with(".helper"));
         if helper {
             env.insert(format!("GIT_CONFIG_VALUE_{i}"), String::new());
         }
     }
+    push_config(env, "credential.helper", "");
+    env.insert("GIT_CONFIG_NOSYSTEM".into(), "1".into());
+    env.insert("GIT_TERMINAL_PROMPT".into(), "0".into());
 }
 
 /// Git refuses a work tree another user owns. A Gateway turn's leased user works in the bot's checkout, so the
