@@ -49,6 +49,9 @@ TRANSCRIBE_TIMEOUT = 30  # a live clip that takes longer is lost: the person is 
 TRANSCRIBE_MODEL = "tico-transcribe-1.1"  # live-call clips: the Gateway's fast speech-to-text
 # The Gateway's older speech-to-text, tried once when it does not know TRANSCRIBE_MODEL yet (it answers 400).
 TRANSCRIBE_FALLBACK = "elevenlabs/scribe-v2"
+# Pinned, not auto-detected: a short clip (one word, "yeah") was heard as another language. No person or company
+# language is stored yet, so every call's speech is English.
+TRANSCRIBE_LANGUAGE = "en"
 CONNECT_TIMEOUT = 15  # the recorder's join, and its leave
 RECORDER_PREFIX = "tico-recorder-"  # the recorder's identity is this and the call id, never a person's
 VOICE_NAME = "Tico voice"  # how the recorder shows in the room
@@ -599,7 +602,7 @@ def _unknown_model(status, answer):
     return "model" in words and ("unknown" in words or "not found" in words or "unsupported" in words)
 
 
-def transcribe(base, key, audio, *, model=TRANSCRIBE_MODEL, language=""):
+def transcribe(base, key, audio, *, model=TRANSCRIBE_MODEL, language=TRANSCRIBE_LANGUAGE):
     """The text of one WAV clip, through the Gateway's speech-to-text (clients/gateway.py relay). A Gateway that does
     not know `model` yet (400, unknown model) is asked once more with TRANSCRIBE_FALLBACK. Raises MediaUnavailable when
     the Gateway did not answer or refused, so the caller can keep the call going."""
