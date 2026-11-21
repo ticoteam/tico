@@ -1,5 +1,6 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { refusalFor } from '@/actions';
 import { toast } from '@/kit/Toast';
 import { meQuery, useActor, type Actor } from '@/data';
 import { Button } from '@/kit/Button';
@@ -16,14 +17,14 @@ import { fromPage, pageAt, type FromPage } from '@/shell/pageOwner';
 import { dot, type DotState } from '@/tico/dot';
 import { usePageName } from '@/tico/pageName';
 import { MessageBones } from './Bones';
-import { Composer } from './Composer';
+import { Composer, writeDraft } from './Composer';
 import { dayKey, dayLabel } from './dates';
 import { Face, LiveRow, Message, whoOf } from './Message';
 import { onJump } from './Outline';
 import { ChatPlace } from './Rich';
 import { quoteFrom, quoteOf, Replying } from './Quote';
 import { SessionLine, type Session } from './Session';
-import { installConversationLive, liveQuery, liveText, markRead, rowsOf, sendMessage, timelineQuery, useStranded } from './queries';
+import { installConversationLive, isDmChanged, liveQuery, liveText, markRead, rowsOf, sendMessage, timelineQuery } from './queries';
 import type { ChatMessage, LiveRun, Variant } from './types';
 
 /** Within this many pixels of the end counts as "at the bottom": what comes in is read, and the asks over the box come back. */
@@ -185,9 +186,7 @@ export function Conversation({ id, variant, title, actor, session, from, starter
   const timeline = useInfiniteQuery(timelineQuery(id));
   const { data: live = [] } = useQuery(liveQuery(id));
   // the Agent bar's rows that failed when its DM changed under them, kept by its agent, for Retry here
-  const stranded = useStranded(toDm);
-  const ownRows = rowsOf(timeline.data);
-  const own = stranded.length ? [...ownRows, ...stranded.filter((m) => !ownRows.some((r) => r.id === m.id))] : ownRows;
+  const own = rowsOf(timeline.data);
   const rows = withExtra(own, extra, !!timeline.hasNextPage);
   const extraIds = new Set(extra?.map((m) => m.id));
 
@@ -210,6 +209,8 @@ export function Conversation({ id, variant, title, actor, session, from, starter
   const at = from === undefined ? here : from;
   // a starter puts its words in the box; opening the chat never sends anything, so it never starts a run
   const [fill, setFill] = useState<{ text: string } | null>(null);
+  // the Agent bar's box keeps its draft by its agent, not by the thread it shows (which may change under it)
+  const draftId = toDm ? `dm:${toDm}` : undefined;
   const empty = !!starters?.length && !!timeline.data && !rows.some((m) => !m.hidden) && !live.length;
 
   /* VirtualList follows the end while the person is at it (a new row, a reply growing) and keeps their place
@@ -300,12 +301,20 @@ export function Conversation({ id, variant, title, actor, session, from, starter
   const send = (text: string, files: File[], retry?: ChatMessage) => {
     if (!myId) return;
     jump.current = true;
-    // a retry in another thread than its own (a stranded row of the Agent bar) answers nothing there: what it replied
-    // to is in the thread it was first written in
-    const home = !retry || (retry.thread_id || retry.conversation_id) === id;
-    const answers = retry ? (home ? retry.in_reply_to : undefined) : replyTo?.id;
-    const quote = retry ? (home ? retry.reply_to : undefined) : replyTo && quoteFrom(replyTo);
+    const answers = retry ? retry.in_reply_to : replyTo?.id;
+    const quote = retry ? retry.reply_to : replyTo && quoteFrom(replyTo);
+    const replied = replyTo;
     if (!retry) setReplying(null);
+    // The Agent bar's send that fails (any refusal or fault) keeps no row: its words go back into the box, its draft
+    // kept by the agent (`draftId`), so they stay through the bar reading its DM again; the reason shows; and the
+    // quote stays unless the DM changed under it (what it answered is in the other one). Send again sends it.
+    const onFailed = (e: unknown) => {
+      if (myId && draftId) writeDraft(myId, draftId, text);
+      setFill({ text });
+      toast(refusalFor(e, 'Not sent'));
+      if (replied && !isDmChanged(e)) setReplying({ id, m: replied });
+      onMoved?.('');
+    };
     void sendMessage({
       id,
       variant,
@@ -314,7 +323,7 @@ export function Conversation({ id, variant, title, actor, session, from, starter
       // a retry is the same message: it says the page it was first written on
       from: retry ? (retry.refs?.from_page ?? null) : at,
       me: myId,
-      ...(toDm && { toDm, onMoved }),
+      ...(toDm && { toDm, onMoved, onFailed }),
       ...(retry && { retry: retry.id }),
       ...(answers && { replyTo: answers, quote }),
     });
@@ -401,7 +410,7 @@ export function Conversation({ id, variant, title, actor, session, from, starter
           ))}
         </div>
       )}
-      {myId && canPost && <Composer id={id} me={myId} to={name} fill={fill} canSend={!!timeline.data} onSend={(text, files) => send(text, files)} />}
+      {myId && canPost && <Composer id={draftId ?? id} me={myId} to={name} fill={fill} canSend={!!timeline.data} onSend={(text, files) => send(text, files)} />}
     </footer>
   );
 

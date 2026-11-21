@@ -214,32 +214,33 @@ describe('Conversation', () => {
     expect(screen.queryByText('Ship it')).toBeNull();
   });
 
-  it("keeps a row that failed when the bar's DM changed, for Retry in the DM the bar switches to @4882-S1", async () => {
+  it("puts a failed bar send's words back in its box, keeps them through the DM switch, and sends them again @4882", async () => {
     seed([]);
-    let changed = true;
-    serve(() =>
-      changed
-        ? { status: 409, body: { error: { code: 'dm_changed', detail: 'Your chat with bot:qa changed; send it again', retryable: true } } }
-        : { status: 200, body: { ...msg(3, ME, 'Ship it'), conversation_id: 'T2', thread_id: 'T2' } },
-    );
+    let reply: Reply = { status: 409, body: { error: { code: 'dm_changed', detail: 'Your chat with bot:qa changed; send it again', retryable: true } } };
+    serve(() => reply);
     const onMoved = vi.fn();
     const bar = (id: string) => <Conversation id={id} variant="side" title="Ana" actor="bot:qa" from={FROM} toDm="bot:qa" onMoved={onMoved} />;
     const view = render(bar(T), { wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider> });
+    const box = () => screen.getByRole('textbox', { name: 'Message Ana' }) as HTMLTextAreaElement;
     type('Ship it');
     await waitFor(() => expect(onMoved).toHaveBeenCalledWith(''));
-    // the bar reads its DM again and shows another thread, and the cache starts over (a stream reset): the row is not
-    // in it, and is still there
-    queryClient.removeQueries({ queryKey: ['threads'] });
-    queryClient.removeQueries({ queryKey: ['thread', T] });
+    // no failed row: the words are back in the box
+    expect(screen.queryByText('Not sent')).toBeNull();
+    await waitFor(() => expect(box().value).toBe('Ship it'));
+    // the bar reads its DM again and shows another thread: the words are still in its box (kept by the agent)
     queryClient.setQueryData(['thread', 'T2', 'timeline'], { pages: [{ messages: [], next_cursor: null, read_marks: {} }], pageParams: [null] });
     view.rerender(bar('T2'));
-    expect(await screen.findByText('Not sent')).toBeTruthy();
-    changed = false;
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(box().value).toBe('Ship it'));
+    // a refusal puts them back too
+    reply = { status: 403, body: { error: { code: 'forbidden', detail: 'You can see bot:qa but not message them' } } };
+    fireEvent.keyDown(box(), { key: 'Enter' });
     await waitFor(() => expect(sends()).toHaveLength(2));
-    expect(sends()[1]).toMatchObject({ url: '/api/v2/threads/dm/messages', body: { text: 'Ship it', to_dm: 'bot:qa' } });
-    await waitFor(() => expect(screen.queryByText('Not sent')).toBeNull());
-    expect(screen.getByText('Ship it')).toBeTruthy();
+    await waitFor(() => expect(box().value).toBe('Ship it'));
+    reply = { status: 200, body: { ...msg(3, ME, 'Ship it'), conversation_id: 'T2', thread_id: 'T2' } };
+    fireEvent.keyDown(box(), { key: 'Enter' });
+    await waitFor(() => expect(sends()).toHaveLength(3));
+    expect(sends()[2]).toMatchObject({ url: '/api/v2/threads/dm/messages', body: { text: 'Ship it', to_dm: 'bot:qa' } });
+    await waitFor(() => expect(box().value).toBe(''));
   });
 
   it('sends a retry with the page it was first written on, not the one shown now @4857-S15', async () => {

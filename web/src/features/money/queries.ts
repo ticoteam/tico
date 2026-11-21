@@ -767,7 +767,8 @@ export const growthChannelQuery = (channel: string, month: string | undefined) =
 
 /** A message to the Growth Manager from the page: to the reader's DM with exactly it, which the server finds (or makes)
     as it writes (conversation's sendToDm, the Agent bar's path). Resolves with the message, or null when held. */
-export const askGrowthManager = (bot: string, text: string) => sendToDm(bot, text, { page: 'growth', label: 'Growth' });
+export const askGrowthManager = (bot: string, text: string, item?: { kind: string; id: string }) =>
+  sendToDm(bot, text, { page: 'growth', label: 'Growth', ...(item && { item }) });
 
 export interface Segment {
   slug: string;

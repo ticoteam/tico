@@ -226,6 +226,19 @@ describe('Growth on the one read @s400 @s444', () => {
     ]);
   });
 
+  it('says the channel open in its panel as a pointer, with the segment and month read before anything is awaited @4882-S14', async () => {
+    directory(GM());
+    serve(OWNED);
+    show('/company/growth?month=2026-10&panel=channel:search');
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Ask the Growth Manager' }), { target: { value: 'Why is search over?' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect(posts[0]?.body).toMatchObject({
+      text: 'All, October 2026: Why is search over?',
+      refs: { from_page: { page: 'growth', label: 'Growth', item: { kind: 'channel', id: 'search' } } },
+    });
+  });
+
   it('opens no chat when the person moved to another month before the answer came @4882-S8', async () => {
     let answer!: (r: Record<string, unknown>) => void;
     dmReply = new Promise((r) => (answer = r));

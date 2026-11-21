@@ -551,13 +551,16 @@ export const askManager = defineAction({
       return `${router.state.location.pathname}?${q.toString()}`;
     };
     const at = here();
+    // what the words are about, read now too: the segment and month on screen, and the channel open in its panel
+    const lead = growthScopeWords(router, qc);
+    const panel = (router.state.location.search as { panel?: string }).panel ?? '';
+    const channel = panel.startsWith('channel:') ? panel.slice('channel:'.length) : '';
     const who = await findGrowthManager(qc);
     if (!who) throw new Error('No Growth Manager');
     const words = text?.trim();
     let chat = chatAddress(who, 'agent');
     if (words) {
-      const lead = growthScopeWords(router, qc);
-      const sent = await askGrowthManager(who, lead ? `${lead}: ${words}` : words);
+      const sent = await askGrowthManager(who, lead ? `${lead}: ${words}` : words, channel ? { kind: 'channel', id: channel } : undefined);
       // held by the org rules: the words are in the hold, and no chat opens
       if (!sent) {
         toast({ text: 'Held for a check' });

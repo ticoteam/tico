@@ -2,7 +2,6 @@
 // Messages themselves reach the timeline through live/patch.ts (the built-in `messages` patcher); this file adds
 // what only a conversation knows: a pending send giving way to its echo, and a reply being written (`runs`).
 import { infiniteQueryOptions, queryOptions, type InfiniteData, type QueryKey } from '@tanstack/react-query';
-import { useSyncExternalStore } from 'react';
 import { api, ApiError } from '@/api/client';
 import type { Assistant, SlackMessage, SlackThread } from '@/api/schema';
 import { keys, queryClient, quietRoot, write } from '@/data';
@@ -128,6 +127,9 @@ export interface Send {
   /** With `toDm`: the server wrote to another thread than the one shown (the DM is new, or another one now); the
       chat shows that one from here on. */
   onMoved?: (thread: string) => void;
+  /** With `toDm`: the send failed (any refusal or fault, the DM changed under it included); nothing of it stays in the
+      timeline. */
+  onFailed?: (e: unknown) => void;
   me: string;
   /** Retry: the failed row to send again in its place. */
   retry?: string;
@@ -152,6 +154,7 @@ const messageBody = (text: string, from: FromPage | null | undefined, toDm?: str
 
 /** The server looked up the DM a `to_dm` message meant, and it was not the same one by the time it wrote (409). */
 const dmChanged = (e: unknown) => e instanceof ApiError && e.code === 'dm_changed';
+export const isDmChanged = dmChanged;
 
 function post(s: Send, idempotencyKey: string): Promise<Sent> {
   const files = s.files ?? [];
@@ -221,33 +224,9 @@ const pageFor = (s: Send): FromPage | null => (!s.from ? null : s.variant === 't
 /** The thread a `toDm` send was written to, when it is not the one the chat shows. */
 const movedTo = (s: Send, real: ChatMessage) => !!s.toDm && !!(real.conversation_id || real.thread_id) && (real.conversation_id || real.thread_id) !== s.id;
 
-/* The Agent bar's rows that failed when its DM changed under them, by its agent: drawn in whichever DM it shows, for
-   Retry. Kept here, not in the query cache, so nothing that reads the server again (a stream reset) can empty it. */
-const stranded = new Map<string, ChatMessage[]>();
-const strandedWatchers = new Set<() => void>();
-const NO_ROWS: ChatMessage[] = [];
-function setStranded(toDm: string, change: (rows: ChatMessage[]) => ChatMessage[]) {
-  const next = change(stranded.get(toDm) ?? NO_ROWS);
-  if (next.length) stranded.set(toDm, next);
-  else stranded.delete(toDm);
-  for (const watch of strandedWatchers) watch();
-}
-/** The stranded rows of the Agent bar for this agent (none without one). */
-export function useStranded(toDm: string | undefined): ChatMessage[] {
-  return useSyncExternalStore(
-    (watch) => {
-      strandedWatchers.add(watch);
-      return () => strandedWatchers.delete(watch);
-    },
-    () => (toDm ? (stranded.get(toDm) ?? NO_ROWS) : NO_ROWS),
-  );
-}
-
 export async function sendMessage(given: Send): Promise<ChatMessage | null> {
   const s = { ...given, from: pageFor(given) };
   const tmp = s.retry ?? `tmp:${newId()}`;
-  // a stranded row sent again leaves the agent's list: it is in this thread's timeline from here on
-  if (s.toDm && s.retry) setStranded(s.toDm, (rows) => rows.filter((m) => m.id !== s.retry));
   const row: ChatMessage = {
     id: tmp,
     thread_id: s.id,
@@ -286,12 +265,10 @@ export async function sendMessage(given: Send): Promise<ChatMessage | null> {
     if (real && movedTo(s, real)) s.onMoved?.(real.conversation_id ?? real.thread_id ?? '');
     return real;
   } catch (e) {
-    // The Agent bar's DM changed under it: the bar reads its DM again and may show another thread. The row, marked,
-    // goes with the agent (`strandedKey`), so it is still there for Retry, whichever thread the bar shows.
-    if (s.toDm && dmChanged(e)) {
+    // The Agent bar keeps no failed row: its words go back into its box (`onFailed`), for Send again
+    if (s.toDm) {
       dropRow(timelineKey(s.id), tmp);
-      setStranded(s.toDm, (rows) => [...rows.filter((m) => m.id !== tmp), { ...row, pending: 'failed' }]);
-      s.onMoved?.('');
+      s.onFailed?.(e);
     }
     return null;
   }
