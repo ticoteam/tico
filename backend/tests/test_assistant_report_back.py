@@ -69,7 +69,7 @@ def test_each_end_reports_once_with_this_cycles_note_as_a_system_line(api):
     with api.app.state.store.transaction() as c:
         revision = first["wake_key"].rsplit(":", 1)[1]
         row = E.task(c, made["id"])
-        task_effects._report_back(c, row, row, "bot:ops", "Again", revision)
+        task_effects._report_back(c, row, "bot:ops", "Again", revision)
     assert len(reports(api)) == 1
     # Reopened and done again with no words: the first cycle's note is not reused.
     end(api, made["id"], E.REOPEN, by="human:ana", why="One more pass")
@@ -151,27 +151,55 @@ def test_a_done_again_after_a_send_back_is_the_note(api):
     assert report["body"].endswith("\n\nNew headline.")
 
 
-def test_the_filers_own_final_ok_sends_no_report(api):
-    ok = review(api, "human:ben")
-    [made], _ = handoff(api, pipeline="review")
+def built_into_review(api):
+    """Build then Review (Cara OKs). Ops had said done on Build with no words; its later /done with a note is a plain
+    forward move into Review. Returns the task and the Review OK's id."""
     with api.app.state.store.transaction() as c:
-        said_done(c, made["id"], "Ready.")
-        assert A.answer(c, made["id"], ok, "human:ben", "ok")["status"] == "done"
-    assert reports(api) == []
+        made = X.pipeline(
+            c,
+            "build",
+            "Build",
+            stages=[
+                {"name": "Build", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
+                {
+                    "name": "Review",
+                    "owner": "assignee",
+                    "requirements": [{"kind": "ok", "person": "human:cara", "line": "OK it"}],
+                },
+            ],
+        )
+    [task], _ = handoff(api, pipeline="build")
+    with api.app.state.store.transaction() as c:
+        row = E.task(c, task["id"])
+        X.answer(c, row, made["requirements"]["Build"][0], "done", "bot:ops")  # said earlier, with no words
+        assert said_done(c, task["id"], "Built it.")["stage"]["name"] == "Review"
+    return task, made["requirements"]["Review"][0]
 
 
-def test_done_on_a_met_stage_carries_its_note_to_the_report(api):
-    [made], _ = handoff(api)
+def test_a_done_note_into_review_is_quoted_when_the_review_ok_ends_it(api):
+    task, ok = built_into_review(api)
     with api.app.state.store.transaction() as c:
-        row = E.task(c, made["id"])
-        rid = c.execute(
-            "SELECT id FROM requirements WHERE stage_id=? AND kind='owner_done' AND withdrawn_at IS NULL",
-            (row["stage_id"],),
-        ).fetchone()[0]
-        X.answer(c, row, rid, "done", "bot:ops")  # said earlier, with no words; the task did not move then
-        assert said_done(c, made["id"], "Shipped it.")["status"] == "done"
+        assert A.answer(c, task["id"], ok, "human:cara", "ok")["status"] == "done"
     [report] = reports(api)
-    assert report["body"].endswith("\n\nShipped it.")
+    assert report["body"].endswith("\n\nBuilt it.")
+
+
+def test_a_close_with_no_reason_quotes_this_cycles_done_note(api):
+    task, _ = built_into_review(api)
+    end(api, task["id"], E.CLOSED, by="human:ana")
+    [report] = reports(api)
+    assert report["body"].endswith("\n\nBuilt it.")
+
+
+def test_a_title_never_starts_a_list_or_a_heading():
+    assert [task_effects._plain(t) for t in ("1. Plan", "- Plan", "+ Plan", "# Plan", "> Plan", "* Plan")] == [
+        "1\\. Plan",
+        "\\- Plan",
+        "\\+ Plan",
+        "\\# Plan",
+        "\\> Plan",
+        "\\* Plan",
+    ]
 
 
 def test_a_paused_assistant_still_gets_a_room_for_the_report(api):

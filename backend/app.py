@@ -21,7 +21,7 @@ from . import agents, app_view, mcp_oauth, oidc, runner_online, views
 from . import outcome_stats
 from . import pipeline_judges
 from . import assistant_changes, why_here
-from . import task_effects, tools_delegation
+from . import tools_delegation
 from . import setup_failures
 from . import sources as SRC
 from . import ask_ingest, owner_link, setup_handoff
@@ -140,7 +140,6 @@ def create_app(settings=None):
         openapi_url=None,
     )
     app.state.store, app.state.auth, app.state.execution = store, auth, execution
-    task_effects.AUTH = auth  # a report back checks the person's full task read right (backend/task_effects.py)
     app.state.onboarding = onboarding  # tests build a picked team as bots
     screen_sessions = _configure_app(
         app,
