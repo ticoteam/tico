@@ -18,18 +18,21 @@ def test_task_list_page_reads_its_tasks_once_and_answers_the_same(api, monkeypat
     for path in ("/api/v2/tasks?status=open", "/api/v2/tasks?status=open&sort=finished"):
         page(api, monkeypatch, path)  # warm: the table checks each connection keeps
         kept, statements = page(api, monkeypatch, path)
-        reread = [
-            sql for sql in statements_of(api, monkeypatch, path) if sql.startswith("SELECT * FROM tasks WHERE id")
-        ]
+        reread = [sql for sql in statements_of(api, monkeypatch, path) if rereads_tasks(sql)]
         assert len(kept["tasks"]) == 12 and reread == [], (path, reread)
         with monkeypatch.context() as patched:
             patched.setattr(hubdb, "_TASK_ROW_READS", ())
             plain, more = page(api, monkeypatch, path)
-            assert any(
-                sql.startswith("SELECT * FROM tasks WHERE id") for sql in statements_of(api, monkeypatch, path)
-            ), "the control reads the rows again"
+            assert any(rereads_tasks(sql) for sql in statements_of(api, monkeypatch, path)), (
+                "the control reads the rows again"
+            )
         assert {k: v for k, v in plain.items() if k != "cursor"} == {k: v for k, v in kept.items() if k != "cursor"}
         assert more > statements
+
+
+def rereads_tasks(sql):
+    """A read of task rows by id: all columns, or the waits' slim columns (waiting_on.SLIM_TASK_COLUMNS)."""
+    return sql.startswith("SELECT ") and " FROM tasks WHERE id" in sql
 
 
 def statements_of(api, monkeypatch, path):
