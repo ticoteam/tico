@@ -364,11 +364,13 @@ registration file, `~/.config/tico/` on a Mac, the runner user's home in Docker,
 files (`.1` to `.4`), in the server's record format (version 1): one JSON object per line with `v` (1), `ts` (Unix
 seconds, milliseconds as decimals) and `kind`, here always `runner.*`: `runner.start` (version, build,
 pid), `runner.turn` (attempt, bot, runtime, outcome, `total_ms`, and `phases`: milliseconds since the turn was claimed
-for `placed`, `harness_started`, `harness_spawned`, `first_output`, `first_delta_posted`, then the hand-in's
+for `placed`, `harness_started`, `harness_spawned`, `first_output`, `first_text` (the reply's first words, not a thought),
+`first_delta_posted`, then the hand-in's
 `model_done`, `scrubbed` (the secret scrub of the changed files), `finished_at`, `saved` (the result in runner.sqlite),
 `flushed` (the last events sent), `complete_posted` and `done`; a Claude turn adds `claude_spawned` (its process
 started, before any cold sign-in hold), `claude_init` (its `system/init`) and `claude_result` (its last `result`), and
-`transcript_bytes`, the size of the session it resumed), `runner.heartbeat` (round trips of a second or more, and every failure), `runner.git` (git commands of two
+`transcript_bytes`, the size of the session it resumed; every turn has `warm`, whether it ran on a harness process an
+earlier turn left running, and `model_calls`, its model requests, when its harness lists them), `runner.heartbeat` (round trips of a second or more, and every failure), `runner.git` (git commands of two
 seconds or more and every timeout, the scrub's included: verb, checkout folder name, milliseconds, exit code; never arguments) and
 `runner.process` once a minute (resident memory, CPU time, finished children's CPU, open turns, and `dropped`: records
 lost because the writer fell behind). Turns never wait on the disk. `TICO_FLIGHT_RECORDER=0` turns it off.

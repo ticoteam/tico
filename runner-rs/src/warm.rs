@@ -195,6 +195,9 @@ impl WarmSessions {
         if entries.get(&key).is_some_and(|e| e.busy) {
             return Err("Conversation already has an active turn".into());
         }
+        // Warm: the turn runs on the process an earlier turn left running (its timings' `warm`).
+        let warm = entries.contains_key(&key);
+        crate::flight::fact(&crate::util::text_of(&attempt["id"]), "warm", json!(warm));
         let entry = entries.entry(key).or_insert_with(|| Entry {
             host: make(&home, &turn_env),
             fingerprint: print,

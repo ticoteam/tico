@@ -162,6 +162,20 @@ describe('Conversation', () => {
     expect(screen.getAllByText('Checking the label service again.')).toHaveLength(1);
   });
 
+  it('says what a running reply is doing from its tool step label, and keeps it while the call ends', () => {
+    show();
+    emit('runs', [{ run_id: 'r1', conversation_id: T, bot_id: 'qa', state: 'running' }]);
+    const tool = (seq: number, label?: string) => ({ run_id: 'r1', conversation_id: T, output: { kind: 'tool', compact: true, seq, ...(label && { label }) } });
+    emit('runs', [tool(1, 'Reading Finance')]);
+    const row = document.querySelector('.msg.is-live');
+    expect(row?.textContent).toContain('Reading Finance');
+    expect(row?.textContent).not.toContain('Working');
+    emit('runs', [tool(2)]);
+    expect(row?.textContent).toContain('Reading Finance');
+    emit('runs', [tool(3, 'Filing a task')]);
+    expect(row?.textContent).toContain('Filing a task');
+  });
+
   it('keeps a failed send on screen, marked, and sends it again on Retry', async () => {
     let fail = true;
     serve(() => (fail ? { status: 500, body: { error: { code: 'boom', detail: 'Broke' } } } : { status: 200, body: msg(3, ME, 'Ship it') }));

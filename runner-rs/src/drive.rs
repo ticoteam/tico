@@ -170,6 +170,9 @@ impl Runner {
         let mut earlier_tokens: Option<Value> = None;
         let mut last_flush: Option<Instant> = None;
         let mut first_output = false;
+        let mut first_text = false;
+        // The turn's model requests, from its token events' per-request usage (a harness that lists them).
+        let mut model_calls = 0usize;
         let mut queue: Vec<Value> = vec![];
         // The outbox rows this drain has gathered, not yet written: (kind, JSON payload) in arrival order.
         let mut rows: Vec<(String, String)> = vec![];
@@ -552,6 +555,10 @@ impl Runner {
                         first_output = true;
                         mark("first_output", aid);
                     }
+                    if !first_text && reply_words(&kind, &event) {
+                        first_text = true;
+                        mark("first_text", aid);
+                    }
                     if kind == "message" && (truthy(event.get("final")) || reply.is_empty()) {
                         reply = text_of(&clean["text"]);
                     }
@@ -564,6 +571,10 @@ impl Runner {
                     if kind == "tokens" {
                         tokens = event.clone();
                         segment.meter.add(&event);
+                        if let Some(requests) = model_requests(&event) {
+                            model_calls += requests;
+                            crate::flight::fact(aid, "model_calls", json!(model_calls));
+                        }
                     }
                 }
                 if kind == "turn_completed" {
@@ -772,6 +783,18 @@ impl Runner {
             yielded: false,
         })
     }
+}
+
+/// Whether a streamed event is the reply's own words (its timings' `first_text`): a text delta or a message with text;
+/// a thought is not.
+fn reply_words(kind: &str, event: &Value) -> bool {
+    ((kind == "delta" && event["delta_kind"] != "thought") || kind == "message")
+        && !text_of(&event["text"]).trim().is_empty()
+}
+
+/// How many model requests a `tokens` event lists (its per-request usage), when its harness lists them.
+fn model_requests(event: &Value) -> Option<usize> {
+    event["usage"]["requests"].as_array().map(Vec::len)
 }
 
 #[cfg(test)]
@@ -1028,6 +1051,30 @@ mod tests {
         .await
         .expect("the drive ends");
         (drove, carried, goal)
+    }
+
+    #[test]
+    fn first_text_is_the_replys_own_words_and_model_calls_are_the_listed_requests() {
+        let text = |kind: &str, v: Value| reply_words(kind, &v);
+        assert!(text(
+            "delta",
+            json!({"text": "Acme's", "delta_kind": "text"})
+        ));
+        assert!(text("message", json!({"text": "Acme's renewal is due."})));
+        assert!(!text(
+            "delta",
+            json!({"text": "Weighing it", "delta_kind": "thought"})
+        ));
+        assert!(!text("message", json!({"text": "  "})));
+        assert!(!text("tool", json!({"text": "tico task show 1"})));
+        let tokens =
+            json!({"input": 9, "usage": {"requests": [[1, 0, 2, 1], [3, 0, 4, 1], [5, 0, 6, 0]]}});
+        assert_eq!(model_requests(&tokens), Some(3));
+        assert_eq!(
+            model_requests(&json!({"input": 9, "output": 2})),
+            None,
+            "unknown stays unknown"
+        );
     }
 
     #[tokio::test]

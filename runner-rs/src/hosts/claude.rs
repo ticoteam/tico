@@ -1239,7 +1239,11 @@ impl ClaudeHost {
         // Spawned now: whatever the runner holds the turn for after this (a cold sign-in) is not Claude's boot.
         self.mark("claude_spawned");
         // The session Claude resumes, by size: whether resuming takes longer as a thread grows.
-        crate::flight::fact(&self.attempt(), "transcript_bytes", transcript_bytes);
+        crate::flight::fact(
+            &self.attempt(),
+            "transcript_bytes",
+            serde_json::json!(transcript_bytes),
+        );
         log(&format!(
             "claude[{}]: turn started pid {}",
             self.0.bot,

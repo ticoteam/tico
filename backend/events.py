@@ -2908,15 +2908,31 @@ def _live_text(event, shown):
     return event["kind"] == "delta" and isinstance(payload, dict) and payload.get("delta_kind") != "thought"
 
 
+def _tool_label(event, shown):
+    """A tool call's label as the live reply shows it (turns.tool_label: a few plain words, never its arguments or
+    output), for a call starting at the top of the turn; None for any other step, a call ending or a subagent's own."""
+    from .turns import TOOL_ENDED, tool_label
+
+    payload = (shown[0] or {}).get("payload") if event["kind"] == "tool" else None
+    if not isinstance(payload, dict) or payload.get("parent_id"):
+        return None
+    status = str(payload.get("status") or payload.get("state") or payload.get("phase") or "").lower()
+    return None if status in TOOL_ENDED else tool_label(payload)
+
+
 def _step_output(event, compact, shown):
     """A run step as a `runs` event's `output`: the whole stored step, or its compact signal (still truthy). `shown` is
     what `_step_shown` gave for it."""
     if compact and not _live_text(event, shown):
-        return {
+        step = {
             **{key: event[key] for key in COMPACT_STEP},
             "bytes": len((event["payload"] or "").encode()),
             "compact": True,
         }
+        label = _tool_label(event, shown)
+        if label:
+            step["label"] = label  # what the live reply says it is doing ("Filing a task"), not "Working"
+        return step
     (decoded,) = shown
     event = dict(event)
     stored = event.pop("payload")

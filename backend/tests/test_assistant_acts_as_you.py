@@ -360,6 +360,32 @@ def test_a_second_morning_message_the_same_company_day_is_refused_with_the_next_
     assert refused.json()["error"]["next_at"] == "2026-11-06T08:00:00.000000Z", refused.text
 
 
+def test_a_morning_that_links_the_same_items_as_the_last_one_is_not_sent(api):
+    """Quiet mornings: the items are the links, in any order and wording; the same set as the person's last morning is
+    409 same_as_last and writes nothing, a changed set goes, and a message with no links is never held back by it."""
+    coo = setup_attempt(api, "assistant")[2]["token"]
+
+    def next_day():
+        # The day's cap aside (one lease cannot span days): the morning already sent becomes yesterday's.
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE messages SET refs=json_set(refs,'$.morning','2000-01-01') WHERE refs LIKE '%morning%'")
+
+    first = "Close [the invoice](#/task/t-1) to move [Q4 cash](#/goals/g-1)."
+    morning(api, coo, body=first)
+    next_day()
+    again = "Still open: [Q4 cash](#/goals/g-1) needs [the invoice](#/task/t-1) closed. [Invoice](#/task/t-1)."
+    refused = api.post("/api/v2/assistant/morning", json={"for": "human:ana", "body": again}, headers=headers(coo))
+    assert refused.status_code == 409 and refused.json()["error"]["code"] == "same_as_last", refused.text
+    with api.app.state.store.read() as c:
+        sent = c.execute("SELECT COUNT(*) FROM messages WHERE json_extract(refs,'$.morning') IS NOT NULL").fetchone()[0]
+    assert sent == 1
+    morning(api, coo, body=first + " Then [the renewal](#/task/t-2).")
+    next_day()
+    morning(api, coo, body="A quiet one.")
+    next_day()
+    morning(api, coo, body="A quiet one.")
+
+
 def test_only_the_assistants_background_run_sends_the_morning_message(api):
     coo = setup_attempt(api, "assistant")[2]["token"]
     other_bot = setup_attempt(api, "ops")[2]["token"]

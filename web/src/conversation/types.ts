@@ -85,5 +85,7 @@ export interface LiveRun {
   typing: string | null;
   /** The last thing it did: 'think' before any output, 'work' on a tool step, 'type' while text streams. */
   doing: 'think' | 'work' | 'type';
+  /** Its newest tool call in a few words ("Reading Finance"), from the `runs` topic's step `label`. */
+  label?: string;
   ended: boolean;
 }

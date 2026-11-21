@@ -39,6 +39,7 @@ CONFIRM_TTL_H = 24  # a proposal nobody confirmed for a day is not run
 MAX_PENDING = 20
 MAX_BACKGROUND_PER_DAY = 5  # cards the Assistant's own background run may put in one person's chat a day
 MORNING_KEY = "morning"  # the message's refs key: the company day it was sent for (one a day per person)
+MORNING_LOOKBACK_DAYS = 30  # a morning naming the same items as one older than this goes again
 
 # ------------------------------------------------------------------ what the assistant may write directly
 # What an assistant turn may write on its own is what stays inside the team: creating a task (for its person, a bot or
@@ -1800,6 +1801,30 @@ def chat_room(c, settings, who, create=True):
     return ensure_room(c, who.actor, settings.assistant_bot) if create else find_room(c, who.actor)
 
 
+# The places a morning message links, its items: `[title](#/task/<id>)`, `[goal](#/goals/<id>)` and the like.
+_LINKED = re.compile(r"\]\(\s*([^)\s]+)")
+
+
+def morning_items(text):
+    """A stable hash of the items a morning message links, in any order and however often (None when it links none):
+    a morning that names the same items as the person's last one is not sent again."""
+    linked = sorted(set(_LINKED.findall(text)))
+    return digest("\n".join(linked))[:16] if linked else None
+
+
+def last_morning_items(c, actor):
+    """The items hash of the last morning message `actor` was sent in the last MORNING_LOOKBACK_DAYS, from its audit row
+    (`assistant.morning`), or None. Read newest first on events_action_ts, within the window: at most a month of that
+    action's rows, and usually the newest few."""
+    since = H.shift(H.now(), days=-MORNING_LOOKBACK_DAYS)
+    row = c.execute(
+        "SELECT json_extract(detail,'$.items') FROM events WHERE action='assistant.morning' AND created_at>=? "
+        "AND actor=? ORDER BY created_at DESC LIMIT 1",
+        (since, actor),
+    ).fetchone()
+    return row[0] if row else None
+
+
 def morning_day():
     """The company day a morning message is for: today's date on the company's clock (updates.ZONE, the zone the update
     ladder and the automations read, not UTC), and the UTC instant that day ends, when the next one may go."""
@@ -2367,7 +2392,7 @@ def install(app, store, auth, mutate, onboarding):
         **api_v2(
             "Assistant",
             "sendAssistantMorning",
-            "The Assistant's background run only: one morning message for a person, in their own Assistant chat, as the Assistant (no card). Once a company day per person: a second is 409 already_sent_today",
+            "The Assistant's background run only: one morning message for a person, in their own Assistant chat, as the Assistant (no card). Once a company day per person: a second is 409 already_sent_today; one linking the same items as the last is 409 same_as_last",
         ),
     )
     def morning(request: Request, body: M.AssistantMorning):
@@ -2404,6 +2429,13 @@ def install(app, store, auth, mutate, onboarding):
                     409,
                     extra={"next_at": next_at},
                 )
+            items = morning_items(body.body)
+            if items and items == last_morning_items(c, found.actor):
+                raise Problem(
+                    "same_as_last",
+                    "This morning message names the same items as the last one this person was sent; nothing was sent",
+                    409,
+                )
             room = chat_room(c, settings, found)
             message = H._write_message(
                 c,
@@ -2422,7 +2454,7 @@ def install(app, store, auth, mutate, onboarding):
                 found.actor,
                 "assistant.morning",
                 message["id"],
-                {"day": day, "by": caller.actor, "chars": len(body.body)},
+                {"day": day, "by": caller.actor, "chars": len(body.body), **({"items": items} if items else {})},
             )
             return {"message_id": message["id"], "conversation_id": room["id"], "day": day, "next_at": next_at}
 

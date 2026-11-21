@@ -2935,11 +2935,16 @@ class RunSession(Contract):
 class RunTimings(Contract):
     """Where a turn's time went on its computer, up to its result (runner-rs/src/flight.rs timings, feature
     `run_timings`): when the runner claimed it on its own clock (Unix seconds), each mark's milliseconds since then, and
-    the size of the session it resumed. The completion adds the server's own (backend/performance.py note_timings)."""
+    the size of the session it resumed; `first_text` among the marks is its first words of reply. With feature
+    `run_timings_turn`, how many model requests it made (when the harness counts them) and whether it ran warm, on a
+    harness process an earlier turn left running. The completion adds the server's own (backend/performance.py
+    note_timings)."""
 
     claimed_at: float = Field(ge=0)
     phases: dict[Annotated[str, Field(max_length=40)], Annotated[int, Field(ge=0, le=10**9)]] = Field(max_length=40)
     transcript_bytes: int | None = Field(default=None, ge=0)
+    model_calls: int | None = Field(default=None, ge=0, le=10**6)
+    warm: bool | None = None
 
 
 class Completion(Contract):

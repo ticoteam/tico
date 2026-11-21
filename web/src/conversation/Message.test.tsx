@@ -328,6 +328,17 @@ describe('What a message holds besides words (thread-content.html)', () => {
     expect(frame.getAttribute('sandbox')).toBe('');
   });
 
+  it('shows a page the reply links the way the Assistant writes it (#/file/<id>) as a page card, not a bare link', async () => {
+    serve((url) => {
+      if (url.endsWith('/info')) return { status: 200, body: { file: { id: 'file-0123456789abcdef', title: 'Weekly review', name: 'weekly.html', mime: 'text/html', library_kind: 'page', size: 10 } } };
+      if (url.includes('/files/file-0123456789abcdef')) return { status: 200, body: '<h1>Weekly review</h1>' };
+      return undefined;
+    });
+    show([msg(1, 'bot:assistant', 'Made it: [Weekly review](#/file/file-0123456789abcdef)')]);
+    const card = await screen.findByRole('button', { name: 'Weekly review' });
+    expect(card.closest('.pcard')).toBeTruthy();
+  });
+
   it('shows a picture that does not load as its name', async () => {
     serve();
     show([msg(1, 'bot:qa', 'Shot', { refs: { attachments: [{ id: 'f3', name: 'gone.png', content_type: 'image/png' }] } })]);

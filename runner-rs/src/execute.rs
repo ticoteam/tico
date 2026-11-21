@@ -2742,6 +2742,8 @@ impl Runner {
                 env = turn_env;
                 Host::Antigravity(warm)
             } else {
+                // Every other harness starts a new process for the turn: never warm.
+                crate::flight::fact(&aid, "warm", json!(false));
                 self.make_host(&bot, &runtime, &env, selected.as_ref(), tx)?
             };
             let h = host.insert(made);
@@ -4067,7 +4069,13 @@ impl Runner {
         // Where the turn's time went, up to here, kept with its result: saved before sending, so a resent result is
         // the same. An older server refuses the field (`run_timings`).
         if crate::follow::feature("run_timings") {
-            if let Some(timings) = crate::flight::timings(&aid) {
+            if let Some(mut timings) = crate::flight::timings(&aid) {
+                if !crate::follow::feature("run_timings_turn") {
+                    if let Some(t) = timings.as_object_mut() {
+                        t.remove("model_calls");
+                        t.remove("warm");
+                    }
+                }
                 completion.insert("timings".into(), timings);
             }
         }

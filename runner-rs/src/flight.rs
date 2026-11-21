@@ -35,7 +35,7 @@ pub const GIT_SLOW_MS: u64 = 2000;
 /// refresh (crate::fetch_fresh): `fetch_skipped`, it started on the runner's recent fetch, and `fetched_first`, it
 /// fetched before it started. A third, `start_asked`, is the turn's first start-place ask: a turn without it kept the
 /// place the hub granted at its claim up to `started` (execute.rs keep_start_place).
-const PHASES: [&str; 20] = [
+const PHASES: [&str; 21] = [
     "claimed",
     "prepared",
     "refreshed",
@@ -47,6 +47,7 @@ const PHASES: [&str; 20] = [
     "harness_spawned",
     "claude_init",
     "first_output",
+    "first_text",
     "first_delta_posted",
     "claude_result",
     "model_done",
@@ -71,7 +72,7 @@ struct Turn {
     /// When it was claimed, Unix seconds on this computer's clock.
     wall: f64,
     phases: Vec<(String, u64)>,
-    /// Numbers about the turn beside its marks (`transcript_bytes`).
+    /// Facts about the turn beside its marks (`transcript_bytes`, `model_calls`, `warm`).
     facts: Map<String, Value>,
     /// From the work frame last heard (`heard`) to this claim, when one was heard shortly before: the flight file's
     /// record only, never the timings the server is sent.
@@ -210,15 +211,16 @@ pub fn phase(name: &str, attempt: &str) {
     }
 }
 
-/// A number about an open turn, kept beside its marks (`transcript_bytes`).
-pub fn fact(attempt: &str, key: &str, value: u64) {
+/// A fact about an open turn, kept beside its marks: `transcript_bytes`, `model_calls` (its model requests, when the
+/// harness counts them) and `warm` (it ran on a harness process an earlier turn left running).
+pub fn fact(attempt: &str, key: &str, value: Value) {
     if let Some(turn) = TURNS
         .lock()
         .unwrap_or_else(|p| p.into_inner())
         .as_mut()
         .and_then(|t| t.get_mut(attempt))
     {
-        turn.facts.insert(key.into(), json!(value));
+        turn.facts.insert(key.into(), value);
     }
 }
 
@@ -870,10 +872,12 @@ mod tests {
         std::thread::sleep(Duration::from_millis(30));
         phase("claude_spawned", &aid); // a relaunch keeps the first spawn
         phase("claude_result", &aid); // a steered turn's last result is the one that ends it
-        fact(&aid, "transcript_bytes", 4096);
+        fact(&aid, "transcript_bytes", json!(4096));
+        fact(&aid, "warm", json!(false));
         let t = timings(&aid).unwrap();
         assert!(t["claimed_at"].as_f64().unwrap() > 1.0e9, "{t}");
         assert_eq!(t["transcript_bytes"], 4096, "{t}");
+        assert_eq!(t["warm"], false, "{t}");
         assert_eq!(t["phases"]["claimed"], 0, "{t}");
         assert!(t["phases"]["claude_spawned"].as_u64().unwrap() < 30, "{t}");
         assert!(t["phases"]["claude_result"].as_u64().unwrap() >= 30, "{t}");
