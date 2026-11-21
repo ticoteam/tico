@@ -297,9 +297,11 @@ _DECISIONS = (
     "'requirement_withdrawn')"
 )
 # An agent's action: its row in the audit log, less what run_triggers.BOOKKEEPING says changes nothing anyone else sees
-# (reads, SQL, tool-call stats, refusals, its own status and run bookkeeping).
-_AGENT_ACTION = f"actor LIKE 'bot:%' AND action NOT IN {qlist(sorted(RT.BOOKKEEPING))} AND " + " AND ".join(
-    f"action NOT LIKE '{prefix}%'" for prefix in RT.BOOKKEEPING_PREFIXES
+# (reads, SQL, tool-call stats, refusals, its own status and run bookkeeping). The actor is a range, not a LIKE, so the
+# rows come from the actor index (events_actor_action_created) and the per-row read check runs on agents' rows only.
+_AGENT_ACTION = (
+    f"actor >= 'bot:' AND actor < 'bot;' AND action NOT IN {qlist(sorted(RT.BOOKKEEPING))} AND "
+    + " AND ".join(f"action NOT LIKE '{prefix}%'" for prefix in RT.BOOKKEEPING_PREFIXES)
 )
 _WEEK = "date({at}, '-6 days', 'weekday 1')"
 
