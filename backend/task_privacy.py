@@ -51,11 +51,16 @@ def actor(who):
     """Whom a request reads as: its actor, or a person and whom they act as. A lease of the shared Assistant, in either
     form, reads by its run's scope (hubdb.RunPrincipal, rooms.run_scope)."""
     other = getattr(who, "task_actor", "")
-    shared = H.assistant_actor() if getattr(who, "attempt_id", "") else ""
-    me = H.run_principal(who.actor, who.attempt_id) if shared and who.actor == shared else who.actor
+    attempt = getattr(who, "attempt_id", "")
+
+    def run(a):
+        # Any bot's run is marked; hubdb.task_private_readable scopes only the install's shared Assistant (its
+        # connection's settings), and reads every other bot as itself.
+        return H.run_principal(a, attempt) if attempt and H.is_bot(a) else a
+
     if other and other != who.actor:
-        return (me, H.run_principal(other, who.attempt_id) if shared and other == shared else other)
-    return me
+        return (run(who.actor), run(other))
+    return run(who.actor)
 
 
 def principals_read(c, principals, row):

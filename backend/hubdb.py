@@ -2375,6 +2375,8 @@ def task_private_readable(conn, actor, row):
         return False
     row = dict(row)
     nobody = False
+    if isinstance(actor, RunPrincipal) and actor != assistant_actor(conn):
+        actor = str(actor)  # another bot's run reads as that bot
     if isinstance(actor, RunPrincipal):
         # One Assistant serves everyone (rooms.run_scope): in a person's own chat it reads exactly what they read, by
         # their own rule (page copies included); a routine turn reads its own task and no other private one; a run whose
@@ -2568,6 +2570,10 @@ class RunPrincipal(str):
     Assistant itself (a wake, a notice, an owner) passes the plain actor and is not narrowed."""
 
     attempt = ""
+
+    def __repr__(self):
+        # The cache key of a read made as it (threads, execution): one run's reads are never another's.
+        return f"RunPrincipal({str(self)!r}, {self.attempt!r})"
 
 
 def run_principal(actor, attempt):
@@ -5029,6 +5035,8 @@ def task_create(
                 for item in related
                 if all(task_private_readable(conn, reader, item) for reader in readers)
                 and (private or not dedicated or not task_private(conn, item))
+                # A turn of the shared Assistant reads its own task and no other private one (rooms.run_scope).
+                and not (target == assistant_actor(conn) and task_private(conn, item))
             ]
         reconcile = (
             {

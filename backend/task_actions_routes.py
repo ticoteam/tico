@@ -272,7 +272,7 @@ def register_core(
             # An ask's words come from the pages it showed (body_sources): a reader who may not open one reads none.
             from .files import readable_page_refs
 
-            history = readable_page_refs(c, auth, who, history)
+            history = readable_page_refs(c, auth, auth.run_viewer(c, who), history)
             for event in history:
                 if isinstance(event, dict):
                     event.pop("body_sources", None)

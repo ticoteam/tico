@@ -1292,7 +1292,7 @@ def quiet_source_wait(c, job, facts=None, *, started_counts=None, attempt_times=
 
 def _held_key(who, actor, bot):
     # task_sql's fence depends on the role as well as the actor.
-    return ("readable_held", actor, who.role, bot)
+    return ("readable_held", repr(actor), who.role, bot)  # repr: a run's principal keys its own reads
 
 
 def _readable_held(c, who, auth, bot):
@@ -1333,7 +1333,7 @@ def prime_readable_held(c, who, auth, bots):
     chosen = _tico_chosen_for(c, who, todo)
     for bot in todo:
         values[_held_key(who, actor, bot)] = found[bot]
-        values[("tico_chosen", actor, bot)] = chosen[bot]
+        values[("tico_chosen", repr(actor), bot)] = chosen[bot]
 
 
 def _readable_held_for(c, who, auth, bots):
@@ -1418,7 +1418,7 @@ def tico_chosen(c, who, bot):
     every bot at once by prime_readable_held, so a status page pays no statement per bot for it."""
     from . import read_cache
 
-    values, key = read_cache.cache(c), ("tico_chosen", privacy.actor(who), bot)
+    values, key = read_cache.cache(c), ("tico_chosen", repr(privacy.actor(who)), bot)
     if values is not None and key in values:
         return values[key]
     return _tico_chosen_for(c, who, [bot])[bot]

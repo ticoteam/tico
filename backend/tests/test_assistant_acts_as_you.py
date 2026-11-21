@@ -213,6 +213,41 @@ def test_a_task_read_in_the_persons_own_chat_shows_what_they_read_under_it(api):
     assert child["id"] not in json.dumps(bens["children"]) and handed["id"] not in json.dumps(bens["task"]["filed"])
 
 
+def test_only_the_persons_own_assistant_chat_reads_with_their_rights(api):
+    """Person-wide reads are for the person's own chat with the Assistant: a room of theirs with another bot is not."""
+    from backend import rooms
+
+    r, attempt = assistant_turn(api, "ana-test", text="What's mine?")
+    with api.app.state.store.transaction() as c:
+        assert rooms._run_scope(c, attempt["id"]) == ("person", "human:ana")
+        c.execute("UPDATE conversations SET room_key='docs' WHERE id=?", (attempt["conversation"]["id"],))
+        assert rooms._run_scope(c, attempt["id"]) == ("", "")
+
+
+def test_an_install_with_its_own_assistant_slug_scopes_that_bots_runs(api, monkeypatch):
+    """The shared Assistant is whichever bot the install names (its settings' assistant_bot), not the word "assistant":
+    a run of it reads its own routine turn and no other private task it holds, though the bot itself still holds both."""
+    from backend import task_privacy as privacy
+    from backend.auth import Identity
+    from backend.tests.helpers.api import assign, claim, ready, runner
+
+    with api.app.state.store.transaction() as c:
+        turns = [
+            H.task_create(c, f"human:{p}", "Turn", "Mine.", "bot:ops", private=True)["id"] for p in ("ana", "cara")
+        ]
+    machine = runner(api)
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    attempt = claim(api, machine, "ops")
+    mine, other = turns if attempt["task"]["id"] == turns[0] else turns[::-1]
+    monkeypatch.setattr(api.app.state.store.settings, "assistant_bot", "ops")
+    with api.app.state.store.read() as c:
+        principal = privacy.actor(Identity("bot:ops", "bot", attempt_id=attempt["id"]))
+        assert all(H.task_private_readable(c, "bot:ops", H.task(c, t)) for t in turns)  # the bot, outside a run
+        assert H.task_private_readable(c, principal, H.task(c, mine))
+        assert not H.task_private_readable(c, principal, H.task(c, other))
+
+
 def test_a_private_task_is_never_the_shared_assistants_as_owner_or_reader(api):
     """One Assistant serves everyone, so a private task naming it would be read by its runs for all: refused as owner or
     reader, on create and on a later change, from the person's own chat and from the person directly."""

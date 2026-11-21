@@ -433,6 +433,54 @@ def test_an_assistant_run_reads_a_routine_turn_only_for_the_person_it_works_for(
     assert api.get("/api/v2/tasks/" + turns["ana"]["id"], headers=headers("ana-test")).status_code == 200
 
 
+def test_a_routine_turn_reads_the_turn_it_was_woken_for_and_no_other_of_its_persons(api):
+    """Two open turns of Ana's routine: an earlier one that named the Assistant as requester, and a new one hers. Each
+    run reads the turn it was woken for and not the other, the new turn's claim does not name the earlier one, and once
+    Ana may not sign in her turn's run reads nothing."""
+    from backend.tests.helpers.api import assign, claim, ready, runner
+
+    set_templates(api, STAFF)
+    flow = bot_flow(api, "assistant")
+    prompt = run_to_turn(flow, MAIL)["prompt"]
+    with api.app.state.store.transaction() as c:
+        earlier = H.task(
+            c,
+            AA.start_turn(c, {"id": "auto_old", "flow": flow}, "run_old", "draft", "bot:assistant", prompt, None)[
+                "ref"
+            ],
+        )
+        c.execute("UPDATE tasks SET requester_id='bot:assistant' WHERE id=?", (earlier["id"],))  # filed before #4851
+        newer = H.task(
+            c,
+            AA.start_turn(c, {"id": "auto_new", "flow": flow}, "run_new", "draft", "bot:assistant", prompt, None)[
+                "ref"
+            ],
+        )
+    machine = runner(api)
+    with api.app.state.store.read() as c:
+        held = c.execute(
+            "SELECT generation FROM assignments WHERE bot=?", (H.resolve_bot(c, "assistant")["id"],)
+        ).fetchone()
+    assign(api, machine, "assistant", held["generation"] if held else 0)
+    ready(api, machine, ["assistant"])
+    runs = {}
+    for _ in range(2):
+        attempt = claim(api, machine)
+        runs[attempt["task"]["id"]] = attempt
+    old, new = runs[earlier["id"]], runs[newer["id"]]
+    assert earlier["id"] not in json.dumps(new), "the new turn's claim names the earlier turn"
+    for run, own, other in ((old, earlier, newer), (new, newer, earlier)):
+        assert api.get("/api/v2/tasks/" + own["id"], headers=headers(run["token"])).status_code == 200
+        assert api.get("/api/v2/tasks/" + other["id"], headers=headers(run["token"])).status_code == 404
+    with api.app.state.store.transaction() as c:
+        doc = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
+        for person in doc["people"]:
+            if person.get("id") == "ana":
+                person["sign_in"] = False
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(doc),))
+    assert api.get("/api/v2/tasks/" + newer["id"], headers=headers(new["token"])).status_code == 404
+
+
 def test_a_mail_turn_title_names_the_sender_when_the_subject_is_empty():
     about = E._turn_about({"message": {"source": "mail", "from": "jo@acme.example", "from_name": "", "subject": "Re:"}})
     assert about == "jo@acme.example"

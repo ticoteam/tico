@@ -665,10 +665,12 @@ def readers(auth):
         if who is not None:
             from .files import readable_earlier, readable_page_refs
 
-            # An OK's page from an earlier stage may live on another task: the file's own read check decides it.
+            # An OK's page from an earlier stage may live on another task: the file's own read check decides it. Pages
+            # are read as the request reads (auth.run_viewer: a lease of the shared Assistant as its run's person).
+            reader = auth.run_viewer(c, who)
             for entry in value.get("to_leave") or []:
-                readable_earlier(c, auth, who, entry)
-            value = readable_page_refs(c, auth, who, value)
+                readable_earlier(c, auth, reader, entry)
+            value = readable_page_refs(c, auth, reader, value)
             value = teammate_access.Known(c, who, auth).task(value)  # people the reader may not see
         return value
 
@@ -679,7 +681,9 @@ def readers(auth):
         from .files import readable_page_refs
 
         distinct = {tag["id"]: tag for row in rows for tag in row.get("tags") or ()}
-        checked = cast("list[dict[str, Any]]", readable_page_refs(c, auth, who, list(distinct.values())))
+        checked = cast(
+            "list[dict[str, Any]]", readable_page_refs(c, auth, auth.run_viewer(c, who), list(distinct.values()))
+        )
         return {
             tag_id: shown if shown.get("removed") is True else {k: shown[k] for k in LIST_TAG_FIELDS if k in shown}
             for tag_id, shown in zip(distinct, checked, strict=True)
@@ -810,7 +814,7 @@ def readers(auth):
             result.append(value)
         from .files import readable_page_refs
 
-        result = readable_page_refs(c, auth, who, result)
+        result = readable_page_refs(c, auth, auth.run_viewer(c, who), result)
         return teammate_access.Known(c, who, auth).tasks(result)  # people the reader may not see
 
     def mover(c, who):

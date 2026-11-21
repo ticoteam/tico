@@ -54,6 +54,11 @@ def run_scope(c, attempt_id):
 def _run_scope(c, attempt_id):
     from .auth import standing
 
+    def kept(person, scope):
+        # Only while that person may sign in (auth.standing): a run for someone gone reads nothing.
+        human = H.human(c, H.actor_id(person)) if H.is_human(person) else None
+        return scope if human and not standing(c, human["id"]) else ("gone", "")
+
     row = c.execute(
         "SELECT a.task_id,m.conversation_id FROM attempts a JOIN jobs j ON j.id=a.job_id "
         "JOIN messages m ON m.id=j.message_id WHERE a.id=?",
@@ -62,21 +67,17 @@ def _run_scope(c, attempt_id):
     if not row:
         return ("", "")
     task = H.task(c, row["task_id"]) if row["task_id"] else None
-    if (
-        task
-        and task["owner_id"] == H.assistant_actor(c)
-        and H.task_private(c, task)
-        and H.is_human(task["requester_id"])
-    ):
-        return ("task", task["id"])
+    if task and task["owner_id"] == H.assistant_actor(c) and H.task_private(c, task):
+        # The turn it was woken for, whatever its requester (an earlier turn named the Assistant itself).
+        filed_for = task["requester_id"]
+        return kept(filed_for, ("task", task["id"])) if H.is_human(filed_for) else ("task", task["id"])
     room = H.conversation(c, row["conversation_id"]) or {}
     if room.get("scope") != PERSONAL and room.get("root_id") and room["root_id"] != room.get("id"):
         room = H.conversation(c, room["root_id"]) or {}
-    person = str(room.get("owner_id") or "") if room.get("scope") == PERSONAL else ""
-    if not H.is_human(person):
-        return ("", "")
-    human = H.human(c, H.actor_id(person))
-    return ("person", person) if human and not standing(c, human["id"]) else ("gone", "")
+    if room.get("scope") != PERSONAL or room.get("room_key") != ASSISTANT_ROOM:
+        return ("", "")  # the person's own chat with the Assistant only, not their chat with another bot
+    person = str(room.get("owner_id") or "")
+    return kept(person, ("person", person)) if H.is_human(person) else ("", "")
 
 
 def personal_attempt(c, assistant_bot, attempt_id):
