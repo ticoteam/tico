@@ -14,6 +14,7 @@ import pytest
 from backend.store import H
 from backend.tests.helpers.api import as_member, headers, post, ready
 from backend import bot_settings as BS
+from backend import docs
 from backend.tests.helpers.sql import column, query, world
 
 SECRET_TABLES = (
@@ -298,6 +299,7 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
         "release-history",
         "release-snoozes-seen",
         "rules.asks_to_a_person",
+        "rules.constitution",  # the constitution's recorded doc id, made at this completed company's start
         "stage_rules_snooze_sweep",
         "strategy-bot",
         "tool_settings.ids_repaired",
@@ -1111,8 +1113,12 @@ def test_current_docs_and_files_follow_api_visibility(api, world):
                 "VALUES(?,'ops',?,?,'Release notes','document','remote_link',?,?)",
                 (fid, scope, fid, H.now(), H.now()),
             )
-    assert column(api, "SELECT id FROM docs") == [doc["id"]]
-    assert column(api, "SELECT doc_id FROM doc_versions") == [doc["id"]]
+    # The constitution, made at this completed company's start, is a team doc every teammate reads, as the API shows it.
+    with api.app.state.store.read() as c:
+        constitution = docs.constitution_id(c)
+    assert constitution
+    assert column(api, "SELECT id FROM docs") == sorted([doc["id"], constitution])
+    assert column(api, "SELECT doc_id FROM doc_versions") == sorted([doc["id"], constitution])
     assert column(api, "SELECT id FROM linked_docs") == [linked["id"]]
     assert column(api, "SELECT id FROM bot_files") == ["ana-file", "public-file", "task-file"]
     assert column(api, "SELECT id FROM bot_files", "ben-test") == ["ben-file", "public-file", "task-file"]
@@ -1121,7 +1127,7 @@ def test_current_docs_and_files_follow_api_visibility(api, world):
         "public-file",
         "task-file",
     ]
-    assert query(api, "SELECT count(*) FROM docs")["rows"] == [[1]]
+    assert query(api, "SELECT count(*) FROM docs")["rows"] == [[2]]  # the release guide and the constitution
     assert query(api, "SELECT count(*) FROM bot_files")["rows"] == [[3]]
     assert "prohibited" in error(api, "SELECT * FROM main.docs")
     assert "prohibited" in error(api, "SELECT * FROM main.bot_files")
