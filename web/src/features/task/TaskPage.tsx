@@ -26,7 +26,7 @@ import { EmailSource, Email as EmailView } from './Email';
 import { ArchiveMenu } from './Files';
 import { FileTab, FileView, PageBones } from './FileView';
 import { FlowTop, MoreMenu, QuietLine, WhereLine } from './Head';
-import { changesAskedOf, decisionOf, defaultTab, DETAILS, emailOf, failedToast, sendTitle, tabAddress, type TaskTab } from './model';
+import { askOf, changesAskedOf, decisionOf, defaultTab, DETAILS, emailOf, failedToast, sendTitle, tabAddress, type TaskTab } from './model';
 import { FlowMark } from '@/kit/FlowMark';
 import { Face } from './parts';
 import { taskDetailQuery, taskRefQuery, type TaskData } from './queries';
@@ -123,7 +123,9 @@ const decisionFor = (x: Tab | undefined): { email: string | null } | null => (x?
 
 function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: string; flow: boolean }) {
   const navigate = useNavigate();
-  const { tabs, files, waiting } = useTabs(t);
+  // The ask a card opened it for (`?ask=`): its tab, at the version it pinned, and its Approve.
+  const ask = (useSearch({ strict: false }) as TaskSearch).ask;
+  const { tabs, files, waiting } = useTabs(t, ask ? askOf(t, ask) : undefined);
   const own = tabs.filter((x) => !x.wait);
   const known = tab !== undefined && tabs.some((x) => x.slug === tab);
   const unresolved = !!tab && !known && (!files.isSuccess || !waiting.settled);
@@ -195,6 +197,7 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
   };
 
   const cards = useCards();
+  const beside = !!new URLSearchParams(useRouterState({ select: (s) => s.location.searchStr })).get('chat');
   // A phone's Chat tab: an email's OK hung on this task, as a card in the chat.
   const approvals = useApprovalCards({ task: current?.chat ? t : undefined });
   const moreMenu = <MoreMenu t={t} flow={flow} details={quiet} />;
@@ -288,7 +291,9 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
           {/* An email's OK on the task itself waits on the person too: off its tab, a pointer to it, never Approve. */}
           {!current?.email && <EmailPointers t={t} items={own.flatMap((x) => (x.email && x.mark === 'ask' ? [{ send: x.email, ...tabAddress(t, x.slug, flow) }] : []))} />}
           {body}
-          {!current?.chat && pick && <Decision key={pick.email ?? ''} t={t} flow={flow} dock email={pick.email} />}
+          {/* Docked (a phone's bottom, beside the chat sheet's own card on a computer), or in the page when the thread a
+              card was opened from holds the chat sheet (`?chat=`): Approve is always somewhere. */}
+          {!current?.chat && pick && <Decision key={pick.email ?? ''} t={t} flow={flow} dock={cards || !beside} email={pick.email} requirement={ask} />}
         </div>
       }
     />
@@ -377,12 +382,13 @@ export function TaskChat({ task, flow = false }: TaskChatProps) {
     (`useTabs`, `decisionFor`). Which tab a slug is needs the files and the emails filed apart read: no card until then,
     never the wrong one. */
 function ChatDecision({ t, flow, onAsking }: { t: TaskData; flow: boolean; onAsking: (asking: boolean) => void }) {
-  const { tabs, settled } = useTabs(t);
   const location = useRouterState({ select: (s) => s.location });
+  const ask = (location.search as TaskSearch).ask;
+  const { tabs, settled } = useTabs(t, ask ? askOf(t, ask) : undefined);
   const tab = flow ? (location.search as TaskSearch).tab : location.pathname.split('/')[4];
   if (!settled) return null;
   const pick = decisionFor(tabs.find((x) => x.slug === resolveTab(tabs, tab && decoded(tab))));
-  return pick && <Decision key={pick.email ?? ''} t={t} flow={flow} onAsking={onAsking} email={pick.email} />;
+  return pick && <Decision key={pick.email ?? ''} t={t} flow={flow} onAsking={onAsking} email={pick.email} requirement={ask} />;
 }
 
 /** `/task/<n>`: the task by its number alone. Once its pipeline is known the address becomes its own, replaced. */

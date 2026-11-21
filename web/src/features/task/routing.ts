@@ -57,6 +57,8 @@ export interface TaskSearch {
   v?: number;
   vs?: number;
   part?: number;
+  /** The ask a card opened the task for (its requirement id): its tab, the version it pinned and its Approve. */
+  ask?: string;
 }
 
 const whole = (x: unknown): number => (typeof x === 'number' ? x : typeof x === 'string' && /^\d+$/.test(x) ? Number(x) : NaN);
@@ -71,6 +73,7 @@ export function taskSearch(raw: Record<string, unknown>): TaskSearch {
   if (typeof raw.tab === 'string' && raw.tab) out.tab = raw.tab;
   if (typeof raw.file === 'string' && raw.file) out.file = raw.file;
   if (typeof raw.full === 'string' && raw.full) out.full = raw.full;
+  if (typeof raw.ask === 'string' && raw.ask) out.ask = raw.ask;
   const v = n(raw.v);
   const vs = n(raw.vs);
   if (v) out.v = v;

@@ -201,7 +201,7 @@ describe('an approval waiting, as a card in the agent’s thread @approvals', ()
     expect(card.querySelectorAll('.file')).toHaveLength(1);
     expect(card.querySelector('.file em')?.textContent).toBe('MD');
     // it opens on the page it shows, as the task's page names its tab
-    expect(card.getAttribute('href')).toBe('/tasks/ops/41/release-report');
+    expect(card.getAttribute('href')).toBe('/tasks/ops/41/release-report?ask=r2');
     expect(card.parentElement?.dataset.from).toBe('bot:lo');
   });
 
@@ -212,7 +212,7 @@ describe('an approval waiting, as a card in the agent’s thread @approvals', ()
     const file = screen.getAllByRole('link', { name: /Approve/ }).find((a) => a.querySelector('.file'));
     // its own chips (the PDF and the review page it shows), opening on the PDF it is about, never the review page
     expect([...(file?.querySelectorAll('.file') ?? [])].map((f) => f.textContent)).toEqual(expect.arrayContaining([expect.stringContaining('declaration.pdf'), expect.stringContaining('Review')]));
-    expect(file?.getAttribute('href')).toBe('/tasks/ops/41/declaration-pdf');
+    expect(file?.getAttribute('href')).toBe('/tasks/ops/41/declaration-pdf?ask=r2');
   });
 
   it('a file OK on another task’s file, behind an email OK, opens the task’s own tab for it, where Approve is', async () => {
@@ -221,7 +221,7 @@ describe('an approval waiting, as a card in the agent’s thread @approvals', ()
     await waitFor(() => expect(screen.getAllByRole('link', { name: /Approve/ })).toHaveLength(2));
     const hrefs = screen.getAllByRole('link', { name: /Approve/ }).map((a) => a.getAttribute('href'));
     // the email's card opens its tab; the file's card, the task's tab of that file (tabsOf: never the Library)
-    expect(hrefs.sort()).toEqual(['/tasks/ops/41/email', '/tasks/ops/41/file']);
+    expect(hrefs.sort()).toEqual(['/tasks/ops/41/email', '/tasks/ops/41/file?ask=r2']);
   });
 
   it('two page OKs on one task are two cards', async () => {
@@ -230,6 +230,9 @@ describe('an approval waiting, as a card in the agent’s thread @approvals', ()
     needs = [first, second];
     show({ agent: 'bot:lo' });
     await waitFor(() => expect(screen.getAllByRole('link', { name: /Approve/ })).toHaveLength(2));
+    // each opens its own ask: the address names it, for its tab and its Approve (approvals.test: the page reads it)
+    const hrefs = screen.getAllByRole('link', { name: /Approve/ }).map((a) => a.getAttribute('href'));
+    expect(hrefs.map((h) => new URL(h ?? '', 'http://x').searchParams.get('ask')).sort()).toEqual(['r2', 'r3']);
   });
 
   it('an OK the agent asked for by its slug, on a finance item, is a card with no chips', async () => {

@@ -99,8 +99,10 @@ export const emailOf = (r: TaskRequirement | null | undefined): string | null =>
     `decision`: what the tabs are marked for and pinned at: the task's first ask that is not an email's (an email's OK
     has its own tab), unless a caller names another (a card for one ask). When an email's OK comes first, its tab still
     comes first. */
-export function tabsOf(t: TaskData, files?: TaskFileView[], decision: TaskRequirement | null = decisionOf(t, null)): TaskTab[] {
-  const emailFirst = !!emailOf(decisionOf(t));
+export function tabsOf(t: TaskData, files?: TaskFileView[], chosen?: TaskRequirement | null): TaskTab[] {
+  // A caller's own ask (an address's `ask`, a card's) leads; else an email's OK that comes first keeps its tab first.
+  const decision = chosen === undefined ? decisionOf(t, null) : chosen;
+  const emailFirst = chosen === undefined && !!emailOf(decisionOf(t));
   const asked = thingsOf(decision);
   const target = targetOf(decision);
   const pinned = (id: string) => (target?.id === id && target.version ? { version: target.version } : {});

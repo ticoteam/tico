@@ -260,6 +260,38 @@ describe('the thing is the first tab', () => {
     await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/tasks/t1/asks/r2/ok', body: { shown_hash: 'h-v1' } }));
   });
 
+  it('the ask the address names (a card opened it) is the one on screen, at its pinned version, and the one Approve answers @approvals', async () => {
+    const at = (id: string, n: number) => ({ n, by: 'bot:lo', created_at: '2026-11-01T10:00:00Z', mime: 'application/pdf', size: 10, url: `/api/v2/files/${id}?v=${n}`, answers: [], ask: null });
+    const pdf = (id: string, name: string) => ({ id, name, title: name, mime: 'application/pdf', archived: false, current_version: 3, links: [], writers: [], versions: [at(id, 1), at(id, 2), at(id, 3)] });
+    shown = task({ title: 'Two declarations', to_leave: [req({ shows: ['file:f9@1'], line: 'Sign A' }), req({ requirement_id: 'r3', shows: ['file:f8@2'], line: 'Sign B' })] });
+    reply = (url) =>
+      url.endsWith('/files?all=1')
+        ? { body: { files: [pdf('f9', 'a.pdf'), pdf('f8', 'b.pdf')] } }
+        : url.endsWith('/oks/r3')
+          ? { body: { subject: 'file:f8@2', shown_hash: 'h-b2', content: { file: 'f8', version: 2 } } }
+          : null;
+    show(
+      <>
+        <TaskPage task="12" pipeline="p1" tab="b-pdf" />
+        <TaskChat task="12" />
+      </>,
+      '/tasks/p1/12/b-pdf?ask=r3',
+    );
+    expect(await screen.findByRole('region', { name: 'b.pdf' })).toBeTruthy();
+    expect(pdfRead.at(-1)).toBe('/api/v2/files/f8?v=2'); // the version r3 pinned
+    const box = within(screen.getByRole('region', { name: 'Chat with Legal Owner' })).getByRole('region', { name: 'The decision' });
+    fireEvent.click(await ready(box));
+    await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/tasks/t1/asks/r3/ok', body: { shown_hash: 'h-b2' } }));
+  });
+
+  it('on a computer, opened beside the thread it came from (`?chat=`), the page holds its own Approve @approvals', async () => {
+    show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1/12/email?chat=agent%3Alo&via=thread');
+    const box = await decision();
+    // in the page, not in the phone's dock (which a computer does not draw)
+    expect(box.closest('[data-dock]')).toBeNull();
+    expect(await ready(box)).toBeTruthy();
+  });
+
   it('opens the version the address names over the one the ask pinned @approvals', async () => {
     const at = (n: number) => ({ n, by: 'bot:lo', created_at: '2026-11-01T10:00:00Z', mime: 'application/pdf', size: 10, url: `/api/v2/files/f9?v=${n}`, answers: [], ask: null });
     const pdf = { id: 'f9', name: 'declaration.pdf', title: 'declaration.pdf', mime: 'application/pdf', archived: false, current_version: 2, links: [], writers: [], versions: [at(1), at(2)] };

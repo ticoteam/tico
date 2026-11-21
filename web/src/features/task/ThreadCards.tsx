@@ -6,7 +6,7 @@ import { Icon } from '@/kit/Icon';
 import { besideThread } from '@/lib';
 import { flowQuery, type FlowItem } from '@/features/tasks/routing';
 import { AskCard } from './AskCard';
-import { askOf, decisionOf, personOf, sendTitle, tabAddress, tabsOf, targetOf, thingsOf } from './model';
+import { askOf, personOf, sendTitle, tabAddress, tabsOf, targetOf, thingsOf } from './model';
 import { taskDetailQuery, taskFilesQuery, type TaskData } from './queries';
 import { useTabs } from './tabs';
 import { matterOf } from './Waiting';
@@ -26,8 +26,8 @@ interface Approval {
   task: string;
   /** The email it shows: its send's id. */
   send: string | null;
-  /** The requirement it answers, when Needs you names it. */
-  requirement?: string;
+  /** The requirement it answers (Needs you names it). */
+  requirement: string;
   /** The thread the card sits in, as the shell's `?chat=`: what it opens comes beside that thread (plan/layers.html). */
   chat?: string;
 }
@@ -35,10 +35,8 @@ interface Approval {
 const approvalOf = (m: ChatMessage): Approval | null => (m.kind === 'approval' ? ((m.refs?.approval as Approval | undefined) ?? null) : null);
 const emailIn = (shows: readonly string[]) => shows.find((x) => x.startsWith('email:'))?.slice(6) || null;
 
-/** The open requirement a card stands for: the one its entry names, else the task's own (an email's, or one that is
-    not an email's). */
-const cardAsk = (sub: TaskData, requirement: string | undefined, send: string | null) =>
-  requirement ? askOf(sub, requirement) : decisionOf(sub, send ?? null);
+/** Whether the task's read has the requirement a card stands for at all (answered or not): one it lacks is read again. */
+const hasAsk = (sub: TaskData, requirement: string) => !!sub.to_leave?.some((r) => r.requirement_id === requirement);
 
 /** Which approvals a thread shows: those `agent` asked for (the person's DM with it, or its Home; its id or slug), or
     those hung on `task` (a case's chat: its "Send:" OKs). */
@@ -77,7 +75,7 @@ export function useApprovalCards(scope: ApprovalScope, chat?: string): ChatMessa
   const files = useQueries({
     queries: asks.map((it, i) => {
       const sub = subs[i]?.data;
-      return { ...taskFilesQuery(it.id), enabled: !!sub && !emailIn(it.ask?.shows ?? []) && thingsOf(cardAsk(sub, it.ask?.requirement, null)).size > 0, retry: false };
+      return { ...taskFilesQuery(it.id), enabled: !!sub && !emailIn(it.ask?.shows ?? []) && thingsOf(askOf(sub, it.ask?.requirement ?? '')).size > 0, retry: false };
     }),
   });
   // An approval entry its task's cached read does not have yet (a new OK): that read is refreshed, once.
@@ -85,9 +83,9 @@ export function useApprovalCards(scope: ApprovalScope, chat?: string): ChatMessa
   const stale = asks
     .filter((it, i) => {
       const sub = subs[i]?.data;
-      return !!sub && !cardAsk(sub, it.ask?.requirement, emailIn(it.ask?.shows ?? []));
+      return !!sub && !hasAsk(sub, it.ask?.requirement ?? '');
     })
-    .map((it) => `${it.id}:${it.ask?.requirement ?? emailIn(it.ask?.shows ?? [])}`)
+    .map((it) => `${it.id}:${it.ask?.requirement ?? ''}`)
     .join(',');
   useEffect(() => {
     for (const id of new Set(stale.split(',').filter(Boolean).map((k) => k.split(':')[0]!)))
@@ -98,19 +96,21 @@ export function useApprovalCards(scope: ApprovalScope, chat?: string): ChatMessa
     const send = emailIn(it.ask?.shows ?? []);
     // An email's card stands for that email's own open OK on the task, never another ask there.
     // Any other card, the task's own decision that is not an email's (an email's OK beside it has its own card).
-    if (!sub || !cardAsk(sub, it.ask?.requirement, send)) return [];
+    const requirement = it.ask?.requirement;
+    // Only an open ask it can still answer is drawn.
+    if (!sub || !requirement || !askOf(sub, requirement)) return [];
     // An email's: still to go out, as its OK task's row says (sendToGo); its preview is read only on its Email tab.
     if (send) {
       if (!sendToGo(sub, send)) return [];
     } else if (files[i]?.isPending && files[i]?.fetchStatus !== 'idle') return [];
     // The words stand for the card where words are read (a row with none is not drawn).
     const row: ChatMessage = {
-      id: `approval:${it.id}:${it.ask?.requirement ?? send ?? ''}`,
+      id: `approval:${it.id}:${requirement}`,
       sender_id: whose(it) ?? it.ask?.by ?? undefined,
       created_at: it.since,
       kind: 'approval',
       body: `Approve: ${it.title}`,
-      refs: { approval: { task: it.id, send, chat, ...(it.ask?.requirement && { requirement: it.ask.requirement }) } },
+      refs: { approval: { task: it.id, send, chat, requirement } },
     };
     return [row];
   });
@@ -130,9 +130,9 @@ function ApprovalCard({ task, send, chat, requirement }: Approval) {
 
 /** Any other OK (a page, a file, a finance item): the task's title, and the files it shows as chips. It opens the task's
     page, which opens on what waits on the person. */
-function ThingCard({ sub, chat, requirement }: { sub: TaskData; chat?: string; requirement?: string }) {
+function ThingCard({ sub, chat, requirement }: { sub: TaskData; chat?: string; requirement: string }) {
   // Its own requirement, never an email's OK or another ask beside it on the task (each has its own card).
-  const decision = cardAsk(sub, requirement, null);
+  const decision = askOf(sub, requirement);
   const shown = thingsOf(decision);
   const files = useQuery({ ...taskFilesQuery(sub.id), enabled: shown.size > 0, retry: false });
   const chips = (files.data ?? []).filter((f) => shown.has(f.id)).map((f) => ({ key: f.id, name: f.title || f.name, type: typeOf(f.name, undefined) }));
@@ -142,7 +142,8 @@ function ThingCard({ sub, chat, requirement }: { sub: TaskData; chat?: string; r
   const tabs = target ? tabsOf(sub, files.data ?? (files.isError ? [] : undefined), decision) : [];
   const tab = tabs.find((x) => (x.doc?.file_id ?? x.file?.id ?? x.other) === target?.id);
   // Always the task's own tab, where Approve is (the page marks and pins the same file: tabsOf).
-  return <Card to={tabAddress(sub, tab?.slug, false).to} chat={chat} what={sub.title} files={chips} />;
+  // The address names its ask (`?ask=`): the page opens on its tab at the version it pinned, with its Approve.
+  return <Card to={`${tabAddress(sub, tab?.slug, false).to}?ask=${encodeURIComponent(requirement)}`} chat={chat} what={sub.title} files={chips} />;
 }
 
 /** An email's OK: the case it answers (else the subject) and who it goes to, from the OK task itself (its title and its

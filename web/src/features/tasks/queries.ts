@@ -744,9 +744,9 @@ export const flowQuery = queryOptions({
       for (const id of [it.task_id, it.task?.id, ...((it as { task_ids?: string[] }).task_ids ?? [])]) if (id) named.add(id);
       const t = it.task;
       if (!t) continue;
-      // One approval per entry (its requirement): two OKs on one task, emails or not, are two approvals.
-      const key = it.ask?.requirement_id ? `${t.id}:${it.ask.requirement_id}` : it.id;
-      if ((it.ask?.kind === 'ok' || it.ask?.kind === 'page') && !approvals.has(key)) approvals.set(key, flowItemOf(it, t));
+      // One approval per requirement: two OKs on one task, emails or not, are two approvals. An entry names its own.
+      const rid = it.ask?.requirement_id;
+      if ((it.ask?.kind === 'ok' || it.ask?.kind === 'page') && rid && !approvals.has(`${t.id}:${rid}`)) approvals.set(`${t.id}:${rid}`, flowItemOf(it, t));
       const at = seen.get(t.id);
       if (at !== undefined) {
         const row = items[at];
