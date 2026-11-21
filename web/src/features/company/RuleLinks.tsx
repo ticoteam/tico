@@ -20,23 +20,26 @@ export function RuleLinks() {
       path="/company/rules/links"
       className="co"
       sections={
-        <Table label="Links, last 30 days" stick>
-          <thead>
-            <tr>
-              <Th>Link</Th>
-              <Th>Mode</Th>
-              <Th num>Writes</Th>
-              <Th num>Refused</Th>
-              <Th num>Held</Th>
-              <Th num>Unchecked</Th>
-            </tr>
-          </thead>
-          <tbody>
-            {links.map((l) => (
-              <LinkRow key={l.id} link={l} />
-            ))}
-          </tbody>
-        </Table>
+        // On a phone the counts scroll sideways inside the table; the page itself never does.
+        <div className="rl-scroll">
+          <Table label="Links, last 30 days">
+            <thead>
+              <tr>
+                <Th>Link</Th>
+                <Th>Mode</Th>
+                <Th num>Writes</Th>
+                <Th num>Refused</Th>
+                <Th num>Held</Th>
+                <Th num>Unchecked</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {links.map((l) => (
+                <LinkRow key={l.id} link={l} />
+              ))}
+            </tbody>
+          </Table>
+        </div>
       }
     />
   );
