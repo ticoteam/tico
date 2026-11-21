@@ -132,8 +132,16 @@ def test_the_assistant_snapshot_holds_only_its_persons_own_items(api, monkeypatc
         try:
             venue = H.task_create(c, "human:cara", "Book the venue", "For the offsite.", "bot:ops", pipeline="general")
             H.task_create(c, "human:ana", "Ana's private handoff", "Hers alone.", "bot:ops", private=True)
+            # Not hers to track: one filed for Ben, and one she keeps herself.
+            his = H.task_create(c, "human:cara", "Ben's onboarding", "For him.", "bot:ops")["id"]
+            H.task_create(c, "human:cara", "Cara's own notes", "Mine.", "human:cara")
+            nobodys = H.task_create(c, "human:cara", "Nobody's errand", "Unassigned.", "bot:ops")["id"]
         finally:
             H.VIA.reset(token)
+        c.execute("UPDATE task_move_guards SET open=1, task_id=? WHERE id=1", (nobodys,))  # as a move opens it
+        c.execute("UPDATE tasks SET owner_id=NULL WHERE id=?", (nobodys,))  # unassigned
+        c.execute("UPDATE task_move_guards SET open=0, task_id=NULL WHERE id=1")
+        c.execute("UPDATE tasks SET requester_id='human:ben' WHERE id=?", (his,))  # filed --for Ben
         held = ok_ask(c, venue["id"], "human:ana", "ben", "OK Dana's catering deposit")
         bind(c, held["requirement_id"], "human:ana", "human:ben")
     _, attempt = assistant_turn(api, "cara-test", "What needs me today?")
@@ -143,8 +151,17 @@ def test_the_assistant_snapshot_holds_only_its_persons_own_items(api, monkeypatc
     assert "Payroll" not in header and "payroll" not in header and "Ana's private handoff" not in header, header
     assert "Dana" not in header, "a handoff's turn says a bound OK only to its parties"
     assert "- OK the launch note (Ship the launch note)" in header, "Needs you reads as the list they are served"
+    assert "Ben's onboarding" not in header and "Cara's own notes" not in header, header
+    assert "Nobody's errand" not in header, "an unassigned task is not a handoff, as in the Tracker"
     with api.app.state.store.read_transaction() as c:
         cara = Identity("human:cara", "human", "cara@acme.example")
+        asked = []
+        c.set_trace_callback(asked.append)
+        try:
+            run_header.snapshot(c, api.app.state.auth, cara)
+        finally:
+            c.set_trace_callback(None)
+        assert sum("json_extract(detail,'$.via')='assistant'" in sql for sql in asked) == 1, "one handoff query"
         full = ["Card now: " + "y" * 90] * 19  # what the card took already: no room left for a handoff
         lines, unseen = run_header.snapshot(c, api.app.state.auth, cara, full)
     assert unseen == 1 and not any("Book the venue" in line for line in lines), "past its room a handoff is not read"

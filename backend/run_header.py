@@ -36,6 +36,7 @@ from . import org_rules as _org_rules
 from . import stage_rules
 from . import store as _store
 from . import task_asks
+from . import task_calls
 from . import task_engine as E
 from . import task_reads as _task_reads
 from . import task_requirements as R
@@ -67,10 +68,12 @@ WORKERS = 4
 _WORKERS = ThreadPoolExecutor(max_workers=WORKERS, thread_name_prefix="run-header")
 _SLOTS = threading.BoundedSemaphore(WORKERS)
 
-# The open tasks the person's Assistant filed for them that they may read: `%s` is their task rule (Auth.task_sql).
+# The open tasks the person's Assistant filed for them that they may read, as their Tracker counts them: they are the
+# requester and someone else has it. `%s` is their task rule (Auth.task_sql).
 HANDOFFS_SQL = (
-    "SELECT id, title, owner_id FROM tasks WHERE status='open' AND id IN (SELECT target FROM events WHERE actor=? "
-    "AND action='task.create' AND json_extract(detail,'$.via')='assistant') AND (%s) ORDER BY created_at DESC, id DESC"
+    "SELECT id, title, owner_id FROM tasks WHERE status='open' AND requester_id=? AND owner_id<>'' AND owner_id<>? "
+    "AND id IN (SELECT target FROM events WHERE actor=? AND action='task.create' "
+    "AND json_extract(detail,'$.via')='assistant') AND (%s) ORDER BY created_at DESC, id DESC"
 )
 
 
@@ -379,10 +382,6 @@ def changes(c: Any, auth: Any, who: Any, task_id: str, bot: str, last: Row) -> l
     return out
 
 
-# How many open tasks the person's Assistant filed for them that they may read (HANDOFFS_SQL's rows).
-HANDOFFS_COUNT_SQL = "SELECT count(*) FROM (" + HANDOFFS_SQL + ")"
-
-
 def snapshot(
     c: Any, auth: Any, person: Any, before: Sequence[str] = (), deadline: float = float("inf")
 ) -> tuple[list[str], int]:
@@ -398,11 +397,14 @@ def snapshot(
         line = item.get("about") or item["line"]
         out.append(f"- {line}" + (f" ({_clip(title, TITLE_MAX)})" if title else ""))
     rule: str = auth.task_sql(c, person)
-    total = int(c.execute(HANDOFFS_COUNT_SQL % rule, (person.actor,)).fetchone()[0])
+    me = person.actor
+    handed: list[Row] = [dict(r) for r in c.execute(HANDOFFS_SQL % rule, (me, me, me))]
     head = "Open handoffs you filed through me:"
     room = MAX_CHARS - RESERVE - _pack([*before, *out])[2]
+    # Their views read together, for as many as the room could ever show (a line is a dozen characters at least).
+    task_calls.prime_views(c, [r["id"] for r in handed[: max(1, room // 12)]], person.task_actor or me)
     lines: list[str] = []
-    for r in c.execute(HANDOFFS_SQL % rule, (person.actor,)):
+    for r in handed:
         heading = 0 if lines else len(head) + 1
         if room - heading < 4 or time.monotonic() > deadline:
             break
@@ -419,7 +421,7 @@ def snapshot(
         lines.append(line)
         room -= len(line) + 3 + heading
     out += _listed(head, lines)
-    return out, total - len(lines)
+    return out, len(handed) - len(lines)
 
 
 def _listed(head: str, items: Sequence[str]) -> list[str]:
