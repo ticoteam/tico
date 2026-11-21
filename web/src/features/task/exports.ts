@@ -8,3 +8,4 @@ export { useApprovalCards, approvalCard, type ApprovalScope } from './ThreadCard
 export { AskCard } from './AskCard';
 export { SendMark, TaskSend } from './sending';
 export { RequestCard } from './Requests';
+export { CardFix, lineFor, StatusLine } from './StatusLine';

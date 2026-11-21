@@ -347,6 +347,7 @@
       "stage_id": "general-done",
       "stage_since": null,
       "status": "done",
+      "status_line": null,
       "tags": [],
       "title": "Draft the launch plan",
       "to_leave": [],

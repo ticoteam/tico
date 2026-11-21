@@ -62,7 +62,6 @@
             "ask": true,
             "line": "Spend $9 on ads for a second test?",
             "requirement_id": "<pending_ask>",
-            "running": false,
             "since": "<time>",
             "state": "person",
             "until": null,

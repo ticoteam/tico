@@ -31,11 +31,15 @@ import { FlowMark } from '@/kit/FlowMark';
 import { Face } from './parts';
 import { taskDetailQuery, taskRefQuery, type TaskData } from './queries';
 import { useTabs, type Tab } from './tabs';
+import { TaskStatus } from './StatusLine';
 import { approvalCard, useApprovalCards } from './ThreadCards';
 import { PageView, useVersions, VersionBar } from './Versions';
 import { Brief, EmailPointers, MatterBrief, WaitingOnYou } from './Waiting';
 import { waitsNow } from './waits';
 import './task.css';
+
+/** How often an open task reads itself again, as a backstop for the stream. */
+const STATUS_BACKSTOP_MS = 5 * 60_000;
 
 export interface TaskPageProps {
   /** The address's task: its number, or its id. */
@@ -53,7 +57,9 @@ export interface TaskPageProps {
 /** The address's task, read once and kept current by the stream while it is open. */
 function useTask(param: string) {
   const ref = useQuery(taskRefQuery(param));
-  const detail = useQuery(taskDetailQuery(ref.data));
+  // On this screen only, the task reads itself again every few minutes: the stream sends its status line as it changes,
+  // and this heals one it missed (a backstop, not the way it updates).
+  const detail = useQuery({ ...taskDetailQuery(ref.data), refetchInterval: STATUS_BACKSTOP_MS });
   useFollow(ref.data ? { task: ref.data } : null);
   const error = ref.error ?? detail.error;
   const retry = () => void (ref.isError ? ref.refetch() : detail.refetch());
@@ -243,7 +249,12 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
         variant="page"
         title={owner?.name}
         actor={t.owner_id ?? undefined}
-        foot={<Decision t={t} flow={flow} onAsking={setAsking} email={null} />}
+        foot={
+          <>
+            <TaskStatus t={t} />
+            <Decision t={t} flow={flow} onAsking={setAsking} email={null} />
+          </>
+        }
         canPost={!asking}
         extra={approvals}
         card={approvalCard}
@@ -342,13 +353,21 @@ export function TaskChat({ task, flow = false }: TaskChatProps) {
           variant="task"
           title={name}
           actor={t.owner_id ?? undefined}
-          foot={decision}
+          foot={
+            <>
+              <TaskStatus t={t} />
+              {decision}
+            </>
+          }
           canPost={!asking}
           extra={approvals}
           card={approvalCard}
         />
       ) : (
-        decision
+        <>
+          <TaskStatus t={t} />
+          {decision}
+        </>
       )}
     </>
   );

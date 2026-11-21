@@ -79,15 +79,15 @@ def test_a_bots_turn_says_whether_its_run_is_going_now(api):
     ready(api, r, ["ops"])
     made = post(api, "tasks", {"title": "Draft the release notes", "body": "For 0.6.", "owner": "ops"})
 
-    def turn():
-        return next(t for t in get(api, "tasks?brief=true")["tasks"] if t["id"] == made["id"])["turn"]
+    def line():
+        return next(t for t in get(api, "tasks?brief=true")["tasks"] if t["id"] == made["id"])["status_line"]
 
-    assert turn()["state"] == "bot" and turn()["running"] is False
+    assert line() == "up_next"
     attempt = claim(api, r, "ops")
     assert attempt, "the task's wake was claimed"
-    assert turn()["state"] == "bot" and turn()["running"] is True
+    assert line() == "starting"
     expire(api, attempt["id"])
-    assert turn()["running"] is False
+    assert line() == "up_next"
 
 
 def test_factories_count_done_in_the_period_and_mark_what_needs_a_person(api):

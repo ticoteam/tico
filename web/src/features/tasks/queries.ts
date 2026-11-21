@@ -98,7 +98,7 @@ export type TaskItem = Pick<
   Task,
   'id' | 'number' | 'title' | 'status' | 'pipeline_id' | 'stage_id' | 'owner_id' | 'labels' | 'late' | 'turn' | 'updated_at' | 'version'
 > &
-  Partial<Pick<Task, 'stuck' | 'stage_since' | 'snoozed' | 'created_at' | 'due_at' | 'visibility' | 'blocks' | 'email_send'>>;
+  Partial<Pick<Task, 'stuck' | 'stage_since' | 'snoozed' | 'created_at' | 'due_at' | 'visibility' | 'blocks' | 'email_send' | 'status_line'>>;
 
 /** The cache's shape for a list: the server's page, kept as is so the stream's patches apply (live/patch.ts). */
 export interface TaskPage {
@@ -167,6 +167,35 @@ export const isFiltered = (f: Filters) => !!(f.owner || f.tag || f.late || f.q |
 
 const query = (params: Record<string, string | number>) =>
   new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)])).toString();
+
+/** The stream sends each card's status line as it changes; a board on screen also reads its loaded rows again this
+    often (`refreshLoaded`), so a change the stream missed heals (push first, a slow read only as the backstop). */
+export const STATUS_BACKSTOP_MS = 5 * 60_000;
+const BY_IDS = 100;
+
+/** Every row a list holds read again by id, and its status (line, turn, Stopped) put back in place: its pages stay as
+    loaded, and a row the stream changed while the read was out keeps what the stream said. */
+export async function refreshLoaded(params: Record<string, string | number>): Promise<void> {
+  const key = keys.tasks.list(params);
+  const before = new Map((queryClient.getQueryData<TaskPage>(key)?.tasks ?? []).filter((t) => !t.id.startsWith('tmp:')).map((t) => [t.id, t]));
+  const ids = [...before.keys()];
+  const fresh = new Map<string, TaskItem>();
+  for (let i = 0; i < ids.length; i += BY_IDS) {
+    const part = ids.slice(i, i + BY_IDS);
+    const page = await api.get<TaskPage>(`/api/v2/tasks?${query({ ids: part.join(','), status: 'all', limit: part.length })}`);
+    for (const t of page.tasks) fresh.set(t.id, t);
+  }
+  if (!fresh.size) return;
+  const status = (t: TaskItem, f: TaskItem): TaskItem => ({ ...t, status_line: f.status_line ?? null, turn: f.turn, stuck: f.stuck });
+  queryClient.setQueryData<TaskPage>(key, (cur) => {
+    if (!cur) return cur;
+    const tasks = cur.tasks.map((t) => {
+      const f = fresh.get(t.id);
+      return f && before.get(t.id) === t ? status(t, f) : t;
+    });
+    return { ...cur, tasks };
+  });
+}
 
 export const pipelineTasksQuery = (pipeline: string, f: Filters) => {
   const params = listParams(pipeline, f);

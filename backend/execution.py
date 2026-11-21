@@ -37,6 +37,7 @@ from . import (
 from . import runner_online
 from . import task_privacy as privacy
 from . import task_text_keys
+from . import task_reads
 from . import (
     bot_stops,
     browser_exit,
@@ -3996,6 +3997,7 @@ class Execution:
             (bot, body.runner_id, generation + 1, H.now(), who.actor),
         )
         if not old or old["runner_id"] != body.runner_id:
+            task_reads.status_moved(c, [bot])  # a computer now: its tasks are no longer Paused for want of one
             from .model_login import hold_removals
 
             hold_removals(c, self.store.settings, {bot})
@@ -4211,6 +4213,7 @@ class Execution:
                 if voice_restart:
                     state = retry_state = "queued"
                 c.execute("UPDATE attempts SET state='expired',finished_at=? WHERE id=?", (H.now(), row["id"]))
+                task_reads.run_moved(c, row["id"])
                 from .performance import stamp_attempt
 
                 stamp_attempt(c, row["id"], row["runner_id"], "end")
@@ -4490,6 +4493,7 @@ class Execution:
             "UPDATE attempts SET state='expired',finished_at=?,lease_until=?,final_text=? WHERE id=?",
             (now, now, HANDED_BACK + ".", row["id"]),
         )
+        task_reads.run_moved(c, row["id"])
         gateway_connection.forget(c, row["id"])
         state = self.settle_unstarted(c, row, HANDED_BACK, event="attempt.returned")
         return {"attempt_id": row["id"], "outcome": body.outcome, "job_state": state, "message": None}
@@ -5255,6 +5259,7 @@ class Execution:
 
         run_diagnostics.touch(c, aid, "leased")
         c.execute("UPDATE jobs SET state='leased',attempt_id=? WHERE id=?", (aid, row["id"]))
+        task_reads.run_moved(c, aid)
         org_turns.observe(c, self.store.settings, detailed=False)
         # What woke this turn, the bot's profile and how the release policy let it go, for its run record
         # (backend/wake_presets.py). A job released to fork the bot's latest session names it to a runner that can.
@@ -5814,6 +5819,7 @@ class Execution:
             return None
         until = H.shift(now, seconds=self.store.settings.lease_seconds)
         c.execute("UPDATE attempts SET state='running',finished_at=NULL,lease_until=? WHERE id=?", (until, row["id"]))
+        task_reads.run_moved(c, row["id"])
         from . import run_diagnostics
 
         run_diagnostics.restored(c, row["id"])
@@ -6270,6 +6276,7 @@ class Execution:
                 },
             }
         c.execute("UPDATE attempts SET state='running',started_at=? WHERE id=?", (H.now(), aid))
+        task_reads.run_moved(c, aid)
         from . import task_wakes
 
         task_wakes.started(c, aid)  # charged to the task's change current now, not the one it was claimed in
@@ -7366,6 +7373,7 @@ class Execution:
                 aid,
             ),
         )
+        task_reads.run_moved(c, aid)
         quota_continue = bool(source_pause and not body.fallback and row['thread_id'] and worked)
         if quota_continue:
             c.execute("UPDATE attempts SET result=json_set(result,'$.quota_continue',json('true')) WHERE id=?", (aid,))

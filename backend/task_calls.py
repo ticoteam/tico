@@ -1217,6 +1217,18 @@ def task_view(
         if live and visit.get("late_told_at")
         else None
     )
+    # A page several people approve is each approver's turn: `viewer` sees it as theirs (waiting_on.head_for).
+    # `turn_for`: the person the read is for (waiting_on.turn_viewer), apart from `viewer`, who decides access.
+    head = W.head_for(raw_waits, turn_for or viewer)
+    turn = waits[raw_waits.index(head)] if head else None
+    run = (
+        task_reads.live_runs(conn, {task_id: head.who}).get(task_id)
+        if head and head.state == W.BOT and head.who
+        else None
+    )
+    stopped = live and visit.get("level") == "person"
+    line = task_reads.status_line(row["status"], head, run, task_reads.machine(conn, head), stopped=stopped)
+    task_reads.paused_turn(conn, turn, line)
     return {
         "id": task_id,
         "status": row["status"],
@@ -1235,9 +1247,8 @@ def task_view(
         "visit_id": visit.get("id") if live else None,
         "owner_id": row.get("owner_id"),
         "assignee_id": row.get("assignee_id"),
-        # A page several people approve is each approver's turn: `viewer` sees it as theirs (waiting_on.head_for).
-        # `turn_for`: the person the read is for (waiting_on.turn_viewer), apart from `viewer`, who decides access.
-        "turn": waits[raw_waits.index(head)] if (head := W.head_for(raw_waits, turn_for or viewer)) else None,
+        "turn": turn,
+        "status_line": line,
         "waits": waits,
         "to_leave": to_leave,
         "inputs": handed,

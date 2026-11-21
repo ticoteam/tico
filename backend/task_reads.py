@@ -24,7 +24,8 @@ the caller could read the task now, or could under one of those earlier states.
 
 import hashlib
 import json
-from typing import TYPE_CHECKING
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, Any
 
 import orjson
 from fastapi.responses import Response
@@ -33,6 +34,8 @@ from . import events as E
 
 if TYPE_CHECKING:
     import sqlite3
+
+    from .waiting_on import Wait
 
 CAP = 500  # more changed tasks than one page: a full read is no dearer
 SNOOZE_LINE_BYTES = 200  # a brief row's snooze line, in UTF-8 bytes: the task's own read keeps the whole why
@@ -263,8 +266,9 @@ def came_from(c: "sqlite3.Connection", ids: list[str]) -> dict[str, dict[str, st
 
 def brief(c, rows, visible_sql="1", viewer=None):
     """The engine's fields of a list row (docs/dev/pipelines-v3-cutover.md, "The task as JSON", Brief), laid over each
-    row in place: `turn` (the headline wait; `running` when a bot's turn is a run going now), `late`, `snoozed`,
-    `blocked_by` and `blocks` (the open tasks it depends on and those it blocks, `_dependencies`; only where there are any),
+    row in place: `turn` (the headline wait; `running` when a bot's turn is a run going now), `status_line`
+    (`status_line`), `late`, `snoozed`, `blocked_by` and
+    `blocks` (the open tasks it depends on and those it blocks, `_dependencies`; only where there are any),
     `pushed_past` (it entered its stage pushed past a requirement), `stuck` (only when the ladder brought it to a
     person, stuck or late with them: its Needs you card is the stuck card, task #392), `stage_since` (when it
     entered its stage: its open visit, else when it was filed; a board card's age), `visit_id` (its open visit, only when
@@ -276,7 +280,7 @@ def brief(c, rows, visible_sql="1", viewer=None):
     keeps it whole."""
     from datetime import datetime, timezone
 
-    from . import late_rule
+    from . import cloud_machines, late_rule
     from . import waiting_on as W
     from .store import H
 
@@ -332,13 +336,26 @@ def brief(c, rows, visible_sql="1", viewer=None):
     turns = {tid: W.view(head, shown.__contains__) if head else None for tid, head in heads.items()}
     # Waits only on a person's OK or answer: it holds no slot in a stage with a limit (waiting_on.on_person_many).
     person = W.on_person_many(c, waits)
-    running = _running(c, {tid: t["who"] for tid, t in turns.items() if t and t["state"] == "bot" and t["who"]})
+    running = live_runs(c, {tid: t["who"] for tid, t in turns.items() if t and t["state"] == "bot" and t["who"]})
+    seen: dict[str, str | None] = {}
+    turn_bots = {str(H.actor_id(h.who)) for h in heads.values() if h and h.state == W.BOT and h.who}
+    machines = cloud_machines.states(c, turn_bots) if turn_bots else {}
     for row in rows:
         turn = turns.get(row["id"])
-        if turn:
-            turn["running"] = row["id"] in running
-            if turn["state"] == W.SNOOZED:
-                turn["line"] = clip_line(turn["line"])
+        head = heads.get(row["id"])
+        line = status_line(
+            row.get("status"),
+            head,
+            running.get(row["id"]),
+            machine(c, head, seen, machines),
+            stopped=row["id"] in stuck,
+        )
+        row["status_line"] = line
+        paused_turn(c, turn, line)
+        if turn and turn["state"] == W.BOT:
+            turn["running"] = row["id"] in running  # only on an agent's turn, the one it speaks of
+        if turn and turn["state"] == W.SNOOZED:
+            turn["line"] = clip_line(turn["line"])
         row["turn"] = turn
         if turn and turn["ask"] and visits.get(row["id"]):
             row["visit_id"] = visits[row["id"]]  # only on an ask: with it the ask is read by id (waiting_on.ask_id)
@@ -414,27 +431,202 @@ def _dependencies(c, ids, visible_sql):
     return blocked_by, blocks
 
 
-def _running(c, bots):
-    """The tasks, of {task id: bot actor}, whose bot has a run on them now: its attempt is leased or running and its
-    computer still renews the lease (task_wakes.live_run, for many tasks in one read). A bot's turn that is not running
-    is waiting to try again."""
+# A live run as `run_task` reads it: the attempt, its own message's refs, and its job's message (refs, wake, chat).
+_RUN_ROWS = (
+    "SELECT a.id, a.bot_id, a.state, a.task_id, am.refs AS refs, jm.refs AS job_refs, jm.wake_key, jm.conversation_id "
+    "FROM attempts a LEFT JOIN messages am ON am.id = a.message_id LEFT JOIN jobs j ON j.id = a.job_id "
+    "LEFT JOIN messages jm ON jm.id = j.message_id "
+)
+
+
+def run_task(c: "sqlite3.Connection", run: Any) -> str | None:
+    """The one task a run (a `_RUN_ROWS` row) is on, for the reads (`live_runs`) and the stream (`run_moved`) alike: the
+    task the attempt names (`task_id`), else the one its message's refs name (hubdb.refs_task_id: the attempt's message,
+    then its job's), else the one its job's wake key names, else the one open task of its chat; None when none, or when
+    its chat has more than one open task."""
+    from .store import H
+
+    if run["task_id"]:
+        return str(run["task_id"])
+
+    def known(tid: object) -> bool:
+        return bool(tid) and c.execute("SELECT 1 FROM tasks WHERE id=?", (tid,)).fetchone() is not None
+
+    for refs in (run["refs"], run["job_refs"]):
+        named = H.refs_task_id(H._json(refs, {}) or {})
+        if known(named):
+            return str(named)
+    wake = str(run["wake_key"] or "")
+    if ":" in wake and known(wake.split(":", 1)[0]):
+        return wake.split(":", 1)[0]
+    if run["conversation_id"]:
+        found = c.execute(
+            "SELECT id FROM tasks WHERE conversation_id=? AND status='open' LIMIT 2", (run["conversation_id"],)
+        ).fetchall()
+        if len(found) == 1:
+            return str(found[0][0])
+    return None
+
+
+def live_runs(c: "sqlite3.Connection", bots: dict[str, str]) -> dict[str, str]:
+    """{task id: "leased" or "running"} of the tasks, of {task id: bot actor}, whose bot has a run on them now
+    (`run_task`): its attempt is leased (its computer is starting it) or running, and its computer still renews the
+    lease. A bot's turn that is not running is waiting to try again."""
     from .store import H
 
     if not bots:
-        return set()
-    pairs = json.dumps([[tid, H.actor_id(bot)] for tid, bot in bots.items()])
-    return {
+        return {}
+    wanted = {tid: str(H.actor_id(bot)) for tid, bot in bots.items()}
+    out: dict[str, str] = {}
+    for run in c.execute(
+        _RUN_ROWS + "WHERE a.bot_id IN (SELECT value FROM json_each(?)) AND a.state IN ('leased', 'running') "
+        "AND a.lease_until > ?",
+        (json.dumps(sorted(set(wanted.values()))), H.now()),
+    ).fetchall():
+        tid = run_task(c, run)
+        if tid in wanted and wanted[tid] == run["bot_id"] and out.get(tid) != "running":
+            out[tid] = str(run["state"])  # "running" wins over "leased"
+    return out
+
+
+# The one status line of a card (its board card, its head and over its chat's message box), `status_line` on every
+# task read: Starting (its bot's computer is waking, or has its run and is starting it), Up next (its bot's turn, no run
+# yet), Working (a run going now), Needs you (a person's turn: `turn.who`, so a page says it only to that person),
+# Paused (its bot cannot run: `turn.line` says why and `turn.href` is where a person fixes it). Only the word: what it
+# is about is the turn's, already on the row, so 500 rows cost a few kilobytes more.
+STARTING, UP_NEXT, WORKING, NEEDS_YOU, PAUSED = "starting", "up_next", "working", "needs_you", "paused"
+WAKING, FAILED = "waking", "failed"  # a bot's cloud computer (cloud_machines.states)
+
+
+def status_line(
+    status: str | None, head: "Wait | None", run: str | None = None, machine: str | None = None, stopped: bool = False
+) -> str | None:
+    """A task's status line from what it holds now: its `status`, its headline wait `head` (a waiting_on.Wait),
+    `run` ("leased" or "running" when its bot has a live run on it, `live_runs`), `machine` (`machine`: its bot's cloud
+    computer waking, or failed to start) and `stopped` (the ladder brought its visit to a person: a bot's turn with no
+    run is not Up next then, and the card keeps its Stopped mark). None when none of the five says it: a finished task,
+    or one that waits on nobody, a sub-task, a check or a snooze."""
+    from . import waiting_on as W
+
+    if status != "open" or head is None:
+        return None
+    if head.state == W.PERSON:
+        return NEEDS_YOU if head.who else None
+    if head.state == W.PAUSED:
+        return STARTING if machine == WAKING else PAUSED
+    if head.state != W.BOT:
+        return None
+    # A live run says itself before anything its computer's machine says.
+    if run == "running":
+        return WORKING
+    if run == "leased":
+        return STARTING
+    if machine == FAILED:
+        return PAUSED
+    if machine == WAKING:
+        return STARTING
+    return None if stopped else UP_NEXT
+
+
+def machine(
+    c: "sqlite3.Connection",
+    head: "Wait | None",
+    seen: dict[str, str | None] | None = None,
+    machines: dict[str, str] | None = None,
+) -> str | None:
+    """WAKING when its bot's cloud computer is on its way, so it starts by itself and says Starting: a Paused bot with no
+    computer waiting for its cloud machine (task_wakes.CLOUD_STARTING), or a bot whose enrolled cloud machine was woken
+    and is not up yet. FAILED when that enrolled machine's start failed before any run was claimed: Paused, fixed on
+    Settings > Computers (`paused_turn`). None otherwise. `seen` keeps each bot's cause for one pass, and `machines`
+    is cloud_machines.states read for a pass's bots at once."""
+    from . import cloud_machines, task_wakes
+    from . import waiting_on as W
+    from .store import H
+
+    if head is None or not head.who or head.fix:
+        return None
+    if head.state == W.PAUSED:
+        return WAKING if task_wakes.cannot_run(c, head.who, seen) == task_wakes.CLOUD_STARTING else None
+    if head.state != W.BOT:
+        return None
+    bot = str(H.actor_id(head.who))
+    found = machines if machines is not None else cloud_machines.states(c, [bot])
+    return found.get(bot)
+
+
+def paused_turn(c: "sqlite3.Connection", turn: dict[str, Any] | None, line: str | None) -> None:
+    """A bot's turn whose cloud computer failed to start says so, as a Paused turn does: why, and Settings > Computers."""
+    from . import task_wakes
+
+    if turn and line == PAUSED and turn.get("state") == "bot":
+        turn["line"] = task_wakes.cause_line(c, turn["who"], task_wakes.CLOUD_FAILED)
+        turn["href"] = task_wakes.COMPUTERS_PAGE
+
+
+class _Sent(set[str]):
+    """The tasks this transaction has sent again already: held in its after-commit list, which the commit and a
+    rollback empty, so it lasts exactly one transaction."""
+
+    def __call__(self) -> None:
+        return None
+
+
+def _send(c: "sqlite3.Connection", ids: Iterable[str], kind: str) -> None:
+    """One `tasks` change for each of these open tasks, once per transaction; past events.FAN_CAP one `bulk` change."""
+    from .store import H
+
+    hooks = getattr(c, "after_commit", None)
+    sent = next((h for h in hooks if isinstance(h, _Sent)), None) if hooks is not None else None
+    if sent is None:
+        sent = _Sent()
+        if hooks is not None:
+            hooks.append(sent)
+    if "*" in sent:
+        return
+    fresh = sorted(set(ids) - sent)
+    if not fresh:
+        return
+    if "*" in fresh or len(fresh) > E.FAN_CAP:
+        sent.add("*")
+        c.execute("INSERT INTO changes(topic,kind,created_at) VALUES('tasks','bulk',?)", (H.now(),))
+        return
+    sent.update(fresh)
+    at = H.now()
+    c.executemany(
+        "INSERT INTO changes(topic,kind,subject_id,created_at) VALUES('tasks',?,?,?)", [(kind, i, at) for i in fresh]
+    )
+
+
+def run_moved(c: "sqlite3.Connection", attempt_id: str) -> None:
+    """A bot's run was leased, started, ended or failed: its open task (`run_task`, as the reads say it) is sent again
+    with its new `status_line` (`_send`). A closed or finished task gets nothing."""
+    run = c.execute(_RUN_ROWS + "WHERE a.id = ?", (attempt_id,)).fetchone()
+    tid = run_task(c, run) if run else None
+    if tid and c.execute("SELECT 1 FROM tasks WHERE id=? AND status='open'", (tid,)).fetchone():
+        _send(c, [tid], "run")
+
+
+def status_moved(c: "sqlite3.Connection", bots: Iterable[str] | None, tasks: Iterable[str] = ()) -> None:
+    """What decides whether these agents can run changed (a cloud machine's state, a hold, a computer assigned, placed or
+    revoked): every open task one of them owns or that waits on one of them (an ask), and `tasks`, is sent again, once
+    per transaction (`_send`). None is every agent (a company-wide hold): one `bulk` change."""
+    from .store import H
+
+    if bots is None:
+        _send(c, ["*"], "status")  # every list read again, once per transaction
+        return
+    actors = json.dumps(sorted({f"bot:{H.actor_id(b)}" for b in bots if b}))
+    found = [
         r[0]
         for r in c.execute(
-            "SELECT DISTINCT json_extract(p.value, '$[0]') FROM json_each(?) p "
-            "JOIN tasks t ON t.id = json_extract(p.value, '$[0]') "
-            "JOIN jobs j ON j.bot_id = json_extract(p.value, '$[1]') "
-            "JOIN attempts a ON a.id = j.attempt_id AND a.state IN ('leased', 'running') AND a.lease_until > ? "
-            "JOIN messages m ON m.id = j.message_id "
-            "AND (m.conversation_id = t.conversation_id OR substr(m.wake_key, 1, length(t.id) + 1) = t.id || ':')",
-            (pairs, H.now()),
+            "SELECT id FROM tasks WHERE status='open' AND owner_id IN (SELECT value FROM json_each(?1)) UNION "
+            "SELECT v.task_id FROM requirements r JOIN visits v ON v.left_at IS NULL AND (v.id = r.visit_id OR "
+            "v.stage_id = r.stage_id) JOIN tasks t ON t.id = v.task_id AND t.status = 'open' "
+            "WHERE r.person_id IN (SELECT value FROM json_each(?1)) AND r.withdrawn_at IS NULL",
+            (actors,),
         )
-    }
+    ]
+    _send(c, [*found, *tasks], "status")
 
 
 def comment_rights(c, auth, who, task_id):

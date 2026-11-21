@@ -2302,6 +2302,9 @@ def archive_bot(c, actor, bot, successor="", revoke_agent=True):
         (ts, actor, bot),
     )
     c.execute("DELETE FROM assignments WHERE bot=?", (bot,))
+    from . import task_reads
+
+    task_reads.status_moved(c, [bot])  # no computer now: its tasks say Paused
     c.execute("UPDATE jobs SET state='canceled' WHERE bot_id=? AND state='queued'", (bot,))
     for row in c.execute("SELECT id FROM schedules WHERE bot=? AND deleted_at IS NULL", (bot,)).fetchall():
         c.execute(
