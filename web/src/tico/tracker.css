@@ -2,7 +2,8 @@
    phone's 410px half card, or less while typing) and gives way before the composer: the groups scroll inside it. */
 .tracker{flex:0 1 auto;min-height:0;max-height:45%;display:flex;flex-direction:column;border-bottom:1px solid var(--line)}
 .tracker-row{flex:none;width:100%;height:36px;display:flex;align-items:center;gap:var(--s-2);padding:0 var(--s-4);border:0;background:none;color:var(--ink-2);font:inherit;font-size:var(--t-sm);cursor:pointer}
-.tracker-row:hover{color:var(--ink)}
+.tracker-row:not(.is-fault):hover{color:var(--ink)}
+.tracker-row.is-fault{cursor:default}
 .tracker-row:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap-in)}
 .tracker-n{color:var(--ink);font-weight:var(--w-strong)}
 .tracker-tag{display:inline-flex;align-items:center;gap:var(--s-1);color:var(--muted)}

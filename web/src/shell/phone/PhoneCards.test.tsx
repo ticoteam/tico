@@ -155,6 +155,24 @@ describe('PhoneCards', () => {
     expect(document.querySelector('.phone')?.getAttribute('data-card')).toBe('none');
   });
 
+  it("a page opened from Tico's card (a tracked task) tucks Tico, and Back brings it up again", async () => {
+    render(
+      <PhoneCards
+        page={<h1>Finance</h1>}
+        tico={<a href="/next/tasks/p1/12" onClick={(e) => e.preventDefault()}>Draft the strategy</a>}
+        menu={null}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Open Tico' }));
+    expect(screen.getByRole('dialog', { name: 'Tico' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('link', { name: 'Draft the strategy' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    // Tico's entry is still there: Back (the page's own) lands on it, with Tico up
+    window.history.pushState({}, '');
+    window.history.back();
+    await waitFor(() => expect(screen.getByRole('dialog', { name: 'Tico' })).toBeTruthy());
+  });
+
   it('an address that names a chat opens on its card, with the conversation in the card-high sheet', () => {
     render(
       <PhoneCards

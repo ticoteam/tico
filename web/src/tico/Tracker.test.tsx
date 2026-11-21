@@ -39,18 +39,22 @@ let posts: { url: string; body: unknown }[] = [];
 let seen: string | null = null;
 const ASK = { id: 'v1:r1', kind: 'ask', task_id: 't1', task: { id: 't1', number: 1, title: 'Research e-signature vendors' } };
 let needs: unknown[] = [ASK];
+let needsFail = false;
 
 beforeEach(() => {
   gets = [];
   posts = [];
   seen = null;
   needs = [ASK];
+  needsFail = false;
   vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
     const u = String(url);
     if (init?.method === 'POST') {
       posts.push({ url: u, body: JSON.parse(String(init.body)) });
       seen = (JSON.parse(String(init.body)) as { value: string }).value;
     } else gets.push(u);
+    if (needsFail && u.startsWith('/api/v2/needs-you'))
+      return new Response(JSON.stringify({ error: { code: 'forbidden', detail: 'No.' } }), { status: 403, headers: { 'Content-Type': 'application/json' } });
     const q = new URL(u, 'http://x').searchParams;
     const body = u.startsWith('/api/v2/tasks')
       ? (q.get('status') === 'open' ? OPEN : BACK)[q.get('after') ?? '']
@@ -114,6 +118,22 @@ describe("Tico's tracker", () => {
     );
     const row = await screen.findByRole('button', { name: /Tracking 2/ });
     await waitFor(() => expect(row.textContent).toContain('2 needs you'));
+  });
+
+  it('waits for Needs you before counting, and a failed read is a quiet retry, not "nothing needs you"', async () => {
+    needsFail = true;
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Tracker />
+      </QueryClientProvider>,
+    );
+    const retry = await screen.findByRole('button', { name: 'Try again' });
+    expect(screen.queryByRole('button', { name: /Tracking/ })).toBeNull();
+    expect(screen.getByRole('img', { name: 'Tracking did not load' })).toBeTruthy();
+    needsFail = false;
+    fireEvent.click(retry);
+    const row = await screen.findByRole('button', { name: /Tracking 2/ });
+    expect(row.textContent).toContain('1 needs you');
   });
 
   it('drops a result from the Back count when it ages past 7 days, on one timer', async () => {

@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from 'react';
 import { meQuery, useActor } from '@/data';
 import { flowQuery } from '@/features/tasks/routing';
 import { Avatar } from '@/kit/Avatar';
+import { Button } from '@/kit/Button';
+import { Fault } from '@/kit/Fault';
 import { FlowMark } from '@/kit/FlowMark';
 import { Icon } from '@/kit/Icon';
 import { TaskRow } from '@/kit/Row';
@@ -47,7 +49,7 @@ export function Tracker() {
   useFollow(me ? { party: me } : null);
   const open = useQuery({ ...trackedQuery(me ?? ''), enabled: !!me, select: rows });
   const back = useQuery({ ...backQuery(me ?? ''), enabled: !!me, select: rows });
-  const { data: waiting } = useQuery({ ...flowQuery, select: (f) => new Set(f.task_ids ?? f.items.map((i) => i.id)) });
+  const flow = useQuery({ ...flowQuery, select: (f) => new Set(f.task_ids ?? f.items.map((i) => i.id)) });
   const seen = useQuery(trackerSeenQuery);
   // Open: when, and the last opening before it, which Back counts from while it stays open.
   const [opened, setOpened] = useState<{ at: number; seen: string | null } | null>(null);
@@ -61,11 +63,14 @@ export function Tracker() {
   // The time Back's 7 days count back from: now when drawn, then again whenever its next result ages out.
   const [now, setNow] = useState(() => Date.now());
   const at = Math.max(now, back.dataUpdatedAt, opened?.at ?? 0);
-  // Nothing shows until the lists and the last opening are read: a count from half the reads would be wrong. One
-  // cutoff serves the count and the open group (which counts from the opening before this one).
+  // Nothing shows until the lists, Needs you and the last opening are read: a count from half the reads would be wrong
+  // (Needs you still loading is not "nothing needs you"). A read that failed with nothing to show is a quiet retry.
+  // One cutoff serves the count and the open group (which counts from the opening before this one).
+  const reads = [open, back, flow, seen];
+  const failed = reads.filter((r) => r.isError && r.data === undefined);
   const groups =
-    me && open.isSuccess && back.isSuccess && seen.isSuccess
-      ? trackerGroups(open.data, back.data, waiting ?? new Set(), me, backSince(opened ? opened.seen : seen.data, at))
+    me && open.data && back.data && flow.data && seen.data !== undefined
+      ? trackerGroups(open.data, back.data, flow.data, me, backSince(opened ? opened.seen : seen.data, at))
       : null;
   const ageOut = groups ? nextAgeOut(groups.back) : null;
   useEffect(() => {
@@ -74,6 +79,17 @@ export function Tracker() {
     const timer = setTimeout(() => setNow(Date.now()), Math.max(0, ageOut - Date.now()));
     return () => clearTimeout(timer);
   }, [ageOut]);
+  if (!groups && me && failed.length)
+    return (
+      <div className="tracker">
+        <div className="tracker-row is-fault">
+          <Fault label="Tracking did not load" size={16} />
+          <Button variant="quiet" onClick={() => failed.forEach((r) => void r.refetch())}>
+            Try again
+          </Button>
+        </div>
+      </div>
+    );
   if (!groups) return null;
   const tracking = groups.needs.length + groups.open.length;
   const backCount = opened ? 0 : groups.back.length;
