@@ -775,3 +775,31 @@ def test_a_pipeline_owner_saved_moves_both_needs_you(api, monkeypatch):
     with store.read() as c:
         assert paid_renders.holder(c, task["id"]) == "human:ben" != before
     assert {before, "human:ben"} <= told
+
+
+def test_a_twin_reconciled_while_a_request_is_checked_lets_the_new_visit_send(api, monkeypatch):
+    connect(api)
+    task, token = turn(api)
+    unknown_now(api, token, "Kettle wide", monkeypatch)
+    store = api.app.state.store
+    with store.transaction() as c:
+        (twin,) = [r[0] for r in c.execute("SELECT target FROM events WHERE action=?", (paid_renders.UNKNOWN,))]
+        c.execute("UPDATE visits SET id='visit-moved' WHERE task_id=? AND left_at IS NULL", (task["id"],))
+    sent = []
+    monkeypatch.setattr(G, "video_submit", counting(sent, (202, {"id": JOB, "status": "queued"}, "")))
+    checked = paid_renders._answer
+
+    def reconciled_meanwhile(c, who, key, said, write):  # its person marks it reconciled between the read and the write
+        found = checked(c, who, key, said, write)
+        if not write and found[0] == twin:
+            with store.transaction() as w:
+                assert paid_renders.reconcile(w, "human:ana", task["id"], [twin])
+        return found
+
+    monkeypatch.setattr(paid_renders, "_answer", reconciled_meanwhile)
+    body = {"prompt": "a kettle", "shot": "Kettle wide"}
+    first = video(api, token, body, "new-visit")
+    assert first.status_code == 202, first.text
+    monkeypatch.setattr(paid_renders, "_answer", checked)
+    assert video(api, token, body, "new-visit").status_code == 202  # its retry is the new visit's shot, not the old one
+    assert len(sent) == 1
