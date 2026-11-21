@@ -3302,20 +3302,29 @@ def mail_prepare(store, primary, who, author, to, cc, subject, body, contacts=()
 
 def mail_decide(c, prep):
     """Inside the mail's (or letter's, `prep["operation"]`) write: {"outcome": "pass" | "unchecked" | "warn" (with
-    `warning_line`) | "held" (with `held`, whose `text` says the rule and whom to appeal to)}. A held mail is never
-    sent."""
+    `warning_line`) | "held" (with `held`, whose `text` says the rule and whom to appeal to), "rules": the rule ids
+    this decision used (the hold it wrote or returned, a warning's, a consumed approval's; none for a refusal that
+    names no rule)}. A held mail is never sent."""
     if prep is None:
         return {"outcome": "pass"}
     author, key, output, approved, verdict = (prep[k] for k in ("author", "key", "output", "approved", "verdict"))
     operation = prep.get("operation") or "mail"
     noun, replay = NOUNS[operation], {SEND_KEYS[operation]: key}
 
+    def rules_of(hold):
+        return sorted(json.loads(hold["rule_ids"] or "[]")) if hold else []
+
+    def used(gate):
+        if gate and gate.get("hold_id"):
+            return rules_of(_hold(c, gate["hold_id"]))
+        return sorted(r["id"] for r in (gate or {}).get("warned", {}).get("rules", []))
+
     def outcome(gate):
         if gate and gate.get("held"):
-            return {"outcome": "held", **answer(gate)}
+            return {"outcome": "held", **answer(gate), "rules": used(gate)}
         if gate and gate.get("warned"):
-            return {"outcome": "warn", "warning_line": mail_warning_line(gate), **answer(gate)}
-        return {"outcome": "unchecked" if verdict and verdict["outcome"] == "unchecked" else "pass"}
+            return {"outcome": "warn", "warning_line": mail_warning_line(gate), **answer(gate), "rules": used(gate)}
+        return {"outcome": "unchecked" if verdict and verdict["outcome"] == "unchecked" else "pass", "rules": []}
 
     waiting = open_mail_hold(c, author, key, operation) if holds(verdict) else None
     if approved:
@@ -3326,27 +3335,30 @@ def mail_decide(c, prep):
                     "id": approved["id"],
                     "text": f"The rules changed while this {noun} was checked. Send it again to check it.",
                 },
+                "rules": [],
             }
         if holds(verdict):
             # A newer rule holds an approved mail: the old approval is spent, and the mail has one hold.
             supersede_mail(c, approved["id"])
             if waiting:
-                return {"outcome": "held", "held": held_again(c, waiting, verdict)}
+                return {"outcome": "held", "held": held_again(c, waiting, verdict), "rules": rules_of(waiting)}
             return outcome(apply(c, verdict, output, replay))
         if not claim_mail(c, approved["id"]):
             # Another send already used this approval: this one stays a draft.
             return {
                 "outcome": "held",
                 "held": {"id": approved["id"], "text": f"This {noun}'s approval was already used. It stays a draft."},
+                "rules": [],
             }
         gate = apply(c, verdict, output, replay) if verdict else None
         return {
             **outcome(gate),
             "outcome": "warn" if gate and gate.get("warned") else "pass",
             "approved": approved["id"],
+            "rules": sorted({*rules_of(approved), *used(gate)}),  # the approval it consumed, and any warning
         }
     if waiting:
-        return {"outcome": "held", "held": held_again(c, waiting, verdict)}
+        return {"outcome": "held", "held": held_again(c, waiting, verdict), "rules": rules_of(waiting)}
     return outcome(apply(c, verdict, output, replay))
 
 

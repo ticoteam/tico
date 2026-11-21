@@ -856,6 +856,64 @@ def ok_given(c, grant, ctx):
         raise Problem("email_not_shown", "Open the full email before you OK it", 409)
 
 
+def existing(c, auth, actor, body, operation_key="", request=None, draft_verified=True, snap=None):
+    """What `enqueue` reads to find a send it already has, before it writes anything: its operation's receipt
+    (`prior`), a verified draft's sends still to go (`drafts`, `same_draft` when the newest has this content), the case
+    it is for (`task_id`), its idempotency `key` and the send already under it (`old`, legacy keys included). Read
+    only: the send route asks it too, before the rule check (`duplicate`)."""
+    mailbox = body.mailbox.strip().lower()
+    snap = snap or snapshot(body.raw, mailbox)
+    operation_key = operation_key or body.operation_id
+    asked = request_hash(request or body)
+    prior = receipt(c, actor, operation_key, mailbox, asked, snap["content_sha256"]) if operation_key else None
+    draft_id = body.draft_id if draft_verified else ""
+    # A verified draft's sends still to go, newest first, whoever queued them (the sender may send from this inbox,
+    # checked by the caller). Requeued, the draft is a new version: its own send, never merged with another by content.
+    # Only the same content again (its newest send's) changes nothing.
+    drafts = revised(c, mailbox, draft_id)
+    task_id = body.task_id or None
+    if not task_id and drafts and drafts[0]["task_id"] and reads_task(c, auth, actor, drafts[0]["task_id"]):
+        # The draft's earlier send names its case: kept only for a sender who reads it, else the send has none.
+        task_id = drafts[0]["task_id"]
+    same_draft = bool(drafts) and snap["content_sha256"] in (
+        drafts[0]["content_sha256"],
+        json.loads(drafts[0]["classification"]).get("source_sha256"),
+    )
+    if draft_id:
+        key, old = "draft:" + H.new_id(), None
+    else:
+        # Without a verified draft, the same email for the same case (or with none) is the same send.
+        key = digest(dump([mailbox, snap["content_sha256"], snap["recipients"], task_id or "no task"]))
+        old = c.execute("SELECT * FROM email_sends WHERE idempotency_key=?", (key,)).fetchone()
+        if not old:
+            # Keyed before keys named the case: the same send only for the same case, or with none for both.
+            legacy = digest(dump([mailbox, snap["content_sha256"], snap["recipients"]]))
+            hit = c.execute("SELECT * FROM email_sends WHERE idempotency_key=?", (legacy,)).fetchone()
+            old = hit if hit and (hit["task_id"] or None) == (task_id or None) else None
+    return {
+        "operation_key": operation_key,
+        "asked": asked,
+        "prior": prior,
+        "drafts": drafts,
+        "same_draft": same_draft,
+        "task_id": task_id,
+        "key": key,
+        "old": old,
+    }
+
+
+def duplicate(c, auth, actor, body, operation_key="", request=None, draft_verified=True):
+    """Read only, before the rule check: whether `enqueue` will queue nothing new for this email (`existing`: a send it
+    has, by its receipt, its draft or its key, another sender's included, which it refuses), or refuse it outright (a
+    receipt for other content). `enqueue` decides again inside its write."""
+    try:
+        found = existing(c, auth, actor, body, operation_key, request, draft_verified)
+    except Problem:
+        return True
+    old = found["old"]
+    return bool(found["prior"] or found["same_draft"] or (old and old["state"] in (*ACTIVE, "sent", "unknown")))
+
+
 def enqueue(
     c,
     auth,
@@ -883,28 +941,18 @@ def enqueue(
     raw = body.raw
     snap = snapshot(raw, mailbox)
     reply_id, thread_id = resolve_reply(c, mailbox, snap, body.reply_to_id, body.thread_id)
-    operation_key = operation_key or body.operation_id
-    asked = request_hash(request or body)
-    prior = receipt(c, actor, operation_key, mailbox, asked, snap["content_sha256"]) if operation_key else None
-    if prior:
-        return public(prior)
+    found = existing(c, auth, actor, body, operation_key, request, draft_verified, snap)
+    operation_key, asked, drafts, task_id, key, old = (
+        found[k] for k in ("operation_key", "asked", "drafts", "task_id", "key", "old")
+    )
     draft_id = body.draft_id if draft_verified else ""
-    # A verified draft's sends still to go, newest first, whoever queued them (the sender may send from this inbox,
-    # checked above). Requeued, the draft is a new version: its own send, never merged with another by content. Only
-    # the same content again (its newest send's) changes nothing.
-    drafts = revised(c, mailbox, draft_id)
-    task_id = body.task_id or None
-    if not task_id and drafts and drafts[0]["task_id"] and reads_task(c, auth, actor, drafts[0]["task_id"]):
-        # The draft's earlier send names its case: kept only for a sender who reads it, else the send has none.
-        task_id = drafts[0]["task_id"]
+    if found["prior"]:
+        return public(found["prior"])
     case = c.execute("SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone() if task_id else None
     if case and case["status"] == "closed":
         # Read in this write: a close that won the race with this send leaves nothing to go.
         raise Problem("task_closed", "The task this email is for was closed", 409)
-    if drafts and snap["content_sha256"] in (
-        drafts[0]["content_sha256"],
-        json.loads(drafts[0]["classification"]).get("source_sha256"),
-    ):
+    if found["same_draft"]:
         for row in drafts[1:]:
             retire(c, row, REPLACED)
         if operation_key:
@@ -912,17 +960,6 @@ def enqueue(
         return public(drafts[0])
     # Whether a version it replaces had an OK asked for it: the new one needs its own, whatever the edit took out.
     ok_again = any(r["approval_id"] or json.loads(r["classification"]).get("ok_again") for r in drafts)
-    if draft_id:
-        key, old = "draft:" + H.new_id(), None
-    else:
-        # Without a verified draft, the same email for the same case (or with none) is the same send.
-        key = digest(dump([mailbox, snap["content_sha256"], snap["recipients"], task_id or "no task"]))
-        old = c.execute("SELECT * FROM email_sends WHERE idempotency_key=?", (key,)).fetchone()
-        if not old:
-            # Keyed before keys named the case: the same send only for the same case, or with none for both.
-            legacy = digest(dump([mailbox, snap["content_sha256"], snap["recipients"]]))
-            found = c.execute("SELECT * FROM email_sends WHERE idempotency_key=?", (legacy,)).fetchone()
-            old = found if found and (found["task_id"] or None) == (task_id or None) else None
     if old and old["state"] in (*ACTIVE, "sent", "unknown"):
         if old["actor"] != actor:
             raise Problem("duplicate", "This email is already queued or sent", 409)
@@ -1646,34 +1683,6 @@ def drain(store, auth, limit=20, budget=None):
     return sent
 
 
-def queued_already(c, actor, body, operation_key="", request=None, draft_verified=True):
-    """Read only, before the rule check: whether `enqueue` would answer with a send it already has (its operation's
-    receipt, the same content as a draft's newest send, the same email queued or sent by this sender) and queue none.
-    `enqueue` makes these checks again inside its write."""
-    mailbox = body.mailbox.strip().lower()
-    snap = snapshot(body.raw, mailbox)
-    operation_key = operation_key or body.operation_id
-    try:
-        if operation_key and receipt(
-            c, actor, operation_key, mailbox, request_hash(request or body), snap["content_sha256"]
-        ):
-            return True
-    except Problem:
-        return False
-    draft_id = body.draft_id if draft_verified else ""
-    drafts = revised(c, mailbox, draft_id)
-    if drafts and snap["content_sha256"] in (
-        drafts[0]["content_sha256"],
-        json.loads(drafts[0]["classification"]).get("source_sha256"),
-    ):
-        return True
-    if draft_id:
-        return False
-    key = digest(dump([mailbox, snap["content_sha256"], snap["recipients"], body.task_id or "no task"]))
-    old = c.execute("SELECT state, actor FROM email_sends WHERE idempotency_key=?", (key,)).fetchone()
-    return bool(old and old["state"] in (*ACTIVE, "sent", "unknown") and old["actor"] == actor)
-
-
 def _raced(c):
     """The rule gate of an email first found already queued: reached only when the write would queue it after all."""
     raise Problem("changed", "This email changed while it was checked. Send it again.", 409, retryable=True)
@@ -1718,7 +1727,7 @@ def rule_gate(app, store, who, snap):
         else:
             result = rules.mail_decide(c, prep)
         # The email link's one outcome event (backend/rule_links.py), in the mail's write: a held mail is not sent.
-        rule_links.record(c, rule_links.mailed(c, found, result), stopped=True)
+        rule_links.record(c, rule_links.mailed(found, result), stopped=True)
         return result
 
     return gate
@@ -2063,11 +2072,15 @@ def install(app, store, auth, mutate):
         # for a person's own mail); Tico's own automation and calendar email does not.
         composed = body.automation_action_id or body.calendar_action_id
         operation_key = body.operation_id or request.headers.get("Idempotency-Key", "")
+        idem = request.headers.get("Idempotency-Key") or ""
         with store.read() as c:
-            # An email already queued or sent is answered with that send: no rule check is spent on it. The write
-            # checks again, and an email the write would now queue after all is refused for a retry (`_raced`).
-            again = rule_links.is_agent(store, who) and queued_already(
-                c, actor, body, operation_key, asked, draft_verified=not asked.raw
+            # No rule check is spent on an email the write will not queue: no usable Idempotency-Key (the write refuses
+            # it), or one `enqueue` answers with a send it has or refuses (`duplicate`). The write decides again, and an
+            # email it would queue after all is refused for a retry (`_raced`).
+            again = rule_links.is_agent(store, who) and (
+                not idem
+                or len(idem) > 200
+                or duplicate(c, auth, actor, body, operation_key, asked, draft_verified=not asked.raw)
             )
         rules = None if composed else _raced if again else rule_gate(app, store, who, snap)
         via = who.via or ("agent:" + who.agent if who.agent else "")

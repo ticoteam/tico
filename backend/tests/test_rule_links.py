@@ -184,6 +184,9 @@ TOKEN = "tpx1.eyJ0IjoiY2xvc2UifQ.c2lnbmF0dXJlLXZhbHVlLTEy"
         ),
         ("leads", "", ("a=" + TOKEN.replace(".", "%2E")).encode(), "application/x-www-form-urlencoded"),
         ("leads", "", ("see " + TOKEN).encode(), "text/plain; charset=utf-8"),
+        # a JSON escape that, undone, leaves a percent escape; and the same inside base64
+        ("leads", "q=" + TOKEN.replace(".", "\\u00252E", 1), b"", ""),
+        ("leads", "b=" + base64.b64encode(TOKEN.replace(".", "\\u00252E", 1).encode()).decode(), b"", ""),
         # base64 whose content is itself percent- or JSON-escaped, in either alphabet
         ("leads", "b=" + base64.urlsafe_b64encode(("u:" + TOKEN.replace(".", "%2E")).encode()).decode(), b"", ""),
         ("leads", "", json.dumps({"b": base64.b64encode(("\\u0074" + TOKEN[1:]).encode()).decode()}).encode(), ""),
@@ -192,6 +195,12 @@ TOKEN = "tpx1.eyJ0IjoiY2xvc2UifQ.c2lnbmF0dXJlLXZhbHVlLTEy"
 def test_what_the_check_reads_holds_no_credential_in_any_spelling(rest, query, body, kind):
     read = L.proxy_output("POST", rest, query, body, (), kind)
     assert L.clean(read) and "tpx1" not in read.lower() and "[token]" in read
+
+
+def test_a_value_escaped_deeper_than_is_read_is_not_read():
+    deep = TOKEN.replace(".", "%" + "25" * 5 + "2E")  # six layers of percent escapes
+    assert L.scrub(deep) == "[a value not read]" and not L.clean(deep)
+    assert "tpx1" not in L.proxy_output("POST", "leads", "q=" + deep, b"", ())
 
 
 def test_a_body_that_cannot_be_read_safely_is_named_not_read():
@@ -247,18 +256,19 @@ def test_rules_links_lists_each_link_with_its_mode_and_30_day_counts(ruled, monk
         old = H.event(c, "bot:ops", "rules.refused", "link:tool:close", {})
         c.execute("UPDATE events SET created_at=? WHERE id=?", (H.shift(now, days=-31), old["id"]))
         # A label in registry_metadata never makes a path that only logs read as Enforced.
-        c.execute("INSERT INTO registry_metadata VALUES(?,?)", (L.MODES, json.dumps({"webhook": "enforced"})))
+        modes = {"webhook": "enforced", "email": "informed"}  # neither is what its path does: neither is taken
+        c.execute("INSERT INTO registry_metadata VALUES(?,?)", (L.MODES, json.dumps(modes)))
     links = {row["id"]: row for row in get(api, "rule-links")["links"]}
     # Email is the one path that really stops a write; nothing relabels another.
     assert {k: v["mode"] for k, v in links.items()} == {
         "email": "enforced",
         "webhook": "informed",
-        "support": "informed",
         "release": "informed",
         "tool:close": "informed",
         "tool:quiet": "informed",
         "tool:acme": "not_covered",
         "tool:shop": "not_covered",
+        "support": "not_covered",
         "computer": "not_covered",
     }
     assert links["tool:close"]["counts"] == {"passed": 1, "refused": 1, "held": 0}

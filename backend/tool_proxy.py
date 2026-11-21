@@ -67,6 +67,9 @@ MCP_READS = frozenset(
     )
 )
 READ_ONLY_TOOLS = {}  # {tool id: {MCP tool name}}: what the vendor's latest tools/list marked read-only
+# The same, learned only from a tools/list sent to exactly the tool's MCP address (backend/rule_links.mcp_endpoint): the
+# hints the outside-write gate trusts. Read authorization keeps READ_ONLY_TOOLS, as before.
+GATE_READ_ONLY = {}
 MAX_LISTING = 4 * 1024 * 1024
 MAX_NAMES = 5000
 TTL = 12 * 3600  # a watcher's or an agent's token; a run's lasts exactly as long as its attempt
@@ -277,21 +280,21 @@ def rpc_calls(body):
     return out
 
 
-def mcp_write(tool_id, calls):
+def mcp_write(tool_id, calls, known=READ_ONLY_TOOLS):
     """'' when every call only reads, else the first call that may write, named for the refusal."""
     for method, params in calls:
         if method is None or method in MCP_READS or method.startswith('notifications/'):
             continue
         if method == 'tools/call':
             name = str(params.get('name') or '')
-            if name and name in READ_ONLY_TOOLS.get(tool_id, ()):
+            if name and name in known.get(tool_id, ()):
                 continue
             return f'the MCP tool {name or "(unnamed)"}, which its server does not mark read-only'
         return f'the MCP call {method}'
     return ''
 
 
-def learn_read_only(tool_id, data):
+def learn_read_only(tool_id, data, into=READ_ONLY_TOOLS):
     """Note which tools a tools/list answer (JSON, or server-sent `data:` lines) marks `readOnlyHint`; a tool listed
     without it is taken off."""
     messages = []
@@ -304,7 +307,7 @@ def learn_read_only(tool_id, data):
                     messages.append(json.loads(line[5:]))
                 except ValueError:
                     continue
-    known = READ_ONLY_TOOLS.setdefault(tool_id, set())
+    known = into.setdefault(tool_id, set())
     for m in messages:
         tools = ((m or {}).get('result') or {}).get('tools') if isinstance(m, dict) else None
         for t in tools if isinstance(tools, list) else []:
@@ -483,6 +486,8 @@ def install(app, store):
 
     def gated(subject, tool_id, method, rest, query, body, params, content_type):
         try:
+            if body is None:  # over rule_links.MAX_JUDGED: never copied or read, recorded unchecked
+                return rule_links.too_large(subject, subject, 'tool:' + tool_id, 'tool_call')
             output = rule_links.proxy_output(method, rest, query, body, params, content_type)
             return rule_links.check_as(
                 store, getattr(app.state, 'judge', None), subject, subject, '', 'tool:' + tool_id, 'tool_call', output
@@ -640,12 +645,12 @@ def install(app, store):
                 detail = read_only_detail(ready['who'], ready['name'], '' if calls is None else write)
                 await log(403, 'refused', detail)
                 return refused(403, 'forbidden', detail)
-        # Only the tool's own MCP server, matched exactly on the address forwarded to, gives MCP reads and read-only hints.
-        forwarded = tool['base_url'].rstrip('/') + '/' + rest.lstrip('/')
-        mcp = rule_links.mcp_endpoint(tool, forwarded)
-        listing = mcp and bool(calls) and any(m == 'tools/list' for m, _ in calls)
+        listing = bool(calls) and any(m == 'tools/list' for m, _ in calls)
         asked = query
-        url = forwarded
+        url = tool['base_url'].rstrip('/') + '/' + rest.lstrip('/')
+        # The gate's MCP read exemption, and the read-only hints it trusts, need the full address forwarded to (the
+        # caller's own query included) to be exactly the tool's MCP address.
+        mcp = rule_links.mcp_endpoint(tool, url + ('?' + asked if asked else ''))
         query = outgoing_query(query, tool, key, auth['query'] if auth else None)
         url += ('?' + query) if query else ''
         if urlsplit(url).hostname != urlsplit(tool['base_url']).hostname:
@@ -656,11 +661,12 @@ def install(app, store):
         except egress.Blocked as exc:
             await log(None, 'refused', exc.reason)
             return refused(403, 'tool_address', exc.reason)
-        if method not in SAFE and not (mcp and calls is not None and not mcp_write(tool_id, calls)):
+        if method not in SAFE and not (mcp and calls is not None and not mcp_write(tool_id, calls, GATE_READ_ONLY)):
             # The destination checked and pinned, a write meets the org rules on what the caller sent, scrubbed, before
             # it is forwarded with the key (backend/rule_links.py). Log-only: its one outcome event on the tool's link
             # goes with the call's own row, after it is forwarded.
-            sent, kind = b''.join(chunks), request.headers.get('content-type', '')
+            sent = b''.join(chunks) if total <= rule_links.MAX_JUDGED else None
+            kind = request.headers.get('content-type', '')
             checked['found'] = await loop().run_in_executor(
                 None, gated, got['subject'], tool_id, method, rest, asked, sent, got['auth_params'], kind
             )
@@ -754,6 +760,8 @@ def install(app, store):
                     yield tail
                 if heard:
                     learn_read_only(tool_id, b''.join(heard))
+                    if mcp:
+                        learn_read_only(tool_id, b''.join(heard), GATE_READ_ONLY)
             finally:
                 await upstream.aclose()
                 await client.aclose()
