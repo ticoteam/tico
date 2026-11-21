@@ -2,7 +2,7 @@
 
 import pytest
 
-from backend import bot_settings as BS, store as S, task_engine
+from backend import bot_settings as BS, run_header, store as S, task_engine
 from backend.tests.helpers.api import as_member, assign, headers, post, ready, runner  # noqa: F401
 from backend.tests.helpers.files import turn
 from backend.tests.helpers.make_page import start
@@ -66,6 +66,8 @@ def test_private_make_page_receipts_replay_after_finish_and_recheck_person_and_c
         with monkeypatch.context() as patch:
             # Polls no longer save receipts. Exercise receipts kept by older servers through the real routes.
             patch.setattr(S, "is_poll", lambda operation, result: False)
+            # The first claim's header is asserted below: give its best-effort build room, as test_run_header.py does.
+            patch.setattr(run_header, "BUDGET_SECONDS", 30.0)
             patch.setattr(api.app.state.execution, "idle_inputs", lambda *args: None)
             real_renew = api.app.state.execution.renew
             patch.setattr(
@@ -92,7 +94,13 @@ def test_private_make_page_receipts_replay_after_finish_and_recheck_person_and_c
         row = c.execute("SELECT state,acting_person FROM attempts WHERE id=?", (aid,)).fetchone()
         assert tuple(row) == ("completed", "human:ben")
     # The original response was lost: the finished attempt must recover the identical receipt, not a historical result.
-    assert post(api, path, body, machine["token"], key) == first
+    again = post(api, path, body, machine["token"], key)
+    if endpoint == "claim":
+        # The run header is read fresh after the claim, never kept in its receipt: a replay whose lease is no longer
+        # live gets none (test_run_header.py), so the finished claim recovers the receipt without it.
+        assert "run_header" in first["attempt"] and "run_header" not in again["attempt"]
+        first = {**first, "attempt": {k: v for k, v in first["attempt"].items() if k != "run_header"}}
+    assert again == first
     post(api, path, body, "cara-test", key, expected=403)
     outsider = runner(api, operator="cara")
     if endpoint == "claim":
