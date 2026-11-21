@@ -196,9 +196,9 @@ def test_making_a_task_private_never_carries_down_to_a_task_the_shared_assistant
         assert not H.task_private(c, H.task(c, parent["id"])) and not H.task_private(c, H.task(c, child["id"]))
 
 
-def test_the_shared_assistant_is_no_requester_assignee_group_reader_or_manager_of_a_private_task(api):
-    """Not as the task's requester or assignee (on create, as it goes private, and on the engine's own writes), not
-    through a group it is in, and not through a bot that reports to it."""
+def test_the_shared_assistant_is_no_requester_or_assignee_and_reads_no_private_task_through_a_group_or_report(api):
+    """Refused as a private task's requester or assignee (on create, as it goes private, and on the engine's own writes).
+    A group it is in, or a bot that reports to it, lends it no read: those private tasks are filed, and it reads none."""
     from backend import rooms
     from backend import task_engine as E
 
@@ -213,23 +213,35 @@ def test_the_shared_assistant_is_no_requester_assignee_group_reader_or_manager_o
         mine = H.task_create(c, "human:ana", "Offer", "Mine.", "bot:ops", private=True, lint=False)["id"]
     refused(lambda c: H._made_private(c, "human:ana", asked))
     refused(lambda c: E._write(c, mine, assignee_id="bot:assistant"))
-    # Built-in bots stay outside groups in the app; one placed there by its configuration is caught all the same.
+    # Built-in bots stay outside groups in the app; one placed there by its configuration reads nothing through it.
     desk = post(api, "groups", {"name": "Desk", "add": {"bots": ["ops"]}})["id"]
     with api.app.state.store.transaction() as c:
         BS.update(c, "assistant", {"team": desk})
-        assert "group:" + desk in H.reader_names(c, "bot:assistant")
-    answer = api.post(
-        "/api/v2/tasks",
-        json={"owner": "ops", "title": "Desk offer", "body": "Ours.", "private": True, "readers": ["group:" + desk]},
-        headers=headers(),
-    )
-    assert answer.status_code >= 400 and "shared Assistant" in answer.json()["error"]["detail"], answer.text
-    with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET reports_to='assistant' WHERE bot='finance'")
-    refused(lambda c: H.task_create(c, "human:ana", "Books", "Mine.", "bot:finance", private=True, lint=False))
+    grouped = post(
+        api,
+        "tasks",
+        {"owner": "ops", "title": "Desk offer", "body": "Ours.", "private": True, "readers": ["group:" + desk]},
+    )
+    with api.app.state.store.transaction() as c:
+        books = H.task_create(c, "human:ana", "Books", "Mine.", "bot:finance", private=True, lint=False)
     with api.app.state.store.read() as c:
+        for row in (H.task(c, grouped["id"]), books):
+            assert not H.task_private_readable(c, "bot:assistant", row)
+            assert H.task_private_readable(c, "bot:finance" if row["id"] == books["id"] else "bot:ops", row)
+        seen = c.execute(
+            f"SELECT id FROM tasks WHERE id IN (?,?) AND {api.app.state.auth.task_sql(c, bot_identity('bot:assistant'))}",
+            (grouped["id"], books["id"]),
+        ).fetchall()
+        assert seen == []
         # Its company tasks open a room of their own, never a person's chat with it.
         assert rooms.task_conversation_id(c, api.app.state.auth, "bot:assistant", "human:ana") is None
+
+
+def bot_identity(actor):
+    from backend.auth import Identity
+
+    return Identity(actor, "bot")
 
 
 def test_a_batch_commit_never_oks_on_an_assistant_walk(api):

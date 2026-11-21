@@ -73,5 +73,10 @@ def mover(c, actor, row, current=None):
 
 
 def private_subjects(c, actor):
-    """Private inheritance currently follows bot reports; person-only tasks keep their parties."""
+    """Private inheritance currently follows bot reports; person-only tasks keep their parties. The shared Assistant
+    inherits none: one Assistant serves everyone, so a bot that reports to it lends it no private task."""
+    from . import hubdb as H
+
+    if actor == H.assistant_actor(c):
+        return {actor}
     return {actor, *(subject for subject in subjects(c, actor) if subject.startswith('bot:'))}

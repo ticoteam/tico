@@ -2490,8 +2490,12 @@ def task_readers(row):
 
 
 def reader_names(conn, actor):
-    """The reader-list values that name `actor`: itself and every group it is in (its own and each one above it)."""
+    """The reader-list values that name `actor`: itself and every group it is in (its own and each one above it). The
+    shared Assistant is named by itself alone: no group lends it a private task (refuse_shared_assistant)."""
     from . import people as P, views
+
+    if actor == assistant_actor(conn):
+        return [actor]
 
     roster = views.roster(conn, shared=True)
     if is_bot(actor):
@@ -2547,14 +2551,10 @@ def assistant_actor(conn=None):
 
 def refuse_shared_assistant(conn, actor, *parties, task=None):
     """One Assistant serves everyone: a private task is never the shared Assistant's, as owner, requester, assignee or
-    reader, by name, through a group it is in (reader_names) or a bot that reports to it (task_rights.private_subjects),
-    or its background and routine runs would read one person's private work for all. Its person's work goes to a person
-    or another agent."""
-    from .task_rights import private_subjects
-
-    me = assistant_actor(conn)
-    named = {p for p in parties if p}
-    if named and named & {me, *reader_names(conn, me), *private_subjects(conn, me)}:
+    reader, or its background and routine runs would read one person's private work for all. Its person's work goes to a
+    person or another agent. A group it is in or a bot that reports to it lends it no read of a private task
+    (reader_names, task_rights.private_subjects), so those are not refused here."""
+    if assistant_actor(conn) in parties:
         refuse(
             conn,
             actor,
