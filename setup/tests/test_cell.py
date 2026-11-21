@@ -9,6 +9,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -1069,6 +1070,87 @@ def test_a_failed_stop_or_snapshot_leaves_the_old_release_running(ready, monkeyp
     assert record(ready)["version"] == "v1.2.3" and "pending" not in record(ready)
     assert ready.system.calls[-1][-3:] == ["up", "-d", "--remove-orphans"]
     assert not (d / "snapshots").exists() or not any((d / "snapshots").iterdir())
+
+
+def _cores(host, *names, fresh=()):
+    """core folders under the host's /opt/tico-cell, all older than cell.FRESH_S except `fresh`."""
+    base = host.etc / cell.CORES
+    old = time.time() - cell.FRESH_S - 60
+    for name in (*names, *fresh):
+        (base / name / "setup").mkdir(parents=True)
+        if name not in fresh:
+            os.utime(base / name, (old, old))
+    return base
+
+
+def _tags(host):
+    return sorted(i.split(":", 1)[1] for i in host.system.images if i.startswith(cell.SERVER_IMAGE + ":"))
+
+
+def test_a_successful_update_removes_the_releases_nothing_needs(ready):
+    ready(*add_args(ready))
+    ready.system.images |= {f"{cell.SERVER_IMAGE}:{t}" for t in ("v1.0.0", "v1.2.2", "v2.0.0", "latest")}
+    base = _cores(
+        ready,
+        "core-v0.9.0",  # nothing needs it
+        "core-v1.0.0",  # stats-core's target
+        "core-v1.1.0",  # a unit's WorkingDirectory
+        "core-v1.2.3",  # the release before: no longer needed once the update is healthy
+        "core-v2.0.0",  # newer than every company's: an update on its way in
+        ".core-v1.9.0.x1",  # an install that died half-way
+        ".prune-core-v0.1.0.7",  # an interrupted removal
+        fresh=["core-v1.1.5"],  # just installed: maybe a running update's
+    )
+    (base / "stats-core").symlink_to("/opt/tico-cell/core-v1.0.0")
+    unit = ready.etc / cell.UNIT_DIR / "tico-demo-rotate.service"
+    unit.parent.mkdir(parents=True, exist_ok=True)
+    unit.write_text("[Service]\nWorkingDirectory=/opt/tico-cell/core-v1.1.0\n")
+    d = ready.root / "companies" / "boatyard"
+    (d / "data" / "hub.sqlite").write_text("db v1")
+    assert ready("update", "--company", "boatyard", "--version", "v1.3.0")["ok"]
+    assert _tags(ready) == ["latest", "v1.3.0", "v2.0.0"]
+    assert sorted(p.name for p in base.iterdir()) == [
+        "core-v1.0.0",
+        "core-v1.1.0",
+        "core-v1.1.5",
+        "core-v2.0.0",
+        "stats-core",
+    ]
+    assert ["docker", "image", "prune", "--force"] in ready.system.calls
+    assert ready("prune") == {"ok": True, "images_removed": 0, "cores_removed": 0}  # nothing left to remove
+
+
+def test_prune_keeps_a_pending_rollback_and_removes_nothing_without_a_company(ready):
+    ready.system.images |= {f"{cell.SERVER_IMAGE}:v1.0.0"}
+    _cores(ready, "core-v1.0.0")
+    assert ready("prune") == {"ok": True, "images_removed": 0, "cores_removed": 0}
+    ready(*add_args(ready))
+    ready("stop", "--company", "boatyard")
+    (ready.root / "companies" / "boatyard" / "data" / "hub.sqlite").write_text("db v1")
+    assert ready("update", "--company", "boatyard", "--version", "v1.3.0")["ok"]  # stopped: the update stays pending
+    assert record(ready)["pending"]["from"] == "v1.2.3"
+    assert _tags(ready) == ["v1.2.3", "v1.3.0"]
+    assert not (ready.etc / cell.CORES / "core-v1.0.0").exists()
+
+
+def test_a_snapshot_the_disk_cannot_hold_makes_room_first_then_is_refused(ready):
+    ready(*add_args(ready))
+    d = ready.root / "companies" / "boatyard"
+    (d / "data" / "hub.sqlite").write_text("db v1")
+    for name in ("20260101T000000Z-v1.0.0", "20260102T000000Z-v1.1.0"):
+        (d / "snapshots" / name).mkdir(parents=True)
+    ready.system.images.add(f"{cell.SERVER_IMAGE}:v1.0.0")
+    ready.system.free = cell.SNAPSHOT_SPARE  # less than the database and the spare
+    env_before = (d / ".env").read_text()
+    answer = ready("update", "--company", "boatyard", "--version", "v2.0.0")
+    assert answer["error"] == "disk_full" and "still on v1.2.3" in answer["detail"]
+    assert (d / ".env").read_text() == env_before and "pending" not in record(ready)
+    assert _tags(ready) == ["v1.2.3", "v2.0.0"]  # room was made first; the release being pulled for kept
+    assert [p.name for p in (d / "snapshots").iterdir()] == ["20260102T000000Z-v1.1.0"]  # the oldest went first
+    ready.system.free = 1 << 50
+    assert ready("update", "--company", "boatyard", "--version", "v2.0.0")["ok"]
+    names = sorted(p.name for p in (d / "snapshots").iterdir())
+    assert len(names) == cell.SNAPSHOTS_KEPT and names[0] == "20260102T000000Z-v1.1.0" and names[1].endswith("-v1.2.3")
 
 
 @pytest.mark.parametrize("argv", [["stop"], ["start"], ["sleep"], ["wake"], ["update", "--version", "v1.3.0"]])

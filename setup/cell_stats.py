@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import calendar
 import concurrent.futures as cf
+import contextlib
 import errno
 import fcntl
 import getpass
@@ -71,6 +72,7 @@ WINDOW_S = 300  # the flight window
 ERROR_SINCE_S = 70  # log lines this recent (a push a minute, with some overlap)
 ERRORS_MAX, ERROR_CHARS = 20, 300
 SLOW_EVERY = 15 * 60  # docker system df, top SQL shapes, attachment sizes
+PRUNE_EVERY = 60 * 60  # `cell prune`: the release images and core folders no company needs (setup/cell.py)
 SLOW_ROUTE_P95_MS, SLOW_ROUTE_MAX_MS = 500, 1000
 SQL_TOP = 10
 HEALTH_TIMEOUT = 3
@@ -1707,9 +1709,27 @@ def push(box: Box, out=None) -> int:
     queued = _read_json(queue_path).get("items") or []
     pending = [d for d in queued if isinstance(d, dict)] + items
     report["debug"] = run_debug(box, cfg, pending, started, queue_path)
+    report["prune"] = prune_hourly(box, started, cache_path)
     out.write(json.dumps(report) + "\n")
     out.flush()
     return 0 if status in (200, 429) else 1
+
+
+def prune_hourly(box: Box, started: float, cache_path: Path) -> dict | None:
+    """Once an hour, with what is left of the tick: `cell prune` from the core this runs from, so a cell that has not
+    updated in a while (an update prunes too) does not fill its disk. Cut short by the budget, the next hour goes on."""
+    cache = _read_json(cache_path)
+    now, remaining = box.time(), started + TICK_BUDGET - box.monotonic()
+    if now - (cache.get("prune_at") or 0) < PRUNE_EVERY or remaining < TOOL_MIN:
+        return None
+    cache["prune_at"] = now
+    _write_private(cache_path, cache)
+    r = box.run([sys.executable, "-m", "setup", "cell", "prune"], timeout=remaining, cwd=str(box.path(CORE_LINK)))
+    with contextlib.suppress(ValueError, IndexError):
+        answer = json.loads(r.stdout.strip().splitlines()[-1])
+        if isinstance(answer, dict):
+            return answer
+    return {"ok": False, "detail": scrub((r.stderr or r.stdout).strip())[-200:]}
 
 
 def run_debug(box: Box, cfg: dict, pending: list[dict], started: float, queue_path: Path) -> dict:
