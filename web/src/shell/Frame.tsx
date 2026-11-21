@@ -3,18 +3,18 @@ import { motionLevel } from '@/motion';
 import { PhoneCards, type PhoneCardsProps } from '@/shell/phone';
 import { Dot } from '@/tico/dot';
 import { useArrangement } from './arrangement';
-import { useDesktopInset } from '@/desktop';
 import { Icon } from '@/kit/Icon';
 import { C, foldOf, forwardFor, layout, modeFor, press, specOf, TICO_MARK, type Arrangement, type ArrangementSpec, type Saved, type SheetId, type SheetLayout } from './layout';
 import { keepOne, useSheetMemory, withFold, withWidth, withoutWidth } from './memory';
 import { SheetContext, type SheetControls } from './Sheet';
+import { Trail, TrailContext, type TrailPart } from './Trail';
 import './Frame.css';
 import './desktop.css';
 
 /* The ground and the sheets: Tico | the menu (or a task's list) | a second chat | the page, plus a panel, an agent's
    widgets or a call's side. Sizes come from layout() (layout.md, then plan/layers.html); under 760 the phone's cards
    take over. The stacking order never changes: the leftmost sheet is on top. A tucked sheet keeps its card under its
-   left neighbour and shows its edge, one button that opens it. */
+   left neighbour and shows its edge, one button that opens it. Over them all, on the ground, the trail back up. */
 
 export interface FrameProps {
   /* Tico's open sheet; folded, the frame draws its strip */
@@ -39,6 +39,8 @@ export interface FrameProps {
   lipActs?: PhoneCardsProps['lipActs'];
   /* on a desktop: a control on a tucked sheet's edge that is not its tap target (search under Tico's Dot) */
   edgeActs?: Partial<Record<SheetId, ReactNode>>;
+  /* the trail (Trail.tsx): on the ground over the sheets, on a phone over the page; a page's head reads it too */
+  trail?: readonly TrailPart[];
   /* by default the address decides */
   arrangement?: Arrangement;
   onCloseChat?: () => void;
@@ -51,9 +53,6 @@ export interface FrameProps {
 const SHEET_MOVE = { ms: 620, easing: 'cubic-bezier(.3,1,.3,1)', arriveMs: 340, fadeMs: 300, fadeDelayMs: 200 };
 const SHEET_FOLD = { ms: 200, easing: 'cubic-bezier(.3,1,.3,1)', arriveMs: 120, fadeMs: 100, fadeDelayMs: 70 };
 const SHEET_RESET = { ms: 240, easing: 'cubic-bezier(.2,0,0,1)', arriveMs: 340, fadeMs: 300, fadeDelayMs: 200 };
-
-/* the least head a sheet keeps beside the desktop window's buttons; narrower, its content starts below them */
-const BESIDE_LIGHTS = 160;
 
 /* what a tucked sheet's edge says, under its mark */
 const EDGE_NAME: Record<SheetId, string> = { tico: 'Tico', menu: 'Menu', list: 'Tasks', chat: 'Chat', page: 'Page', panel: 'Panel', widgets: 'Page', stage: 'Call', side: 'Side' };
@@ -69,7 +68,7 @@ export function foldSheet(id: string, folded?: boolean): void {
 }
 
 export function Frame(p: FrameProps) {
-  return p.arrangement ? <Sheets {...p} arr={p.arrangement} /> : <Routed {...p} />;
+  return <TrailContext value={p.trail ?? []}>{p.arrangement ? <Sheets {...p} arr={p.arrangement} /> : <Routed {...p} />}</TrailContext>;
 }
 function Routed(p: FrameProps) {
   return <Sheets {...p} arr={useArrangement()} />;
@@ -115,7 +114,6 @@ interface Placed {
 
 function Sheets(p: FrameProps & { arr: Arrangement }) {
   const { width, mode } = useWindowMode();
-  const lights = useDesktopInset();
   const [saved, update] = useSheetMemory();
   const [draft, setDraft] = useState<Saved | null>(null);
   /* the sheet opened by its edge, for this arrangement only */
@@ -311,8 +309,14 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
     // a teammate's own page: their page at the back, their chat the card over it. Theirs and a task's chat belong to
     // the page: they wait as a lip, so the page's head is free, unless the address asks for the chat.
     const tucked = p.arr === 'agent' || p.arr === 'task';
-    if (p.arr === 'agent' && p.widgets) return <PhoneCards page={p.widgets} tico={p.tico} menu={p.menu} chat={p.page} tucked lips={p.lips} lipActs={p.lipActs} />;
-    return <PhoneCards page={call ? null : p.page} tico={p.tico} menu={p.menu} chat={call ? undefined : p.chat} call={call ? p.page : undefined} tucked={tucked} lips={p.lips} lipActs={p.lipActs} />;
+    const trailed = (page: ReactNode) => (
+      <>
+        {p.trail ? <Trail parts={p.trail} /> : null}
+        {page}
+      </>
+    );
+    if (p.arr === 'agent' && p.widgets) return <PhoneCards page={trailed(p.widgets)} tico={p.tico} menu={p.menu} chat={p.page} tucked lips={p.lips} lipActs={p.lipActs} />;
+    return <PhoneCards page={call ? null : trailed(p.page)} tico={p.tico} menu={p.menu} chat={call ? undefined : p.chat} call={call ? p.page : undefined} tucked={tucked} lips={p.lips} lipActs={p.lipActs} />;
   }
 
   const content = (s: SheetLayout) => {
@@ -340,19 +344,15 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
   const top = sheets.length + 1; // the handles sit over every sheet
 
   return (
-    <div className="app-tico shell-frame" data-arrangement={p.arr}>
+    <div className={p.trail ? 'app-tico shell-frame has-trail' : 'app-tico shell-frame'} data-arrangement={p.arr}>
+      {p.trail ? <Trail parts={p.trail} /> : null}
       {sheets.map((s, i) => {
         const shut = s.state !== 'open';
         const card = s.card ?? { x: s.x ?? 0, width: s.width };
         const x = s.x ?? card.x;
         const under = x - card.x;
-        // the desktop window's buttons sit over the top left corner: a sheet under them moves its head right past
-        // them, or, too narrow for that (an edge), starts below them (desktop.css)
-        const past = Math.max(0, lights.left - x);
-        const clear = past > 0 && lights.top > 0 ? (s.width - past < BESIDE_LIGHTS ? 'top' : 'left') : undefined;
-        const style = { left: card.x, width: card.width, zIndex: s.z, '--depth': s.depth } as CSSProperties & Record<'--depth' | '--under' | '--lights-left', number | string>;
+        const style = { left: card.x, width: card.width, zIndex: s.z, '--depth': s.depth } as CSSProperties & Record<'--depth' | '--under', number | string>;
         if (under > 0) style['--under'] = `${under}px`;
-        if (clear) style['--lights-left'] = `${past}px`;
         const controls: SheetControls = {
           id: s.id,
           state: s.state,
@@ -376,7 +376,6 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
               style={style}
               inert={shut}
               aria-hidden={shut || undefined}
-              data-lights={clear}
               data-shut={shut || undefined}
               data-under={under > 0 || undefined}
               data-cast={s.cast || undefined}
@@ -391,7 +390,6 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
                 type="button"
                 style={{ ...depth, left: x, zIndex: s.z }}
                 data-first={i === 0 || undefined}
-                data-lights={clear}
                 data-edge={s.id}
                 data-act={act ? true : undefined}
                 aria-label={`Open ${NAME[s.id]}`}
@@ -406,7 +404,7 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
               </button>
             ) : null}
             {act ? (
-              <div className="shell-edge-act" style={{ ...depth, left: x, zIndex: s.z }} data-lights={clear}>
+              <div className="shell-edge-act" style={{ ...depth, left: x, zIndex: s.z }}>
                 {act}
               </div>
             ) : null}

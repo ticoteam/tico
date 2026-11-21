@@ -737,7 +737,6 @@ function OneRisk({ id, panel }: { id: string; panel?: string }) {
     <Record
       title={d.risk.label}
       path={BASE}
-      crumb={[{ label: 'Risk', to: BASE }]}
       className="co"
       actions={
         <Button variant={panel ? 'plain' : 'primary'} data-phone onClick={() => open.run({ panel: 'matter-new' })}>

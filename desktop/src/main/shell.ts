@@ -19,10 +19,10 @@ import { issuerCookie, type Picks } from './portal';
 import { onOwnOrigin } from './validate';
 import { loadWindowState, MIN_HEIGHT, MIN_WIDTH, restoreFrame, saveWindowState } from './windowState';
 
-/** Where macOS puts the window buttons: inside the first sheet's 60 high head, which starts 8 in from the corner. */
-const TRAFFIC_LIGHTS = { x: 22, y: 31 };
+/** Where macOS puts the window buttons: in line with the trail's row over the sheets (8 to 40 from the top). */
+const TRAFFIC_LIGHTS = { x: 22, y: 18 };
 /** What the page keeps clear of the buttons, from the window's top left corner (handed to the page as CSS vars). */
-export const BUTTONS_INSET = { left: 92, top: 52 };
+export const BUTTONS_INSET = { left: 92, top: 40 };
 
 /** How often a company whose page could not load is tried again, shown or not (a Mac that woke before its network). */
 const RETRY_MS = 30_000;

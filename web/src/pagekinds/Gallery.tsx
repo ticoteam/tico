@@ -32,7 +32,6 @@ const TABS = [
   { label: 'Two', to: '/dev/pagekinds/two' },
 ];
 const FIGS = ['One', 'Two', 'Three', 'Four'].map((label) => ({ label, value: '0' }));
-const CRUMB = [{ label: 'Up', to: '/dev/pagekinds' }];
 
 /** Dev only: the nine kinds with grey blocks in every slot, to check edges, heights and the phone collapse. */
 export function Gallery() {
@@ -86,7 +85,6 @@ export function Gallery() {
         <Record
           title="Record"
           path="/dev/record"
-          crumb={CRUMB}
           tabs={TABS}
           facts={<Ph n={4} />}
           side={<Ph n={3} />}
@@ -101,7 +99,6 @@ export function Gallery() {
         <Document
           title="Document"
           path="/dev/document"
-          crumb={CRUMB}
           tabs={TABS}
           body={<Ph h={18} n={8} />}
           side={<Ph n={5} />}

@@ -3,6 +3,7 @@ export type { FrameProps } from './Frame';
 export { Sheet, SheetHead, useSheet } from './Sheet';
 export { PageFault } from './PageFault';
 export { tabTitle, useTabTitle } from './title';
+export { TrailContext, trailOf, upOf, useTrail, type TrailPart, type TrailNames } from './Trail';
 export type { SheetProps, SheetHeadProps, SheetControls } from './Sheet';
 export { Menu } from './Menu';
 export type { MenuProps, MenuNode, MenuTeam, MenuMate, MenuCompany, MenuCounts, MenuRowId, MenuTalk } from './Menu';
@@ -20,7 +21,6 @@ export {
   openCallWindow,
   reportToDesktop,
   useCallWindow,
-  useDesktopInset,
   watchCallWindow,
   callWindowControls,
   type DesktopApp,

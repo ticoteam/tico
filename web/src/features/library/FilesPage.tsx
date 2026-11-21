@@ -273,7 +273,6 @@ function FilePage({ id, search }: { id: string; search: FilesSearch }) {
     <Document
       title={file.title}
       path={`/library/files?file=${id}`}
-      crumb={[{ label: 'Files', to: '/library/files' }]}
       className="lib"
       state={unavailable ? (versions.isPending ? 'loading' : 'fault') : 'ready'}
       onRetry={versions.isError ? () => void versions.refetch() : undefined}

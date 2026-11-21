@@ -1,5 +1,5 @@
-/* A phone's Back in a page head goes up its trail (`/tasks/launch` from a task). When the step before this one in the
-   app's history is that very page, Back goes back to it instead: the list returns as it was left, its view (list or
+/* A part of the frame's trail, and a phone's Back in a page head, go up the trail (`/tasks/launch` from a task). When
+   the step before this one in the app's history is that very page, they go back to it instead: the list returns as it was left, its view (list or
    board), filters and place kept, and the step is not pushed a second time. The pathname of each history step is kept
    as the router resolves it, by the step's index (TanStack's `__TSR_index`; a replace keeps its index). */
 

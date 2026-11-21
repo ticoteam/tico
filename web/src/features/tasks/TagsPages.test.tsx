@@ -157,7 +157,6 @@ describe('A tag @s4', () => {
     ]);
     show(<TagPage tag="t1" />, '/tags/t1');
     expect(await screen.findByRole('heading', { level: 1, name: 'bug' })).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Tags' }).getAttribute('href')).toBe('/tags');
     const eng = screen.getByRole('region', { name: 'Engineering' });
     const row = within(eng).getByTitle('Checkout fails on one browser');
     expect(row.getAttribute('href')).toBe('/tasks/eng/7');

@@ -53,12 +53,14 @@ import {
   type MenuNode,
   type MenuTeam,
   orgTree,
+  trailOf,
   type OrgNode,
+  type TrailPart,
 } from '@/shell';
 import { MenuLip } from '@/shell/phone';
 import { TicoSheet } from '@/tico';
 import { dot } from '@/tico/dot';
-import { pageName } from '@/tico/pageName';
+import { pageName, usePageName } from '@/tico/pageName';
 import { boardSearch, isFlowPath, leaveFlow, notePlace } from '@/lib';
 
 export interface RouterContext {
@@ -191,6 +193,7 @@ function App() {
   const arrangement = arrangementFor(at.path, at.chat ? { chat: at.chat } : {}, isActor);
   useNotePlaces();
   useLeaveFlowKey(isFlowPath(at.path));
+  const trail = useTrailParts(at.path, who);
 
   // One stream, once the person is known and Tico's room is drawn (its follow then rides the first connection).
   const room = useQuery(ticoRoomQuery);
@@ -289,6 +292,7 @@ function App() {
           widgets={widgets}
           side={side}
           panel={panel ? <PanelHost /> : undefined}
+          trail={trail}
           lips={{ menu: <PhoneMenuLip /> }}
           lipActs={{ call: <CallMute />, tico: <SearchButton /> }}
           edgeActs={{ tico: <SearchButton /> }}
@@ -317,6 +321,18 @@ function App() {
       <AssetRecovery />
     </>
   );
+}
+
+/* ---------------------------------------------------------------- the trail */
+
+/** The trail over every page (shell/Trail.tsx), with the names it needs: the company's, as the menu reads it; a
+    pipeline's; the teammate `/team/<who>` names; and the open page's own. */
+function useTrailParts(path: string, who: string): TrailPart[] {
+  const { data: config } = useQuery(configQuery);
+  const { data: pipelines } = useQuery(pipelinesQuery);
+  const name = useDirectory((d) => (who ? (d.byId[who] ?? d.byId[`human:${who}`])?.name : undefined));
+  const page = usePageName();
+  return trailOf(path, { company: config?.company_name || config?.app_name || '', pipelines, who: name, page });
 }
 
 /* ---------------------------------------------------------------- the menu, from the directory */

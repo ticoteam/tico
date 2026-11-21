@@ -1,12 +1,5 @@
 import type { ReactNode } from 'react';
 
-/** One step of the small trail above a title: the pages this one sits under, from the top. */
-export interface Crumb {
-  label: string;
-  /** A resolved address in the app ("/library/contacts"). */
-  to: string;
-}
-
 /** One tab of the page's tab row. Tabs are links: the address decides which one is on. */
 export interface PageTab {
   label: string;
@@ -26,14 +19,12 @@ export interface PageTab {
   className?: string;
 }
 
-/** The head every kind but the centered card has: one height, title and trail on the left, controls and "⋯" on the right. */
+/** The head every kind but the centered card has: one height, the title on the left, controls and "⋯" on the right. */
 export interface HeadProps {
-  /** The page's name, the h1. Only the name: where it sits goes in `crumb`. */
+  /** The page's name, the h1. Only the name: where it sits is the frame's trail, which ends with it. */
   title: string;
   /** The page's address ("/company/finance"). The title carries `data-target="page:<path>"` so Tico's flights can land. */
   path: string;
-  /** The small trail above the title. On a phone its last step becomes the back button. */
-  crumb?: readonly Crumb[];
   /** Before the title: a back button, a face (36 at most), the Dot. */
   lead?: ReactNode;
   /** Right after the title: a date range and its steps, a version. */
@@ -51,7 +42,7 @@ export interface HeadProps {
   /** The title edits in place: click it, type, Enter saves, Escape puts it back. */
   onRename?: (next: string) => void;
   /**
-   * The rest of the where line, after the trail: a task's stage, owner, age and Late. On a phone the where line sits
+   * A small where line by the title: a task's stage, owner, age and Late. On a phone the where line sits
    * under the title.
    */
   sub?: ReactNode;

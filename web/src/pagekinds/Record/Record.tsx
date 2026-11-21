@@ -20,7 +20,7 @@ export interface RecordProps extends PageBaseProps {
   panel?: ReactNode;
 }
 
-/** One thing: label and value, its own sections, a side column. Reached from a row; its crumb leads back. */
+/** One thing: label and value, its own sections, a side column. Reached from a row; the trail leads back. */
 export function Record({ tabs, facts, figures, sections, side, panel, ...page }: RecordProps) {
   return (
     <Page kind="record" tabs={tabs} over={panel && <PanelSlot>{panel}</PanelSlot>} skeleton={<RecordSkeleton />} {...page}>

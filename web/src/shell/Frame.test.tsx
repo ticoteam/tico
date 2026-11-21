@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { Frame, foldSheet } from './Frame';
+import { Frame } from './Frame';
 import { Sheet } from './Sheet';
 
 // the frame alone: no motion, a plain Dot, no phone cards
@@ -108,30 +108,5 @@ describe('Frame', () => {
     rerender(<Frame {...slots} arrangement="agent" widgets={<Sheet kind="column" label="Widgets" />} />);
     expect(screen.getByRole('button', { name: 'Open the menu' })).toBeTruthy();
     expect(screen.queryByRole('separator', { name: 'Resize the menu' })).toBeNull();
-  });
-
-  it("in the Mac app, marks the sheets under the window's buttons: a head moves right, an edge starts below", async () => {
-    const root = document.documentElement;
-    root.dataset.desktop = 'mac';
-    root.style.setProperty('--desktop-inset-left', '92px');
-    root.style.setProperty('--desktop-inset-top', '52px');
-    try {
-      resize(1440);
-      render(<Frame {...slots} arrangement="page" />);
-      const place = (id: string) => document.querySelector<HTMLElement>(`[data-sheet="${id}"]`)!;
-      expect(place('tico').dataset.lights).toBe('left');
-      expect(place('tico').style.getPropertyValue('--lights-left')).toBe('84px');
-      expect(place('menu').dataset.lights).toBeUndefined();
-      act(() => foldSheet('tico', true)); // Tico draws in to its edge; the menu beside it starts at 52, under the buttons
-      expect(place('tico').dataset.lights).toBe('top');
-      expect(screen.getByRole('button', { name: 'Open Tico' }).dataset.lights).toBe('top');
-      expect(place('menu').dataset.lights).toBe('left');
-      expect(place('menu').style.getPropertyValue('--lights-left')).toBe('40px');
-      await act(async () => root.setAttribute('style', '--desktop-inset-left: 0px; --desktop-inset-top: 0px')); // full screen
-      expect(place('tico').dataset.lights).toBeUndefined();
-    } finally {
-      delete root.dataset.desktop;
-      root.removeAttribute('style');
-    }
   });
 });

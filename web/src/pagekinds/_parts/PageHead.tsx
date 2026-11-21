@@ -1,12 +1,12 @@
 import { Link, useLocation, useRouter, type LinkProps } from '@tanstack/react-router';
-import { Fragment, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
-import { useSheet } from '@/shell';
+import { stepBackIs, watchSteps } from '@/lib';
+import { upOf, useSheet, useTrail } from '@/shell';
 import { showPageName } from '@/tico/pageName';
 import type { HeadProps } from '@/pagekinds/types';
 import { EditableTitle } from './EditableTitle';
-import { stepBackIs, watchSteps } from './backTo';
 
 export type PageHeadProps = HeadProps;
 
@@ -25,33 +25,22 @@ function closeArtifact(router: AppRouter, up: string | undefined) {
 }
 
 /**
- * The page's head, one height on every page (`--head-h`). The trail stands before the title at the title's size, muted,
- * a chevron between ("Docs › Returns and refunds", every mock's `.crumb`); the title holds only the name. A task's
- * trail (`sub`) stays in its small where line. Then the controls, "⋯" last, then a button for each sheet the frame
- * tucked behind the page, then ✕ when the page was opened from a thread (`close`).
+ * The page's head, one height on every page (`--head-h`). The title holds only the name: where it sits is the frame's
+ * trail, over every page (shell/Trail.tsx). A task's stage and owner (`sub`) stay in its small where line. Then the
+ * controls, "⋯" last, then a button for each sheet the frame tucked behind the page, then ✕ when the page was opened
+ * from a thread (`close`). On a phone, Back goes one step up the trail.
  */
-export function PageHead({ title, path, crumb, lead, after, actions, search, more, onRename, sub, size, top, close }: PageHeadProps) {
+export function PageHead({ title, path, lead, after, actions, search, more, onRename, sub, size, top, close }: PageHeadProps) {
   const sheet = useSheet();
   const router = useRouter();
   const opened = useLocation({ select: (l) => (l.search as Record<string, unknown>).via === 'thread' });
   const closes = close ?? opened;
   const big = size === 'large' ? 't-figure' : undefined;
-  const back = crumb?.at(-1);
+  const back = upOf(useTrail());
   const [renaming, setRenaming] = useState(false);
   // a name that arrives after the route drew (its data came later, a rename) reaches the tab title and the page a message to Tico names
   useEffect(() => showPageName(title), [title]);
   useEffect(() => watchSteps(router), [router]);
-  const trail = crumb && crumb.length > 0 && (
-    <nav className={sub ? 'pk-crumb' : 'pk-crumb is-inline'} aria-label="Breadcrumb">
-      {crumb.map((c, i) => (
-        <Fragment key={c.to}>
-          {i > 0 && <Icon name="chevron" />}
-          <Link to={to(c.to)}>{c.label}</Link>
-        </Fragment>
-      ))}
-      {!sub && <Icon name="chevron" />}
-    </nav>
-  );
   const head = (
     <header className="page-head pk-head">
       {/* a phone's back: to the thread the page was opened from, else up the trail */}
@@ -76,15 +65,8 @@ export function PageHead({ title, path, crumb, lead, after, actions, search, mor
         </Link>
       ) : null}
       {lead}
-      <div className={trail && !sub ? 'pk-title has-crumb' : 'pk-title'}>
-        {sub ? (
-          <div className="tv-where pk-where">
-            {trail}
-            {sub}
-          </div>
-        ) : (
-          trail
-        )}
+      <div className="pk-title">
+        {sub && <div className="tv-where pk-where">{sub}</div>}
         {onRename && renaming ? (
           <h1 data-target={`page:${path}`} className={big}>
             <EditableTitle

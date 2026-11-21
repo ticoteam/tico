@@ -75,7 +75,6 @@ export function TaskPage({ task, pipeline, tab, file, flow = false }: TaskPagePr
         // no name until the task's own arrives: a placeholder would reach the tab title and what a message sends as its page
         title={error ? 'Task' : ''}
         path={path}
-        crumb={flow ? [{ label: 'Flow', to: '/flow' }] : pipeline ? [{ label: 'Tasks', to: `/tasks/${pipeline}` }] : undefined}
         body={null}
         state={stateOf(error)}
         empty={{ title: 'No such task' }}
@@ -245,9 +244,6 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
       className={['tv', details && 'is-details', flow && 'is-flow', quiet && 'is-quiet'].filter(Boolean).join(' ')}
       title={quiet ? (sendTitle(t.title)?.subject ?? t.title) : t.title}
       path={address.to}
-      // Inside Flow too the trail is the task's pipeline (more.js where): Flow's own way back is its list, and a phone's row
-      // over the head.
-      crumb={[{ label: t.pipeline?.name ?? 'Tasks', to: `/tasks/${encodeURIComponent(t.pipeline_id ?? '')}` }]}
       sub={quiet ? <QuietLine t={t}>{send && <EmailSource t={t} send={send} />}</QuietLine> : <WhereLine t={t} />}
       // An approval's title is read, not renamed (the mock draws it plain): Details, under ⋯, renames it.
       onRename={quiet ? undefined : (title) => void rename(title)}

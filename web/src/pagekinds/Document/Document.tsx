@@ -22,7 +22,7 @@ export interface DocumentProps extends PageBaseProps {
   foot?: ReactNode;
 }
 
-/** Something to read and decide on: a spec, a QA report, an update, a skill. Comes with a small crumb trail. */
+/** Something to read and decide on: a spec, a QA report, an update, a skill. */
 export function Document({ tabs, body, framed = false, side, sideFacts = false, foot, ...page }: DocumentProps) {
   const under = useCards() && sideFacts;
   const aside = side && (

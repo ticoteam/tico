@@ -49,7 +49,6 @@ import './library.css';
    Flow mark; a skill opens as its text with who has it beside it; a proposal opens as its changes, with Approve and
    Send back at the foot for an admin (anyone else reads it only). */
 
-const CRUMB = [{ label: 'Skills', to: '/library/skills' }];
 const SKILL_COLUMNS = (
   <div className="skill-cols" aria-hidden="true">
     <span />
@@ -395,7 +394,6 @@ function SkillPage({ name }: { name: string }) {
     <Document
       title={name}
       path={`/library/skills?skill=${name}`}
-      crumb={CRUMB}
       className="lib"
       actions={
         <>
@@ -593,7 +591,6 @@ function ProposalPage({ id }: { id: string }) {
     <Document
       title={p?.name ?? 'Proposed change'}
       path={`/library/skills?proposal=${id}`}
-      crumb={CRUMB}
       className="lib"
       actions={<OwnerButton page="skills" />}
       more={
