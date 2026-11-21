@@ -1141,6 +1141,7 @@ def task_view(
     visible_sql: str | None = None,
     *,
     inputs: bool = False,
+    turn_for: str | None = None,
 ) -> Row | None:
     """The engine's part of a task as JSON (docs/dev/pipelines-v3-cutover.md, "The task as JSON"): where it is, whose
     turn it is, everything it needs to leave its stage, and what `viewer` may do about each. None when there is no
@@ -1234,7 +1235,9 @@ def task_view(
         "visit_id": visit.get("id") if live else None,
         "owner_id": row.get("owner_id"),
         "assignee_id": row.get("assignee_id"),
-        "turn": waits[0] if waits else None,
+        # A page several people approve is each approver's turn: `viewer` sees it as theirs (waiting_on.head_for).
+        # `turn_for`: the person the read is for (waiting_on.turn_viewer), apart from `viewer`, who decides access.
+        "turn": waits[raw_waits.index(head)] if (head := W.head_for(raw_waits, turn_for or viewer)) else None,
         "waits": waits,
         "to_leave": to_leave,
         "inputs": handed,

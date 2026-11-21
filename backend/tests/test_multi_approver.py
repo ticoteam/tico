@@ -151,21 +151,34 @@ def test_a_second_approver_answers_through_the_task_api(api):
         for slug in ("writer", "manager"):
             X.bot(conn, slug)
         rid = _shared(conn, ANA, BEN)
+        # An ordinary OK of Ben's with the same line, ahead of the shared page: it never takes the shared ask's place.
+        X.requirement(conn, "product-spec", "ok", person=BEN, line="Spec page", position=-1)
+        # One whose words are the shared ask's own dedupe key would collide if keys were text.
+        X.requirement(conn, "product-spec", "ok", person=BEN, line=f"shared:{rid}", position=-1)
         row = _task(conn)
         _, version = _submitted(conn, store, row)
-    for token in ("ana-test", "ben-test"):
+        # A bot's snooze heads the task's waits; each approver's turn is still their own ask.
+        E.snooze(
+            conn, row["id"], "bot:writer", "Waiting on the approval", seen_version=E.task(conn, row["id"])["version"]
+        )
+    for token, me in (("ana-test", ANA), ("ben-test", BEN)):
         read = api.get(f"/api/v2/tasks/{row['id']}", headers=headers(token))
+        turn = read.json()["task"]["turn"]
+        assert (turn["who"], turn["requirement_id"]) == (me, rid), f"{token}: the shared ask is their turn too"
+        listed = api.get(f"/api/v2/tasks?turn={me}&snoozed=all", headers=headers(token)).json()["tasks"]
+        assert [t["turn"]["who"] for t in listed if t["id"] == row["id"]] == [me], f"{token}: the board's mark"
         (entry,) = [e for e in read.json()["task"]["to_leave"] if e["requirement_id"] == rid]
         assert sorted(entry["may"]) == ["no", "ok"], token
         needs = api.get("/api/v2/needs-you", headers=headers(token)).json()
-        assert rid in json.dumps(needs), f"{token}: the ask is in Needs you"
+        (item,) = [i for i in needs["items"] if i.get("requirement_id") == rid]
+        assert item["task"]["turn"]["who"] == me, f"{token}: the ask's card in Needs you is theirs"
     ok = api.post(
         f"/api/v2/tasks/{row['id']}/asks/{rid}/answer",
         json={"value": "ok", "page_version": version, "visit_id": row["visit"]["id"]},
         headers=headers("ben-test"),
     )
     assert ok.status_code == 200, ok.text
-    assert ok.json()["task"]["stage"]["name"] == "Done"
+    assert ok.json()["task"]["stage"]["name"] == "Spec", "Ben's ordinary OK still waits"
 
 
 def test_a_stage_takes_a_list_of_approvers_for_a_document_approval_only(c, company):
@@ -300,3 +313,49 @@ def test_an_approver_taken_off_the_list_after_their_ok_no_longer_moves_the_stage
     done = next(r["id"] for r in R.for_visit(c, task["visit"]) if r["kind"] == "owner_done")
     A.answer(c, row["id"], done, "bot:writer", "done", seen_version=task["version"])
     assert E.task(c, row["id"])["stage"]["name"] == "Spec", "her OK no longer moves the stage"
+
+
+def test_a_page_unshared_between_the_read_and_the_write_is_refused_to_check_again(api, monkeypatch):
+    """A person's own click on a shared page skips the rule check; if the page is no longer shared by the write, the
+    write is refused to be sent again (and checked), never saved unchecked."""
+    store = api.app.state.store
+    store.blobs = store.blobs or Blobs(store.settings)
+    with store.transaction() as conn:
+        for slug in ("writer", "manager"):
+            X.bot(conn, slug)
+        rid = _shared(conn, ANA, BEN)
+        row = _task(conn)
+        _, version = _submitted(conn, store, row)
+    asked: list[str] = []
+
+    def shared_once(c, requirement_id):
+        asked.append(requirement_id)
+        return len(asked) == 1  # shared when the route reads it, single by the write
+
+    monkeypatch.setattr(T, "shared_page", shared_once)
+    sent = api.post(
+        f"/api/v2/tasks/{row['id']}/asks/{rid}/answer",
+        json={"value": "ok", "page_version": version, "visit_id": row["visit"]["id"]},
+        headers=headers("ana-test"),
+    )
+    assert sent.status_code == 409 and sent.json()["retryable"], sent.text
+    with store.read() as c:
+        assert c.execute("SELECT 1 FROM answers WHERE requirement_id=?", (rid,)).fetchone() is None
+
+
+def test_an_assistant_read_for_ben_shows_bens_turn_on_a_shared_page(c, company):
+    """`turn` is said to the person a read is for (`who.actor`), also when the Assistant acts for them
+    (`who.task_actor`): its read for Ben shows Ben's turn, as his own does; access stays the acting agent's."""
+    from backend import task_calls as TC
+    from backend import task_reads
+    from backend.auth import Identity
+
+    _shared(c, ANA, BEN)
+    row = _task(c)
+    _submitted(c, company, row)
+    who = Identity(BEN, "human", "ben@acme.example", via="assistant", task_actor="bot:assistant")
+    assert W.turn_viewer(who) == BEN
+    view = TC.task_view(c, row["id"], who.task_actor or who.actor, turn_for=W.turn_viewer(who))
+    assert view and view["turn"]["who"] == BEN
+    (brief,) = task_reads.brief(c, [{"id": row["id"]}], "1", W.turn_viewer(who))
+    assert brief["turn"]["who"] == BEN

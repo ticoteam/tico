@@ -261,7 +261,7 @@ def came_from(c: "sqlite3.Connection", ids: list[str]) -> dict[str, dict[str, st
     }
 
 
-def brief(c, rows, visible_sql="1"):
+def brief(c, rows, visible_sql="1", viewer=None):
     """The engine's fields of a list row (docs/dev/pipelines-v3-cutover.md, "The task as JSON", Brief), laid over each
     row in place: `turn` (the headline wait; `running` when a bot's turn is a run going now), `late`, `snoozed`,
     `blocked_by` and `blocks` (the open tasks it depends on and those it blocks, `_dependencies`; only where there are any),
@@ -315,7 +315,8 @@ def brief(c, rows, visible_sql="1"):
         )
     }
     blocked_by, blocks = _dependencies(c, ids, visible_sql)
-    heads = {tid: found[0] if found else None for tid, found in waits.items()}
+    # A page several people approve is each approver's turn: `viewer` sees it as theirs (waiting_on.head_for).
+    heads = {tid: W.head_for(found, viewer) for tid, found in waits.items()}
     named = sorted({head.about for head in heads.values() if head and head.about})
     shown = (
         {

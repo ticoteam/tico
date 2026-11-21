@@ -602,7 +602,10 @@ def readers(auth):
         viewer = (who.task_actor or who.actor) if who is not None else None
         # Another task it names is shown under the reader's whole rule, the one a direct read of that task uses.
         rule = auth.task_sql(c, who) if who is not None and visible_sql == "1" else visible_sql
-        value.update(H.task_view(c, row["id"], viewer, rule, inputs=True) or {"stage_since": None})
+        from . import waiting_on
+
+        turn_for = waiting_on.turn_viewer(who)
+        value.update(H.task_view(c, row["id"], viewer, rule, inputs=True, turn_for=turn_for) or {"stage_since": None})
         # The task above it by id only to a reader of that task: anyone else sees "a private task" under relations.
         parent = TR.parent_of(c, row["id"])
         value["parent_id"] = (
@@ -771,7 +774,9 @@ def readers(auth):
         # The rows each row's from_person reads, read for the whole page first; each row is still decided one at a
         # time by the same code below.
         views.prime_list_origins(c, visible_sql, rows)
-        task_reads.brief(c, rows, visible_sql)
+        from . import waiting_on
+
+        task_reads.brief(c, rows, visible_sql, waiting_on.turn_viewer(who))
         tags = list_tags(c, who, rows)
         result = []
         for row in rows:

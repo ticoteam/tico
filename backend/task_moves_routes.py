@@ -176,10 +176,12 @@ def register(
         ask: bool = False,
         late: bool = False,
         first: Callable[..., bool] | None = None,
+        unchecked: Callable[[Any, Any], bool] | None = None,
     ) -> None:
         """`also(c, params)`: actors the write reaches besides the task's people and `to` (an answer's asker). `late`:
         under rules that only warn, the write goes first and its check right after; its call says where its words went
-        (org_rule_check `late_on`)."""
+        (org_rule_check `late_on`). `unchecked(caller, params)`: a write no rule checks at all (a person's own click
+        on a page several people approve), so no check, nor its model, runs for it."""
         writes[operation] = {
             "model": model,
             "said": said,
@@ -190,6 +192,7 @@ def register(
             "ask": ask,
             "late": late,
             "first": first,
+            "unchecked": unchecked,
         }
 
     def carry(c: Any, who: Any, task_id: str, gate: Any, text: Any, version: Any) -> tuple[Any, Any]:
@@ -209,12 +212,18 @@ def register(
         params: Any = None,
         ingest: Any = None,
         replaying: bool = False,
+        unchecked: bool = False,
     ) -> dict[str, Any]:
-        """The write inside the store's write, through its verdict: held, nothing is written but the hold."""
+        """The write inside the store's write, through its verdict: held, nothing is written but the hold. `unchecked`:
+        no rule check ran for it (`checked`), which only a write the gate never holds may take."""
         spec = writes[operation]
         # Refuses before any hold could keep the write, and a replay of one that must not wait (Send anyway); True
         # for a direct human action the rule gate never holds.
-        if spec["first"] and spec["first"](c, who, task_id, body, params or {}, verdict, replaying):
+        ungated = bool(spec["first"] and spec["first"](c, who, task_id, body, params or {}, verdict, replaying))
+        if unchecked and not ungated:
+            # Read as never gated, and no longer so (the page stopped being shared): check it again, from the start.
+            raise Problem("task_changed", task_rule_gate.CHANGED, 409, retryable=True)
+        if ungated:
             return spec["call"](c, who, task_id, body, None, params or {}, ingest) or {}
         replay: dict[str, Any] = {
             "task": task_id,
@@ -260,8 +269,16 @@ def register(
 
     def checked(request: Request, tid: str, body: Any, operation: str, params: Any = None) -> Any:
         """A route's write: checked outside the store's write, then made through its verdict inside it."""
-        rc = check(request.state.identity, tid, body, operation, params)
-        return work(request, tid, body, lambda c, who, task_id: gated(c, who, task_id, body, rc, operation, params))
+        spec = writes[operation]
+        caller = request.state.identity
+        skip = bool(spec["unchecked"] and spec["unchecked"](caller, params))
+        rc = None if skip else check(caller, tid, body, operation, params)
+        return work(
+            request,
+            tid,
+            body,
+            lambda c, who, task_id: gated(c, who, task_id, body, rc, operation, params, unchecked=skip),
+        )
 
     def replays() -> None:
         """Send anyway on a held task write: the same write once, as its author, at the version it was checked at
@@ -915,7 +932,22 @@ def register(
         ).fetchone()
         return [found[0]] if found and found[0] else []
 
-    says("task_ask_answer", M.TaskAskAnswer, answer_said, answer_call, also=asker, first=answer_first)
+    def answer_unchecked(who: Any, params: Any) -> bool:
+        """A person's own click on a page several people approve: never gated (`answer_first`), so never checked."""
+        if not task_asks.own_click(who):
+            return False
+        with store.read() as c:
+            return task_asks.shared_page(c, params["requirement_id"])
+
+    says(
+        "task_ask_answer",
+        M.TaskAskAnswer,
+        answer_said,
+        answer_call,
+        also=asker,
+        first=answer_first,
+        unchecked=answer_unchecked,
+    )
 
     @app.post(
         "/api/v2/tasks/{tid}/asks/{requirement_id}/answer",

@@ -94,6 +94,7 @@ class Wait:
     fix: str | None = None
     href: str | None = None
     share: tuple[str, ...] | None = None
+    shared: bool = False  # an ask of one approver of a page several people approve (`of`); never leaves the server
 
 
 # What a reader who may not open a task this one filed is told of it (`unnamed`).
@@ -131,7 +132,7 @@ def view(wait: Wait, shown: Callable[[str], bool]) -> Row:
     """A wait as JSON for a reader (`unnamed`), without `about`: which task a line came from is the server's. `href` only
     when the line has a page to fix it on."""
     out = asdict(unnamed(wait, shown))
-    del out["about"], out["fix"]
+    del out["about"], out["fix"], out["shared"]
     if out["href"] is None:
         del out["href"]
     if out["share"] is None:
@@ -618,7 +619,8 @@ def of(
                     continue
                 readable = [who for who in everyone if not E.not_shared(conn, row, who)]
                 for who in readable or [None]:
-                    out.append(_turn(conn, row, who, line, requirement["id"], since, True, seen))
+                    asked = _turn(conn, row, who, line, requirement["id"], since, True, seen)
+                    out.append(replace(asked, shared=True) if who and asked.state == PERSON else asked)
                 continue
             named = standing.on or person_for(conn, row)
             if not requirement.get("visit_id") and not is_bot(named) and on_filed(requirement["id"], since):
@@ -708,10 +710,34 @@ def of(
             for blocker, since in blockers
         ]
     # Two requirements missing for the same reason ("No PR linked" for PR open and Checks pass) are one line.
-    once: dict[tuple[str, str | None, str], Wait] = {}
+    # A shared page's ask is kept by its requirement: an ordinary ask of the same person with the same line never
+    # takes its place (`head_for` finds it by its mark).
+    once: dict[tuple[str, str | None, tuple[str, str | None]], Wait] = {}
     for wait in out:
-        once.setdefault((wait.state, wait.who, wait.line), wait)
+        kept = ("shared", wait.requirement_id) if wait.shared else ("line", wait.line)
+        once.setdefault((wait.state, wait.who, kept), wait)
     return sorted(once.values(), key=lambda wait: _ORDER[wait.state])
+
+
+def heads(waits: Sequence[Wait]) -> list[Wait]:
+    """Whose turn a task is: its headline wait (the first), and each approver's ask of a page several people approve
+    (`Wait.shared`), wherever it stands in the list."""
+    return [*waits[:1], *(w for w in waits[1:] if w.shared)]
+
+
+def head_for(waits: Sequence[Wait], viewer: object = None) -> Wait | None:
+    """The wait a task's row and read show `viewer` as its turn: their ask of a page several people approve when they
+    are one of its approvers, else the headline. The same shape for every reader; only whose name it carries differs.
+    `viewer` is whoever the read is for: `who.task_actor or who.actor` (`turn_viewer`)."""
+    mine = next((w for w in waits if w.shared and viewer and w.who == viewer), None)
+    return mine or (waits[0] if waits else None)
+
+
+def turn_viewer(who: object) -> str | None:
+    """Whom a read's `turn` is said to: the caller's person (`who.actor`), also when an agent acts for them
+    (`who.task_actor`, the Assistant or BotOps), so their read shows that person's turn. Access is decided apart."""
+    found = getattr(who, "actor", None)
+    return str(found) if found else None
 
 
 def turns(conn: "sqlite3.Connection", row: Row, waits: Sequence[Wait] | None = None) -> set[str]:
