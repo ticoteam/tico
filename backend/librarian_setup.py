@@ -41,8 +41,9 @@ HEADINGS = {
     "competitors": "Who we compete with",
     "watch": "What to watch",
 }
-# The Librarian's own map and FAQ are not a person's docs: Docs is still empty with only those.
-OWN_DOCS = "path NOT LIKE '\\_librarian/%' ESCAPE '\\' AND path != 'FAQ.md'"
+# The Librarian's own map and FAQ, and the built-in constitution (org_rules.CONSTITUTION_PATH), are not a person's docs:
+# Docs is still empty with only those.
+OWN_DOCS = "path NOT LIKE '\\_librarian/%' ESCAPE '\\' AND path != 'FAQ.md' AND path != 'rules/constitution.md'"
 
 
 class DocsSetup(M.Contract):

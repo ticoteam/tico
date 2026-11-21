@@ -22,6 +22,7 @@ import type {
   ReachValues,
   Routine,
   RuleGroups,
+  RuleHistory,
   RuleHold,
   Repeats,
   RuleSource,
@@ -460,6 +461,32 @@ export const orgRulesQuery = (status: 'active' | 'suggested') =>
     queryKey: ['rules', 'org', status],
     queryFn: async ({ signal }) => (await api.get<{ rules: OrgRule[] }>(`/api/v2/rules?status=${status}&limit=100`, { signal })).rules,
   });
+
+/** One rule's versions and its last 30 days: its holds the reader may read and its check counts. */
+export const ruleHistoryQuery = (id: string) =>
+  queryOptions({
+    queryKey: ['rules', 'history', id],
+    queryFn: ({ signal }) => api.get<RuleHistory>(`/api/v2/rules/${enc(id)}/history`, { signal }),
+  });
+
+/** The constitution at the root of Rules: the locked doc at its path (backend/org_rules.py CONSTITUTION_PATH). */
+export const constitutionQuery = queryOptions({
+  queryKey: ['rules', 'constitution'],
+  queryFn: async ({ signal }) => {
+    const r = await api.get<{ docs: { id: string; title: string; locked: boolean }[] }>('/api/v2/docs?path_prefix=rules/constitution.md&limit=1', { signal });
+    return r.docs[0] ?? null;
+  },
+  ...quiet,
+});
+
+/** "Make this a rule": the words become a task for the Rules page's owner, who drafts it and asks one OK. */
+export function makeRule(text: string) {
+  return write<{ task_id: string; owner: string }>({
+    key: [orgRulesQuery('suggested').queryKey],
+    optimistic: (cur: unknown) => cur,
+    send: (idempotencyKey) => api.post<{ task_id: string; owner: string }>('/api/v2/rules/make', { text }, { idempotencyKey }),
+  });
+}
 
 export interface StageRules {
   items: StageRule[];

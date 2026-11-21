@@ -21,9 +21,9 @@ import { RULES, type RuleTab } from './actions';
 import { PartyPick, useNamer } from './CompanyRules';
 import { DuePanel } from './DuePanel';
 import { Face, press, RemoveItem, useConfirmRemove, useName, Verb, Word } from './parts';
-import { holdsQuery, orgRulesQuery, partiesOf, ruleSourcesQuery, stageRulesQuery, teamsQuery } from './queries';
-import type { OrgRule, RuleHold, StageRule } from './types';
-import { agentWords, BROKEN, cap, dayWords, STAGE_EVENTS, STAGE_THENS, STAGE_TIMERS, stageParts } from './words';
+import { orgRulesQuery, partiesOf, ruleHistoryQuery, ruleSourcesQuery, stageRulesQuery, teamsQuery } from './queries';
+import type { OrgRule, RuleHold, RuleVersion, StageRule } from './types';
+import { agentWords, BROKEN, cap, dayWords, exactWords, STAGE_EVENTS, STAGE_THENS, STAGE_TIMERS, stageParts } from './words';
 
 /* One rule, as a panel (rules.js rulePanel): When, Check and Then as facts, then the tasks it holds. Edit turns the
    panel into the rule's editor; `org:new` and `stage:new` open the editor empty. */
@@ -102,6 +102,12 @@ function OrgView({ id, onClose }: { id: string; onClose: () => void }) {
           </blockquote>
         )}
       </section>
+      {r.exact_check && (
+        <section className="rail-sec">
+          <h3>Checked exactly</h3>
+          <p className="inst t-read">{exactWords(r.exact_check)}</p>
+        </section>
+      )}
       {(dues.length > 0 || (r.can_edit && !tmp)) && (
         <section className="rail-sec">
           <h3>
@@ -122,7 +128,7 @@ function OrgView({ id, onClose }: { id: string; onClose: () => void }) {
           {!!r.due_more && <p className="row-sub">{`${r.due_more} more`}</p>}
         </section>
       )}
-      {!tmp && <Holds id={r.id} />}
+      {!tmp && <History id={r.id} />}
       {remove.node}
     </SidePanel>
   );
@@ -435,22 +441,70 @@ function StageEditor({ rule, onDone, onClose }: { rule?: StageRule; onDone: () =
   );
 }
 
-// ---------------------------------------------------------------- what a rule holds
+// ---------------------------------------------------------------- a rule's history
 
 /** A hold's state, as its row's mark says it: held until its reviewer sends it anyway or keeps it blocked. */
 const HOLD_MARK: Record<string, string> = { held: 'Waits on you', sent: 'Sent anyway', kept: 'Kept blocked' };
 
-function Holds({ id }: { id: string }) {
-  const q = useQuery(holdsQuery);
-  const list = (q.data ?? []).filter((h) => h.rules.some((r) => r.id === id));
-  if (!list.length) return null;
+/** The check outcomes a rule's last 30 days count, in the order they are said. */
+const OUTCOMES: [string, string][] = [
+  ['rules.refused', 'refused'],
+  ['rules.blocked', 'stopped'],
+  ['rules.held', 'held'],
+  ['rules.escalated', 'asked first'],
+  ['rules.warned', 'warned'],
+  ['rules.unchecked', 'unchecked'],
+  ['rules.passed', 'passed'],
+];
+
+/** What one version changed, in a word or two. */
+function versionWords(v: RuleVersion): string {
+  const a = v.after;
+  const b = v.before;
+  if (!b) return a?.status === 'suggested' ? 'Suggested' : 'Added';
+  if (!a) return 'Removed';
+  if (b.status !== a.status) return a.status === 'active' ? 'Added' : a.status === 'retired' ? (b.status === 'suggested' ? 'Set aside' : 'Removed') : 'Changed';
+  const changed: [keyof OrgRule, string][] = [
+    ['text', 'Words'],
+    ['who', 'Who'],
+    ['if_broken', 'If broken'],
+    ['exact_check', 'Checked exactly'],
+  ];
+  const said = changed.filter(([k]) => JSON.stringify(b[k] ?? null) !== JSON.stringify(a[k] ?? null)).map(([, w]) => w);
+  return said.length ? `Changed ${said.join(', ').toLowerCase()}` : 'Changed';
+}
+
+/** Its versions, newest first, then its last 30 days: the check counts and the holds the reader may read. */
+function History({ id }: { id: string }) {
+  const q = useQuery(ruleHistoryQuery(id));
+  if (!q.data) return null;
+  const { counts, holds } = q.data;
+  // the rule's own versions (its due dates write their audit rows under the rule too), newest first
+  const versions = q.data.versions.filter((v) => v.after?.version != null).sort((a, b) => (b.after?.version ?? 0) - (a.after?.version ?? 0));
+  const said = OUTCOMES.filter(([k]) => counts[k]).map(([k, w]) => `${counts[k]} ${w}`);
   return (
-    <section className="rail-sec">
-      <h3>Holds</h3>
-      {list.map((h) => (
-        <HoldRow key={h.id} h={h} />
-      ))}
-    </section>
+    <>
+      <section className="rail-sec" aria-label="Last 30 days">
+        <h3>Last 30 days</h3>
+        <p className="row-sub">{said.length ? said.join(', ') : 'Nothing checked'}</p>
+        {holds.map((h) => (
+          <HoldRow key={h.id} h={h} />
+        ))}
+      </section>
+      {versions.length > 0 && (
+        <section className="rail-sec" aria-label="Versions">
+          <h3>Versions</h3>
+          {versions.map((v) => (
+            <Row key={v.id} className="hold" title={versionWords(v)} target={`version:${v.id}`}>
+              <span className="hold-mark">{`v${v.after?.version ?? ''}`}</span>
+              <span className="row-title">{versionWords(v)}</span>
+              <Face id={v.actor} />
+              <Ago at={v.created_at} className="row-age" />
+            </Row>
+          ))}
+        </section>
+      )}
+    </>
   );
 }
 

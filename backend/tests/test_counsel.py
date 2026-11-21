@@ -1614,3 +1614,108 @@ def test_a_stateless_bots_task_keeps_its_own_session_lane_and_checkpoint_even_on
         assert [link["url"] for link in H.task_links(c, task) if link["kind"] == "session"] == [
             "session:rules-owner/t-counsel"
         ]
+
+
+def test_make_this_a_rule_is_one_clerk_task_whose_one_ok_adds_exactly_what_was_shown(api):
+    """ "Make this a rule" files a private task for the Rules page's owner with the constitution in it; the clerk's
+    suggestion and its one OK ask; the person's OK adds that version as them, typed check and all, and ends the task.
+    Nobody else asks for the clerk's suggestion, and the constitution is changed by people only."""
+    org(api)
+    counsel_on(api)
+    with api.app.state.store.transaction() as c:
+        doc_id = O.ensure_constitution(c)
+    assert doc_id
+    made = post(api, "rules/make", {"text": "Never refund more than $100 without Ben."})
+    with api.app.state.store.read() as c:
+        task = H.task(c, made["task_id"])
+        words = H.task_words(c, made["task_id"])
+    assert task["owner_id"] == "bot:rules-owner" and task["private"]
+    assert "Never refund more than $100" in words and "## Order of law" in words
+    run = headers(counsel_run(api)[1]["token"])
+    cap = {"kind": "max_usd", "action": "refund", "field": "amount_usd", "max_usd": 100}
+    suggested = api.post(
+        "/api/v2/rules",
+        headers=run,
+        json={
+            "kind": "internal",
+            "text": "Refunds over $100 go to Ben first.",
+            "who": {"bots": ["ops"]},
+            "exact_check": cap,
+        },
+    ).json()
+    assert suggested["status"] == "suggested"
+    ops = api.post(
+        f"/api/v2/rules/{suggested['id']}/ok", headers=headers("ops-test"), json={"task_id": made["task_id"]}
+    )
+    assert ops.status_code == 403, ops.text
+    asked = api.post(f"/api/v2/rules/{suggested['id']}/ok", headers=run, json={"task_id": made["task_id"]})
+    assert asked.status_code == 200, asked.text
+    rid = asked.json()["requirement_id"]
+    assert asked.json()["asked_of"] == "human:ana"
+    shown = get(api, f"oks/{rid}")["shown_hash"]
+    ok = api.post(
+        f"/api/v2/tasks/{made['task_id']}/asks/{rid}/ok", headers=headers("ana-test"), json={"shown_hash": shown}
+    )
+    assert ok.status_code == 200, ok.text
+    added = get(api, f"rules/{suggested['id']}")
+    assert added["status"] == "active" and added["exact_check"] == cap and added["decided_by"] == "human:ana"
+    with api.app.state.store.read() as c:
+        assert H.task(c, made["task_id"])["status"] == "done"
+        assert c.execute("SELECT locked FROM docs WHERE id=?", (doc_id,)).fetchone()[0] == 1
+    # The constitution: a bot never changes it, nor the owner's Assistant acting for them; the owner does.
+    doc = get(api, f"docs/{doc_id}")["doc"]
+    change = {"version": doc["version"], "body": doc["body"] + "\nOne more line."}
+    assert api.patch(f"/api/v2/docs/{doc_id}", headers=headers("ops-test"), json=change).status_code == 403
+    store = api.app.state.store
+    store.settings.test_identities["ana-assistant"] = Identity("human:ana", "owner", via="assistant")
+    assert api.patch(f"/api/v2/docs/{doc_id}", headers=headers("ana-assistant"), json=change).status_code == 403
+    assert api.patch(f"/api/v2/docs/{doc_id}", headers=headers("ana-test"), json=change).status_code == 200
+
+
+def test_the_cli_makes_a_rule_asks_its_ok_reads_its_history_and_sends_a_typed_check():
+    """`tico rules make|ok|history` and `--exact` reach their routes with the bodies the server reads; the clerk's OK
+    ask is in the Rules Owner's tool list, and the Assistant may make a rule for its person."""
+    from clients import cli_spec, hubcli, hubtools
+
+    sent = []
+
+    class Api:
+        def get(self, path, **query):
+            if path == "me":
+                return {"actor": "human:ana", "role": "owner", "kind": "owner"}
+            sent.append(("GET", path, None))
+            return {}
+
+        def post(self, path, body=None, key=None):
+            sent.append(("POST", path, body))
+            return {}
+
+    def run(*words):
+        line = hubcli.parser().parse_args(list(words))
+        name, args = cli_spec.of(line).prepare(line)
+        return hubtools.BY_NAME[name]["fn"](Api(), args)
+
+    cap = '{"kind": "max_usd", "action": "refund", "field": "amount_usd", "max_usd": 100}'
+    run("rules", "make", "Refunds over $100 need Ben")
+    run("rules", "ok", "r1", "--task", "T1")
+    run("rules", "history", "r1")
+    run("rules", "add", "--kind", "internal", "--text", "Refunds over $100 go to Ben.", "--who", "ops", "--exact", cap)
+    run("rules", "edit", "r1", "--version", "2", "--exact", "{}")
+    assert sent == [
+        ("POST", "rules/make", {"text": "Refunds over $100 need Ben"}),
+        ("POST", "rules/r1/ok", {"task_id": "T1"}),
+        ("GET", "rules/r1/history", None),
+        (
+            "POST",
+            "rules",
+            {
+                "kind": "internal",
+                "text": "Refunds over $100 go to Ben.",
+                "who": {"names": ["ops"]},
+                "exact_check": json.loads(cap),
+            },
+        ),
+        ("POST", "rules/r1", {"version": 2, "exact_check": {}}),
+    ]
+    assert "tico_rules_ok" in hubtools.COUNSEL_TOOLS
+    assert "tico_rules_make" in {t["name"] for t in hubtools.listing(kind="assistant")}

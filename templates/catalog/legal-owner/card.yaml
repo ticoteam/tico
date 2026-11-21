@@ -67,6 +67,7 @@ recommend_when: [sells_to_businesses, sells_to_consumers, uses_docs, uses_email]
 # Requests to the legal desk and tasks it files stay with their two participants.
 private_tasks_default: true
 shared_files:
+  - .claude/skills/clerk-a-rule
   - .claude/skills/check-a-legal-deadline
   - .claude/skills/write-a-counsel-brief
   - .claude/skills/manage-insurance

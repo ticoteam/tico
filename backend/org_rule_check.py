@@ -833,6 +833,26 @@ def structured_check(c, author, operation, *, targets=(), contacts=()):
     return DR.check(c, author, list(targets), operation, contacts=list(contacts))
 
 
+def exact_check(c, author, action, params, recipients=(), place=None):
+    """The rules in force for this write whose typed check (org_rules.exact_check) is about `action` and that `params`
+    break, strictest first: each {id, version, text, if_broken, reason}. Empty when none is. Stateless and engine-free (it
+    reads the rules and the params, nothing else), so it runs inside the write's transaction, under its lock."""
+    broken = []
+    for row in R.matching(c, author, recipients, place):
+        reason = R.exact_broken(row["exact_check"], action, params)
+        if reason:
+            broken.append(
+                {
+                    "id": row["id"],
+                    "version": row["version"],
+                    "text": row["text"],
+                    "if_broken": row["if_broken"],
+                    "reason": reason,
+                }
+            )
+    return sorted(broken, key=lambda r: -STRICT[r["if_broken"]])
+
+
 def _emails(c, actors):
     """The addresses of the people among `actors`. A structured rule reads a person's address as its entity (the email
     identifier) and as the organization whose domain it is."""
@@ -2586,6 +2606,16 @@ def holds_listed(c, who, task_id="", thread="", cursor=None, limit=HOLD_LIST_MAX
     else:
         scope, scope_args = "state='held'", ()
     return _page(c, who, f"{scope} AND {where}", (*scope_args, *args), cursor, limit, auth, fallback)
+
+
+def holds_of_rule(c, who, rule_id, since, cursor=None, limit=HOLD_LIST_MAX, auth=None):
+    """One page of the holds of one rule made since `since` that the caller may read, as summaries (`_page`): a rule's
+    history (org_rules.history)."""
+    where, args, fallback = _reader_sql(who)
+    if not where:
+        return [], None
+    scope = "created_at>=? AND EXISTS (SELECT 1 FROM json_each(rule_ids) WHERE value=?)"
+    return _page(c, who, f"{scope} AND {where}", (since, rule_id, *args), cursor, limit, auth, fallback)
 
 
 def holds_for_task(c, who, task_id, cursor=None, limit=HOLD_LIST_MAX, auth=None):

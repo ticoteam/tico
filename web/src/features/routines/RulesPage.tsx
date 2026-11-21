@@ -3,14 +3,18 @@ import { useState, type ReactNode } from 'react';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
+import { Field } from '@/kit/Field';
+import { Icon } from '@/kit/Icon';
+import { Link } from '@/kit/Link';
+import { Row } from '@/kit/Row';
 import { MenuItem } from '@/kit/Menu';
 import { pipelinesQuery, type Pipeline } from '@/features/tasks/routing';
 import { List, PageMore, Section, type PageTab } from '@/pagekinds';
 import { hasWho, ROUTINES, RULES, type RuleTab } from './actions';
 import { CompanyRules, holdsOf, OrgRuleRow, partiesOf, PartyPick } from './CompanyRules';
-import { Find, press, RemoveItem, Rows, RuleRow, useConfirmRemove, useName } from './parts';
+import { Find, press, pressOut, RemoveItem, Rows, RuleRow, useConfirmRemove, useName } from './parts';
 import { ReadDocument } from './ReadDocument';
-import { dueQuery, holdsQuery, orgRulesQuery, routinesQuery, ruleGroupsQuery, stageRulesQuery, teamsQuery } from './queries';
+import { constitutionQuery, dueQuery, holdsQuery, orgRulesQuery, routinesQuery, ruleGroupsQuery, stageRulesQuery, teamsQuery } from './queries';
 import { RulePanel } from './RulePanel';
 import type { DueDate, Group, OrgRule, Routine, StageRule } from './types';
 import { agentWords, dayWords, runnerOf, stageParts, triggerWords } from './words';
@@ -18,8 +22,9 @@ import './routines.css';
 
 /* Rules (pages/3-company/rules.js): one List, eight tabs on `?tab=`. Every rule is one dense row with no title; a row
    opens its rule in `?panel=` (`org:<id>`, `stage:<id>`, a due date's `due:<id>`), where it is read, changed or
-   removed. Wakes and routines on tasks are routines: their rows open the routine on Routines. The head's "⋯" adds a
-   due date or a document to read for outside rules. */
+   removed. Wakes and routines on tasks are routines: their rows open the routine on Routines. The constitution, a doc
+   only people change, heads Company. The head's "⋯" adds a due date or a document to read for outside rules, or makes
+   words into a rule (the Rules owner drafts it and asks one OK). */
 
 export interface RulesSearch {
   tab?: Exclude<RuleTab, ''>;
@@ -95,6 +100,7 @@ export function RulesPage({ search }: { search: RulesSearch }) {
 function Page({ search, asked, state, retry, empty, dialogs, children }: Omit<TabProps, 'confirm'> & { state: State; retry?: () => void; empty: string; dialogs?: ReactNode; children: ReactNode }) {
   const t: RuleTab = search.tab ?? '';
   const [reading, setReading] = useState(false);
+  const [making, setMaking] = useState(false);
   const kind = t === 'stages' ? 'stage' : t === 'outside' ? 'outside' : 'org';
   const add = (
     <Button variant="primary" onClick={() => press('rules.new', { kind })}>
@@ -114,12 +120,14 @@ function Page({ search, asked, state, retry, empty, dialogs, children }: Omit<Ta
           {asked}
           {dialogs}
           {reading && <ReadDocument onClose={() => setReading(false)} />}
+          {making && <MakeRule onClose={() => setMaking(false)} />}
         </>
       }
       more={
         <PageMore>
           <MenuItem label="Add due date" icon="calendar" onSelect={() => void press('rules.newDue', {})} />
           <MenuItem label="Add document" icon="file" onSelect={() => setReading(true)} />
+          <MenuItem label="Make this a rule" icon="edit" onSelect={() => setMaking(true)} />
         </PageMore>
       }
       state={state}
@@ -141,8 +149,73 @@ function useTeamName() {
 function CompanyTab({ search, confirm, asked }: TabProps) {
   return (
     <Page search={search} asked={asked} state="ready" empty="No rules yet">
+      <Constitution />
       <CompanyRules who={search.who ?? '*'} panel={search.panel} confirm={confirm} q={search.q} />
     </Page>
+  );
+}
+
+/** The constitution at the root of Rules: the locked doc only people change. Nothing until the company has one. */
+function Constitution() {
+  const doc = useQuery(constitutionQuery).data;
+  if (!doc) return null;
+  return (
+    <Row className="rule rr-law" title={doc.title} href={`/library/${encodeURIComponent(doc.id)}`} target="constitution">
+      <span className="rule-how" title="Only people change it">
+        <Icon name="lock" />
+      </span>
+      <span className="row-title">{doc.title}</span>
+    </Row>
+  );
+}
+
+/** "Make this a rule": the words go to the Rules owner, who drafts the rule and asks for one OK; then a link to its task. */
+function MakeRule({ onClose }: { onClose: () => void }) {
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [task, setTask] = useState<string | null>(null);
+  const ready = text.trim().length >= 3;
+  const go = async () => {
+    setBusy(true);
+    const r = await pressOut<{ task_id: string }>('rules.make', { text: text.trim() });
+    setBusy(false);
+    if (r?.out) setTask(r.out.task_id);
+  };
+  // one dialog throughout: swapping it for another on send would hand focus back to the page's "⋯"
+  return (
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title="Make this a rule"
+      description={task ? 'The Rules owner drafts it and asks you to OK it.' : undefined}
+      actions={
+        task ? (
+          <>
+            <Link className="verb" href={`/task/${encodeURIComponent(task)}`} onClick={onClose}>
+              Open task
+            </Link>
+            <Button variant="primary" onClick={onClose}>
+              Done
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button variant="quiet" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button variant="primary" busy={busy} disabled={!ready} onClick={() => go()}>
+              Send
+            </Button>
+          </>
+        )
+      }
+    >
+      {!task && (
+        <div className="rr-form">
+          <Field label="Rule" area value={text} onValueChange={setText} placeholder="Refunds over $100 go to Ben first" autoFocus />
+        </div>
+      )}
+    </Dialog>
   );
 }
 

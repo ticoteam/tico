@@ -106,6 +106,7 @@ ASSISTANT_WRITES = {
     "tico_settings_set",
     "tico_rules_read",
     "tico_rules_ask",
+    "tico_rules_make",
     # People view; the Assistant books for them (decision 13).
     "tico_calendar_add",
     "tico_calendar_move",
@@ -247,6 +248,8 @@ AUDIENCE = {
     # A bot checks its own drafts and appeals its own holds; a person's writes are never checked.
     "tico_rules_check": BOTS,
     "tico_rules_appeal": BOTS,
+    # Whoever suggested a rule asks its OK: a bot (a person adds a rule directly).
+    "tico_rules_ok": BOTS,
     "tico_rules_withdraw": PEOPLE + BOTS,
     # A bot does not unsnooze (docs/dev/pipelines-v3-cutover.md, Bot commands): a person brings a task back.
     "tico_task_unsnooze": HUMANS_AND_ASSISTANT,
@@ -324,6 +327,7 @@ COUNSEL_TOOLS = frozenset(
         "tico_rules_list",
         "tico_rules_get",
         "tico_rules_add",
+        "tico_rules_ok",
         "tico_file_read",
         "tico_task_comment",
         "tico_task_close",
@@ -467,6 +471,8 @@ ASSISTANT_TOOLS = frozenset(
         "tico_rules_get",
         "tico_rules_read",
         "tico_rules_ask",
+        "tico_rules_make",
+        "tico_rules_history",
         "tico_settings_find",
         "tico_settings_show",
         "tico_settings_set",

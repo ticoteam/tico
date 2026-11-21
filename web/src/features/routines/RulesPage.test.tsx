@@ -7,7 +7,20 @@ import { ActionsRoot } from '@/actions';
 import { queryClient } from '@/data';
 import { pipelinesQuery } from '@/features/tasks/exports';
 import { validateRulesSearch } from './load';
-import { dueQuery, holdsQuery, orgRulesQuery, reachQuery, routinesQuery, ruleGroupsQuery, ruleSourcesQuery, stageRulesQuery, teamsQuery, type StageRules } from './queries';
+import {
+  constitutionQuery,
+  dueQuery,
+  holdsQuery,
+  orgRulesQuery,
+  reachQuery,
+  routinesQuery,
+  ruleGroupsQuery,
+  ruleHistoryQuery,
+  ruleSourcesQuery,
+  stageRulesQuery,
+  teamsQuery,
+  type StageRules,
+} from './queries';
 import { RulesPage } from './RulesPage';
 import { StageRules as StageRulesList } from './StageRules';
 import type { OrgRule, Reach, Routine, StageRule } from './types';
@@ -189,6 +202,49 @@ describe('Rules: the page and Company', () => {
     expect(sent[0]!.body).toMatchObject({ version: 4, text: 'Ship only from main, always', who: { groups: ['g1'], people: ['ann'] } });
     expect(sent[0]!.body).not.toHaveProperty('with');
     expect(sent[0]!.body).not.toHaveProperty('description');
+  });
+});
+
+describe('Rules: checked exactly, history, the constitution and the clerk', () => {
+  it('a rule with a typed check says Checked exactly, then its last 30 days and its versions, newest first', async () => {
+    record();
+    company([org({ id: 'o7', text: 'Refunds over $100 go to Ben first', exact_check: { kind: 'max_usd', action: 'refund', field: 'amount_usd', max_usd: 100 } })]);
+    queryClient.setQueryData(ruleHistoryQuery('o7').queryKey, {
+      versions: [
+        { id: 'a1', created_at: '2026-11-19T10:00:00Z', actor: 'bot:rel', before: null, after: { status: 'suggested', version: 1 } },
+        { id: 'd1', created_at: '2026-11-19T11:00:00Z', actor: 'human:ann', before: null, after: { due: 'd1' } as never },
+        { id: 'a2', created_at: '2026-11-20T10:00:00Z', actor: 'human:ann', before: { text: 'Refunds go to Ben', status: 'active', version: 1 }, after: { text: 'Refunds over $100 go to Ben first', status: 'active', version: 2 } },
+      ],
+      counts: { 'rules.blocked': 2, 'rules.warned': 1 },
+      holds: [{ id: 'h1', state: 'held', created_at: '2026-11-20T11:00:00Z', author: 'bot:rel', rules: [{ id: 'o7' }], to: ['Ann Lee'] }],
+    });
+    show('/company/rules?panel=org:o7');
+    const panel = await screen.findByRole('complementary', { name: 'Rule' });
+    expect(within(panel).getByText('refund: amount_usd at most $100')).toBeTruthy();
+    const days = within(panel).getByRole('region', { name: 'Last 30 days' });
+    expect(within(days).getByText('2 stopped, 1 warned')).toBeTruthy();
+    expect(within(days).getByTitle('Ann Lee')).toBeTruthy();
+    const versions = within(panel).getByRole('region', { name: 'Versions' });
+    expect(within(versions).getAllByText(/Changed words|Suggested/).map((e) => e.textContent)).toEqual(['Changed words', 'Suggested']);
+    expect(within(panel).getByRole('heading', { name: 'Checked exactly' })).toBeTruthy();
+    expect(within(versions).queryByText('Added')).toBeNull(); // a due date's audit row is not a version
+  });
+
+  it('the constitution heads Company and opens its doc; Make this a rule sends the words and links the task', async () => {
+    const sent = record((url, method) => (method === 'POST' && url.endsWith('/api/v2/rules/make') ? ok({ task_id: 't9', owner: 'bot:rules-owner' }) : nothing()));
+    company([]);
+    queryClient.setQueryData(constitutionQuery.queryKey, () => ({ id: 'doc-1', title: 'Constitution', locked: true }));
+    show('/company/rules');
+    expect(href(await screen.findByTitle('Constitution'))).toBe('/library/doc-1');
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Make this a rule' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Make this a rule' });
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Rule' }), { target: { value: '  Refunds over $100 go to Ben first ' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]!.body).toEqual({ text: 'Refunds over $100 go to Ben first' });
+    const done = await screen.findByRole('dialog', { name: 'Make this a rule' });
+    expect(href(await within(done).findByRole('link', { name: 'Open task' }))).toBe('/task/t9');
   });
 });
 

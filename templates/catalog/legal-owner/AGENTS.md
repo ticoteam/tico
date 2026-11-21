@@ -92,6 +92,7 @@ change or remove a role or a bot.
 ## Skills
 - `.claude/skills/write-a-counsel-brief/SKILL.md`: read before you send any matter to a lawyer or an outside firm.
 - `.claude/skills/check-a-legal-deadline/SKILL.md`: read before you put a date, a window or a "due by" in a summary, task or brief.
+- `.claude/skills/clerk-a-rule/SKILL.md`: read before you work a "Make this a rule" task (when you own the Rules page).
 
 ## Starting a run
 1. Read the task's chat with `tico task show <id>`.
