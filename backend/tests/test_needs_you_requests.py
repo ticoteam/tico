@@ -2,6 +2,8 @@
 proposals, each through its own list and authority check, and only to someone who may settle it. Ana owns the company
 and Ben is an admin (both credential administrators); Cara is a member. Ops owns the Tools page."""
 
+import pytest
+
 from backend import api_tools
 from backend.tests.helpers import credentials as creds
 from backend.tests.helpers.api import claim, get, headers, post, put
@@ -189,30 +191,40 @@ def test_a_key_proposal_whose_tools_are_all_deleted_is_superseded(api, monkeypat
     assert (
         post(api, f"tools-chat/proposals/{mid}/grant", {"keep": [0], "positions": "original"})["state"] == "superseded"
     )
+    post(api, f"tools-chat/proposals/{mid}/grant", {"keep": [0]}, expected=409)  # and after it, still 409
+
+
+def test_a_deleted_tool_is_recorded_on_a_proposal_from_a_former_tools_owner(api, monkeypatch):
+    import json
+
+    _, mid, _ = world(api, monkeypatch)
+    put(api, "page-owners/tools", {"bot": "cpo"})  # ops no longer owns the Tools page
+    with api.app.state.store.read() as c:
+        crm = c.execute("SELECT id FROM tools WHERE name='Close CRM'").fetchone()[0]
+    assert api.delete(f"/api/v2/api-tools/{crm}", headers=headers()).status_code == 200
+    with api.app.state.store.read() as c:
+        refs = json.loads(c.execute("SELECT refs FROM messages WHERE id=?", (mid,)).fetchone()[0])
+    assert refs["key_grant"]["gone"] == [0]
 
 
 def test_grant_takes_a_rows_tool_by_its_id_alone(api, monkeypatch):
-    # A tool named like the row's tool id is added: Grant attaches the key to the row's own tool, never that one.
+    # A lookalike tool, stored before the row's own one (an id-or-name lookup finds it first), is named like the row's
+    # tool id: Grant attaches the key to the row's own tool, never the lookalike.
     _, mid, _ = world(api, monkeypatch)
-    with api.app.state.store.read() as c:
+    with api.app.state.store.transaction() as c:
         crm = c.execute("SELECT id FROM tools WHERE name='Close CRM'").fetchone()[0]
-    named = tool(api, crm.upper())["id"]
-    assert named != crm
+        columns = [r[1] for r in c.execute("PRAGMA table_info(tools)")]
+        copied = ",".join("?" if col in ("id", "name") else col for col in columns)
+        c.execute(
+            f"INSERT INTO tools({','.join(columns)}) SELECT {copied} FROM tools WHERE id=?",
+            [("lookalike" if col == "id" else crm) for col in columns if col in ("id", "name")] + [crm],
+        )
+        c.execute("UPDATE tools SET rowid=-1 WHERE id='lookalike'")  # stored first
     card = requests(api, "ana-test")["key_drop"]["key_drop"]
     body = {"keep": [0], "seen": card["losses"], "positions": "original"}
     assert post(api, f"tools-chat/proposals/{mid}/grant", body)["state"] == "granted"
     with api.app.state.store.read() as c:
         assert c.execute("SELECT tool_id FROM credentials WHERE name='JIRA_LOGIN'").fetchone()[0] == crm
-    # Grant's stored rows name a tool by its id alone: a name finds nothing there.
-    import pytest
-
-    from backend import key_grants
-    from backend.store import Problem
-
-    with api.app.state.store.read() as c:
-        assert key_grants._tool(c, "Close CRM")["id"] == crm  # pyright: ignore[reportPrivateUsage]
-        with pytest.raises(Problem):
-            key_grants._tool(c, "Close CRM", exact=True)  # pyright: ignore[reportPrivateUsage]
 
 
 def test_a_grant_from_a_card_whose_loss_preview_moved_is_refused(api, monkeypatch):
@@ -293,7 +305,8 @@ def test_a_task_key_card_is_neither_listed_nor_saved_once_its_person_cannot_read
     post(api, f"credential-requests/{card['id']}/save", {"value": NEW}, "cara-test", expected=404)
 
 
-def test_a_proposal_with_one_deleted_tool_lists_and_grants_the_other_row(api, monkeypatch):
+@pytest.mark.parametrize("keep_all", [False, True])
+def test_a_proposal_with_one_deleted_tool_lists_and_grants_the_other_row(api, monkeypatch, keep_all):
     # Two keys for two tools; Acme Ads is deleted. Needs you leaves its row out, the other keeps its place (`at`), and
     # Grant takes that place, named twice or not.
     machine, _ = setup(api)
@@ -343,5 +356,7 @@ def test_a_proposal_with_one_deleted_tool_lists_and_grants_the_other_row(api, mo
         attached = c.execute("SELECT name FROM credentials WHERE tool_id IS NOT NULL AND name LIKE '%_LOGIN'")
         assert [r[0] for r in attached] == []
     body = {"keep": [1, 1], "seen": card["losses"], "positions": "original"}
+    if keep_all:  # no keep: every row still on the card
+        body = {"seen": card["losses"], "positions": "original"}
     done = post(api, f"tools-chat/proposals/{proposal['id']}/grant", body)
     assert done["state"] == "granted" and [r["key"] for r in done["rows"]] == ["JIRA_LOGIN"]

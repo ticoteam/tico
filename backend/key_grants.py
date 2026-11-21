@@ -327,21 +327,20 @@ def proposed_for(c: Any, vault: Any, who: Any) -> list[Row]:
             r | {"at": at, "replaces": _replaced(c, r, owner)} for at, r in enumerate(card["rows"]) if at not in gone
         ]
         if rows and _refusal(c, vault, who, rows) is None:
-            shown = {"losses": losses(c, card["rows"], owner), "message_id": m["id"], "created_at": m["created_at"]}
+            kept = [r for at, r in enumerate(card["rows"]) if at not in gone]
+            shown = {"losses": losses(c, kept, owner), "message_id": m["id"], "created_at": m["created_at"]}
             out.append(card | {"rows": rows, "by": owner} | shown)
     return out
 
 
 def tool_gone(c: Any, tool_id: str) -> None:
-    """A tool was deleted: each person with a proposal naming it hears that their Needs you moved (its row leaves)."""
-    owner = _owner(c)
-    if not owner:
-        return
+    """A tool was deleted: on every open proposal naming it, whoever owns the Tools page now or proposed it, the place is
+    recorded gone, and each person with one hears that their Needs you moved (its row leaves)."""
     people: list[str] = []
     for m in c.execute(
-        "SELECT id, refs FROM messages WHERE sender_id=? AND kind='notice' AND json_extract(refs,'$.card')=? "
+        "SELECT id, refs FROM messages WHERE kind='notice' AND json_extract(refs,'$.card')=? "
         "AND json_extract(refs,'$.key_grant.state')='proposed'",
-        (owner, CARD),
+        (CARD,),
     ).fetchall():
         card = _card(dict(m))
         places = [at for at, r in enumerate(card["rows"]) if r["tool_id"] == tool_id] if card else []
@@ -419,8 +418,10 @@ def grant(
         if not owner or not message or card is None or message.get("sender_id") != owner:
             raise Problem("not_found", "No key proposal here", 404)
         proposed = card["state"] == "proposed"
-        gone = _gone(c, card) if proposed else set[int]()
-        positions = list(range(len(card["rows"]))) if keep is None else list(dict.fromkeys(int(i) for i in keep))
+        gone = _gone(c, card) if card["state"] in ("proposed", "superseded") else set[int]()
+        # No keep: every row still on the card (all of them when none is left: the card is superseded below).
+        left = [at for at in range(len(card["rows"])) if at not in gone] or list(range(len(card["rows"])))
+        positions = left if keep is None else list(dict.fromkeys(int(i) for i in keep))
         if proposed and (not positions or any(i < 0 or i >= len(card["rows"]) for i in positions)):
             raise Problem("proposal", "Keep at least one of the card's rows", 422)
         # A hidden tool first (404), then who may grant (403); then whose card it is (404).
@@ -431,7 +432,7 @@ def grant(
         if who.actor not in _members(c, _thread(c, message["conversation_id"], owner)):
             raise Problem("not_found", "No key proposal here", 404)
         changed = Problem("changed", "A key's tool was deleted: check the card again", 409)
-        if proposed and gone and positions_are != "original":
+        if gone and positions_are != "original":  # a card superseded by deletion too
             # A row left the card (its tool was deleted): a keep that does not say it names places on the card as
             # proposed may mean the rows a client drew without it. Nothing is granted: read the card again.
             raise changed
@@ -456,7 +457,7 @@ def grant(
             owner,
             exact=True,  # the stored rows' own tools: never another found by name
         )
-        if seen is not None and seen != losses(c, card["rows"], owner):
+        if seen is not None and seen != losses(c, [r for at, r in enumerate(card["rows"]) if at not in gone], owner):
             raise Problem("changed", "Who loses access changed: check the card again", 409)
         for row in rows:
             _attach(c, who, vault, row)
