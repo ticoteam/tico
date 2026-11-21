@@ -33,9 +33,11 @@ export function waitSlugs(count: number, taken: Iterable<string>): string[] {
   });
 }
 
-/** Whether an email's OK task's send is still to go out, from the task's row (`email_send`, the send's state the server
-    keeps on it): its preview is read only when its tab opens, since that read counts as showing it to the person. */
-export const sendToGo = (sub: Pick<TaskData, 'email_send'>): boolean => stillToGo(sub.email_send?.state);
+/** Whether the email `send` an open OK shows is still to go out: from the task's row (`email_send`, the newest send of
+    the task) when that row is this send; another send there (a newer one canceled, say) says nothing of this one, and
+    the OK still open says it waits (an OK goes with its send). Its preview is read only when its tab opens, since that
+    read counts as showing it to the person. */
+export const sendToGo = (sub: Pick<TaskData, 'email_send'>, send: string): boolean => sub.email_send?.id !== send || stillToGo(sub.email_send.state);
 
 /** Whether an email's OK hung on the task waits on the person now: the matter then opens on it. */
 export async function waitsOnYou(client: QueryClient, t: TaskData): Promise<boolean> {
@@ -43,7 +45,8 @@ export async function waitsOnYou(client: QueryClient, t: TaskData): Promise<bool
     sendTasksOf(t).map(async (id) => {
       try {
         const sub = await client.ensureQueryData(taskDetailQuery(id));
-        return !!emailOf(decisionOf(sub)) && sendToGo(sub);
+        const send = emailOf(decisionOf(sub));
+        return !!send && sendToGo(sub, send);
       } catch {
         return false;
       }
@@ -60,6 +63,7 @@ export function waitsNow(client: QueryClient, id: string): boolean {
   if (decisionOf(t)) return true;
   return sendTasksOf(t).some((sid) => {
     const sub = client.getQueryData(taskDetailQuery(sid).queryKey);
-    return !!sub && !!emailOf(decisionOf(sub)) && sendToGo(sub);
+    const send = sub && emailOf(decisionOf(sub));
+    return !!sub && !!send && sendToGo(sub, send);
   });
 }

@@ -273,6 +273,8 @@ interface RowSend {
   send_after: string;
   finished_at: string | null;
   detail: string;
+  /** On its own case's row only: the day it is held for, or null once it is not. */
+  not_before?: string | null;
 }
 
 /** A send moved (backend/email_sending.py `moved` sends its tasks again): wherever the send itself is shown (the toast

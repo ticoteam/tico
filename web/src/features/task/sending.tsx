@@ -6,7 +6,7 @@ import { clock, dayKey, stamp } from '@/conversation';
 import { queryClient } from '@/data';
 import { closeToast, toast, updateToast } from '@/kit/Toast';
 import { follow } from '@/live/follow';
-import { failedToast } from './model';
+import { failedToast, heldUntil } from './model';
 import { sendStateQuery } from './queries';
 
 /* An email the person approved, until it has gone. The toast says who it goes to and counts down the undo window, with
@@ -15,10 +15,14 @@ import { sendStateQuery } from './queries';
    rows (`email_send`, features/task/queries.ts): the card reads it from its row, so every device and every person who
    reads the task sees it; the toast and the tab from the send's state, which those rows keep current. */
 
-type Send = Pick<EmailSend, 'state' | 'send_after' | 'finished_at' | 'detail'>;
+type Send = Pick<EmailSend, 'state' | 'send_after' | 'finished_at' | 'detail'> & { not_before?: string | null };
 
-/** Where an approved send is: in its window (`until`, when it goes), gone, or not gone and why. */
-export type SendWhere = { kind: 'sending'; until: number | null } | { kind: 'sent'; at: string | null } | { kind: 'not_sent' | 'unsure'; detail: string };
+/** Where an approved send is: in its window (`until`, when it may still be taken back) and, held for a later day, the
+    day it goes (`on`, its matter's not before); gone, or not gone and why. */
+export type SendWhere =
+  | { kind: 'sending'; until: number | null; on?: string }
+  | { kind: 'sent'; at: string | null }
+  | { kind: 'not_sent' | 'unsure'; detail: string };
 
 /** Where a send is. A send still waiting on an OK is "sending" only when the person just gave it (`approved`): the
     server takes the OK into the send within seconds. */
@@ -28,7 +32,7 @@ export function whereOf(s: Send, approved: boolean): SendWhere | null {
       return { kind: 'sent', at: s.finished_at };
     case 'pending': {
       const until = Date.parse(s.send_after);
-      return { kind: 'sending', until: Number.isFinite(until) ? until : null };
+      return { kind: 'sending', until: Number.isFinite(until) ? until : null, ...(s.not_before && { on: s.not_before }) };
     }
     case 'dispatching':
       return { kind: 'sending', until: null };
@@ -74,6 +78,8 @@ export function toastLine(w: SendWhere, to: string, now: number): string {
     return w.detail ? `${head}: ${w.detail}` : head;
   }
   const left = countdown(w.until, now);
+  const day = w.on && heldUntil(w.on);
+  if (day) return left ? `${day} to ${to} · undo ${left}` : `${day} to ${to}`;
   return left ? `Sending to ${to} in ${left}` : `Sending to ${to}`;
 }
 
@@ -85,7 +91,7 @@ export function markLine(w: SendWhere, now: number): string {
   }
   if (w.kind !== 'sending') return w.kind === 'unsure' ? 'Not confirmed' : 'Not sent';
   const left = countdown(w.until, now);
-  return left ? ['Sending', left].join(' · ') : 'Sending';
+  return [(w.on && heldUntil(w.on)) || 'Sending', left].filter(Boolean).join(' · ');
 }
 
 /** How long a card keeps saying how a send ended: a day. */
@@ -165,7 +171,14 @@ export function followSend({ send, to, task, answer }: { send: string; to: reado
 
   let last: Send | undefined;
   const observer = new QueryObserver(queryClient, { ...sendStateQuery(send, true), staleTime: 0 });
+  // Held for its matter's day past the undo window: Undo stays through the window, then the toast says the day and lets go.
+  const heldPast = () => w.kind === 'sending' && !!w.on && countdown(w.until, Date.now()) === null;
+  const settleHeld = () => {
+    stop();
+    updateToast(id, { text: toastLine(w, who, Date.now()), kind: 'done', timeout: 5000 });
+  };
   const tick = setInterval(() => {
+    if (heldPast()) return settleHeld();
     if (w.kind === 'sending' && w.until !== null) show(last);
   }, 1000);
   const limit = setTimeout(() => {
@@ -178,6 +191,7 @@ export function followSend({ send, to, task, answer }: { send: string; to: reado
     const next = whereOf(r.data, true);
     if (!next) return;
     w = next;
+    if (heldPast()) return settleHeld();
     if (w.kind === 'sending') return show(r.data);
     stop();
     if (w.kind === 'sent') updateToast(id, { text: toastLine(w, who, Date.now()), kind: 'done', timeout: 5000 });

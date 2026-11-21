@@ -1,7 +1,7 @@
 import { QueryClient } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { TaskData } from './queries';
-import { isSendTask, sendTasksOf, waitSlugs, waitsOnYou } from './waits';
+import { isSendTask, sendTasksOf, sendToGo, waitSlugs, waitsOnYou } from './waits';
 
 /* An email's OK hung on a matter: which tasks are such OKs, and whether the matter opens on the email. */
 
@@ -20,6 +20,12 @@ describe('an email’s OK hung on a matter @approvals', () => {
       relations: { depends_on: [{ ...sub, id: 't4', direction: 'out' }] },
     } as Partial<TaskData>);
     expect(sendTasksOf(t)).toEqual(['t1', 't4']);
+  });
+
+  it('reads the state of the send the OK shows, never another send of the task', () => {
+    expect(sendToGo({ email_send: { id: 's2', state: 'canceled' } } as Partial<TaskData>, 's1')).toBe(true);
+    expect(sendToGo({ email_send: { id: 's1', state: 'canceled' } } as Partial<TaskData>, 's1')).toBe(false);
+    expect(sendToGo({ email_send: { id: 's1', state: 'waiting_approval' } } as Partial<TaskData>, 's1')).toBe(true);
   });
 
   it('names the emails’ tabs apart from the task’s own', () => {

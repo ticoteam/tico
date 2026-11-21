@@ -70,6 +70,20 @@ function answer(url: string): Reply {
   if (url.includes('/needs-you')) return { body: { actor: 'human:me', items: needs } };
   if (url.endsWith('/api/v2/tasks/t1')) return { body: { task: okTask('t1') } };
   if (url.endsWith('/api/v2/tasks/t2')) return { body: { task: okTask('t2', 'bot:other') } };
+  if (url.endsWith('/api/v2/tasks/t4')) {
+    const ok = (rid: string, send: string) => ({ requirement_id: rid, kind: 'ok', line: 'Send this email?', met: false, may: ['ok', 'no'], shows: [`email:${send}`], asked_by: 'bot:lo' });
+    return { body: { task: { ...okTask('t4'), to_leave: [ok('r1', 's1'), ok('r5', 's5')] } } };
+  }
+  // a case whose OK is on itself: its newest send (s2) was canceled, the one its OK shows (s1) still waits
+  if (url.endsWith('/api/v2/tasks/c1'))
+    return { body: { task: { ...okTask('c1'), title: 'Ruiz: reply letter', relations: {}, email_send: { id: 's2', state: 'canceled' } }, parent: { id: 'p0', title: 'Legal 2026' } } };
+  // a case with two emails waiting on OKs of its own, and an older question
+  if (url.endsWith('/api/v2/tasks/c2/files?all=1'))
+    return { body: { files: [{ id: 'f-email', name: 'email.md', title: 'Email', mime: 'text/markdown', archived: false, current_version: 1, links: [], versions: [], writers: [] }] } };
+  if (url.endsWith('/api/v2/tasks/c2')) {
+    const two = (rid: string, send: string) => ({ requirement_id: rid, kind: 'ok', line: 'Send this email?', met: false, may: ['ok', 'no'], shows: [`email:${send}`], asked_by: 'bot:lo' });
+    return { body: { task: { ...okTask('c2'), title: 'Ruiz: two letters', relations: {}, to_leave: [two('r1', 's1'), two('r3', 's3')] } } };
+  }
   if (url.endsWith('/api/v2/tasks/p1')) return { body: { task: otherTask('p1', 'Release report', ['page:file-a@2']) } };
   if (url.endsWith('/api/v2/tasks/p1/files?all=1'))
     return { body: { files: [{ id: 'file-a', name: 'release-report.md', title: 'Release report', mime: 'text/markdown', archived: false, current_version: 2, links: [], versions: [], writers: [] }, { id: 'file-b', name: 'notes.md', title: 'Notes', mime: 'text/markdown', archived: false, current_version: 1, links: [], versions: [], writers: [] }] } };
@@ -135,7 +149,8 @@ describe('an approval waiting, as a card in the agent’s thread @approvals', ()
     // its preview is read only on the Email tab: that read counts as showing the email
     expect(read.filter((u) => u.includes('/email/sends/'))).toEqual([]);
     // The case's own address: it opens on the email waiting on the person.
-    expect(card.getAttribute('href')).toBe('/task/m1');
+    // the case's tab for this email, as the case's page names it
+    expect(card.getAttribute('href')).toBe('/tasks/legal/7/email');
     // At the time it was asked, from the agent.
     expect(card.parentElement?.dataset.at).toBe('2026-11-19T09:00:00Z');
     expect(card.parentElement?.dataset.from).toBe('bot:lo');
@@ -144,8 +159,8 @@ describe('an approval waiting, as a card in the agent’s thread @approvals', ()
   it('opens the case beside the thread it sits in, with a way back (plan/layers.html)', async () => {
     show({ agent: 'bot:lo' }, 'agent:lo');
     const card = await screen.findByRole('link', { name: /Approve/ });
-    expect(card.getAttribute('href')).toBe('/task/m1?chat=agent%3Alo&via=thread');
-    expect(card.dataset.target).toBe('approval:/task/m1');
+    expect(card.getAttribute('href')).toBe('/tasks/legal/7/email?chat=agent%3Alo&via=thread');
+    expect(card.dataset.target).toBe('approval:/tasks/legal/7/email');
   });
 
   it('a page its task needs approved is a card in the owner’s thread, the page as a chip', async () => {
@@ -178,7 +193,58 @@ describe('an approval waiting, as a card in the agent’s thread @approvals', ()
     theMatter = { ...matter, children: [{ id: 't1', title: 'Send: A → a@example.test', status: 'open' }, { id: 't3', title: 'Send: B → b@example.test', status: 'open' }] };
     show({ agent: 'bot:lo' });
     const card = await screen.findByRole('link', { name: /Approve/ });
-    await waitFor(() => expect(card.getAttribute('href')).toBe('/tasks/general/40'));
+    await waitFor(() => expect(card.getAttribute('href')).toBe('/tasks/general/40/email'));
+  });
+
+  it('two OKs on one "Send:" task open two different emails on its own page', async () => {
+    theMatter = { ...matter, children: [{ id: 't1', title: 'Send: A → a@example.test', status: 'open' }, { id: 't3', title: 'Send: B → b@example.test', status: 'open' }] };
+    needs = [ask('t4', 'bot:lo', 's1'), { ...ask('t4', 'bot:lo', 's5'), id: 't4:r5' }];
+    show({ agent: 'bot:lo' });
+    await waitFor(() => expect(screen.getAllByRole('link', { name: /Approve/ })).toHaveLength(2));
+    const hrefs = screen.getAllByRole('link', { name: /Approve/ }).map((a) => a.getAttribute('href'));
+    expect(hrefs).toEqual(['/tasks/general/40/email', '/tasks/general/40/email-2']);
+  });
+
+  it('a case whose newer send was canceled still shows the card of the email its OK waits on, named as the case', async () => {
+    needs = [ask('c1', 'bot:lo', 's1')];
+    show({ agent: 'bot:lo' });
+    const card = await screen.findByRole('link', { name: /Approve/ });
+    expect(card.textContent).toContain('Ruiz: reply letter'); // the case itself, never its parent
+    expect(card.textContent).not.toContain('Legal 2026');
+    // its own email's tab on the case, never a guess at another send's
+    expect(card.getAttribute('href')).toBe('/tasks/general/40/email');
+  });
+
+  it('two email OKs on one case are two cards, each opening its own email, and an older question hides neither', async () => {
+    const question = { ...ask('c2', 'bot:lo', 's1', '2026-11-19T08:00:00Z'), ask: { requirement_id: 'q1', kind: 'question', line: 'Which date?', met: false, asked_by: 'bot:lo', shows: [], may: [] } };
+    needs = [question, ask('c2', 'bot:lo', 's1'), { ...ask('c2', 'bot:lo', 's3'), id: 'c2:r3' }];
+    show({ agent: 'bot:lo' });
+    await waitFor(() => expect(screen.getAllByRole('link', { name: /Approve/ })).toHaveLength(2));
+    const hrefs = screen.getAllByRole('link', { name: /Approve/ }).map((a) => a.getAttribute('href'));
+    // as the task's page names its tabs, files included: its file "Email" took the first slug
+    expect(hrefs).toEqual(['/tasks/general/40/email-2', '/tasks/general/40/email-2-2']);
+  });
+
+  it('a case with no "Send:" task shows the card of the email OK on itself in its own chat', async () => {
+    needs = [ask('c1', 'bot:lo', 's1')];
+    const own = { id: 'c1', title: 'Ruiz: reply letter', children: [], relations: {}, to_leave: [{ requirement_id: 'r1', kind: 'ok', met: false, may: ['ok', 'no'], shows: ['email:s1'] }] };
+    show({ task: own as unknown as TaskData });
+    expect((await screen.findByRole('link', { name: /Approve/ })).textContent).toContain('Ruiz: reply letter');
+  });
+
+  it('a new email OK on a case shows its card in the case’s chat, the case read again when its cached read lacks it', async () => {
+    needs = [ask('c1', 'bot:lo', 's1')];
+    const cached = { ...okTask('c1'), title: 'Ruiz: reply letter', relations: {}, to_leave: [] };
+    queryClient.setQueryData(['tasks', 'detail', 'c1'], cached);
+    show({ task: cached as unknown as TaskData });
+    expect(await screen.findByRole('link', { name: /Approve/ })).toBeTruthy();
+  });
+
+  it('a case’s chat shows the card of an email OK a person asked for, too', async () => {
+    needs = [ask('c1', 'human:omar', 's1')];
+    const own = { id: 'c1', title: 'Ruiz: reply letter', children: [], relations: {}, to_leave: [{ requirement_id: 'r1', kind: 'ok', met: false, may: ['ok', 'no'], shows: ['email:s1'] }] };
+    show({ task: own as unknown as TaskData });
+    expect(await screen.findByRole('link', { name: /Approve/ })).toBeTruthy();
   });
 
   it('an email already sent or canceled shows no card', async () => {

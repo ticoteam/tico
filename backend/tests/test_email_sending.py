@@ -548,6 +548,91 @@ def test_a_send_held_until_a_time_is_left_out_of_the_queue_until_then(inbox, mon
     assert len(dispatch(inbox)) == 1
 
 
+def test_a_held_send_is_on_its_cases_row_with_its_day_until_it_is_sent_and_after(inbox, monkeypatch):
+    """A send held for its matter's not before read "Sending" on its case's card with no day, and once sent weeks after
+    its undo window, the card dropped it (ended sends are read by `send_after`). The case's row carries the day it waits
+    for, and a send that goes is read as going when it went."""
+    autonomous(inbox, undo_seconds=0)
+    case = _case(inbox)
+    day = H.shift(H.now(), days=20)[:10]
+    _not_before(inbox, case, day)
+    held = queue(inbox, raw=mime(body="Later."), actor="bot:ops", task_id=case)
+    with inbox.app.state.store.read() as c:
+        row = S.for_tasks(c, [case])[case]
+        assert (row["id"], row["state"]) == (held["id"], "pending")
+        assert row["not_before"] == S.in_company_zone(S.not_before(c, case))  # the company's day, as the preview says
+    monkeypatch.setattr(H, "now", lambda: day + "T23:00:00.000000Z")
+    assert len(dispatch(inbox)) == 1
+    with inbox.app.state.store.read() as c:
+        row = S.for_tasks(c, [case])[case]
+        assert (row["id"], row["state"], row["not_before"]) == (held["id"], "sent", None)
+
+
+def test_a_cases_row_names_a_hold_only_past_the_undo_deadline_and_a_date_change_sends_it_again(inbox):
+    """The case's row named a matter date that ends inside the undo window (the send goes at its undo deadline, not
+    then), and a date edited later left open pages on the old day. It names the day only past the undo deadline an OK
+    would set, as the preview does, and a change to the matter's dates sends the case's row again."""
+    policy(inbox, undo_seconds=600, pacing_seconds=0)
+    case = _case(inbox)
+    risk = post(inbox, "risks", {"label": "Records requests"})
+    key = risk.get("risk", risk).get("key") or "risk:records-requests"
+    post(inbox, f"tasks/{case}", {"labels": [key if key.startswith("risk:") else "risk:" + key]})
+    post(inbox, f"tasks/{case}/matter", {"kind": "request"})
+    soon = H.shift(H.now(), minutes=5)[:19] + "Z"
+    post(inbox, f"tasks/{case}/matter/dates", {"label": "Records produced", "starts_at": soon})
+    queued = queue(inbox, raw=mime(body="The records."), actor="bot:ops", task_id=case)
+    assert queued["state"] == "waiting_approval"
+    with inbox.app.state.store.read() as c:
+        assert S.for_tasks(c, [case])[case]["not_before"] is None  # within the 10 minutes an OK would start
+        before = c.execute("SELECT max(rowid) FROM changes").fetchone()[0]
+    later = H.shift(H.now(), days=3)[:10]
+    post(inbox, f"tasks/{case}/matter/dates", {"label": "Hearing", "starts_at": later})
+    with inbox.app.state.store.read() as c:
+        assert S.for_tasks(c, [case])[case]["not_before"][:10] == later
+        assert c.execute(
+            "SELECT 1 FROM changes WHERE rowid>? AND topic='tasks' AND kind='email_send' AND subject_id=?",
+            (before, case),
+        ).fetchone()
+
+
+def test_a_held_send_that_ends_without_going_is_still_shown_on_its_case(inbox, monkeypatch):
+    """A send held for weeks past its undo window that was then blocked dropped off its case at once: ended sends are
+    read by `send_after`, still its old undo deadline. It ends now, so the case says Not sent for a day."""
+    autonomous(inbox, undo_seconds=0)
+    case = _case(inbox)
+    day = H.shift(H.now(), days=20)[:10]
+    _not_before(inbox, case, day)
+    held = queue(inbox, raw=mime(body="Later."), actor="bot:ops", task_id=case)
+    policy(inbox, mode="never")
+    monkeypatch.setattr(H, "now", lambda: day + "T23:00:00.000000Z")
+    assert dispatch(inbox) == []
+    with inbox.app.state.store.read() as c:
+        row = S.for_tasks(c, [case])[case]
+        assert (row["id"], row["state"]) == (held["id"], "blocked")
+
+
+def test_the_drain_writes_nothing_for_an_inbox_that_only_holds_sends_for_later(inbox, monkeypatch):
+    """Every drain pass opened a durable write for each inbox with queued mail, even one whose only sends wait for
+    their matter's not before. It writes only when it may lease, or has an OK or a hand-over to look at."""
+    autonomous(inbox, undo_seconds=0)
+    case = _case(inbox)
+    _not_before(inbox, case, H.shift(H.now(), days=3)[:10])
+    queue(inbox, raw=mime(body="Later."), actor="bot:ops", task_id=case)
+    store, writes = inbox.app.state.store, []
+    real = store.transaction
+
+    def counted(*args, **kwargs):
+        writes.append(kwargs.get("durable"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(store, "transaction", counted)
+    assert dispatch(inbox) == [] and writes == []
+    policy(inbox, mode="ask_first")
+    assert queue(inbox, raw=mime(body="Asked first."), actor="bot:ops")["state"] == "waiting_approval"
+    writes.clear()
+    assert dispatch(inbox) == [] and writes  # a send waiting on an OK is looked at
+
+
 def test_a_send_still_to_go_is_canceled_when_its_case_or_its_ok_task_closes(inbox):
     """A send still to go for a case that was closed, OK'd or with no OK at all, went anyway when its time came. Closing
     the case cancels it in the same write; closing the task its OK waits on, when that is a task of its own, does too.
@@ -955,7 +1040,7 @@ def test_each_move_of_a_send_reaches_its_tasks_on_the_stream_and_their_rows(inbo
     assert listed()[case] == moved[case]
     detail = inbox.get(f"/api/v2/tasks/{case}", headers=headers()).json()
     assert detail.get("task", detail)["email_send"] == moved[case]
-    assert set(moved[case]) == {"id", "state", "send_after", "finished_at", "detail"}  # never the email itself
+    assert set(moved[case]) == {"id", "state", "send_after", "finished_at", "detail", "not_before"}  # never the email
     with store.transaction() as c:  # a day after it ended, the case no longer shows it
         c.execute("UPDATE email_sends SET finished_at=? WHERE id=?", (H.shift(H.now(), hours=-25), queued["id"]))
     assert listed()[case] is None

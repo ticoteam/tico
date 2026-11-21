@@ -327,6 +327,17 @@ describe('the decision', () => {
     expect(screen.queryByText('Check the brief?')).toBeNull();
   });
 
+  it('an email OK on a case itself shows the case’s own brief, and names no other matter @approvals', async () => {
+    shown = task({ title: 'Ruiz: late delivery', note: 'Dana Ruiz wants a refund.' } as Partial<TaskData>);
+    const parent = { id: 'p0', title: 'Legal 2026', label: null, step: null };
+    reply = (url) => (url.endsWith('/api/v2/tasks/t1') || url.includes('/api/v2/tasks/%2312') ? { body: { task: shown, runs: [], children: [], parent, can_comment: true, mover: true } } : null);
+    show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1/12/email');
+    const brief = await screen.findByRole('region', { name: 'Brief' });
+    expect(within(brief).getByText('Dana Ruiz wants a refund.')).toBeTruthy();
+    expect(screen.queryByText(/Legal 2026/)).toBeNull();
+    expect(screen.queryByRole('link', { name: /^From / })).toBeNull();
+  });
+
   it('names the email, who asks and what Approve does; the head is quiet and Details sits under ⋯ @approvals', async () => {
     show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
     expect(await screen.findByRole('heading', { level: 1, name: 'Reply to the late-delivery claim' })).toBeTruthy();
@@ -339,6 +350,17 @@ describe('the decision', () => {
     expect(within(tabs).queryByRole('link', { name: 'Details' })).toBeNull();
     fireEvent.click(screen.getAllByRole('button', { name: 'More' })[0] as HTMLElement);
     expect(await screen.findByRole('menuitem', { name: 'Details' })).toBeTruthy();
+  });
+
+  it('reads the day a held email goes live, and drops it once the hold is cleared @approvals', async () => {
+    const held = { ...mail, not_before: '2099-11-25T00:00:00-08:00' };
+    reply = (url) => (url.endsWith('/api/v2/email/sends/s1') ? { body: held } : null);
+    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    const box = await decision();
+    expect(await within(box).findByText('Sends Nov 25')).toBeTruthy();
+    // the case's row on the stream says the hold is gone (live/patch.ts): an explicit null
+    await act(async () => queryClient.setQueryData(['email-send-state', 's1'], (s: object | undefined) => ({ ...s, not_before: null })));
+    expect(await within(box).findByText('Sends now')).toBeTruthy();
   });
 
   it('says the day a held email goes and flags its archived file @approvals', async () => {

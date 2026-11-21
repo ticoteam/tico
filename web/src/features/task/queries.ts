@@ -566,9 +566,12 @@ export interface EmailFile {
   archived?: boolean;
 }
 
+/** The send's state as a task row carries it: with the day it is held for (the preview's `not_before`). */
+const withHeld = (r: { send: MailSend; not_before?: string | null }): MailSend => ({ ...r.send, not_before: r.not_before ?? null });
+
 /** The send as its preview gives it. `reply_to_id` (the Gmail message it answers) is read when the server gives it:
     backend/email_sending.py `public` keeps it on the row but leaves it out today. */
-export type MailSend = EmailSendDetail['send'] & { reply_to_id?: string | null; thread_id?: string | null };
+export type MailSend = EmailSendDetail['send'] & { reply_to_id?: string | null; thread_id?: string | null; not_before?: string | null };
 
 /** The preview's answer: what the schema has, and what the server adds when it carries them (PR #4540): the hash the
     OK sends back, and the frozen copy's To, Cc and Bcc apart (`send.recipients` is all of them in one list). */
@@ -581,7 +584,7 @@ export const emailSendQuery = (task: string, send: string) =>
     queryKey: [...keys.tasks.detail(task), 'email', send] as const,
     queryFn: async ({ signal }) => {
       const r = await api.get<EmailPreview>(`/api/v2/email/sends/${enc(send)}`, { signal });
-      queryClient.setQueryData(sendStateQuery(send).queryKey, r.send);
+      queryClient.setQueryData(sendStateQuery(send).queryKey, withHeld(r));
       return { ...r, files: r.send.attachments as unknown as EmailFile[] };
     },
   });
@@ -599,7 +602,7 @@ export const SEND_BACKSTOP_MS = 5 * 60_000;
 export const sendStateQuery = (send: string, approved = false) =>
   queryOptions({
     queryKey: keys.emailSend(send),
-    queryFn: async ({ signal }): Promise<MailSend> => (await api.get<EmailPreview>(`/api/v2/email/sends/${enc(send)}`, { signal })).send,
+    queryFn: async ({ signal }): Promise<MailSend> => withHeld(await api.get<EmailPreview>(`/api/v2/email/sends/${enc(send)}`, { signal })),
     refetchInterval: (q) => {
       const state = q.state.data?.state ?? '';
       return OUTGOING.includes(state) || (approved && state === 'waiting_approval') ? SEND_BACKSTOP_MS : false;

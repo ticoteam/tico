@@ -161,7 +161,7 @@ function Answered({ task, send }: { task: string; send: MailSend }) {
 /** The matter an email's OK came from (`useMatterOf`): one quiet link to it in the head's line, never to another OK. */
 export function EmailSource({ t, send }: { t: TaskData; send: string }) {
   const matter = useMatterOf(t, send);
-  if (!matter) return null;
+  if (!matter || matter.id === t.id) return null; // an OK on the case itself comes from nowhere else
   return (
     <>
       {' · '}

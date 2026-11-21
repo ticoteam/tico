@@ -1,4 +1,5 @@
-import { useQueries, useQuery } from '@tanstack/react-query';
+import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect } from 'react';
 import type { ChatMessage } from '@/conversation';
 import { useActor, useDirectory } from '@/data';
 import { Icon } from '@/kit/Icon';
@@ -7,8 +8,9 @@ import { flowQuery, type FlowItem } from '@/features/tasks/routing';
 import { AskCard } from './AskCard';
 import { decisionOf, personOf, sendTitle, tabAddress, thingsOf } from './model';
 import { taskDetailQuery, taskFilesQuery, type TaskData } from './queries';
+import { useTabs } from './tabs';
 import { matterOf } from './Waiting';
-import { sendTasksOf, sendToGo } from './waits';
+import { isSendTask, sendTasksOf, sendToGo } from './waits';
 
 /* An approval an agent asked for that waits on the person, as a card in the agent's thread at the time it was asked
    (plan/threads-team.html: an approval waiting, as a link in a thread). An OK the agent asked for (an email, a finance
@@ -43,8 +45,10 @@ export function useApprovalCards(scope: ApprovalScope, chat?: string): ChatMessa
   const named = 'agent' in scope ? scope.agent : undefined;
   const agent = useActor(named)?.id ?? named;
   const task = 'task' in scope ? scope.task : undefined;
-  const hung = task ? new Set(sendTasksOf(task)) : null;
-  const on = !!agent?.startsWith('bot:') || !!hung?.size;
+  // A case's chat: its "Send:" OKs, and the email OKs on the case itself, as Needs you lists them now (the stream keeps
+  // it current), never as the case's cached read last had them.
+  const hung = task ? new Set([...sendTasksOf(task), task.id]) : null;
+  const on = !!agent?.startsWith('bot:') || !!task;
   const { data } = useQuery({ ...flowQuery, enabled: on });
   // An ask names its agent by id or by slug (`bot:finance-owner`): both read as the agent's id here.
   const byId = useDirectory((d) => d.byId);
@@ -53,9 +57,17 @@ export function useApprovalCards(scope: ApprovalScope, chat?: string): ChatMessa
     const by = it.ask?.by ?? (it.ask?.kind === 'page' ? it.owner_id : null);
     return by?.startsWith('bot:') ? (byId?.[by]?.id ?? by) : null;
   };
-  const asks = (on ? (data?.items ?? []) : []).filter((it) =>
-    hung ? it.ask?.kind === 'ok' && !!whose(it) && hung.has(it.id) : (it.ask?.kind === 'ok' || it.ask?.kind === 'page') && !!agent && whose(it) === agent,
-  );
+  // An email's card stands for its own approval entry (`approvals`: one per email's OK), so another ask on the task
+  // hides none; any other OK or page keeps the task's row (`items`). A case's chat shows whoever asked (a person too);
+  // an agent's thread, what that agent asked.
+  const mine = (it: FlowItem) =>
+    hung
+      ? it.ask?.kind === 'ok' && hung.has(it.id) && (it.id !== task?.id || !!emailIn(it.ask?.shows ?? []))
+      : (it.ask?.kind === 'ok' || it.ask?.kind === 'page') && !!agent && whose(it) === agent;
+  const isEmail = (it: FlowItem) => !!emailIn(it.ask?.shows ?? []);
+  const asks = on
+    ? [...(data?.items ?? []).filter((it) => !isEmail(it) && mine(it)), ...(data?.approvals ?? []).filter((it) => isEmail(it) && mine(it))]
+    : [];
   const subs = useQueries({ queries: asks.map((it) => ({ ...taskDetailQuery(it.id), retry: false })) });
   // The files any other OK shows (its chips, ThingCard), read before the card draws.
   const files = useQueries({
@@ -64,18 +76,32 @@ export function useApprovalCards(scope: ApprovalScope, chat?: string): ChatMessa
       return { ...taskFilesQuery(it.id), enabled: !!sub && !emailIn(it.ask?.shows ?? []) && thingsOf(decisionOf(sub)).size > 0, retry: false };
     }),
   });
+  // An approval entry its task's cached read does not have yet (a new email's OK): that read is refreshed, once.
+  const client = useQueryClient();
+  const stale = asks
+    .filter((it, i) => {
+      const sub = subs[i]?.data;
+      return !!sub && isEmail(it) && !decisionOf(sub, emailIn(it.ask?.shows ?? []) ?? undefined);
+    })
+    .map((it) => `${it.id}:${emailIn(it.ask?.shows ?? [])}`)
+    .join(',');
+  useEffect(() => {
+    for (const id of new Set(stale.split(',').filter(Boolean).map((k) => k.split(':')[0]!)))
+      void client.invalidateQueries({ queryKey: taskDetailQuery(id).queryKey, exact: true });
+  }, [stale, client]);
   return asks.flatMap((it, i) => {
     const sub = subs[i]?.data;
-    if (!sub || !decisionOf(sub)) return [];
     const send = emailIn(it.ask?.shows ?? []);
+    // An email's card stands for that email's own open OK on the task, never another ask there.
+    if (!sub || !decisionOf(sub, send ?? undefined)) return [];
     // An email's: still to go out, as its OK task's row says (sendToGo); its preview is read only on its Email tab.
     if (send) {
-      if (!sendToGo(sub)) return [];
+      if (!sendToGo(sub, send)) return [];
     } else if (files[i]?.isPending && files[i]?.fetchStatus !== 'idle') return [];
     // The words stand for the card where words are read (a row with none is not drawn).
     const row: ChatMessage = {
-      id: `approval:${it.id}`,
-      sender_id: whose(it) ?? undefined,
+      id: send ? `approval:${it.id}:${send}` : `approval:${it.id}`,
+      sender_id: whose(it) ?? it.ask?.by ?? undefined,
       created_at: it.since,
       kind: 'approval',
       body: `Approve: ${it.title}`,
@@ -94,7 +120,7 @@ export function approvalCard(m: ChatMessage) {
 function ApprovalCard({ task, send, chat }: Approval) {
   const sub = useQuery(taskDetailQuery(task)).data;
   if (!sub) return null;
-  return send ? <EmailCard sub={sub} chat={chat} /> : <ThingCard sub={sub} chat={chat} />;
+  return send ? <EmailCard sub={sub} send={send} chat={chat} /> : <ThingCard sub={sub} chat={chat} />;
 }
 
 /** Any other OK (a page, a file, a finance item): the task's title, and the files it shows as chips. It opens the task's
@@ -110,11 +136,22 @@ function ThingCard({ sub, chat }: { sub: TaskData; chat?: string }) {
     parent or the case that waits on it, `matterOf`): the email's preview is read only on its Email tab, since that
     read counts as showing it. It opens on the case's Email tab, or on the Send task's own page when the case has more
     than one email (the tab would be a guess). */
-function EmailCard({ sub, chat }: { sub: TaskData; chat?: string }) {
+function EmailCard({ sub, send, chat }: { sub: TaskData; send: string; chat?: string }) {
   const matter = matterOf(sub);
-  const held = useQuery({ ...taskDetailQuery(matter?.id), retry: false }).data;
-  const one = !!matter && (held?.id !== matter.id || sendTasksOf(held).length <= 1);
-  const to = one ? matter.to : tabAddress(sub, undefined, false).to;
+  const read = useQuery({ ...taskDetailQuery(matter?.id), retry: false });
+  const held = read.data?.id === matter?.id ? read.data : undefined;
+  const one = !!matter && (!held || sendTasksOf(held).length <= 1);
+  // The tab it opens, as the page it opens names it (useTabs), by this send: the case's own tab for an OK on the case
+  // itself; for a "Send:" task, its tab on the matter, or on the task's own page when the matter has more than one.
+  const direct = !isSendTask(sub.title);
+  const target = direct || !one ? sub : held;
+  const own = useTabs(sub);
+  const onMatter = useTabs(held ?? sub);
+  const resolver = target === sub ? own : target ? onMatter : null;
+  // Named once what it reads is in, never guessed first.
+  if ((matter && !read.isFetched) || (resolver && !resolver.settled)) return null;
+  const slug = resolver?.tabs.find((x) => x.email === send && (target === sub ? !x.wait : !!x.wait))?.slug;
+  const to = target && slug ? tabAddress(target, slug, false).to : one && matter ? matter.to : tabAddress(sub, undefined, false).to;
   const title = sendTitle(sub.title);
   const what = matter?.title ?? title?.subject ?? sub.title;
   return <Card to={to} chat={chat} what={title?.to ? `${what}, to ${personOf(title.to)}` : what} />;

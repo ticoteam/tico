@@ -10,7 +10,7 @@ import { FakeEventSource, opening, task, taskFrame } from '@/live/fake-stream';
 // eslint-disable-next-line no-restricted-imports -- the test plays the server's stream, as the shell's startLive opens it
 import { flushFrame } from '@/live/frame';
 import { resetFollows } from '@/live/follow';
-import { followSend, rowWhere, SendMark } from './sending';
+import { followSend, markLine, rowWhere, SendMark, type SendWhere } from './sending';
 
 /* After Approve on an email: the toast counts down the undo window, then says Sent or Not sent; the email's quiet line
    says Sending, then Sent. The send is read once; each move after that comes on the live stream as its tasks' rows
@@ -31,7 +31,8 @@ beforeEach(() => {
   vi.stubGlobal('fetch', async (url: string) => {
     const mine = String(url).endsWith('/api/v2/email/sends/s1');
     if (mine) reads++;
-    const body = mine ? { send: { ...base, ...send }, body: '', bodies: [], preview_complete: true } : {};
+    const { not_before, ...rest } = send;
+    const body = mine ? { send: { ...base, ...rest }, body: '', bodies: [], preview_complete: true, not_before: not_before ?? null } : {};
     return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
   });
   FakeEventSource.all = [];
@@ -82,6 +83,26 @@ describe('the toast after Approve on an email', () => {
     expect(await screen.findByText('Sent to dexter@acme.example')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
     expect(reads).toBe(1);
+    stop();
+  });
+
+  it('held for its matter’s day, keeps Undo through the undo window, then says the day and lets go', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
+    vi.setSystemTime(NOW);
+    send = { state: 'pending', send_after: '2026-11-19T13:21:58Z', not_before: '2026-12-08T00:00:00-08:00' };
+    shown();
+    let stop = () => {};
+    act(() => {
+      stop = followSend({ send: 's1', to: ['dexter@acme.example'], task: 't1', answer: 'a1' });
+    });
+    await vi.waitFor(() => expect(screen.getByText('Sends Dec 8 to dexter@acme.example · undo 1:58')).toBeTruthy());
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeTruthy();
+    await act(async () => {
+      vi.setSystemTime(NOW + 119_000);
+      vi.advanceTimersByTime(1000);
+    });
+    expect(screen.getByText('Sends Dec 8 to dexter@acme.example')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
     stop();
   });
 
@@ -140,6 +161,14 @@ describe("a task row's send", () => {
     expect(rowWhere({ ...row, state: 'pending', finished_at: null }, NOW)?.kind).toBe('sending');
     expect(rowWhere({ ...row, state: 'sent', finished_at: '2026-11-19T05:23:00Z' }, NOW)?.kind).toBe('sent');
     expect(rowWhere({ ...row, state: 'sent', finished_at: '2026-11-17T05:23:00Z' }, NOW)).toBeNull();
+  });
+
+  it('held past its undo window for its matter’s day, it says that day, never Sending', () => {
+    const held = { ...row, state: 'pending' as const, finished_at: null, not_before: '2026-12-08T00:00:00-08:00' };
+    const w = rowWhere(held, NOW) as SendWhere;
+    expect(w).toEqual({ kind: 'sending', until: Date.parse(row.send_after), on: '2026-12-08T00:00:00-08:00' });
+    expect(markLine(w, NOW)).toBe('Sends Dec 8'); // its undo window over
+    expect(markLine(w, Date.parse(row.send_after) - 90_000)).toBe('Sends Dec 8 · 1:30'); // still in it: Undo stays
   });
 
   it('says nothing once canceled, and Not sent only when it failed, was blocked, or is unsure', () => {
