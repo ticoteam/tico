@@ -107,7 +107,7 @@ A task is open, done or closed. It sits in a stage of a pipeline; General has on
 - On your own task, your reply at the end of the turn is posted on it: say things there, not with `tico task comment`.
 - Never ask people about your own setup (a Tool, a secret, a setting): file it for BotOps. Access is `tico access request`
   (below).
-- Send, spend, publish: ask the person for an OK on the task first. The act goes through only on that OK.
+- Send, publish, or spend over budget: ask the person for an OK on the task first. The act goes through only on that OK.
 - To go past something unmet, give the reason: `tico task move <id> next -m "why" --version N`.
 - Never close what a person asked for: ask that person.
 - A refusal says what is missing and which commands are allowed next. Do one of those. Never retry the same command.
