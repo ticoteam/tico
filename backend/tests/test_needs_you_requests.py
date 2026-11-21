@@ -174,3 +174,12 @@ def test_a_key_card_is_listed_and_saved_only_while_its_requester_manages_the_age
     assert requests(api, "cara-test") == {}
     refused = post(api, f"credential-requests/{card['id']}/save", {"value": NEW}, "cara-test", expected=403)
     assert refused["error"]["detail"] == "You can't save this key"
+
+
+def test_a_key_proposal_whose_tools_are_all_deleted_is_superseded(api, monkeypatch):
+    _, mid, _ = world(api, monkeypatch)
+    with api.app.state.store.read() as c:
+        crm = c.execute("SELECT id FROM tools WHERE name='Close CRM'").fetchone()[0]
+    assert api.delete(f"/api/v2/api-tools/{crm}", headers=headers()).status_code == 200
+    assert "key_drop" not in requests(api, "ana-test")
+    assert post(api, f"tools-chat/proposals/{mid}/grant", {"keep": [0]})["state"] == "superseded"
