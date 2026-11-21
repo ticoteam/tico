@@ -234,6 +234,45 @@ def test_who_may_ask_for_whom_and_the_counts_for_the_weekly_review(api):
     assert numbers["by_kind"] == {"tool_write": 1} and numbers["open"] == 1
 
 
+def test_a_name_finds_the_tool_the_asker_may_see_and_two_it_may_see_are_offered_as_choices(api):
+    world(api)
+    nobody = {"audience": {"everyone": False, "people": [], "teams": [], "bots": []}}
+    hidden = tool(api, "Acme Bank", base_url="https://api.bank.acme.example")["id"]
+    vault = tool(api, "Acme Vault", base_url="https://vault.acme.example")["id"]
+    for tid in (hidden, vault):
+        key(api, tid, SECRET + "-" + tid)
+        assert api.patch(f"/api/v2/api-tools/{tid}", json=nobody, headers=headers()).status_code == 200
+    seen = tool(api, "Acme Bank", base_url="https://api2.bank.acme.example")["id"]
+    key(api, seen, OTHER)
+    # Cara, a member, may not see the hidden twin: the name reaches the one she may ask for.
+    assert ask(api, "Acme Bank", "read_write", token="cara-test")["resource_id"] == seen
+    # A tool hidden from her answers as no tool does.
+    gone = ask(api, "Acme Vault", token="cara-test", expected=404)["error"]
+    absent = ask(api, "Acme Nothing", token="cara-test", expected=404)["error"]
+    assert {**gone, "detail": gone["detail"].replace("Vault", "Nothing")} == absent
+    # Two by one name, one whose id is that name too: both are offered rather than one picked; tool:<id> picks one.
+    first = tool(api, "Sentry", base_url="https://sentry.acme.example")["id"]
+    second = tool(api, "Sentry", base_url="https://eu.sentry.acme.example")["id"]
+    assert first == "sentry"
+    both = ask(api, "sentry", "read_write", token="cara-test", expected=409)["error"]
+    assert sorted(choice["resource"] for choice in both["choices"]) == sorted(["tool:" + first, "tool:" + second])
+    assert ask(api, "tool:" + first, "read_write", token="cara-test")["resource_id"] == first
+    # An API tool and a website tool by one name are two matches too; picking the website tool says where its account is.
+    ledger = tool(api, "Ledger", base_url="https://ledger.acme.example")["id"]
+    site = post(api, "website-tools", {"name": "Ledger", "sites": ["ledger.acme.example"]})["id"]
+    two = ask(api, "Ledger", token="cara-test", expected=409)["error"]
+    assert sorted(choice["resource"] for choice in two["choices"]) == sorted(["tool:" + ledger, "tool:" + site])
+    assert ask(api, "tool:" + site, token="cara-test", expected=422)["error"]["code"] == "resource"
+    assert ask(api, "api:Ledger", token="cara-test")["resource_id"] == ledger  # `api:` names the API tool
+    # A website tool named Pager and an API tool whose id is `pager` are two matches for a bare "pager" too.
+    pager = tool(api, "Pager", base_url="https://pager.acme.example")["id"]
+    assert pager == "pager"
+    assert api.patch("/api/v2/api-tools/pager", json={"name": "Paging API"}, headers=headers()).status_code == 200
+    page = post(api, "website-tools", {"name": "Pager", "sites": ["pager.acme.example"]})["id"]
+    three = ask(api, "pager", token="cara-test", expected=409)["error"]
+    assert sorted(choice["resource"] for choice in three["choices"]) == sorted(["tool:pager", "tool:" + page])
+
+
 def test_titles_of_old_access_tasks_tie_only_when_certain(api):
     assert AR.parse_title("Give Sentry Triage read access to gotidy?") == ("Sentry Triage", ["gotidy"], "read", "")
     assert AR.parse_title(
@@ -264,6 +303,17 @@ def test_titles_of_old_access_tasks_tie_only_when_certain(api):
         assert found == {tied: True}
         assert c.execute("SELECT status FROM tasks WHERE id=?", (tied,)).fetchone()[0] == "closed"
         assert c.execute("SELECT status FROM tasks WHERE id=?", (loose,)).fetchone()[0] == "open"
+    # An Everyone tool behind an Only listed namesake ties; two Everyone tools by the name do not.
+    hidden = tool(api, "Acme Bank", base_url="https://api.bank.acme.example")["id"]
+    nobody = {"audience": {"everyone": False, "people": [], "teams": [], "bots": []}}
+    assert api.patch(f"/api/v2/api-tools/{hidden}", json=nobody, headers=headers()).status_code == 200
+    seen = tool(api, "Acme Bank", base_url="https://api2.bank.acme.example")["id"]
+    title = "Give Ops Bot read access to Acme Bank"
+    with api.app.state.store.read() as c:
+        assert AR.tie(c, title) == [("bot:ops", "tool", seen, "read")]
+    tool(api, "Acme Bank", base_url="https://api3.bank.acme.example")
+    with api.app.state.store.read() as c:
+        assert AR.tie(c, title) is None
 
 
 def test_a_bot_asks_for_itself_from_its_turn_and_that_task_waits(api):

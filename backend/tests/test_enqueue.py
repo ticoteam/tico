@@ -254,6 +254,7 @@ def _bare(trigger):
         " released_at TEXT);"  # enqueue reads the company pause here
         "CREATE UNIQUE INDEX holds_open ON holds(kind, holdable_type, holdable_id, coalesce(bot_id,''))"
         " WHERE released_at IS NULL;"
+        "CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT);"  # a new bot's repository default
         "INSERT INTO runners VALUES('mac', NULL), ('old-mac', '2026-01-01');"
     )
     if trigger:

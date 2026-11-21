@@ -26,14 +26,6 @@
                 }
             },
             {
-                "code": "reportCallIssue",
-                "range": {
-                    "startColumn": 22,
-                    "endColumn": 88,
-                    "lineCount": 4
-                }
-            },
-            {
                 "code": "reportArgumentType",
                 "range": {
                     "startColumn": 18,

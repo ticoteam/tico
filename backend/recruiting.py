@@ -1054,7 +1054,7 @@ def onboard(c, who, onboarding, row, card, slug, *, name, description, instructi
 
     # A seat's bot gets its template's repository access on every repository In use (the Builder writes, a reviewer
     # reads), unless the person adding it already chose some.
-    repositories.seat_default(c, onboarding.settings.catalog_dir, slug, who.actor)
+    repositories.seat_default(c, onboarding.settings.catalog_dir, slug, who.actor, new=True)
     if card["starter"]:
         onboarding._make_starter(c, who, slug, card["template"])
         return None

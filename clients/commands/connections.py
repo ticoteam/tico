@@ -403,8 +403,9 @@ GRANT_FLAGS = {
 @tool(
     "tico_repo_grant",
     "Let one bot read or write one repository (the Owner or an admin; BotOps as the person who asked), keeping the "
-    "bot's other chosen repositories: a bot on its own repository only switches to chosen with this one. A bot on All "
-    "ticked repos is refused unless that already covers it (choose its repositories with tico bot repos). `tick` "
+    "bot's other chosen repositories: a bot on its own repository only switches to chosen with this one, and one on All "
+    "ticked repos at read switches to chosen, keeping read on what it reaches. One on All ticked repos at write is "
+    "refused unless that already covers it (choose its repositories with tico bot repos). `tick` "
     "ticks the repository first when it is not, since a grant applies only to a ticked one. "
     "Example: tico repo grant acme/web builder write --tick",
     {
@@ -432,19 +433,24 @@ def repo_grant(api, args):
     if not row.get("enabled") and args.get("tick"):
         person.call("PUT", "repositories/" + name, {"enabled": True}, key=_key(args, ":tick"))
         out["ticked"] = out["ticked_now"] = True
+    reads = current["mode"] == "all" and current.get("all_access") == "read"
     if current["mode"] == "all":
         if out["ticked"] and (current.get("all_access") == "write" or access == "read") and not flags:
             return {**out, "changed": False, "detail": f"{bot} has All ticked repos ({current.get('all_access')})"}
+    if current["mode"] == "all" and not reads:
         raise APIError(
             "repository_access_all",
             f"{bot} has All ticked repos ({current.get('all_access')}); to give it {access} on {name} alone, choose "
             f"its repositories instead: tico bot repos {bot} --chosen {name}:{access} ...",
             409,
         )
+    # From All ticked repos at Read it moves to Chosen repos, keeping read on each repository it reaches now (its own
+    # stays write whatever the mode), as a product repository's grant does.
+    kept = current.get("effective") if reads else current.get("chosen") if current["mode"] == "chosen" else []
     chosen = [
         {"full_name": r["full_name"], "access": r["access"]}
-        for r in (current.get("chosen") or [] if current["mode"] == "chosen" else [])
-        if r["full_name"].lower() != name.lower()
+        for r in kept or []
+        if r["full_name"].lower() != name.lower() and (not reads or r["access"] == "read")
     ]
     chosen.append({"full_name": name, "access": access, **flags})
     result = person.call("PUT", f"bots/{_path(bot)}/repositories", {"mode": "chosen", "chosen": chosen}, key=_key(args))
@@ -526,9 +532,10 @@ def repo_claim(api, args):
 
 @tool(
     "tico_repo_default",
-    "The repository access a new bot starts with: own (its own repository only) or all (All ticked repos). Without "
-    "`mode` it reads it; setting it is the Owner's or an admin's. Example: tico repo default own",
-    {"mode": _s("own or all", enum=["own", "all"])},
+    "The repository access a new bot starts with: own (its own repository only), read (reads All ticked repos, the "
+    "default) or all (writes All ticked repos). Without `mode` it reads it; setting it is the Owner's or an admin's. "
+    "Example: tico repo default own",
+    {"mode": _s("own, read or all", enum=["own", "read", "all"])},
     writes=True,
 )
 def repo_default(api, args):
@@ -812,7 +819,7 @@ REPO = (
     ),
     Command(
         "repo default",
-        "the repository access a new bot starts with: own or all; without a mode, read it",
+        "the repository access a new bot starts with: own, read (the default) or all; without a mode, show it",
         args=(Arg("mode", positional=True, nargs="?"),),
         convert=_key_if_set,
         example="tico repo default own",

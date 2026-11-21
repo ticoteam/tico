@@ -17,7 +17,7 @@ def test_restore_fences_credentials_and_preserves_uncertain_effects(api, tmp_pat
     post(api, f"attempts/{a['id']}/started", {"thread_id": "pre-disaster"}, r["token"])
     setup(api)
     site = post(api, 'website-tools', {'sites': ['app.acme.example']})['id']
-    account = post(api, f'website-tools/{site}/accounts', {})['id']
+    account = post(api, f'website-tools/{site}/accounts', {'all_bots': True})['id']
     with api.app.state.store.read() as c:
         assert website_tools.can_use(c, 'bot:ops', website_tools._account(c, site, account))
     backup = tmp_path / "backup.sqlite"

@@ -68,7 +68,8 @@ export function TeamIcon({ owner }: { owner: boolean }) {
 
 const NEW_AGENTS = [
   { value: 'own', label: 'Their own repo' },
-  { value: 'all', label: 'All repos in use' },
+  { value: 'read', label: 'Read repos in use' },
+  { value: 'all', label: 'Write repos in use' },
 ] as const;
 const MANY = 100;
 

@@ -276,7 +276,7 @@ function useLogin() {
     username: trimmed(l.username),
     password: l.password || undefined,
     totp: trimmed(l.totp),
-    ...(l.shared ? { all_bots: true } : { holder: me?.id }),
+    ...(l.shared ? {} : { holder: me?.id }),
   });
   return [l, setLogin, body] as const;
 }

@@ -1341,7 +1341,13 @@ class Store:
 
                     # The registry names it: chosen, unless it is the name Tico would give the bot anyway.
                     note_named(c, entry["repo"], ("emp-" + slug, "bot-" + slug), self.settings.github_owner)
-                BS.write(c, slug, json.loads(encode(entry)))
+                declared = json.loads(encode(entry))
+                if "repo_access_mode" not in declared:
+                    from .repositories import NEW_BOT_ACCESS, new_bot_default
+
+                    # A first import's agents are new agents: New agents get, unless the registry names their access.
+                    declared.update(NEW_BOT_ACCESS[new_bot_default(c)])
+                BS.write(c, slug, declared)
             self.seed_goals(c)
             from . import groups as Groups
 

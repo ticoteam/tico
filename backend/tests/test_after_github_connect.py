@@ -335,6 +335,9 @@ def test_one_tap_on_the_product_repository_gives_each_seat_its_access(company, g
         "qa-owner": "read",
         "product-manager": "read",
         "engineering-manager": "read",
+        # A seat whose card names no access reads every repository in use, as any new agent does.
+        "general-manager": "read",
+        "growth-manager": "read",
     }
     for slug, level in want.items():
         answer = token(api, gh, slug).json()
@@ -351,5 +354,5 @@ def test_one_tap_on_the_product_repository_gives_each_seat_its_access(company, g
         r for r in seen["effective"] if r["full_name"] == f"{ORG}/tico"
     ).items()
     assert api.get("/api/v2/bots/feature-owner/github-repos", headers=signed_in()).json()["repositories"] == []
-    for slug in ("assistant", "botops", "general-manager", "growth-manager"):
+    for slug in ("assistant", "botops"):
         assert f"{ORG}/tico" not in token(api, gh, slug).json()["repositories"], slug

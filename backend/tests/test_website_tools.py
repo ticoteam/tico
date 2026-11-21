@@ -212,10 +212,15 @@ def test_an_address_a_browser_could_read_differently_matches_no_site():
 # ---- the pick rule
 
 
-def test_new_shared_accounts_cover_current_and_future_bots_without_giving_people_or_unknown_bots_access(api):
+def test_a_new_shared_account_reaches_nobody_until_all_bots_covers_current_and_future_bots_but_not_people(api):
     start(api)
     tid = website(api)
     aid = post(api, f"website-tools/{tid}/accounts", {"password": PASSWORD})["id"]
+    assert get(api, f"website-tools/{tid}")["accounts"][0]["all_bots"] is False
+    with api.app.state.store.read() as c:
+        with pytest.raises(Problem):
+            W.pick(c, Identity(bot(api, "ops"), "bot"), tid)
+    share(api, tid, aid, "bots")
     # An account grant also makes an otherwise private tool discoverable to its bots.
     call(api, "PATCH", f"website-tools/{tid}", {"audience": {"people": ["ana"]}})
     with api.app.state.store.transaction() as c:

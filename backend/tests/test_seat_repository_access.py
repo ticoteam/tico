@@ -163,3 +163,56 @@ def test_a_second_builder_made_by_the_owner_writes_and_a_person_can_still_narrow
     with api.app_state.store.transaction() as c:
         _seat(c, bot, "builder")
     assert _start(api) == [] and _effective(api, bot)["Acme/product"] == "read"
+
+
+def test_a_new_agent_reads_every_repository_in_use_unless_the_team_chose_and_existing_bots_keep_theirs(api, gh):
+    catalog(api, gh)
+    put(api, "repositories/Acme/product", {"enabled": True})
+    assert api.get("/api/v2/repositories", headers=auth()).json()["new_bot_default"] == "read"
+
+    def make(slug):
+        body = {"slug": slug, "display_name": slug.title(), "description": "Writes", "status": "planned"}
+        made = api.post("/api/v2/bots", json=body, headers={**auth(), "Idempotency-Key": slug})
+        assert made.status_code == 200, made.text
+        with api.app_state.store.read() as c:
+            bot = H.resolve_bot(c, slug)["id"]
+            own = "Acme/" + c.execute("SELECT repo FROM bot_config WHERE bot=?", (bot,)).fetchone()[0]
+        return bot, {name: level for name, level in _effective(api, bot).items() if name != own}
+
+    seo, reached = make("seo")
+    assert reached == {"Acme/product": "read"}  # never another bot's repository
+    assert _defaults(api, seo) == [True]
+    assert _effective(api, REVIEWER) == {"Acme/emp-cmo": "write"}  # a bot made before is unchanged
+    put(api, "repositories/settings", {"new_bot_default": "own"})
+    assert make("ads")[1] == {}
+
+
+def test_a_bot_hired_into_a_builder_seat_writes_over_its_read_but_a_startup_never_lifts_read(api, gh):
+    catalog(api, gh)
+    put(api, "repositories/Acme/product", {"enabled": True})
+    # Riley, a member the seat reports to, hires: a member's bot starts on the read default, not the card's write.
+    seat = api.post(
+        "/api/v2/seats",
+        json={"title": "Builder", "reports_to": "human:riley"},
+        headers={**auth(), "Idempotency-Key": "seat-builder"},
+    )
+    assert seat.status_code == 200, seat.text
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE seats SET template='builder' WHERE id=?", (seat.json()["id"],))
+    hired = api.post(
+        f"/api/v2/seats/{seat.json()['id']}/hire",
+        json={"template": "builder"},
+        headers={**auth("person-test"), "Idempotency-Key": "hire-builder"},
+    )
+    assert hired.status_code == 200, hired.text
+    with api.app_state.store.read() as c:
+        bot = H.resolve_bot(c, hired.json()["slug"])["id"]
+    assert _effective(api, bot)["Acme/product"] == "write"
+
+    # An existing bot started on read whose template becomes the Builder's keeps its read at the next start.
+    body = {"slug": "maker", "display_name": "Maker", "description": "Builds", "status": "planned"}
+    assert api.post("/api/v2/bots", json=body, headers={**auth(), "Idempotency-Key": "maker"}).status_code == 200
+    with api.app_state.store.transaction() as c:
+        maker = H.resolve_bot(c, "maker")["id"]
+        _seat(c, maker, "builder")
+    assert _start(api) == [] and _effective(api, maker)["Acme/product"] == "read"

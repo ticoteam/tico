@@ -39,6 +39,19 @@ def test_creation_is_personal_idempotent_and_requires_read_and_own_computer(api)
     branch(api, computer, expected=403)
 
 
+def test_a_new_branch_reads_every_repository_in_use_and_an_existing_one_keeps_its_access(api):
+    share(api)
+    computer = runner(api, 'cara')
+    made = bot_id(api, branch(api, computer)['slug'])
+    with api.app.state.store.transaction() as c:
+        declared = BS.read(c, made)
+        assert (declared['repo_access_mode'], declared['repo_all_access']) == ('all', 'read')
+        BS.update(c, made, {'repo_access_mode': 'own', 'repo_all_access': None})
+    assert branch(api, computer)['created'] is False
+    with api.app.state.store.read() as c:
+        assert BS.read(c, made)['repo_access_mode'] == 'own'
+
+
 def test_a_saved_config_with_the_removed_rotation_settings_still_loads_and_is_not_followed(api):
     share(api)
     computer = runner(api, 'cara')

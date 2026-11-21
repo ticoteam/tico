@@ -1240,7 +1240,7 @@ export const setRepo = (name: string, change: { enabled?: boolean; setup_command
     send: (idempotencyKey) => api.put(`/api/v2/repositories/${repoPath(name)}`, change, { idempotencyKey }),
   });
 
-export const setNewAgentRepos = (value: 'own' | 'all') =>
+export const setNewAgentRepos = (value: 'own' | 'read' | 'all') =>
   write({
     key: repositoriesQuery.queryKey,
     optimistic: (v: RepoList | undefined) => v && { ...v, new_bot_default: value },

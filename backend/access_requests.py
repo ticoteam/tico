@@ -131,11 +131,20 @@ def _org(c: Any) -> Any:
 
 
 # ---------------------------------------------------------------------------------------------------- resources
-def _tool(c: Any, ref: Any) -> Any:
-    ref = str(ref or "").strip().removeprefix("api:")
-    return c.execute(
-        "SELECT * FROM tools WHERE id=? OR lower(name)=lower(?) ORDER BY id=? DESC LIMIT 1", (ref, ref, ref)
-    ).fetchone()
+def _tools(c: Any, ref: Any, by_id: Any, requestable: Any) -> Any:
+    """The tools `ref` names among those `requestable` keeps (every Everyone tool, and an Only listed one only where
+    the asker may see it), so a hidden tool never hides another of the same name and an answer never tells a hidden
+    tool from no tool. `by_id` (`tool:<id>`): the tool with that id, else those with that name. A bare name: every
+    tool with that name or id, so two called Sentry, or a tool whose id is `sentry` and another named Sentry, are
+    choices rather than a guess."""
+    wanted = str(ref or "").strip().removeprefix("api:")
+    found = [
+        row
+        for row in c.execute("SELECT * FROM tools WHERE id=? OR lower(name)=lower(?) ORDER BY id", (wanted, wanted))
+        if requestable(row)
+    ]
+    exact = [row for row in found if row["id"] == wanted] if by_id else []
+    return exact or found
 
 
 def _repository(c: Any, ref: Any) -> Any:
@@ -161,8 +170,25 @@ def resource(c: Any, who: Any, ref: Any, admins: Any = (), auth: Any = None) -> 
     kind = prefix.lower() if colon and prefix.lower() in ("tool", "api", "repo", "repository", "github") else ""
     name = rest.strip() if kind else text
     if kind in ("", "tool", "api"):
-        row = _tool(c, name if kind != "api" else "api:" + name)
-        if row is not None and (row["audience"] is None or api_tools.visible(c, who, row, admins, auth)):
+
+        def requestable(row: Any) -> bool:
+            # Asking is for access one lacks, so an Everyone tool counts though its Tools list shows it only to holders.
+            if kind == "api" and api_tools.kind_of(row) != "api":
+                return False  # `api:<name>` names an API tool
+            return row["audience"] is None or bool(api_tools.visible(c, who, row, admins, auth))
+
+        named = _tools(c, name, kind != "", requestable)
+        if len(named) > 1:
+            choices = [{"resource": "tool:" + str(row["id"]), "name": str(row["name"])} for row in named]
+            raise Problem(
+                "ambiguous",
+                f"Several tools are named {name}: ask again for one of "
+                + ", ".join(choice["resource"] for choice in choices),
+                409,
+                extra={"choices": choices},
+            )
+        if named:
+            row = named[0]
             if api_tools.kind_of(row) != "api":
                 raise Problem("resource", f"{row['name']} is a website tool: ask for its account in Tools", 422)
             return TOOL, str(row["id"]), str(row["name"]), row
@@ -410,21 +436,21 @@ def _give_repository(c: Any, row: Any, actor: Any, person: Any = False) -> Any:
         c.execute("UPDATE repositories SET enabled=1,updated_at=? WHERE full_name=?", (H.now(), name))
         H.event(c, actor, "repositories.changed", name, {"before": {"enabled": 0}, "after": {"enabled": 1}})
     current = R.access(c, bot, org)
-    if current["mode"] == "all":
-        if has(c, row):
-            return
-        raise Problem(
-            "repository_mode",
-            f"{_bot_name(c, row['subject'])} uses All ticked repos at Read: change it in Settings > General › "
-            "Repositories",
-            409,
-        )
-    chosen = {r["full_name"].lower(): dict(r) for r in current["chosen"]} if current["mode"] == "chosen" else {}
-    held = chosen.get(name.lower(), {}).get("access")
-    chosen[name.lower()] = {"full_name": name, "access": "write" if "write" in (held, want) else "read"}
-    body = R.RepoAccessUpdate(
-        mode="chosen", chosen=[R.Grant(full_name=g["full_name"], access=g["access"]) for g in chosen.values()]
+    if current["mode"] == "all" and has(c, row):
+        return
+    # As a product repository its bot makes (github_app): from All ticked repos it moves to Chosen repos, each
+    # repository it reaches now kept at its level, and this one at the asked level or the one it has, if higher.
+    keep, _ = R.chosen_keeping(c, current, name, org)
+    held = next(
+        (
+            r["access"]
+            for r in current["chosen" if current["mode"] == "chosen" else "effective"]
+            if r["full_name"].lower() == name.lower()
+        ),
+        None,
     )
+    grant = R.Grant(full_name=name, access="write" if "write" in (held, want) else "read")
+    body = R.RepoAccessUpdate(mode="chosen", chosen=[*keep, grant])
     R.set_access(c, bot, body, org, actor, team_list=True, own_click=person, default=False)
 
 
@@ -891,6 +917,10 @@ def _named_bot(c: Any, name: Any) -> Any:
     return "bot:" + rows[0]["id"] if len(rows) == 1 else None
 
 
+def _everyone(row: Any) -> bool:
+    return row["audience"] is None
+
+
 def tie(c: Any, title: Any) -> Any:
     """[(subject, resource_type, id, level)] a title names with certainty, or None: one bot, a level, and each resource
     one that exists."""
@@ -902,11 +932,13 @@ def tie(c: Any, title: Any) -> Any:
     if not subject:
         return None
     out: list[tuple[str, str, str, str]] = []
+    api_tools = _mod("api_tools")
     for item in items:
-        tool = _tool(c, item) if kind != REPOSITORY else None
-        repo = _repository(c, item) if not tool else None
-        if tool is not None and tool["audience"] is None:
-            out.append((subject, TOOL, str(tool["id"]), level))
+        # Only Everyone tools, with no asker to see the rest; several by the name, or a website tool, is not certain.
+        tools: list[Row] = _tools(c, item, False, _everyone) if kind != REPOSITORY else []
+        repo = _repository(c, item) if not tools else None
+        if len(tools) == 1 and api_tools.kind_of(tools[0]) == "api":
+            out.append((subject, TOOL, str(tools[0]["id"]), level))
         elif repo is not None:
             out.append((subject, REPOSITORY, str(repo["full_name"]), level))
         else:

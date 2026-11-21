@@ -20,6 +20,12 @@ from . import bot_settings as BS
 from .api_contract import KEYLESS, api_v2
 
 SETTINGS = 'repos_new_bot_default'
+# What New agents get gives a new bot: their own repo, or All repos in use with read or with write.
+NEW_BOT_ACCESS = {
+    'own': {'repo_access_mode': 'own'},
+    'read': {'repo_access_mode': 'all', 'repo_all_access': 'read'},
+    'all': {'repo_access_mode': 'all', 'repo_all_access': 'write'},
+}
 # {bot: [owner/name, ...]}: write grants an Owner or admin let start and manage workflow runs (Actions: write).
 WORKFLOWS = 'repository-workflow-grants'
 # {bot: [owner/name, ...]}: write grants an Owner or admin let edit workflow files (Workflows: write).
@@ -735,6 +741,35 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
     return {**after, **lost}
 
 
+def new_bot_default(c, fallback='read'):
+    """The team's New agents get (a key of NEW_BOT_ACCESS), or `fallback` while nobody has chosen: a bot made in
+    Settings, by hiring, from a template or as a shared bot's branch reads every repository in use."""
+    chosen = metadata(c, SETTINGS).get('new_bot_default')
+    return chosen if chosen in NEW_BOT_ACCESS else fallback
+
+
+def chosen_keeping(c, before, repository, org):
+    """The Chosen repos grants a bot keeps when `repository` is added at its own level, and how many it moved from All
+    ticked repos (None when it was not there). All ticked repos has one level for every repository, so a bot on it
+    moves to Chosen repos with each ticked repository it reaches now at the level it has, Run workflows and Edit
+    workflow files as they are: nothing gets wider or narrower. Its own repository is not a grant; it stays write
+    whatever the mode."""
+    moved = None
+    if before['mode'] == 'chosen':
+        keep = [Grant(**r) for r in before['chosen']]
+    elif before['mode'] == 'all':
+        ticked = Reads(c, []).all_ticked(org)
+        keep = [
+            Grant(full_name=r['full_name'], access=r['access'], **{flag: True for flag in STORED if r.get(flag)})
+            for r in before['effective']
+            if r['full_name'].lower() in ticked
+        ]
+        moved = len([g for g in keep if g.full_name.lower() != repository.lower()])
+    else:
+        keep = []
+    return [g for g in keep if g.full_name.lower() != repository.lower()], moved
+
+
 def card_access(catalog_dir, template):
     """The repository access a template's card declares for a bot made from it (templates/catalog/<template>/card.yaml
     `repo_access_mode`, own or all, and `repo_all_access`, read or write, read when left out), or {} when it declares
@@ -783,19 +818,25 @@ def _org(c):
     return str(row[0] or '') if row else ''
 
 
-def seat_default(c, catalog_dir, bot, actor):
+def seat_default(c, catalog_dir, bot, actor, new=False):
     """A seat's bot gets the access its template's card declares (`card_access`) on All repos in use, so every
     repository In use now and later reaches it at that level, with Run workflows and Edit workflow files off: the
-    Builder pushes to the team's repository, never a fork. Only while nobody has chosen for it: still on Their own repo
-    (where a new bot starts) and `untouched`. Audited as `bot.repos_changed` with `default`. Returns whether it changed
-    the bot."""
+    Builder pushes to the team's repository, never a fork. Only while nobody has chosen for it (`untouched`) and it is
+    still on Their own repo, or, for a bot just made to fill the seat (`new`), still reading All repos in use where it
+    started: a startup never turns an existing bot's read into write. Audited as `bot.repos_changed` with `default`.
+    Returns whether it changed the bot."""
     declared = BS.read(c, bot)
     want = card_access(catalog_dir, declared.get('template'))
-    if want.get('repo_access_mode') != 'all' or (declared.get('repo_access_mode') or 'own') != 'own':
+    mode = declared.get('repo_access_mode') or 'own'
+    level = 'write' if want.get('repo_all_access') == 'write' else 'read'
+    started = mode == 'own' or (
+        new and mode == 'all' and declared.get('repo_all_access') == 'read' and level == 'write'
+    )
+    if want.get('repo_access_mode') != 'all' or not started:
         return False
     if not untouched(c, bot):
         return False
-    body = RepoAccessUpdate(mode='all', all_access='write' if want['repo_all_access'] == 'write' else 'read')
+    body = RepoAccessUpdate(mode='all', all_access=level)
     set_access(c, bot, body, _org(c), actor, default=True)
     return True
 
@@ -1396,7 +1437,7 @@ class RepoUpdate(Contract):
 
 
 class RepoSettings(Contract):
-    new_bot_default: Literal['own', 'all']
+    new_bot_default: Literal['own', 'read', 'all']
 
 
 class RepoClaim(Contract):
@@ -1435,7 +1476,7 @@ def install(app, store, service):
             github_row = service.row(c)
             return {
                 'repositories': repos,
-                'new_bot_default': metadata(c, SETTINGS).get('new_bot_default', 'own'),
+                'new_bot_default': new_bot_default(c),
                 'github_connected': bool(github_row),
                 # An App that was created but never installed cannot reach any repository.
                 'github_installed': bool(github_row and github_row['installation_id']),

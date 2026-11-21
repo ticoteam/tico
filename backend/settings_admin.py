@@ -663,6 +663,11 @@ class SettingsAdmin:
             config.update(self.template_gateway(body.template))
             if privileged:
                 config.update(self.template_repo_defaults(body.template))
+        if "repo_access_mode" not in config:
+            from .repositories import NEW_BOT_ACCESS, new_bot_default
+
+            # A card's access its creator could not give still reaches the bot when it fills a seat (seat_default).
+            config.update(NEW_BOT_ACCESS[new_bot_default(c)])
         team = self._team(c, bot_id, config)
         now = H.now()
         c.execute(
