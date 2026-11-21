@@ -194,27 +194,32 @@ def asks_person(verdict: Row) -> bool:
     return verdict.get("operation") in QUESTIONS and H.is_bot(str(verdict.get("author") or ""))
 
 
-def refuse_question(c: Any, verdict: Row, rule: Row, too_large: bool, error: str | None = None) -> None:
-    """Where a bot's ❓ would be held (org_rule_check `_write_hold`: its permissions, audience and rules in force all
-    checked), it is refused back to the bot at once instead, with the rule and how to make it lawful, under `COVERS`
-    (never counted toward quarantine): held, it sat on a review task the person never saw while the bot believed it had
-    asked. Too long to check against a Block or Escalate rule, it is refused to shorten. The Directory's check failing
-    (`error`, no rule found broken) refuses it to try again (503, retryable, not a refusal on record). A Warn rule never
-    holds, so it never reaches here: the ❓ is asked, with its warning. Any other write is held as before."""
+def refuse_question(
+    c: Any, verdict: Row, *, broken: Sequence[Row] = (), unchecked: bool = False, too_large: bool = False
+) -> None:
+    """Where a bot's ❓ would be held (org_rule_check, at its hold: its permissions, audience and rules in force all
+    checked), it is refused back to the bot at once instead, and nothing is held: held, it sat on a review task the
+    person never saw while the bot believed it had asked. In this order: a Block or Escalate rule found broken
+    (`broken`, the one to name first) is refused with the rule and how to make it lawful, under `COVERS` (never counted
+    toward quarantine); else a check that could not run (`unchecked`: the Directory's check failed, or a rule of it
+    cannot be checked) is refused to try again (503, retryable, not a refusal on record); else too long to check
+    (`too_large`) is refused to shorten. A Warn rule never holds, so it never reaches here: the ❓ is asked, with its
+    warning. Any other write is held as before."""
     if not asks_person(verdict):
         return
     author = str(verdict["author"])
-    if error:
+    if broken:
+        H.refuse(
+            c,
+            author,
+            COVERS,
+            f'Not asked. Your question breaks a rule: "{broken[0].get("text") or "a rule"}" Rewrite it so it keeps '
+            "the rule and ask again, or act on the rule instead of asking.",
+        )
+    if unchecked:
         raise Problem("task_rule_unchecked", NOT_ASKED_UNCHECKED, 503, retryable=True)
     if too_large:
         H.refuse(c, author, COVERS, NOT_ASKED_LOCAL["too_large"])
-    H.refuse(
-        c,
-        author,
-        COVERS,
-        f'Not asked. Your question breaks a rule: "{rule.get("text") or "a rule"}" Rewrite it so it keeps the rule '
-        "and ask again, or act on the rule instead of asking.",
-    )
 
 
 def note_first(

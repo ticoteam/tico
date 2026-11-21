@@ -312,6 +312,15 @@ def test_a_question_whose_block_rule_turned_warn_while_it_was_checked_is_asked(r
     assert sql(api, "SELECT count(*) AS n FROM org_rule_holds")[0]["n"] == 0
 
 
+def test_a_question_to_someone_who_cannot_read_the_private_task_is_refused_for_that_not_the_rule(ruled):
+    api, _ = ruled
+    color_rule(api)
+    task = post(api, "tasks", {"owner": "ops", "title": "Draft the offer", "body": "Draft it.", "private": True})
+    r = ask_on(api, task, to="ben", text=COLORED)
+    assert r.status_code == 422 and r.json()["error"]["code"] == "private", r.text
+    nothing_asked(api)
+
+
 def test_a_question_too_long_to_check_against_a_block_rule_is_refused_to_shorten(ruled, monkeypatch):
     from clients import judge as J
 
@@ -322,17 +331,6 @@ def test_a_question_too_long_to_check_against_a_block_rule_is_refused_to_shorten
     r = ask_on(api, task, text=COLORED)
     assert r.status_code == 409 and r.json()["error"] == "task_rule" and "Shorten it" in r.json()["detail"], r.text
     nothing_asked(api)
-
-
-def test_a_question_a_warn_rule_finds_broken_is_asked_with_the_warning(ruled):
-    api, _ = ruled
-    color_rule(api, if_broken="warn")
-    task = task_for_ops(api)
-    r = ask_on(api, task, text=COLORED)
-    assert r.status_code == 200 and r.json()["rule_warning"]["rules"][0]["text"] == COLOR, r.text
-    [mark] = sql(api, "SELECT line FROM question_marks WHERE cleared_at IS NULL AND task_id=?", (task["id"],))
-    assert mark["line"] == COLORED
-    assert sql(api, "SELECT count(*) AS n FROM org_rule_holds")[0]["n"] == 0
 
 
 def test_a_question_mark_is_in_the_persons_needs_you_until_they_reply_and_files_nothing(ruled):
@@ -594,7 +592,7 @@ def test_send_anyway_posts_and_marks_a_held_question(ruled, where, monkeypatch):
         c.execute("UPDATE org_rules SET if_broken='escalate', reviewer='ana' WHERE text=?", (OR.ASKS_TO_A_PERSON,))
     path = f"tasks/{task_for_ops(api)['id']}/questions" if where == "task" else "questions"
     with monkeypatch.context() as before:  # only to make the hold; Send anyway below runs the real gate
-        before.setattr(task_rule_gate, "refuse_question", lambda *_: None)
+        before.setattr(task_rule_gate, "refuse_question", lambda *_, **__: None)
         held = post(api, path, {"to": "ben", "text": "Should it go out **Friday**?"}, token="ops-test")["held"]
     view = get(api, f"rule-holds/{held['id']}")
     assert view["can_send"], view

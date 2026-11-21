@@ -564,6 +564,13 @@ def _check(
     return target
 
 
+def check_asking(conn: sqlite3.Connection, bot: str, task_id: str, person: str, body: str) -> str:
+    """Everything a bot's ❓ on a task must pass before its message is written (`_check`): run before the rule check's
+    verdict is applied, so a person who may not be asked (one who cannot read a private task) is the error the bot
+    reads, not a rule's. Returns the person."""
+    return _check(conn, bot, task_id, person, body, None, checked=True)
+
+
 def mark(conn: sqlite3.Connection, bot: str, message_id: str, person: str, *, checked: bool = True) -> Row:
     """Mark the bot's own message ❓ for `person`, replacing the bot's open ❓ in that chat. Returns the mark, with
     `replaced` the open ❓ it cleared ({id, line, created_at}) or None.

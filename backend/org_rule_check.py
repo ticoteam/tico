@@ -990,6 +990,18 @@ def _structured_apply(c, verdict, payload, replay, tell, judged_text=None, priva
     mode, repeat = strictest["if_broken"], False
     if mode == "block" and strictest["id"] and _repeats(c, verdict["author"], strictest["id"]) >= REPEAT_BLOCKS - 1:
         mode, repeat = "escalate", True
+    if task_rule_gate.asks_person(verdict):
+        # A bot's ❓ is refused, never held: a rule found broken first, then a check that could not run, then length.
+        found_broken = [r for r in now["held"] if r.get("id") and not r.get("reason")]
+        judged_long = bool(judged_held) and judged.get("outcome") == "too_large"
+        sure = sorted(judged_held, key=lambda r: -STRICT[r["if_broken"]]) if not judged_long else []
+        task_rule_gate.refuse_question(
+            c,
+            verdict,
+            broken=[*sure, *found_broken],
+            unchecked=len(found_broken) < len(now["held"]),
+            too_large=judged_long,
+        )
     return _write_hold(
         c,
         hold_verdict,
@@ -1718,6 +1730,9 @@ def apply(
         if tell:
             _tell_bot(c, author, told)
         return {"warn": line, "warned": {"rules": [{"id": r["id"], "text": r["text"]} for r in broken], "text": told}}
+    from . import task_rule_gate
+
+    task_rule_gate.refuse_question(c, verdict, broken=[] if too_large else [strictest], too_large=too_large)
     return _write_hold(
         c,
         verdict,
@@ -1754,11 +1769,8 @@ def _write_hold(
     """The hold a write is held in, written and told. `broken` are the rules that hold it, `strictest` the one the hold
     is on and `mode` its outcome (`block` or `escalate`; an escalation with no reviewer is a block). `check` is the check
     that held it: `judged`, or `structured` with `error`, the class of a check that could not complete. Returns apply's
-    answer: {"held": view, "rule", "hold_id"}. A bot's ❓ to a person is never held: it is refused back to the bot
-    (task_rule_gate.refuse_question)."""
-    from . import task_rule_gate
-
-    task_rule_gate.refuse_question(c, verdict, strictest, too_large, error)
+    answer: {"held": view, "rule", "hold_id"}. A bot's ❓ to a person never gets here: its caller refuses it back to
+    the bot (task_rule_gate.refuse_question)."""
     author, operation = verdict["author"], verdict["operation"]
     target = "org_rule:" + strictest["id"] if strictest["id"] else "org_rule_check"
     reviewer = reviewer_for(c, author, broken)

@@ -73,6 +73,8 @@ def register(
 
         comment_rights(c, auth, who, task_id)
         asker, asked_me = replying_to(c, who, task_id, body)
+        if ask_to:  # who a ❓ asks is checked before its rule verdict: may they be asked at all
+            question_marks.check_asking(c, who.actor, task_id, ask_to, body.text)
         # The org rule check (backend/org_rule_check.py), applied before anything is written: held, nothing is.
         extra = (ask_to,) if ask_to else ()
         audience = rule_comment_audience(c, who, row, body.text, *extra) if rc is not None else None

@@ -132,6 +132,27 @@ def test_a_question_the_check_could_not_judge_is_refused_to_try_again_not_held(b
     assert _messages(api, "Acme Lights quote") == []
 
 
+def test_a_question_a_rule_finds_broken_is_refused_for_it_whatever_else_could_not_be_checked(blocked, monkeypatch):
+    """A broken rule outranks a check that could not run and a text too long to check (`refuse_question`)."""
+    from clients import judge as J
+
+    api, _judge, _rule_id = blocked
+    color_rule(api)
+    task = _task(api)
+    monkeypatch.setattr(J, "MAX_STATE_CHARS", 200)  # the judged rule: too long to check; the Directory's: broken
+    r = _question(api, task, "Should the Acme Lights note say the favorite color is teal?")
+    assert r.status_code == 409 and r.json()["error"] == "task_rule" and ACME in r.json()["detail"], r.text
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("the walk failed")
+
+    monkeypatch.setattr(J, "MAX_STATE_CHARS", 100_000)
+    monkeypatch.setattr(ES, "walk", broken)  # the Directory's: could not be checked; the judged rule: broken
+    r = _question(api, task, "Should the Acme Lights note say the favorite color is teal?")
+    assert r.status_code == 409 and r.json()["error"] == "task_rule" and COLOR in r.json()["detail"], r.text
+    assert sql(api, "SELECT count(*) AS n FROM org_rule_holds")[0]["n"] == 0
+
+
 def test_a_question_whose_rules_changed_while_it_was_checked_is_asked(blocked):
     """The Directory rule retired and the judged Block turned Warn mid-check: no rule in force holds it, so it is asked."""
     api, judge, rule_id = blocked
