@@ -18,6 +18,7 @@ Classification and review are triage, not a security boundary: permissions, OKs 
 import json
 import logging
 import re
+from datetime import datetime, timezone
 
 from fastapi import Request, Response
 from urllib.parse import quote
@@ -167,8 +168,8 @@ class Enqueue(Contract):
     automation_action_id: str = Field(default="", max_length=100)
     calendar_action_id: str = Field(default="", max_length=100)
     operation_id: str = Field(default="", max_length=200)
-    # The task this email is for: its OK, when it needs one, is asked on a sub-task of it. A bot's turn on a task names it
-    # when this is left out (`turn_task`).
+    # The task this email is for: its OK, when it needs one, is asked on it. A bot's turn on a task names it when this is
+    # left out (`turn_task`).
     task_id: str = Field(default="", max_length=200)
 
 
@@ -522,6 +523,8 @@ def decision(c, auth, row, *, dispatch=False, wait_for_gmail=False):
         reasons.append("lint")
     if own_writing(row) and policy["second_review"] and checks.get("review") is not True:
         reasons.append("second_review")
+    if checks.get("ok_again"):
+        reasons.append("revised_after_ok")
     if any(rule["value"] == "known_addresses" for rule in policy["recipient_rules"]) and any(
         not known_to(a) for a in recipients
     ):
@@ -734,14 +737,15 @@ def send_title(row):
     return "Send: " + subject + to
 
 
-def request_approval(c, auth, row, policy):
-    """Ask for an OK of this frozen send, on a task of its own titled with the email (`send_title`), of someone who may
-    approve it (`approver`; the company's first person when nobody can, so the send is held where someone sees it).
-    That task is a sub-task of the send's own task when its sender may file under it: not the send's task itself, where
-    a bot's next ask would replace this one (task_engine._replace_open) and so stop the email. The OK's id is the
-    send's `approval_id`, its task the send's `approval_task_id`."""
+def request_approval(c, auth, row, policy, why="Asked again", renew=False):
+    """Ask for an OK of this frozen send, of someone who may approve it (`approver`; the company's first person when
+    nobody can, so the send is held where someone sees it), on the send's own task (the case) when its sender may ask
+    there (`asks_on`): an OK bound to a send is never replaced by the bot's next ask there (task_engine._replace_open),
+    so each send waits on the case with its own OK. Otherwise, and for a send with no task, on a task of its own titled
+    with the email (`send_title`). An earlier OK of this send is withdrawn with `why` once the new one is asked
+    (task_asks.ask_ok; `renew`: even one for the same content, asked again of someone who may approve it now). The OK's id is the send's `approval_id`, its task the send's `approval_task_id`."""
     person = approver(c, auth, row, policy) or H.human_actor(H.default_human(c))
-    parent = H.task(c, row["task_id"]) if row["task_id"] else None
+    case = H.task(c, row["task_id"]) if row["task_id"] else None
     asked = task_asks.ask_ok(
         c,
         row["actor"],
@@ -751,7 +755,9 @@ def request_approval(c, auth, row, policy):
         subject=SUBJECT + row["id"],
         content=content(row),
         title=send_title(row),
-        parent_id=parent["id"] if parent and files_under(c, row["actor"], parent) else None,
+        task_id=case["id"] if case and asks_on(c, auth, row["actor"], person, case) else None,
+        why=why,
+        renew=renew,
     )
     c.execute(
         "UPDATE email_sends SET approval_id=?,approval_task_id=? WHERE id=?",
@@ -759,12 +765,18 @@ def request_approval(c, auth, row, policy):
     )
 
 
-def files_under(c, actor, task):
-    """Whether `actor` may file a sub-task under this open task (hubdb._task_parent, checked here so a send it may not
-    file under is still asked for, on a task of its own)."""
-    if task["status"] != "open" or not H.task_private_readable(c, actor, task):
+def asks_on(c, auth, actor, person, task):
+    """Whether `actor` may ask `person` for an OK on this task (task_calls.task_ask): it is open, `actor` works it, and
+    `person` reads it already, as the approval page checks it (auth.task: a private task's readers, and Read on each
+    agent it involves). An ask never makes a reader of anyone. Checked here so a send it may not ask about there is
+    still asked for, on a task of its own."""
+    if task["status"] != "open" or not H.task_can_work(c, actor, task):
         return False
-    return not actor.startswith("bot:") or H.task_participant(c, actor, task) or H.task_ancestor_party(c, actor, task)
+    try:
+        auth.task(c, auth.identity_for_actor(c, person), task["id"], tags=False)
+    except Problem:
+        return False
+    return True
 
 
 def shown_to(c, who, row):
@@ -802,11 +814,26 @@ def ok_given(c, grant, ctx):
         raise Problem("email_not_shown", "Open the full email before you OK it", 409)
 
 
-def enqueue(c, auth, actor, body, classification, via="", operation_key="", rules=None, wait_for_gmail=False):
+def enqueue(
+    c,
+    auth,
+    actor,
+    body,
+    classification,
+    via="",
+    operation_key="",
+    rules=None,
+    wait_for_gmail=False,
+    request=None,
+    draft_verified=True,
+):
     """Freeze, decide and queue one send. `rules` is the org rule check's in-write half (`rule_gate`): a held email is
     queued blocked with the hold's text, and a warned one carries the warning line in its frozen copy. With
     `wait_for_gmail` (an email Tico composes inside another write, a calendar invitation), Gmail not answering the
-    decision's questions queues it pending and unchecked (`decision`) instead of refusing it."""
+    decision's questions queues it pending and unchecked (`decision`) instead of refusing it. `request` is the request
+    as its caller sent it (before a draft was frozen into `body`): an operation id is bound to its hash.
+    `draft_verified`: Gmail read the draft named (`frozen_draft`), or Tico's own server code named it; only then does
+    the email replace that draft's earlier sends. A caller's `draft_id` beside its own `raw` is only a label."""
     mailbox = body.mailbox.strip().lower()
     bot = H.actor_id(actor) if actor.startswith("bot:") else ""
     if not access.may(c, actor, mailbox)["send"]:
@@ -815,27 +842,50 @@ def enqueue(c, auth, actor, body, classification, via="", operation_key="", rule
     snap = snapshot(raw, mailbox)
     reply_id, thread_id = resolve_reply(c, mailbox, snap, body.reply_to_id, body.thread_id)
     operation_key = operation_key or body.operation_id
-    if operation_key:
-        prior = c.execute(
-            "SELECT s.* FROM email_send_operations o JOIN email_sends s ON s.id=o.send_id "
-            "WHERE o.actor=? AND o.operation_key=?",
-            (actor, operation_key),
-        ).fetchone()
-        if prior:
-            if (
-                snap["content_sha256"]
-                not in (prior["content_sha256"], json.loads(prior["classification"]).get("source_sha256"))
-                or prior["mailbox"] != mailbox
-            ):
-                raise Problem("operation", "This operation already froze different email content", 409)
-            return public(prior)
-    key = digest(dump([mailbox, snap["content_sha256"], snap["recipients"]]))
-    old = c.execute("SELECT * FROM email_sends WHERE idempotency_key=?", (key,)).fetchone()
+    asked = request_hash(request or body)
+    prior = receipt(c, actor, operation_key, mailbox, asked, snap["content_sha256"]) if operation_key else None
+    if prior:
+        return public(prior)
+    draft_id = body.draft_id if draft_verified else ""
+    # A verified draft's sends still to go, newest first, whoever queued them (the sender may send from this inbox,
+    # checked above). Requeued, the draft is a new version: its own send, never merged with another by content. Only
+    # the same content again (its newest send's) changes nothing.
+    drafts = revised(c, mailbox, draft_id)
+    task_id = body.task_id or None
+    if not task_id and drafts and drafts[0]["task_id"] and reads_task(c, auth, actor, drafts[0]["task_id"]):
+        # The draft's earlier send names its case: kept only for a sender who reads it, else the send has none.
+        task_id = drafts[0]["task_id"]
+    case = c.execute("SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone() if task_id else None
+    if case and case["status"] == "closed":
+        # Read in this write: a close that won the race with this send leaves nothing to go.
+        raise Problem("task_closed", "The task this email is for was closed", 409)
+    if drafts and snap["content_sha256"] in (
+        drafts[0]["content_sha256"],
+        json.loads(drafts[0]["classification"]).get("source_sha256"),
+    ):
+        for row in drafts[1:]:
+            retire(c, row, REPLACED)
+        if operation_key:
+            remember(c, actor, operation_key, drafts[0]["id"], asked)
+        return public(drafts[0])
+    # Whether a version it replaces had an OK asked for it: the new one needs its own, whatever the edit took out.
+    ok_again = any(r["approval_id"] or json.loads(r["classification"]).get("ok_again") for r in drafts)
+    if draft_id:
+        key, old = "draft:" + H.new_id(), None
+    else:
+        # Without a verified draft, the same email for the same case (or with none) is the same send.
+        key = digest(dump([mailbox, snap["content_sha256"], snap["recipients"], task_id or "no task"]))
+        old = c.execute("SELECT * FROM email_sends WHERE idempotency_key=?", (key,)).fetchone()
+        if not old:
+            # Keyed before keys named the case: the same send only for the same case, or with none for both.
+            legacy = digest(dump([mailbox, snap["content_sha256"], snap["recipients"]]))
+            found = c.execute("SELECT * FROM email_sends WHERE idempotency_key=?", (legacy,)).fetchone()
+            old = found if found and (found["task_id"] or None) == (task_id or None) else None
     if old and old["state"] in (*ACTIVE, "sent", "unknown"):
         if old["actor"] != actor:
             raise Problem("duplicate", "This email is already queued or sent", 409)
         if operation_key:
-            c.execute("INSERT INTO email_send_operations VALUES(?,?,?)", (actor, operation_key, old["id"]))
+            remember(c, actor, operation_key, old["id"], asked)
         return public(old)
     if old:
         c.execute("UPDATE email_sends SET idempotency_key=? WHERE id=?", ("retired:" + old["id"], old["id"]))
@@ -850,6 +900,9 @@ def enqueue(c, auth, actor, body, classification, via="", operation_key="", rule
         raise Problem("queue_full", "The email queue content limit is reached", 429)
     groups = snap["recipient_headers"]
     checks = {**classification, "copied": sorted(set(groups["cc"]) | set(groups["bcc"]))}
+    if ok_again:
+        # It replaces a version an OK was asked for: the new one needs its own, whatever the edit took out.
+        checks["ok_again"] = True
     gate = rules(c) if rules else None
     if gate:
         checks["rules"] = gate["outcome"]
@@ -881,19 +934,21 @@ def enqueue(c, auth, actor, body, classification, via="", operation_key="", rule
         "subject": snap["subject"],
         "body_sha256": snap["body_sha256"],
         "raw": raw,
-        "draft_id": body.draft_id,
+        # Stored only when Gmail read the draft or Tico named it: what a revision is found by (`revised`).
+        "draft_id": draft_id,
         "thread_id": thread_id,
         "reply_to_id": reply_id,
         # An OK is asked for this snapshot once it is written (`request_approval`): nothing named in the request is
         # one. `body.approval_id` is only ever a person's message the second reviewer reads (`review_context`).
         "approval_id": "",
-        "task_id": body.task_id or None,
+        "task_id": task_id,
         "approval_task_id": None,
         "classification": dump(checks),
         "decision": "{}",
         "state": "pending",
         "created_at": now,
         "send_after": H.shift(now, seconds=effective(c, mailbox, bot)["undo_seconds"]),
+        "detail": "",
     }
     found = decision(c, auth, row, wait_for_gmail=wait_for_gmail)
     if gate and gate["outcome"] == "held":
@@ -909,10 +964,13 @@ def enqueue(c, auth, actor, body, classification, via="", operation_key="", rule
         "INSERT INTO email_sends(" + ",".join(row) + ") VALUES(" + ",".join("?" for _ in row) + ")", tuple(row.values())
     )
     if operation_key:
-        c.execute("INSERT INTO email_send_operations VALUES(?,?,?)", (actor, operation_key, ident))
+        remember(c, actor, operation_key, ident, asked)
     if row["state"] == "waiting_approval" and not found["approved"]:
         # Only an OK bound to this exact snapshot releases it.
         request_approval(c, auth, row, found["policy"])
+    # The draft's earlier versions go once the new one's ask is written, so its case never moves on in between.
+    for older in drafts:
+        retire(c, older, REPLACED)
     if classification.get("status") == "classified":
         H.event(
             c,
@@ -928,6 +986,174 @@ def enqueue(c, auth, actor, body, classification, via="", operation_key="", rule
     H.event(c, actor, "email.queued", ident, {"mailbox": mailbox, "state": row["state"]})
     moved(c, ident)
     return public(c.execute("SELECT * FROM email_sends WHERE id=?", (ident,)).fetchone())
+
+
+def in_company_zone(ts):
+    """A timestamp as the company's own time, with its offset: its date part is the company's day."""
+    from .updates import ZONE
+
+    return (H.parse_ts(ts) or datetime.now(timezone.utc)).astimezone(ZONE).isoformat()
+
+
+def not_before(c, task_id):
+    """The earliest a send for this task may go, as a timestamp: the latest not before of its matter's open key dates
+    (backend/risk.py: "records may be produced no earlier than"), or "" when it has none. A send past its undo window
+    (`send_after`) waits for it too, read as it stands each time the queue looks (`_lease`)."""
+    if not task_id:
+        return ""
+    found = c.execute(
+        "SELECT starts_at FROM matter_dates WHERE task_id=? AND done_at IS NULL AND starts_at IS NOT NULL", (task_id,)
+    ).fetchall()
+    return latest_bound(r[0] for r in found)
+
+
+def latest_bound(values):
+    """The latest of these matter not-before values (a day or a UTC time, backend/risk.py) as a timestamp, or ""."""
+    from . import risk
+
+    found = [risk.date_bound(v, end=False) for v in values if v]
+    return max(found).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z" if found else ""
+
+
+# The matter dates of a send `s`, open and with a not before, in one column: what `latest_bound` reads.
+DATES_SQL = (
+    "(SELECT group_concat(d.starts_at, ',') FROM matter_dates d WHERE d.task_id=s.task_id AND d.done_at IS NULL "
+    "AND d.starts_at IS NOT NULL)"
+)
+
+
+def held_clause(now):
+    """SQL true for a send `s` that its matter's not before still holds at `now`, and its arguments: a day is held
+    while it is after the company's day now (its bound is its first second, risk.date_bound), a UTC time while it is
+    after now. Read in the query, so a held send's row (and its MIME) is never loaded to find that out."""
+    from .updates import ZONE
+
+    at = H.parse_ts(now) or datetime.now(timezone.utc)
+    clause = (
+        "EXISTS (SELECT 1 FROM matter_dates d WHERE d.task_id=s.task_id AND d.done_at IS NULL "
+        "AND d.starts_at > CASE WHEN length(d.starts_at)=10 THEN ? ELSE ? END)"
+    )
+    return clause, (
+        at.astimezone(ZONE).strftime("%Y-%m-%d"),
+        at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    )
+
+
+# The files of a task (its own, and the pages linked to it, backend/page_links.py) with a version of these bytes, each
+# with whether it is archived (the file, or its page).
+ARCHIVED_SQL = (
+    "SELECT DISTINCT f.*, max(f.archived, coalesce(p.archived, 0)) AS gone FROM bot_file_versions v "
+    "JOIN bot_files f ON f.id=v.file_id LEFT JOIN pages p ON p.file_id=f.id WHERE v.digest=? "
+    "AND (f.task_id=? OR f.id IN (SELECT page_id FROM page_links WHERE target=?))"
+)
+
+
+def with_archived(c, auth, who, row, send):
+    """The send as `who` reads its preview: each frozen file that is a version of an archived file or page of its task
+    (its own or linked to it), and of no file still in use there, marked `archived`, counting only the files `who` may see (files.file_visible). Its OK
+    says so, so an outdated copy is not sent by mistake."""
+    if not row["task_id"]:
+        return send
+    from . import files as task_files
+
+    cache = {}
+
+    def archived(sha):
+        seen = [
+            f
+            for f in c.execute(ARCHIVED_SQL, (sha, row["task_id"], "task:" + row["task_id"])).fetchall()
+            if task_files.file_visible(c, auth, who, f, cache)
+        ]
+        return bool(seen) and all(f["gone"] for f in seen)
+
+    files = [{**f, "archived": True} if archived(f.get("sha256")) else f for f in send["attachments"]]
+    return {**send, "attachments": files}
+
+
+REPLACED = "A new version of the email replaced it"
+
+
+def reads_task(c, auth, actor, task_id):
+    """Whether `actor` reads this task as the API checks a caller (auth.task)."""
+    from .auth import Identity
+
+    try:
+        who = auth.identity_for_actor(c, actor) if actor.startswith("human:") else Identity(actor, "bot")
+        auth.task(c, who, task_id, tags=False)
+    except Problem:
+        return False
+    return True
+
+
+def request_hash(request):
+    """The hash an operation id is bound to: the request as its caller sent it."""
+    return digest(dump(request.model_dump()))
+
+
+def receipt(c, actor, operation_key, mailbox, asked, content_sha256=None):
+    """The send this operation queued, when it is this same request (`asked`, its `request_hash`), else None when the
+    operation queued nothing yet. Another request under the same operation id is refused. A receipt written before
+    requests were bound is matched by the content its send froze (`content_sha256`; None: not known yet)."""
+    prior = c.execute(
+        "SELECT s.*,o.request_sha256 FROM email_send_operations o JOIN email_sends s ON s.id=o.send_id "
+        "WHERE o.actor=? AND o.operation_key=?",
+        (actor, operation_key),
+    ).fetchone()
+    if not prior:
+        return None
+    if not prior["request_sha256"] and content_sha256 is None:
+        return None
+    froze = (prior["content_sha256"], json.loads(prior["classification"]).get("source_sha256"))
+    same = asked == prior["request_sha256"] if prior["request_sha256"] else content_sha256 in froze
+    if prior["mailbox"] != mailbox or not same:
+        raise Problem("operation", "This operation already froze different email content", 409)
+    return prior
+
+
+def remember(c, actor, operation_key, sid, request_sha256):
+    """The operation's receipt: its send, and the hash of the request that queued it."""
+    c.execute(
+        "INSERT INTO email_send_operations(actor,operation_key,send_id,request_sha256) VALUES(?,?,?,?)",
+        (actor, operation_key, sid, request_sha256),
+    )
+
+
+def retire(c, row, why):
+    """A send still to go that will not go: canceled with `why`, its frozen copy cleared and its OK withdrawn."""
+    c.execute(
+        "UPDATE email_sends SET state='canceled',detail=?,finished_at=?,raw='' WHERE id=?", (why, H.now(), row["id"])
+    )
+    settle_automation(c, row, "canceled", why)
+    if row["approval_id"]:
+        task_asks.withdraw(c, row["approval_id"], why)
+    H.event(c, H.TICO_ACTOR, "email.canceled", row["id"], {"mailbox": row["mailbox"], "why": why})
+    moved(c, row["id"])
+
+
+def task_closed(c, task_id):
+    """A task was closed (task_effects.moved): each send still to go that is for it, or whose OK waits on it, is
+    canceled in the same write, approved or not, never sent when its time comes. Not when the close is the OK's own
+    task ending because that OK was taken back (task_asks.withdraw revokes it first): the send is asked again."""
+    for row in c.execute(
+        "SELECT * FROM email_sends s WHERE state IN ('waiting_approval','pending') AND (task_id=? OR (approval_task_id=? "
+        "AND NOT EXISTS (SELECT 1 FROM ok_grants g WHERE g.requirement_id=s.approval_id AND g.revoked_at IS NOT NULL)))",
+        (task_id, task_id),
+    ).fetchall():
+        retire(c, row, TASK_CLOSED)
+
+
+def revised(c, mailbox, draft_id):
+    """The sends this Gmail draft of this inbox froze before, still to go (waiting for an OK or in their undo window),
+    newest first, whoever queued them: a revision of the draft by anyone who may send from the inbox updates the newest
+    in place, new content and a new OK, and retires the rest (older data may hold several), never a second send beside
+    it. Empty for an email not frozen from a draft."""
+    if not draft_id:
+        return []
+    return c.execute(
+        "SELECT * FROM email_sends WHERE state IN ('waiting_approval','pending') AND mailbox=? AND draft_id=? "
+        "ORDER BY rowid DESC",
+        (mailbox, draft_id),
+    ).fetchall()
 
 
 def turn_task(c, who):
@@ -1100,12 +1326,21 @@ def _queued(c, mailbox, lease=True):
         (mailbox,),
     ).fetchall()
     if lease:
-        rows += c.execute(
-            "SELECT * FROM email_sends WHERE mailbox=? AND state='pending' AND send_after<=? "
-            "ORDER BY created_at,rowid LIMIT 20",
-            (mailbox, H.now()),
-        ).fetchall()
+        rows += _due(c, mailbox, H.now(), 20)
     return rows
+
+
+def _due(c, mailbox, now, limit):
+    """The sends of this inbox that may go now, oldest first: past their undo window (`send_after`) and their matter's
+    not before, read as it stands now (a date moved later holds one; moved earlier or cleared, it goes at its undo
+    deadline). A held send never takes the place of one that is due."""
+    held, args = held_clause(now)
+    return c.execute(
+        "SELECT s.* FROM email_sends s WHERE s.mailbox=? AND s.state='pending' AND s.send_after<=? AND NOT "
+        + held
+        + " ORDER BY s.created_at,s.rowid LIMIT ?",
+        (mailbox, now, *args, limit),
+    ).fetchall()
 
 
 def _why_asked_again(c, auth, row, bound, standing, policy):
@@ -1115,6 +1350,9 @@ def _why_asked_again(c, auth, row, bound, standing, policy):
     if giver and can_ok(c, auth, giver, row["mailbox"], row["bot"], policy) and not seen(c, giver, row):
         return "The email was OK'd without opening it in full: open it and OK it again"
     return "The email's approval rule changed"
+
+
+TASK_CLOSED = "Its task was closed"
 
 
 def _lease(c, auth, mailbox, runner_id, *, permit=False, lease=True):
@@ -1145,24 +1383,32 @@ def _lease(c, auth, mailbox, runner_id, *, permit=False, lease=True):
         "SELECT * FROM email_sends WHERE mailbox=? AND state='waiting_approval' ORDER BY checked_at,rowid LIMIT 100",
         (mailbox,),
     ).fetchall()
-    due = (
-        c.execute(
-            "SELECT * FROM email_sends WHERE mailbox=? AND state='pending' AND send_after<=? "
-            "ORDER BY created_at,rowid LIMIT 1000",
-            (mailbox, now),
-        ).fetchall()
-        if lease
-        else []
-    )
+    due = _due(c, mailbox, now, 1000) if lease else []
     for row in [*waiting, *due]:
+        case = (
+            c.execute("SELECT status FROM tasks WHERE id=?", (row["task_id"],)).fetchone() if row["task_id"] else None
+        )
+        if case and case["status"] == "closed":
+            # Its case was closed (before the close canceled its sends too): it never goes.
+            retire(c, row, TASK_CLOSED)
+            continue
         c.execute("UPDATE email_sends SET checked_at=? WHERE id=?", (now, row["id"]))
         found = decision(c, auth, row)
         rid = row["approval_id"]
         bound = task_asks.grant(c, rid) if rid else None
         bound = bound if bound and bound["subject"] == SUBJECT + row["id"] else None
         standing = task_asks.standing(c, rid) if bound else None
+        if bound and standing == task_asks.SENT_BACK and not bound["filed"]:
+            # Sent back on its case: this version never goes. It waits for the next version of its draft, whose new
+            # ask replaces this one once it is written (task_asks.ask_ok), so the case never moves on in between;
+            # nothing here withdraws it.
+            if row["state"] != "waiting_approval":
+                c.execute("UPDATE email_sends SET state='waiting_approval' WHERE id=?", (row["id"],))
+                moved(c, row["id"])
+            continue
         if standing in (task_asks.SENT_BACK, task_asks.WITHDRAWN):
-            # Sent back, withdrawn, or pushed past on its task: this snapshot is not sent. A new email is a new OK.
+            # Sent back on a task of its own, withdrawn, or pushed past on its task: this snapshot is not sent. A new
+            # email is a new OK.
             reason = "approval_declined" if standing == task_asks.SENT_BACK else "approval_withdrawn"
             found["outcome"], found["reasons"] = "blocked", [reason]
         if found["outcome"] == "blocked":
@@ -1187,9 +1433,10 @@ def _lease(c, auth, mailbox, runner_id, *, permit=False, lease=True):
                 and not can_ok(c, auth, asked_of, row["mailbox"], row["bot"], found["policy"])
             )
             if not bound or stale:
-                if bound:
-                    task_asks.withdraw(c, rid, _why_asked_again(c, auth, row, bound, standing, found["policy"]))
-                request_approval(c, auth, row, found["policy"])
+                # The new ask is written first, then the old one withdrawn (task_asks.ask_ok, `renew`): the case never
+                # moves on between the two.
+                why_again = _why_asked_again(c, auth, row, bound, standing, found["policy"]) if bound else ""
+                request_approval(c, auth, row, found["policy"], why_again or "Asked again", renew=bool(bound))
             continue
         if row["state"] == "waiting_approval":
             c.execute(
@@ -1297,10 +1544,7 @@ def drain(store, auth, limit=20, budget=None):
         _SERVED[mailbox] = time.monotonic()
         token = refused = None
         with store.read() as c:
-            if c.execute(
-                "SELECT 1 FROM email_sends WHERE mailbox=? AND state='pending' AND send_after<=? LIMIT 1",
-                (mailbox, H.now()),
-            ).fetchone():
+            if _due(c, mailbox, H.now(), 1):
                 try:
                     token = google_tokens.token(c, mailbox, "gmail", write=True)
                 except Problem as problem:
@@ -1310,10 +1554,7 @@ def drain(store, auth, limit=20, budget=None):
                     refused = problem if problem.code == "read_only" or gone else None
         if refused is not None:
             with store.transaction(durable=True, notify=True) as c:
-                for row in c.execute(
-                    "SELECT * FROM email_sends WHERE mailbox=? AND state='pending' AND send_after<=? LIMIT ?",
-                    (mailbox, H.now(), limit),
-                ).fetchall():
+                for row in _due(c, mailbox, H.now(), limit):
                     _finish(c, row, "failed", "", refused.detail)
             continue
         try:
@@ -1659,6 +1900,24 @@ def install(app, store, auth, mutate):
                     raise Problem("receipt_expired", "This send's receipt expired; retry with a new operation id", 409)
 
                 return mutate(request, asked, unchecked, durable=True)
+        operation = body.operation_id or request.headers.get("Idempotency-Key", "")
+        mailbox = body.mailbox.strip().lower()
+        if operation:
+            # A retry of an operation finds its send before anything reads Gmail (its draft may have changed or gone
+            # since), through the normal write with today's checks: the inbox, and the task it names.
+            with store.read() as c:
+                done = receipt(c, who.actor, operation, mailbox, request_hash(asked))
+            if done:
+
+                def replay(c):
+                    if not access.may(c, who.actor, mailbox)["send"]:
+                        raise Problem("forbidden", "The sender cannot send from this inbox", 403)
+                    found = receipt(c, who.actor, operation, mailbox, request_hash(asked)) or done
+                    if found["task_id"]:
+                        auth.task(c, who, found["task_id"], tags=False)  # the task of the send it returns
+                    return {"send": public(found)}
+
+                return mutate(request, asked, replay, durable=True)
         if not body.raw:
             if not body.draft_id:
                 raise Problem("raw", "Send the frozen MIME (raw) or name a Gmail draft (draft_id)", 422)
@@ -1718,6 +1977,9 @@ def install(app, store, auth, mutate):
                     via=via,
                     rules=rules,
                     operation_key=body.operation_id or request.headers.get("Idempotency-Key", ""),
+                    request=asked,
+                    # Gmail read the draft named only when no `raw` came with it (`frozen_draft`).
+                    draft_verified=not asked.raw,
                 )
             },
             durable=True,
@@ -1757,6 +2019,13 @@ def install(app, store, auth, mutate):
             more = len(out) < len(rows)
             return {"sends": out, "next_cursor": out[-1]["id"] if more and out else None}
 
+    def reads(c, who, task_id):
+        """Whether `who` reads this task (auth.task): its matter's dates are said only to its readers."""
+        try:
+            return bool(task_id) and bool(auth.task(c, who, task_id, tags=False))
+        except Problem:
+            return False
+
     def preview_row(c, request, sid):
         row = c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone()
         if not row:
@@ -1786,8 +2055,17 @@ def install(app, store, auth, mutate):
             # Who each address is to, as its frozen headers say (the stored `recipients` is all of them in one list);
             # empty once the frozen copy is gone, as `body` is.
             groups = (snap or {}).get("recipient_headers") or {}
+            held = (
+                not_before(c, row["task_id"]) if row["state"] in OPEN_STATES and reads(c, who, row["task_id"]) else ""
+            )
+            # Its undo deadline: set once it may go, else what an OK now would set.
+            undo = effective(c, row["mailbox"], row["bot"])["undo_seconds"]
+            due = row["send_after"] if row["state"] != "waiting_approval" else H.shift(H.now(), seconds=undo)
             return {
-                "send": public(row),
+                "send": with_archived(c, auth, who, row, public(row)),
+                # The later day a send still to go is held for (its matter's not before past its undo deadline), or
+                # null.
+                "not_before": in_company_zone(held) if held > max(due, H.now()) else None,
                 "body": (snap or {}).get("body", ""),
                 "bodies": (snap or {}).get("visible_bodies", []),
                 "preview_complete": bool(snap),

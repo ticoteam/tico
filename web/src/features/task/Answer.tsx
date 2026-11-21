@@ -5,10 +5,11 @@ import type { TaskRequirement } from '@/api/schema';
 import { clock } from '@/conversation';
 import { meQuery } from '@/data';
 import { Button } from '@/kit/Button';
+import { Icon } from '@/kit/Icon';
 import { Pill } from '@/kit/Pill';
 import { toast } from '@/kit/Toast';
 import { useFollow } from '@/live/follow';
-import { changesAskedOf, decisionName, decisionOf, effectOf, emailOf, failedToast, personOf, reviewOf, sendTitle } from './model';
+import { changesAskedOf, decisionName, decisionOf, effectOf, emailOf, failedToast, heldUntil, personOf, reviewOf, sendTitle } from './model';
 import { answered } from './answered';
 import { AskCard, Docked, useAnswering } from './AskCard';
 import { HeldDecision, isRuleReview } from './Held';
@@ -27,21 +28,25 @@ export interface DecisionProps {
   dock?: boolean;
   /** Told while "What should change?" is open: the chat's own message box steps aside, so there is one place to type. */
   onAsking?: (asking: boolean) => void;
+  /** The email whose tab is open: its own OK is the decision; null on another tab of the task: never an email's OK
+      (its preview read counts as showing it); left out, whatever waits first. */
+  email?: string | null;
 }
 
 /** The decision while something waits on the person, or "Changes asked" once they asked for changes. An answer is shown
     first, which takes the request away; the box is held through the send, and after a refusal until the task's truth
     is back, so it can still say why. */
-export function Decision({ t, flow, dock = false, onAsking }: DecisionProps) {
+export function Decision({ t, flow, dock = false, onAsking, email }: DecisionProps) {
   const me = useQuery(meQuery).data?.id;
   const [held, setHeld] = useState<{ r: TaskRequirement; sending: boolean } | null>(null);
-  const live = decisionOf(t);
+  const live = decisionOf(t, email);
   // The truth is back after a refusal: let go (React's "adjust state while rendering").
   if (live && held && !held.sending) setHeld(null);
   const r = held?.sending ? held.r : (live ?? held?.r);
-  const asked = r ? null : changesAskedOf(t, me);
-  // A rule's review asks no OK: what it held waits on the person in the same box (Held.tsx).
-  if (!r && !asked) return isRuleReview(t) ? <HeldDecision t={t} flow={flow} dock={dock} /> : null;
+  const asked = r ? null : changesAskedOf(t, me, email);
+  // A rule's review asks no OK: what it held waits on the person in the same box (Held.tsx). An email tab shows only
+  // that email's own decision.
+  if (!r && !asked) return isRuleReview(t) && typeof email !== 'string' ? <HeldDecision t={t} flow={flow} dock={dock} /> : null;
   const box = r ? (
     <Answer key={`${t.id}:${r.requirement_id}`} t={t} r={r} flow={flow} onAsking={onAsking} hold={(x, sending = false) => setHeld(x && { r: x, sending })} />
   ) : (
@@ -51,13 +56,14 @@ export function Decision({ t, flow, dock = false, onAsking }: DecisionProps) {
 }
 
 /** The thing's name and what Approve does: an email is named by who it goes to, read from its own preview, else from
-    the task's title while the preview is not read. */
+    the task's title while the preview is not read; one held for a later day says when it goes ("Sends Nov 25"). */
 function useNamed(t: TaskData, r: TaskRequirement) {
   const send = emailOf(r);
   const mail = useQuery({ ...emailSendQuery(t.id, send ?? ''), enabled: !!send });
   const all = mail.data ? addressesOf(mail.data).to : [];
   const to = all[0] ?? sendTitle(t.title)?.to;
-  return { name: decisionName(t, r, to ? personOf(to) : undefined), effect: effectOf(t, r), send, recipients: all.length ? all : to ? [to] : [] };
+  const effect = heldUntil(mail.data?.not_before) ?? effectOf(t, r);
+  return { name: decisionName(t, r, to ? personOf(to) : undefined), effect, send, recipients: all.length ? all : to ? [to] : [], files: mail.data?.files ?? [] };
 }
 
 /** One task the stream follows, for its status alone. */
@@ -100,7 +106,7 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
   const request = useAction('task.requestChanges');
   const { error, setError, here, nextUp, refused, moveOn } = useAnswering(t, flow);
   const shown = useQuery(decisionShownQuery(t.id, r.requirement_id, t.version, emailOf(r)));
-  const { name, effect, send, recipients } = useNamed(t, r);
+  const { name, effect, send, recipients, files } = useNamed(t, r);
   const [asking, setAsking] = useState(false);
   const [note, setNote] = useState('');
   const may = (v: 'ok' | 'no') => r.may.includes(v);
@@ -210,6 +216,17 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
         )
       }
     >
+      {!asking && files.length > 0 && (
+        <span className="askcard-files">
+          {files.map((f) => (
+            <span key={f.part} className="file">
+              <Icon name="file" />
+              <span>{f.name}</span>
+              {f.archived && <em>Archived</em>}
+            </span>
+          ))}
+        </span>
+      )}
       {asking && (
         <label className="askcard-field">
           <span>What should change?</span>

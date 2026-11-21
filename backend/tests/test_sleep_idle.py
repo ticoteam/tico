@@ -3,7 +3,7 @@
 import dataclasses
 import json
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -525,6 +525,36 @@ def test_a_send_waiting_for_a_far_retry_does_not_keep_the_server_up_but_sets_the
             c.execute("UPDATE webhook_sends SET state=?, next_attempt_at=?", (state, sleep_idle.stamp(later)))
         with api.app.state.store.read() as c:
             assert (sleep_idle.busy(c, at) == "send_pending") is due
+
+
+def test_a_queued_email_keeps_the_server_up_when_due_and_wakes_it_when_held_for_a_later_day(api, hq):
+    """An email queued for its undo window let the server sleep before it went, and one held until its matter's not
+    before (backend/email_sending.py `not_before`) waited until someone came back. One due within the next 15 minutes
+    keeps the server up; one due later sets the wake time to when it may go."""
+    at = hq.clock[0]
+    later = datetime.fromtimestamp(at + 3 * 86400, timezone.utc).strftime("%Y-%m-%d")
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, "human:ana", "Records request", "x", "human:ana", lint=False)["id"]
+        c.execute(
+            "INSERT INTO email_sends(id,mailbox,actor,bot,via,content_sha256,idempotency_key,recipients,attachments,"
+            "subject,body_sha256,raw,draft_id,thread_id,reply_to_id,approval_id,classification,decision,state,created_at,"
+            "send_after,task_id) VALUES('es_1','legal@acme.example','bot:ops','ops','','c','k','[]','[]','s','b','raw',"
+            "'','','','','{}','{}','pending',?,?,?)",
+            (sleep_idle.stamp(at), sleep_idle.stamp(at + 90), task),
+        )
+    with api.app.state.store.read() as c:
+        assert sleep_idle.busy(c, at) == "send_pending"
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO matter_dates(id,task_id,label,starts_at,created_by_id,created_at,updated_by_id,updated_at) "
+            "VALUES('md_1',?,'Records produced',?,'human:ana',?,'human:ana',?)",
+            (task, later, sleep_idle.stamp(at), sleep_idle.stamp(at)),
+        )
+    from backend import email_sending
+
+    with api.app.state.store.read() as c:
+        assert sleep_idle.busy(c, at) == ""
+        assert sleep_idle.wake_time(c, at) == pytest.approx(sleep_idle.epoch(email_sending.not_before(c, task)), abs=1)
 
 
 class Cell:

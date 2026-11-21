@@ -690,13 +690,11 @@ def test_a_bots_new_ask_never_drops_an_ok_given_for_exact_content_it_has_not_use
     rid = asked["requirement_id"]
     task_asks.show(c, BEN, rid, {"cents": 500}, own_click=True)
     task_asks.give_ok(c, BEN, rid, task_asks.content_hash({"cents": 500}), own_click=True)
-    with _refused("not used yet"):
-        _ok(c, row["id"], BEN, "OK the launch week?")
+    _ok(c, row["id"], BEN, "OK the launch week?")  # asked beside it: a bound OK is never replaced
     assert task_asks.standing(c, rid) == task_asks.OK  # still good, for that content only
     task_asks.use(c, rid, "budget_raise:b1", {"cents": 500}, BUILDER)
-    _ok(c, row["id"], BEN, "OK the launch week?")
     assert task_asks.standing(c, rid) == task_asks.USED
-    assert H.task_view(c, row["id"], BEN)["to_leave"][-1]["requirement_id"] == rid  # what was decided stays
+    assert rid in {r["requirement_id"] for r in H.task_view(c, row["id"], BEN)["to_leave"]}  # what was decided stays
 
 
 def test_an_answer_the_assistant_gives_for_a_person_says_so_on_the_task(c):

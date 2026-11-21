@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsRoot } from '@/actions';
@@ -13,7 +13,7 @@ import { forgetPlaces, notePlace } from '@/lib';
 import { useFollow } from '@/live/follow';
 import { fakePdf } from '@/test/fakePdf';
 import { decisionName, effectOf, sendTitle } from './model';
-import type { TaskData } from './queries';
+import { taskFilesQuery, type TaskData } from './queries';
 import { TaskChat, TaskPage } from './TaskPage';
 
 /* The decision (plan/approvals.html): the thing asked about is the first tab, one box decides it, Approve is bound to
@@ -308,7 +308,7 @@ describe('the decision', () => {
     expect(within(box).getByRole('textbox', { name: 'What should change?' })).toHaveProperty('value', '');
   });
 
-  it('keeps the decision being sent in view while a second approval waits', async () => {
+  it('keeps the decision being sent in view, and never turns into another ask on the email’s tab', async () => {
     const next = req({ requirement_id: 'r2', shows: [], line: 'Check the brief?' });
     shown = task({ to_leave: [req(), next] });
     let respond!: (r: Reply) => void;
@@ -323,7 +323,8 @@ describe('the decision', () => {
     expect(within(box).getByText('Email to Dana Ruiz')).toBeTruthy();
     expect(within(box).queryByText('Check the brief?')).toBeNull();
     await act(async () => respond({ body: { task: task({ to_leave: [req({ met: true, may: [] }), next] }) } }));
-    expect(await screen.findByText('Check the brief?')).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'The decision' })).toBeNull());
+    expect(screen.queryByText('Check the brief?')).toBeNull();
   });
 
   it('names the email, who asks and what Approve does; the head is quiet and Details sits under ⋯ @approvals', async () => {
@@ -338,6 +339,103 @@ describe('the decision', () => {
     expect(within(tabs).queryByRole('link', { name: 'Details' })).toBeNull();
     fireEvent.click(screen.getAllByRole('button', { name: 'More' })[0] as HTMLElement);
     expect(await screen.findByRole('menuitem', { name: 'Details' })).toBeTruthy();
+  });
+
+  it('says the day a held email goes and flags its archived file @approvals', async () => {
+    const held = { ...mail, not_before: '2099-11-25T16:00:00.000000Z', send: { ...mail.send, attachments: [{ part: 2, name: 'letter.pdf', size: 4096, archived: true }] } };
+    reply = (url) => (url.endsWith('/api/v2/email/sends/s1') ? { body: held } : null);
+    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    const box = await decision();
+    expect(await within(box).findByText('Sends Nov 25')).toBeTruthy();
+    expect(within(box).getByText('letter.pdf')).toBeTruthy();
+    expect(within(box).getByText('Archived')).toBeTruthy();
+  });
+
+  it('two sends on one task: each email tab approves its own send with its own hash @approvals', async () => {
+    const second = { ...mail, send: { ...mail.send, id: 's2', subject: 'Records enclosed', recipients: ['Lee Park <lee@example.test>'] }, shown_hash: 'h-mail-2' };
+    shown = task({ to_leave: [req(), req({ requirement_id: 'r2', shows: ['email:s2'] })] });
+    reply = (url) =>
+      url.endsWith('/api/v2/email/sends/s2')
+        ? { body: second }
+        : url.endsWith('/api/v2/oks/r2')
+          ? { body: { requirement_id: 'r2', subject: 'email_send:s2', content: {}, shown_hash: 'h-grant-2', standing: 'waiting', task_id: 't1' } }
+          : null;
+    show(<TaskPage task="12" pipeline="p1" tab="email-2" />, '/tasks/p1/12/email-2');
+    const box = await decision();
+    expect(await within(box).findByText('Email to Lee Park')).toBeTruthy();
+    fireEvent.click(await ready(box));
+    await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/tasks/t1/asks/r2/ok', body: { shown_hash: 'h-mail-2' } }));
+  });
+
+  const secondSend = () => {
+    const second = { ...mail, send: { ...mail.send, id: 's2', subject: 'Records enclosed', recipients: ['Lee Park <lee@example.test>'] }, shown_hash: 'h-mail-2' };
+    const okTwo = { requirement_id: 'r2', subject: 'email_send:s2', content: {}, shown_hash: 'h-grant-2', standing: 'waiting', task_id: 't1' };
+    reply = (url) => (url.endsWith('/api/v2/email/sends/s2') ? { body: second } : url.endsWith('/api/v2/oks/r2') ? { body: okTwo } : null);
+  };
+
+  it('off its Email tab an email’s OK is a pointer, its preview never read @approvals', async () => {
+    const got: string[] = [];
+    reply = (url) => {
+      got.push(url);
+      return null;
+    };
+    shown = task({ documents: [{ file_id: 'd1', name: 'Notes', kind: 'markdown', version: 1 }] as never });
+    show(<TaskPage task="12" pipeline="p1" tab="notes" />, '/tasks/p1/12/notes');
+    const pointer = await screen.findByRole('region', { name: 'Waits on you' });
+    expect(within(pointer).getByRole('button', { name: 'Open' })).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'The decision' })).toBeNull();
+    expect(got.filter((u) => u.includes('/api/v2/email/sends/'))).toEqual([]);
+  });
+
+  it('beside an older email OK filed apart, the case’s own card steps aside @approvals', async () => {
+    const sub = task({ id: 't7', number: 77, title: 'Send: Old notice → dana@example.test', pipeline_id: 'general', to_leave: [req({ requirement_id: 'r7', shows: ['email:s7'] })] });
+    const children = [{ id: 't7', number: 77, title: sub.title, status: 'open' }];
+    const old = { ...mail, send: { ...mail.send, id: 's7', state: 'waiting_approval' } };
+    reply = (url) =>
+      url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1')
+        ? { body: { task: shown, runs: [], children, can_comment: true, mover: true } }
+        : url.endsWith('/api/v2/tasks/t7')
+          ? { body: { task: sub, runs: [], children: [], can_comment: true, mover: true } }
+          : url.endsWith('/api/v2/email/sends/s7')
+            ? { body: old }
+            : null;
+    show(<TaskChat task="12" />, '/tasks/p1/12/email-2');
+    await waitFor(() => expect(queryClient.getQueryState(taskFilesQuery('t1').queryKey)?.status).toBe('success'));
+    await waitFor(() => expect(queryClient.getQueryData(['tasks', 'detail', 't7'])).toBeTruthy());
+    expect(screen.queryByRole('region', { name: 'The decision' })).toBeNull();
+  });
+
+  it('beside an address naming no tab of the task, the chat card answers the tab the page opens @approvals', async () => {
+    shown = task({ to_leave: [req(), req({ requirement_id: 'r2', shows: [], line: 'Check the brief?' })] });
+    for (const at of ['/tasks/p1/12/bogus', '/tasks/p1/12/%E0%A4%A']) {
+      show(<TaskChat task="12" />, at);
+      const box = await decision();
+      expect(await within(box).findByText('Email to Dana Ruiz')).toBeTruthy(); // the Email tab opens: its own OK
+      expect(within(box).queryByText('Check the brief?')).toBeNull();
+      cleanup();
+    }
+  });
+
+  it('the chat card beside an email tab approves that send @approvals', async () => {
+    secondSend();
+    shown = task({ to_leave: [req(), req({ requirement_id: 'r2', shows: ['email:s2'] })] });
+    show(<TaskChat task="12" />, '/tasks/p1/12/email-2');
+    const box = await decision();
+    expect(await within(box).findByText('Email to Lee Park')).toBeTruthy();
+    fireEvent.click(await ready(box));
+    await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/tasks/t1/asks/r2/ok', body: { shown_hash: 'h-mail-2' } }));
+  });
+
+  it('an email tab whose send has no OK to give shows no decision, in the chat or the dock @approvals', async () => {
+    secondSend();
+    shown = task({ to_leave: [req(), req({ requirement_id: 'r2', shows: ['email:s2'], met: true, may: [] })] });
+    show(<TaskChat task="12" />, '/tasks/p1/12/email-2');
+    await waitFor(() => expect(queryClient.getQueryState(taskFilesQuery('t1').queryKey)?.status).toBe('success'));
+    expect(screen.queryByRole('region', { name: 'The decision' })).toBeNull();
+    cleanup();
+    show(<TaskPage task="12" pipeline="p1" tab="email-2" />, '/tasks/p1/12/email-2');
+    expect(await screen.findByRole('heading', { name: 'Records enclosed' })).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'The decision' })).toBeNull();
   });
 
   it('Approve sends the hash of the email as shown, then offers Undo @approvals', async () => {
@@ -478,6 +576,28 @@ describe('an email waiting to send', () => {
     await ready(box);
     expect(within(box).getByText('Sends now')).toBeTruthy();
     expect(within(box).queryByText('Part of it did not load')).toBeNull();
+  });
+
+  it('a refused decision stays with its email, never shown on another tab @approvals', async () => {
+    const notes = { file_id: 'd1', name: 'Notes', kind: 'markdown', version: 1 };
+    shown = task({ documents: [notes] as never });
+    let refuse!: () => void;
+    reply = (url, method) =>
+      method === 'POST' && url.endsWith('/asks/r1/ok')
+        ? new Promise<Reply>((done) => (refuse = () => done({ status: 422, body: { error: { code: 'ok_refused', detail: 'This OK is no longer asked.' } } })))
+        : null;
+    const router = show(<TaskChat task="12" />, '/tasks/p1/12/email');
+    const box = await decision();
+    fireEvent.click(await ready(box));
+    await waitFor(() => expect(sent.at(-1)?.url).toBe('/api/v2/tasks/t1/asks/r1/ok'));
+    // while it is sent, the task says the OK is no longer asked; then the server refuses it
+    shown = task({ documents: [notes] as never, to_leave: [req({ met: true, may: [] })] });
+    await act(() => queryClient.invalidateQueries({ queryKey: keys.tasks.detail('t1') }));
+    await act(async () => refuse());
+    expect(await within(box).findByText('This OK is no longer asked.')).toBeTruthy(); // held on its email, to say why
+    await act(() => router.navigate({ to: '/tasks/p1/12/notes' as never }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/notes'));
+    expect(screen.queryByRole('region', { name: 'The decision' })).toBeNull();
   });
 
   it('keeps Approve off for a stage’s own OK whose email did not load @approvals', async () => {
@@ -641,9 +761,11 @@ describe('on a phone, the decision holds the bottom', () => {
   });
 
   it('of the Chat tab, over its message box @approvals', async () => {
+    shown = task({ to_leave: [req(), req({ requirement_id: 'r2', shows: [], line: 'Check the brief?' })] });
     show(<TaskPage task="12" pipeline="p1" tab="chat" />, '/tasks/p1/12/chat');
     const chat = await screen.findByRole('region', { name: 'Chat with Legal Owner' });
-    expect(within(chat).getByRole('region', { name: 'The decision' })).toBeTruthy();
+    // the task's own ask: an email's OK is approved only on its Email tab
+    expect(within(within(chat).getByRole('region', { name: 'The decision' })).getByText('Check the brief?')).toBeTruthy();
     // one box: the page's own dock steps aside on the Chat tab
     expect(screen.getAllByRole('region', { name: 'The decision' })).toHaveLength(1);
   });
@@ -656,7 +778,7 @@ describe('the matter shows the email that waits on the person', () => {
   const serve = (m: TaskData, children: unknown[], state = 'waiting_approval') => {
     reply = (url) => {
       if (url.includes('/api/v2/tasks/%2340') || url.endsWith('/api/v2/tasks/t5')) return { body: { task: m, runs: [], children, can_comment: true, mover: true } };
-      if (url.endsWith('/api/v2/tasks/t1')) return { body: { task: sub, runs: [], children: [], parent: { id: 't5', title: m.title, label: null, step: null } } };
+      if (url.endsWith('/api/v2/tasks/t1')) return { body: { task: { ...sub, email_send: { id: 's1', state } }, runs: [], children: [], parent: { id: 't5', title: m.title, label: null, step: null } } };
       if (url.endsWith('/api/v2/email/sends/s1')) return { body: { ...mail, send: { ...mail.send, state } } };
       return null;
     };
@@ -684,7 +806,8 @@ describe('the matter shows the email that waits on the person', () => {
     serve(matter({ documents: [deadlines], relations: { depends_on: [{ id: 't1', title: sub.title, status: 'open', owner_id: 'bot:lo', direction: 'out' }] } } as unknown as Partial<TaskData>), []);
     const router = show(<TaskPage task="40" pipeline="p9" tab="deadlines" />, '/tasks/p9/40/deadlines');
     const pointer = await screen.findByRole('region', { name: 'Waits on you' });
-    expect(await within(pointer).findByText('Email to Dana Ruiz')).toBeTruthy();
+    // named from the OK task's title: its preview is never read off the Email tab
+    expect(await within(pointer).findByText('Email to dana@example.test')).toBeTruthy();
     // one label on the bar: the dot says it waits on you to a screen reader, no second line drawn over the name
     expect(within(pointer).queryByText(/waits on you/i)).toBeNull();
     expect(within(pointer).getByRole('img', { name: 'Waits on you' })).toBeTruthy();
@@ -705,7 +828,7 @@ describe('the matter shows the email that waits on the person', () => {
     reply = (url, method) => (url.endsWith('/api/v2/tasks/t5/files?all=1') ? { body: { files: [pdf] } } : inner(url, method));
     show(<TaskPage task="40" pipeline="p9" tab="declaration-pdf" />, '/tasks/p9/40/declaration-pdf');
     const pointer = await screen.findByRole('region', { name: 'Waits on you' });
-    expect(await within(pointer).findByText('Email to Dana Ruiz')).toBeTruthy();
+    expect(await within(pointer).findByText('Email to dana@example.test')).toBeTruthy();
     expect(await screen.findByRole('region', { name: 'declaration.pdf' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Sign' })).toBeTruthy();
     expect(sent).toEqual([]);
@@ -714,9 +837,10 @@ describe('the matter shows the email that waits on the person', () => {
   it('shows nothing once the email is no longer to go out, or with no OK hung on it @approvals', async () => {
     serve(matter(), [{ id: 't1', title: sub.title, status: 'open', owner_id: 'bot:lo' }], 'canceled');
     show(<TaskPage task="40" pipeline="p9" />, '/tasks/p9/40');
-    await waitFor(() => expect(queryClient.getQueryData([...keys.tasks.detail('t1'), 'email', 's1'])).toBeTruthy());
+    await waitFor(() => expect(queryClient.getQueryData(keys.tasks.detail('t1'))).toBeTruthy());
     await act(async () => {});
     expect(document.querySelector('.tv-waits')).toBeNull();
+    expect(queryClient.getQueryData([...keys.tasks.detail('t1'), 'email', 's1'])).toBeUndefined();
     expect(sent).toEqual([]);
   });
 });

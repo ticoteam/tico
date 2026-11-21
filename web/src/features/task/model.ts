@@ -37,9 +37,17 @@ export interface TaskTab {
   other?: string;
 }
 
-/** The requirement the person may answer now: Approve, Send back. */
-export function decisionOf(t: TaskData): TaskRequirement | null {
-  return t.to_leave?.find((r) => !r.met && (r.may.includes('ok') || r.may.includes('no'))) ?? null;
+const answerable = (r: TaskRequirement) => !r.met && (r.may.includes('ok') || r.may.includes('no'));
+
+/** Whether a requirement belongs where `email` is open: that email's own (a string), or none's (null: a page off the
+    email tabs never shows an email's OK); undefined: any. */
+const belongs = (r: TaskRequirement, email: string | null | undefined) => email === undefined || (emailOf(r) ?? null) === email;
+
+/** The requirement the person may answer now: Approve, Send back. With `email` (the email tab open), only that email's
+    own OK, never another ask, so two sends on one task are each approved from their own tab; with null (another tab),
+    never an email's OK. */
+export function decisionOf(t: TaskData, email?: string | null): TaskRequirement | null {
+  return (t.to_leave ?? []).find((r) => answerable(r) && belongs(r, email)) ?? null;
 }
 
 /** The files a requirement shows: the page it approves, and each `page:` or `file:` it names. */
@@ -114,7 +122,7 @@ export function tabsOf(t: TaskData, files?: TaskFileView[]): TaskTab[] {
   for (const r of t.to_leave ?? []) {
     const email = emailOf(r);
     if (!email || emails.some((x) => x.email === email)) continue;
-    emails.push({ slug: free('Email'), label: 'Email', mark: r === decision ? 'ask' : r.met ? 'ok' : 'none', email });
+    emails.push({ slug: free('Email'), label: 'Email', mark: answerable(r) ? 'ask' : r.met ? 'ok' : 'none', email });
   }
   const all = [...docs, ...others, ...away, ...emails];
   // What the ask is about opens first, before any other page it shows (a review page).
@@ -157,6 +165,16 @@ export function decisionName(t: TaskData, r: TaskRequirement, to?: string): stri
   return v && v > 1 && (r.approval || doc) ? `${name} v${v}` : name;
 }
 
+const sendDay = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+
+/** What Approve does for an email held for a later day ("Sends Nov 25"): the preview's `not_before` (its matter's not
+    before, in the company's time with its offset, so its date part is the company's day, whatever the browser's);
+    null when it has none and goes once its undo window is over. */
+export function heldUntil(notBefore: string | null | undefined): string | null {
+  const day = /^\d{4}-\d{2}-\d{2}/.exec(notBefore ?? '')?.[0];
+  return day ? `Sends ${sendDay.format(new Date(`${day}T12:00:00Z`))}` : null;
+}
+
 /** What Approve does, in three words or fewer (plan/approvals.html): an email sends; the last thing a stage waits on
     moves the task on. Nothing when it does neither. */
 export function effectOf(t: TaskData, r: TaskRequirement): string {
@@ -166,8 +184,8 @@ export function effectOf(t: TaskData, r: TaskRequirement): string {
 }
 
 /** A request the person asked changes on: it waits on the agent's new version (plan/approvals.html, Changes asked). */
-export function changesAskedOf(t: TaskData, me: string | undefined): TaskRequirement | null {
-  return (me && t.to_leave?.find((r) => !r.met && r.answer?.value === 'no' && r.answer.by === me)) || null;
+export function changesAskedOf(t: TaskData, me: string | undefined, email?: string | null): TaskRequirement | null {
+  return (me && t.to_leave?.find((r) => !r.met && r.answer?.value === 'no' && r.answer.by === me && belongs(r, email))) || null;
 }
 
 /** A request whose answer is being sent (answerAsk shows it at once, before the server takes it). */

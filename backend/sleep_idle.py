@@ -239,7 +239,8 @@ def fixed_times(c, when):
 
 
 def later_sends(c, at):
-    """The earliest `next_attempt_at` of each kind of waiting send that is beyond the 15 minutes `busy` already covers."""
+    """The earliest `next_attempt_at` of each kind of waiting send, and the earliest queued email, that is beyond the
+    15 minutes `busy` already covers."""
     out = []
     for name, where in SENDS.items():
         if table(c, name):
@@ -248,7 +249,26 @@ def later_sends(c, at):
             ).fetchone()
             if row and row[0] and (found := epoch(row[0])):
                 out.append(found)
+    # A queued email due later (its undo window, or its matter's not before) wakes the server to go.
+    later = [t for t in email_due(c) if t > at + SOON]
+    if later:
+        out.append(min(later))
     return out
+
+
+def email_due(c):
+    """When each queued email may go (backend/email_sending.py): its undo deadline, or its matter's not before when
+    that is later; now for one being handed to Gmail."""
+    from . import email_sending
+
+    rows = c.execute(
+        "SELECT s.state, s.send_after, " + email_sending.DATES_SQL + " FROM email_sends s "
+        "WHERE s.state IN ('pending','dispatching')"
+    ).fetchall()
+    return [
+        0.0 if r[0] == "dispatching" else epoch(max(r[1], email_sending.latest_bound((r[2] or "").split(",")))) or 0.0
+        for r in rows
+    ]
 
 
 def online_computer(c):
@@ -283,6 +303,8 @@ def busy(c, at):
             ).fetchone()
         ):
             return "send_pending"
+    if any(t <= at + SOON for t in email_due(c)):
+        return "send_pending"
     if (times := routine_times(c, at)) and times[0] <= at + SOON:
         return "routine_due"
     return ""

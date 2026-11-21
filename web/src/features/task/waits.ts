@@ -1,10 +1,11 @@
 import type { QueryClient } from '@tanstack/react-query';
 import { decisionOf, emailOf } from './model';
-import { emailSendQuery, taskDetailQuery, type TaskData } from './queries';
+import { taskDetailQuery, type TaskData } from './queries';
 
-/* An email's OK is a task of its own ("Send: …", backend/email_sending.py request_approval): a sub-task of the matter
-   the agent worked on, or, for an older send, a task on its own the agent linked to the matter. Plain rules here, so
-   the route can open the matter on the email before the page's code loads. */
+/* An email's OK waits on the matter itself now (backend/email_sending.py request_approval), in its own requirements.
+   An older send's OK is a task of its own ("Send: …"): a sub-task of the matter, or a task on its own the agent linked
+   to it; these rules keep those answerable. Plain rules here, so the route can open the matter on the email before the
+   page's code loads. */
 
 /** An email's OK task, as the server titles it ("Send: <subject> → <to>", or an older "Send an email"). */
 export const isSendTask = (title: string | null | undefined): boolean => /^send(:|\s+an\s+email\s*$)/i.test((title ?? '').trim());
@@ -32,16 +33,17 @@ export function waitSlugs(count: number, taken: Iterable<string>): string[] {
   });
 }
 
+/** Whether an email's OK task's send is still to go out, from the task's row (`email_send`, the send's state the server
+    keeps on it): its preview is read only when its tab opens, since that read counts as showing it to the person. */
+export const sendToGo = (sub: Pick<TaskData, 'email_send'>): boolean => stillToGo(sub.email_send?.state);
+
 /** Whether an email's OK hung on the task waits on the person now: the matter then opens on it. */
 export async function waitsOnYou(client: QueryClient, t: TaskData): Promise<boolean> {
   const found = await Promise.all(
     sendTasksOf(t).map(async (id) => {
       try {
         const sub = await client.ensureQueryData(taskDetailQuery(id));
-        const send = emailOf(decisionOf(sub));
-        if (!send) return false;
-        const mail = await client.ensureQueryData(emailSendQuery(sub.id, send));
-        return stillToGo(mail.send.state);
+        return !!emailOf(decisionOf(sub)) && sendToGo(sub);
       } catch {
         return false;
       }
@@ -58,9 +60,6 @@ export function waitsNow(client: QueryClient, id: string): boolean {
   if (decisionOf(t)) return true;
   return sendTasksOf(t).some((sid) => {
     const sub = client.getQueryData(taskDetailQuery(sid).queryKey);
-    if (!sub || !decisionOf(sub)) return false;
-    const send = emailOf(decisionOf(sub));
-    const mail = send ? client.getQueryData(emailSendQuery(sub.id, send).queryKey) : undefined;
-    return !mail || stillToGo(mail.send.state);
+    return !!sub && !!emailOf(decisionOf(sub)) && sendToGo(sub);
   });
 }

@@ -28,12 +28,13 @@ describe('an email’s OK hung on a matter @approvals', () => {
     expect(waitSlugs(2, [])).toEqual(['email-1', 'email-2']);
   });
 
-  it('opens the matter on the email only while its send is still to go out', async () => {
+  it('opens the matter on the email only while its send is still to go out, never reading its preview', async () => {
     let state = 'waiting_approval';
+    const read: string[] = [];
     vi.stubGlobal('fetch', async (url: string) => {
-      const body = String(url).endsWith('/api/v2/tasks/t1')
-        ? { task: { ...sub, to_leave: [{ requirement_id: 'r1', kind: 'ok', met: false, may: ['ok', 'no'], shows: ['email:s1'] }] }, children: [] }
-        : { send: { id: 's1', state, attachments: [] }, body: '', preview_complete: true };
+      read.push(String(url));
+      const ok = { requirement_id: 'r1', kind: 'ok', met: false, may: ['ok', 'no'], shows: ['email:s1'] };
+      const body = { task: { ...sub, to_leave: [ok], email_send: { id: 's1', state } }, children: [] };
       return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
     });
     const t = matter({ children: [sub] } as Partial<TaskData>);
@@ -41,5 +42,6 @@ describe('an email’s OK hung on a matter @approvals', () => {
     state = 'canceled';
     expect(await waitsOnYou(new QueryClient(), t)).toBe(false);
     expect(await waitsOnYou(new QueryClient(), matter())).toBe(false);
+    expect(read.filter((u) => u.includes('/email/sends/'))).toEqual([]);
   });
 });

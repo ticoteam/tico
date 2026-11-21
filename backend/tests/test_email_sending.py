@@ -429,13 +429,14 @@ def test_a_bot_managers_message_approves_nothing(inbox):
     assert dispatch(inbox) == [] and dispatch(inbox) == []
 
 
-def test_a_send_for_a_task_asks_its_ok_under_that_task_titled_with_the_email(inbox, monkeypatch):
-    """Each held send filed a task of its own titled "Send an email", apart from the case it was for: three sends could
-    not be told apart, and none was linked to the case. A bot's send from its turn on a task, or naming one, asks its
-    OK on a sub-task of it titled with the email, one per send (on the case itself the next send's ask would replace
-    the first's and stop that email). The send names both tasks; a task its sender cannot read is refused, and a
-    sent email leaves the case open."""
+def test_a_send_for_a_task_asks_its_ok_on_that_task(inbox, monkeypatch):
+    """Approving an email meant switching to a "Send:" task of its own under the case, because the bot's next ask on
+    the case would have replaced the send's OK and so stopped the email. A send from a bot's turn on a task, or naming
+    one, now asks its OK on that task: one OK per send, side by side, and the bot's later OK of a page or ❓ question
+    there replaces neither; the approved one still goes. No Send task is filed for it. A send with no task still files
+    a task of its own, under nothing; a task the sender cannot read is refused; a sent email leaves the case open."""
     from backend import task_relations
+    from backend.tests.helpers import engine as X
 
     policy(inbox, undo_seconds=0, pacing_seconds=0)
     monkeypatch.setattr(S, "classify", lambda *a, **k: {"legal_or_money": False, "status": "classified"})
@@ -447,6 +448,7 @@ def test_a_send_for_a_task_asks_its_ok_under_that_task_titled_with_the_email(inb
     token = claim(inbox, r)["token"]
     with inbox.app.state.store.transaction() as c:
         hidden = H.task_create(c, "human:ben", "Ben's own", "x", "human:ben", private=True, lint=False)["id"]
+        tasks_before = c.execute("SELECT count(*) FROM tasks").fetchone()[0]
 
     def send(subject, expected=200, **more):
         body = {"mailbox": BOX, "raw": mime(subject=subject), **more}
@@ -454,28 +456,440 @@ def test_a_send_for_a_task_asks_its_ok_under_that_task_titled_with_the_email(inb
 
     from_turn = send("Reply to your letter")["send"]
     named = send("Records enclosed", task_id=case[:8])["send"]
-    with inbox.app.state.store.read() as c:
-        for queued, subject in ((from_turn, "Reply to your letter"), (named, "Records enclosed")):
+    with inbox.app.state.store.transaction() as c:
+        assert c.execute("SELECT count(*) FROM tasks").fetchone()[0] == tasks_before  # no Send task
+        for queued in (from_turn, named):
             assert queued["state"] == "waiting_approval" and queued["task_id"] == case
-            sub = H.task(c, queued["approval_task_id"])
-            assert sub["title"] == f"Send: {subject} → {CONTACT}" and sub["private"]
-            assert task_relations.parent_of(c, sub["id"]) == case
-            assert task_asks.task_of(c, queued["approval_id"]) == sub["id"]
+            assert queued["approval_task_id"] == case == task_asks.task_of(c, queued["approval_id"])
             assert task_asks.standing(c, queued["approval_id"]) == task_asks.WAITING
-    assert from_turn["approval_task_id"] != named["approval_task_id"]
+        page = X.shown(c, bot="ops", task_id=case)
+        H.task_ask(
+            c, "bot:ops", case, "human:ana", "OK the letter?", shows=page, seen_version=H.task(c, case)["version"]
+        )
+        assert {task_asks.standing(c, q["approval_id"]) for q in (from_turn, named)} == {task_asks.WAITING}
+    post(inbox, f"tasks/{case}/questions", {"to": "ana", "text": "Which date suits the court?"}, token=token)
+    with inbox.app.state.store.read() as c:
+        assert {task_asks.standing(c, q["approval_id"]) for q in (from_turn, named)} == {task_asks.WAITING}
+    assert from_turn["approval_id"] != named["approval_id"]
     send("Other", expected=404, task_id=hidden)
 
     alone = queue(inbox, raw=mime(subject="Records request"), actor="bot:ops")
     with inbox.app.state.store.read() as c:
-        assert alone["task_id"] is None and task_relations.parent_of(c, alone["approval_task_id"]) is None
+        assert alone["task_id"] is None and alone["approval_task_id"] not in (None, case)
+        assert task_relations.parent_of(c, alone["approval_task_id"]) is None
 
     approved(inbox, from_turn)
     assert dispatch(inbox) == [] and len(dispatch(inbox)) == 1
     with inbox.app.state.store.read() as c:
         assert task_asks.standing(c, from_turn["approval_id"]) == task_asks.USED
-        assert H.task(c, from_turn["approval_task_id"])["status"] == "done"
         assert H.task(c, case)["status"] == "open"
         assert task_asks.standing(c, named["approval_id"]) == task_asks.WAITING
+
+
+def _case(inbox, title="Winberg: records request"):
+    with inbox.app.state.store.transaction() as c:
+        return H.task_create(c, "bot:ops", title, "Answer the request.", "bot:ops", lint=False)["id"]
+
+
+def _not_before(inbox, task, day):
+    with inbox.app.state.store.transaction() as c:
+        c.execute("DELETE FROM matter_dates WHERE task_id=?", (task,))
+        c.execute(
+            "INSERT INTO matter_dates(id,task_id,label,starts_at,created_by_id,created_at,updated_by_id,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (H.new_id(), task, "Records produced", day, "human:ana", H.now(), "human:ana", H.now()),
+        )
+
+
+def test_an_approved_send_waits_for_its_matters_not_before_as_it_stands_when_it_goes(inbox, monkeypatch):
+    """Nothing held an approved email until its matter's not before ("records may be produced no earlier than"): the
+    OK set its time to the end of the undo window. A send goes at the later of its undo deadline and the date, read as
+    it stands just before it goes: moved later after the OK, it waits for the new day; moved earlier, or cleared, it
+    goes at its undo deadline. The preview names the day only while it is past the undo deadline."""
+    policy(inbox, undo_seconds=90, pacing_seconds=0)
+    case, other = _case(inbox), _case(inbox, "Winberg: subpoena")
+    day, later = H.shift(H.now(), days=3)[:10], H.shift(H.now(), days=5)[:10]
+    _not_before(inbox, case, day)
+    _not_before(inbox, other, day)
+
+    def preview(send):
+        return inbox.get("/api/v2/email/sends/" + send["id"], headers=headers()).json()["not_before"]
+
+    held = queue(inbox, raw=mime(body="The records."), actor="bot:ops", task_id=case)
+    early = queue(inbox, raw=mime(body="The subpoena."), actor="bot:ops", task_id=other)
+    assert preview(held)[:10] == day
+    approved(inbox, held)
+    approved(inbox, early)
+    assert dispatch(inbox) == []
+    with inbox.app.state.store.transaction() as c:
+        row = c.execute("SELECT state,send_after FROM email_sends WHERE id=?", (held["id"],)).fetchone()
+        assert row["state"] == "pending" and row["send_after"] < S.not_before(c, case)  # the undo deadline, apart
+        c.execute("DELETE FROM matter_dates WHERE task_id=?", (other,))  # cleared after the OK
+    _not_before(inbox, case, later)  # moved later after the OK
+    assert preview(early) is None
+    monkeypatch.setattr(H, "now", lambda: H.shift(row["send_after"], seconds=1))  # the undo deadline passed
+    assert len(dispatch(inbox)) == 1  # the cleared one goes at its undo deadline
+    monkeypatch.setattr(H, "now", lambda: day + "T23:00:00.000000Z")  # the first day came
+    assert dispatch(inbox) == []
+    monkeypatch.setattr(H, "now", lambda: later + "T23:00:00.000000Z")  # the new day came
+    assert len(dispatch(inbox)) == 1
+
+
+def test_a_send_held_until_a_time_is_left_out_of_the_queue_until_then(inbox, monkeypatch):
+    """The queue reads a send's matter date in its own query (a held send's MIME is never loaded): a not before given as
+    a time holds it until that time, and not after."""
+    autonomous(inbox, undo_seconds=0)
+    case = _case(inbox)
+    at = H.shift(H.now(), hours=2)[:19] + "Z"
+    _not_before(inbox, case, at)
+    queue(inbox, raw=mime(body="At two."), actor="bot:ops", task_id=case)
+    assert dispatch(inbox) == []
+    monkeypatch.setattr(H, "now", lambda: H.shift(at, seconds=1))
+    assert len(dispatch(inbox)) == 1
+
+
+def test_a_send_still_to_go_is_canceled_when_its_case_or_its_ok_task_closes(inbox):
+    """A send still to go for a case that was closed, OK'd or with no OK at all, went anyway when its time came. Closing
+    the case cancels it in the same write; closing the task its OK waits on, when that is a task of its own, does too.
+    A send whose write reads its case closed (a close that won the race with a slow send) is refused."""
+    autonomous(inbox, undo_seconds=90)
+    case = _case(inbox)
+    allowed = queue(inbox, raw=mime(body="No OK needed."), actor="bot:ops", task_id=case)
+    assert allowed["state"] == "pending" and not allowed["approval_id"]
+    policy(inbox, mode="ask_first")
+    alone = queue(inbox, raw=mime(body="Asked apart."), actor="bot:ops")
+    with inbox.app.state.store.transaction() as c:
+        H.task_close(c, "human:ana", case, "Settled.")
+        H.task_close(c, "human:ana", alone["approval_task_id"], "Not this one.")
+        for queued in (allowed, alone):
+            gone = c.execute("SELECT state,detail,raw FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
+            assert tuple(gone) == ("canceled", S.TASK_CLOSED, "")
+    with pytest.raises(Problem, match="was closed"):
+        queue(inbox, raw=mime(body="Too late."), actor="bot:ops", task_id=case)
+    with inbox.app.state.store.read() as c:
+        assert (
+            c.execute("SELECT count(*) FROM email_sends WHERE state IN ('pending','waiting_approval')").fetchone()[0]
+            == 0
+        )
+    assert dispatch(inbox) == []
+
+
+def test_a_send_whose_case_was_closed_before_the_close_canceled_sends_never_goes(inbox, monkeypatch):
+    """A case closed before closing a task canceled its sends left them queued. The write that would hand one to Gmail
+    reads its case and cancels it instead."""
+    autonomous(inbox, undo_seconds=0)
+    case = _case(inbox)
+    queued = queue(inbox, raw=mime(body="Old news."), actor="bot:ops", task_id=case)
+    with monkeypatch.context() as before_deploy:
+        before_deploy.setattr(S, "task_closed", lambda c, task_id: None)  # closed by a server that canceled nothing
+        with inbox.app.state.store.transaction() as c:
+            H.task_close(c, "human:ana", case, "Settled.")
+    assert dispatch(inbox) == []
+    with inbox.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM email_sends WHERE id=?", (queued["id"],)).fetchone()[0] == "canceled"
+
+
+def test_a_send_back_on_the_case_holds_it_until_the_next_version_asks_again(inbox):
+    """A send back on the case was withdrawn by the next drain pass: when it was the last thing the case waited on,
+    the case moved on before the agent's next version could ask. The declined version never goes, its ask stays until
+    the next version's ask is written, and the case stays where it is."""
+    from backend import task_engine as E
+    from backend.tests.helpers import engine as X
+
+    policy(inbox, undo_seconds=0, pacing_seconds=0)
+    case = _case(inbox)
+    first = queue(inbox, raw=mime(body="Version one."), actor="bot:ops", draft_id="r-1", task_id=case)
+    with inbox.app.state.store.transaction() as c:
+        row = E.task(c, case)
+        X.say_done(c, row, "bot:ops")
+        H.task_answer(c, "human:ana", case, first["approval_id"], "no", "Say the date.")
+    assert dispatch(inbox) == [] and dispatch(inbox) == []
+    with inbox.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM email_sends WHERE id=?", (first["id"],)).fetchone()[0] == "waiting_approval"
+        assert (H.task(c, case)["status"], H.task(c, case)["stage_id"]) == ("open", row["stage_id"])
+    second = queue(inbox, raw=mime(body="Version two, with the date."), actor="bot:ops", draft_id="r-1", task_id=case)
+    with inbox.app.state.store.read() as c:
+        assert task_asks.standing(c, second["approval_id"]) == task_asks.WAITING
+        assert c.execute("SELECT state FROM email_sends WHERE id=?", (first["id"],)).fetchone()[0] == "canceled"
+        assert (H.task(c, case)["status"], H.task(c, case)["stage_id"]) == ("open", row["stage_id"])
+
+
+def test_the_same_email_on_another_case_is_its_own_send(inbox):
+    """The same email queued for a second case found the first case's send and stopped there: the second case had no
+    send of its own. A case's send is never the one queued for another."""
+    policy(inbox, undo_seconds=90, pacing_seconds=0)
+    one, two = _case(inbox), _case(inbox, "Winberg: second request")
+    first = queue(inbox, raw=mime(body="The records."), actor="bot:ops", task_id=one)
+    second = queue(inbox, raw=mime(body="The records."), actor="bot:ops", task_id=two)
+    assert first["id"] != second["id"] and (first["task_id"], second["task_id"]) == (one, two)
+    assert queue(inbox, raw=mime(body="The records."), actor="bot:ops", task_id=one)["id"] == first["id"]
+
+
+def test_a_draft_id_beside_a_callers_own_mime_replaces_nothing(inbox, monkeypatch):
+    """A draft id sent beside the caller's own MIME, never checked against Gmail, replaced whatever send that draft had
+    queued. Only a draft Gmail read (or Tico's own server code named) replaces its earlier sends."""
+    monkeypatch.setattr(S, "classify", lambda *a, **k: {"legal_or_money": False, "status": "classified"})
+    policy(inbox, undo_seconds=90, pacing_seconds=0)
+    case = _case(inbox)
+    first = queue(inbox, raw=mime(body="Version one."), actor="human:ana", draft_id="r-1", task_id=case)
+    body = {"mailbox": BOX, "raw": mime(body="Not from Gmail."), "draft_id": "r-1", "task_id": case}
+    other = post(inbox, "email/sends", body)["send"]
+    assert other["id"] != first["id"] and other["draft_id"] == ""  # never stored where revisions are found
+    with inbox.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM email_sends WHERE id=?", (first["id"],)).fetchone()[0] != "canceled"
+
+
+def test_an_ok_asked_again_under_a_changed_approval_rule_never_lets_the_case_move_on(inbox):
+    """When the approval rule changed, the drain withdrew the send's ask before asking the new approver: when it was
+    the last thing the case waited on, the case moved on first. The new approver's ask is written first."""
+    from backend import task_engine as E
+    from backend.tests.helpers import engine as X
+
+    policy(inbox, undo_seconds=0, pacing_seconds=0, who_can_ok="named_people", approvers=["ana"])
+    case = _case(inbox)
+    first = queue(inbox, raw=mime(body="The records."), actor="bot:ops", task_id=case)
+    with inbox.app.state.store.transaction() as c:
+        row = E.task(c, case)
+        X.say_done(c, row, "bot:ops")
+    policy(inbox, who_can_ok="named_people", approvers=["ben"])
+    assert dispatch(inbox) == []
+    with inbox.app.state.store.read() as c:
+        again = c.execute("SELECT approval_id FROM email_sends WHERE id=?", (first["id"],)).fetchone()[0]
+        assert again != first["approval_id"] and task_asks.grant(c, again)["asked_of_id"] == "human:ben"
+        assert task_asks.standing(c, first["approval_id"]) == task_asks.WITHDRAWN
+        assert (H.task(c, case)["status"], H.task(c, case)["stage_id"]) == ("open", row["stage_id"])
+
+
+def test_a_send_queued_before_keys_named_the_case_is_found_only_for_its_case(inbox):
+    """A send queued before its key named its case was missed by the same email again for that case (a second send),
+    and found for another. It is found again only for its own case."""
+    policy(inbox, undo_seconds=90, pacing_seconds=0)
+    one, two = _case(inbox), _case(inbox, "Winberg: second request")
+    first = queue(inbox, raw=mime(body="The records."), actor="bot:ops", task_id=one)
+    with inbox.app.state.store.transaction() as c:  # as an older server keyed it
+        legacy = S.digest(S.dump([BOX, first["content_sha256"], [CONTACT]]))
+        c.execute("UPDATE email_sends SET idempotency_key=? WHERE id=?", (legacy, first["id"]))
+    assert queue(inbox, raw=mime(body="The records."), actor="bot:ops", task_id=one)["id"] == first["id"]
+    assert queue(inbox, raw=mime(body="The records."), actor="bot:ops", task_id=two)["id"] != first["id"]
+    taskless = queue(inbox, raw=mime(body="The records."), actor="bot:ops")
+    assert taskless["id"] != first["id"] and taskless["task_id"] is None  # a send for no case is not a case's
+    assert queue(inbox, raw=mime(body="The records."), actor="bot:ops")["id"] == taskless["id"]
+
+
+def test_requeuing_a_verified_draft_is_a_new_send_that_retires_every_older_one(inbox):
+    """A revision updated its draft's send in place and merged with other sends by content, which let an OK'd version's
+    approval reach other content. Requeued, a Gmail-verified draft is a new send of its own: every older send of that
+    inbox and draft still to go is canceled with its ask, once the new ask is written, by anyone who may send from the
+    inbox (anyone else is refused). It never merges with another draft's send; the same content again changes
+    nothing."""
+    policy(inbox, undo_seconds=90, pacing_seconds=0)
+    case = _case(inbox)
+
+    def send(body, draft="r-1", actor="bot:ops"):
+        return queue(inbox, raw=mime(body=body), actor=actor, draft_id=draft, task_id=case)
+
+    first = send("Version one.")
+    approved(inbox, first)
+    assert send("Version one.", actor="human:ana")["id"] == first["id"]  # the same content: nothing changes
+    other = send("Version two.", draft="r-b")
+    second = send("Version two.", actor="human:ana")  # says what r-b says: still its own send
+    assert len({first["id"], other["id"], second["id"]}) == 3 and second["actor"] == "human:ana"
+    with pytest.raises(Problem, match="cannot send"):
+        send("Version three.", actor="human:cara")
+    with inbox.app.state.store.transaction() as c:
+        states = dict(c.execute("SELECT id,state FROM email_sends").fetchall())
+        assert (states[first["id"]], states[other["id"]], states[second["id"]]) == (
+            "canceled",
+            "waiting_approval",
+            "waiting_approval",
+        )
+        assert task_asks.standing(c, first["approval_id"]) == task_asks.WITHDRAWN
+        assert task_asks.task_of(c, second["approval_id"]) == case
+        c.execute("UPDATE email_sends SET draft_id='r-1' WHERE id=?", (other["id"],))  # older data: two of one draft
+    third = send("Version three.")
+    with inbox.app.state.store.read() as c:
+        states = dict(c.execute("SELECT id,state FROM email_sends").fetchall())
+        assert (states[other["id"]], states[second["id"]], states[third["id"]]) == (
+            "canceled",
+            "canceled",
+            "waiting_approval",
+        )
+
+
+def test_a_draft_requeued_by_a_sender_who_cannot_read_its_case_names_no_case(inbox):
+    """A draft requeued with no task by another sender of the inbox took its earlier send's case, private or not, and
+    a refusal about that case could tell them it existed. The case is kept only for a sender who reads it."""
+    from backend import mailbox_access as MA
+    from backend.tests.helpers import engine as X
+
+    policy(inbox, undo_seconds=90, pacing_seconds=0)
+    with inbox.app.state.store.transaction() as c:
+        X.bot(c, "other")
+        MA.grant(c, "human:ana", MA._row(c, BOX)["id"], "bot", "other", "read_write")
+        case = H.task_create(c, "bot:ops", "Ops' private matter", "x", "bot:ops", private=True, lint=False)["id"]
+    first = queue(inbox, raw=mime(body="Version one."), actor="bot:ops", draft_id="r-1", task_id=case)
+    assert first["task_id"] == case
+    second = queue(inbox, raw=mime(body="Version two."), actor="bot:other", draft_id="r-1")
+    assert second["task_id"] is None and second["approval_task_id"] != case
+    mine = queue(inbox, raw=mime(body="Version three."), actor="bot:ops", draft_id="r-1")
+    assert mine["task_id"] is None  # the newest send names no case now
+
+
+def test_a_new_version_of_a_draft_an_ok_was_asked_for_needs_its_own_ok(inbox):
+    """A new version that took out what made the first one ask (its files) went out with no OK. A version replacing
+    one an OK was asked for always asks again, unless it is blocked."""
+    autonomous(inbox, undo_seconds=90, ask_attachments=True)
+    case = _case(inbox)
+    first = queue(inbox, raw=mime(body="Attached.", files=True), actor="bot:ops", draft_id="r-1", task_id=case)
+    assert first["state"] == "waiting_approval" and "attachments" in first["decision"]["reasons"]
+    second = queue(inbox, raw=mime(body="Here it is, inline."), actor="bot:ops", draft_id="r-1", task_id=case)
+    assert second["state"] == "waiting_approval" and second["decision"]["reasons"] == ["revised_after_ok"]
+    assert dispatch(inbox) == []
+
+
+def test_an_operation_is_bound_to_the_request_that_queued_it(inbox):
+    """Each operation id is bound to the hash of the request as its caller sent it: the same request finds its send,
+    whatever the draft froze since; another request under the same id is refused."""
+    policy(inbox, undo_seconds=90, pacing_seconds=0)
+    case = _case(inbox)
+
+    def send(body, op, raw=None):
+        request = S.Enqueue(mailbox=BOX, draft_id="r-1", task_id=case, operation_id=op)
+        frozen = request.model_copy(update={"raw": raw or mime(body=body)})
+        with inbox.app.state.store.transaction() as c:
+            return S.enqueue(c, inbox.app.state.auth, "bot:ops", frozen, {"legal_or_money": False}, request=request)
+
+    first = send("Version one.", "op-1")
+    assert send("Version two.", "op-2")["id"] != first["id"]
+    assert send("The draft changed since.", "op-1")["id"] == first["id"]  # the same request, another frozen MIME
+    with pytest.raises(Problem, match="different email content"):
+        queue(inbox, raw=mime(body="Version two."), actor="bot:ops", draft_id="r-1", task_id=case, operation_id="op-1")
+
+
+def test_a_retried_operation_returns_its_send_only_to_who_still_reads_its_task(inbox):
+    """A retry of an operation returned its send whatever the caller could still read. The replay runs through the
+    normal write and checks the task of the send it returns."""
+    autonomous(inbox, undo_seconds=90)
+    _, _, attempt = setup_attempt(inbox, "ops")
+    with inbox.app.state.store.transaction() as c:
+        case = H.task_create(c, "human:ana", "Private matter", "x", "human:ana", private=True, lint=False)["id"]
+        H.set_task_readers(c, "human:ana", case, add=["bot:ops"])
+    body = {"mailbox": BOX, "raw": mime(body="The records."), "task_id": case, "operation_id": "op-r"}
+    first = inbox.post("/api/v2/email/sends", json=body, headers=headers(attempt["token"]))
+    assert first.status_code == 200, first.text
+    with inbox.app.state.store.transaction() as c:
+        H.set_task_readers(c, "human:ana", case, remove=["bot:ops"])
+    again = inbox.post("/api/v2/email/sends", json=body, headers=headers(attempt["token"]))
+    assert again.status_code in (403, 404), again.text
+
+
+def test_a_held_send_whose_lookup_fails_never_holds_up_due_mail(inbox, monkeypatch):
+    """A send held by its matter's not before was read (and its Gmail facts asked) with the due mail of its inbox: a
+    lookup that failed for it held up the rest. Held sends are left out in the query, so due mail goes."""
+    autonomous(inbox, undo_seconds=0)
+    case = _case(inbox)
+    _not_before(inbox, case, H.shift(H.now(), days=3)[:10])
+    held = queue(inbox, raw=mime(body="Later."), actor="bot:ops", task_id=case)
+    due = queue(inbox, raw=mime(body="Now."), actor="bot:ops")
+    real = S._original
+
+    def lookup(c, row):
+        if row["id"] == held["id"]:
+            raise Problem("gmail_unavailable", "Gmail did not answer; try again", 502, retryable=True)
+        return real(c, row)
+
+    monkeypatch.setattr(S, "_original", lookup)
+    assert len(dispatch(inbox)) == 1
+    with inbox.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM email_sends WHERE id=?", (due["id"],)).fetchone()[0] == "sent"
+        assert c.execute("SELECT state FROM email_sends WHERE id=?", (held["id"],)).fetchone()[0] == "pending"
+
+
+def test_an_approver_who_cannot_read_the_case_is_asked_apart_and_sees_none_of_its_files(inbox):
+    """An approver the case is not private from, but who cannot read it (no Read on the agent it involves), was asked
+    on it anyway. The OK is checked as the approval page checks a reader (auth.task) and asked on a task of its own;
+    the preview flags no file of the case to them, read only from files they may see."""
+    import hashlib
+
+    policy(inbox, undo_seconds=0, pacing_seconds=0, who_can_ok="named_people", approvers=["cara"])
+    current = inbox.get("/api/v2/bots/ops/access", headers=headers()).json()
+    people = {"people": ["ana"]}
+    body = {"see": {"everyone": True}, "read": people, "write": people, "revision": current["revision"]}
+    assert inbox.put("/api/v2/bots/ops/access", json=body, headers=headers()).status_code == 200
+    case = _case(inbox)
+    queued = queue(inbox, raw=mime(files=True), actor="bot:ops", task_id=case)
+    assert queued["state"] == "waiting_approval" and queued["approval_task_id"] not in (None, case)
+    with inbox.app.state.store.transaction() as c:
+        assert task_asks.grant(c, queued["approval_id"])["asked_of_id"] == "human:cara"
+        now, digest = H.now(), hashlib.sha256(b"proof").hexdigest()
+        c.execute(
+            "INSERT INTO blobs (id, owner, digest, size, name, content_type, created_at) VALUES "
+            "('b-old','bot:ops',?,5,'proof.pdf','application/pdf',?)",
+            (digest, now),
+        )
+        c.execute(
+            "INSERT INTO bot_files (id, bot_id, scope, identity, title, kind, mime, locator, first_activity_at, "
+            "last_activity_at, current_version, task_id, archived) VALUES ('f-old','ops',?,'f-old','Letter v1','file',"
+            "'application/pdf','tico_blob',?,?,1,?,1)",
+            ("task:" + case, now, now, case),
+        )
+        c.execute(
+            "INSERT INTO bot_file_versions (file_id, version, blob_id, digest, size, name, mime, actor, created_at) "
+            "VALUES ('f-old',1,'b-old',?,5,'proof.pdf','application/pdf','bot:ops',?)",
+            (digest, now),
+        )
+
+    def flags(token):
+        detail = inbox.get("/api/v2/email/sends/" + queued["id"], headers=headers(token)).json()
+        return [f.get("archived", False) for f in detail["send"]["attachments"]]
+
+    assert flags("ana-test") == [True] and flags("cara-test") == [False]
+
+
+def test_the_preview_marks_a_file_that_is_an_archived_file_of_the_case(inbox):
+    """A send OK'd on its case listed its files with nothing to say one was an outdated, archived draft of the case's
+    letter. The preview marks a frozen file `archived` when it is a version of an archived file or page of the send's
+    task (its own, or linked to it) and of no file still in use there."""
+    import hashlib
+
+    policy(inbox, undo_seconds=0, pacing_seconds=0)
+    case = _case(inbox)
+    queued = queue(inbox, raw=mime(files=True), actor="bot:ops", task_id=case)
+
+    def marked():
+        detail = inbox.get("/api/v2/email/sends/" + queued["id"], headers=headers()).json()
+        return [f.get("archived", False) for f in detail["send"]["attachments"]]
+
+    with inbox.app.state.store.transaction() as c:
+        now, blob, old = H.now(), H.new_id(), "file-letter-v1"
+        c.execute(
+            "INSERT INTO blobs (id, owner, digest, size, name, content_type, created_at) VALUES (?,?,?,?,?,?,?)",
+            (blob, "bot:ops", hashlib.sha256(b"proof").hexdigest(), 5, "proof.pdf", "application/pdf", now),
+        )
+        c.execute(
+            "INSERT INTO bot_files (id, bot_id, scope, identity, title, kind, mime, locator, first_activity_at, "
+            "last_activity_at, current_version, task_id, archived) VALUES (?,'ops',?,?,'Letter v1','file',"
+            "'application/pdf','tico_blob',?,?,1,?,1)",
+            (old, "task:" + case, old, now, now, case),
+        )
+        c.execute(
+            "INSERT INTO bot_file_versions (file_id, version, blob_id, digest, size, name, mime, actor, created_at) "
+            "VALUES (?,1,?,?,5,'proof.pdf','application/pdf','bot:ops',?)",
+            (old, blob, hashlib.sha256(b"proof").hexdigest(), now),
+        )
+    assert marked() == [True]
+    with inbox.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_files SET archived=0 WHERE id=?", (old,))
+    assert marked() == [False]
+    with inbox.app.state.store.transaction() as c:  # a page linked to the case, archived as a page
+        c.execute("UPDATE bot_files SET task_id=NULL, scope='bot' WHERE id=?", (old,))
+        c.execute("INSERT INTO pages (file_id, archived, created_at, updated_at) VALUES (?,1,?,?)", (old, now, now))
+        c.execute(
+            "INSERT INTO page_links (id, page_id, target, role, created_by, created_at) VALUES "
+            "('pl-1',?,?,'related','human:ana',?)",
+            (old, "task:" + case, now),
+        )
+    assert marked() == [True]
 
 
 def test_each_move_of_a_send_reaches_its_tasks_on_the_stream_and_their_rows(inbox, monkeypatch):

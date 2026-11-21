@@ -1043,7 +1043,11 @@ export function dateInstant(value: string, end = false): number {
 /** By date, as the server orders them: due by, else not before. */
 const byDate = (a: MatterDate, b: MatterDate) => dateInstant(a.due_at || a.starts_at || '') - dateInstant(b.due_at || b.starts_at || '');
 
-const settleDate = (task: string) => (cur: unknown, r: MatterDateResult) => (r.matter ? eachMatter(task, cur, () => r.matter) : cur);
+const settleDate = (task: string) => (cur: unknown, r: MatterDateResult) => {
+  // An email held for the matter's not before says its day in its preview: read again.
+  void queryClient.invalidateQueries({ queryKey: [...keys.tasks.detail(task), 'email'] });
+  return r.matter ? eachMatter(task, cur, () => r.matter) : cur;
+};
 
 /** A key date added to a matter, shown at once by date. */
 export function addMatterDate(task: string, facts: MatterDateFacts) {

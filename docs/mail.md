@@ -222,9 +222,10 @@ Bots > <bot> > Email sending**, or the company or inbox sending policy (see [Tur
 
 Some sends always ask a person whatever the mode, for example a new correspondent, attachments, an outside Cc or many
 outside recipients, legal or money matters; the effective **Who can OK** rule decides whose yes counts. A held send
-is an OK on a task of its own, titled with the email ("Send: <subject> → <first recipient>"), in that person's Needs
-you. With `--task` (or, left out, the task a bot's turn works on) that task is a sub-task of the one the email is for,
-and the send's `task_id` and `approval_task_id` name both. It is bound to the frozen send: the person sees the
+is an OK in that person's Needs you, on the task the email is for: `--task`, or, left out, the task a bot's turn works
+on. Each send there has its own OK, and your later asks on the task never replace it. A send with no task (or one
+whose approver cannot see its task) is asked on a task of its own, titled with the email ("Send: <subject> → <first
+recipient>"); the send's `approval_task_id` names the task its OK is on. It is bound to the frozen send: the person sees the
 whole email (the complete MIME and exact To, Cc and Bcc) and OKs it with their own click; a changed email needs a new
 OK. Nothing a bot passes releases a send, and a numbered GitHub issue authorizes nothing either. Finance queues its
 exact invoice email the same way; OKing the finance action does not OK an email nobody saw.
@@ -232,12 +233,16 @@ exact invoice email the same way; OKing the finance action does not OK an email 
 
 `send` answers with Tico's decision:
 
-- `pending`: the undo window runs, then it goes unless someone cancels it (`tico email cancel <send-id>`).
+- `pending`: the undo window runs, then it goes unless someone cancels it (`tico email cancel <send-id>`). A send for a
+  matter with a not before date waits for that date too, whichever is later, and is canceled if its task is closed.
 - `waiting_approval`: a person OKs it in Tico.
 - `blocked`, with the reason: the draft stays in Drafts. This is not an error.
 
 A bot without Read and write on the mailbox cannot queue a send.
-Queuing the same draft twice queues nothing the second time.
+Queuing the same draft twice queues nothing the second time. After `draft-update`, queuing it again (by anyone who
+may send from the inbox) queues the new version as its own send and cancels the older one still waiting, with its OK:
+the new version needs its own OK whenever the old one was asked about. The same email for another task is its own
+send.
 
 ### Reply
 

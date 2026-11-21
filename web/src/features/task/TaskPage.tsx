@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate, useRouter, useSearch } from '@tanstack/react-router';
+import { useNavigate, useRouter, useRouterState, useSearch } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
 import { run } from '@/actions';
 import { ApiError } from '@/api/client';
@@ -32,7 +32,7 @@ import { Face } from './parts';
 import { taskDetailQuery, taskFilesQuery, taskRefQuery, type TaskData } from './queries';
 import { approvalCard, useApprovalCards } from './ThreadCards';
 import { PageView, useVersions, VersionBar } from './Versions';
-import { Brief, MatterBrief, useWaiting, WaitingOnYou, type Waiting } from './Waiting';
+import { Brief, EmailPointers, MatterBrief, useWaiting, WaitingOnYou, type Waiting } from './Waiting';
 import { waitSlugs, waitsNow } from './waits';
 import './task.css';
 
@@ -111,10 +111,10 @@ function markOf(x: TaskTab) {
   return undefined;
 }
 
-function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: string; flow: boolean }) {
-  const navigate = useNavigate();
+/** Every tab of a task, the one list the page, its dock and the chat card beside it read: its emails' OKs filed as
+    tasks of their own (a "Send:" sub-task) that wait on the person first, then its own. `settled` once both are read. */
+function useTabs(t: TaskData) {
   const files = useQuery(taskFilesQuery(t.id));
-  // An email's OK filed as its own task (a "Send:" sub-task) that waits on the person: the matter opens on it.
   const waiting = useWaiting(t);
   // The files did not load: what the ask is about still opens, read by its id, never another page it shows.
   const own = tabsOf(t, files.data ?? (files.isError ? [] : undefined));
@@ -123,6 +123,31 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
   const other = useQuery({ ...fileQuery(away?.other ?? ''), enabled: !!away });
   if (away && other.data) away.label = tabLabel(other.data.title || other.data.name || 'File');
   const tabs: Tab[] = [...waitTabs(waiting.items, own), ...own];
+  return { tabs, files, waiting, settled: files.isFetched && waiting.settled };
+}
+
+/** The tab the page shows for the address's `tab`: that tab when the task has it, else the one that waits on the person
+    (defaultTab), as the page opens it before the address names it. The page and the chat card beside it read this. */
+const resolveTab = (tabs: Tab[], tab: string | undefined): string => (tab && tabs.some((x) => x.slug === tab) ? tab : defaultTab(tabs));
+
+/** A path part decoded, or as it is when it is not valid percent-encoding (a bad `%` never throws). */
+const decoded = (part: string): string => {
+  try {
+    return decodeURIComponent(part);
+  } catch {
+    return part;
+  }
+};
+
+/** What the decision answers on tab `x`: an email tab its email's own OK (`email`), none on an email filed apart (its
+    own card shows on the page), else the task's ask that is not an email's (null: an email's OK is approved only
+    where the email is on screen). */
+const decisionFor = (x: Tab | undefined): { email: string | null } | null => (x?.wait ? null : { email: x?.email ?? null });
+
+function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: string; flow: boolean }) {
+  const navigate = useNavigate();
+  const { tabs, files, waiting } = useTabs(t);
+  const own = tabs.filter((x) => !x.wait);
   const known = tab !== undefined && tabs.some((x) => x.slug === tab);
   const unresolved = !!tab && !known && (!files.isSuccess || !waiting.settled);
   // With no tab in the address, the page that waits on the person opens, and the address names it: the tab row reads
@@ -131,7 +156,7 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
   const [first, setFirst] = useState<string | null>(null);
   if (first === null && waiting.settled && (files.isSuccess || (!tab && files.isError))) setFirst(defaultTab(tabs));
   // A tab that went (an email's OK answered, its Email tab with it): the page that waits now, never a blank page.
-  const opened = first !== null && tabs.some((x) => x.slug === first) ? first : defaultTab(tabs);
+  const opened = resolveTab(tabs, first ?? undefined);
   const on = known ? tab : opened;
   // Closing: the history steps back, and this page names no tab in the meantime.
   const leaving = useRef(false);
@@ -177,7 +202,10 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
   const address = tabAddress(t, on, flow);
   const details = !unresolved && on === DETAILS;
   // An approval's view (plan/approvals.html): the title, one quiet line and the thing's tabs; its facts are under ⋯.
-  const asked = decisionOf(t) ?? changesAskedOf(t, me);
+  // The email whose tab is open (not one filed apart): its own OK is the decision, never another ask; off email tabs,
+  // never an email's OK (reading its preview counts as showing it).
+  const pick = decisionFor(current);
+  const asked = pick && (decisionOf(t, pick.email) ?? changesAskedOf(t, me, pick.email));
   const quiet = !details && !!asked;
   const send = emailOf(asked);
   // The page alone: the sheets beside it fold (the shell's own keys unfold them).
@@ -244,7 +272,7 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
         variant="page"
         title={owner?.name}
         actor={t.owner_id ?? undefined}
-        foot={<Decision t={t} flow={flow} onAsking={setAsking} />}
+        foot={<Decision t={t} flow={flow} onAsking={setAsking} email={null} />}
         canPost={!asking}
         extra={approvals}
         card={approvalCard}
@@ -274,9 +302,11 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
       body={
         <div className="tv-view">
           {/* An email's OK filed apart from the matter it answers waits on the person here too, at the top. */}
-          {!quiet && !current?.wait && <WaitingOnYou items={tabs.flatMap((x) => (x.wait && x.email ? [{ sub: x.wait, send: x.email, to: tabAddress(t, x.slug, flow).to }] : []))} />}
+          {!quiet && !current?.wait && <WaitingOnYou items={tabs.flatMap((x) => (x.wait && x.email ? [{ sub: x.wait, send: x.email, ...tabAddress(t, x.slug, flow) }] : []))} />}
+          {/* An email's OK on the task itself waits on the person too: off its tab, a pointer to it, never Approve. */}
+          {!current?.email && <EmailPointers t={t} items={own.flatMap((x) => (x.email && x.mark === 'ask' ? [{ send: x.email, ...tabAddress(t, x.slug, flow) }] : []))} />}
           {body}
-          {!current?.chat && <Decision t={t} flow={flow} dock />}
+          {!current?.chat && pick && <Decision key={pick.email ?? ''} t={t} flow={flow} dock email={pick.email} />}
         </div>
       }
     />
@@ -297,6 +327,7 @@ export function TaskChat({ task, flow = false }: TaskChatProps) {
   const { t } = useTask(task);
   const owner = useActor(t?.owner_id);
   const [asking, setAsking] = useState(false);
+  const decision = t && <ChatDecision key={t.id} t={t} flow={flow} onAsking={setAsking} />;
   // An email's OK hung on this task waits on the person: a card in its chat, pointing to the email.
   const approvals = useApprovalCards({ task: t });
   // Its conversation is the task's own, or (a task filed in its owner's room) the owner's main chat: the head says which.
@@ -340,16 +371,28 @@ export function TaskChat({ task, flow = false }: TaskChatProps) {
           variant="task"
           title={name}
           actor={t.owner_id ?? undefined}
-          foot={<Decision key={t.id} t={t} flow={flow} onAsking={setAsking} />}
+          foot={decision}
           canPost={!asking}
           extra={approvals}
           card={approvalCard}
         />
       ) : (
-        <Decision key={t.id} t={t} flow={flow} />
+        decision
       )}
     </>
   );
+}
+
+/** The chat card beside the page: the decision for the tab the page has open, read from the same tab list
+    (`useTabs`, `decisionFor`). Which tab a slug is needs the files and the emails filed apart read: no card until then,
+    never the wrong one. */
+function ChatDecision({ t, flow, onAsking }: { t: TaskData; flow: boolean; onAsking: (asking: boolean) => void }) {
+  const { tabs, settled } = useTabs(t);
+  const location = useRouterState({ select: (s) => s.location });
+  const tab = flow ? (location.search as TaskSearch).tab : location.pathname.split('/')[4];
+  if (!settled) return null;
+  const pick = decisionFor(tabs.find((x) => x.slug === resolveTab(tabs, tab && decoded(tab))));
+  return pick && <Decision key={pick.email ?? ''} t={t} flow={flow} onAsking={onAsking} email={pick.email} />;
 }
 
 /** `/task/<n>`: the task by its number alone. Once its pipeline is known the address becomes its own, replaced. */
