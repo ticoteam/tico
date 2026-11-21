@@ -554,8 +554,11 @@ def _write(conn: "sqlite3.Connection", task_id: str, **fields: Any) -> None:
     names = list(fields)
     if set(names) - WRITES:
         raise ValueError(f"not a column the engine writes: {sorted(set(names) - WRITES)}")
-    held = [fields[k] for k in ("owner_id", "assignee_id") if fields.get(k)]
-    if held and _h().task_private(conn, _h().task(conn, task_id)):
+    current: Row = (_h().task(conn, task_id) or {}) if any(fields.get(k) for k in ("owner_id", "assignee_id")) else {}
+    # Only a new holder counts: the owner it already has, kept or named its assignee too, gains nothing.
+    had: set[Any] = {current.get("owner_id"), current.get("assignee_id")}
+    held = [fields[k] for k in ("owner_id", "assignee_id") if fields.get(k) and fields[k] not in had]
+    if held and current and _h().task_private(conn, current):
         # One Assistant serves everyone: no stage, move, refile or pick gives it a private task (refuse_shared_assistant).
         _h().refuse_shared_assistant(conn, _h().TICO_ACTOR, *held, task=task_id)
     sets = ", ".join(f"{name}=?" for name in names)

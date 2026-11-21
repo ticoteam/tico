@@ -57,6 +57,15 @@ def acts_as(c, auto):
     return {"p": "human:", "b": "bot:"}.get(lead[:1], "") + lead[2:] if lead else ""
 
 
+def _routine_person(c, auto, actor):
+    """The person a routine works for: its owner when a person, else the person whose inbox starts it."""
+    if H.is_human(actor):
+        return actor
+    inbox = str((auto["flow"].get("trigger") or {}).get("inbox") or "").strip().lower()
+    row = c.execute("SELECT id FROM humans WHERE lower(email)=?", (inbox,)).fetchone() if inbox else None
+    return H.human_actor(row["id"]) if row else None
+
+
 def _chain_refs(auto):
     return {"automation_chain": list(auto.get("chain") or [])}
 
@@ -734,6 +743,8 @@ def start_turn(
         pipeline=where[0],  # the Finance Owner's routines run in Finance, at Review (bookkeeper.filing)
         stage=where[1],
         routine=True,
+        # The person a message routine works for keeps its private turn the Assistant's (hubdb.refuse_shared_assistant).
+        routine_for=_routine_person(c, auto, actor) if H.bot_actor(bot) == H.assistant_actor(c) else None,
         trigger="other",
         trigger_source="automation:" + auto["id"],
         occurrence=marker,

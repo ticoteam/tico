@@ -320,18 +320,13 @@ def test_the_draft_turn_is_asked_about_the_slack_text_it_handles(api):
     assert "Can you send the deck by Friday?" in turn["prompt"]
 
 
-# A general counsel's turn tasks are private; the shared Assistant never holds a private task
-# (hubdb.refuse_shared_assistant), so these mail turns are another bot's made from that template.
-COUNSEL = {**STAFF, "doc-updater": "general-counsel"}
-
-
 def test_the_turn_task_carries_the_mail_subject_and_body(api):
-    set_templates(api, COUNSEL)
-    flow = bot_flow(api, "doc-updater")
+    set_templates(api, STAFF)
+    flow = bot_flow(api, "assistant")
     prompt = run_to_turn(flow, MAIL)["prompt"]
     with api.app.state.store.transaction() as c:
         started = AA.start_turn(
-            c, {"id": "auto_founder", "flow": flow}, "run_1", "draft", "bot:doc-updater", prompt, None
+            c, {"id": "auto_founder", "flow": flow}, "run_1", "draft", "bot:assistant", prompt, None
         )
         words = H.task_words(c, started["ref"])  # the turn's instructions: Tico's, to the bot in its run
     assert "Board pack" in words and "Can you send the deck by Friday?" in words
@@ -339,9 +334,9 @@ def test_the_turn_task_carries_the_mail_subject_and_body(api):
 
 def test_a_mail_turn_is_titled_by_the_mail_only_on_a_private_task(api):
     """An inbox's turns all shared its name ("Ana's inbox"). A mail's turn is titled by its sender and subject where
-    only the task's readers see the title (a general counsel's tasks are private); a company-visible task keeps the
-    automation's name, since its title is in every teammate's lists and the mail is not."""
-    set_templates(api, COUNSEL)
+    only the task's readers see the title (the assistant's tasks are private, as a general counsel's); a company-visible
+    task keeps the automation's name, since its title is in every teammate's lists and the mail is not."""
+    set_templates(api, STAFF)
     reply = {
         "message": {
             **MAIL["message"],
@@ -349,7 +344,7 @@ def test_a_mail_turn_is_titled_by_the_mail_only_on_a_private_task(api):
             "subject": "RE: Fwd: Demand letter",
         }
     }
-    for bot, private in (("doc-updater", True), ("cpo", False)):
+    for bot, private in (("assistant", True), ("cpo", False)):
         flow = bot_flow(api, bot)
         turn = run_to_turn(flow, reply)
         assert turn["about"] == "Winberg Law: Demand letter"
@@ -367,6 +362,29 @@ def test_a_mail_turn_is_titled_by_the_mail_only_on_a_private_task(api):
             task = H.task(c, started["ref"])
         assert bool(task["private"]) is private
         assert task["title"] == ("Winberg Law: Demand letter" if private else flow["name"])
+
+
+def test_a_persons_message_routine_turn_stays_the_assistants_and_runs_as_a_personal_turn(api):
+    """The one private task the shared Assistant may hold: a person's own message routine's turn (as before). Its run is
+    claimed personal for that person, so it works in a throwaway copy with no git credentials."""
+    from backend.tests.helpers.api import assign, claim, ready, runner
+
+    set_templates(api, STAFF)
+    flow = bot_flow(api, "assistant")
+    prompt = run_to_turn(flow, MAIL)["prompt"]
+    with api.app.state.store.transaction() as c:
+        started = AA.start_turn(c, {"id": "auto_mine", "flow": flow}, "run_1", "draft", "bot:assistant", prompt, None)
+        task = H.task(c, started["ref"])
+    assert task["owner_id"] == "bot:assistant" and task["private"]
+    machine = runner(api)
+    with api.app.state.store.read() as c:
+        held = c.execute(
+            "SELECT generation FROM assignments WHERE bot=?", (H.resolve_bot(c, "assistant")["id"],)
+        ).fetchone()
+    assign(api, machine, "assistant", held["generation"] if held else 0)
+    ready(api, machine, ["assistant"])
+    attempt = claim(api, machine)
+    assert attempt["task"]["id"] == task["id"] and attempt["personal"] is True
 
 
 def test_a_mail_turn_title_names_the_sender_when_the_subject_is_empty():

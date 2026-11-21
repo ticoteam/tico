@@ -36,15 +36,27 @@ def personal_root(c, conversation):
     return not found or found.get("scope") == PERSONAL
 
 
+def personal_run(c, assistant_bot, bot, conversation, task):
+    """Whether a run is the Assistant's for one person: in their own room or a sub-thread of one (`personal_root`), or on
+    a private task, which the Assistant holds only as a person's own message routine's turn
+    (hubdb.refuse_shared_assistant). Its claim says `personal`, and it is issued no git credential."""
+    return bot == assistant_bot and (personal_root(c, conversation) or bool(task and H.task_private(c, task)))
+
+
 def personal_attempt(c, assistant_bot, attempt_id):
-    """Whether the run is the Assistant's in a person's own room or a sub-thread of one (`personal_root`), the same test
-    as its claim's `personal`: such a run is issued no git credential (backend/github_app.py token)."""
+    """`personal_run` for a run by its id (backend/github_app.py token)."""
     row = c.execute(
-        "SELECT a.bot_id,m.conversation_id FROM attempts a JOIN jobs j ON j.id=a.job_id "
+        "SELECT a.bot_id,a.task_id,m.conversation_id FROM attempts a JOIN jobs j ON j.id=a.job_id "
         "JOIN messages m ON m.id=j.message_id WHERE a.id=?",
         (attempt_id,),
     ).fetchone()
-    return bool(row) and row["bot_id"] == assistant_bot and personal_root(c, H.conversation(c, row["conversation_id"]))
+    return bool(row) and personal_run(
+        c,
+        assistant_bot,
+        row["bot_id"],
+        H.conversation(c, row["conversation_id"]),
+        H.task(c, row["task_id"]) if row["task_id"] else None,
+    )
 
 
 def session_config(conversation, bot, config):

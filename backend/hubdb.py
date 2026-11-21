@@ -4615,6 +4615,7 @@ def task_create(
     trigger_source=None,
     public=False,
     routine=False,
+    routine_for=None,
     same=None,
     occurrence=None,
     occurrence_step=None,
@@ -4839,7 +4840,10 @@ def task_create(
             )
         number = _number_free(conn, actor, number)
     if private:
-        refuse_shared_assistant(conn, actor, target, requester, *(readers or ()))
+        # A person's message routine's turn (automation_actions.start_turn, `routine_for` that person) stays the
+        # Assistant's, as it was; its runs are personal ones (rooms.personal_run).
+        routine_turn = bool(routine and is_human(routine_for) and target == assistant_actor(conn))
+        refuse_shared_assistant(conn, actor, *(() if routine_turn else (target, requester)), *(readers or ()))
     from contextlib import ExitStack
 
     from . import task_trigger_rules
