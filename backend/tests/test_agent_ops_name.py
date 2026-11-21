@@ -16,7 +16,7 @@ from backend import company_file as C
 from backend import bot_settings as BS
 from backend.slugs import slugify
 from backend.store import H
-from backend.tests.helpers.api import post, put
+from backend.tests.helpers.api import assign, get, post, put, runner
 from backend.tests.helpers.template_renames import employees_file
 from clients import catalog
 from runner_support import catalog_job
@@ -38,12 +38,9 @@ ALIAS_PATHS = (
 ALIAS_WORDS = ("bots_botops", "botops_direct", "botops_manages_bots", 'RENAMED_TITLES = {"botops": "BotOps"}')
 OLD = re.compile(r"(?i:botops)|\bBot[ -]Ops\b")
 # The id itself: quoted ("botops", `botops`, a SQL or keyword value =botops), an actor (bot:botops), a route or
-# repository (bots/botops, ticoteam/botops), a stored event name (botops.request_carried), or a handoff that must reach
-# the built-in even when a company's own bot holds the slug agent-ops (--owner botops, @botops, message send botops,
-# repo-create botops).
-ID = re.compile(
-    r"""(?:["'`/=]|bot:|--owner |@|message send |repo-create )botops(?![\w-])|(?<![\w-])botops(?=["'`]|\.[a-z_])"""
-)
+# repository (bots/botops, ticoteam/botops), a stored event name (botops.request_carried), or a task the server files
+# for the built-in, which must reach it even when a company's own bot holds the slug agent-ops (--owner botops).
+ID = re.compile(r"""(?:["'`/=]|bot:|--owner )botops(?![\w-])|(?<![\w-])botops(?=["'`]|\.[a-z_])""")
 
 
 def _bad_lines(text, first=1):
@@ -99,25 +96,23 @@ def test_its_own_routes_are_its_ids_whatever_holds_the_slug():
         assert not agent_ops_act.OWN.fullmatch(agent_ops_act.by_id(by_slug, theirs))
 
 
-class _Release:
-    def __init__(self, release):
-        self.row = {"release": release} if release else None
-
-    def execute(self, *_):
-        return self
-
-    def fetchone(self):
-        return self.row
-
-
-def test_a_computer_on_an_older_release_is_sent_the_template_by_the_name_its_catalog_has():
-    config = {"template": H.AGENT_OPS_SLUG, "runtime": "fake"}
-    for release, sent in (("", "botops"), ("0.6.0", "botops"), ("0.6.195", "botops"), ("0.6.196", "agent-ops")):
-        assert runner_versions.wire_template(_Release(release), "r1", config)["template"] == sent
-    assert runner_versions.wire_template(_Release(""), "r1", {"template": "librarian"}) == {"template": "librarian"}
-    assert runner_versions.reported_template("botops") == H.AGENT_OPS_SLUG  # its report counts for agent-ops
+def test_every_computer_is_sent_the_template_by_the_name_all_of_them_know():
+    assert runner_versions.wire_template({"template": H.AGENT_OPS_SLUG, "runtime": "fake"})["template"] == "botops"
+    assert runner_versions.wire_template({"template": "librarian"}) == {"template": "librarian"}
+    # Its refresh report counts for Agent Ops under either name, and a newer runner reads the old name as the new one.
+    assert runner_versions.reported_template("botops") == runner_versions.reported_template("agent-ops") == "agent-ops"
     cards = {H.AGENT_OPS_SLUG: {"bootstrap": True}}
     assert catalog_job.BotSetup.refresh_template(None, "botops", {"template": "botops"}, cards) == ("agent-ops", "")
+
+
+def test_its_assignment_names_the_old_template_in_config_and_config_json_alike(api):
+    post(api, "bots/register", {"template": "agent-ops", "display_name": "Agent Ops"})
+    r = runner(api)
+    with api.app.state.store.read() as c:
+        placed = c.execute("SELECT generation FROM assignments WHERE bot='botops'").fetchone()
+    assign(api, r, "agent-ops", generation=placed["generation"] if placed else 0)
+    (row,) = [a for a in get(api, "runners/assignments", token=r["token"]) if a["bot"] == H.FLEET_MAINTAINER]
+    assert row["config"]["template"] == json.loads(row["config_json"])["template"] == "botops"
 
 
 def test_an_old_company_file_reads_the_new_name_unless_a_person_chose_one():
@@ -162,7 +157,11 @@ def test_an_existing_company_is_renamed_on_start(company):
         assert BS.read(c, "botops")["template"] == "agent-ops"
         rules = team_rules.load(c)
         assert (rules["agent_ops_direct"], rules["agent_ops_manages_bots"], rules["admin_sql"]) == (False, True, False)
-        assert "botops_direct" not in c.execute("SELECT value FROM registry_metadata WHERE key='rules'").fetchone()[0]
+        stored = c.execute(
+            "SELECT value, json_type(value,'$.agent_ops_direct') AS a, json_type(value,'$.agent_ops_manages_bots') AS b "
+            "FROM registry_metadata WHERE key='rules'"
+        ).fetchone()
+        assert "botops_direct" not in stored["value"] and (stored["a"], stored["b"]) == ("false", "true")  # still JSON
 
 
 def test_a_name_a_person_chose_stays(company):

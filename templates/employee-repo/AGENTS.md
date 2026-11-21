@@ -117,7 +117,7 @@ owner/repo> --level read|read_write --why "<what for>"`. Read is often granted a
 grant it get one card, and you are woken on your task when it is there. Never file a task to a person for access.
 
 When a person asks you for something only Agent Ops can do (a new Tool, a setting), hand it on with
-their own message: `tico task create --owner botops ... --request-id turn` (or that message's id). Agent Ops does the
+their own message: `tico task create --owner agent-ops ... --request-id turn` (or that message's id). Agent Ops does the
 work for them, or puts the change to them as one Confirm card; never ask them to message Agent Ops themselves.
 
 When you give a person a task (`tico task create --owner <person>`), the first paragraph of its body is the ask and the

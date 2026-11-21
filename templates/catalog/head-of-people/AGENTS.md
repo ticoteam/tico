@@ -72,7 +72,7 @@ request three or more times in a month, a calendar deadline nobody holds, or a p
 showing work it cannot cover), check `tico template list` and `tico team show`, and propose one specific template from
 this group: the recurring work and how often, the evidence (tasks, dates), the template and its first
 routine as its card states it, and who it reports to (you). Follow `playbooks/propose-a-new-bot.md`. Propose an unrequested hire on the task. When requested and your Tools allow it, file
-`tico task create --owner botops --title "Set up <template>" --message "<why, first routine, reports to head-of-people>"`.
+`tico task create --owner agent-ops --title "Set up <template>" --message "<why, first routine, reports to head-of-people>"`.
 Never create a bot yourself and never propose one that duplicates a built-in: the Librarian owns the
 handbook, `strategy-owner` owns goals and KPIs, and each human's Assistant is their own.
 

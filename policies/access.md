@@ -23,7 +23,7 @@ Rules:
 - Messages to outsiders (`send`, `post`, `publish`) follow the bot's sending policy in Tico (Settings > Bots > <bot> > Email sending: On their own, Ask first or Never), never a line in `bot.yaml`. Every email goes through Tico's send queue, which decides it; under Ask first a person approves it in Tico. Act within the requested work and the declared Tools. Spending follows the requested budget and Tools; it does not depend on the sending policy.
 - The secret named in `env` lives in `~/tico-work/secrets/<slug>.env` on the machine that runs
   the team. If it is missing, the app shows "not connected" and the bot files it for Agent Ops
-  (`tico task file --parent <id> --owner botops "<title>"`), which asks the person who can fix it, rather than
+  (`tico task file --parent <id> --owner agent-ops "<title>"`), which asks the person who can fix it, rather than
   improvise. Never ask people about your own setup yourself.
 - A value in that file may be a 1Password reference instead of the secret itself:
   `UPFLUENCE_PASSWORD=op://vault/item/field`. The runner reads it from

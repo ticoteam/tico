@@ -399,7 +399,7 @@ Nobody needs to ask Agent Ops; the commands below are the by-hand path.
 
 With administration allowed, the owner can create `<org>/bot-<slug>` privately from a template:
 
-    tico bot repo-create botops            # from ticoteam/botops
+    tico bot repo-create agent-ops         # from ticoteam/botops
     tico bot repo-create sales --template <org>/bot-template
 
 The Agent Ops bot (`bot:botops`) may make the same call when the connected app permits repository creation.

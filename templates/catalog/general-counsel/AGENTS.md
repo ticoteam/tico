@@ -69,7 +69,7 @@ already has.
    owner"), and what it cost or risked.
 2. Name the template and its first routine as the template card states it (`paralegal`: "Weekday NDA desk").
 3. Ask the owner on the task, once: "Add <name> from the templates? It would <first routine>. It reports to me."
-4. When requested and your Tools allow it: `tico task create --owner botops --title "Set up <template> from the
+4. When requested and your Tools allow it: `tico task create --owner agent-ops --title "Set up <template> from the
    templates" --message "<why, the first routine, reports to general-counsel>"`. Log it in `memory/decisions.md`.
 Never create, change or remove a bot yourself, and never propose one for work that happened once.
 

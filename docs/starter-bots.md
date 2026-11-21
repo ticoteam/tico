@@ -43,7 +43,7 @@ Chief of Staff is no longer a default.
 Every group has a head, the template its row names (`lead: true`): it writes the group's weekly summary from what its bots and humans
 produced, proposes who should take a stuck or misrouted request, and **hires**: when repeated work in the group is not
 covered, it proposes a specific worker template from its `team_templates` with the reason and that template's first routine,
-and only after the owner confirms asks Agent Ops to set it up (`tico task create --owner botops`). Heads never create bots
+and only after the owner confirms asks Agent Ops to set it up (`tico task create --owner agent-ops`). Heads never create bots
 themselves and never do their team's work.
 
 Five Managers (Product, Engineering, Growth, Success and Corporate) are also `lead: true`. Each has its team's bots under it, runs its team's week, routes the team's work to its owners and manages its team's pipelines: when a task stops, the Manager decides what happens to it. Product and Growth take no group's head seat.

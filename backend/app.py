@@ -1455,12 +1455,19 @@ def _install_request_guard(
                 # The default applies only to what Agent Ops does for a person (the delegable routes). Its own run's
                 # plumbing (credentials, attempts, jobs, its status) and its own messages stay Agent Ops': a run's
                 # credential fetch as the person was refused, and every human-requested turn failed to start.
-                def bot_id(ref):
-                    with store.read() as c:
-                        return (H.resolve_bot(c, ref) or {}).get("id")
+                # A bot's route is read by the bot's id (agent_ops_act.by_id), looked up off the event loop and only
+                # for a bot's route.
+                route = agent_ops_act.BOT_ROUTE.fullmatch(agent_ops_act.normalize(request.url.path) or "")
+                named = {}
+                if route and not on_behalf:
 
+                    def bot_id(ref):
+                        with store.read() as c:
+                            return (H.resolve_bot(c, ref) or {}).get("id")
+
+                    named[route.group(1)] = await asyncio.to_thread(bot_id, route.group(1))
                 if not on_behalf and agent_ops_act.default_delegable(
-                    request.method, request.url.path, body, request.query_params, resolve=bot_id
+                    request.method, request.url.path, body, request.query_params, resolve=named.get
                 ):
                     on_behalf = "default"
             elif (

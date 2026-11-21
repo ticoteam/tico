@@ -22,11 +22,18 @@ UPDATE registry_metadata SET value = json_set(value, '$.selected.botops.template
 WHERE key = 'onboarding' AND json_valid(value) AND json_extract(value, '$.selected.botops.template') = 'botops';
 UPDATE registry_metadata SET value = json_set(value, '$.selected.botops.display_name', 'Agent Ops')
 WHERE key = 'onboarding' AND json_valid(value) AND json_extract(value, '$.selected.botops.display_name') = 'BotOps';
+-- A rule keeps its JSON true or false under its new name (json_extract alone would give 1 or 0).
 UPDATE registry_metadata
-SET value = json_remove(json_set(value, '$.agent_ops_direct', json_extract(value, '$.botops_direct')), '$.botops_direct')
+SET value = json_remove(
+  json_set(value, '$.agent_ops_direct', CASE json_type(value, '$.botops_direct')
+    WHEN 'true' THEN json('true') WHEN 'false' THEN json('false') ELSE json_extract(value, '$.botops_direct') END),
+  '$.botops_direct'
+)
 WHERE key = 'rules' AND json_valid(value) AND json_type(value, '$.botops_direct') IS NOT NULL;
 UPDATE registry_metadata
 SET value = json_remove(
-  json_set(value, '$.agent_ops_manages_bots', json_extract(value, '$.botops_manages_bots')), '$.botops_manages_bots'
+  json_set(value, '$.agent_ops_manages_bots', CASE json_type(value, '$.botops_manages_bots')
+    WHEN 'true' THEN json('true') WHEN 'false' THEN json('false') ELSE json_extract(value, '$.botops_manages_bots') END),
+  '$.botops_manages_bots'
 )
 WHERE key = 'rules' AND json_valid(value) AND json_type(value, '$.botops_manages_bots') IS NOT NULL;
