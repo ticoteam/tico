@@ -564,7 +564,8 @@ def _write(conn: "sqlite3.Connection", task_id: str, **fields: Any) -> None:
     sets = ", ".join(f"{name}=?" for name in names)
     from . import paid_renders
 
-    before = paid_renders.holder(conn, task_id)  # who its paid shots to reconcile wait on, if any
+    # Who its paid shots to reconcile wait on, if any, read only for a write that may move it.
+    before = paid_renders.holder(conn, task_id) if paid_renders.MOVES.intersection(names) else None
     conn.execute("INSERT OR REPLACE INTO task_move_guards (id, open, task_id) VALUES (1, 1, ?)", (task_id,))
     try:
         conn.execute(f"UPDATE tasks SET {sets} WHERE id=?", (*[fields[n] for n in names], task_id))
@@ -1950,6 +1951,9 @@ def reassign(
     check_version(conn, by, row, seen_version)
     if row["status"] != "open":
         _refuse(conn, by, "task_ended", f"The task is {row['stage']['name']}. Reopen it first.", task_id)
+    from . import paid_renders
+
+    held_by = paid_renders.holder(conn, task_id)  # who its paid shots wait on, compared once the ladder is reset
     owner = owner or None
     if owner == row.get("owner_id"):
         return row
@@ -1967,6 +1971,7 @@ def reassign(
             "UPDATE visits SET holder_id=?, pick_state=NULL, pick_why=NULL WHERE id=?", (owner, row["visit"]["id"])
         )
     _reset_ladder(conn, row["visit"], ts, by)  # the old owner's wakes go with its turn
+    paid_renders.holder_moved(conn, task_id, held_by)  # the whole reassignment, its ladder reset too
     said = ". ".join(p for p in (why, f"Overturned rule {overturned['name']}" if overturned else "") if p) or why
     data: Row = {"stage": row["stage_id"], **({"overturned_rule": overturned["id"]} if overturned else {})}
     revision = _event(conn, task_id, by, "reassign", row.get("owner_id"), owner, said, data)

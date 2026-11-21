@@ -701,3 +701,77 @@ def test_a_new_person_for_the_card_moves_both_needs_you(api, monkeypatch):
         H.task_update(c, "human:ana", task["id"], human_id="human:cara")
         told = {r[0] for r in c.execute("SELECT subject_id FROM changes WHERE topic='needs' AND seq>?", (mark,))}
     assert {"human:ben", "human:cara"} <= told
+
+
+def test_a_twin_that_starts_while_a_request_is_checked_answers_its_job(api, monkeypatch):
+    from types import SimpleNamespace
+
+    connect(api)
+    task, token = turn(api)
+    sent = []
+    monkeypatch.setattr(G, "video_submit", counting(sent, (202, {"id": JOB, "status": "queued"}, "")))
+    body = {"prompt": "a kettle", "shot": "Kettle wide"}
+    with monkeypatch.context() as stopped:  # sent on the first visit, its answer not written yet
+        stopped.setattr(paid_renders, "end", lambda *a: None)
+        assert video(api, token, body, "first").status_code == 202
+    store = api.app.state.store
+    with store.transaction() as c:
+        (twin,) = [r[0] for r in c.execute("SELECT target FROM events WHERE action=?", (paid_renders.SENT,))]
+        c.execute("UPDATE visits SET id='visit-moved' WHERE task_id=? AND left_at IS NULL", (task["id"],))
+    checked = paid_renders._answer
+
+    def started_meanwhile(
+        c, who, key, said, write
+    ):  # the Gateway answers the first send between the read and the write
+        found = checked(c, who, key, said, write)
+        if not write and found[0] == twin:
+            paid_renders.end(store, SimpleNamespace(actor="bot:ops"), twin, 202, {"id": JOB, "status": "queued"}, "")
+        return found
+
+    monkeypatch.setattr(paid_renders, "_answer", started_meanwhile)
+    again = video(api, token, body, "second")
+    assert again.status_code == 202 and again.json()["id"] == JOB, again.text
+    assert len(sent) == 1  # never a second submission
+
+
+def needs_told(store, write):
+    """The people whose Needs you `write` (given a connection) sent again."""
+    with store.transaction() as c:
+        mark = c.execute("SELECT coalesce(max(seq), 0) FROM changes").fetchone()[0]
+        write(c)
+        return {r[0] for r in c.execute("SELECT subject_id FROM changes WHERE topic='needs' AND seq>?", (mark,))}
+
+
+def test_a_reassignment_that_resets_the_ladder_moves_both_needs_you(api, monkeypatch):
+    from backend import task_engine as E
+
+    connect(api)
+    task, token = turn(api)
+    unknown_now(api, token, "Kettle wide", monkeypatch)
+    store = api.app.state.store
+    with store.transaction() as c:  # the ladder brought the card to cara: its shots wait on her; ben owns the pipeline
+        c.execute("UPDATE pipelines SET owner_id='human:ben' WHERE id=?", (task["pipeline_id"],))
+        sql = "UPDATE visits SET level='person', person_id='human:cara' WHERE task_id=? AND left_at IS NULL"
+        c.execute(sql, (task["id"],))
+        assert paid_renders.holder(c, task["id"]) == "human:cara"
+    # Nobody has it now, and the ladder starts again: its shots wait on the pipeline's owner, whom no task write names.
+    told = needs_told(store, lambda c: E.reassign(c, task["id"], None, "human:ana"))
+    with store.read() as c:
+        assert paid_renders.holder(c, task["id"]) == "human:ben"
+    assert {"human:cara", "human:ben"} <= told
+
+
+def test_a_pipeline_owner_saved_moves_both_needs_you(api, monkeypatch):
+    from backend import pipeline_settings as PS
+
+    connect(api)
+    task, token = turn(api)
+    unknown_now(api, token, "Kettle wide", monkeypatch)
+    store = api.app.state.store
+    with store.read() as c:
+        before = paid_renders.holder(c, task["id"])
+        existing = dict(c.execute("SELECT * FROM pipelines WHERE id=?", (task["pipeline_id"],)).fetchone())
+    told = needs_told(store, lambda c: PS._write_pipeline(c, {**existing, "owner_id": "human:ben"}, existing, H.now()))
+    with store.read() as c:
+        assert paid_renders.holder(c, task["id"]) == "human:ben" != before
+    assert {before, "human:ben"} <= told

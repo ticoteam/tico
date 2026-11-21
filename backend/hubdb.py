@@ -5425,7 +5425,9 @@ def task_update(
         sets = [one for one in dict.fromkeys(sets) if one != "updated_at=:updated_at"]
         from . import paid_renders
 
-        before = paid_renders.holder(conn, task_id)  # who its paid shots to reconcile wait on, if any
+        # Who its paid shots to reconcile wait on, if any, read only for a write that may move it.
+        moves = paid_renders.MOVES.intersection(one.split("=")[0] for one in sets)
+        before = paid_renders.holder(conn, task_id) if moves else None
         conn.execute(
             f"UPDATE tasks SET {', '.join([*sets, 'updated_at=:updated_at', 'version=version+1'])} WHERE id=:id", args
         )

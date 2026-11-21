@@ -252,7 +252,12 @@ def resolve(store: Any, who: Any, shot: Shot, operation: str | None = None) -> t
     if write:
         with store.transaction() as c:
             key, said, alias = _shot(c, who, shot, operation, pin)
-            found, detail, state = _answer(c, who, key, said, write=True)
+            if (
+                found != key
+            ):  # another visit's shot, checked again by its own key: one that started since answers its job
+                detail, state = _latest(c, found)[1], _settle(c, who, found)
+            else:
+                found, detail, state = _answer(c, who, key, said, write=True)
             if state is not None:
                 _keep(c, who, alias, found, detail)
     if isinstance(state, Problem):
@@ -409,9 +414,16 @@ def reconcile(c: Any, actor: str, task_id: str, keys: Iterable[str]) -> list[Row
     return shots
 
 
+# A task write that may move who a card's shots wait on (`holder`): no other write reads them.
+MOVES = frozenset(("owner_id", "human_id", "stage_id", "pipeline_id", "private"))
+# Whether any shot of the company is unknown now: one seek of events_action_ts, stopping at the first.
+_ANY = f"SELECT 1 FROM events s WHERE s.action=? AND {_LATER} LIMIT 1"
+
+
 def holder(c: Any, task_id: str) -> str | None:
-    """The person a card's shots to reconcile wait on now (waiting_on.person_for), or None when it has none."""
-    if not unsettled(c, task_id):
+    """The person a card's shots to reconcile wait on now (waiting_on.person_for), or None when it has none. A company
+    with no unknown shot answers at once."""
+    if not c.execute(_ANY, (UNKNOWN, *ACTIONS)).fetchone() or not unsettled(c, task_id):
         return None
     from . import task_engine, waiting_on
 
@@ -430,6 +442,17 @@ def holder_moved(c: Any, task_id: str, before: str | None) -> None:
 
         events: Any = _events
         events.needs_moved(c, [before, after or ""], "ask")
+
+
+def pipeline_holders(c: Any, pipeline_id: str) -> dict[str, str | None]:
+    """`holder` of each card of a pipeline with shots to reconcile, before a save that may move who they wait on (its
+    owner or manager); `holder_moved` each after it."""
+    found = [str(t) for t in cards(c)]
+    rows = c.execute(
+        "SELECT id FROM tasks WHERE pipeline_id=? AND id IN (SELECT value FROM json_each(?))",
+        (pipeline_id, json.dumps(found)),
+    )
+    return {str(r[0]): holder(c, str(r[0])) for r in rows} if found else {}
 
 
 def _moved(c: Any, task_id: str) -> None:
