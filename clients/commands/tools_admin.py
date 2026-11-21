@@ -603,15 +603,15 @@ ACCOUNT = _s("The account's id, from tico_tool_website_show")
 @tool(
     "tico_credential_login_add",
     "Add an account to a website tool. Its password and 2FA key are read from this computer (a variable or a file); "
-    "leave both out for a site a person signs in to by hand. Shared with all bots unless all_bots is off or it has "
-    "a holder.",
+    "leave both out for a site a person signs in to by hand. A shared account is used by nobody until shared; all_bots "
+    "shares it with every bot.",
     {
         "tool": WEBSITE_ID,
         "username": _s("The sign-in name"),
         **_from("the password", "password_"),
         **_from("the 2FA (TOTP) key", "totp_"),
         "holder": _s("Whose own account it is (human:<id> or bot:<slug>); a shared account has none"),
-        "all_bots": {"type": "boolean", "description": "Every bot uses it (on by default)"},
+        "all_bots": {"type": "boolean", "description": "Every bot uses it (off by default)"},
     },
     required=("tool",),
     writes=True,

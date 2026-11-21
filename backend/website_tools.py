@@ -1038,7 +1038,8 @@ class WebsiteAccountCreate(Contract):
     password: SecretStr | None = Field(default=None, max_length=10_000)
     totp: SecretStr | None = Field(default=None, max_length=2_000)
     holder: ID | None = None
-    all_bots: bool = True
+    # A shared account reaches nobody until someone chooses who uses it: a login can act as the company.
+    all_bots: bool = False
 
 
 class WebsiteAccountUpdate(Contract):
@@ -1526,7 +1527,7 @@ def install(app: "FastAPI", store: Any, auth: Any, settings: Any) -> None:
         **api_v2(
             "Tools",
             "addWebsiteAccount",
-            "Add an account: shared (credential administrators) or own (holder: yourself or a bot you manage; one per holder). password and totp (a 2FA setup key or otpauth:// link) are stored sealed and never shown again. username and password may be left out for a site a person signs in to by hand. Shared accounts default to all_bots: true, including future bots; set false for selected teammates only. Own accounts stay private",
+            "Add an account: shared (credential administrators) or own (holder: yourself or a bot you manage; one per holder). password and totp (a 2FA setup key or otpauth:// link) are stored sealed and never shown again. username and password may be left out for a site a person signs in to by hand. Shared accounts start shared with nobody; all_bots: true shares with every agent, including future ones. Own accounts stay private",
             "WebsiteAccountSaved",
         ),
     )
