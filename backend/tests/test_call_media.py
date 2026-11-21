@@ -167,26 +167,13 @@ def test_transcribing_returns_the_gateway_text_and_a_failed_gateway_is_unavailab
     method, url, body, headers = calls[0]
     assert method == "POST" and url == "https://gateway.acme.example/v1/audio/transcriptions"
     assert body["model"] == media.TRANSCRIBE_MODEL and body["input_audio"]["format"] == "wav"
+    assert body["language"] == "en"
     assert headers == {"Authorization": "Bearer gw-key"}
 
     monkeypatch.setattr(gateway, "relay", lambda *args, **kwargs: (503, b"{}"))
     with pytest.raises(media.MediaUnavailable) as refused:
         media.transcribe("https://gateway.acme.example/v1", "gw-key", b"RIFF")
     assert refused.value.status == 503
-
-
-def test_a_clip_is_pinned_to_english_so_a_one_word_yeah_is_not_heard_as_another_language(monkeypatch):
-    from clients import gateway
-
-    bodies = []
-
-    def relay(method, url, body=None, headers=None, timeout=None):
-        bodies.append(json.loads(body))
-        return 200, json.dumps({"text": "yeah"}).encode()
-
-    monkeypatch.setattr(gateway, "relay", relay)
-    assert media.transcribe("https://gateway.acme.example/v1", "gw-key", b"RIFF") == "yeah"
-    assert bodies[0]["language"] == "en"
 
 
 def test_a_gateway_that_does_not_know_the_live_model_yet_is_asked_once_with_the_older_one(monkeypatch):
