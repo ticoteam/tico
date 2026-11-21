@@ -198,3 +198,44 @@ def test_a_span_hides_an_agent_its_reader_may_not_see(api):
     sql = "SELECT who FROM task_wait_spans WHERE id='s2'"
     assert rows(api, sql, "ben-test") == [{"who": ""}]
     assert rows(api, sql, "ana-test") == [{"who": "bot:secret"}]
+
+
+def test_an_ok_given_to_someone_waits_on_them_from_the_give(c, time_machine):
+    from backend import waiting_on as W
+
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    asked = X.ok_ask(c, task_id, BUILDER, "ana", "OK the draft?")["requirement_id"]
+    time_machine.shift(timedelta(hours=3))
+    A.give_to(c, task_id, asked, ANA, "human:ben")
+    [head] = [w for w in W.waiting_on(c, task_id) if w.requirement_id == asked]
+    assert (head.who, H.parse_ts(head.since)) == ("human:ben", START + timedelta(hours=3))
+    assert spans(c, task_id)[-1] == ("person", "human:ben", True)
+
+
+def test_taking_back_an_ok_that_moved_the_task_is_one_decision(api):
+    store = api.app.state.store
+    made = post(api, "tasks", {"owner": "ops", "title": "Post the note", "body": "Today."})
+    task_id = made["id"]
+    with store.transaction() as c:
+        X.say_done(c, E.task(c, task_id), "bot:ops")
+        asked = X.ok_ask(c, task_id, "bot:ops", "ana", "OK to post?")["requirement_id"]
+        answer_id = A.answer(c, task_id, asked, ANA, "ok")["answer_id"]
+        assert E.task(c, task_id)["visit"]["entered_how"] == "met"  # the OK moved it on
+        A.undo(c, answer_id, ANA)
+        kinds = [
+            r[0]
+            for r in c.execute(
+                "SELECT kind FROM history_events WHERE subject_id=? AND actor_id=? ORDER BY created_at", (task_id, ANA)
+            )
+        ]
+        assert kinds[-3:] == ["answer", "answer_undone", "move"]
+        c.execute(
+            "UPDATE history_events SET created_at=? WHERE subject_id=? AND actor_id=? AND (kind <> 'move' "
+            "OR json_extract(data, '$.undone_answer') IS NOT NULL)",
+            (f"{WEEK2}T10:00:00.000000Z", task_id, ANA),
+        )
+    [week] = rows(api, f"SELECT decisions FROM human_decisions_weekly WHERE week='{WEEK2}'", "ana-test")
+    assert week == {"decisions": 2}
+
+
+WEEK2 = "2030-02-04"

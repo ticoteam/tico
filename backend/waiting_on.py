@@ -613,7 +613,8 @@ def of(
         elif standing.state == R.WAITING:
             # An OK or an answer waits on whoever it names: a person, or a bot that was named to approve. One that names
             # nobody, or a person who left (`person_of` skips them), is the task's person's. A page naming several
-            # approvers is asked of each of them (`asked_of`).
+            # approvers is asked of each of them (`asked_of`). One given to someone waits on them from the give.
+            since = max(since or "", R.given_at(conn, requirement, str(visit["id"])) or "") or None
             everyone = asked_of(conn, row, standing)
             if R.shared(requirement):
                 # Asked of each approver who can open the task; only when none can, of whoever shares it with them.
@@ -704,7 +705,8 @@ def of(
         asking = {m["bot_id"] for m in marks}
         out = [wait for wait in out if not (wait.state in (BOT, PAUSED) and not wait.fix and wait.who in asking)]
     for m in marks:
-        out.append(Wait(PERSON, m["person_id"], m["line"], question_marks.wait_id(m), m["created_at"], ask=True))
+        since = m.get("given_at") or m["created_at"]  # a ❓ given to someone waits on them from the give
+        out.append(Wait(PERSON, m["person_id"], m["line"], question_marks.wait_id(m), since, ask=True))
     if blockers:
         # It depends on a task still open: that is all it waits on, nobody's turn, until the task ends (task_depends).
         # An OK or an answer asked of a person, and a cause a person fixes first, stay theirs, as under a bot's snooze.

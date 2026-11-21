@@ -143,9 +143,11 @@ def measure(
     copies: int = 0,
     queued: bool = False,
     due: float = 0.02,
+    backfill: bool = False,
 ) -> dict[str, Any]:
     """One pass over `count` tasks made through the engine, times 1 + `copies` (`clone`). `due`: the share of tasks
-    whose next try is due in the pass measured."""
+    whose next try is due in the pass measured. `backfill`: no task has a wait span yet, as on the first pass after
+    they came in (backend/wait_spans.py)."""
     from backend import never_stuck as NS
 
     rng = random.Random(seed)
@@ -165,6 +167,8 @@ def measure(
                 "(SELECT id FROM visits WHERE left_at IS NULL ORDER BY id LIMIT ?)",
                 (Wd.ts(world.at() + dt.timedelta(minutes=10)), int(count * due)),
             )
+            if backfill:
+                c.execute("DELETE FROM task_wait_spans")
         Wd.METER.trace = []
         before = Wd.METER.count
         profiler = cProfile.Profile() if profile else None
