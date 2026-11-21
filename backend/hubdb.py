@@ -3945,7 +3945,10 @@ CHECK_MODEL_SQL = (
 
 
 def _made_private(conn, actor, task_id):
-    """A company-visible task goes private because the task above it is: the flag, its record, and the follow-ups."""
+    """A company-visible task goes private because the task above it is: the flag, its record, and the follow-ups. Never
+    one the shared Assistant owns or reads (refuse_shared_assistant)."""
+    row = task(conn, task_id) or {}
+    refuse_shared_assistant(conn, actor, row.get("owner_id"), *task_readers(row), task=task_id)
     conn.execute("UPDATE tasks SET private=1,visibility='private' WHERE id=?", (task_id,))
     _task_event(conn, task_id, actor, "private", 0, 1, "")
     _private_followups(conn, task_id)
@@ -4837,7 +4840,7 @@ def task_create(
         dedicated = False
         # A bot's task always gets its own room: its comments, notices and replies stay out of the chat
         # the bot's main session reads. The chat it was started from gets one "Started task" line.
-        # `own_room=False` (the Assistant, whose turns act for the person of the room) keeps the old way.
+        # `own_room=False` keeps the old way: a task filed into the chat it came from, as before task rooms.
         started_in = conversation(conn, conversation_id) if conversation_id and is_bot(target) and own_room else None
         if conversation_id and not private and (not is_bot(target) or not own_room):
             conv = conversation(conn, conversation_id)

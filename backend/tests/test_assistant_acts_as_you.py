@@ -180,6 +180,21 @@ def test_a_private_task_is_never_the_shared_assistants_as_owner_or_reader(api):
     refused("tasks/" + public["id"], {"private": True, "version": get(api, "tasks/" + public["id"])["task"]["version"]})
 
 
+def test_making_a_task_private_never_carries_down_to_a_task_the_shared_assistant_owns(api):
+    """A task's subtasks go private with it; one the shared Assistant owns refuses the whole change, which writes nothing."""
+    parent = post(api, "tasks", {"owner": "ops", "title": "Launch", "body": "Plan.", "private": False})
+    child = post(
+        api,
+        "tasks",
+        {"owner": "assistant", "title": "Launch notes", "body": "Tidy.", "private": False, "parent": parent["id"]},
+    )
+    version = get(api, "tasks/" + parent["id"])["task"]["version"]
+    answer = api.post("/api/v2/tasks/" + parent["id"], json={"private": True, "version": version}, headers=headers())
+    assert answer.status_code >= 400 and "shared Assistant" in answer.json()["error"]["detail"], answer.text
+    with api.app.state.store.read() as c:
+        assert not H.task_private(c, H.task(c, parent["id"])) and not H.task_private(c, H.task(c, child["id"]))
+
+
 def test_a_batch_commit_never_oks_on_an_assistant_walk(api):
     with api.app.state.store.transaction() as c:
         made = H.task_create(c, "human:ana", "Run the LinkedIn ads", "Q4.", "bot:finance", lint=False)

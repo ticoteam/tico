@@ -554,6 +554,9 @@ def _write(conn: "sqlite3.Connection", task_id: str, **fields: Any) -> None:
     names = list(fields)
     if set(names) - WRITES:
         raise ValueError(f"not a column the engine writes: {sorted(set(names) - WRITES)}")
+    if fields.get("owner_id") == _h().assistant_actor() and _h().task_private(conn, _h().task(conn, task_id)):
+        # One Assistant serves everyone: no stage, move, refile or pick gives it a private task (refuse_shared_assistant).
+        _h().refuse_shared_assistant(conn, _h().TICO_ACTOR, fields["owner_id"], task=task_id)
     sets = ", ".join(f"{name}=?" for name in names)
     conn.execute("INSERT OR REPLACE INTO task_move_guards (id, open, task_id) VALUES (1, 1, ?)", (task_id,))
     try:
@@ -1943,8 +1946,6 @@ def reassign(
     if owner == row.get("owner_id"):
         return row
     _may_name(conn, by, owner, task_id)
-    if H.task_private(conn, row):
-        H.refuse_shared_assistant(conn, by, owner, task=task_id)
     overturned = _owner_rule(conn, row, owner, by, set_anyway)
     ts = H.now()
     fields: Row = {"owner_id": owner, "version": int(row.get("version") or 0) + 1, "updated_at": ts}

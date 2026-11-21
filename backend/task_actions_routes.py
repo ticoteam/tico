@@ -685,7 +685,6 @@ def register_core(
             pipeline=body.pipeline,
             number=body.number,
             mover=mover(c, who) or None,
-            own_room=H.actor_id(owner) != settings.assistant_bot,
             public=public,
             same=same,
             follow=body.follow,
