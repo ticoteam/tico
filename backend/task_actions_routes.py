@@ -221,7 +221,9 @@ def register_core(
             related_sql = auth.task_sql(c, who)
             child_rows = H._rows(
                 c.execute(
-                    "SELECT id,title,status,owner_id FROM tasks WHERE id IN ("
+                    # A check sub-task's role (backend/check_models.py): the task page shows a second review's state.
+                    "SELECT id,title,status,owner_id,"
+                    "(SELECT role FROM task_check_models m WHERE m.task_id=tasks.id) AS role FROM tasks WHERE id IN ("
                     + TR.CHILD_IDS
                     + ") AND ("
                     + related_sql
@@ -237,6 +239,7 @@ def register_core(
                     "status": t["status"],
                     "owner_id": t["owner_id"],
                     **child_refs[t["id"]],
+                    **({"role": t["role"]} if t["role"] else {}),
                 }
                 for t in child_rows
             ]

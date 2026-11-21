@@ -6,7 +6,7 @@ import { isSendTask, sendTasksOf, waitSlugs, waitsOnYou } from './waits';
 /* An email's OK hung on a matter: which tasks are such OKs, and whether the matter opens on the email. */
 
 const matter = (more: Partial<TaskData> = {}) => ({ id: 't5', children: [], relations: {}, ...more }) as unknown as TaskData;
-const sub = { id: 't1', title: 'Send: Re: Notice → dana@example.test', status: 'open', owner_id: 'bot:lo' };
+const sub = { id: 't1', title: 'Send: Re: Notice → dana@example.test', status: 'open', owner_id: 'bot:lo', label: null, stage: null };
 
 afterEach(() => vi.unstubAllGlobals());
 

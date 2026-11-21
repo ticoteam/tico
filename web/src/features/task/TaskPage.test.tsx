@@ -207,6 +207,28 @@ describe('task route loading', () => {
     }
     await expect(loaded).resolves.toMatchObject({ tab: tab ?? 'attachment-pdf' });
   });
+
+  it('keeps what the ask is about when the files do not load: its own tab, read by its id, not the page beside it @approvals', async () => {
+    const t = task();
+    t.to_leave = [{ ...t.to_leave![0]!, approval: undefined, shows: ['file:f6@1', 'page:f2@1'] }];
+    serve((url) => {
+      if (url.includes('/api/v2/tasks/%2312')) return { status: 200, body: detail(t) };
+      if (url.endsWith('/tasks/t1/files?all=1')) return { status: 500, body: { error: { code: 'oops', detail: 'down' } } };
+      return base(url);
+    });
+    await expect(loadTask(queryClient, '12')).resolves.toMatchObject({ tab: 'file' });
+  });
+
+  it('waits for the files when the ask is about a file and also shows a page @approvals', async () => {
+    const t = task();
+    t.to_leave = [{ ...t.to_leave![0]!, approval: undefined, shows: ['file:f6@1', 'page:f2@1'] }];
+    serve((url) => {
+      if (url.includes('/api/v2/tasks/%2312')) return { status: 200, body: detail(t) };
+      if (url.endsWith('/tasks/t1/files?all=1')) return { status: 200, body: { files: [{ id: 'f6', name: 'declaration.pdf', versions: [] }] } };
+      return base(url);
+    });
+    await expect(loadTask(queryClient, '12')).resolves.toMatchObject({ tab: 'declaration-pdf' });
+  });
 });
 
 describe('one open task', () => {
@@ -457,6 +479,72 @@ describe('a page’s versions, a new page and a picture', () => {
     return null;
   };
   const frame = (title: string) => screen.findByTitle(title) as Promise<HTMLIFrameElement>;
+
+  it.each([
+    ['its list of versions', versions],
+    ['a list that no longer reaches it', versions.slice(1)],
+  ])('opens a page an ask pinned at v1 with v2 present, from %s @approvals', async (_, listed) => {
+    const t = withVersions();
+    (t.documents![0] as { versions: unknown }).versions = listed;
+    t.to_leave = [{ requirement_id: 'r1', line: 'Spec approved', met: false, may: ['ok', 'no'], approval: { document: 'Spec', file_id: 'f1', version: 1 } } as never];
+    serve((url) => (url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1') ? { status: 200, body: detail(t) } : (html(url) ?? base(url))));
+    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    expect((await frame('Spec, v1')).getAttribute('srcdoc')).toContain('Sign in with your email.');
+  });
+
+  const pinnedAt = (n: number, live: Record<string, unknown>) => {
+    const t = withVersions();
+    t.to_leave = [{ requirement_id: 'r1', line: 'Spec approved', met: false, may: ['ok', 'no'], approval: { document: 'Spec', file_id: 'f1', version: n } } as never];
+    serve((url) =>
+      url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1')
+        ? { status: 200, body: detail(t) }
+        : url.endsWith('/api/v2/pages/f1')
+          ? { status: 200, body: { page: live } }
+          : (html(url) ?? base(url)),
+    );
+  };
+
+  it('shows the live page only while it is the version pinned; else that version’s own text @approvals', async () => {
+    pinnedAt(2, { src: 'about:blank', version: 3 });
+    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    expect((await frame('Spec')).getAttribute('srcdoc')).toContain('Sign in with your email or phone.');
+  });
+
+  it('opens the version the address names even when the list does not reach it @approvals', async () => {
+    const t = withVersions();
+    (t.documents![0] as { versions: unknown }).versions = versions.slice(1);
+    serve((url) => (url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1') ? { status: 200, body: detail(t) } : (html(url) ?? base(url))));
+    show(<TaskPage task="12" pipeline="p1" tab="spec" />, '/tasks/p1/12/spec?v=1');
+    expect((await frame('Spec, v1')).getAttribute('srcdoc')).toContain('Sign in with your email.');
+  });
+
+  it('a related page an ask pinned shows live only while it is that version @approvals', async () => {
+    const at = (n: number) => ({ n, by: 'bot:a1', created_at: '2026-11-01T10:00:00Z', mime: 'text/html', size: 10, url: `/api/v2/files/f7?v=${n}`, answers: [], ask: null });
+    const page = { id: 'f7', name: 'plan.html', title: 'Plan', mime: 'text/html', archived: false, current_version: 2, links: [], writers: [], versions: [at(1), at(2)] };
+    const t = task({ documents: [], to_leave: [{ requirement_id: 'r1', line: 'Plan approved', met: false, may: ['ok', 'no'], shows: ['file:f7@1'] } as never] });
+    serve((url) =>
+      url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1')
+        ? { status: 200, body: detail(t) }
+        : url.endsWith('/tasks/t1/files?all=1')
+          ? { status: 200, body: { files: [page] } }
+          : url.endsWith('/api/v2/pages/f7')
+            ? { status: 200, body: { page: { src: 'about:blank', version: 2 } } }
+            : url.endsWith('/api/v2/files/f7?v=1')
+              ? { status: 200, body: '<p>The plan as it was.</p>' }
+              : base(url),
+    );
+    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    expect((await frame('Plan')).getAttribute('srcdoc')).toContain('The plan as it was.');
+  });
+
+  it('with a version pinned, picking the newest names it, so it does not snap back to the pin @approvals', async () => {
+    pinnedAt(1, { src: 'about:blank', version: 2 });
+    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    fireEvent.click(await screen.findByRole('button', { name: 'Version 1' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /v2/ }));
+    expect(await screen.findByRole('button', { name: 'Version 2' })).toBeTruthy();
+    expect((await frame('Spec')).getAttribute('src')).toBe('about:blank');
+  });
 
   it('opens an older version and marks what changed since the one before @s55', async () => {
     serve((url) => (url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1') ? { status: 200, body: detail(withVersions()) } : (html(url) ?? base(url))));

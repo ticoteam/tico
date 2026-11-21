@@ -53,6 +53,9 @@ def test_a_review_subtask_runs_on_grok_in_its_own_session_and_its_verdict_wakes_
     shown = get(api, "tasks/" + sub["id"])
     assert shown["runs"][0]["ran_on"]["segments"][0]["model"] == "grok-4.6"
     assert shown["check_model"]["model"] == "grok-4.6" and shown["check_model"]["role"] == "review"
+    # The parent's page reads its second review's state from its children (web: the ask card's review pill).
+    kids = get(api, "tasks/" + parent["id"])["children"]
+    assert [(k["id"], k["status"], k.get("role")) for k in kids] == [(sub["id"], "done", "review")]
     back = claim(api, machine)
     assert back["task"]["id"] == parent["id"]
     assert back["config"]["runtime"] == "claude" and "check" not in back["task"]

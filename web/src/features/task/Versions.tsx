@@ -29,14 +29,20 @@ export interface Versions {
   count: number | null;
   /** The page as its frame draws it: marked when `on`, else the version shown when it is not the newest. */
   html: string | null;
+  /** The version an ask pinned, the default while the address names none: a version picked is then always named. */
+  pin: number | undefined;
   failed: boolean;
 }
 
-export function useVersions(doc: TaskDocument | undefined, v?: number, vs?: number): Versions | null {
+/** `pinned`, the version an ask is about, opens unless the address names another; it is read by its number even when
+    the page's list of versions does not reach back to it. */
+export function useVersions(doc: TaskDocument | undefined, v?: number, vs?: number, pinned?: number): Versions | null {
   const list = [...(doc?.versions ?? [])].sort((a, b) => b.n - a.n);
-  const shown = doc && v && list.some((x) => x.n === v) ? v : (doc?.version ?? 0);
-  const named = !!vs && vs !== shown && list.some((x) => x.n === vs);
-  const before = named ? vs : list.find((x) => x.n < shown)?.n;
+  // A version the address names opens, read by its number even when the list does not reach it.
+  const named = !!doc && !!v;
+  const shown = named ? v : (pinned ?? doc?.version ?? 0);
+  const marked = !!vs && vs !== shown && list.some((x) => x.n === vs);
+  const before = marked ? vs : list.find((x) => x.n < shown)?.n;
   const newest = shown === doc?.version;
   const file = doc?.file_id ?? '';
   const older = useQuery({ ...pageVersionQuery(file, before ?? 0), enabled: !!doc && !!before });
@@ -47,9 +53,9 @@ export function useVersions(doc: TaskDocument | undefined, v?: number, vs?: numb
   if (older.data != null && newer.data != null) {
     const page = parsePage(newer.data, md);
     count = markChanges(parsePage(older.data, md), page);
-    if (named) html = frameDoc(page, true);
+    if (marked) html = frameDoc(page, true);
   }
-  if (!named && !newest && newer.data != null) html = frameDoc(parsePage(newer.data, md));
+  if (!marked && !newest && newer.data != null) html = frameDoc(parsePage(newer.data, md));
   if (!doc) return null;
   return {
     doc,
@@ -57,10 +63,11 @@ export function useVersions(doc: TaskDocument | undefined, v?: number, vs?: numb
     shown,
     newest,
     before,
-    on: named,
+    on: marked,
     count,
     html,
-    failed: newer.isError || (named && older.isError),
+    failed: newer.isError || (marked && older.isError),
+    pin: pinned,
   };
 }
 
@@ -93,7 +100,7 @@ export function VersionBar({ task, vs, at, onAt }: { task: string; vs: Versions;
             label={`v${x.n}`}
             meta={[when(x.at), x.note].filter(Boolean).join(', ')}
             on={x.n === vs.shown}
-            onSelect={() => void run('task.showVersion', { task, version: x.n === vs.doc.version ? null : x.n }, { via: 'click' })}
+            onSelect={() => void run('task.showVersion', { task, version: x.n === vs.doc.version && vs.pin === undefined ? null : x.n }, { via: 'click' })}
           />
         ))}
       </Menu>
@@ -124,7 +131,7 @@ export function PageView({ task, vs, at }: { task: string; vs: Versions; at: num
     if (vs.on && at >= 0) frame.current?.contentWindow?.postMessage({ tico_change: at }, '*');
   }, [vs.on, at]);
   const name = vs.doc.title || vs.doc.name;
-  if (vs.newest && !vs.on) return <DocFrame task={task} doc={vs.doc} />;
+  if (vs.newest && !vs.on) return <DocFrame task={task} doc={vs.doc} pin={vs.pin === undefined ? undefined : vs.shown} />;
   if (vs.failed) return <Empty icon="alert" title={`${name} did not load`} />;
   return (
     <div className="frame is-inset">

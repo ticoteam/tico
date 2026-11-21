@@ -18,7 +18,7 @@ import { download } from './Files';
 import { DETAILS, failedToast, isPage, tabAddress } from './model';
 import { Face, Go } from './parts';
 import { frameDoc, parsePage } from './changes';
-import { pageShownQuery, pageVersionQuery, taskFilesQuery, type TaskData } from './queries';
+import { fileMetaQuery, pageShownQuery, pageVersionQuery, taskFilesQuery, type TaskData } from './queries';
 import { isWord, WordPages } from './Word';
 
 /* What a task shows in its page sheet: one of its pages (a tab), or one of its files opened from Details. Both keep
@@ -39,11 +39,13 @@ const currentOf = (f: TaskFileView): FileVersion | undefined => f.versions.find(
 
 /** A tab's content: a page from its page read (its own address, its live parts), or, when the server answers that it
     is no page, `file` (the same file from its file read, in the file viewer). */
-function PageOrFile({ task, id, title, page, file }: { task: string; id: string; title: string; page: boolean; file: ReactNode }) {
+function PageOrFile({ task, id, title, page, file, pin }: { task: string; id: string; title: string; page: boolean; file: ReactNode; pin?: number }) {
   const shown = useQuery({ ...pageShownQuery(task, id), enabled: page });
   // No address (an install without page hosting: `src` null): the page's own text at its version, framed as an older
-  // version is, so the tab never waits on an address that will not come.
-  const p = shown.data?.page;
+  // version is, so the tab never waits on an address that will not come. A version an ask pinned (`pin`) is shown live
+  // only while the live page is that version; else that version's own text.
+  const live = shown.data?.page;
+  const p = live && pin && live.version !== pin ? { ...live, src: null, version: pin } : live;
   const text = useQuery({ ...pageVersionQuery(id, p?.version ?? 0), enabled: !!p && !p.src && !!p.version });
   if (!page || shown.isError) return <div className="frame fv">{file}</div>;
   if (text.isError) return <Empty icon="alert" title={`${title} did not load`} />;
@@ -62,33 +64,43 @@ function PageOrFile({ task, id, title, page, file }: { task: string; id: string;
 }
 
 /** A document's tab: a page, or a Markdown file. */
-export function DocFrame({ task, doc }: { task: string; doc: TaskDocument }) {
-  return <PageOrFile task={task} id={doc.file_id} title={doc.title || doc.name} page={isPage(doc)} file={<FilePreview file={doc.file_id} version={doc.version} />} />;
+export function DocFrame({ task, doc, pin }: { task: string; doc: TaskDocument; pin?: number }) {
+  return <PageOrFile task={task} id={doc.file_id} title={doc.title || doc.name} page={isPage(doc)} pin={pin} file={<FilePreview file={doc.file_id} version={doc.version} />} />;
 }
 
-/** One of the task's other files as a tab, at its current version: an HTML file may be a page linked to the task. */
-export function FileTab({ task, f }: { task: string; f: TaskFileView }) {
+/** One of the task's other files as a tab, at its current version or the one an ask pinned (`version`): an HTML file
+    may be a page linked to the task. */
+export function FileTab({ task, f, version }: { task: string; f: TaskFileView; version?: number }) {
   const isPerson = useIsPerson();
-  const v = currentOf(f);
-  if (!v) return null;
+  const now = currentOf(f);
+  const listed = version !== undefined ? f.versions.find((x) => x.n === version) : now;
+  // A version the listing no longer reaches (it keeps the newest): its own name and type, read by the file's id.
+  const meta = useQuery({ ...fileMetaQuery(f.id, version ?? 0), enabled: !listed && version !== undefined });
+  const v =
+    listed ??
+    (now && meta.data && { ...now, n: version as number, url: `/api/v2/files/${encodeURIComponent(f.id)}?v=${version}`, mime: meta.data.content_type, name: meta.data.name, size: meta.data.size ?? null });
+  if (meta.isError) return <Empty icon="alert" title="This file did not load" />;
+  if (!v) return <PageBones />;
   const name = f.title || f.name;
+  // Each version keeps the name it was stored under: its viewer and its download follow that version's own.
+  const stored = v.name || f.name;
   // A Word file is drawn as its words on paper, with Download beside it.
-  if (isWord(f.name, v.mime))
+  if (isWord(stored, v.mime))
     return (
       <>
         <div className="fv-bar">
           <b>{name}</b>
           <span className="grow" />
-          <a className="ib ib-sm" href={v.url} download={f.name} aria-label="Download" title="Download">
+          <a className="ib ib-sm" href={v.url} download={stored} aria-label="Download" title="Download">
             <Icon name="download" />
           </a>
         </div>
         <WordPages url={v.url} name={name} />
       </>
     );
-  // The tab is the file at its current version, so a person may sign it here as in its file view.
-  const file = <FileFrame id={f.id} version={v.n} mime={v.mime} title={name} url={v.url} name={f.name} size={v.size} signable={isPerson} />;
-  return <PageOrFile task={task} id={f.id} title={name} page={v.mime.startsWith('text/html')} file={file} />;
+  // At its current version a person may sign it here as in its file view; an older version pinned by an ask is read only.
+  const file = <FileFrame id={f.id} version={v.n} mime={v.mime} title={name} url={v.url} name={stored} size={v.size} signable={isPerson && v === now} />;
+  return <PageOrFile task={task} id={f.id} title={name} page={v.mime.startsWith('text/html')} pin={version} file={file} />;
 }
 
 const BONES = [38, 92, 86, 64, 90, 72, 48];

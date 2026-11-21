@@ -31,6 +31,10 @@ export interface TaskTab {
   email?: string;
   /** The task's chat (a phone's tab). */
   chat?: boolean;
+  /** The version the ask pinned (`file:<id>@<n>`): the tab shows it, not a newer one. */
+  version?: number;
+  /** A file the ask is about that is not one of this task's (another task's): read by its id, as the library reads it. */
+  other?: string;
 }
 
 /** The requirement the person may answer now: Approve, Send back. */
@@ -42,7 +46,7 @@ export function decisionOf(t: TaskData): TaskRequirement | null {
 export function thingsOf(r: TaskRequirement | null): Set<string> {
   const out = new Set<string>();
   if (!r) return out;
-  for (const id of [r.approval?.file_id, r.page?.file_id, ...(r.approval?.pages ?? []).map((p) => p.file_id), ...(r.page?.pages ?? []).map((p) => p.file_id)])
+  for (const id of [r.approval?.file_id, r.page?.file_id, r.approval?.file_id || r.page?.file_id ? null : r.earlier?.file_id, ...(r.approval?.pages ?? []).map((p) => p.file_id), ...(r.page?.pages ?? []).map((p) => p.file_id)])
     if (id) out.add(id);
   for (const ref of r.shows ?? []) {
     const m = /^(?:page|file):([^@]+)/.exec(ref);
@@ -51,16 +55,41 @@ export function thingsOf(r: TaskRequirement | null): Set<string> {
   return out;
 }
 
+/** What a requirement is about: the page a stage's OK names, else the first page or file it shows (an OK's subject,
+    task_asks pins it first). A review page it also shows is not it. */
+export function targetOf(r: TaskRequirement | null): { id: string; version?: number } | null {
+  // A stage's OK whose page was pinned on an earlier stage says it in `earlier` alone.
+  const from = r?.approval?.file_id ? r.approval : r?.page?.file_id ? r.page : r?.earlier;
+  const own = from?.file_id;
+  const at = from?.version;
+  if (own) return { id: own, ...(at && { version: at }) };
+  for (const ref of r?.shows ?? []) {
+    const m = /^(?:page|file):([^@]+)(?:@v?(\d+))?/.exec(ref);
+    if (m?.[1]) return { id: m[1], ...(m[2] && { version: Number(m[2]) }) };
+  }
+  return null;
+}
+
+/** The second review (a sub-task filed with `--role review`): "Review running" while one is open, then "Reviewed". */
+export function reviewOf(t: Pick<TaskData, 'children'>): string | null {
+  const reviews = (t.children ?? []).filter((c) => c.role === 'review');
+  if (reviews.some((c) => c.status === 'open')) return 'Review running';
+  return reviews.some((c) => c.status === 'done') ? 'Reviewed' : null;
+}
+
 /** The email a requirement shows (`email:<id>`): its send's id. */
 export const emailOf = (r: TaskRequirement | null | undefined): string | null => r?.shows?.find((x) => x.startsWith('email:'))?.slice(6) || null;
 
 /** What waits on the person comes first, marked with the Dot (plan/approvals.html): the page, the file or the email it
-    asks about. Then the stage's other pages and Markdown files, each with its state (more.js taskflow); the task's
+    asks about, the one it is about (`targetOf`, at the version it pinned) before the others it shows; one that is not
+    this task's opens as a tab of its own once the files are read (`files` given), never the review page beside it. Then the stage's other pages and Markdown files, each with its state (more.js taskflow); the task's
     other files but its pictures (Details walks those), so a PDF, a Word file or a sound opens as a tab too; the other
     emails its requirements show; the chat (a phone's tab); then Details. A page linked in two roles is one tab. */
-export function tabsOf(t: TaskData, files: TaskFileView[] = []): TaskTab[] {
+export function tabsOf(t: TaskData, files?: TaskFileView[]): TaskTab[] {
   const decision = decisionOf(t);
   const asked = thingsOf(decision);
+  const target = targetOf(decision);
+  const pinned = (id: string) => (target?.id === id && target.version ? { version: target.version } : {});
   const used = new Set<string>([DETAILS, CHAT]);
   const free = (name: string) => {
     let slug = slugOf(name);
@@ -74,20 +103,25 @@ export function tabsOf(t: TaskData, files: TaskFileView[] = []): TaskTab[] {
     seen.add(doc.file_id);
     const slug = free(doc.name);
     const ok = doc.approved_version !== undefined && doc.approved_version === doc.version && !doc.changed_since_ok;
-    return [{ slug, label: tabLabel(doc.title || doc.name), mark: asked.has(doc.file_id) ? 'ask' : ok ? 'ok' : 'none', doc }];
+    return [{ slug, label: tabLabel(doc.title || doc.name), mark: asked.has(doc.file_id) ? 'ask' : ok ? 'ok' : 'none', doc, ...pinned(doc.file_id) }];
   });
-  const others = files
+  const others = (files ?? [])
     .filter((f) => !f.archived && !seen.has(f.id) && (asked.has(f.id) || !(f.versions.find((v) => v.n === f.current_version) ?? f.versions.at(-1))?.mime.startsWith('image/')))
-    .map((f): TaskTab => ({ slug: free(f.title || f.name), label: tabLabel(f.title || f.name), file: f, ...(asked.has(f.id) && { mark: 'ask' as const }) }));
+    .map((f): TaskTab => ({ slug: free(f.title || f.name), label: tabLabel(f.title || f.name), file: f, ...pinned(f.id), ...(asked.has(f.id) && { mark: 'ask' as const }) }));
+  const here = [...docs, ...others].some((x) => (x.doc?.file_id ?? x.file?.id) === target?.id);
+  const away: TaskTab[] = target && files && !here ? [{ slug: free('File'), label: 'File', mark: 'ask', other: target.id, ...pinned(target.id) }] : [];
   const emails: TaskTab[] = [];
   for (const r of t.to_leave ?? []) {
     const email = emailOf(r);
     if (!email || emails.some((x) => x.email === email)) continue;
     emails.push({ slug: free('Email'), label: 'Email', mark: r === decision ? 'ask' : r.met ? 'ok' : 'none', email });
   }
-  const all = [...docs, ...others, ...emails];
+  const all = [...docs, ...others, ...away, ...emails];
+  // What the ask is about opens first, before any other page it shows (a review page).
+  const isTarget = (x: TaskTab) => !!target && (x.doc?.file_id ?? x.file?.id ?? x.other) === target.id;
   return [
-    ...all.filter((x) => x.mark === 'ask'),
+    ...all.filter((x) => x.mark === 'ask' && isTarget(x)),
+    ...all.filter((x) => x.mark === 'ask' && !isTarget(x)),
     ...all.filter((x) => x.mark !== 'ask'),
     ...(t.conversation_id ? [{ slug: CHAT, label: 'Chat', chat: true }] : []),
     { slug: DETAILS, label: 'Details' },

@@ -7,6 +7,7 @@
 .askcard-note{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
 /* on a computer, what answering does sits at the left of the buttons' row (AskCard.tsx); a long one shortens, wherever it is */
 .askcard .an-row .askcard-note{margin-right:auto}
+.askcard-top>.pill{flex:none}
 .askcard.is-asked{padding:var(--s-2h) var(--s-2) var(--s-2h) var(--s-3h)}
 .askcard.is-asked .hollow{flex:none;margin:0 var(--s-0)}
 .askcard.is-asked .askcard-note{margin-left:var(--s-1)}

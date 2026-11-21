@@ -1,6 +1,6 @@
 import { keepPreviousData, queryOptions, type QueryKey } from '@tanstack/react-query';
 import { ApiError, api } from '@/api/client';
-import type { OkPreview, PagePublished, PageShown, PipelineSettingsResult, PublishPageBody, TaskDetail, TaskFileList, TaskLinkView, TaskResult } from '@/api/schema';
+import type { OkPreview, PagePublished, PageShown, PipelineSettingsResult, PublishPageBody, TaskDetail, TaskDetailChild, TaskFileList, TaskLinkView, TaskResult } from '@/api/schema';
 import { keys, meQuery, queryClient, quietRoot, write } from '@/data';
 import { flowQuery, pipelinesQuery } from '@/features/tasks/routing';
 import type { FileLibrary, FileSearch, TaskFileResult, TaskFileView } from '@/api/schema';
@@ -27,21 +27,15 @@ export type TaskData = TaskDetail['task'] & {
   note?: string | null;
 };
 
-export interface TaskChild {
-  id: string;
-  title: string;
-  status: string;
-  owner_id: string | null;
-  label?: string | null;
-  step?: string | null;
-}
+/** A sub-task the reader may open (GET /api/v2/tasks/{tid} `children`); a check's `role` says a second review. */
+export type TaskChild = TaskDetailChild;
 
 function flat(d: TaskDetail): TaskData {
   return {
     ...d.task,
     runs: d.runs ?? [],
     parent: d.parent ?? null,
-    children: (d.children as TaskChild[] | undefined) ?? [],
+    children: d.children ?? [],
     can_comment: d.can_comment ?? false,
     mover: d.mover ?? false,
   };
@@ -84,6 +78,15 @@ export const taskFilesQuery = (id: string) =>
   queryOptions({
     queryKey: [...keys.tasks.detail(id), 'files'] as const,
     queryFn: async ({ signal }) => (await api.get<TaskFileList>(`${taskPath(id)}/files?all=1`, { signal })).files,
+  });
+
+/** One version of a file's name, size and type, without its bytes (GET /api/v2/files/{fid}/meta?v=<n>): a version
+    a task's listing no longer reaches. A version never changes once written. */
+export const fileMetaQuery = (file: string, n: number) =>
+  queryOptions({
+    queryKey: ['files', 'meta', file, n] as const,
+    queryFn: ({ signal }) => api.get<{ name: string; content_type: string; size?: number | null }>(`/api/v2/files/${enc(file)}/meta?v=${n}`, { signal }),
+    staleTime: Infinity,
   });
 
 /** One version of a page as its text (GET /api/v2/files/{fid}?v=<n>). A version never changes once written. */
