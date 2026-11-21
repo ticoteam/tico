@@ -74,6 +74,8 @@ function answer(url: string): Reply {
   if (url.endsWith('/api/v2/tasks/c1'))
     return { body: { task: { ...okTask('c1'), title: 'Ruiz: reply letter', relations: {}, email_send: { id: 's2', state: 'canceled' } }, parent: { id: 'p0', title: 'Legal 2026' } } };
   // a case with two emails waiting on OKs of its own, and an older question
+  if (url.endsWith('/api/v2/tasks/c2/files?all=1'))
+    return { body: { files: [{ id: 'f-email', name: 'email.md', title: 'Email', mime: 'text/markdown', archived: false, current_version: 1, links: [], versions: [], writers: [] }] } };
   if (url.endsWith('/api/v2/tasks/c2')) {
     const two = (rid: string, send: string) => ({ requirement_id: rid, kind: 'ok', line: 'Send this email?', met: false, may: ['ok', 'no'], shows: [`email:${send}`], asked_by: 'bot:lo' });
     return { body: { task: { ...okTask('c2'), title: 'Ruiz: two letters', relations: {}, to_leave: [two('r1', 's1'), two('r3', 's3')] } } };
@@ -205,7 +207,8 @@ describe('an approval waiting, as a card in the agent’s thread @approvals', ()
     show({ agent: 'bot:lo' });
     await waitFor(() => expect(screen.getAllByRole('link', { name: /Approve/ })).toHaveLength(2));
     const hrefs = screen.getAllByRole('link', { name: /Approve/ }).map((a) => a.getAttribute('href'));
-    expect(hrefs).toEqual(['/tasks/general/40/email', '/tasks/general/40/email-2']);
+    // as the task's page names its tabs, files included: its file "Email" took the first slug
+    expect(hrefs).toEqual(['/tasks/general/40/email-2', '/tasks/general/40/email-2-2']);
   });
 
   it('a case with no "Send:" task shows the card of the email OK on itself in its own chat', async () => {
@@ -213,6 +216,14 @@ describe('an approval waiting, as a card in the agent’s thread @approvals', ()
     const own = { id: 'c1', title: 'Ruiz: reply letter', children: [], relations: {}, to_leave: [{ requirement_id: 'r1', kind: 'ok', met: false, may: ['ok', 'no'], shows: ['email:s1'] }] };
     show({ task: own as unknown as TaskData });
     expect((await screen.findByRole('link', { name: /Approve/ })).textContent).toContain('Ruiz: reply letter');
+  });
+
+  it('a new email OK on a case shows its card in the case’s chat, the case read again when its cached read lacks it', async () => {
+    needs = [ask('c1', 'bot:lo', 's1')];
+    const cached = { ...okTask('c1'), title: 'Ruiz: reply letter', relations: {}, to_leave: [] };
+    queryClient.setQueryData(['tasks', 'detail', 'c1'], cached);
+    show({ task: cached as unknown as TaskData });
+    expect(await screen.findByRole('link', { name: /Approve/ })).toBeTruthy();
   });
 
   it('a case’s chat shows the card of an email OK a person asked for, too', async () => {

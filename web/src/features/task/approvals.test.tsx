@@ -328,7 +328,9 @@ describe('the decision', () => {
   });
 
   it('an email OK on a case itself shows the case’s own brief, and names no other matter @approvals', async () => {
-    shown = task({ title: 'Ruiz: late delivery', note: 'Dana Ruiz wants a refund.', parent: { id: 'p0', title: 'Legal 2026' } } as Partial<TaskData>);
+    shown = task({ title: 'Ruiz: late delivery', note: 'Dana Ruiz wants a refund.' } as Partial<TaskData>);
+    const parent = { id: 'p0', title: 'Legal 2026', label: null, step: null };
+    reply = (url) => (url.endsWith('/api/v2/tasks/t1') || url.includes('/api/v2/tasks/%2312') ? { body: { task: shown, runs: [], children: [], parent, can_comment: true, mover: true } } : null);
     show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1/12/email');
     const brief = await screen.findByRole('region', { name: 'Brief' });
     expect(within(brief).getByText('Dana Ruiz wants a refund.')).toBeTruthy();

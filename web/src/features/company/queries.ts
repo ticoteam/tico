@@ -1044,8 +1044,14 @@ export function dateInstant(value: string, end = false): number {
 const byDate = (a: MatterDate, b: MatterDate) => dateInstant(a.due_at || a.starts_at || '') - dateInstant(b.due_at || b.starts_at || '');
 
 const settleDate = (task: string) => (cur: unknown, r: MatterDateResult) => {
-  // An email held for the matter's not before says its day in its preview: read again.
-  void queryClient.invalidateQueries({ queryKey: [...keys.tasks.detail(task), 'email'] });
+  // An email held for the matter's not before says its day: every open preview and state of a send of this case is
+  // read again, by the send's own task, wherever it is open (a "Send:" task's page too).
+  void queryClient.invalidateQueries({
+    predicate: (q) => {
+      const data = q.state.data as { task_id?: string | null; send?: { task_id?: string | null } } | undefined;
+      return (data?.send?.task_id ?? data?.task_id) === task && (q.queryKey[0] === 'email-send-state' || q.queryKey[3] === 'email');
+    },
+  });
   return r.matter ? eachMatter(task, cur, () => r.matter) : cur;
 };
 

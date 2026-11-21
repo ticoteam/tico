@@ -14,7 +14,7 @@ import { Link } from '@/kit/Link';
 import { toast } from '@/kit/Toast';
 import { useFollow } from '@/live/follow';
 import { Document, type PageState, type PageTab } from '@/pagekinds';
-import { fileQuery, FilePreview } from '@/features/library/exports';
+import { FilePreview } from '@/features/library/exports';
 import { threadQuery } from '@/features/threads/exports';
 import { whoHref } from '@/features/team/routing';
 import { leaveTask } from '@/lib';
@@ -26,14 +26,15 @@ import { EmailSource, Email as EmailView } from './Email';
 import { ArchiveMenu } from './Files';
 import { FileTab, FileView, PageBones } from './FileView';
 import { FlowTop, MoreMenu, QuietLine, WhereLine } from './Head';
-import { changesAskedOf, decisionOf, defaultTab, DETAILS, emailOf, failedToast, personOf, sendTitle, tabAddress, tabLabel, tabsOf, type TaskTab } from './model';
+import { changesAskedOf, decisionOf, defaultTab, DETAILS, emailOf, failedToast, sendTitle, tabAddress, type TaskTab } from './model';
 import { FlowMark } from '@/kit/FlowMark';
 import { Face } from './parts';
-import { taskDetailQuery, taskFilesQuery, taskRefQuery, type TaskData } from './queries';
+import { taskDetailQuery, taskRefQuery, type TaskData } from './queries';
+import { useTabs, type Tab } from './tabs';
 import { approvalCard, useApprovalCards } from './ThreadCards';
 import { PageView, useVersions, VersionBar } from './Versions';
-import { Brief, EmailPointers, MatterBrief, useWaiting, WaitingOnYou, type Waiting } from './Waiting';
-import { waitSlugs, waitsNow } from './waits';
+import { Brief, EmailPointers, MatterBrief, WaitingOnYou } from './Waiting';
+import { waitsNow } from './waits';
 import './task.css';
 
 export interface TaskPageProps {
@@ -88,42 +89,12 @@ export function TaskPage({ task, pipeline, tab, file, flow = false }: TaskPagePr
   return <TaskView key={t.id} t={t} tab={tab} file={file} flow={flow} />;
 }
 
-/** A tab of the open task, or an email's OK hung on it (`wait`, its OK task). */
-type Tab = TaskTab & { wait?: TaskData };
-
-/** One tab per email's OK that waits on the person, first and marked (one the person asked changes on is not marked): "Email", or "Email to <who>" when there are two. */
-function waitTabs(items: Waiting[], own: TaskTab[]): Tab[] {
-  const mails = items.flatMap((x) => (x.send ? [{ ...x, send: x.send }] : []));
-  const slugs = waitSlugs(mails.length, own.map((x) => x.slug));
-  return mails.map(({ sub, send }, i) => {
-    const to = sendTitle(sub.title)?.to;
-    // Changes asked: the tab stays, not marked as waiting on the person.
-    const mark = decisionOf(sub) ? ('ask' as const) : ('none' as const);
-    return { slug: slugs[i]!, label: mails.length > 1 && to ? `Email to ${personOf(to)}` : 'Email', mark, email: send, wait: sub };
-  });
-}
-
 /** A tab's mark (parts-kit.js tab): approved, waits on you, not yet. */
 function markOf(x: TaskTab) {
   if (x.mark === 'ok') return <Icon name="check" label="Approved" />;
   if (x.mark === 'ask') return <FlowMark size={10} />;
   if (x.mark === 'none') return <i className="hollow" />;
   return undefined;
-}
-
-/** Every tab of a task, the one list the page, its dock and the chat card beside it read: its emails' OKs filed as
-    tasks of their own (a "Send:" sub-task) that wait on the person first, then its own. `settled` once both are read. */
-function useTabs(t: TaskData) {
-  const files = useQuery(taskFilesQuery(t.id));
-  const waiting = useWaiting(t);
-  // The files did not load: what the ask is about still opens, read by its id, never another page it shows.
-  const own = tabsOf(t, files.data ?? (files.isError ? [] : undefined));
-  // The file the ask is about when it is another task's: its tab is named once its record is read.
-  const away = own.find((x) => x.other);
-  const other = useQuery({ ...fileQuery(away?.other ?? ''), enabled: !!away });
-  if (away && other.data) away.label = tabLabel(other.data.title || other.data.name || 'File');
-  const tabs: Tab[] = [...waitTabs(waiting.items, own), ...own];
-  return { tabs, files, waiting, settled: files.isFetched && waiting.settled };
 }
 
 /** The tab the page shows for the address's `tab`: that tab when the task has it, else the one that waits on the person
