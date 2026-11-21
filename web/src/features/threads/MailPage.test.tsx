@@ -117,7 +117,7 @@ describe('Mail @s159', () => {
     expect(sent('POST', '/api/v2/threads/dm/messages')?.body).toEqual({
       text: 'Is it paid?',
       to_dm: 'bot:qa',
-      refs: { from_page: { page: 'mail', label: 'Mail', item: { kind: 'mail', id: 'help@example.test/th1' } } },
+      refs: { from_page: { page: 'mail', label: 'Mail', item: { kind: 'mail', id: 'th1' } } },
     });
     expect(all('POST', '/api/v2/email/sends')).toEqual([]);
     expect(all('POST', '/api/v2/mail/drafts')).toEqual([]);

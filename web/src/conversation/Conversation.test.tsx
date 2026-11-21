@@ -214,6 +214,18 @@ describe('Conversation', () => {
     expect(screen.queryByText('Ship it')).toBeNull();
   });
 
+  it("reads the Agent bar's DM again when the server says it changed, and keeps the words for Retry @4882-S1", async () => {
+    seed([]);
+    serve(() => ({ status: 409, body: { error: { code: 'dm_changed', detail: 'Your chat with bot:qa changed; send it again', retryable: true } } }));
+    const onMoved = vi.fn();
+    render(<Conversation id={T} variant="side" title="Ana" actor="bot:qa" from={FROM} toDm="bot:qa" onMoved={onMoved} />, {
+      wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+    });
+    type('Ship it');
+    await waitFor(() => expect(onMoved).toHaveBeenCalledWith(''));
+    expect(await screen.findByText('Not sent')).toBeTruthy();
+  });
+
   it('sends a retry with the page it was first written on, not the one shown now @4857-S15', async () => {
     let fail = true;
     serve(() => (fail ? { status: 500, body: { error: { code: 'boom', detail: 'Broke' } } } : { status: 200, body: msg(3, ME, 'Ship it') }));

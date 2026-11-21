@@ -1,6 +1,8 @@
 import { useNavigate } from '@tanstack/react-router';
+import { refusalFor } from '@/actions';
 import { Composer, sendToDm, type FromPage } from '@/conversation';
 import { useActor } from '@/data';
+import { toast } from '@/kit/Toast';
 import { useMe } from './people';
 
 export interface AgentBoxProps {
@@ -8,6 +10,8 @@ export interface AgentBoxProps {
   agent: string;
   /** The conversation it is about: sent with each message as `from_page`, a pointer to it (no words). */
   from: FromPage;
+  /** The draft's key: the conversation's own whole address, as it always was (`agent:<path>`). */
+  draftId: string;
 }
 
 /**
@@ -15,29 +19,35 @@ export interface AgentBoxProps {
  * it, never to the outside party (plan/threads-team.html "From outside"). What is typed goes to your DM with exactly
  * the agent, which the server finds (or makes) as it writes (`sendToDm`, the Agent bar's path), with this
  * conversation as its page; that thread, where it went, opens beside, where the agent answers and drafts any reply.
+ * Refused, the words stay in the box; held by the org rules, they are in the hold and nothing opens.
  */
-export function AgentBox({ agent, from }: AgentBoxProps) {
+export function AgentBox({ agent, from, draftId }: AgentBoxProps) {
   const me = useMe();
   const who = useActor(agent);
   const navigate = useNavigate();
   if (!me) return null;
   return (
     <Composer
-      id={`agent:${from.page}:${from.item?.id ?? ''}`}
+      // one box per conversation: its draft and its sending state go with it
+      key={draftId}
+      id={draftId}
       me={me}
       to={who?.name ?? 'the agent'}
       // a message with files cannot carry its page: the agent would not know which conversation it is about
       attach={false}
       onSend={async (text) => {
-        // the box keeps the words until the server has them (a failure keeps them); then the thread it went to opens
-        // beside. A held message (the org rules) went nowhere yet: nothing opens.
         let sent;
         try {
           sent = await sendToDm(agent, text, from);
-        } catch {
+        } catch (e) {
+          toast(refusalFor(e, 'Not sent'));
           return false;
         }
-        const thread = sent?.conversation_id || sent?.thread_id;
+        if (!sent) {
+          toast({ text: 'Held for a check' });
+          return true;
+        }
+        const thread = sent.conversation_id || sent.thread_id;
         if (thread) void navigate({ to: '.', search: (s: Record<string, unknown>) => ({ ...s, chat: `thread:${thread}` }) } as never);
         return true;
       }}

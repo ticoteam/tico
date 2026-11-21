@@ -2,7 +2,7 @@
 // Messages themselves reach the timeline through live/patch.ts (the built-in `messages` patcher); this file adds
 // what only a conversation knows: a pending send giving way to its echo, and a reply being written (`runs`).
 import { infiniteQueryOptions, queryOptions, type InfiniteData, type QueryKey } from '@tanstack/react-query';
-import { api } from '@/api/client';
+import { api, ApiError } from '@/api/client';
 import type { Assistant, SlackMessage, SlackThread } from '@/api/schema';
 import { keys, queryClient, quietRoot, write } from '@/data';
 import { onTopic } from '@/live';
@@ -137,6 +137,20 @@ export interface Send {
 
 type Sent = ChatMessage | { message?: ChatMessage } | { hold?: unknown };
 
+/** `/threads/dm/messages`: the sender's DM with `to_dm`, found or made by the server as it writes (thread_api DM_ADDRESS). */
+const DM_ADDRESS = 'dm';
+
+/** A thread message as every sender here writes it: its words, the page it was written on, and, sent to an agent's DM
+    by owner (`toDm`), that agent. */
+const messageBody = (text: string, from: FromPage | null | undefined, toDm?: string) => ({
+  text,
+  refs: from ? { from_page: from } : {},
+  ...(toDm && { to_dm: toDm }),
+});
+
+/** The server looked up the DM a `to_dm` message meant, and it was not the same one by the time it wrote (409). */
+const dmChanged = (e: unknown) => e instanceof ApiError && e.code === 'dm_changed';
+
 function post(s: Send, idempotencyKey: string): Promise<Sent> {
   const files = s.files ?? [];
   const opts = { idempotencyKey };
@@ -149,10 +163,8 @@ function post(s: Send, idempotencyKey: string): Promise<Sent> {
     return api.post<Sent>('/api/v2/uploads/assistant/messages', f, opts);
   }
   const reply = s.replyTo ? { in_reply_to: s.replyTo } : {};
-  const where = s.toDm ? 'dm' : enc(s.id);
-  const dm = s.toDm ? { to_dm: s.toDm } : {};
-  if (!files.length)
-    return api.post<Sent>(`/api/v2/threads/${where}/messages`, { text: s.text, refs: s.from ? { from_page: s.from } : {}, ...reply, ...dm }, opts);
+  const where = s.toDm ? DM_ADDRESS : enc(s.id);
+  if (!files.length) return api.post<Sent>(`/api/v2/threads/${where}/messages`, { ...messageBody(s.text, s.from, s.toDm), ...reply }, opts);
   const f = new FormData();
   f.set('text', s.text);
   if (s.replyTo) f.set('in_reply_to', s.replyTo);
@@ -175,8 +187,9 @@ const answerOf = (r: Sent): ChatMessage | null => {
  * a pointer {kind, id}. Resolves with the message, whose thread is where it went, or null when it was held.
  */
 export async function sendToDm(agent: string, text: string, from: FromPage): Promise<ChatMessage | null> {
-  const r = await api.post<Sent>('/api/v2/threads/dm/messages', { text, to_dm: agent, refs: { from_page: from } }, { idempotencyKey: newId() });
-  return answerOf(r);
+  const send = () => api.post<Sent>(`/api/v2/threads/${DM_ADDRESS}/messages`, messageBody(text, from, agent), { idempotencyKey: newId() });
+  // the DM changed between the server's lookup and its write (`dm_changed`): sent again, it is looked up again
+  return answerOf(await send().catch((e: unknown) => (dmChanged(e) ? send() : Promise.reject(e))));
 }
 
 const withRows = (d: Timeline | undefined, fn: (rows: ChatMessage[]) => ChatMessage[]): Timeline | undefined => {
@@ -241,7 +254,9 @@ export async function sendMessage(given: Send): Promise<ChatMessage | null> {
     const real = answerOf(answer);
     if (real && movedTo(s, real)) s.onMoved?.(real.conversation_id ?? real.thread_id ?? '');
     return real;
-  } catch {
+  } catch (e) {
+    // the Agent bar's DM changed under it: the row stays, marked, for Retry, and the bar reads its DM again
+    if (s.toDm && dmChanged(e)) s.onMoved?.('');
     return null;
   }
 }

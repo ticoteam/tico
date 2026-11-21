@@ -12,6 +12,7 @@ import { groupsQuery } from '@/features/team/exports';
 import { ItemHead } from '@/pagekinds';
 import { Browse } from './Browse';
 import { ChatSheet } from './ChatSheet';
+import { Toasts } from '@/kit/Toast';
 import { LearnedPage } from './LearnedPage';
 import { MenuThreads } from './MenuThreads';
 import { MessagePick } from './MessagePick';
@@ -63,6 +64,7 @@ function show(node: ReactNode, at: string) {
   render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
+      <Toasts />
     </QueryClientProvider>,
   );
   return router;
@@ -153,6 +155,45 @@ describe('A thread @s157', () => {
 });
 
 describe('A thread from outside @4882', () => {
+  const outside = () => {
+    const t = thread({ id: 's1', title: 'Slack: Acme', root_id: 's1', members: { members: [{ actor: 'human:me' }, { actor: 'slack:U1' }, { actor: 'bot:qa' }] } });
+    seedList([t]);
+    seedThread(t, [msg('m1', 'slack:U1', 'Is the order shipped?', 's1')]);
+    return show(<ThreadsPage pane="thread" thread="s1" />, '/threads/s1');
+  };
+  const say = async (words: string) => {
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Message QA' }), { target: { value: words } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+  };
+  const posts = () => calls.filter((c) => c.method === 'POST' && c.url.endsWith('/threads/dm/messages'));
+
+  it('sends again once when the DM changed as the server wrote, and a refusal keeps the words with its reason @4882-S1 @4882-S3', async () => {
+    let n = 0;
+    serve((url, method) => {
+      if (method !== 'POST' || !url.endsWith('/threads/dm/messages')) return undefined;
+      n += 1;
+      if (n === 1) return { status: 409, body: { error: { code: 'dm_changed', detail: 'Your chat with bot:qa changed; send it again', retryable: true } } };
+      if (n === 2) return ok({ ...msg('m5', 'human:me', 'First', 'd5'), conversation_id: 'd5' });
+      return { status: 403, body: { error: { code: 'forbidden', detail: 'You can see bot:qa but not message them' } } };
+    });
+    const router = outside();
+    await say('First');
+    await waitFor(() => expect(new URLSearchParams(router.state.location.searchStr).get('chat')).toBe('thread:d5'));
+    expect(posts()).toHaveLength(2);
+    await say('Second');
+    expect(await screen.findByText('You can see bot:qa but not message them')).toBeTruthy();
+    expect((screen.getByRole('textbox', { name: 'Message QA' }) as HTMLTextAreaElement).value).toBe('Second');
+  });
+
+  it('says a held message was held, clears the box and opens no chat @4882-S2', async () => {
+    serve((url, method) => (method === 'POST' && url.endsWith('/threads/dm/messages') ? ok({ hold: { id: 'h1' } }) : undefined));
+    const router = outside();
+    await say('Held words');
+    expect(await screen.findByText('Held for a check')).toBeTruthy();
+    expect((screen.getByRole('textbox', { name: 'Message QA' }) as HTMLTextAreaElement).value).toBe('');
+    expect(new URLSearchParams(router.state.location.searchStr).get('chat')).toBeNull();
+  });
+
   it('has a box only to its agent, sent to the DM with exactly it, and the thread it went to opens beside', async () => {
     serve((url, method) =>
       method === 'POST' && url.endsWith('/threads/dm/messages') ? ok({ ...msg('m5', 'human:me', 'Answer them for me'), conversation_id: 'd5', thread_id: 'd5' }) : undefined,

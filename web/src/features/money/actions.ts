@@ -33,6 +33,7 @@ import { FINANCE_TAB_IDS } from './search';
 import { capsOf, tabShown, type AccessList } from './caps';
 import { asOfDay, balanceCsv, balanced, billPayload, compareDay, download, entryPayload, invoicePayload, paidPayload, toCents } from './ledger';
 import { TX_STATUSES, validateFinanceSearch } from './search';
+import { toast } from '@/kit/Toast';
 
 /* Every view and change on Finance and Growth. Tabs, ranges and the open panel live in the address, so Back undoes a
    view; a budget change is shown first and taken back if the server refuses it. Growth is read here: its changes go
@@ -532,6 +533,9 @@ function growthScopeWords(router: AnyRouter, qc: typeof queryClient) {
 
 /** Growth changes (channels, customers, sources) are asked of the Growth Manager: its chat opens beside the page. With
     words, they are sent first, led by the scope and month on screen. Ordinary messaging, so Tico may ask too. */
+/** What `growth.askManager` answers when the org rules held the words: nothing was sent and nothing opens. */
+const HELD = 'held';
+
 export const askManager = defineAction({
   id: 'growth.askManager',
   title: 'Ask the Growth Manager',
@@ -545,15 +549,20 @@ export const askManager = defineAction({
     if (words) {
       const lead = growthScopeWords(router, qc);
       const sent = await askGrowthManager(who, lead ? `${lead}: ${words}` : words);
+      // held by the org rules: the words are in the hold, and no chat opens
+      if (!sent) {
+        toast({ text: 'Held for a check' });
+        return HELD;
+      }
       // the thread it went to opens beside the page
-      const thread = sent?.conversation_id || sent?.thread_id;
+      const thread = sent.conversation_id || sent.thread_id;
       if (thread) chat = `thread:${thread}`;
     }
     await router.navigate({ to: '.', search: (prev: Record<string, unknown>) => ({ ...prev, chat }) });
     return chat;
   },
-  did: ({ text }) => (text?.trim() ? 'Asked the Growth Manager' : 'Opened the chat'),
-  target: (_i, chat) => (chat ? { kind: 'chat', id: chat } : null),
+  did: ({ text }, out) => (out === HELD ? 'Held for a check' : text?.trim() ? 'Asked the Growth Manager' : 'Opened the chat'),
+  target: (_i, chat) => (chat && chat !== HELD ? { kind: 'chat', id: chat } : null),
 });
 
 export const closeGrowthPanel = defineAction({

@@ -18,6 +18,8 @@ const missing: Reply = { status: 404, body: {} };
 const broken: Reply = { status: 500, body: {} };
 
 const posts: { path: string; body: Record<string, unknown> }[] = [];
+/** What a message to an agent's DM answers: the message and the thread it went to, or a hold. */
+let dmReply: Record<string, unknown> = { id: 'm1', conversation_id: 'dm-gm1', thread_id: 'dm-gm1' };
 
 /** Growth's reads, each replaceable (`path?scope=` for one scope); anything else is not found. Every POST is kept. */
 function serve(over: Record<string, Reply> = {}, urls: URL[] = []) {
@@ -33,7 +35,7 @@ function serve(over: Record<string, Reply> = {}, urls: URL[] = []) {
     if ((init?.method ?? 'GET') === 'POST') {
       posts.push({ path, body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown> });
       // a message to an agent's DM answers with the message and the thread it went to
-      const sent = path === '/threads/dm/messages' ? { id: 'm1', conversation_id: 'dm-gm1', thread_id: 'dm-gm1' } : {};
+      const sent = path === '/threads/dm/messages' ? dmReply : {};
       return new Response(JSON.stringify(sent), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }
     urls.push(u);
@@ -222,6 +224,22 @@ describe('Growth on the one read @s400 @s444', () => {
     expect(posts).toEqual([
       { path: '/threads/dm/messages', body: { text: 'All, October 2026: Why is search over?', to_dm: 'bot:gm1', refs: { from_page: { page: 'growth', label: 'Growth' } } } },
     ]);
+  });
+
+  it('says a held ask was held, clears the line and opens no chat @4882-S2', async () => {
+    dmReply = { hold: { id: 'h1' } };
+    try {
+      directory(GM());
+      serve(OWNED);
+      const router = show('/company/growth?month=2026-10');
+      fireEvent.change(await screen.findByRole('textbox', { name: 'Ask the Growth Manager' }), { target: { value: 'Why is search over?' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+      expect(await screen.findByText('Held for a check')).toBeTruthy();
+      expect(router.state.location.search).toEqual({ month: '2026-10' });
+      expect((screen.getByRole('textbox', { name: 'Ask the Growth Manager' }) as HTMLInputElement).value).toBe('');
+    } finally {
+      dmReply = { id: 'm1', conversation_id: 'dm-gm1', thread_id: 'dm-gm1' };
+    }
   });
 
   it('no segments, no spend, all zeros: the KPIs lead and the funnel folds below', async () => {
