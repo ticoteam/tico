@@ -3,6 +3,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { FlowMark } from '@/kit/FlowMark';
 import { Link } from '@/kit/Link';
+import { useCards } from '@/kit/Popover';
 import { toast } from '@/kit/Toast';
 import { answered } from './answered';
 import { failedToast, reasonOf, tabAddress } from './model';
@@ -35,21 +36,27 @@ export interface AskCardProps {
 }
 
 export function AskCard({ name, note, who, end, asked, asking, actions, error, href, label = 'The decision', target, children }: AskCardProps) {
-  // `has-row`: the buttons' row ends the card, so on a computer the note can sit at its left (ask.css).
-  const row = !!actions && !error && 'has-row';
-  const className = ['answer askcard', asked && 'is-asked', asking && 'is-asking', href && 'is-link', row].filter(Boolean).join(' ');
+  const className = ['answer askcard', asked && 'is-asked', asking && 'is-asking', href && 'is-link'].filter(Boolean).join(' ');
+  // On a computer what answering does sits at the left of the buttons' row while that row ends the card, and goes while
+  // "What should change?" is open; on a phone, or with no row, it stays in the top line.
+  const cards = useCards();
+  const where = !note || (asking && !cards) ? null : !cards && !asked && actions && !error ? 'row' : 'top';
+  const noted = <span className="askcard-note">{note}</span>;
   const inner = (
     <>
       <div className="askcard-top">
         {asked ? <i className="hollow" /> : <FlowMark />}
         <b className="an-name">{name}</b>
-        {note && <span className="askcard-note">{note}</span>}
+        {where === 'top' && noted}
         <span className="grow" />
         {end ?? <Face id={who} />}
       </div>
       {children}
       {actions && (
-        <div className="an-row">{actions}</div>
+        <div className="an-row">
+          {where === 'row' && noted}
+          {actions}
+        </div>
       )}
       {error && (
         <p className="an-err" role="alert">

@@ -361,8 +361,7 @@ def _grant_view(bot, access_row, name):
 )
 def repo_show(api, args):
     person = _as_person(api)
-    listing = person.get("repositories")
-    row = _repo_row(listing, args["repository"])
+    row = _repo_row(person.get("repositories"), args["repository"])
     if not row:
         raise _not_listed(args["repository"])
     name = row["full_name"]
@@ -436,15 +435,17 @@ def repo_grant(api, args):
         out["ticked"] = out["ticked_now"] = True
         if current["mode"] == "all":
             current = person.get(f"bots/{_path(bot)}/repositories")
-    unreachable = row.get("reachable") is False
-    if unreachable:
+    if row.get("reachable") is False:
         out["reachable"] = False
     reads = current["mode"] == "all" and current.get("all_access") == "read"
+    # What All ticked repos covers by configuration, as the hub answers it: never another bot's own repository, and
+    # one GitHub cannot reach this minute too (a hub from before all_ticked: what the bot reaches now).
+    covered = current.get("all_ticked")
+    if covered is None:
+        covered = [r["full_name"] for r in current.get("effective") or [] if r["access"] == current.get("all_access")]
     if current["mode"] == "all" and not flags:
-        # What All ticked repos reaches, never another bot's own repository, as the hub answers it; its answer leaves
-        # out a repository GitHub cannot reach this minute, which All ticked repos still covers when it is ticked.
         held = {r["full_name"].lower(): r["access"] for r in current.get("effective") or []}.get(name.lower())
-        if held is None and unreachable and out["ticked"] and not row.get("bot_repo"):
+        if held is None and name.lower() in {n.lower() for n in covered}:
             held = current.get("all_access")
         if held == "write" or held == access:
             return {**out, "changed": False, "detail": f"{bot} has All ticked repos ({current.get('all_access')})"}
@@ -456,25 +457,15 @@ def repo_grant(api, args):
             409,
         )
     # From All ticked repos at Read it moves to Chosen repos, keeping read on each repository All ticked repos covers
-    # (its own stays write whatever the mode), one GitHub cannot reach this minute too.
-    kept = current.get("effective") if reads else current.get("chosen") if current["mode"] == "chosen" else []
+    # (its own stays write whatever the mode), as a product repository's grant does.
     if reads:
-        reached = {r["full_name"].lower() for r in kept or []}
-        kept = [
-            *(kept or []),
-            *(
-                {"full_name": r["full_name"], "access": "read"}
-                for r in listing.get("repositories") or []
-                if r.get("enabled")
-                and not r.get("bot_repo")
-                and r.get("reachable") is False
-                and r["full_name"].lower() not in reached
-            ),
-        ]
+        kept = [{"full_name": n, "access": "read"} for n in covered]
+    else:
+        kept = current.get("chosen") if current["mode"] == "chosen" else []
     chosen = [
         {"full_name": r["full_name"], "access": r["access"]}
         for r in kept or []
-        if r["full_name"].lower() != name.lower() and (not reads or r["access"] == "read")
+        if r["full_name"].lower() != name.lower()
     ]
     chosen.append({"full_name": name, "access": access, **flags})
     result = person.call("PUT", f"bots/{_path(bot)}/repositories", {"mode": "chosen", "chosen": chosen}, key=_key(args))

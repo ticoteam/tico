@@ -118,7 +118,7 @@ def task_scoped(row):
     return bool(row["task_id"]) and row["scope"] == "task:" + row["task_id"] and row["locator"] == "tico_blob"
 
 
-def list_again(c, fid, *, own=False):
+def list_again(c: sqlite3.Connection, fid: str, *, own: bool = False) -> None:
     """Each task a page is on through a link or a pin lists it again after an archive flag changes; `own` adds the
     task it belongs to, which a change to the file's own flag already reaches (backend/events.py). The page is the
     change's ref, as a link's is, so only readers who may see the page hear of it."""

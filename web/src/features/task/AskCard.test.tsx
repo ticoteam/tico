@@ -1,21 +1,35 @@
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { AskCard } from './AskCard';
 
-/* On a computer the note sits at the left of the buttons' row (ask.css), only while that row is the card's last line:
-   with no buttons, or with what went wrong said under them, it stays in the card's top line. */
+/* On a computer the note sits in the buttons' row, at its left, only while that row is the card's last line: with no
+   buttons, or with what went wrong said under them, it stays in the card's top line. On a phone it is always there. */
 describe('AskCard', () => {
-  const card = (props: Partial<Parameters<typeof AskCard>[0]>) => {
+  afterEach(() => {
+    delete document.documentElement.dataset.layout;
+  });
+
+  const where = (props: Partial<Parameters<typeof AskCard>[0]>) => {
     const { unmount } = render(<AskCard name="Send the letter" note="Sends now" end={<span />} {...props} />);
-    const row = screen.getByRole('region', { name: 'The decision' }).classList.contains('has-row');
+    const note = screen.queryByText('Sends now');
+    const at = note?.closest('.an-row') ? 'row' : note?.closest('.askcard-top') ? 'top' : null;
     unmount();
-    return row;
+    return at;
   };
+  const approve = <button>Approve</button>;
 
   it('puts the note in the buttons row only when that row ends the card', () => {
-    expect(card({ actions: <button>Approve</button> })).toBe(true);
-    expect(card({ actions: <button>Approve</button>, error: 'It did not send' })).toBe(false);
-    expect(card({})).toBe(false);
-    expect(card({ error: 'It did not load' })).toBe(false);
+    expect(where({ actions: approve })).toBe('row');
+    expect(where({ actions: approve, error: 'It did not send' })).toBe('top');
+    expect(where({})).toBe('top');
+    expect(where({ error: 'It did not load' })).toBe('top');
+    expect(where({ actions: approve, asked: true })).toBe('top');
+    expect(where({ actions: approve, asking: true })).toBe(null);
+  });
+
+  it('keeps the note in the top line on a phone', () => {
+    document.documentElement.dataset.layout = 'cards';
+    expect(where({ actions: approve })).toBe('top');
+    expect(where({ actions: approve, asking: true })).toBe('top');
   });
 });

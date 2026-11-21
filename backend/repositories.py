@@ -560,11 +560,15 @@ def access(c, bot, org, reads=None):
         and org
         and r['full_name'].split('/')[0].lower() == org.lower()
     ]
+    # What All ticked repos covers by configuration, whether GitHub reaches it this minute or not: `effective` is
+    # what the bot reaches now.
+    covered = [n for _, n in sorted(reads.all_ticked(org).items()) if org and n.split('/')[0].lower() == org.lower()]
     return {
         'mode': mode,
         'all_access': all_access,
         'chosen': chosen,
         'all_repos': [ticked[k] for k in sorted(ticked)],
+        'all_ticked': covered,
         'effective': effective,
         'create_repositories': bot == _botops() or reads.creation.get(bot) is True,
         'create_product_repositories': product_creation(reads.product_creation, bot),
@@ -758,13 +762,15 @@ def chosen_keeping(c, before, repository, org):
     if before['mode'] == 'chosen':
         keep = [Grant(**r) for r in before['chosen']]
     elif before['mode'] == 'all':
-        ticked = Reads(c, []).all_ticked(org)
         access = before['all_access']
         opted = {r['full_name'].lower(): r for r in before['all_repos']} if access == 'write' else {}
         keep = [
-            Grant(full_name=name, access=access, **{flag: True for flag in STORED if opted.get(key, {}).get(flag)})
-            for key, name in sorted(ticked.items())
-            if name.split('/')[0].lower() == str(org).lower()
+            Grant(
+                full_name=name,
+                access=access,
+                **{flag: True for flag in STORED if opted.get(name.lower(), {}).get(flag)},
+            )
+            for name in before['all_ticked']
         ]
         moved = len([g for g in keep if g.full_name.lower() != repository.lower()])
     else:

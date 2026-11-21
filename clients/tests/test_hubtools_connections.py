@@ -301,7 +301,12 @@ def test_repo_grant_write_for_a_bot_reading_every_repository_keeps_its_reads(api
     seed_repos(api)
     hub = Client(live, "ana-test")
     hub.call("PUT", "bots/ops/repositories", {"mode": "all", "all_access": "read"})  # where a new agent starts
-    unreachable(api, "acme/web")  # ticked, yet GitHub cannot reach it this minute: it keeps its read all the same
+    with api.app.state.store.transaction() as c:  # ticked under the GitHub organization connected before: not covered
+        c.execute(
+            "INSERT INTO repositories(id,full_name,enabled,bot_repo,updated_at) VALUES(?,?,1,0,?)",
+            (H.new_id(), "oldorg/web", H.now()),
+        )
+    unreachable(api, "acme/web", "oldorg/web")  # GitHub cannot reach them this minute: acme/web keeps its read
     assert tool("tico_repo_grant", hub, repository="acme/web", bot="ops", access="read")["changed"] is False
     got = tool("tico_repo_grant", hub, repository="acme/docs", bot="ops", tick=True)
     assert got["changed"] and got["was"] == "all"
