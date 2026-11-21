@@ -1387,6 +1387,7 @@ mod tests {
         let names = Names {
             company: "Acme".into(),
             app: "Tico".into(),
+            assistant: "assistant".into(),
         };
         let (mut first, mut next) = task_turns();
         let (was, now) = (

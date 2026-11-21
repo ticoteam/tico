@@ -151,8 +151,8 @@ def for_turn(c: Any, auth: Any, attempt: Row, deadline: float = float("inf")) ->
     making: Row = page.get("task") or {}
     if (making or row["acting_person"]) and acting is None:
         return [], 0  # the person it acts for cannot be resolved now: never the bot's rights instead
-    task: Row = making or attempt.get("task") or {}
-    task_id = str(task.get("id") or "")
+    # The task the run was recorded for (a carrier in one task's room may start another's run), or a Make page target.
+    task_id = str(making.get("id") or row["task_id"] or "")
     lines = card(c, auth, who, bot, task_id, making=bool(making)) if task_id else []
     if acting is None:
         return lines, 0
@@ -188,7 +188,9 @@ def _pack(lines: Sequence[str]) -> tuple[list[str], int, int]:
     out, size, left = [HEAD], len(HEAD), 0
     room = MAX_CHARS - RESERVE
     for first, *bullets in groups:
-        heading = first.endswith(":") and bool(bullets)
+        heading = first.endswith(":")
+        if heading and not bullets:  # a heading with nothing under it says nothing
+            continue
         if not heading and size + 1 + len(first) > room:
             left += 1 + len(bullets)
             continue
@@ -331,7 +333,7 @@ MADE_PAGE_SQL = (
 def _changes_since(c: Any, auth: Any, who: Any, bot: str, task: Row, making: bool) -> list[str]:
     """What others changed since this bot's last run on the task ended: its last run there, or for a Make page turn its
     last finished Make page turn for the same task and person, whichever ended later."""
-    last = task_wakes.last_run(c, task, bot) or {}
+    last = task_wakes.last_run(c, task, bot, ended=True) or {}
     ended = str(last.get("finished_at") or "")
     if making:
         made = c.execute(MADE_PAGE_SQL, (bot[len("bot:") :], who.actor, task["id"])).fetchone()

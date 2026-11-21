@@ -849,13 +849,14 @@ def _on_task(conn: "sqlite3.Connection", task: Row) -> tuple[object, ...]:
     return (task["id"], *_range(task["id"]), task["id"], 1 if alone else 0, conversation)
 
 
-def last_run(conn: "sqlite3.Connection", task: Row, actor: str | None) -> Row | None:
+def last_run(conn: "sqlite3.Connection", task: Row, actor: str | None, *, ended: bool = False) -> Row | None:
     """This bot's newest run on this task that started: its `state` and when it ended (`finished_at`). None when it
-    never ran for it. A lease that never started is no run."""
+    never ran for it. A lease that never started is no run. `ended`: the newest that has also ended, past one still
+    going (the run header's "changes since your last run")."""
     H = _h()
     if not H.is_bot(actor):
         return None
-    found = _read(conn, _LAST_RUN, (H.actor_id(actor), *_on_task(conn, task)))
+    found = _read(conn, _LAST_ENDED if ended else _LAST_RUN, (H.actor_id(actor), *_on_task(conn, task)))
     return {"state": found[0], "finished_at": found[1]} if found else None
 
 
@@ -863,6 +864,7 @@ _LAST_RUN = (
     f"SELECT a.state, a.finished_at {_RUNS}WHERE +a.bot_id=? AND a.started_at IS NOT NULL AND {_ON_TASK} "
     "ORDER BY a.rowid DESC LIMIT 1"
 )
+_LAST_ENDED = _LAST_RUN.replace("a.started_at IS NOT NULL", "a.started_at IS NOT NULL AND a.finished_at IS NOT NULL")
 
 
 def _marks(task: Row) -> tuple[int, int, int]:

@@ -69,11 +69,33 @@ def test_changes_since_the_agents_last_run_are_what_others_did_after_it_as_its_h
         H.history_event(c, "task", tid, "human:ben", "title", "Ship it", "Ship the launch note")
         H.history_event(c, "task", tid, "human:ben", "handoff_filed", None, hers)
         H.history_event(c, "task", tid, "bot:ops", "checkpoint", None, "Drafted")
+        # A newer run that started and has not ended does not hide the last one that did.
+        job = c.execute("SELECT job_id, message_id FROM attempts WHERE task_id=?", (tid,)).fetchone()
+        c.execute(
+            "INSERT INTO attempts (id, job_id, bot_id, runner_id, generation, token_hash, state, lease_until, "
+            "created_at, started_at, message_id, task_id) VALUES (?,?,'ops',?,1,'h','running',?,?,?,?,?)",
+            (H.new_id(), job[0], r["runner_id"], H.now(), H.now(), H.now(), job[1], tid),
+        )
     text = card_as(api, Identity("bot:ops", "bot"), tid)
     changes = text[text.index("Changes since your last run") :]
     assert "Ben: changed title" in changes, text
     assert "handoff filed" not in changes, "a change naming a task it may not open is not shown"
     assert "checkpoint" not in changes, "its own change is not news to it"
+
+
+def test_the_header_describes_the_task_the_run_was_recorded_for(api, monkeypatch):
+    monkeypatch.setattr(run_header, "BUDGET_SECONDS", 30.0)
+    r = ops_runner(api)
+    carrier = card_for_ops(api, "Card A")
+    attempt = post(api, "jobs/claim", {}, token=r["token"])["attempt"]
+    assert attempt["task"]["id"] == carrier
+    with api.app.state.store.transaction() as c:
+        other = new_task(c, "human:ana", "Card B", assignee="bot:ops")["id"]
+        # A carrier in A's room starts a run for B: the run is recorded for B.
+        c.execute("UPDATE attempts SET task_id=? WHERE id=?", (other, attempt["id"]))
+    with api.app.state.store.read_transaction() as c:
+        lines, _ = run_header.for_turn(c, api.app.state.auth, attempt)
+    assert lines[0].startswith("Card now: Card B is in"), lines
 
 
 def test_a_bound_oks_words_reach_only_its_parties_and_an_approval_names_its_version(api):
@@ -283,3 +305,10 @@ def test_a_long_header_keeps_whole_entries_with_their_heading_and_counts_only_en
     assert "Rules on this stage:" not in kept, "a heading goes only with a bullet of its own"
     shown = len([line for line in kept if line.startswith("- item")])
     assert kept[-1] == f"+{30 - shown + 1} more", kept[-1]
+
+
+def test_each_section_is_cut_on_its_own_and_no_bullet_moves_under_another_heading():
+    text = run_header.capped(
+        ["Met:", "- " + "m" * 1950, "Missing to leave this stage:", "- Review: not yet.", "Rules:"]
+    )
+    assert text.splitlines()[1:] == ["Missing to leave this stage:", "- Review: not yet.", "+1 more"], text

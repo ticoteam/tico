@@ -7849,6 +7849,7 @@ mod tests {
         let names = crate::prompt::Names {
             company: "Acme".into(),
             app: "Tico".into(),
+            assistant: "assistant".into(),
         };
         let header = "Run header, read as this run starts (newer than anything earlier in this conversation):\nCard now: Ship is in Build (Engineering); version 3.";
         let attempt = json!({"id": "a1", "bot": "ops", "_replaced": true, "run_header": header,
