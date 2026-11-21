@@ -29,7 +29,7 @@ export function OkCard({ m }: { m: ChatMessage }) {
   if (!ok) return null;
   return (
     <AskCard
-      name={ok.ask?.line || ok.title}
+      name={ok.about || ok.ask?.line || ok.title}
       who={ok.ask?.by ?? ok.owner_id}
       href={taskAddress(ok, undefined, false).to}
       actions={<span className="btn">Review and approve</span>}
