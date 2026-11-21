@@ -1114,6 +1114,14 @@ refuses everything else.
    move. Requirements added to the old visit end in it too. Each has a key made from the visit, so running twice does
    nothing.
 
+**Card slots (pilot: Video Production).** In a pipeline named in `card_slot.SWITCHED`, a card's work for an agent runs
+one run at a time per visit (`jobs.slot`, `<visit>:<agent>`), for messages in the card's own room whose provenance does
+not narrow that room's audience. While a slot's job has a run, its other jobs wait and then run one at a time by the
+usual pick. A slot's run carries its own job alone: nothing is steered into it, its completion coalesces nothing, and
+no slot job is steered into or coalesced by another run, nor read in its history. So a run that ends after a move or a reassign settles nothing of
+the new visit's or agent's work. While any agent has live or unsettled work in the card's room from before the switch,
+the card stays on the older path. Other pipelines are unchanged; the switch goes once every pipeline runs by slot.
+
 ### Metadata
 
 Metadata is Tico's saved copy of something that lives outside the task tables. Requirements read metadata. Nothing calls

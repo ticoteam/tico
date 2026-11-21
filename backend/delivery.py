@@ -138,8 +138,11 @@ def carried(conn, bot, attempt_id, conversation_ids, notes=(), *, job=None, curr
             "SELECT d.id,d.kind,d.item,m.sender_id,m.body,m.created_at,m.deleted_at,m.refs,m.conversation_id,"
             "d.conversation_id FROM deferrals d "
             "LEFT JOIN messages m ON m.id=d.item WHERE d.bot=? AND d.settled_at IS NULL AND d.conversation_id IN "
-            f"({','.join('?' * len(ids))}) ORDER BY d.created_at,d.id",
-            (bot, *ids),
+            f"({','.join('?' * len(ids))}) "
+            # A card slot's fired deadline run keeps its items until it is picked (backend/card_slot.py).
+            "AND NOT EXISTS(SELECT 1 FROM jobs fj WHERE fj.id=d.fired_job AND fj.slot IS NOT NULL AND fj.id IS NOT ?) "
+            "ORDER BY d.created_at,d.id",
+            (bot, *ids, job),
         ).fetchall()
         for row in rows:
             rid, kind, item, sender, body, created, deleted, refs, room, session = row
@@ -350,7 +353,10 @@ def _fire(conn, H, bot, conversation_id, at, external):
         (bot, conversation_id),
     ).fetchone()
     if pending:
-        ids = [r["id"] for r in live]
+        from . import card_slot
+
+        # A card slot's deadline run takes only what the card's room may read; the rest keeps a run of its own.
+        ids = [r["id"] for r in live if card_slot.joins(conn, pending[0], r["item"])]
         for part in H.chunks(ids):
             conn.execute(
                 f"UPDATE deferrals SET fired_job=? WHERE id IN ({','.join('?' * len(part))})", (pending[0], *part)
@@ -388,8 +394,12 @@ def _fire(conn, H, bot, conversation_id, at, external):
     conn.execute(
         "INSERT OR IGNORE INTO jobs(id,message_id,bot_id,created_at) VALUES(?,?,?,?)", (message_id, message_id, bot, at)
     )
+    from . import card_slot
+
+    stored = conn.execute("SELECT id,recipient_id,refs FROM messages WHERE id=?", (message_id,)).fetchone()
+    card_slot.assign(conn, {"id": stored[0], "recipient_id": stored[1], "refs": stored[2]})  # as enqueue does
     job = conn.execute("SELECT id FROM jobs WHERE message_id=?", (message_id,)).fetchone()[0]
-    ids = [r["id"] for r in live]
+    ids = [r["id"] for r in live if r["item"] == message_id or card_slot.joins(conn, job, r["item"])]
     for part in H.chunks(ids):
         conn.execute(f"UPDATE deferrals SET fired_job=? WHERE id IN ({','.join('?' * len(part))})", (job, *part))
     H.event(conn, H.TICO_ACTOR, EVENT, job, {"bot": bot, "conversation": conversation_id or None, "items": ids})

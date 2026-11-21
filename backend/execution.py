@@ -13,6 +13,7 @@ from datetime import timezone
 from clients import gateway, sessions
 
 from . import (
+    card_slot,
     start_places,
     org_turns,
     check_models,
@@ -4686,6 +4687,7 @@ class Execution:
                 row["id"] in skip
                 or (failed is not None and row["bot_id"] in failed.bots)
                 or claim_waiting(c, row, loads)
+                or card_slot.busy(c, row)  # one run at a time per card slot: the next waits for it
             ):
                 continue
             if i % PRIME_QUEUED == 0 and len(candidates) > 1:
@@ -5366,6 +5368,10 @@ class Execution:
             since=epoch["updated_at"] if epoch else None,
         )["messages"]
         history = lane_history(c, row["bot_id"], followed, history, conv, lane)[-HISTORY_PAGE:]
+        if card_slot.of(row):
+            # The bot's own work waiting for its own run (the card's next turn, a comment) is not read in this one.
+            waiting = card_slot.pending(c, row["bot_id"], [m["id"] for m in history])
+            history = [m for m in history if m["id"] not in waiting]
         conversation = thread_payload(c, conv, msg)
         if conversation and conversation.get("audience_class") == "public":
             from . import threads
@@ -5477,7 +5483,7 @@ class Execution:
                 + '):\n'
                 + recovery['note'],
             }
-        if task and recovery:
+        if task and recovery and not card_slot.of(row):  # a slot's run carries its own job alone
             msg = self.fold_behind(c, row, aid, msg, task["id"], followed, lane)
         # The model's capacity stopped this job's turn after it acted: the runner continues that same thread, or holds
         # the run for review when it no longer has it (runner-rs/src/execute.rs CONTINUE_LOST).
@@ -6352,7 +6358,7 @@ class Execution:
         rows = c.execute(
             "SELECT m.*,j.id AS job_id FROM jobs j JOIN messages m ON m.id=j.message_id "
             "JOIN conversations cv ON cv.id=m.conversation_id "
-            "WHERE j.bot_id=? AND j.state='queued' AND j.held=0 AND j.redirect=0 AND j.id<>? "
+            "WHERE j.bot_id=? AND j.state='queued' AND j.held=0 AND j.redirect=0 AND j.id<>? AND j.slot IS NULL "
             "AND m.deleted_at IS NULL AND coalesce(json_extract(m.refs,'$.command'),0)!=1 "
             # A run for a thread's waiting notes carries them at its own claim, so it is never folded.
             f"AND coalesce(json_extract(m.refs,'$.wake'),'')<>'{threads.NOTE_WAKE}' "
@@ -6503,6 +6509,8 @@ class Execution:
             return call_sessions.inputs(c, attempt, ref["voice_call"], self.auth, phase=voice, if_idle=if_idle)
         if "make_page" in (origin.get("refs") or {}):
             return {"messages": []}
+        if card_slot.of(c.execute("SELECT slot FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()):
+            return {"messages": []}  # a card slot's run carries its own job alone (backend/card_slot.py)
         origin_task = work_task_id(origin, H.conversation(c, origin["conversation_id"]))
         from .shared_bots import follow
 
@@ -6519,6 +6527,8 @@ class Execution:
             "SELECT m.*,j.id AS job_id FROM jobs j JOIN messages m ON m.id=j.message_id "
             "JOIN conversations cv ON cv.id=m.conversation_id "
             "WHERE j.bot_id=? AND j.state='queued' AND coalesce(json_extract(m.refs,'$.command'),0)!=1 "
+            # A card slot's job is never steered: it runs after (backend/card_slot.py).
+            "AND j.slot IS NULL "
             # Queued, not steered: it goes in right after the turn (backend/delivery.py).
             "AND coalesce(json_extract(m.refs,'$.delivery'),'')<>'queue' "
             # A run for a thread's waiting notes carries them at its own claim, so it is never folded.
@@ -7682,7 +7692,8 @@ class Execution:
                 "UPDATE jobs SET state=?,attempt_id=CASE WHEN ? THEN NULL ELSE attempt_id END WHERE message_id=?",
                 (state, deferred, incoming["message_id"]),
             )
-        if body.outcome == "completed":
+        slotted = card_slot.of(c.execute("SELECT slot FROM jobs WHERE id=?", (row["job_id"],)).fetchone())
+        if body.outcome == "completed" and not slotted:  # a card slot's run settles its own job alone
             # Notices that queued in this turn's conversation before it was claimed were in the
             # room page it was given, so the turn has read them. Leaving their jobs queued costs
             # one more run each to read the same thing again: a bot could accumulate
@@ -7694,7 +7705,7 @@ class Execution:
             works = stage_wake(msg.get("refs"))
             for extra in c.execute(
                 "SELECT j.id,j.message_id FROM jobs j JOIN messages m ON m.id=j.message_id "
-                "WHERE j.bot_id=? AND j.state='queued' AND m.kind='notice' "
+                "WHERE j.bot_id=? AND j.state='queued' AND m.kind='notice' AND j.slot IS NULL "
                 "AND m.conversation_id=? AND m.created_at<=? AND j.id<>?",
                 (row["bot_id"], conv["id"], row["created_at"], row["job_id"]),
             ).fetchall():
