@@ -1165,6 +1165,28 @@ describe('an email’s OK reads with the matter it answers', () => {
     expect(brief.compareDocumentPosition(body) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it('shows the matter’s open key dates in one line above the email @approvals', async () => {
+    shown = task({ title: 'Send: Re: Notice of claim → dana@example.test' });
+    const dates = [
+      { id: 'd1', label: 'Earliest send', starts_at: '2026-12-08', due_at: null, done_at: null },
+      { id: 'd2', label: 'Reply due', starts_at: null, due_at: '2026-12-15', done_at: null },
+      { id: 'd3', label: 'Old date', starts_at: null, due_at: '2026-10-01', done_at: '2026-10-02' },
+    ];
+    const matter = task({ id: 't5', number: 40, title: 'Late-delivery claim: Dana Ruiz', pipeline_id: 'p9', to_leave: [], matter: { dates } as unknown as TaskData['matter'] });
+    reply = (url) => {
+      if (url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1'))
+        return { body: { task: shown, runs: [], children: [], parent: { id: 't5', title: matter.title, label: null, step: null } } };
+      if (url.endsWith('/api/v2/tasks/t5')) return { body: { task: matter, runs: [], children: [] } };
+      return null;
+    };
+    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    const strip = await screen.findByText('Earliest send: Not before Dec 8');
+    expect(screen.getByText('Reply due: Due Dec 15')).toBeTruthy();
+    expect(screen.queryByText(/Old date/)).toBeNull();
+    const body = await screen.findByText('Dear Ms. Ruiz, our response is attached.');
+    expect(strip.compareDocumentPosition(body) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('shows nothing more when the matter has no note @approvals', async () => {
     const matter = task({ id: 't5', number: 40, title: 'Late-delivery claim: Dana Ruiz', pipeline_id: 'p9', to_leave: [] });
     reply = (url) => {
