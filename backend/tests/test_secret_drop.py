@@ -228,7 +228,8 @@ def test_grant_makes_exactly_the_cards_grants_and_the_check_uses_the_username(ap
 
     dm, tid, saved, bot, sent, code = _proposal_world(api, monkeypatch)
     card = _propose(api, dm, [{'key': 'JIRA_LOGIN', 'tool': tid, 'level': 'read', 'bots': ['support']}], bot)
-    post(api, f"tools-chat/proposals/{card['id']}/grant", {}, 'cara-test', expected=403)  # not a credential admin
+    # Cara cannot see Close CRM: the card is not there for her (404 before any 403)
+    post(api, f"tools-chat/proposals/{card['id']}/grant", {}, 'cara-test', expected=404)
     done = post(api, f"tools-chat/proposals/{card['id']}/grant", {'keep': [0]})
     assert done['state'] == 'granted'
     assert done['results'] == [{'key': 'JIRA_LOGIN', 'tool_id': tid, 'ok': True, 'detail': 'Connected to Close CRM'}]

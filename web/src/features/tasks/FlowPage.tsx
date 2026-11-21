@@ -3,12 +3,14 @@ import { Link } from '@tanstack/react-router';
 import { useFollow } from '@/live/follow';
 import { FlowMark } from '@/kit/FlowMark';
 import { useCards } from '@/kit/Popover';
+import { RequestCard } from '@/features/task/exports';
+import { FillContext } from '@/kit/Button';
 import { Icon } from '@/kit/Icon';
 import { TaskRow } from '@/kit/Row';
 import { List, Section } from '@/pagekinds';
 import { Capped, LIST_CAP, LIST_SHOW, RowMore, ROW_H } from './capped';
 import { Blocks, Face, FlowButton } from './parts';
-import { flowGroups, flowQuery, pipelinesQuery, type FlowGroup, type FlowItem } from './queries';
+import { flowGroups, flowQuery, pipelinesQuery, type FlowGroup, type FlowItem, type FlowRequest } from './queries';
 import './tasks.css';
 
 function FlowRow({ it }: { it: FlowItem }) {
@@ -59,6 +61,22 @@ function FlowSection({ g, under }: { g: FlowGroup; under?: boolean }) {
   );
 }
 
+/** What waits on you with no task (an access request, a key card, a key proposal), first, each answered in its card.
+    One filled button to the page: the first card's. */
+function Requests({ items }: { items: readonly FlowRequest[] }) {
+  return (
+    <Section name="Requests" count={items.length} target="stage:requests">
+      <div className="flow-requests">
+        {items.map((it, i) => (
+          <FillContext key={it.id} value={i === 0}>
+            <RequestCard it={it} />
+          </FillContext>
+        ))}
+      </div>
+    </Section>
+  );
+}
+
 /** Flow: every task that waits on you, in every pipeline, one after another. A row opens it in Flow. It is Tasks with
     the Flow button pressed (list.js flow). */
 export function FlowPage() {
@@ -68,12 +86,13 @@ export function FlowPage() {
   const pipes = useSuspenseQuery(pipelinesQuery).data;
   const cards = useCards();
   const groups = flowGroups(flow.items, pipes);
+  const requests = flow.requests ?? [];
   return (
     <List
       title="Tasks"
       path="/flow"
       actions={<FlowButton on count={flow.count} />}
-      state={flow.items.length ? 'ready' : 'empty'}
+      state={flow.count ? 'ready' : 'empty'}
       empty={{
         title: 'Nothing waits on you',
         action: (
@@ -83,7 +102,12 @@ export function FlowPage() {
         ),
       }}
       className="tasks-page"
-      sections={cards ? <ByPipeline groups={groups} /> : groups.map((g) => <FlowSection key={g.key} g={g} />)}
+      sections={
+        <>
+          {requests.length > 0 && <Requests items={requests} />}
+          {cards ? <ByPipeline groups={groups} /> : groups.map((g) => <FlowSection key={g.key} g={g} />)}
+        </>
+      }
     />
   );
 }

@@ -2044,6 +2044,8 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
                 **({"snoozed_until": it["snoozed_until"]} if it.get("snoozed_until") else {}),
             }
         )
+    if snoozed != "only":
+        items += request_items(c, auth, who)
     if not count_only:
         # An ask carries its requirement as the task's own read gives it (`to_leave`), with what this person may do:
         # that entry alone (task_calls.ask_entry), not the whole view of its task.
@@ -2079,6 +2081,59 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
                         if said:
                             item["about"] = said
     return sorted(items, key=needs_key)
+
+
+REQUEST_KINDS = ("access", "key", "key_drop")
+
+
+def request_items(c, auth, who):
+    """The person's open access requests, key cards and key-drop proposals as Needs-you items (`kind` access, key,
+    key_drop), each read through its own list and authority check, which its action checks again: an item the person
+    may not settle is never listed. The card as each kind draws it rides along under its kind."""
+    from types import SimpleNamespace
+
+    from . import access_requests, credential_cards, key_grants
+
+    vault = SimpleNamespace(admins=auth.settings.credential_admins, auth=auth)
+    items = []
+    for r in access_requests.open_for(c, who, vault, auth):
+        level = access_requests.LEVELS[r["level"]]
+        line = f"{r['subject_name']} asks for {r['resource_name']} · {level}"
+        items.append(
+            {
+                "kind": "access",
+                "id": "access:" + r["id"],
+                "from_id": r["subject"],
+                "line": line,
+                "since": r["created_at"],
+                "access": r,
+            }
+        )
+    for r in credential_cards.pending_for(c, vault, who):
+        line = r["title"]
+        items.append(
+            {
+                "kind": "key",
+                "id": "key:" + r["id"],
+                "from_id": "bot:" + r["bot"],
+                "line": line,
+                "since": r["created_at"],
+                "key": r,
+            }
+        )
+    for r in key_grants.proposed_for(c, vault, who):
+        line = "Grant " + "; ".join(f"{row['key']} to {row['tool_name']}" for row in r["rows"])
+        items.append(
+            {
+                "kind": "key_drop",
+                "id": "key_drop:" + r["message_id"],
+                "from_id": r["by"],
+                "line": line,
+                "since": r["created_at"],
+                "key_drop": r,
+            }
+        )
+    return items
 
 
 def _asked_page(item):
@@ -2121,6 +2176,13 @@ def needs_still_shown(c, auth, who, items):
         return False
     oks = [str(item["requirement_id"]) for item in told if (item.get("ask") or {}).get("kind") == "ok"]
     return not oks or task_asks.parties_to_all(c, who.actor, oks)
+
+
+def needs_requests_still(c, auth, who, items):
+    """Whether every access request, key card and key proposal in a held build (all of it: they are few, and its counts
+    name them too) is still one the caller may settle, by each kind's own checks (request_items)."""
+    held = {str(item["id"]) for item in items if item.get("kind") in REQUEST_KINDS}
+    return not held or held <= {str(item["id"]) for item in request_items(c, auth, who)}
 
 
 def needs_key(x):
@@ -2225,7 +2287,7 @@ def needs_actor(it, me):
     task = it.get("task") or {}
     if it.get("kind") == "paused":
         return next(iter(it.get("bots") or ()), None)
-    if it.get("kind") == "question":
+    if it.get("kind") == "question" or it.get("kind") in REQUEST_KINDS:  # a ❓'s bot; the agent a request is for
         return it.get("from_id") if H.is_bot(it.get("from_id")) else None
     if it.get("kind") == "ask":
         asked = (it.get("ask") or {}).get("asked_by")
@@ -3528,8 +3590,10 @@ def install_views(app, store, auth, mutate, task_view):
             if built is not None:
                 with store.read_transaction() as c:
                     out = needs_paged(who, built.items, built.version, limit, cursor, built.snoozed_until, built.counts)
-                    if needs_still_readable(c, auth, who, built.task_ids) and needs_still_shown(
-                        c, auth, who, out["items"]
+                    if (
+                        needs_still_readable(c, auth, who, built.task_ids)
+                        and needs_still_shown(c, auth, who, out["items"])
+                        and needs_requests_still(c, auth, who, built.items)
                     ):
                         return out
                 held.drop(viewer, built)

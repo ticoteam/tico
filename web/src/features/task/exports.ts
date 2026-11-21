@@ -7,3 +7,4 @@ export { loadTask, taskRefQuery, taskDetailQuery, taskAddress, taskSearch, type 
 export { useApprovalCards, approvalCard, type ApprovalScope } from './ThreadCards';
 export { AskCard } from './AskCard';
 export { SendMark, TaskSend } from './sending';
+export { RequestCard } from './Requests';

@@ -64,6 +64,8 @@ def _mod(name: str) -> Any:
         from . import credentials as found
     elif name == "default_read":
         from . import default_read as found
+    elif name == "events":
+        from . import events as found
     elif name == "page_owners":
         from . import page_owners as found
     elif name == "reconnects":
@@ -93,6 +95,11 @@ VIA: contextvars.ContextVar[str] = contextvars.ContextVar("access_request_via", 
 # Set while a level change is half made (api_tools.set_level grants, then sets the grant's level): nothing is settled
 # until it is whole.
 DEFERRED: contextvars.ContextVar[bool] = contextvars.ContextVar("access_request_deferred", default=False)
+
+
+class AccessGrantBody(Contract):
+    # Read only: Grant on a request for Read and write gives Read alone.
+    level: str | None = Field(default=None, pattern=r"^read$")
 
 
 class AccessRequestBody(Contract):
@@ -340,13 +347,18 @@ def _post_card(c: Any, auth: Any, person: Any, row: Any) -> Any:
 
 
 def _refresh_cards(c: Any, row: Any) -> Any:
-    """Every copy of the request's card shows where it stands now: resolved copies ask nothing."""
+    """Every copy of the request's card shows where it stands now: resolved copies ask nothing, and leave each person's
+    Needs you."""
+    events = _mod("events")
+
     card = json.dumps(card_of(c, row))
-    for message_id in json.loads(row["cards"] or "{}").values():
+    copies = json.loads(row["cards"] or "{}")
+    for message_id in copies.values():
         c.execute(
             "UPDATE messages SET refs=json_set(coalesce(refs,'{}'),'$.access_request',json(?)) WHERE id=?",
             (card, message_id),
         )
+    events.needs_moved(c, copies, "access")
 
 
 def _row(c: Any, rid: Any) -> Any:
@@ -421,10 +433,11 @@ def _auto_repository(c: Any, auth: Any, row: Any) -> Any:
         return False
 
 
-def _give_repository(c: Any, row: Any, actor: Any, person: Any = False) -> Any:
+def _give_repository(c: Any, row: Any, actor: Any, person: Any = False, only: Any = False) -> Any:
     """The bot reaches the repository at the request's level: ticked for the team if a person grants it, then chosen for
     the bot (its other chosen repositories kept). A bot on All ticked repos already reaches every ticked one at its
-    level; past that level it is a choice in Settings."""
+    level; past that level it is a choice in Settings. `only` (Read only): this repository at exactly that level, even
+    for a bot on All ticked repos at Write, whose other repositories keep theirs."""
     R = _mod("repositories")
 
     bot, name, org = H.actor_id(row["subject"]), row["resource_id"], _org(c)
@@ -439,8 +452,10 @@ def _give_repository(c: Any, row: Any, actor: Any, person: Any = False) -> Any:
     # All ticked repos covers it by configuration (all_ticked), whether GitHub reaches it this minute or not.
     ticked = {n.lower() for n in current["all_ticked"]}
     covered = name.lower() in ticked and (current["all_access"] == "write" or want == "read")
-    if current["mode"] == "all" and (covered or has(c, row)):
+    if current["mode"] == "all" and (covered or has(c, row)) and not only:
         return
+    if only and current["mode"] == "all" and name.lower() in ticked and current["all_access"] == "read":
+        return  # All ticked repos gives it exactly Read already: the bot stays there
     # As a product repository its bot makes (github_app): from All ticked repos it moves to Chosen repos, each
     # repository All ticked repos covers kept at its level, and this one at the asked level or the one it has, if higher.
     keep, _ = R.chosen_keeping(c, current, name, org)
@@ -452,7 +467,7 @@ def _give_repository(c: Any, row: Any, actor: Any, person: Any = False) -> Any:
         ),
         None,
     )
-    grant = R.Grant(full_name=name, access="write" if "write" in (held, want) else "read")
+    grant = R.Grant(full_name=name, access=want if only else "write" if "write" in (held, want) else "read")
     body = R.RepoAccessUpdate(mode="chosen", chosen=[*keep, grant])
     R.set_access(c, bot, body, org, actor, team_list=True, own_click=person, default=False)
 
@@ -609,6 +624,7 @@ def ask(c: Any, who: Any, body: Any, vault: Any, auth: Any) -> Any:
         "UPDATE access_requests SET approvers=?,cards=? WHERE id=?",
         (json.dumps([p.actor for p in people]), json.dumps(cards), row["id"]),
     )
+    _mod("events").needs_moved(c, cards, "access")  # each copy is in its person's Needs you now
     row = _row(c, row["id"])
     _wait(c, row, task, cards)
     names = ", ".join(H.actor_name(c, p.actor) for p in people[:3])
@@ -670,19 +686,27 @@ def view(c: Any, row: Any) -> Any:
 
 
 # ---------------------------------------------------------------------------------------------------- closing
-def _close(c: Any, row: Any, state: Any, actor: Any, via: Any) -> Any:
-    """Resolve an open request: every copy of its card says so; the waiting task is woken (granted, declined)."""
+def _close(c: Any, row: Any, state: Any, actor: Any, via: Any, level: Any = None) -> Any:
+    """Resolve an open request: every copy of its card says so; the waiting task is woken (granted, declined). `level`:
+    granted at less than was asked (Read only), recorded so and said to the waiting task."""
     reconnects = _mod("reconnects")
 
     at = H.now()
+    given = level or row["level"]
     if (
         c.execute(
-            "UPDATE access_requests SET state=?,resolved_by=?,resolved_via=?,resolved_at=? WHERE id=? AND state='open'",
-            (state, actor, via, at, row["id"]),
+            "UPDATE access_requests SET state=?,resolved_by=?,resolved_via=?,resolved_at=?,level=?,kind=? "
+            "WHERE id=? AND state='open'",
+            (state, actor, via, at, given, _kind(row["resource_type"], given), row["id"]),
         ).rowcount
         != 1
     ):
         return False
+    if given != row["level"]:
+        c.execute(
+            "UPDATE task_reconnects SET label=? WHERE json_extract(fix,'$.request')=? AND fixed_at IS NULL",
+            (f"{row['resource_name']} · Read only", row["id"]),
+        )
     row = _row(c, row["id"])
     _refresh_cards(c, row)
     H.event(c, actor or H.TICO_ACTOR, "access." + state, row["id"], {"kind": row["kind"], "via": via})
@@ -696,11 +720,19 @@ def _close(c: Any, row: Any, state: Any, actor: Any, via: Any) -> Any:
 def _wake(c: Any, row: Any) -> Any:
     reconnects = _mod("reconnects")
 
-    if not row["task_id"]:
+    # The waits tied to this request, by its id: never another request's on the same key (Read only records Read, the
+    # key of a separate open request for Read). A repeat from a task can wait on a request first made in chat.
+    keys = [
+        r[0]
+        for r in c.execute(
+            "SELECT DISTINCT key FROM task_reconnects WHERE json_extract(fix,'$.request')=? ORDER BY key", (row["id"],)
+        )
+    ]
+    if keys:
+        for key in keys:
+            reconnects.fixed(c, key, H.actor_id(row["subject"]), why="access")
         return
-    waits = c.execute("SELECT 1 FROM task_reconnects WHERE key=? LIMIT 1", (_key(row),)).fetchone()
-    if waits:
-        reconnects.fixed(c, _key(row), H.actor_id(row["subject"]), why="access")
+    if not row["task_id"]:
         return
     task = H.task(c, row["task_id"])
     if task and task["status"] in H.ACTIVE_STATUSES and H.is_bot(task["owner_id"]):
@@ -770,26 +802,35 @@ def _open_row(c: Any, who: Any, rid: Any, vault: Any, auth: Any) -> Any:
     if not row:
         raise Problem("not_found", "No such request", 404)
     if not may_unblock(c, who, row, vault, auth):
-        names = ", ".join(H.actor_name(c, a) for a in json.loads(row["approvers"] or "[]")[:3])
-        raise Problem("forbidden", "You can't grant this" + (f": {names} can" if names else ""), 403)
+        raise Problem("forbidden", "You can't grant this", 403)  # nothing of who can: that is the request's own
     return row
 
 
-def grant(c: Any, who: Any, rid: Any, vault: Any, auth: Any) -> Any:
-    """The card's Grant: the access given as this person's own tap, and every copy of the card resolved."""
+def grant(c: Any, who: Any, rid: Any, vault: Any, auth: Any, level: Any = None) -> Any:
+    """The card's Grant: the access given as this person's own tap, and every copy of the card resolved. `level` "read"
+    is Read only on a request for Read and write: Read is given, and the request is granted as one for Read."""
     api_tools = _mod("api_tools")
 
     row = _open_row(c, who, rid, vault, auth)
     if row["state"] != "open":
         return view(c, row)
+    only = bool(level) and level != row["level"]
+    given = row | {"level": level} if only else row
+    narrow = {"subject": row["subject"], "resource_type": row["resource_type"], "resource_id": row["resource_id"]}
     token = VIA.set("card")
     try:
-        if not has(c, row):
+        if row["resource_type"] != TOOL and only:
+            _give_repository(c, given, who.actor, person=True, only=True)  # exactly Read there, even over Write
+        elif not has(c, given):
             if row["resource_type"] == TOOL:
-                api_tools.set_level(c, who, vault, row["resource_id"], row["subject"], row["level"])
+                api_tools.set_level(c, who, vault, row["resource_id"], row["subject"], given["level"])
             else:
-                _give_repository(c, row, who.actor, person=True)
-        settled(c, who, subject=row["subject"], resource_type=row["resource_type"], resource_id=row["resource_id"])
+                _give_repository(c, given, who.actor, person=True)
+        if only:
+            # Read only is configured now, whether GitHub reaches the repository this minute or not: the request
+            # closes as granted for Read, as any configured grant does, and its waiting task is told.
+            _close(c, row, "granted", who.actor, "card", level=given["level"])
+        settled(c, who, **narrow)
     finally:
         VIA.reset(token)
     return view(c, _row(c, rid))
@@ -800,6 +841,23 @@ def decline(c: Any, who: Any, rid: Any, vault: Any, auth: Any) -> Any:
     if row["state"] == "open":
         _close(c, row, "declined", who.actor, "card")
     return view(c, _row(c, rid))
+
+
+def open_for(c: Any, who: Any, vault: Any, auth: Any) -> Any:
+    """The open requests whose card reached `who` and that they may still grant (`may_unblock`, as Grant checks it),
+    oldest first, each as its card shows it: their access cards in Needs you (views.needs_items)."""
+    if not _present(c):
+        return []
+    rows = c.execute(
+        "SELECT * FROM access_requests WHERE state='open' AND EXISTS(SELECT 1 FROM json_each(cards) WHERE key=?) "
+        "ORDER BY created_at, id",
+        (who.actor,),
+    ).fetchall()
+    return [
+        card_of(c, row) | {"created_at": row["created_at"]}
+        for row in map(dict, rows)
+        if may_unblock(c, who, row, vault, auth)
+    ]
 
 
 def take_back(c: Any, who: Any, rid: Any, vault: Any, auth: Any) -> Any:
@@ -1013,9 +1071,11 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> Any:
             return fn(c, who, rid, vault(), auth)
 
     @app.post("/api/v2/access-requests/{rid}/grant")
-    def access_request_grant(request: Request, rid: str):
-        """Grant on the card: the access given as this person, every other copy of the card resolved."""
-        return tap(request, rid, grant)
+    def access_request_grant(request: Request, rid: str, body: AccessGrantBody | None = None):
+        """Grant on the card: the access given as this person, every other copy of the card resolved. `level` "read" is
+        Read only on a request for Read and write."""
+        level = body.level if body else None
+        return tap(request, rid, lambda c, who, rid, vault, auth: grant(c, who, rid, vault, auth, level))  # pyright: ignore[reportUnknownLambdaType]
 
     @app.post("/api/v2/access-requests/{rid}/decline")
     def access_request_decline(request: Request, rid: str):

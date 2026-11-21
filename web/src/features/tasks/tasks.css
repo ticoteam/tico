@@ -140,3 +140,7 @@ html[data-layout="cards"] .stage-fold a{min-height:var(--ctl);display:inline-fle
 .pipe .stage+.stage{margin-top:var(--s-0);padding-top:0;border-top:0}
 .pipe .stage-head{top:44px}
 .pipe .stage-head .sec-name{font-size:var(--t-sm);font-weight:var(--w-strong);color:var(--ink-2)}
+
+/* Flow's requests (FlowPage Requests): each card on the page's edge, one under another */
+.flow-requests{display:flex;flex-direction:column;gap:var(--s-2);padding:var(--s-1) var(--page-x) var(--s-3)}
+:where(html[data-layout="cards"]) .flow-requests .answer.askcard{padding:var(--s-2) var(--s-2) var(--s-2) var(--s-3h)}

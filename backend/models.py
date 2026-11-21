@@ -2585,6 +2585,8 @@ class KeyGrantGrant(Contract):
     """Grant on the card: the positions of the rows kept (null: all)."""
 
     keep: list[int] | None = Field(default=None, max_length=20)
+    # The loss preview the card showed (Needs you's `losses`): a 409 when who keeps and loses access moved since.
+    seen: str | None = Field(default=None, max_length=40)
 
 
 class AccessRules(Contract):

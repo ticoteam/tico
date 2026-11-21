@@ -12,10 +12,10 @@ from backend.tests.helpers.github_app import api, auth, gh, runner_token, turn_t
 from backend.tests.helpers.repositories import catalog, put
 
 
-def ask(api, resource, level="read", token="owner-test", expected=200, bot="cpo"):
+def ask(api, resource, level="read", token="owner-test", expected=200, bot="cpo", **more):
     r = api.post(
         "/api/v2/access-requests",
-        json={"resource": resource, "level": level, "for_bot": bot, "why": "review the release"},
+        json={"resource": resource, "level": level, "for_bot": bot, "why": "review the release", **more},
         headers={**auth(token), "Idempotency-Key": uuid.uuid4().hex},
     )
     assert r.status_code == expected, r.text
@@ -152,3 +152,111 @@ def test_a_grant_past_all_ticked_repos_at_write_keeps_every_write_and_its_workfl
     }
     chosen = {r["full_name"]: r for r in api.get("/api/v2/bots/cpo/repositories", headers=auth()).json()["chosen"]}
     assert chosen["Acme/product"].get("run_workflows") is True and not chosen["Acme/docs"].get("run_workflows")
+
+
+def test_read_only_for_a_bot_on_all_ticked_repos_at_write_gives_that_repository_read_alone(api, gh):
+    catalog(api, gh)
+    api.app_state.auth.owner_email = "ana@acme.example"
+    put(api, "repositories/Acme/product", {"enabled": True})
+    put(api, "bots/cpo/repositories", {"mode": "all", "all_access": "write"})
+    asked = ask(api, "Acme/docs", "read_write")  # not ticked: it asks
+    assert asked["state"] == "open"
+    r = api.post(f"/api/v2/access-requests/{asked['id']}/grant", json={"level": "read"}, headers=auth())
+    assert r.status_code == 200 and r.json()["state"] == "granted", r.text
+    assert reach(api) == {"Acme/emp-cpo": "write", "Acme/product": "write", "Acme/docs": "read"}
+
+
+def missing(api, name, gone=True):
+    """GitHub misses `name` for a moment (a refresh marks it), or reaches it again."""
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE repositories SET reachable=? WHERE full_name=?", (0 if gone else 1, name))
+        save_metadata(c, "repositories-confirmed-missing", {name.lower(): time.time()} if gone else {})
+
+
+def read_only(api, rid):
+    r = api.post(f"/api/v2/access-requests/{rid}/grant", json={"level": "read"}, headers=auth())
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_read_only_lowers_a_repository_github_reaches_again_at_write_to_read(api, gh):
+    catalog(api, gh)
+    api.app_state.auth.owner_email = "ana@acme.example"
+    for name in ("product", "docs"):
+        put(api, "repositories/Acme/" + name, {"enabled": True})
+    put(api, "bots/cpo/repositories", {"mode": "all", "all_access": "write"})
+    missing(api, "Acme/docs")
+    asked = ask(api, "Acme/docs", "read_write")
+    assert asked["state"] == "open"
+    missing(api, "Acme/docs", gone=False)  # GitHub reaches it again, at All ticked repos' Write
+    assert read_only(api, asked["id"])["state"] == "granted"
+    assert reach(api) == {"Acme/emp-cpo": "write", "Acme/product": "write", "Acme/docs": "read"}
+
+
+def test_read_only_where_all_ticked_repos_already_gives_read_keeps_the_bot_there(api, gh):
+    catalog(api, gh)
+    api.app_state.auth.owner_email = "ana@acme.example"
+    for name in ("product", "docs"):
+        put(api, "repositories/Acme/" + name, {"enabled": True})
+    put(api, "bots/cpo/repositories", {"mode": "all", "all_access": "read"})
+    asked = ask(api, "Acme/docs", "read_write")
+    assert asked["state"] == "open"
+    assert read_only(api, asked["id"])["state"] == "granted"
+    got = api.get("/api/v2/bots/cpo/repositories", headers=auth()).json()
+    assert (got["mode"], got["all_access"]) == ("all", "read")
+
+
+def test_read_only_on_a_repository_github_misses_closes_the_request_and_frees_its_task(api, gh):
+    # Read only is configured at once, as any grant is, whether GitHub reaches the repository this minute or not.
+    from backend import reconnects
+    from backend.store import H
+
+    catalog(api, gh)
+    api.app_state.auth.owner_email = "ana@acme.example"
+    for name in ("product", "docs"):
+        put(api, "repositories/Acme/" + name, {"enabled": True})
+    put(api, "bots/cpo/repositories", {"mode": "all", "all_access": "write"})
+    missing(api, "Acme/docs")
+    with api.app_state.store.transaction() as c:
+        tid = H.task_create(c, "human:ana", "Review the docs", "Details.", "bot:cpo", lint=False)["id"]
+    asked = ask(api, "Acme/docs", "read_write", task=tid)
+    with api.app_state.store.read() as c:
+        assert reconnects.hold(c, tid) is not None
+    done = read_only(api, asked["id"])
+    assert (done["state"], done["level"]) == ("granted", "read")
+    with api.app_state.store.read() as c:
+        assert reconnects.hold(c, tid) is None
+    chosen = {
+        r["full_name"]: r["access"] for r in api.get("/api/v2/bots/cpo/repositories", headers=auth()).json()["chosen"]
+    }
+    assert chosen["Acme/docs"] == "read"
+
+
+def test_read_only_wakes_only_its_own_tasks_and_a_separate_read_request_settles_as_usual(api, gh):
+    from backend import reconnects
+    from backend.store import H
+
+    catalog(api, gh)
+    api.app_state.auth.owner_email = "ana@acme.example"
+    for name in ("product", "docs"):
+        put(api, "repositories/Acme/" + name, {"enabled": True})
+    put(api, "bots/cpo/repositories", {"mode": "all", "all_access": "write"})
+    missing(api, "Acme/docs")
+    with api.app_state.store.transaction() as c:
+        reads = H.task_create(c, "human:ana", "Read the docs", "Details.", "bot:cpo", lint=False)["id"]
+        writes = H.task_create(c, "human:ana", "Fix the docs", "Details.", "bot:cpo", lint=False)["id"]
+    reading = ask(api, "Acme/docs", task=reads)
+    writing = ask(api, "Acme/docs", "read_write", task=writes)
+    assert read_only(api, writing["id"])["state"] == "granted"
+    with api.app_state.store.read() as c:
+        assert reconnects.hold(c, writes) is None
+        assert reconnects.hold(c, reads) is not None  # its own request is still open: GitHub misses Acme/docs
+    assert row(api, reading["id"])["state"] == "open"
+    missing(api, "Acme/docs", gone=False)
+    from backend import access_requests as AR
+
+    with api.app_state.store.transaction() as c:
+        AR.settled(c)
+    with api.app_state.store.read() as c:
+        assert reconnects.hold(c, reads) is None
+    assert row(api, reading["id"])["state"] == "granted"

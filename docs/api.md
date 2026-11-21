@@ -101,7 +101,7 @@ Internal developer tutorials: [Listening](listening.md#read-and-save) and [Needs
 
 `GET /api/v2/needs-you` is one list for the signed-in person, oldest first: every ask with their name, every task they
 own, every Paused cause they can fix, and every agent's ❓ for them. An @ alone is not on it: it is in the threads
-sidebar's Needs attention. Each item has `kind` (`task`, `ask`, `paused`, `question`), `id`, `line`, `since` and the brief `task`; an ask also has its requirement as `ask`.
+sidebar's Needs attention. Each item has `kind` (`task`, `ask`, `paused`, `question`, `access`, `key`, `key_drop`), `id`, `line`, `since` and the brief `task`; an ask also has its requirement as `ask`. An access request, key card or key-drop proposal the caller may settle carries its card under its kind, answered at its own route (access requests' `grant` with `{"level": "read"}` for Read only, or `decline`; `credential-requests/{id}/save`; `tools-chat/proposals/{message_id}/grant`).
 `count` is the length of the list, the one number on the Tasks badge (`count=1` returns only that). `version` changes
 whenever an item or its place does: `version=<the one held>` answers `unchanged`, and `ids=` sends only those items
 with their places (`positions`), to mend a held copy after a live `needs` event. `limit` and `cursor` page it.

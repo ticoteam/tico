@@ -289,12 +289,20 @@ def _retire(c, wait):
         return
     request = json.loads(wait.get("fix") or "{}").get("request")
     if request and _H()._has_table(c, "credential_requests"):
-        c.execute(
+        if c.execute(
             "UPDATE credential_requests SET status='canceled',updated_at=? WHERE id=? AND status='pending'",
             (_H().now(), request),
-        )
+        ).rowcount:
+            _needs_moved(c, wait)
     if wait["key"].startswith("login:"):
         _unfold_hold(c, wait["bot"])
+
+
+def _needs_moved(c, wait):
+    """Its key card left the person's Needs you (views.needs_items lists a pending one)."""
+    from . import events
+
+    events.needs_moved(c, [wait["person"]], "key")
 
 
 def _standing(c, wait):
@@ -370,10 +378,11 @@ def _settle_requests(c, waits, at):
     for wait in waits:
         request = json.loads(wait["fix"] or "{}").get("request")
         if request:
-            c.execute(
+            if c.execute(
                 "UPDATE credential_requests SET status='saved',updated_at=? WHERE id=? AND status='pending'",
                 (at, request),
-            )
+            ).rowcount:
+                _needs_moved(c, wait)
 
 
 def dropped(c, request_id):

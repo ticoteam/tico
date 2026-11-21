@@ -82,10 +82,11 @@ export function decideHold(task: string, id: string, how: 'keep' | 'send', nonce
     wait: true,
     optimistic: (cur: unknown) => {
       if (Array.isArray(cur)) return (cur as Hold[]).map(decided);
-      const f = cur as { items?: { id: string }[]; count?: number } | Hold | undefined;
+      const f = cur as { items?: { id: string }[]; count?: number; requests?: unknown[] } | Hold | undefined;
       if (f && 'items' in f && f.items) {
         const items = f.items.filter((x) => x.id !== task);
-        return { ...f, items, count: items.length };
+        // Flow's requests (access, key, key-drop) count too: they still wait.
+        return { ...f, items, count: items.length + (('requests' in f && f.requests?.length) || 0) };
       }
       return f && 'operation' in f ? decided(f) : cur;
     },

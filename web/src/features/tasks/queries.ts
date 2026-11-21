@@ -1,6 +1,6 @@
 import { infiniteQueryOptions, queryOptions, type InfiniteData, type QueryKey } from '@tanstack/react-query';
 import { api } from '@/api/client';
-import type { TagCreate, TagResult, TagUpdate } from '@/api/schema';
+import type { NeedsYouItem, TagCreate, TagResult, TagUpdate } from '@/api/schema';
 import type {
   FactoryMap,
   PipelineSettings,
@@ -659,9 +659,17 @@ export function flowGroups(items: readonly FlowItem[], pipelines: readonly Pipel
   return [...out.values()];
 }
 
+/** An access request, key card or key-drop proposal that waits on the person (Needs you `access`, `key`, `key_drop`):
+    no task holds it, so Flow draws its card above the tasks and it is answered there. */
+export type FlowRequest = NeedsYouItem & { kind: 'access' | 'key' | 'key_drop' };
+const REQUESTS = new Set<string>(['access', 'key', 'key_drop']);
+const isRequest = (it: NeedsYouItem): it is FlowRequest => REQUESTS.has(it.kind);
+
 export interface Flow {
+  /** The tasks and the requests. */
   count: number;
   items: FlowItem[];
+  requests?: FlowRequest[];
   /** Every task the Needs you list names, a grouped item's (a paused agent's `task_ids`) each one too. */
   task_ids?: string[];
   /** Each task with an approval (an OK or a page) that waits on the person, from every row of the list: `items` keeps
@@ -697,7 +705,12 @@ export const flowQuery = queryOptions({
     const named = new Set<string>();
     const items: FlowItem[] = [];
     const approvals = new Map<string, FlowItem>();
+    const requests: FlowRequest[] = [];
     for (const it of await needsYouItems()) {
+      if (isRequest(it)) {
+        requests.push(it);
+        continue;
+      }
       // a paused item names its tasks in task_ids (backend/views.py), which the generated type leaves out
       for (const id of [it.task_id, it.task?.id, ...((it as { task_ids?: string[] }).task_ids ?? [])]) if (id) named.add(id);
       const t = it.task;
@@ -712,7 +725,7 @@ export const flowQuery = queryOptions({
       seen.set(t.id, items.length);
       items.push(flowItemOf(it, t));
     }
-    return { count: items.length, items, task_ids: [...named], approvals: [...approvals.values()] };
+    return { count: items.length + requests.length, items, requests, task_ids: [...named], approvals: [...approvals.values()] };
   },
 });
 

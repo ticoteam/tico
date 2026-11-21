@@ -1,8 +1,16 @@
 # pyright: strict
 """The answers of the Needs you routes (backend/openapi_v2.py gathers them)."""
 
+from typing import Any
+
 from ..api_contract import ref
 from ._base import SCHEMAS, items, obj
+
+
+def described(fields: dict[str, Any], description: str) -> dict[str, Any]:
+    """An object schema of `fields` (obj), every one of them present, with its description."""
+    return {**obj(fields), "description": description}
+
 
 # One item of a person's Needs you (backend/views.py needs_items).
 NEEDS_ITEM = obj(
@@ -10,11 +18,13 @@ NEEDS_ITEM = obj(
         "id": "s",
         "kind": {
             "type": "string",
-            "enum": ["task", "ask", "paused", "question"],
+            "enum": ["task", "ask", "paused", "question", "access", "key", "key_drop"],
             "description": "task: a private task they must let someone see (`task.turn.share`); ask: a requirement "
             "with their name (its fields in "
             "`ask`); paused: a bot that cannot run, which they can fix; question: a bot's ❓ on its message for "
-            "them, until they reply in that chat. An @ alone is not here: it is in the threads sidebar",
+            "them, until they reply in that chat; access: an access request they can grant (`access`); key: a key "
+            "card they can fill (`key`); key_drop: the Tools owner's key proposal they can grant (`key_drop`). An @ "
+            "alone is not here: it is in the threads sidebar",
         },
         "line": "s",
         "since": "n",
@@ -31,7 +41,50 @@ NEEDS_ITEM = obj(
         "items": {"type": "string"},
         "description": "A ❓'s website browser to take over (`browser:<tool>/<account>`)",
     },
-    from_id={"type": "string", "description": "Who wrote it: a ❓'s bot"},
+    from_id={
+        "type": ["string", "null"],
+        "description": "Who asks: a ❓'s bot, the bot an access request or key card is for, the Tools owner of a key proposal",
+    },
+    access=described(
+        {
+            "id": "s",
+            "state": "s",
+            "subject": "s",
+            "subject_name": "s",
+            "resource_name": "s",
+            "level": {"type": "string", "enum": ["read", "read_write"]},
+            "why": "s",
+        },
+        "An access request's card (backend/access_requests.py card_of): POST "
+        "/api/v2/access-requests/{id}/grant (with level read: Read only) or /decline",
+    ),
+    key=described(
+        {"id": "s", "title": "s", "label": "s", "env": "s", "format": "s", "help_url": "s", "kind": "s"},
+        "A key card (backend/credential_cards.py card_view): POST /api/v2/credential-requests/{id}/save",
+    ),
+    key_drop=described(
+        {
+            "message_id": "s",
+            "state": "s",
+            "losses": "s",
+            "rows": items(
+                obj(
+                    {
+                        "key": "s",
+                        "tool_name": "s",
+                        "level": {"type": "string", "enum": ["read", "read_write"]},
+                        "bots": items(obj({"id": "s", "name": "s"})),
+                        # the tool's key at that level this one replaces: who keeps their access on it, who loses it
+                        "replaces": {
+                            "oneOf": [obj({"key": "s", "keeps": items("s"), "loses": items("s")}), {"type": "null"}]
+                        },
+                    }
+                )
+            ),
+        },
+        "A key proposal's card (backend/key_grants.py): POST "
+        "/api/v2/tools-chat/proposals/{message_id}/grant with the positions of the rows kept (`keep`)",
+    ),
     conversation_id={"type": "string", "description": "The thread a ❓ was written in"},
     root_id={"type": "string", "description": "A ❓'s root thread: the rail row it moves"},
     href={"type": "string", "description": "A paused cause a person fixes in the app: where (Connect GitHub)"},

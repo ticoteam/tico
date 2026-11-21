@@ -75,6 +75,8 @@ def _module(name: str) -> Any:
         from . import tool_services as found
     elif name == "auth":
         from . import auth as found
+    elif name == "events":
+        from . import events as found
     elif name == "credentials":
         from . import credentials as found
     else:
@@ -311,6 +313,7 @@ def _card(c: Any, task: Row, owner: str, person: str, tool: Row, key: Row) -> st
     if not waits:
         c.execute("UPDATE credential_requests SET status='canceled',updated_at=? WHERE id=?", (H.now(), rid))
         return None
+    _module("events").needs_moved(c, [person], "key")  # the card stands: it is in their Needs you now
     return rid
 
 
@@ -540,7 +543,8 @@ def save(c: Any, vault: Any, who: Any, row: Row, value: str) -> None:
         raise Problem("not_found", "That key is no longer in Tools", 404)
     api_tools = _api_tools()
     api_tools.update_key(c, who, vault, tool["id"], row["credential_id"], api_tools.KeyUpdate(value=SecretStr(value)))
-    c.execute(
+    if c.execute(
         "UPDATE credential_requests SET status='saved',updated_at=? WHERE id=? AND status='pending'",
         (H.now(), row["id"]),
-    )
+    ).rowcount:
+        _module("events").needs_moved(c, [row["requester"]], "key")  # it leaves their Needs you

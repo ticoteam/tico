@@ -195,10 +195,11 @@ export function answerAsk(id: string, rid: string, value: 'ok' | 'no', note?: st
     turn: t.turn?.requirement_id === rid ? null : t.turn,
   });
   const gone = (cur: unknown): unknown => {
-    const f = cur as { count?: number; items?: { id: string }[] } | undefined;
+    const f = cur as { count?: number; items?: { id: string }[]; requests?: unknown[] } | undefined;
     if (!f?.items) return cur;
     const items = f.items.filter((w) => w.id !== id);
-    return { ...f, items, count: items.length };
+    // Flow's requests (access, key, key-drop) count too: answering a task's ask leaves them waiting.
+    return { ...f, items, count: items.length + (f.requests?.length ?? 0) };
   };
   const flows = queryClient.getQueriesData({ queryKey: ['flow'] }).map(([k]) => k);
   return write<TaskResult>({
@@ -698,3 +699,61 @@ export const wordQuery = (url: string) =>
     },
     staleTime: Infinity,
   });
+
+/* ---------------------------------------------------------------- requests in Needs you */
+
+/** Answer an access request, a key card or a key-drop proposal from Needs you, through its own route: the row stays,
+    busy, until the server has taken it, then leaves Flow; every other copy of it settles on the server. */
+function answerRequest<T>(item: string, send: (idem: string) => Promise<T>, taken: (out: T) => boolean = () => true): Promise<T> {
+  // Read Flow again once answered, refused or not: one answer can settle other cards too (another copy, a Read request).
+  const again = () => void queryClient.invalidateQueries({ queryKey: flowQuery.queryKey });
+  return write<T>({
+    key: flowQuery.queryKey,
+    wait: true,
+    optimistic: (cur: unknown) => cur,
+    // Only an answer that settled it takes the row out: a grant that is still open keeps its card.
+    settle: (cur: { count: number; requests?: { id: string }[] } | undefined, out: T) => {
+      if (!taken(out) || !cur?.requests?.some((r) => r.id === item)) return cur;
+      return { ...cur, count: cur.count - 1, requests: cur.requests.filter((r) => r.id !== item) };
+    },
+    send,
+  }).finally(again);
+}
+
+/** An access request as its route answers: where it stands now, whoever settled it, and the level it is for. */
+export interface AccessAnswer {
+  state: string;
+  level: string;
+}
+
+/** Grant (`read` for Read only on a request for Read and write) or decline an access request. */
+export const grantAccess = (item: string, rid: string, level?: 'read') =>
+  answerRequest(
+    item,
+    (idem) => api.post<AccessAnswer>(`/api/v2/access-requests/${enc(rid)}/grant`, level ? { level } : {}, { idempotencyKey: idem }),
+    (out) => out.state !== 'open',
+  );
+export const declineAccess = (item: string, rid: string) =>
+  answerRequest(
+    item,
+    (idem) => api.post<AccessAnswer>(`/api/v2/access-requests/${enc(rid)}/decline`, {}, { idempotencyKey: idem }),
+    (out) => out.state !== 'open',
+  );
+/** The key the person typed into a key card: it goes to the server alone, never into a message. */
+export const saveKey = (item: string, rid: string, value: string) =>
+  answerRequest(item, (idem) => api.post(`/api/v2/credential-requests/${enc(rid)}/save`, { value }, { idempotencyKey: idem }));
+/** A key proposal as its Grant answers: where it stands, its rows, and each tool's check. */
+export interface KeyDropAnswer {
+  state: string;
+  rows: { key: string; tool_name: string }[];
+  results?: { key: string; ok: boolean; detail: string }[];
+}
+
+/** Grant the key-drop proposal's rows kept (their positions), with the loss preview the card showed (`seen`): the
+    server refuses with a 409 when who keeps and loses access moved since. */
+export const grantKeyDrop = (item: string, message: string, keep: number[], seen: string) =>
+  answerRequest(
+    item,
+    (idem) => api.post<KeyDropAnswer>(`/api/v2/tools-chat/proposals/${enc(message)}/grant`, { keep, seen }, { idempotencyKey: idem }),
+    (out) => out.state !== 'proposed',
+  );
