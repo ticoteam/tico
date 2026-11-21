@@ -449,7 +449,9 @@ VIDEO_JOB = re.compile(r"gv_[0-9a-f]{24}")
     "with sound unless `audio` is false. It answers the job id at once; check it with "
     "tico_gateway_video_status, since a video takes minutes. `first_frame` and `last_frame` are "
     "optional PNG or JPEG files on this computer. It spends from the company's Gateway cap, held "
-    "until the job ends.",
+    "until the job ends. Name the `shot`: the same shot is made once, and one the Gateway never "
+    "confirmed is refused with reconcile_shot: ask the task's person to reconcile it (check Gateway "
+    "usage), and never render it again under another name.",
     {
         "prompt": _s("What the video shows"),
         "seconds": {
@@ -469,6 +471,8 @@ VIDEO_JOB = re.compile(r"gv_[0-9a-f]{24}")
         "audio": {"type": "boolean", "default": True, "description": "With sound (the default)"},
         "first_frame": _s("A PNG or JPEG file on this computer that the video starts from"),
         "last_frame": _s("A PNG or JPEG file on this computer that the video ends on"),
+        "shot": _s("The shot's name, e.g. kettle close-up (default: the prompt's first words)"),
+        "operation_id": _s("Retry-safe id: a retry with the same id is the same video; optional."),
     },
     required=("prompt",),
     local=True,
@@ -491,7 +495,9 @@ def gateway_video(api, args):
     for name in ("first_frame", "last_frame"):
         if args.get(name):
             body[name] = data_url_of(args[name], VIDEO_FRAME_TYPES)[0]
-    job = api.post("gateway/videos", body)
+    if args.get("shot"):
+        body["shot"] = str(args["shot"])
+    job = api.post("gateway/videos", body, key=_key(args))
     return {"id": job.get("id"), "status": job.get("status", "queued"), "seconds": seconds, "resolution": resolution}
 
 

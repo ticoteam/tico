@@ -2449,6 +2449,7 @@ class GatewayVideo(Contract):
     audio: bool = True
     first_frame: str | None = Field(default=None, max_length=3_000_000)  # a base64 data URL, checked by the Gateway
     last_frame: str | None = Field(default=None, max_length=3_000_000)
+    shot: str | None = Field(default=None, max_length=80)  # its name: one charge per shot (backend/paid_renders.py)
 
     @model_validator(mode="after")
     def frames_are_pictures(self):

@@ -116,6 +116,7 @@ BOOKKEEPING = frozenset(
         "mcp.call",
         "service_key.use",
         "subscription.sent_to_computer",
+        "paid_render.alias",  # a request's Idempotency-Key kept as its paid shot's alias (backend/paid_renders.py)
     }
 )
 BOOKKEEPING_PREFIXES = ("attempt.", "job.", "turn.", "runner.")

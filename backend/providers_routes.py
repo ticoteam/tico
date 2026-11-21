@@ -12,6 +12,7 @@ from clients import gateway as gateway_client
 from . import gateway_connection
 from . import gateway_page
 from . import gateway_tiers
+from . import paid_renders
 import hashlib
 import json
 from . import model_login
@@ -311,10 +312,23 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
         auth.domain(who)
         if settings.rehearsal:
             raise Problem("rehearsal", "Video is off in rehearsal mode; nothing is sent to the Gateway", 503)
+        job = {"model": gateway_client.VIDEO_MODEL, **body.model_dump(exclude_none=True, exclude={"shot"})}
+        # One charge per paid shot: a shot that started, is in flight or is unknown is answered before any check; a new
+        # one is written down before it is sent and never sent again when its outcome is unknown (backend/paid_renders.py).
+        operation = request.headers.get("idempotency-key")
+        started = paid_renders.resolve(store, who, job, body.shot, operation)
+        if started:
+            return started
         key, base, header = gateway_for(who)
         video_budget_refusal(who, "videos")
-        job = {"model": gateway_client.VIDEO_MODEL, **body.model_dump(exclude_none=True)}
-        status, answer, code = gateway_client.video_submit(base, key, job, header)
+        status, answer, code = paid_renders.send(
+            store,
+            who,
+            job,
+            body.shot,
+            lambda shot: gateway_client.video_submit(base, key, job, {**header, "Idempotency-Key": shot}),
+            operation,
+        )
         if status != 202:
             if status == 404:
                 raise Problem("gateway_video_unavailable", "The Tico AI Gateway does not make videos yet", 503)
