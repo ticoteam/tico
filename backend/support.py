@@ -47,6 +47,7 @@ from .api_contract import api_v2
 
 log = logging.getLogger("tico.support")
 # (judge, identity) while a route may send a ticket: `file` checks the first delivery as that sender's (rule_links).
+LINK_CHECKS = 500  # first checks of deliveries kept for their retries, oldest dropped first
 LINK: contextvars.ContextVar[tuple | None] = contextvars.ContextVar("support_link", default=None)
 
 MAX_MESSAGE = 4000
@@ -440,6 +441,7 @@ def ask_report(c, by, payload, *, task_id=None, person=None):
 class Support:
     def __init__(self, store, settings, census, vault=None):
         self.store, self.settings, self.census, self.vault = store, settings, census, vault
+        self.link_checks = {}  # {sender|delivery key: the first check}: a retry of that delivery is not checked again
         self.previews = diagnostics.Previews()
         self.sending = threading.Lock()  # one OK is used once, even when two calls race
 
@@ -580,10 +582,7 @@ class Support:
             payload["kind"] = sent["kind"] = body.kind
         # An agent's report (its own, or a person's Assistant's or BotOps's) meets the org rules before its first
         # delivery, one event with the ticket it makes (backend/rule_links.py). Log-only. A retry finds its ticket above.
-        asked = LINK.get()
-        found = (
-            rule_links.check(self.store, asked[0], asked[1], "support", "support_report", message) if asked else None
-        )
+        found = self._link_check(message, idem or key)
         answer = _ask_hq("POST", "/v1/support", body=payload, idem=idem)
         if answer.status_code == 422 and _refused_field(answer) == "fields":
             # An HQ from before source refuses it as an unknown field: the ticket goes again without it, keeping the
@@ -647,8 +646,25 @@ class Support:
             )
             if on_filed:
                 on_filed(c, ticket_id)
-            rule_links.record(c, found)
+            if answer.status_code == 201:  # HQ's real first delivery, never its answer to a retry of a lost one
+                rule_links.record(c, found)
             return view(c.execute("SELECT * FROM support_tickets WHERE id=?", (ticket_id,)).fetchone())
+
+    def _link_check(self, message, delivery):
+        """The support link's check of a delivery an agent asked for (`LINK`, backend/rule_links.py), outside any write:
+        the first check of its delivery key again on a retry, else a new one. None when no agent asked for it."""
+        asked = LINK.get()
+        if not asked:
+            return None
+        reuse = f"{asked[1].actor}|{delivery}" if delivery else ""
+        found = self.link_checks.get(reuse) if reuse else None
+        if found is None:
+            found = rule_links.check(self.store, asked[0], asked[1], "support", "support_report", message)
+            if reuse and found:
+                self.link_checks[reuse] = found
+                while len(self.link_checks) > LINK_CHECKS:
+                    self.link_checks.pop(next(iter(self.link_checks)))
+        return found
 
     def report(self, who, payload, task_id="", check=None):
         """Draft a report to Tico support (POST /api/v2/support/reports). A bot's draft is filed at once as the

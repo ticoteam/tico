@@ -695,8 +695,9 @@ def check_as(
     where an outside message came from (`inbound`), kept on the verdict and its hold. `late`: the write may be saved
     before its check (`deferred`): when every rule it meets only warns and the verdict is not cached, nothing is asked
     now, and the verdict says so (`late`), for `apply` to queue the one check to run right after the write.
-    `most_calls`: the calls this check may make; needing more is unchecked (`too_many_calls`), asking nothing. `parts`
-    False: never mark a holding verdict for its part call (backend/rule_links.py, whose checks hold nothing)."""
+    `most_calls`: the calls this check may make (preflight, recheck and mail_prepare pass it on); needing more is
+    unchecked (`too_many_calls`), asking nothing. `parts` False: never mark a holding verdict for its part call (the
+    link checks of backend/rule_links.py, email's included)."""
     author = principal
     if not author:
         return None
@@ -1137,6 +1138,8 @@ def preflight(
     contacts=(),
     targets=(),
     late=False,
+    most_calls=None,
+    parts=True,
 ):
     """The stable entry for a write one identity makes (core's `threads.post` calls it): `check_as` for the principal,
     sender and route `checked_as` reads from `who`. `place`: the write's place, or a function of (c, principal,
@@ -1188,6 +1191,8 @@ def preflight(
             place=place,
             attempt_id=attempt_id,
             late=late,
+            most_calls=most_calls,
+            parts=parts,
         )
     except Problem as exc:
         from . import task_rule_gate
@@ -2821,7 +2826,7 @@ def _same_audience(c, hold, audience=None, auth=None):
         )
 
 
-def recheck(store, primary, hold, audience=None, auth=None):
+def recheck(store, primary, hold, audience=None, auth=None, most_calls=None, parts=True):
     """Outside the write, before Send anyway or an approved mail: when the rules that match now differ from those at the
     hold (a rule edited or added since), the rules changed or added are a new check, on the same input the first check
     had (text, audience, context, object, place). Returns (the pairs matching now, that verdict or None). The write
@@ -2855,6 +2860,8 @@ def recheck(store, primary, hold, audience=None, auth=None):
         place=place,
         attempt_id=prov.get("attempt_id") or "",
         origin=prov.get("origin"),
+        most_calls=most_calls,
+        parts=parts,
     )
     if fresh is None:
         return sorted(now), verdict
@@ -3260,7 +3267,7 @@ def health_findings(c, settings):
 
 
 # ----------------------------------------------------------------------------- HTTP
-def mail_prepare(store, primary, who, author, to, cc, subject, body, contacts=()):
+def mail_prepare(store, primary, who, author, to, cc, subject, body, contacts=(), most_calls=None, parts=True):
     """The org rule check of one mail, before its write: None when no rule is in force, else what `mail_decide` needs.
     `author` is the teammate the mail is checked as (a person, when BotOps sends it for one): its holds and approvals
     are found under it; `who` stays the caller, for the write's permission and audit. An approved mail (Send anyway) is
@@ -3273,7 +3280,7 @@ def mail_prepare(store, primary, who, author, to, cc, subject, body, contacts=()
             return None  # no rule in force: no roster read for the recipients, nothing written
         approved = mail_approved(c, author, key)
         recipients = mail_recipients(c, [*to, *cc])
-    check = recheck(store, primary, approved) if approved else None
+    check = recheck(store, primary, approved, most_calls=most_calls, parts=parts) if approved else None
     verdict = (
         check[1]
         if approved
@@ -3286,6 +3293,8 @@ def mail_prepare(store, primary, who, author, to, cc, subject, body, contacts=()
             recipients,
             context={"to": [a.lower() for a in [*to, *cc]]},
             contacts=contacts,
+            most_calls=most_calls,
+            parts=parts,
         )
     )
     return {"author": author, "key": key, "output": output, "approved": approved, "check": check, "verdict": verdict}

@@ -276,6 +276,8 @@ def test_mcp_at_read_passes_set_up_listings_and_read_only_tools_and_refuses_the_
     tool_proxy.READ_ONLY_TOOLS.clear()
     setup(api)
     tool(api, scheme="bearer", base="https://mcp.close.example")
+    with api.app.state.store.transaction() as c:  # its MCP server: the one address read-only hints are learned at
+        c.execute("UPDATE tools SET mcp_url='https://mcp.close.example/mcp' WHERE id='close-crm'")
     give(api, key(api, "close-crm", FULL), "bot:ops", "read")
     vendor = McpVendor(sse)
     api.app.state.tool_proxy_transport = httpx.MockTransport(vendor)
@@ -487,5 +489,13 @@ def test_an_agents_write_is_rule_checked_before_the_key_goes_in_logged_once_and_
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM events WHERE action LIKE 'rules.%'").fetchone()[0] == 1
     assert call(api, "POST", "api/v1/lead/", token, json=listing).status_code == 200
+    assert call(api, "POST", "mcp/", token, json=listing).status_code == 200  # not the MCP address exactly
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM events WHERE action LIKE 'rules.%'").fetchone()[0] == 2
+        assert c.execute("SELECT count(*) FROM events WHERE action LIKE 'rules.%'").fetchone()[0] == 3
+    # A destination refused at its check is never judged: the address is checked and pinned first.
+    ANSWERS["api.close.example"] = "10.0.0.5"
+    asked = len(judge.read)
+    assert call(api, "POST", "api/v1/lead/", token, json=note).status_code == 403
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM events WHERE action LIKE 'rules.%'").fetchone()[0] == 3
+    assert len(judge.read) == asked

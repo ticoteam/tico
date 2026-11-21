@@ -14,11 +14,14 @@ so no call is spent on a write that will not happen; the write's own checks stil
 Nothing here stops a write. `would` in an event's detail says the outcome was not carried out: the write went anyway.
 Email's own held path (backend/email_sending.py `rule_gate`) does stop a mail, so email is the one Enforced link and
 its event says what happened, with the rules the mail's decision applied. The event is written in a savepoint: a
-failure to log never changes the write or its answer.
+failure to log never changes the write or its answer; the proxy writes it with the call's own row, after forwarding.
+
+Each link's mode lives in registry_metadata (`MODES`), by default Enforced for email and Informed only for the rest; only
+the owner changes one, and not from here. A label alone never makes a path that only logs read as Enforced.
 
 What the check reads of a proxied write is scrubbed first (`proxy_output`): no header at all (so no Authorization,
 Cookie or a tool's own auth header); the path, the query's names and values and a JSON, form or plain text body read
-decoded (percent escapes, JSON escapes) with every proxy token (`tpx1.*`, plain or inside base64 such as a Basic pair)
+decoded (percent escapes, JSON escapes, base64 content too) with every proxy token (`tpx1.*`, plain or inside base64 such as a Basic pair)
 taken out and the tool's auth query parameters blanked, never encoded again. A body of any other kind, or one whose
 scrubbing cannot be verified, is not read. It runs before the proxy puts the key in. Events never carry the text.
 
@@ -32,7 +35,7 @@ import logging
 import re
 from collections.abc import Callable, Collection
 from typing import Any, cast
-from urllib.parse import parse_qsl, unquote, urlsplit
+from urllib.parse import parse_qsl, unquote
 
 from fastapi import FastAPI, Request
 
@@ -46,6 +49,9 @@ H: Any = _H
 Found = dict[str, Any]  # what `check_as` found and `record` writes
 LOG = logging.getLogger("tico.rule_links")
 ENFORCED, INFORMED, NOT_COVERED = "enforced", "informed", "not_covered"
+MODES = (
+    "rule-link-modes"  # registry_metadata: {link id: "enforced" | "informed"}; a link it does not name has its default
+)
 ENFORCED_LINKS = frozenset({"email"})  # the links whose path really stops a write; every other is Informed only
 FIXED = {"email": "Email", "webhook": "Outgoing webhooks", "support": "Tico support", "release": "Releases"}
 OUTCOMES = ("rules.passed", "rules.refused", "rules.held")
@@ -55,6 +61,7 @@ CALLS = 1  # the judge calls one link check may make
 COMPUTER = "computer"  # the Not covered row for calls a computer makes straight out
 TOKEN = re.compile(r"tpx1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")  # backend/tool_proxy.py TOKEN_RE
 BASE64 = re.compile(r"[A-Za-z0-9+/_-]{16,}={0,2}")
+URLSAFE = str.maketrans("-_", "+/")
 ESCAPE = re.compile(r"\\u([0-9a-fA-F]{4})")
 FORM = "application/x-www-form-urlencoded"
 # What each link's write is, in the words the check reads (org_rule_check.OPERATIONS).
@@ -79,18 +86,18 @@ def _decoded(text: str) -> str:
 
 
 def _hidden(match: re.Match[str]) -> str:
-    """A base64 run that holds a proxy token, read from any of its four offsets in either alphabet, as `[token]`."""
-    raw = match.group(0)
+    """A base64 run that holds a proxy token, read from any of its four offsets in either alphabet, its content decoded
+    in turn (percent and JSON escapes), as `[token]`."""
+    raw = match.group(0).translate(URLSAFE)  # either alphabet, read as the standard one
     for offset in range(4):
         part = raw[offset:].rstrip("=")
         part = part[: len(part) // 4 * 4]  # whole quanta only: a run's tail never makes it fail to decode
-        for decode in (base64.b64decode, base64.urlsafe_b64decode):
-            try:
-                if b"tpx1." in decode(part).lower():
-                    return "[token]"
-            except ValueError:
-                continue
-    return raw
+        try:
+            if "tpx1" in _decoded(base64.b64decode(part, validate=True).decode("latin-1")).lower():
+                return "[token]"
+        except ValueError:
+            continue
+    return match.group(0)
 
 
 def scrub(text: str) -> str:
@@ -115,7 +122,7 @@ def _scrubbed(value: Any) -> Any:
 
 
 def _body(body: bytes, content_type: str) -> str | None:
-    """A JSON, form or plain text body as the check reads it, scrubbed; None for any other kind or one that fails."""
+    """A JSON, form or text/plain body as the check reads it, scrubbed; None for any other kind or one that fails."""
     kind = content_type.split(";")[0].strip().lower()
     try:
         text = body.decode("utf-8")
@@ -123,7 +130,7 @@ def _body(body: bytes, content_type: str) -> str | None:
             out = json.dumps(_scrubbed(json.loads(text)), ensure_ascii=False)
         elif kind == FORM:
             out = "&".join(f"{scrub(k)}={scrub(v)}" for k, v in parse_qsl(text, keep_blank_values=True))
-        elif kind.startswith("text/"):
+        elif kind == "text/plain":
             out = scrub(text)
         else:
             return None
@@ -150,10 +157,11 @@ def proxy_output(
     return head + "\n\n" + (text if text is not None else f"[a body of {len(body)} bytes, not read]")
 
 
-def mcp_endpoint(tool: Any, rest: str) -> bool:
-    """Whether a proxied call goes to the tool's own MCP server, the one address the MCP read exemption covers."""
+def mcp_endpoint(tool: Any, forwarded: str) -> bool:
+    """Whether the address a proxied call is forwarded to (before its query) is exactly the tool's MCP server, trailing
+    slash included: the one address the MCP read exemption and its read-only hints cover."""
     url = str(tool.get("mcp_url") or "")
-    return bool(url) and rest.strip("/") == (urlsplit(url).path or "/").strip("/")
+    return bool(url) and forwarded == url
 
 
 # ----------------------------------------------------------------------------- the check and its one event
@@ -212,15 +220,24 @@ def check(store: Any, primary: Any, who: Any, link: str, operation: str, output:
 
 def would_write(store: Any, who: Any, request: Any, test: Callable[[Any], Any]) -> bool:
     """Read only, before a check: whether the write would be made now, so no call is spent on one that will not. Not
-    when its Idempotency-Key already has an answer (a replay writes nothing), nor when `test(c)` (the write's own
+    when its Idempotency-Key is missing or too long, or already has an answer (a replay writes nothing), nor when `test(c)` (the write's own
     checks, read now) is false or refuses. The write runs its checks again inside itself."""
+    key = request.headers.get("idempotency-key") or ""
+    if not key or len(key) > 200:
+        return False  # the write refuses it (Store.mutate)
     try:
         with store.read() as c:
-            if store.saved(c, who, request.url.path, request.headers.get("idempotency-key")):
+            if store.saved(c, who, request.url.path, key):
                 return False
             return bool(test(c))
     except Problem:
         return False
+
+
+def is_agent(store: Any, who: Any) -> bool:
+    """Whether a write by `who` is an agent's, which `check` checks: its sender is a bot."""
+    found: Any = ORC.checked_as(who, store.settings.assistant_bot)
+    return bool(found) and bool(H.is_bot(found[1]))
 
 
 def record(c: Any, found: Found | None, stopped: bool = False) -> Any:
@@ -250,18 +267,20 @@ def record(c: Any, found: Found | None, stopped: bool = False) -> Any:
     return row
 
 
-def mailed(found: Any, result: Any) -> Found:
+def mailed(c: Any, found: Any, result: Any) -> Found:
     """The email link's outcome from the decision the mail's own gate applied (email_sending.rule_gate), which holds a
     mail for real: `found` is (principal, sender, via) and `result` what `mail_decide` (or its structured fallback)
-    answered. Its rules are the ones that decision held or warned on."""
-
-    def ids(part: Any) -> list[str]:
-        rules: list[Any] = (cast("dict[str, Any]", part).get("rules") or []) if isinstance(part, dict) else []
-        return sorted(
-            {str(r["id"]) for r in (cast("dict[str, Any]", r) for r in rules if isinstance(r, dict)) if r.get("id")}
-        )
-
-    applied = sorted({*ids(result.get("held")), *ids(result.get("rule_warning"))})
+    answered. Its rules: the applied hold's stored `rule_ids`, or the rules a delivered mail was warned on."""
+    held: Any = result.get("held")
+    hold_id = cast("dict[str, Any]", held).get("id") if isinstance(held, dict) else None
+    row = c.execute("SELECT rule_ids FROM org_rule_holds WHERE id=?", (hold_id,)).fetchone() if hold_id else None
+    stored: Any = json.loads(row[0] or "[]") if row else []
+    warning: Any = result.get("rule_warning")
+    warned: list[Any] = (cast("dict[str, Any]", warning).get("rules") or []) if isinstance(warning, dict) else []
+    applied = sorted(
+        {str(x) for x in cast("list[Any]", stored) if x}
+        | {str(w.get("id")) for w in (cast("dict[str, Any]", r) for r in warned if isinstance(r, dict)) if w.get("id")}
+    )
     return {
         "link": "email",
         "actor": found[1],
@@ -275,9 +294,22 @@ def mailed(found: Any, result: Any) -> Found:
 
 
 # ----------------------------------------------------------------------------- Rules › Links
-def mode(link: str) -> str:
-    """Enforced only where the path really stops a write (email, in this phase); every other link is Informed only."""
-    return ENFORCED if link in ENFORCED_LINKS else INFORMED
+def modes(c: Any) -> dict[str, Any]:
+    """{link id: mode} as registry_metadata names them (`MODES`; only the owner changes one, not from here)."""
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (MODES,)).fetchone()
+    try:
+        saved: Any = json.loads(row[0]) if row else {}
+    except ValueError:
+        saved = {}
+    return cast("dict[str, Any]", saved) if isinstance(saved, dict) else {}
+
+
+def mode(link: str, saved: dict[str, Any]) -> str:
+    """A link's mode from registry_metadata (`saved`), by default Enforced for email and Informed only for the rest.
+    Enforced only where the path really stops a write (ENFORCED_LINKS): a label alone never makes a log-only path
+    claim it."""
+    named = saved.get(link, ENFORCED if link in ENFORCED_LINKS else INFORMED)
+    return ENFORCED if named == ENFORCED and link in ENFORCED_LINKS else INFORMED
 
 
 def counts(c: Any, links: list[str], since: str) -> dict[str, dict[str, int]]:
@@ -309,8 +341,9 @@ def listing(c: Any, who: Any, admins: Any, auth: Any, now: str | None = None) ->
         *(("tool:" + str(t["id"]), str(t["name"] or t["id"])) for t in tools if _proxied(t)),
     ]
     seen = counts(c, [link for link, _ in links], str(H.shift(now or H.now(), days=-DAYS)))
+    saved = modes(c)
     rows: list[dict[str, Any]] = [
-        {"id": link, "name": name, "mode": mode(link), "counts": seen[link]} for link, name in links
+        {"id": link, "name": name, "mode": mode(link, saved), "counts": seen[link]} for link, name in links
     ]
     rows += [
         {"id": "tool:" + str(t["id"]), "name": str(t["name"] or t["id"]), "mode": NOT_COVERED, "counts": None}

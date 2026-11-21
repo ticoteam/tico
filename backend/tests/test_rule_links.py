@@ -85,6 +85,47 @@ def test_a_webhook_send_that_would_be_refused_is_never_judged(ruled):
     assert r.status_code == 404 and judge.read == [] and link_events(api, "webhook") == []
 
 
+def test_a_send_to_a_paused_endpoint_or_with_no_key_is_never_judged(ruled, monkeypatch):
+    from backend import egress
+    from backend.tests.helpers.webhooks import PUBLIC, make
+
+    api, judge = ruled
+    monkeypatch.setattr(egress, "resolve", lambda host: PUBLIC)
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"bots": ["ops"]}, "if_broken": "block"})
+    hook = make(api, events=["custom.*"])
+    post(api, f"webhooks/{hook['id']}/pause", {})
+    with api.app.state.store.transaction() as c:  # ops may send outside on its own
+        ana = api.app.state.auth.identity_for_actor(c, "human:ana")
+        S.update_policy(c, ana, "bot:ops", S.PolicyUpdate(mode="on_their_own"))
+    # ops sends to an endpoint that listens for it, but is paused: publish refuses it, and no call was spent.
+    r = api.post(
+        f"/api/v2/webhooks/{hook['id']}/send",
+        json={"type": "custom.color", "data": {"say": "Our favorite color is gold"}},
+        headers=headers("ops-test"),
+    )
+    assert r.status_code == 409, r.text
+    assert judge.read == [] and link_events(api, "webhook") == []
+    request = type("R", (), {"headers": {}, "url": type("U", (), {"path": "/api/v2/release/now"})()})()
+    assert L.would_write(api.app.state.store, Identity("bot:ops", "bot"), request, lambda c: True) is False
+
+
+def test_release_now_checks_again_when_the_open_task_went_between_its_read_and_its_write(ruled, monkeypatch):
+    from backend import release_schedule_routes as RS
+
+    api, judge = ruled
+    assert api.patch("/api/v2/release-schedule", json={"bot": "ops"}, headers=headers()).status_code == 200
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"bots": ["ops"]}, "if_broken": "block"})
+    real, reads = RS.would_file, []
+
+    def stale_first(c, who):  # the first read still saw an open Release task, gone by the write
+        reads.append(1)
+        return len(reads) > 1 and real(c, who)
+
+    monkeypatch.setattr(RS, "would_file", stale_first)
+    assert post(api, "release/now", {"note": "Our favorite color is gold"}, token="ops-test")["sent"] is True
+    assert len(judge.read) == 1 and [a for _, a, _ in link_events(api, "release")] == ["rules.refused"]
+
+
 def test_a_link_check_makes_one_call_at_most_and_no_part_call(ruled, monkeypatch):
     api, judge = ruled
     made = rule(api, {"kind": "internal", "text": COLOR, "who": {"bots": ["ops"]}, "if_broken": "block"})
@@ -143,6 +184,9 @@ TOKEN = "tpx1.eyJ0IjoiY2xvc2UifQ.c2lnbmF0dXJlLXZhbHVlLTEy"
         ),
         ("leads", "", ("a=" + TOKEN.replace(".", "%2E")).encode(), "application/x-www-form-urlencoded"),
         ("leads", "", ("see " + TOKEN).encode(), "text/plain; charset=utf-8"),
+        # base64 whose content is itself percent- or JSON-escaped, in either alphabet
+        ("leads", "b=" + base64.urlsafe_b64encode(("u:" + TOKEN.replace(".", "%2E")).encode()).decode(), b"", ""),
+        ("leads", "", json.dumps({"b": base64.b64encode(("\\u0074" + TOKEN[1:]).encode()).decode()}).encode(), ""),
     ],
 )
 def test_what_the_check_reads_holds_no_credential_in_any_spelling(rest, query, body, kind):
@@ -151,6 +195,7 @@ def test_what_the_check_reads_holds_no_credential_in_any_spelling(rest, query, b
 
 
 def test_a_body_that_cannot_be_read_safely_is_named_not_read():
+    assert "not read]" in L.proxy_output("POST", "page", "", ("<p>" + TOKEN).encode(), (), "text/html")
     read = L.proxy_output("POST", "files", "", b"\x89PNG" + TOKEN.encode(), (), "image/png")
     assert read.endswith(f"[a body of {4 + len(TOKEN)} bytes, not read]") and "tpx1" not in read
     assert "[key]" in L.proxy_output("POST", "x", "api_key=" + TOKEN, b"", {"api_key"})
@@ -167,7 +212,10 @@ def test_a_held_or_warned_mail_is_logged_on_the_email_link_with_the_rules_its_de
     gate = S.rule_gate(api.app, api.app.state.store, Identity("bot:ops", "bot", agent="test"), snap)
     with api.app.state.store.transaction() as c:
         assert gate(c)["outcome"] == "held"
+    with api.app.state.store.read() as c:
+        [hold] = [json.loads(r[0]) for r in c.execute("SELECT rule_ids FROM org_rule_holds")]
     [(actor, action, detail)] = link_events(api, "email")
+    assert detail["rules"] == hold
     assert (actor, action, detail["rules"], detail["broken"]) == (
         "bot:ops",
         "rules.held",
@@ -198,6 +246,8 @@ def test_rules_links_lists_each_link_with_its_mode_and_30_day_counts(ruled, monk
         H.event(c, "bot:ops", "rules.refused", "link:tool:close", {})
         old = H.event(c, "bot:ops", "rules.refused", "link:tool:close", {})
         c.execute("UPDATE events SET created_at=? WHERE id=?", (H.shift(now, days=-31), old["id"]))
+        # A label in registry_metadata never makes a path that only logs read as Enforced.
+        c.execute("INSERT INTO registry_metadata VALUES(?,?)", (L.MODES, json.dumps({"webhook": "enforced"})))
     links = {row["id"]: row for row in get(api, "rule-links")["links"]}
     # Email is the one path that really stops a write; nothing relabels another.
     assert {k: v["mode"] for k, v in links.items()} == {
@@ -220,3 +270,19 @@ def test_rules_links_lists_each_link_with_its_mode_and_30_day_counts(ruled, monk
     monkeypatch.setattr(support_access, "check_live", lambda c, who: None)  # a live support session, as opened
     store.settings.test_identities["support-app"] = Identity("human:tico-support", "human", support="app")
     assert api.get("/api/v2/rule-links", headers=headers("support-app")).status_code == 403
+
+
+def test_both_email_paths_take_a_links_budget(ruled, monkeypatch):
+    api, judge = ruled
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"bots": ["ops"]}, "if_broken": "block"})
+    seen = []
+    real_check, real_recheck = K.check_as, K.recheck
+    monkeypatch.setattr(K, "check_as", lambda *a, **kw: seen.append(("first", kw)) or real_check(*a, **kw))
+    snap = {"recipient_headers": {"to": ["v@outside.example"], "cc": [], "bcc": []}, "subject": "Hi", "body": "Hello."}
+    who = Identity("bot:ops", "bot", agent="test")
+    S.rule_gate(api.app, api.app.state.store, who, snap)
+    monkeypatch.setattr(K, "mail_approved", lambda c, author, key, operation="mail": {"id": "h1"})
+    monkeypatch.setattr(K, "recheck", lambda *a, **kw: seen.append(("approved", kw)) or ([], None))
+    S.rule_gate(api.app, api.app.state.store, who, snap)
+    assert [(path, kw["most_calls"], kw["parts"]) for path, kw in seen] == [("first", 1, False), ("approved", 1, False)]
+    assert real_recheck is not K.recheck

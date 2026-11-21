@@ -452,7 +452,7 @@ def install(app, store):
     vault = app.state.vault
     loop = asyncio.get_running_loop
 
-    def record(tool_id, credential_id, subject, level, method, path, status, result, detail, began):
+    def record(tool_id, credential_id, subject, level, method, path, status, result, detail, began, gate=None):
         with store.transaction() as c:
             c.execute(
                 'INSERT INTO tool_calls(id,tool_id,credential_id,actor,bot,access_level,method,path,status_code,'
@@ -479,17 +479,17 @@ def install(app, store):
 
                 record_use(c, subject, 'credential.proxied_call', credential_id, {'tool': tool_id}, windowed=True)
                 reconnect_tasks.called(c, tool_id, status)  # Key rejected opens its Reconnect task, Working ends it
+            rule_links.record(c, gate)  # the write's rule check, in the same transaction as its row (in a savepoint)
 
     def gated(subject, tool_id, method, rest, query, body, params, content_type):
         try:
             output = rule_links.proxy_output(method, rest, query, body, params, content_type)
-            found = rule_links.check_as(
+            return rule_links.check_as(
                 store, getattr(app.state, 'judge', None), subject, subject, '', 'tool:' + tool_id, 'tool_call', output
             )
-            with store.transaction() as c:
-                rule_links.record(c, found)
-        except Exception:  # log-only: a failure to log never stops the write
-            LOG.exception('The rule check of a proxied write could not be logged')
+        except Exception:  # log-only: a failure to check never stops the write
+            LOG.exception('The rule check of a proxied write failed')
+            return None
 
     def plan(request, tool_id, rest, method):
         """Everything the call needs, read once: (refusal, None) or (None, plan)."""
@@ -605,6 +605,7 @@ def install(app, store):
                 )
                 return refused(401 if again else 502, 'tool_sign_in', detail)
         secrets = secrets_of(key, credential.get('username') or '', auth['secrets'] if auth else ())
+        checked = {}  # the write's rule check, written once with the row its call leaves (`record`)
         log = lambda status, result, detail: loop().run_in_executor(
             None,
             record,
@@ -618,6 +619,7 @@ def install(app, store):
             result,
             scrub_text(detail, secrets),
             began,
+            checked.pop('found', None),
         )
         size = request.headers.get('content-length', '')
         if size.isdigit() and int(size) > MAX_BODY:
@@ -638,17 +640,12 @@ def install(app, store):
                 detail = read_only_detail(ready['who'], ready['name'], '' if calls is None else write)
                 await log(403, 'refused', detail)
                 return refused(403, 'forbidden', detail)
-        # A write meets the org rules before the key goes in (backend/rule_links.py): one outcome event on the tool's
-        # link, before it is forwarded. Log-only: nothing is stopped here yet. Only an MCP call to the tool's own MCP
-        # server that only reads is not a write.
-        mcp_read = calls is not None and rule_links.mcp_endpoint(tool, rest) and not mcp_write(tool_id, calls)
-        if method not in SAFE and not mcp_read:
-            sent, kind = b''.join(chunks), request.headers.get('content-type', '')
-            await loop().run_in_executor(
-                None, gated, got['subject'], tool_id, method, rest, query, sent, got['auth_params'], kind
-            )
-        listing = bool(calls) and any(m == 'tools/list' for m, _ in calls)
-        url = tool['base_url'].rstrip('/') + '/' + rest.lstrip('/')
+        # Only the tool's own MCP server, matched exactly on the address forwarded to, gives MCP reads and read-only hints.
+        forwarded = tool['base_url'].rstrip('/') + '/' + rest.lstrip('/')
+        mcp = rule_links.mcp_endpoint(tool, forwarded)
+        listing = mcp and bool(calls) and any(m == 'tools/list' for m, _ in calls)
+        asked = query
+        url = forwarded
         query = outgoing_query(query, tool, key, auth['query'] if auth else None)
         url += ('?' + query) if query else ''
         if urlsplit(url).hostname != urlsplit(tool['base_url']).hostname:
@@ -659,6 +656,14 @@ def install(app, store):
         except egress.Blocked as exc:
             await log(None, 'refused', exc.reason)
             return refused(403, 'tool_address', exc.reason)
+        if method not in SAFE and not (mcp and calls is not None and not mcp_write(tool_id, calls)):
+            # The destination checked and pinned, a write meets the org rules on what the caller sent, scrubbed, before
+            # it is forwarded with the key (backend/rule_links.py). Log-only: its one outcome event on the tool's link
+            # goes with the call's own row, after it is forwarded.
+            sent, kind = b''.join(chunks), request.headers.get('content-type', '')
+            checked['found'] = await loop().run_in_executor(
+                None, gated, got['subject'], tool_id, method, rest, asked, sent, got['auth_params'], kind
+            )
         client = httpx.AsyncClient(
             transport=getattr(app.state, 'tool_proxy_transport', None),
             timeout=TIMEOUT,

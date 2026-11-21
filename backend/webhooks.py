@@ -373,6 +373,18 @@ def _fan_out(c, hooks, name, subject, data, actor, revision):
 
 
 def _publish_only(c, type_, subject, data, actor, only, revision):
+    hook, name = publishable(c, type_, subject, data, actor, only)
+    event_id = _event_id(name, subject, revision)
+    _event_row(c, event_id, name, subject, data, actor, only=only)
+    queued = _queue(c, hook, event_id, name, subject, data)
+    if queued:
+        _refresh(c)
+    return queued
+
+
+def publishable(c, type_, subject, data, actor, only):
+    """What `publish(only=...)` checks before it writes, read only: (endpoint row, event name), or Refused. Rules ›
+    Links reads it before an agent's send is checked (backend/rule_links.py), so no call goes on a send refused here."""
     hook = c.execute("SELECT * FROM webhooks WHERE id=?", (only,)).fetchone()
     if not hook or hook["deleted_at"]:
         raise Refused("That endpoint does not exist")
@@ -393,12 +405,7 @@ def _publish_only(c, type_, subject, data, actor, only, revision):
         raise Refused("The data is over 64 KB")
     if view_for(c, hook["created_by"], name, subject, data, {}) is None:
         raise Refused("The person who owns that endpoint may not read this")
-    event_id = _event_id(name, subject, revision)
-    _event_row(c, event_id, name, subject, data, actor, only=only)
-    queued = _queue(c, hook, event_id, name, subject, data)
-    if queued:
-        _refresh(c)
-    return queued
+    return hook, name
 
 
 # ----------------------------------------------------------------------------------------------------- endpoint filters
@@ -1592,6 +1599,10 @@ def install(app, settings, store, auth, mutate):
             if not CUSTOM.fullmatch(name):
                 return False
             may_send(c, who, _row(c, hook_id), name)
+            try:
+                publishable(c, name, body.subject or name, body.data, who.actor, hook_id)
+            except Refused:
+                return False
             return True
 
         # An agent's send meets the org rules first (backend/rule_links.py), its one event in the send's write; only a

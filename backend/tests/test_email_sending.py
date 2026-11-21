@@ -1272,3 +1272,24 @@ def test_a_drain_leases_no_new_email_once_its_budget_is_spent(inbox, monkeypatch
     assert states == ["sent", "sent", "pending"]
     assert S.drain(store, auth, budget=drains.Budget(5)) == 1
     assert S.drain(store, auth, budget=drains.Budget(5)) == 0 and len(calls) == 3  # each once, never twice
+
+
+def test_an_email_already_queued_is_found_before_the_rule_check_and_a_race_is_refused_for_a_retry(inbox):
+    """Rules › Links: the send route asks no rule check for an email `enqueue` would answer with a send it has
+    (`queued_already`, read only); the write checks again, and one it would queue after all is refused to retry."""
+    raw = mime(body="The signed lease.")
+    queued = queue(inbox, raw=raw, actor="bot:ops")
+    with inbox.app.state.store.read() as c:
+        assert S.queued_already(c, "bot:ops", S.Enqueue(mailbox=BOX, raw=raw))
+        assert not S.queued_already(c, "bot:ops", S.Enqueue(mailbox=BOX, raw=mime(body="Something else.")))
+        assert not S.queued_already(c, "bot:finance", S.Enqueue(mailbox=BOX, raw=raw))  # another sender's
+    with pytest.raises(Problem) as raced, inbox.app.state.store.transaction() as c:
+        S.enqueue(
+            c,
+            inbox.app.state.auth,
+            "bot:ops",
+            S.Enqueue(mailbox=BOX, raw=mime(body="New words.")),
+            {"legal_or_money": False, "status": "classified"},
+            rules=S._raced,
+        )
+    assert raced.value.status == 409 and queued["id"]

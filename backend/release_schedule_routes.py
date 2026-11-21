@@ -178,6 +178,10 @@ def view(c: Any, who: Any, auth: Any) -> dict[str, Any]:
     }
 
 
+class _Recheck(Exception):
+    """Release now's write found what its read did not (the open Release task gone): it checks again outside it."""
+
+
 def open_release(c: Any, owner: str) -> Any:
     """The Release Owner's unfinished Release task (its id first), or None."""
     return c.execute(
@@ -283,21 +287,33 @@ def register(app: FastAPI, auth: Any, mutate: Callable[..., Any], store: Any) ->
         from . import rule_links as _rule_links
 
         links: Any = _rule_links
+        agent = links.is_agent(store, who)
 
-        # An agent's ask meets the org rules first (backend/rule_links.py), its one event in the ask's write; only an
-        # ask that would file a task is checked. Log-only.
         def filing_now(c: Any) -> bool:
             return would_file(c, who)
 
-        filing = links.would_write(store, who, request, filing_now)
-        found = (
-            links.check(store, request.app.state.judge, who, "release", "release", body.note or "") if filing else None
+        for _ in range(2):
+            # An agent's ask meets the org rules first (backend/rule_links.py), its one event in the ask's write; only
+            # an ask that would file a task is checked. Log-only.
+            filing = agent and links.would_write(store, who, request, filing_now)
+            found = (
+                links.check(store, request.app.state.judge, who, "release", "release", body.note or "")
+                if filing
+                else None
+            )
+
+            def write(c: Any, filing: bool = filing, found: Any = found) -> dict[str, Any]:
+                if agent and not filing and would_file(c, who):
+                    raise _Recheck  # the open Release task went since it was read: check again, outside this write
+                out = request_now(c, who.actor, body.note or "", auth.task_sql(c, who))
+                if out["sent"]:
+                    links.record(c, found)
+                return out
+
+            try:
+                return mutate(request, body, write)
+            except _Recheck:
+                continue
+        raise Problem(
+            "release_changed", "The Release task changed while this was asked. Ask again.", 409, retryable=True
         )
-
-        def write(c: Any) -> dict[str, Any]:
-            out = request_now(c, who.actor, body.note or "", auth.task_sql(c, who))
-            if out["sent"]:
-                links.record(c, found)
-            return out
-
-        return mutate(request, body, write)

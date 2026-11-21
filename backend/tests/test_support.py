@@ -1267,3 +1267,32 @@ def test_an_agents_report_is_logged_once_on_the_support_link_at_its_first_delive
     assert send(api, bot, approval["id"]).status_code == 200
     assert send(api, bot, approval["id"]).json()["again"]
     assert logged() == [("bot:assistant", "rules.passed")] * 2 and len(hq.seen) == 2
+
+
+def test_a_report_retried_after_a_lost_answer_is_checked_once_and_logged_only_for_a_real_first_delivery(
+    environment, hq, monkeypatch
+):  # noqa: F811
+    """HQ kept the ticket but its answer was lost; the retry gets HQ's 200 for the same ticket. The retry reuses the
+    first check of its delivery key, and no outcome is logged: HQ's 200 is not a first delivery."""
+    from backend import rule_links
+
+    api = environment()
+    bot = as_bot(api)
+    checks, real_check, real_ask = [], rule_links.check, support._ask_hq
+    monkeypatch.setattr(rule_links, "check", lambda *a, **kw: checks.append(1) or real_check(*a, **kw))
+    lost = [True]
+
+    def flaky(method, path, **kw):
+        answer = real_ask(method, path, **kw)
+        if method == "POST" and path == "/v1/support":
+            if lost.pop() if lost else False:
+                raise support.Problem("support_unreachable", "Could not reach Tico support.", 502, retryable=True)
+            return httpx.Response(200, json=answer.json())  # HQ's answer to a retry: the same ticket
+        return answer
+
+    monkeypatch.setattr(support, "_ask_hq", flaky)
+    assert draft(api, bot).status_code == 502
+    assert draft(api, bot).json()["sent"] is True
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM events WHERE target='link:support'").fetchone()[0] == 0
+    assert len(checks) == 1
