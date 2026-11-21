@@ -713,8 +713,43 @@ def test_hubspots_documented_reads_are_no_writes_and_a_neighbouring_write_still_
         with api.app.state.store.read() as c:
             return c.execute("SELECT count(*) FROM events WHERE action LIKE 'rules.%'").fetchone()[0]
 
-    for path in ("crm/v3/objects/contacts/search", "crm/objects/2026-03/deals/search", "crm/v3/lists/search"):
+    reads = (
+        "crm/v3/objects/contacts/search",
+        "crm/objects/2026-03/deals/search",
+        "crm/v3/lists/search",
+        "crm/lists/2026-03/search",
+    )
+    for path in reads:
         assert call(api, "POST", path, token, tid="hubspot", json={}).status_code == 200
     assert gated() == 0
     assert call(api, "POST", "crm/v3/objects/contacts/batch/create", token, tid="hubspot", json={}).status_code == 200
-    assert gated() == 1
+    assert call(api, "POST", "crm/lists/2026-03", token, tid="hubspot", json={}).status_code == 200  # makes a list
+    assert gated() == 2
+
+
+def test_the_write_key_policy_comes_first_by_service_or_known_host_and_its_exceptions_beat_the_stored_delivery(api):
+    """One decision (credentials.held_at_read): a tool is an ads, payments or CRM tool by its service or its API's
+    known host, never its name; that policy comes before the id heuristic and before the tool's own delivery, so a
+    Meta tool named Campaigns gets a proxy token, a HubSpot token under an id-like variable is never handed as a
+    setting, and Google Ads keeps its key even marked proxied: Not covered, and listed as direct."""
+    from backend import proxy_keys
+
+    setup(api)
+    tool(api, "campaigns", "Campaigns", "bearer", delivery="computer", base="https://graph.facebook.com", service="")
+    tool(api, "hubspot", "HubSpot", "bearer", delivery="computer", base="https://api.hubapi.com", service="hubspot")
+    tool(api, "ads", "Ads", "bearer", delivery="proxy", base="https://googleads.googleapis.com", service="google-ads")
+    give(api, key(api, "campaigns", "meta-synthetic-token-0004", env="CAMPAIGNS_TOKEN"), "bot:ops")
+    hubspot = "1a2b3c4d-1a2b-3c4d-5e6f-1a2b3c4d5e6f"  # a private app token's id-like shape (made up)
+    give(api, key(api, "hubspot", hubspot, env="HUBSPOT_ACCOUNT_ID"), "bot:ops")  # an id-like name on a write key
+    give(api, key(api, "ads", "ads-synthetic-0005", env="GOOGLE_ADS_KEY"), "bot:ops")
+    _, ops = run(api)
+    assert handed(api, ops, "CAMPAIGNS_TOKEN")["value"].startswith("tpx1.")
+    assert handed(api, ops, "HUBSPOT_ACCOUNT_ID")["value"].startswith("tpx1.")
+    assert handed(api, ops, "GOOGLE_ADS_KEY")["value"] == "ads-synthetic-0005"
+    links = {r["id"]: r for r in get(api, "rule-links")["links"]}
+    assert links["tool:campaigns"]["mode"] == "informed" and links["tool:ads"]["mode"] == "not_covered"
+    with api.app.state.store.read() as c:
+        listed = proxy_keys.report(c)
+    assert [d["tool"] for d in listed["direct"]] == ["ads"]
+    assert sorted(d["tool"] for d in listed["proxied"]) == ["campaigns", "hubspot"]
+    assert hubspot not in json.dumps(listed)

@@ -1087,16 +1087,9 @@ class Vault:
             # A key whose tool is reached through the proxy stays here: a run has a proxy token for it, and an agent
             # (a bot, or the Assistant or BotOps with a person's rights, confirmed or not) never sees the value; only
             # a person signed in themselves does.
-            from . import api_tools
-
             tool = c.execute('SELECT * FROM tools WHERE id=?', (found['tool_id'],)).fetchone()
             proxied = {tool['id']: tool} if tool is not None and tool['delivery'] == 'proxy' else {}
-            stays = tool is not None and (
-                tool['delivery'] == 'proxy'
-                or (found['access_level'] == 'read_write' and api_tools.writes_by_proxy(tool))
-                or (who.role == 'bot' and held_at_read(c, proxied, found, who.actor, self.cipher)[0] is not None)
-            )
-            if stays:
+            if held_at_read(c, proxied, found, who.actor, self.cipher)[0] is not None:
                 raise Problem(
                     'proxied_key', 'This key stays with Tico: the run reaches its tool through the proxy', 403
                 )
@@ -1178,22 +1171,32 @@ def same_value(c, cipher, env, value):
 
 
 def held_at_read(c, proxied, row, subject, cipher=None):
-    """(tool row or None, way) for a held key: the tool when the run gets a proxy token for it, either because the
-    tool is proxied or because `subject` holds this Read and write key at Read only and the proxy can hold it to
-    reads (backend/api_tools.py `computer_way`). way `skip`: a read key of the same tool goes instead. An id stored
-    as a key (`tool_settings.is_setting`: its name and its value both say id, POSTHOG_PROJECT_ID, TWILIO_ACCOUNT_SID)
-    goes as its value, never as a proxy token: a bot sends it as it is, in a path or as a username."""
-    if cipher is not None and _is_id(c, cipher, row):
-        return None, 'key'
-    tool = proxied.get(row['tool_id'])
-    if tool is not None:
-        return tool, 'proxy'
+    """The one decision on how a held key reaches a run, which the runtime, a reveal, Rules › Links and the report all
+    follow: (tool row or None, way), the tool when the run gets a proxy token for it. In order:
+    - the write-key policy of an ads, payments or CRM tool (backend/api_tools.py `proxy_policy`), ahead of anything
+      else, the tool's own delivery included: `direct` (Google Ads, or no address the proxy can call) goes as it is;
+      `proxy` takes a Read and write key through the proxy;
+    - an id stored as a key (`tool_settings.is_setting`: its name and its value both say id, POSTHOG_PROJECT_ID,
+      TWILIO_ACCOUNT_SID) goes as its value: a bot sends it as it is, in a path or as a username;
+    - a proxied tool's key: a proxy token;
+    - else `computer_way`: as it is, or a proxy token when `subject` holds a Read and write key at Read only and the
+      proxy can hold it to reads; way `skip`: a read key of the same tool goes instead."""
     from . import api_tools
 
-    way = api_tools.computer_way(c, row, subject)
-    if way == 'proxy':
-        return c.execute('SELECT * FROM tools WHERE id=?', (row['tool_id'],)).fetchone(), way
-    return None, way
+    tool = proxied.get(row['tool_id']) if row['tool_id'] else None
+    if tool is None and row['tool_id']:
+        tool = c.execute('SELECT * FROM tools WHERE id=?', (row['tool_id'],)).fetchone()
+    policy = api_tools.proxy_policy(tool) if tool is not None else None
+    if policy == 'direct':
+        return None, 'key'
+    if policy == 'proxy' and row['access_level'] == 'read_write':
+        return tool, 'proxy'
+    if cipher is not None and _is_id(c, cipher, row):
+        return None, 'key'
+    if row['tool_id'] in proxied:
+        return tool, 'proxy'
+    way = api_tools.computer_way(c, row, subject, tool)
+    return (tool, way) if way == 'proxy' else (None, way)
 
 
 def _is_id(c, cipher, row):

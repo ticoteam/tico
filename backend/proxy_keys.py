@@ -6,7 +6,7 @@
 Read only (backend.migrations.read_only: no byte of the file, its log or its index changes): it prints, as JSON, for
 the person who rotates the keys at each vendor:
 - `proxied`: each bot's effective grant of a Read and write key on such a tool, which now reaches its runs only through
-  the proxy (api_tools.writes_by_proxy): a run before this may have had the key itself, so it is one to rotate;
+  the proxy (api_tools.proxy_policy): a run before this may have had the key itself, so it is one to rotate;
 - `direct`: each bot's effective grant of such a key that still reaches runs as it is (Google Ads, or a tool the proxy
   cannot call): Not covered on Rules › Links;
 - `computers`: each computer whose runner predates proxy tokens (PROXY_RELEASE) or reports no release.
@@ -38,11 +38,10 @@ def report(c: Any) -> dict[str, Any]:
     """{proxied, direct, computers}, as the module's text says."""
     out: dict[str, list[dict[str, Any]]] = {"proxied": [], "direct": []}
     for tool in c.execute("SELECT * FROM tools WHERE kind='api' ORDER BY lower(name), id").fetchall():
-        host = tool["base_url"] or api_tools._field(tool, "mcp_url") or ""
-        category = TS.gated(tool["service"], tool["name"], host)
+        category = TS.gated(tool["service"], tool["base_url"] or api_tools._field(tool, "mcp_url") or "")
         if not category:
             continue
-        way = "proxied" if tool["delivery"] == "proxy" or api_tools.writes_by_proxy(tool) else "direct"
+        way = "proxied" if api_tools.proxy_policy(tool) == "proxy" else "direct"  # the one decision's policy
         for row in c.execute(
             "SELECT k.*, g.subject, g.created_at AS granted_at FROM credentials k JOIN credential_grants g "
             "ON g.credential_id=k.id WHERE k.tool_id=? AND k.access_level='read_write' AND k.ciphertext IS NOT NULL "

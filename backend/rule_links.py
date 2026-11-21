@@ -29,8 +29,8 @@ Events never carry the text. A proxied write is judged with or without an Idempo
 within KEY_DAYS logs no second event.
 
 Not covered: a tool whose key goes to computers (but an ads, payments or CRM tool's write keys, which reach runs only
-through the proxy: api_tools.writes_by_proxy), a website tool's browser sign-in, and any call a computer makes
-straight out. Rules › Links lists them, unmeasured.
+through the proxy: api_tools.proxy_policy), a website tool's browser sign-in, and any call a computer makes straight
+out. Rules › Links lists them, unmeasured.
 """
 
 import hashlib
@@ -356,13 +356,16 @@ def listing(c: Any, who: Any, admins: Any, auth: Any, now: str | None = None) ->
 
 
 def _proxied(tool: Any) -> bool:
-    """A tool whose writes go through the proxy: a proxied tool, or one whose keys go to computers but whose write
-    keys reach runs only through the proxy (ads, payments, CRM: api_tools.writes_by_proxy). Any other tool, Google Ads
-    and a tool with no address the proxy can call among them, is Not covered: its write key reaches runs as it is."""
+    """A tool whose writes go through the proxy, by the one decision (credentials.held_at_read): an ads, payments or CRM
+    tool by its write-key policy (api_tools.proxy_policy: Google Ads and one the proxy cannot call are Not covered,
+    whatever their delivery), any other by its own delivery."""
     from . import api_tools as _api_tools
 
     api_tools: Any = _api_tools
-    return tool["kind"] == "api" and (tool["delivery"] == "proxy" or bool(api_tools.writes_by_proxy(tool)))
+    if tool["kind"] != "api":
+        return False
+    policy = api_tools.proxy_policy(tool)
+    return policy == "proxy" or (policy is None and tool["delivery"] == "proxy")
 
 
 def install(app: FastAPI, store: Any, auth: Any) -> None:

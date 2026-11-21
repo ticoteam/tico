@@ -191,22 +191,19 @@ def _templated(c, tool_id):
     return row is not None and bool(_field(row, "auth_template"))
 
 
-def computer_way(c, row, subject):
+def computer_way(c, row, subject, tool=None):
     """How one key of a tool whose keys go to computers reaches `subject`'s run:
     - `key`: as it is;
     - `skip`: held at Read, and a read key of the same tool goes instead (the read key is preferred);
     - `proxy`: held at Read with only a Read and write key: the run gets a proxy token, and the proxy lets only reads
       through (backend/tool_proxy.py);
     - `unenforced`: as `key`, because nothing can hold it to reads: the tool has no API address the proxy can call.
-    A key on no tool, or held at Read and write, is `key`, except a write key of an ads, payments or CRM tool
-    (`writes_by_proxy`): `proxy`, and the proxy lets its writes through, seen by the Rules gate."""
+    A key on no tool, or held at Read and write, is `key` (credentials.held_at_read puts the write-key policy of ads,
+    payments and CRM tools, `proxy_policy`, ahead of this). `tool`: its row, when the caller has it."""
     if not row["tool_id"] or row["access_level"] == "read":
         return "key"
     held = _held(c, row["tool_id"], subject_of(c, subject))
     mine = [level for key, level in held if key["id"] == row["id"]]
-    tool = c.execute("SELECT * FROM tools WHERE id=?", (row["tool_id"],)).fetchone() if mine else None
-    if mine and mine[0] == "read_write" and tool is not None and writes_by_proxy(tool):
-        return "proxy"
     if not mine or mine[0] != "read":
         return "key"
     # A template's keys are each a variable of their own: only a read key of the same variable goes instead.
@@ -216,6 +213,7 @@ def computer_way(c, row, subject):
         for key, _level in held
     ):
         return "skip"
+    tool = tool if tool is not None else c.execute("SELECT * FROM tools WHERE id=?", (row["tool_id"],)).fetchone()
     from .tool_proxy import address_problem
 
     if tool is not None and not address_problem(tool["base_url"] or "", tool["name"] or tool["id"]):
@@ -223,20 +221,21 @@ def computer_way(c, row, subject):
     return "unenforced"
 
 
-def writes_by_proxy(tool):
-    """Whether a tool's write keys reach runs only through the proxy, where the Rules gate sees their writes, whatever
-    delivery its keys have: an ads, payments or CRM tool (tool_services.GATED) the proxy can call, but Google Ads, whose
-    calls are signed on the computer (tool_services.DIRECT). Such a key is never revealed to a run either; rotating one
-    a run had before is a person's, at the vendor (`python -m backend.proxy_keys` lists them)."""
+def proxy_policy(tool):
+    """The write-key policy of an ads, payments or CRM tool (tool_services.GATED, by its service or its API's known
+    host), ahead of the tool's own delivery: `direct` for Google Ads, whose calls are signed on the computer
+    (tool_services.DIRECT), and for one the proxy cannot call, its write keys reaching runs as they are (Not covered);
+    `proxy` for the rest, a write key reaching runs only through the proxy, where the Rules gate sees its writes, and
+    never revealed to an agent. None for any other tool: its own delivery decides. Rotating a key a run had before is
+    a person's, at the vendor (`python -m backend.proxy_keys` lists them)."""
     from .tool_proxy import address_problem
 
-    host = tool["base_url"] or _field(tool, "mcp_url") or ""
-    vendor = TS.gated_vendor(tool["service"], tool["name"], host)
-    return (
-        bool(vendor)
-        and vendor not in TS.DIRECT
-        and not address_problem(tool["base_url"] or "", tool["name"] or tool["id"])
-    )
+    vendor = TS.gated_vendor(tool["service"], tool["base_url"] or _field(tool, "mcp_url") or "")
+    if not vendor:
+        return None
+    if vendor in TS.DIRECT or address_problem(tool["base_url"] or "", tool["name"] or tool["id"]):
+        return "direct"
+    return "proxy"
 
 
 def subject_level(c, tool_id, subject):

@@ -254,9 +254,9 @@ TEMPLATES = {
 
 
 # Ads, payments and CRM (plan P3/W4): a write key of one of these reaches a run only through the proxy, where the
-# Rules gate (backend/rule_links.py) sees its writes (api_tools.writes_by_proxy). With each, the POSTs its API answers
+# Rules gate (backend/rule_links.py) sees its writes (api_tools.proxy_policy). With each, the POSTs its API answers
 # as a read (a search, a query), which are no write: any other call but GET, HEAD and OPTIONS is one. A tool is one of
-# these by its service, its name, or its API's host (a "Billing" tool at api.stripe.com is Stripe's).
+# these by its service or its API's known host (a "Billing" tool at api.stripe.com is Stripe's), never by its name.
 GATED = {
     "meta-ads": ("ads", ()),
     "google-ads": ("ads", (r"/v\d+/customers/[^/]+/googleAds:search(Stream)?",)),
@@ -265,7 +265,13 @@ GATED = {
     "mercury": ("payments", ()),
     "close-crm": ("crm", (r"/api/v1/data/search/?",)),
     # v3 and the date-versioned CRM (/crm/objects/2026-03/...): object search and batch read; list search
-    "hubspot": ("crm", (r"/crm/(v3/objects|objects/\d{4}-\d{2})/[^/]+/(search|batch/read)", r"/crm/v3/lists/search")),
+    "hubspot": (
+        "crm",
+        (
+            r"/crm/(v3/objects|objects/\d{4}-\d{2})/[^/]+/(search|batch/read)",
+            r"/crm/(v3/lists|lists/\d{4}-\d{2})/search",
+        ),
+    ),
     "pipedrive": ("crm", ()),
     "attio": ("crm", (r"/v2/(objects/[^/]+/records|lists/[^/]+/entries)/query",)),
 }
@@ -276,28 +282,26 @@ GATED = {
 DIRECT = frozenset({"google-ads"})
 
 
-def gated_vendor(service="", name="", host=""):
-    """The GATED vendor of a tool, else "": its service as stored, as matched, as its vendor (`close` is Close CRM's),
-    or its API's host's (api.stripe.com is Stripe's)."""
-    for found in (
-        str(service or "").strip().lower(),
-        match(service=service, name=name),
-        vendor_of(service, name),
-        service_for_host(host) if host else "",
-    ):
+def gated_vendor(service="", host=""):
+    """The GATED vendor of a tool, else "": its service (as stored, or its alias: `close` is Close CRM's), else the
+    known service whose API is at its host's domain (graph.facebook.com is Meta Ads'). Never its display name."""
+    service = str(service or "").strip().lower()
+    for found in (service, match(service=service), vendor_of(service) if service else ""):
         if found in GATED:
             return found
-    return ""
+    domain = _domain(host) if host else ""
+    found = next((key for key, row in SERVICES.items() if row["base_url"] and _domain(row["base_url"]) == domain), "")
+    return found if found in GATED else ""
 
 
-def gated(service="", name="", host=""):
+def gated(service="", host=""):
     """`ads`, `payments` or `crm` for a tool of one of those vendors, else ""."""
-    return GATED.get(gated_vendor(service, name, host), ("", ()))[0]
+    return GATED.get(gated_vendor(service, host), ("", ()))[0]
 
 
-def vendor_read(service, method, path, name="", host=""):
+def vendor_read(service, method, path, host=""):
     """A POST the vendor's API answers as a read (GATED), at exactly this URL path (the whole path): not a write."""
-    reads = GATED.get(gated_vendor(service, name, host), ("", ()))[1]
+    reads = GATED.get(gated_vendor(service, host), ("", ()))[1]
     return method == "POST" and any(re.fullmatch(pattern, path) for pattern in reads)
 
 
