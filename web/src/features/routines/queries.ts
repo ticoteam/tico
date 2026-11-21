@@ -487,9 +487,9 @@ export const MAKE_LABEL = 'make-rule';
     labelled for its clerk skill, private to the one who asks and the owner, naming the constitution to read. `tico rules
     make` files the same (clients/commands/rules.py make_task). */
 export async function makeRule(text: string): Promise<{ task_id: string }> {
-  const owner = (await queryClient.fetchQuery(pageOwnersQuery)).rules?.bot;
+  const owner = (await queryClient.ensureQueryData(pageOwnersQuery)).rules?.bot;
   if (!owner) throw Object.assign(new Error('The Rules page has no owner to draft it'), { code: 'counsel_off: The Rules page has no owner to draft it' });
-  const law = await queryClient.fetchQuery(constitutionQuery);
+  const law = await queryClient.ensureQueryData(constitutionQuery);
   const read = law ? ` The constitution is doc ${law.id}: read it with \`tico doc read ${law.id}\`.` : '';
   const body = {
     title: `Make this a rule: ${text.split(/\s+/).join(' ').slice(0, 150)}`,
