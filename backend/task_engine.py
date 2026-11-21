@@ -562,11 +562,15 @@ def _write(conn: "sqlite3.Connection", task_id: str, **fields: Any) -> None:
         if me not in (current.get("owner_id"), current.get("assignee_id")) and _h().task_private(conn, current):
             _h().refuse_shared_assistant(conn, _h().TICO_ACTOR, me, task=task_id)
     sets = ", ".join(f"{name}=?" for name in names)
+    from . import paid_renders
+
+    before = paid_renders.holder(conn, task_id)  # who its paid shots to reconcile wait on, if any
     conn.execute("INSERT OR REPLACE INTO task_move_guards (id, open, task_id) VALUES (1, 1, ?)", (task_id,))
     try:
         conn.execute(f"UPDATE tasks SET {sets} WHERE id=?", (*[fields[n] for n in names], task_id))
     finally:
         conn.execute("UPDATE task_move_guards SET open=0, task_id=NULL WHERE id=1")
+    paid_renders.holder_moved(conn, task_id, before)
 
 
 def _open_visit(conn: "sqlite3.Connection", task_id: str, stage_id: str, how: str, ts: str) -> str:

@@ -320,11 +320,7 @@ def brief(c, rows, visible_sql="1", viewer=None):
     }
     blocked_by, blocks = _dependencies(c, ids, visible_sql)
     # A page several people approve is each approver's turn: `viewer` sees it as theirs (waiting_on.head_for).
-    # A card's paid shots to reconcile are its person's turn as shown (waiting_on.with_shots), never the engine's.
-    from . import paid_renders
-
-    cards = paid_renders.cards(c)
-    heads = {tid: W.head_for(W.with_shots(c, tid, found, cards), viewer) for tid, found in waits.items()}
+    heads = {tid: W.head_for(found, viewer) for tid, found in waits.items()}
     named = sorted({head.about for head in heads.values() if head and head.about})
     shown = (
         {
@@ -338,16 +334,19 @@ def brief(c, rows, visible_sql="1", viewer=None):
         else set()
     )
     turns = {tid: W.view(head, shown.__contains__) if head else None for tid, head in heads.items()}
-    for turn in turns.values():
-        if turn:
-            turn.pop("shots", None)  # a row says only "Reconcile N shots"; the keys and names are the task's own read
     # Waits only on a person's OK or answer: it holds no slot in a stage with a limit (waiting_on.on_person_many).
     person = W.on_person_many(c, waits)
     running = live_runs(c, {tid: t["who"] for tid, t in turns.items() if t and t["state"] == "bot" and t["who"]})
     seen: dict[str, str | None] = {}
     turn_bots = {str(H.actor_id(h.who)) for h in heads.values() if h and h.state == W.BOT and h.who}
     machines = cloud_machines.states(c, turn_bots) if turn_bots else {}
+    from . import paid_renders
+
+    cards = paid_renders.cards(c)  # paid shots to reconcile: a card's own line, apart from its turn and status
     for row in rows:
+        reconcile = W.reconcile_of(c, row["id"], cards)
+        if reconcile:
+            row["reconcile"] = reconcile
         turn = turns.get(row["id"])
         head = heads.get(row["id"])
         line = status_line(

@@ -117,6 +117,12 @@ class TaskRelationView(TypedDict):
     """depends_on only: when the dependency was written"""
 
 
+@answer
+class TaskReconcile(TypedDict):
+    who: str | None
+    line: str
+
+
 class TaskFields(TypedDict):
     """What every read of a task carries; Task and TaskDetailTask add stage_since, which only the task's own read
     always has. Not published: each answer names Task or TaskDetailTask."""
@@ -142,6 +148,8 @@ class TaskFields(TypedDict):
     status_line: NotRequired[Literal["starting", "up_next", "working", "needs_you", "paused"] | None]
     """The card's one status line, on every read and the live stream (task_reads.status_line): starting (its agent's computer is waking or starting the run), up_next (its agent's turn, no run yet), working (a run going now), needs_you (a person's turn: `turn.who`), paused (its agent cannot run: `turn.line` says why, `turn.href` where it is fixed); null when none applies"""
     late: TaskLate | None
+    reconcile: NotRequired[TaskReconcile]
+    """Paid shots of unknown outcome it waits on a person to reconcile, apart from its turn and status line: who and "Reconcile N shots"; only when there are any"""
     stuck: NotRequired[bool]
     """Present and true when the never-stuck ladder brought it to a person (stuck or late)"""
     lane: str

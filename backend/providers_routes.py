@@ -319,7 +319,7 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
         # one is written down before it is sent and never sent again when its outcome is unknown (backend/paid_renders.py).
         operation = request.headers.get("idempotency-key")
         shot = paid_renders.shot_of(job, body.shot)  # hashed once, outside any transaction
-        started = paid_renders.resolve(store, who, shot, operation)
+        started, pin = paid_renders.resolve(store, who, shot, operation)  # the shot picked, sent as it is
         if started:
             return started
         key, base, header = gateway_for(who)
@@ -330,6 +330,7 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
             shot,
             lambda shot: gateway_client.video_submit(base, key, job, {**header, "Idempotency-Key": shot}),
             operation,
+            pin,
         )
         if status != 202:
             if status == 404:

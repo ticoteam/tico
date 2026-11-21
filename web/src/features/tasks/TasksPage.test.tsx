@@ -119,6 +119,22 @@ it('finishes the route’s Flow read when the shell unsubscribes', async () => {
   await expect(loaded).resolves.toEqual({ count: 0, items: [], requests: [], task_ids: [], approvals: [] });
 });
 
+it('keeps the Reconcile summary on a Flow row that folds several items of one task', async () => {
+  const brief = { id: 't1', number: 3, title: 'Make the shots', pipeline_id: 'p', stage_id: 's', owner_id: 'bot:ops' };
+  const ask = { kind: 'ask', task_id: 't1', requirement_id: 'r1', line: 'OK the cut?', since: ago(60), task: brief };
+  const shots = { kind: 'ask', task_id: 't1', requirement_id: 'paid_render:t1', line: 'Reconcile 1 shot', since: ago(30), task: brief };
+  serve(() => ({ status: 200, body: { items: [ask, shots] } }));
+  const flow = await queryClient.fetchQuery(flowQuery);
+  expect(flow.items.map((i) => i.about)).toEqual(['Reconcile 1 shot · Make the shots']);
+});
+
+it('a board card shows its shots to reconcile apart from its turn and status line', async () => {
+  serve(() => ({ status: 200, body: {} }));
+  seed([task('a1', 7, 'Fix the export', 's1', { reconcile: { who: 'human:me', line: 'Reconcile 2 shots' } })]);
+  show(<TasksPage pipeline="eng" search={{}} />, '/tasks/eng');
+  expect(within(await screen.findByTitle('Fix the export')).getByText('Reconcile 2 shots')).toBeTruthy();
+});
+
 it('keeps Flow cached when returning to Tasks, where the live needs topic stays followed', async () => {
   seed([]);
   show(<FlowPage />, '/flow');

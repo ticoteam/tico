@@ -1064,6 +1064,18 @@ def all_met(waits: list[Wait]) -> bool:
     return bool(waits) and all(wait.state == ROOM for wait in waits)
 
 
+def reconcile_of(conn: "sqlite3.Connection", task_id: str, cards: Mapping[str, list[Row]]) -> Row | None:
+    """A card row's paid shots to reconcile, apart from its turn and status line: {who, line} ("Reconcile N shots", the
+    person it waits on), done and closed cards too; None with none. `cards` is paid_renders.cards."""
+    shots = cards.get(str(task_id))
+    row = E.task(conn, str(task_id)) if shots else None
+    if not shots or not row:
+        return None
+    from . import paid_renders
+
+    return {"who": person_for(conn, row), "line": paid_renders.line(shots)}
+
+
 def with_shots(
     conn: "sqlite3.Connection", task_id: str, waits: Sequence[Wait], cards: Mapping[str, list[Row]] | None = None
 ) -> list[Wait]:

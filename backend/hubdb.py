@@ -5423,9 +5423,13 @@ def task_update(
         args["id"] = task_id
         args["updated_at"] = ts
         sets = [one for one in dict.fromkeys(sets) if one != "updated_at=:updated_at"]
+        from . import paid_renders
+
+        before = paid_renders.holder(conn, task_id)  # who its paid shots to reconcile wait on, if any
         conn.execute(
             f"UPDATE tasks SET {', '.join([*sets, 'updated_at=:updated_at', 'version=version+1'])} WHERE id=:id", args
         )
+        paid_renders.holder_moved(conn, task_id, before)
         if args.get("private"):
             # Made private: a reconnect card's person may not read it now (backend/reconnects.py).
             from .reconnects import access_changed as reconnects_access_changed

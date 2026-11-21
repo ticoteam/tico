@@ -121,10 +121,13 @@ def _hash(*parts: str) -> str:
     return hashlib.sha256("\n".join(parts).encode()).hexdigest()[:32]
 
 
-def _shot(c: Any, who: Any, shot: Shot, operation: str | None) -> tuple[str, Row, tuple[str, Row] | None]:
+Pin = tuple[str, Row, "tuple[str, Row] | None"]  # (key, said, alias): the shot `resolve` picked, which `begin` sends
+
+
+def _shot(c: Any, who: Any, shot: Shot, operation: str | None, pin: Pin | None = None) -> Pin:
     """The shot key, what a send writes with it ({task, visit, input, shot}), and the alias a send keeps for the
     request's Idempotency-Key ((alias, detail), None when it has one already or no key). A key kept before names the
-    shot it was sent as."""
+    shot it was sent as; else `pin`, the shot `resolve` picked, so a card that moved since never makes another key."""
     task_id, visit = _turn(c, who)
     said: Row = {"task": task_id, "visit": visit, "input": shot.digest, "shot": shot.name}
     alias = "op_" + _hash(who.actor, operation) if operation else ""
@@ -141,6 +144,8 @@ def _shot(c: Any, who: Any, shot: Shot, operation: str | None) -> tuple[str, Row
             **{k: known[f] for k, f in (("task", "task"), ("visit", "visit"), ("shot", "name")) if f in known},
         }
         return str(known["key"]), said, None
+    if pin is not None:
+        return pin
     if not shot.named and not visit:
         if not operation:
             raise Problem("validation", "Send an Idempotency-Key, or name the shot", 422)
@@ -235,29 +240,37 @@ def _keep(c: Any, who: Any, alias: tuple[str, Row] | None, found: str, detail: R
 _BOUND = (("task", "task"), ("visit", "visit"), ("name", "shot"))
 
 
-def resolve(store: Any, who: Any, shot: Shot, operation: str | None = None) -> Row | None:
-    """Before any check: the job of a shot that started, or None for one that may be sent; raises for a shot in flight,
-    unknown or reconciled. A read for a new shot, which `begin` writes down: it writes only for a shot sent before, to
-    mark it unknown when it was stranded and keep the request's key as its alias."""
+def resolve(store: Any, who: Any, shot: Shot, operation: str | None = None) -> tuple[Row | None, Pin]:
+    """Before any check: (the job of a shot that started, or None for one that may be sent; the shot it picked, which
+    `send` then sends as it is); raises for a shot in flight, unknown or reconciled. A read for a new shot, which
+    `begin` writes down: it writes only for a shot sent before, to mark it unknown when it was stranded and keep the
+    request's key as its alias."""
     with store.read() as c:
-        key, said, alias = _shot(c, who, shot, operation)
-        found, _, state = _answer(c, who, key, said, write=False)
-        write = state is not None and (alias is not None or _stranded(found, _latest(c, found)[0]))
+        pin = _shot(c, who, shot, operation)
+        found, _, state = _answer(c, who, pin[0], pin[1], write=False)
+        write = state is not None and (pin[2] is not None or _stranded(found, _latest(c, found)[0]))
     if write:
         with store.transaction() as c:
-            key, said, alias = _shot(c, who, shot, operation)
+            key, said, alias = _shot(c, who, shot, operation, pin)
             found, detail, state = _answer(c, who, key, said, write=True)
             if state is not None:
                 _keep(c, who, alias, found, detail)
     if isinstance(state, Problem):
         raise state
-    return state
+    return state, pin
 
 
-def send(store: Any, who: Any, shot: Shot, submit: Callable[[str], Answer], operation: str | None = None) -> Answer:
+def send(
+    store: Any,
+    who: Any,
+    shot: Shot,
+    submit: Callable[[str], Answer],
+    operation: str | None = None,
+    pin: Pin | None = None,
+) -> Answer:
     """Send a paid render once: `submit(key)` makes the call, with the shot key as its Idempotency-Key, and answers
     (status, answer, code). The same shot started already answers its job with no call; a call that raises is unknown."""
-    key, started = begin(store, who, shot, operation)
+    key, started = begin(store, who, shot, operation, pin)
     if started:
         return 202, started, ""
     status, answer, code = 0, {}, "unreachable"  # a call that raises: unknown
@@ -268,14 +281,16 @@ def send(store: Any, who: Any, shot: Shot, submit: Callable[[str], Answer], oper
     return status, answer, code
 
 
-def begin(store: Any, who: Any, shot: Shot, operation: str | None = None) -> tuple[str, Row | None]:
+def begin(
+    store: Any, who: Any, shot: Shot, operation: str | None = None, pin: Pin | None = None
+) -> tuple[str, Row | None]:
     """Write the shot down before it is sent, its request's alias with it. Answers (key, None) to send it now (it is in
     flight until `end`), or (key, the started job); raises for a shot in flight (429), unknown (409 `reconcile_shot`) or
     reconciled (409 `shot_reconciled`)."""
     key, sending = "", False
     try:
         with store.transaction(durable=True) as c:
-            key, said, alias = _shot(c, who, shot, operation)
+            key, said, alias = _shot(c, who, shot, operation, pin)
             found, detail, state = _answer(c, who, key, said, write=True)
             if state is None:
                 with _LOCK:
@@ -392,6 +407,29 @@ def reconcile(c: Any, actor: str, task_id: str, keys: Iterable[str]) -> list[Row
     if shots:
         _moved(c, task_id)
     return shots
+
+
+def holder(c: Any, task_id: str) -> str | None:
+    """The person a card's shots to reconcile wait on now (waiting_on.person_for), or None when it has none."""
+    if not unsettled(c, task_id):
+        return None
+    from . import task_engine, waiting_on
+
+    row = task_engine.task(c, task_id)
+    return waiting_on.person_for(c, row) if row else None
+
+
+def holder_moved(c: Any, task_id: str, before: str | None) -> None:
+    """After a write to the card that may move who it waits on (its owner, Human or stage): when the person its shots
+    wait on changed from `before` (`holder`, read before the write), both their Needs you are sent again."""
+    if before is None:
+        return
+    after = holder(c, task_id)
+    if after != before:
+        from . import events as _events
+
+        events: Any = _events
+        events.needs_moved(c, [before, after or ""], "ask")
 
 
 def _moved(c: Any, task_id: str) -> None:
