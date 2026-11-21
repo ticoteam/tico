@@ -388,6 +388,14 @@ fn parts(
             format!(" End each memory/ or knowledge/ commit message of this turn with the line `Tico-Run: {run}`.")
         };
         lines.push((Part::Turn, format!("This turn's run is {run}; its conversation is {conv_id} (`tico conversation show {conv_id}`).{kept}")));
+        // The card and the person's snapshot, read as the run starts (backend/run_header.py). It changes from turn to
+        // turn, so it is this turn's own part: the standing part a resumed session already holds stays byte-identical.
+        if let Some(header) = attempt["run_header"]
+            .as_str()
+            .filter(|h| !h.trim().is_empty())
+        {
+            lines.push((Part::Turn, header.to_string()));
+        }
     }
     if make_page {
         lines = [
@@ -1356,6 +1364,55 @@ mod tests {
             "{r}"
         );
         assert!(r.find("an AI teammate at") < r.find("\"relations\""), "{r}");
+    }
+
+    #[test]
+    fn the_run_header_is_this_turns_own_and_a_resumed_thread_keeps_its_cached_prefix() {
+        let names = Names {
+            company: "Acme".into(),
+            app: "Tico".into(),
+        };
+        let (mut first, mut next) = task_turns();
+        let (was, now) = (
+            "Run header, read as this run starts (newer than anything earlier in this conversation):\nCard now: Fix the Acme release smoke test is in Build (Engineering), 3 h in this stage; version 3.\nWhose turn: Ana: OK the spec.",
+            "Run header, read as this run starts (newer than anything earlier in this conversation):\nCard now: Fix the Acme release smoke test is in Review (Engineering), 5 min in this stage; version 4.\nWhose turn: eng: Open the PR.",
+        );
+        first["run_header"] = json!(was);
+        next["run_header"] = json!(now);
+        let context = "claude opus agent-1";
+        let given = build(&first, &names, None, false, "", &Seen::default(), context);
+        let mut bare = first.clone();
+        bare.as_object_mut().unwrap().remove("run_header");
+        let without = build(&bare, &names, None, false, "", &Seen::default(), context);
+        // The header is the one difference, and everything before it is byte for byte the same.
+        assert_eq!(
+            (given.standing.as_str(), given.task.as_str()),
+            (without.standing.as_str(), without.task.as_str())
+        );
+        let at = given.text.find(was).expect("the header is in the prompt");
+        assert_eq!(given.text[..at], without.text[..at]);
+        assert_eq!(
+            given.text.replacen(&format!("{was}\n\n"), "", 1),
+            without.text
+        );
+        // It opens the turn's own part: before the room, the task and the message.
+        for after in ["Assigned task:", "Conversation history", "Current message"] {
+            assert!(
+                given.text.find(after).is_some_and(|p| p > at),
+                "{after}: {}",
+                given.text
+            );
+        }
+        // The next turn resumes on what the first left: a new header never sends the standing part or the task again.
+        let short = build(&next, &names, Some("m1"), true, "", &seen(&given), context);
+        assert_eq!(
+            (short.standing.as_str(), short.task.as_str()),
+            (given.standing.as_str(), given.task.as_str())
+        );
+        let t = &short.text;
+        assert!(t.starts_with(STANDING_SEEN), "{t}");
+        assert!(t.contains(now) && !t.contains(was), "{t}");
+        assert!(!short.restore.contains(now), "{}", short.restore);
     }
 
     #[test]
