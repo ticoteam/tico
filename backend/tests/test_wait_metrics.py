@@ -163,3 +163,22 @@ def test_an_ask_added_in_product_validate_is_left_out_by_its_visits_stage(drafts
         time_machine.shift(timedelta(hours=1))
         H._task_event(c, held, ANA, "answer", None, "ok", None, data={"requirement": asked, "answer_id": "a-held"})
     assert view(drafts, "SELECT * FROM ask_answer_weekly") == []
+
+
+def test_a_new_page_for_the_ask_asks_again_and_only_stored_oks_and_pages_count(drafts, time_machine):
+    """Ana sends a page back and OKs the replacement in the same visit: two decisions, one repeat. An ok or no on
+    something that is no stored OK or page (an old structured question's reply) is not a decision."""
+
+    def say(c, task_id, actor, kind, old, new, data):
+        time_machine.shift(timedelta(minutes=1))
+        H._task_event(c, task_id, actor, kind, old, new, None, data=data)
+
+    with drafts.transaction() as c:
+        task_id = X.new_task(c, ANA, "Write the spec", "drafts", assignee=BUILDER)["id"]
+        page = X.requirement(c, E.task(c, task_id)["stage_id"], "page", person=ANA, line="Ana OKs the spec")
+        say(c, task_id, BUILDER, "page_attached", None, "page:f1@1", {"requirement": page})
+        say(c, task_id, ANA, "answer", None, "no", {"requirement": page, "answer_id": "a1"})
+        say(c, task_id, BUILDER, "page_attached", "page:f1@1", "page:f1@2", {"requirement": page})
+        say(c, task_id, ANA, "answer", None, "ok", {"requirement": page, "answer_id": "a2"})
+        say(c, task_id, ANA, "answer", None, "ok", {"requirement": "an-old-question", "answer_id": "a3"})
+    assert view(drafts, "SELECT answers, repeats FROM repeat_ask_weekly") == [{"answers": 2, "repeats": 1}]

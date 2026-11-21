@@ -319,11 +319,21 @@ def _validate(stage: str) -> str:
     )
 
 
-# Each person's answer to an OK or a page that was not taken back: its task, requirement, person, time and row.
+# Each person's answer to a stored OK or page that was not taken back: its task, requirement, person, time and row (an
+# ok or no on anything else, such as an old structured question, is not one).
 _ANSWERS = (
     "SELECT a.subject_id AS task_id, json_extract(a.data, '$.requirement') AS requirement, a.actor_id AS person, "
-    "a.created_at, a.id FROM {history_events} a WHERE a.subject_type = 'task' AND a.kind = 'answer' "
+    "a.created_at, a.id FROM {history_events} a JOIN {all_requirements} kq "
+    "ON kq.id = json_extract(a.data, '$.requirement') AND kq.kind IN ('ok', 'page') "
+    "WHERE a.subject_type = 'task' AND a.kind = 'answer' "
     "AND a.new IN ('ok', 'no') AND a.actor_id LIKE 'human:%' AND NOT " + _UNDONE.format(row="a")
+)
+# Each recorded re-ask of one requirement, by task and requirement (DISTINCT: read once, then looked up by both): the
+# owner saying done again after a send back (`again`), or a new page replacing the one it asked about.
+_REASKS = (
+    "SELECT DISTINCT subject_id AS task_id, json_extract(data, '$.requirement') AS requirement, created_at "
+    "FROM {history_events} WHERE subject_type = 'task' AND ((kind = 'answer' AND new = 'again') "
+    "OR (kind = 'page_attached' AND old IS NOT NULL))"
 )
 
 
@@ -420,19 +430,21 @@ DERIVED = {
     # a revised OK with new notes, are one; an answer taken back is none), and the repeats: a decision on an ask asked
     # of them again after a recorded re-ask (the owner saying done again after a send back, or the task moving, which
     # makes a new visit), written before the decision. Keyed by the requirement, never by later waits: each approver of a page several people approve
-    # decides it once. A ❓ is a new ask each time, so it is not in it.
+    # decides it once. A new page replacing the one asked about asks again too. A ❓ is a new ask each time, so it is not
+    # in it.
     "repeat_ask_weekly": (
-        ("history_events",),
-        "WITH answered AS (" + _ANSWERS + "), "
-        "decisions AS (SELECT task_id, requirement, person, occurrence, min(created_at) AS at FROM ("
-        "SELECT a.*, (SELECT count(*) FROM {history_events} h WHERE h.subject_type = 'task' "
-        "AND h.subject_id = a.task_id AND (h.kind = 'move' OR (h.kind = 'answer' AND h.new = 'again' "
-        "AND json_extract(h.data, '$.requirement') = a.requirement)) AND h.created_at < a.created_at) "
-        "AS occurrence FROM answered a) GROUP BY task_id, requirement, person, occurrence) "
+        ("history_events", "requirements"),
+        # Subqueries, not WITH: the inner requirements are read only from this view itself (see ask_answer_weekly).
         "SELECT week, count(*) AS answers, sum(repeated) AS repeats, "
         "round(100.0 * sum(repeated) / count(*), 1) AS repeat_pct "
         "FROM (SELECT " + _WEEK.format(at="at") + " AS week, "
-        "occurrence > min(occurrence) OVER (PARTITION BY task_id, requirement, person) AS repeated FROM decisions) "
+        "occurrence > min(occurrence) OVER (PARTITION BY task_id, requirement, person) AS repeated FROM ("
+        "SELECT task_id, requirement, person, occurrence, min(created_at) AS at FROM ("
+        "SELECT a.task_id, a.requirement, a.person, a.created_at, count(r.created_at) + (SELECT count(*) "
+        "FROM {history_events} m WHERE m.subject_type = 'task' AND m.subject_id = a.task_id AND m.kind = 'move' "
+        "AND m.created_at < a.created_at) AS occurrence FROM (" + _ANSWERS + ") a "
+        "LEFT JOIN (" + _REASKS + ") r ON r.task_id = a.task_id AND r.requirement = a.requirement "
+        "AND r.created_at < a.created_at GROUP BY a.id) GROUP BY task_id, requirement, person, occurrence)) "
         "GROUP BY week",
     ),
     # Per week: OKs and pages added to one task and asked of a person (not in Product's Validate, by the stage of the visit
@@ -455,8 +467,8 @@ DERIVED = {
         "AND NOT " + _validate("v.stage_id") + ") s "
         "JOIN (SELECT task_id, requirement, min(created_at) AS answered FROM (" + _ANSWERS + ") "
         "GROUP BY task_id, requirement) f ON f.task_id = s.task_id AND f.requirement = s.requirement "
-        "LEFT JOIN (SELECT subject_id AS task_id, json_extract(data, '$.requirement') AS requirement, created_at "
-        "FROM {history_events} WHERE subject_type = 'task' AND kind = 'give') g "
+        "LEFT JOIN (SELECT DISTINCT subject_id AS task_id, json_extract(data, '$.requirement') AS requirement, "
+        "created_at FROM {history_events} WHERE subject_type = 'task' AND kind = 'give') g "
         "ON g.task_id = s.task_id AND g.requirement = s.requirement AND g.created_at < f.answered "
         "GROUP BY s.task_id, s.requirement))) GROUP BY week",
     ),
@@ -495,11 +507,12 @@ GRANTED = {
         GROUP BY 1, 2, 3""",
     ),
 }
-# Base tables only a saved view (DERIVED or GRANTED) reads, and the columns it may see of them. ask_answer_weekly reads
-# an ask's requirement and visit only by the id a history row the reader may read names, for the stage it was added in.
+# Base tables only a saved view (DERIVED or GRANTED) reads, and the columns it may see of them. The ask views read a
+# requirement and its visit only by the id a history row the reader may read names: its kind, and the stage it was
+# added in.
 GRANTED_SOURCES = {
     "assistant_actions": ("created_at", "proposer", "proposed_via", "status"),
-    "requirements": ("id", "visit_id"),
+    "requirements": ("id", "visit_id", "kind"),
     "visits": ("id", "stage_id"),
 }
 # FTS5 reads these as main.<virtual>_* with no view context; they are not a public API.
