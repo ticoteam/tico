@@ -264,6 +264,12 @@ time{font-size:var(--t-xs);color:var(--muted);white-space:nowrap;font-variant-nu
 .li-pick{height:var(--ctl);border:0;background:none;border-radius:var(--r-ctl);padding:0 6px 0 10px;display:inline-flex;align-items:center;gap:4px;font-weight:var(--w-title);font-size:var(--t-nav-name);
   transition:background var(--dur-fast) var(--ease)}
 .li-pick .ico{color:var(--muted)}
+/* the head as a crumb (__root ListUp): Tasks, a quiet chevron, then the picker; the picker's own padding sits after it */
+.li-up{height:var(--ctl);display:inline-flex;align-items:center;padding:0 4px 0 10px;border-radius:var(--r-ctl);color:var(--muted);font-size:var(--t-nav-name);text-decoration:none;flex:none;
+  transition:background var(--dur-fast) var(--ease),color var(--dur-fast) var(--ease)}
+.li-up:hover{background:var(--well-2);color:var(--ink)}
+.li-sep{color:var(--faint);flex:none}
+.li-up~.li-pick{padding-left:4px;min-width:0}
 .li-pick:hover{background:var(--well-2)}
 /* Flow as one icon: the Dot with a play mark. No word. Off, the count sits beside it. (The Flow mark is in dot.css.) */
 .li-play{height:var(--ctl);min-width:var(--ctl);border:0;background:none;border-radius:var(--r-ctl);padding:0 6px;display:inline-flex;align-items:center;justify-content:center;gap:6px;

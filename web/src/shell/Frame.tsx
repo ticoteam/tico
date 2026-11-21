@@ -339,6 +339,8 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
         return p.page;
     }
   };
+  // a task's list place holds the menu when there is no list (closed, or a task with no pipeline): its edge is the menu's
+  const shown = (id: SheetId): SheetId => (id === 'list' && !p.list ? 'menu' : id);
   const mark = (id: SheetId) =>
     id === 'tico' ? <Dot size={TICO_MARK} /> : id === 'menu' && p.lips?.menu ? <span className="shell-edge-lip">{p.lips.menu}</span> : <Icon name={EDGE_ICON[id]} />;
   const top = sheets.length + 1; // the handles sit over every sheet
@@ -392,15 +394,15 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
                 data-first={i === 0 || undefined}
                 data-edge={s.id}
                 data-act={act ? true : undefined}
-                aria-label={`Open ${NAME[s.id]}`}
-                title={`Open ${NAME[s.id]}`}
+                aria-label={`Open ${NAME[shown(s.id)]}`}
+                title={`Open ${NAME[shown(s.id)]}`}
                 onClick={() => {
                   onPress(s.id);
                   if (s.id === 'tico') typeToTico();
                 }}
               >
-                <span className="shell-edge-mark">{mark(s.id)}</span>
-                <span className="shell-edge-name">{EDGE_NAME[s.id]}</span>
+                <span className="shell-edge-mark">{mark(shown(s.id))}</span>
+                <span className="shell-edge-name">{EDGE_NAME[shown(s.id)]}</span>
               </button>
             ) : null}
             {act ? (
@@ -429,7 +431,7 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
               role="separator"
               tabIndex={0}
               aria-orientation="vertical"
-              aria-label={`Resize ${NAME[s.id]}`}
+              aria-label={`Resize ${NAME[shown(s.id)]}`}
               aria-valuenow={Math.round(s.width)}
               aria-valuemin={s.min}
               aria-valuemax={s.dragMax}

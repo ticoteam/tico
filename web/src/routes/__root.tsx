@@ -45,7 +45,6 @@ import {
   isTeammate,
   reportToDesktop,
   useCompanies,
-  useSheet,
   useTabTitle,
   watchCallWindow,
   type Company,
@@ -194,6 +193,14 @@ function App() {
   useNotePlaces();
   useLeaveFlowKey(isFlowPath(at.path));
   const trail = useTrailParts(at.path, who);
+  /* A task's list closed with its ×: the menu takes its place until you leave the tasks (a board, a page), so the
+     company is always one press away; the next task opened from a board has its list again. */
+  const [listShut, setListShut] = useState(false);
+  if (listShut && arrangement !== 'task') setListShut(false);
+  const closeList = () => {
+    setListShut(true);
+    foldSheet('list', false);
+  };
 
   // One stream, once the person is known and Tico's room is drawn (its follow then rides the first connection).
   const room = useQuery(ticoRoomQuery);
@@ -242,8 +249,9 @@ function App() {
     /* Beside the open task, the list it was opened from, the task chosen: inside Flow, what waits on you; under a
        pipeline, that pipeline's tasks as its board showed them. Flow is entered only on purpose. */
     if (task && top === 'flow') list = <TaskList open={decodeURIComponent(task)} />;
-    // a task with no pipeline of its own (`all`) has no list: the menu stays in its place
-    else if (task && top === 'tasks' && a && a !== 'all') list = <PipelineList pipeline={decodeURIComponent(a)} open={decodeURIComponent(task)} />;
+    // a task with no pipeline of its own (`all`), or its list closed: the menu stays in its place
+    else if (task && top === 'tasks' && a && a !== 'all' && !listShut)
+      list = <PipelineList pipeline={decodeURIComponent(a)} open={decodeURIComponent(task)} onClose={closeList} />;
     // opened from a thread (lib besideThread), that thread stays beside it (plan/layers.html); else the task's own chat
     if (!at.chat) chat = task ? (
       <Sheet kind="chat" label="The task's chat">
@@ -595,6 +603,19 @@ function useLeaveFlowKey(on: boolean) {
 
 /* ---------------------------------------------------------------- an open task's list */
 
+/* The list's head is a crumb: Tasks, then the pipeline (or Flow) with its picker at the end. Tasks goes to every
+   pipeline, with the menu back in the list's place. */
+function ListUp() {
+  return (
+    <>
+      <Link to="/tasks" className="li-up">
+        Tasks
+      </Link>
+      <Icon name="chevron" className="li-sep" />
+    </>
+  );
+}
+
 function ListFace({ id }: { id: string | null }) {
   const who = useActor(id);
   return id ? <Avatar decorative kind={who?.kind ?? (id.startsWith('bot:') ? 'agent' : 'person')} name={who?.name ?? (id.startsWith('bot:') ? 'Agent' : 'Person')} hue={who?.hue} live={who?.working} size={22} /> : null;
@@ -613,6 +634,7 @@ function TaskList({ open }: { open: string }) {
   return (
     <Sheet kind="list" label="Flow">
       <header className="li-head">
+        <ListUp />
         <DropMenu
           align="start"
           trigger={
@@ -684,8 +706,7 @@ function TaskList({ open }: { open: string }) {
 /* Beside a task opened under a pipeline, in the menu's place: that pipeline's open tasks by stage, with the filters
    its board was last shown with, the open task chosen. The pick goes to another pipeline's board, the play mark
    enters Flow, and Close folds the list to the menu's icons. */
-function PipelineList({ pipeline, open }: { pipeline: string; open: string }) {
-  const sheet = useSheet();
+function PipelineList({ pipeline, open, onClose }: { pipeline: string; open: string; onClose: () => void }) {
   const me = useQuery(meQuery).data?.id;
   const { data: flow } = useQuery(flowQuery);
   const { data: pipes } = useQuery(pipelinesQuery);
@@ -699,6 +720,7 @@ function PipelineList({ pipeline, open }: { pipeline: string; open: string }) {
   return (
     <Sheet kind="list" label={name}>
       <header className="li-head">
+        <ListUp />
         <DropMenu
           align="start"
           trigger={
@@ -717,7 +739,7 @@ function PipelineList({ pipeline, open }: { pipeline: string; open: string }) {
           <FlowMark play />
           {flow?.count ? <b>{flow.count}</b> : null}
         </Link>
-        {sheet.canFold ? <IconButton icon="close" label="Close" quiet onClick={sheet.toggleFold} /> : null}
+        <IconButton icon="close" label="Close the list" quiet onClick={onClose} />
       </header>
       <div className="nav-scroll li-body">
         {page && !stages.length ? <Empty title="No open tasks" /> : null}
