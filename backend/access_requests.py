@@ -245,9 +245,14 @@ def _level_of(c: Any, row: Any) -> Any:
     return None
 
 
+def _wanted(row: Any) -> Any:
+    """The level that settles the request: its own, or Read once a person chose Read only (its `kind` says read)."""
+    return "read" if str(row.get("kind") or "").endswith("_read") else row["level"]
+
+
 def has(c: Any, row: Any) -> Any:
     held = _level_of(c, row)
-    return held is not None and RANK[held] >= RANK[row["level"]]
+    return held is not None and RANK[held] >= RANK[_wanted(row)]
 
 
 # ---------------------------------------------------------------------------------------------------- who decides
@@ -454,6 +459,8 @@ def _give_repository(c: Any, row: Any, actor: Any, person: Any = False, only: An
     covered = name.lower() in ticked and (current["all_access"] == "write" or want == "read")
     if current["mode"] == "all" and (covered or has(c, row)) and not only:
         return
+    if only and current["mode"] == "all" and name.lower() in ticked and current["all_access"] == "read":
+        return  # All ticked repos gives it exactly Read already: the bot stays there
     # As a product repository its bot makes (github_app): from All ticked repos it moves to Chosen repos, each
     # repository All ticked repos covers kept at its level, and this one at the asked level or the one it has, if higher.
     keep, _ = R.chosen_keeping(c, current, name, org)
@@ -691,12 +698,19 @@ def _close(c: Any, row: Any, state: Any, actor: Any, via: Any) -> Any:
     at = H.now()
     if (
         c.execute(
-            "UPDATE access_requests SET state=?,resolved_by=?,resolved_via=?,resolved_at=? WHERE id=? AND state='open'",
-            (state, actor, via, at, row["id"]),
+            "UPDATE access_requests SET state=?,resolved_by=?,resolved_via=?,resolved_at=?,level=? "
+            "WHERE id=? AND state='open'",
+            (state, actor, via, at, _wanted(row) if state == "granted" else row["level"], row["id"]),
         ).rowcount
         != 1
     ):
         return False
+    if state == "granted" and _wanted(row) != row["level"]:
+        # Read only took effect: the request is recorded as granted for Read, and a task waiting on it is told so.
+        c.execute(
+            "UPDATE task_reconnects SET label=? WHERE json_extract(fix,'$.request')=? AND fixed_at IS NULL",
+            (f"{row['resource_name']} · Read only", row["id"]),
+        )
     row = _row(c, row["id"])
     _refresh_cards(c, row)
     H.event(c, actor or H.TICO_ACTOR, "access." + state, row["id"], {"kind": row["kind"], "via": via})
@@ -805,28 +819,24 @@ def grant(c: Any, who: Any, rid: Any, vault: Any, auth: Any, level: Any = None) 
     row = _open_row(c, who, rid, vault, auth)
     if row["state"] != "open":
         return view(c, row)
-    given = row | {"level": level} if level and level != row["level"] else row
+    only = bool(level) and level != row["level"]
+    if only:
+        # Read only: Read settles it from now on (`_wanted`), whenever Read takes effect; its level stays as asked
+        # until it closes, so an open request for Read on the same thing is left alone.
+        c.execute("UPDATE access_requests SET kind=? WHERE id=?", (_kind(row["resource_type"], "read"), rid))
+        row = _row(c, rid)
+    given = row | {"level": _wanted(row)}
     narrow = {"subject": row["subject"], "resource_type": row["resource_type"], "resource_id": row["resource_id"]}
     token = VIA.set("card")
     try:
-        if not has(c, given):
+        if row["resource_type"] != TOOL and only:
+            _give_repository(c, given, who.actor, person=True, only=True)  # exactly Read there, even over Write
+        elif not has(c, given):
             if row["resource_type"] == TOOL:
                 api_tools.set_level(c, who, vault, row["resource_id"], row["subject"], given["level"])
             else:
-                _give_repository(c, given, who.actor, person=True, only=given is not row)
+                _give_repository(c, given, who.actor, person=True)
         settled(c, who, **narrow)
-        if given is not row:
-            # An open request for Read on the same thing closed just above, so this one can be it now; a task waiting
-            # on it is told Read only was given.
-            c.execute(
-                "UPDATE task_reconnects SET label=? WHERE json_extract(fix,'$.request')=? AND fixed_at IS NULL",
-                (f"{row['resource_name']} · Read only", rid),
-            )
-            c.execute(
-                "UPDATE access_requests SET level=?,kind=? WHERE id=? AND state='open'",
-                (given["level"], _kind(row["resource_type"], given["level"]), rid),
-            )
-            settled(c, who, **narrow)
     finally:
         VIA.reset(token)
     return view(c, _row(c, rid))

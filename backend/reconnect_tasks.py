@@ -298,7 +298,6 @@ def _card(c: Any, task: Row, owner: str, person: str, tool: Row, key: Row) -> st
     )
     message_id = sent["id"] if sent else None
     c.execute("UPDATE credential_requests SET message_id=? WHERE id=?", (message_id, rid))
-    _module("events").needs_moved(c, [person], "key")  # the card is in their Needs you now
     waits: Row = RC.open(
         c,
         task["id"],
@@ -314,6 +313,7 @@ def _card(c: Any, task: Row, owner: str, person: str, tool: Row, key: Row) -> st
     if not waits:
         c.execute("UPDATE credential_requests SET status='canceled',updated_at=? WHERE id=?", (H.now(), rid))
         return None
+    _module("events").needs_moved(c, [person], "key")  # the card stands: it is in their Needs you now
     return rid
 
 

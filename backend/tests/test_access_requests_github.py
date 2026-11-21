@@ -164,3 +164,66 @@ def test_read_only_for_a_bot_on_all_ticked_repos_at_write_gives_that_repository_
     r = api.post(f"/api/v2/access-requests/{asked['id']}/grant", json={"level": "read"}, headers=auth())
     assert r.status_code == 200 and r.json()["state"] == "granted", r.text
     assert reach(api) == {"Acme/emp-cpo": "write", "Acme/product": "write", "Acme/docs": "read"}
+
+
+def missing(api, name, gone=True):
+    """GitHub misses `name` for a moment (a refresh marks it), or reaches it again."""
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE repositories SET reachable=? WHERE full_name=?", (0 if gone else 1, name))
+        save_metadata(c, "repositories-confirmed-missing", {name.lower(): time.time()} if gone else {})
+
+
+def read_only(api, rid):
+    r = api.post(f"/api/v2/access-requests/{rid}/grant", json={"level": "read"}, headers=auth())
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_read_only_lowers_a_repository_github_reaches_again_at_write_to_read(api, gh):
+    catalog(api, gh)
+    api.app_state.auth.owner_email = "ana@acme.example"
+    for name in ("product", "docs"):
+        put(api, "repositories/Acme/" + name, {"enabled": True})
+    put(api, "bots/cpo/repositories", {"mode": "all", "all_access": "write"})
+    missing(api, "Acme/docs")
+    asked = ask(api, "Acme/docs", "read_write")
+    assert asked["state"] == "open"
+    missing(api, "Acme/docs", gone=False)  # GitHub reaches it again, at All ticked repos' Write
+    assert read_only(api, asked["id"])["state"] == "granted"
+    assert reach(api) == {"Acme/emp-cpo": "write", "Acme/product": "write", "Acme/docs": "read"}
+
+
+def test_read_only_where_all_ticked_repos_already_gives_read_keeps_the_bot_there(api, gh):
+    catalog(api, gh)
+    api.app_state.auth.owner_email = "ana@acme.example"
+    for name in ("product", "docs"):
+        put(api, "repositories/Acme/" + name, {"enabled": True})
+    put(api, "bots/cpo/repositories", {"mode": "all", "all_access": "read"})
+    asked = ask(api, "Acme/docs", "read_write")
+    assert asked["state"] == "open"
+    assert read_only(api, asked["id"])["state"] == "granted"
+    got = api.get("/api/v2/bots/cpo/repositories", headers=auth()).json()
+    assert (got["mode"], got["all_access"]) == ("all", "read")
+
+
+def test_read_only_on_a_repository_github_misses_waits_and_closes_as_read_once_it_takes_effect(api, gh):
+    # Read and Read and write both open on a repository GitHub misses: Read only leaves the open request as it is
+    # (another open request already asks for Read) and closes it, as granted for Read, once Read is there.
+    from backend import access_requests as AR
+
+    catalog(api, gh)
+    api.app_state.auth.owner_email = "ana@acme.example"
+    for name in ("product", "docs"):
+        put(api, "repositories/Acme/" + name, {"enabled": True})
+    put(api, "bots/cpo/repositories", {"mode": "all", "all_access": "write"})
+    missing(api, "Acme/docs")
+    reading, writing = ask(api, "Acme/docs"), ask(api, "Acme/docs", "read_write")
+    assert (reading["state"], writing["state"]) == ("open", "open")
+    assert read_only(api, writing["id"])["state"] == "open"  # not there yet
+    assert row(api, writing["id"])["level"] == "read_write"
+    missing(api, "Acme/docs", gone=False)
+    with api.app_state.store.transaction() as c:
+        AR.settled(c)
+    assert (row(api, writing["id"])["state"], row(api, writing["id"])["level"]) == ("granted", "read")
+    assert row(api, reading["id"])["state"] == "granted"
+    assert reach(api)["Acme/docs"] == "read"

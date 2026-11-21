@@ -17,11 +17,12 @@ const said = (err: unknown) => (err instanceof Error && err.message) || 'Not sav
 
 /** One press: the work, its toast once taken, or the refusal in the card. Returns the promise, so the button is busy. */
 function useOnce(setError: (s: string) => void) {
-  return <T,>(work: () => Promise<T>, done: string | ((out: T) => string), name: string) => async () => {
+  return <T,>(work: () => Promise<T>, done: string | ((out: T) => string | { text: string; name: string }), name: string) => async () => {
     setError('');
     try {
       const out = await work();
-      toast({ text: typeof done === 'string' ? done : done(out), name });
+      const said = typeof done === 'string' ? done : done(out);
+      toast(typeof said === 'string' ? { text: said, name } : said);
     } catch (err) {
       setError(said(err));
     }
@@ -36,11 +37,15 @@ const taken = async (out: Promise<AccessAnswer>) => {
   return answer;
 };
 
-/** What a key proposal's Grant says happened: its state, the keys granted and any whose tool check failed. */
-export function keyDropDone(out: KeyDropAnswer): string {
-  if (out.state !== 'granted') return 'Not granted yet';
-  const failed = (out.results ?? []).filter((r) => !r.ok);
-  return failed.length ? `Granted; ${failed.map((r) => `${r.key}: ${r.detail}`).join('; ')}` : 'Granted';
+/** Rows named as the card names them: one key and its tool, or how many. */
+const keysName = (rows: readonly { key: string; tool_name: string }[]) =>
+  rows.length === 1 ? `${rows[0]?.key} for ${rows[0]?.tool_name}` : `${rows.length} keys`;
+
+/** What a key proposal's Grant says happened, from its answer: the rows granted, and how many failed their check. */
+export function keyDropDone(out: KeyDropAnswer): { text: string; name: string } {
+  if (out.state !== 'granted') return { text: 'Not granted yet', name: keysName(out.rows) };
+  const failed = (out.results ?? []).filter((r) => !r.ok).length;
+  return { text: failed ? `Granted, ${failed} not connected` : 'Granted', name: keysName(out.rows) };
 }
 
 /** What the access request's answer says happened: the server's state and level, which may be someone else's. */
@@ -120,7 +125,7 @@ function KeyDropCard({ it, d }: { it: NeedsYouItem; d: NonNullable<NeedsYouItem[
   const [error, setError] = useState('');
   const [kept, setKept] = useState<ReadonlySet<number>>(() => new Set(d.rows.map((_, i) => i)));
   const once = useOnce(setError);
-  const name = d.rows.length === 1 ? `${d.rows[0]?.key} for ${d.rows[0]?.tool_name}` : `${d.rows.length} keys`;
+  const name = keysName(d.rows);
   const flip = (i: number, on: boolean) => setKept((was) => (on ? new Set(was).add(i) : new Set([...was].filter((x) => x !== i))));
   return (
     <AskCard
@@ -144,6 +149,12 @@ function KeyDropCard({ it, d }: { it: NeedsYouItem; d: NonNullable<NeedsYouItem[
             label={
               <span>
                 <b>{r.key}</b> → {r.tool_name} · {LEVEL[r.level]} · {r.bots.map((b) => b.name).join(', ')}
+                {r.replaces && (
+                  <span className="askcard-replaces">
+                    Replaces {r.replaces.key}
+                    {r.replaces.loses.length > 0 && ` · ${r.replaces.loses.join(', ')} lose access`}
+                  </span>
+                )}
               </span>
             }
           />

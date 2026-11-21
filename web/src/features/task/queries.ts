@@ -743,7 +743,7 @@ export const saveKey = (item: string, rid: string, value: string) =>
 /** A key proposal as its Grant answers: where it stands, its rows, and each tool's check. */
 export interface KeyDropAnswer {
   state: string;
-  rows: { key: string }[];
+  rows: { key: string; tool_name: string }[];
   results?: { key: string; ok: boolean; detail: string }[];
 }
 

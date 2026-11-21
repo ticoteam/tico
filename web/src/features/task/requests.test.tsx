@@ -39,8 +39,14 @@ const DROP: FlowRequest = {
     message_id: 'm1',
     state: 'proposed',
     rows: [
-      { key: 'JIRA_LOGIN', tool_name: 'Jira', level: 'read', bots: [{ id: 'bot:builder', name: 'Builder' }] },
-      { key: 'CLOSE_KEY', tool_name: 'Close CRM', level: 'read_write', bots: [{ id: 'bot:sales', name: 'Sales Owner' }] },
+      { key: 'JIRA_LOGIN', tool_name: 'Jira', level: 'read', bots: [{ id: 'bot:builder', name: 'Builder' }], replaces: null },
+      {
+        key: 'CLOSE_KEY',
+        tool_name: 'Close CRM',
+        level: 'read_write',
+        bots: [{ id: 'bot:sales', name: 'Sales Owner' }],
+        replaces: { key: 'Close old', keeps: ['Builder'], loses: ['Tools Owner'] },
+      },
     ],
   },
 };
@@ -169,17 +175,19 @@ describe('a key card in Needs you', () => {
 
 describe('a key-drop proposal in Needs you', () => {
   it('lists each key, its tool, level and agents, ticked; Grant selected grants the rows left ticked', async () => {
-    reply = () => ({ body: { state: 'granted', rows: [{ key: 'JIRA_LOGIN' }], results: [{ key: 'JIRA_LOGIN', ok: false, detail: 'Didn’t work: 401' }] } });
+    reply = () => ({
+      body: { state: 'granted', rows: [{ key: 'JIRA_LOGIN', tool_name: 'Jira' }], results: [{ key: 'JIRA_LOGIN', ok: false, detail: 'Didn’t work: 401' }] },
+    });
     show();
     const box = await card('Key proposal');
     expect(within(box).getByText('2 keys')).toBeTruthy();
     const rows = within(box).getAllByRole('checkbox');
     expect(rows.map((r) => r.getAttribute('aria-checked'))).toEqual(['true', 'true']);
-    expect(box.textContent).toContain('Close CRM · Read and write · Sales Owner');
+    expect(box.textContent).toContain('Close CRM · Read and write · Sales OwnerReplaces Close old · Tools Owner lose access');
     fireEvent.click(within(box).getByText('Close CRM', { exact: false }));
     fireEvent.click(within(box).getByRole('button', { name: 'Grant selected' }));
     await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/tools-chat/proposals/m1/grant', body: { keep: [0] } }]));
     await gone('Key proposal');
-    await waitFor(() => expect(document.querySelector('.toasts')?.textContent).toContain('Granted; JIRA_LOGIN: Didn’t work: 401'));
+    await waitFor(() => expect(document.querySelector('.toasts')?.textContent).toContain('Granted, 1 not connected: JIRA_LOGIN for Jira'));
   });
 });

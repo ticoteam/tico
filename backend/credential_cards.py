@@ -325,6 +325,19 @@ def card_row(c, vault, rid, viewer):
     return row
 
 
+def requester_manages(c, auth, row):
+    """Whether the card's requester still manages its bot (SettingsAdmin._manager's rule: the owner, an Admin, one of
+    its owners, or a person it reports up to): a plain key card is stored for them, so Save and Needs you both ask it. A
+    Reconnect card replaces a tool's key, which the tool's own rule decides."""
+    if reconnect_tasks.card_tool(c, row) is not None:
+        return True
+    try:
+        person = auth.identity_for_actor(c, row["requester"])
+    except Problem:
+        return False
+    return person.role == "owner" or bool(auth.bot_manager(c, person, row["bot"]))
+
+
 def pending_for(c, vault, viewer):
     """The key cards that wait on `viewer`, oldest first, as `card_view` draws them: each pending card they were asked
     to fill that `card_row` still opens for them and that they may save. Their key cards in Needs you
@@ -339,7 +352,7 @@ def pending_for(c, vault, viewer):
         except Problem:
             continue
         shown = card_view(c, vault, row, viewer)
-        if shown["can_save"]:
+        if shown["can_save"] and requester_manages(c, vault.auth, row):
             out.append(shown | {"created_at": row["created_at"]})
     return out
 
@@ -490,6 +503,7 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
                 c.execute(
                     "UPDATE credential_requests SET status='canceled',updated_at=? WHERE id=?", (H.now(), again["id"])
                 )
+                events.needs_moved(c, [again["requester"]], "key")  # it leaves the old requester's Needs you
                 again = None
             if again:
                 # Asked again on the same task: its card is still open, so that card is the answer, not a second one.
@@ -613,7 +627,8 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
                 # A Reconnect card: the value replaces the tool's key in place, every grant kept, and its task ends.
                 reconnect_tasks.save(c, vault, who, row, value)
                 return view(c, c.execute("SELECT * FROM credential_requests WHERE id=?", (rid,)).fetchone(), who)
-            manager(c, auth.identity_for_actor(c, row["requester"]), row["bot"])
+            if not requester_manages(c, auth, row):
+                raise Problem("forbidden", "You can't save this key", 403)
             stored = store_for_bot(c, vault, who, row["env"], row["bot"], value, kind=row["kind"])
             c.execute(
                 "UPDATE credential_requests SET status='saved',updated_at=?,credential_id=? WHERE id=?",

@@ -23,6 +23,7 @@
 /* a request's body (Requests.tsx): what it is for, a key's field and where to get one, a proposal's rows to tick */
 .askcard-help{display:inline-block;margin-top:var(--s-1h);font-size:var(--t-sm);color:var(--muted);text-decoration:underline;text-underline-offset:2px}
 .askcard-help:hover{color:var(--ink)}
+.askcard-replaces{display:block;font-size:var(--t-sm);color:var(--muted)}
 .askcard-rows{display:flex;flex-direction:column;gap:var(--s-1h);margin:var(--s-2) var(--s-1) 0 0;color:var(--ink-2);overflow-wrap:anywhere}
 
 /* in a thread the card is a link, drawn in line with the timeline's cards: no lift, its files as chips */

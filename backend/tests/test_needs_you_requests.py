@@ -155,3 +155,22 @@ def test_a_refused_key_save_names_nobody(api, monkeypatch):
     refused = post(api, f"credential-requests/{card['id']}/save", {"value": NEW}, "ben-test", expected=403)
     assert refused["error"]["detail"] == "You can't save this key"
     assert not any(name in str(refused) for name in ("Ana", "Ben", "human:"))
+
+
+def test_a_key_card_is_listed_and_saved_only_while_its_requester_manages_the_agent(api):
+    # Ops reports to Cara, so its key card is hers to fill; once it reports elsewhere, the card leaves her list and its
+    # Save is refused, though she is a credential administrator who may store keys: one check for both.
+    machine, _ = setup(api)
+    creds.setup(api)
+    api.app.state.store.settings.credential_admins = ("ana@acme.example", "cara@acme.example")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='human:cara' WHERE bot='ops'")
+    post(api, "chat/ops", {"text": "Connect our analytics"}, "cara-test")
+    bot = claim(api, machine)["token"]
+    card = post(api, "credential-requests", {"env": "ACME_ANALYTICS_KEY", "label": "the analytics key"}, bot)
+    assert set(requests(api, "cara-test")) == {"key"}
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='human:ana' WHERE bot='ops'")
+    assert requests(api, "cara-test") == {}
+    refused = post(api, f"credential-requests/{card['id']}/save", {"value": NEW}, "cara-test", expected=403)
+    assert refused["error"]["detail"] == "You can't save this key"

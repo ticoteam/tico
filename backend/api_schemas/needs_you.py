@@ -73,6 +73,10 @@ NEEDS_ITEM = obj(
                         "tool_name": "s",
                         "level": {"type": "string", "enum": ["read", "read_write"]},
                         "bots": items(obj({"id": "s", "name": "s"})),
+                        # the tool's key at that level this one replaces: who keeps their access on it, who loses it
+                        "replaces": {
+                            "oneOf": [obj({"key": "s", "keeps": items("s"), "loses": items("s")}), {"type": "null"}]
+                        },
                     }
                 )
             ),
