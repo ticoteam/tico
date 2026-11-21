@@ -20,6 +20,7 @@ from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, cast
 
 from . import hubdb_core
+from . import task_requirements as R
 
 if TYPE_CHECKING:
     import sqlite3
@@ -197,7 +198,14 @@ def _write_report(conn: "sqlite3.Connection", after: Row, by: str, why: str | No
         return
     filed = cast(Row, detail)
     person = str(made["actor"])
-    if filed.get("via") != "assistant" or not H.is_human(person) or by == person:
+    # Only the person it was filed for, while still here (a task filed `--for` someone else, or a filer who has left,
+    # gets nothing and opens no room).
+    if (
+        filed.get("via") != "assistant"
+        or by == person
+        or after.get("requester_id") != person
+        or not R.active_person(conn, person)
+    ):
         return
     if (
         conn.execute("SELECT 1 FROM messages WHERE wake_key=?", (key,)).fetchone()
