@@ -15,6 +15,8 @@ from backend.store import H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, restrict, runner
 from backend.tests.helpers.org_rule_check import (  # noqa: F401 - fixtures
+    COLOR,
+    color_rule,
     not_a_friday,
     ruled,
     sql,
@@ -264,6 +266,118 @@ def test_the_asks_to_a_person_rule_checks_a_question_mark(ruled):
     assert sql(api, "SELECT count(*) AS n FROM org_rule_holds")[0]["n"] == 0
 
 
+COLORED = "Should the launch note say Acme's favorite color is teal?"
+
+
+def nothing_asked(api):
+    assert sql(api, "SELECT count(*) AS n FROM org_rule_holds")[0]["n"] == 0, "no hold"
+    assert sql(api, "SELECT count(*) AS n FROM question_marks WHERE bot_id='bot:ops'")[0]["n"] == 0, "nothing marked"
+    assert sql(api, "SELECT count(*) AS n FROM messages WHERE body LIKE '%teal%'")[0]["n"] == 0
+
+
+@pytest.mark.parametrize("where", ["task", "direct"])
+@pytest.mark.parametrize("if_broken", ["block", "escalate"])
+def test_a_question_a_teams_block_rule_finds_broken_is_refused_back_to_the_bot_not_held(ruled, if_broken, where):
+    """Legal B1: held, a bot's ❓ sat on a review task the person never saw while the bot believed it had asked."""
+    api, _ = ruled
+    color_rule(api, if_broken=if_broken)
+    task = task_for_ops(api)
+    if where == "task":
+        r = ask_on(api, task, text=COLORED)
+    else:
+        r = api.post("/api/v2/questions", json={"to": "ana", "text": COLORED}, headers=headers("ops-test"))
+    assert r.status_code == 409 and r.json()["error"] == "task_rule", r.text
+    assert COLOR in r.json()["detail"] and "Rewrite it so it keeps the rule" in r.json()["detail"]
+    nothing_asked(api)
+    if (if_broken, where) == ("block", "task"):
+        lawful = ask_on(api, task, text="Should the launch note name a color at all?")
+        assert lawful.status_code == 200, "lawful: asked"
+
+
+def test_a_question_whose_block_rule_turned_warn_while_it_was_checked_is_asked(ruled):
+    """Refused only where it would have been held: the rules in force at the write decide, not those at the check."""
+    api, judge = ruled
+    made = color_rule(api)
+    checks = judge.__call__
+
+    def turned_warn(state, questions, label=None):
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE org_rules SET if_broken='warn', version=version+1 WHERE id=?", (made["id"],))
+        return checks(state, questions, label)
+
+    api.app.state.judge = turned_warn
+    task = task_for_ops(api)
+    r = ask_on(api, task, text=COLORED)
+    assert r.status_code == 200 and r.json()["question"]["line"] == COLORED, r.text
+    assert sql(api, "SELECT count(*) AS n FROM org_rule_holds")[0]["n"] == 0
+
+
+def test_a_question_to_someone_who_cannot_read_the_private_task_is_refused_for_that_not_the_rule(ruled):
+    api, _ = ruled
+    color_rule(api)
+    task = post(api, "tasks", {"owner": "ops", "title": "Draft the offer", "body": "Draft it.", "private": True})
+    r = ask_on(api, task, to="ben", text=COLORED)
+    assert r.status_code == 422 and r.json()["error"]["code"] == "private", r.text
+    nothing_asked(api)
+
+
+@pytest.mark.parametrize("if_broken", ["block", "warn"])
+def test_a_question_the_judge_failed_to_check_is_refused_to_try_again_unless_every_rule_only_warns(ruled, if_broken):
+    api, judge = ruled
+    color_rule(api, if_broken=if_broken)
+    task = task_for_ops(api)
+    judge.fail = RuntimeError("the judge is out")
+    r = ask_on(api, task, text=COLORED)
+    if if_broken == "warn":
+        assert r.status_code == 200 and r.json()["question"]["line"] == COLORED, r.text
+        return
+    assert r.status_code == 503 and r.json()["error"] == "task_rule_unchecked" and r.json()["retryable"], r.text
+    nothing_asked(api)
+
+
+@pytest.mark.parametrize(
+    ("verdict", "refused"),
+    [
+        ({"outcome": "pass", "error": "busy", "unchecked_rules": ["b"]}, True),  # one call failed, the others passed
+        ({"outcome": "broken", "broken": ["w"], "error": "timeout", "unchecked_rules": ["b"]}, True),
+        ({"outcome": "pass", "error": "busy", "unchecked_rules": ["w"]}, False),  # only a Warn went unchecked
+        ({"outcome": "unchecked", "error": "no_engine"}, False),  # no decision model: as any write
+        ({"outcome": "unchecked", "error": "rules_changed"}, False),
+        ({"outcome": "unchecked", "error": "day_cap"}, True),
+    ],
+)
+def test_which_unchecked_question_verdicts_are_refused_to_try_again(verdict, refused):
+    from backend import task_rule_gate
+
+    rules = [{"id": "b", "if_broken": "block"}, {"id": "w", "if_broken": "warn"}]
+    assert task_rule_gate.unchecked_holding({**verdict, "rules": rules}) is refused
+
+
+def test_a_direct_question_to_someone_not_in_the_chat_is_refused_for_that_not_the_rule(ruled):
+    api, _ = ruled
+    color_rule(api)
+    asked = api.post("/api/v2/questions", json={"to": "ana", "text": ASKED}, headers=headers("ops-test"))
+    assert asked.status_code == 200, asked.text
+    chat = asked.json()["question"]["conversation_id"]
+    r = api.post(
+        "/api/v2/questions", json={"to": "ben", "text": COLORED, "conversation_id": chat}, headers=headers("ops-test")
+    )
+    assert r.status_code != 200 and "task_rule" not in r.text, r.text
+    assert sql(api, "SELECT count(*) AS n FROM org_rule_holds")[0]["n"] == 0
+
+
+def test_a_question_too_long_to_check_against_a_block_rule_is_refused_to_shorten(ruled, monkeypatch):
+    from clients import judge as J
+
+    api, _ = ruled
+    color_rule(api)
+    task = task_for_ops(api)
+    monkeypatch.setattr(J, "MAX_STATE_CHARS", 200)
+    r = ask_on(api, task, text=COLORED)
+    assert r.status_code == 409 and r.json()["error"] == "task_rule" and "Shorten it" in r.json()["detail"], r.text
+    nothing_asked(api)
+
+
 def test_a_question_mark_is_in_the_persons_needs_you_until_they_reply_and_files_nothing(ruled):
     api, _ = ruled
     task = task_for_ops(api)
@@ -507,18 +621,24 @@ def test_a_task_question_checks_the_rules_for_the_person_it_asks(ruled):
     )
     judge.needles[text] = "Friday"
     r = ask_on(api, task_for_ops(api), to="ben", text="Should it go out Friday?")
-    assert r.status_code == 200 and r.json().get("held"), r.text
+    assert r.status_code == 409 and text in r.json()["detail"], r.text  # refused back to the bot, never held
+    assert sql(api, "SELECT count(*) AS n FROM org_rule_holds")[0]["n"] == 0
     assert sql(api, "SELECT count(*) AS n FROM question_marks")[0]["n"] == 0
 
 
 @pytest.mark.parametrize("where", ["task", "direct"])
-def test_send_anyway_posts_and_marks_a_held_question(ruled, where):
+def test_send_anyway_posts_and_marks_a_held_question(ruled, where, monkeypatch):
+    """A ❓ a rule holds is refused now (task_rule_gate.refuse_question); one held before still sends."""
+    from backend import task_rule_gate
+
     api, judge = ruled
     judge.needles = {OR.ASKS_TO_A_PERSON: "**"}
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE org_rules SET if_broken='escalate', reviewer='ana' WHERE text=?", (OR.ASKS_TO_A_PERSON,))
     path = f"tasks/{task_for_ops(api)['id']}/questions" if where == "task" else "questions"
-    held = post(api, path, {"to": "ben", "text": "Should it go out **Friday**?"}, token="ops-test")["held"]
+    with monkeypatch.context() as before:  # only to make the hold; Send anyway below runs the real gate
+        before.setattr(task_rule_gate, "refuse_question", lambda *_, **__: None)
+        held = post(api, path, {"to": "ben", "text": "Should it go out **Friday**?"}, token="ops-test")["held"]
     view = get(api, f"rule-holds/{held['id']}")
     assert view["can_send"], view
     post(api, f"rule-holds/{held['id']}/send", {"nonce": view["nonce"]})

@@ -12,7 +12,7 @@ import pytest
 
 from backend.entities import store as ES
 from backend.store import H
-from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
 from backend.tests.helpers.org_rule_check import COLOR, Judge, color_rule, events, hold_row, ruled, say, sql  # noqa: F401
 from backend.tests.helpers.org_rules import edit, org, rule  # noqa: F401
 
@@ -100,6 +100,96 @@ def test_a_check_that_errors_holds_the_write_with_the_error_class(blocked, monke
     assert json.loads(row["verdict"])["error"] == "RuntimeError"
     assert "RuntimeError" in held["reason"]
     assert _messages(api, "Acme Lights job") == []
+
+
+def _task(api):
+    return post(api, "tasks", {"owner": "ops", "title": "Write the launch note", "body": "Draft it."})
+
+
+def _question(api, task, text):
+    """A bot's ❓ to Ana (an acme.example address, so it reaches Acme Lights) on a task of ops's."""
+    return api.post(
+        f"/api/v2/tasks/{task['id']}/questions",
+        json={"to": "ana", "text": text},
+        headers=headers("ops-test"),
+    )
+
+
+def test_a_question_the_check_could_not_judge_is_refused_to_try_again_not_held(blocked, monkeypatch):
+    """A check failure is not a broken rule: the bot is told to try again, never to rewrite a question that broke
+    nothing (backend/task_rule_gate.py `refuse_question`)."""
+    api, _judge, _rule_id = blocked
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("the walk failed")
+
+    task = _task(api)
+    monkeypatch.setattr(ES, "walk", broken)
+    r = _question(api, task, "Should the Acme Lights quote go out today?")
+    assert r.status_code == 503 and r.json()["error"] == "task_rule_unchecked" and r.json()["retryable"], r.text
+    assert "Rewrite" not in r.json()["detail"]
+    assert sql(api, "SELECT count(*) AS n FROM org_rule_holds")[0]["n"] == 0
+    assert _messages(api, "Acme Lights quote") == []
+
+
+def test_a_question_a_rule_finds_broken_is_refused_for_it_whatever_else_could_not_be_checked(blocked, monkeypatch):
+    """A broken rule outranks a check that could not run and a text too long to check (`refuse_question`)."""
+    from clients import judge as J
+
+    api, _judge, _rule_id = blocked
+    color_rule(api)
+    task = _task(api)
+    monkeypatch.setattr(J, "MAX_STATE_CHARS", 200)  # the judged rule: too long to check; the Directory's: broken
+    r = _question(api, task, "Should the Acme Lights note say the favorite color is teal?")
+    assert r.status_code == 409 and r.json()["error"] == "task_rule" and ACME in r.json()["detail"], r.text
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("the walk failed")
+
+    monkeypatch.setattr(J, "MAX_STATE_CHARS", 100_000)
+    monkeypatch.setattr(ES, "walk", broken)  # the Directory's: could not be checked; the judged rule: broken
+    r = _question(api, task, "Should the Acme Lights note say the favorite color is teal?")
+    assert r.status_code == 409 and r.json()["error"] == "task_rule" and COLOR in r.json()["detail"], r.text
+    assert sql(api, "SELECT count(*) AS n FROM org_rule_holds")[0]["n"] == 0
+
+
+def test_a_question_the_directory_finds_broken_names_that_rule_when_the_text_check_faults(blocked, monkeypatch):
+    from backend import org_rule_check
+
+    api, _judge, _rule_id = blocked
+    color_rule(api)
+    task = _task(api)
+
+    def fault(*args, **kwargs):
+        raise RuntimeError("a fault here")
+
+    monkeypatch.setattr(org_rule_check.J, "pack", fault)
+    r = _question(api, task, "Should the Acme Lights note say the favorite color is teal?")
+    assert r.status_code == 409 and r.json()["error"] == "task_rule" and ACME in r.json()["detail"], r.text
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE org_rules SET status='retired', version=version+1 WHERE id=?", (_rule_id,))
+    r = _question(api, task, "Should the Acme Lights note say the favorite color is teal?")
+    assert r.status_code == 503 and "Try again" in r.text, r.text  # no rule found broken: a try again
+    assert sql(api, "SELECT count(*) AS n FROM org_rule_holds")[0]["n"] == 0
+
+
+def test_a_question_whose_rules_changed_while_it_was_checked_is_asked(blocked):
+    """The Directory rule retired and the judged Block turned Warn mid-check: no rule in force holds it, so it is asked."""
+    api, judge, rule_id = blocked
+    color = color_rule(api)
+    checks = judge.__call__
+
+    def changed(state, questions, label=None):
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE org_rules SET status='retired', version=version+1 WHERE id=?", (rule_id,))
+            c.execute("UPDATE org_rules SET if_broken='warn', version=version+1 WHERE id=?", (color["id"],))
+        return checks(state, questions, label)
+
+    task = _task(api)
+    api.app.state.judge = changed
+    r = _question(api, task, "Should the Acme Lights note say the favorite color is teal?")
+    assert r.status_code == 200 and r.json()["question"]["person_id"] == "human:ana", r.text
+    assert sql(api, "SELECT count(*) AS n FROM org_rule_holds")[0]["n"] == 0
 
 
 def test_a_judged_hold_is_unchanged(ruled):

@@ -14,7 +14,7 @@ from . import question_marks
 from . import task_privacy as privacy
 from . import teammate_access
 from . import visuals
-from .api_contract import ASK_REFUSED, api_v2
+from .api_contract import ASK_REFUSED, QUESTION_REFUSED, api_v2
 from .api_answers.tasks import CommentResult, TaskComments
 
 
@@ -73,6 +73,8 @@ def register(
 
         comment_rights(c, auth, who, task_id)
         asker, asked_me = replying_to(c, who, task_id, body)
+        if ask_to:  # who a ❓ asks is checked before its rule verdict: may they be asked at all
+            question_marks.check_asking(c, who.actor, task_id, ask_to, body.text)
         # The org rule check (backend/org_rule_check.py), applied before anything is written: held, nothing is.
         extra = (ask_to,) if ask_to else ()
         audience = rule_comment_audience(c, who, row, body.text, *extra) if rc is not None else None
@@ -291,6 +293,7 @@ def register(
             "listed in their Needs you until they reply there or the task ends; no task is filed and nothing else is "
             "sent. One open ❓ per bot per chat: a new one replaces the old, and `warning` says so. Bots only",
             CommentResult,
+            responses={"409": QUESTION_REFUSED},
         ),
     )
     def task_question(request: Request, tid: str, body: M.Question):
@@ -361,7 +364,8 @@ def register(
 
     def question_write(c, who, tid, text, to, rc, ingest=None):
         """A ❓ on a task's chat, as the route writes it and Send anyway replays it: the comment, then its mark, in one
-        transaction. Held by a rule, nothing is written and nothing is marked."""
+        transaction. A Block or Escalate rule it breaks refuses it back to the bot, nothing written or held
+        (task_rule_gate.refuse_question); a hold from before still replays here."""
         done = comment_write(c, who, tid, M.TaskComment(text=text), ingest, rc, who, ask_to=to)
         said = done.get("comment") or {}
         if not said.get("id"):

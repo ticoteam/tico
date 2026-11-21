@@ -31,7 +31,7 @@ from . import task_privacy as _task_privacy
 from .store import H as _H
 from .store import Problem
 from . import store as _store_module
-from .api_contract import api_v2
+from .api_contract import QUESTION_REFUSED, api_v2
 from .api_answers.tasks import OkPreview, TaskManyResult, TaskMoveResult, TaskResult
 
 # Untyped modules, reached through Any in this strict module.
@@ -820,6 +820,7 @@ def register(
             "askOnTask",
             "Ask a person on the task for an OK of what it shows, in one sentence. The task stays in its stage until they answer; carries requirement_id. A question is a message marked ❓ (POST /api/v2/tasks/{tid}/questions)",
             TaskResult,
+            responses={"409": QUESTION_REFUSED},
         ),
     )
     def task_ask(request: Request, tid: str, body: M.TaskAsk):

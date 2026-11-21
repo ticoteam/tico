@@ -953,6 +953,26 @@ def _structured_apply(c, verdict, payload, replay, tell, judged_text=None, priva
         if holds(judged)
         else []
     )
+    from . import task_rule_gate
+
+    if task_rule_gate.asks_person(verdict):
+        # A bot's ❓ is refused, never held (task_rule_gate.refuse_question), and only by the judged rules still in force
+        # as checked (`apply`'s same check): a Directory rule found broken or a judged one first, then a check that
+        # could not run (the Directory's, a rule of it, or the judged one), then a text too long to check.
+        stale = bool(judged) and not _same_rules(c, judged)
+        found_broken = [r for r in now["held"] if r.get("id") and not r.get("reason")]
+        judged_long = not stale and bool(judged_held) and judged.get("outcome") == "too_large"
+        sure = [] if stale or judged_long else sorted(judged_held, key=lambda r: -STRICT[r["if_broken"]])
+        task_rule_gate.refuse_question(
+            c,
+            verdict,
+            broken=[*sure, *found_broken],
+            unchecked=len(found_broken) < len(now["held"])
+            or bool(verdict.get("judged_failed"))
+            or (not stale and task_rule_gate.unchecked_holding(judged)),
+            too_large=judged_long,
+        )
+        judged_held = []  # not refused: nothing holds it
     if now["outcome"] != "held" and not judged_held:
         return _warn_structured(c, verdict, now["warned"], tell) if now["outcome"] == "warn" else None
     found: dict[str, dict] = {}
@@ -1148,21 +1168,35 @@ def preflight(
                 attempt_id=attempt_id,
                 draft=draft,
             )
-    verdict = check_as(
-        store,
-        primary,
-        *found,
-        operation,
-        output,
-        recipients,
-        context=context,
-        obj=obj,
-        draft=draft,
-        skip=skip,
-        place=place,
-        attempt_id=attempt_id,
-        late=late,
-    )
+    try:
+        verdict = check_as(
+            store,
+            primary,
+            *found,
+            operation,
+            output,
+            recipients,
+            context=context,
+            obj=obj,
+            draft=draft,
+            skip=skip,
+            place=place,
+            attempt_id=attempt_id,
+            late=late,
+        )
+    except Problem as exc:
+        from . import task_rule_gate
+
+        if (
+            structured is None
+            or structured["outcome"] != "held"
+            or exc.code != "rule_check"
+            or not task_rule_gate.asks_person({"operation": operation, "author": found[0]})
+        ):
+            raise
+        # A bot's ❓ the Directory holds: a Directory rule found broken still names itself, inside the write; with none,
+        # the text check's fault refuses it to try again (task_rule_gate.refuse_question).
+        return {**structured, "judged_failed": True}
     if structured is None:
         return verdict
     if structured["outcome"] == "held":
@@ -1584,6 +1618,18 @@ def _people(recipients, author):
     return sorted({r for r in recipients or () if r and r != author})
 
 
+def _same_rules(c, verdict):
+    """Whether the rules in force now for a judged verdict's write are the ones it checked."""
+    now = {
+        (r["id"], r["version"]) for r in R.matching(c, verdict["author"], verdict["recipients"], verdict.get("place"))
+    }
+    checked = verdict.get("matched")
+    checked = (
+        {tuple(x) for x in checked} if checked is not None else {(r["id"], r["version"]) for r in verdict["rules"]}
+    )
+    return now == checked
+
+
 def apply(
     c,
     verdict,
@@ -1631,12 +1677,7 @@ def apply(
     if verdict["outcome"] in ("broken", "too_large"):
         # The rules in force now must be the ones checked: a rule edited, retired or added since is a new check, which
         # cannot run here (no engine under the write lock), so the output goes through unchecked.
-        now = {(r["id"], r["version"]) for r in R.matching(c, author, verdict["recipients"], verdict.get("place"))}
-        checked = verdict.get("matched")
-        checked = (
-            {tuple(x) for x in checked} if checked is not None else {(r["id"], r["version"]) for r in verdict["rules"]}
-        )
-        if now != checked:
+        if not _same_rules(c, verdict):
             verdict = {**verdict, "outcome": "unchecked", "error": "rules_changed"}
     if verdict["outcome"] == "unchecked" or verdict.get("unchecked_rules"):
         H.event(
@@ -1651,6 +1692,19 @@ def apply(
                 **({"call": verdict["call"]} if verdict.get("call") else {}),
                 **marked,
             },
+        )
+    from . import task_rule_gate
+
+    if task_rule_gate.asks_person(verdict):
+        # A bot's ❓ is refused, never held (task_rule_gate.refuse_question): a Block or Escalate rule found broken
+        # first, then one a failed call left unchecked, then a text too long to check against one. Else it goes on.
+        holding = [r for r in verdict["rules"] if r["id"] in (verdict.get("broken") or []) and r["if_broken"] != "warn"]
+        task_rule_gate.refuse_question(
+            c,
+            verdict,
+            broken=[] if verdict["outcome"] != "broken" else sorted(holding, key=lambda r: -STRICT[r["if_broken"]]),
+            unchecked=task_rule_gate.unchecked_holding(verdict),
+            too_large=verdict["outcome"] == "too_large" and bool(holding),
         )
     if verdict["outcome"] not in ("broken", "too_large"):
         return (
@@ -1743,7 +1797,8 @@ def _write_hold(
     """The hold a write is held in, written and told. `broken` are the rules that hold it, `strictest` the one the hold
     is on and `mode` its outcome (`block` or `escalate`; an escalation with no reviewer is a block). `check` is the check
     that held it: `judged`, or `structured` with `error`, the class of a check that could not complete. Returns apply's
-    answer: {"held": view, "rule", "hold_id"}."""
+    answer: {"held": view, "rule", "hold_id"}. A bot's ❓ to a person never gets here: its caller refuses it back to
+    the bot (task_rule_gate.refuse_question)."""
     author, operation = verdict["author"], verdict["operation"]
     target = "org_rule:" + strictest["id"] if strictest["id"] else "org_rule_check"
     reviewer = reviewer_for(c, author, broken)

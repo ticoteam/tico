@@ -21,7 +21,7 @@ from . import rooms
 from . import updates
 from .store import encode
 from . import updates_routes
-from .api_contract import ASK_REFUSED
+from .api_contract import ASK_REFUSED, QUESTION_REFUSED
 from .api_answers.conversations import ChatResult, Message
 
 import asyncio
@@ -1700,6 +1700,7 @@ def register_messages(
             "askInChat",
             "A bot's ❓ in a direct chat: send `text` to `to` (in `conversation_id`, or the bot's chat with them) and "
             "mark it as needing their reply, until they reply there. Bots only",
+            responses={"409": QUESTION_REFUSED},
         ),
     )
     def chat_question(request: Request, body: M.ChatQuestion):
@@ -1722,7 +1723,12 @@ def register_messages(
 
     def chat_question_write(c, who, sent, rc, ingest):
         """A ❓ in a direct chat, as the route writes it and Send anyway replays it: the message, then its mark, in one
-        transaction. Held by a rule, nothing is written and nothing is marked."""
+        transaction. A Block or Escalate rule it breaks refuses it back to the bot, nothing written or held
+        (task_rule_gate.refuse_question); a hold from before still replays here. Who it asks, and where, is checked
+        before the rule check's verdict is applied, so a person who may not be asked there is the error the bot reads."""
+        guarded = routed_message(c, who, sent)
+        guarded.conversation_id = named_destination(c, who, guarded)
+        recipient_gate.require_recipient(c, who, guarded.to, body=guarded, auth=auth)
         message = message_write(c, who, sent, rc, ingest)
         if not message.get("id"):
             return message

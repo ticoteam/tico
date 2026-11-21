@@ -12,7 +12,8 @@ applied inside it.
   finds broken is refused with the rule's words, under `COVERS`, an engine-style refusal that never counts toward
   quarantine. With the judge out the ask goes; a cause here (`LOCAL`: every call slot busy, the day's calls spent, too
   long to check) refuses it to try again. A Warn rule never stops an ask: the ask reaches its person and the bot is told
-  the rule (`rule_warning`), whether it was found broken or could not be checked.
+  the rule (`rule_warning`), whether it was found broken or could not be checked. A bot's ❓ (on a task's chat or in a
+  direct chat) is refused the same way, never held (`refuse_question`).
 - The check cannot run (an error here, not the judge being out): nothing is written (fail closed).
 
 The hold's text is what the write says. A hand-off also says the task to its new owner, so the judge reads the task's
@@ -179,6 +180,63 @@ def stale(verdict: Row, obj_now: Any, audience_now: Any) -> bool:
 
 def not_asked(rule: Row) -> str:
     return f'Not asked. A rule covers this: "{rule.get("text") or "a rule"}" Act on the rule instead of asking.'
+
+
+# A bot's ❓ to a person: on a task's chat (backend/task_comments_routes.py) and in a direct chat (backend/thread_api.py).
+QUESTIONS = ("question", "chat_question")
+
+
+NOT_ASKED_UNCHECKED = "Not asked yet: the company's rules could not be checked. Try again in a minute."
+# A check that did not run for how the install is set up (no decision model, its spend cap) or because the rules changed
+# under it lets a ❓ go, as it lets any write go; any other failure (busy, the day's calls, a timeout) may clear on a try.
+GOES_UNCHECKED = ("no_engine", "budget", "rules_changed")
+
+
+def asks_person(verdict: Row) -> bool:
+    """Whether a verdict is a bot's ❓ to a person (`QUESTIONS`)."""
+    return verdict.get("operation") in QUESTIONS and H.is_bot(str(verdict.get("author") or ""))
+
+
+def unchecked_holding(verdict: Row | None) -> bool:
+    """Whether a judged verdict left a Block or Escalate rule unchecked, by a failure trying again may clear."""
+    if not verdict or verdict.get("error") in GOES_UNCHECKED:
+        return False
+    if verdict.get("outcome") == "unchecked":
+        ids = None
+    elif verdict.get("unchecked_rules"):
+        ids = set(verdict["unchecked_rules"])
+    else:
+        return False
+    rules: list[Row] = verdict.get("rules") or []
+    return any((r.get("if_broken") or "block") != "warn" for r in rules if ids is None or r.get("id") in ids)
+
+
+def refuse_question(
+    c: Any, verdict: Row, *, broken: Sequence[Row] = (), unchecked: bool = False, too_large: bool = False
+) -> None:
+    """Where a bot's ❓ would be held (org_rule_check, at its hold: its permissions, audience and rules in force all
+    checked), it is refused back to the bot at once instead, and nothing is held: held, it sat on a review task the
+    person never saw while the bot believed it had asked. In this order: a Block or Escalate rule found broken
+    (`broken`, the one to name first) is refused with the rule and how to make it lawful, under `COVERS` (never counted
+    toward quarantine); else a check that could not run (`unchecked`: the Directory's check failed or a rule of it
+    cannot be checked, or a judged Block or Escalate rule went unchecked: `unchecked_holding`) is refused to try again (503, retryable, not a refusal on record); else too long to check
+    (`too_large`) is refused to shorten. A Warn rule never holds, so it never reaches here: the ❓ is asked, with its
+    warning. Any other write is held as before."""
+    if not asks_person(verdict):
+        return
+    author = str(verdict["author"])
+    if broken:
+        H.refuse(
+            c,
+            author,
+            COVERS,
+            f'Not asked. Your question breaks a rule: "{broken[0].get("text") or "a rule"}" Rewrite it so it keeps '
+            "the rule and ask again, or act on the rule instead of asking.",
+        )
+    if unchecked:
+        raise Problem("task_rule_unchecked", NOT_ASKED_UNCHECKED, 503, retryable=True)
+    if too_large:
+        H.refuse(c, author, COVERS, NOT_ASKED_LOCAL["too_large"])
 
 
 def note_first(
