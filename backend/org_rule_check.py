@@ -955,8 +955,24 @@ def _structured_apply(c, verdict, payload, replay, tell, judged_text=None, priva
     )
     from . import task_rule_gate
 
-    if judged_held and task_rule_gate.asks_person(verdict) and not _same_rules(c, judged):
-        judged_held = []  # a bot's ❓ is refused only by rules still in force as checked (`apply`'s same check)
+    if task_rule_gate.asks_person(verdict):
+        # A bot's ❓ is refused, never held (task_rule_gate.refuse_question), and only by the judged rules still in force
+        # as checked (`apply`'s same check): a Directory rule found broken or a judged one first, then a check that
+        # could not run (the Directory's, a rule of it, or the judged one), then a text too long to check.
+        stale = bool(judged) and not _same_rules(c, judged)
+        found_broken = [r for r in now["held"] if r.get("id") and not r.get("reason")]
+        judged_long = not stale and bool(judged_held) and judged.get("outcome") == "too_large"
+        sure = [] if stale or judged_long else sorted(judged_held, key=lambda r: -STRICT[r["if_broken"]])
+        task_rule_gate.refuse_question(
+            c,
+            verdict,
+            broken=[*sure, *found_broken],
+            unchecked=len(found_broken) < len(now["held"])
+            or bool(verdict.get("judged_failed"))
+            or (not stale and task_rule_gate.unchecked_holding(judged)),
+            too_large=judged_long,
+        )
+        judged_held = []  # not refused: nothing holds it
     if now["outcome"] != "held" and not judged_held:
         return _warn_structured(c, verdict, now["warned"], tell) if now["outcome"] == "warn" else None
     found: dict[str, dict] = {}
@@ -990,18 +1006,6 @@ def _structured_apply(c, verdict, payload, replay, tell, judged_text=None, priva
     mode, repeat = strictest["if_broken"], False
     if mode == "block" and strictest["id"] and _repeats(c, verdict["author"], strictest["id"]) >= REPEAT_BLOCKS - 1:
         mode, repeat = "escalate", True
-    if task_rule_gate.asks_person(verdict):
-        # A bot's ❓ is refused, never held: a rule found broken first, then a check that could not run, then length.
-        found_broken = [r for r in now["held"] if r.get("id") and not r.get("reason")]
-        judged_long = bool(judged_held) and judged.get("outcome") == "too_large"
-        sure = sorted(judged_held, key=lambda r: -STRICT[r["if_broken"]]) if not judged_long else []
-        task_rule_gate.refuse_question(
-            c,
-            verdict,
-            broken=[*sure, *found_broken],
-            unchecked=len(found_broken) < len(now["held"]),
-            too_large=judged_long,
-        )
     return _write_hold(
         c,
         hold_verdict,
@@ -1164,21 +1168,35 @@ def preflight(
                 attempt_id=attempt_id,
                 draft=draft,
             )
-    verdict = check_as(
-        store,
-        primary,
-        *found,
-        operation,
-        output,
-        recipients,
-        context=context,
-        obj=obj,
-        draft=draft,
-        skip=skip,
-        place=place,
-        attempt_id=attempt_id,
-        late=late,
-    )
+    try:
+        verdict = check_as(
+            store,
+            primary,
+            *found,
+            operation,
+            output,
+            recipients,
+            context=context,
+            obj=obj,
+            draft=draft,
+            skip=skip,
+            place=place,
+            attempt_id=attempt_id,
+            late=late,
+        )
+    except Problem as exc:
+        from . import task_rule_gate
+
+        if (
+            structured is None
+            or structured["outcome"] != "held"
+            or exc.code != "rule_check"
+            or not task_rule_gate.asks_person({"operation": operation, "author": found[0]})
+        ):
+            raise
+        # A bot's ❓ the Directory holds: a Directory rule found broken still names itself, inside the write; with none,
+        # the text check's fault refuses it to try again (task_rule_gate.refuse_question).
+        return {**structured, "judged_failed": True}
     if structured is None:
         return verdict
     if structured["outcome"] == "held":
@@ -1675,6 +1693,19 @@ def apply(
                 **marked,
             },
         )
+    from . import task_rule_gate
+
+    if task_rule_gate.asks_person(verdict):
+        # A bot's ❓ is refused, never held (task_rule_gate.refuse_question): a Block or Escalate rule found broken
+        # first, then one a failed call left unchecked, then a text too long to check against one. Else it goes on.
+        holding = [r for r in verdict["rules"] if r["id"] in (verdict.get("broken") or []) and r["if_broken"] != "warn"]
+        task_rule_gate.refuse_question(
+            c,
+            verdict,
+            broken=[] if verdict["outcome"] != "broken" else sorted(holding, key=lambda r: -STRICT[r["if_broken"]]),
+            unchecked=task_rule_gate.unchecked_holding(verdict),
+            too_large=verdict["outcome"] == "too_large" and bool(holding),
+        )
     if verdict["outcome"] not in ("broken", "too_large"):
         return (
             _warn_structured(c, verdict, verdict["structured_warned"], tell)
@@ -1730,9 +1761,6 @@ def apply(
         if tell:
             _tell_bot(c, author, told)
         return {"warn": line, "warned": {"rules": [{"id": r["id"], "text": r["text"]} for r in broken], "text": told}}
-    from . import task_rule_gate
-
-    task_rule_gate.refuse_question(c, verdict, broken=[] if too_large else [strictest], too_large=too_large)
     return _write_hold(
         c,
         verdict,

@@ -1724,7 +1724,11 @@ def register_messages(
     def chat_question_write(c, who, sent, rc, ingest):
         """A ❓ in a direct chat, as the route writes it and Send anyway replays it: the message, then its mark, in one
         transaction. A Block or Escalate rule it breaks refuses it back to the bot, nothing written or held
-        (task_rule_gate.refuse_question); a hold from before still replays here."""
+        (task_rule_gate.refuse_question); a hold from before still replays here. Who it asks, and where, is checked
+        before the rule check's verdict is applied, so a person who may not be asked there is the error the bot reads."""
+        guarded = routed_message(c, who, sent)
+        guarded.conversation_id = named_destination(c, who, guarded)
+        recipient_gate.require_recipient(c, who, guarded.to, body=guarded, auth=auth)
         message = message_write(c, who, sent, rc, ingest)
         if not message.get("id"):
             return message

@@ -321,6 +321,51 @@ def test_a_question_to_someone_who_cannot_read_the_private_task_is_refused_for_t
     nothing_asked(api)
 
 
+@pytest.mark.parametrize("if_broken", ["block", "warn"])
+def test_a_question_the_judge_failed_to_check_is_refused_to_try_again_unless_every_rule_only_warns(ruled, if_broken):
+    api, judge = ruled
+    color_rule(api, if_broken=if_broken)
+    task = task_for_ops(api)
+    judge.fail = RuntimeError("the judge is out")
+    r = ask_on(api, task, text=COLORED)
+    if if_broken == "warn":
+        assert r.status_code == 200 and r.json()["question"]["line"] == COLORED, r.text
+        return
+    assert r.status_code == 503 and r.json()["error"] == "task_rule_unchecked" and r.json()["retryable"], r.text
+    nothing_asked(api)
+
+
+@pytest.mark.parametrize(
+    ("verdict", "refused"),
+    [
+        ({"outcome": "pass", "error": "busy", "unchecked_rules": ["b"]}, True),  # one call failed, the others passed
+        ({"outcome": "broken", "broken": ["w"], "error": "timeout", "unchecked_rules": ["b"]}, True),
+        ({"outcome": "pass", "error": "busy", "unchecked_rules": ["w"]}, False),  # only a Warn went unchecked
+        ({"outcome": "unchecked", "error": "no_engine"}, False),  # no decision model: as any write
+        ({"outcome": "unchecked", "error": "rules_changed"}, False),
+        ({"outcome": "unchecked", "error": "day_cap"}, True),
+    ],
+)
+def test_which_unchecked_question_verdicts_are_refused_to_try_again(verdict, refused):
+    from backend import task_rule_gate
+
+    rules = [{"id": "b", "if_broken": "block"}, {"id": "w", "if_broken": "warn"}]
+    assert task_rule_gate.unchecked_holding({**verdict, "rules": rules}) is refused
+
+
+def test_a_direct_question_to_someone_not_in_the_chat_is_refused_for_that_not_the_rule(ruled):
+    api, _ = ruled
+    color_rule(api)
+    asked = api.post("/api/v2/questions", json={"to": "ana", "text": ASKED}, headers=headers("ops-test"))
+    assert asked.status_code == 200, asked.text
+    chat = asked.json()["question"]["conversation_id"]
+    r = api.post(
+        "/api/v2/questions", json={"to": "ben", "text": COLORED, "conversation_id": chat}, headers=headers("ops-test")
+    )
+    assert r.status_code != 200 and "task_rule" not in r.text, r.text
+    assert sql(api, "SELECT count(*) AS n FROM org_rule_holds")[0]["n"] == 0
+
+
 def test_a_question_too_long_to_check_against_a_block_rule_is_refused_to_shorten(ruled, monkeypatch):
     from clients import judge as J
 

@@ -153,6 +153,26 @@ def test_a_question_a_rule_finds_broken_is_refused_for_it_whatever_else_could_no
     assert sql(api, "SELECT count(*) AS n FROM org_rule_holds")[0]["n"] == 0
 
 
+def test_a_question_the_directory_finds_broken_names_that_rule_when_the_text_check_faults(blocked, monkeypatch):
+    from backend import org_rule_check
+
+    api, _judge, _rule_id = blocked
+    color_rule(api)
+    task = _task(api)
+
+    def fault(*args, **kwargs):
+        raise RuntimeError("a fault here")
+
+    monkeypatch.setattr(org_rule_check.J, "pack", fault)
+    r = _question(api, task, "Should the Acme Lights note say the favorite color is teal?")
+    assert r.status_code == 409 and r.json()["error"] == "task_rule" and ACME in r.json()["detail"], r.text
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE org_rules SET status='retired', version=version+1 WHERE id=?", (_rule_id,))
+    r = _question(api, task, "Should the Acme Lights note say the favorite color is teal?")
+    assert r.status_code == 503 and "Try again" in r.text, r.text  # no rule found broken: a try again
+    assert sql(api, "SELECT count(*) AS n FROM org_rule_holds")[0]["n"] == 0
+
+
 def test_a_question_whose_rules_changed_while_it_was_checked_is_asked(blocked):
     """The Directory rule retired and the judged Block turned Warn mid-check: no rule in force holds it, so it is asked."""
     api, judge, rule_id = blocked
