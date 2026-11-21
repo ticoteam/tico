@@ -19,6 +19,14 @@ from backend.tests.helpers.new_bot_flows import create_bot
 ANA = "ana@acme.example"
 
 
+@pytest.fixture(autouse=True)
+def _still_clock():
+    """The clock stands still in each test: a time the test books and the time it expects are read from one instant,
+    so a test that crosses a minute boundary compares the same minute."""
+    with time_machine.travel(datetime.now(timezone.utc), tick=False):
+        yield
+
+
 def _iso(minutes):
     return (datetime.now(timezone.utc) + timedelta(minutes=minutes)).replace(second=0, microsecond=0).isoformat()
 
@@ -139,7 +147,7 @@ def _prep_tasks(api):
         return [
             (r["title"], r["owner_id"], r["private"])
             for r in c.execute(
-                "SELECT title,owner_id,private FROM tasks WHERE title LIKE 'Prepare for %' ORDER BY created_at"
+                "SELECT title,owner_id,private FROM tasks WHERE title LIKE 'Prepare for %' ORDER BY created_at, rowid"
             )
         ]
 
@@ -649,8 +657,9 @@ def test_the_thread_list_names_its_next_scheduled_call(meet, google):
     cid = thread(meet)
     later = schedule(meet, cid, minutes=300)
     sooner = schedule(meet, cid, minutes=60)
-    for _ in range(6):
-        post(meet, f"calls/{post(meet, f'threads/{cid}/calls', {'title': 'Acme now'})['id']}/end", {})
+    with time_machine.travel(datetime.now(timezone.utc) + timedelta(seconds=1), tick=False):  # newer than the bookings
+        for _ in range(6):
+            post(meet, f"calls/{post(meet, f'threads/{cid}/calls', {'title': 'Acme now'})['id']}/end", {})
     listed = get(meet, f"threads/{cid}/calls?limit=2")
     assert listed["next_scheduled"]["id"] == sooner["id"] and later["id"] not in [c["id"] for c in listed["calls"]]
     post(meet, f"calls/{sooner['id']}/end", {})
