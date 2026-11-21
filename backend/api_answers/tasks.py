@@ -609,6 +609,8 @@ class TaskFileView(TypedDict):
     mime: str
     current_version: int
     archived: bool
+    # A page's own archive flag (PATCH /api/v2/pages/{id}), apart from its file's.
+    page_archived: NotRequired[bool]
     links: list[PageLinkView]
     writers: list[PageWriter]
     versions: list[TaskFileVersion]

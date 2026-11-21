@@ -171,9 +171,9 @@ export function FileView({ t, file, full, flow }: { t: TaskData; file: string; f
     toast({ text: 'Removed', name: x.title || x.name, action: { label: 'Undo', run: () => void run('task.archiveFile', { task: t.id, file: x.id, archived: false }, { via: 'click' }).then((u) => u.ok || toast(failedToast(u))) } });
     void navigate({ to: details.to as never, search: back as never });
   };
-  // The full listing names a page's writers. A page is restored as a page, by whoever may archive it (its ⋯ rule).
-  const page = !!f && 'writers' in f;
-  const shown = useQuery({ ...pageShownQuery(t.id, file), enabled: page && !!f?.archived });
+  // Restore clears the flag that archived it: a page's own (by whoever may archive the page, its ⋯ rule), else the file's.
+  const page = !!f?.page_archived;
+  const shown = useQuery({ ...pageShownQuery(t.id, file), enabled: page });
   const mayRestore = page ? !!shown.data?.can_manage || !!shown.data?.page?.may_write : mayRemove;
   const restore = async (x: TaskFileView) => {
     const r = await (page ? run('task.archivePage', { task: t.id, page: x.id, archived: false }, { via: 'click' }) : run('task.archiveFile', { task: t.id, file: x.id, archived: false }, { via: 'click' }));
@@ -250,7 +250,7 @@ export function FileView({ t, file, full, flow }: { t: TaskData; file: string; f
         </div>
       ) : (
         <div className="frame fv">
-          {v && f && <Body f={f} v={v} onPicture={v === current ? () => showPicture(f.id) : undefined} signable={v === current && isPerson} />}
+          {v && f && <Body f={f} v={v} onPicture={v === current && !f.archived ? () => showPicture(f.id) : undefined} signable={v === current && isPerson} />}
         </div>
       )}
       <PictureViewer pictures={pictures} at={fullAt >= 0 ? fullAt : null} onAtChange={(i) => showPicture(i == null ? null : (pictures[i]?.id ?? null))} />

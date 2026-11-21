@@ -409,7 +409,8 @@ rest of the ladder. Task create and update take `"human": "human:charlie"` (`""`
 
 Attach a file to the task so anyone who can read the task can open it. Uploading the same name on the same task adds a
 new version; `--replaces <file id>` (MCP `replaces`) makes an upload the next version of that file whatever its name, and
-brings it back if it was archived. Each version records who uploaded it, when, its size and type, and an optional note;
+brings it back if it was archived. It keeps the file's type, never takes a page (`tico page publish` versions pages), and
+leaves an attachment that other tasks share. Each version records who uploaded it, when, its size and type, and an optional note;
 older versions stay behind the file's version menu.
 
 ```sh

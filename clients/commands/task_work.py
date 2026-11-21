@@ -656,7 +656,7 @@ REPLACES_ALONE = "replaces is for a file: a document or a page requirement conti
     writes=True,
 )
 def task_attach(api, args):
-    if args.get("replaces") and (args.get("document") or args.get("req") or args.get("page")):
+    if args.get("replaces") is not None and (args.get("document") or args.get("req") or args.get("page")):
         raise ValueError(REPLACES_ALONE)
     if args.get("document"):
         return _document(api, args)

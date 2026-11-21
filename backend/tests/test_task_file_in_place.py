@@ -61,6 +61,10 @@ def test_an_agent_replaces_a_file_in_place_and_its_older_versions_stay(api, tmp_
     assert file["id"] == fid and not file["archived"] and file["name"] == "letter-final.md"
     assert {v["n"]: v["name"] for v in file["versions"]} == {1: "letter-v1.md", 2: "letter-v2.md", 3: "letter-final.md"}
     assert (read(api, fid), read(api, fid, 1), read(api, fid, 2)) == (b"Final", b"First draft", b"Second draft")
+    # The archive took its versions off the task; coming back puts them on again for anyone who reads the task.
+    with api.app.state.store.read() as c:
+        first = c.execute("SELECT blob_id FROM bot_file_versions WHERE file_id=? AND version=1", (fid,)).fetchone()[0]
+    assert api.get(f"/api/v2/files/{first}", headers=headers("ben-test")).content == b"First draft"
 
     # Only a file on this very task is replaced, and a document continues its own file.
     other = post(api, "tasks", {"title": "Other matter", "owner": "ops", "body": "Elsewhere."})["id"]
@@ -71,12 +75,13 @@ def test_an_agent_replaces_a_file_in_place_and_its_older_versions_stay(api, tmp_
     r = api.post(f"/api/v2/tasks/{tid}/files", json=document, headers=headers(token))
     assert r.status_code == 422, r.text
     # The clients refuse it before anything is sent.
-    with pytest.raises(ValueError, match="replaces is for a file"):
-        attach(agent, {"id": tid, "document": "Spec", "text": "<p>Spec</p>", "replaces": fid})
-    page = tmp_path / "spec.html"
-    page.write_text("<p>Spec</p>")
-    with pytest.raises(remotecli.APIError, match="replaces is for a file"):
-        cli(api, token, monkeypatch, "attach", tid, str(page), "--doc", "Spec", "--replaces", fid)
+    for value in (fid, ""):  # an empty replaces is refused alike
+        with pytest.raises(ValueError, match="replaces is for a file"):
+            attach(agent, {"id": tid, "document": "Spec", "text": "<p>Spec</p>", "replaces": value})
+        page = tmp_path / "spec.html"
+        page.write_text("<p>Spec</p>")
+        with pytest.raises(remotecli.APIError, match="replaces is for a file"):
+            cli(api, token, monkeypatch, "attach", tid, str(page), "--doc", "Spec", "--replaces", value)
     assert len(listed(api, tid)) == 1
 
 
@@ -126,3 +131,48 @@ def test_an_attachment_from_before_versioned_files_is_replaced_and_archived_with
     assert listed(api, tid)[kept]["archived"] and read(api, kept, 1) == b"Mailed"
     assert api.patch(f"/api/v2/files/{kept}", json={"archived": False}, headers=headers()).status_code == 200
     assert not listed(api, tid)[kept]["archived"]
+
+
+def test_replaces_refuses_a_page_another_type_and_an_attachment_other_tasks_share(api):
+    tid = post(api, "tasks", {"title": "Arbitration", "owner": "ops", "body": "File the claim."})["id"]
+    token = as_bot(api, "ops")
+    claim = post(api, f"tasks/{tid}/files", {"name": "claim.pdf", "content_base64": "JVBERi0xLjQK"}, token)["file_id"]
+    refused = post(
+        api, f"tasks/{tid}/files", {"name": "claim.md", "text": "# Claim", "replaces": claim}, token, expected=422
+    )
+    assert "keeps the file's type" in refused["error"]["detail"]
+
+    page = post(api, "pages", {"task": tid, "as": "Brief", "name": "brief.html", "text": "<p>Brief</p>"}, token)
+    page_id = page.get("file_id") or page["page"]["file_id"]
+    body = {"name": "brief-2.html", "text": "<p>Brief 2</p>", "replaces": page_id}
+    refused = post(api, f"tasks/{tid}/files", body, token, expected=422)
+    assert "page publish" in refused["error"]["detail"]
+
+    other = post(api, "tasks", {"title": "Related claim", "owner": "ops", "body": "Same exhibit."})["id"]
+    shared = legacy_attachment(api, tid, "exhibit.txt", b"Exhibit A")
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO task_assets VALUES(?,?)", (other, shared))
+    body = {"name": "exhibit-2.txt", "text": "Exhibit A, marked", "replaces": shared}
+    refused = post(api, f"tasks/{tid}/files", body, token, expected=422)
+    assert "more than one task" in refused["error"]["detail"]
+
+
+def test_a_file_published_for_a_task_and_a_version_by_its_blob_id_archive_and_restore_on_the_task(api):
+    tid = post(api, "tasks", {"title": "Mailbox", "owner": "ops", "body": "Scan the mail."})["id"]
+    token = as_bot(api, "ops")
+    publish = hubtools.BY_NAME["tico_file_publish"]["fn"]
+    published = publish(Agent(api, token), {"name": "scan.md", "text": "Letter 1", "task": tid})["file"]["id"]
+    assert api.patch(f"/api/v2/files/{published}", json={"archived": True}, headers=headers(token)).status_code == 200
+    assert listed(api, tid)[published]["archived"]
+    restored = api.patch(f"/api/v2/files/{published}", json={"archived": False}, headers=headers(token))
+    assert restored.json() == {"file": {"id": published, "archived": False}}, restored.text
+    assert not listed(api, tid)[published]["archived"]
+
+    # A version's blob id archives its own file, never a second copy of it.
+    fid = post(api, f"tasks/{tid}/files", {"name": "log.md", "text": "Day 1"})["file_id"]
+    with api.app.state.store.read() as c:
+        blob = c.execute("SELECT blob_id FROM bot_file_versions WHERE file_id=? AND version=1", (fid,)).fetchone()[0]
+    archived = api.patch(f"/api/v2/files/{blob}", json={"archived": True}, headers=headers())
+    assert archived.json() == {"file": {"id": fid, "archived": True}}, archived.text
+    files = listed(api, tid)
+    assert files[fid]["archived"] and blob not in files
