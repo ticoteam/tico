@@ -313,6 +313,11 @@ def moved(
     H.event(conn, actor, "task.close" if new == "closed" else "task.update", after["id"], {"status": new, "note": why})
     H.recount(conn, [after.get("owner_id"), after.get("requester_id"), before.get("owner_id")])
     if new == "closed":
+        from . import email_sending
+
+        # An email still to go for it, or whose OK waits on it, is canceled with it (backend/email_sending.py).
+        mail: Any = email_sending
+        mail.task_closed(conn, after["id"])
         # Last, so a wake this move queued is stopped too. The run that makes the close is never stopped.
         H.stop_ended_work(conn, actor, after["id"], "closed")
 

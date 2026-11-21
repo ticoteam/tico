@@ -553,6 +553,8 @@ export interface EmailFile {
   name: string;
   size: number;
   type?: string;
+  /** A version of an archived file of the send's task, and of no file still in use there. */
+  archived?: boolean;
 }
 
 /** The send as its preview gives it. `reply_to_id` (the Gmail message it answers) is read when the server gives it:

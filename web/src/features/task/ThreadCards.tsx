@@ -6,9 +6,9 @@ import { besideThread } from '@/lib';
 import { flowQuery, type FlowItem } from '@/features/tasks/routing';
 import { AskCard } from './AskCard';
 import { decisionOf, personOf, sendTitle, tabAddress, thingsOf } from './model';
-import { addressesOf, emailSendQuery, taskDetailQuery, taskFilesQuery, type EmailFile, type TaskData } from './queries';
-import { useMatterOf } from './Waiting';
-import { sendTasksOf, stillToGo } from './waits';
+import { taskDetailQuery, taskFilesQuery, type TaskData } from './queries';
+import { matterOf } from './Waiting';
+import { sendTasksOf, sendToGo } from './waits';
 
 /* An approval an agent asked for that waits on the person, as a card in the agent's thread at the time it was asked
    (plan/threads-team.html: an approval waiting, as a link in a thread). An OK the agent asked for (an email, a finance
@@ -57,19 +57,6 @@ export function useApprovalCards(scope: ApprovalScope, chat?: string): ChatMessa
     hung ? it.ask?.kind === 'ok' && !!whose(it) && hung.has(it.id) : (it.ask?.kind === 'ok' || it.ask?.kind === 'page') && !!agent && whose(it) === agent,
   );
   const subs = useQueries({ queries: asks.map((it) => ({ ...taskDetailQuery(it.id), retry: false })) });
-  const mails = useQueries({
-    queries: asks.map((it) => {
-      const send = emailIn(it.ask?.shows ?? []);
-      return { ...emailSendQuery(it.id, send ?? ''), enabled: !!send, retry: false };
-    }),
-  });
-  // The case an older send names by its task (useMatterOf): read before the card draws, so its title does not change.
-  const froms = useQueries({
-    queries: asks.map((it, i) => {
-      const from = mails[i]?.data?.send.task_id;
-      return { ...taskDetailQuery(from && from !== it.id ? from : undefined), retry: false };
-    }),
-  });
   // The files any other OK shows (its chips, ThingCard), read before the card draws.
   const files = useQueries({
     queries: asks.map((it, i) => {
@@ -81,11 +68,9 @@ export function useApprovalCards(scope: ApprovalScope, chat?: string): ChatMessa
     const sub = subs[i]?.data;
     if (!sub || !decisionOf(sub)) return [];
     const send = emailIn(it.ask?.shows ?? []);
+    // An email's: still to go out, as its OK task's row says (sendToGo); its preview is read only on its Email tab.
     if (send) {
-      const mail = mails[i];
-      if (!mail?.data || !stillToGo(mail.data.send.state)) return [];
-      const from = mail.data.send.task_id;
-      if (from && from !== it.id && froms[i]?.isPending && froms[i]?.fetchStatus !== 'idle') return [];
+      if (!sendToGo(sub)) return [];
     } else if (files[i]?.isPending && files[i]?.fetchStatus !== 'idle') return [];
     // The words stand for the card where words are read (a row with none is not drawn).
     const row: ChatMessage = {
@@ -109,7 +94,7 @@ export function approvalCard(m: ChatMessage) {
 function ApprovalCard({ task, send, chat }: Approval) {
   const sub = useQuery(taskDetailQuery(task)).data;
   if (!sub) return null;
-  return send ? <EmailCard sub={sub} send={send} chat={chat} /> : <ThingCard sub={sub} chat={chat} />;
+  return send ? <EmailCard sub={sub} chat={chat} /> : <ThingCard sub={sub} chat={chat} />;
 }
 
 /** Any other OK (a page, a file, a finance item): the task's title, and the files it shows as chips. It opens the task's
@@ -121,19 +106,18 @@ function ThingCard({ sub, chat }: { sub: TaskData; chat?: string }) {
   return <Card to={tabAddress(sub, undefined, false).to} chat={chat} what={sub.title} files={chips} />;
 }
 
-/** An email's OK: the case it answers (else the subject) and who it goes to, its files as chips. It opens on the case's
-    Email tab, or on the Send task's own page when the case has more than one email (the tab would be a guess). */
-function EmailCard({ sub, send, chat }: { sub: TaskData; send: string; chat?: string }) {
-  const mail = useQuery(emailSendQuery(sub.id, send)).data;
-  const matter = useMatterOf(sub, send);
+/** An email's OK: the case it answers (else the subject) and who it goes to, from the OK task itself (its title and its
+    parent or the case that waits on it, `matterOf`): the email's preview is read only on its Email tab, since that
+    read counts as showing it. It opens on the case's Email tab, or on the Send task's own page when the case has more
+    than one email (the tab would be a guess). */
+function EmailCard({ sub, chat }: { sub: TaskData; chat?: string }) {
+  const matter = matterOf(sub);
   const held = useQuery({ ...taskDetailQuery(matter?.id), retry: false }).data;
   const one = !!matter && (held?.id !== matter.id || sendTasksOf(held).length <= 1);
   const to = one ? matter.to : tabAddress(sub, undefined, false).to;
   const title = sendTitle(sub.title);
-  const address = (mail && addressesOf(mail).to[0]) ?? title?.to;
   const what = matter?.title ?? title?.subject ?? sub.title;
-  const chips = (mail?.files ?? []).map((f: EmailFile) => ({ key: `${f.part}:${f.name}`, name: f.name, type: typeOf(f.name, f.type) }));
-  return <Card to={to} chat={chat} what={address ? `${what}, to ${personOf(address)}` : what} files={chips} />;
+  return <Card to={to} chat={chat} what={title?.to ? `${what}, to ${personOf(title.to)}` : what} />;
 }
 
 /** A file's kind as a chip names it: from its media type, else its name's ending ("PDF"). */

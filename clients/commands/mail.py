@@ -360,8 +360,7 @@ _DRAFT_KEYS = (
 
 _SEND_TASK = {
     **TASK_ID,
-    'description': 'The task this email is for: an OK it needs is asked on a sub-task of it. Defaults to the task your '
-    'turn works on',
+    'description': 'The task this email is for: an OK it needs is asked on it. Defaults to the task your turn works on',
 }
 
 

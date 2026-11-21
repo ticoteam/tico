@@ -48,7 +48,7 @@ requirements  id, stage_id | visit_id (exactly one), kind, source, condition, se
               kind: owner_done | ok | page | item | linked_done
               source and condition on an item only (github: pr_open | checks_pass | pr_merged | in_release)
               person_id only on ok and page (C29).
-              unique (visit_id, added_by_id) where by_bot = 1 and withdrawn_at is null (C15)
+              unique (visit_id, added_by_id) where by_bot = 1 and withdrawn_at is null and not settings.bound (C15)
 visits        id, task_id, stage_id, entered_at,
               entered_how (new|met|pushed_past|back|closed|reopened),
               left_at, how (met|pushed_past|back|closed|reopened), by_id, why,

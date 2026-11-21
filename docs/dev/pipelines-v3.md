@@ -135,7 +135,8 @@ Close calls that change behavior, C1 to C31. They are part of sign-off A. Text i
 - **C14.** Forward moves go one stage at a time. Dragging a task several stages ahead counts as pushing past every stage
   skipped, with one reason.
 - **C15.** A bot can have one requirement of its own open on a task at a time. If it asks again, the new one replaces the
-  old one. People have no such limit.
+  old one. People have no such limit. An OK bound to an action (send this email, mail this letter) is not counted: it
+  is keyed by what it approves, so each send on a task keeps its own OK and a later ask never replaces it.
 - **C16.** The person at the top of the ladder is the first person above the pipeline's manager bot on the org chart. If
   there is none, the org owner. A task with a Human ([tasks.md](../tasks.md#the-tasks-human)) falls to them first.
 - **C17.** From phase 1 until the proof, the other orgs stay on today's release. A fix for them comes from a branch off
@@ -294,7 +295,7 @@ spec, the bots whose areas the work touches get one say.
 - Anyone working a task can add a requirement to it: an OK from a named person (C30).
 - It lasts for this visit to the stage. The task doesn't leave until it is answered, withdrawn, or pushed past with a
   reason.
-- A bot can have one open per task. Asking again replaces it (C15).
+- A bot can have one open per task, beside any OKs bound to an action. Asking again replaces it (C15).
 - Moving back or closing ends it. Nothing is left behind.
 - A bot takes back only an ask a bot added. An ask a person added is taken back by a person.
 - Only an OK can name a person (C29). To hand it to someone else, put their name on it.

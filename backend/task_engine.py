@@ -2401,7 +2401,8 @@ def add_requirement(
     address). `ends_with_task`: an OK a feature asks
     about the task's own work (backend/person_asks.py), taken back once nothing else holds the task (`advance`), so it
     never holds it alone. The task does not leave the stage until it is answered, withdrawn or pushed past. A bot has
-    one open per task: asking again replaces it (C15, `_replace_open`). A bot does not ask an OK in Product's Validate
+    one open per task: asking again replaces it (C15, `_replace_open`), except an OK bound to an action, which stands
+    beside it. A bot does not ask an OK in Product's Validate
     that is not an OK of its passed proof page (validate_gate; `for_action`: an OK bound to an action, task_asks.ask_ok,
     is that action's own)."""
     row = task(conn, task_id)
@@ -2444,7 +2445,7 @@ def add_requirement(
         _refuse(conn, by, "private", told(conn, by, row, unshared), task_id, said=said)
     if not (line or "").strip():
         _refuse(conn, by, "task_requirement", "Say what you are asking, in one sentence", task_id)
-    return _write_ask(conn, row, by, kind, person, line, shows=shows, ends=ends_with_task)
+    return _write_ask(conn, row, by, kind, person, line, shows=shows, ends=ends_with_task, bound=for_action)
 
 
 def _write_ask(
@@ -2457,15 +2458,18 @@ def _write_ask(
     *,
     shows: object = None,
     ends: bool = False,
+    bound: bool = False,
 ) -> Row:
     """The ask `add_requirement` checked, written on the task's visit: it replaces the bot's open one, starts the
-    ladder again and wakes whom it names. Returns the task with `requirement_id`."""
+    ladder again and wakes whom it names. Returns the task with `requirement_id`. A `bound` ask (an OK bound to an
+    action, task_asks.ask_ok) replaces nothing and is never replaced (`_replace_open`): it is marked so in `settings`."""
     H = _h()
     task_id = str(row["id"])
     ts = H.now()
     visit = row["visit"]
-    if is_bot(by):
+    if is_bot(by) and not bound:
         _replace_open(conn, task_id, visit["id"], by, ts)
+    settings = {**({"ends_with_task": True} if ends else {}), **({"bound": True} if bound else {})}
     requirement_id = H.new_id()
     conn.execute(
         "INSERT INTO requirements (id, visit_id, kind, who_oks, person_id, added_by_id, by_bot, line, shows, settings, "
@@ -2480,7 +2484,7 @@ def _write_ask(
             1 if is_bot(by) else 0,
             line.strip(),
             None if shows is None else json.dumps(shows),
-            json.dumps({"ends_with_task": True} if ends else {}),
+            json.dumps(settings),
             ts,
         ),
     )
@@ -2562,24 +2566,14 @@ def shows_a_file(conn: "sqlite3.Connection", by: str, shows: object) -> bool:
 
 def _replace_open(conn: "sqlite3.Connection", task_id: str, visit_id: str, by: str, ts: str) -> None:
     """C15: a bot has one ask of its own on a visit (the index requirements_one_per_bot): asking again replaces it.
-    What was answered stays on record (its answer, and the task's `decided`, task_calls), and an OK that was used stays
-    used. An OK bound to exact content that was given and not used yet is never dropped by a new ask, nor made good for
-    anything else: the bot uses it or withdraws it first."""
-    from . import task_asks
-
+    What was answered stays on record (its answer, and the task's `decided`, task_calls). An OK bound to an action (a
+    send, a letter, a spend: `settings.bound`, task_asks.ask_ok) is keyed by its subject and content instead and is left
+    out: a later ask never stops the email it waits on, and two sends on one task each keep their own OK."""
     rows = conn.execute(
-        "SELECT id FROM requirements WHERE visit_id=? AND added_by_id=? AND by_bot=1 AND withdrawn_at IS NULL",
+        "SELECT id FROM requirements WHERE visit_id=? AND added_by_id=? AND by_bot=1 AND withdrawn_at IS NULL "
+        "AND json_extract(settings, '$.bound') IS NULL",
         (visit_id, str(by)),
     ).fetchall()
-    for (old,) in rows:
-        if task_asks.standing(conn, str(old)) == task_asks.OK:
-            _refuse(
-                conn,
-                by,
-                "task_requirement",
-                "Your earlier OK on this task was given and not used yet: use it, or withdraw it, then ask again",
-                task_id,
-            )
     for (old,) in rows:
         conn.execute("UPDATE requirements SET withdrawn_at=? WHERE id=?", (ts, old))
         _event(conn, task_id, by, "requirement_withdrawn", old, None, "Asked again")

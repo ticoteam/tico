@@ -10,6 +10,8 @@ import type { TaskData } from './queries';
 
 type Reply = { status?: number; body: unknown };
 const asked: string[] = [];
+/** Every address read. */
+const read: string[] = [];
 
 const ask = (task: string, by: string, send: string, since = '2026-11-19T09:00:00Z') => ({
   kind: 'ask',
@@ -35,6 +37,7 @@ const okTask = (id: string, by = 'bot:lo') =>
     children: [],
     relations: { depends_on: [{ id: 'm1', number: 7, title: 'Ruiz: reply letter', status: 'open', direction: 'in' }] },
     to_leave: [{ requirement_id: 'r1', kind: 'ok', line: 'Send this email?', met: false, may: ['ok', 'no'], shows: ['email:s1'], asked_by: by }],
+    email_send: { id: 's1', state },
   }) as unknown as TaskData;
 
 const matter = { id: 'm1', number: 7, title: 'Ruiz: reply letter', status: 'open', pipeline_id: 'legal', children: [], relations: { depends_on: [{ id: 't1', title: 'Send: Re: Notice of claim → dana@example.test', status: 'open', direction: 'out' }] }, to_leave: [] };
@@ -93,7 +96,9 @@ beforeEach(() => {
   queryClient.clear();
   const actors = [{ id: 'bot:lo', kind: 'agent', name: 'Legal Owner', slug: 'legal-owner' }];
   queryClient.setQueryData(['directory'], { actors, byId: { 'bot:lo': actors[0], 'bot:legal-owner': actors[0] } });
+  read.length = 0;
   vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+    read.push(String(url));
     if ((init?.method ?? 'GET') !== 'GET') asked.push(String(url));
     const r = answer(String(url));
     return new Response(JSON.stringify(r.body), { status: r.status ?? 200, headers: { 'Content-Type': 'application/json' } });
@@ -123,12 +128,12 @@ const show = (scope: ApprovalScope, chat?: string) =>
   );
 
 describe('an approval waiting, as a card in the agent’s thread @approvals', () => {
-  it('names the case and who it goes to, shows the letter, and opens the case on the email', async () => {
+  it('names the case and who it goes to from the OK task, never reading the email, and opens the case on it', async () => {
     show({ agent: 'bot:legal-owner' });
     const card = await screen.findByRole('link', { name: /Approve/ });
-    expect(card.textContent).toContain('Ruiz: reply letter, to Dana Ruiz');
-    expect(card.textContent).toContain('ruiz-letter.pdf');
-    expect(card.textContent).toContain('PDF');
+    expect(card.textContent).toContain('Ruiz: reply letter, to dana@example.test');
+    // its preview is read only on the Email tab: that read counts as showing the email
+    expect(read.filter((u) => u.includes('/email/sends/'))).toEqual([]);
     // The case's own address: it opens on the email waiting on the person.
     expect(card.getAttribute('href')).toBe('/task/m1');
     // At the time it was asked, from the agent.
@@ -179,7 +184,7 @@ describe('an approval waiting, as a card in the agent’s thread @approvals', ()
   it('an email already sent or canceled shows no card', async () => {
     state = 'canceled';
     show({ agent: 'bot:lo' });
-    await waitFor(() => expect(queryClient.getQueryData(['tasks', 'detail', 't1', 'email', 's1'])).toBeTruthy());
+    await waitFor(() => expect(queryClient.getQueryData(['tasks', 'detail', 't1'])).toBeTruthy());
     expect(screen.queryByRole('link')).toBeNull();
   });
 

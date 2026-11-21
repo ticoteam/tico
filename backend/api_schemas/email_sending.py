@@ -55,6 +55,8 @@ SCHEMAS.update(
                 "bcc": items("s"),
                 # What the OK sends back (POST /api/v2/tasks/{tid}/asks/{rid}/ok); null when the send has no OK to give.
                 "shown_hash": "n",
+                # The later day a send still to go is held for (its matter's not before); null when it has none.
+                "not_before": "n",
             }
         ),
         "EmailSendList": obj({"sends": items(ref("EmailSend")), "next_cursor": "n"}),

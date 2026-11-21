@@ -6,7 +6,7 @@ this cap, send this report) waits on an OK from a named person. The OK is a requ
 (`H.task_ask(kind="ok")`), and this module keeps a grant beside it (`ok_grants`): who asked, what will be done
 (`subject`, "<kind>:<id>", e.g. "email_send:<id>"), and the content asked about with its hash.
 
-    ask_ok(conn, by, person, line, *, shows, subject, content, task_id=None, title=None, parent_id=None, matter=None)
+    ask_ok(conn, by, person, line, *, shows, subject, content, task_id=None, title=None, matter=None, why=..., renew=False)
         -> {"task_id", "requirement_id"}
     show(conn, person, requirement_id, content, *, own_click) -> shown hash      a preview was put in front of a person
     preview(conn, viewer, requirement_id, *, own_click) -> {...}                 the stored content, shown
@@ -671,15 +671,17 @@ def ask_ok(
     content: object,
     task_id: str | None = None,
     title: str | None = None,
-    parent_id: str | None = None,
     matter: str | None = None,
+    why: str = "Asked again",
+    renew: bool = False,
 ) -> Row:
     """Ask `person` (always a person by name) to OK `content` before `subject` is done. The OK goes on `task_id`, the
-    task the work belongs to; with none, a task is filed in General first (under `parent_id`, when given, as its
-    sub-task), asked for by `by`: owned by `by` when that is a bot or a person, by `person` when it is the engine, and
-    titled by FILED_TITLES with `matter`, the task the asker was working, when its title may go there. The same subject
-    asked again with the same content is the same ask; with other content, the old ask is withdrawn and a new one made
-    (for a GENERIC subject, only the same asker's on the same task). Returns {task_id, requirement_id}."""
+    task the work belongs to; with none, a task is filed in General first, asked for by `by`: owned by `by` when that is
+    a bot or a person, by `person` when it is the engine, and titled by FILED_TITLES with `matter`, the task the asker
+    was working, when its title may go there. The same subject asked again with the same content is the same ask; with
+    other content, a new one is made and then the old one withdrawn with `why` (for a GENERIC subject, only the same
+    asker's on the same task), so the task never moves on between the two; `renew` asks anew even for the same content
+    (its old ask is no longer good: whom it waits on may not approve it now). Returns {task_id, requirement_id}."""
     H = _h()
     subject = str(subject or "").strip()
     if not kind_of(subject) or ":" not in subject:
@@ -700,6 +702,7 @@ def ask_ok(
     # subject is the asker's own words: only the same asker's ask on the same task is replaced; another's is never
     # touched (they stand side by side, each used by whoever asked it).
     own_words = kind_of(subject) in GENERIC and kind_of(subject) not in OWNED
+    replaced: list[str] = []
     for old in conn.execute(
         "SELECT requirement_id FROM ok_grants WHERE subject=? AND used_at IS NULL", (subject,)
     ).fetchall():
@@ -711,18 +714,18 @@ def ask_ok(
         ):
             continue
         state = _state(conn, before)[0]
-        if state == SENT_BACK and before["asked_by_id"] == by:
+        if state == SENT_BACK and (before["asked_by_id"] == by or not own_words):
             # Asked again after a send back: the new ask replaces the old one, which would otherwise hold its task in
-            # the stage (C15). The send back stays in the task's history.
-            withdraw(conn, before["requirement_id"], "Asked again")
+            # the stage (C15), once the new one is written. The send back stays in the task's history.
+            replaced.append(before["requirement_id"])
             continue
         if state not in (WAITING, OK):
             continue
-        if before["content_hash"] == digest and before["asked_by_id"] == by:
+        if before["content_hash"] == digest and before["asked_by_id"] == by and not renew:
             found = task_of(conn, before["requirement_id"])
             if found and (task_id is None or found == task_id):
                 return {"task_id": found, "requirement_id": before["requirement_id"]}
-        withdraw(conn, before["requirement_id"], "Asked again")
+        replaced.append(before["requirement_id"])
     filed = task_id is None
     if filed:
         owner = by if (is_bot(by) or is_human(by)) else target
@@ -735,7 +738,6 @@ def ask_ok(
             (f"{named} · {about}"[:300] if about else named) or (title or line).strip(),
             line.strip(),
             owner,
-            parent_id=parent_id,
             lint=False,
             # A task filed for an OK is private to its parties: the subject it previews is never wider than they are.
             private=True,
@@ -761,6 +763,8 @@ def ask_ok(
         (requirement_id, by, target, subject, digest, _canonical(content), int(filed), H.now()),
     )
     H.event(conn, by, "ok.asked", requirement_id, {"subject": subject, "to": target, "task": task_id})
+    for old_id in replaced:
+        withdraw(conn, old_id, why)
     return {"task_id": task_id, "requirement_id": requirement_id}
 
 
@@ -1073,11 +1077,14 @@ def revoke(conn: "sqlite3.Connection", requirement_id: str) -> None:
 
 def withdraw(conn: "sqlite3.Connection", requirement_id: str, why: str) -> None:
     """Take an OK back that nobody needs any more: the content changed, or the act will not happen. A grant that was
-    used stays as it is. A task ask_ok filed is closed with `why`."""
+    used stays as it is. One that was not is revoked for good (`revoke`), even when its visit already ended met and
+    its requirement can no longer be withdrawn: asking about the same content again needs a new OK. Its answer stays
+    on record. A task ask_ok filed is closed with `why`."""
     H = _h()
     row = grant(conn, requirement_id)
     if not row or row.get("used_at"):
         return
+    revoke(conn, requirement_id)
     requirement = _requirement(conn, requirement_id)
     if requirement and not requirement.get("withdrawn_at"):
         H.attempt(conn, H.task_withdraw_ask, SYSTEM, requirement_id, why)

@@ -237,3 +237,73 @@ def test_the_stored_content_is_what_the_preview_shows(c):
     assert (seen["subject"], seen["content"], seen["standing"]) == (SUBJECT, EMAIL, K.WAITING)
     K.give_ok(c, ANA, asked["requirement_id"], seen["shown_hash"], own_click=True)
     assert K.standing(c, asked["requirement_id"]) == K.OK
+
+
+def test_a_bots_next_ask_on_the_task_never_replaces_its_pending_send_ok(c):
+    """An OK bound to an action stood on the task only until the bot's next ask there replaced it
+    (task_engine._replace_open), and so stopped the email, which is why a send's OK had a task of its own. A bound OK is
+    keyed by its subject and content: the bot's later OK of a page, and a second send's OK, stand beside it, and each is
+    given and used on its own. An OK that is not bound still replaces the bot's earlier one."""
+    from backend import task_requirements as R
+
+    case = X.new_task(c, ANA, "Winberg: reply letter", assignee=SENDER)["id"]
+    send = _ask(c, task_id=case)
+    other = {**EMAIL, "subject": "Records enclosed"}
+    second = K.ask_ok(
+        c, SENDER, ANA, "Send this email?", shows=["email:e2"], subject="hq_reply:TK-2", content=other, task_id=case
+    )
+
+    def ask(line, shows):
+        return H.task_ask(c, SENDER, case, ANA, line, shows=shows, seen_version=H.task(c, case)["version"])
+
+    page = ask("OK the reply letter?", X.shown(c, bot="sender", task_id=case))
+    assert K.standing(c, send["requirement_id"]) == K.WAITING
+    assert K.standing(c, second["requirement_id"]) == K.WAITING
+    _ok(c, send)
+    again = ask("OK the new letter?", X.shown(c, "Letter v2", "sender", case))
+    assert R.get(c, page["requirement_id"])["withdrawn_at"]  # an unbound OK is still replaced
+    assert not R.get(c, again["requirement_id"])["withdrawn_at"]
+    assert K.standing(c, send["requirement_id"]) == K.OK
+    assert K.standing(c, second["requirement_id"]) == K.WAITING
+    K.use(c, send["requirement_id"], SUBJECT, EMAIL, SENDER)
+    _ok(c, second, content=other)
+    K.use(c, second["requirement_id"], "hq_reply:TK-2", other, SENDER)
+
+
+def test_an_ok_replaced_after_its_visit_ended_met_is_not_good_for_its_content_again(c):
+    """A approved, the task moved on (the visit ended met, so the requirement could no longer be withdrawn), then B was
+    asked: A's grant stayed OK, and asking about A again handed that old OK back. A replaced grant is revoked for
+    good, its answer kept on record: going back to A needs a fresh OK."""
+    pipe = X.pipeline(
+        c, "email", "Email", ({"name": "Draft", "owner": SENDER, "by_hand": True}, {"name": "Send", "owner": SENDER})
+    )
+    task_id = X.new_task(c, ANA, "Send the invoice", pipe["id"], assignee=SENDER)["id"]
+    first = _ask(c, task_id=task_id)
+    _ok(c, first)
+    assert H.task_move(c, ANA, task_id, H.TASK_NEXT)["stage"]["name"] == "Send"
+    other = {**EMAIL, "body_sha256": "b" * 64}
+    _ask(c, content=other, task_id=task_id)
+    assert K.standing(c, first["requirement_id"]) == K.WITHDRAWN
+    back = _ask(c, task_id=task_id)
+    assert back["requirement_id"] != first["requirement_id"] and K.standing(c, back["requirement_id"]) == K.WAITING
+    answer = c.execute("SELECT answer, undone_at FROM answers WHERE requirement_id=?", (first["requirement_id"],))
+    assert tuple(answer.fetchone()) == ("ok", None)
+
+
+def test_asking_again_after_a_send_back_never_lets_the_task_move_on_between_the_two(c):
+    """Asked again after a send back, the old ask was withdrawn first: when it was the last thing the stage waited on,
+    the task moved on before the new ask was written, and asking on it was refused. The new ask is written first."""
+    from backend import task_engine as E
+
+    row = X.new_task(c, ANA, "Send the invoice", assignee=SENDER)
+    first = _ask(c, task_id=row["id"])
+    X.say_done(c, row, SENDER)
+    E.advance(c, row["id"])
+    assert H.task(c, row["id"])["stage_id"] == row["stage_id"]  # the OK is all it waits on
+    H.task_answer(c, ANA, row["id"], first["requirement_id"], "no", "Say the amount.")
+    assert K.standing(c, first["requirement_id"]) == K.SENT_BACK
+    again = _ask(c, content={**EMAIL, "body_sha256": "b" * 64}, task_id=row["id"])
+    after = H.task(c, row["id"])
+    assert (after["status"], after["stage_id"]) == ("open", row["stage_id"])
+    assert K.standing(c, again["requirement_id"]) == K.WAITING
+    assert K.standing(c, first["requirement_id"]) in (K.SENT_BACK, K.WITHDRAWN)
