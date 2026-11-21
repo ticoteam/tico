@@ -37,7 +37,13 @@ BOOTSTRAP_TEMPLATES = {
     "librarian": "librarian",
     "strategy-owner": "strategy-owner",
 }
+OLD_NAMES = {"botops": "agent-ops"}  # the server names it so to a computer it cannot tell is new (#4863)
 FETCH_RETRY_S = 120  # how long a repository that could not be cloned is left before the next try
+
+
+def _current(named, cards):
+    """A template this release's catalog has under another name, by that name."""
+    return OLD_NAMES.get(named, named) if named not in cards else named
 
 
 class BotSetup:
@@ -90,7 +96,7 @@ class BotSetup:
         placed, not on first use. A registration made before the catalog existed carries no template,
         so the assistant and Agent Ops are recognized by their own slugs as well.
         """
-        named = str((config or {}).get("template") or "")
+        named = _current(str((config or {}).get("template") or ""), cards)
         if named:
             card = cards.get(named) or {}
             return named if card.get("bootstrap") or (card and (config or {}).get("materialize") is True) else ""
@@ -196,7 +202,7 @@ class BotSetup:
     def refresh_template(self, bot, config, cards):
         """(the template a bot follows, the template its config names that the catalog no longer has). A registration
         made before the catalog existed carries no template: the built-in bots are recognized by their own slugs."""
-        named = str((config or {}).get("template") or "")
+        named = _current(str((config or {}).get("template") or ""), cards)
         if named:
             return (named, "") if named in cards else ("", named)
         template = BOOTSTRAP_TEMPLATES.get(bot, "")

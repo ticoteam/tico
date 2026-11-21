@@ -951,16 +951,28 @@ def parse_body(raw):
 # Taking back its own Confirm card, and listing them (backend/assistant.py): Agent Ops' own cards, never run for a person.
 OWN = re.compile(
     API + r"(credential-runtime|runner-credential-.*|runner-watcher-credentials|attempts.*|jobs.*|runners/.*|"
-    r"messages(/.*)?|chat/.*|conversations/.*|bots/(" + H.FLEET_MAINTAINER + "|" + H.AGENT_OPS_SLUG + r")(/.*)?|"
+    r"messages(/.*)?|chat/.*|conversations/.*|bots/" + H.FLEET_MAINTAINER + r"(/.*)?|"
     r"files/(uploads|imports)|uploads/.*|me(/.*)?|"
     r"assistant/proposals|assistant/actions/" + _S + r"/withdraw)"
 )
 
 
-def default_delegable(method, path, body=None, query=None):
+BOT_ROUTE = re.compile(API + r"bots/([^/]+)(/.*)?")
+
+
+def by_id(path, resolve):
+    """A bot's route named by the bot's id: `resolve(ref)` is the id of the bot a slug or id names, or None. Agent Ops'
+    own routes are its id's, so a company's own bot that holds the slug agent-ops is never taken for it."""
+    found = BOT_ROUTE.fullmatch(path or "")
+    bot = resolve(found.group(1)) if found and resolve else None
+    return API + "bots/" + bot + (found.group(2) or "") if found and bot else path
+
+
+def default_delegable(method, path, body=None, query=None, resolve=None):
     """Whether an Agent Ops call with no explicit `on_behalf_of` acts as the person who asked: only the routes Agent Ops
-    may do or propose for a person, and never its own plumbing or its own messages."""
-    path = normalize(path)
+    may do or propose for a person, and never its own plumbing or its own messages. `resolve` names a bot route by its
+    id (`by_id`)."""
+    path = by_id(normalize(path), resolve)
     if (
         path
         and str(method).upper() in ("GET", "POST")

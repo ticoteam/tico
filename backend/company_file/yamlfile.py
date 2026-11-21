@@ -419,7 +419,9 @@ def from_yaml(text):
         bot = {
             "id": _str(b.get("id")),
             "template": role["slug"],
-            "title": _str(b.get("title")),
+            "title": role["name"]
+            if D.RENAMED_TITLES.get(b.get("template")) == b.get("title")
+            else _str(b.get("title")),
             "dept": b.get("department"),
             "lead": role["lead"],
             "core": role["core"],

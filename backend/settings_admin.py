@@ -783,6 +783,10 @@ class SettingsAdmin:
         default until the bot's owner picks one."""
         CA.gate(c, who.actor, "bots", "add a bot")
         self.validate_template(body.template)
+        if body.template == H.AGENT_OPS_SLUG:  # one Agent Ops, under its slug: never a second under -2
+            if H.bot(c, H.FLEET_MAINTAINER) or H.resolve_bot(c, H.AGENT_OPS_SLUG):
+                raise Problem("duplicate", "This company has its Agent Ops already", 409)
+            body = body.model_copy(update={"slug": H.AGENT_OPS_SLUG})
         if not body.slug and (asked := self._bot_being_set_up(c, body.template)):
             # Agent Ops left the slug out while working a bot's own "Set up" task: that bot is the one asked for, so it
             # answers (`created: false`, below) and no second one is made under a -2 slug.
@@ -842,7 +846,7 @@ class SettingsAdmin:
             template=body.template,
         )
         result = self.create_bot(c, who, payload)
-        bot_id = H.resolve_bot(c, body.slug)["id"]
+        bot_id = str(result["id"])  # the bot it made, under the slug it took
         if body.template:
             row = self._config(c, bot_id)
             declared = _json(row["config"], {}) or {}

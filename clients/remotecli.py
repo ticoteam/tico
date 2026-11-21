@@ -692,7 +692,7 @@ def bots(client, args):
     record = onboarding(client)
     chosen = (record.get("selected") or {}).get(args.slug) or {} if args.slug else {}
     registered = register_for_requester(client, args, chosen)
-    slug = args.slug or (registered or {}).get("slug") or local_slug(client, args, workspace)
+    slug = (registered or {}).get("slug") or args.slug or local_slug(client, args, workspace)  # the server's word wins
     path = catalog.materialize(
         args.template,
         slug,

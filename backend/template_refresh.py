@@ -19,6 +19,7 @@ from . import bot_settings as BS
 from . import hubdb as H
 from . import models as M
 from . import releases
+from . import runner_versions
 from .store import Problem
 
 if TYPE_CHECKING:
@@ -53,7 +54,7 @@ def record(c: Any, who: Any, bot: str, body: TemplateRefresh) -> dict[str, Any]:
         raise Problem("forbidden", "That bot is not assigned to this computer", 403)
     declared = BS.read(c, bot)
     # The bot was given another template since the computer read it: that report is about files it no longer follows.
-    if str(declared.get("template") or "") != body.template:
+    if str(declared.get("template") or "") != runner_versions.reported_template(body.template):
         return {"recorded": False}
     if body.missing:
         if declared.get("template_missing") == body.template:

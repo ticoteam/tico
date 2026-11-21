@@ -1451,11 +1451,16 @@ def _install_request_guard(
                 on_behalf = (body.get("on_behalf_of") if isinstance(body, dict) else None) or request.query_params.get(
                     "on_behalf_of"
                 )
+
                 # The default applies only to what Agent Ops does for a person (the delegable routes). Its own run's
                 # plumbing (credentials, attempts, jobs, its status) and its own messages stay Agent Ops': a run's
                 # credential fetch as the person was refused, and every human-requested turn failed to start.
+                def bot_id(ref):
+                    with store.read() as c:
+                        return (H.resolve_bot(c, ref) or {}).get("id")
+
                 if not on_behalf and agent_ops_act.default_delegable(
-                    request.method, request.url.path, body, request.query_params
+                    request.method, request.url.path, body, request.query_params, resolve=bot_id
                 ):
                     on_behalf = "default"
             elif (

@@ -11,12 +11,15 @@ from pathlib import Path
 
 import yaml
 
-from backend import agent_ops_act, team_rules
+from backend import agent_ops_act, runner_versions, team_rules
+from backend import company_file as C
 from backend import bot_settings as BS
 from backend.slugs import slugify
 from backend.store import H
 from backend.tests.helpers.api import post, put
+from backend.tests.helpers.template_renames import employees_file
 from clients import catalog
+from runner_support import catalog_job
 
 ROOT = Path(__file__).resolve().parents[2]
 MIGRATION = ROOT / "backend/migrations/20261121173732_agent_ops_name.sql"
@@ -31,16 +34,16 @@ ALIAS_PATHS = (
 )
 # Names other systems or saved records still use: the Gateway's outbound count for its role botops
 # (backend/suggestions.py COUNTS), and the two team rules' old names a Confirm card saved before the rename sends
-# (team_rules.OLD_NAMES).
-ALIAS_WORDS = ("bots_botops", "botops_direct", "botops_manages_bots")
+# (team_rules.OLD_NAMES), and the old default title an exported company file still carries (draft.RENAMED_TITLES).
+ALIAS_WORDS = ("bots_botops", "botops_direct", "botops_manages_bots", 'RENAMED_TITLES = {"botops": "BotOps"}')
 OLD = re.compile(r"(?i:botops)|\bBot[ -]Ops\b")
 # The id itself: quoted ("botops", `botops`, a SQL or keyword value =botops), an actor (bot:botops), a route or
 # repository (bots/botops, ticoteam/botops), a stored event name (botops.request_carried), or a handoff that must reach
-# the built-in even when a company's own bot holds the slug agent-ops (--owner botops, @botops, message send botops).
-ID = re.compile(r"""(?:["'`/=]|bot:|--owner |@|message send )botops(?![\w-])|(?<![\w-])botops(?=["'`]|\.[a-z_])""")
-
-# Cards whose name is not their slug: a person names the Assistant, and "&" has no slug.
-NAMED_OTHERWISE = {"assistant", "fpa-analyst", "segment-marketing-owner"}
+# the built-in even when a company's own bot holds the slug agent-ops (--owner botops, @botops, message send botops,
+# repo-create botops).
+ID = re.compile(
+    r"""(?:["'`/=]|bot:|--owner |@|message send |repo-create )botops(?![\w-])|(?<![\w-])botops(?=["'`]|\.[a-z_])"""
+)
 
 
 def _bad_lines(text, first=1):
@@ -85,13 +88,54 @@ def test_the_old_name_is_left_only_as_the_id():
     assert not offenders, "BotOps is Agent Ops (#4863); `botops` only as its id:\n" + "\n".join(offenders)
 
 
-def test_its_own_routes_read_the_same_by_id_and_by_slug():
+def test_its_own_routes_are_its_ids_whatever_holds_the_slug():
+    ours, theirs = {"agent-ops": H.FLEET_MAINTAINER}.get, {"agent-ops": "0195c3a2-custom"}.get
     for method, rest in (("GET", ""), ("PATCH", "/definition"), ("POST", "/repositories")):
         by_id, by_slug = ("/api/v2/bots/" + ref + rest for ref in (H.FLEET_MAINTAINER, H.AGENT_OPS_SLUG))
-        assert agent_ops_act.default_delegable(method, by_id, {}) is agent_ops_act.default_delegable(
-            method, by_slug, {}
-        )
-        assert agent_ops_act.OWN.fullmatch(by_id) and agent_ops_act.OWN.fullmatch(by_slug)
+        assert agent_ops_act.default_delegable(method, by_id, {}) is False  # its own route: never as a person
+        assert agent_ops_act.default_delegable(method, by_slug, {}, resolve=ours) is False
+        # A company's own bot that holds the slug is never taken for Agent Ops.
+        assert agent_ops_act.by_id(by_slug, theirs) == "/api/v2/bots/0195c3a2-custom" + rest
+        assert not agent_ops_act.OWN.fullmatch(agent_ops_act.by_id(by_slug, theirs))
+
+
+class _Release:
+    def __init__(self, release):
+        self.row = {"release": release} if release else None
+
+    def execute(self, *_):
+        return self
+
+    def fetchone(self):
+        return self.row
+
+
+def test_a_computer_on_an_older_release_is_sent_the_template_by_the_name_its_catalog_has():
+    config = {"template": H.AGENT_OPS_SLUG, "runtime": "fake"}
+    for release, sent in (("", "botops"), ("0.6.0", "botops"), ("0.6.195", "botops"), ("0.6.196", "agent-ops")):
+        assert runner_versions.wire_template(_Release(release), "r1", config)["template"] == sent
+    assert runner_versions.wire_template(_Release(""), "r1", {"template": "librarian"}) == {"template": "librarian"}
+    assert runner_versions.reported_template("botops") == H.AGENT_OPS_SLUG  # its report counts for agent-ops
+    cards = {H.AGENT_OPS_SLUG: {"bootstrap": True}}
+    assert catalog_job.BotSetup.refresh_template(None, "botops", {"template": "botops"}, cards) == ("agent-ops", "")
+
+
+def test_an_old_company_file_reads_the_new_name_unless_a_person_chose_one():
+    rows = [
+        {"id": "ops", "template": "botops", "title": "BotOps", "department": "engineering"},
+        {"id": "fixer", "template": "botops", "title": "Fleet Fixer", "department": "engineering"},
+    ]
+    bots = {b["id"]: b for b in C.from_yaml(employees_file(rows))["bots"]}
+    assert (bots["ops"]["template"], bots["ops"]["title"]) == ("agent-ops", "Agent Ops")
+    assert bots["fixer"]["title"] == "Fleet Fixer"
+
+
+def test_a_registered_agent_ops_takes_its_slug_and_a_second_is_refused(api):
+    body = {"template": "agent-ops", "display_name": "Agent Ops"}
+    made = post(api, "bots/register", body)
+    assert (made["id"], made["slug"], made["created"]) == ("botops", "agent-ops", True)
+    post(api, "bots/register", body, expected=409)
+    post(api, "bots/register", {**body, "display_name": "Ops Two"}, expected=409)
 
 
 def _migrate(c):
@@ -182,12 +226,9 @@ def test_a_new_company_gets_agent_ops_under_its_first_id(company):
     assert H.new_bot_id(H.AGENT_OPS_SLUG) == H.FLEET_MAINTAINER  # made from its card, it keeps the id too
 
 
-def test_slugs_match_names():
-    cards = {card["template"]: card for card in catalog.cards()}
-    assert cards[H.AGENT_OPS_SLUG]["name"] == "Agent Ops" and cards[H.AGENT_OPS_SLUG]["required"]
-    unmatched = [
-        (template, card["slug"], card["name"])
-        for template, card in cards.items()
-        if template not in NAMED_OTHERWISE and not (card["slug"] == template == slugify(card["name"]))
-    ]
-    assert not unmatched
+def test_its_slug_matches_its_name():
+    card = next(card for card in catalog.cards() if card["template"] == H.AGENT_OPS_SLUG)
+    assert card["slug"] == card["template"] == slugify(card["name"]) == H.AGENT_OPS_SLUG and card["required"]
+    registry = yaml.safe_load((ROOT / "templates/environment-registry/employees.yaml").read_text())
+    entry = next(e for e in registry["employees"] if e.get("slug") == H.AGENT_OPS_SLUG)
+    assert slugify(entry["display_name"]) == entry["slug"]

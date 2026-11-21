@@ -136,6 +136,9 @@ RENAMED = {
     # Nov 21 (#4863): slugs match names, and the bot engineer is Agent Ops (its bot keeps the id `botops`).
     "botops": "agent-ops",
 }
+# The default title a renamed template's card had: a file that kept it reads the card's new name (a title a person chose
+# stays).
+RENAMED_TITLES = {"botops": "BotOps"}
 # Each team's Manager: the bot that leads the team and manages its pipelines. {team: (template, department, title)}.
 TEAM_MANAGERS = {
     "product": ("product-manager", "product", "Product Manager"),
