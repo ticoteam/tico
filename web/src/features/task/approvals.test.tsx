@@ -283,7 +283,7 @@ describe('the thing is the first tab', () => {
         <TaskPage task="12" pipeline="p1" tab="b-pdf" />
         <TaskChat task="12" />
       </>,
-      '/tasks/p1/12/b-pdf?ask=r3&chat=agent%3Alo&via=thread',
+      '/tasks/p1/12/b-pdf?ask=r3&chat=agent%3Alo&via=thread&vs=1',
     );
     expect(await screen.findByRole('region', { name: 'b.pdf' })).toBeTruthy();
     expect(pdfRead.at(-1)).toBe('/api/v2/files/f8?v=2'); // the version r3 pinned
@@ -300,6 +300,35 @@ describe('the thing is the first tab', () => {
     await waitFor(() => expect((router.state.location.search as { ask?: string }).ask).toBe('r1'));
     expect(router.state.location.pathname).toBe('/tasks/p1/12/a-pdf');
     expect(router.state.location.searchStr).toContain('chat=agent');
+    expect(router.state.location.searchStr).not.toContain('vs='); // the next page at its own pinned version
+  });
+
+  it('when the next ask after a file’s is an email’s, its Email tab opens, the thread kept and the answered ask gone @approvals', async () => {
+    const { files } = twoPdfs();
+    const asks = (met: boolean) => [req(), req({ requirement_id: 'r3', shows: ['file:f8@2'], line: 'Sign B', ...(met && { met: true, may: [] }) })];
+    shown = task({ title: 'Two declarations', to_leave: asks(false) });
+    const after = task({ title: 'Two declarations', to_leave: asks(true) });
+    reply = (url, method) =>
+      method === 'POST' && url.endsWith('/asks/r3/ok')
+        ? { body: { task: after } }
+        : url.endsWith('/files?all=1')
+          ? { body: { files } }
+          : url.endsWith('/oks/r3')
+            ? { body: { subject: 'file:f8@2', shown_hash: 'h-b2', content: { file: 'f8', version: 2 } } }
+            : null;
+    const router = show(
+      <>
+        <TaskPage task="12" pipeline="p1" tab="b-pdf" />
+        <TaskChat task="12" />
+      </>,
+      '/tasks/p1/12/b-pdf?ask=r3&chat=agent%3Alo&via=thread&vs=1',
+    );
+    expect(await screen.findByRole('region', { name: 'b.pdf' })).toBeTruthy();
+    const box = within(screen.getByRole('region', { name: 'Chat with Legal Owner' })).getByRole('region', { name: 'The decision' });
+    fireEvent.click(await ready(box));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/email'));
+    const params = new URLSearchParams(router.state.location.searchStr);
+    expect([params.get('chat'), params.get('via'), params.get('ask'), params.get('vs')]).toEqual(['agent:lo', 'thread', null, null]);
   });
 
   it('a refused answer to the ask the address names leaves the person on its file, at its version @approvals', async () => {

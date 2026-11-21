@@ -165,22 +165,29 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
   const asks = tabs.find((x) => x.mark === 'ask')?.slug;
   useEffect(() => {
     if (seek === sought.current) return;
-    // Opened for one ask (`?ask=`): the next one still waiting that is not an email's opens for its own ask, its tab
-    // (the same one too) and the thread beside it kept.
-    // The answer to it is not read back yet: wait for it.
-    if (ask && named && askOf(t, ask)) return;
-    const next = ask && named ? decisionOf(t, null) : null;
+    // Opened for one ask (`?ask=`): once it is answered, the next one still waiting opens, its tab (the same one too):
+    // a page or a file for its own ask, at its own pinned version; an email on its Email tab. The thread beside it
+    // stays in the address; the answered ask and the version the last page was opened at go.
+    if (ask && named && askOf(t, ask)) return; // the answer to it is not read back yet
+    const next = ask && named ? decisionOf(t) : null;
     if (next) {
       sought.current = seek;
+      const send = emailOf(next);
       const target = targetOf(next);
-      const slug = tabsOf(t, files.data, next).find((x) => (x.doc?.file_id ?? x.file?.id ?? x.other) === target?.id)?.slug;
-      void navigate({ to: tabAddress(t, slug, false).to as never, search: ((s: Record<string, unknown>) => ({ ...s, ask: next.requirement_id })) as never });
+      const slug = send
+        ? tabs.find((x) => x.email === send && !x.wait)?.slug
+        : tabsOf(t, files.data, next).find((x) => (x.doc?.file_id ?? x.file?.id ?? x.other) === target?.id)?.slug;
+      const search = (s: Record<string, unknown>) => {
+        const { ask: _a, v: _v, vs: _vs, ...kept } = s;
+        return send ? kept : { ...kept, ask: next.requirement_id };
+      };
+      void navigate({ to: tabAddress(t, slug, false).to as never, search: search as never });
       return;
     }
     if (!asks) return;
     sought.current = seek;
     if (asks !== on) void navigate({ to: tabAddress(t, asks, false).to as never });
-  }, [seek, asks, on, t, navigate, ask, named, files.data]);
+  }, [seek, asks, on, t, navigate, ask, named, files.data, tabs]);
   const [adding, setAdding] = useState<Adding | null>(null);
   const [asking, setAsking] = useState(false);
   const search = useSearch({ strict: false }) as TaskSearch;
