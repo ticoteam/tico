@@ -89,6 +89,8 @@ class ThreadPost(BaseModel):
     unmarked: list[str] = Field(default_factory=list, max_length=50)
     # Files already in Tico shared with the message, as `<file id>@<version>` or {ref, title} (shared_files).
     attachments: list[M.Attachment] = Field(default_factory=list, max_length=10)
+    # Posted to /threads/dm/messages: the poster's DM with exactly this one (the Agent bar's), found or made at write time.
+    to_dm: str | None = Field(None, max_length=200)
 
 
 class MessagePatch(BaseModel):
@@ -137,6 +139,8 @@ class ThreadUpload(BaseModel):
     delivery: Way | None = None
     defer_for: str | None = None
     attachments: list[M.Attachment] = Field(default_factory=list, max_length=10)  # as ThreadPost's
+    from_page: dict | None = None  # the page it was written on, as a post's refs.from_page (sent as JSON)
+    to_dm: str | None = Field(None, max_length=200)  # as ThreadPost's
 
 
 SHARE_REFUSED = (
@@ -172,6 +176,12 @@ def _unmarked(who, body):
     """The suspects a person un-marked in the Tools chat (backend/secret_drop.py), which the backstop lets through only
     from the web chat: a post made with a personal access token is an API client, whose suspects are refused (AC-15)."""
     return [] if getattr(who, "via_token", False) else list(getattr(body, "unmarked", None) or [])
+
+
+# `/threads/dm/messages` (and its upload): the poster's DM with `to_dm`, the open one with exactly those two (every kind
+# of member counted, as threads.dm looks one up) or a new one, found again inside the write, so a chat that has since
+# become a group is never the one written to.
+DM_ADDRESS = "dm"
 
 
 def _delivery_words(body):
@@ -504,6 +514,41 @@ def install(app, store, auth, mutate, rule_check):
 
         return place
 
+    def dm_target(c, who, body):
+        """Where `/threads/dm/messages` (DM_ADDRESS) writes, read only: the poster's member-private DM with exactly `to_dm`
+        (the one the Agent bar reads, `GET /threads/dm?private=true`), or None when there is none yet. Then the message
+        starts it (`dm_start`), made only when the send goes through."""
+        if not body.to_dm:
+            raise Problem("to_dm", "Name who the DM is with in to_dm", 422)
+        resolved = threads._dm_members_for(c, who.actor, [body.to_dm])
+        found = threads._open_dm(c, who.actor, resolved, legacy=False)
+        if not found:
+            # starting one needs what starting any DM needs: an unseen teammate is the same 404 as an unknown one, and
+            # nothing is checked, judged or stored for it (threads.dm)
+            v = threads.viewer(auth, who)
+            for target in resolved:
+                threads._require_write(c, v, target)
+        return found
+
+    def dm_start(who, body):
+        """The first message of the poster's DM with `to_dm`: its start (as `POST /threads/dm` makes one) and its rule
+        check, outside the write, as a first message is checked."""
+        start = {"dm": [body.to_dm], "private": True}
+        with store.read() as c:
+            secret_drop.refuse_start(c, who.actor, start["dm"], body.text)
+        rc = rule_check(
+            who,
+            "threads",
+            body.text,
+            lambda c: org_rule_check.thread_people(c, {"start": start}),
+            "",
+            {},
+            place=lambda c, author, people: org_rule_check.place_for_start(
+                c, author, people, audience="personal", members=start["dm"]
+            ),
+        )
+        return start, rc
+
     def check(who, thread_id, body):
         """The org-rule check of one message, for a person or a bot alike (operation `threads`), outside the write. A
         bot's post to someone out of its reach is refused first (reach.check_thread), so it spends no judgment; so is a
@@ -726,18 +771,19 @@ def install(app, store, auth, mutate, rule_check):
             "ThreadView",
         ),
     )
-    def dm_thread(request: Request, peer: str = Query(..., alias="with"), create: bool = True):
+    def dm_thread(request: Request, peer: str = Query(..., alias="with"), create: bool = True, private: bool = False):
         """My DM with `with`: the open one with exactly us two, or a new one. Only starting one needs Write on them (the
         reply-back rule applies): 404 when I cannot see them, 403 naming Write when I can see them but may not message
-        them. `create=false` makes nothing: 404 `no_dm` when there is none yet."""
+        them. `create=false` makes nothing: 404 `no_dm` when there is none yet. `private`: only a member-private one (the
+        Agent bar's, as `/threads/dm/messages` writes to it), never an older chat read by its participant list."""
         v = threads.viewer(auth, request.state.identity)
         if not create or getattr(
             request.state.identity, "view", ""
         ):  # a read-only view never starts a DM (backend/app_view.py)
             with store.read() as c:
-                return threads.dm(c, v, [peer], make=False)
+                return threads.dm(c, v, [peer], make=False, private=private)
         with store.transaction() as c:
-            return threads.dm(c, v, [peer])
+            return threads.dm(c, v, [peer], private=private)
 
     @app.get(
         "/api/v2/threads/{thread_id}",
@@ -986,20 +1032,30 @@ def install(app, store, auth, mutate, rule_check):
         """A message in the thread (in its sub-thread with `parent_message_id`). A person's or a bot's message passes the
         org-rule check first, outside the write; a held one writes nothing but its hold."""
         who = request.state.identity
+        start = None
+        # the DM a `/threads/dm/messages` post means is looked up read only, outside the write (`dm_target`)
+        target: str | None = thread_id
+        if thread_id == DM_ADDRESS:
+            with store.read() as c:
+                target = dm_target(c, who, body)
         # A room that moved is checked and written as its Home (bot_home_merge.named_home), named before the check.
-        thread_id = bot_home_merge.named_home(store, thread_id)
+        if target:
+            target = bot_home_merge.named_home(store, target)
         _delivery_words(body)
-        rc = check(who, thread_id, body)
+        if target:
+            rc = check(who, target, body)
+        else:  # the poster's first message to that agent: the DM is made with it, only if it goes
+            start, rc = dm_start(who, body)
 
         def work(c):
             v = threads.viewer(auth, who)
-            replying = _reply_check(c, auth, who, thread_id, body)
-            way, marks = _delivery_refs(c, auth, who, body, thread_id) if body.delivery else (None, {})
+            replying = _reply_check(c, auth, who, target, body) if target else None
+            way, marks = _delivery_refs(c, auth, who, body, target) if body.delivery and target else (None, {})
             shared = shared_files(c, app.state.files, who, body.attachments)
             message = threads.post(
                 c,
                 v,
-                thread_id,
+                target,
                 body.text,
                 kind=body.kind,
                 refs={**body.refs, **marks} if marks else body.refs,
@@ -1010,6 +1066,7 @@ def install(app, store, auth, mutate, rule_check):
                 in_reply_to=replying,
                 unmarked=_unmarked(who, body),
                 attachments=shared or None,
+                **({"start": start} if start else {}),
             )
             if "id" not in message:  # held: post wrote nothing and answers with the hold
                 return message
@@ -1332,14 +1389,25 @@ def install(app, store, auth, mutate, rule_check):
         who = request.state.identity
         if who.role not in ("owner", "human", "bot"):
             raise Problem("identity", "A person or a bot posts files to a thread", 403)
-        thread_id = bot_home_merge.named_home(store, thread_id)  # as post_message names it: the Home, before the check
+        to_dm = thread_id == DM_ADDRESS
+        # the Home, before the check; a `/threads/dm/messages` upload's DM is looked up read only in `admit`
+        target: str | None = None if to_dm else bot_home_merge.named_home(store, thread_id)
         checked = {}
 
         def admit(body):
+            nonlocal target
             _delivery_words(body)
+            page_owners.check_from({"from_page": body.from_page})
+            if to_dm:
+                with store.read() as c:
+                    found = dm_target(c, who, body)
+                target = bot_home_merge.named_home(store, found) if found else None
+            if not target:  # the first message to that agent makes the DM, only if it goes (`dm_start`)
+                checked["start"], checked["rc"] = dm_start(who, body)
+                return
             with store.read() as c:
-                threads.require(c, threads.viewer(auth, who), thread_id, write=True)
-            checked["rc"] = check(who, thread_id, body)
+                threads.require(c, threads.viewer(auth, who), target, write=True)
+            checked["rc"] = check(who, target, body)
 
         body, uploads = await app.state.uploads.form(request, ThreadUpload, admit)
         if not body.text.strip() and not uploads and not body.attachments:
@@ -1347,8 +1415,9 @@ def install(app, store, auth, mutate, rule_check):
 
         def work(c):
             v = threads.viewer(auth, who)
-            replying = _reply_check(c, auth, who, thread_id, body)
-            way, marks = _delivery_refs(c, auth, who, body, thread_id) if body.delivery else (None, {})
+            start = checked.get("start")
+            replying = _reply_check(c, auth, who, target, body) if target else None
+            way, marks = _delivery_refs(c, auth, who, body, target) if body.delivery and target else (None, {})
             items = [register(c, who, **upload) for upload in uploads]
             for index, item in enumerate(items):
                 caption = body.titles[index] if index < len(body.titles) else ""
@@ -1357,15 +1426,16 @@ def install(app, store, auth, mutate, rule_check):
             posted = threads.post(
                 c,
                 v,
-                thread_id,
+                target,
                 body.text,
                 kind=body.kind,
                 to_actor=body.to,
-                refs=marks or None,
+                refs={**marks, **({"from_page": body.from_page} if body.from_page else {})} or None,
                 parent_message_id=body.parent_message_id,
                 checked=checked["rc"],
                 attachments=items or None,
                 in_reply_to=replying,
+                **({"start": start} if start else {}),
             )
             if "id" not in posted:  # held: its files are in the hold's replay, linked when it is released
                 return posted
@@ -1374,7 +1444,7 @@ def install(app, store, auth, mutate, rule_check):
             message["reply_to"] = threads.reply_quotes(c, v, [message]).get(message["id"])
             if way:
                 message = {**message, "sent_as": _sent_as(c, way, posted)}
-            return {"thread": threads.get(c, v, thread_id), "message": message}
+            return {"thread": threads.get(c, v, message["conversation_id"]), "message": message}
 
         return await asyncio.to_thread(write_upload, store, request, body, uploads, work)
 

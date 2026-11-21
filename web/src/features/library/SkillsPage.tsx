@@ -21,7 +21,7 @@ import { Document, List, PageMore, Section } from '@/pagekinds';
 import { Markdown } from '@/kit/Markdown';
 import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { forgetHelperCode, heldHelperCode } from './helperCode';
-import { Face, Find, Foot, OwnerButton, press, useGo, when, Who } from './parts';
+import { Face, Find, Foot, press, useGo, when, Who } from './parts';
 import {
   accessRoleQuery,
   installTargetsQuery,
@@ -191,7 +191,6 @@ function SkillsList({ search }: { search: SkillsSearch }) {
               />
             ))}
           </Menu>
-          <OwnerButton page="skills" />
           <Button variant="primary" onClick={() => setMaking(true)} data-target="skills:new" aria-label="New skill">
             New
           </Button>
@@ -398,7 +397,6 @@ function SkillPage({ name }: { name: string }) {
       actions={
         <>
           {main && <IconButton icon="edit" label="Edit" onClick={() => setEditing(true)} data-target={`skill-edit:${name}`} data-phone />}
-          <OwnerButton page="skills" />
           {editing && main && <EditSkill name={name} text={main.content} onClose={() => setEditing(false)} />}
           {installing && <InstallDialog name={name} versions={d.data?.versions ?? []} onClose={() => setInstalling(false)} />}
           {removing && (
@@ -592,7 +590,6 @@ function ProposalPage({ id }: { id: string }) {
       title={p?.name ?? 'Proposed change'}
       path={`/library/skills?proposal=${id}`}
       className="lib"
-      actions={<OwnerButton page="skills" />}
       more={
         <PageMore target={`proposal-more:${id}`}>
           {open && (decider || mine) && (

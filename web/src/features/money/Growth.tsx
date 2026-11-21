@@ -13,7 +13,7 @@ import { Select } from '@/kit/Select';
 import { EmptyRow, Table } from '@/kit/Table';
 import { Dashboard, FiguresStrip, Section, type Figure, type PageTab } from '@/pagekinds';
 import { GROWTH } from './head';
-import { ChannelPanel, ManagerFace } from './GrowthPanels';
+import { ChannelPanel } from './GrowthPanels';
 import { axis, count, firstRead, growthMonths, isYm, loudHealth, monShort, monthName, pct, ratio, readDay, statusWord, valueKind } from './model';
 import { ActLink, usePhone, usePress } from './parts';
 import {
@@ -124,7 +124,7 @@ function GrowthBoard({ search }: { search: GrowthSearch }) {
   const phone = usePhone();
   const segments = useQuery(segmentsQuery);
   const d = useSuspenseQuery(growthReadQuery(search.segment, search.month)).data;
-  const owners = useQuery(pageOwnersQuery).data;
+  const owners = useQuery(pageOwnersQuery).data?.pages;
   const manager = useDirectory((dir) => growthManager(owners, dir)) ?? null;
   const segs = segments.data?.segments ?? [];
   const series = d.series ?? [];
@@ -213,7 +213,6 @@ function GrowthBoard({ search }: { search: GrowthSearch }) {
             />
             {d.partial && <span className="gr-partial">partial</span>}
           </div>
-          <ManagerFace />
         </>
       }
       tabs={tabs}

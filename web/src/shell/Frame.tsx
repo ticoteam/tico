@@ -1,12 +1,13 @@
 import { Fragment, useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
 import { motionLevel } from '@/motion';
-import { PhoneCards, type PhoneCardsProps } from '@/shell/phone';
+import { PhoneCards, type PhoneCard, type PhoneCardsProps } from '@/shell/phone';
 import { Dot } from '@/tico/dot';
 import { useArrangement } from './arrangement';
 import { Icon } from '@/kit/Icon';
 import { CardsContext } from '@/kit/Popover';
 import { C, foldOf, forwardFor, layout, modeFor, press, specOf, TICO_MARK, type Arrangement, type ArrangementSpec, type Saved, type SheetId, type SheetLayout } from './layout';
 import { keepOne, useSheetMemory, withFold, withWidth, withoutWidth } from './memory';
+import { barFolded } from './pageOwner';
 import { SheetContext, type SheetControls } from './Sheet';
 import { Trail, TrailContext, type TrailPart } from './Trail';
 import './Frame.css';
@@ -46,6 +47,22 @@ export interface FrameProps {
   arrangement?: Arrangement;
   onCloseChat?: () => void;
   onClosePanel?: () => void;
+  /* `chat` is the page's Agent bar (shell/pageOwner.ts), not a second chat: it folds to an edge with the owner's face
+     and name instead of closing. `fold`: the person's choice for this page; `ask`: an ask from the owner waits on them,
+     which opens it (on a phone, raises its card). */
+  bar?: AgentBar;
+}
+
+export interface AgentBar {
+  /** The page's key, whose fold it keeps (two pipelines' boards are one page, Tasks). */
+  page: string;
+  /** The page's address: moving to another one (another pipeline's board too), a phone's card is set again. */
+  address: string;
+  name: string;
+  face: ReactNode;
+  fold: boolean | undefined;
+  ask: boolean;
+  onFold: (folded: boolean) => void;
 }
 
 /* How long sheets take to move (motion.md E1-E3). A change of arrangement moves at E1's 620ms (--dur-sheet). A sheet
@@ -75,9 +92,13 @@ function Routed(p: FrameProps) {
   return <Sheets {...p} arr={useArrangement()} />;
 }
 
-function specFor(arr: Arrangement, p: FrameProps): ArrangementSpec {
+function specFor(arr: Arrangement, p: FrameProps, width: number): ArrangementSpec {
   if (arr === 'page') return p.panel ? { name: 'chat', chat: false, panel: true } : 'page';
-  if (arr === 'chat') return p.chat || p.panel ? { name: 'chat', chat: !!p.chat, panel: !!p.panel } : 'page';
+  if (arr === 'chat') {
+    if (!p.chat && !p.panel) return 'page';
+    const bar = p.bar && p.chat ? { bar: barFolded(p.bar.fold, p.bar.ask, width >= C.BAR_OPEN_AT) ? ('fold' as const) : ('open' as const) } : {};
+    return { name: 'chat', chat: !!p.chat, panel: !!p.panel, ...bar };
+  }
   return arr;
 }
 
@@ -131,12 +152,15 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
   /* the sheet opened by its edge, for this arrangement only */
   const [opened, setOpened] = useState<{ arr: Arrangement; id: SheetId } | null>(null);
   const [dragging, setDragging] = useState<SheetId | null>(null);
+  /* the phone's card before its last change: the Agent bar's lip keeps the page's fold as the desktop's edge does */
+  const card = useRef<PhoneCard>('none');
   const drag = useRef<Drag | null>(null);
   const cause = useRef<Cause>(null);
   const places = useRef(new Map<SheetId, HTMLElement>());
   const before = useRef<{ arr: Arrangement; at: Partial<Record<SheetId, Placed>> } | null>(null);
 
-  const spec = specFor(p.arr, p);
+  const spec = specFor(p.arr, p, width);
+  const bar = typeof spec === 'object' && 'bar' in spec && p.bar ? p.bar : null;
   const arr = typeof spec === 'string' ? spec : spec.name; // which memory: a panel alone uses the chat one
   const mem = draft ?? saved;
   // opened by its edge only while it would be tucked without it: once the window has room, the usual layout is back
@@ -145,10 +169,27 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
   const sheets = L.mode === 'sheets' ? L.sheets : [];
   const stretch = L.mode === 'sheets' ? L.stretch : null;
   const find = (id: SheetId) => sheets.find(s => s.id === id);
+  /* An open Agent bar that would leave the page under its floor (C.FLOOR, at 820 say): the phone's cards instead, the
+     bar a card over the page, so opening it never squeezes the page. */
+  const cramped = !!bar && !!stretch && find('chat')?.state === 'open' && stretch.width < C.FLOOR;
+  const cards = mode === 'cards' || L.mode === 'cards' || !stretch || cramped;
+  useEffect(() => {
+    document.documentElement.dataset.layout = cards ? 'cards' : 'sheets';
+  }, [cards, mode]);
 
   /* a fold control, a shortcut, or a tucked sheet's edge (layout.md 5; plan/layers.html) */
   const onPress = (id: SheetId) => {
-    if (!find(id)) return;
+    const cur = find(id);
+    if (!cur) return;
+    if (id === 'chat' && bar) {
+      // the Agent bar: open or folded is the page's own fold, kept by the root, never a state of the moment; open, it
+      // keeps its place in the row (layout.ts) and the sheets above it tuck
+      cause.current = 'fold';
+      bar.onFold(cur.state === 'open');
+      // its edge always opens it: a sheet opened over the row for now (a panel) gives way
+      setOpened(null);
+      return;
+    }
     const r = press(width, spec, saved, id, forward);
     cause.current = 'fold';
     if (r.saved !== saved) update(now => withFold(now, arr, id, foldOf(r.saved, arr, id) === true));
@@ -237,7 +278,7 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
       else if (forward) {
         cause.current = 'fold';
         setOpened(null);
-      } else if (inChat && p.arr === 'chat' && p.onCloseChat && (!typing(t) || !(t as HTMLInputElement).value)) p.onCloseChat();
+      } else if (inChat && p.arr === 'chat' && !bar && p.onCloseChat && (!typing(t) || !(t as HTMLInputElement).value)) p.onCloseChat();
       else if (inPanel && p.onClosePanel) p.onClosePanel();
       else return;
       e.preventDefault();
@@ -315,7 +356,7 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
     }
   });
 
-  if (mode === 'cards' || L.mode === 'cards' || !stretch) {
+  if (cards || !stretch) {
     // a call takes the screen in the chat's place (phone/notes.md)
     const call = p.arr === 'call';
     // a teammate's own page: their page at the back, their chat the card over it. Theirs and a task's chat belong to
@@ -328,7 +369,33 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
       </>
     );
     if (p.arr === 'agent' && p.widgets) return <PhoneCards page={trailed(p.widgets)} tico={p.tico} menu={p.menu} chat={p.page} tucked lips={p.lips} lipActs={p.lipActs} />;
-    return <PhoneCards page={call ? null : trailed(p.page)} tico={p.tico} menu={p.menu} chat={call ? undefined : p.chat} call={call ? p.page : undefined} tucked={tucked} lips={p.lips} lipActs={p.lipActs} />;
+    // the page's Agent bar rests as a lip with its owner's name, folded or open as the page's fold says (a phone is never
+    // wide), and comes up when an ask from them waits on you. Raising it or putting it down (a tap, a drag, Back) is
+    // kept as that fold; what the fold or an ask did by itself is not.
+    const owner = p.bar && p.chat ? p.bar : null;
+    const lip = !!owner && barFolded(owner.fold, owner.ask, false);
+    const onCard = (next: PhoneCard) => {
+      const was = card.current;
+      card.current = next;
+      if (!owner) return;
+      if (next === 'chat' && was !== 'chat' && lip) owner.onFold(false);
+      else if (next === 'none' && was === 'chat' && !lip) owner.onFold(true);
+    };
+    return (
+      <PhoneCards
+        page={call ? null : trailed(p.page)}
+        tico={p.tico}
+        menu={p.menu}
+        chat={call ? undefined : p.chat}
+        call={call ? p.page : undefined}
+        tucked={tucked || lip}
+        chatKey={owner?.address}
+        onCardChange={onCard}
+        labels={owner ? { chat: owner.name } : undefined}
+        lips={p.lips}
+        lipActs={p.lipActs}
+      />
+    );
   }
 
   const content = (s: SheetLayout) => {
@@ -354,7 +421,7 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
   // a task's list place holds the menu when there is no list (closed, or a task with no pipeline): its edge is the menu's
   const shown = (id: SheetId): SheetId => (id === 'list' && !p.list ? 'menu' : id);
   const mark = (id: SheetId) =>
-    id === 'tico' ? <Dot size={TICO_MARK} /> : id === 'menu' && p.lips?.menu ? <span className="shell-edge-lip">{p.lips.menu}</span> : <Icon name={EDGE_ICON[id]} />;
+    id === 'tico' ? <Dot size={TICO_MARK} /> : id === 'chat' && bar ? bar.face : id === 'menu' && p.lips?.menu ? <span className="shell-edge-lip">{p.lips.menu}</span> : <Icon name={EDGE_ICON[id]} />;
   const top = sheets.length + 1; // the handles sit over every sheet
 
   return (
@@ -374,7 +441,7 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
           folded: false,
           canFold: !!s.canFold,
           toggleFold: () => onPress(s.id),
-          close: s.id === 'chat' && p.arr === 'chat' ? p.onCloseChat : s.id === 'panel' ? p.onClosePanel : undefined,
+          close: s.id === 'chat' && p.arr === 'chat' && !bar ? p.onCloseChat : s.id === 'panel' ? p.onClosePanel : undefined,
           tucked: [],
         };
         const depth = { '--depth': s.depth } as CSSProperties;
@@ -406,15 +473,15 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
                 data-first={i === 0 || undefined}
                 data-edge={s.id}
                 data-act={act ? true : undefined}
-                aria-label={`Open ${NAME[shown(s.id)]}`}
-                title={`Open ${NAME[shown(s.id)]}`}
+                aria-label={`Open ${s.id === 'chat' && bar ? bar.name : NAME[shown(s.id)]}`}
+                title={`Open ${s.id === 'chat' && bar ? bar.name : NAME[shown(s.id)]}`}
                 onClick={() => {
                   onPress(s.id);
                   if (s.id === 'tico') typeToTico();
                 }}
               >
                 <span className="shell-edge-mark">{mark(shown(s.id))}</span>
-                <span className="shell-edge-name">{EDGE_NAME[shown(s.id)]}</span>
+                <span className="shell-edge-name">{s.id === 'chat' && bar ? bar.name : EDGE_NAME[shown(s.id)]}</span>
               </button>
             ) : null}
             {act ? (

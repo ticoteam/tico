@@ -9,7 +9,7 @@ import { Segmented } from '@/kit/Segmented';
 import { EmptyRow, GroupRow, Table } from '@/kit/Table';
 import { List, Section, SidePanel } from '@/pagekinds';
 import { Ask, useAsk, useMay } from './dialogs';
-import { FIN, FinanceOwner, useFinanceHead } from './head';
+import { FIN, useFinanceHead } from './head';
 import { addMonths, budgetDay, budgetGroups, cash, centsOf, monShort, monthName, monthSpan, paceOf, type BudgetLine, type Period } from './model';
 import { ActLink, Meter, Pfig, PhoneRows, Prow, readState, usePhone, usePress, useViewAs } from './parts';
 import { budgetHistoryQuery, budgetsQuery, pnlQuery, type Budget, type BudgetHistory } from './queries';
@@ -122,7 +122,6 @@ export function BudgetsPage({ search, mine = false }: { search: FinanceSearch; m
           <span data-phone data-target="range:budgets">
             <Segmented label="Period" options={PERIODS} value={per} onValueChange={(v) => void press('budget.setPeriod', { period: v })} />
           </span>
-          <FinanceOwner />
         </>
       }
       sections={

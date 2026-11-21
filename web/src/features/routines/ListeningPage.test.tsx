@@ -92,15 +92,11 @@ describe('The watches', () => {
     expect(within(row).getByText('10 a day')).toBeTruthy();
   });
 
-  it('with none says so, and its owner is a face in the head that opens their chat @s516', async () => {
-    const auto = { id: 'bot:auto', kind: 'agent', name: 'Automations Owner' };
-    queryClient.setQueryData(['directory'], { actors: [auto], byId: { [auto.id]: auto } });
-    record((u) => (u.includes('/api/v2/page-owners') ? ok({ pages: { listening: { bot: 'auto' } } }) : nothing()));
+  it('with none says so @s516', async () => {
+    record();
     queryClient.setQueryData(watchesQuery.queryKey, []);
     show('/company/listening');
     expect(await screen.findByText('No watches yet')).toBeTruthy();
-    const face = await screen.findByRole('link', { name: 'Chat with Automations Owner' });
-    expect(href(face)).toContain('chat=agent:auto');
   });
 
   it('the watches are searched in the address, and one not reading says so @s516', async () => {

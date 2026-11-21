@@ -1,7 +1,7 @@
 import { useInfiniteQuery, useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import { useAction } from '@/actions';
-import { meQuery, useActors, type Actor } from '@/data';
+import { meQuery, pageOwnersQuery, useActors, type Actor, type PageOwnerRow } from '@/data';
 import { useFollow } from '@/live/follow';
 import { Ago } from '@/kit/Ago';
 import { Avatar } from '@/kit/Avatar';
@@ -389,6 +389,7 @@ function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; a
               <LabelValue label="Model" onEdit={manage ? () => setEditing('model') : undefined}>
                 {row ? modelLine(row, models?.models) : ''}
               </LabelValue>
+              <PagesLine agent={actor.id} />
             </Facts>
             {instructions.data && (
               <div className="ins">
@@ -485,6 +486,51 @@ function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; a
         </>
       }
     />
+  );
+}
+
+/** The pages this agent owns (backend/page_owners.py), its face in their Agent bar: given or taken back here, as in
+    Settings › Page owners. A page it owns by default stays its own until another agent is given it. */
+function PagesLine({ agent }: { agent: string }) {
+  const owners = useQuery(pageOwnersQuery).data;
+  const pages = Object.entries(owners?.pages ?? {});
+  // who may change a page's owner is the company's owner or an admin, as the server's PUT checks: not this agent's managers
+  const manage = owners?.canChange === true;
+  const set = useAction('settings.setPageOwner');
+  // what the server says owns each page now (its choice, its default, or the General Manager standing in); a change is a
+  // choice, and the page reads again after it
+  const owns = (row: PageOwnerRow) => row.bot === agent;
+  const shown = pages.filter(([, r]) => owns(r)).map(([page, r]) => r.name ?? page).join(', ') || 'None';
+  if (!manage) return <LabelValue label="Pages">{shown}</LabelValue>;
+  return (
+    <Menu
+      trigger={
+        <button type="button" className="fact is-edit">
+          <span>Pages</span>
+          <span className="fact-v">
+            <span className="fact-t">{shown}</span>
+            <span className="fact-pick">
+              <Icon name="chevdown" />
+            </span>
+          </span>
+        </button>
+      }
+    >
+      {pages.map(([page, row]) => {
+        const mine = owns(row);
+        const byDefault = mine && (row.choice ?? 'default') === 'default';
+        return (
+          <MenuItem
+            key={page}
+            label={row.name ?? page}
+            on={mine}
+            disabled={byDefault}
+            meta={byDefault ? 'Default' : undefined}
+            onSelect={() => void set.run({ page, owner: mine ? 'default' : agent })}
+          />
+        );
+      })}
+    </Menu>
   );
 }
 

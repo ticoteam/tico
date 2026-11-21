@@ -1,4 +1,3 @@
-import { useQuery } from '@tanstack/react-query';
 import { useLocation } from '@tanstack/react-router';
 import { useState, type ReactNode } from 'react';
 import { refusal, run } from '@/actions';
@@ -9,7 +8,6 @@ import { SettledSearch } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { OwnerButton as KitOwnerButton } from '@/kit/OwnerButton';
 import { toast } from '@/kit/Toast';
-import { pageOwnersQuery } from './queries';
 import { chatAddress } from '@/lib';
 
 /** Each id form the directory answers (`bot:<slug>`, a bare id...) to its actor's id and name only, for `useDirectory`:
@@ -43,16 +41,6 @@ export function Who({ actor, name, className = 'doc-owner' }: { actor: string | 
       <span>{shown}</span>
     </span>
   );
-}
-
-/**
- * The page owner's face in the head (backend/page_owners.py: docs, files and contacts default to the Librarian, skills
- * to BotOps, tools to the Tools owner). It opens their chat beside the page; nothing when the page has no owner. A
- * phone's head leaves it out (search, the filled button and ⋯ only).
- */
-export function OwnerButton({ page }: { page: 'docs' | 'skills' | 'contacts' | 'tools' }) {
-  const bot = useQuery(pageOwnersQuery).data?.[page]?.bot ?? null;
-  return <ChatWith actor={bot && !bot.includes(':') ? `bot:${bot}` : bot} />;
 }
 
 /** A teammate's face that opens their chat beside the page (a file's maker, a page's owner). */

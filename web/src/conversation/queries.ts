@@ -7,6 +7,7 @@ import type { Assistant, SlackMessage, SlackThread } from '@/api/schema';
 import { keys, queryClient, quietRoot, write } from '@/data';
 import { onTopic } from '@/live';
 import { newId } from '@/lib/ids';
+import type { FromPage } from '@/shell/pageOwner';
 import type { ChatMessage, LiveRun, PageRef, ReplyQuote, TimelinePage, Variant } from './types';
 
 const PAGE = 50;
@@ -117,8 +118,16 @@ export interface Send {
   variant: Variant;
   text: string;
   files?: File[];
-  /** The page it was sent from (refs.page). */
+  /** The page it was written on (`from_page`, backend/page_owners.py check_from). */
+  from?: FromPage | null;
+  /** A box from outside (AgentBox): the conversation it is about, as `refs.page` (as main sends it). */
   page?: PageRef | null;
+  /** The Agent bar's: sent to the sender's DM with exactly this agent, which the server finds (or makes) as it writes
+      (`/threads/dm/messages`, `to_dm`), never to a thread named by the id the page holds. */
+  toDm?: string;
+  /** With `toDm`: the server wrote to another thread than the one shown (the DM is new, or another one now); the
+      chat shows that one from here on. */
+  onMoved?: (thread: string) => void;
   me: string;
   /** Retry: the failed row to send again in its place. */
   retry?: string;
@@ -134,22 +143,25 @@ function post(s: Send, idempotencyKey: string): Promise<Sent> {
   const files = s.files ?? [];
   const opts = { idempotencyKey };
   if (s.variant === 'tico') {
-    if (!files.length) return api.post<Sent>('/api/v2/assistant/messages', { text: s.text, ...(s.page && { page: s.page }) }, opts);
+    if (!files.length) return api.post<Sent>('/api/v2/assistant/messages', { text: s.text, ...(s.from && { from_page: s.from }) }, opts);
     const f = new FormData();
     f.set('text', s.text);
-    if (s.page) f.set('page', JSON.stringify(s.page));
+    if (s.from) f.set('from_page', JSON.stringify(s.from));
     for (const file of files) f.append('files', file);
     return api.post<Sent>('/api/v2/uploads/assistant/messages', f, opts);
   }
   const reply = s.replyTo ? { in_reply_to: s.replyTo } : {};
+  const where = s.toDm ? 'dm' : enc(s.id);
+  const dm = s.toDm ? { to_dm: s.toDm } : {};
   if (!files.length)
-    return api.post<Sent>(`/api/v2/threads/${enc(s.id)}/messages`, { text: s.text, refs: s.page ? { page: s.page } : {}, ...reply }, opts);
-  // The upload form has no refs: a message with files does not carry the page.
+    return api.post<Sent>(`/api/v2/threads/${where}/messages`, { text: s.text, refs: s.from ? { from_page: s.from } : s.page ? { page: s.page } : {}, ...reply, ...dm }, opts);
   const f = new FormData();
   f.set('text', s.text);
   if (s.replyTo) f.set('in_reply_to', s.replyTo);
+  if (s.from) f.set('from_page', JSON.stringify(s.from));
+  if (s.toDm) f.set('to_dm', s.toDm);
   for (const file of files) f.append('files', file);
-  return api.post<Sent>(`/api/v2/uploads/threads/${enc(s.id)}/messages`, f, opts);
+  return api.post<Sent>(`/api/v2/uploads/threads/${where}/messages`, f, opts);
 }
 
 /** The posted message, or null when the server held it (a hold has no id). */
@@ -173,7 +185,15 @@ const markRow = (tmp: string, pending: ChatMessage['pending']) => (rows: ChatMes
  * gives way to it (installConversationLive) and the answer then adds nothing, so it never shows twice. A failure keeps
  * the row, marked "Not sent", for Retry; a held message is marked "Held". Resolves with the real message, or null.
  */
-export async function sendMessage(s: Send): Promise<ChatMessage | null> {
+/** What a message says of its page: what is open there (a doc, a mail) goes only to Tico, which acts with the person's
+    own rights; any other chat's members may not read it, so they are told the page alone. Every send passes here. */
+const pageFor = (s: Send): FromPage | null => (!s.from ? null : s.variant === 'tico' ? s.from : { page: s.from.page, label: s.from.label });
+
+/** The thread a `toDm` send was written to, when it is not the one the chat shows. */
+const movedTo = (s: Send, real: ChatMessage) => !!s.toDm && !!(real.conversation_id || real.thread_id) && (real.conversation_id || real.thread_id) !== s.id;
+
+export async function sendMessage(given: Send): Promise<ChatMessage | null> {
+  const s = { ...given, from: pageFor(given) };
   const tmp = s.retry ?? `tmp:${newId()}`;
   const row: ChatMessage = {
     id: tmp,
@@ -183,6 +203,7 @@ export async function sendMessage(s: Send): Promise<ChatMessage | null> {
     body: s.text,
     created_at: new Date().toISOString(),
     refs: {
+      ...(s.from && { from_page: s.from }),
       ...(s.page && { page: s.page }),
       ...(s.files?.length && { attachments: s.files.map((f, i) => ({ id: `${tmp}:${i}`, name: f.name, content_type: f.type })) }),
     },
@@ -198,6 +219,8 @@ export async function sendMessage(s: Send): Promise<ChatMessage | null> {
       settle: (d: Timeline | undefined, answer: Sent) => {
         const real = answerOf(answer);
         if (!real) return withRows(d, markRow(tmp, 'held'));
+        // written elsewhere (`toDm`): this timeline keeps nothing of it; the chat switches to that thread (below)
+        if (movedTo(s, real)) return withRows(d, (rows) => rows.filter((m) => m.id !== tmp && m.id !== real.id));
         if (!d) return d;
         const has = d.pages.some((p) => p.messages.some((m) => m.id === real.id));
         const out = withRows(d, (rows) => rows.filter((m) => m.id !== tmp));
@@ -207,7 +230,9 @@ export async function sendMessage(s: Send): Promise<ChatMessage | null> {
       revert: (d: Timeline | undefined) => withRows(d, markRow(tmp, 'failed')),
       offline: 'hold',
     });
-    return answerOf(answer);
+    const real = answerOf(answer);
+    if (real && movedTo(s, real)) s.onMoved?.(real.conversation_id ?? real.thread_id ?? '');
+    return real;
   } catch {
     return null;
   }

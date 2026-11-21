@@ -14,7 +14,9 @@
    Pure: it reads only its arguments and never writes `saved`, which is what keeps automatic tucks out of memory. */
 
 export type Arrangement = 'page' | 'chat' | 'agent' | 'task' | 'call';
-export type ArrangementSpec = Arrangement | { name: 'chat'; chat?: boolean; panel?: boolean };
+/* `bar`: the chat is the page's Agent bar (its owner's DM, shell/pageOwner.ts), not a second chat: it folds to its edge
+   ('fold') instead of closing, and the page leads, so a narrow window folds the bar before it tucks the page. */
+export type ArrangementSpec = Arrangement | { name: 'chat'; chat?: boolean; panel?: boolean; bar?: 'open' | 'fold' };
 export type SheetId = 'tico' | 'menu' | 'list' | 'chat' | 'page' | 'panel' | 'widgets' | 'stage' | 'side';
 /* open; 'fold' tucked by hand or by default; 'tucked' for room or under a sheet opened below it. Tucked, a sheet shows
    its edge. */
@@ -86,6 +88,7 @@ export const C = {
   UNDER: 16, // an open sheet after an edge starts this far under it, so its corners hide
   STEP: 10, // each card under its neighbour sits this much shorter, top and bottom
   OPEN_AT: [1360, 1080, 840], // at or over these widths, 4, 3 or 2 sheets stay open; under the last, 1 (plan/layers.html)
+  BAR_OPEN_AT: 1200, // the page's Agent bar is open by default at this width and over, folded under it (master plan P5)
   FLOOR: 480, // the stretching sheet, open, is never narrower
   CARDS_AT: 760, // at this width and under: the phone's cards
   SHEETS_AT: 800, // coming back from cards: sheets return at this width (hysteresis)
@@ -145,7 +148,9 @@ export const openCount = (width: number): number => {
 export function layout(width: number, arrangement: ArrangementSpec, saved: Saved | null | undefined, forward?: SheetId | null): Layout {
   const a = typeof arrangement === 'string' ? { name: arrangement } : arrangement;
   const A = ARR[a.name];
-  const hand = (id: SheetId) => foldOf(saved, a.name, id);
+  const bar = 'bar' in a ? a.bar : undefined;
+  // the Agent bar's fold is the page's own (shell/pageOwner.ts useBarFold), never this arrangement's memory
+  const hand = (id: SheetId) => (id === 'chat' && bar ? bar === 'fold' : foldOf(saved, a.name, id));
   if (width <= C.CARDS_AT) return { mode: 'cards', arr: a.name, width, sheets: [], acting: [`cards: the window is ${C.CARDS_AT} or under`] };
 
   // 1. which sheets are showing, and the width each one wants: saved or default, inside its floor and ceiling
@@ -162,7 +167,7 @@ export function layout(width: number, arrangement: ArrangementSpec, saved: Saved
     const sp = specOf(a.name, id);
     const want = widthOf(saved, a.name, id);
     const w = clamp(want == null ? sp.def : want, sp.min, sp.max);
-    S[id] = { id, state: 'open', why: '', width: w, z, depth: 0, wanted: w, def: sp.def, min: sp.min, max: sp.max, canFold: !!sp.fold };
+    S[id] = { id, state: 'open', why: '', width: w, z, depth: 0, wanted: w, def: sp.def, min: sp.min, max: sp.max, canFold: !!sp.fold || (id === 'chat' && !!bar) };
   });
   const fixed = ids.filter(id => id !== A.stretch);
   const F = forward && S[forward] ? forward : null;
@@ -215,12 +220,13 @@ export function layout(width: number, arrangement: ArrangementSpec, saved: Saved
   }
   // the sheet the address opens leads (unless an edge was clicked, a second chat is open, or it was tucked by hand):
   // the sheets below it go first, right to left, then the ones above it, Tico first
-  const L = !F && A.lead && S[A.lead] && open(A.lead) && !(a.name === 'chat' && ids.includes('chat')) ? A.lead : null;
+  const L = !F && A.lead && S[A.lead] && open(A.lead) && !(a.name === 'chat' && ids.includes('chat') && !bar) ? A.lead : null;
   const li = L ? ids.indexOf(L) : -1;
   const order = L ? [...ids.slice(li + 1).reverse(), ...ids.slice(0, li)] : ids.slice().reverse();
   for (const id of order) {
     if (!tooMany() && !short()) break;
-    if (id === F || !open(id)) continue;
+    // an open Agent bar is the person's choice for the page: it keeps its place, and the sheets above it tuck
+    if (id === F || !open(id) || (id === 'chat' && bar === 'open')) continue;
     set(id, 'tucked', 'room');
     acting.push(`${id} under its left neighbour: ${tooMany() ? `the window keeps ${openCount(width)} open` : 'no room'}`);
   }

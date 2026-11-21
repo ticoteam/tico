@@ -13,7 +13,7 @@ import { Document, type PageTab } from '@/pagekinds';
 import { GoalsPage, type GoalsSearch } from './GoalsPage';
 import { MarketTab, spendOf } from './MarketPage';
 import { OrgTab } from './OrgPage';
-import { Face, Go, NameOf, PageOwner, readState, usdShort, useDo } from './parts';
+import { Face, Go, NameOf, readState, usdShort, useDo } from './parts';
 import { brandProposalsQuery, brandQuery, brandVersionQuery, marketSpendQuery, strategyQuery, strategyVersionQuery, strategyVersionsQuery, type Brand, type BrandBody, type BrandProposal, type VersionRow } from './queries';
 import { STRATEGY_TABS, type StrategyTab } from './routing';
 import './company.css';
@@ -113,7 +113,6 @@ function StrategyTabBody({ search }: { search: StrategySearch }) {
   return (
     <Document
       {...head('strategy')}
-      actions={<PageOwner page="strategy" />}
       // a past version is its own read, with its own states
       state={asked && !past.isSuccess ? readState(past) : !v && !s.bets.length ? 'empty' : 'ready'}
       onRetry={() => void past.refetch()}
@@ -254,7 +253,6 @@ function BrandBook({ b, search }: { b: Brand; search: StrategySearch }) {
         <>
           {shown && <VersionPick rows={b.versions ?? []} shown={shown} action="brand.openVersion" />}
           {book && editButton}
-          <PageOwner page="strategy" />
         </>
       }
       // a past version is its own read, with its own states

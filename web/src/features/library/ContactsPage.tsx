@@ -15,7 +15,7 @@ import { SkeletonRows } from '@/kit/Skeleton';
 import { VirtualList } from '@/kit/VirtualList';
 import { FilterRow, List, RecordPanel, Section, type PageState, type PageTab } from '@/pagekinds';
 import { ContactRules, PlaceFacts, PlaceSections, useUs } from './ContactPlace';
-import { Face, Find, Foot, OwnerButton, press, useGo, Who } from './parts';
+import { Face, Find, Foot, press, useGo, Who } from './parts';
 import {
   attributesQuery,
   cardQuery,
@@ -139,7 +139,6 @@ export function ContactsPage({ search }: { search: ContactsSearch }) {
               ))}
             </Menu>
           )}
-          <OwnerButton page="contacts" />
           {state !== 'empty' && add}
           {adding && <AddContact type={type} kind={kind?.name ?? 'contact'} onClose={() => setAdding(false)} />}
         </>

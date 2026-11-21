@@ -21,7 +21,7 @@ export const threadKeys = {
   list: keys.threads.list(),
   view: keys.threads.view,
   catchUp: keys.threads.catchUp(),
-  chat: (chat: string) => ['threads', 'chat', chat] as const,
+  chat: (chat: string, only?: 'private') => (only ? (['threads', 'chat', chat, only] as const) : (['threads', 'chat', chat] as const)),
   team: (group: string) => ['threads', 'team', group] as const,
 };
 const mailKeys = {
@@ -95,15 +95,16 @@ export const catchUpQuery = queryOptions({
  * The second chat's thread. `thread:<id>` is the thread itself; `agent:<slug>` and `person:<id>` are the viewer's DM
  * with them, which the server opens when there is none yet (as the old app's "Message" does).
  */
-export const chatQuery = (chat: string) => {
+export const chatQuery = (chat: string, only?: 'private') => {
   const thread = chat.startsWith('thread:') ? chat.slice('thread:'.length) : undefined;
   return queryOptions({
-    queryKey: thread === undefined ? threadKeys.chat(chat) : threadKeys.view(thread),
+    queryKey: thread === undefined ? threadKeys.chat(chat, only) : threadKeys.view(thread),
     queryFn: async ({ signal }): Promise<Thread> => {
       if (thread !== undefined) return readThread(thread, signal);
       const actor = chatActor(chat);
       if (!actor) throw new Error('not a chat address');
-      return api.get<Thread>(`/api/v2/threads/dm${qs({ with: actor })}`, { signal });
+      // `private`: the Agent bar's, the member-private DM `/threads/dm/messages` writes to (never an older pair chat)
+      return api.get<Thread>(`/api/v2/threads/dm${qs({ with: actor, ...(only && { private: 'true' }) })}`, { signal });
     },
   });
 };

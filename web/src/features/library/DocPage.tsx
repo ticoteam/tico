@@ -9,7 +9,7 @@ import { Menu, MenuItem } from '@/kit/Menu';
 import { toast } from '@/kit/Toast';
 import { Document, PageMore } from '@/pagekinds';
 import { headings, Markdown } from '@/kit/Markdown';
-import { Face, OwnerButton, press, when } from './parts';
+import { Face, press, when } from './parts';
 import { docQuery, docVersionQuery, docVersionsQuery, externalDocAtQuery, externalDocQuery, type Doc } from './queries';
 import type { DocSearch } from './search';
 import './library.css';
@@ -86,7 +86,6 @@ function OneDoc({ id, search }: { id: string; search: DocSearch }) {
       onRetry={requested ? () => void old.refetch() : undefined}
       after={versionPick}
       onRename={typable ? (title) => void keep(doc, { title }) : undefined}
-      actions={<OwnerButton page="docs" />}
       more={
         !requested &&
         !doc.archived && (
@@ -180,7 +179,6 @@ function NewDoc() {
       path="/library/new"
       className="lib"
       onRename={(title) => void press('docs.create', { title, body }, 'Not made')}
-      actions={<OwnerButton page="docs" />}
       body={<textarea className="doc-text t-read" aria-label="Text" value={body} onChange={(e) => setBody(e.target.value)} placeholder="Write here" spellCheck />}
     />
   );

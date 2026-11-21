@@ -707,6 +707,9 @@ export interface Flow {
   /** Each approval (an OK or a page) that waits on the person, from every row of the list, one per requirement: `items`
       keeps one row per task, the oldest, which may be another ask (the thread cards read this). */
   approvals?: ApprovalItem[];
+  /** Each ❓ question or ask an agent put to the person that still waits, with the pipeline of its task when it is on
+      one: the Agent bar opens for its page's owner on that page (a pipeline's on that pipeline's page). */
+  asks?: { id: string; kind: 'question' | 'ask'; by: string; pipeline: string | null; href: string | null }[];
 }
 
 type NeedsRow = Awaited<ReturnType<typeof needsYouItems>>[number];
@@ -740,7 +743,15 @@ export const flowQuery = queryOptions({
     const items: FlowItem[] = [];
     const approvals = new Map<string, ApprovalItem>();
     const requests: FlowRequest[] = [];
+    const asks: NonNullable<Flow['asks']> = [];
     for (const it of await needsYouItems()) {
+      // whose it is, as the server's needs_actor reads it (backend/views.py): a ❓'s agent; an ask's asker, else, for an OK
+      // the stage asks for, the task's owner, then who asked for the task, whichever is an agent
+      const task = it.task as (typeof it.task & { requester_id?: string | null }) | undefined;
+      const by = it.kind === 'question' ? it.from_id : it.kind === 'ask' ? [it.ask?.asked_by, task?.owner_id, task?.requester_id].find((a) => !!a?.startsWith('bot:')) : null;
+      // where it waits (its chat, or its task), which the Agent bar links: a ❓ may wait in a Home or a task's chat
+      const href = it.href ?? (it.conversation_id ? `/threads/${encodeURIComponent(it.conversation_id)}` : it.task?.id ? `/task/${encodeURIComponent(it.task.id)}` : null);
+      if (by?.startsWith('bot:')) asks.push({ id: it.id, kind: it.kind === 'question' ? 'question' : 'ask', by, pipeline: it.task?.pipeline_id ?? null, href });
       if (isRequest(it)) {
         requests.push(it);
         continue;
@@ -765,7 +776,7 @@ export const flowQuery = queryOptions({
       seen.set(t.id, items.length);
       items.push(flowItemOf(it, t));
     }
-    return { count: items.length + requests.length, items, requests, task_ids: [...named], approvals: [...approvals.values()] };
+    return { count: items.length + requests.length, items, requests, task_ids: [...named], approvals: [...approvals.values()], asks };
   },
 });
 

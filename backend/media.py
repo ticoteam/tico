@@ -257,6 +257,7 @@ async def form(request, model, blobs, store, admit=None):
                     "labels",
                     "links",
                     "page",
+                    "from_page",
                 ):
                     if field in fields:
                         fields[field] = json.loads(fields[field])

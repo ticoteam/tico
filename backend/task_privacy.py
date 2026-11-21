@@ -126,6 +126,15 @@ def private_tasks(c, ids):
     return {tid for tid, row in _task_rows(c, ids).items() if H.task_private(c, row)}
 
 
+def about(refs):
+    """A message's refs as its provenance and its task links read them: without `from_page`, the page it was written on
+    and a pointer to what was open there (backend/page_owners.py check_from), which the runner reads under its own
+    rights and which makes no message about a task."""
+    return (
+        {k: v for k, v in refs.items() if k != "from_page"} if isinstance(refs, dict) and "from_page" in refs else refs
+    )
+
+
 def references(c, value):
     """Task ids anywhere in a structured reference or payload, including nested lists. Every string that could
     name a task is gathered first and looked up in one query: one query per string was most of a busy server's SQL."""
@@ -215,7 +224,7 @@ def _message_tasks(c, message, seen=None, include_run=True, current=False):
     refs = H._json(message.get("refs"), {}) or {}
     if not isinstance(refs, dict):
         raise Problem("privacy", "Message provenance cannot be authorized", 403)
-    ids = references(c, refs)
+    ids = references(c, about(refs))
     for key in ("answers", "inputs"):
         for mid in refs.get(key, []) if isinstance(refs.get(key), list) else []:
             if isinstance(mid, str):

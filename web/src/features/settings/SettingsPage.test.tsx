@@ -563,6 +563,16 @@ describe('Settings › General @s1072', () => {
   const companyName = () => (queryClient.getQueryData(['config']) as { company_name: string }).company_name;
   beforeEach(() => queryClient.setQueryData(accessQuery.queryKey, ACCESS));
 
+  it('gives the page owner picker only to whoever the server lets change it @4857-S10', async () => {
+    const pages = { finance: { bot: 'bot:fo', name: 'Finance', choice: 'bot:fo', default: 'bot:fo' } };
+    queryClient.setQueryData(['settings', 'page-owners'], { pages, canChange: false });
+    general();
+    expect(await screen.findByRole('region', { name: 'Page owners' })).toBeTruthy();
+    expect(screen.queryByRole('combobox', { name: 'Finance owner' })).toBeNull();
+    act(() => queryClient.setQueryData(['settings', 'page-owners'], { pages, canChange: true }));
+    expect(await screen.findByRole('combobox', { name: 'Finance owner' })).toBeTruthy();
+  });
+
   it('the owner renames the company in place; only the name changes in the setup sent back', async () => {
     general();
     fireEvent.click(await screen.findByRole('button', { name: 'Company name, Sample Co' }));

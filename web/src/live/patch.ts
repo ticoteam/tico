@@ -604,7 +604,8 @@ export function installPatchers(): void {
   onTopic<ThreadEvent>('threads', applyThreadEvents);
   // An agent added, archived or brought back.
   onRefetch<{ area?: string }>('setup', (e) =>
-    e.area === 'org' ? [keys.directory(), keys.groups(), keys.team.groups(), keys.team.agents()] : [],
+    // the page owners too: an archived owner gives its pages to the next in line (backend/page_owners.py)
+    e.area === 'org' ? [keys.directory(), keys.groups(), keys.team.groups(), keys.team.agents(), ['settings', 'page-owners']] : [],
   );
   onRefetch<{ meeting_id?: string }>('meeting_items', (e) => [e.meeting_id ? ['meetings', e.meeting_id] : ['meetings']]);
   onRefetch<{ place?: string }>('presence', (e) => [e.place ? ['presence', e.place] : ['presence']]);

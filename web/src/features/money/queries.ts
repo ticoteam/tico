@@ -24,7 +24,7 @@ import type {
   FinanceSalesTax,
   FinanceTransactions,
 } from '@/api/schema';
-import { directoryQuery, isNetworkError, QUIET_STALE_MS, queryClient, quietRoot, write, type Directory } from '@/data';
+import { directoryQuery, isNetworkError, pageOwnersQuery, QUIET_STALE_MS, queryClient, quietRoot, write, type Directory, type PageOwnerRow } from '@/data';
 import { newId } from '@/lib';
 
 /* Finance, budgets and Growth. None has a live topic: each root is read again after the person's own writes, on
@@ -779,17 +779,7 @@ export const segmentsQuery = queryOptions({
   queryFn: ({ signal }) => api.get<{ segments: Segment[] }>('/api/v2/growth/segments', { signal }),
 });
 
-export interface PageOwnerRow {
-  bot?: string | null;
-  /** 'default', 'none' or the chosen agent ('bot:<id>'). */
-  choice?: string;
-}
-/** Each page's owner (backend/page_owners.py); Settings and Library read the same key. */
-export const pageOwnersQuery = queryOptions({
-  queryKey: ['settings', 'page-owners'],
-  queryFn: async ({ signal }) => (await api.get<{ pages?: Record<string, PageOwnerRow> }>('/api/v2/page-owners', { signal })).pages ?? {},
-  ...quiet,
-});
+export { pageOwnersQuery };
 
 const botId = (ref: string) => (ref.includes(':') ? ref : `bot:${ref}`);
 
@@ -814,7 +804,7 @@ export function growthManager(owners: Record<string, PageOwnerRow> | undefined, 
 /** The Growth Manager, read from the server if not held yet. */
 export async function findGrowthManager(qc: QueryClient): Promise<string | null> {
   const [owners, dir] = await Promise.all([qc.ensureQueryData(pageOwnersQuery), qc.ensureQueryData(directoryQuery).catch(() => undefined)]);
-  return growthManager(owners, dir);
+  return growthManager(owners.pages, dir);
 }
 
 // ---------------------------------------------------------------- one bill, invoice, card or transaction (the books tabs' panels and forms)

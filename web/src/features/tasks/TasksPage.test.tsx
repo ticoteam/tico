@@ -109,6 +109,27 @@ it('finishes the route’s pipeline read when the shell unsubscribes', async () 
   await expect(loaded).resolves.toEqual([expect.objectContaining({ id: PIPE.id })]);
 });
 
+it('names the agents with a ❓ question or an ask waiting on the person, not those with tasks, pauses or requests @4857-S9', async () => {
+  serve(() => ({
+    status: 200,
+    body: {
+      items: [
+        { id: 'q1', kind: 'question', from_id: 'bot:qa', conversation_id: 'home-qa' },
+        { id: 'a1', kind: 'ask', ask: { kind: 'ok', asked_by: 'bot:fin' }, task: { id: 't9', pipeline_id: 'finance' } },
+        { id: 'a2', kind: 'ask', ask: { kind: 'ok', asked_by: null }, task: { id: 't8', pipeline_id: 'eng', owner_id: 'human:me', requester_id: 'bot:eng' } },
+        { id: 't1', kind: 'task', from_id: 'bot:ops' },
+        { id: 'p1', kind: 'paused', bots: ['bot:ops'] },
+        { id: 'r1', kind: 'access', from_id: 'bot:tools' },
+      ],
+    },
+  }));
+  expect((await queryClient.fetchQuery(flowQuery)).asks).toEqual([
+    { id: 'q1', kind: 'question', by: 'bot:qa', pipeline: null, href: '/threads/home-qa' },
+    { id: 'a1', kind: 'ask', by: 'bot:fin', pipeline: 'finance', href: '/task/t9' },
+    { id: 'a2', kind: 'ask', by: 'bot:eng', pipeline: 'eng', href: '/task/t8' },
+  ]);
+});
+
 it('finishes the route’s Flow read when the shell unsubscribes', async () => {
   let respond!: (reply: Reply) => void;
   serve(() => new Promise((resolve) => { respond = resolve; }));
@@ -116,7 +137,7 @@ it('finishes the route’s Flow read when the shell unsubscribes', async () => {
   const stop = new QueryObserver(queryClient, flowQuery).subscribe(() => {});
   stop();
   respond({ status: 200, body: { items: [] } });
-  await expect(loaded).resolves.toEqual({ count: 0, items: [], requests: [], task_ids: [], approvals: [] });
+  await expect(loaded).resolves.toEqual({ count: 0, items: [], requests: [], task_ids: [], approvals: [], asks: [] });
 });
 
 it('keeps the Reconcile summary on a Flow row that folds several items of one task', async () => {

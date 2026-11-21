@@ -393,32 +393,6 @@ describe('Growth panels @s480 @s444', () => {
 });
 
 describe('Growth Manager entry @s479 @s483', () => {
-  it('its face is in the head of the board, and opens its chat beside the page', async () => {
-    directory(GM(), agent('bot:gm0', 'general-manager', 'General Manager'));
-    serve(OWNED);
-    const router = show('/company/growth?month=2026-10');
-    fireEvent.click(await screen.findByRole('button', { name: 'Chat with Growth Manager' }));
-    await waitFor(() => expect(router.state.location.search).toEqual({ month: '2026-10', chat: 'agent:gm1' }));
-    expect(screen.getByRole('button', { name: 'Chat with Growth Manager' }).getAttribute('aria-pressed')).toBe('true');
-  });
-
-  it('is absent when only the General Manager stands in', async () => {
-    directory(agent('bot:gm0', 'general-manager', 'General Manager'));
-    serve({ '/page-owners': ok({ pages: { growth: { bot: 'general-manager', choice: 'default' } } }) });
-    show('/company/growth');
-    await screen.findByRole('link', { name: 'Search ads' });
-    await waitFor(() => expect(queryClient.getQueryData(['settings', 'page-owners'])).toBeTruthy());
-    expect(screen.queryByRole('button', { name: /^Chat with/ })).toBeNull();
-  });
-
-  it('is absent when the Growth page has no owner', async () => {
-    serve({ '/page-owners': ok({ pages: { growth: { bot: null, choice: 'none' } } }) });
-    show('/company/growth');
-    await screen.findByRole('link', { name: 'Search ads' });
-    await waitFor(() => expect(queryClient.getQueryData(['settings', 'page-owners'])).toBeTruthy());
-    expect(screen.queryByRole('button', { name: /^Chat with/ })).toBeNull();
-  });
-
   it('has no channel, month, customer or source editor: changes are asked of the Growth Manager @s481 @s482', async () => {
     directory(GM());
     serve(OWNED);

@@ -3130,8 +3130,10 @@ class AssistantMessage(Contract):
     text: Annotated[str, Field(min_length=1, max_length=8000)]
     # place "updates" hands the turn the updates the person may read (backend/updates_chat.py).
     place: Literal["updates"] | None = None
-    # Sent from the Ask panel (ui/app/ask-panel.ts): the page the person is looking at, handed to the turn as a hint.
+    # The old app's Ask panel (ui/app/ask-panel.ts): the page the person is looking at, read only without from_page.
     page: AssistantPage | None = None
+    # The page it was written on, {page, label[, item]} (backend/page_owners.py check_from), handed to the turn.
+    from_page: dict[str, Any] | None = None
 
 
 class MakePage(Contract):
@@ -3145,6 +3147,7 @@ class AssistantUpload(Contract):
     # Each file's caption, in upload order.
     titles: list[Annotated[StrictStr, Field(max_length=200)]] = Field(default_factory=list, max_length=10)
     page: AssistantPage | None = None  # as AssistantMessage's, sent as JSON
+    from_page: dict[str, Any] | None = None  # as AssistantMessage's, sent as JSON
 
 
 class LibrarianResearch(Contract):

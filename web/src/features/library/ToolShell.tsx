@@ -12,7 +12,7 @@ import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { ItemHead, Section, type PageState } from '@/pagekinds';
 import { SkRows, StateBody } from '@/pagekinds';
-import { Face, Held, KindTile, OwnerButton } from './parts';
+import { Face, Held, KindTile } from './parts';
 import { googleQuery } from './queries';
 import type { ToolsSearch } from './search';
 
@@ -120,7 +120,6 @@ export function ToolPage(p: ToolPageProps) {
           <>
             {p.lock && <Held />}
             {p.problem && <Pill>{p.problem}</Pill>}
-            <OwnerButton page="tools" />
             {state === 'ready' && p.fill}
           </>
         }

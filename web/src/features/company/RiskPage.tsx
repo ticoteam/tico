@@ -18,7 +18,7 @@ import { fmtAge, fmtDate, fmtMoney } from '@/lib';
 import { FiguresStrip, List, PageMore, Record, RecordPanel, Section, SidePanel } from '@/pagekinds';
 import type { MatterDate, Risk, RiskDetail } from '@/api/schema';
 import { Markdown } from '@/kit/Markdown';
-import { Face, Go, NameOf, PageOwner, PanelLink, PanelSection, useDo } from './parts';
+import { Face, Go, NameOf, PanelLink, PanelSection, useDo } from './parts';
 import { dateInstant, fileSearchQuery, partySearchQuery, productsQuery, matterDatesQuery, matterFilesQuery, mattersQuery, riskQuery, risksQuery, waitingTasksQuery, type MatterRow, type RiskDate } from './queries';
 import './company.css';
 
@@ -121,7 +121,6 @@ function Risks({ search }: { search: RiskSearch }) {
       {...useHead('risks')}
       actions={
         <>
-          <PageOwner page="risk" />
           {add}
         </>
       }
@@ -225,7 +224,6 @@ function Disputes({ search }: { search: RiskSearch }) {
       {...useHead('disputes')}
       actions={
         <>
-          <PageOwner page="risk" />
           <Button variant={search.panel ? 'plain' : 'primary'} onClick={() => open.run({ panel: 'new' })}>
             Add risk
           </Button>
