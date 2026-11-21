@@ -3395,7 +3395,7 @@ class Cell:
                     continue
                 shutil.rmtree(gone, ignore_errors=True)
                 removed += 1
-            elif p.name.startswith(".prune-") and age > FRESH_S:
+            elif p.name.startswith(".prune-") and age > FRESH_S and self.system.monotonic() < deadline:
                 shutil.rmtree(p, ignore_errors=True)  # a removal that was interrupted
         return removed
 
