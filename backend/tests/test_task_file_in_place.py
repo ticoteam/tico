@@ -3,8 +3,10 @@ every older version still opens. An archived file stays on the task, restorable,
 
 import pytest
 
+from backend import page_links
 from backend.auth import Identity
 from backend.blobs import register
+from backend.store import H
 from backend.tests.helpers.api import get, headers, post  # noqa: F401
 from backend.tests.helpers.automation_api import as_bot
 from backend.tests.helpers.automation_cli import Client
@@ -288,3 +290,56 @@ def test_a_person_archives_and_restores_a_task_file_from_the_cli_and_the_tool(ap
     archive = hubtools.BY_NAME["tico_file_archive"]["fn"]
     assert archive(person, {"id": fid})["file"]["archived"] is True
     assert archive(person, {"id": fid, "restore": True})["file"]["archived"] is False
+
+
+def test_a_page_archived_by_either_flag_is_listed_again_on_every_task_it_is_on(api):
+    """A task lists a page through its own file, a link or a pin: an archive of either flag reaches each one's open
+    views, and a person's listing of a task's archived pages asks each page's links once, not once a page."""
+    from backend.tests.helpers.task_privacy_reads import traced
+
+    publish = hubtools.BY_NAME["tico_file_publish"]["fn"]
+    agent = Agent(api, as_bot(api, "ops"))
+    home, linked, pinned = (
+        post(api, "tasks", {"title": title, "owner": "ops", "body": "Brief."}, "cara-test")["id"]
+        for title in ("Home", "Linked", "Pinned")
+    )
+    pages = []
+    for name, scope in (("brief.html", "task"), ("policy.html", "bot")):
+        fid = publish(agent, {"name": name, "text": "<p>Text</p>", "task": home, "scope": scope})["file"]["id"]
+        with api.app.state.store.transaction() as c:
+            c.execute("INSERT INTO pages(file_id,created_at,updated_at) VALUES(?,?,?)", (fid, H.now(), H.now()))
+        r = api.post(
+            f"/api/v2/pages/{fid}/links", json={"target": "task:" + linked, "role": "related"}, headers=headers()
+        )
+        assert r.status_code == 200, r.text
+        post(api, "pins", {"place": "task:" + pinned, "item": "page:" + fid})
+        pages.append(fid)
+
+    def heard(change):
+        with api.app.state.store.read() as c:
+            seen = c.execute("SELECT max(seq) FROM changes").fetchone()[0] or 0
+        assert change().status_code == 200
+        with api.app.state.store.read() as c:
+            return {
+                r[0]
+                for r in c.execute(
+                    "SELECT subject_id FROM changes WHERE seq>? AND topic='tasks' AND kind='files'", (seen,)
+                )
+            }
+
+    for fid in pages:  # a task file's flag, a bot-wide file's flag, then the page's own
+        for archived in (True, False):
+            assert heard(lambda: api.patch(f"/api/v2/files/{fid}", json={"archived": archived}, headers=headers())) >= {
+                linked,
+                pinned,
+            }
+        assert heard(lambda: api.patch(f"/api/v2/pages/{fid}", json={"archived": True}, headers=headers())) >= {
+            home,
+            linked,
+            pinned,
+        }
+
+    files, statements = traced(api, lambda: get(api, f"tasks/{home}/files", token="cara-test")["files"])
+    assert {f["id"] for f in files if f["archived"]} == set(pages)
+    one_page = page_links.LINKS_SQL.split("?")[0]  # its links read page by page, not in the listing's one batch
+    assert not [s for s in statements if s.startswith(one_page)]

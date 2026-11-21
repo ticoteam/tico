@@ -35,7 +35,9 @@ export interface AskCardProps {
 }
 
 export function AskCard({ name, note, who, end, asked, asking, actions, error, href, label = 'The decision', target, children }: AskCardProps) {
-  const className = ['answer askcard', asked && 'is-asked', asking && 'is-asking', href && 'is-link'].filter(Boolean).join(' ');
+  // `has-row`: the buttons' row ends the card, so on a computer the note can sit at its left (ask.css).
+  const row = !!actions && !error && 'has-row';
+  const className = ['answer askcard', asked && 'is-asked', asking && 'is-asking', href && 'is-link', row].filter(Boolean).join(' ');
   const inner = (
     <>
       <div className="askcard-top">

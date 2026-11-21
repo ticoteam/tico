@@ -118,6 +118,21 @@ def task_scoped(row):
     return bool(row["task_id"]) and row["scope"] == "task:" + row["task_id"] and row["locator"] == "tico_blob"
 
 
+def list_again(c, fid, *, own=False):
+    """Each task a page is on through a link or a pin lists it again after an archive flag changes; `own` adds the
+    task it belongs to, which a change to the file's own flag already reaches (backend/events.py)."""
+    sql, args = "SELECT substr(target,6) FROM page_links WHERE page_id=? AND target LIKE 'task:%'", [fid]
+    if file_library.has_pins(c):
+        sql += " UNION SELECT substr(place,6) FROM pins WHERE item=? AND place LIKE 'task:%'"
+        args.append("page:" + fid)
+    if own:
+        sql += " UNION SELECT task_id FROM bot_files WHERE id=? AND task_id IS NOT NULL"
+        args.append(fid)
+    now = H.now()
+    for (task,) in c.execute(sql, args).fetchall():
+        c.execute("INSERT INTO changes(topic,kind,subject_id,created_at) VALUES('tasks','files',?,?)", (task, now))
+
+
 def removed_event(c, task_id, actor, fid, title, *, back=False):
     """The task's activity says which file was taken off it (or brought `back`), by its newest name."""
     row = c.execute(
@@ -1947,6 +1962,7 @@ class Files:
         self.activity(c, fid, who.actor, "archived" if archived else "restored", task=task_id)
         removed_event(c, task_id, who.actor, fid, stored["title"], back=not archived)
         task_pages.submit_linked(c, fid, None, who.actor)
+        list_again(c, fid)
         H.event(c, who.actor, "task.file_archived" if archived else "task.file_restored", task_id, {"file": fid})
         return {"file": {"id": fid, "archived": archived}}
 
@@ -1982,8 +1998,8 @@ class Files:
         from .file_signings import signed_versions
 
         signed = signed_versions(c, [r["id"] for r in rows if r["mime"] == "application/pdf"])
-        if all_pages:
-            page_links.prime(c, [row for row in rows if row["page_id"]])
+        # Each page's details, or whether an archived one may come back (can_restore), read its links.
+        page_links.prime(c, [r for r in rows if r["page_id"] and (all_pages or r["archived"] or r["page_archived"])])
         listed, restorers = [], {}
         for row in rows:
             fid = row["id"]
@@ -2599,6 +2615,7 @@ class Files:
             )
             if "archived" in fields and fields["archived"] != row["archived"]:
                 task_pages.submit_linked(c, fid, None, actor)
+                list_again(c, fid)
             if "title" in fields:
                 file_library.retitle(c, fid, fields["title"])
             if body.promote:

@@ -433,9 +433,13 @@ def repo_grant(api, args):
     if not row.get("enabled") and args.get("tick"):
         person.call("PUT", "repositories/" + name, {"enabled": True}, key=_key(args, ":tick"))
         out["ticked"] = out["ticked_now"] = True
+        if current["mode"] == "all":
+            current = person.get(f"bots/{_path(bot)}/repositories")
     reads = current["mode"] == "all" and current.get("all_access") == "read"
-    if current["mode"] == "all":
-        if out["ticked"] and (current.get("all_access") == "write" or access == "read") and not flags:
+    if current["mode"] == "all" and not flags:
+        # What it reaches now, never another bot's own repository, as the hub answers it.
+        held = {r["full_name"].lower(): r["access"] for r in current.get("effective") or []}.get(name.lower())
+        if held == "write" or held == access:
             return {**out, "changed": False, "detail": f"{bot} has All ticked repos ({current.get('all_access')})"}
     if current["mode"] == "all" and not reads:
         raise APIError(

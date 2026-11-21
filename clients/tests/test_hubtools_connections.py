@@ -297,6 +297,19 @@ def test_repo_grant_write_for_a_bot_reading_every_repository_keeps_its_reads(api
     assert access_of(hub, "ops") == ("chosen", {"acme/web": "read", "acme/docs": "write"})
 
 
+def test_repo_grant_on_another_agents_own_repository_is_never_covered_by_all_ticked_repos(api, live):
+    seed_repos(api)
+    bot(api, "builder")
+    hub = Client(live, "ana-test")
+    hub.call("PUT", "bots/ops/repositories", {"mode": "all", "all_access": "write"})
+    with pytest.raises(APIError, match="tico bot repos ops --chosen acme/bot-builder:write"):
+        tool("tico_repo_grant", hub, repository="acme/bot-builder", bot="ops", tick=True)
+    assert repo(hub, "acme/bot-builder")["enabled"] is True, "ticked, yet still not one All ticked repos reaches"
+    hub.call("PUT", "bots/ops/repositories", {"mode": "all", "all_access": "read"})
+    got = tool("tico_repo_grant", hub, repository="acme/bot-builder", bot="ops", access="read")
+    assert got["changed"] and access_of(hub, "ops") == ("chosen", {"acme/web": "read", "acme/bot-builder": "read"})
+
+
 def test_repo_revoke_takes_one_away_and_says_when_there_is_nothing_to_take(api, live):
     seed_repos(api)
     bot(api, "builder")

@@ -4,8 +4,8 @@
 .askcard-top .an-name{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .askcard .an-row{justify-content:flex-end;margin-top:var(--s-1h)}
 .askcard-note{font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
-/* on a computer, what answering does sits at the left of the buttons' row */
-.askcard:not(.is-asked) .askcard-top .askcard-note{position:absolute;left:var(--s-3h);bottom:var(--s-2);line-height:var(--ctl)}
+/* on a computer, what answering does sits at the left of the buttons' row while that row ends the card; else in the top line */
+.askcard.has-row:not(.is-asked) .askcard-top .askcard-note{position:absolute;left:var(--s-3h);bottom:var(--s-2);line-height:var(--ctl)}
 .askcard.is-asking .askcard-top .askcard-note{display:none}
 .askcard.is-asked{padding:var(--s-2h) var(--s-2) var(--s-2h) var(--s-3h)}
 .askcard.is-asked .hollow{flex:none;margin:0 var(--s-0)}
@@ -53,7 +53,7 @@
   .tv-lead .answer.askcard{padding:var(--s-2h) var(--s-3) var(--s-3) var(--s-3h)}
   .tv-waits .answer.askcard{padding:var(--s-2) var(--s-2) var(--s-2) var(--s-3h)}
   .answer.askcard.is-link{padding:var(--s-2h) var(--s-3)}
-  .askcard:not(.is-asked) .askcard-top .askcard-note{position:static;line-height:inherit}
+  .askcard.has-row:not(.is-asked) .askcard-top .askcard-note{position:static;line-height:inherit}
   .askcard.is-asking .askcard-top .askcard-note{display:inline}
   .askcard.is-asked{padding:var(--s-1h) 0 var(--s-1) var(--s-1h)}
 }
