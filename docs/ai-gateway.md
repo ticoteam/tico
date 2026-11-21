@@ -357,9 +357,12 @@ that started a job can read it.
 
 One charge per shot: before a video is sent, the server writes down its shot (who asks, the card's stage visit, the
 input and the shot name) and sends that key to the Gateway as the Idempotency-Key. Asking for the same shot again answers
-the same job without a second call. When the Gateway's answer never arrives (a timeout, a lost connection, a restart
-mid-call) the shot is never sent again: the request is refused with `reconcile_shot`, and on a bot's task the bot asks
-the person the task falls to "Reconcile shot NAME", once. A new take needs a new shot name.
+the same job without a second call, even when the Gateway or the budget would refuse a new one. Only a certain refusal
+lets a shot be sent again. When the outcome is unknown (no answer, a provider timeout, a restart mid-call) the shot is
+never sent again: the request is refused with `reconcile_shot`, and one question on the task asks the person it falls
+to to reconcile it, listing every such shot. A shot a restart left unanswered is asked about within minutes, with no
+request needed. A request with no shot name outside a task is keyed to its own Idempotency-Key. A new take needs a new
+shot name.
 
 Bots use the same two things with the `tico_gateway_video` and `tico_gateway_video_status` tools. The video is priced per
 second at what the video model costs plus 25% (`tico gateway catalog video`), held when the job starts and charged when it

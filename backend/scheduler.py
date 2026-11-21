@@ -246,6 +246,12 @@ def step_run_housekeeping(ctx):
 
         org_turns.observe(c, store.settings, detailed=False)
 
+    def paid_renders_sweep(c):
+        # A paid shot a restart left unanswered asks its card's person to reconcile it, with no request needed.
+        from . import paid_renders
+
+        paid_renders.sweep(c)
+
     with store.read() as c:
         from . import start_places
 
@@ -268,6 +274,7 @@ def step_run_housekeeping(ctx):
         execution.release_limits,  # a usage limit lifts at its reset, not at the next claim
         source_outages_tick,
         company_turns_tick,
+        paid_renders_sweep,
         wake_presets_tick,  # wake presets let go of the notices and sweeps now due
         execution.hold_unrunnable,
         placement_sweep,  # an active bot with no computer gets one

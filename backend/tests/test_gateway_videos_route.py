@@ -7,6 +7,8 @@ import json
 import urllib.error
 
 from backend import paid_renders
+from backend.store import H
+from backend.tests.helpers.held_runs import botops
 from backend.tests.helpers.api import assign, claim, headers, post, ready, runner
 from clients import gateway as G
 
@@ -101,9 +103,10 @@ def test_a_refused_video_says_the_gateways_reason(api, monkeypatch):
     error = refused.json()["error"]
     assert refused.status_code == 503 and error["code"] == "gateway_video_failed", refused.text
     assert error["detail"] == f"Video failed: http: {REFUSAL}", refused.text
+    # A 5xx that gives no reason of its own may have started (and charged) the video: never sent again.
     monkeypatch.setattr(G, "video_submit", lambda *a: (502, {}, "http"))
     refused = api.post("/api/v2/gateway/videos", json={"prompt": "a kettle"}, headers=headers("ana-test"))
-    assert refused.json()["error"]["detail"] == "Video failed: http", refused.text
+    assert refused.json()["error"]["code"] == "reconcile_shot", refused.text
 
 
 def test_the_gateway_client_keeps_a_refusals_reason_trimmed_to_300_characters():
@@ -157,9 +160,25 @@ def turn(api):
 
 
 def reconcile_asks(api, task):
+    """The open reconcile questions on the card: (person, first line)."""
     with api.app.state.store.read() as c:
-        rows = c.execute("SELECT person_id, line FROM question_marks WHERE task_id=?", (task["id"],)).fetchall()
+        rows = c.execute(
+            "SELECT person_id, line FROM question_marks WHERE task_id=? AND cleared_at IS NULL AND line LIKE 'Reconcile%'",
+            (task["id"],),
+        ).fetchall()
     return [tuple(row) for row in rows]
+
+
+def video(api, token, body, key=None):
+    return api.post("/api/v2/gateway/videos", json=body, headers=headers(token, key))
+
+
+def counting(sent, answer):
+    def submit(base, key, body, header):
+        sent.append(body)
+        return answer
+
+    return submit
 
 
 def test_a_shot_whose_answer_was_lost_is_never_sent_again_and_asks_once_to_reconcile_it(api, monkeypatch):
@@ -215,3 +234,99 @@ def test_a_started_shot_answers_its_job_again_and_one_cut_off_by_a_restart_is_re
     monkeypatch.setattr(G, "video_submit", submit)
     assert api.post("/api/v2/gateway/videos", json=retake, headers=headers(token)).status_code == 202
     assert len(sent) == 3
+
+
+def test_a_gateway_unavailable_answer_is_unknown_and_asked_about_once(api, monkeypatch):
+    connect(api)
+    task, token = turn(api)
+    sent = []
+    # HQ's 503 unavailable: the provider timed out, and may still finish and charge.
+    monkeypatch.setattr(G, "video_submit", counting(sent, (503, {}, "unavailable")))
+    body = {"prompt": "a kettle", "shot": "Kettle pour"}
+    for key in ("one", "two"):
+        assert video(api, token, body, key).json()["error"]["code"] == "reconcile_shot"
+    assert len(sent) == 1 and reconcile_asks(api, task) == [("human:ana", "Reconcile shot Kettle pour")]
+
+
+def test_the_sweep_asks_about_a_shot_a_restart_left_sent_with_no_request(api, monkeypatch):
+    connect(api)
+    task, token = turn(api)
+    sent = []
+    monkeypatch.setattr(G, "video_submit", counting(sent, (202, {"id": JOB, "status": "queued"}, "")))
+    with monkeypatch.context() as stopped:  # the server stops after the call, before it writes the answer down
+        stopped.setattr(paid_renders, "end", lambda *a: None)
+        assert video(api, token, {"prompt": "a kettle", "shot": "Kettle wide"}).status_code == 202
+    paid_renders._IN_FLIGHT.clear()
+    store = api.app.state.store
+    with store.transaction() as c:
+        assert paid_renders.sweep(c) == 0  # too new: it may still be answered
+        c.execute("UPDATE events SET created_at=? WHERE action=?", (H.shift(H.now(), minutes=-10), paid_renders.SENT))
+    with store.transaction() as c:
+        assert paid_renders.sweep(c) == 1
+    with store.transaction() as c:
+        assert paid_renders.sweep(c) == 0
+    assert len(sent) == 1 and reconcile_asks(api, task) == [("human:ana", "Reconcile shot Kettle wide")]
+
+
+def test_unknown_shots_share_one_question_and_leave_the_agents_own_question_open(api, monkeypatch):
+    connect(api)
+    botops(api)  # BotOps asks: the agent's own open question is never replaced
+    task, token = turn(api)
+    own = api.post(
+        f"/api/v2/tasks/{task['id']}/questions",
+        json={"to": "ana", "text": "Which tone should the launch video take?"},
+        headers=headers(token),
+    )
+    assert own.status_code == 200, own.text
+    monkeypatch.setattr(G, "video_submit", lambda *a: (0, {}, "unreachable"))
+    for shot in ("Kettle wide", "Kettle top"):
+        assert video(api, token, {"prompt": "a kettle", "shot": shot}).status_code == 409
+    assert reconcile_asks(api, task) == [("human:ana", "Reconcile shots Kettle wide, Kettle top")]
+    with api.app.state.store.read() as c:
+        opened = c.execute(
+            "SELECT line FROM question_marks WHERE task_id=? AND cleared_at IS NULL ORDER BY created_at", (task["id"],)
+        ).fetchall()
+    assert [row[0] for row in opened] == [
+        "Which tone should the launch video take?",
+        "Reconcile shots Kettle wide, Kettle top",
+    ]
+
+
+def test_a_started_shot_is_answered_again_without_the_send_checks(api, monkeypatch):
+    connect(api)
+    _, token = turn(api)
+    sent = []
+    monkeypatch.setattr(G, "video_submit", counting(sent, (202, {"id": JOB, "status": "queued"}, "")))
+    body = {"prompt": "a kettle", "shot": "Kettle close-up"}
+    assert video(api, token, body).status_code == 202
+    settings = api.app.state.store.settings
+    settings.gateway_key = ""  # the Gateway is gone: a new shot is refused, the started one still answers
+    again = video(api, token, body)
+    assert again.status_code == 202 and again.json() == {"id": JOB, "status": "queued"}, again.text
+    assert video(api, token, {**body, "shot": "Kettle top"}).json()["error"]["code"] == "gateway_not_connected"
+    assert len(sent) == 1
+
+
+def test_the_reconcile_question_goes_to_the_pipelines_person(api, monkeypatch):
+    connect(api)
+    task, token = turn(api)
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE pipelines SET owner_id='human:ben' WHERE id=(SELECT pipeline_id FROM tasks WHERE id=?)",
+            (task["id"],),
+        )
+        c.execute("UPDATE tasks SET human_id=NULL WHERE id=?", (task["id"],))
+    monkeypatch.setattr(G, "video_submit", lambda *a: (0, {}, "unreachable"))
+    assert video(api, token, {"prompt": "a kettle", "shot": "Kettle wide"}).status_code == 409
+    assert reconcile_asks(api, task) == [("human:ben", "Reconcile shot Kettle wide")]
+
+
+def test_an_unnamed_video_outside_a_card_is_keyed_to_its_request(api, monkeypatch):
+    connect(api)
+    sent = []
+    monkeypatch.setattr(G, "video_submit", counting(sent, (202, {"id": JOB, "status": "queued"}, "")))
+    body = {"prompt": "a kettle"}
+    assert video(api, "ana-test", body, "first").status_code == 202
+    assert video(api, "ana-test", body, "first").status_code == 202  # a retry of the same request
+    assert video(api, "ana-test", body, "second").status_code == 202  # a new request is a new take
+    assert len(sent) == 2
