@@ -338,10 +338,11 @@ def test_a_page_asks_row_is_its_pages_title_while_the_reader_reads_that_version(
     """Marketing C3: seven page asks all read "Release report", the document's name. A page ask's row is the submitted
     page's own title (`about` and `line`), only while the reader may read that version: once the page is deleted the
     list's version moves (`version=` is not "unchanged"), a cursor into the held build (backend/needs_cache.py) is
-    built again, and every answer shows the ask's own line, never the page's title."""
+    built again, and every answer shows the ask's own line, never the page's title. A title that is only the file's
+    name ("spec.html") names nothing, and the team brief (views.fleet_snapshot) lists the same rows."""
     store = api.app.state.store
     store.blobs = store.blobs or Blobs(store.settings)
-    titles = ["Pause 3 rental Google campaigns", "Publish 3 comparison pages"]
+    titles = ["Pause 3 rental Google campaigns", "Publish 3 comparison pages", "spec.html"]
     fids = []
     with store.transaction() as c:
         for slug in ("manager", "writer"):
@@ -360,8 +361,12 @@ def test_a_page_asks_row_is_its_pages_title_while_the_reader_reads_that_version(
 
     first = api.get("/api/v2/needs-you?limit=50", headers=headers("ana-test")).json()
     shown = rows(first)
-    for fid, title in zip(fids, titles, strict=True):
+    for fid, title in zip(fids[:2], titles, strict=False):
         assert (shown[fid]["about"], shown[fid]["line"]) == (title, title)
+    assert shown[fids[2]]["line"] == "Spec page" and "about" not in shown[fids[2]]
+    with store.read_transaction() as c:
+        brief = V.fleet_snapshot(c, api.app.state.auth, WHO[ANA], lambda row, **k: row)["needs_you"]
+    assert rows({"items": brief})[fids[0]]["about"] == titles[0]
     with store.transaction() as c:
         c.execute("UPDATE bot_files SET state='deleted' WHERE id=?", (fids[1],))
     held = api.get(f"/api/v2/needs-you?limit=50&cursor={first['version']}.0", headers=headers("ana-test")).json()

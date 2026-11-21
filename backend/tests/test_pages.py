@@ -58,6 +58,7 @@ def test_a_published_page_is_cleaned_and_reads_with_its_status_fields_only_for_w
     # The same bytes again are no new version; a change is.
     assert page(api, attempt).json()["page"]["version"] == 1
     assert page(api, attempt, data=HTML.replace(b"42", b"43")).json()["page"]["version"] == 2
+    assert read(api, fid, "ben-test").json()["page"]["title"] == "Engineering weekly"  # named: its <title> never wins
 
 
 def test_a_page_has_an_inline_address_only_with_a_visual_address(api):
@@ -96,7 +97,7 @@ def test_a_replaced_page_names_its_replacement_only_to_readers_who_may_see_it(ap
     old = page(api, attempt).json()["page"]["file_id"]
     new = page(api, attempt, name="weekly-2.html", data=HTML + b"<p>v2</p>", replaces=old).json()["page"]
     seen = read(api, old, "ben-test").json()["page"]
-    assert (seen["replaced_by_id"], seen["replaced_by_title"]) == (new["file_id"], "weekly-2.html")
+    assert (seen["replaced_by_id"], seen["replaced_by_title"]) == (new["file_id"], "Weekly")  # its own <title>
     # A bot without write rights on the old page cannot replace it.
     _, other = turn(api, bot="finance")
     assert page(api, other, name="f.html", replaces=old).status_code == 404

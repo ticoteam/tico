@@ -648,10 +648,15 @@ def readable_titles(c, auth, who, pinned):
     # What page_blob_visible reads of each version's blob: the pages it holds, and their rows.
     held = page_identities(c, sorted({stored[k]["blob_id"] for k in pinned if k in stored}))
     page_rows(c, sorted({fid for found in held.values() for fid in found}))
+    # A title that is only the version's file name ("release-report.html") names nothing: left out.
     return {
         (f, v): rows[f]["title"]
         for f, v in pinned
-        if f in rows and f not in denied and version_refusal(c, auth, who, rows[f], v, stored.get((f, v))) is None
+        if f in rows
+        and f not in denied
+        and (f, v) in stored
+        and rows[f]["title"] != stored[(f, v)]["name"]
+        and version_refusal(c, auth, who, rows[f], v, stored[(f, v)]) is None
     }
 
 

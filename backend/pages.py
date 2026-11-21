@@ -9,6 +9,7 @@ app from these fields, outside the page, so a page cannot fake it.
 
 import asyncio
 import hashlib
+import html
 import json
 import re
 from datetime import date
@@ -34,6 +35,12 @@ STALE_FACTOR = 1.5
 LIST_MAX = 50
 IDS_MAX = 50
 AS_OF = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def html_title(data):
+    """A page's own <title>, on one line and at most 300 characters, or ""."""
+    found = re.search(rb"<title[^>]*>(.*?)</title>", data[:65536], re.I | re.S)
+    return " ".join(html.unescape(found.group(1).decode("utf-8", errors="replace")).split())[:300] if found else ""
 
 
 class PageLink(M.Contract):
@@ -375,9 +382,17 @@ class Pages:
             raise Problem("file_refused", "A page is at most 10 MB", 422)
         # The original's digest stands for the version, so publishing the same page again is no new version.
         fields = {**fields, "name": name, "etag": hashlib.sha256(data).hexdigest()}
+        # A page published with no title is named by its own <title>, not its file name, unless someone named it since.
+        own_title = "" if fields.get("title") else html_title(cleaned)
 
         def extra(c, row, changed, editor, linked_task):
             now = H.now()
+            if own_title and row["title"] == name:
+                c.execute("UPDATE bot_files SET title=? WHERE id=?", (own_title, row["id"]))
+                from . import file_library
+
+                file_library.retitle(c, row["id"], own_title)
+                row = c.execute("SELECT * FROM bot_files WHERE id=?", (row["id"],)).fetchone()
             c.execute(
                 "INSERT INTO pages(file_id,cadence,as_of,created_at,updated_at,spec) VALUES(?,?,?,?,?,?) "
                 "ON CONFLICT(file_id) DO UPDATE SET cadence=COALESCE(?,cadence),as_of=?,updated_at=?,"

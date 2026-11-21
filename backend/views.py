@@ -2404,7 +2404,7 @@ def fleet_snapshot(c, auth, identity, task_view):
                 for k in ("id", "title", "owner_id", "requester_id", "status", "due_at", "note", "updated_at")
             }
         )
-    items = needs_items(c, auth, principal, task_view)
+    items = needs_shown(c, auth, principal, task_view)
     return {
         "actor": principal.actor,
         "as_of": H.now(),
@@ -3484,7 +3484,7 @@ def install_views(app, store, auth, mutate, task_view):
             return {
                 "actor": who.actor,
                 "since": since,
-                "bots": recent_bots(c, auth, who, since, limit, needs_items(c, auth, who, task_view)),
+                "bots": recent_bots(c, auth, who, since, limit, needs_shown(c, auth, who, task_view)),
             }
 
     @app.get(
