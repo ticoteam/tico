@@ -24,17 +24,18 @@ function waitTabs(items: Waiting[], own: TaskTab[]): Tab[] {
 }
 
 /** Every tab of a task, the one list the page, its dock and the chat card beside it read: its emails' OKs filed as
-    tasks of their own (a "Send:" sub-task) that wait on the person first, then its own. `settled` once both are read. */
-export function useTabs(t: TaskData) {
-  const files = useQuery(taskFilesQuery(t.id));
+    tasks of their own (a "Send:" sub-task) that wait on the person first, then its own. `settled` once both are read.
+    No task (not read yet): no tabs, nothing read, never settled. */
+export function useTabs(t: TaskData | undefined) {
+  const files = useQuery({ ...taskFilesQuery(t?.id ?? ''), enabled: !!t });
   const waiting = useWaiting(t);
   // The files did not load: what the ask is about still opens, read by its id, never another page it shows.
-  const own = tabsOf(t, files.data ?? (files.isError ? [] : undefined));
+  const own = t ? tabsOf(t, files.data ?? (files.isError ? [] : undefined)) : [];
   // The file the ask is about when it is another task's: its tab is named once its record is read.
   const away = own.find((x) => x.other);
   const other = useQuery({ ...fileQuery(away?.other ?? ''), enabled: !!away });
   if (away && other.data) away.label = tabLabel(other.data.title || other.data.name || 'File');
   const tabs: Tab[] = [...waitTabs(waiting.items, own), ...own];
-  return { tabs, files, waiting, settled: files.isFetched && waiting.settled };
+  return { tabs, files, waiting, settled: !!t && files.isFetched && waiting.settled };
 }
 

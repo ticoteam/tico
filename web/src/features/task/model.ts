@@ -92,9 +92,9 @@ export const emailOf = (r: TaskRequirement | null | undefined): string | null =>
     asks about, the one it is about (`targetOf`, at the version it pinned) before the others it shows; one that is not
     this task's opens as a tab of its own once the files are read (`files` given), never the review page beside it. Then the stage's other pages and Markdown files, each with its state (more.js taskflow); the task's
     other files but its pictures (Details walks those), so a PDF, a Word file or a sound opens as a tab too; the other
-    emails its requirements show; the chat (a phone's tab); then Details. A page linked in two roles is one tab. */
-export function tabsOf(t: TaskData, files?: TaskFileView[]): TaskTab[] {
-  const decision = decisionOf(t);
+    emails its requirements show; the chat (a phone's tab); then Details. A page linked in two roles is one tab.
+    `decision`: what the tabs are marked for, the task's first ask unless a caller names another (a card for one ask). */
+export function tabsOf(t: TaskData, files?: TaskFileView[], decision: TaskRequirement | null = decisionOf(t)): TaskTab[] {
   const asked = thingsOf(decision);
   const target = targetOf(decision);
   const pinned = (id: string) => (target?.id === id && target.version ? { version: target.version } : {});

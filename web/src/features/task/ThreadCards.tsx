@@ -6,7 +6,7 @@ import { Icon } from '@/kit/Icon';
 import { besideThread } from '@/lib';
 import { flowQuery, type FlowItem } from '@/features/tasks/routing';
 import { AskCard } from './AskCard';
-import { decisionOf, personOf, sendTitle, tabAddress, thingsOf } from './model';
+import { decisionOf, personOf, sendTitle, tabAddress, tabsOf, targetOf, thingsOf } from './model';
 import { taskDetailQuery, taskFilesQuery, type TaskData } from './queries';
 import { useTabs } from './tabs';
 import { matterOf } from './Waiting';
@@ -57,23 +57,21 @@ export function useApprovalCards(scope: ApprovalScope, chat?: string): ChatMessa
     const by = it.ask?.by ?? (it.ask?.kind === 'page' ? it.owner_id : null);
     return by?.startsWith('bot:') ? (byId?.[by]?.id ?? by) : null;
   };
-  // An email's card stands for its own approval entry (`approvals`: one per email's OK), so another ask on the task
-  // hides none; any other OK or page keeps the task's row (`items`). A case's chat shows whoever asked (a person too);
-  // an agent's thread, what that agent asked.
+  // Each card stands for its own approval entry (`approvals`: one per approval, one per email's OK), so another ask on
+  // the task (an older question) hides none. A case's chat shows whoever asked (a person too); an agent's thread, what
+  // that agent asked.
   const mine = (it: FlowItem) =>
     hung
       ? it.ask?.kind === 'ok' && hung.has(it.id) && (it.id !== task?.id || !!emailIn(it.ask?.shows ?? []))
       : (it.ask?.kind === 'ok' || it.ask?.kind === 'page') && !!agent && whose(it) === agent;
   const isEmail = (it: FlowItem) => !!emailIn(it.ask?.shows ?? []);
-  const asks = on
-    ? [...(data?.items ?? []).filter((it) => !isEmail(it) && mine(it)), ...(data?.approvals ?? []).filter((it) => isEmail(it) && mine(it))]
-    : [];
+  const asks = on ? (data?.approvals ?? []).filter(mine) : [];
   const subs = useQueries({ queries: asks.map((it) => ({ ...taskDetailQuery(it.id), retry: false })) });
   // The files any other OK shows (its chips, ThingCard), read before the card draws.
   const files = useQueries({
     queries: asks.map((it, i) => {
       const sub = subs[i]?.data;
-      return { ...taskFilesQuery(it.id), enabled: !!sub && !emailIn(it.ask?.shows ?? []) && thingsOf(decisionOf(sub)).size > 0, retry: false };
+      return { ...taskFilesQuery(it.id), enabled: !!sub && !emailIn(it.ask?.shows ?? []) && thingsOf(decisionOf(sub, null)).size > 0, retry: false };
     }),
   });
   // An approval entry its task's cached read does not have yet (a new email's OK): that read is refreshed, once.
@@ -93,7 +91,8 @@ export function useApprovalCards(scope: ApprovalScope, chat?: string): ChatMessa
     const sub = subs[i]?.data;
     const send = emailIn(it.ask?.shows ?? []);
     // An email's card stands for that email's own open OK on the task, never another ask there.
-    if (!sub || !decisionOf(sub, send ?? undefined)) return [];
+    // Any other card, the task's own decision that is not an email's (an email's OK beside it has its own card).
+    if (!sub || !decisionOf(sub, send ?? null)) return [];
     // An email's: still to go out, as its OK task's row says (sendToGo); its preview is read only on its Email tab.
     if (send) {
       if (!sendToGo(sub, send)) return [];
@@ -126,10 +125,20 @@ function ApprovalCard({ task, send, chat }: Approval) {
 /** Any other OK (a page, a file, a finance item): the task's title, and the files it shows as chips. It opens the task's
     page, which opens on what waits on the person. */
 function ThingCard({ sub, chat }: { sub: TaskData; chat?: string }) {
-  const shown = thingsOf(decisionOf(sub));
-  const files = useQuery({ ...taskFilesQuery(sub.id), enabled: shown.size > 0, retry: false }).data ?? [];
-  const chips = files.filter((f) => shown.has(f.id)).map((f) => ({ key: f.id, name: f.title || f.name, type: typeOf(f.name, undefined) }));
-  return <Card to={tabAddress(sub, undefined, false).to} chat={chat} what={sub.title} files={chips} />;
+  // Its own decision, never an email's OK beside it on the task (that has its own card).
+  const decision = decisionOf(sub, null);
+  const shown = thingsOf(decision);
+  const files = useQuery({ ...taskFilesQuery(sub.id), enabled: shown.size > 0, retry: false });
+  const chips = (files.data ?? []).filter((f) => shown.has(f.id)).map((f) => ({ key: f.id, name: f.title || f.name, type: typeOf(f.name, undefined) }));
+  // It opens on the tab of what it is about (`targetOf`, never a review page it also shows), named as the task's page
+  // names its tabs (tabsOf), a file of another task included.
+  const target = targetOf(decision);
+  const tabs = target ? tabsOf(sub, files.data ?? (files.isError ? [] : undefined), decision) : [];
+  const tab = tabs.find((x) => (x.doc?.file_id ?? x.file?.id ?? x.other) === target?.id);
+  // A file of another task: the task's page may not show it as a tab (an email's OK first marks another), so the card
+  // opens the file's own page.
+  const away = tab?.other && target ? `/library/files?${new URLSearchParams({ file: target.id, ...(target.version && { v: String(target.version) }) })}` : null;
+  return <Card to={away ?? tabAddress(sub, tab?.slug, false).to} chat={chat} what={sub.title} files={chips} />;
 }
 
 /** An email's OK: the case it answers (else the subject) and who it goes to, from the OK task itself (its title and its
@@ -145,12 +154,11 @@ function EmailCard({ sub, send, chat }: { sub: TaskData; send: string; chat?: st
   // itself; for a "Send:" task, its tab on the matter, or on the task's own page when the matter has more than one.
   const direct = !isSendTask(sub.title);
   const target = direct || !one ? sub : held;
-  const own = useTabs(sub);
-  const onMatter = useTabs(held ?? sub);
-  const resolver = target === sub ? own : target ? onMatter : null;
+  // Read once, for the page it opens only.
+  const resolver = useTabs(target);
   // Named once what it reads is in, never guessed first.
-  if ((matter && !read.isFetched) || (resolver && !resolver.settled)) return null;
-  const slug = resolver?.tabs.find((x) => x.email === send && (target === sub ? !x.wait : !!x.wait))?.slug;
+  if ((matter && !read.isFetched) || (target && !resolver.settled)) return null;
+  const slug = resolver.tabs.find((x) => x.email === send && (target === sub ? !x.wait : !!x.wait))?.slug;
   const to = target && slug ? tabAddress(target, slug, false).to : one && matter ? matter.to : tabAddress(sub, undefined, false).to;
   const title = sendTitle(sub.title);
   const what = matter?.title ?? title?.subject ?? sub.title;
