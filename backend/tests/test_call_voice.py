@@ -1958,17 +1958,18 @@ def _quiet_voice(meet):
     meet.app.state.calls.voice.stop()
 
 
-# A recorded call's pieces, as speech recognition cut them (#4916), with fictional words: each piece's text and where
-# its speech starts and ends in the call, in ms. One question came out as pieces at every "um".
+# A call's pieces as speech recognition cuts them (#4916), made up: each piece's text and where its clip starts and
+# ends in the call, in ms. The gaps between voiced frames join 1+2 (1.1 s), 4+5 (0.66 s) and 7+8 (0.85 s), and split the
+# rest; one question came out as pieces at every "um".
 RECORDED_CALL = [
-    ("Sí.", 3909, 5529),
-    ("Can you hear me?", 6249, 7089),
-    ("Uh, I think the line dropped, didn't it?", 23109, 26069),
-    ("Um, could you check", 45209, 46729),
-    ("Like, is there one report that I should", 46989, 49709),
-    ("Uh, I was thinking about", 58669, 60937),
-    ("Which is the quickest", 67097, 67957),
-    ("way to export.", 68457, 69577),
+    ("Sí.", 2000, 3400),
+    ("Can you hear me?", 4100, 5000),
+    ("Uh, I think the line dropped, didn't it?", 20000, 23000),
+    ("Um, could you check", 40000, 41500),
+    ("Like, is there one report that I should", 41760, 44500),
+    ("Uh, I was thinking about", 53000, 55300),
+    ("Which is the quickest", 61000, 61950),
+    ("way to export.", 62400, 63500),
 ]
 
 
@@ -2039,8 +2040,8 @@ def test_a_recorded_calls_pieces_are_asked_as_the_persons_turns_and_each_answere
     # Each is asked on the first tick TURN_END_MS after its last word (its clip's end less the cut's quiet tail).
     ends = [RECORDED_CALL[i][2] for i in (1, 2, 4, 5, 7)]
     for (_, at), end in zip(asked, ends, strict=True):
-        waited = at - (end - call_voice.PREROLL_MS) / 1000
-        assert call_voice.TURN_END_MS / 1000 <= waited < call_voice.TURN_END_MS / 1000 + 0.15, (at, end)
+        waited = round(at * 1000) - (end - call_voice.PREROLL_MS)  # ms on the call's clock
+        assert call_voice.TURN_END_MS <= waited < call_voice.TURN_END_MS + 150, (at, end)
     assert [t["status"] for t in _turns(meet, call["meeting_id"])] == ["replied"] * len(asked)
 
 
@@ -2267,3 +2268,57 @@ def test_a_recorder_that_reconnects_on_a_new_timeline_does_not_run_turns_togethe
     turn = post(meet, f"{path}/inputs", {}, token)["call_voice"]["turn"]
     assert turn["text"] == "Which is the quickest"  # two turns, not one run together
     assert [t["question"]["text"] for t in voice._found(call["id"]).gathering] == ["Can you hear me?"]
+
+
+def test_a_failure_after_the_turn_is_written_puts_it_back_at_the_head(meet, monkeypatch):
+    call, voice, now, path, token = _resident_dm(meet, monkeypatch)
+    _say(meet, call["id"], now, 0, "Which is the quickest way to export?", quiet_ms=1000)
+
+    def refused(*args, **kwargs):
+        raise RuntimeError("the write failed after the turn was written")
+
+    with monkeypatch.context() as m:
+        m.setattr(events, "queue_voice_inputs", refused)  # after the turn's row is written, in the same transaction
+        now[0] += 0.3
+        with pytest.raises(RuntimeError):
+            voice.tick()
+    state = voice._found(call["id"])
+    assert state.open is None and [t["question"]["text"] for t in state.gathering] == [
+        "Which is the quickest way to export?"
+    ]
+    assert _turns(meet, call["meeting_id"]) == []  # rolled back with it
+    voice.tick()
+    assert (
+        post(meet, f"{path}/inputs", {}, token)["call_voice"]["turn"]["text"] == "Which is the quickest way to export?"
+    )
+
+
+def test_a_gap_of_exactly_the_turns_end_starts_a_new_turn(meet, monkeypatch):
+    call, voice, now, path, token = _resident_dm(meet, monkeypatch)
+    _say(meet, call["id"], now, 0, "Which is the quickest", quiet_ms=600)  # last voiced frame ends at 1000
+    _say(meet, call["id"], now, 2200, "way to export.", quiet_ms=1300)  # first voiced frame at 2200: 1200 ms on
+    voice.tick()
+    assert post(meet, f"{path}/inputs", {}, token)["call_voice"]["turn"]["text"] == "Which is the quickest"
+    assert [t["question"]["text"] for t in voice._found(call["id"]).gathering] == ["way to export."]
+
+
+def test_a_clip_from_before_the_recorder_reconnected_still_comes_first(meet, monkeypatch):
+    call, voice, now, path, token = _resident_dm(meet, monkeypatch)
+    calls, release = meet.app.state.calls, threading.Event()
+
+    def transcribe(base, key, audio, **kw):
+        if len(audio) // 32 > 1500:  # the older, longer clip: its text is slow to come
+            assert release.wait(10)
+            return "Older piece."
+        return "Newer piece."
+
+    monkeypatch.setattr(call_media, "transcribe", transcribe)
+    now[0] = 52.0
+    calls.ingest(call["id"], "human:ana", PCM_ONE_SECOND + PCM_ONE_SECOND[: 32 * 500] + bytes(32 * 600), 50_000)
+    now[0] = 60.0  # the recorder reconnects: its timeline starts again at 0
+    calls.ingest(call["id"], "human:ana", PCM_ONE_SECOND + bytes(32 * 1300), 0)
+    release.set()
+    assert calls.settle()
+    # In the order said, two turns: the older asked first, the newer waiting behind it.
+    assert post(meet, f"{path}/inputs", {}, token)["call_voice"]["turn"]["text"] == "Older piece."
+    assert [t["question"]["text"] for t in voice._found(call["id"]).gathering] == ["Newer piece."]

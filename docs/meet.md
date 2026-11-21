@@ -250,7 +250,8 @@ prep message in the thread.
 
 **Who answers.** In a 1:1 call with a bot (one bot attached, and the thread's people are exactly one person and that
 bot) the bot answers each turn of the person's, whole: the utterances their speech is cut into at a pause (an "um" too)
-are joined into one turn while each starts less than 1.2 seconds after the last one's last voiced frame. A turn is asked
+are joined into one turn while each starts less than 1.2 seconds after the last one's last voiced frame, measured on the
+call's own clock (a recorder that reconnects on a new timeline keeps its place), and only once stored. A turn is asked
 as one question only once the person has been quiet that long and nothing more is on its way, turns finished while the
 bot was busy too, one by one, oldest first. A turn gathered while the call was one-to-one is asked as one even if the roster changes; later pieces follow
 the rules then in force. A follow-up waits while a turn
