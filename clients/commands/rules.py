@@ -366,18 +366,17 @@ def rules_history(api, args):
     "tico_rules_make",
     "Make this a rule: your words (an answer, an incident, a refusal) become a normal task for the Rules page's owner, "
     "who drafts one rule and its typed check, checks it against the constitution and the rules in force, and asks one "
-    "OK. The Assistant files it as the person, citing their words (on_behalf_of).",
-    {"text": _s("What should become a rule, in your own words"), "on_behalf_of": ASKED},
+    "OK. Filed as you, through the normal task route.",
+    {"text": _s("What should become a rule, in your own words")},
     required=("text",),
     writes=True,
 )
 def rules_make(api, args):
-    who = _asked(api, args) if args.get("on_behalf_of") else _as_person(api)
-    owner = ((who.get("page-owners").get("pages") or {}).get("rules") or {}).get("bot")
+    owner = ((api.get("page-owners").get("pages") or {}).get("rules") or {}).get("bot")
     if not owner:
         raise APIError("counsel_off", "The Rules page has no owner to draft it", 409)
-    law = (who.get("rules/counts") or {}).get("constitution") or {}
-    return who.post("tasks", make_task(args["text"], owner, law.get("id")), key=_key(args))
+    law = (api.get("rules/counts") or {}).get("constitution") or {}
+    return api.post("tasks", make_task(args["text"], owner, law.get("id")), key=_key(args))
 
 
 MAKE_LABEL = "make-rule"  # backend/org_rules.py MAKE_LABEL: what makes a task a clerk's

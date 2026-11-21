@@ -2605,11 +2605,11 @@ def _replace_open(conn: "sqlite3.Connection", task_id: str, visit_id: str, by: s
 
 
 def withdraw_requirement(
-    conn: "sqlite3.Connection", requirement_id: str, by: str, why: str | None = None
+    conn: "sqlite3.Connection", requirement_id: str, by: str, why: str | None = None, *, advance_task: bool = True
 ) -> Row | None:
-    """Take back a requirement that was added to one task. The task moves on if that was all it waited for. A bot takes
-    back only what a bot asked: an ask a person added stays in the Needs you of whom it names until a person takes it
-    back or it is answered."""
+    """Take back a requirement that was added to one task. The task moves on if that was all it waited for, unless
+    `advance_task` is False (an ask replaced by another that is about to be asked). A bot takes back only what a bot asked: an
+    ask a person added stays in the Needs you of whom it names until a person takes it back or it is answered."""
     H = _h()
     requirement = R.get(conn, requirement_id)
     if not requirement or not requirement.get("visit_id"):
@@ -2623,4 +2623,6 @@ def withdraw_requirement(
     conn.execute("UPDATE requirements SET withdrawn_at=? WHERE id=?", (ts, requirement_id))
     _reset_ladder(conn, visit, ts, by)
     _event(conn, visit["task_id"], by, "requirement_withdrawn", requirement_id, None, why)
+    if not advance_task:
+        return task(conn, visit["task_id"])
     return advance(conn, visit["task_id"]) or task(conn, visit["task_id"])

@@ -153,8 +153,8 @@ rule_due_status(due_date_id, due_on, satisfied_by, via routine|person, task_id?,
 - **Make this a rule** is a normal private task (`POST /api/v2/tasks`, every filing check) for the Rules page's owner,
   labelled `make-rule` and naming the constitution's doc, the one doc outside its task the Rules Owner may read. Its
   clerk skill (`templates/catalog/_shared/.claude/skills/clerk-a-rule`) suggests one rule in its run on that task, which
-  binds the suggestion to the task; saving a revised draft there sets every earlier one aside and withdraws its ask,
-  whoever drafted it (a reassigned task). It asks one OK from that run (`POST /api/v2/rules/{id}/ok`, line "Approve
+  binds the suggestion to the task (a run carrying several binds to its own, and refuses when none is its own); saving a revised draft there sets every earlier one aside and withdraws its ask,
+  whoever drafted it (a reassigned task), without moving the task on for it. It asks one OK from that run (`POST /api/v2/rules/{id}/ok`, line "Approve
   this rule") of the first of the requester, the owner and the Admins who is the owner or an Admin, already reads the
   task and is within the clerk's reach: an ask shares the task with no one. The preview binds the sentence, Who, With,
   Where, If broken, the reviewer and the typed check, each shown whole. A draft with a toward scope or condition is not

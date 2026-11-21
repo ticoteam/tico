@@ -409,6 +409,8 @@ def refresh_generated_docs(c):
     for row in c.execute(
         "SELECT rowid AS rid,* FROM docs WHERE archived=0 AND (path GLOB '_librarian/*' OR path='FAQ.md')"
     ).fetchall():
+        if row["id"] == constitution_id(c):
+            continue  # the constitution is people's, wherever a person moved it
         title = titles.get(row["path"], {}).get(row["title"], row["title"])
         text = H.librarian_text(row["body"]) if row["updated_by_id"] == "bot:librarian" else row["body"]
         if (title, text) == (row["title"], row["body"]):
@@ -884,8 +886,8 @@ class Docs:
     def remove_index_source(self, c, source, actor):
         """An archived source leaves the cached index in the same transaction."""
         row = c.execute("SELECT rowid AS rid,* FROM docs WHERE path='_librarian/index.md' AND archived=0").fetchone()
-        if not row or row["id"] == source["id"]:
-            return
+        if not row or row["id"] in (source["id"], constitution_id(c)):
+            return  # the constitution is people's, wherever a person moved it
         reused = c.execute(
             "SELECT 1 FROM docs WHERE path=? COLLATE NOCASE AND archived=0 AND id!=?", (source["path"], source["id"])
         ).fetchone()

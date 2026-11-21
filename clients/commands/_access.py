@@ -106,7 +106,6 @@ ASSISTANT_WRITES = {
     "tico_settings_set",
     "tico_rules_read",
     "tico_rules_ask",
-    "tico_rules_make",
     # People view; the Assistant books for them (decision 13).
     "tico_calendar_add",
     "tico_calendar_move",
@@ -250,6 +249,9 @@ AUDIENCE = {
     "tico_rules_appeal": BOTS,
     # Whoever suggested a rule asks its OK: a bot (a person adds a rule directly).
     "tico_rules_ok": BOTS,
+    # "Make this a rule" is a normal task its caller files as itself: a person, or an agent on its own run. The Assistant
+    # and BotOps file as someone else, which the task route refuses here: they are not offered it.
+    "tico_rules_make": PEOPLE + ("bot", "agent"),
     "tico_rules_withdraw": PEOPLE + BOTS,
     # A bot does not unsnooze (docs/dev/pipelines-v3-cutover.md, Bot commands): a person brings a task back.
     "tico_task_unsnooze": HUMANS_AND_ASSISTANT,
@@ -473,7 +475,6 @@ ASSISTANT_TOOLS = frozenset(
         "tico_rules_get",
         "tico_rules_read",
         "tico_rules_ask",
-        "tico_rules_make",
         "tico_rules_history",
         "tico_settings_find",
         "tico_settings_show",
