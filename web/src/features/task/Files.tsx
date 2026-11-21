@@ -12,8 +12,8 @@ import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { toast } from '@/kit/Toast';
 import { fmtDate } from '@/lib';
-import { DETAILS, failedToast, isPage, reasonOf } from './model';
-import { pagePickQuery, pageShownQuery, taskDetailQuery, taskFilesQuery } from './queries';
+import { DETAILS, failedToast, isPage, reasonOf, tabAddress } from './model';
+import { pagePickQuery, pageShownQuery, taskDetailQuery, taskFilesQuery, type TaskData } from './queries';
 import type { Versions } from './Versions';
 
 /* What a person does to a task's pages and files beyond reading them (the old app's page view, ui/app/pages.ts, and
@@ -94,6 +94,29 @@ export function PageMenu({ task, vs }: { task: string; vs: Versions }) {
       </Menu>
       {open === 'delete' && <DeletePage task={task} page={file} name={name} onClose={() => setOpen(null)} onDeleted={() => void toDetails()} />}
     </>
+  );
+}
+
+/** Archived files and pages, off the tab row and folded at its end: each opens in the page sheet, where it can be restored. */
+export function ArchiveMenu({ t, flow }: { t: TaskData; flow: boolean }) {
+  const navigate = useNavigate();
+  const files = useQuery(taskFilesQuery(t.id));
+  const archived = (files.data ?? []).filter((f) => f.archived);
+  if (!archived.length) return null;
+  const details = tabAddress(t, DETAILS, flow);
+  return (
+    <Menu
+      trigger={
+        <button className="tv-ver tv-add" type="button" data-target={`task-archive:${t.id}`}>
+          <Icon name="archive" />
+          Archive ({archived.length})
+        </button>
+      }
+    >
+      {archived.map((f) => (
+        <MenuItem key={f.id} label={f.title || f.name} onSelect={() => void navigate({ to: details.to as never, search: (flow ? { tab: DETAILS, file: f.id } : { file: f.id }) as never })} />
+      ))}
+    </Menu>
   );
 }
 

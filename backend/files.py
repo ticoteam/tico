@@ -103,14 +103,28 @@ def new_id():
     return "file-" + secrets.token_hex(12)
 
 
-def removed_event(c, task_id, actor, fid, title):
-    """The task's activity says which file was taken off it, by its newest name."""
+def same_type(mime):
+    """A type as a replacement compares it: no parameters, lower case, under its common name (audio/vnd.wave is
+    audio/wav)."""
+    from .visuals import stored_type
+
+    return stored_type(str(mime or "").split(";", 1)[0].strip().lower())
+
+
+def task_scoped(row):
+    """A stored file kept on its task, attached to it or published for it; never a link, a bot-wide file, or one
+    promoted to bot-wide."""
+    return bool(row["task_id"]) and row["scope"] == "task:" + row["task_id"] and row["locator"] == "tico_blob"
+
+
+def removed_event(c, task_id, actor, fid, title, *, back=False):
+    """The task's activity says which file was taken off it (or brought `back`), by its newest name."""
     row = c.execute(
         "SELECT name FROM bot_file_versions WHERE file_id=? ORDER BY version DESC LIMIT 1", (fid,)
     ).fetchone()
     provenance = file_provenance(c, fid)
     name, data = H.sourced_text(row["name"] if row else title, [provenance], provenance)
-    H._task_event(c, task_id, actor, "file", name, None, "", data=data)
+    H._task_event(c, task_id, actor, "file", *((None, name) if back else (name, None)), "", data=data)
 
 
 def file_provenance(c, fid, version=None):
@@ -1209,6 +1223,20 @@ TASK_UPLOAD_SERIES_SQL = (
     "ORDER BY f.last_activity_at DESC"
 )
 
+# The file on this task an upload names as the one it replaces.
+TASK_REPLACE_SQL = (
+    "SELECT f.*,p.file_id IS NOT NULL AS is_page FROM bot_files f LEFT JOIN pages p ON p.file_id=f.id "
+    "WHERE f.id=? AND f.task_id=? AND f.state<>'deleted'"
+)
+
+# A stored file kept on its task (task_scoped below), by its id or the blob id of one of its versions: what a task
+# participant archives and restores.
+TASK_SCOPED_SQL = (
+    "SELECT * FROM bot_files WHERE task_id IS NOT NULL AND state<>'deleted' AND locator='tico_blob' "
+    "AND scope='task:'||task_id AND (id=? OR id IN (SELECT file_id FROM bot_file_versions WHERE blob_id=?)) "
+    "ORDER BY id=? DESC,last_activity_at DESC LIMIT 1"
+)
+
 TASK_VERSIONS_SQL = (
     "SELECT v.*,r.note,r.comment_id FROM json_each(?) ids JOIN bot_file_versions v ON v.file_id=ids.value "
     "AND v.version>=CASE WHEN ? > 0 THEN coalesce((SELECT older.version FROM bot_file_versions older "
@@ -1631,11 +1659,18 @@ class Files:
         fid, _ = self.attach_task(c, who, task_id, item, digest, bot)
         return fid
 
-    def attach_task(self, c, who, task_id, item, digest, bot, *, file=None, series=True):
+    def attach_task(self, c, who, task_id, item, digest, bot, *, file=None, series=True, replaces=None):
         """Continue a writable series on this task unless it is linked here as a document.
-        A named document is passed as `file` after cleaning. With `series` off and no `file`, start a new series."""
-        row = file
-        if row is None and series:
+        A named document is passed as `file` after cleaning. With `series` off and no `file`, start a new series.
+        `replaces` names the file to continue whatever the new name (an unversioned attachment is adopted as its v1);
+        an archived one comes back with the new version."""
+        row, legacy = file, None
+        if replaces:
+            row, legacy = self.replaced(c, who, task_id, replaces, item["content_type"])
+            if row is not None and row["archived"]:
+                c.execute("UPDATE bot_files SET archived=0 WHERE id=?", (row["id"],))
+                self.relink(c, task_id, row["id"])
+        if row is None and legacy is None and series:
             from . import page_links
 
             rows = c.execute(TASK_UPLOAD_SERIES_SQL, (task_id, item["name"], "task:" + task_id)).fetchall()
@@ -1647,59 +1682,13 @@ class Files:
                 ),
                 None,
             )
+            if row is None:
+                legacy = self.legacy_attachment(c, who, task_id, "b.name=? AND b.id<>?", (item["name"], item["id"]))
         created = row is None
-        legacy = None
         if row is None:
-            if series:
-                found = c.execute(
-                    "SELECT b.* FROM blobs b JOIN task_assets a ON a.blob_id=b.id "
-                    "WHERE a.task_id=? AND b.name=? AND b.id<>? AND NOT EXISTS "
-                    "(SELECT 1 FROM bot_file_versions v WHERE v.blob_id=b.id) "
-                    "ORDER BY b.created_at DESC",
-                    (task_id, item["name"], item["id"]),
-                ).fetchall()
-                legacy = next(
-                    (
-                        b
-                        for b in found
-                        if not page_ref_denials(c, self.auth, who, b["id"])
-                        and privacy.blob_readable(c, privacy.actor(who), b["id"])
-                    ),
-                    None,
-                )
-            fid, stamp = (legacy["id"] if legacy else new_id()), H.now()
-            c.execute(
-                "INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,mime,locator,task_id,"
-                "first_activity_at,last_activity_at) VALUES(?,?,?,?,?,?,?,'tico_blob',?,?,?)",
-                (
-                    fid,
-                    bot,
-                    "task:" + task_id,
-                    "task-file:" + fid,
-                    item["name"],
-                    BF.kind_of(item["name"]),
-                    item["content_type"],
-                    task_id,
-                    stamp,
-                    stamp,
-                ),
-            )
-            row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
-            if legacy:
-                self.insert_task_version(
-                    c,
-                    fid,
-                    1,
-                    legacy["id"],
-                    legacy["digest"],
-                    legacy["size"],
-                    legacy["name"],
-                    legacy["content_type"],
-                    legacy["owner"],
-                    legacy["created_at"],
-                    pending=False,
-                )
-        number = row["current_version"] + 1 + (1 if legacy else 0)
+            source = legacy or {"name": item["name"], "content_type": item["content_type"]}
+            row = self.task_file_row(c, task_id, bot, source["name"], source["content_type"], legacy)
+        number = row["current_version"] + 1
         self.insert_task_version(
             c,
             row["id"],
@@ -1720,6 +1709,164 @@ class Files:
             c, row["id"], who.actor, "created" if created else "modified", task=task_id, version=number, digest=digest
         )
         return row["id"], number
+
+    def replaced(self, c, who, task_id, fid, mime):
+        """The stored file kept on this task an upload replaces, or the attachment from before versioned files it
+        adopts. A page takes its versions from page publish, a bot-wide file or a link is its own, a replacement keeps
+        the file's type, and an attachment another task links stays as it is."""
+        row = c.execute(TASK_REPLACE_SQL, (fid, task_id)).fetchone()
+        legacy = None
+        if row is None:
+            legacy = self.legacy_attachment(c, who, task_id, "b.id=?", (fid,))
+        elif not self.visible(c, who, row, {}):
+            row = None
+        if legacy is not None:
+            current = same_type(legacy["content_type"])
+        elif row is not None:
+            if row["is_page"]:
+                raise Problem("validation", "A page takes its new version from tico page publish, not replaces", 422)
+            if not task_scoped(row) or not row["current_version"]:
+                raise Problem(
+                    "validation", "Only a file kept on this task is replaced; attach the new one by name", 422
+                )
+            current = same_type(row["mime"])
+        else:
+            raise Problem("not_found", "No file on this task to replace by that id", 404)
+        # An attachment from before versioned files keeps its blob id, adopted or not: another task may still link it.
+        if c.execute("SELECT 1 FROM task_assets WHERE blob_id=? AND task_id<>?", (fid, task_id)).fetchone():
+            raise Problem("validation", "This attachment is on more than one task; attach the new one by name", 422)
+        if current != same_type(mime):
+            raise Problem(
+                "validation", f"A replacement keeps the file's type ({current}); attach a {mime} by name", 422
+            )
+        return row, legacy
+
+    @staticmethod
+    def relink(c, task_id, fid):
+        """Each version's attachment back on the task, so its older versions open again."""
+        c.execute(
+            "INSERT OR IGNORE INTO task_assets(task_id,blob_id) SELECT ?,blob_id FROM bot_file_versions WHERE file_id=?",
+            (task_id, fid),
+        )
+
+    def legacy_attachment(self, c, who, task_id, where, params):
+        """The newest attachment on this task from before versioned files, matching `where`, that `who` may read."""
+        found = c.execute(
+            "SELECT b.* FROM blobs b JOIN task_assets a ON a.blob_id=b.id WHERE a.task_id=? AND "
+            + where
+            + " AND NOT EXISTS (SELECT 1 FROM bot_file_versions v WHERE v.blob_id=b.id) ORDER BY b.created_at DESC",
+            (task_id, *params),
+        ).fetchall()
+        return next(
+            (
+                b
+                for b in found
+                if not page_ref_denials(c, self.auth, who, b["id"])
+                and privacy.blob_readable(c, privacy.actor(who), b["id"])
+            ),
+            None,
+        )
+
+    def task_file_row(self, c, task_id, bot, name, mime, legacy=None):
+        """A new task file; an attachment from before versioned files (`legacy`, its blob) keeps its id as its v1."""
+        fid, stamp = (legacy["id"] if legacy else new_id()), H.now()
+        c.execute(
+            "INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,mime,locator,task_id,"
+            "first_activity_at,last_activity_at) VALUES(?,?,?,?,?,?,?,'tico_blob',?,?,?)",
+            (fid, bot, "task:" + task_id, "task-file:" + fid, name, BF.kind_of(name), mime, task_id, stamp, stamp),
+        )
+        if legacy:
+            self.insert_task_version(
+                c,
+                fid,
+                1,
+                legacy["id"],
+                legacy["digest"],
+                legacy["size"],
+                legacy["name"],
+                legacy["content_type"],
+                legacy["owner"],
+                legacy["created_at"],
+                pending=False,
+            )
+            c.execute("UPDATE bot_files SET current_version=1 WHERE id=?", (fid,))
+        return c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
+
+    def task_bot(self, c, who, task):
+        """The bot a task file is kept under: the writer, else the task's owner or requester, else the default bot."""
+        from .views import default_bot
+
+        actor = next((a for a in (who.actor, task["owner_id"], task["requester_id"]) if H.is_bot(a)), None)
+        return H.actor_id(actor) if actor else default_bot(c, self.store.settings)
+
+    @staticmethod
+    def participant(c, who, task):
+        """Who archives and restores a task's files: its owner or requester, or a person who may move tasks."""
+        return who.actor in (task["owner_id"], task["requester_id"]) or (
+            who.role == "owner" or who.role == "human" and H.can_move(c, who.actor)
+        )
+
+    def may_archive(self, c, who, task):
+        if not self.participant(c, who, task):
+            raise Problem(
+                "forbidden", "Only a task participant or someone who can move it archives its attachments", 403
+            )
+
+    def page_rights(self, c, who, row, is_page=None):
+        """Whether `who` may archive this file as far as its page goes: a page's managers and writers, or no page.
+        `is_page`, when the caller's read already joined the page, saves looking it up."""
+        from . import page_links
+        from .pages import may_manage
+
+        if is_page is None:
+            is_page = c.execute("SELECT 1 FROM pages WHERE file_id=? AND deleted_at IS NULL", (row["id"],)).fetchone()
+        if not is_page:
+            return True
+        return may_manage(c, self.auth, who, row) or page_links.may_write(c, self.auth, who, row)
+
+    def can_restore(self, c, who, row, memo):
+        """Whether `who` may bring back an archived file on a task listing (rows joined to their page): each flag that
+        archived it under its own rule, a page's (page managers and writers), a task file's (participants with page
+        rights), else a file's (its managers). `memo` keeps each task's and the managers' answer for one listing."""
+        if (row["page_archived"] or task_scoped(row)) and not self.page_rights(c, who, row, bool(row["page_id"])):
+            return False
+        if not row["archived"]:
+            return True
+        key = row["task_id"] if task_scoped(row) else ""
+        if key not in memo:
+            memo[key] = (
+                self.participant(c, who, H.task(c, key))
+                if key
+                else who.role in ("owner", "human") and bool(self.auth.bot_admin(who))
+            )
+        return memo[key]
+
+    def archive_task_file(self, c, who, stored, archived):
+        """Take a task file off its task, or bring it back. Its versions stay either way."""
+        from . import task_pages
+
+        fid, task_id = stored["id"], stored["task_id"]
+        if not self.visible(c, who, stored, {}):
+            raise Problem("not_found", "File not found", 404)
+        task = self.auth.task(c, who, task_id)
+        H._writer(c, who.actor, task_id=task["id"])
+        self.may_archive(c, who, task)
+        if not self.page_rights(c, who, stored):
+            raise Problem("forbidden", "Only the page's managers and writers archive or restore it", 403)
+        c.execute("UPDATE bot_files SET archived=?,last_activity_at=? WHERE id=?", (int(archived), H.now(), fid))
+        if archived:
+            c.execute(
+                "DELETE FROM task_assets WHERE task_id=? AND blob_id IN "
+                "(SELECT blob_id FROM bot_file_versions WHERE file_id=?)",
+                (task_id, fid),
+            )
+        else:
+            self.relink(c, task_id, fid)
+        self.activity(c, fid, who.actor, "archived" if archived else "restored", task=task_id)
+        removed_event(c, task_id, who.actor, fid, stored["title"], back=not archived)
+        task_pages.submit_linked(c, fid, None, who.actor)
+        H.event(c, who.actor, "task.file_archived" if archived else "task.file_restored", task_id, {"file": fid})
+        return {"file": {"id": fid, "archived": archived}}
 
     @staticmethod
     def insert_task_version(c, fid, number, blob, digest, size, name, mime, actor, created, *, pending=True):
@@ -1755,7 +1902,7 @@ class Files:
         signed = signed_versions(c, [r["id"] for r in rows if r["mime"] == "application/pdf"])
         if all_pages:
             page_links.prime(c, [row for row in rows if row["page_id"]])
-        listed = []
+        listed, restorers = [], {}
         for row in rows:
             fid = row["id"]
             history = histories.get(fid, [])
@@ -1768,6 +1915,8 @@ class Files:
             if all_pages and is_page:
                 details = {
                     "title": row["title"],
+                    "page_archived": bool(row["page_archived"]),
+                    "file_archived": bool(row["archived"]),
                     "links": page_links.links_of(c, self.auth, who, fid),
                     "writers": page_links.writers_of(c, fid),
                 }
@@ -1782,9 +1931,11 @@ class Files:
                         "mime": row["mime"],
                         "current_version": row["current_version"],
                         "archived": archived,
+                        **({"can_restore": self.can_restore(c, who, row, restorers)} if archived else {}),
                         "versions": [
                             {
                                 "n": v["version"],
+                                "name": v["name"],
                                 "size": v["size"],
                                 "mime": v["mime"],
                                 "sha256": v["digest"],
@@ -1841,6 +1992,7 @@ class Files:
                     "versions": [
                         {
                             "n": 1,
+                            "name": b["name"],
                             "size": b["size"],
                             "mime": b["content_type"],
                             "sha256": b["digest"],
@@ -2288,68 +2440,41 @@ class Files:
         who = request.state.identity
 
         def work(c):
-            stored = c.execute("SELECT * FROM bot_files WHERE id=? AND identity LIKE 'task-file:%'", (fid,)).fetchone()
-            if stored and body.model_dump(exclude_none=True) == {"archived": True}:
-                task = self.auth.task(c, who, stored["task_id"])
-                H._writer(c, who.actor, task_id=task["id"])
-                if who.actor not in (task["owner_id"], task["requester_id"]) and not (
-                    who.role == "owner" or who.role == "human" and H.can_move(c, who.actor)
-                ):
-                    raise Problem(
-                        "forbidden", "Only a task participant or someone who can move it archives its attachments", 403
-                    )
-                c.execute("UPDATE bot_files SET archived=1,last_activity_at=? WHERE id=?", (H.now(), fid))
-                c.execute(
-                    "DELETE FROM task_assets WHERE task_id=? AND blob_id IN "
-                    "(SELECT blob_id FROM bot_file_versions WHERE file_id=?)",
-                    (stored["task_id"], fid),
-                )
-                c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), stored["task_id"]))
-                self.activity(c, fid, who.actor, "archived", task=stored["task_id"])
-                removed_event(c, stored["task_id"], who.actor, fid, stored["title"])
-                task_pages.submit_linked(c, fid, None, who.actor)
-                H.event(c, who.actor, "task.file_archived", stored["task_id"], {"file": fid})
-                return {"file": {"id": fid, "archived": True}}
-            if not is_file_id(fid) and not stored:
-                if body.model_dump(exclude_none=True) != {"archived": True}:
+            nonlocal fid
+            stored = c.execute(TASK_SCOPED_SQL, (fid, fid, fid)).fetchone()
+            asked = body.model_dump(exclude_none=True)
+            if "archived" in asked and len(asked) > 1:
+                raise Problem("validation", "Change archived on its own", 422)
+            if stored and set(asked) == {"archived"}:
+                return self.archive_task_file(c, who, stored, body.archived)
+            legacy = not is_file_id(fid) and not stored
+            series = legacy and c.execute("SELECT file_id FROM bot_file_versions WHERE blob_id=?", (fid,)).fetchone()
+            if series:
+                # A version of a file kept elsewhere (a bot-wide one a same-name upload continued) is that file's.
+                fid, legacy = series["file_id"], False
+            if legacy:
+                if asked != {"archived": True}:
                     raise Problem("validation", "Task attachments support archive only", 422)
                 linked = c.execute("SELECT task_id FROM task_assets WHERE blob_id=?", (fid,)).fetchall()
                 if not linked:
                     raise Problem("not_found", "File not found", 404)
-                for task in linked:
-                    row = self.auth.task(c, who, task["task_id"])
+                tasks = [self.auth.task(c, who, task["task_id"]) for task in linked]
+                for row in tasks:
                     H._writer(c, who.actor, task_id=row["id"])
-                    if who.actor not in (row["owner_id"], row["requester_id"]) and not (
-                        who.role == "owner" or who.role == "human" and H.can_move(c, who.actor)
-                    ):
-                        raise Problem(
-                            "forbidden",
-                            "Only a task participant or someone who can move it archives its attachments",
-                            403,
-                        )
+                    self.may_archive(c, who, row)
+                blob = c.execute("SELECT * FROM blobs WHERE id=?", (fid,)).fetchone()
+                # On one task, it becomes that task's file under its own id, archived, so it can be restored.
+                if len(tasks) == 1 and blob is not None:
+                    row = self.task_file_row(
+                        c, tasks[0]["id"], self.task_bot(c, who, tasks[0]), blob["name"], blob["content_type"], blob
+                    )
+                    return self.archive_task_file(c, who, row, True)
                 c.execute("DELETE FROM task_assets WHERE blob_id=?", (fid,))
-                blob = c.execute("SELECT name FROM blobs WHERE id=?", (fid,)).fetchone()
                 for task in linked:
                     provenance = file_provenance(c, fid)
                     name, data = H.sourced_text(blob["name"] if blob else fid, [provenance], provenance)
                     H._task_event(c, task["task_id"], who.actor, "file", name, None, "", data=data)
                     c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), task["task_id"]))
-                    for published in c.execute(
-                        "SELECT f.id FROM bot_files f JOIN bot_file_versions v "
-                        "ON v.file_id=f.id "
-                        "WHERE v.blob_id=? AND f.scope=? AND f.archived=0",
-                        (fid, "task:" + task["task_id"]),
-                    ).fetchall():
-                        c.execute(
-                            "UPDATE bot_files SET archived=1,last_activity_at=? WHERE id=?", (H.now(), published["id"])
-                        )
-                        c.execute(
-                            "DELETE FROM task_assets WHERE task_id=? AND blob_id IN "
-                            "(SELECT blob_id FROM bot_file_versions WHERE file_id=?)",
-                            (task["task_id"], published["id"]),
-                        )
-                        self.activity(c, published["id"], who.actor, "archived", task=task["task_id"])
-                        task_pages.submit_linked(c, published["id"], None, who.actor)
                     H.event(c, who.actor, "task.file_archived", task["task_id"], {"file": fid})
                 return {"file": {"id": fid, "archived": True}}
             row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
@@ -2380,24 +2505,22 @@ class Files:
                 if self.find(c, row["bot_id"], "bot", row["identity"]):
                     raise Problem("conflict", "A bot-wide file with the same identity already exists", 409)
                 fields["scope"] = "bot"
-            if body.archived:
-                fields["archived"] = 1
-            elif body.archived is False:
-                raise Problem("validation", "A removed file comes back when the bot publishes it again", 422)
+            if body.archived is not None:
+                fields["archived"] = int(body.archived)
             if not fields:
                 return {"file": self.brief(c, row)}
             fields["last_activity_at"] = now
             c.execute(
                 "UPDATE bot_files SET " + ",".join(k + "=?" for k in fields) + " WHERE id=?", (*fields.values(), fid)
             )
-            if "archived" in fields and not row["archived"]:
+            if "archived" in fields and fields["archived"] != row["archived"]:
                 task_pages.submit_linked(c, fid, None, actor)
             if "title" in fields:
                 file_library.retitle(c, fid, fields["title"])
             if body.promote:
                 self.activity(c, fid, actor, "promoted", task=row["task_id"], now=now, detail={"from": row["scope"]})
-            elif body.archived:
-                self.activity(c, fid, actor, "archived", now=now)
+            elif body.archived is not None:
+                self.activity(c, fid, actor, "archived" if body.archived else "restored", now=now)
             else:
                 self.activity(
                     c,

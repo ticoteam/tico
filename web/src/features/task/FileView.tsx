@@ -116,8 +116,10 @@ function Body({ f, v, onPicture, signable = false }: { f: TaskFileView; v: FileV
     ) : (
       <img src={v.url} alt={`${name}, v${v.n}`} />
     );
-  if (isWord(f.name, v.mime)) return <WordPages url={v.url} name={`${name}, v${v.n}`} />;
-  return <FileFrame id={f.id} version={v.n} mime={v.mime} title={`${name}, v${v.n}`} url={v.url} name={f.name} size={v.size} signable={signable} />;
+  // Each version keeps the name it was stored under: an older draft opens and saves as it was named then.
+  const stored = v.name || f.name;
+  if (isWord(stored, v.mime)) return <WordPages url={v.url} name={`${name}, v${v.n}`} />;
+  return <FileFrame id={f.id} version={v.n} mime={v.mime} title={`${name}, v${v.n}`} url={v.url} name={stored} size={v.size} signable={signable} />;
 }
 
 /** A file open in the page sheet (more.js fileBar): back to Details, its name, which of the task's files it is, and its
@@ -127,9 +129,10 @@ export function FileView({ t, file, full, flow }: { t: TaskData; file: string; f
   const me = useQuery(meQuery);
   const search = useSearch({ strict: false }) as TaskSearch;
   const navigate = useNavigate();
+  // An archived file opens from the Archive menu too; it is not one of the task's files to step through.
   const list = (files.data ?? []).filter((f) => !f.archived);
   const i = list.findIndex((f) => f.id === file);
-  const f = list[i];
+  const f = (files.data ?? []).find((x) => x.id === file);
   const details = tabAddress(t, DETAILS, flow);
   const at = (id: string) => (flow ? { tab: DETAILS, file: id } : { file: id });
   const back = flow ? { tab: DETAILS } : {};
@@ -168,10 +171,20 @@ export function FileView({ t, file, full, flow }: { t: TaskData; file: string; f
     toast({ text: 'Removed', name: x.title || x.name, action: { label: 'Undo', run: () => void run('task.archiveFile', { task: t.id, file: x.id, archived: false }, { via: 'click' }).then((u) => u.ok || toast(failedToast(u))) } });
     void navigate({ to: details.to as never, search: back as never });
   };
+  // Restore clears each flag that archived it, a page's own and its file's; the server says who may.
+  const mayRestore = !!f?.can_restore;
+  const restore = async (x: TaskFileView) => {
+    const page = !!x.page_archived;
+    const file = !page || !!x.file_archived;
+    let r = page ? await run('task.archivePage', { task: t.id, page: x.id, archived: false }, { via: 'click' }) : null;
+    if (file && (!r || r.ok)) r = await run('task.archiveFile', { task: t.id, file: x.id, archived: false }, { via: 'click' });
+    if (!r) return;
+    toast(r.ok ? { text: 'Restored', name: x.title || x.name } : failedToast(r));
+  };
 
   const menu = f && v && (
     <Menu trigger={<IconButton icon="more" label="More" size="sm" data-target={`task-version:${t.id}`} />}>
-      <MenuItem label="Download" icon="download" onSelect={() => download(v.url, f.name)} />
+      <MenuItem label="Download" icon="download" onSelect={() => download(v.url, v.name || f.name)} />
       {versions.length > 1 && (
         <MenuSub label="Versions" icon="clock">
           {versions.map((x) => (
@@ -187,10 +200,10 @@ export function FileView({ t, file, full, flow }: { t: TaskData; file: string; f
       {pair && (
         <MenuItem label="Compare" icon="columns" on={!!other} onSelect={() => void run('task.compare', { task: t.id, against: other ? null : pair.n }, { via: 'click' })} />
       )}
-      {mayRemove && (
+      {(f.archived ? mayRestore : mayRemove) && (
         <>
           <MenuRule />
-          <MenuItem label="Remove file" icon="close" onSelect={() => void remove(f)} />
+          {f.archived ? <MenuItem label="Restore" icon="archive" onSelect={() => void restore(f)} /> : <MenuItem label="Remove file" icon="close" onSelect={() => void remove(f)} />}
         </>
       )}
     </Menu>
@@ -218,8 +231,8 @@ export function FileView({ t, file, full, flow }: { t: TaskData; file: string; f
             <b>{i + 1}</b> of {list.length}
           </span>
         )}
-        {list.length > 1 && step(-1, 'Previous', true)}
-        {list.length > 1 && step(1, 'Next', false)}
+        {list.length > 1 && i >= 0 && step(-1, 'Previous', true)}
+        {list.length > 1 && i >= 0 && step(1, 'Next', false)}
         {menu}
       </div>
       {files.isError ? (
@@ -239,7 +252,7 @@ export function FileView({ t, file, full, flow }: { t: TaskData; file: string; f
         </div>
       ) : (
         <div className="frame fv">
-          {v && f && <Body f={f} v={v} onPicture={v === current ? () => showPicture(f.id) : undefined} signable={v === current && isPerson} />}
+          {v && f && <Body f={f} v={v} onPicture={v === current && !f.archived ? () => showPicture(f.id) : undefined} signable={v === current && isPerson} />}
         </div>
       )}
       <PictureViewer pictures={pictures} at={fullAt >= 0 ? fullAt : null} onAtChange={(i) => showPicture(i == null ? null : (pictures[i]?.id ?? null))} />

@@ -65,6 +65,13 @@ class TaskFile(M.Contract):
         description="The task's document this is the next version of (HTML text): Spec, QA report, Release report "
         "and Invoice are the names a stage approves; any other name is a document no stage asks for",
     )
+    replaces: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+        description="A file on this task (its id) this is the next version of, whatever its name; its older versions "
+        "stay behind its version menu. Without it, the same name adds a version",
+    )
 
 
 def task_file_contract():
@@ -812,12 +819,21 @@ def install_media(
                 return found
 
         tid = await asyncio.to_thread(allowed)
+
+        def replaceable(body, content_type):
+            # A refused replacement stores nothing; the write checks it again in its own transaction.
+            if body.replaces:
+                with store.read() as c:
+                    files.replaced(c, who, tid, body.replaces, content_type)
+
         upload_key(request)
         poster = None
         if request.headers.get("content-type", "").lower().startswith("multipart/form-data"):
             from .file_upload import parse
 
-            fields, uploads, stack = await parse(request, store.settings.upload_max_bytes, blobs.directory)
+            fields, uploads, stack = await parse(
+                request, store.settings.upload_max_bytes, blobs.directory, ("name", "note", "ask", "replaces")
+            )
             try:
                 if fields.get("document"):
                     raise Problem("validation", "A document is HTML text: send it as text", 422)
@@ -854,11 +870,12 @@ def install_media(
                     }
                 # Byte identity goes in the receipt without storing multipart bytes. The replay check and the write
                 # below hash this same payload: any difference turns every retry into an idempotency conflict.
-                described = body.model_dump(exclude={"document"})
+                described = body.model_dump(exclude={"document", *(() if body.replaces else ("replaces",))})
                 payload = {**described, "uploads": [{**described, "digest": digest, "size": size, "poster": poster}]}
                 replay = await asyncio.to_thread(replay_upload, store, request, payload)
                 if replay is not None:
                     return replay
+                await asyncio.to_thread(replaceable, body, content_type)
                 await asyncio.to_thread(blobs.put_staged, upload["stream"], digest, size, content_type)
                 if poster:
                     await asyncio.to_thread(
@@ -878,6 +895,8 @@ def install_media(
             if body.document is not None:
                 from . import task_documents as TD
 
+                if body.replaces:
+                    raise Problem("validation", "A document continues its own file: leave out replaces", 422)
                 document = TD.canonical(body.document)
                 if body.text is None:
                     raise Problem("validation", "A document is HTML text: send it as text", 422)
@@ -902,19 +921,20 @@ def install_media(
             payload = body.model_dump()
             if not body.note:
                 payload.pop("note")
-            if not body.document:
-                payload.pop("document")  # an older runner's replayed receipt hashes as it did
+            for field in ("document", "replaces"):
+                if not payload[field]:
+                    payload.pop(field)  # an older runner's replayed receipt hashes as it did
             replay = await asyncio.to_thread(replay_upload, store, request, payload)
             if replay is not None:
                 return replay
+            await asyncio.to_thread(replaceable, body, content_type)
             digest = await asyncio.to_thread(blobs.put, data, content_type)
 
         def work(c):
             task = comment_rights(c, auth, who, tid)
             H._writer(c, who.actor, task_id=tid)
             item = register(c, who, digest, size, name, content_type)
-            bot_actor = next((a for a in (who.actor, task["owner_id"], task["requester_id"]) if H.is_bot(a)), None)
-            bot = H.actor_id(bot_actor) if bot_actor else default_bot(c, store.settings)
+            bot = files.task_bot(c, who, task)
             document, submitted = None, None
             if body.document:
                 from . import task_documents as TD
@@ -925,7 +945,7 @@ def install_media(
                 fid, number = files.attach_task(c, who, tid, item, digest, bot, file=page, series=False)
                 TD.record(c, tid, document, fid, who.actor)
             else:
-                fid, number = files.attach_task(c, who, tid, item, digest, bot)
+                fid, number = files.attach_task(c, who, tid, item, digest, bot, replaces=body.replaces)
             c.execute("INSERT INTO task_assets VALUES(?,?)", (tid, item["id"]))
             if body.note is not None:
                 edit_file_version(c, auth, who, tid, fid, number, M.FileVersionEdit(note=body.note))

@@ -581,6 +581,7 @@ class SignedVersion(TypedDict):
 @answer
 class TaskFileVersion(TypedDict):
     n: int
+    name: str
     size: int
     mime: str
     sha256: str
@@ -608,6 +609,12 @@ class TaskFileView(TypedDict):
     mime: str
     current_version: int
     archived: bool
+    # A page's own archive flag (PATCH /api/v2/pages/{id}), apart from its file's.
+    page_archived: NotRequired[bool]
+    # A page's file flag (PATCH /api/v2/files/{id}), apart from the page's own.
+    file_archived: NotRequired[bool]
+    # On an archived file: whether the reader may bring it back, under the rule of the flag that archived it.
+    can_restore: NotRequired[bool]
     links: list[PageLinkView]
     writers: list[PageWriter]
     versions: list[TaskFileVersion]

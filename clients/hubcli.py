@@ -849,6 +849,11 @@ def parser():
     s.add_argument("--req", help='the page requirement it is for, e.g. "Code review"')
     s.add_argument("--version", type=int, help=version_help)
     s.add_argument("--name", help="the name people see; defaults to the file's own")
+    s.add_argument(
+        "--replaces",
+        metavar="FILE_ID",
+        help="a file on this task this is the next version of, whatever its name (the same name already is)",
+    )
     s.add_argument("--poster", help="a PNG or JPEG preview")
     s.add_argument("--note", help="short note on this version (at most 500 characters); not with --doc")
     s.add_argument(

@@ -48,9 +48,10 @@ KINDS = {
     "audio/ogg": "audio",
     "audio/aac": "audio",
 }
-# Python 3.15's mimetypes names .wav audio/vnd.wave; browsers know audio/wav. A type the server picks is stored as the
-# common name, and versions already stored under the other still show inline (KINDS above).
-ALIASES = {"audio/vnd.wave": "audio/wav"}
+# Python 3.15's mimetypes names .wav audio/vnd.wave, and a system's mime.types may say audio/x-wav or audio/wave;
+# browsers know audio/wav. A type the server picks is stored as the common name, and versions already stored under
+# another still show inline (KINDS above).
+ALIASES = {"audio/vnd.wave": "audio/wav", "audio/x-wav": "audio/wav", "audio/wave": "audio/wav"}
 MB = 1024 * 1024
 # A page or SVG is read whole by the viewer (ui/app/viewer.ts caps it at 10 MB); video and audio stream by range.
 LIMITS = {"image": 25 * MB, "svg": 10 * MB, "page": 10 * MB, "video": 2048 * MB, "audio": 2048 * MB}

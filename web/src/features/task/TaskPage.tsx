@@ -22,6 +22,7 @@ import { Decision } from './Answer';
 import { AddMenu, Details, type Adding } from './Details';
 import type { TaskSearch } from './exports';
 import { EmailSource, Email as EmailView } from './Email';
+import { ArchiveMenu } from './Files';
 import { FileTab, FileView, PageBones } from './FileView';
 import { FlowTop, MoreMenu, QuietLine, WhereLine } from './Head';
 import { changesAskedOf, decisionOf, defaultTab, DETAILS, emailOf, failedToast, personOf, sendTitle, tabAddress, tabsOf, type TaskTab } from './model';
@@ -254,6 +255,7 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
       tabsAfter={
         <>
           {details && !file ? <AddMenu onAdding={setAdding} /> : versions && <VersionBar task={t.id} vs={versions} at={at} onAt={onAt} />}
+          <ArchiveMenu t={t} flow={flow} />
           <IconButton icon="expand" label="Expand" size="sm" className="tv-expand" onClick={expand} />
         </>
       }

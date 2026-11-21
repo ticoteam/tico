@@ -522,6 +522,12 @@ def run(args, who=None):
         if sub in ("relate", "unrelate"):
             return via_tool(client, args)  # the tool says what to do instead of blocks and blocked_by
         if sub == "attach":
+            if getattr(args, "replaces", None) is not None and (
+                getattr(args, "doc", None) or getattr(args, "req", None)
+            ):
+                from clients.commands.task_work import REPLACES_ALONE
+
+                raise APIError("validation", REPLACES_ALONE, 422)
             if getattr(args, "doc", None):  # a document is a page: the request `tico page publish --task --as` sends
                 from clients import hubtools
                 from clients.commands._shared import DOCUMENT_NOTE, document_attachment
@@ -535,8 +541,9 @@ def run(args, who=None):
                 return via_tool(client, args, page=args.file)
             path = Path(args.file)
             body = {"name": args.name or path.name}
-            if getattr(args, "note", None) is not None:
-                body["note"] = args.note
+            for field in ("note", "replaces"):
+                if getattr(args, field, None) is not None:
+                    body[field] = getattr(args, field)
             if client.features().get("task_files_multipart"):
                 uploads = {"file": path}
                 if getattr(args, "poster", None):

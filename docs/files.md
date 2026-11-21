@@ -163,7 +163,9 @@ A picture, SVG, HTML page, video or audio clip can also go on a thread reply or 
 [Visuals in replies](visuals.md).
 
 `tico file archive <id>` also accepts a task attachment's ID. A task participant or a human who may move the task can
-archive it; the attachment is detached from the task and the action is recorded. Stored bytes and version history remain.
+archive it, and restore it (`tico file archive <id> --restore`, `PATCH /api/v2/files/{id}` with `archived: false`); the
+action is recorded. It stays listed
+on the task as archived, with its stored bytes and version history.
 
 ## Visibility
 
@@ -187,7 +189,7 @@ The check applies to every list row, the total, metadata, activity, versions and
 A bot cannot make a thread's file bot-wide. The owner or a bot administrator **promotes** a task or
 thread file to bot-wide, explicitly and never automatically (`PATCH /api/v2/files/{id}` with `promote: true`); the move is
 recorded in the file's activity. Archiving (`archived: true`) takes a file off the list; its bytes stay, and it returns when
-the bot publishes a changed version.
+the bot publishes a changed version or its owner or a bot administrator restores it (`archived: false`).
 
 ## API
 
@@ -593,7 +595,8 @@ a custom server image, or supply a poster. Pillow and the multipart parser ship 
 ## Task file reviews
 
 Task attachments are versioned by name within their task, across uploaders. Reusing a name
-adds a version; an archived name starts a new file. Existing attachments are v1. Task files
+adds a version; an archived name starts a new file, unless the upload names the file it `replaces`. Existing
+attachments are v1. Task files
 and their versions are listed by `GET /api/v2/tasks/{id}/files`, with notes, questions, all
 answers and nullable media metadata. Downloads accept `?v=<n>` for an exact version.
 The version's author can edit its note or question through
