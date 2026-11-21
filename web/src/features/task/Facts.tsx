@@ -68,15 +68,18 @@ const none = <small>None</small>;
 /** The wait states whose `who` is a teammate; the rest name a task, a stage or a source, which the line says. */
 const ON_SOMEONE = new Set(['person', 'bot', 'paused']);
 
-/** One quiet line: how long the open task has waited on its turn now, and on whom. */
+/** One quiet line: who or what the open task waits on, and for how long when the wait itself says since when. */
 export function WaitFact({ t }: { t: TaskData }) {
   const turn = t.status === 'open' ? t.turn : null;
-  const since = turn?.since ?? t.stage_since;
-  if (!turn || !since) return null;
+  if (!turn) return null;
   return (
     <Kv k="Waiting">
       <small>
-        <Ago at={since} />{' '}
+        {turn.since && (
+          <>
+            <Ago at={turn.since} />{' '}
+          </>
+        )}
         {turn.who && ON_SOMEONE.has(turn.state) ? (
           <>
             on <NameOf id={turn.who} />

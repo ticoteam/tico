@@ -3,15 +3,17 @@
 
     sync(conn, task_id, row=None, waits=None) -> bool     bring the task's open span in line with its headline now
     recheck(conn, task_id, have, found=None)               the never-stuck pass's backstop for one task it read
+    reconcile(conn, task_ids, have) -> int                 the same for the open tasks the ladder does not check
     close_ended(conn) -> int                               close the open spans of tasks that are no longer open
     open_spans(conn) -> dict[str, Key]                     every open span, by task, in one read
 
 `waiting_on` works out what a task waits on and forgets it; this keeps when each headline (its visit, state and who)
-began and ended. The engine calls `sync` where it already works the waits out again after a write (a move, a change,
-an answer, a snooze), and the card slot's reconcile calls it the same way. The never-stuck pass compares what it read
-of each task with the open spans (`recheck`) and closes those of tasks that ended (`close_ended`): that is what catches
-a flip no write made, such as checks finishing, a bot running out of credit or a stage getting room. Nothing reads or
-writes spans on a read of a task. A write is one statement or two, only when the headline changed.
+began and ended. The engine calls `sync` with the waits it already worked out after a write (a move, a change, an
+answer, a snooze), and the card slot's reconcile calls it the same way. The never-stuck pass compares what it read of
+each task it checks with the open spans (`recheck`), then every other open task on the engine (by hand, blocked,
+snoozed: `reconcile`), and closes the spans of tasks that ended (`close_ended`): that is what catches a flip no write
+made, such as checks finishing, a bot running out of credit or a stage getting room. Nothing reads or writes spans on
+a read of a task. A write is one statement or two, only when the headline changed.
 """
 
 from typing import TYPE_CHECKING, Any
@@ -93,6 +95,17 @@ def recheck(
     if headline(row, waits) == have:
         return False
     return sync(conn, task_id, row, waits)
+
+
+# Every open task on the engine.
+OPEN_TASKS = "SELECT id FROM tasks WHERE pipeline_id IS NOT NULL AND status = 'open' ORDER BY id"
+
+
+def reconcile(conn: "sqlite3.Connection", task_ids: list[str], have: dict[str, Key]) -> int:
+    """`recheck` for each of these tasks, read together (waiting_on.prime: nothing more when the pass read them
+    already and wrote nothing since). Returns how many spans it changed."""
+    W.prime(conn, task_ids)
+    return sum(recheck(conn, task_id, have.get(task_id)) for task_id in task_ids)
 
 
 def close_ended(conn: "sqlite3.Connection") -> int:

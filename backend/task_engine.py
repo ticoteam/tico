@@ -660,10 +660,11 @@ def _event(
     return str(_h()._task_event(conn, task_id, by, kind, old, new, note or "", data=data))
 
 
-def _turn_of(conn: "sqlite3.Connection", row: Row) -> tuple[str | None, str]:
+def _turn_of(conn: "sqlite3.Connection", row: Row, waits: "list[Any] | None" = None) -> tuple[str | None, str]:
     """The one bot to wake about an open task now, as the never-stuck ladder picks it (`waiting_on.turn`), and the
     lead its wake starts with when it is not the owner: a stage with nobody set wakes the manager bot to pick someone
-    (C25); a bot named on an OK is told what it is asked. None when it is nobody's turn, or a person's."""
+    (C25); a bot named on an OK is told what it is asked. None when it is nobody's turn, or a person's. `waits` saves
+    reading them again when the caller has them."""
     from . import waiting_on as W
 
     if row["status"] != "open" or row.get("snooze") or row["stage"].get("by_hand"):
@@ -671,7 +672,7 @@ def _turn_of(conn: "sqlite3.Connection", row: Row) -> tuple[str | None, str]:
     visit = _part(row, "visit")
     if not row.get("owner_id") and visit.get("pick_state") == stage_pick.FULL:
         return None, ""  # it waits for a free bot of the stage's list: nobody is woken
-    waits = W.of(conn, row)
+    waits = W.of(conn, row) if waits is None else waits
     target = W.turn(conn, row, waits, paused=True)
     if target and not row.get("owner_id") and target == _part(row, "pipeline").get("manager_id"):
         if visit.get("pick_state") == stage_pick.NOBODY:
@@ -697,14 +698,18 @@ def _wake_turn(
     """Tell whoever has the turn in a stage the task just entered, once per visit: the bot the ladder would wake, and
     each other bot an OK or an answer names while it has a turn too (its ask's one wake: task_wakes.ask). A person is
     not told: their list is a read. After that the ladder tries only its own bot. `lead` opens the wake when the turn's
-    own lead says nothing; `refs`, `trigger` and `source` are a new task's own (`enter`)."""
+    own lead says nothing; `refs`, `trigger` and `source` are a new task's own (`enter`). The task's wait span follows
+    the waits read here (wait_spans.sync)."""
+    from . import wait_spans
     from . import waiting_on as W
 
+    waits = W.of(conn, row) if row["status"] == "open" else []
+    wait_spans.sync(conn, str(row["id"]), row, waits)
     refs, instructions = task_wakes.split_instructions(refs)
     if row["stage"]["kind"] != "work":
         task_wakes.keep_instructions(conn, row, instructions)
         return None
-    target, turn_lead = _turn_of(conn, row)
+    target, turn_lead = _turn_of(conn, row, waits)
     if not target:
         task_wakes.keep_instructions(conn, row, instructions)
         return None
@@ -733,7 +738,7 @@ def wake_turn(conn: "sqlite3.Connection", row: Row) -> str | None:
 
 
 def _sync_wait(conn: "sqlite3.Connection", task_id: str) -> None:
-    """After a move, a new task, a snooze or its end: the task's wait span follows its headline (wait_spans.sync)."""
+    """After a move that ended the task, a snooze or its end: its wait span follows its headline (wait_spans.sync)."""
     from . import wait_spans
 
     wait_spans.sync(conn, task_id)
@@ -935,7 +940,6 @@ def enter(
     entered = _task(conn, task_id)
     lead = stage_effects.enter(conn, entered, by)
     _wake_turn(conn, entered, lead, refs=wake, trigger=trigger, source=source)
-    _sync_wait(conn, task_id)
     return entered
 
 
@@ -1336,8 +1340,10 @@ def move(
     moved = _task(conn, task_id)
     if target["kind"] == "work":
         _wake_turn(conn, moved, stage_effects.enter(conn, moved, by))
-    elif not cascade:
-        _ended(conn, moved, by)
+    else:
+        _sync_wait(conn, task_id)  # it ended: its span closes
+        if not cascade:
+            _ended(conn, moved, by)
     if pushed:
         _tell_manager(conn, moved, f"Pushed past {', '.join(p['name'] for p in pushed)}: {why}", "pushed_past")
     if moved["status"] != "open" or kind == "forward":
@@ -1351,7 +1357,6 @@ def move(
     # What a move causes beyond the task's own row: the events, a routine's day, stopping work on a closed task
     # (backend/task_effects.py). Last, and for every move, so nothing that moves a task can leave them out.
     task_effects.moved(conn, row, moved, "side" if side else kind, by, why, revision)
-    _sync_wait(conn, task_id)
     return _task(conn, task_id)
 
 
@@ -1554,8 +1559,9 @@ def refile(
     moved = _task(conn, task_id)
     if target["kind"] == "work":
         _wake_turn(conn, moved, stage_effects.enter(conn, moved, by))
+    else:
+        _sync_wait(conn, task_id)
     task_effects.moved(conn, row, moved, MOVED, by, why, revision, batch=batch)
-    _sync_wait(conn, task_id)
     return _task(conn, task_id)
 
 
@@ -2247,7 +2253,6 @@ def restore(conn: "sqlite3.Connection", task_id: str, by: str, was: Row) -> Row:
         _owned(conn, {**row, "owner_id": was.get("owner_id")}, _task(conn, task_id), by)
         stage_effects.enter(conn, _task(conn, task_id), by)
         _wake_turn(conn, _task(conn, task_id), "This task was restored.")
-    _sync_wait(conn, task_id)
     return _task(conn, task_id)
 
 
