@@ -53,6 +53,7 @@ ENFORCED, INFORMED, NOT_COVERED = "enforced", "informed", "not_covered"
 ENFORCED_LINKS = frozenset({"email"})  # the links whose path really stops a write; every other is Informed only
 FIXED = {"email": "Email", "webhook": "Outgoing webhooks", "release": "Releases"}
 UNCOVERED = {"support": "Tico support", "computer": "Calls straight from computers"}  # unmeasured paths, besides tools
+CALLS_READ = 50  # the MCP calls of one batch the check reads (each one line), however many the batch holds
 MAX_JUDGED = 1024 * 1024  # a proxied body over this is not parsed for its key names (the check reads the rest)
 OUTCOMES = ("rules.passed", "rules.refused", "rules.held", "rules.unchecked")
 KEY_DAYS = 1  # how long a write's Idempotency-Key keeps a retry under it from logging a second event
@@ -77,12 +78,23 @@ def _name(value: Any, pattern: re.Pattern[str] = NAME) -> str | None:
     return text if pattern.fullmatch(text) and not text.lower().startswith("tpx1") else None
 
 
-def proxy_output(tool_name: str, method: str, body: bytes | None, calls: Any = None) -> str:
+def proxy_output(
+    tool_name: str, method: str, body: bytes | None, calls: Any = None, writes: Callable[[Any], bool] | None = None
+) -> str:
     """What the check reads of a proxied write, names only: the tool's name and the HTTP method; for MCP calls (`calls`,
     tool_proxy.rpc_calls) each call's method and tool name; for a JSON object body its top-level key names. Never a
-    value, the path, the query or a header. `body` is None when it is not read (over MAX_JUDGED)."""
+    value, the path, the query or a header. `body` is None when it is not read (over MAX_JUDGED). `writes(call)`: whether
+    a call may write; those are read first when a batch holds more than CALLS_READ."""
     lines = [f"{method} to {tool_name}"]
-    for called, params in calls or ():
+    every: list[tuple[Any, Any]] = calls or []
+    if writes and len(every) > CALLS_READ:
+        # The calls that may write (`writes`) first, in their order, then the rest: a long run of reads never pushes a
+        # write out of the calls the check reads.
+        every = [call for call in every if writes(call)] + [call for call in every if not writes(call)]
+    listed = every[:CALLS_READ]  # a batch of any size is classified in full; the check reads its first CALLS_READ
+    if len(every) > CALLS_READ:
+        lines.append(f"(the first {CALLS_READ} of {len(every)} MCP calls)")
+    for called, params in listed:
         named = _name(called, METHOD)
         if named:
             tool = _name(cast("dict[str, Any]", params).get("name")) if called == "tools/call" else None
@@ -183,6 +195,23 @@ def is_agent(store: Any, who: Any) -> bool:
     return bool(found) and bool(H.is_bot(found[1]))
 
 
+def key_digest(key: str) -> str:
+    """What an event keeps of a write's Idempotency-Key."""
+    return hashlib.sha256(str(key).encode()).hexdigest()[:32]
+
+
+def logged(c: Any, actor: str, link: str, key: str) -> bool:
+    """Whether `actor`'s write on `link` under Idempotency-Key `key` already has its outcome event (within KEY_DAYS): a
+    retry, which is neither judged nor logged again. One seek on events_action_target."""
+    return bool(
+        c.execute(
+            "SELECT 1 FROM events WHERE action IN (?,?,?,?) AND target=? AND created_at>=? AND actor=? "
+            "AND json_extract(detail, '$.key')=? LIMIT 1",
+            (*OUTCOMES, "link:" + link, H.shift(H.now(), days=-KEY_DAYS), actor, key_digest(key)),
+        ).fetchone()
+    )
+
+
 def record(c: Any, found: Found | None, stopped: bool = False) -> Any:
     """The one outcome event of a checked write, in the caller's transaction, inside its own savepoint: a failure is
     logged and leaves the write as it was. `stopped`: the write was not made because of it (email's held path);
@@ -200,13 +229,10 @@ def record(c: Any, found: Found | None, stopped: bool = False) -> Any:
         detail["for"] = found["for"]
     target = "link:" + found["link"]
     if found.get("key"):
-        # The caller's Idempotency-Key, as a digest: a retry under it within KEY_DAYS logs no second event.
-        detail["key"] = hashlib.sha256(str(found["key"]).encode()).hexdigest()[:32]
-        if c.execute(
-            "SELECT 1 FROM events WHERE action IN (?,?,?,?) AND target=? AND created_at>=? AND actor=? "
-            "AND json_extract(detail, '$.key')=? LIMIT 1",
-            (*OUTCOMES, target, H.shift(H.now(), days=-KEY_DAYS), found["actor"], detail["key"]),
-        ).fetchone():
+        # The caller's Idempotency-Key, as a digest: a retry under it within KEY_DAYS logs no second event (checked
+        # again here, for two tries racing past `logged`).
+        detail["key"] = key_digest(found["key"])
+        if logged(c, found["actor"], found["link"], found["key"]):
             return None
     # Not judged (or the judge out) and nothing found: its own outcome, counted apart from a write that passed.
     action = "rules.unchecked" if found["unchecked"] and found["outcome"] == "passed" else "rules." + found["outcome"]

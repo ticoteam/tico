@@ -485,12 +485,27 @@ def install(app, store):
                 reconnect_tasks.called(c, tool_id, status)  # Key rejected opens its Reconnect task, Working ends it
             rule_links.record(c, gate)  # the write's rule check, in the same transaction as its row (in a savepoint)
 
-    def gated(subject, tool_id, name, method, body, calls):
+    def gated(subject, tool_id, name, method, body, calls, key, unread, hinted):
+        """The write's rule check, or None for a retry under an Idempotency-Key whose event is already logged (read
+        first: no judge call, no second event). `unread`: a POST over the gate's 1 MB limit that no parse read, so
+        whether it only reads is unknown: recorded unchecked, never judged or counted as a write."""
+        link = 'tool:' + tool_id
         try:
-            output = rule_links.proxy_output(name, method, body, calls)
-            return rule_links.check_as(
-                store, getattr(app.state, 'judge', None), subject, subject, '', 'tool:' + tool_id, 'tool_call', output
-            )
+            if key:
+                with store.read() as c:
+                    if rule_links.logged(c, subject, link, key):
+                        return None
+            if unread:
+                found = rule_links.unchecked(subject, subject, link, 'tool_call', 'too_large')
+            else:
+                # Calls that may write go first, so the calls the check reads (CALLS_READ) never leave one out.
+                output = rule_links.proxy_output(
+                    name, method, body, calls, lambda call: bool(mcp_write(hinted, [call], GATE_READ_ONLY))
+                )
+                found = rule_links.check_as(
+                    store, getattr(app.state, 'judge', None), subject, subject, '', link, 'tool_call', output
+                )
+            return {**found, 'key': key} if key else found
         except Exception:  # log-only: a failure to check never stops the write
             LOG.exception('The rule check of a proxied write failed')
             return None
@@ -633,11 +648,10 @@ def install(app, store):
                 await log(413, 'refused', 'Request body over 25 MB')
                 return refused(413, 'too_large', 'A tool call sends at most 25 MB.')
             chunks.append(chunk)
-        # Read authorization parses a Read caller's POST whatever its size, as before; the gate reads it only up to its
-        # 1 MB limit (`gate_calls`), and a larger one is not parsed for it at all.
+        # Read authorization parses a Read caller's POST whatever its size, as before; other POSTs are parsed up to 1 MB.
+        # What the gate takes of that parse is `gate_calls`, below.
         small = total <= rule_links.MAX_JUDGED
         calls = rpc_calls(b''.join(chunks)) if method == 'POST' and (small or ready['reads_only']) else None
-        gate_calls = calls if small else None
         if ready['reads_only'] and method == 'POST':
             # A POST passes at Read only as MCP calls that only read.
             write = mcp_write(tool_id, calls) if calls is not None else 'not MCP'
@@ -655,6 +669,9 @@ def install(app, store):
         # The gate's hints belong to this MCP address of this tool as made: a tool made again under the same id starts
         # with none.
         hinted = (tool_id, tool.get('mcp_url') or '', tool.get('created_at') or '')
+        # The gate reads a parse up to 1 MB, and at the tool's MCP address Read authorization's parse whatever its size;
+        # a large POST anywhere else keeps the name-only check.
+        gate_calls = calls if small or mcp else None
         if urlsplit(url).hostname != urlsplit(tool['base_url']).hostname:
             await log(None, 'refused', 'Address left the tool host')
             return refused(404, 'not_found', 'Not found')
@@ -669,13 +686,25 @@ def install(app, store):
             # The destination checked and pinned, a write meets the org rules on its names only (the tool, the method,
             # MCP methods and tools, a JSON body's key names: never a value) before it is forwarded with the key
             # (backend/rule_links.py). Log-only: its one outcome event goes with the call's own row, after forwarding.
-            # Judged with or without an Idempotency-Key; one only lets a retry under it log no second event.
+            # Judged with or without an Idempotency-Key; with one, a retry under it is neither judged nor logged again.
             sent = b''.join(chunks) if small and not gate_calls else None
-            found = await loop().run_in_executor(
-                None, gated, got['subject'], tool_id, tool['name'] or tool_id, method, sent, gate_calls
-            )
             idem = request.headers.get('idempotency-key', '')
-            checked['found'] = {**found, 'key': idem} if found and 0 < len(idem) <= 200 else found
+            # Only a large POST to the tool's MCP address could be an MCP read no parse saw: that one is unchecked. Any
+            # other large POST (an upload) keeps its name-only check.
+            unread = method == 'POST' and not small and gate_calls is None and mcp
+            checked['found'] = await loop().run_in_executor(
+                None,
+                gated,
+                got['subject'],
+                tool_id,
+                tool['name'] or tool_id,
+                method,
+                sent,
+                gate_calls,
+                idem if 0 < len(idem) <= 200 else '',
+                unread,
+                hinted,
+            )
         client = httpx.AsyncClient(
             transport=getattr(app.state, 'tool_proxy_transport', None),
             timeout=TIMEOUT,

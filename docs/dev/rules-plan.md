@@ -459,7 +459,9 @@ reason), the rules in its detail, written in a savepoint so a failure never chan
   address (the final URL), are never counted; the read-only hints this trusts belong to that tool as made (id, MCP
   address, created_at). A write that would not be made (no right, no usable Idempotency-Key or a replay of one, a
   paused endpoint, a duplicate email, a release already open) is not judged. A proxied write is judged with or without
-  an Idempotency-Key (`tico tools call` sends one); with one, a retry under it within a day logs no second event. A
+  an Idempotency-Key (`tico tools call` sends one); with one, a retry under it within a day is neither judged nor
+  logged again. A POST over 1 MB to the tool's MCP address that no Read-authorization parse read is recorded unchecked,
+  never counted as a write; other large POSTs keep the name-only check, and a batch is read up to its first 50 calls. A
   webhook send that became eligible after its preflight is recorded unchecked.
 - **Rules › Links** (`/company/rules/links`, from the Rules page's "⋯"; the owner and Admins in person) lists each link
   with its 30-day counts, unchecked apart (a tool's from when it was made), then the Not covered paths: reports to Tico
