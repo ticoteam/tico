@@ -408,3 +408,12 @@ def test_the_private_calls_lease_reads_and_writes_threads_as_the_assistant_and_n
         c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(roster),))
     get(meet, f"threads/{everyone}", token, expected=404)
     assert get(meet, "threads?limit=200", token)["threads"] == []
+    # Every caller form denies it too: a raw identity, a viewer without auth (readable, the rail, execution) or with it.
+    from backend.auth import Identity
+
+    lease = meet.app.state.auth.authenticate({"authorization": "Bearer " + token}, "/api/v2/threads", "GET")
+    bot = Identity("bot:assistant", "bot", attempt_id=session["id"])
+    with meet.app.state.store.read() as c:
+        for who in (lease, bot):
+            for form in (who, threads.viewer(None, who), threads.viewer(meet.app.state.auth, who)):
+                assert not threads.readable(c, form, everyone)

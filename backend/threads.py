@@ -514,10 +514,10 @@ _MISSING = (404, "not_found", "Thread not found")
 
 def _gone_run(c, v):
     """A lease of the shared Assistant whose person may no longer sign in (rooms.run_scope "gone") reads no thread: a
-    deny only, never a wider read. Asked once a request."""
+    deny only, never a wider read. Decided from the lease alone, whatever form the caller passes. Asked once a request."""
     if v._gone is None:
         who = v.who
-        lease = v.auth is not None and getattr(who, "attempt_id", "")
+        lease = getattr(who, "attempt_id", "")
         if lease and H.assistant_actor(c) in (v.actor, getattr(who, "task_actor", "")):
             from . import rooms
 
