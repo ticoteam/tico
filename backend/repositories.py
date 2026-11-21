@@ -1589,6 +1589,10 @@ def install(app, store, service):
             validate_identity(c, who)
         return who if who.role == 'bot' and who.actor == 'bot:' + bot else None
 
+    def owner_only(bot, who):
+        """A built-in agent's repositories are the Owner's alone to change (the read's `can_change` says the same)."""
+        return bool(app.state.auth.system_bot(bot)) and who.role != 'owner'
+
     @app.get(
         '/api/v2/bots/{bot}/repositories',
         **api_v2("Repositories", "getBotRepositories", "Bot repository access", "BotRepositories"),
@@ -1602,8 +1606,10 @@ def install(app, store, service):
                 raise Problem('forbidden', 'This bot is not visible to you', 403)
             row = service.row(c)
             found = access(c, bot, row['org'] if row else store.settings.github_owner)
-        # As the PUT decides for a person: the owner or an admin.
-        found['can_change'] = who.role == 'owner' or (who.role == 'human' and bool(app.state.auth.bot_admin(who)))
+        # As the PUT decides for a person: the owner, or an admin for any agent but a built-in one.
+        found['can_change'] = (
+            who.role == 'owner' or (who.role == 'human' and bool(app.state.auth.bot_admin(who)))
+        ) and not owner_only(bot, who)
         return found
 
     @app.put(
@@ -1616,7 +1622,7 @@ def install(app, store, service):
         with store.read() as c:
             bot = (H.resolve_bot(c, bot) or {}).get('id', bot)
         who = botops(request, bot) or human(request, True)
-        if app.state.auth.system_bot(bot) and who.role != 'owner':
+        if owner_only(bot, who):
             raise Problem('forbidden', 'Only the Owner changes Built-in bots', 403)
         with store.transaction() as c:
             row = service.row(c)

@@ -692,21 +692,16 @@ export function flowGroups(items: readonly FlowItem[], pipelines: readonly Pipel
 }
 
 /** An access request, key card or key-drop proposal that waits on the person (Needs you `access`, `key`, `key_drop`):
-    no task holds it, so its card is answered where it is drawn: a repository's request above Flow's tasks, the rest
-    (a tool's request, a key, a key proposal) on Tools. */
+    no task holds it, so Flow draws its card above the tasks and it is answered there. */
 export type FlowRequest = NeedsYouItem & { kind: 'access' | 'key' | 'key_drop' };
 const REQUESTS = new Set<string>(['access', 'key', 'key_drop']);
 const isRequest = (it: NeedsYouItem): it is FlowRequest => REQUESTS.has(it.kind);
-const forFlow = (it: FlowRequest) => it.kind === 'access' && it.access?.resource_type === 'repository';
 
 export interface Flow {
-  /** The tasks and Flow's requests. */
+  /** The tasks and the requests. */
   count: number;
   items: FlowItem[];
-  /** A repository's access requests: Flow's own. */
   requests?: FlowRequest[];
-  /** A tool's access requests, key cards and key proposals: Tools draws them, and Flow leaves them out of its count. */
-  toolRequests?: FlowRequest[];
   /** Every task the Needs you list names, a grouped item's (a paused agent's `task_ids`) each one too. */
   task_ids?: string[];
   /** Each approval (an OK or a page) that waits on the person, from every row of the list, one per requirement: `items`
@@ -743,10 +738,9 @@ export const flowQuery = queryOptions({
     const items: FlowItem[] = [];
     const approvals = new Map<string, ApprovalItem>();
     const requests: FlowRequest[] = [];
-    const toolRequests: FlowRequest[] = [];
     for (const it of await needsYouItems()) {
       if (isRequest(it)) {
-        (forFlow(it) ? requests : toolRequests).push(it);
+        requests.push(it);
         continue;
       }
       // a paused item names its tasks in task_ids (backend/views.py), which the generated type leaves out
@@ -768,7 +762,7 @@ export const flowQuery = queryOptions({
       seen.set(t.id, items.length);
       items.push(flowItemOf(it, t));
     }
-    return { count: items.length + requests.length, items, requests, toolRequests, task_ids: [...named], approvals: [...approvals.values()] };
+    return { count: items.length + requests.length, items, requests, task_ids: [...named], approvals: [...approvals.values()] };
   },
 });
 

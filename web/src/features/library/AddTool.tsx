@@ -9,6 +9,7 @@ import { Field, Search } from '@/kit/Field';
 import { Segmented } from '@/kit/Segmented';
 import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
+import { newId } from '@/lib/ids';
 import { Foot, press, ToolGlyph, trimmed, useGo } from './parts';
 import { ConnectMailboxDialog, MailingAddressDialog, NewAddressDialog, RequestNumberDialog, WebhookDialog } from './ToolDialogs';
 import { addApiTool, catalogQuery, probeMcp, type CatalogService, type LoginAdd, type McpProbe } from './queries';
@@ -103,26 +104,27 @@ function Ways({ service, onWay, onBack, onClose }: { service: CatalogService; on
   );
 }
 
-/** A key for a catalog service, on a new connection made from the catalog's entry only when the key is sent. A
-    connection that already has one is replaced from its own page (Replace key). The key is only sent, never read back. */
+/** A key for a catalog service: a new connection made from the catalog's entry with its key, in one write the server
+    takes once (one request key per key typed), so a refused key makes no connection and sending again makes no second
+    one. A connection that already has a key is replaced from its own page. The key is only sent, never read back. */
 function PasteKey({ service, onClose }: { service: CatalogService; onClose: () => void }) {
   const [value, setValue] = useState('');
+  const [attempt, setAttempt] = useState(newId);
   const [busy, setBusy] = useState(false);
+  const type = (v: string) => {
+    setValue(v);
+    setAttempt(newId());
+  };
   const save = async () => {
     setBusy(true);
-    let tool: string;
     try {
-      tool = (await addApiTool({ name: service.name, service: service.id, auth_scheme: service.auth_scheme })).id;
+      const { id } = await addApiTool({ name: service.name, service: service.id, auth_scheme: service.auth_scheme, key: value.trim() }, attempt);
+      onClose();
+      void press('tools.open', { tool: `api:${id}` });
     } catch (e) {
-      setBusy(false);
       toast({ text: e instanceof Error && e.message ? e.message : 'Not added', kind: 'failed' });
-      return;
     }
-    const ok = await press('tools.setKey', { tool, value: value.trim() }, 'Not added');
     setBusy(false);
-    if (!ok) return;
-    onClose();
-    void press('tools.open', { tool: `api:${tool}` });
   };
   return (
     <Dialog
@@ -132,7 +134,7 @@ function PasteKey({ service, onClose }: { service: CatalogService; onClose: () =
       className="connect"
       actions={<Foot onClose={onClose} label="Save" busy={busy} ready={!!value.trim()} onGo={() => void save()} />}
     >
-      <Field label="Key" type="password" value={value} onValueChange={setValue} autoComplete="off" autoFocus wide />
+      <Field label="Key" type="password" value={value} onValueChange={type} autoComplete="off" autoFocus wide />
     </Dialog>
   );
 }

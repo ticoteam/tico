@@ -138,12 +138,22 @@ def _hidden(c: Any, who: Who, resource: Resource, admins: Any, auth: Any) -> boo
     return False
 
 
-def _acting_builtin(who: Who) -> str:
-    """The built-in acting for the person (`by` on the delegation, else the run's own bot), or ""."""
-    if getattr(who, "via", "") not in DELEGATED:
-        return ""
+def acting_agent(who: Who) -> str:
+    """The agent whose run makes this write, whoever's rights it carries: `by` on a delegation, else the run's own bot
+    (`task_actor`, set on every lent identity), else the caller when it is a bot; "" for a person's own write. Every
+    check on what an agent may do (itself, every agent, the catalog) reads this, never `via` or the principal."""
     lent: Any = H.DELEGATION.get() or {}
-    return str(lent.get("by") or getattr(who, "task_actor", "") or "")
+    if lent.get("by"):
+        return str(lent["by"])
+    if getattr(who, "task_actor", ""):
+        return str(who.task_actor)
+    return str(getattr(who, "actor", "")) if getattr(who, "role", "") == "bot" else ""
+
+
+def _tools_owner(c: Any) -> str:
+    """The Tools page's owner bot (backend/page_owners.py), "" when it has none."""
+    page_owners: Any = importlib.import_module(".page_owners", __package__)
+    return str(page_owners.owner(c, "tools", fallback=False) or "")
 
 
 def may_change_access(
@@ -165,10 +175,17 @@ def decide(
         return Decision(False, "", hidden=True)
     subject = _subject(c, subject)
     via = str(getattr(who, "via", "") or "")
-    if subject and via == "tools-owner" and subject == _acting_builtin(who):
-        return Decision(
-            False, "The Tools Owner holds none of the keys it connects: give the level to the bot that needs it"
-        )
+    acting = acting_agent(who)
+    # An agent never gives itself access with someone's rights, and the Tools Owner never at all.
+    if subject and acting and subject == acting and (via or acting == _tools_owner(c)):
+        if acting == _tools_owner(c):
+            return Decision(
+                False, "The Tools Owner holds none of the keys it connects: give the level to the bot that needs it"
+            )
+        return Decision(False, "An agent never gives itself access: a person adds it under Who can use it")
+    # A login shared with every agent (agents added later included) is a person's own tap, never an agent's.
+    if action == GRANT and subject == "bots" and resource.kind == ACCOUNT and (acting or via):
+        return Decision(False, "Sharing a login with every agent is a person's own tap in Tools")
     is_admin = admin(c, who, admins)
     if action == AUDIENCE:
         name = resource.name or (resource.row["name"] if resource.row is not None else "this tool")
@@ -313,12 +330,13 @@ def _note(c: Any, who: Who, bot_id: str, admins: Any, auth: Any) -> Decision:
 ADDRESS_FIELDS = ("base_url", "auth_scheme", "check_path")
 
 
-def catalog_only(who: Who, service: Any = "", fields: Any = None, mcp_url: str = "", c: Any = None) -> None:
-    """The Tools Owner defines a tool only from the catalog (backend/tool_services.py): a known service with its own
-    address, scheme and check path, or a vendor's listed MCP server (`mcp_url`), whether it acts for a person or (`c`
-    given) in its own run as the Tools page's owner. An address of its own is a person's to add. Its values never
-    reach it either way (backend/tools_delegation.py)."""
-    if getattr(who, "via", "") != "tools-owner" and not (c is not None and _tools_owner_itself(c, who)):
+def catalog_only(c: Any, who: Who, service: Any = "", fields: Any = None, mcp_url: str = "") -> None:
+    """The Tools Owner (the Tools page's owner bot, whoever that is: `acting_agent`) defines a tool only from the
+    catalog (backend/tool_services.py): a known service with its own address, scheme and check path, or a vendor's
+    listed MCP server (`mcp_url`), in its own run or with a person's rights alike. An address of its own is a person's
+    to add. Its values never reach it either way (backend/tools_delegation.py)."""
+    acting = acting_agent(who)
+    if not acting or acting != _tools_owner(c):
         return
     services: Any = importlib.import_module(".tool_services", __package__)
     if mcp_url:
@@ -331,17 +349,6 @@ def catalog_only(who: Who, service: Any = "", fields: Any = None, mcp_url: str =
         raise Problem(
             "catalog_only", "The Tools Owner adds tools from the catalog only: a person adds any other address", 403
         )
-
-
-def _tools_owner_itself(c: Any, who: Who) -> bool:
-    """`who` is the Tools page's owner bot in its own run, with no person's rights lent."""
-    page_owners: Any = importlib.import_module(".page_owners", __package__)
-
-    return (
-        getattr(who, "role", "") == "bot"
-        and not getattr(who, "via", "")
-        and str(getattr(who, "actor", "")) == page_owners.owner(c, "tools", fallback=False)
-    )
 
 
 def require(
