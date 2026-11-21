@@ -206,3 +206,21 @@ def test_a_new_page_for_the_ask_asks_again_and_only_stored_oks_and_pages_count(d
         done = requirement(c, E.task(c, task_id), "owner_done")
         say(c, task_id, ANA, "answer", None, "ok", {"requirement": done, "answer_id": "a4"})
     assert view(drafts, "SELECT answers, repeats FROM repeat_ask_weekly") == [{"answers": 2, "repeats": 1}]
+
+
+def test_a_new_page_the_ok_stands_for_does_not_ask_again(drafts, time_machine):
+    """A new version at the commits Ana OK'd keeps her OK (task_pages `ok_kept`): her next OK is not a repeat."""
+
+    def say(c, task_id, actor, kind, old, new, data):
+        time_machine.shift(timedelta(minutes=1))
+        H._task_event(c, task_id, actor, kind, old, new, None, data=data)
+
+    with drafts.transaction() as c:
+        task_id = X.new_task(c, ANA, "Write the spec", "drafts", assignee=BUILDER)["id"]
+        page = X.requirement(c, E.task(c, task_id)["stage_id"], "page", person=ANA, line="Ana OKs the spec")
+        say(c, task_id, BUILDER, "page_attached", None, "page:f1@1", {"requirement": page, "version": 1})
+        say(c, task_id, ANA, "answer", None, "ok", {"requirement": page, "answer_id": "a1"})
+        say(c, task_id, BUILDER, "page_attached", "page:f1@1", "page:f1@2", {"requirement": page, "version": 2})
+        H._task_event(c, task_id, "keeper", "ok_kept", None, "OK carried", None, data={"requirement": page, "to": 2})
+        say(c, task_id, ANA, "answer", None, "ok", {"requirement": page, "answer_id": "a2"})
+    assert view(drafts, "SELECT answers, repeats FROM repeat_ask_weekly") == [{"answers": 1, "repeats": 0}]

@@ -335,11 +335,15 @@ _PEOPLES = _ANSWERS.format(actor="a.actor_id LIKE 'human:%'")
 # A person's answer, also one whose person the reader may not see (their name reads ''): an answer is an answer.
 _ANY_PERSONS = _ANSWERS.format(actor="(a.actor_id LIKE 'human:%' OR a.actor_id = '')")
 # Each recorded re-ask of one requirement, by task and requirement (DISTINCT: read once, then looked up by both): the
-# owner saying done again after a send back (`again`), or a new page replacing the one it asked about.
+# owner saying done again after a send back (`again`), or a new page replacing the one it asked about, unless the OK
+# given on the old one stands for the new version (task_pages: its `ok_kept` row for that version asks nobody again).
 _REASKS = (
-    "SELECT DISTINCT subject_id AS task_id, json_extract(data, '$.requirement') AS requirement, created_at "
-    "FROM {history_events} WHERE subject_type = 'task' AND ((kind = 'answer' AND new = 'again') "
-    "OR (kind = 'page_attached' AND old IS NOT NULL))"
+    "SELECT DISTINCT p.subject_id AS task_id, json_extract(p.data, '$.requirement') AS requirement, p.created_at "
+    "FROM {history_events} p WHERE p.subject_type = 'task' AND ((p.kind = 'answer' AND p.new = 'again') "
+    "OR (p.kind = 'page_attached' AND p.old IS NOT NULL AND NOT EXISTS (SELECT 1 FROM {history_events} k "
+    "WHERE k.subject_type = 'task' AND k.subject_id = p.subject_id AND k.kind = 'ok_kept' AND k.created_at >= p.created_at "
+    "AND json_extract(k.data, '$.requirement') = json_extract(p.data, '$.requirement') "
+    "AND json_extract(k.data, '$.to') = json_extract(p.data, '$.version'))))"
 )
 
 
