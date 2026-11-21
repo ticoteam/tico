@@ -353,7 +353,10 @@ def _fire(conn, H, bot, conversation_id, at, external):
         (bot, conversation_id),
     ).fetchone()
     if pending:
-        ids = [r["id"] for r in live]
+        from . import card_slot
+
+        # A card slot's deadline run takes only what the card's room may read; the rest keeps a run of its own.
+        ids = [r["id"] for r in live if card_slot.joins(conn, pending[0], r["item"])]
         for part in H.chunks(ids):
             conn.execute(
                 f"UPDATE deferrals SET fired_job=? WHERE id IN ({','.join('?' * len(part))})", (pending[0], *part)
@@ -396,7 +399,7 @@ def _fire(conn, H, bot, conversation_id, at, external):
     stored = conn.execute("SELECT id,recipient_id,refs FROM messages WHERE id=?", (message_id,)).fetchone()
     card_slot.assign(conn, {"id": stored[0], "recipient_id": stored[1], "refs": stored[2]})  # as enqueue does
     job = conn.execute("SELECT id FROM jobs WHERE message_id=?", (message_id,)).fetchone()[0]
-    ids = [r["id"] for r in live]
+    ids = [r["id"] for r in live if r["item"] == message_id or card_slot.joins(conn, job, r["item"])]
     for part in H.chunks(ids):
         conn.execute(f"UPDATE deferrals SET fired_job=? WHERE id IN ({','.join('?' * len(part))})", (job, *part))
     H.event(conn, H.TICO_ACTOR, EVENT, job, {"bot": bot, "conversation": conversation_id or None, "items": ids})

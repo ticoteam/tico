@@ -384,3 +384,51 @@ def test_older_work_kept_from_some_of_the_room_does_not_hold_the_card(api):
         c.execute("UPDATE pipelines SET name='Video Production' WHERE id='video'")
     assert carried and _slot(api, carried) is None
     assert _slot(api, _ask(api, task))
+
+
+def _private_card_and_secret(api):
+    """A private card, and another private task some of its readers may not read."""
+    machine, task = _card(api)
+    with api.app.state.store.transaction() as c:
+        secret = X.new_task(c, "human:ben", "Ben's salary review", assignee="human:ben")
+        c.execute("UPDATE tasks SET private=1 WHERE id IN (?,?)", (task["id"], secret["id"]))
+    return machine, task, secret
+
+
+def test_in_a_private_cards_room_a_message_drawing_on_another_private_task_gets_no_slot(api):
+    _, task, secret = _private_card_and_secret(api)
+    draft = _ok(api, task)
+    drawn = _queue(api, task, H.TICO_ACTOR, "From the salary review.", source={"task": secret["id"]})
+    assert _slot(api, drawn) is None
+    assert _slot(api, _ask(api, task)) == f"{draft}:ops"  # nor does it hold the card on the older path
+
+
+def test_a_slot_run_reads_no_deferred_item_of_a_waiting_deadline_run(api):
+    from backend import delivery
+
+    machine, task = _card(api)
+    draft = _ok(api, task)
+    first = _queue(api, task, "bot:cpo", "The music is licensed.", quiet=True)
+    second = _queue(api, task, "bot:cpo", "The voice-over is booked.", quiet=True)
+    with api.app.state.store.transaction() as c:
+        for item in (first, second):
+            delivery.defer(c, "bot:ops", "comment", item, conversation_id=task["conversation_id"], task_id=task["id"])
+        assert delivery.now(c, "ops", task["conversation_id"]) == second  # one deadline run carries both
+    run = claim(api, machine)
+    assert run["message"]["id"] == _wake(api, task, draft)
+    assert not {first, second} & {m["id"] for m in run["history"]}
+
+
+def test_a_narrower_deferred_item_keeps_its_own_deadline_run(api):
+    from backend import delivery
+
+    _, task = _card(api)
+    _ok(api, task)
+    kept = _queue(api, task, ANA, "For Ana only.", audience='["human:ana","bot:ops"]', quiet=True)
+    open_ = _queue(api, task, ANA, QUESTION, quiet=True)
+    with api.app.state.store.transaction() as c:
+        for item in (kept, open_):
+            delivery.defer(c, "bot:ops", "comment", item, conversation_id=task["conversation_id"], task_id=task["id"])
+        job = delivery.now(c, "ops", task["conversation_id"])
+        fired = dict(c.execute("SELECT item, fired_job FROM deferrals WHERE item IN (?,?)", (kept, open_)).fetchall())
+    assert job == open_ and _slot(api, job) and fired == {kept: None, open_: open_}

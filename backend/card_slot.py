@@ -63,13 +63,15 @@ def _never(refs: Row) -> bool:
     return bool(refs.get("command") or refs.get("live_meeting") or refs.get("wake") == T.NOTE_WAKE)
 
 
-def _narrows(conn: Any, message_id: str, private_room: bool) -> bool:
+def _narrows(conn: Any, message_id: str, card: str, private_room: bool) -> bool:
     """Whether a message, or the message it carries, is kept from some reader of the card's room: the card's own access
     is the baseline. One with a legacy audience is; in a public room, so is one some reader of the room may not read
-    (threads.message_narrower). A private card's room is narrow already, so only a legacy audience narrows it."""
-    from . import threads
+    (threads.message_narrower); in a private card's room, which is narrow already, so is one that draws on another
+    private task (task_privacy.message_tasks), which some of the card's readers may not read."""
+    from . import task_privacy, threads
 
     T: Any = threads  # untyped
+    P: Any = task_privacy  # untyped
     found = conn.execute(
         "SELECT m.legacy_audience, s.id, s.legacy_audience FROM messages m "
         "LEFT JOIN messages s ON s.id = json_extract(m.refs,'$.carries') WHERE m.id=?",
@@ -77,11 +79,21 @@ def _narrows(conn: Any, message_id: str, private_room: bool) -> bool:
     ).fetchone()
     if not found or found[0] or found[2]:
         return bool(found)
-    if private_room:
-        return False
-    return bool(
-        T.message_narrower(conn, {"id": message_id}) or (found[1] and T.message_narrower(conn, {"id": found[1]}))
-    )
+    sources = [message_id, *([found[1]] if found[1] else [])]
+    if not private_room:
+        return any(T.message_narrower(conn, {"id": source}) for source in sources)
+    return any(P.private_tasks(conn, set(P.message_tasks(conn, {"id": source})) - {card}) for source in sources)
+
+
+def joins(conn: Any, job_id: str, message_id: str) -> bool:
+    """Whether a deferred message may go in with the deadline run `job_id`: always, unless that run is a card slot's
+    and the message is kept from some reader of the card's room (`_narrows`). Such a message keeps its own run."""
+    found = conn.execute(
+        "SELECT t.id, t.private FROM jobs j JOIN visits v ON v.id = substr(j.slot, 1, instr(j.slot, ':') - 1) "
+        "JOIN tasks t ON t.id = v.task_id WHERE j.id=? AND j.slot IS NOT NULL",
+        (job_id,),
+    ).fetchone()
+    return not found or not _narrows(conn, message_id, found[0], found[1] is None or bool(found[1]))
 
 
 # The older path's unsettled jobs in one room, read from the live and uncertain job indexes (jobs_live_created,
@@ -114,19 +126,19 @@ def assign(conn: Any, message: Row) -> str | None:
         return None
     task_id = task_wakes.message_task(conn, message["id"])
     found = conn.execute(
-        "SELECT v.id, p.name, t.private FROM tasks t JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL "
+        "SELECT v.id, p.name, t.private, t.id FROM tasks t JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL "
         "JOIN stages s ON s.id = v.stage_id JOIN pipelines p ON p.id = s.pipeline_id WHERE t.id=? AND t.conversation_id=?",
         (task_id or "", room[0]),
     ).fetchone()
     if not found or str(found[1]).casefold() not in SWITCHED:
         return None
     private = found[2] is None or bool(found[2])
-    if _narrows(conn, message["id"], private):
+    if _narrows(conn, message["id"], found[3], private):
         return None  # some reader of the card's room may not read it: its own run answers it
     # Any agent's unsettled work in the card's room from before the switch settles first: until then the card stays on
     # the older path, a reassign mid-run included. Work that could never have a slot (above) does not count.
     for older, raw in conn.execute(_OLDER, (message["id"], room[0], message["id"], room[0])).fetchall():
-        if not _never(_refs(raw)) and not _narrows(conn, older, private):
+        if not _never(_refs(raw)) and not _narrows(conn, older, found[3], private):
             return None
     slot = f"{found[0]}:{str(message['recipient_id'])[4:]}"
     conn.execute("UPDATE jobs SET slot=? WHERE id=?", (slot, message["id"]))
@@ -134,8 +146,9 @@ def assign(conn: Any, message: Row) -> str | None:
 
 
 def pending(conn: Any, bot: str, message_ids: Collection[str]) -> set[str]:
-    """Of these messages, the ones `bot` still has a queued job for, or whose carrier it does: its own work waiting for
-    a run of its own, in any visit, is not read in another run's history."""
+    """Of these messages, the ones `bot` still has a queued job for, or whose carrier it does, and the deferred items
+    (and their carriers' sources) a queued deadline run of its carries: its own work waiting for a run of its own, in
+    any visit, is not read in another run's history."""
     if not message_ids:
         return set()
     marks = ",".join("?" * len(message_ids))
@@ -146,4 +159,10 @@ def pending(conn: Any, bot: str, message_ids: Collection[str]) -> set[str]:
         f"OR json_extract(m.refs,'$.carries') IN ({marks}))",
         (bot, *message_ids, *message_ids),
     ).fetchall()
-    return {str(value) for row in found for value in row if value}
+    items = conn.execute(
+        "SELECT d.item, json_extract(m.refs,'$.carries') FROM deferrals d JOIN jobs j ON j.id = d.fired_job "
+        "JOIN messages m ON m.id = d.item WHERE d.bot=? AND d.settled_at IS NULL AND d.fired_job IS NOT NULL "
+        f"AND j.state='queued' AND (d.item IN ({marks}) OR json_extract(m.refs,'$.carries') IN ({marks}))",
+        (str(bot), *message_ids, *message_ids),
+    ).fetchall()
+    return {str(value) for row in (*found, *items) for value in row if value}
