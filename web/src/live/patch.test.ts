@@ -119,6 +119,15 @@ describe('tasks', () => {
     expect(queryClient.getQueryState(detail)?.isInvalidated).toBe(true);
   });
 
+  it('read a case again when its key date changes even if a later event of the same frame names only the task @live', () => {
+    const detail = ['tasks', 'detail', 't1'];
+    queryClient.setQueryData(detail, { ...task('t1'), matter: { dates: [{ id: 'd1', done_at: null }] } });
+    FakeEventSource.last.feed(frame(901, 'tasks', { seq: 901, actor: 'human:p1', at: AT, id: 't1', kind: 'obligations', kinds: ['obligations'] }));
+    FakeEventSource.last.feed(frame(902, 'tasks', { seq: 902, actor: 'human:p1', at: AT, id: 't1', kind: 'update', kinds: ['update'] }));
+    flushFrame();
+    expect(queryClient.getQueryState(detail)?.isInvalidated).toBe(true);
+  });
+
   it('start a read of a task’s children again when a review ends while an older one is in flight: it ends Reviewed', async () => {
     const parent = ['tasks', 'detail', 't1'];
     const review = (status: string) => ({ id: 't2', status, role: 'review' });
