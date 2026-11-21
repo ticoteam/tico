@@ -1,7 +1,7 @@
 """What a bot may publish as a file, checked the same way by the hub, the runner and `tico file`.
 
-The rule people have: any work file goes, whatever its type. Only programs a computer runs (check_program: people
-and agents alike) and, for agents, secrets (credential-like names) are refused.
+The rule people have: any work file goes, whatever its type. An agent is refused only secrets (credential-like
+names) and programs a computer runs (check_program).
 
 Pure stdlib. The server repeats every rule here (backend/files.py): this module is what lets the
 client refuse early, with a reason, before any bytes are sent. See docs/files.md.
@@ -81,7 +81,8 @@ EXECUTABLE = frozenset(
     ".lnk .msi .msp .mpkg .pif .pkg .ps1 .psm1 .reg .rpm .run .scr .sh .bash .zsh .csh .ksh .so .sys .vbe .vbs "
     ".wsf .wsh".split()
 )
-# The first bytes of a program: ELF, Mach-O (either byte order, 32 or 64 bit, and universal) and Windows PE.
+# The first bytes of a program: ELF and Mach-O (either byte order, 32 or 64 bit, and universal). A Windows program
+# carries its extension (.exe, .dll), and "MZ" alone also starts ordinary text.
 PROGRAM_MAGIC = (
     b"\x7fELF",
     b"\xfe\xed\xfa\xce",
@@ -89,7 +90,6 @@ PROGRAM_MAGIC = (
     b"\xce\xfa\xed\xfe",
     b"\xcf\xfa\xed\xfe",
     b"\xca\xfe\xba\xbe",
-    b"MZ",
 )
 KINDS = {
     ".mp4": "video",
@@ -157,10 +157,11 @@ def check_name(name):
 
 
 def check_program(name, head=b""):
-    """Refuses a program, the one rule for people and agents: an EXECUTABLE extension, a program's first bytes
-    (`head`, when known), or a script (`#!`) with no extension. A `.py` that starts with `#!` is source, so it goes."""
+    """Refuses a program an agent would publish: an EXECUTABLE extension, a program's first bytes (`head`, when
+    known), or a script (`#!`) with no extension. A `.py` that starts with `#!` is source, so it goes. Trailing dots
+    are no extension (`run.` is `run`, `tool.exe.` is `tool.exe`), as the runner reads them."""
     base = posixpath.basename(str(name or "").replace("\\", "/")).strip()
-    suffix = Path(base).suffix.lower()
+    suffix = Path(base.rstrip(".") or "x").suffix.lower()
     head = bytes(head[:16])
     if suffix in EXECUTABLE or head.startswith(PROGRAM_MAGIC) or (not suffix and head.startswith(b"#!")):
         raise Refused(f"{base} is a program, so it is never published")
@@ -245,8 +246,6 @@ def local_file(root, rel, extra_types=()):
             raise Refused(f"{walk.name} looks like a credential, which is never published")
     else:
         check_name(walk.name)
-    with open(walk, "rb") as stream:
-        check_program(walk.name, stream.read(16))
     info = walk.stat()
     if info.st_nlink > 1:
         raise Refused(f"{'/'.join(parts)} has more than one hard link, so it may be another file under a new name")
@@ -264,6 +263,7 @@ def read_local(root, rel):
         raise Refused(f"A file read whole is at most {MAX_BYTES // MB} MB; {path.name} is larger")
     check_size(len(data), path.name)
     name, content_type = check_name(path.name)
+    check_program(name, data)
     if not media_matches(name, data):
         raise Refused(f"{name} is not that kind of file: its first bytes do not match")
     return name, content_type, data, relative

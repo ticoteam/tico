@@ -1979,10 +1979,11 @@ class Files:
                     identity += ":person:" + who.actor
             name, mime = BF.check_name(name)
             # A streamed video or audio file was checked against the server's limit and its first bytes when it was
-            # spooled.
+            # spooled. An agent's file is never a program (clients/bot_files.py check_program); a person's is not looked at.
             if not failed and not staged:
                 BF.check_size(len(data), name)
-                BF.check_program(name, data[:16])
+                if who.role in ("bot", "runner"):
+                    BF.check_program(name, data[:16])
         except BF.Refused as exc:
             raise refused(exc) from exc
         digest = None

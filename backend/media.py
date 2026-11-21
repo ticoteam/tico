@@ -193,13 +193,12 @@ def replay_upload(store, request, payload):
     return result
 
 
-def refuse_file(who, name, head):
-    """One rule for a task's attachments (clients/bot_files.py): nobody attaches a program; an agent also never
-    attaches a credential-like name. A person may: "AWS credentials guide.pdf" is a normal name for a document."""
+def refuse_agent_file(name, head):
+    """What an agent never attaches to a task (clients/bot_files.py): a credential-like name or a program, by its name
+    or first bytes. Anything else goes, as it does for a person."""
     try:
+        BF.check_name(name)
         BF.check_program(name, head)
-        if who.role == "bot":
-            BF.check_name(name)
     except BF.Refused as exc:
         raise Problem("file_refused", str(exc), 422) from exc
 
@@ -837,9 +836,10 @@ def install_media(
                     else "application/octet-stream"
                 )
                 size = upload["size"]
-                head = upload["stream"].read(16)
-                upload["stream"].seek(0)
-                refuse_file(who, name, head)
+                if who.role == "bot":
+                    head = upload["stream"].read(16)
+                    upload["stream"].seek(0)
+                    refuse_agent_file(name, head)
                 digest = upload["digest"]
                 if "poster" in uploads:
                     supplied = uploads["poster"]
@@ -897,7 +897,8 @@ def install_media(
             if not data or size > 10_000_000:
                 raise Problem("validation", "A file is at least one byte and at most 10 MB", 422)
             content_type = guessed_type(name) or ("text/plain" if body.text is not None else "application/octet-stream")
-            refuse_file(who, name, data[:16])
+            if who.role == "bot":
+                refuse_agent_file(name, data[:16])
             payload = body.model_dump()
             if not body.note:
                 payload.pop("note")

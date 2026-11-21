@@ -93,9 +93,14 @@ def test_local_mcp_attach_refuses_unsafe_paths(monkeypatch, tmp_path, bad):
     link = root / 'link.txt'
     link.symlink_to(outside)
     program = root / 'tool'  # no extension: known by its first bytes
-    program.write_bytes(b'\x7fELF\x02\x01\x01')
+    program.write_bytes(b'\x7fELF\x02\x01\x01\x00' + bytes(8))  # a 64-bit ELF's first 16 bytes
     (root / 'Makefile').write_text('all:\n')
     assert BF.local_file(root, 'Makefile')[1] == 'Makefile'
+    assert BF.local_file(root, 'tool')[1] == 'tool'  # a website upload (tico browser upload) is not inspected
+    with pytest.raises(BF.Refused, match='is a program'):
+        BF.read_local(root, 'tool')  # publishing a file reads its first bytes
+    with pytest.raises(BF.Refused):
+        BF.check_program('run.', b'#!/bin/sh')  # a trailing dot is no extension, as in the runner
     assert BF.check_name('.gitignore') == ('.gitignore', 'application/octet-stream')
     with pytest.raises(BF.Refused):
         BF.check_name('..')

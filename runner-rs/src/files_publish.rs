@@ -83,7 +83,7 @@ pub const EXECUTABLE: &[&str] = &[
     ".wsf",
     ".wsh",
 ];
-/// The first bytes of a program: ELF, Mach-O (either byte order, 32 or 64 bit, and universal) and Windows PE
+/// The first bytes of a program: ELF and Mach-O (either byte order, 32 or 64 bit, and universal)
 /// (bot_files.PROGRAM_MAGIC).
 pub const PROGRAM_MAGIC: &[&[u8]] = &[
     b"\x7fELF",
@@ -92,7 +92,6 @@ pub const PROGRAM_MAGIC: &[&[u8]] = &[
     b"\xce\xfa\xed\xfe",
     b"\xcf\xfa\xed\xfe",
     b"\xca\xfe\xba\xbe",
-    b"MZ",
 ];
 
 pub const TABLES: &str = "
@@ -151,9 +150,9 @@ pub fn check_name(name: &str) -> Result<String, String> {
 }
 
 /// Why a file is a program, or Ok (bot_files.check_program): an EXECUTABLE extension, a program's first bytes, or a
-/// script (`#!`) with no extension.
+/// script (`#!`) with no extension. Trailing dots are no extension (`run.` is `run`, `tool.exe.` is `tool.exe`).
 pub fn check_program(base: &str, head: &[u8]) -> Result<(), String> {
-    let ext = suffix(base);
+    let ext = suffix(base.trim_end_matches('.'));
     if EXECUTABLE.contains(&ext.as_str())
         || PROGRAM_MAGIC.iter().any(|m| head.starts_with(m))
         || (ext.is_empty() && head.starts_with(b"#!"))
@@ -225,17 +224,17 @@ pub fn local_file(root: &Path, rel: &str) -> Result<(PathBuf, String), String> {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default(),
     )?;
-    let mut head = Vec::with_capacity(16);
-    std::fs::File::open(&walk)
-        .and_then(|f| std::io::Read::read_to_end(&mut std::io::Read::take(f, 16), &mut head))
-        .map_err(|e| e.to_string())?;
-    check_program(&base, &head)?;
     if meta.nlink() > 1 {
         return Err(format!(
             "{joined} has more than one hard link, so it may be another file under a new name"
         ));
     }
     check_size(meta.len())?;
+    let mut head = Vec::with_capacity(16);
+    std::fs::File::open(&walk)
+        .and_then(|f| std::io::Read::read_to_end(&mut std::io::Read::take(f, 16), &mut head))
+        .map_err(|e| e.to_string())?;
+    check_program(&base, &head)?;
     Ok((walk, joined))
 }
 
@@ -925,7 +924,19 @@ mod tests {
             .unwrap_err()
             .contains("more than one hard link"));
         // A program is known by its first bytes too; a script without `#!` or with an extension is a work file.
-        std::fs::write(dir.join("reports/tool"), b"\x7fELF\x02\x01").unwrap();
+        // The first 16 bytes of a 64-bit little-endian ELF and of a 64-bit Mach-O.
+        std::fs::write(
+            dir.join("reports/tool"),
+            b"\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("reports/mac"),
+            b"\xcf\xfa\xed\xfe\x0c\x00\x00\x01\x00\x00\x00\x00\x02\x00\x00\x00",
+        )
+        .unwrap();
+        std::fs::write(dir.join("reports/run."), "#!/bin/sh\n").unwrap();
+        std::fs::write(dir.join("reports/cities.csv"), "MZ,Maputo\n").unwrap();
         std::fs::write(dir.join("reports/run"), "#!/bin/sh\necho hi\n").unwrap();
         std::fs::write(dir.join("reports/Makefile"), "all:\n").unwrap();
         std::fs::write(dir.join("reports/fit.py"), "#!/usr/bin/env python3\n").unwrap();
@@ -934,6 +945,10 @@ mod tests {
             "tool is a program, so it is never published"
         );
         assert!(local_file(&dir, "reports/run").is_err());
+        assert!(local_file(&dir, "reports/mac").is_err());
+        assert!(local_file(&dir, "reports/run.").is_err());
+        assert!(local_file(&dir, "reports/cities.csv").is_ok());
+        assert!(check_name("tool.exe.").is_err());
         assert!(local_file(&dir, "reports/Makefile").is_ok());
         assert!(local_file(&dir, "reports/fit.py").is_ok());
         // A hidden file is a candidate; a hidden folder is never walked.

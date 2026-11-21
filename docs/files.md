@@ -143,10 +143,10 @@ the container its extension names, or it is refused. Older servers do not advert
 take video and audio only up to 25 MB, and the client refuses a larger one before it reads it.
 Automatic file publishing (the runner's) keeps its 25 MiB cap. Task attachments use the server upload limit
 (2 GiB by default; 10 MB on older servers).
-People and agents attach any work file (captions, code, archives, hidden files like `.gitignore`) under one rule:
-nobody attaches a program, known by its extension (`.exe`, `.sh`, `.dmg` and the like) or its first bytes (ELF,
-Mach-O, Windows PE, or `#!` on a file with no extension; `clients/bot_files.py` check_program). For an agent, a `.env`,
-anything with a credential-like name, a symbolic link, a file with more than one hard link, and any path that resolves outside
+Agents attach and publish any work file, as people do (captions, code, archives, hidden files like `.gitignore`),
+except a program, known by its extension (`.exe`, `.sh`, `.dmg` and the like) or its first bytes (ELF, Mach-O, or
+`#!` on a file with no extension; `clients/bot_files.py` check_program). A `.env`, anything with a credential-like
+name, a symbolic link, a file with more than one hard link, and any path that resolves outside
 the checkout is refused. Uploads go through a durable outbox in the runner's own state with an
 idempotency key per file and content, so a restart or a lost reply retries safely and lands once. A
 file that could not be uploaded is not linked and never opens nothing.
@@ -155,8 +155,8 @@ When the bot's repository is on GitHub and the file is committed and pushed, the
 the commit and the row offers **View on GitHub** at that exact commit.
 
 A bot's deliverable attached to a task (`tico task attach`) is listed as a file for that task too.
-Text attachments preserve indentation, spaces and final newlines. A program anyone attaches, or a credential-like name an
-agent attaches, returns a 422 that says why. The runner never walks a hidden folder (`.git`, `.cache`).
+Text attachments preserve indentation, spaces and final newlines. A program or credential-like name an agent attaches
+returns a 422 that says why; a person's upload has no type check. The runner never walks a hidden folder (`.git`, `.cache`).
 
 A picture, SVG, HTML page, video or audio clip can also go on a thread reply or task comment as a titled visual
 (`--visual PATH --title "…"`); it is stored as a file there and shows inline as a card; video and audio play in it. See
