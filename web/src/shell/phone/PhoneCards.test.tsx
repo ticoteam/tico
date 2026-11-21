@@ -19,13 +19,12 @@ vi.mock('@/motion', () => ({ motionLevel: () => 'off' }));
 const fs = (await import(/* @vite-ignore */ 'node:' + 'fs')) as { readFileSync(file: URL, encoding: 'utf8'): string };
 const here = import.meta.url; // not inline: Vite would turn `new URL('…', import.meta.url)` into an asset import
 const phoneCss = fs.readFileSync(new URL('./phone.css', here), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
-/** The declarations of the rule whose selector list includes `selector` exactly. */
-const rule = (selector: string): string => {
-  for (const m of phoneCss.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-    if (m[1]!.split(',').some((s) => s.trim() === selector)) return m[2]!.replace(/\s+/g, ' ');
-  }
-  return '';
-};
+/** The declarations of every rule whose selector list includes `selector` exactly. */
+const rule = (selector: string): string =>
+  [...phoneCss.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    .filter((m) => m[1]!.split(',').some((s) => s.trim() === selector))
+    .map((m) => m[2]!.replace(/\s+/g, ' '))
+    .join(';');
 
 const width = (w: number) =>
   act(() => {
@@ -451,6 +450,11 @@ describe('phone: the cards behind a raised one peek above it', () => {
     expect(rule('.phone[data-card^="tico"]>.ly-chat.is-behind')).toContain('--ty:calc(var(--at) - var(--peek) * 2)');
     expect(rule('.phone[data-card="tico"] .ly-tico>.full')).toContain('--vis:calc(100% - var(--at))');
     expect(rule('.phone[data-card="menu"] .ly-menu>.full')).toContain('height:calc(100% - var(--at))');
+    // #4920: Tico's fills the screen, under only the peeks behind it (they move up with it), and its sheet fills it
+    expect(rule('.phone>.ly-tico')).toContain('top:var(--sat);height:calc(100% - var(--sat))');
+    expect(rule('.phone[data-card="tico"]>.ly-menu.is-behind')).toContain('--ty:calc(var(--at) - var(--peek) - var(--top) + var(--sat))');
+    expect(rule('.phone[data-card="tico"]>.ly-chat.is-behind')).toContain('--ty:calc(var(--at) - var(--peek) * 2 - var(--top) + var(--sat))');
+    expect(rule('.phone .ly-tico>.full>.pane')).toContain('flex:1;min-height:0');
     // moves are transform only
     expect(rule('.phone>.ly')).toContain('transition:transform var(--card-dur) var(--card-ease)');
   });
@@ -458,6 +462,9 @@ describe('phone: the cards behind a raised one peek above it', () => {
   it('while typing, the cards in front go under the keyboard and the peeks behind stay, clear of the box', () => {
     expect(rule('.phone[data-typing]>.ly:not(.is-up):not(.is-behind)')).toContain('--ty:calc(100% + 48px)');
     expect(rule('.phone[data-typing="tico"][data-card="tico"]>.ly-tico>.full')).toContain('--vis:calc(100% - var(--at) - var(--kb))');
+    // #4920: typing to Tico, the tracker's row and the chips fold so the latest messages keep the room over the box
+    expect(rule('.phone[data-typing="tico"] .ly-tico .tracker')).toContain('display:none');
+    expect(rule('.phone[data-typing="tico"] .ly-tico .qchips')).toContain('display:none');
   });
 });
 
