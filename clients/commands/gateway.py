@@ -471,6 +471,7 @@ VIDEO_JOB = re.compile(r"gv_[0-9a-f]{24}")
         "first_frame": _s("A PNG or JPEG file on this computer that the video starts from"),
         "last_frame": _s("A PNG or JPEG file on this computer that the video ends on"),
         "shot": _s("The shot's name, e.g. kettle close-up (default: the prompt's first words)"),
+        "operation_id": _s("Retry-safe id: a retry with the same id is the same video; optional."),
     },
     required=("prompt",),
     local=True,
@@ -495,7 +496,7 @@ def gateway_video(api, args):
             body[name] = data_url_of(args[name], VIDEO_FRAME_TYPES)[0]
     if args.get("shot"):
         body["shot"] = str(args["shot"])
-    job = api.post("gateway/videos", body)
+    job = api.post("gateway/videos", body, key=_key(args))
     return {"id": job.get("id"), "status": job.get("status", "queued"), "seconds": seconds, "resolution": resolution}
 
 

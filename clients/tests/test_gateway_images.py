@@ -196,13 +196,14 @@ class VideoGateway:
 
     def __init__(self, states, content=b"\x00\x00\x00\x18ftypmp4 bytes", cost=0.4):
         self.states, self.content, self.cost = list(states), content, cost
-        self.calls = []
+        self.calls, self.keys = [], []
 
     def __call__(self, *args, **kwargs):
         return self
 
     def post(self, path, body, key=None):
         self.calls.append(("POST", path, body))
+        self.keys.append(key)
         return {"id": "gv_" + "a" * 24, "status": "queued"}
 
     def get(self, path):
@@ -232,7 +233,8 @@ def video(monkeypatch):
     return gateway
 
 
-def test_a_video_is_started_then_checked_until_it_is_done_and_saved_once(video, tmp_path):
+def test_a_video_is_started_then_checked_until_it_is_done_and_saved_once(video, tmp_path, monkeypatch):
+    monkeypatch.setenv("HUB_OPERATION_ID", "op-intro-1")  # a retry of the same command is the same video
     frame = tmp_path / "first.png"
     frame.write_bytes(PNG)
     started = run(
@@ -256,7 +258,8 @@ def test_a_video_is_started_then_checked_until_it_is_done_and_saved_once(video, 
     assert (method, path) == ("POST", "gateway/videos")
     assert "model" not in body and body["audio"] is False and body["aspect"] == "16:9"  # the route sets the model
     assert body["first_frame"] == "data:image/png;base64," + base64.b64encode(PNG).decode() and "last_frame" not in body
-    assert body["shot"] == "kettle close-up"
+    assert body["shot"] == "kettle close-up" and video.keys == ["op-intro-1"]
+    assert "operation_id" in hubtools.BY_NAME["tico_gateway_video"]["inputSchema"]["properties"]
     out = tmp_path / "clips" / "kettle.mp4"
     job = "gv_" + "a" * 24
     assert run(["gateway", "video-status", job, "--out", str(out)])["status"] == "queued"

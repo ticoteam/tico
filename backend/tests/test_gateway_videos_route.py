@@ -152,8 +152,11 @@ def test_a_video_needs_a_connected_gateway_and_stops_at_the_video_budget(api, mo
     assert refused.status_code == 409 and refused.json()["error"]["code"] == "gateway_not_connected"
 
 
-def turn(api):
-    """ops at work on its card: a runner claims ops's task, and the attempt's token is ops for that turn."""
+def turn(api, with_botops=True):
+    """ops at work on its card: a runner claims ops's task, and the attempt's token is ops for that turn. BotOps, who
+    asks the reconcile question, is here unless `with_botops` is False."""
+    if with_botops:
+        botops(api)
     r = runner(api)
     assign(api, r, "ops")
     ready(api, r, ["ops"])
@@ -273,7 +276,6 @@ def test_the_sweep_asks_about_a_shot_a_restart_left_sent_with_no_request(api, mo
 
 def test_unknown_shots_share_one_question_and_leave_the_agents_own_question_open(api, monkeypatch):
     connect(api)
-    botops(api)  # BotOps asks: the agent's own open question is never replaced
     task, token = turn(api)
     own = api.post(
         f"/api/v2/tasks/{task['id']}/questions",
@@ -357,7 +359,7 @@ def test_a_retry_after_the_card_moved_on_is_the_same_shot(api, monkeypatch):
 
 def test_the_sweep_finds_a_resent_shot_and_asks_later_when_nobody_could(api, monkeypatch):
     connect(api)
-    task, token = turn(api)
+    task, token = turn(api, with_botops=False)
     own = api.post(
         f"/api/v2/tasks/{task['id']}/questions",
         json={"to": "ana", "text": "Which tone should the launch video take?"},
@@ -376,7 +378,7 @@ def test_the_sweep_finds_a_resent_shot_and_asks_later_when_nobody_could(api, mon
     paid_renders._IN_FLIGHT.clear()
     with store.transaction() as c:
         c.execute("UPDATE events SET created_at=? WHERE action LIKE 'paid_render.%'", (H.shift(H.now(), days=-3),))
-    # No BotOps, and the agent's own question is open: nobody can ask yet, and the shot stays unknown.
+    # No BotOps: nobody asks yet (never the agent that rendered), and the shot stays unknown.
     with store.transaction() as c:
         assert paid_renders.sweep(c) == 1
     assert reconcile_asks(api, task) == []
@@ -386,3 +388,111 @@ def test_the_sweep_finds_a_resent_shot_and_asks_later_when_nobody_could(api, mon
     with store.transaction() as c:
         assert paid_renders.sweep(c) == 0
     assert reconcile_asks(api, task) == [("human:ana", "Reconcile 1 shot", ["Kettle wide"])]
+
+
+def unknown_now(api, token, shot, monkeypatch):
+    monkeypatch.setattr(G, "video_submit", lambda *a: (0, {}, "unreachable"))
+    assert video(api, token, {"prompt": "a kettle", "shot": shot}).json()["error"]["code"] == "reconcile_shot"
+
+
+def test_only_certain_refusals_let_a_shot_be_sent_again(api, monkeypatch):
+    connect(api)
+    _, token = turn(api)
+    cases = [
+        ((503, {}, "unconfigured"), 503, 2),  # refused before anything was sent
+        ((504, {"detail": "The provider took too long"}, "http"), 409, 1),
+        ((503, {"detail": "The provider timed out"}, "provider_timeout"), 409, 1),
+        ((503, {}, "unavailable"), 409, 1),
+    ]
+    for n, (answer, status, sends) in enumerate(cases):
+        sent = []
+        monkeypatch.setattr(G, "video_submit", counting(sent, answer))
+        body = {"prompt": "a kettle", "shot": f"Take {n}"}
+        for _ in range(2):
+            assert video(api, token, body).status_code == status, answer
+        assert len(sent) == sends, answer
+
+
+def test_a_second_request_for_a_shot_in_flight_keeps_its_key_as_an_alias(api, monkeypatch):
+    connect(api)
+    task, token = turn(api)
+    sent = []
+    monkeypatch.setattr(G, "video_submit", counting(sent, (202, {"id": JOB, "status": "queued"}, "")))
+    body = {"prompt": "a kettle", "shot": "Kettle wide"}
+    with monkeypatch.context() as stopped:  # request A is still waiting on the Gateway
+        stopped.setattr(paid_renders, "end", lambda *a: None)
+        assert video(api, token, body, "request-a").status_code == 202
+    busy = video(api, token, body, "request-b")
+    assert (busy.status_code, busy.json()["error"]["code"]) == (429, "paid_render_busy"), busy.text
+    with api.app.state.store.transaction() as c:  # the card moves to a new visit before B retries
+        c.execute("UPDATE visits SET id='visit-moved' WHERE task_id=? AND left_at IS NULL", (task["id"],))
+    assert video(api, token, body, "request-b").status_code == 429  # still the same shot, never a second send
+    paid_renders._IN_FLIGHT.clear()  # a restart: A's outcome is unknown
+    settings = api.app.state.store.settings
+    settings.gateway_key = ""  # an unknown shot is answered before the Gateway check
+    refused = video(api, token, body, "request-b")
+    assert (refused.status_code, refused.json()["error"]["code"]) == (409, "reconcile_shot"), refused.text
+    assert len(sent) == 1
+
+
+def test_a_shot_sent_again_after_a_refusal_keeps_its_first_visit_and_name(api, monkeypatch):
+    connect(api)
+    task, token = turn(api)
+    with api.app.state.store.read() as c:
+        first = c.execute("SELECT id FROM visits WHERE task_id=? AND left_at IS NULL", (task["id"],)).fetchone()[0]
+    monkeypatch.setattr(G, "video_submit", lambda *a: (422, {}, "invalid"))
+    body = {"prompt": "a kettle", "shot": "Kettle wide"}
+    assert video(api, token, body, "the-request").status_code == 422
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE visits SET id='visit-moved' WHERE task_id=? AND left_at IS NULL", (task["id"],))
+    monkeypatch.setattr(G, "video_submit", lambda *a: (0, {}, "unreachable"))
+    # The retry names the shot otherwise: it is still the shot its key was first sent under, on its first visit.
+    assert video(api, token, {**body, "shot": "Another name"}, "the-request").status_code == 409
+    with api.app.state.store.read() as c:
+        sends = [
+            json.loads(row[0]) for row in c.execute("SELECT detail FROM events WHERE action=?", (paid_renders.SENT,))
+        ]
+    assert [(d["visit"], d["shot"]) for d in sends] == [(first, "Kettle wide"), (first, "Kettle wide")]
+
+
+def test_botops_asks_only_when_its_question_slot_in_the_room_is_free(api, monkeypatch):
+    from backend import question_marks as Q
+
+    connect(api)
+    task, token = turn(api)
+    store = api.app.state.store
+    with store.transaction() as c:  # BotOps already asks Ana something in this card's chat
+        other = Q.ask(c, "bot:botops", task["id"], "human:ana", "Can you check the tool key?", checked=False)
+    unknown_now(api, token, "Kettle wide", monkeypatch)
+    assert reconcile_asks(api, task) == []
+    with store.read() as c:
+        assert c.execute("SELECT cleared_at FROM question_marks WHERE id=?", (other["id"],)).fetchone()[0] is None
+    with store.transaction() as c:
+        c.execute("UPDATE question_marks SET cleared_at=?, cleared_reason='replied' WHERE id=?", (H.now(), other["id"]))
+    with store.transaction() as c:
+        assert paid_renders.sweep(c) == 1
+    assert reconcile_asks(api, task) == [("human:ana", "Reconcile 1 shot", ["Kettle wide"])]
+
+
+def test_the_sweep_asks_again_when_the_question_went_unanswered_but_not_once_answered(api, monkeypatch):
+    connect(api)
+    task, token = turn(api)
+    store = api.app.state.store
+    unknown_now(api, token, "Kettle wide", monkeypatch)
+    for reason in ("replaced", "addressee_gone"):
+        with store.transaction() as c:
+            c.execute(
+                "UPDATE question_marks SET cleared_at=?, cleared_reason=? WHERE task_id=? AND cleared_at IS NULL",
+                (H.now(), reason, task["id"]),
+            )
+        assert reconcile_asks(api, task) == []
+        with store.transaction() as c:
+            assert paid_renders.sweep(c) == 1, reason
+        assert reconcile_asks(api, task) == [("human:ana", "Reconcile 1 shot", ["Kettle wide"])]
+    with store.transaction() as c:
+        assert paid_renders.sweep(c) == 0  # open and answerable: left alone
+        c.execute(
+            "UPDATE question_marks SET cleared_at=?, cleared_reason='replied' WHERE task_id=?", (H.now(), task["id"])
+        )
+    with store.transaction() as c:
+        assert paid_renders.sweep(c) == 0  # answered: left alone
