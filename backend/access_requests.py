@@ -710,9 +710,17 @@ def _wake(c: Any, row: Any) -> Any:
 
     if not row["task_id"]:
         return
-    waits = c.execute("SELECT 1 FROM task_reconnects WHERE key=? LIMIT 1", (_key(row),)).fetchone()
-    if waits:
-        reconnects.fixed(c, _key(row), H.actor_id(row["subject"]), why="access")
+    # The waits on this request: its key, or the key it was asked under before Read only narrowed it.
+    keys = [
+        r[0]
+        for r in c.execute(
+            "SELECT DISTINCT key FROM task_reconnects WHERE key=? OR json_extract(fix,'$.request')=? ORDER BY key",
+            (_key(row), row["id"]),
+        )
+    ]
+    if keys:
+        for key in keys:
+            reconnects.fixed(c, key, H.actor_id(row["subject"]), why="access")
         return
     task = H.task(c, row["task_id"])
     if task and task["status"] in H.ACTIVE_STATUSES and H.is_bot(task["owner_id"]):
@@ -782,8 +790,7 @@ def _open_row(c: Any, who: Any, rid: Any, vault: Any, auth: Any) -> Any:
     if not row:
         raise Problem("not_found", "No such request", 404)
     if not may_unblock(c, who, row, vault, auth):
-        names = ", ".join(H.actor_name(c, a) for a in json.loads(row["approvers"] or "[]")[:3])
-        raise Problem("forbidden", "You can't grant this" + (f": {names} can" if names else ""), 403)
+        raise Problem("forbidden", "You can't grant this", 403)  # nothing of who can: that is the request's own
     return row
 
 
@@ -806,7 +813,12 @@ def grant(c: Any, who: Any, rid: Any, vault: Any, auth: Any, level: Any = None) 
                 _give_repository(c, given, who.actor, person=True)
         settled(c, who, **narrow)
         if given is not row:
-            # An open request for Read on the same thing closed just above, so this one can be it now.
+            # An open request for Read on the same thing closed just above, so this one can be it now; a task waiting
+            # on it is told Read only was given.
+            c.execute(
+                "UPDATE task_reconnects SET label=? WHERE json_extract(fix,'$.request')=? AND fixed_at IS NULL",
+                (f"{row['resource_name']} · Read only", rid),
+            )
             c.execute(
                 "UPDATE access_requests SET level=?,kind=? WHERE id=? AND state='open'",
                 (given["level"], _kind(row["resource_type"], given["level"]), rid),

@@ -4,6 +4,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { queryClient } from '@/data';
 import { flowQuery, type FlowRequest } from '@/features/tasks/routing';
 import { Toasts } from '@/kit/Toast';
+import { answerAsk } from './queries';
 import { RequestCard } from './Requests';
 
 /* Needs you's requests without a task (master plan P1): an access request (Grant, Read only, Decline), a key card (the
@@ -88,6 +89,7 @@ const gone = (name: string) => waitFor(() => expect(screen.queryByRole('region',
 
 describe('an access request in Needs you', () => {
   it('says who asks for what and why; Grant gives what was asked and the card leaves', async () => {
+    reply = () => ({ body: { state: 'granted', level: 'read_write' } });
     show();
     const box = await card('Access request');
     expect(within(box).getByText('Growth Manager asks for Meta Ads')).toBeTruthy();
@@ -97,6 +99,19 @@ describe('an access request in Needs you', () => {
     fireEvent.click(within(box).getByRole('button', { name: 'Grant' }));
     await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/access-requests/r1/grant', body: {} }]));
     await gone('Access request');
+    await waitFor(() => expect(document.querySelector('.toasts')?.textContent).toContain('Granted: Meta Ads'));
+  });
+
+  it('says what the server settled: Read only, or a decline someone else made first', async () => {
+    reply = () => ({ body: { state: 'granted', level: 'read' } });
+    show();
+    fireEvent.click(within(await card('Access request')).getByRole('button', { name: 'Read only' }));
+    await waitFor(() => expect(document.querySelector('.toasts')?.textContent).toContain('Granted read only: Meta Ads'));
+    reply = () => ({ body: { state: 'declined', level: 'read_write' } });
+    waiting = [ACCESS];
+    queryClient.setQueryData(flowQuery.queryKey, { count: 1, items: [], requests: waiting, task_ids: [] });
+    fireEvent.click(within(await card('Access request')).getByRole('button', { name: 'Grant' }));
+    await waitFor(() => expect(document.querySelector('.toasts')?.textContent).toContain('Declined by someone else: Meta Ads'));
   });
 
   it('Read only gives read alone; Decline declines', async () => {
@@ -118,6 +133,15 @@ describe('an access request in Needs you', () => {
     fireEvent.click(within(box).getByRole('button', { name: 'Grant' }));
     expect((await within(box).findByRole('alert')).textContent).toBe('You can’t grant this');
     expect(screen.getByRole('region', { name: 'Access request' })).toBeTruthy();
+  });
+});
+
+describe('Flow’s count', () => {
+  it('keeps the requests when a task’s ask is answered', async () => {
+    queryClient.setQueryData(flowQuery.queryKey, { count: 2, items: [{ id: 't1' }], requests: [ACCESS], task_ids: ['t1'] });
+    const answered = answerAsk('t1', 'q1', 'ok');
+    expect(queryClient.getQueryData<{ count: number }>(flowQuery.queryKey)?.count).toBe(1);
+    await answered.catch(() => undefined);
   });
 });
 

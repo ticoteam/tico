@@ -195,10 +195,11 @@ export function answerAsk(id: string, rid: string, value: 'ok' | 'no', note?: st
     turn: t.turn?.requirement_id === rid ? null : t.turn,
   });
   const gone = (cur: unknown): unknown => {
-    const f = cur as { count?: number; items?: { id: string }[] } | undefined;
+    const f = cur as { count?: number; items?: { id: string }[]; requests?: unknown[] } | undefined;
     if (!f?.items) return cur;
     const items = f.items.filter((w) => w.id !== id);
-    return { ...f, items, count: items.length };
+    // Flow's requests (access, key, key-drop) count too: answering a task's ask leaves them waiting.
+    return { ...f, items, count: items.length + (f.requests?.length ?? 0) };
   };
   const flows = queryClient.getQueriesData({ queryKey: ['flow'] }).map(([k]) => k);
   return write<TaskResult>({
@@ -715,11 +716,17 @@ function answerRequest<T>(item: string, send: (idem: string) => Promise<T>): Pro
   });
 }
 
+/** An access request as its route answers: where it stands now, whoever settled it, and the level it is for. */
+export interface AccessAnswer {
+  state: string;
+  level: string;
+}
+
 /** Grant (`read` for Read only on a request for Read and write) or decline an access request. */
 export const grantAccess = (item: string, rid: string, level?: 'read') =>
-  answerRequest(item, (idem) => api.post(`/api/v2/access-requests/${enc(rid)}/grant`, level ? { level } : {}, { idempotencyKey: idem }));
+  answerRequest(item, (idem) => api.post<AccessAnswer>(`/api/v2/access-requests/${enc(rid)}/grant`, level ? { level } : {}, { idempotencyKey: idem }));
 export const declineAccess = (item: string, rid: string) =>
-  answerRequest(item, (idem) => api.post(`/api/v2/access-requests/${enc(rid)}/decline`, {}, { idempotencyKey: idem }));
+  answerRequest(item, (idem) => api.post<AccessAnswer>(`/api/v2/access-requests/${enc(rid)}/decline`, {}, { idempotencyKey: idem }));
 /** The key the person typed into a key card: it goes to the server alone, never into a message. */
 export const saveKey = (item: string, rid: string, value: string) =>
   answerRequest(item, (idem) => api.post(`/api/v2/credential-requests/${enc(rid)}/save`, { value }, { idempotencyKey: idem }));

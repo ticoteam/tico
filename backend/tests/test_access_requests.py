@@ -377,3 +377,32 @@ def test_a_tool_with_a_template_is_granted_one_key_per_variable(api):
     asked = ask(api, "Acme Pair", "read_write")
     post(api, f"access-requests/{asked['id']}/grant", {}, "ben-test")
     assert held() == {"ACME_KEY": "read_write", "ACME_SECRET": "read_write"} and lv(api, tid) == "read_write"
+
+
+def test_read_only_frees_the_task_waiting_on_the_request_and_tells_it_read_only(api):
+    # Read only narrows the request to Read: the task's wait, made for Read and write, still ends, and says Read only.
+    world(api)
+    crm = tool(api)["id"]
+    key(api, crm, SECRET)
+    tid = task(api, "bot:ops", "Update the deal stages")
+    asked = ask(api, crm, "read_write", task=tid)
+    assert post(api, f"access-requests/{asked['id']}/grant", {"level": "read"}, "ben-test")["level"] == "read"
+    with api.app.state.store.read() as c:
+        assert reconnects.hold(c, tid) is None
+        assert c.execute("SELECT count(*) FROM task_reconnects WHERE fixed_at IS NULL").fetchone()[0] == 0
+        woke = c.execute(
+            "SELECT body FROM messages WHERE recipient_id='bot:ops' AND body LIKE 'Access granted%'"
+        ).fetchall()
+    assert len(woke) == 1 and "Close CRM · Read only is granted" in woke[0]["body"]
+    assert lv(api, crm) == "read"
+
+
+def test_a_refused_tap_names_nobody_who_could_grant_it(api):
+    world(api)
+    crm = tool(api)["id"]
+    key(api, crm, SECRET)
+    asked = ask(api, crm, "read_write")
+    for what in ("grant", "decline"):
+        r = api.post(f"/api/v2/access-requests/{asked['id']}/{what}", json={}, headers=headers("cara-test"))
+        assert r.status_code == 403 and r.json()["error"]["detail"] == "You can't grant this"
+        assert "Ana" not in r.text and "Ben" not in r.text and "human:" not in r.text

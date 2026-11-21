@@ -4,7 +4,7 @@ import { Button } from '@/kit/Button';
 import { Checkbox } from '@/kit/Checkbox';
 import { toast } from '@/kit/Toast';
 import { AskCard } from './AskCard';
-import { declineAccess, grantAccess, grantKeyDrop, saveKey } from './queries';
+import { declineAccess, grantAccess, grantKeyDrop, saveKey, type AccessAnswer } from './queries';
 
 /* What waits on the person without a task (master plan P1): an agent's access request, a key card and the Tools owner's
    key-drop proposal, each in the one ask card with its own body. The server checks again on every press and settles
@@ -17,15 +17,25 @@ const said = (err: unknown) => (err instanceof Error && err.message) || 'Not sav
 
 /** One press: the work, its toast once taken, or the refusal in the card. Returns the promise, so the button is busy. */
 function useOnce(setError: (s: string) => void) {
-  return (work: () => Promise<unknown>, done: string, name: string) => async () => {
+  return <T,>(work: () => Promise<T>, done: string | ((out: T) => string), name: string) => async () => {
     setError('');
     try {
-      await work();
-      toast({ text: done, name });
+      const out = await work();
+      toast({ text: typeof done === 'string' ? done : done(out), name });
     } catch (err) {
       setError(said(err));
     }
   };
+}
+
+/** What the access request's answer says happened: the server's state and level, which may be someone else's. */
+export function accessDone(pressed: 'grant' | 'decline', out: AccessAnswer): string {
+  if (out.state === 'declined') return pressed === 'decline' ? 'Declined' : 'Declined by someone else';
+  if (out.state === 'granted') {
+    if (pressed === 'decline') return 'Granted by someone else';
+    return out.level === 'read' ? 'Granted read only' : 'Granted';
+  }
+  return 'Closed';
 }
 
 /** An agent asks for a level on a tool or a repository: Grant, Read only (when it asked for write) or Decline. */
@@ -43,9 +53,11 @@ function AccessCard({ it, a }: { it: NeedsYouItem; a: NonNullable<NeedsYouItem['
       error={error}
       actions={
         <>
-          <Button onClick={once(() => declineAccess(it.id, a.id), 'Declined', a.resource_name)}>Decline</Button>
-          {a.level === 'read_write' && <Button onClick={once(() => grantAccess(it.id, a.id, 'read'), 'Granted read', a.resource_name)}>Read only</Button>}
-          <Button variant="primary" onClick={once(() => grantAccess(it.id, a.id), 'Granted', a.resource_name)}>
+          <Button onClick={once(() => declineAccess(it.id, a.id), (out) => accessDone('decline', out), a.resource_name)}>Decline</Button>
+          {a.level === 'read_write' && (
+            <Button onClick={once(() => grantAccess(it.id, a.id, 'read'), (out) => accessDone('grant', out), a.resource_name)}>Read only</Button>
+          )}
+          <Button variant="primary" onClick={once(() => grantAccess(it.id, a.id), (out) => accessDone('grant', out), a.resource_name)}>
             Grant
           </Button>
         </>

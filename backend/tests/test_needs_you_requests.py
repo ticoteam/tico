@@ -4,9 +4,10 @@ and Ben is an admin (both credential administrators); Cara is a member. Ops owns
 
 from backend import api_tools
 from backend.tests.helpers import credentials as creds
-from backend.tests.helpers.api import claim, get, post, put
+from backend.tests.helpers.api import claim, get, headers, post, put
 from backend.tests.helpers.api_tools import key, tool
 from backend.tests.helpers.chat_goals import setup
+from backend.tests.helpers.events import live, ready, topic  # noqa: F401  (live: the stream fixture)
 
 OLD = "acme-close-synthetic-old-0011223344"
 NEW = "acme-close-synthetic-new-5566778899"
@@ -79,3 +80,56 @@ def test_needs_you_lists_each_request_only_to_someone_who_may_settle_it_and_its_
     assert post(api, f"credential-requests/{mine['key']['key']['id']}/save", {"value": NEW})["status"] == "saved"
     assert post(api, f"tools-chat/proposals/{mid}/grant", {"keep": [0]})["state"] == "granted"
     assert requests(api, "ana-test") == {} and requests(api, "ben-test") == {}
+
+
+def test_a_held_page_never_serves_a_request_the_viewer_lost(api, monkeypatch):
+    # The next page of a list built seconds ago is cut from that build: Ben's access requests are checked again first.
+    world(api, monkeypatch)
+    crm = tool(api, "Acme Billing", base_url="https://billing.acme.example")["id"]
+    key(api, crm, ADS + "-billing")
+    post(api, "access-requests", {"resource": crm, "level": "read_write", "for_bot": "cpo"})
+    first = get(api, "needs-you?limit=1", "ben-test")
+    assert first["next"] and [it["kind"] for it in first["items"]] == ["access"]
+    api.app.state.store.settings.credential_admins = ("ana@acme.example",)  # Ben may grant nothing now
+    after = get(api, f"needs-you?limit=1&cursor={first['next']}", "ben-test")
+    assert [it for it in after["items"] if it["kind"] in KINDS] == []
+
+
+def test_a_key_proposal_is_listed_and_granted_only_by_someone_who_can_see_its_tool(api, monkeypatch):
+    # Ben, a credential administrator, drops a key in his chat with ops; once its tool is Only listed without him, the
+    # proposal leaves his list and its Grant finds nothing.
+    machine, _ = setup(api)
+    put(api, "page-owners/tools", {"bot": "ops"})
+    creds.setup(api)
+    monkeypatch.setattr(api_tools, "send_check", lambda url, hdrs, params: api_tools.Reply(200))
+    crm = tool(api)["id"]
+    dm = post(api, "threads/dm", {"members": ["bot:ops"]}, "ben-test")
+    secret = {"name": "JIRA_LOGIN", "kind": "password", "env": "JIRA_LOGIN", "secret": PASSWORD, "source": "tools-chat"}
+    post(api, "credentials", secret, "ben-test")
+    post(api, f"threads/{dm['id']}/messages", {"text": "for close [saved JIRA_LOGIN for Close CRM]"}, "ben-test")
+    bot = claim(api, machine)["token"]
+    rows = [{"key": "JIRA_LOGIN", "tool": crm, "level": "read", "bots": ["cpo"]}]
+    proposal = post(api, "tools-chat/proposals", {"thread_id": dm["id"], "rows": rows}, bot)
+    assert set(requests(api, "ben-test")) == {"key_drop"}
+    nobody = {"audience": {"everyone": False, "people": [], "teams": [], "bots": []}}
+    assert api.patch(f"/api/v2/api-tools/{crm}", json=nobody, headers=headers()).status_code == 200
+    assert requests(api, "ben-test") == {}
+    post(api, f"tools-chat/proposals/{proposal['id']}/grant", {"keep": [0]}, "ben-test", expected=404)
+
+
+def test_a_new_key_card_reaches_its_person_on_the_live_stream(api, monkeypatch, live):  # noqa: F811
+    setup(api)
+    put(api, "page-owners/tools", {"bot": "ops"})
+    creds.setup(api)
+    monkeypatch.setattr(api_tools, "send_check", lambda url, hdrs, params: api_tools.Reply(401))
+    crm = tool(api)["id"]
+    key(api, crm, OLD)
+    stream = live("ana-test", "?topics=needs")
+    ready(stream)
+    with api.app.state.store.read() as c:
+        before = c.execute("SELECT COALESCE(MAX(seq),0) FROM changes").fetchone()[0]
+    assert post(api, f"api-tools/{crm}/check", {})["detail"] == "Key rejected"
+    stream.until(lambda e: topic("needs")(e) and any(it["kind"] == "key" for it in e["data"].get("items") or []))
+    with api.app.state.store.read() as c:
+        rows = c.execute("SELECT kind FROM changes WHERE seq>? AND topic='needs' AND subject_id='human:ana'", (before,))
+        assert "key" in {r[0] for r in rows}

@@ -248,6 +248,18 @@ def propose(c: Any, who: Any, thread_id: str, rows: list[Row], note: str = "") -
         MINTING.reset(token)
 
 
+def _may_grant(c: Any, vault: Any, who: Any, card: Row) -> bool:
+    """Whether `who` may grant every row of the card: each tool is one they can see and grant on (Only listed tools
+    included). Listing and Grant both ask this."""
+    from . import tool_access as TA
+
+    for row in card["rows"]:
+        tool = c.execute("SELECT * FROM tools WHERE id=?", (row["tool_id"],)).fetchone()
+        if tool is None or not TA.decide(c, who, TA.tool(tool), "", TA.GRANT, admins=vault.admins, auth=vault.auth).ok:
+            return False
+    return True
+
+
 def proposed_for(c: Any, vault: Any, who: Any) -> list[Row]:
     """The key proposals that wait on `who`, oldest first: each card still proposed in their chat with the Tools page's
     owner, while they may grant (`grant`'s own checks), as the card with its message_id, created_at and who proposed it
@@ -270,7 +282,7 @@ def proposed_for(c: Any, vault: Any, who: Any) -> list[Row]:
             thread = _thread(c, m["conversation_id"], owner)
         except Problem:
             continue
-        if card is not None and who.actor in _members(c, thread):
+        if card is not None and who.actor in _members(c, thread) and _may_grant(c, vault, who, card):
             out.append(card | {"message_id": m["id"], "created_at": m["created_at"], "by": owner})
     return out
 
@@ -314,12 +326,10 @@ def _attach(c: Any, who: Any, vault: Any, row: Row) -> None:
 
 
 def _save(c: Any, message_id: str, card: Row) -> None:
-    """The card as it stands now; granted, it leaves the person's Needs you."""
     raw = c.execute("SELECT refs FROM messages WHERE id=?", (message_id,)).fetchone()["refs"]
     refs = json.loads(raw or "{}")
     refs[CARD] = card
     c.execute("UPDATE messages SET refs=? WHERE id=?", (json.dumps(refs), message_id))
-    _events().needs_moved(c, [card["person"]], "key_drop")
 
 
 def grant(store: Any, vault: Any, who: Any, message_id: str, keep: list[int] | None = None) -> Row:
@@ -336,7 +346,7 @@ def grant(store: Any, vault: Any, who: Any, message_id: str, keep: list[int] | N
         if not owner or not message or card is None or message.get("sender_id") != owner:
             raise Problem("not_found", "No key proposal here", 404)
         thread = _thread(c, message["conversation_id"], owner)
-        if who.actor not in _members(c, thread):
+        if who.actor not in _members(c, thread) or not _may_grant(c, vault, who, card):
             raise Problem("not_found", "No key proposal here", 404)
         if card["state"] != "proposed":
             return card
@@ -358,6 +368,7 @@ def grant(store: Any, vault: Any, who: Any, message_id: str, keep: list[int] | N
             _attach(c, who, vault, row)
         card = card | {"state": "granted", "rows": rows, "granted_by": who.actor, "results": []}
         _save(c, message_id, card)
+        _events().needs_moved(c, [card["person"]], "key_drop")  # settled: it leaves their Needs you
     results: list[Row] = []
     for tool_id in dict.fromkeys(r["tool_id"] for r in rows):
         try:

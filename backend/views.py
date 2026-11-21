@@ -2083,6 +2083,9 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
     return sorted(items, key=needs_key)
 
 
+REQUEST_KINDS = ("access", "key", "key_drop")
+
+
 def request_items(c, auth, who):
     """The person's open access requests, key cards and key-drop proposals as Needs-you items (`kind` access, key,
     key_drop), each read through its own list and authority check, which its action checks again: an item the person
@@ -2163,7 +2166,8 @@ def needs_shown(c, auth, who, task_view=None, **how):
 def needs_still_shown(c, auth, who, items):
     """Whether items cut from a held build (backend/needs_cache.py) still show only what the caller may read: each
     page ask's title (files.readable_titles), and what each OK is about (a Finance action's payee and amount) to its
-    parties alone (task_asks.parties_to_all, one statement for them all)."""
+    parties alone (task_asks.parties_to_all, one statement for them all), and each request still the caller's to settle
+    (request_items)."""
     from . import task_asks
     from .files import readable_titles
 
@@ -2172,7 +2176,11 @@ def needs_still_shown(c, auth, who, items):
     if pages and len(readable_titles(c, auth, who, pages)) < len(set(pages)):
         return False
     oks = [str(item["requirement_id"]) for item in told if (item.get("ask") or {}).get("kind") == "ok"]
-    return not oks or task_asks.parties_to_all(c, who.actor, oks)
+    if oks and not task_asks.parties_to_all(c, who.actor, oks):
+        return False
+    # An access request, key card or key proposal: still one the caller may settle, by its own checks (request_items).
+    held = {str(item["id"]) for item in items if item.get("kind") in REQUEST_KINDS}
+    return not held or held <= {str(item["id"]) for item in request_items(c, auth, who)}
 
 
 def needs_key(x):

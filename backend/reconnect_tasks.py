@@ -75,6 +75,8 @@ def _module(name: str) -> Any:
         from . import tool_services as found
     elif name == "auth":
         from . import auth as found
+    elif name == "events":
+        from . import events as found
     elif name == "credentials":
         from . import credentials as found
     else:
@@ -296,6 +298,7 @@ def _card(c: Any, task: Row, owner: str, person: str, tool: Row, key: Row) -> st
     )
     message_id = sent["id"] if sent else None
     c.execute("UPDATE credential_requests SET message_id=? WHERE id=?", (message_id, rid))
+    _module("events").needs_moved(c, [person], "key")  # the card is in their Needs you now
     waits: Row = RC.open(
         c,
         task["id"],

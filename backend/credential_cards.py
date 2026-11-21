@@ -534,6 +534,7 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
                 ":kind,:status,:created_at,:updated_at,:credential_id,:message_id)",
                 row,
             )
+            events.needs_moved(c, [person.actor], "key")  # the card is in their Needs you now
             shown = view(c, row, person)
             card = H._write_message(
                 c,
