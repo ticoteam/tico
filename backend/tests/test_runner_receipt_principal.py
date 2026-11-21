@@ -92,7 +92,13 @@ def test_private_make_page_receipts_replay_after_finish_and_recheck_person_and_c
         row = c.execute("SELECT state,acting_person FROM attempts WHERE id=?", (aid,)).fetchone()
         assert tuple(row) == ("completed", "human:ben")
     # The original response was lost: the finished attempt must recover the identical receipt, not a historical result.
-    assert post(api, path, body, machine["token"], key) == first
+    again = post(api, path, body, machine["token"], key)
+    if endpoint == "claim":
+        # The run header is read fresh after the claim, never kept in its receipt: a replay whose lease is no longer
+        # live gets none (test_run_header.py), so the finished claim recovers the receipt without it.
+        assert "run_header" in first["attempt"] and "run_header" not in again["attempt"]
+        first = {**first, "attempt": {k: v for k, v in first["attempt"].items() if k != "run_header"}}
+    assert again == first
     post(api, path, body, "cara-test", key, expected=403)
     outsider = runner(api, operator="cara")
     if endpoint == "claim":
