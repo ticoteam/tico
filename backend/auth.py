@@ -1094,7 +1094,7 @@ class Auth:
             # The person's own Assistant also reads the tasks filed for the OKs asked of her (task_asks.assistant_reads_own_ok).
             own_oks = (
                 (" OR id IN (" + FILED_FOR_SQL.replace("?", me) + ")")
-                if assistant_for(who.actor, who.task_actor)
+                if assistant_for(c, who.actor, who.task_actor)
                 else ""
             )
             audience += (

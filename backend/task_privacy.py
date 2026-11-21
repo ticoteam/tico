@@ -63,7 +63,7 @@ def principals_read(c, principals, row):
     from .task_asks import assistant_for, assistant_reads_own_ok
 
     return (
-        assistant_for(*principals)
+        assistant_for(c, *principals)
         and H.task_private_readable(c, principals[0], row)
         and assistant_reads_own_ok(c, principals[0], principals[1], dict(row)["id"])
     )

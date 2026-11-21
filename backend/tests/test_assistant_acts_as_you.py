@@ -244,6 +244,19 @@ def bot_identity(actor):
     return Identity(actor, "bot")
 
 
+def test_archiving_an_agent_never_makes_the_shared_assistant_a_private_tasks_requester(api):
+    """Its open tasks' requests go to its successor; a private one, with the shared Assistant as successor, goes to the
+    agent's human owner instead (the default person when it has none)."""
+    from backend import settings_admin
+
+    with api.app.state.store.transaction() as c:
+        mine = H.task_create(c, "bot:finance", "Books", "Private.", "bot:ops", private=True, lint=False)["id"]
+        ours = H.task_create(c, "bot:finance", "Notes", "Company.", "bot:ops", private=False, lint=False)["id"]
+        settings_admin.archive_bot(c, "human:ana", "finance", successor="assistant")
+        assert H.is_human(H.task(c, mine)["requester_id"])
+        assert H.task(c, ours)["requester_id"] == "bot:assistant"
+
+
 def test_a_batch_commit_never_oks_on_an_assistant_walk(api):
     with api.app.state.store.transaction() as c:
         made = H.task_create(c, "human:ana", "Run the LinkedIn ads", "Q4.", "bot:finance", lint=False)

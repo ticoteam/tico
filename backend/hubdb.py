@@ -2523,7 +2523,10 @@ def reader_actors(conn, row):
 
     out = set()
     for reader in task_readers(row):
-        out |= group_member_actors(conn, reader[6:]) if reader.startswith("group:") else {reader}
+        # A group lends the shared Assistant no private task (reader_names), so it is not among the group's readers.
+        out |= (
+            group_member_actors(conn, reader[6:]) - {assistant_actor(conn)} if reader.startswith("group:") else {reader}
+        )
     return out
 
 

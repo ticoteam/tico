@@ -726,9 +726,7 @@ def test_a_persons_token_cannot_say_yes_to_a_report_through_the_needs_you_list(e
     drafts_only(api)
     from backend import task_asks
 
-    # Drafted by a bot that holds the ticket while it waits on the person (the shared Assistant never holds a private
-    # task: its report's ticket is the person's own, hubdb.refuse_shared_assistant).
-    approval = draft(api, as_bot(api, "botops")).json()
+    approval = draft(api, as_bot(api)).json()
     with api.app.state.store.read() as c:
         approver = task_asks.grant(c, approval["id"])["asked_of_id"]
     me = api.get("/api/me", headers=signed_in()).json()
@@ -744,7 +742,7 @@ def test_a_persons_token_cannot_say_yes_to_a_report_through_the_needs_you_list(e
     assert r.status_code == 422 and task_asks.FROM_PREVIEW in r.text, r.text
     with api.app.state.store.read() as c:
         assert task_asks.standing(c, approval["id"]) == task_asks.WAITING
-    assert send(api, as_bot(api, "botops"), approval["id"]).status_code != 200
+    assert send(api, as_bot(api), approval["id"]).status_code != 200
     assert hq.seen == [] and not consumed(api, approval["id"])
 
 
