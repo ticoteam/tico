@@ -43,6 +43,16 @@ def test_search_and_kind_narrow_the_newest_first_list_and_page_on(api):
     assert page(api, "q=winberg", who="cara-test")["files"] == [], "a private chat's file stays out of a search"
 
 
+def test_search_finds_a_word_whole_part_typed_or_plural(api):
+    _, attempt = turn(api)
+    put(api, attempt, "notes/one.md", "# One\n\nThe test harness runs nightly.")
+    put(api, attempt, "notes/two.md", "# Two\n\nQuarterly reports are due. Two boxes.")
+    for q in ("harness", "harn", "harnes", "harness+nightly"):
+        assert titles(page(api, "q=" + q)) == ["one.md"], q
+    for q in ("report", "reports", "repo", "quarterly+reports", "boxes"):
+        assert titles(page(api, "q=" + q)) == ["two.md"], q
+
+
 def test_recent_is_when_the_content_changed_not_when_it_was_copied(api):
     _, attempt = turn(api)
     # A computer publishing a checkout for the first time: the file's commit time, not the copy's.
