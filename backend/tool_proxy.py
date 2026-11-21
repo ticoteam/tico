@@ -685,7 +685,9 @@ def install(app, store):
             # Judged with or without an Idempotency-Key; with one, a retry under it is neither judged nor logged again.
             sent = b''.join(chunks) if small and not gate_calls else None
             idem = request.headers.get('idempotency-key', '')
-            unread = method == 'POST' and not small and gate_calls is None
+            # Only a large POST to the tool's MCP address could be an MCP read no parse saw: that one is unchecked. Any
+            # other large POST (an upload) keeps its name-only check.
+            unread = method == 'POST' and not small and gate_calls is None and mcp
             checked['found'] = await loop().run_in_executor(
                 None,
                 gated,

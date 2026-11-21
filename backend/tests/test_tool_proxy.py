@@ -293,11 +293,17 @@ def test_an_mcp_read_over_a_megabyte_is_never_counted_as_a_write(api):
     """The gate reads Read authorization's parse whatever its size, so a Read caller's large MCP read at the tool's MCP
     address is no write; a Read and write caller's large POST is not parsed at all, so it is recorded unchecked,
     never judged or counted as a write."""
+    from backend.tests.helpers.org_rules import org, rule
+
     setup(api)
+    org(api)
     judge = api.app.state.judge = Judge()
     tool(api, scheme="bearer", base="https://mcp.close.example")
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tools SET mcp_url='https://mcp.close.example/mcp' WHERE id='close-crm'")
+    # A rule every write here would break: a judged write is refused, so a write never judged shows.
+    who = {"bots": ["ops", "finance"]}
+    rule(api, {"kind": "internal", "text": "Never write to Close CRM.", "who": who, "if_broken": "block"})
     full = key(api, "close-crm", FULL)
     give(api, full, "bot:ops", "read")
     give(api, full, "bot:finance", "read_write")
@@ -306,16 +312,23 @@ def test_an_mcp_read_over_a_megabyte_is_never_counted_as_a_write(api):
     _, finance = run(api, "finance")
     big = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "search", "q": "x" * (1024 * 1024)}}
 
-    def actions():
+    def outcomes():
         with api.app.state.store.read() as c:
-            return [r[0] for r in c.execute("SELECT action FROM events WHERE action LIKE 'rules.%' ORDER BY rowid")]
+            rows = c.execute("SELECT action, detail FROM events WHERE action LIKE 'rules.%' ORDER BY rowid")
+            return [(r[0], json.loads(r[1]).get("unchecked", "")) for r in rows]
 
     reader = handed(api, ops)["value"]
     assert call(api, "POST", "mcp", reader, json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).status_code == 200
     assert call(api, "POST", "mcp", reader, json=big).status_code == 200
-    assert actions() == []
-    assert call(api, "POST", "mcp", handed(api, finance)["value"], json=big).status_code == 200
-    assert actions() == ["rules.unchecked"] and judge.read == []
+    assert outcomes() == [] and judge.read == []
+    writer = handed(api, finance)["value"]
+    # At the MCP address, unparsed: unchecked, never judged. Anywhere else: the name-only check, which this rule refuses.
+    assert call(api, "POST", "mcp", writer, json=big).status_code == 200
+    assert outcomes() == [("rules.unchecked", "too_large")] and judge.read == []
+    assert call(api, "POST", "upload", writer, json=big).status_code == 200
+    assert outcomes() == [("rules.unchecked", "too_large"), ("rules.refused", "")] and judge.read == [
+        "POST to Close CRM"
+    ]
 
 
 @pytest.mark.parametrize("sse", [False, True])

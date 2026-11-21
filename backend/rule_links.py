@@ -53,6 +53,7 @@ ENFORCED, INFORMED, NOT_COVERED = "enforced", "informed", "not_covered"
 ENFORCED_LINKS = frozenset({"email"})  # the links whose path really stops a write; every other is Informed only
 FIXED = {"email": "Email", "webhook": "Outgoing webhooks", "release": "Releases"}
 UNCOVERED = {"support": "Tico support", "computer": "Calls straight from computers"}  # unmeasured paths, besides tools
+CALLS_READ = 50  # the MCP calls of one batch the check reads (each one line), however many the batch holds
 MAX_JUDGED = 1024 * 1024  # a proxied body over this is not parsed for its key names (the check reads the rest)
 OUTCOMES = ("rules.passed", "rules.refused", "rules.held", "rules.unchecked")
 KEY_DAYS = 1  # how long a write's Idempotency-Key keeps a retry under it from logging a second event
@@ -82,7 +83,11 @@ def proxy_output(tool_name: str, method: str, body: bytes | None, calls: Any = N
     tool_proxy.rpc_calls) each call's method and tool name; for a JSON object body its top-level key names. Never a
     value, the path, the query or a header. `body` is None when it is not read (over MAX_JUDGED)."""
     lines = [f"{method} to {tool_name}"]
-    for called, params in calls or ():
+    listed: list[tuple[Any, Any]] = list(calls or ())
+    if len(listed) > CALLS_READ:  # a batch of any size is classified in full; the check reads its first CALLS_READ
+        lines.append(f"(the first {CALLS_READ} of {len(listed)} MCP calls)")
+        listed = listed[:CALLS_READ]
+    for called, params in listed:
         named = _name(called, METHOD)
         if named:
             tool = _name(cast("dict[str, Any]", params).get("name")) if called == "tools/call" else None
