@@ -1585,7 +1585,6 @@ def test_a_copy_run_from_source_files_no_automatic_report_until_it_names_an_hq(
     with store.transaction() as c:
         c.execute("DELETE FROM health_reports")
         c.execute("DELETE FROM support_tickets")
-    hq.keys.clear()  # another HQ: it holds none of the first one's Idempotency-Keys
     assert file_due(api, run(api))[sig]["ticket"] and len(hq.tickets) == 2
 
 

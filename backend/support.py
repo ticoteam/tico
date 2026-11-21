@@ -44,9 +44,6 @@ from .store import H, Problem, encode, refusal_problem
 from .api_contract import api_v2
 
 log = logging.getLogger("tico.support")
-LINK_STATE = (
-    "support-link:"  # registry_metadata, per HQ delivery key: who asked for it and its first check (rule_links)
-)
 
 MAX_MESSAGE = 4000
 PER_DAY = 10  # new tickets one person may file in a day; HQ limits the address as well
@@ -260,12 +257,6 @@ def _ask_hq(method, path, *, body=None, secret="", wait=HQ_WAIT, idem=""):
         ) from None
 
 
-def hq_key(actor, key):
-    """The Idempotency-Key HQ hears for a ticket kept under `key` by `actor` (none without a key): the same on a retry,
-    so a send whose answer was lost gets the ticket it made. A digest: the key itself stays here."""
-    return "tico-support:" + hashlib.sha256(f"{actor}|{key}".encode()).hexdigest()[:40] if key else ""
-
-
 def _refused_field(response):
     try:
         return response.json().get("field")
@@ -418,7 +409,7 @@ def _key_of(by, payload):
     return hashlib.sha256((str(by) + "\n" + str(payload.get("content_sha256") or "")).encode()).hexdigest()[:32]
 
 
-def ask_report(c, by, payload, *, task_id=None, person=None, asker=None):
+def ask_report(c, by, payload, *, task_id=None, person=None):
     """Ask a person for an OK of a report to Tico support, exactly as drafted (`payload`: message, content_sha256,
     include_ids). Asked of `person`; else the person whose token or Assistant drafted it, the task's owner when that is
     a person, or the install's default person. Returns {task_id, requirement_id}. The Health Monitor asks with this
@@ -429,7 +420,7 @@ def ask_report(c, by, payload, *, task_id=None, person=None, asker=None):
         person = person or (H.human_actor(H.default_human(c)) if H.default_human(c) else None)
     if not person:
         raise Problem("identity", "This install has no person to OK a report yet.", 409)
-    asked = task_asks.ask_ok(
+    return task_asks.ask_ok(
         c,
         by,
         person,
@@ -440,15 +431,6 @@ def ask_report(c, by, payload, *, task_id=None, person=None, asker=None):
         task_id=task_id,
         title="Send a report to Tico support",
     )
-    # The agent that asked (`asker`, or `by` when it is a bot), kept with the OK for the send it allows
-    # (`file_approved`, under Idempotency-Key `tico-support:<OK id>`): that send is checked as theirs.
-    asker = asker or ((by, by, "") if H.is_bot(by) else None)
-    if asker:
-        c.execute(
-            "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (LINK_STATE + "tico-support:" + asked["requirement_id"], json.dumps({"asker": list(asker)})),
-        )
-    return asked
 
 
 class Support:
@@ -550,9 +532,8 @@ class Support:
         `on_filed(c, ticket_id)` runs in the transaction that keeps it (an approval spent with it). `source` is who
         filed it, as HQ's queue sorts tickets (one of SOURCES; the body's own when not given). `idem` is an OK already
         used for this report (file_approved): HQ hears it as Idempotency-Key, and the day's cap, counted when it was
-        asked, refuses nothing after the claim. Otherwise a `key` gives HQ a stable Idempotency-Key of its own
-        (`hq_key`): a retry after a lost answer gets the ticket the first send made. `asker`: the agent that asked
-        for this send, (principal, sender, via), checked at this first delivery on the support link (`_link_check`)."""
+        asked, refuses nothing after the claim. `asker`: the agent that asked for this send, (principal, sender, via):
+        checked on the support link (backend/rule_links.py) before this delivery, its one event kept with the ticket."""
         message, email = clean_message(body.message), clean_email(body.email)
         with self.store.read() as c:
             if key:
@@ -595,14 +576,13 @@ class Support:
             payload["diagnostics"] = self.attachment(who, body.diagnostics)
         if body.kind != "support":
             payload["kind"] = sent["kind"] = body.kind
-        delivery = idem or hq_key(who.actor, key)
-        found = self._link_check(asker, body.kind, delivery)
-        answer = _ask_hq("POST", "/v1/support", body=payload, idem=delivery)
+        found = self._link_check(asker, body.kind)
+        answer = _ask_hq("POST", "/v1/support", body=payload, idem=idem)
         if answer.status_code == 422 and _refused_field(answer) == "fields":
             # An HQ from before source refuses it as an unknown field: the ticket goes again without it, keeping the
             # rest (BotOps' and the Health Monitor's messages start with their name, which is how such an HQ reads it).
             payload.pop("source")
-            answer = _ask_hq("POST", "/v1/support", body=payload, idem=delivery)
+            answer = _ask_hq("POST", "/v1/support", body=payload, idem=idem)
         if answer.status_code == 422 and {"app_version", "kind"} & set(payload) and _refused_field(answer) == "fields":
             # An HQ from before app_version or kind refuses unknown fields; the ticket still goes without them, and
             # names its kind in the message instead.
@@ -612,7 +592,7 @@ class Support:
             named = f"[{body.kind.capitalize()}] {message}"
             if body.kind != "support" and len(named) <= MAX_MESSAGE:
                 payload["message"] = named
-            answer = _ask_hq("POST", "/v1/support", body=payload, idem=delivery)
+            answer = _ask_hq("POST", "/v1/support", body=payload, idem=idem)
         if answer.status_code == 422 and "diagnostics" in payload:
             raise Problem(
                 "diagnostics_rejected",
@@ -660,37 +640,19 @@ class Support:
             )
             if on_filed:
                 on_filed(c, ticket_id)
-            # The agent's first delivery: its one event on the support link, and the delivery's kept state goes.
-            rule_links.record(c, found)
-            if delivery:
-                c.execute("DELETE FROM registry_metadata WHERE key=?", (LINK_STATE + delivery,))
+            rule_links.record(c, found)  # one ticket, one event: with the row it makes
             return view(c.execute("SELECT * FROM support_tickets WHERE id=?", (ticket_id,)).fetchone())
 
-    def _link_check(self, asker, kind, delivery):
-        """The support link's check of an agent's first delivery (backend/rule_links.py), outside any write, on its names
-        only. Its state is kept per delivery key in registry_metadata (`LINK_STATE`): who asked (kept when an OK was
-        asked, `ask_report`) and the first check, so a retry, or a restart in between, is never judged again. None
-        when no agent asked for it."""
-        state = {}
-        if delivery:
-            with self.store.read() as c:
-                row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (LINK_STATE + delivery,)).fetchone()
-            state = json.loads(row[0]) if row else {}
-        asker = asker or state.get("asker")
+    def _link_check(self, asker, kind):
+        """The support link's check of an agent's delivery (backend/rule_links.py), outside any write, names only; None
+        when no agent asked for it. A retry before the ticket is kept may be judged again (log-only: its event is
+        still one, with the ticket)."""
         if not asker:
             return None
-        found = state.get("found")
-        if found is None:
-            judge = getattr(getattr(self.app, "state", None), "judge", None)
-            said = f"A {kind or 'support'} request to Tico support"
-            found = rule_links.check_as(self.store, judge, *asker, "support", "support_report", said)
-            if delivery:
-                with self.store.transaction() as c:
-                    c.execute(
-                        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                        (LINK_STATE + delivery, json.dumps({"asker": list(asker), "found": found})),
-                    )
-        return found
+        judge = getattr(getattr(self.app, "state", None), "judge", None)
+        said = f"A {kind or 'support'} request to Tico support"
+        principal, sender, via = asker
+        return rule_links.check_as(self.store, judge, principal, sender, via, "support", "support_report", said)
 
     def report(self, who, payload, task_id="", check=None):
         """Draft a report to Tico support (POST /api/v2/support/reports). A bot's draft is filed at once as the
@@ -751,9 +713,7 @@ class Support:
                     None,
                 )
                 if not direct and not claimed_rid:
-                    asked = ask_report(
-                        c, who.actor, payload, task_id=task_id or None, asker=rule_links.agent_of(self.store, who)
-                    )
+                    asked = ask_report(c, who.actor, payload, task_id=task_id or None)
                     return {
                         **asked,
                         "id": asked["requirement_id"],
@@ -893,7 +853,10 @@ class Support:
         def settle(c, _ticket_id=None):
             task_asks.settle(c, rid, "Sent the report to Tico support.")
 
-        ticket = self._send(person, payload, source, key, on_filed=settle, idem="tico-support:" + rid)
+        # Checked as whoever asked for the OK when that is an agent (the grant keeps it), an approval from before too.
+        by = str(found["asked_by_id"])
+        asker = (by, by, "") if H.is_bot(by) else None
+        ticket = self._send(person, payload, source, key, on_filed=settle, idem="tico-support:" + rid, asker=asker)
         return {"ticket": ticket, "approval": rid, "filed_as": person.actor, "again": False}
 
     def _send(self, person, payload, source, key, on_filed=None, idem="", asker=None):

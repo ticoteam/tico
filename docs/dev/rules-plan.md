@@ -491,10 +491,9 @@ reason), the rules in its detail, written in a savepoint so a failure never chan
   logged again. A POST over 1 MB to the tool's MCP address that no Read-authorization parse read is recorded unchecked,
   never counted as a write; other large POSTs keep the name-only check, and a batch is read up to its first 50 calls. A
   webhook send that became eligible after its preflight is recorded unchecked. A report to Tico support is checked at
-  its first delivery to HQ (the route's and Maintenance's alike), as the agent that asked: kept with the OK when one
-  was asked, and with the delivery's first check per HQ Idempotency-Key, so a retry or a restart is not judged again;
-  its event goes with the ticket it makes. Every report or ticket kept under a key gives HQ a stable Idempotency-Key, so
-  a retry after a lost answer gets the first ticket.
+  its first delivery to HQ (the route's and Maintenance's alike), as the agent that asked (an OK'd report: the OK's
+  asker); its event goes with the ticket it makes, so one ticket is one event. A retry before the ticket is kept may be
+  judged again (log-only).
 - **Rules › Links** (`/company/rules/links`, from the Rules page's "⋯"; the owner and Admins in person) lists each link
   with its 30-day counts, unchecked apart (a tool's from when it was made), then the Not covered paths: tools whose keys go to computers, website tools, and calls a computer makes straight out. A tool is
   listed only to a reader who may see it.

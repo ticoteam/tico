@@ -19,7 +19,6 @@ class FakeHQ:
         self.read_status = None  # answers every ticket read with this status (429: HQ asking us to slow down)
         self.fields = None  # an older HQ: refuses a ticket carrying a field beyond these
         self.refuse_field = None  # refuses every ticket, naming this field as the wrong one
-        self.keys = {}  # Idempotency-Key -> the ticket its first send made: a retry gets that ticket again (200)
 
     def __call__(self, request):
         self.seen.append(request)
@@ -34,16 +33,8 @@ class FakeHQ:
                 return httpx.Response(422, json={"error": "invalid", "field": self.refuse_field})
             if self.fields is not None and set(body) - self.fields:
                 return httpx.Response(422, json={"error": "invalid", "field": "fields"})
-            key = request.headers.get("idempotency-key")
-            if key and self.keys.get(key) in self.tickets:
-                tid = self.keys[key]
-                return httpx.Response(
-                    200, json={"ticket_id": tid, "secret": self.tickets[tid]["secret"], "status": "open"}
-                )
             tid = self.new_ticket_id()
             self.tickets[tid] = {"secret": self.new_secret(), "status": "open", "input": body, "messages": []}
-            if key:
-                self.keys[key] = tid
             return httpx.Response(201, json={"ticket_id": tid, "secret": self.tickets[tid]["secret"], "status": "open"})
         parts = path.strip("/").split("/")
         ticket = self.tickets.get(parts[2]) if len(parts) > 2 else None
