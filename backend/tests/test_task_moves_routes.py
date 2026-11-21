@@ -167,18 +167,16 @@ def test_needs_you_leaves_out_a_persons_own_task_lists_its_ask_and_counts_the_li
     assert needs["count"] == len(needs["items"]) == get(api, "needs-you?count=1", token="ben-test")["count"]
 
 
-def test_a_persons_mention_is_in_needs_you_until_they_reply(api):
+def test_a_persons_mention_alone_adds_nothing_to_needs_you(api):
+    """An @ is not a wait (#4762): it is on the threads sidebar's Needs attention, never on Needs you or its count."""
+    before = get(api, "needs-you?count=true", token="cara-test")["count"]
     made = task(api, owner="ana")
     post(api, f"tasks/{made['id']}/comments", {"text": "@cara can you check the barn's dates?"})
-    mention = [i for i in get(api, "needs-you", token="cara-test")["items"] if i["kind"] == "mention"]
-    assert len(mention) == 1 and mention[0]["task"]["id"] == made["id"]
-    with api.app.state.store.read() as c:
-        (root,) = c.execute(
-            "SELECT coalesce(root_id, id) FROM conversations WHERE id=?", (mention[0]["conversation_id"],)
-        ).fetchone()
-    assert mention[0]["root_id"] == root  # the rail row a mention moves
-    post(api, f"tasks/{made['id']}/comments", {"text": "Checked: both weekends are free."}, token="cara-test")
-    assert not [i for i in get(api, "needs-you", token="cara-test")["items"] if i["kind"] == "mention"]
+    needs = get(api, "needs-you", token="cara-test")
+    assert needs["count"] == before and not [i for i in needs["items"] if (i.get("task") or {}).get("id") == made["id"]]
+    assert get(api, "needs-you?count=true", token="cara-test")["count"] == before
+    sidebar = get(api, "threads", token="cara-test")
+    assert made["conversation_id"] in str(sidebar.get("attention"))
 
 
 def test_the_pipelines_read_and_save_their_settings_record(api):

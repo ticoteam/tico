@@ -164,8 +164,8 @@ Close calls that change behavior, C1 to C31. They are part of sign-off A. Text i
   person's OK; the words ("15 wait on a person") are its label and tooltip only, on desktop and phone. The
   setting is called Limit. The word "pool" is gone.
 - **C28.** Needs you is the one place to check, and it holds only what someone asks of you: every requirement with your
-  name, and every @ of you by a person, on a task or in a channel, until you reply. A task you own with nothing asked of
-  you is in Tasks. A bot's @ on a task only marks it unread: a bot that
+  name. An @ alone is not on it (Nov 19): a person's @ of you is in the threads sidebar's Needs attention until you
+  reply. A task you own with nothing asked of you is in Tasks. A bot's @ on a task only marks it unread: a bot that
   needs you has to use a requirement. A task never waits on an @, and an @ sends no push. A bot that @s someone and stops
   is still the one whose turn it is. *Today an @ on a task reaches no list. Channels are not changed.*
 - **C29.** Only a requirement a person can meet with a button can name a person: OK from someone, a page's OK. "Checks pass" can't. If a person has to make it pass, that is a sub-task.

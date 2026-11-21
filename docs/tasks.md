@@ -225,10 +225,11 @@ A person hands a task back to its owner with **Try again** (`POST /api/v2/tasks/
 ## Needs you
 
 Needs you is the one list a person checks, and it holds only what someone asks of them: every open ❓ and OK
-with their name, every @ of them by a person until they reply, and two things only they can fix before a task can move:
+with their name, and two things only they can fix before a task can move:
 every Paused cause they can fix (one row per cause, not per task) and a private task that waits on someone being let
 in. A task they own with nothing asked of them is in Tasks, not Needs you, and so is a task the never-stuck ladder could
-take no further. A bot's @ only marks the task unread. No chat, email or push goes to a person about a task.
+take no further. An @ is not on Needs you: a person's @ is in the threads sidebar's Needs attention until they reply,
+and an agent's @ only marks the task unread. No chat, email or push goes to a person about a task.
 
 So whatever needs a person to act asks them, and only bots write questions, never Tico. A bot that files a task for a
 person (`tico task create --owner <person>`) files its own task, with the title as its question to them; Tico's own

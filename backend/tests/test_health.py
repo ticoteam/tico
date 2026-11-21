@@ -1731,43 +1731,19 @@ def _asks(api, owner, askers, start=0):
             question_marks.ask(c, asker, made["id"], owner, f"Question {i}?")
 
 
-def test_a_plate_over_ten_warns_and_names_the_three_bots_asking_most(environment):
-    api = environment()
-    for slug in ("helper", "builder", "reviewer", "ops"):
-        add_bot(api, slug)
-    _asks(api, "human:morgan", ["bot:helper"] * 6 + ["bot:builder"] * 3 + ["bot:reviewer"] * 2 + ["bot:ops"])
-    check = health_of(api)[1]["needs_plate"]
-    assert check["status"] == "warn"
-    [item] = check["items"]
-    assert item["person"] == "human:morgan" and item["count"] == 12
-    assert [(a["bot"], a["count"]) for a in item["askers"]] == [
-        ("bot:helper", 6),
-        ("bot:builder", 3),
-        ("bot:reviewer", 2),
-    ]
-    assert "12 on Needs you" in check["summary"]
+def test_a_long_needs_you_is_no_health_finding(environment):
+    """Needs you's length is no check (#4762): a 'get under 10' finding filed asks nobody could act on."""
+    from backend.maintenance_steps import check_health
 
-
-def test_a_plate_of_ten_or_fewer_is_fine_and_over_twenty_five_is_bad(environment):
     api = environment()
     add_bot(api, "helper")
-    _asks(api, "human:morgan", ["bot:helper"] * 10)
-    assert "needs_plate" not in health_of(api)[1]
-    _asks(api, "human:morgan", ["bot:helper"] * 16, start=10)
-    check = health_of(api)[1]["needs_plate"]
-    assert check["status"] == "bad" and check["items"][0]["count"] == 26
-
-
-def test_a_person_sees_only_their_own_plate(environment):
-    api = environment()
-    add_bot(api, "helper")
-    _asks(api, "human:morgan", ["bot:helper"] * 11)
-    _asks(api, "human:quinn", ["bot:helper"] * 12)
-    everyone = health_of(api)[1]["needs_plate"]["items"]
-    assert sorted(item["person"] for item in everyone) == ["human:morgan", "human:quinn"]
-    quinn = health_of(api, as_person(api, "quinn"))[1]["needs_plate"]
-    assert [item["person"] for item in quinn["items"]] == ["human:quinn"] and quinn["items"][0]["count"] == 12
-    assert "Morgan" not in json.dumps(quinn)
+    _asks(api, "human:morgan", ["bot:helper"] * 26)
+    assert not [check for check in health_of(api)[1] if check.startswith("needs_plate")]
+    state, notes = api.app.state, {}
+    with state.store.read_transaction() as c:
+        read, found = check_health._page_findings(c, check_health.context(state.auth, state.store.settings), notes)
+    assert read and "page" not in notes  # the page was read: no finding is a real answer
+    assert not [f for f in found if "needs_plate" in str(f)]
 
 
 def test_github_is_a_note_until_a_bot_someone_made_is_backed_up_nowhere_then_clears_once_connected(environment):

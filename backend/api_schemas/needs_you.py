@@ -10,11 +10,11 @@ NEEDS_ITEM = obj(
         "id": "s",
         "kind": {
             "type": "string",
-            "enum": ["task", "ask", "paused", "mention", "question"],
+            "enum": ["task", "ask", "paused", "question"],
             "description": "task: a private task they must let someone see (`task.turn.share`); ask: a requirement "
             "with their name (its fields in "
-            "`ask`); paused: a bot that cannot run, which they can fix; mention: an @ of them by a person they have "
-            "not replied to; question: a bot's ❓ on its message for them, until they reply in that chat",
+            "`ask`); paused: a bot that cannot run, which they can fix; question: a bot's ❓ on its message for "
+            "them, until they reply in that chat. An @ alone is not here: it is in the threads sidebar",
         },
         "line": "s",
         "since": "n",
@@ -24,16 +24,16 @@ NEEDS_ITEM = obj(
     ask={"oneOf": [ref("TaskRequirement"), {"type": "null"}]},
     task_id={"type": ["string", "null"]},
     requirement_id={"type": ["string", "null"]},
-    message_id={"type": "string", "description": "A mention's or a ❓'s message"},
+    message_id={"type": "string", "description": "A ❓'s message"},
     mark_id={"type": "string", "description": "A ❓'s mark (POST /api/v2/questions/{mid}/give)"},
     shows={
         "type": "array",
         "items": {"type": "string"},
         "description": "A ❓'s website browser to take over (`browser:<tool>/<account>`)",
     },
-    from_id={"type": "string", "description": "Who wrote it: a mention's person, a ❓'s bot"},
-    conversation_id={"type": "string", "description": "The thread a mention was written in"},
-    root_id={"type": "string", "description": "A mention's root thread: the rail row it moves"},
+    from_id={"type": "string", "description": "Who wrote it: a ❓'s bot"},
+    conversation_id={"type": "string", "description": "The thread a ❓ was written in"},
+    root_id={"type": "string", "description": "A ❓'s root thread: the rail row it moves"},
     href={"type": "string", "description": "A paused cause a person fixes in the app: where (Connect GitHub)"},
     snoozed_until={
         "type": "string",

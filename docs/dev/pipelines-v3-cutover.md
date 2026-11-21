@@ -168,10 +168,12 @@ write carries the same fields.
 **Needs you** (`GET /api/v2/needs-you`) is one list for a person, made of:
 
 - `waiting_on.needs(person)`: every requirement with their name, every task they own, every Paused cause they can fix;
-- every @ of them by a person, on a task or in a channel, until they reply (C28). A bot's @ only marks the task unread.
-  A task never waits on an @.
+- every bot's ❓ for them (backend/question_marks.py).
 
-Each item has `kind` (`task`, `ask`, `paused`, `mention`), the brief task, and for an ask the fields of `to_leave`
+An @ alone is not on Needs you (C28): a person's @ is in the threads sidebar's Needs attention until they reply, and a
+bot's @ only marks the task unread. A task never waits on an @.
+
+Each item has `kind` (`task`, `ask`, `paused`, `question`), the brief task, and for an ask the fields of `to_leave`
 below. An ask's `id` is `<visit>:<requirement>`: a stage's requirement is on every task in the stage, so each task's
 ask is its own item. `requirement_id` answers it.
 

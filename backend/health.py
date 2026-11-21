@@ -2698,9 +2698,6 @@ def _unreviewed_runs(c, who, auth):
     )
 
 
-NEEDS_PLATE_WARN = 10  # more items than this on one person's Needs you plate is a warning
-NEEDS_PLATE_BAD = 25  # more than this is bad
-NEEDS_PLATE_ASKERS = 3  # the bots named on a plate, most items first
 NEVER_STUCK_COUNTS = ("waiting_on_nothing", "retry", "manager", "person", "cant_run", "no_one", "broken")
 # registry_metadata: the hourly never-stuck reading (record_never_stuck). Its numbers sit under NEVER_STUCK_KEY, which an
 # Admin's SQL reads; which tasks each counts, and the breaks' words, sit under NEVER_STUCK_TASKS_KEY, which no SQL reads
@@ -2708,93 +2705,6 @@ NEVER_STUCK_COUNTS = ("waiting_on_nothing", "retry", "manager", "person", "cant_
 NEVER_STUCK_KEY = "health:never_stuck"
 NEVER_STUCK_TASKS_KEY = "health:never_stuck:tasks"
 NEVER_STUCK_FRESH_MINUTES = 10  # an older reading says when it was read
-
-
-def _plate_people(c, auth):
-    """Everyone on the roster as the identity they sign in with. A person who has left, or whose sign-in is off, has no
-    plate that anyone reads here."""
-    found = []
-    # Each person's row as identity_for_actor reads it (H.human), from the one read of the roster: not a read a person.
-    people = c.execute("SELECT * FROM humans ORDER BY id").fetchall()
-    read_cache.prime(c, "SELECT * FROM humans WHERE id=?", {(row["id"],): row for row in people})
-    for row in people:
-        try:
-            found.append(auth.identity_for_actor(c, "human:" + row["id"]))
-        except Problem:
-            continue
-    return found
-
-
-def _plate_tasks(item):
-    """The tasks one Needs you item stands for: its task, or the tasks a Paused cause holds up."""
-    return [str(t) for t in ([item.get("task_id")] if item.get("task_id") else item.get("tasks") or [])]
-
-
-def _plate_check(c, who, auth, full):
-    """Each person's Needs you count from the engine's read (waiting_on.needs: the OKs and questions asked of them, a
-    private task they must let someone see, and the Paused causes they fix). An administrator reads everyone's plate; anyone else reads only their own. Warn over
-    NEEDS_PLATE_WARN items, bad over NEEDS_PLATE_BAD. Only the plates over the warning are listed, each with the bots
-    that asked for most of its tasks."""
-    from . import waiting_on
-
-    over = []
-    visible_sql = auth.task_sql(c, who) if full else None
-    # An administrator's: one pass over the open tasks for every person's plate. Anyone else's: their own list, read
-    # from only the tasks that can reach them (waiting_on.needs gives each person what that pass gives them).
-    plates = waiting_on.needs_by_person(c) if full else {who.actor: waiting_on.needs(c, who.actor)}
-    people = _plate_people(c, auth) if full else [who]
-    # Another person's plate counts only what the reader may read: a private task is not theirs to count. One read for
-    # every other person's plate.
-    others = [plates.get(person.actor, []) for person in people if visible_sql and person.actor != who.actor]
-    readable = (
-        _readable(c, visible_sql, sorted({tid for items in others for item in items for tid in _plate_tasks(item)}))
-        if others
-        else set()
-    )
-    for person in people:
-        items = plates.get(person.actor, [])
-        if visible_sql and person.actor != who.actor:
-            items = [item for item in items if any(tid in readable for tid in _plate_tasks(item))]
-        if len(items) > NEEDS_PLATE_WARN:
-            bots = {}
-            for item in items:
-                if not item.get("task_id"):
-                    continue  # a Paused cause (a held run, a login) stands for tasks no bot asked this person for
-                # The row Needs you's pass already read for this snapshot (waiting_on.prime): no read of its own.
-                asker = (H._one(c, "SELECT * FROM tasks WHERE id=?", (item["task_id"],)) or {}).get("requester_id")
-                if H.is_bot(asker):
-                    bots[asker] = bots.get(asker, 0) + 1
-            over.append((len(items), person.actor, bots))
-    if not over:
-        return None
-    rows = []
-    for count, actor, bots in sorted(over, key=lambda row: (-row[0], row[1])):
-        askers = sorted(bots.items(), key=lambda kv: (-kv[1], kv[0]))[:NEEDS_PLATE_ASKERS]
-        asked = [{"bot": bot, "name": H.actor_name(c, bot), "count": n} for bot, n in askers]
-        name = H.actor_name(c, actor)
-        most = ", most asked by " + ", ".join(f"{a['name']} ({a['count']})" for a in asked) if asked else ""
-        rows.append(
-            {
-                "person": actor,
-                "name": name,
-                "count": count,
-                "askers": asked,
-                "text": f"{name}: {count} on Needs you{most}.",
-                "fixes": [_fix("Open tasks", "#/tasks")],
-            }
-        )
-    worst = max(count for count, _, _ in over)
-    return _check(
-        "needs_plate",
-        "Needs you plate",
-        "bad" if worst > NEEDS_PLATE_BAD else "warn",
-        _diagnostic_summary(
-            f"{_plural(len(over), 'person has', 'people have')} more than {NEEDS_PLATE_WARN} items on Needs you.",
-            rows,
-        ),
-        [_fix("Open tasks", "#/tasks")],
-        items=rows,
-    )
 
 
 def never_stuck_reading(c):
@@ -2859,18 +2769,6 @@ def record_never_stuck(store):
                 (key, json.dumps(value)),
             )
     return reading
-
-
-def _readable(c, visible_sql, ids):
-    """Of `ids`, those a reader with `visible_sql` may read, in one statement."""
-    if not ids:
-        return set()
-    return {
-        row[0]
-        for row in c.execute(
-            f"SELECT id FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND ({visible_sql})", (json.dumps(ids),)
-        )
-    }
 
 
 def _never_stuck_check(c, visible_sql=None):
@@ -3450,8 +3348,6 @@ def view(c, who, settings, auth, github, config, filing=False):
         )
     if unreviewed := _unreviewed_runs(c, who, auth):
         checks.append(unreviewed)
-    if kind != "bot" and (plate := _plate_check(c, who, auth, full)):
-        checks.append(plate)
     fixes = [_fix("Add a computer", "#/settings", "devices")] if full else []
     # Cloud machines Tico stopped for credit are not offline: the company is out of credit (task #423).
     from .cloud_machines import credit_stopped

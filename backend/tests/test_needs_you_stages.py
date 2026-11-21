@@ -40,8 +40,8 @@ def test_a_paused_cause_or_an_item_with_no_task_is_in_no_stage():
     items = [
         {"kind": "ask", "task": task},
         {"kind": "task", "task": task},
-        {"kind": "mention", "task": task},
-        {"kind": "mention", "task": None},
+        {"kind": "question", "task": task},
+        {"kind": "question", "task": None},
         {"kind": "paused", "task": task},
         {"kind": "task", "task": {"stage_id": None}},
     ]

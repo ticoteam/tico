@@ -621,12 +621,12 @@ def batch_abandon(api, args):
     "tico_needs_you_show",
     "What is on the person's Needs you: the total, the number per kind (task: a private task they "
     "must let someone see; ask: an OK or question with their name; paused: a bot that cannot run "
-    "until they fix it; mention: an @ of them by a person), and the items, oldest first, each "
+    "until they fix it; question: a bot's ❓ for them), and the items, oldest first, each "
     "with its task. Use it to see the pile before closing or stopping anything.",
     {
         "kind": {
             "type": "string",
-            "enum": ["task", "ask", "paused", "mention", "question"],
+            "enum": ["task", "ask", "paused", "question"],
             "description": "Only this kind",
         },
         "limit": {

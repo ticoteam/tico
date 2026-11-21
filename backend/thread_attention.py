@@ -1,10 +1,10 @@
-"""Needs attention (spec 3.6): the thread items on a person's Needs you list.
+"""Needs attention (spec 3.6): the thread items on a person's threads sidebar.
 
 Read from the inbox (`message_deliveries`), the thread counters and the writes held for review (`org_rule_holds`), each
 row checked against the per-message rule (`threads.readable`) before it is listed. An item clears by what the person
 does, not by a click:
 - a mention, or a reply to a message of the person's, is open until the person posts in its thread after it (or it is
-  deleted): the one definition Needs you reads too (backend/open_mentions.py), so a thread listed here has an item on Needs you;
+  deleted) (backend/open_mentions.py); Needs you holds no @;
 - an unread DM is open until the person reads past its last message from a person or one addressed to them. A DM with
   one bot and no one else is not: the bot is on the Team chart, which shows its unread (threads.bot_dm_unread), and a
   bot's mention there is still an item;

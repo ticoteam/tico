@@ -100,8 +100,8 @@ tag, run `python3 scripts/build_api_docs.py`; `--check` verifies the guide match
 Internal developer tutorials: [Listening](listening.md#read-and-save) and [Needs you batches](needs-you-batches.md).
 
 `GET /api/v2/needs-you` is one list for the signed-in person, oldest first: every ask with their name, every task they
-own, every Paused cause they can fix, and every @ of them by a person until they reply. Each item has `kind` (`task`,
-`ask`, `paused`, `mention`), `id`, `line`, `since` and the brief `task`; an ask also has its requirement as `ask`.
+own, every Paused cause they can fix, and every agent's ❓ for them. An @ alone is not on it: it is in the threads
+sidebar's Needs attention. Each item has `kind` (`task`, `ask`, `paused`, `question`), `id`, `line`, `since` and the brief `task`; an ask also has its requirement as `ask`.
 `count` is the length of the list, the one number on the Tasks badge (`count=1` returns only that). `version` changes
 whenever an item or its place does: `version=<the one held>` answers `unchanged`, and `ids=` sends only those items
 with their places (`positions`), to mend a held copy after a live `needs` event. `limit` and `cursor` page it.

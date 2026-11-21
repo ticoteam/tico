@@ -16,8 +16,7 @@ Threads that need the person sit in the same [Needs you](tasks.md#needs-you) lis
 | **Paused** | A thread's bot replies were held back by the loop guard (`TICO_THREAD_LOOP_GUARD`, 6 an hour by default) | Its held replies resume, when a person posts in the thread or the hour passes |
 
 Bot posts that name nobody are activity, not attention. A message addressed to a person without an @ is unread in its
-thread, not attention. A mention or a reply is the one definition Needs you reads too (`backend/open_mentions.py`), so a
-thread listed here has the same item on Needs you. A paused thread is listed once, to the people who can manage it.
+thread, not attention. A mention or a reply (`backend/open_mentions.py`) is listed here only: Needs you holds no @. A paused thread is listed once, to the people who can manage it.
 Items the Needs you list already shows are not listed twice.
 
 The thread items are not cut from the list: they page with the rest of Needs you, in the same order. A held item is

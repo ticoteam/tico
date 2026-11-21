@@ -78,8 +78,8 @@ class Rig:
         return self.w.read(lambda c: W.needs(c, person))
 
     def needs_you(self, person: str) -> list[dict[str, Any]]:
-        """The person's Needs you as `GET /api/v2/needs-you` gives it (views.needs_items): `needs` plus every @ of them by
-        a person they have not replied to (C28), only what they may read."""
+        """The person's Needs you as `GET /api/v2/needs-you` gives it (views.needs_items): `needs` and a bot's ❓ for
+        them, only what they may read. An @ alone is not on it (C28)."""
         from backend import views
         from backend.auth import Auth, Identity
 
@@ -1105,8 +1105,8 @@ def s43(r: Rig) -> None:
     r.ok(ANA, lambda c: H.task_comment(c, ANA, task, "@ben can you check the dates?"), "Ana @s Ben")
     expect(r.waits(task)[0] == ("bot", BUILDER), f"the task's turn changed: {r.waits(task)}")
     expect(
-        any(n["kind"] == "mention" and n.get("task_id") == task for n in r.needs_you(BEN)),
-        "the @ is not in Ben's Needs you (C28)",
+        not any(n.get("task_id") == task for n in r.needs_you(BEN)),
+        "the @ alone put the task on Ben's Needs you (C28)",
     )
 
 

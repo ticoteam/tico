@@ -163,7 +163,7 @@ def test_health_claim_checks_read_every_queued_job_together_and_say_the_same(api
     body, total = counted(api, monkeypatch, "/api/v2/health")
     primed = api.get("/api/v2/health", headers=headers("ana-test")).content
     assert any(row["id"] == "waiting" for row in body["checks"])
-    # About 200 on v3: the Needs you plate reads every open task's waits together (waiting_on.prime), with each bot's
+    # About 200 on v3: the checks read every open task's waits together (waiting_on.prime), with each bot's
     # "can it run" (task_wakes.prime_bots) and each queued job's snooze (execution.prime_job_checks) read once for
     # all. 2,360 before the batching; a return to per-job reads is far above this bound.
     assert total < 320, total

@@ -257,7 +257,7 @@ it), how many items that cause made in the last seven days and how many are stil
 would stop the source: turn an automation off, retire a rule, close what a bot filed, pause the bot, or file a task for
 BotOps to fix the bot's source. Each command is a `tico` line you can run as it is. A ref you cannot read is `404`.
 
-`tico needs-you show [--kind task|ask|paused|mention]` (`GET /api/v2/needs-you/summary`) gives the same count as
+`tico needs-you show [--kind task|ask|paused|question]` (`GET /api/v2/needs-you/summary`) gives the same count as
 Needs you, split by kind and by the bot that put each item there, with this week's and older counts. Use it first when
 the list looks too long: the numbers come from the same query as the list ([Needs you](tasks.md#needs-you)).
 

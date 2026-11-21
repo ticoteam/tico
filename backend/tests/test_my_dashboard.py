@@ -206,8 +206,8 @@ def test_home_builds_thread_attention_once_for_both_cards_and_rechecks_on_the_ne
     monkeypatch.setattr(thread_attention, "_items", counted)
     cards = {p["card"]["template"]: p["card"]["data"] for p in place(api, "person:me")["pins"]}
     assert calls == ["human:ana"]
-    # Needs you keeps the mention once, while the sidebar's separate projection still sees the thread.
-    assert {it["id"] for it in cards["needs_attention"]["items"]} == {mention["id"]}
+    # An @ is not on Needs you (#4762); the sidebar's projection still sees the thread.
+    assert mention["id"] not in {it["id"] for it in cards["needs_attention"]["items"]}
     assert [it["id"] for it in cards["unread_threads"]["threads"]] == [tid]
     reply = say(api, tid, "Checked.", actor="human:ana")
     calls.clear()
@@ -294,18 +294,16 @@ def test_needs_brief_titles_by_task_and_words_what_is_needed():
     items = [
         item("ask", "Send this email?") | {"ask": {"kind": "ok"}},
         item("question", "Which date works?", "Pick a launch date"),
-        item("mention", "@ana can you look?"),
         item("task", "Stuck in Build: Ben can't see this task", "Shared one", turn={"share": ["human:ben"]}),
         item("paused", "Connect Google", "Sync the calendar"),
-        {"id": "m2", "kind": "mention", "line": "@ana in Launch", "task_id": None, "task": None},
+        {"id": "q2", "kind": "question", "line": "Which room?", "task_id": None, "task": None},
     ]
     rows = needs_brief(items, len(items))
     assert [(r["title"], r["act"]) for r in rows] == [
         ("Send an email", "ok"),
         ("Pick a launch date", "reply"),  # a bot's ❓: answered in the chat
-        ("Send an email", "reply"),
         ("Shared one", "fix"),  # a task item is one to let someone see: never "done"
         ("Connect Google", "fix"),  # a Paused cause is not about one task: its own line
-        ("@ana in Launch", "reply"),  # a mention outside a task: its own line
+        ("Which room?", "reply"),  # a ❓ outside a task: its own line
     ]
     assert [r["line"] for r in rows] == [it["line"] for it in items]
