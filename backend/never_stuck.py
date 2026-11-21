@@ -173,6 +173,10 @@ def check(
     ).fetchall()
     todo = [(str(found[0]), True) for found in due]
     todo += [(str(found[0]), False) for found in conn.execute(_OPEN).fetchall()]
+    # The open tasks the ladder does not check (by hand, blocked, snoozed): only their wait spans are kept, from the
+    # same first read.
+    listed = {each for each, _ in todo}
+    others = [str(found[0]) for found in conn.execute(wait_spans.OPEN_TASKS) if str(found[0]) not in listed]
     ahead: Ahead | None = None
     quiet = 0  # tasks in a row that changed nothing
     for n, (task_id, wake_up) in enumerate(todo):
@@ -187,7 +191,7 @@ def check(
             if ahead is None or ahead.changes != conn.total_changes or task_id not in ahead.asked:
                 rest = [each for each, woke in todo[n:] if not woke]
                 if ahead is None:
-                    ahead = read_ahead(conn, rest, seen)
+                    ahead = read_ahead(conn, rest, seen, others)
                 elif quiet >= QUIET:
                     ahead = read_ahead(conn, rest[: 2 * quiet], seen)
             if ahead and ahead.changes == conn.total_changes:
@@ -200,9 +204,9 @@ def check(
                 E.unsnooze(conn, task_id, SYSTEM)
                 done["snoozes_ended"] += 1
             else:
+                read = read or _read(conn, task_id, seen)  # the one read `_one` and the span check share
                 _one(conn, task_id, at, done, seen, live, read)
-                # A flip no write made (checks finished, out of credit, room). What was read holds while nothing was
-                # written; after a write the task is read again.
+                # A flip no write made (checks finished, out of credit, room). After a write the task is read again.
                 wait_spans.recheck(conn, task_id, spans.get(task_id), read if conn.total_changes == changes else None)
         except Exception as error:
             # SQLite may already have ended the transaction (a full disk, an I/O error): that stops the pass.
@@ -222,8 +226,21 @@ def check(
     # Stage rules whose When is a timer: tables only, no model (backend/stage_rule_timers.py).
     timers: Any = stage_rule_timers
     _step(conn, "stage_rules", failures, lambda: timers.sweep(conn, at))
-    _step(conn, "wait_spans", failures, lambda: wait_spans.close_ended(conn))
+    # Every other open task's span, then those of tasks that ended. Nobody is woken for them.
+    _step(conn, "wait_spans", failures, lambda: wait_spans.reconcile(conn, others, spans))
+    _step(conn, "ended_spans", failures, lambda: wait_spans.close_ended(conn))
     return done
+
+
+def _read(
+    conn: "sqlite3.Connection", task_id: str, seen: dict[str, str | None]
+) -> "tuple[Row, list[R.Standing], list[W.Wait]] | None":
+    """A task the pass did not read ahead, read as `read_ahead` reads each one: its row, standings and waits."""
+    row = E.task(conn, task_id)
+    if not row:
+        return None
+    standings = R.standings(conn, row)
+    return row, standings, W.of(conn, row, seen, standings)
 
 
 def _step(
@@ -232,17 +249,21 @@ def _step(
     """One step of the pass after the tasks, in its own savepoint: a step that raises is undone alone and named in
     `failures` (without the list, the error is raised). Returns what `work` returns, 0 when it raised."""
     _keeping_reads(conn, f"SAVEPOINT never_stuck_{name}")
+    rolled_back = False
     try:
         return work()
     except Exception as error:
         if failures is None or not conn.in_transaction or storage_error(error):
             raise
         conn.execute(f"ROLLBACK TO never_stuck_{name}")
+        rolled_back = True
         failures.append((name, error))
         return 0
     finally:
-        if conn.in_transaction:
+        if conn.in_transaction and rolled_back:
             conn.execute(f"RELEASE never_stuck_{name}")
+        elif conn.in_transaction:
+            _keeping_reads(conn, f"RELEASE never_stuck_{name}")  # what the pass read stays for the next step
 
 
 # ----------------------------------------------------------------------------- the pass in a read snapshot first
@@ -470,11 +491,14 @@ _PART_READS = (
 _SNOOZE_ENDED = "SELECT MAX(ended_at) FROM snoozes WHERE visit_id=? AND ended_at IS NOT NULL"
 
 
-def read_ahead(conn: "sqlite3.Connection", task_ids: list[str], seen: dict[str, str | None]) -> Ahead:
+def read_ahead(
+    conn: "sqlite3.Connection", task_ids: list[str], seen: dict[str, str | None], also: list[str] | None = None
+) -> Ahead:
     """Read what the pass needs for every one of these tasks in a fixed number of statements, however many tasks there
     are: each one-task read the check makes is made once for the list and kept in the snapshot's read cache
     (`read_cache`), where the one-task read finds it. Then each task's row, standings and waits are worked out from it.
-    A connection with no read cache reads each task as before."""
+    A connection with no read cache reads each task as before. `also` are tasks read with them for later in the pass
+    (wait_spans.reconcile), whose waits are not worked out here."""
     import json
 
     from . import read_cache
@@ -489,7 +513,7 @@ def read_ahead(conn: "sqlite3.Connection", task_ids: list[str], seen: dict[str, 
     for sql, of_tasks in _PART_READS:
         parts = {(str(row["id"]),): row for row in conn.execute(sql.replace("id=?", f"id IN ({of_tasks})"), (listed,))}
         RC.prime(conn, sql, parts)
-    W.prime(conn, task_ids)
+    W.prime(conn, [*task_ids, *(also or ())])
     tasks = [row for row in (E.task(conn, each) for each in task_ids) if row and row.get("visit")]
     visits: list[Row] = [row["visit"] for row in tasks]
     visit_ids = json.dumps([str(visit["id"]) for visit in visits])

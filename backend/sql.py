@@ -27,6 +27,7 @@ from fastapi import Request
 from pydantic import Field
 
 from . import outcome_stats
+from . import run_triggers as RT
 from . import task_privacy as privacy
 from . import teammate_access as TA
 from .privacy_index import ReadIndex
@@ -67,7 +68,8 @@ HIDDEN = {"task_requesters": {"token_hash"}, "attempts": {"token_hash"}, "servic
 # Columns read as an expression over the caller's own views: a column naming a task the caller may not read gives
 # its id to nobody. A bot's claim limit (bot_control.claim_task) on such a task reads '': a limit is on, as
 # GET /api/v2/bots says with `claim_scoped` and no `claim_task`.
-# A wait span on a task it filed or waits on names that task only to a reader who may read it (waiting_on.unnamed).
+# A wait span on a task it filed or waits on names that task only to a reader who may read it, as task_waits does
+# (waiting_on.unnamed).
 SPAN_TASK = "CASE WHEN source.kind = 'tasks' AND source.who NOT IN (SELECT id FROM tasks) THEN '' ELSE {who} END"
 MASKED = {
     "task_wait_spans": {"who": SPAN_TASK.format(who="source.who")},
@@ -121,9 +123,10 @@ def teammate_masks(unseen, me, inner=None, names=None, bots=()):
         out["thread_members"] = {
             column: masked(column, member("source.thread_id"), qlist(strangers)) for column in ("actor", "added_by")
         }
-        if people:
-            # A wait span names who the task waited on as the task names its owner.
-            out["task_wait_spans"] = {"who": SPAN_TASK.format(who=masked("who", party("source.task_id")))}
+        # A wait span names a person, group or bot the caller may not see as task_waits does: as ''.
+        out["task_wait_spans"] = {
+            "who": SPAN_TASK.format(who=f"CASE WHEN source.who IN {qlist(strangers)} THEN '' ELSE source.who END")
+        }
     if people and inner is not None:
         out["tasks"] = {
             column: masked(column, party("source.id")) for column in ("owner_id", "requester_id", "closed_by_id")
@@ -244,15 +247,21 @@ def live_masks(unsettled):
     }
 
 
-# A person's own act on a task, or their Assistant's on their word: their rows in its history and the messages they wrote
-# in its chat. BotOps or another agent acting with their rights (`via`) is not theirs.
-_MINE = "coalesce({col}, 'assistant') IN ('assistant', 'token')"
+# A person's own act on a task, by their own hand (hubdb.OWN_HAND_VIA) or their Assistant's on their word: a row of its
+# history, or a message they wrote that names the task as the server attributes one (hubdb.MESSAGE_TASK_SQL: its refs,
+# else the message it replies to, as Settings > History reads a decision, else its conversation's task). BotOps or
+# another agent acting with their rights is not theirs, and Tico's carrier copy of a message is not a second touch.
+_OWN_VIA = "('', " + ", ".join(f"'{via}'" for via in (*H.OWN_HAND_VIA, "assistant")) + ")"
+_MESSAGE_TASK = (
+    f"coalesce({H._task_ref_sql('$.task')}, {H._task_ref_sql('$.task_id')}, "
+    "(SELECT json_extract(q.refs, '$.task') FROM {messages} q WHERE q.id = m.in_reply_to), cv.task_id)"
+)
 _TOUCHES = (
     "SELECT created_at AS at, subject_id AS task_id, actor_id AS person_id, kind FROM {history_events} "
-    "WHERE subject_type = 'task' AND actor_id LIKE 'human:%' AND " + _MINE.format(col="via") + " "
-    "UNION ALL SELECT m.created_at, t.id, m.sender_id, 'message' FROM {messages} m "
-    "JOIN {tasks} t ON t.conversation_id = m.conversation_id WHERE m.sender_id LIKE 'human:%' AND "
-    + _MINE.format(col="json_extract(m.refs, '$.via')")
+    f"WHERE subject_type = 'task' AND actor_id LIKE 'human:%' AND coalesce(via, '') IN {_OWN_VIA} "
+    f"UNION ALL SELECT m.created_at, {_MESSAGE_TASK}, m.sender_id, 'message' FROM {{messages}} m "
+    "LEFT JOIN {conversations} cv ON cv.id = m.conversation_id WHERE m.sender_id LIKE 'human:%' "
+    f"AND coalesce(json_extract(m.refs, '$.via'), '') IN {_OWN_VIA}"
 )
 # The history kinds that are a person deciding something about a task (one row each: a move's owner and status rows are
 # its consequences, not more decisions).
@@ -260,15 +269,19 @@ _DECISIONS = (
     "('answer', 'answer_undone', 'give', 'move', 'snooze', 'unsnooze', 'reassign', 'try_again', 'requirement', "
     "'requirement_withdrawn')"
 )
-# Whether the person a wait span `w` waited on touched its task while it lasted.
-_TOUCHED = (
-    "(EXISTS (SELECT 1 FROM {history_events} h WHERE h.subject_type = 'task' AND h.subject_id = w.task_id "
-    "AND h.actor_id = w.who AND "
-    + _MINE.format(col="h.via")
-    + " AND h.created_at BETWEEN w.opened_at AND w.closed_at) "
-    "OR EXISTS (SELECT 1 FROM {messages} m WHERE m.conversation_id = (SELECT conversation_id FROM {tasks} "
-    "WHERE id = w.task_id) AND m.sender_id = w.who AND " + _MINE.format(col="json_extract(m.refs, '$.via')") + " "
-    "AND m.created_at BETWEEN w.opened_at AND w.closed_at))"
+# An agent's action: its row in the audit log, less what run_triggers.BOOKKEEPING says changes nothing anyone else sees
+# (reads, SQL, tool-call stats, refusals, its own status and run bookkeeping).
+_AGENT_ACTION = f"actor LIKE 'bot:%' AND action NOT IN {qlist(sorted(RT.BOOKKEEPING))} AND " + " AND ".join(
+    f"action NOT LIKE '{prefix}%'" for prefix in RT.BOOKKEEPING_PREFIXES
+)
+# When an OK answered in history row `a` was asked: the newest of the task entering its stage (a stage's own OK), the
+# ask added on the task (`requirement`, by id) and the owner saying done again after a send back (`again`).
+_ASKED_AT = (
+    "(SELECT max(h.created_at) FROM {history_events} h WHERE h.subject_type = 'task' AND h.subject_id = a.subject_id "
+    "AND h.created_at < a.created_at AND (h.kind = 'move' "
+    "OR (h.kind = 'requirement' AND h.new = json_extract(a.data, '$.requirement')) "
+    "OR (h.kind = 'answer' AND h.new = 'again' "
+    "AND json_extract(h.data, '$.requirement') = json_extract(a.data, '$.requirement'))))"
 )
 _WEEK = "date({at}, '-6 days', 'weekday 1')"
 
@@ -330,39 +343,33 @@ DERIVED = {
     # Each touch a person made on a task (_TOUCHES): its time and week, the task, the person and what they did (a
     # history kind such as answer or move, or `message`).
     "human_touches_v": (
-        ("history_events", "messages", "tasks"),
-        "SELECT at, " + _WEEK.format(at="at") + " AS week, task_id, person_id, kind FROM (" + _TOUCHES + ")",
+        ("history_events", "messages", "conversations", "tasks"),
+        "SELECT at, " + _WEEK.format(at="at") + " AS week, task_id, person_id, kind FROM (" + _TOUCHES + ") "
+        "WHERE task_id IN (SELECT id FROM {tasks})",
     ),
-    # Per week: people's decisions on tasks (_DECISIONS), the agents' actions (their rows in the audit log, `events`)
-    # and decisions per 1,000 of those actions.
+    # Per week: people's decisions on tasks (_DECISIONS), the agents' actions (_AGENT_ACTION) and decisions per 1,000 of
+    # those actions. Both count only rows the reader may read: an agent reads its own actions alone.
     "human_decisions_weekly": (
         ("history_events", "events"),
         "SELECT week, sum(decision) AS decisions, sum(1 - decision) AS agent_actions, "
         "round(1000.0 * sum(decision) / nullif(sum(1 - decision), 0), 1) AS per_1000_actions "
         "FROM (SELECT " + _WEEK.format(at="created_at") + " AS week, 1 AS decision FROM {history_events} "
-        "WHERE subject_type = 'task' AND actor_id LIKE 'human:%' AND " + _MINE.format(col="via") + " "
+        f"WHERE subject_type = 'task' AND actor_id LIKE 'human:%' AND coalesce(via, '') IN {_OWN_VIA} "
         "AND kind IN " + _DECISIONS + " "
-        "UNION ALL SELECT " + _WEEK.format(at="created_at") + ", 0 FROM {events} WHERE actor LIKE 'bot:%') "
+        "UNION ALL SELECT " + _WEEK.format(at="created_at") + ", 0 FROM {events} WHERE " + _AGENT_ACTION + ") "
         "GROUP BY week",
     ),
-    # Per week a wait on a person ended (task_wait_spans, kind `person`): how many; how many they answered (touched the
-    # task while it waited, _TOUCHED) and the median seconds those took; repeats (the same person waited on again on
-    # the same task); and avoidable ones, which ended without that person touching the task.
-    "person_wait_weekly": (
-        ("task_wait_spans", "history_events", "messages", "tasks"),
-        "SELECT week, count(*) AS person_waits, sum(answered) AS answered, "
-        "max(CASE WHEN answered = 1 AND n = (total + 1) / 2 THEN secs END) AS ask_answer_median_s, "
-        "sum(repeated) AS repeats, round(100.0 * sum(repeated) / count(*), 1) AS repeat_ask_pct, "
-        "count(*) - sum(answered) AS avoidable, round(100.0 * (count(*) - sum(answered)) / count(*), 1) AS avoidable_pct "
-        "FROM (SELECT *, row_number() OVER (PARTITION BY week, answered ORDER BY secs) AS n, "
-        "count(*) OVER (PARTITION BY week, answered) AS total "
-        "FROM (SELECT " + _WEEK.format(at="w.closed_at") + " AS week, "
-        "CAST(round((julianday(w.closed_at) - julianday(w.opened_at)) * 86400) AS INTEGER) AS secs, "
-        + _TOUCHED
-        + " AS answered, "
-        "EXISTS (SELECT 1 FROM {task_wait_spans} e WHERE e.task_id = w.task_id AND e.kind = 'person' "
-        "AND e.who = w.who AND e.opened_at < w.opened_at) AS repeated "
-        "FROM {task_wait_spans} w WHERE w.kind = 'person' AND w.closed_at IS NOT NULL AND w.who LIKE 'human:%')) "
+    # Per week a person answered an OK (an `answer` row of ok or no, _OWN_VIA): how many, and the median seconds from
+    # its ask (_ASKED_AT) to the answer.
+    "ask_answer_weekly": (
+        ("history_events",),
+        "SELECT week, count(*) AS answers, max(CASE WHEN n = (total + 1) / 2 THEN secs END) AS median_s "
+        "FROM (SELECT week, secs, row_number() OVER (PARTITION BY week ORDER BY secs) AS n, "
+        "count(*) OVER (PARTITION BY week) AS total "
+        "FROM (SELECT " + _WEEK.format(at="a.created_at") + " AS week, "
+        "CAST(round((julianday(a.created_at) - julianday(" + _ASKED_AT + ")) * 86400) AS INTEGER) AS secs "
+        "FROM {history_events} a WHERE a.subject_type = 'task' AND a.kind = 'answer' AND a.new IN ('ok', 'no') "
+        f"AND a.actor_id LIKE 'human:%' AND coalesce(a.via, '') IN {_OWN_VIA}) WHERE secs IS NOT NULL) "
         "GROUP BY week",
     ),
     # Per week: the Assistant's turns on a person's message, and the 50th and 90th percentile milliseconds from the
@@ -380,21 +387,20 @@ DERIVED = {
         "AND json_extract(result, '$.timings.send_to_claim_ms') IS NOT NULL)) "
         "GROUP BY week",
     ),
-    # Per week: the reader's tasks handed off through their Assistant that ended by someone else's move, and how many
-    # of those it reported back in their Assistant chat (backend/task_effects.py, a `report_back:<task>:` wake key).
-    # The reader's own only: a report is in their private room, which nobody else reads.
+    # Per week: each move that ended one of the reader's tasks handed off through their Assistant (a `move` history row
+    # of done or closed) made by anyone but them, and how many of those moves it reported back in their Assistant chat:
+    # the report's wake key names that exact move (backend/task_effects.py, `report_back:<task>:<move row id>`). The
+    # reader's own only: a report is in their private room, which nobody else reads.
     "report_back_weekly": (
         ("tasks", "events", "messages", "history_events"),
         "SELECT week, count(*) AS ended, sum(reported) AS reported, "
         "round(100.0 * sum(reported) / count(*), 1) AS report_back_pct "
-        "FROM (SELECT " + _WEEK.format(at="coalesce(t.done_at, t.closed_at)") + " AS week, "
-        "EXISTS (SELECT 1 FROM {messages} m WHERE m.wake_key >= 'report_back:' || t.id || ':' "
-        "AND m.wake_key < 'report_back:' || t.id || ';') AS reported "
+        "FROM (SELECT " + _WEEK.format(at="h.created_at") + " AS week, "
+        "EXISTS (SELECT 1 FROM {messages} m WHERE m.wake_key = 'report_back:' || t.id || ':' || h.id) AS reported "
         "FROM {tasks} t JOIN {events} e ON e.target = t.id AND e.action = 'task.create' AND e.actor = {me} "
-        "WHERE t.status IN ('done', 'closed') AND t.requester_id = {me} "
-        "AND json_extract(e.detail, '$.via') = 'assistant' "
-        "AND coalesce((SELECT h.actor_id FROM {history_events} h WHERE h.subject_type = 'task' "
-        "AND h.subject_id = t.id AND h.kind = 'move' ORDER BY h.created_at DESC LIMIT 1), '') <> {me}) "
+        "JOIN {history_events} h ON h.subject_type = 'task' AND h.subject_id = t.id AND h.kind = 'move' "
+        "AND json_extract(h.data, '$.move') IN ('done', 'closed') AND h.actor_id <> {me} "
+        "WHERE t.requester_id = {me} AND json_extract(e.detail, '$.via') = 'assistant') "
         "GROUP BY week",
     ),
 }
@@ -1730,7 +1736,7 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement="", pool=Non
                     masks[table] = {**masks.get(table, {}), **cols_masked}
         if "messages" in tables:
             masks["messages"] = {**masks.get("messages", {}), "refs": function("page_refs") + "(source.refs)"}
-        need_bots = "thread_members" in tables or "task_waits" in worked_out
+        need_bots = "thread_members" in tables or "task_wait_spans" in tables or "task_waits" in worked_out
         bots = TA.hidden(conn, who, "see", ("bot",), auth) if need_bots else set()
         if (unseen or bots) and (set(tables) & _UNSEEN_TABLES):
             from . import threads

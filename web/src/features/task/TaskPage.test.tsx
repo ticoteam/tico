@@ -777,6 +777,14 @@ describe('Details: the facts @s58', () => {
     expect(line.textContent).toBe('Waiting2h on Bo Lee');
   });
 
+  it('says only whom the task waits on when the wait has no time of its own', async () => {
+    serve(reads(task({ stage_since: '2026-11-01T10:00:00Z', turn: { state: 'bot', who: 'bot:a1', line: '', since: null } } as Partial<TaskData>)));
+    details();
+    await facts();
+    const label = await screen.findByText('Waiting');
+    expect((label.parentElement as HTMLElement).textContent).toBe('Waitingon Builder');
+  });
+
   it('sets the Human in place', async () => {
     serve(base);
     details();
