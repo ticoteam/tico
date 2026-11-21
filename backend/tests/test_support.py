@@ -1271,3 +1271,25 @@ def test_an_agents_first_support_delivery_logs_one_event_and_a_draft_or_a_retry_
     assert logged() == [("bot:assistant", "rules.passed")] * 2
     # Judged once each, as the bot, on its names only.
     assert checks == [(("bot:assistant", "bot:assistant", ""), "A support request to Tico support")] * 2
+
+
+def test_an_oks_authority_lost_while_its_send_is_checked_stops_the_send(environment, hq, monkeypatch):  # noqa: F811
+    """The approval's authority is checked again after the support link's check and right before the first HQ request:
+    whoever gave the OK losing it while the check ran stops the send, and nothing reaches HQ."""
+    from backend import rule_links, task_asks
+
+    api = environment()
+    drafts_only(api)
+    bot = as_bot(api)
+    approval = draft(api, bot).json()
+    decide(api, approval["id"])
+    real = rule_links.check_as
+
+    def losing(*a, **kw):
+        monkeypatch.setattr(task_asks, "_authority", lambda c, person, row: "Ana can no longer OK this")
+        return real(*a, **kw)
+
+    monkeypatch.setattr(rule_links, "check_as", losing)
+    r = send(api, bot, approval["id"])
+    assert r.status_code == 409 and "can no longer OK" in r.json()["error"]["detail"]
+    assert [q for q in hq.seen if q.url.path == "/v1/support"] == [] and hq.tickets == {}

@@ -527,13 +527,14 @@ class Support:
             raise Problem("diagnostics_stale", "This preview expired. Refresh diagnostics and review again.", 409)
         return bundle
 
-    def file(self, who, body, key="", on_filed=None, source="", idem="", asker=None):
+    def file(self, who, body, key="", on_filed=None, source="", idem="", asker=None, before_send=None):
         """Send the ticket to HQ, then keep HQ's id and secret. Nothing is kept when HQ refuses or cannot be reached.
         `on_filed(c, ticket_id)` runs in the transaction that keeps it (an approval spent with it). `source` is who
         filed it, as HQ's queue sorts tickets (one of SOURCES; the body's own when not given). `idem` is an OK already
         used for this report (file_approved): HQ hears it as Idempotency-Key, and the day's cap, counted when it was
         asked, refuses nothing after the claim. `asker`: the agent that asked for this send, (principal, sender, via):
-        checked on the support link (backend/rule_links.py) before this delivery, its one event kept with the ticket."""
+        checked on the support link (backend/rule_links.py) before this delivery, its one event kept with the ticket.
+        `before_send()` runs after that check and right before the first request to HQ (an OK's authority, rechecked)."""
         message, email = clean_message(body.message), clean_email(body.email)
         with self.store.read() as c:
             if key:
@@ -577,6 +578,8 @@ class Support:
         if body.kind != "support":
             payload["kind"] = sent["kind"] = body.kind
         found = self._link_check(asker, body.kind)
+        if before_send:
+            before_send()
         answer = _ask_hq("POST", "/v1/support", body=payload, idem=idem)
         if answer.status_code == 422 and _refused_field(answer) == "fields":
             # An HQ from before source refuses it as an unknown field: the ticket goes again without it, keeping the
@@ -836,19 +839,22 @@ class Support:
             return {"ticket": view(ruled), "approval": rid, "filed_as": ruled["actor"], "again": True}
         if found["used_by_id"] != who.actor:
             raise Problem("approval", f"This OK was already used at {found['used_at']}.", 409)
-        # Claimed, with no ticket yet: the first send, or a retry after a crash or HQ out of reach, under the same
-        # Idempotency-Key (HQ answers a retry with the ticket the first send made). Before the first send, whoever gave
-        # the OK must still be here and still entitled to give it (rule C); if not, it is given up on and never sent.
-        # Once a send has begun (`ok.sending`) HQ may have it, so a retry is never refused for that.
-        with self.store.transaction() as c:
-            started = c.execute("SELECT 1 FROM events WHERE action='ok.sending' AND target=?", (rid,)).fetchone()
-            refused = task_asks.claimed_problem(c, rid, authority=not started)
+
+        def before_send():
+            """Claimed, with no ticket yet: the first send, or a retry after a crash or HQ out of reach, under the same
+            Idempotency-Key (HQ answers a retry with the ticket the first send made). Right before the first send (after
+            the support link's check, so authority lost while it ran still stops it), whoever gave the OK must still be
+            here and still entitled to give it (rule C); if not, it is given up on and never sent. Once a send has begun
+            (`ok.sending`) HQ may have it, so a retry is never refused for that."""
+            with self.store.transaction() as c:
+                started = c.execute("SELECT 1 FROM events WHERE action='ok.sending' AND target=?", (rid,)).fetchone()
+                refused = task_asks.claimed_problem(c, rid, authority=not started)
+                if refused:
+                    task_asks.not_done(c, rid, refused)
+                elif not started:
+                    H.event(c, who.actor, "ok.sending", rid, {"task": task_asks.task_of(c, rid)})
             if refused:
-                task_asks.not_done(c, rid, refused)
-            elif not started:
-                H.event(c, who.actor, "ok.sending", rid, {"task": task_asks.task_of(c, rid)})
-        if refused:
-            raise Problem("approval", f"{refused}: the report was not sent.", 409)
+                raise Problem("approval", f"{refused}: the report was not sent.", 409)
 
         def settle(c, _ticket_id=None):
             task_asks.settle(c, rid, "Sent the report to Tico support.")
@@ -856,10 +862,19 @@ class Support:
         # Checked as whoever asked for the OK when that is an agent (the grant keeps it), an approval from before too.
         by = str(found["asked_by_id"])
         asker = (by, by, "") if H.is_bot(by) else None
-        ticket = self._send(person, payload, source, key, on_filed=settle, idem="tico-support:" + rid, asker=asker)
+        ticket = self._send(
+            person,
+            payload,
+            source,
+            key,
+            on_filed=settle,
+            idem="tico-support:" + rid,
+            asker=asker,
+            before_send=before_send,
+        )
         return {"ticket": ticket, "approval": rid, "filed_as": person.actor, "again": False}
 
-    def _send(self, person, payload, source, key, on_filed=None, idem="", asker=None):
+    def _send(self, person, payload, source, key, on_filed=None, idem="", asker=None, before_send=None):
         """File a report as `person`, once per `key`: a ticket kept under that key answers again."""
         with self.store.read() as c:
             done = c.execute(
@@ -879,6 +894,7 @@ class Support:
             source=source,
             idem=idem,
             asker=asker,
+            before_send=before_send,
         )
 
     def write(self, who, ticket_id, text, attachment=""):
