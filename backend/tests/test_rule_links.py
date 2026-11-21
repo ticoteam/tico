@@ -310,7 +310,7 @@ def test_rules_links_lists_each_link_with_its_mode_and_30_day_counts(ruled, monk
         "tool:quiet": "informed",
         "tool:acme": "not_covered",
         "tool:shop": "not_covered",
-        "support": "not_covered",
+        "support": "informed",
         "computer": "not_covered",
     }
     assert links["tool:close"]["counts"] == {"passed": 1, "refused": 1, "held": 0, "unchecked": 1}

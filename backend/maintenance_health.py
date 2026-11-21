@@ -1178,11 +1178,14 @@ def report(c_factory, support, auth, settings, who, key):
 
     bundle = diagnostics.build(store, settings, auth, owner, support.census)
     attachment = support.previews.keep(owner.actor, bundle)
+    from . import rule_links
+
     ticket = support.file(
         owner,
         SupportTicket(message=message, include_ids=True, diagnostics=attachment),
         "health:" + row["signature"],
         source="health_monitor",
+        asker=rule_links.agent_of(store, who),  # BotOps's own report: checked on the support link at its delivery
     )
     now = H.now()
     with store.transaction() as c:

@@ -472,11 +472,13 @@ Block rule broken), `rules.held` (an Escalate rule broken) or `rules.unchecked` 
 reason), the rules in its detail, written in a savepoint so a failure never changes the write. Nothing is stopped yet:
 `would` marks an outcome that did not happen.
 
-- **The links.** Each proxied tool (`tool:<id>`), outgoing webhook sends, Release now: Informed only. Email: Enforced,
+- **The links.** Each proxied tool (`tool:<id>`), outgoing webhook sends, Release now, reports to Tico support:
+  Informed only. Email: Enforced,
   as its own held path already stops a mail. A link's mode is what its path does; no setting changes it yet.
 - **What is judged: names only.** A proxied write is judged on the tool's name, the HTTP method, an MCP call's method
   and tool name, and a JSON body's top-level key names; a webhook send on its event and endpoint names; Release now on
-  its name. Never a value, path, query or header, so no credential reaches the judge.
+  its name; a report to Tico support on its kind. Never a value, path, query or header, so no credential reaches the
+  judge.
 - **How.** The Informed only links ask one provider (no fallback), one call, no part call; a failure is unchecked.
   Email keeps its own judge exactly as before this PR, fallback provider and part call included, and logs the rule ids
   its decision used with any unchecked reason.
@@ -488,10 +490,14 @@ reason), the rules in its detail, written in a savepoint so a failure never chan
   an Idempotency-Key (`tico tools call` sends one); with one, a retry under it within a day is neither judged nor
   logged again. A POST over 1 MB to the tool's MCP address that no Read-authorization parse read is recorded unchecked,
   never counted as a write; other large POSTs keep the name-only check, and a batch is read up to its first 50 calls. A
-  webhook send that became eligible after its preflight is recorded unchecked.
+  webhook send that became eligible after its preflight is recorded unchecked. A report to Tico support is checked at
+  its first delivery to HQ (the route's and Maintenance's alike), as the agent that asked (an OK'd report: the bot that asked for the OK, else the person's
+  Assistant or BotOps sending it); its event goes with the ticket it makes, so one ticket is one event. A message on a
+  ticket and a feedback answer sent by a person's Assistant or BotOps are checked too. The check never runs while the
+  support send lock is held. A retry before the ticket is kept may be
+  judged again (log-only).
 - **Rules › Links** (`/company/rules/links`, from the Rules page's "⋯"; the owner and Admins in person) lists each link
-  with its 30-day counts, unchecked apart (a tool's from when it was made), then the Not covered paths: reports to Tico
-  support (#4869), tools whose keys go to computers, website tools, and calls a computer makes straight out. A tool is
+  with its 30-day counts, unchecked apart (a tool's from when it was made), then the Not covered paths: tools whose keys go to computers, website tools, and calls a computer makes straight out. A tool is
   listed only to a reader who may see it.
 
 Refusals, appeals and Allow once come next.

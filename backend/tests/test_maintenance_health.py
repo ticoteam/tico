@@ -860,6 +860,10 @@ def _part_one_ticket(api, runner, monkeypatch, hq=None, comments=None, clock=Non
     assert first["ticket"] and len(hq.tickets) == 1
     again = file_due(api, run(api, now + timedelta(hours=25)))  # seen a third time, a day on: a comment, not a ticket
     assert again[sig]["comment"] is True and len(hq.tickets) == 1
+    # BotOps's report is checked on the support link at its one delivery (Rules › Links); the comment is no delivery.
+    with api.app.state.store.read() as c:
+        rows = c.execute("SELECT actor, action FROM events WHERE target='link:support'").fetchall()
+    assert [tuple(r) for r in rows] == [("bot:botops", "rules.passed")]
     (ticket,) = hq.tickets.values()
     assert [m["body"][:37] for m in ticket["messages"]] == ["[Health Monitor] Seen again (3 times)"]
 

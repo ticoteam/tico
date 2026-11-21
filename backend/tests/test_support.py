@@ -1241,3 +1241,100 @@ def test_a_retry_across_the_upgrade_finds_the_ticket_filed_under_the_bare_key(en
     assert len(hq.seen) == sent  # nothing new reached HQ
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM support_tickets").fetchone()[0] == 1
+
+
+def test_an_agents_first_support_delivery_logs_one_event_and_a_draft_or_a_retry_none(environment, hq, monkeypatch):  # noqa: F811
+    """Rules › Links: a bot's report is checked on the support link at its first delivery to HQ, as the bot, under the
+    team rule or from a person's OK (the OK's asked_by_id); a draft waiting for its OK, and a retry that finds its
+    ticket, log nothing."""
+    from backend import rule_links
+
+    api = environment()
+    bot = as_bot(api)
+    checks, real = [], rule_links.check_as
+    monkeypatch.setattr(rule_links, "check_as", lambda *a, **kw: checks.append((a[2:5], a[-1])) or real(*a, **kw))
+
+    def logged():
+        with api.app.state.store.read() as c:
+            rows = c.execute("SELECT actor, action FROM events WHERE target='link:support' ORDER BY rowid")
+            return [tuple(r) for r in rows]
+
+    assert draft(api, bot).json()["sent"] is True  # under the team rule
+    assert draft(api, bot).status_code == 200  # the same report again: its ticket back
+    assert logged() == [("bot:assistant", "rules.passed")]
+    drafts_only(api)
+    approval = draft(api, bot, message="Another report, with other words").json()
+    assert approval["status"] == "pending" and len(logged()) == 1
+    decide(api, approval["id"])
+    assert send(api, bot, approval["id"]).status_code == 200
+    assert send(api, bot, approval["id"]).json()["again"]
+    assert logged() == [("bot:assistant", "rules.passed")] * 2
+    # Judged once each, as the bot, on its names only.
+    assert checks == [(("bot:assistant", "bot:assistant", ""), "A support request to Tico support")] * 2
+
+
+def test_an_oks_authority_lost_while_its_send_is_checked_stops_the_send(environment, hq, monkeypatch):  # noqa: F811
+    """The approval's authority is checked again after the support link's check and right before the first HQ request:
+    whoever gave the OK losing it while the check ran stops the send, and nothing reaches HQ."""
+    from backend import rule_links, task_asks
+
+    api = environment()
+    drafts_only(api)
+    bot = as_bot(api)
+    approval = draft(api, bot).json()
+    decide(api, approval["id"])
+    real = rule_links.check_as
+
+    def losing(*a, **kw):
+        monkeypatch.setattr(task_asks, "_authority", lambda c, person, row: "Ana can no longer OK this")
+        return real(*a, **kw)
+
+    monkeypatch.setattr(rule_links, "check_as", losing)
+    r = send(api, bot, approval["id"])
+    assert r.status_code == 409 and "can no longer OK" in r.json()["error"]["detail"]
+    assert [q for q in hq.seen if q.url.path == "/v1/support"] == [] and hq.tickets == {}
+
+
+def _assistant(api, person="riley"):
+    """`person`'s Assistant acting for them on a card they confirmed: their identity, via assistant (backend/assistant.py)."""
+    as_person(api, person)
+    api.app.state.store.settings.test_identities[person + "-assistant"] = Identity(
+        "human:" + person, "human", email=person + "@acme.example", via="assistant", confirmed=True
+    )
+    return signed_in(person + "-assistant")
+
+
+def _support_events(api):
+    with api.app.state.store.read() as c:
+        rows = c.execute("SELECT actor, action, detail FROM events WHERE target='link:support' ORDER BY rowid")
+        return [(r["actor"], r["action"], json.loads(r["detail"]).get("operation")) for r in rows]
+
+
+def test_a_persons_assistant_writing_to_support_is_checked_as_the_assistant(environment, hq, monkeypatch):  # noqa: F811
+    """Rules › Links: an OK'd report the Assistant drafted (its OK keeps the person's id), a message on a ticket and a
+    feedback answer, each sent by a person's Assistant, are checked on the support link as the Assistant, never under the
+    lock `sending`; the person's own writes are not checked."""
+    from backend import rule_links
+
+    api = environment()
+    drafts_only(api)
+    helper, riley = _assistant(api), as_person(api, "riley")
+    support_now = api.app.state.support
+    real = rule_links.check_as
+
+    def unlocked(*a, **kw):
+        assert not support_now.sending.locked()  # no judge call while the lock is held
+        return real(*a, **kw)
+
+    monkeypatch.setattr(rule_links, "check_as", unlocked)
+    drafted = draft(api, helper)
+    approval = drafted.json()
+    assert approval.get("status") == "pending", drafted.text
+    decide(api, approval["id"], token="riley")
+    assert send(api, helper, approval["id"]).status_code == 200
+    ticket = file(api, headers=riley).json()  # Riley's own: not checked
+    note = api.post(f"/api/v2/support/tickets/{ticket['id']}/messages", json={"message": "More detail"}, headers=helper)
+    assert note.status_code == 200, note.text
+    answer = {"moment": "first_result", "answer": "Good so far"}
+    assert api.post("/api/v2/support/feedback", json=answer, headers=helper).status_code == 200
+    assert _support_events(api) == [("bot:assistant", "rules.passed", "support_report")] * 3
