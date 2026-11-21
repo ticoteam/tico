@@ -106,7 +106,7 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
    no lip, no handle, no second face. The task's chat is its Chat tab then. The resting cards go at once, without their
    spring, so the decision is whole from its first frame. */
 .phone:has(>.pg [data-dock] .askcard){--cards-h:0px}
-.phone:has(>.pg [data-dock] .askcard)>.ly:not(.is-up):not(.is-behind){--ty:calc(100% + 48px);transition:none}
+.phone:has(>.pg [data-dock] .askcard)>.ly:not(.is-up):not(.is-behind),.phone:has(>.pg [data-dock] .askcard):not(.is-handle)>.nub{--ty:calc(100% + 48px);transition:none}
 /* raised: the card stands below the peeks of the cards behind it, and they come up with it in order (plan/layers.html:
    Tico › Company › Thread, front to back), so the next layer is a tap away without tucking the raised one first */
 .phone[data-card="tico"]{--at:var(--behind)}
