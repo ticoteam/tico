@@ -487,7 +487,7 @@ def install(app, store):
     def gated(subject, tool_id, method, rest, query, body, params, content_type):
         try:
             if body is None:  # over rule_links.MAX_JUDGED: never copied or read, recorded unchecked
-                return rule_links.too_large(subject, subject, 'tool:' + tool_id, 'tool_call')
+                return rule_links.unchecked(subject, subject, 'tool:' + tool_id, 'tool_call', 'too_large')
             output = rule_links.proxy_output(method, rest, query, body, params, content_type)
             return rule_links.check_as(
                 store, getattr(app.state, 'judge', None), subject, subject, '', 'tool:' + tool_id, 'tool_call', output
@@ -648,11 +648,11 @@ def install(app, store):
         listing = bool(calls) and any(m == 'tools/list' for m, _ in calls)
         asked = query
         url = tool['base_url'].rstrip('/') + '/' + rest.lstrip('/')
-        # The gate's MCP read exemption, and the read-only hints it trusts, need the full address forwarded to (the
-        # caller's own query included) to be exactly the tool's MCP address.
-        mcp = rule_links.mcp_endpoint(tool, url + ('?' + asked if asked else ''))
         query = outgoing_query(query, tool, key, auth['query'] if auth else None)
         url += ('?' + query) if query else ''
+        # The gate's MCP read exemption, and the read-only hints it trusts, need the final address (the key's own query
+        # parameters included) to be exactly the tool's MCP address.
+        mcp = rule_links.mcp_endpoint(tool, url)
         if urlsplit(url).hostname != urlsplit(tool['base_url']).hostname:
             await log(None, 'refused', 'Address left the tool host')
             return refused(404, 'not_found', 'Not found')
@@ -665,11 +665,18 @@ def install(app, store):
             # The destination checked and pinned, a write meets the org rules on what the caller sent, scrubbed, before
             # it is forwarded with the key (backend/rule_links.py). Log-only: its one outcome event on the tool's link
             # goes with the call's own row, after it is forwarded.
-            sent = b''.join(chunks) if total <= rule_links.MAX_JUDGED else None
-            kind = request.headers.get('content-type', '')
-            checked['found'] = await loop().run_in_executor(
-                None, gated, got['subject'], tool_id, method, rest, asked, sent, got['auth_params'], kind
-            )
+            idem = request.headers.get('idempotency-key', '')
+            if not idem or len(idem) > 200:
+                # No usable Idempotency-Key: not judged (a retry could not be told from a new write), recorded
+                # unchecked, and forwarded as before.
+                subject = got['subject']
+                checked['found'] = rule_links.unchecked(subject, subject, 'tool:' + tool_id, 'tool_call', 'no_key')
+            else:
+                sent = b''.join(chunks) if total <= rule_links.MAX_JUDGED else None
+                kind = request.headers.get('content-type', '')
+                checked['found'] = await loop().run_in_executor(
+                    None, gated, got['subject'], tool_id, method, rest, asked, sent, got['auth_params'], kind
+                )
         client = httpx.AsyncClient(
             transport=getattr(app.state, 'tool_proxy_transport', None),
             timeout=TIMEOUT,

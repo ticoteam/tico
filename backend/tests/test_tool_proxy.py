@@ -4,6 +4,7 @@ tool and its live run, and the caller's level picks the key and the methods. The
 import base64
 import ipaddress
 import json
+import uuid
 
 import httpx
 import pytest
@@ -462,7 +463,12 @@ def test_an_agents_write_is_rule_checked_before_the_key_goes_in_logged_once_and_
     note = {"note": "Our favorite color is gold", "copy": token, "basic": basic}
     r = api.post(
         f"/api/v2/tool-proxy/close-crm/api/v1/lead/?api_key={token}&mode=x",
-        headers={"Authorization": "Basic " + basic, "Cookie": "session=" + token, "X-Vendor-Auth": token},
+        headers={
+            "Authorization": "Basic " + basic,
+            "Cookie": "session=" + token,
+            "X-Vendor-Auth": token,
+            "Idempotency-Key": "lead-1",
+        },
         json=note,
     )
     assert r.status_code == 200 and len(vendor.seen) == 1  # log-only: the would-be refusal still went
@@ -477,30 +483,49 @@ def test_an_agents_write_is_rule_checked_before_the_key_goes_in_logged_once_and_
     detail = json.loads(rows[0]["detail"])
     assert (detail["rules"], detail["broken"], detail["would"]) == ([made["id"]], [made["id"]], True)
     assert token not in dump(api, "events", "tool_calls")
-    # A read, and an MCP call that only reads sent to the tool's own MCP server, are never counted; the same call to
-    # any other address is a write like any other POST.
+
+    def write(path, key=True, **kw):
+        sent = {"Authorization": "Bearer " + token, **({"Idempotency-Key": uuid.uuid4().hex} if key else {})}
+        return api.post("/api/v2/tool-proxy/close-crm/" + path, headers=sent, **kw)
+
+    def logged():
+        with api.app.state.store.read() as c:
+            return [json.loads(r[0]) for r in c.execute("SELECT detail FROM events WHERE action LIKE 'rules.%'")]
+
+    # A read is never counted.
+    assert call(api, "GET", f"api/v1/lead/?api_key={token}", token).status_code == 200 and len(logged()) == 1
+    # Its key goes in the query, so no call to it is ever exactly its MCP address: an MCP read there is checked too.
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tools SET mcp_url='https://api.close.example/mcp' WHERE id='close-crm'")
-    assert call(api, "GET", f"api/v1/lead/?api_key={token}", token).status_code == 200
-    listing = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
-    assert call(api, "POST", "mcp", token, json=listing).status_code == 200
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM events WHERE action LIKE 'rules.%'").fetchone()[0] == 1
-    assert call(api, "POST", "api/v1/lead/", token, json=listing).status_code == 200
-    assert call(api, "POST", "mcp/", token, json=listing).status_code == 200  # not the MCP address exactly
-    assert call(api, "POST", "mcp?session=1", token, json=listing).status_code == 200  # nor with a query
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM events WHERE action LIKE 'rules.%'").fetchone()[0] == 4
-    # A body over what the check reads is never copied or judged: recorded unchecked.
-    asked = len(judge.read)
-    assert call(api, "POST", "api/v1/lead/", token, content=b"x" * (1024 * 1024 + 1)).status_code == 200
-    with api.app.state.store.read() as c:
-        last = c.execute("SELECT detail FROM events WHERE action LIKE 'rules.%' ORDER BY rowid DESC").fetchone()
-    assert json.loads(last[0])["unchecked"] == "too_large" and len(judge.read) == asked
+    assert write("mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).status_code == 200
+    assert len(logged()) == 2
+    # With no Idempotency-Key, or a body over what the check reads, a write is forwarded as before, never judged, and
+    # recorded unchecked.
+    asked, forwarded = len(judge.read), len(vendor.seen)
+    assert write("api/v1/lead/", key=False, json=note).status_code == 200
+    assert write("api/v1/lead/", content=b"x" * (1024 * 1024 + 1)).status_code == 200
+    assert [d["unchecked"] for d in logged()[2:]] == ["no_key", "too_large"]
+    assert len(judge.read) == asked and len(vendor.seen) == forwarded + 2
     # A destination refused at its check is never judged: the address is checked and pinned first.
     ANSWERS["api.close.example"] = "10.0.0.5"
-    asked = len(judge.read)
-    assert call(api, "POST", "api/v1/lead/", token, json=note).status_code == 403
+    assert write("api/v1/lead/", json=note).status_code == 403
+    assert len(logged()) == 4 and len(judge.read) == asked
+
+
+def test_only_an_mcp_read_sent_to_exactly_the_tools_mcp_address_is_not_a_write(api):
+    setup(api)
+    api.app.state.judge = Judge()
+    tool(api, scheme="bearer", base="https://mcp.close.example")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tools SET mcp_url='https://mcp.close.example/mcp' WHERE id='close-crm'")
+    give(api, key(api, "close-crm", FULL), "bot:ops")
+    api.app.state.tool_proxy_transport = httpx.MockTransport(Vendor())
+    _, attempt = run(api)
+    token = handed(api, attempt)["value"]
+    listing = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+    sent = {"Authorization": "Bearer " + token}
+    for path in ("mcp", "mcp/", "mcp?session=1"):  # only the first is exactly the MCP address
+        sent["Idempotency-Key"] = uuid.uuid4().hex
+        assert api.post("/api/v2/tool-proxy/close-crm/" + path, headers=sent, json=listing).status_code == 200
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM events WHERE action LIKE 'rules.%'").fetchone()[0] == 5
-    assert len(judge.read) == asked
+        assert c.execute("SELECT count(*) FROM events WHERE action LIKE 'rules.%'").fetchone()[0] == 2
