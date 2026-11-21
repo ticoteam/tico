@@ -435,10 +435,16 @@ def repo_grant(api, args):
         out["ticked"] = out["ticked_now"] = True
         if current["mode"] == "all":
             current = person.get(f"bots/{_path(bot)}/repositories")
+    unreachable = row.get("reachable") is False
+    if unreachable:
+        out["reachable"] = False
     reads = current["mode"] == "all" and current.get("all_access") == "read"
     if current["mode"] == "all" and not flags:
-        # What it reaches now, never another bot's own repository, as the hub answers it.
+        # What All ticked repos reaches, never another bot's own repository, as the hub answers it; its answer leaves
+        # out a repository GitHub cannot reach this minute, which All ticked repos still covers when it is ticked.
         held = {r["full_name"].lower(): r["access"] for r in current.get("effective") or []}.get(name.lower())
+        if held is None and unreachable and out["ticked"] and not row.get("bot_repo"):
+            held = current.get("all_access")
         if held == "write" or held == access:
             return {**out, "changed": False, "detail": f"{bot} has All ticked repos ({current.get('all_access')})"}
     if current["mode"] == "all" and not reads:

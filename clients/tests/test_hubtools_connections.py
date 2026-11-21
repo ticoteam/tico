@@ -3,9 +3,11 @@ against a stubbed API, and repository grants, revokes and settings against a liv
 bot's other repositories is checked in what the hub stores. Whether a company can work now is stubbed."""
 
 import json
+import time
 
 import pytest
 
+from backend.repositories import save_metadata
 from backend.store import H
 from backend.tests.helpers import engine as X
 from backend.tests.live import live  # noqa: F401 (the fixture)
@@ -306,6 +308,15 @@ def test_repo_grant_on_another_agents_own_repository_is_never_covered_by_all_tic
         tool("tico_repo_grant", hub, repository="acme/bot-builder", bot="ops", tick=True)
     assert repo(hub, "acme/bot-builder")["enabled"] is True, "ticked, yet still not one All ticked repos reaches"
     hub.call("PUT", "bots/ops/repositories", {"mode": "all", "all_access": "read"})
+    # A ticked repository GitHub cannot reach this minute stays covered: the grant says so and changes nothing.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE repositories SET reachable=0 WHERE full_name='acme/web'")
+        save_metadata(c, "repositories-confirmed-missing", {"acme/web": time.time()})
+    got = tool("tico_repo_grant", hub, repository="acme/web", bot="ops", access="read")
+    assert (got["changed"], got["reachable"]) == (False, False) and access_of(hub, "ops")[0] == "all"
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE repositories SET reachable=1 WHERE full_name='acme/web'")
+        save_metadata(c, "repositories-confirmed-missing", {})
     got = tool("tico_repo_grant", hub, repository="acme/bot-builder", bot="ops", access="read")
     assert got["changed"] and access_of(hub, "ops") == ("chosen", {"acme/web": "read", "acme/bot-builder": "read"})
 

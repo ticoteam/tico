@@ -293,17 +293,19 @@ def test_a_person_archives_and_restores_a_task_file_from_the_cli_and_the_tool(ap
 
 
 def test_a_page_archived_by_either_flag_is_listed_again_on_every_task_it_is_on(api):
-    """A task lists a page through its own file, a link or a pin: an archive of either flag reaches each one's open
-    views, and a person's listing of a task's archived pages asks each page's links once, not once a page."""
+    """A task lists a page through its own file, a link or a pin: an archive of either flag, or a new version that
+    brings it back, reaches each one's open views as a change about that page; and a person's listing of a task's
+    archived pages asks each page's links once, not once a page."""
     from backend.tests.helpers.task_privacy_reads import traced
 
     publish = hubtools.BY_NAME["tico_file_publish"]["fn"]
-    agent = Agent(api, as_bot(api, "ops"))
+    token = as_bot(api, "ops")
+    agent = Agent(api, token)
     home, linked, pinned = (
         post(api, "tasks", {"title": title, "owner": "ops", "body": "Brief."}, "cara-test")["id"]
         for title in ("Home", "Linked", "Pinned")
     )
-    pages = []
+    pages = {}
     for name, scope in (("brief.html", "task"), ("policy.html", "bot")):
         fid = publish(agent, {"name": name, "text": "<p>Text</p>", "task": home, "scope": scope})["file"]["id"]
         with api.app.state.store.transaction() as c:
@@ -313,33 +315,40 @@ def test_a_page_archived_by_either_flag_is_listed_again_on_every_task_it_is_on(a
         )
         assert r.status_code == 200, r.text
         post(api, "pins", {"place": "task:" + pinned, "item": "page:" + fid})
-        pages.append(fid)
+        pages[fid] = name
 
     def heard(change):
+        """(task, page) of each change to a task's files that `change` logs."""
         with api.app.state.store.read() as c:
             seen = c.execute("SELECT max(seq) FROM changes").fetchone()[0] or 0
         assert change().status_code == 200
         with api.app.state.store.read() as c:
             return {
-                r[0]
+                tuple(r)
                 for r in c.execute(
-                    "SELECT subject_id FROM changes WHERE seq>? AND topic='tasks' AND kind='files'", (seen,)
+                    "SELECT subject_id,ref FROM changes WHERE seq>? AND topic='tasks' AND kind='files'", (seen,)
                 )
             }
 
+    def edit(kind, fid, archived):
+        return lambda: api.patch(f"/api/v2/{kind}/{fid}", json={"archived": archived}, headers=headers())
+
     for fid in pages:  # a task file's flag, a bot-wide file's flag, then the page's own
         for archived in (True, False):
-            assert heard(lambda: api.patch(f"/api/v2/files/{fid}", json={"archived": archived}, headers=headers())) >= {
-                linked,
-                pinned,
-            }
-        assert heard(lambda: api.patch(f"/api/v2/pages/{fid}", json={"archived": True}, headers=headers())) >= {
-            home,
-            linked,
-            pinned,
-        }
+            assert heard(edit("files", fid, archived)) >= {(linked, fid), (pinned, fid)}
+        assert heard(edit("pages", fid, True)) >= {(home, fid), (linked, fid), (pinned, fid)}
 
     files, statements = traced(api, lambda: get(api, f"tasks/{home}/files", token="cara-test")["files"])
     assert {f["id"] for f in files if f["archived"]} == set(pages)
     one_page = page_links.LINKS_SQL.split("?")[0]  # its links read page by page, not in the listing's one batch
     assert not [s for s in statements if s.startswith(one_page)]
+
+    # A new version brings it back from either flag: the first is archived as a page, the second as a file.
+    _, policy = pages
+    assert heard(edit("pages", policy, False))
+    assert heard(edit("files", policy, True))
+    for fid, name in pages.items():
+        body = {"page": fid, "name": name, "text": "<p>New</p>"}
+        republish = lambda: api.post("/api/v2/pages", json=body, headers=headers(token))  # noqa: E731
+        assert heard(republish) >= {(linked, fid), (pinned, fid)}
+    assert not any(f["archived"] for f in get(api, f"tasks/{home}/files")["files"])

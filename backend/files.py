@@ -120,17 +120,21 @@ def task_scoped(row):
 
 def list_again(c, fid, *, own=False):
     """Each task a page is on through a link or a pin lists it again after an archive flag changes; `own` adds the
-    task it belongs to, which a change to the file's own flag already reaches (backend/events.py)."""
-    sql, args = "SELECT substr(target,6) FROM page_links WHERE page_id=? AND target LIKE 'task:%'", [fid]
-    if file_library.has_pins(c):
-        sql += " UNION SELECT substr(place,6) FROM pins WHERE item=? AND place LIKE 'task:%'"
-        args.append("page:" + fid)
+    task it belongs to, which a change to the file's own flag already reaches (backend/events.py). The page is the
+    change's ref, as a link's is, so only readers who may see the page hear of it."""
+    sql = (
+        "SELECT substr(target,6) FROM page_links WHERE page_id=? AND target LIKE 'task:%' "
+        "UNION SELECT substr(place,6) FROM pins WHERE item=? AND place LIKE 'task:%'"
+    )
+    args = [fid, "page:" + fid]
     if own:
         sql += " UNION SELECT task_id FROM bot_files WHERE id=? AND task_id IS NOT NULL"
         args.append(fid)
     now = H.now()
     for (task,) in c.execute(sql, args).fetchall():
-        c.execute("INSERT INTO changes(topic,kind,subject_id,created_at) VALUES('tasks','files',?,?)", (task, now))
+        c.execute(
+            "INSERT INTO changes(topic,kind,subject_id,ref,created_at) VALUES('tasks','files',?,?,?)", (task, fid, now)
+        )
 
 
 def removed_event(c, task_id, actor, fid, title, *, back=False):
@@ -1678,6 +1682,8 @@ class Files:
         c.execute(
             "UPDATE bot_files SET " + ",".join(k + "=?" for k in fields) + " WHERE id=?", (*fields.values(), row["id"])
         )
+        if changed and row["archived"]:
+            list_again(c, row["id"])
         return c.execute("SELECT * FROM bot_files WHERE id=?", (row["id"],)).fetchone(), created, changed
 
     @staticmethod
@@ -1767,6 +1773,7 @@ class Files:
             if row is not None and row["archived"]:
                 c.execute("UPDATE bot_files SET archived=0 WHERE id=?", (row["id"],))
                 self.relink(c, task_id, row["id"])
+                list_again(c, row["id"])
         if row is None and legacy is None and series:
             from . import page_links
 

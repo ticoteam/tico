@@ -378,6 +378,7 @@ class Pages:
 
         def extra(c, row, changed, editor, linked_task):
             now = H.now()
+            was = c.execute("SELECT archived FROM pages WHERE file_id=?", (row["id"],)).fetchone()
             c.execute(
                 "INSERT INTO pages(file_id,cadence,as_of,created_at,updated_at,spec) VALUES(?,?,?,?,?,?) "
                 "ON CONFLICT(file_id) DO UPDATE SET cadence=COALESCE(?,cadence),as_of=?,updated_at=?,"
@@ -396,6 +397,10 @@ class Pages:
                     int(bool(changed)),
                 ),
             )
+            if changed and was and was[0]:
+                from .files import list_again
+
+                list_again(c, row["id"])  # its new version brings the archived page back on each task it is on
             actor = editor.actor
             page_links.link(c, row["id"], actor, "writer", actor)
             if importing:
