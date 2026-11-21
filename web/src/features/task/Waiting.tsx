@@ -2,9 +2,9 @@ import { useQueries, useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { meQuery } from '@/data';
 import { Button } from '@/kit/Button';
-import { FlowMark } from '@/kit/FlowMark';
 import { Markdown } from '@/kit/Markdown';
 import { answeringOf, changesAskedOf, decisionName, decisionOf, emailOf, personOf, sendTitle, tabAddress } from './model';
+import { AskCard } from './AskCard';
 import { Go } from './parts';
 import { addressesOf, emailSendQuery, taskDetailQuery, type TaskData } from './queries';
 import { isSendTask, sendTasksOf, stillToGo } from './waits';
@@ -51,16 +51,7 @@ function Pointer({ sub, send, to }: { sub: TaskData; send: string; to: string })
   const r = decisionOf(sub);
   if (!r) return null;
   const who = (mail.data && addressesOf(mail.data).to[0]) ?? sendTitle(sub.title)?.to;
-  return (
-    <section className="answer dcx tv-pointer" aria-label="Waits on you">
-      <div className="dcx-top">
-        <FlowMark />
-        <b className="an-name">{decisionName(sub, r, who ? personOf(who) : undefined)}</b>
-        <span className="grow" />
-        <Button onClick={() => navigate({ to: to as never })}>Open</Button>
-      </div>
-    </section>
-  );
+  return <AskCard name={decisionName(sub, r, who ? personOf(who) : undefined)} label="Waits on you" end={<Button onClick={() => navigate({ to: to as never })}>Open</Button>} />;
 }
 
 /** At the top of a task's other pages: each email that waits on the person, pointing to its Email tab. */
