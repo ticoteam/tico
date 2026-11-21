@@ -2661,9 +2661,6 @@ impl Runner {
                         for key in ["HUB_WORKSPACE", "TICO_PROJECTS_DIR"] {
                             e.insert(key.into(), execution_path.display().to_string());
                         }
-                        // Pi's sessions outlive the copy: one folder per room, outside it (hosts/pi.rs session_dir).
-                        let sessions = crate::sessions::PersonalCopy::sessions_for(&self.config.projects_dir(), &attempt);
-                        e.insert(crate::hosts::pi::SESSIONS_ENV.into(), sessions.display().to_string());
                     }
                 }
             }
@@ -9042,44 +9039,23 @@ for line in sys.stdin:
         let lane = runner
             .lanes
             .lane("assistant", &crate::sessions::turn_lane(&attempt));
-        // Pi keeps the room's sessions outside the copy, so the next turn resumes what this one saved.
-        let projects = runner.config.projects_dir();
-        let sessions = crate::sessions::PersonalCopy::sessions_for(&projects, &attempt);
-        let pi_dir = |workspace: &Path| {
-            let env: Env = [
-                ("HUB_WORKSPACE".to_string(), workspace.display().to_string()),
-                (
-                    crate::hosts::pi::SESSIONS_ENV.to_string(),
-                    sessions.display().to_string(),
-                ),
-            ]
-            .into_iter()
-            .collect();
-            crate::hosts::pi::session_dir(
-                "assistant",
-                &crate::hosts::Settings {
-                    env,
-                    ..Default::default()
-                },
-            )
+        // Pi's sessions are kept in the copy and go with it: a personal turn on Pi never resumes another's.
+        let env_for = |workspace: &Path| -> Env {
+            [("HUB_WORKSPACE".to_string(), workspace.display().to_string())]
+                .into_iter()
+                .collect()
         };
-        let saved = pi_dir(&copy);
-        assert!(!saved.starts_with(&copy));
-        std::fs::write(saved.join("thread-1.jsonl"), "saved").unwrap();
-        drop(place);
-        assert!(lane.try_lock().is_ok() && !copy.exists());
-        let mut again = runner.enter_lanes(&attempt, &lost).await.unwrap();
-        runner
-            .place_turn(&mut again, &mut attempt, &env, &lost)
-            .await
-            .unwrap();
-        assert_eq!(
-            again.execution_path, copy,
-            "the room's next turn works at the same path"
+        let sessions = crate::hosts::pi::session_dir(
+            "assistant",
+            &crate::hosts::Settings {
+                env: env_for(&copy),
+                ..Default::default()
+            },
         );
-        let resumed = pi_dir(&again.execution_path).join("thread-1.jsonl");
-        assert_eq!(std::fs::read_to_string(resumed).unwrap(), "saved");
-        drop(again);
+        assert!(sessions.starts_with(&copy));
+        std::fs::write(sessions.join("thread-1.jsonl"), "saved").unwrap();
+        drop(place);
+        assert!(lane.try_lock().is_ok() && !copy.exists() && !sessions.exists());
         std::fs::remove_dir_all(dir).ok();
     }
 

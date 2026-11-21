@@ -555,18 +555,8 @@ pub fn sign_in(assignments: &[Value]) -> (&'static str, String) {
     }
 }
 
-/// A turn's own folder for Pi's sessions, when it has one: a person's own Assistant chat, whose workspace is a copy
-/// removed after each turn (crate::sessions::PersonalCopy::sessions_for).
-pub const SESSIONS_ENV: &str = "TICO_PI_SESSIONS";
-
-/// `<workspace>/runtime/pi-sessions/<bot>` (or the turn's SESSIONS_ENV), made on first use (the bot user's, when
-/// isolated).
+/// `<workspace>/runtime/pi-sessions/<bot>`, made on first use (the bot user's, when isolated).
 pub fn session_dir(bot: &str, settings: &Settings) -> PathBuf {
-    let own = settings
-        .env
-        .get(SESSIONS_ENV)
-        .filter(|d| !d.is_empty())
-        .map(PathBuf::from);
     let root = settings
         .env
         .get("HUB_WORKSPACE")
@@ -579,12 +569,10 @@ pub fn session_dir(bot: &str, settings: &Settings) -> PathBuf {
                 settings.cwd.clone()
             }
         });
-    let path = own.unwrap_or_else(|| {
-        PathBuf::from(root)
-            .join("runtime")
-            .join("pi-sessions")
-            .join(if bot.is_empty() { "pi" } else { bot })
-    });
+    let path = PathBuf::from(root)
+        .join("runtime")
+        .join("pi-sessions")
+        .join(if bot.is_empty() { "pi" } else { bot });
     let _ = crate::isolation::mkdir(&path, 0o777);
     // A leased turn user writes here through the shared group; the supervisor's umask left it owner-writable only,
     // and earlier threads' session files may be owner-only too.

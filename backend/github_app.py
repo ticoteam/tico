@@ -39,6 +39,7 @@ from .health import GITHUB_HEALTH, note_github_token
 from .store import Problem, digest, encode
 from . import bot_settings as BS
 from . import brand_icons
+from . import rooms
 from .api_contract import KEYLESS, api_v2, error, ref
 
 
@@ -2647,6 +2648,11 @@ def install_github_app(app, settings, store):
         who = request.state.identity
         with store.read_transaction() as c:
             validate_identity(c, who)
+            if who.attempt_id and rooms.personal_attempt(c, settings.assistant_bot, who.attempt_id):
+                # One Assistant serves everyone: a person's own chat pushes nothing, so it gets no GitHub token.
+                raise Problem(
+                    "forbidden", "A person's own " + settings.assistant_name + " chat gets no GitHub token", 403
+                )
             body.bot = (H.resolve_bot(c, body.bot) or {}).get("id", body.bot)
             # A turn may ask only for its own bot; a runner only for a bot assigned to it.
             if who.role == "bot":

@@ -36,6 +36,17 @@ def personal_root(c, conversation):
     return not found or found.get("scope") == PERSONAL
 
 
+def personal_attempt(c, assistant_bot, attempt_id):
+    """Whether the run is the Assistant's in a person's own room or a sub-thread of one (`personal_root`), the same test
+    as its claim's `personal`: such a run is issued no git credential (backend/github_app.py token)."""
+    row = c.execute(
+        "SELECT a.bot_id,m.conversation_id FROM attempts a JOIN jobs j ON j.id=a.job_id "
+        "JOIN messages m ON m.id=j.message_id WHERE a.id=?",
+        (attempt_id,),
+    ).fetchone()
+    return bool(row) and row["bot_id"] == assistant_bot and personal_root(c, H.conversation(c, row["conversation_id"]))
+
+
 def session_config(conversation, bot, config):
     """The config a turn is handed. In the owner's earlier Strategy Owner chat (a turn queued there before it became
     history) it keys its session on that conversation

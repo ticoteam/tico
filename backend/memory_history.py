@@ -117,6 +117,14 @@ def shown(c, assistant_bot):
     )
 
 
+def left_group(c, bot, assistant_bot, was):
+    """After `bot`'s repository changed, in the same write: if it wrote the Assistant's repository before (`was`,
+    `guarded` as it was) and no longer does, its stored documents go, so none hidden while it was there can show."""
+    if was and bot not in guarded(c, assistant_bot):
+        c.execute("DELETE FROM bot_memory_documents WHERE bot=?", (bot,))
+        c.execute("DELETE FROM bot_memory_oversized WHERE bot=?", (bot,))
+
+
 def record(c, who, bot, report, assistant_bot):
     """Store what a computer reported for a bot assigned to it. Returns how many commits were new or changed."""
     if not c.execute("SELECT 1 FROM assignments WHERE bot=? AND runner_id=?", (bot, who.runner_id)).fetchone():

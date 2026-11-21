@@ -180,6 +180,54 @@ def test_a_bot_on_the_assistants_repository_and_a_sub_thread_of_a_personal_room_
     assert history(api, "ana-test", "assistant")["updates"] == []
 
 
+def test_a_bot_that_leaves_the_assistants_repository_loses_the_documents_hidden_there(api):
+    """Documents stored while a bot wrote the Assistant's repository (an older server) go when its repository changes away,
+    in the same write, so leaving the group never shows them."""
+    from backend.tests.helpers.shared_bots import revision
+
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET repo='emp-assistant' WHERE bot='finance'")
+        c.execute(
+            "INSERT INTO bot_memory_documents(bot,path,content,updated_at) VALUES('finance','memory/learnings.md',?,?)",
+            ("- Ben earns 90k\n", H.now()),
+        )
+    post(api, "bots/finance/definition", {"repo": "emp-finance", "expected_revision": revision(api, "finance")})
+    assert history(api, "ana-test", "finance")["documents"] == {}
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM bot_memory_documents WHERE bot='finance'").fetchone()[0] == 0
+
+
+def test_a_turn_in_a_sub_thread_of_a_personal_room_gets_no_github_token(api):
+    """The same root-room test as the claim: the Assistant's run in a sub-thread of a person's own room is refused a
+    GitHub token, as the person's turn and as the bot's own wake there."""
+    machine = runner(api)
+    assign(api, machine, "assistant")
+    ready(api, machine, ["assistant"])
+    post(api, "assistant/messages", {"text": "Push my notes"}, "ben-test")
+    attempt = claim(api, machine, "assistant")
+    with api.app.state.store.transaction() as c:
+        message, room = c.execute(
+            "SELECT m.id,m.conversation_id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.id=?",
+            (attempt["job_id"],),
+        ).fetchone()
+        root = H.open_conversation(
+            c,
+            "human:ben",
+            ["human:ben", "bot:assistant"],
+            kind="chat",
+            scope="personal",
+            owner_actor="human:ben",
+            room_key="assistant-root",
+        )["id"]
+        c.execute("UPDATE conversations SET scope='shared',root_id=? WHERE id=?", (root, room))
+    for refs in (None, "{}"):  # the person's own words, then a wake of the bot's own
+        if refs:
+            with api.app.state.store.transaction() as c:
+                c.execute("UPDATE messages SET refs=? WHERE id=?", (refs, message))
+        asked = api.post("/api/v2/github/token", json={"bot": "assistant"}, headers=headers(attempt["token"]))
+        assert asked.status_code == 403 and "token" not in asked.json(), asked.text
+
+
 def test_only_the_assigned_computer_reports_and_runs_must_be_the_bots_own(api):
     machine, other = runner(api), runner(api, label="Other Mac")
     assign(api, machine, "ops")

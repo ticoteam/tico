@@ -1724,15 +1724,6 @@ impl PersonalCopy {
         std::env::temp_dir().join(format!("tico-personal-{}", Self::key(projects, attempt)))
     }
 
-    /// The room's own folder for a harness's saved sessions (Pi's), outside the copy so the next turn resumes them.
-    pub(crate) fn sessions_for(projects: &Path, attempt: &Value) -> PathBuf {
-        projects
-            .join("runtime")
-            .join("pi-sessions")
-            .join(text_of(&attempt["bot"]))
-            .join(format!("personal-{}", Self::key(projects, attempt)))
-    }
-
     /// Clone `main` (already refreshed for this turn) into the room's path, replacing a copy a stopped turn left.
     pub(crate) async fn make(
         main: &Path,

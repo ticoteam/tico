@@ -1215,6 +1215,9 @@ class SettingsAdmin:
             from .repositories import note_chosen
 
             note_chosen(c, values["repo"], self.settings.github_owner)  # a person's choice: Tico uses it
+        from . import memory_history
+
+        was = bot in memory_history.guarded(c, self.settings.assistant_bot)
         BS.write(c, bot, declared)
         c.execute(
             "UPDATE bot_config SET description=?,reports_to=?,repo=?,thread_mode=?,"
@@ -1229,6 +1232,7 @@ class SettingsAdmin:
                 bot,
             ),
         )
+        memory_history.left_group(c, bot, self.settings.assistant_bot, was)
         entries = self._entries(c)
         roster = self._roster(c)
         for slug in entries:
