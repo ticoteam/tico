@@ -124,6 +124,15 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
     else if (card === 'chat') setCard('none');
   }
 
+  // the card the person just tucked, until it is home: a decision docking then lets it finish its slide (phone.css)
+  const [going, setGoing] = useState<Slot | null>(null);
+  const [from, setFrom] = useState(card);
+  if (from !== card) {
+    setFrom(card);
+    const left = slotOf(from);
+    setGoing(left && left !== slotOf(card) ? left : null);
+  }
+
   const isUp = (s: Slot) => slotOf(card) === s;
   const raised = slotOf(card);
   // the cards behind the raised one that are there to show: Tico's has the menu and an open chat, the menu's the chat
@@ -485,7 +494,10 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
     const up = isUp(s);
     return (
       <section
-        className={`ly ly-${s}${up ? ' is-up' : behind.includes(s) ? ' is-behind' : ''}`}
+        className={`ly ly-${s}${up ? ' is-up' : behind.includes(s) ? ' is-behind' : going === s ? ' is-going' : ''}`}
+        onTransitionEnd={(e) => {
+          if (going === s && e.target === e.currentTarget && e.propertyName === 'transform') setGoing(null);
+        }}
         role={up ? 'dialog' : undefined}
         aria-label={label[s]}
         tabIndex={up ? -1 : undefined}

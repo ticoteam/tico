@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data';
+import { useCards } from '@/kit/Popover';
 import { arrangementFor } from '@/shell/arrangement';
 import { Frame } from '@/shell/Frame';
 import { Sheet } from '@/shell/Sheet';
@@ -133,6 +134,19 @@ describe('PhoneCards', () => {
     }
   });
 
+  // #4820: a page the frame draws knows it is on a phone from its first render, before the html attribute is written
+  it("gives the page the window's mode from its first render", () => {
+    width(390);
+    delete document.documentElement.dataset.layout;
+    const seen: boolean[] = [];
+    const Page = () => {
+      seen.push(useCards());
+      return null;
+    };
+    render(<Frame tico={<p>Tico</p>} menu={<p>Menu</p>} page={<Page />} arrangement="page" />);
+    expect(seen[0]).toBe(true);
+  });
+
   it('a chat that opens comes up as its own card', () => {
     const { rerender } = render(cards());
     rerender(cards({ chat: true }));
@@ -153,6 +167,12 @@ describe('PhoneCards', () => {
     fireEvent.click(screen.getByRole('link', { name: 'Approve' }));
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(document.querySelector('.phone')?.getAttribute('data-card')).toBe('none');
+    // it slides home even if the case's decision docks meanwhile (#4820: only resting cards leave at once), then rests
+    const chat = document.querySelector<HTMLElement>('.ly-chat')!;
+    expect(chat.classList.contains('is-going')).toBe(true);
+    expect(rule('.phone:has(>.pg [data-dock][data-fresh] .askcard)>.ly:not(.is-up):not(.is-behind):not(.is-going)')).toContain('transition:none');
+    fireEvent.transitionEnd(chat, { propertyName: 'transform' });
+    expect(chat.classList.contains('is-going')).toBe(false);
   });
 
   it("a page opened from Tico's card (a tracked task) tucks Tico, and Back brings it up again", async () => {

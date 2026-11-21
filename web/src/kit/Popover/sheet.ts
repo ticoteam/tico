@@ -1,4 +1,4 @@
-import { type CSSProperties, useSyncExternalStore } from 'react';
+import { createContext, type CSSProperties, use, useSyncExternalStore } from 'react';
 import { popLayer, popMotion } from './Popover';
 
 const root = () => document.documentElement;
@@ -9,9 +9,15 @@ function subscribe(changed: () => void) {
   return () => watch.disconnect();
 }
 
+/** The shell's own cards-or-sheets, given to what it draws: read in render, it is the window's mode at once, where the
+    html attribute (kept for CSS) is written only once the shell has drawn. */
+export const CardsContext = createContext<boolean | null>(null);
+
 /** True on the phone's cards (`html[data-layout="cards"]`, which the shell sets): a menu is then a sheet. */
 export function useCards() {
-  return useSyncExternalStore(subscribe, read, () => false);
+  const shell = use(CardsContext);
+  const html = useSyncExternalStore(subscribe, read, () => false);
+  return shell ?? html;
 }
 
 /* Base UI writes the anchored position inline; on the cards a menu's positioner is pinned to the bottom edge instead. */
