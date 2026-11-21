@@ -21,9 +21,23 @@ from . import world as Wd
 from .world import ANA, BEN, BUILDER, CARA, GENERAL, REVIEWER, WRITER, World
 
 
+QUEUE = "queue"
+QUEUE_RECORD: dict[str, Any] = {
+    "id": QUEUE,
+    "name": "Queue",
+    "goal": "Requests that wait for room.",
+    "prefix": "Q",
+    "stages": [
+        {"name": "Ideas", "owner": ANA, "by_hand": True, "requests_move_on": True, "requirements": []},
+        {"name": "Next", "owner": "assignee", "task_limit": 1, "requirements": [{"kind": "owner_done"}]},
+    ],
+}
+
+
 def fill(world: World, count: int, rng: random.Random, *, queued: bool = False) -> dict[str, int]:
     """`count` open General tasks. Returns how many of each kind. With `queued`, each bot task's wake is still queued
     (its bot has not taken it yet); else every wake had its run and the task waits for its next try."""
+    from backend import pipeline_settings as PS
     from backend import task_engine as E
     from backend import task_relations as TR
     from backend.store import H
@@ -50,6 +64,15 @@ def fill(world: World, count: int, rng: random.Random, *, queued: bool = False) 
                 kinds["blocked"] += 1
             else:
                 kinds["a bot's turn"] += 1
+        # People's requests in a by-hand stage that moves them on, queued behind a next stage that is full (one task
+        # holds its one slot): their wait reads that stage's room (never_stuck._requests, waiting_on.of).
+        PS.save(c, E.SYSTEM, dict(QUEUE_RECORD, stages=[dict(stage) for stage in QUEUE_RECORD["stages"]]))
+        for n in range(max(1, count // 5) + 1):
+            row = H.task_create(c, ANA, f"Request {n}", "Please look at this.", BUILDER, pipeline=QUEUE, lint=False)
+            if n == 0:
+                E.move(c, row["id"], "Next", ANA)
+            else:
+                kinds["queued behind a full stage"] += 1
         if queued:
             return dict(kinds)
         # Every wake so far had its run, which ended: the bots' tasks wait for their next try.

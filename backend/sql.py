@@ -248,16 +248,35 @@ def live_masks(unsettled):
     }
 
 
-# A person's own act on a task, written as the question engine takes a reply from them (question_marks.REPLY_VIA: their
-# own hand, Slack, their personal token, their Assistant on their word): a row of its
-# history, or a message they wrote that names the task as the server attributes one (hubdb.MESSAGE_TASK_SQL: its refs'
-# task or task_id, a list read as its first), else as the message it replies to is attributed (the same way, then its
-# conversation's task), else its own conversation's task. BotOps or another agent acting with their rights is not
-# theirs, and Tico's carrier copy of a message is not a second touch.
+# A person's own act on a task, written as the question engine takes a reply from them (question_marks.REPLY_VIA:
+# their own hand, Slack, their personal token, their Assistant on their word): a row of its history, or a message they
+# wrote on the task the server says it names (hubdb.refs_task_id: its refs' task or task_id, a list read as its first
+# string that is not blank), else the task of the message it replies to (the same way, then that one's chat), else its
+# own chat's task. BotOps or another agent acting with their rights is not theirs, and Tico's carrier copy of a message
+# is not a second touch.
 _OWN_VIA = "(" + ", ".join(f"'{via or ''}'" for via in question_marks.REPLY_VIA if via is not None) + ")"
-_REFS_TASK = f"{H._task_ref_sql('$.task')}, {H._task_ref_sql('$.task_id')}"
+_BLANKS = "' ' || char(9, 10, 13)"
+
+
+def _ref_sql(alias: str, key: str) -> str:
+    """The SQL twin of hubdb._task_ref over `alias`.refs at `key`: a string, trimmed, or the first string of a list that
+    is not blank; nothing else names a task."""
+    path = f"$.{key}"
+    return (
+        f"CASE json_type({alias}.refs, '{path}') "
+        f"WHEN 'text' THEN nullif(trim(json_extract({alias}.refs, '{path}'), {_BLANKS}), '') "
+        f"WHEN 'array' THEN (SELECT trim(value, {_BLANKS}) FROM json_each({alias}.refs, '{path}') "
+        f"WHERE type = 'text' AND trim(value, {_BLANKS}) <> '' ORDER BY key LIMIT 1) END"
+    )
+
+
+def _refs_task_sql(alias: str) -> str:
+    """hubdb.refs_task_id in SQL: `refs.task`, else `refs.task_id`."""
+    return f"coalesce({_ref_sql(alias, 'task')}, {_ref_sql(alias, 'task_id')})"
+
+
 _MESSAGE_TASK = (
-    f"coalesce({_REFS_TASK}, (SELECT coalesce({_REFS_TASK.replace('m.refs', 'q.refs')}, qc.task_id) "
+    f"coalesce({_refs_task_sql('m')}, (SELECT coalesce({_refs_task_sql('q')}, qc.task_id) "
     "FROM {messages} q LEFT JOIN {conversations} qc ON qc.id = q.conversation_id WHERE q.id = m.in_reply_to), "
     "cv.task_id)"
 )
@@ -269,7 +288,8 @@ _TOUCHES = (
     f"AND coalesce(json_extract(m.refs, '$.via'), '') IN {_OWN_VIA}"
 )
 # The history kinds that are a person deciding something about a task (one row each: a move's owner and status rows are
-# its consequences, not more decisions, and so is the move back that taking an answer back makes, `undone_answer`).
+# its consequences, not more decisions, and so are the move back that taking an answer back makes, `undone_answer`,
+# and the end of a snooze that an answer, a done or a reply makes by itself, `consequence`).
 _DECISIONS = (
     "('answer', 'answer_undone', 'give', 'move', 'snooze', 'unsnooze', 'reassign', 'try_again', 'requirement', "
     "'requirement_withdrawn')"
@@ -352,6 +372,7 @@ DERIVED = {
         "FROM (SELECT " + _WEEK.format(at="created_at") + " AS week, 1 AS decision FROM {history_events} "
         f"WHERE subject_type = 'task' AND actor_id LIKE 'human:%' AND coalesce(via, '') IN {_OWN_VIA} "
         "AND kind IN " + _DECISIONS + " AND json_extract(data, '$.undone_answer') IS NULL "
+        "AND json_extract(data, '$.consequence') IS NULL "
         "UNION ALL SELECT " + _WEEK.format(at="created_at") + ", 0 FROM {events} WHERE " + _AGENT_ACTION + ") "
         "GROUP BY week",
     ),

@@ -454,7 +454,7 @@ def _done_ends_own_snooze(conn: "sqlite3.Connection", task_id: str, by: str) -> 
         return
     setter = str(snoozed["by_id"])
     if setter == str(by) or (is_human(by) and is_bot(setter)):
-        E.unsnooze(conn, task_id, by, "Done")
+        E.unsnooze(conn, task_id, by, "Done", consequence="done")
 
 
 def _answer_ends_bots_snooze(conn: "sqlite3.Connection", task_id: str, by: str) -> None:
@@ -464,7 +464,7 @@ def _answer_ends_bots_snooze(conn: "sqlite3.Connection", task_id: str, by: str) 
     row = E.task(conn, task_id)
     snoozed = (row or {}).get("snooze")
     if row and snoozed and is_human(by) and is_bot(snoozed["by_id"]):
-        E.unsnooze(conn, task_id, by, "Answered")
+        E.unsnooze(conn, task_id, by, "Answered", consequence="answer")
 
 
 def answer(

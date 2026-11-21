@@ -368,8 +368,9 @@ def people_of(conn: "sqlite3.Connection", requirement: Row, visit_id: str) -> li
 
 
 def given_at(conn: "sqlite3.Connection", requirement: Row, visit_id: str) -> str | None:
-    """When an OK or a page was last given to someone on this visit, or None: from then it waits on them. An ask added
-    to the task keeps it in its settings (answers.give_to); a stage's is its newest `give` answer (`people_of`)."""
+    """When an OK or a page was last given to someone, or asked again after a send back, on this visit, or None: from
+    then it waits on whom it names. An ask added to the task keeps its give in its settings (answers.give_to); a stage's
+    is its newest `give` or `again` answer (`people_of`, answers.reopen_sent_back)."""
     if requirement["kind"] not in STEERED:
         return None
     if requirement.get("visit_id"):
@@ -380,7 +381,7 @@ def given_at(conn: "sqlite3.Connection", requirement: Row, visit_id: str) -> str
     gives = [
         str(row["created_at"])
         for row in _cached(conn, "answers_on_visit", ANSWERS_SQL, "visit_id", visit_id)
-        if row["requirement_id"] == requirement["id"] and row["answer"] == "give"
+        if row["requirement_id"] == requirement["id"] and row["answer"] in ("give", "again")
     ]
     return gives[-1] if gives else None
 
