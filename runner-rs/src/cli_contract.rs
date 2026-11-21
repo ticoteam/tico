@@ -160,7 +160,19 @@ struct Screen {
 
 impl Screen {
     fn start(home: &Home, exe: &str, argv: &[String], terminal: bool) -> Screen {
+        Screen::start_with(home, exe, argv, terminal, &[])
+    }
+
+    /// `start` with extra environment variables on top of the empty home's.
+    fn start_with(
+        home: &Home,
+        exe: &str,
+        argv: &[String],
+        terminal: bool,
+        env: &[(&str, &str)],
+    ) -> Screen {
         let mut cmd = home.command(exe, argv);
+        cmd.envs(env.iter().copied());
         unsafe {
             cmd.pre_exec(|| {
                 libc::setsid();
@@ -594,10 +606,12 @@ fn claude_full_login_shows_a_link_with_the_manual_code_callback_and_a_code_promp
         },
         screen.shown("")
     );
-    // The page the link opens must show the person a code to paste back, not send it to a local port.
-    let plain = url.replace("%2F", "/").replace("%3A", ":");
+    // The page the link opens must show the person a code to paste back, not send it to a local port. Since 2.1.330
+    // the CLI shows a short link, `https://claude.ai/oauth/authorize?<scope bits><43-character code challenge>`, and
+    // only for a link whose redirect is the manual-code page: any other link it prints in full. So the link shown is
+    // either the full one with `code/callback` or that short form, and the full-link run below proves the redirect.
     assert!(
-        url.starts_with("https://") && !url.contains(char::is_whitespace) && plain.contains("code/callback"),
+        manual_code_link(&url) || short_sign_in_link(&url),
         "the link `claude auth login --claudeai` shows no longer returns to the manual-code page ({} characters)",
         url.len()
     );
@@ -614,6 +628,43 @@ fn claude_full_login_shows_a_link_with_the_manual_code_callback_and_a_code_promp
         !lines.iter().any(|l| l.contains("https://")),
         "a line of `claude auth login` still carries a link after scrubbing"
     );
+    drop(screen);
+    // The same sign-in with the CLI's switch for the full link: its redirect must still be the manual-code page.
+    let home = Home::new();
+    let mut screen = Screen::start_with(
+        &home,
+        "claude",
+        &login.command,
+        true,
+        &[("CLAUDE_CODE_FULL_SIGN_IN_LINK", "1")],
+    );
+    screen.wait(60, |raw| {
+        let (url, _, _, prompt) = parse(raw, "");
+        !url.is_empty() && prompt
+    });
+    let (url, _, _, _) = parse(&screen.raw(), "");
+    assert!(
+        manual_code_link(&url),
+        "with CLAUDE_CODE_FULL_SIGN_IN_LINK=1, the link `claude auth login --claudeai` shows does not return to the \
+         manual-code page ({} characters): the switch may be gone, or the sign-in now goes to a local port",
+        url.len()
+    );
+}
+
+/// A full sign-in link whose redirect is the manual-code page (`https://platform.claude.com/oauth/code/callback`).
+fn manual_code_link(url: &str) -> bool {
+    let plain = url.replace("%2F", "/").replace("%3A", ":");
+    url.starts_with("https://")
+        && !url.contains(char::is_whitespace)
+        && plain.contains("code/callback")
+}
+
+/// Claude Code's short sign-in link (2.1.330 on): scope bits and the 43-character code challenge, then optional
+/// parameters. The CLI shortens only a claude.ai link whose redirect is the manual-code page.
+fn short_sign_in_link(url: &str) -> bool {
+    Regex::new(r"^https://claude\.ai/oauth/authorize\?[A-Za-z0-9_-]{44,}(&\S*)?$")
+        .unwrap()
+        .is_match(url)
 }
 
 #[test]
