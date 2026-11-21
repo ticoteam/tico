@@ -192,6 +192,26 @@ mod tests {
         );
         assert_eq!(servers.len(), 1);
         assert_eq!(text_of(&servers[0]["env"]), "NOTION_TOKEN");
+        // bot.yaml's account (NOTION_KEY) is another connection on that endpoint: still said to be missing.
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(
+            problems[0].starts_with("notion: MCP server not passed"),
+            "{problems:?}"
+        );
+        // The grant of bot.yaml's very connection (its address and variable) leaves nothing missing.
+        let same = [
+            json!({"name": "notion", "service": "notion", "url": "https://mcp.notion.com/mcp",
+                           "transport": "http", "headers": {"Authorization": "Bearer ${NOTION_KEY}"}, "env": "NOTION_KEY"}),
+        ];
+        let (_, problems) = mcp_for_run(
+            &dir,
+            &Env::new(),
+            &BTreeSet::new(),
+            "claude",
+            "",
+            &[],
+            &same,
+        );
         assert!(problems.is_empty(), "{problems:?}");
         // With no bot.yaml at all, the grant alone brings it.
         let none = dir.join("none");

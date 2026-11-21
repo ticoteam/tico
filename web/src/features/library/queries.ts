@@ -649,7 +649,7 @@ export const apiToolQuery = (id: string) =>
     use it at which level (the first few, `access_total` all) and whether it is an MCP server; the rest is its own page.
     Under the index's key, so whatever reads Tools again reads the vendors too. */
 export type VendorRow = ToolIndexRow & {
-  access?: Array<ApiTool['access'][number] & { read_not_enforced?: boolean }>;
+  access?: ApiTool['access'];
   access_total?: number;
   mcp?: boolean;
 };

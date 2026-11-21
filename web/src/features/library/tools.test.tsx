@@ -1896,7 +1896,7 @@ describe('the Tools page: requests, connections by vendor, find or connect', () 
             vendor: 'raygun',
             name: 'Raygun',
             rows: [
-              { ...raygun[0], mcp: false, access_total: 1, access: [{ subject: 'bot:b1', kind: 'bot', name: 'Clerk', level: 'read', initials: 'C', last_used_at: null }] },
+              { ...raygun[0], mcp: false, access_total: 1, access: [{ subject: 'bot:b1', kind: 'bot', name: 'Clerk', level: 'read', initials: 'C', last_used_at: null, proxied_read: true }] },
               { ...raygun[1], mcp: true, access_total: 0, access: [] },
               { ...raygun[2], who: [{ kind: 'bot', id: 'b1', name: 'Clerk', initials: 'C' }] },
             ],
@@ -1929,7 +1929,7 @@ describe('the Tools page: requests, connections by vendor, find or connect', () 
       url === '/api/v2/tool-templates' ? { services: [linear, stripe], templates: [] } : method === 'POST' && url === '/api/v2/api-tools' ? { id: 'linear' } : undefined,
     );
     as('owner');
-    tools([indexRow({ id: 'api:t1', name: 'Sample API' })]);
+    tools([indexRow({ id: 'api:t1', name: 'Sample API' }), indexRow({ id: 'api:linear-mcp', name: 'Linear MCP', service: 'linear' })]);
     open('');
     fireEvent.click(await screen.findByRole('button', { name: 'Add tool' }));
     const find = await screen.findByRole('dialog', { name: 'Find or connect' });
@@ -1942,6 +1942,7 @@ describe('the Tools page: requests, connections by vendor, find or connect', () 
     fireEvent.click(within(ways).getByRole('button', { name: 'Paste a key' }));
     const paste = await screen.findByRole('dialog', { name: 'Paste a Linear key' });
     expect(writes(sent)).toEqual([]); // nothing is made before the key is sent
+    expect(within(paste).queryByRole('combobox')).toBeNull(); // never onto a connection that has a key or signs in
     fireEvent.change(within(paste).getByLabelText('Key'), { target: { value: 'lin_api_made_up_0001' } });
     fireEvent.click(within(paste).getByRole('button', { name: 'Save' }));
     await waitFor(() =>
