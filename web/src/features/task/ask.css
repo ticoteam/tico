@@ -1,0 +1,59 @@
+/* ---------- the ask card (AskCard.tsx): one frame for every ask, the slim raised card of parts.css .answer ---------- */
+.answer.askcard{position:relative;padding:var(--s-2h) var(--s-2) var(--s-2) var(--s-3h)}
+.askcard-top{display:flex;align-items:center;gap:var(--s-2);min-height:24px;padding-right:var(--s-1)}
+.askcard-top .an-name{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.askcard .an-row{justify-content:flex-end;margin-top:var(--s-1h)}
+.askcard-note{font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
+/* on a computer, what answering does sits at the left of the buttons' row */
+.askcard:not(.is-asked) .askcard-top .askcard-note{position:absolute;left:var(--s-3h);bottom:var(--s-2);line-height:var(--ctl)}
+.askcard.is-asking .askcard-top .askcard-note{display:none}
+.askcard.is-asked{padding:var(--s-2h) var(--s-2) var(--s-2h) var(--s-3h)}
+.askcard.is-asked .hollow{flex:none;margin:0 var(--s-0)}
+.askcard.is-asked .askcard-note{margin-left:var(--s-1)}
+.an-err{margin:var(--s-2) var(--s-1h) 0 0;font-size:var(--t-sm);line-height:var(--lh);color:var(--ink-2);text-wrap:pretty}
+.an-err .btn{margin-left:var(--s-2)}
+
+/* "What should change?": one line in the card */
+.askcard-field{display:block;margin:var(--s-2h) var(--s-1) 0 0;padding:var(--s-2) var(--s-3) var(--s-2h);border-radius:var(--r-ctl);background:var(--well);box-shadow:inset 0 0 0 1px var(--line-strong)}
+.askcard-field>span:first-child{display:block;font-size:var(--t-xs);color:var(--muted)}
+.askcard-field textarea{display:block;width:100%;margin-top:var(--s-0);padding:0;border:0;background:none;color:var(--ink);font:inherit;line-height:var(--lh-read);resize:none;outline:none}
+.askcard.is-asking .an-row{margin-top:var(--s-2)}
+
+/* in a thread the card is a link, drawn in line with the timeline's cards: no lift, its files as chips */
+.askcard.is-link{display:block;margin:var(--s-1) 0 var(--s-0);background:none;box-shadow:inset 0 0 0 1px var(--line-strong);color:var(--ink);text-decoration:none}
+.askcard.is-link:hover{background:var(--hover)}
+.askcard.is-link .askcard-top>.ico{width:14px;height:14px;color:var(--faint)}
+.askcard-what{margin-top:var(--s-1);color:var(--ink-2);line-height:var(--lh-read);overflow-wrap:anywhere}
+.askcard-files{display:flex;flex-wrap:wrap;gap:var(--s-1h);margin-top:var(--s-1h)}
+.askcard-files .file{height:28px;margin-top:0;min-width:0;max-width:100%;padding:0 var(--s-2h);border-radius:var(--r-chip);font-size:var(--t-sm);color:var(--ink-2)}
+.askcard-files .file>span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.askcard-files .file .ico{width:14px;height:14px;flex:none}
+.askcard-files .file em{flex:none;white-space:nowrap}
+.askcard-files .file.is-more{color:var(--muted)}
+
+/* a held message (Held.tsx): what was held, its part that breaks the rule marked, then the rule and its Why */
+.hold-body{display:flex;flex-direction:column;gap:var(--s-2);margin:var(--s-2) var(--s-1) 0 0}
+.hold-text{margin:0;max-height:min(40vh,320px);overflow:auto;padding:var(--s-2) var(--s-3);border-radius:var(--r-ctl);background:var(--well);color:var(--ink);line-height:var(--lh-read);white-space:pre-wrap;overflow-wrap:anywhere}
+.hold-text.is-bones{height:48px}
+.hold-text mark{background:var(--well-2);color:inherit;text-decoration:underline 2px var(--ink-2);text-underline-offset:3px}
+.hold-note,.hold-why{margin:0;font-size:var(--t-sm);color:var(--muted)}
+.hold-why{color:var(--ink-2);overflow-wrap:anywhere}
+.hold-rule{display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--s-0) var(--s-2);margin:0;font-size:var(--t-sm);color:var(--ink-2);line-height:var(--lh)}
+.hold-rule>span:first-child{color:var(--ink)}
+.hold-reason{flex-basis:100%;color:var(--muted)}
+.hold-edit{color:var(--muted);text-decoration:underline;text-underline-offset:2px}
+.hold-edit:hover{color:var(--ink)}
+
+/* a phone: the card holds the bottom; the ask, what answering does and the face on one line, buttons half the width each */
+:where(html[data-layout="cards"]){
+  .answer.askcard{padding:var(--s-0) 0 0 var(--s-1h)}
+  .askcard .an-row{margin-top:var(--s-2)}
+  .askcard .an-row .btn{flex:1;height:44px}
+  .askcard-field{margin-right:0}
+  .tv-lead .answer.askcard{padding:var(--s-2h) var(--s-3) var(--s-3) var(--s-3h)}
+  .tv-waits .answer.askcard{padding:var(--s-2) var(--s-2) var(--s-2) var(--s-3h)}
+  .answer.askcard.is-link{padding:var(--s-2h) var(--s-3)}
+  .askcard:not(.is-asked) .askcard-top .askcard-note{position:static;line-height:inherit}
+  .askcard.is-asking .askcard-top .askcard-note{display:inline}
+  .askcard.is-asked{padding:var(--s-1h) 0 var(--s-1) var(--s-1h)}
+}

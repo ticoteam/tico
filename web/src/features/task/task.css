@@ -145,10 +145,6 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
 .tv-drop{display:grid;justify-items:center;gap:var(--s-3);padding:var(--s-6) var(--s-4);border:1.5px dashed var(--line-strong);border-radius:var(--r-card)}
 .tv-drop.is-over{background:var(--hover)}
 
-/* ---------- the answer card, over the message box in the task's chat ---------- */
-.an-err{margin:var(--s-2) var(--s-1h) 0 0;font-size:var(--t-sm);line-height:var(--lh);color:var(--ink-2);text-wrap:pretty}
-.an-err .btn{margin-left:var(--s-2)}
-
 /* ---------- a phone: the page is the back card; Details fills it and the answer holds the bottom ---------- */
 :where(html[data-layout="cards"]){
   .dt{padding:var(--s-1) var(--s-2) var(--s-6)}
@@ -215,36 +211,6 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
 .ap-orig:not(.is-open) .ap-orig-body{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ap-orig.is-open .ap-orig-body{margin-top:var(--s-1);max-height:50vh;overflow:auto;color:var(--ink-2)}
 
-/* ---------- the decision (plan/approvals.html): the answer card, grown by one line: what Approve does, and who asks ---------- */
-.answer.dcx{position:relative;padding:var(--s-2h) var(--s-2) var(--s-2) var(--s-3h)}
-.dcx-top{display:flex;align-items:center;gap:var(--s-2);min-height:24px;padding-right:var(--s-1)}
-.dcx-top .an-name{min-width:0;overflow:hidden;text-overflow:ellipsis}
-.dcx .an-row{margin-top:var(--s-1h)}
-.dcx-eff{font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
-/* on a computer, what Approve does sits at the left of the buttons' row */
-.dcx:not(.is-asked) .dcx-top .dcx-eff{position:absolute;left:var(--s-3h);bottom:var(--s-2);line-height:var(--ctl)}
-.dcx.is-asking .dcx-top .dcx-eff{display:none}
-.dcx-ask{display:block;margin:var(--s-2h) var(--s-1) 0 0;padding:var(--s-2) var(--s-3) var(--s-2h);border-radius:var(--r-ctl);background:var(--well);box-shadow:inset 0 0 0 1px var(--line-strong)}
-.dcx-ask>span:first-child{display:block;font-size:var(--t-xs);color:var(--muted)}
-.dcx-field{display:block;width:100%;margin-top:var(--s-0);padding:0;border:0;background:none;color:var(--ink);font:inherit;line-height:var(--lh-read);resize:none;outline:none}
-.dcx.is-asking .an-row{margin-top:var(--s-2)}
-.dcx.is-asked{padding:var(--s-2h) var(--s-2) var(--s-2h) var(--s-3h)}
-.dcx.is-asked .hollow{flex:none;margin:0 var(--s-0)}
-.dcx.is-asked .dcx-eff{margin-left:var(--s-1)}
-
-/* a held message's decision (Held.tsx): what was held, its part that breaks the rule marked, then the rule and its Why */
-.hold-body{display:flex;flex-direction:column;gap:var(--s-2);margin:var(--s-2) var(--s-1) 0 0}
-.hold-text{margin:0;max-height:min(40vh,320px);overflow:auto;padding:var(--s-2) var(--s-3);border-radius:var(--r-ctl);background:var(--well);color:var(--ink);line-height:var(--lh-read);white-space:pre-wrap;overflow-wrap:anywhere}
-.hold-text.is-bones{height:48px}
-.hold-text mark{background:var(--well-2);color:inherit;text-decoration:underline 2px var(--ink-2);text-underline-offset:3px}
-.hold-note,.hold-why{margin:0;font-size:var(--t-sm);color:var(--muted)}
-.hold-why{color:var(--ink-2);overflow-wrap:anywhere}
-.hold-rule{display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--s-0) var(--s-2);margin:0;font-size:var(--t-sm);color:var(--ink-2);line-height:var(--lh)}
-.hold-rule>span:first-child{color:var(--ink)}
-.hold-reason{flex-basis:100%;color:var(--muted)}
-.hold-edit{color:var(--muted);text-decoration:underline;text-underline-offset:2px}
-.hold-edit:hover{color:var(--ink)}
-
 /* an email's OK hung on the matter, at the top of its other pages: a pointer to its Email tab, no Approve */
 .tv-waits{flex:none;display:flex;flex-direction:column;gap:var(--s-2);padding:var(--s-3) var(--pad-task)}
 
@@ -277,19 +243,8 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
   .ap-doc{height:min(720px,90vh)}
   .ap-doc:has(.fv-none){height:auto;min-height:0}
   .ap-doc .lib.fv-embed .fv-frame{border-radius:0;box-shadow:none}
-  /* the decision holds the bottom: name, what Approve does and the face on one line, two buttons half the width each */
-  .answer.dcx{padding:var(--s-0) 0 0 var(--s-1h)}
-  .dcx .an-row{margin-top:var(--s-2)}
-  .dcx .an-row .btn{flex:1;height:44px}
-  .dcx .an-row .grow{display:none}
-  .dcx-ask{margin-right:0}
   .tv-waits{padding:var(--s-2) var(--s-3)}
   .tv-lead,.ap-scroll>.tv-brief{padding:var(--s-3h) var(--s-4) 0}
-  .tv-lead .answer.dcx{padding:var(--s-2h) var(--s-3) var(--s-3) var(--s-3h)}
-  .tv-waits .answer.dcx{padding:var(--s-2) var(--s-2) var(--s-2) var(--s-3h)}
-  .dcx:not(.is-asked) .dcx-top .dcx-eff{position:static;line-height:inherit}
-  .dcx.is-asking .dcx-top .dcx-eff{display:inline}
-  .dcx.is-asked{padding:var(--s-1h) 0 var(--s-1) var(--s-1h)}
   .fv-bar small{display:none}
   .fv-bar>b{min-width:0;flex:1}
   .fv-bar>.grow{display:none}

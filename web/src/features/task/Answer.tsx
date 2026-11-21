@@ -1,19 +1,17 @@
 import { useQuery } from '@tanstack/react-query';
-import { useNavigate } from '@tanstack/react-router';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { run, useAction } from '@/actions';
 import type { TaskRequirement } from '@/api/schema';
 import { clock } from '@/conversation';
 import { meQuery } from '@/data';
 import { Button } from '@/kit/Button';
-import { FlowMark } from '@/kit/FlowMark';
 import { toast } from '@/kit/Toast';
-import { changesAskedOf, decisionName, decisionOf, effectOf, emailOf, failedToast, personOf, reasonOf, sendTitle, tabAddress } from './model';
+import { changesAskedOf, decisionName, decisionOf, effectOf, emailOf, failedToast, personOf, sendTitle } from './model';
 import { answered } from './answered';
-import { Face } from './parts';
+import { AskCard, Docked, useAnswering } from './AskCard';
 import { HeldDecision, isRuleReview } from './Held';
 import { followSend } from './sending';
-import { addressesOf, decisionShownQuery, emailSendQuery, waitingQuery, type TaskData } from './queries';
+import { addressesOf, decisionShownQuery, emailSendQuery, type TaskData } from './queries';
 
 /* The decision (plan/approvals.html): one box wherever a request waits on the person. It names the thing, who asks and
    what Approve does; Request changes opens one line in it; Approve is the one filled button, bound to exactly what was
@@ -47,13 +45,7 @@ export function Decision({ t, flow, dock = false, onAsking }: DecisionProps) {
   ) : (
     <Asked t={t} r={asked as TaskRequirement} />
   );
-  return dock ? (
-    <div className="dock" data-dock>
-      {box}
-    </div>
-  ) : (
-    box
-  );
+  return <Docked dock={dock}>{box}</Docked>;
 }
 
 /** The thing's name and what Approve does: an email is named by who it goes to, read from its own preview, else from
@@ -86,11 +78,9 @@ interface AnswerProps {
 export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
   const approve = useAction('task.approve');
   const request = useAction('task.requestChanges');
-  const navigate = useNavigate();
-  const waiting = useQuery({ ...waitingQuery, enabled: flow });
+  const { error, setError, here, nextUp, refused, moveOn } = useAnswering(t, flow);
   const shown = useQuery(decisionShownQuery(t.id, r.requirement_id, t.version, emailOf(r)));
   const { name, effect, send, recipients } = useNamed(t, r);
-  const [error, setError] = useState('');
   const [asking, setAsking] = useState(false);
   const [note, setNote] = useState('');
   const may = (v: 'ok' | 'no') => r.may.includes(v);
@@ -106,31 +96,11 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
   // A refusal, or what Approve binds to did not load: said in place of what Approve does, never over it.
   const fault = !!error || shown.isError || (preview?.complete === false && !shown.isPlaceholderData);
 
-  // A refusal that lands once the box has gone (the person moved on) is said in a toast: never silent.
-  const here = useRef(true);
-  useEffect(() => {
-    here.current = true;
-    return () => {
-      here.current = false;
-    };
-  }, []);
-  const refused = (res: { error?: string; why?: string }) => {
-    if (!here.current) toast(failedToast(res));
-    setError(reasonOf(res.error));
-  };
-
   useEffect(() => {
     if (!asking) return;
     onAsking?.(true);
     return () => onAsking?.(false);
   }, [asking, onAsking]);
-
-  // Picked before answering: the answered row leaves the list at once.
-  const nextUp = () => {
-    const rows = waiting.data ?? [];
-    const i = rows.findIndex((w) => w.id === t.id);
-    return (i >= 0 ? (rows[i + 1] ?? rows[i - 1]) : rows[0]) ?? null;
-  };
 
   const onApprove = async () => {
     setError('');
@@ -160,11 +130,7 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
           },
         }),
       });
-    // Outside Flow the open task's page decides: the next ask on it, or back to where it was opened from. Not once the
-    // person has moved on.
-    if (!flow) return void (here.current && answered());
-    const to = next ? tabAddress(next, undefined, true) : { to: '/flow', search: {} };
-    void navigate({ to: to.to as never, search: to.search as never });
+    moveOn(next);
   };
 
   const onSend = async () => {
@@ -179,56 +145,57 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
   };
 
   return (
-    <section className={asking ? 'answer dcx is-asking' : 'answer dcx'} aria-label="The decision" data-target={`task-answer:${t.id}`}>
-      <div className="dcx-top">
-        <FlowMark />
-        <b className="an-name">{name}</b>
-        {!fault && (changed || effect) && <span className="dcx-eff">{changed ? 'Changed' : effect}</span>}
-        <span className="grow" />
-        <Face id={askerOf(t, r)} />
-      </div>
-      {asking ? (
-        <>
-          <label className="dcx-ask">
-            <span>What should change?</span>
-            <textarea className="dcx-field" rows={2} maxLength={4000} autoFocus value={note} onChange={(e) => setNote(e.target.value)} />
-          </label>
-          <div className="an-row">
-            <span className="grow" />
+    <AskCard
+      name={name}
+      note={!fault && (changed ? 'Changed' : effect)}
+      who={askerOf(t, r)}
+      asking={asking}
+      target={`task-answer:${t.id}`}
+      actions={
+        asking ? (
+          <>
             <Button disabled={request.pending} onClick={() => setAsking(false)}>
               Cancel
             </Button>
             <Button variant="primary" busy={request.pending} disabled={!note.trim() || request.pending} onClick={() => onSend()}>
               Send
             </Button>
-          </div>
-        </>
-      ) : (
-        <div className="an-row">
-          <span className="grow" />
-          {may('no') && (
-            <Button disabled={busy} onClick={() => setAsking(true)}>
-              Request changes
-            </Button>
-          )}
-          {may('ok') && (
-            <Button variant="primary" busy={approve.pending} disabled={busy || !ready} onClick={() => onApprove()}>
-              Approve
-            </Button>
-          )}
-        </div>
+          </>
+        ) : (
+          <>
+            {may('no') && (
+              <Button disabled={busy} onClick={() => setAsking(true)}>
+                Request changes
+              </Button>
+            )}
+            {may('ok') && (
+              <Button variant="primary" busy={approve.pending} disabled={busy || !ready} onClick={() => onApprove()}>
+                Approve
+              </Button>
+            )}
+          </>
+        )
+      }
+      error={
+        fault && (
+          <>
+            {error || 'Part of it did not load'}
+            {!error && (
+              <Button variant="quiet" onClick={() => shown.refetch()}>
+                Try again
+              </Button>
+            )}
+          </>
+        )
+      }
+    >
+      {asking && (
+        <label className="askcard-field">
+          <span>What should change?</span>
+          <textarea rows={2} maxLength={4000} autoFocus value={note} onChange={(e) => setNote(e.target.value)} />
+        </label>
       )}
-      {fault && (
-        <p className="an-err" role="alert">
-          {error || 'Part of it did not load'}
-          {!error && (
-            <Button variant="quiet" onClick={() => shown.refetch()}>
-              Try again
-            </Button>
-          )}
-        </p>
-      )}
-    </section>
+    </AskCard>
   );
 }
 
@@ -236,15 +203,5 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
 function Asked({ t, r }: { t: TaskData; r: TaskRequirement }) {
   const { name } = useNamed(t, r);
   const at = clock(r.answer?.at);
-  return (
-    <section className="answer dcx is-asked" aria-label="The decision" data-target={`task-answer:${t.id}`}>
-      <div className="dcx-top">
-        <i className="hollow" />
-        <b className="an-name">{name}</b>
-        <span className="dcx-eff">{at ? `Changes asked, ${at}` : 'Changes asked'}</span>
-        <span className="grow" />
-        <Face id={askerOf(t, r)} />
-      </div>
-    </section>
-  );
+  return <AskCard name={name} note={at ? `Changes asked, ${at}` : 'Changes asked'} who={askerOf(t, r)} asked target={`task-answer:${t.id}`} />;
 }

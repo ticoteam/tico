@@ -110,7 +110,7 @@ a.head-name:hover{text-decoration-color:var(--line-strong)}
 .msg:hover .msg-acts,.msg-acts:focus-within,.msg-acts:has([aria-expanded="true"]){opacity:1}
 @media (hover:none){.msg-acts{display:none}}
 
-/* ---------- a card in the timeline (plan/threads-team.html .kcard): a team's update, an approval waiting on you ---------- */
+/* ---------- a card in the timeline (plan/threads-team.html .kcard): a team's update ---------- */
 .kcard{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--s-1);margin:var(--s-1) 0 var(--s-0);padding:var(--s-2h) var(--s-3);border-radius:var(--r-card);box-shadow:inset 0 0 0 1px var(--line-strong);color:var(--ink)}
 .kcard:hover{background:var(--well)}
 .kcard .kh{display:flex;align-items:center;gap:var(--s-2);font-weight:var(--w-strong)}
@@ -118,16 +118,6 @@ a.head-name:hover{text-decoration-color:var(--line-strong)}
 .kcard .kh .grow{flex:1}
 .kcard p{color:var(--ink-2);line-height:var(--lh-read);overflow-wrap:anywhere}
 .kcard .kf{font-size:var(--t-xs);color:var(--muted)}
-/* an approval waiting, as a link in a thread: it opens the thing, it decides nothing */
-.kcard.is-link{text-decoration:none}
-.kcard.is-link:hover{background:var(--hover)}
-.kcard .kh .ico.end{width:14px;height:14px;color:var(--faint)}
-.kcard .kfiles{display:flex;flex-wrap:wrap;gap:var(--s-1h)}
-.kcard .kfiles .file{height:28px;margin-top:0;min-width:0;max-width:100%;padding:0 var(--s-2h);border-radius:var(--r-chip);font-size:var(--t-sm);color:var(--ink-2)}
-.kcard .kfiles .file>span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-.kcard .kfiles .file .ico{width:14px;height:14px;flex:none}
-.kcard .kfiles .file em{flex:none;white-space:nowrap}
-.kcard .kfiles .file.is-more{color:var(--muted)}
 
 /* ---------- what a message holds besides words (thread-content.html) ---------- */
 /* A link as a chip in the line: what it points at, by its mark and name. The app's pages, its files and a bare web

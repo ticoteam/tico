@@ -131,7 +131,7 @@ test('Needs you: open the case and approve the email; the send goes out', async 
 test("an approval card in an agent's chat opens the case beside it; Close goes back", async ({ browser, hub }) => {
   const { subject } = hub.facts.mail;
   const page = await open(browser, hub, '/team/engineering-manager');
-  const card = page.locator('a.kcard[data-target^="approval:"]');
+  const card = page.locator('a[data-target^="approval:"]');
   await expect(card).toBeVisible();
   const before = page.url();
   await card.click();

@@ -1,11 +1,10 @@
 import { useQueries, useQuery } from '@tanstack/react-query';
 import type { ChatMessage } from '@/conversation';
 import { useActor, useDirectory } from '@/data';
-import { FlowMark } from '@/kit/FlowMark';
 import { Icon } from '@/kit/Icon';
-import { Link } from '@/kit/Link';
 import { besideThread } from '@/lib';
 import { flowQuery, type FlowItem } from '@/features/tasks/routing';
+import { AskCard } from './AskCard';
 import { decisionOf, personOf, sendTitle, tabAddress, thingsOf } from './model';
 import { addressesOf, emailSendQuery, taskDetailQuery, taskFilesQuery, type EmailFile, type TaskData } from './queries';
 import { useMatterOf } from './Waiting';
@@ -149,16 +148,10 @@ interface Chip {
 function Card({ to, chat, what, files = [] }: { to: string; chat?: string; what: string; files?: Chip[] }) {
   const more = files.length - CHIPS;
   return (
-    <Link className="kcard is-link" href={besideThread(to, chat)} data-target={`approval:${to}`}>
-      <span className="kh">
-        <FlowMark size={10} />
-        Approve
-        <span className="grow" />
-        <Icon name="chevron" className="end" />
-      </span>
-      <p>{what}</p>
+    <AskCard name="Approve" href={besideThread(to, chat)} target={`approval:${to}`} end={<Icon name="chevron" />}>
+      <p className="askcard-what">{what}</p>
       {files.length > 0 && (
-        <span className="kfiles">
+        <span className="askcard-files">
           {files.slice(0, more > 1 ? CHIPS : files.length).map((f) => (
             <span key={f.key} className="file">
               <Icon name="file" />
@@ -169,6 +162,6 @@ function Card({ to, chat, what, files = [] }: { to: string; chat?: string; what:
           {more > 1 && <span className="file is-more">+{more}</span>}
         </span>
       )}
-    </Link>
+    </AskCard>
   );
 }
