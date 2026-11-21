@@ -1,9 +1,9 @@
 import type { AnyRouter } from '@tanstack/react-router';
 import * as z from 'zod/mini';
 import { defineAction } from '@/actions';
+import { chatAddress } from '@/lib';
 import { ApiError } from '@/api/client';
 import { directoryQuery, queryClient } from '@/data';
-import { chatAddress } from '@/lib';
 import { budgetDay, lastFullMonth, monthName } from './model';
 import {
   addBudget,
@@ -33,6 +33,7 @@ import { FINANCE_TAB_IDS } from './search';
 import { capsOf, tabShown, type AccessList } from './caps';
 import { asOfDay, balanceCsv, balanced, billPayload, compareDay, download, entryPayload, invoicePayload, paidPayload, toCents } from './ledger';
 import { TX_STATUSES, validateFinanceSearch } from './search';
+import { toast } from '@/kit/Toast';
 
 /* Every view and change on Finance and Growth. Tabs, ranges and the open panel live in the address, so Back undoes a
    view; a budget change is shown first and taken back if the server refuses it. Growth is read here: its changes go
@@ -525,32 +526,58 @@ function growthScopeWords(router: AnyRouter, qc: typeof queryClient) {
   const loc = router.state.location;
   if (loc.pathname !== GROWTH) return '';
   const search = loc.search as { segment?: string; month?: string };
-  const seg = search.segment && qc.getQueryData(segmentsQuery.queryKey)?.segments.find((x) => x.slug === search.segment);
   const read = qc.getQueryData(growthReadQuery(search.segment, search.month).queryKey);
-  return `${seg ? seg.name : 'All'}, ${monthName(read?.period ?? search.month ?? lastFullMonth())}`;
+  // the segment as the board names it (its read), else the list's name, else the address's own word: never "All"
+  // for a segment whose names have not loaded
+  const seg = search.segment && qc.getQueryData(segmentsQuery.queryKey)?.segments.find((x) => x.slug === search.segment);
+  const name = search.segment ? (read?.segment?.name ?? (seg ? seg.name : search.segment)) : 'All';
+  return `${name}, ${monthName(read?.period ?? search.month ?? lastFullMonth())}`;
 }
 
 /** Growth changes (channels, customers, sources) are asked of the Growth Manager: its chat opens beside the page. With
     words, they are sent first, led by the scope and month on screen. Ordinary messaging, so Tico may ask too. */
+/** What `growth.askManager` answers when the org rules held the words: nothing was sent and nothing opens. */
+const HELD = 'held';
+
 export const askManager = defineAction({
   id: 'growth.askManager',
   title: 'Ask the Growth Manager',
   kind: 'change',
   input: z.strictObject({ text: z.optional(z.string().check(z.minLength(1), z.maxLength(4000))) }),
   run: async ({ router, queryClient: qc }, { text }): Promise<string> => {
+    // where it was asked from (the page, its month, segment and open panel), before anything is awaited: the chat
+    // opens beside only if the person is still there
+    const here = () => {
+      const q = new URLSearchParams(router.state.location.searchStr);
+      q.delete('chat');
+      q.sort();
+      return `${router.state.location.pathname}?${q.toString()}`;
+    };
+    const at = here();
+    // what the words are about, read now too: the segment and month on screen, and the channel open in its panel
+    const lead = growthScopeWords(router, qc);
+    const panel = (router.state.location.search as { panel?: string }).panel ?? '';
+    const channel = panel.startsWith('channel:') ? panel.slice('channel:'.length) : '';
     const who = await findGrowthManager(qc);
     if (!who) throw new Error('No Growth Manager');
     const words = text?.trim();
+    let chat = chatAddress(who, 'agent');
     if (words) {
-      const lead = growthScopeWords(router, qc);
-      await askGrowthManager(who, lead ? `${lead}: ${words}` : words, { path: router.state.location.href, title: 'Growth' });
+      const sent = await askGrowthManager(who, lead ? `${lead}: ${words}` : words, channel ? { kind: 'channel', id: channel } : undefined);
+      // held by the org rules: the words are in the hold, and no chat opens
+      if (!sent) {
+        toast({ text: 'Held for a check' });
+        return HELD;
+      }
+      // the thread it went to, as the server answered it, opens beside the page
+      const thread = sent.conversation_id || sent.thread_id;
+      if (thread) chat = `thread:${thread}`;
     }
-    const chat = chatAddress(who, 'agent');
-    await router.navigate({ to: '.', search: (prev: Record<string, unknown>) => ({ ...prev, chat }) });
+    if (here() === at) await router.navigate({ to: '.', search: (prev: Record<string, unknown>) => ({ ...prev, chat }) });
     return chat;
   },
-  did: ({ text }) => (text?.trim() ? 'Asked the Growth Manager' : 'Opened the chat'),
-  target: (_i, chat) => (chat ? { kind: 'chat', id: chat } : null),
+  did: ({ text }, out) => (out === HELD ? 'Held for a check' : text?.trim() ? 'Asked the Growth Manager' : 'Opened the chat'),
+  target: (_i, chat) => (chat && chat !== HELD ? { kind: 'chat', id: chat } : null),
 });
 
 export const closeGrowthPanel = defineAction({

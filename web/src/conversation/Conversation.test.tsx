@@ -6,6 +6,7 @@ import { queryClient, type Actor } from '@/data';
 import { upsertMessage, type TimelineData } from '@/live';
 import type * as Live from '@/live';
 import { Composer } from './Composer';
+import { Toasts } from '@/kit/Toast';
 import { Conversation } from './Conversation';
 import { Message } from './Message';
 import { showPageName } from '@/tico/pageName';
@@ -212,6 +213,78 @@ describe('Conversation', () => {
     type('Ship it');
     await waitFor(() => expect(onMoved).toHaveBeenCalledWith('dm-new'));
     expect(screen.queryByText('Ship it')).toBeNull();
+  });
+
+  it("puts a failed bar send's words back in its box, keeps them through the DM switch, and sends them again @4882", async () => {
+    seed([]);
+    let reply: Reply = { status: 409, body: { error: { code: 'dm_changed', detail: 'Your chat with bot:qa changed; send it again', retryable: true } } };
+    serve(() => reply);
+    const onMoved = vi.fn();
+    const bar = (id: string) => <Conversation id={id} variant="side" title="Ana" actor="bot:qa" from={FROM} toDm="bot:qa" onMoved={onMoved} />;
+    const view = render(bar(T), { wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider> });
+    const box = () => screen.getByRole('textbox', { name: 'Message Ana' }) as HTMLTextAreaElement;
+    type('Ship it');
+    await waitFor(() => expect(onMoved).toHaveBeenCalledWith(''));
+    // no failed row: the words are back in the box
+    expect(screen.queryByText('Not sent')).toBeNull();
+    await waitFor(() => expect(box().value).toBe('Ship it'));
+    // the bar reads its DM again and shows another thread: the words are still in its box (kept by the agent)
+    queryClient.setQueryData(['thread', 'T2', 'timeline'], { pages: [{ messages: [], next_cursor: null, read_marks: {} }], pageParams: [null] });
+    view.rerender(bar('T2'));
+    await waitFor(() => expect(box().value).toBe('Ship it'));
+    // a refusal puts them back too
+    reply = { status: 403, body: { error: { code: 'forbidden', detail: 'You can see bot:qa but not message them' } } };
+    fireEvent.keyDown(box(), { key: 'Enter' });
+    await waitFor(() => expect(sends()).toHaveLength(2));
+    await waitFor(() => expect(box().value).toBe('Ship it'));
+    reply = { status: 200, body: { ...msg(3, ME, 'Ship it'), conversation_id: 'T2', thread_id: 'T2' } };
+    fireEvent.keyDown(box(), { key: 'Enter' });
+    await waitFor(() => expect(sends()).toHaveLength(3));
+    expect(sends()[2]).toMatchObject({ url: '/api/v2/threads/dm/messages', body: { text: 'Ship it', to_dm: 'bot:qa' } });
+    await waitFor(() => expect(box().value).toBe(''));
+  });
+
+  it('never writes a failed bar send over newer words: they stay, through the DM switch, and the toast keeps the unsent words @4882-S16', async () => {
+    seed([]);
+    let answer!: (r: { status: number; body: unknown }) => void;
+    serve(() => new Promise((r) => (answer = r)));
+    const bar = (id: string) => <Conversation id={id} variant="side" title="Ana" actor="bot:qa" from={FROM} toDm="bot:qa" onMoved={() => undefined} />;
+    const view = render(
+      <>
+        {bar(T)}
+        <Toasts />
+      </>,
+      { wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider> },
+    );
+    const box = () => screen.getByRole('textbox', { name: 'Message Ana' }) as HTMLTextAreaElement;
+    type('Ship it');
+    await waitFor(() => expect(answer).toBeTypeOf('function'));
+    fireEvent.change(box(), { target: { value: 'Newer words' } });
+    await act(async () => answer({ status: 409, body: { error: { code: 'dm_changed', detail: 'Your chat changed', retryable: true } } }));
+    expect(box().value).toBe('Newer words');
+    expect(await screen.findByText('Ship it')).toBeTruthy();
+    queryClient.setQueryData(['thread', 'T2', 'timeline'], { pages: [{ messages: [], next_cursor: null, read_marks: {} }], pageParams: [null] });
+    view.rerender(
+      <>
+        {bar('T2')}
+        <Toasts />
+      </>,
+    );
+    await waitFor(() => expect(box().value).toBe('Newer words'));
+  });
+
+  it("says a held bar send was held @4882-S2", async () => {
+    seed([]);
+    serve(() => ({ status: 200, body: { hold: { id: 'h1' } } }));
+    render(
+      <>
+        <Conversation id={T} variant="side" title="Ana" actor="bot:qa" from={FROM} toDm="bot:qa" />
+        <Toasts />
+      </>,
+      { wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider> },
+    );
+    type('Ship it');
+    expect(await screen.findByText('Held for a check')).toBeTruthy();
   });
 
   it('sends a retry with the page it was first written on, not the one shown now @4857-S15', async () => {

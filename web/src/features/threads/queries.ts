@@ -21,7 +21,7 @@ export const threadKeys = {
   list: keys.threads.list(),
   view: keys.threads.view,
   catchUp: keys.threads.catchUp(),
-  chat: (chat: string, only?: 'private') => (only ? (['threads', 'chat', chat, only] as const) : (['threads', 'chat', chat] as const)),
+  chat: (chat: string, only?: 'private') => (only ? ([...keys.threads.chat(chat), only] as const) : keys.threads.chat(chat)),
   team: (group: string) => ['threads', 'team', group] as const,
 };
 const mailKeys = {

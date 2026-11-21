@@ -25,6 +25,7 @@ import type {
   FinanceTransactions,
 } from '@/api/schema';
 import { directoryQuery, isNetworkError, pageOwnersQuery, QUIET_STALE_MS, queryClient, quietRoot, write, type Directory, type PageOwnerRow } from '@/data';
+import { sendToDm } from '@/conversation';
 import { newId } from '@/lib';
 
 /* Finance, budgets and Growth. None has a live topic: each root is read again after the person's own writes, on
@@ -764,9 +765,10 @@ export const growthChannelQuery = (channel: string, month: string | undefined) =
       api.get<GrowthRead>(`/api/v2/growth/read?${qs({ scope: `channel:${channel}`, detail: 'campaigns,series', period: month })}`, { signal }),
   });
 
-/** A message to the Growth Manager in its chat (POST /api/v2/chat/{bot}, backend/thread_api.py), sent from the page. */
-export const askGrowthManager = (bot: string, text: string, page: { path: string; title: string }) =>
-  api.post<unknown>(`/api/v2/chat/${enc(bot.replace(/^bot:/, ''))}`, { text, refs: { page } });
+/** A message to the Growth Manager from the page: to the reader's DM with exactly it, which the server finds (or makes)
+    as it writes (conversation's sendToDm, the Agent bar's path). Resolves with the message, or null when held. */
+export const askGrowthManager = (bot: string, text: string, item?: { kind: string; id: string }) =>
+  sendToDm(bot, text, { page: 'growth', label: 'Growth', ...(item && { item }) });
 
 export interface Segment {
   slug: string;

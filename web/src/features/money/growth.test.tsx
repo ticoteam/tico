@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider, useSearch } from '@tanstack/react-router';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClient, type Actor } from '@/data';
 import { Toasts } from '@/kit/Toast';
@@ -18,6 +18,8 @@ const missing: Reply = { status: 404, body: {} };
 const broken: Reply = { status: 500, body: {} };
 
 const posts: { path: string; body: Record<string, unknown> }[] = [];
+/** What a message to an agent's DM answers: the message and the thread it went to, or a hold. */
+let dmReply: Record<string, unknown> | Promise<Record<string, unknown>> = { id: 'm1', conversation_id: 'dm-gm1', thread_id: 'dm-gm1' };
 
 /** Growth's reads, each replaceable (`path?scope=` for one scope); anything else is not found. Every POST is kept. */
 function serve(over: Record<string, Reply> = {}, urls: URL[] = []) {
@@ -32,7 +34,9 @@ function serve(over: Record<string, Reply> = {}, urls: URL[] = []) {
     const path = u.pathname.replace('/api/v2', '');
     if ((init?.method ?? 'GET') === 'POST') {
       posts.push({ path, body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown> });
-      return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+      // a message to an agent's DM answers with the message and the thread it went to
+      const sent = path === '/threads/dm/messages' ? await dmReply : {};
+      return new Response(JSON.stringify(sent), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }
     urls.push(u);
     const scope = u.searchParams.get('scope');
@@ -212,11 +216,74 @@ describe('Growth on the one read @s400 @s444', () => {
     expect(within(table).getByText('no spend')).toBeTruthy();
     expect(within(table).queryByRole('link', { name: 'Unknown' })).toBeNull();
 
-    // The ask line sends the words to the Growth Manager, led by the scope and month, and opens its chat.
+    // The ask line sends the words to the reader's DM with the Growth Manager, led by the scope and month, and the
+    // thread they went to, as the server answered it, opens beside (#4882).
     fireEvent.change(screen.getByRole('textbox', { name: 'Ask the Growth Manager' }), { target: { value: 'Why is search over?' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-    await waitFor(() => expect(router.state.location.search).toEqual({ month: '2026-10', chat: 'agent:gm1' }));
-    expect(posts).toEqual([{ path: '/chat/gm1', body: expect.objectContaining({ text: 'All, October 2026: Why is search over?' }) as unknown }]);
+    await waitFor(() => expect(router.state.location.search).toEqual({ month: '2026-10', chat: 'thread:dm-gm1' }));
+    expect(posts).toEqual([
+      { path: '/threads/dm/messages', body: { text: 'All, October 2026: Why is search over?', to_dm: 'bot:gm1', refs: { from_page: { page: 'growth', label: 'Growth' } } } },
+    ]);
+  });
+
+  it("leads with the segment as the board's read names it, before the segment list has loaded @4882-S17", async () => {
+    directory(GM());
+    const alpha = { ...READ, scope: 'segment:alpha', segment: { slug: 'alpha', name: 'Alpha', rule: null, value_kind: 'revenue' as const } };
+    serve({ ...OWNED, '/growth/read?scope=segment:alpha': ok(alpha), '/growth/segments': ok({ segments: [] }) });
+    show('/company/growth?month=2026-10&segment=alpha');
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Ask the Growth Manager' }), { target: { value: 'Why is search over?' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect(posts[0]?.body).toMatchObject({ text: 'Alpha, October 2026: Why is search over?' });
+  });
+
+  it('says the channel open in its panel as a pointer, with the segment and month read before anything is awaited @4882-S14', async () => {
+    directory(GM());
+    serve(OWNED);
+    show('/company/growth?month=2026-10&panel=channel:search');
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Ask the Growth Manager' }), { target: { value: 'Why is search over?' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect(posts[0]?.body).toMatchObject({
+      text: 'All, October 2026: Why is search over?',
+      refs: { from_page: { page: 'growth', label: 'Growth', item: { kind: 'channel', id: 'search' } } },
+    });
+  });
+
+  it('opens no chat when the person moved to another month before the answer came @4882-S8', async () => {
+    let answer!: (r: Record<string, unknown>) => void;
+    dmReply = new Promise((r) => (answer = r));
+    try {
+      directory(GM());
+      serve(OWNED);
+      const router = show('/company/growth?month=2026-10');
+      fireEvent.change(await screen.findByRole('textbox', { name: 'Ask the Growth Manager' }), { target: { value: 'Why is search over?' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+      await waitFor(() => expect(posts).toHaveLength(1));
+      act(() => void router.navigate({ to: '.', search: { month: '2026-09' } } as never));
+      await waitFor(() => expect(router.state.location.search).toEqual({ month: '2026-09' }));
+      await act(async () => answer({ id: 'm1', conversation_id: 'dm-gm1', thread_id: 'dm-gm1' }));
+      await waitFor(() => expect((screen.getByRole('textbox', { name: 'Ask the Growth Manager' }) as HTMLInputElement).value).toBe(''));
+      expect(router.state.location.search).toEqual({ month: '2026-09' });
+    } finally {
+      dmReply = { id: 'm1', conversation_id: 'dm-gm1', thread_id: 'dm-gm1' };
+    }
+  });
+
+  it('says a held ask was held, clears the line and opens no chat @4882-S2', async () => {
+    dmReply = { hold: { id: 'h1' } };
+    try {
+      directory(GM());
+      serve(OWNED);
+      const router = show('/company/growth?month=2026-10');
+      fireEvent.change(await screen.findByRole('textbox', { name: 'Ask the Growth Manager' }), { target: { value: 'Why is search over?' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+      expect(await screen.findByText('Held for a check')).toBeTruthy();
+      expect(router.state.location.search).toEqual({ month: '2026-10' });
+      expect((screen.getByRole('textbox', { name: 'Ask the Growth Manager' }) as HTMLInputElement).value).toBe('');
+    } finally {
+      dmReply = { id: 'm1', conversation_id: 'dm-gm1', thread_id: 'dm-gm1' };
+    }
   });
 
   it('no segments, no spend, all zeros: the KPIs lead and the funnel folds below', async () => {

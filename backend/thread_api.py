@@ -530,6 +530,17 @@ def install(app, store, auth, mutate, rule_check):
                 threads._require_write(c, v, target)
         return found
 
+    def dm_still(c, who, body, found):
+        """Inside the write of `/threads/dm/messages`: the DM looked up before the check is still the poster's member-private
+        DM with exactly `to_dm` (its members did not change in between), and when there was none, there is still none
+        (one unarchived or whose membership came back in between has rules of its own, which the check did not read);
+        else a retryable 409 `dm_changed`, and the client sends again, which looks it up and checks it again."""
+        now = threads._open_dm(c, who.actor, threads._dm_members_for(c, who.actor, [body.to_dm]), legacy=False)
+        if now != found:
+            raise Problem(
+                "dm_changed", "Your chat with " + str(body.to_dm) + " changed; send it again", 409, retryable=True
+            )
+
     def dm_start(who, body):
         """The first message of the poster's DM with `to_dm`: its start (as `POST /threads/dm` makes one) and its rule
         check, outside the write, as a first message is checked."""
@@ -1035,9 +1046,11 @@ def install(app, store, auth, mutate, rule_check):
         start = None
         # the DM a `/threads/dm/messages` post means is looked up read only, outside the write (`dm_target`)
         target: str | None = thread_id
-        if thread_id == DM_ADDRESS:
+        found = None
+        to_dm = thread_id == DM_ADDRESS
+        if to_dm:
             with store.read() as c:
-                target = dm_target(c, who, body)
+                target = found = dm_target(c, who, body)
         # A room that moved is checked and written as its Home (bot_home_merge.named_home), named before the check.
         if target:
             target = bot_home_merge.named_home(store, target)
@@ -1049,6 +1062,8 @@ def install(app, store, auth, mutate, rule_check):
 
         def work(c):
             v = threads.viewer(auth, who)
+            if to_dm:
+                dm_still(c, who, body, found)
             replying = _reply_check(c, auth, who, target, body) if target else None
             way, marks = _delivery_refs(c, auth, who, body, target) if body.delivery and target else (None, {})
             shared = shared_files(c, app.state.files, who, body.attachments)
@@ -1399,14 +1414,18 @@ def install(app, store, auth, mutate, rule_check):
             _delivery_words(body)
             page_owners.check_from({"from_page": body.from_page})
             if to_dm:
-                with store.read() as c:
-                    found = dm_target(c, who, body)
+                # the DM and the right to write in it, read in one snapshot, before any byte is taken
+                with store.read_transaction() as c:
+                    found = checked["found"] = dm_target(c, who, body)
+                    if found:
+                        threads.require(c, threads.viewer(auth, who), found, write=True)
                 target = bot_home_merge.named_home(store, found) if found else None
-            if not target:  # the first message to that agent makes the DM, only if it goes (`dm_start`)
-                checked["start"], checked["rc"] = dm_start(who, body)
-                return
-            with store.read() as c:
-                threads.require(c, threads.viewer(auth, who), target, write=True)
+                if not target:  # the first message to that agent makes the DM, only if it goes (`dm_start`)
+                    checked["start"], checked["rc"] = dm_start(who, body)
+                    return
+            else:
+                with store.read() as c:
+                    threads.require(c, threads.viewer(auth, who), target, write=True)
             checked["rc"] = check(who, target, body)
 
         body, uploads = await app.state.uploads.form(request, ThreadUpload, admit)
@@ -1415,6 +1434,8 @@ def install(app, store, auth, mutate, rule_check):
 
         def work(c):
             v = threads.viewer(auth, who)
+            if to_dm:
+                dm_still(c, who, body, checked.get("found"))
             start = checked.get("start")
             replying = _reply_check(c, auth, who, target, body) if target else None
             way, marks = _delivery_refs(c, auth, who, body, target) if body.delivery and target else (None, {})

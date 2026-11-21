@@ -22,5 +22,7 @@ export const keys = {
     list: () => ['threads', 'list'] as const,
     view: (id: string) => ['threads', 'view', id] as const,
     catchUp: () => ['threads', 'catch-up'] as const,
+    /** A chat as an address names it (`agent:<id>`): the DM it opens (its `private` lookup under it). */
+    chat: (chat: string) => ['threads', 'chat', chat] as const,
   },
 } as const;

@@ -1,14 +1,15 @@
 // The conversation's reads and writes: its timeline (paged backwards), sending, read marks, and the live reply.
 // Messages themselves reach the timeline through live/patch.ts (the built-in `messages` patcher); this file adds
 // what only a conversation knows: a pending send giving way to its echo, and a reply being written (`runs`).
-import { infiniteQueryOptions, queryOptions, type InfiniteData, type QueryKey } from '@tanstack/react-query';
-import { api } from '@/api/client';
+import { infiniteQueryOptions, queryOptions, type InfiniteData } from '@tanstack/react-query';
+import { api, ApiError } from '@/api/client';
 import type { Assistant, SlackMessage, SlackThread } from '@/api/schema';
 import { keys, queryClient, quietRoot, write } from '@/data';
 import { onTopic } from '@/live';
 import { newId } from '@/lib/ids';
+import { chatAddress } from '@/lib/chat';
 import type { FromPage } from '@/shell/pageOwner';
-import type { ChatMessage, LiveRun, PageRef, ReplyQuote, TimelinePage, Variant } from './types';
+import type { ChatMessage, LiveRun, ReplyQuote, TimelinePage, Variant } from './types';
 
 const PAGE = 50;
 const enc = encodeURIComponent;
@@ -99,19 +100,6 @@ export async function decideProposal(aid: string, yes: boolean): Promise<Proposa
 
 /* ---------------------------------------------------------------- sending */
 
-function dropRow(key: QueryKey, rowId: string): void {
-  queryClient.setQueryData<Timeline>(key, (d) => {
-    if (!d) return d;
-    let changed = false;
-    const pages = d.pages.map((p) => {
-      if (!p.messages.some((m) => m.id === rowId)) return p;
-      changed = true;
-      return { ...p, messages: p.messages.filter((m) => m.id !== rowId) };
-    });
-    return changed ? { ...d, pages } : d;
-  });
-}
-
 export interface Send {
   /** The conversation (a thread id; for Tico, the person's assistant room). */
   id: string;
@@ -120,14 +108,15 @@ export interface Send {
   files?: File[];
   /** The page it was written on (`from_page`, backend/page_owners.py check_from). */
   from?: FromPage | null;
-  /** A box from outside (AgentBox): the conversation it is about, as `refs.page` (as main sends it). */
-  page?: PageRef | null;
   /** The Agent bar's: sent to the sender's DM with exactly this agent, which the server finds (or makes) as it writes
       (`/threads/dm/messages`, `to_dm`), never to a thread named by the id the page holds. */
   toDm?: string;
   /** With `toDm`: the server wrote to another thread than the one shown (the DM is new, or another one now); the
       chat shows that one from here on. */
   onMoved?: (thread: string) => void;
+  /** With `toDm`: the send failed (any refusal or fault, the DM changed under it included); nothing of it stays in the
+      timeline. */
+  onFailed?: (e: unknown) => void;
   me: string;
   /** Retry: the failed row to send again in its place. */
   retry?: string;
@@ -138,6 +127,21 @@ export interface Send {
 }
 
 type Sent = ChatMessage | { message?: ChatMessage } | { hold?: unknown };
+
+/** `/threads/dm/messages`: the sender's DM with `to_dm`, found or made by the server as it writes (thread_api DM_ADDRESS). */
+const DM_ADDRESS = 'dm';
+
+/** A thread message as every sender here writes it: its words, the page it was written on, and, sent to an agent's DM
+    by owner (`toDm`), that agent. */
+const messageBody = (text: string, from: FromPage | null | undefined, toDm?: string) => ({
+  text,
+  refs: from ? { from_page: from } : {},
+  ...(toDm && { to_dm: toDm }),
+});
+
+/** The server looked up the DM a `to_dm` message meant, and it was not the same one by the time it wrote (409). */
+const dmChanged = (e: unknown) => e instanceof ApiError && e.code === 'dm_changed';
+export const isDmChanged = dmChanged;
 
 function post(s: Send, idempotencyKey: string): Promise<Sent> {
   const files = s.files ?? [];
@@ -151,10 +155,8 @@ function post(s: Send, idempotencyKey: string): Promise<Sent> {
     return api.post<Sent>('/api/v2/uploads/assistant/messages', f, opts);
   }
   const reply = s.replyTo ? { in_reply_to: s.replyTo } : {};
-  const where = s.toDm ? 'dm' : enc(s.id);
-  const dm = s.toDm ? { to_dm: s.toDm } : {};
-  if (!files.length)
-    return api.post<Sent>(`/api/v2/threads/${where}/messages`, { text: s.text, refs: s.from ? { from_page: s.from } : s.page ? { page: s.page } : {}, ...reply, ...dm }, opts);
+  const where = s.toDm ? DM_ADDRESS : enc(s.id);
+  if (!files.length) return api.post<Sent>(`/api/v2/threads/${where}/messages`, { ...messageBody(s.text, s.from, s.toDm), ...reply }, opts);
   const f = new FormData();
   f.set('text', s.text);
   if (s.replyTo) f.set('in_reply_to', s.replyTo);
@@ -169,6 +171,23 @@ const answerOf = (r: Sent): ChatMessage | null => {
   const m = 'message' in r && r.message ? r.message : (r as ChatMessage);
   return m && typeof m.id === 'string' ? m : null;
 };
+
+/**
+ * A message to an agent from a page that is not its chat (Mail's box, an outside thread's box, Growth's ask line): to
+ * the sender's DM with exactly that agent, which the server finds (or makes with this message) as it writes
+ * (`/threads/dm/messages`, `to_dm`, the Agent bar's path and checks). `from` says the page, and what is open there as
+ * a pointer {kind, id}. Resolves with the message, whose thread is where it went, or null when it was held.
+ */
+export async function sendToDm(agent: string, text: string, from: FromPage): Promise<ChatMessage | null> {
+  const send = () => api.post<Sent>(`/api/v2/threads/${DM_ADDRESS}/messages`, messageBody(text, from, agent), { idempotencyKey: newId() });
+  // the DM changed between the server's lookup and its write (`dm_changed`): sent again, it is looked up again
+  const sent = answerOf(await send().catch((e: unknown) => (dmChanged(e) ? send() : Promise.reject(e))));
+  // the chat that shows it reads again: the agent's DM as its address names it (made now, maybe), and its timeline
+  const thread = sent?.conversation_id || sent?.thread_id;
+  void queryClient.invalidateQueries({ queryKey: keys.threads.chat(chatAddress(agent, 'agent')) });
+  if (thread) void queryClient.invalidateQueries({ queryKey: timelineKey(thread) });
+  return sent;
+}
 
 const withRows = (d: Timeline | undefined, fn: (rows: ChatMessage[]) => ChatMessage[]): Timeline | undefined => {
   if (!d?.pages.length) return d;
@@ -204,7 +223,6 @@ export async function sendMessage(given: Send): Promise<ChatMessage | null> {
     created_at: new Date().toISOString(),
     refs: {
       ...(s.from && { from_page: s.from }),
-      ...(s.page && { page: s.page }),
       ...(s.files?.length && { attachments: s.files.map((f, i) => ({ id: `${tmp}:${i}`, name: f.name, content_type: f.type })) }),
     },
     pending: 'sending',
@@ -226,20 +244,21 @@ export async function sendMessage(given: Send): Promise<ChatMessage | null> {
         const out = withRows(d, (rows) => rows.filter((m) => m.id !== tmp));
         return has ? out : withRows(out, (rows) => [...rows, real]);
       },
-      // A failed send is not taken back: it stays, marked, so the words are not lost.
-      revert: (d: Timeline | undefined) => withRows(d, markRow(tmp, 'failed')),
+      // A failed send is not taken back: it stays, marked, so the words are not lost. The Agent bar's goes, its words
+      // back in its box (`onFailed`).
+      revert: (d: Timeline | undefined) => withRows(d, s.toDm ? (rows) => rows.filter((m) => m.id !== tmp) : markRow(tmp, 'failed')),
       offline: 'hold',
     });
     const real = answerOf(answer);
     if (real && movedTo(s, real)) s.onMoved?.(real.conversation_id ?? real.thread_id ?? '');
     return real;
-  } catch {
+  } catch (e) {
+    // The Agent bar keeps no failed row (`revert`): its words go back into its box (`onFailed`), for Send again
+    if (s.toDm) s.onFailed?.(e);
     return null;
   }
 }
 
-/** Drop a failed row (the person took the words back into the box). */
-export const discardPending = (id: string, tmp: string) => dropRow(timelineKey(id), tmp);
 
 /* ---------------------------------------------------------------- read marks */
 
