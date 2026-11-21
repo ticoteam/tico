@@ -231,6 +231,14 @@ def bot(api, slug):
         c.execute("UPDATE bot_config SET repo=? WHERE bot=?", (f"bot-{slug}", slug))
 
 
+def unreachable(api, *names):
+    """GitHub cannot reach `names` now, as a refresh leaves it (no names: it reaches every repository again)."""
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE repositories SET reachable=1")
+        c.executemany("UPDATE repositories SET reachable=0 WHERE full_name=?", [(n,) for n in names])
+        save_metadata(c, "repositories-confirmed-missing", {n: time.time() for n in names})
+
+
 def access_of(hub, bot):
     """The bot's repository access as the hub reads it back: (mode, {repository: access} of its chosen ones)."""
     got = hub.get(f"bots/{bot}/repositories")
@@ -293,6 +301,7 @@ def test_repo_grant_write_for_a_bot_reading_every_repository_keeps_its_reads(api
     seed_repos(api)
     hub = Client(live, "ana-test")
     hub.call("PUT", "bots/ops/repositories", {"mode": "all", "all_access": "read"})  # where a new agent starts
+    unreachable(api, "acme/web")  # ticked, yet GitHub cannot reach it this minute: it keeps its read all the same
     assert tool("tico_repo_grant", hub, repository="acme/web", bot="ops", access="read")["changed"] is False
     got = tool("tico_repo_grant", hub, repository="acme/docs", bot="ops", tick=True)
     assert got["changed"] and got["was"] == "all"
@@ -309,14 +318,10 @@ def test_repo_grant_on_another_agents_own_repository_is_never_covered_by_all_tic
     assert repo(hub, "acme/bot-builder")["enabled"] is True, "ticked, yet still not one All ticked repos reaches"
     hub.call("PUT", "bots/ops/repositories", {"mode": "all", "all_access": "read"})
     # A ticked repository GitHub cannot reach this minute stays covered: the grant says so and changes nothing.
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE repositories SET reachable=0 WHERE full_name='acme/web'")
-        save_metadata(c, "repositories-confirmed-missing", {"acme/web": time.time()})
+    unreachable(api, "acme/web")
     got = tool("tico_repo_grant", hub, repository="acme/web", bot="ops", access="read")
     assert (got["changed"], got["reachable"]) == (False, False) and access_of(hub, "ops")[0] == "all"
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE repositories SET reachable=1 WHERE full_name='acme/web'")
-        save_metadata(c, "repositories-confirmed-missing", {})
+    unreachable(api)
     got = tool("tico_repo_grant", hub, repository="acme/bot-builder", bot="ops", access="read")
     assert got["changed"] and access_of(hub, "ops") == ("chosen", {"acme/web": "read", "acme/bot-builder": "read"})
 

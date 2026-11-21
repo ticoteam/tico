@@ -424,7 +424,8 @@ def repo_grant(api, args):
     flags = {k: args[k] for k in GRANT_FLAGS if args.get(k) is not None}
     if access == "read" and any(flags.values()):
         raise ValueError("Running workflows and editing workflow files need write access")
-    row = _repo_row(person.get("repositories"), args["repository"])
+    listing = person.get("repositories")
+    row = _repo_row(listing, args["repository"])
     if not row:
         raise _not_listed(args["repository"])
     name = row["full_name"]
@@ -454,9 +455,22 @@ def repo_grant(api, args):
             f"its repositories instead: tico bot repos {bot} --chosen {name}:{access} ...",
             409,
         )
-    # From All ticked repos at Read it moves to Chosen repos, keeping read on each repository it reaches now (its own
-    # stays write whatever the mode), as a product repository's grant does.
+    # From All ticked repos at Read it moves to Chosen repos, keeping read on each repository All ticked repos covers
+    # (its own stays write whatever the mode), one GitHub cannot reach this minute too.
     kept = current.get("effective") if reads else current.get("chosen") if current["mode"] == "chosen" else []
+    if reads:
+        reached = {r["full_name"].lower() for r in kept or []}
+        kept = [
+            *(kept or []),
+            *(
+                {"full_name": r["full_name"], "access": "read"}
+                for r in listing.get("repositories") or []
+                if r.get("enabled")
+                and not r.get("bot_repo")
+                and r.get("reachable") is False
+                and r["full_name"].lower() not in reached
+            ),
+        ]
     chosen = [
         {"full_name": r["full_name"], "access": r["access"]}
         for r in kept or []
