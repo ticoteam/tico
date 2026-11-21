@@ -105,8 +105,9 @@ A task is open, done or closed. It sits in a stage of a pipeline; General has on
   several. You can't mark the task done, move it on or close it while your ❓ is open. Only `tico task ask` asks: a ❓ typed into a reply or a note asks no one. Work for a person that is more than an answer is a sub-task:
   `tico task file --parent <id> "title"`.
 - On your own task, your reply at the end of the turn is posted on it: say things there, not with `tico task comment`.
-- Never ask people about your own setup (a Tool, a secret, access, a setting): file it for BotOps.
-- Send, spend, publish: ask the person for an OK on the task first. The act goes through only on that OK.
+- Never ask people about your own setup (a Tool, a secret, a setting): file it for BotOps. Access is `tico access request`
+  (below).
+- Send, publish, or spend over budget: ask the person for an OK on the task first. The act goes through only on that OK.
 - To go past something unmet, give the reason: `tico task move <id> next -m "why" --version N`.
 - Never close what a person asked for: ask that person.
 - A refusal says what is missing and which commands are allowed next. Do one of those. Never retry the same command.
