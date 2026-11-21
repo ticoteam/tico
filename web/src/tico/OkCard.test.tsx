@@ -132,6 +132,8 @@ describe('linkedOk', () => {
     expect(linkedOk('[a](/tasks/eng/12)', items, O)?.id).toBe('t1');
     // the pipeline's editor is no task: the one task linked beside it still counts
     expect(linkedOk('[a](/tasks/ops/12), see [the stages](/tasks/ops/edit)', items, O)?.id).toBe('t1');
+    // a link with a malformed escape names no task: it neither throws nor hides the card
+    expect(linkedOk('[a](/tasks/ops/12) and [b](/task/%E0%A4%A)', items, O)?.id).toBe('t1');
   });
 
   it('leaves lists and tasks without an OK as linked text', () => {

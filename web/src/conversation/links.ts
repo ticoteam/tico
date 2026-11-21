@@ -130,6 +130,15 @@ export function withFileRefs(text: string): string {
 /** The words a chip shows for words that are only an address or a ref: nothing to keep. */
 export const isRawWords = (words: string, href: string) => words === href || /^(page:)?file-[0-9a-f]{12,40}(@\d+)?$/.test(words) || /^https?:\/\//.test(words);
 
+/** A path part decoded, or '' when its escape is malformed (it names nothing). */
+function decoded(part: string): string {
+  try {
+    return decodeURIComponent(part);
+  } catch {
+    return '';
+  }
+}
+
 /** The app's tasks a message's text links to (`/tasks/<pipeline>/<n>`, `/task/<id>`, `/flow/<n>`, an old `#/task/…`),
     read from the links its Markdown draws, each once, by its number or id (the route's task reference). */
 export function tasksIn(text: string, origin: string): string[] {
@@ -140,7 +149,7 @@ export function tasksIn(text: string, origin: string): string[] {
     const [, kind, a = '', b = ''] = /^\/(tasks|task|flow)\/([^/]+)(?:\/([^/]+))?/.exec(new URL(p.to, 'http://app').pathname) ?? [];
     // the pipeline's editor (`/tasks/<pipeline>/edit`) is no task
     if (kind === 'tasks' && b === 'edit') continue;
-    const key = decodeURIComponent(kind === 'tasks' ? b : a);
+    const key = decoded(kind === 'tasks' ? b : a);
     if (key) out.add(key);
   }
   return [...out.values()];

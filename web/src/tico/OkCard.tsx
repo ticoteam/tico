@@ -32,7 +32,6 @@ export function OkCard({ m }: { m: ChatMessage }) {
       name={ok.ask?.line || ok.title}
       who={ok.ask?.by ?? ok.owner_id}
       href={taskAddress(ok, undefined, false).to}
-      target={`ok:${ok.id}`}
       actions={<span className="btn">Review and approve</span>}
     />
   );
