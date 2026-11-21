@@ -253,6 +253,12 @@ is reported again. Nothing is sent when you (or your Assistant for you) closed i
 done or moved it there yourself, or for a call's follow-up, which reports in its call. If you can no longer read the
 task, the message names it only by the title it was filed with.
 
+## An agent's answer comes back
+
+When your Assistant asks another agent something for you, it writes in your own chat with that agent. The agent's first
+reply there comes back to your Assistant chat once, as a short summary with a link to the full reply. A reply you
+cannot read is named, not quoted.
+
 ## Undo
 
 Every change your Assistant makes for you is listed with the words it acted on: `tico assistant change list [--days N]`

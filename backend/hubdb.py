@@ -2281,6 +2281,11 @@ def _write_message(
     if held:
         wake_rules.hold(conn, message(conn, row["id"]), held, rule_id=decision.rule)
     written = message(conn, row["id"])
+    if kind == "say" and is_bot(actor) and is_human(target):
+        # An agent's answer to what the person's Assistant asked it for them goes back to their Assistant chat.
+        from . import assistant_relay
+
+        assistant_relay.replied(conn, written)
     return {**written, "warnings": mention_warnings} if mention_warnings else written
 
 

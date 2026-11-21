@@ -176,7 +176,7 @@ def _report_back(conn: "sqlite3.Connection", after: Row, by: str, why: str | Non
         _write_report(conn, after, by, why, f"report_back:{after['id']}:{revision}")
 
 
-def _plain(text: object) -> str:
+def plain_line(text: object) -> str:
     """Text as plain Markdown on one line: whitespace collapsed, Markdown marks escaped, and no list marker or heading
     at its start."""
     flat = re.sub(r"([\\`*_\[\]<>#|~!])", r"\\\1", " ".join(str(text or "").split())) or "A task"
@@ -212,24 +212,13 @@ def _write_report(conn: "sqlite3.Connection", after: Row, by: str, why: str | No
         or conn.execute("SELECT 1 FROM call_follow_ups WHERE task_id=?", (task_id,)).fetchone()
     ):
         return  # already reported, or a call's follow-up, which reports in its call (call_follow_ups._return)
-    from . import assistant, auth, rooms
+    from . import auth
 
-    helper: Any = assistant
     reads: Any = auth
-    place: Any = rooms
-    # The Assistant as the chat names it: the app's settings, which the connection carries (store.Store._take).
-    slug = str(getattr(getattr(conn, "settings", None), "assistant_bot", "") or "assistant")
-    # A deleted Assistant room still holds the person's one open place (one_active_personal_room): it gives it up.
-    conn.execute(
-        "UPDATE conversations SET closed_at=? WHERE scope='personal' AND owner_id=? AND room_key=? "
-        "AND closed_at IS NULL AND deleted_at IS NOT NULL",
-        (H.now(), person, place.ASSISTANT_ROOM),
-    )
-    room = helper.ensure_room(conn, person, slug, allow_held=True)
     # A system line: names in it mention nobody and it starts no run.
     refs: Row = {"assistant": True, "report_back": True, "quiet": True, "no_mentions": True}
     if reads.actor_reads_task(conn, person, after):
-        title = _plain(after.get("title"))
+        title = plain_line(after.get("title"))
         note = (why or "").strip()
         if not note:
             found = conn.execute(_CYCLE_NOTE_SQL, (task_id,)).fetchone()
@@ -243,7 +232,28 @@ def _write_report(conn: "sqlite3.Connection", after: Row, by: str, why: str | No
         )
         body, refs = said, {**refs, "task": task_id}
     else:
-        body = f"{_plain(filed.get('title'))} has ended"
+        body = f"{plain_line(filed.get('title'))} has ended"
+    assistant_line(conn, person, body, refs, key)
+
+
+def assistant_line(conn: "sqlite3.Connection", person: str, body: str, refs: Row, key: str) -> None:
+    """One delivered message from the Assistant in the person's Assistant chat, with no run: a report back, or another
+    agent's reply relayed (backend/assistant_relay.py). The room is opened if missing, a paused Assistant too, and a
+    deleted one gives up its place first. `key` goes on the message as its wake key: the caller's dedupe record."""
+    H = _h()
+    from . import assistant, rooms
+
+    helper: Any = assistant
+    place: Any = rooms
+    # The Assistant as the chat names it: the app's settings, which the connection carries (store.Store._take).
+    slug = str(getattr(getattr(conn, "settings", None), "assistant_bot", "") or "assistant")
+    # A deleted Assistant room still holds the person's one open place (one_active_personal_room): it gives it up.
+    conn.execute(
+        "UPDATE conversations SET closed_at=? WHERE scope='personal' AND owner_id=? AND room_key=? "
+        "AND closed_at IS NULL AND deleted_at IS NOT NULL",
+        (H.now(), person, place.ASSISTANT_ROOM),
+    )
+    room = helper.ensure_room(conn, person, slug, allow_held=True)
     message = H._write_message(conn, "bot:" + slug, person, body, room, "say", refs, None, None, delivered_at=H.now())
     conn.execute("UPDATE messages SET wake_key=? WHERE id=?", (key, message["id"]))
 

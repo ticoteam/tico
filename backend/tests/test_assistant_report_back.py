@@ -228,7 +228,7 @@ def test_a_close_with_no_reason_quotes_this_cycles_done_note(api):
 
 
 def test_a_title_never_starts_a_list_or_a_heading():
-    assert [task_effects._plain(t) for t in ("1. Plan", "- Plan", "+ Plan", "# Plan", "> Plan", "* Plan")] == [
+    assert [task_effects.plain_line(t) for t in ("1. Plan", "- Plan", "+ Plan", "# Plan", "> Plan", "* Plan")] == [
         "1\\. Plan",
         "\\- Plan",
         "\\+ Plan",
