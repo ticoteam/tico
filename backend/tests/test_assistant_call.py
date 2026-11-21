@@ -285,3 +285,50 @@ def test_a_call_booked_in_your_assistant_chat_invites_nobody_and_takes_no_other_
             raise AssertionError("a booking with another agent was planned")
         except Exception as exc:  # refused before any calendar event is planned
             assert getattr(exc, "code", "") == "assistant_alone"
+
+
+def test_a_chat_with_a_stored_participant_besides_you_and_the_assistant_is_never_private(meet):
+    worker = _resident(meet)
+    rid = room(meet)["room_id"]
+    with meet.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE conversations SET participants=? WHERE id=?", (json.dumps(["bot:assistant", "human:ben"]), rid)
+        )
+    call = start_call(meet, rid, bots=["assistant"])
+    session = _claim(meet, worker)
+    assert session["message"]["refs"]["live_meeting"]["voice_call"] == call["id"]
+    assert not session.get("personal") and _scope(meet, session["id"]) == ("", "")
+
+
+def test_nobody_is_rung_into_a_private_call_nor_given_its_meeting(meet):
+    call, _session, _ = _private_call(meet)
+    rid = room(meet)["room_id"]
+    # Refused before any target is looked at: one who cannot read the chat, and one who can.
+    for actor in ("human:ben", "human:ana"):
+        refused = post(meet, f"calls/{call['id']}/ring", {"actor": actor}, expected=409)
+        assert refused["error"]["code"] == "call_private"
+    with meet.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM thread_members WHERE thread_id=? AND actor='human:ben'", (rid,)).fetchone()
+        assert json.loads(c.execute("SELECT ring FROM calls WHERE id=?", (call["id"],)).fetchone()[0]) == []
+    for widen in ({"add": ["ben"]}, {"visibility": "team"}):
+        shared = post(meet, f"live-meetings/{call['meeting_id']}/access", widen, expected=409)
+        assert shared["error"]["code"] == "call_private"
+    with meet.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM live_meeting_access WHERE meeting_id=?", (call["meeting_id"],)).fetchone()
+
+
+def test_a_pinned_lease_reads_nothing_while_its_person_may_not_sign_in_even_once_the_call_no_longer_qualifies(meet):
+    from backend.store import encode
+
+    call, session, _ = _private_call(meet)
+    with meet.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO call_participants(call_id,actor,joined_at,in_call) VALUES(?,?,?,1)",
+            (call["id"], "human:ben", H.now()),
+        )
+        roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
+        for person in roster["people"]:
+            if person["id"] == "ana":
+                person["sign_in"] = False
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(roster),))
+    assert _scope(meet, session["id"]) == ("gone", "")

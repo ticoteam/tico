@@ -229,7 +229,7 @@ your Assistant chat (busy until it starts). While that chat has a live Tico Meet
 while a Google Meet or a call still ending is on there, since a start would be refused. Its voice turns run as the
 Assistant, never as you. A call in your Assistant chat is private by nature: it rings nobody, invites nobody when booked
 or moved, takes no agent but the Assistant for its whole life (409 `assistant_alone`), and nobody is added to the chat,
-nor is it linked to Slack, while it is on (409 `call_private`). Its voice session, claimed while the call is yours
+nor is it linked to Slack, rung into or its meeting shared, while it is on (409 `call_private`). Its voice session, claimed while the call is yours
 alone, then reads as you, as your own chat with the Assistant does: your private tasks through its tools, no snapshot
 put in its prompt. That claim is pinned to you for its life: a personal run (a throwaway checkout, no Git credential),
 which reads as you only while the call still qualifies and you may still sign in. A call in a person's own room gets no prep task, whoever

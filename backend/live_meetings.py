@@ -2115,6 +2115,12 @@ def install_live_meetings(app, store, auth, write):
 
         def work(c):
             row = _participant(c, auth, who, rid)
+            from . import calls
+
+            call = c.execute("SELECT thread_id FROM calls WHERE live_meeting_id=? AND state='live'", (rid,)).fetchone()
+            if call and (body.add or body.visibility == "team") and calls.assistant_room(c, call["thread_id"]):
+                # A live call in a person's Assistant chat is theirs alone: its meeting widens to nobody.
+                raise Problem("call_private", "A call in an Assistant chat is private: share it once it ends", 409)
             if who.actor != row["owner_actor"] and (
                 body.visibility is not None or any("human:" + H.actor_id(person) != who.actor for person in body.remove)
             ):
