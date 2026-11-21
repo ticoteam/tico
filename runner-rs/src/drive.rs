@@ -400,6 +400,11 @@ impl Runner {
                     continue;
                 }
                 let kind = text_of(&event["kind"]);
+                if kind == "model_calls" {
+                    // A harness's own request count (Muse Code): the run's timings only, never kept or sent on.
+                    crate::flight::add(aid, "model_calls", event["count"].as_u64().unwrap_or(0));
+                    continue;
+                }
                 if kind == "turn_failed" || (kind == "error" && truthy(event.get("host_restart"))) {
                     // A harness killed at its memory limit fails with whatever its own exit looks like; the
                     // turn's scope knows why (crate::turn_limits).
@@ -548,10 +553,9 @@ impl Runner {
                         json!(d.limit.saturating_duration_since(Instant::now()).as_secs() / 60);
                 }
                 if STREAMED.contains(&kind.as_str()) {
-                    // The attempt's model requests, over every harness it ran (a fallback's add on); taken before
-                    // the event is kept, so no server is sent a field it does not know.
+                    // The attempt's model requests, over every harness it ran (a fallback's add on).
                     if kind == "tokens" {
-                        if let Some(requests) = take_model_requests(&mut event) {
+                        if let Some(requests) = model_requests(&event) {
                             crate::flight::add(aid, "model_calls", requests as u64);
                         }
                     }
@@ -793,18 +797,10 @@ fn reply_words(kind: &str, event: &Value) -> bool {
         && !text_of(&event["text"]).trim().is_empty()
 }
 
-/// How many model requests a `tokens` event names, when its harness counts them: its per-request usage (Claude, pi),
-/// else its `model_calls` (Muse Code's `model_completed` records), which this takes out of the event: it is the
-/// runner's own count, never sent on.
-pub(crate) fn take_model_requests(event: &mut Value) -> Option<usize> {
-    let own = event
-        .as_object_mut()
-        .and_then(|e| e.remove("model_calls"))
-        .and_then(|n| n.as_u64());
-    event["usage"]["requests"]
-        .as_array()
-        .map(Vec::len)
-        .or(own.map(|n| n as usize))
+/// How many model requests a `tokens` event lists in its per-request usage (Claude, pi), when it lists them. Muse Code
+/// sends its count as a `model_calls` event instead.
+pub(crate) fn model_requests(event: &Value) -> Option<usize> {
+    event["usage"]["requests"].as_array().map(Vec::len)
 }
 
 #[cfg(test)]
@@ -1077,18 +1073,11 @@ mod tests {
         ));
         assert!(!text("message", json!({"text": "  "})));
         assert!(!text("tool", json!({"text": "tico task show 1"})));
-        let mut tokens =
+        let tokens =
             json!({"input": 9, "usage": {"requests": [[1, 0, 2, 1], [3, 0, 4, 1], [5, 0, 6, 0]]}});
-        assert_eq!(take_model_requests(&mut tokens), Some(3));
-        let mut muse = json!({"input": 9, "model_calls": 4});
-        assert_eq!(take_model_requests(&mut muse), Some(4));
+        assert_eq!(model_requests(&tokens), Some(3));
         assert_eq!(
-            muse,
-            json!({"input": 9}),
-            "the runner's own count is never sent on"
-        );
-        assert_eq!(
-            take_model_requests(&mut json!({"input": 9, "output": 2})),
+            model_requests(&json!({"input": 9, "output": 2})),
             None,
             "unknown stays unknown"
         );

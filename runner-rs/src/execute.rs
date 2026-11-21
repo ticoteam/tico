@@ -4264,7 +4264,7 @@ impl Runner {
         let end = Instant::now() + compact_timeout();
         loop {
             let left = end.saturating_duration_since(Instant::now());
-            let Ok(Some(mut ev)) = tokio::time::timeout(left, rx.recv()).await else {
+            let Ok(Some(ev)) = tokio::time::timeout(left, rx.recv()).await else {
                 return Err("compaction did not finish in time".into());
             };
             if text_of(&ev["thread_id"]) != thread {
@@ -4272,8 +4272,8 @@ impl Runner {
             }
             match text_of(&ev["kind"]).as_str() {
                 "tokens" => {
-                    // The compaction's requests are the attempt's too (drive.rs take_model_requests).
-                    if let Some(requests) = crate::drive::take_model_requests(&mut ev) {
+                    // The compaction's requests are the attempt's too (drive.rs model_requests).
+                    if let Some(requests) = crate::drive::model_requests(&ev) {
                         crate::flight::add(aid, "model_calls", requests as u64);
                     }
                     if let Some(m) = meter.as_deref_mut() {

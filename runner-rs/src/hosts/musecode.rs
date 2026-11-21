@@ -178,14 +178,14 @@ pub fn session_log(env: &Env, session_id: &str) -> Option<PathBuf> {
     found
 }
 
-/// (input, cached, output, model) summed over the `model_completed` records of `run_id` (any run when None) from
-/// byte `offset` on, or None when there are none. Records that repeat the same counts (`goal_usage_attribution`)
-/// are not counted.
+/// (input, cached, output, model, model requests) over the `model_completed` records of `run_id` (any run when None)
+/// from byte `offset` on, in one read, or None when there are none: each request is counted once, by the run record
+/// it came from. Records that repeat the same counts (`goal_usage_attribution`) are not counted.
 pub fn session_usage(
     path: &Path,
     offset: u64,
     run_id: Option<&str>,
-) -> Option<(i64, i64, i64, String)> {
+) -> Option<(i64, i64, i64, String, usize)> {
     let mut file = std::fs::File::open(path).ok()?;
     let size = file.metadata().ok()?.len();
     if offset > 0 && offset <= size {
@@ -194,6 +194,7 @@ pub fn session_usage(
     let mut bytes = vec![];
     file.read_to_end(&mut bytes).ok()?;
     let (mut found, mut model): (Option<(i64, i64, i64)>, String) = (None, String::new());
+    let mut requests = std::collections::HashSet::new();
     for line in String::from_utf8_lossy(&bytes)
         .lines()
         .filter(|l| l.contains("model_completed"))
@@ -224,43 +225,15 @@ pub fn session_usage(
         );
         let (a, b, c) = found.unwrap_or_default();
         found = Some((a + row.0, b + row.1, c + row.2));
+        let request = payload["source_run_record_id"]
+            .as_str()
+            .or(rec["id"].as_str());
+        requests.insert(request.unwrap_or(line).to_string());
         if let Some(m) = event["model"].as_str().filter(|m| !m.is_empty()) {
             model = m.into();
         }
     }
-    found.map(|(a, b, c)| (a, b, c, model))
-}
-
-/// How many model requests `run_id` made, from byte `offset` on: its `model_completed` records, each request once (by
-/// the run record it came from), whatever told the turn its token counts. None without a log or a record.
-pub fn session_calls(path: &Path, offset: u64, run_id: Option<&str>) -> Option<usize> {
-    let mut file = std::fs::File::open(path).ok()?;
-    if offset > 0 && offset <= file.metadata().ok()?.len() {
-        file.seek(SeekFrom::Start(offset)).ok()?;
-    }
-    let mut bytes = vec![];
-    file.read_to_end(&mut bytes).ok()?;
-    let mut seen = std::collections::HashSet::new();
-    for line in String::from_utf8_lossy(&bytes)
-        .lines()
-        .filter(|l| l.contains("model_completed"))
-    {
-        let Ok(rec) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        let payload = &rec["payload"];
-        if payload["event"]["kind"] != "model_completed"
-            || run_id.is_some_and(|r| payload["run_id"].as_str() != Some(r))
-        {
-            continue;
-        }
-        let request = payload["source_run_record_id"]
-            .as_str()
-            .or(rec["id"].as_str())
-            .unwrap_or(line);
-        seen.insert(request.to_string());
-    }
-    (!seen.is_empty()).then_some(seen.len())
+    found.map(|(a, b, c)| (a, b, c, model, requests.len()))
 }
 
 fn placeholder_re() -> &'static Regex {
@@ -1020,13 +993,13 @@ impl MuseCodeHost {
         };
         let _ = std::fs::remove_file(&prompt);
         let run = Some(state.run.as_str()).filter(|r| !r.is_empty());
-        state.calls = session_log(&env, &tid)
-            .and_then(|p| session_calls(&p, offset, run))
+        let log = session_log(&env, &tid).and_then(|p| session_usage(&p, offset, run));
+        state.calls = log
+            .as_ref()
+            .map(|l| l.4)
             .or((state.streamed_calls > 0).then_some(state.streamed_calls));
         if state.usage.is_none() {
-            if let Some((a, b, c, model)) =
-                session_log(&env, &tid).and_then(|p| session_usage(&p, offset, run))
-            {
+            if let Some((a, b, c, model, _)) = log {
                 state.usage = Some((a, b, c));
                 if !model.is_empty() {
                     state.model = model;
@@ -1124,10 +1097,16 @@ impl MuseCodeHost {
             if !state.model.is_empty() {
                 body["model"] = json!(state.model);
             }
-            if let Some(calls) = state.calls {
-                body["model_calls"] = json!(calls); // the runner's timings count them (drive.rs model_requests)
-            }
             self.emit(event("tokens", Some(tid), Some(turn), body));
+        }
+        if let Some(count) = state.calls {
+            // For the run's timings only, with or without token counts (drive.rs: never kept or sent on).
+            self.emit(event(
+                "model_calls",
+                Some(tid),
+                Some(turn),
+                json!({"count": count}),
+            ));
         }
         if interrupted {
             self.emit(event(
@@ -1290,16 +1269,21 @@ mod tests {
             let thread = host.start_thread(&settings);
             host.start_turn(&thread, "hello", None).unwrap();
             let mut got = until_idle(&mut rx, 10).await;
+            // `model_calls` is the runner's own count, never kept or sent on (drive.rs).
+            let calls: Vec<Value> = got
+                .iter()
+                .filter(|e| e["kind"] == "model_calls")
+                .map(|e| e["count"].clone())
+                .collect();
+            got.retain(|e| e["kind"] != "model_calls");
             if path.ends_with("failed.jsonl") {
                 // No session log: its stdout's one `run.model.completed` is the count.
-                let tokens = got.iter().find(|e| e["kind"] == "tokens").unwrap();
-                assert_eq!(tokens["model_calls"], 1, "{tokens}");
+                assert_eq!(calls, [json!(1)]);
             }
             for ev in &mut got {
-                // `model_calls` is the runner's own count, taken out before the event is kept (drive.rs).
                 ev.as_object_mut()
                     .unwrap()
-                    .retain(|k, _| k != "thread_id" && k != "turn_id" && k != "model_calls");
+                    .retain(|k, _| k != "thread_id" && k != "turn_id");
             }
             assert_eq!(got, expected, "{}", path.display());
         }
@@ -1313,6 +1297,43 @@ mod tests {
             0
         );
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_stdout_model_completion_without_usage_still_counts_for_the_timings() {
+        let dir = temp("fake-muse");
+        let failed = crate::hosts::fixtures::dir("musecode").join("failed.jsonl");
+        let stream: Vec<String> = std::fs::read_to_string(failed)
+            .unwrap()
+            .lines()
+            .map(|l| {
+                let mut v: Value = serde_json::from_str(l).unwrap();
+                v["payload"].as_object_mut().unwrap().remove("usage");
+                v.to_string()
+            })
+            .collect();
+        let fixture = dir.join("no-usage.jsonl");
+        std::fs::write(&fixture, stream.join("\n")).unwrap();
+        let cmd = script(&dir, "muse", "#!/bin/sh\ncat \"$FIXTURE\"\n");
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = MuseCodeHost::new("acme", vec![cmd], None, dir.join("state"), tx);
+        host.start();
+        let mut settings = Settings {
+            cwd: dir.display().to_string(),
+            ..Default::default()
+        };
+        settings.env.insert("PATH".into(), "/usr/bin:/bin".into());
+        settings
+            .env
+            .insert("FIXTURE".into(), fixture.display().to_string());
+        let thread = host.start_thread(&settings);
+        host.start_turn(&thread, "hello", None).unwrap();
+        let got = until_idle(&mut rx, 10).await;
+        assert!(!got.iter().any(|e| e["kind"] == "tokens"), "{got:?}");
+        let calls: Vec<&Value> = got.iter().filter(|e| e["kind"] == "model_calls").collect();
+        assert_eq!(calls.len(), 1, "{got:?}");
+        assert_eq!(calls[0]["count"], 1);
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]
@@ -1331,8 +1352,8 @@ mod tests {
             rec("r4", "run-b", "s3"),
         ];
         std::fs::write(&log, lines.join("\n")).unwrap();
-        assert_eq!(session_calls(&log, 0, Some("run-a")), Some(2));
-        assert_eq!(session_calls(&log, 0, Some("run-c")), None);
+        assert_eq!(session_usage(&log, 0, Some("run-a")).map(|u| u.4), Some(2));
+        assert_eq!(session_usage(&log, 0, Some("run-c")), None);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1390,11 +1411,10 @@ mod tests {
         }
         let thread = host.resume_thread(&sid, &settings);
         host.start_turn(&thread, "x", None).unwrap();
-        let tokens: Vec<Value> = until_idle(&mut rx, 10)
-            .await
-            .into_iter()
-            .filter(|e| e["kind"] == "tokens")
-            .collect();
+        let got = until_idle(&mut rx, 10).await;
+        let calls = got.iter().find(|e| e["kind"] == "model_calls").unwrap();
+        assert!(calls["count"].as_u64().unwrap() >= 1, "{calls}");
+        let tokens: Vec<Value> = got.into_iter().filter(|e| e["kind"] == "tokens").collect();
         assert_eq!(tokens.len(), 1, "{tokens:?}");
         assert_eq!(
             host.env(&settings)["XDG_DATA_HOME"],
@@ -1405,11 +1425,6 @@ mod tests {
             json!({"input": 37200, "cached": 24200, "output": 215})
         );
         assert_eq!(tokens[0]["model"], "muse-spark-1.3");
-        assert!(
-            tokens[0]["model_calls"].as_u64().unwrap() >= 1,
-            "{}",
-            tokens[0]
-        );
         let mut meter = crate::execute::Meter::default();
         meter.add(&tokens[0]);
         let r = meter.report("", "musecode", "subscription").unwrap();

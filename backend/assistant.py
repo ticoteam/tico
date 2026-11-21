@@ -1801,15 +1801,48 @@ def chat_room(c, settings, who, create=True):
     return ensure_room(c, who.actor, settings.assistant_bot) if create else find_room(c, who.actor)
 
 
-# The places a morning message links, its items: `[title](#/task/<id>)`, `[goal](#/goals/<id>)` and the like.
-_LINKED = re.compile(r"\]\(\s*([^)\s]+)")
+# The places a morning message links, its items: `[title](#/task/<id>)`, `[goal](#/goals/<id>)` and the like. Read as
+# Markdown reads a link, never inside fenced code or a code span: its destination is `<...>`, or runs to whitespace or
+# the `)` that closes it, with balanced `(...)` and `\)` kept inside.
+_FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})[^\n]*\n.*?(?:^[ \t]{0,3}\1[`~]*[ \t]*$|\Z)", re.M | re.S)
+_CODE_SPAN = re.compile(r"(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)", re.S)
+_LINK_OPEN = re.compile(r"\[(?:[^\[\]\\]|\\.)*\]\(")
+
+
+def _link_targets(text):
+    """The destination of each Markdown link in `text`, as written."""
+    text = _CODE_SPAN.sub(" ", _FENCE.sub("", text))
+    found = []
+    for opened in _LINK_OPEN.finditer(text):
+        i = opened.end()
+        while i < len(text) and text[i] in " \t":
+            i += 1
+        if text.startswith("<", i):
+            end = text.find(">", i)
+            if end > i and "\n" not in text[i:end]:
+                found.append(text[i + 1 : end])
+            continue
+        j, depth = i, 0
+        while j < len(text) and not text[j].isspace():
+            if text[j] == "\\":
+                j += 1
+            elif text[j] == "(":
+                depth += 1
+            elif text[j] == ")":
+                if not depth:
+                    break
+                depth -= 1
+            j += 1
+        if j > i:
+            found.append(text[i:j])
+    return found
 
 
 def morning_items(text):
     """A stable hash of the link targets a morning message names, as written (trimmed, one leading `#` and a trailing
     slash off), in any order and however often; None when it links none. Two spellings of one item count as two: a
     repeat may go again, but a morning with a new item is never held back."""
-    linked = sorted({t.strip().removeprefix("#").rstrip("/") for t in _LINKED.findall(text or "")} - {""})
+    linked = sorted({t.strip().removeprefix("#").rstrip("/") for t in _link_targets(text or "")} - {""})
     return digest("\n".join(linked))[:16] if linked else None
 
 
