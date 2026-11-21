@@ -47,14 +47,20 @@ class Vendor:
 
 
 def tool(
-    api, tid="close-crm", name="Close CRM", scheme="basic_user", delivery="proxy", base="https://api.close.example"
+    api,
+    tid="close-crm",
+    name="Close CRM",
+    scheme="basic_user",
+    delivery="proxy",
+    base="https://api.close.example",
+    service="close",
 ):
     with api.app.state.store.transaction() as c:
         now = H.now()
         c.execute(
             "INSERT INTO tools(id,name,service,base_url,auth_scheme,check_path,delivery,created_by,created_at,"
             "updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-            (tid, name, "close", base, scheme, "/api/v1/me/", delivery, "human:ana", now, now),
+            (tid, name, service, base, scheme, "/api/v1/me/", delivery, "human:ana", now, now),
         )
 
 
@@ -102,7 +108,7 @@ def dump(api, *tables):
 def test_a_proxied_key_never_reaches_the_run_and_is_scrubbed_from_answers_and_records(api):
     setup(api)
     tool(api)
-    tool(api, "acme-api", "Acme API", "bearer", delivery="computer")
+    tool(api, "acme-api", "Acme API", "bearer", delivery="computer", service="acme")
     full = key(api, "close-crm", FULL)
     give(api, full, "bot:ops")
     give(api, key(api, "acme-api", COMPUTER, env="ACME_API_KEY"), "bot:ops")
@@ -216,7 +222,7 @@ def test_read_on_a_computer_tool_goes_through_the_proxy_unless_a_read_key_or_no_
     else a proxy token so only reads get through; with no API address nothing can hold it to reads, and Who can use
     it says so."""
     setup(api)
-    tool(api, delivery="computer")
+    tool(api, name="Ledger", delivery="computer", service="ledger")  # no ads, payments or CRM: its write key goes as is
     full = key(api, "close-crm", FULL)
     give(api, full, "bot:ops", "read")
     give(api, full, "bot:finance", "read_write")
@@ -609,3 +615,61 @@ def test_only_an_mcp_read_sent_to_exactly_the_tools_mcp_address_is_not_a_write(a
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tools SET created_at='2099-01-01T00:00:00Z' WHERE id='close-crm'")
     assert send("mcp", search) == 3
+
+
+def test_a_new_write_grant_on_a_crm_tool_reaches_the_run_only_through_the_proxy_and_the_gate_sees_its_writes(api):
+    """Write keys of ads, payments and CRM tools live in the proxy (#4892): a Read and write grant made since the move
+    hands the run a proxy token even on a tool whose keys go to computers, never the key (nor its reveal), and each
+    write meets the Rules gate; a vendor's search POST is a read. A grant from before keeps its key, listed for
+    rotation with no change made."""
+    from backend import proxy_keys
+    from backend.tests.helpers.api import headers
+    from backend.tests.helpers.org_rules import org, rule
+
+    setup(api)
+    org(api)
+    judge = api.app.state.judge = Judge()
+    tool(api, delivery="computer")  # Close CRM: a CRM tool whose keys went to computers
+    full = key(api, "close-crm", FULL)
+    rule(
+        api,
+        {"kind": "internal", "text": "Never write to Close CRM.", "who": {"bots": ["finance"]}, "if_broken": "block"},
+    )
+
+    def since(at):
+        with api.app.state.store.transaction() as c:
+            c.execute(
+                "INSERT OR REPLACE INTO registry_metadata(key, value) VALUES(?, ?)", (api_tools.WRITE_PROXY_SINCE, at)
+            )
+
+    def outcomes():
+        with api.app.state.store.read() as c:
+            return [r[0] for r in c.execute("SELECT target FROM events WHERE action LIKE 'rules.%' ORDER BY rowid")]
+
+    since("2000-01-01T00:00:00.000000Z")
+    give(api, full, "bot:finance")
+    vendor = Vendor()
+    api.app.state.tool_proxy_transport = httpx.MockTransport(vendor)
+    _, finance = run(api, "finance")
+    item = handed(api, finance)
+    assert item["value"].startswith("tpx1.") and FULL not in json.dumps(item)
+    reveal = api.post(f"/api/v2/credentials/{full}/reveal", json={}, headers=headers(finance["token"]))
+    assert reveal.status_code == 403 and reveal.json()["error"]["code"] == "proxied_key" and FULL not in reveal.text
+    assert call(api, "POST", "api/v1/lead/", item["value"], how="basic", json={"name": "Acme"}).status_code == 200
+    assert vendor.seen[-1].headers["authorization"] == "Basic " + base64.b64encode(f"{FULL}:".encode()).decode()
+    assert outcomes() == ["link:tool:close-crm"] and len(judge.read) == 1  # the write was judged (log-only)
+    assert call(api, "POST", "api/v1/data/search/", item["value"], how="basic", json={"q": "x"}).status_code == 200
+    assert outcomes() == ["link:tool:close-crm"]  # Close's search is a read
+    with api.app.state.store.read() as c:
+        assert proxy_keys.report(c)["direct"] == []
+    # A grant from before the move keeps its key as it was, and is listed for rotation; nothing is changed.
+    since("2999-01-01T00:00:00.000000Z")
+    assert handed(api, finance)["value"] == FULL
+    with api.app.state.store.read() as c:
+        listed = proxy_keys.report(c)
+    assert [(d["tool"], d["subject"], d["category"], d["why"]) for d in listed["direct"]] == [
+        ("close-crm", "bot:finance", "crm", "before")
+    ]
+    assert FULL not in json.dumps(listed)
+    # The run's computer reports no release here: it is listed as one that may not take a proxy token.
+    assert [c["release"] for c in listed["computers"]] == [""]

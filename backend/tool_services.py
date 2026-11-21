@@ -253,6 +253,41 @@ TEMPLATES = {
 }
 
 
+# Ads, payments and CRM (plan P3/W4): a write key of one of these reaches a run only through the proxy, where the
+# Rules gate (backend/rule_links.py) sees its writes (api_tools.write_by_proxy). With each, the POSTs its API answers
+# as a read (a search, a query), which are no write: any other call but GET, HEAD and OPTIONS is one.
+GATED = {
+    "meta-ads": ("ads", ()),
+    "google-ads": ("ads", (r"/customers/[^/]+/googleAds:search(Stream)?$",)),
+    "stripe": ("payments", ()),
+    "brex": ("payments", ()),
+    "mercury": ("payments", ()),
+    "close-crm": ("crm", (r"/api/v1/data/search/?$",)),
+    "hubspot": ("crm", (r"/crm/v3/objects/[^/]+/(search|batch/read)$",)),
+    "pipedrive": ("crm", ()),
+    "attio": ("crm", (r"/v2/(objects/[^/]+/records|lists/[^/]+/entries)/query$",)),
+}
+
+
+def _gated(service="", name=""):
+    """The GATED entry of a tool: its service as stored, as matched, or as its vendor (`close` is Close CRM's)."""
+    for found in (str(service or "").strip().lower(), match(service=service, name=name), vendor_of(service, name)):
+        if found in GATED:
+            return GATED[found]
+    return ("", ())
+
+
+def gated(service="", name=""):
+    """`ads`, `payments` or `crm` for a tool of one of those vendors (its service, else the one its name says), else
+    ""."""
+    return _gated(service, name)[0]
+
+
+def vendor_read(service, method, path, name=""):
+    """A POST the vendor's API answers as a read (GATED), at this URL path: not a write."""
+    return method == "POST" and any(re.search(pattern, path) for pattern in _gated(service, name)[1])
+
+
 # Vendors' own MCP servers (docs/connect-tools.md): Find or connect offers a sign-in with the vendor on these.
 MCP_URLS = {
     "linear": "https://mcp.linear.app/mcp",

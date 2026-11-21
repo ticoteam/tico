@@ -1082,6 +1082,14 @@ class Vault:
             require_seen(c, who, cid, self.admins)
         if not permitted(c, who, cid, self.admins):
             raise Problem('forbidden', 'You do not have access to this credential', 403)
+        if who.role == 'bot' and found is not None and found['tool_id']:
+            # A key its run reaches through the proxy stays here: the run has a proxy token for it, never the value.
+            from . import tool_proxy
+
+            if held_at_read(c, tool_proxy.proxied_tools(c), found, who.actor, self.cipher)[0] is not None:
+                raise Problem(
+                    'proxied_key', 'This key stays with Tico: the run reaches its tool through the proxy', 403
+                )
         row = self.row(c, cid)
         if row['ciphertext'] is None:
             raise Problem('not_connected', 'This connection has no stored password or key', 409)

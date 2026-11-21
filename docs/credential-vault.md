@@ -52,6 +52,15 @@ environment as above, so whoever controls that computer can read it. Tools lists
 read key when there is one, else (only a Read and write key) a proxy token as for a proxied tool, so its calls go through
 the proxy's Read rules; a tool with no API address cannot be held to reads, and Who can use it marks that bot's row.
 
+**Write keys of ads, payments and CRM tools live in the proxy** (Meta Ads, Google Ads, Stripe, Brex, Mercury, Close,
+HubSpot, Pipedrive, Attio: `tool_services.GATED`). A Read and write grant on one of them made since this install moved
+them (the migration `20261121160703_write_keys_by_proxy` stores when) reaches the run as a proxy token even when the
+tool's keys go to computers, so every write meets the Rules gate (Rules › Links), and a run never reveals such a key.
+A grant from before keeps its key as it was, so nothing stops working; `python -m backend.proxy_keys <database>` lists
+those grants and the computers whose runner predates proxy tokens, read only, for a person to rotate the keys at each
+vendor. A tool the proxy cannot call (Google Ads' several values) keeps its key and is listed too. A vendor's search or
+query POST (HubSpot, Attio, Close, Google Ads) is a read, not a write.
+
 **Status.** A tool's check is one authenticated GET to its check path (its known service's when it has none, at that
 service's own address) with each stored key, every 30 minutes for every tool with an address and a check path, its keys
 on the proxy or on computers alike (the server holds every value, and a check sends a key only to the tool's own public
