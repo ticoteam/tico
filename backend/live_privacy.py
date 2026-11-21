@@ -129,18 +129,24 @@ class Sources:
         caps it. A room past the cap is left out, so its own check reads it again and refuses as before."""
         from . import provenance_clock
 
-        cids = sorted({cid for cid in cids if cid} - set(self.primed_rooms))
+        # A room the shared cache holds is answered from it, as its own lookup would be: only the rest are read.
+        cids = sorted(
+            {cid for cid in cids if cid}
+            - set(self.primed_rooms)
+            - {cid for cid in cids if provenance_clock.known(self.c, ("meeting_conversation", cid))}
+        )
         H.prime_conversations(self.c, cids)
         for part in H.chunks([cid for cid in cids if not self.bound_conversation(cid)]):
             inputs = {cid: [] for cid in part}
+            # Each room's inputs by its own index seek, at most 101 of them (the cap's one past), as its lookup reads.
             for cid, refs in self.c.execute(
-                "SELECT conversation_id,refs FROM (SELECT m.conversation_id,m.refs,"
-                "row_number() OVER (PARTITION BY m.conversation_id) AS n FROM messages m INDEXED BY messages_live_meeting_input "
-                "JOIN live_meeting_turns t ON t.id=json_extract(m.refs,'$.live_meeting.turn_id') "
+                "SELECT j.value,i.refs FROM json_each(?) j JOIN messages i ON i.rowid IN (SELECT m.rowid FROM messages m "
+                "INDEXED BY messages_live_meeting_input JOIN live_meeting_turns t "
+                "ON t.id=json_extract(m.refs,'$.live_meeting.turn_id') "
                 "AND t.meeting_id=json_extract(m.refs,'$.live_meeting.meeting_id') "
-                "WHERE m.conversation_id IN (%s) AND json_extract(m.refs,'$.live_meeting.turn_id') IS NOT NULL "
-                "AND m.sender_id=? AND m.recipient_id='bot:'||t.bot) WHERE n<=101" % ",".join("?" * len(part)),
-                (*part, H.TICO_ACTOR),
+                "WHERE m.conversation_id=j.value AND json_extract(m.refs,'$.live_meeting.turn_id') IS NOT NULL "
+                "AND m.sender_id=? AND m.recipient_id='bot:'||t.bot LIMIT 101)",
+                (json.dumps(part), H.TICO_ACTOR),
             ):
                 inputs[cid].append(refs)
             for cid, found in inputs.items():

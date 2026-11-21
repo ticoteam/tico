@@ -5569,6 +5569,10 @@ def read_threads(c, who, ids):
         rows[cid] = thread_row(c, dict(r))
     members.update(_member_rows(c, who, list(rows)))
     prime_members(c, who, list(rows), roots={r.get("root_id") or r["id"] for r in rows.values()})
+    if read_cache.cache(c) is not None:  # a snapshot's own reads: nothing here opens one
+        from .live_privacy import sources
+
+        sources(c).prime_conversations(list(rows))  # each check's meeting provenance (denial), for all at once
     return rows, members
 
 
@@ -5736,6 +5740,10 @@ def _sidebar_page(c, v, cursor, limit, sort):
         # A task's thread is read only while it has unread for the viewer, and each readable check reads its task
         # (denial -> _task_readable -> the task and its tags): the page's tasks are read together, once.
         H.prime_tasks(c, {r["task_id"] for r in found if r.get("task_id")})
+        # Each check reads its room's meeting provenance (live_privacy): the page's rooms are read together, once.
+        from .live_privacy import sources
+
+        sources(c).prime_conversations([r["id"] for r in found])
         rows = []
         for r in found:
             if not thread_readable(c, v, r):
