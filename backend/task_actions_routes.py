@@ -831,8 +831,11 @@ def register_core(
                 (usage_limits.warning(c, owner) or holds.warning(c, owner) or H.setup_hold(c, owner),),
             )
         )
+        # Read back as the person when the task is private now: it may have become private on entering its stage.
+        created = H.task(c, row["id"])
+        reader = privacy.as_the_person(who) if H.task_private(c, created) else None
         return {
-            "task": task_view(H.task(c, row["id"]), c, visible_sql=auth.task_sql(c, person or who), who=person or who),
+            "task": task_view(created, c, visible_sql=auth.task_sql(c, reader or who), who=reader or who),
             **({"readback": readback} if readback else {}),
             **ask_ingest.reply(gate),
             **org_rule_check.answer(rule_gate),

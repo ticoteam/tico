@@ -356,4 +356,7 @@ def install(app: FastAPI, auth: Any, write: Any) -> None:
         def check(c: Connection) -> None:
             may_file(c, auth, who, call_id, body.bot)
 
-        return write(request, body, work, check=check, receipt=(lambda _: person) if person else None)
+        def receipt(_: object) -> Identity | None:
+            return person
+
+        return write(request, body, work, check=check, receipt=receipt if person else None)
