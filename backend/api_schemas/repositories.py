@@ -64,6 +64,8 @@ SCHEMAS.update(
                 "all_access": {"enum": ["read", "write"]},
                 "chosen": items(ref("RepositoryGrant")),
                 "all_repos": items(ref("TickedRepository")),
+                # What All ticked repos covers by configuration, whether GitHub reaches it now or not.
+                "all_ticked": items("s"),
                 "effective": items(ref("RepositoryGrant")),
             }
         ),

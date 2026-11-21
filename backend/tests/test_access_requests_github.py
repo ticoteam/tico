@@ -4,8 +4,10 @@ Owner and the admins, the Grant ticks and chooses it, a change in Settings close
 token reaches what was granted."""
 
 import json
+import time
 import uuid
 
+from backend.repositories import save_metadata
 from backend.tests.helpers.github_app import api, auth, gh, runner_token, turn_token  # noqa: F401
 from backend.tests.helpers.repositories import catalog, put
 
@@ -96,6 +98,37 @@ def test_write_for_a_bot_reading_every_repository_in_use_keeps_its_reads_and_wri
     assert tap(api, asked["id"], "grant")["state"] == "granted"
     assert reach(api) == {"Acme/emp-cpo": "write", "Acme/product": "write", "Acme/docs": "read"}
     assert api.get("/api/v2/bots/cpo/repositories", headers=auth()).json()["mode"] == "chosen"
+
+
+def test_a_grant_past_all_ticked_repos_keeps_a_ticked_repository_github_cannot_reach_now(api, gh):
+    catalog(api, gh)
+    api.app_state.auth.owner_email = "ana@acme.example"
+    for name in ("product", "docs"):
+        put(api, "repositories/Acme/" + name, {"enabled": True})
+    put(api, "bots/cpo/repositories", {"mode": "all", "all_access": "read"})
+    with api.app_state.store.transaction() as c:  # as a refresh leaves it when GitHub misses Acme/docs for a moment
+        c.execute("UPDATE repositories SET reachable=0 WHERE full_name='Acme/docs'")
+        save_metadata(c, "repositories-confirmed-missing", {"acme/docs": time.time()})
+    asked = ask(api, "Acme/product", "read_write")
+    assert tap(api, asked["id"], "grant")["state"] == "granted"
+    chosen = api.get("/api/v2/bots/cpo/repositories", headers=auth()).json()["chosen"]
+    assert {r["full_name"]: r["access"] for r in chosen} == {"Acme/product": "write", "Acme/docs": "read"}
+
+
+def test_read_granted_on_a_repository_all_ticked_repos_covers_at_write_leaves_the_bot_there(api, gh):
+    catalog(api, gh)
+    api.app_state.auth.owner_email = "ana@acme.example"
+    for name in ("product", "docs"):
+        put(api, "repositories/Acme/" + name, {"enabled": True})
+    put(api, "bots/cpo/repositories", {"mode": "all", "all_access": "write"})
+    with api.app_state.store.transaction() as c:  # GitHub misses Acme/docs for a moment: the ask waits on a person
+        c.execute("UPDATE repositories SET reachable=0 WHERE full_name='Acme/docs'")
+        save_metadata(c, "repositories-confirmed-missing", {"acme/docs": time.time()})
+    asked = ask(api, "Acme/docs")
+    assert asked["state"] == "open"
+    tap(api, asked["id"], "grant")
+    got = api.get("/api/v2/bots/cpo/repositories", headers=auth()).json()
+    assert (got["mode"], got["all_access"]) == ("all", "write")
 
 
 def test_a_grant_past_all_ticked_repos_at_write_keeps_every_write_and_its_workflow_flags(api, gh):

@@ -3,8 +3,10 @@ every older version still opens. An archived file stays on the task, restorable,
 
 import pytest
 
+from backend import page_links
 from backend.auth import Identity
 from backend.blobs import register
+from backend.store import H
 from backend.tests.helpers.api import get, headers, post  # noqa: F401
 from backend.tests.helpers.automation_api import as_bot
 from backend.tests.helpers.automation_cli import Client
@@ -288,3 +290,115 @@ def test_a_person_archives_and_restores_a_task_file_from_the_cli_and_the_tool(ap
     archive = hubtools.BY_NAME["tico_file_archive"]["fn"]
     assert archive(person, {"id": fid})["file"]["archived"] is True
     assert archive(person, {"id": fid, "restore": True})["file"]["archived"] is False
+
+
+def heard_from(api, change, refused=False):
+    """(task, page) of each change to a task's files that `change()` logs, one entry a row; `change` answers 200, or
+    is `refused`."""
+    with api.app.state.store.read() as c:
+        seen = c.execute("SELECT max(seq) FROM changes").fetchone()[0] or 0
+    answer = change()
+    assert (getattr(answer, "status_code", 200) >= 400) is refused, getattr(answer, "text", "")
+    with api.app.state.store.read() as c:
+        return [
+            tuple(r)
+            for r in c.execute(
+                "SELECT subject_id,ref FROM changes WHERE seq>? AND topic='tasks' AND kind='files' ORDER BY seq",
+                (seen,),
+            )
+        ]
+
+
+def reached(rows, fid, *tasks):
+    """Each of `tasks` heard of the page `fid` in `rows` (heard_from), as a change about that page."""
+    assert set(tasks) <= {task for task, ref in rows if ref == fid}
+
+
+def archive(api, kind, fid, archived):
+    return archive_as(api, kind, fid, archived, "ana-test")
+
+
+def archive_as(api, kind, fid, archived, who):
+    return api.patch(f"/api/v2/{kind}/{fid}", json={"archived": archived}, headers=headers(who))
+
+
+def test_a_page_archived_by_either_flag_is_listed_again_on_every_task_it_is_on(api):
+    """A task lists a page through its own file, a link or a pin: an archive of either flag, or a new version that
+    brings it back, reaches each one's open views as a change about that page; and a person's listing of a task's
+    archived pages asks each page's links once, not once a page."""
+    from backend.tests.helpers.task_privacy_reads import traced
+
+    publish = hubtools.BY_NAME["tico_file_publish"]["fn"]
+    token = as_bot(api, "ops")
+    agent = Agent(api, token)
+    home, linked, pinned = (
+        post(api, "tasks", {"title": title, "owner": "ops", "body": "Brief."}, "cara-test")["id"]
+        for title in ("Home", "Linked", "Pinned")
+    )
+    pages = {}
+    for name, scope in (("brief.html", "task"), ("policy.html", "bot")):
+        fid = publish(agent, {"name": name, "text": "<p>Text</p>", "task": home, "scope": scope})["file"]["id"]
+        with api.app.state.store.transaction() as c:
+            c.execute("INSERT INTO pages(file_id,created_at,updated_at) VALUES(?,?,?)", (fid, H.now(), H.now()))
+        r = api.post(
+            f"/api/v2/pages/{fid}/links", json={"target": "task:" + linked, "role": "related"}, headers=headers()
+        )
+        assert r.status_code == 200, r.text
+        post(api, "pins", {"place": "task:" + pinned, "item": "page:" + fid})
+        pages[fid] = name
+
+    def heard(change):
+        return heard_from(api, change)
+
+    def edit(kind, fid, archived):
+        return lambda: archive(api, kind, fid, archived)
+
+    for fid in pages:  # a task file's flag, a bot-wide file's flag, then the page's own
+        for archived in (True, False):
+            assert set(heard(edit("files", fid, archived))) >= {(linked, fid), (pinned, fid)}
+        assert set(heard(edit("pages", fid, True))) >= {(home, fid), (linked, fid), (pinned, fid)}
+
+    files, statements = traced(api, lambda: get(api, f"tasks/{home}/files", token="cara-test")["files"])
+    assert {f["id"] for f in files if f["archived"]} == set(pages)
+    one_page = page_links.LINKS_SQL.split("?")[0]  # its links read page by page, not in the listing's one batch
+    assert not [s for s in statements if s.startswith(one_page)]
+
+    # A refused write logs nothing; a new version reaches each task, whichever flags it clears. Republished with
+    # --task, the brief (archived both ways) gains a link to the pinned task; the policy, written again as a file,
+    # comes back from its file's archive while its page's stays.
+    brief, policy = pages
+    assert heard(edit("files", brief, True))
+    assert heard(edit("files", policy, True))
+    refused = heard_from(api, lambda: archive_as(api, "files", policy, False, "cara-test"), refused=True)
+    assert not [r for r in refused if r[1] == policy]
+    body = {"page": brief, "name": "brief.html", "text": "<p>New</p>", "task": pinned}
+    reached(heard(lambda: api.post("/api/v2/pages", json=body, headers=headers(token))), brief, linked, pinned)
+    rewrite = {"name": "policy.html", "text": "<p>New</p>", "task": home, "scope": "bot"}
+    reached(heard(lambda: publish(agent, rewrite)), policy, linked, pinned)
+    files = {f["id"]: f for f in get(api, f"tasks/{home}/files?all=1")["files"]}
+    assert not files[brief]["archived"]
+    assert (files[policy]["file_archived"], files[policy]["page_archived"]) == (False, True)
+
+
+def test_a_document_written_again_lists_its_archived_page_again_on_every_task_it_is_on(api):
+    """`tico task attach --doc` continues the document's page: back from either archive, every task it is on hears."""
+    token = as_bot(api, "ops")
+    home, linked, pinned = (
+        post(api, "tasks", {"title": title, "owner": "ops", "body": "Brief."})["id"]
+        for title in ("Home", "Linked", "Pinned")
+    )
+
+    def write(text):
+        return api.post(
+            f"/api/v2/tasks/{home}/files", json={"document": "Spec", "text": f"<p>{text}</p>"}, headers=headers(token)
+        )
+
+    fid = write("One").json()["file_id"]
+    r = api.post(f"/api/v2/pages/{fid}/links", json={"target": "task:" + linked, "role": "related"}, headers=headers())
+    assert r.status_code == 200, r.text
+    post(api, "pins", {"place": "task:" + pinned, "item": "page:" + fid})
+    for flags in (("pages",), ("pages", "files")):  # archived as a page, then as a page and a file: heard once
+        for kind in flags:
+            assert archive(api, kind, fid, True).status_code == 200
+        reached(heard_from(api, lambda: write(len(flags))), fid, home, linked, pinned)
+    assert not listed(api, home)[fid]["archived"]

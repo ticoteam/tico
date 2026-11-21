@@ -560,11 +560,15 @@ def access(c, bot, org, reads=None):
         and org
         and r['full_name'].split('/')[0].lower() == org.lower()
     ]
+    # What All ticked repos covers by configuration, whether GitHub reaches it this minute or not: `effective` is
+    # what the bot reaches now.
+    covered = [n for _, n in sorted(reads.all_ticked(org).items()) if org and n.split('/')[0].lower() == org.lower()]
     return {
         'mode': mode,
         'all_access': all_access,
         'chosen': chosen,
         'all_repos': [ticked[k] for k in sorted(ticked)],
+        'all_ticked': covered,
         'effective': effective,
         'create_repositories': bot == _botops() or reads.creation.get(bot) is True,
         'create_product_repositories': product_creation(reads.product_creation, bot),
@@ -752,17 +756,21 @@ def chosen_keeping(c, before, repository, org):
     """The Chosen repos grants a bot keeps when `repository` is added at its own level, and how many it moved from All
     ticked repos (None when it was not there). All ticked repos has one level for every repository, so a bot on it
     moves to Chosen repos with each ticked repository it reaches now at the level it has, Run workflows and Edit
-    workflow files as they are: nothing gets wider or narrower. Its own repository is not a grant; it stays write
-    whatever the mode."""
+    workflow files as they are: nothing gets wider or narrower. Each ticked one All ticked repos covers is kept, one
+    GitHub cannot reach this minute too. Its own repository is not a grant; it stays write whatever the mode."""
     moved = None
     if before['mode'] == 'chosen':
         keep = [Grant(**r) for r in before['chosen']]
     elif before['mode'] == 'all':
-        ticked = Reads(c, []).all_ticked(org)
+        access = before['all_access']
+        opted = {r['full_name'].lower(): r for r in before['all_repos']} if access == 'write' else {}
         keep = [
-            Grant(full_name=r['full_name'], access=r['access'], **{flag: True for flag in STORED if r.get(flag)})
-            for r in before['effective']
-            if r['full_name'].lower() in ticked
+            Grant(
+                full_name=name,
+                access=access,
+                **{flag: True for flag in STORED if opted.get(name.lower(), {}).get(flag)},
+            )
+            for name in before['all_ticked']
         ]
         moved = len([g for g in keep if g.full_name.lower() != repository.lower()])
     else:

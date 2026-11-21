@@ -436,10 +436,13 @@ def _give_repository(c: Any, row: Any, actor: Any, person: Any = False) -> Any:
         c.execute("UPDATE repositories SET enabled=1,updated_at=? WHERE full_name=?", (H.now(), name))
         H.event(c, actor, "repositories.changed", name, {"before": {"enabled": 0}, "after": {"enabled": 1}})
     current = R.access(c, bot, org)
-    if current["mode"] == "all" and has(c, row):
+    # All ticked repos covers it by configuration (all_ticked), whether GitHub reaches it this minute or not.
+    ticked = {n.lower() for n in current["all_ticked"]}
+    covered = name.lower() in ticked and (current["all_access"] == "write" or want == "read")
+    if current["mode"] == "all" and (covered or has(c, row)):
         return
     # As a product repository its bot makes (github_app): from All ticked repos it moves to Chosen repos, each
-    # repository it reaches now kept at its level, and this one at the asked level or the one it has, if higher.
+    # repository All ticked repos covers kept at its level, and this one at the asked level or the one it has, if higher.
     keep, _ = R.chosen_keeping(c, current, name, org)
     held = next(
         (

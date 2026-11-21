@@ -97,7 +97,10 @@ def file_of(c: Any, task_id: str, name: str, visible: Callable[[Any], bool]) -> 
         )
     row = rows[0] if rows else None
     if row and row["archived"]:
+        from .files import list_again
+
         c.execute("UPDATE bot_files SET archived=0 WHERE id=?", (row["id"],))
+        list_again(c, row["id"])
         row = c.execute("SELECT * FROM bot_files WHERE id=?", (row["id"],)).fetchone()
     return row
 
@@ -107,11 +110,16 @@ def record(c: Any, task_id: str, name: str, file_id: str, by: str | None = None)
     from . import page_links as L
 
     now = H.now()
+    was = c.execute("SELECT archived FROM pages WHERE file_id=?", (file_id,)).fetchone()
     c.execute(
         "INSERT INTO pages(file_id,cadence,created_at,updated_at) VALUES(?,'none',?,?) "
         "ON CONFLICT(file_id) DO UPDATE SET updated_at=excluded.updated_at,archived=0",
         (file_id, now, now),
     )
+    if was and was[0]:
+        from .files import list_again
+
+        list_again(c, file_id)  # back from its page's archive on each task it is on
     if by is None:
         row = c.execute("SELECT bot_id FROM bot_files WHERE id=?", (file_id,)).fetchone()
         by = f"bot:{row['bot_id']}"

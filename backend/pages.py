@@ -378,6 +378,7 @@ class Pages:
 
         def extra(c, row, changed, editor, linked_task):
             now = H.now()
+            was = c.execute("SELECT archived FROM pages WHERE file_id=?", (row["id"],)).fetchone()
             c.execute(
                 "INSERT INTO pages(file_id,cadence,as_of,created_at,updated_at,spec) VALUES(?,?,?,?,?,?) "
                 "ON CONFLICT(file_id) DO UPDATE SET cadence=COALESCE(?,cadence),as_of=?,updated_at=?,"
@@ -396,6 +397,10 @@ class Pages:
                     int(bool(changed)),
                 ),
             )
+            if changed and was and was[0]:
+                from .files import list_again
+
+                list_again(c, row["id"])  # its new version brings the archived page back on each task it is on
             actor = editor.actor
             page_links.link(c, row["id"], actor, "writer", actor)
             if importing:
@@ -646,17 +651,10 @@ class Pages:
                 if "archived" in fields and fields["archived"] != r["page_archived"]:
                     from . import task_pages
 
+                    from .files import list_again
+
                     task_pages.submit_linked(c, fid, None, who.actor)
-                    # Each task it is on lists it again, as a change to its file flag would (backend/events.py).
-                    for (task,) in c.execute(
-                        "SELECT substr(target,6) FROM page_links WHERE page_id=? AND target LIKE 'task:%' "
-                        "UNION SELECT task_id FROM bot_files WHERE id=? AND task_id IS NOT NULL",
-                        (fid, fid),
-                    ).fetchall():
-                        c.execute(
-                            "INSERT INTO changes(topic,kind,subject_id,created_at) VALUES('tasks','files',?,?)",
-                            (task, now),
-                        )
+                    list_again(c, fid, own=True)
             r = self.rows(c, [fid])[fid]
             return {"page": self.view(c, who, r, self.page_of(r), {}, include_audience=True)}
 
