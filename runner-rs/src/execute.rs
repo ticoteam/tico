@@ -2489,7 +2489,14 @@ impl Runner {
             // GitHub token and its Gateway key. Each is applied below in the order it always was.
             let (built, granted, pinned) = tokio::join!(
                 crate::env::turn_environment(&ctx, &attempt, &mut vault, &self.credentials),
-                tokens.get(client, json!({"bot": bot})),
+                // A personal claim asks for the runner's GitHub token only to refresh a checkout (Make page has none).
+                async {
+                    if personal_claim && !p.has_checkout() {
+                        Ok(json!({}))
+                    } else {
+                        tokens.get(client, json!({"bot": bot})).await
+                    }
+                },
                 crate::gateway_relay::prefetch(&self.client, &attempt, separation),
             );
             env = built.map_err(Fail::runtime)?;
@@ -2599,7 +2606,12 @@ impl Runner {
                     crate::placement::catch_up(&bot, &attempt["generation"], &execution_path, place_env).await;
                     // A checkout with no upstream yet: give its history a home first (service.py prepare_history), and
                     // run no turn on a copy that shares no history with GitHub's.
-                    let (published, detail) = self.publish_before_start(&start_attempt, &flags, &bot, &execution_path, place_env).await?;
+                    // A personal claim publishes nothing, the shared checkout's history included.
+                    let (published, detail) = if personal_claim {
+                        ("skipped", String::new())
+                    } else {
+                        self.publish_before_start(&start_attempt, &flags, &bot, &execution_path, place_env).await?
+                    };
                     if published == "failed" && detail.contains("unrelated history") {
                         return Err(Fail::runtime(format!("this computer's copy of {bot} shares no history with GitHub ({detail}); no turn runs on it")));
                     }
@@ -2649,6 +2661,9 @@ impl Runner {
                         for key in ["HUB_WORKSPACE", "TICO_PROJECTS_DIR"] {
                             e.insert(key.into(), execution_path.display().to_string());
                         }
+                        // Pi's sessions outlive the copy: one folder per room, outside it (hosts/pi.rs session_dir).
+                        let sessions = crate::sessions::PersonalCopy::sessions_for(&self.config.projects_dir(), &attempt);
+                        e.insert(crate::hosts::pi::SESSIONS_ENV.into(), sessions.display().to_string());
                     }
                 }
             }
@@ -9027,8 +9042,44 @@ for line in sys.stdin:
         let lane = runner
             .lanes
             .lane("assistant", &crate::sessions::turn_lane(&attempt));
+        // Pi keeps the room's sessions outside the copy, so the next turn resumes what this one saved.
+        let projects = runner.config.projects_dir();
+        let sessions = crate::sessions::PersonalCopy::sessions_for(&projects, &attempt);
+        let pi_dir = |workspace: &Path| {
+            let env: Env = [
+                ("HUB_WORKSPACE".to_string(), workspace.display().to_string()),
+                (
+                    crate::hosts::pi::SESSIONS_ENV.to_string(),
+                    sessions.display().to_string(),
+                ),
+            ]
+            .into_iter()
+            .collect();
+            crate::hosts::pi::session_dir(
+                "assistant",
+                &crate::hosts::Settings {
+                    env,
+                    ..Default::default()
+                },
+            )
+        };
+        let saved = pi_dir(&copy);
+        assert!(!saved.starts_with(&copy));
+        std::fs::write(saved.join("thread-1.jsonl"), "saved").unwrap();
         drop(place);
         assert!(lane.try_lock().is_ok() && !copy.exists());
+        let mut again = runner.enter_lanes(&attempt, &lost).await.unwrap();
+        runner
+            .place_turn(&mut again, &mut attempt, &env, &lost)
+            .await
+            .unwrap();
+        assert_eq!(
+            again.execution_path, copy,
+            "the room's next turn works at the same path"
+        );
+        let resumed = pi_dir(&again.execution_path).join("thread-1.jsonl");
+        assert_eq!(std::fs::read_to_string(resumed).unwrap(), "saved");
+        drop(again);
         std::fs::remove_dir_all(dir).ok();
     }
 

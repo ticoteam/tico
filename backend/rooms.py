@@ -22,6 +22,20 @@ STRATEGY_ROOM = "ceo"
 DOCS_ROOM = "docs"
 
 
+def personal_root(c, conversation):
+    """Whether a room is a person's own (`PERSONAL`) or hangs off one: a sub-thread's root decides, and a root that is
+    gone counts as one. The Assistant's turn there is a personal claim (backend/execution.py)."""
+    if not conversation:
+        return False
+    if conversation.get("scope") == PERSONAL:
+        return True
+    root = conversation.get("root_id")
+    if not root or root == conversation.get("id"):
+        return False
+    found = H.conversation(c, root)
+    return not found or found.get("scope") == PERSONAL
+
+
 def session_config(conversation, bot, config):
     """The config a turn is handed. In the owner's earlier Strategy Owner chat (a turn queued there before it became
     history) it keys its session on that conversation

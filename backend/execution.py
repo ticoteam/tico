@@ -5645,8 +5645,7 @@ class Execution:
                 # nothing such a turn writes in it (runner-rs/src/sessions.rs PersonalCopy).
                 **(
                     {"personal": True}
-                    if row["bot_id"] == self.store.settings.assistant_bot
-                    and (conv or {}).get("scope") == rooms.PERSONAL
+                    if row["bot_id"] == self.store.settings.assistant_bot and rooms.personal_root(c, conv)
                     else {}
                 ),
                 "task": wire_task,

@@ -135,6 +135,51 @@ def test_a_branch_of_the_assistant_and_an_orphaned_run_get_the_same_guard(api):
         assert shown["updates"] == [] and shown["documents"] == {} and "k\n" not in json.dumps(shown), bot
 
 
+def test_a_bot_on_the_assistants_repository_and_a_sub_thread_of_a_personal_room_get_the_guard(api):
+    """The guard follows the repository, however it is written, and a thread's root: a turn in a sub-thread of a
+    person's own room is personal (its claim says so), and its row never shows; nor one whose root is gone."""
+    from backend import rooms
+
+    machine = runner(api)
+    assign(api, machine, "finance")
+    assign(api, machine, "assistant")
+    ready(api, machine, ["assistant"])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET repo='https://github.com/Acme/emp-assistant.git' WHERE bot='finance'")
+    post(
+        api, "bots/finance/memory/report", {"documents": {"memory/learnings.md": "- Ben earns 90k\n"}}, machine["token"]
+    )
+    assert history(api, "ana-test", "finance")["documents"] == {}
+    post(api, "assistant/messages", {"text": "My salary is 90k"}, "ben-test")
+    attempt = claim(api, machine, "assistant")
+    with api.app.state.store.transaction() as c:
+        room = c.execute(
+            "SELECT m.conversation_id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.id=?",
+            (attempt["job_id"],),
+        ).fetchone()[0]
+        root = H.open_conversation(
+            c,
+            "human:ben",
+            ["human:ben", "bot:assistant"],
+            kind="chat",
+            scope="personal",
+            owner_actor="human:ben",
+            room_key="elsewhere",
+        )["id"]
+        c.execute("UPDATE conversations SET scope='shared',root_id=? WHERE id=?", (root, room))
+        thread = H.conversation(c, room)
+        assert rooms.personal_root(c, thread) and rooms.personal_root(c, {**thread, "root_id": "gone"})
+    sub = {"commits": [commit(attempt=attempt["id"], subject="Ben earns 90k")]}
+    assert post(api, "bots/assistant/memory/report", sub, machine["token"])["recorded"] == 0
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO bot_memory_updates(bot,sha,subject,author,committed_at,files,diff,truncated,attempt_id,shared,"
+            "runner_id,reported_at) VALUES('assistant',?,'Ben earns 90k','',?,'[]','',0,?,1,'',?)",
+            (SHA, H.now(), attempt["id"], H.now()),
+        )
+    assert history(api, "ana-test", "assistant")["updates"] == []
+
+
 def test_only_the_assigned_computer_reports_and_runs_must_be_the_bots_own(api):
     machine, other = runner(api), runner(api, label="Other Mac")
     assign(api, machine, "ops")

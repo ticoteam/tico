@@ -1702,7 +1702,7 @@ pub fn personal_claim(attempt: &Value) -> bool {
 pub(crate) struct PersonalCopy(pub PathBuf);
 
 impl PersonalCopy {
-    pub(crate) fn path_for(projects: &Path, attempt: &Value) -> PathBuf {
+    fn key(projects: &Path, attempt: &Value) -> String {
         let conversation = &attempt["conversation"];
         let room = [&conversation["root_id"], &conversation["id"]]
             .into_iter()
@@ -1717,7 +1717,20 @@ impl PersonalCopy {
             )
             .as_bytes(),
         );
-        std::env::temp_dir().join(format!("tico-personal-{}", &key[..16]))
+        key[..16].to_string()
+    }
+
+    pub(crate) fn path_for(projects: &Path, attempt: &Value) -> PathBuf {
+        std::env::temp_dir().join(format!("tico-personal-{}", Self::key(projects, attempt)))
+    }
+
+    /// The room's own folder for a harness's saved sessions (Pi's), outside the copy so the next turn resumes them.
+    pub(crate) fn sessions_for(projects: &Path, attempt: &Value) -> PathBuf {
+        projects
+            .join("runtime")
+            .join("pi-sessions")
+            .join(text_of(&attempt["bot"]))
+            .join(format!("personal-{}", Self::key(projects, attempt)))
     }
 
     /// Clone `main` (already refreshed for this turn) into the room's path, replacing a copy a stopped turn left.

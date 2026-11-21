@@ -70,32 +70,49 @@ def _run_of(c, bot, attempt):
     return attempt if row and row["bot_id"] in family(c, bot) else ""
 
 
+def repository(c, bot):
+    """The repository `bot` writes, normalized (`acme/emp-ops.git`, a URL or a bare name all give `emp-ops`): a branch
+    writes its original's."""
+    root = source_of(declared(c, bot)) or bot
+    row = c.execute("SELECT repo FROM bot_config WHERE bot=?", (root,)).fetchone()
+    repo = (row["repo"] if row else "") or "emp-" + (H.bot(c, root) or {}).get("slug", root)
+    return repo.strip().rstrip("/").lower().removesuffix(".git").rsplit("/", 1)[-1].rsplit(":", 1)[-1]
+
+
 def guarded(c, assistant_bot):
-    """The Assistant and every bot that writes its repository (its branches). One Assistant serves everyone, so their
-    history is shown only with a known run from a room that is not a person's own chat, and their documents, which name
-    no run, never (a person's own chat on an older runner wrote in the shared checkout)."""
-    return family(c, assistant_bot) if H.bot(c, assistant_bot) else {assistant_bot}
+    """Every bot that writes the Assistant's repository, the Assistant and its branches included. One Assistant serves
+    everyone, so their history is shown only with a run from a thread whose room and root are not a person's own chat,
+    and their documents, which name no run, never (a person's own chat on an older runner wrote in the shared
+    checkout)."""
+    mine = repository(c, assistant_bot)
+    return {assistant_bot} | {row["id"] for row in c.execute("SELECT id FROM bots") if repository(c, row["id"]) == mine}
+
+
+# The run's room and the root of its thread; inner joins, so a run whose message, room or root is gone has none.
+ROOM_SQL = (
+    "FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
+    "JOIN conversations v ON v.id=m.conversation_id JOIN conversations r ON r.id=COALESCE(NULLIF(v.root_id,''),v.id)"
+)
 
 
 def run_room(c, attempt):
-    """The scope of the room the run came from, or None when the run or its room does not resolve."""
-    row = c.execute(
-        "SELECT v.scope FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
-        "JOIN conversations v ON v.id=m.conversation_id WHERE a.id=?",
-        (attempt,),
-    ).fetchone()
-    return row["scope"] if row else None
+    """`rooms.PERSONAL` when the run's room or its thread's root is a person's own chat, else its scope; None when the
+    run, its room or its root does not resolve."""
+    row = c.execute(f"SELECT v.scope,r.scope AS root {ROOM_SQL} WHERE a.id=?", (attempt,)).fetchone()
+    if not row:
+        return None
+    return rooms.PERSONAL if rooms.PERSONAL in (row["scope"], row["root"]) else row["scope"]
 
 
 def shown(c, assistant_bot):
     """The SQL condition (and its values) for the history rows readers see (`guarded`): another bot's, or a guarded bot's
-    whose run resolves to one of that family in a room that is not a person's own chat. An orphaned run never shows."""
+    whose run resolves to one of them in a thread whose room and root are not a person's own chat. An orphaned run, or
+    one whose root is gone, never shows."""
     bots = sorted(guarded(c, assistant_bot))
     marks = ",".join("?" * len(bots))
     return (
-        f"(bot NOT IN ({marks}) OR EXISTS (SELECT 1 FROM attempts a JOIN jobs j ON j.id=a.job_id "
-        "JOIN messages m ON m.id=j.message_id JOIN conversations v ON v.id=m.conversation_id "
-        f"WHERE a.id=bot_memory_updates.attempt_id AND a.bot_id IN ({marks}) AND v.scope<>'personal'))",
+        f"(bot NOT IN ({marks}) OR EXISTS (SELECT 1 {ROOM_SQL} WHERE a.id=bot_memory_updates.attempt_id "
+        f"AND a.bot_id IN ({marks}) AND v.scope<>'personal' AND r.scope<>'personal'))",
         [*bots, *bots],
     )
 
@@ -104,7 +121,7 @@ def record(c, who, bot, report, assistant_bot):
     """Store what a computer reported for a bot assigned to it. Returns how many commits were new or changed."""
     if not c.execute("SELECT 1 FROM assignments WHERE bot=? AND runner_id=?", (bot, who.runner_id)).fetchone():
         raise Problem("forbidden", "That bot is not assigned to this computer", 403)
-    now, changed, withheld = H.now(), 0, False
+    now, changed = H.now(), 0
     checked = bot in guarded(c, assistant_bot)
     for commit in report.commits:
         files = [f for f in commit.files if f.startswith(FOLDERS) and ".." not in f.split("/")]
@@ -117,7 +134,6 @@ def record(c, who, bot, report, assistant_bot):
         if checked and scope == rooms.PERSONAL:
             # A person's own chat wrote it (an older runner, which still runs those turns in the shared checkout): never
             # shown, and withdrawn if an earlier report showed it before its run was known.
-            withheld = True
             changed += c.execute("DELETE FROM bot_memory_updates WHERE bot=? AND sha=?", (bot, commit.sha)).rowcount
             continue
         if checked and scope is None:
@@ -153,7 +169,7 @@ def record(c, who, bot, report, assistant_bot):
             ),
         )
         changed += 1
-    if withheld or checked:
+    if checked:
         # A document says nothing of which runs wrote it (`guarded`): never kept, not even from a report of documents alone.
         return changed
     oversized = {path for path in report.oversized if path in DOCUMENTS}
