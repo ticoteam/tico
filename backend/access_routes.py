@@ -84,7 +84,7 @@ def register(app, admin_only, auth, mutate, onboarding, owner_only, recruiter, s
         """Grant on the card: exactly the rows kept, then each tool's check; the card with a result per row. A
         credential administrator in that chat."""
         return key_grants.grant(
-            store, request.app.state.vault, request.state.identity, message_id, body.keep, body.seen
+            store, request.app.state.vault, request.state.identity, message_id, body.keep, body.seen, body.positions
         )
 
     @app.post("/api/v2/page-chat/cards")

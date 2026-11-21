@@ -201,7 +201,7 @@ describe('a key-drop proposal in Needs you', () => {
     expect(box.textContent).toContain('Close CRM · Read and write · Sales OwnerReplaces Close old · Tools Owner lose access');
     fireEvent.click(within(box).getByText('Close CRM', { exact: false }));
     fireEvent.click(within(box).getByRole('button', { name: 'Grant selected' }));
-    await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/tools-chat/proposals/m1/grant', body: { keep: [0], seen: 'l0ss' } }]));
+    await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/tools-chat/proposals/m1/grant', body: { keep: [0], seen: 'l0ss', positions: 'original' } }]));
     await gone('Key proposal');
     await waitFor(() => expect(document.querySelector('.toasts')?.textContent).toContain('Granted, 1 not connected: JIRA_LOGIN for Jira'));
   });
@@ -214,6 +214,6 @@ describe('a key-drop proposal in Needs you', () => {
     queryClient.setQueryData(flowQuery.queryKey, { count: 1, items: [], requests: waiting, task_ids: [] });
     await waitFor(() => expect(within(box).getAllByRole('checkbox')).toHaveLength(1));
     fireEvent.click(within(box).getByRole('button', { name: 'Grant selected' }));
-    await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/tools-chat/proposals/m1/grant', body: { keep: [1], seen: 'l0ss' } }]));
+    await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/tools-chat/proposals/m1/grant', body: { keep: [1], seen: 'l0ss', positions: 'original' } }]));
   });
 });

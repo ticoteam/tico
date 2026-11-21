@@ -2587,6 +2587,9 @@ class KeyGrantGrant(Contract):
     keep: list[int] | None = Field(default=None, max_length=20)
     # The loss preview the card showed (Needs you's `losses`): a 409 when who keeps and loses access moved since.
     seen: str | None = Field(default=None, max_length=40)
+    # "original": `keep` names places on the card as it was proposed (Needs you's `at`), which a deleted tool's row
+    # does not shift. Without it, a card with a row gone answers 409: read it again.
+    positions: Literal["original"] | None = None
 
 
 class AccessRules(Contract):

@@ -278,6 +278,11 @@ def losses(c: Any, rows: list[Row], owner: str) -> str:
     return hashlib.sha1(shown.encode()).hexdigest()[:12]
 
 
+def _all_there(c: Any, rows: list[Row]) -> bool:
+    """Every tool the card names still exists."""
+    return all(c.execute("SELECT 1 FROM tools WHERE id=?", (r["tool_id"],)).fetchone() for r in rows)
+
+
 def _superseded(c: Any, rows: list[Row]) -> bool:
     """Every tool the card names is deleted: nothing is left to grant."""
     return not any(c.execute("SELECT 1 FROM tools WHERE id=?", (r["tool_id"],)).fetchone() for r in rows)
@@ -387,7 +392,13 @@ def _save(c: Any, message_id: str, card: Row) -> None:
 
 
 def grant(
-    store: Any, vault: Any, who: Any, message_id: str, keep: list[int] | None = None, seen: str | None = None
+    store: Any,
+    vault: Any,
+    who: Any,
+    message_id: str,
+    keep: list[int] | None = None,
+    seen: str | None = None,
+    positions_are: str | None = None,
 ) -> Row:
     """The person's Grant: exactly the rows kept (`keep`: their positions; None keeps all), then each tool's check.
     The card after it, with a result per row: Connected to <tool>, or Didn't work: <reason>. `seen`: the loss preview
@@ -418,6 +429,10 @@ def grant(
             raise Problem("not_found", "No key proposal here", 404)
         if card["state"] != "proposed":
             return card
+        if positions_are != "original" and not _all_there(c, card["rows"]):
+            # A row left the card (its tool was deleted): a keep that does not say it names places on the card as
+            # proposed may mean the rows a client drew without it. Nothing is granted: read it again.
+            raise Problem("changed", "A key's tool was deleted: check the card again", 409)
         # Checked again at Grant: the rows are the server's, and a key or bot may have changed since.
         again = [card["rows"][i] for i in positions]
         rows = _rows(

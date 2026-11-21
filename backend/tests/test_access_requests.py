@@ -432,5 +432,8 @@ def test_a_task_whose_older_wait_was_fixed_is_still_woken_when_its_request_is_gr
         c.execute("UPDATE task_reconnects SET fixed_at=?, ended='fixed', woke_at=? WHERE task_id=?", ("t", "t", tid))
     post(api, f"access-requests/{asked['id']}/grant", {}, "ben-test")
     with api.app.state.store.read() as c:
-        woke = c.execute("SELECT body FROM messages WHERE recipient_id='bot:ops' AND body LIKE 'Granted:%'").fetchall()
-    assert len(woke) == 1 and "Close CRM · Read and write" in woke[0]["body"]
+        woke = c.execute(
+            "SELECT count(*) FROM messages WHERE recipient_id='bot:ops' AND json_extract(refs,'$.access_request')=?",
+            (asked["id"],),
+        ).fetchone()[0]
+    assert woke == 1

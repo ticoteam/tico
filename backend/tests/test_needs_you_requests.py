@@ -295,11 +295,16 @@ def test_a_proposal_with_one_deleted_tool_lists_and_grants_the_other_row(api, mo
     with api.app.state.store.read() as c:  # its person's Needs you moved
         told = c.execute("SELECT kind FROM changes WHERE seq>? AND topic='needs' AND subject_id='human:ana'", (before,))
         assert "key_drop" in {r[0] for r in told}
-    # The page after the first is not cut from the build that still had the deleted tool's row.
+    # The page after the first is not cut from the build that still had the deleted tool's row: the list starts again,
+    # and the proposal on its next page has the one row left.
     after = get(api, f"needs-you?limit=1&cursor={first['next']}")
-    assert all(len(it["key_drop"]["rows"]) == 1 for it in after["items"] if it["kind"] == "key_drop")
-    card = requests(api, "ana-test")["key_drop"]["key_drop"]
+    assert after["restart"] is True
+    page = get(api, f"needs-you?limit=1&cursor={after['next']}")
+    [card] = [it["key_drop"] for it in page["items"] if it["kind"] == "key_drop"]
     assert [(r["at"], r["key"]) for r in card["rows"]] == [(1, "JIRA_LOGIN")]
-    body = {"keep": [1, 1], "seen": card["losses"]}
+    # A keep that does not say it names places on the card as proposed is refused, granting nothing.
+    old = post(api, f"tools-chat/proposals/{proposal['id']}/grant", {"keep": [0], "seen": card["losses"]}, expected=409)
+    assert old["error"]["code"] == "changed"
+    body = {"keep": [1, 1], "seen": card["losses"], "positions": "original"}
     done = post(api, f"tools-chat/proposals/{proposal['id']}/grant", body)
     assert done["state"] == "granted" and [r["key"] for r in done["rows"]] == ["JIRA_LOGIN"]
