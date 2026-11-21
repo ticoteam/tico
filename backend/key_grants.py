@@ -282,14 +282,15 @@ def losses(c: Any, rows: list[Row], owner: str) -> str:
     return hashlib.sha1(shown.encode()).hexdigest()[:12]
 
 
-def _gone(c: Any, card: Row) -> set[int]:
-    """The places on the card whose tool was deleted: recorded when it was (`tool_gone`), so a tool made again under the
-    same id never brings an old row back, and any whose tool is missing now."""
+def _gone(c: Any, card: Row, proposed_at: str) -> set[int]:
+    """The places on the card whose tool was deleted: recorded when it was (`tool_gone`), any whose tool is missing now,
+    and any whose tool was made after the proposal (`proposed_at`, its message's time): a tool made again under the same
+    id never brings an old row back, even one deleted before deletions were recorded."""
     recorded = {int(at) for at in card.get("gone") or ()}
     return recorded | {
         at
         for at, r in enumerate(card["rows"])
-        if not c.execute("SELECT 1 FROM tools WHERE id=?", (r["tool_id"],)).fetchone()
+        if not c.execute("SELECT 1 FROM tools WHERE id=? AND created_at<=?", (r["tool_id"], proposed_at)).fetchone()
     }
 
 
@@ -322,7 +323,7 @@ def proposed_for(c: Any, vault: Any, who: Any) -> list[Row]:
             continue
         # A row whose tool was deleted is left out (none left: the card is not listed); each row keeps its place on the
         # card (`at`), which Grant takes. Who keeps and loses access, as the tools' grants stand now.
-        gone = _gone(c, card)
+        gone = _gone(c, card, m["created_at"])
         rows = [
             r | {"at": at, "replaces": _replaced(c, r, owner)} for at, r in enumerate(card["rows"]) if at not in gone
         ]
@@ -418,7 +419,7 @@ def grant(
         if not owner or not message or card is None or message.get("sender_id") != owner:
             raise Problem("not_found", "No key proposal here", 404)
         proposed = card["state"] == "proposed"
-        gone = _gone(c, card) if card["state"] in ("proposed", "superseded") else set[int]()
+        gone = _gone(c, card, message["created_at"]) if card["state"] in ("proposed", "superseded") else set[int]()
         # No keep: every row still on the card (all of them when none is left: the card is superseded below).
         left = [at for at in range(len(card["rows"])) if at not in gone] or list(range(len(card["rows"])))
         positions = left if keep is None else list(dict.fromkeys(int(i) for i in keep))

@@ -360,3 +360,24 @@ def test_a_proposal_with_one_deleted_tool_lists_and_grants_the_other_row(api, mo
         body = {"seen": card["losses"], "positions": "original"}
     done = post(api, f"tools-chat/proposals/{proposal['id']}/grant", body)
     assert done["state"] == "granted" and [r["key"] for r in done["rows"]] == ["JIRA_LOGIN"]
+
+
+def test_a_tool_made_again_after_the_proposal_never_revives_its_row_even_unrecorded(api, monkeypatch):
+    # Close CRM went before deletions were recorded on proposals (no `gone`) and is made again under the same id: it is
+    # newer than the proposal, so its row stays out of the list and Grant.
+    import json
+
+    _, mid, _ = world(api, monkeypatch)
+    with api.app.state.store.read() as c:
+        crm = c.execute("SELECT id FROM tools WHERE name='Close CRM'").fetchone()[0]
+    assert api.delete(f"/api/v2/api-tools/{crm}", headers=headers()).status_code == 200
+    with api.app.state.store.transaction() as c:  # as an older server left it: nothing recorded on the card
+        refs = json.loads(c.execute("SELECT refs FROM messages WHERE id=?", (mid,)).fetchone()[0])
+        refs["key_grant"].pop("gone", None)
+        c.execute("UPDATE messages SET refs=? WHERE id=?", (json.dumps(refs), mid))
+    assert tool(api)["id"] == crm
+    assert "key_drop" not in requests(api, "ana-test")
+    done = post(api, f"tools-chat/proposals/{mid}/grant", {"keep": [0], "positions": "original"})
+    assert done["state"] == "superseded"  # its one row is gone: nothing is granted
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT tool_id FROM credentials WHERE name='JIRA_LOGIN'").fetchone()[0] is None
