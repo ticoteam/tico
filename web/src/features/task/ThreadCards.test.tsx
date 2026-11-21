@@ -87,12 +87,17 @@ function answer(url: string): Reply {
   if (url.endsWith('/api/v2/tasks/p1')) return { body: { task: otherTask('p1', 'Release report', ['page:file-a@2']) } };
   // an email's OK and a file's OK both waiting on one task, the email's first
   if (url.endsWith('/api/v2/tasks/p2')) {
-    const file = otherTask('p2', 'Release report', ['file:file-a@2']);
+    const file = otherTask('p2', 'Release report', ['file:pdf1@1', 'page:file-a@2']);
     const email = { requirement_id: 'r1', kind: 'ok', line: 'Send this email?', met: false, may: ['ok', 'no'], shows: ['email:s1'], asked_by: 'bot:lo' };
     return { body: { task: { ...file, to_leave: [email, ...file.to_leave] } } };
   }
   if (url.endsWith('/api/v2/tasks/m1/files?all=1')) return { body: { files: [] } };
-  if (url.endsWith('/api/v2/tasks/p1/files?all=1') || url.endsWith('/api/v2/tasks/p2/files?all=1'))
+  if (url.endsWith('/api/v2/tasks/p2/files?all=1')) {
+    const pdf = { id: 'pdf1', name: 'declaration.pdf', title: 'declaration.pdf', mime: 'application/pdf', archived: false, current_version: 1, links: [], writers: [], versions: [{ n: 1, mime: 'application/pdf' }] };
+    const review = { id: 'file-a', name: 'review.md', title: 'Review', mime: 'text/markdown', archived: false, current_version: 2, links: [], versions: [], writers: [] };
+    return { body: { files: [review, pdf] } };
+  }
+  if (url.endsWith('/api/v2/tasks/p1/files?all=1'))
     return { body: { files: [{ id: 'file-a', name: 'release-report.md', title: 'Release report', mime: 'text/markdown', archived: false, current_version: 2, links: [], versions: [], writers: [] }, { id: 'file-b', name: 'notes.md', title: 'Notes', mime: 'text/markdown', archived: false, current_version: 1, links: [], versions: [], writers: [] }] } };
   if (url.endsWith('/api/v2/tasks/f1')) return { body: { task: otherTask('f1', 'Pay the rent', ['finance:x1']) } };
   if (url.endsWith('/api/v2/tasks/m1')) return { body: { task: theMatter, children: (theMatter as { children: unknown[] }).children } };
@@ -172,8 +177,11 @@ describe('an approval waiting, as a card in the agent’s thread @approvals', ()
     expect(card.dataset.target).toBe('approval:/tasks/legal/7/email');
   });
 
-  it('a page its task needs approved is a card in the owner’s thread, the page as a chip', async () => {
-    needs = [otherAsk('p1', 'page', null, 'bot:lo', ['page:file-a@2'])];
+  it('a page its task needs approved is a card in the owner’s thread, the page as a chip, an older ❓ on it or not', async () => {
+    // a ❓ as Needs you lists it, older on the same task: a question row of its own, with no ask
+    const page = otherAsk('p1', 'page', null, 'bot:lo', ['page:file-a@2']);
+    const question = { kind: 'question', id: 'p1:q1', task_id: 'p1', line: 'Which week?', since: '2026-11-19T08:00:00Z', task: page.task };
+    needs = [question, page];
     show({ agent: 'bot:lo' });
     const card = await screen.findByRole('link', { name: /Approve/ });
     expect(card.textContent).toContain('Release report');
@@ -184,25 +192,14 @@ describe('an approval waiting, as a card in the agent’s thread @approvals', ()
     expect(card.parentElement?.dataset.from).toBe('bot:lo');
   });
 
-  it('a page OK on a task that also has an older question is still a card', async () => {
-    // a ❓ as Needs you lists it: a question row of its own, with no ask
-    const page = otherAsk('p1', 'page', null, 'bot:lo', ['page:file-a@2']);
-    const question = { kind: 'question', id: 'p1:q1', task_id: 'p1', line: 'Which week?', since: '2026-11-19T08:00:00Z', task: page.task };
-    needs = [question, page];
-    show({ agent: 'bot:lo' });
-    const card = await screen.findByRole('link', { name: /Approve/ });
-    expect(card.textContent).toContain('Release report');
-    expect(card.querySelectorAll('.file')).toHaveLength(1);
-    expect(card.getAttribute('href')).toBe('/tasks/ops/41/release-report');
-  });
-
-  it('a file OK beside an email OK on one task is its own card: its own chip, opening its file', async () => {
+  it('a file OK beside an email OK on one task is its own card: its own chips, opening the file it is about', async () => {
     needs = [ask('p2', 'bot:lo', 's1'), { ...otherAsk('p2', 'ok', 'bot:lo', 'bot:lo', ['file:file-a@2']), id: 'p2:r2' }];
     show({ agent: 'bot:lo' });
     await waitFor(() => expect(screen.getAllByRole('link', { name: /Approve/ })).toHaveLength(2));
     const file = screen.getAllByRole('link', { name: /Approve/ }).find((a) => a.querySelector('.file'));
-    expect(file?.querySelector('.file')?.textContent).toContain('Release report');
-    expect(file?.getAttribute('href')).toBe('/tasks/ops/41/release-report');
+    // its own chips (the PDF and the review page it shows), opening on the PDF it is about, never the review page
+    expect([...(file?.querySelectorAll('.file') ?? [])].map((f) => f.textContent)).toEqual(expect.arrayContaining([expect.stringContaining('declaration.pdf'), expect.stringContaining('Review')]));
+    expect(file?.getAttribute('href')).toBe('/tasks/ops/41/declaration-pdf');
   });
 
   it('an OK the agent asked for by its slug, on a finance item, is a card with no chips', async () => {

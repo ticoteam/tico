@@ -6,7 +6,7 @@ import { Icon } from '@/kit/Icon';
 import { besideThread } from '@/lib';
 import { flowQuery, type FlowItem } from '@/features/tasks/routing';
 import { AskCard } from './AskCard';
-import { decisionOf, personOf, sendTitle, tabAddress, thingsOf } from './model';
+import { decisionOf, personOf, sendTitle, tabAddress, tabsOf, targetOf, thingsOf } from './model';
 import { taskDetailQuery, taskFilesQuery, type TaskData } from './queries';
 import { useTabs } from './tabs';
 import { matterOf } from './Waiting';
@@ -126,11 +126,15 @@ function ApprovalCard({ task, send, chat }: Approval) {
     page, which opens on what waits on the person. */
 function ThingCard({ sub, chat }: { sub: TaskData; chat?: string }) {
   // Its own decision, never an email's OK beside it on the task (that has its own card).
-  const shown = thingsOf(decisionOf(sub, null));
-  const { tabs, files } = useTabs(shown.size > 0 ? sub : undefined);
+  const decision = decisionOf(sub, null);
+  const shown = thingsOf(decision);
+  const files = useQuery({ ...taskFilesQuery(sub.id), enabled: shown.size > 0, retry: false });
   const chips = (files.data ?? []).filter((f) => shown.has(f.id)).map((f) => ({ key: f.id, name: f.title || f.name, type: typeOf(f.name, undefined) }));
-  // It opens on the tab of what it shows, as the task's page names it.
-  const slug = tabs.find((x) => (x.file && shown.has(x.file.id)) || (x.doc && shown.has(x.doc.file_id)))?.slug;
+  // It opens on the tab of what it is about (`targetOf`, never a review page it also shows), named as the task's page
+  // names its tabs (tabsOf), a file of another task included.
+  const target = targetOf(decision);
+  const tabs = target ? tabsOf(sub, files.data ?? (files.isError ? [] : undefined), decision) : [];
+  const slug = tabs.find((x) => (x.doc?.file_id ?? x.file?.id ?? x.other) === target?.id)?.slug;
   return <Card to={tabAddress(sub, slug, false).to} chat={chat} what={sub.title} files={chips} />;
 }
 
