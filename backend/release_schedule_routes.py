@@ -269,7 +269,16 @@ def register(app: FastAPI, auth: Any, mutate: Callable[..., Any], store: Any) ->
             if not may_release(c, who):
                 raise Problem("forbidden", "Only a person, the Release Owner or a releasing pipeline's manager", 403)
 
+        from . import rule_links as _rule_links
+
+        links: Any = _rule_links
+        # An agent's ask meets the org rules first (backend/rule_links.py), its one event in the ask's write. Log-only.
+        found = links.check(store, request.app.state.judge, who, "release", "release", body.note or "")
+
         def write(c: Any) -> dict[str, Any]:
-            return request_now(c, who.actor, body.note or "", auth.task_sql(c, who))
+            out = request_now(c, who.actor, body.note or "", auth.task_sql(c, who))
+            if out["sent"]:
+                links.record(c, found)
+            return out
 
         return mutate(request, body, write)

@@ -1583,7 +1583,18 @@ def install(app, settings, store, auth, mutate):
     )
     def webhook_send(request: Request, hook_id: str, body: WebhookSend):
         """A custom event (custom.<name>) to one endpoint."""
-        return mutate(request, body, lambda c: send_custom(c, request.state.identity, hook_id, body))
+        from . import rule_links
+
+        who = request.state.identity
+        # An agent's send meets the org rules first (backend/rule_links.py), its one event in the send's write. Log-only.
+        said = json.dumps(body.model_dump(), sort_keys=True, default=str)
+        found = rule_links.check(store, request.app.state.judge, who, "webhook", "webhook", said)
+
+        def write(c):
+            rule_links.record(c, found)
+            return send_custom(c, who, hook_id, body)
+
+        return mutate(request, body, write)
 
     @app.post(
         "/api/v2/webhooks/{hook_id}/example",

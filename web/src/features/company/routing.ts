@@ -1,5 +1,5 @@
 import type { QueryClient } from '@tanstack/react-query';
-import { brandQuery, floorQuery, goalsTreeQuery, groupsQuery, marketBriefingQuery, marketSpendQuery, mattersQuery, productsQuery, revenueQuery, riskQuery, risksQuery, spendQuery, strategyQuery } from './queries';
+import { brandQuery, floorQuery, goalsTreeQuery, groupsQuery, marketBriefingQuery, marketSpendQuery, mattersQuery, productsQuery, revenueQuery, riskQuery, risksQuery, ruleLinksQuery, spendQuery, strategyQuery } from './queries';
 import type { StrategySearch } from './StrategyPage';
 
 // What the routes use before a page's code loads: the address checks and the first reads. No components here: the
@@ -44,3 +44,4 @@ export function loadStrategy(qc: QueryClient, tab: StrategyTab): Promise<unknown
 export const loadProducts = (qc: QueryClient) => qc.ensureQueryData(productsQuery);
 export const loadRisk = (qc: QueryClient, risk?: string) => (risk ? qc.ensureQueryData(riskQuery(risk)) : qc.ensureQueryData(risksQuery));
 export const loadDisputes = (qc: QueryClient) => qc.ensureQueryData(mattersQuery('disputes'));
+export const loadRuleLinks = (qc: QueryClient) => qc.ensureQueryData(ruleLinksQuery);

@@ -2321,6 +2321,9 @@ def _install_features(
     from . import tool_proxy
 
     tool_proxy.install(app, store)
+    from . import rule_links
+
+    rule_links.install(app, store, auth)  # Rules › Links: each way out and its checked writes
     from . import mcp_connect
 
     mcp_connect.install(app, store)  # Tools: remote MCP servers, by token or OAuth sign-in

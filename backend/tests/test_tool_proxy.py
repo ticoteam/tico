@@ -424,3 +424,63 @@ def test_a_streamed_401_reaches_the_caller_unchanged_with_the_phrase_split_acros
     assert r.status_code == 401 and r.content == b"".join(parts)
     with api.app.state.store.read() as c:
         assert [row[0] for row in c.execute("SELECT detail FROM tool_calls")] == [api_tools.MISSING_SCOPE]
+
+
+class Judge:
+    """The org rule check's model (backend/org_rule_check.py): a rule is broken when what it reads says NEEDLE."""
+
+    NEEDLE = "favorite color is"
+
+    def __init__(self):
+        self.read = []
+
+    def __call__(self, state, questions, label=None):
+        self.read.append(state["output"])
+        broken = self.NEEDLE in state["output"].lower()
+        answers = {qid: {"type": "noul", "noul": 0.95 if broken else 0.05} for qid in questions}
+        return {"model": "jev-1.14", "usage": {"input_tokens": 10, "output_tokens": 0}, "ms": 1, "answers": answers}
+
+
+def test_an_agents_write_is_rule_checked_before_the_key_goes_in_logged_once_and_never_stopped(api):
+    """Rules › Links, log-only (backend/rule_links.py): a write by a bot meets the org rules before the proxy puts the key
+    in, and leaves one outcome event on the tool's link with the rule in it. A Block rule broken is a would-be refusal:
+    the write still goes. What the check reads holds no credential in any spelling, and a read is never counted."""
+    from backend.tests.helpers.org_rules import org, rule
+
+    setup(api)
+    org(api)
+    judge = api.app.state.judge = Judge()
+    tool(api, scheme="query:api_key")
+    give(api, key(api, "close-crm", FULL), "bot:ops")
+    color = "Never tell anyone Acme's favorite color."
+    made = rule(api, {"kind": "internal", "text": color, "who": {"bots": ["ops"]}, "if_broken": "block"})
+    vendor = Vendor()
+    api.app.state.tool_proxy_transport = httpx.MockTransport(vendor)
+    _, attempt = run(api)
+    token = handed(api, attempt)["value"]
+    basic = base64.b64encode((token + ":").encode()).decode()
+    note = {"note": "Our favorite color is gold", "copy": token, "basic": basic}
+    r = api.post(
+        f"/api/v2/tool-proxy/close-crm/api/v1/lead/?api_key={token}&mode=x",
+        headers={"Authorization": "Basic " + basic, "Cookie": "session=" + token, "X-Vendor-Auth": token},
+        json=note,
+    )
+    assert r.status_code == 200 and len(vendor.seen) == 1  # log-only: the would-be refusal still went
+    assert "api_key=" + FULL in str(vendor.seen[0].url)  # the key went in after the check
+    [read] = judge.read
+    for secret in (token, basic, token.split(".")[1], FULL):
+        assert secret not in read
+    assert "favorite color is gold" in read and "[token]" in read and "api_key=%5Bkey%5D&mode=x" in read
+    with api.app.state.store.read() as c:
+        rows = c.execute("SELECT actor, action, target, detail FROM events WHERE action LIKE 'rules.%'").fetchall()
+    assert [(a, b, t) for a, b, t, _ in rows] == [("bot:ops", "rules.refused", "link:tool:close-crm")]
+    detail = json.loads(rows[0]["detail"])
+    assert (detail["rules"], detail["broken"], detail["would"]) == ([made["id"]], [made["id"]], True)
+    assert token not in dump(api, "events", "tool_calls")
+    # A read, and an MCP call that only reads, are never counted.
+    assert call(api, "GET", f"api/v1/lead/?api_key={token}", token).status_code == 200
+    listing = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+    assert call(api, "POST", "mcp", token, json=listing).status_code == 200
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM events WHERE action LIKE 'rules.%'").fetchone()[0] == 1
+    assert len(judge.read) == 1

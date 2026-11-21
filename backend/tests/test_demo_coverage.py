@@ -59,6 +59,8 @@ PAGES = {
     "rules-external": page("rules", "rules", kind="external"),
     "rules-due": page("rules/due", "due", next="3660d"),
     "rules-suggested": page("rules", "rules", status="suggested"),
+    # Rules › Links (web/src/features/company/RuleLinks.tsx): each way out, from the demo's tools.
+    "rules-links": page("rule-links", "links"),
     "automations": page("automations", "automations", limit=500),
     "learnings": page("learnings", "nights"),
     "usage": page("usage", "rows", **{"from": str(WEEK_AGO.date()), "to": str(NOW.date())}),
