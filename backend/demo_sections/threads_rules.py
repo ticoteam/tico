@@ -16,6 +16,7 @@ CONTENT = {
             "text": "Never promise a refund over $100 in a customer message. Those go to @ben.",
             "if_broken": "escalate",
             "reviewer": "human:ben",
+            "exact_check": {"kind": "max_usd", "action": "refund", "field": "amount_usd", "max_usd": 100},
         },
         {
             "key": "price",
@@ -453,7 +454,7 @@ def seed(b):
     for item in CONTENT["rules"]:
         _when(b, item["ago"])
         body = {"kind": "internal", "text": item["text"], "who": item.get("who") or {"everyone": True}}
-        body.update({k: item[k] for k in ("with", "if_broken", "reviewer") if k in item})
+        body.update({k: item[k] for k in ("with", "if_broken", "reviewer", "exact_check") if k in item})
         rules[item["key"]] = b.call("POST", "rules", body)["id"]
     suggestion = CONTENT["suggestion"]
     _when(b, suggestion["ago"])

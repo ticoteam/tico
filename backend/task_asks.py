@@ -111,6 +111,13 @@ def _growth_ok(conn: "sqlite3.Connection", grant: Row, ctx: "Context | None") ->
     return growth_proposals.ok_given(conn, grant, ctx)
 
 
+def _rule_ok(conn: "sqlite3.Connection", grant: Row, ctx: "Context | None") -> object:
+    from . import org_rules
+
+    module: Any = org_rules  # its functions are typed loosely
+    return module.ok_given(conn, grant, ctx)
+
+
 def _growth_may_ok(conn: "sqlite3.Connection", person: str, grant: Row) -> str | None:
     from . import growth_proposals
 
@@ -202,6 +209,7 @@ ON_OK: dict[str, Callable[..., object]] = {
     "growth": _growth_ok,
     "letter": _letter_ok,
     "proposal": _proposal_ok,
+    "rule": _rule_ok,
     "support": _support_ok,
 }
 
@@ -218,6 +226,7 @@ OWNED = (
     "publish",
     "finance",
     "growth",
+    "rule",
 )
 
 # Who may OK a subject of this kind under the subject's own rule, called as fn(conn, person, grant) -> the refusal's
@@ -335,6 +344,7 @@ ABOUT: dict[str, Callable[[object], str]] = {
     "webhook": lambda c: f"Make webhook endpoint {n}" if (n := _named(c, "name")) else "",
     "publish": lambda c: f"Publish to the roadmap: {t}" if (t := _published_title(c)) else "",
     "finance": lambda c: _finance_summary(c),
+    "rule": lambda c: f"Add rule: {t}" if (t := _named(c, "text")) else "",
 }
 
 

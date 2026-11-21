@@ -9,7 +9,7 @@ from datetime import timedelta
 
 from backend import org_rules as O
 from backend import rule_due as D
-from backend.store import encode
+from backend.store import H, encode
 from backend.tests.helpers.api import get, headers, post, put  # noqa: F401  (the api fixture)
 from backend import bot_settings as BS
 from backend.tests.helpers.org_rules import as_bot, edit, org, rule
@@ -433,3 +433,92 @@ def test_two_marks_of_one_day_that_race_answer_the_same_conflict(api, monkeypatc
     monkeypatch.setattr(D, "satisfied_days", lambda c, due_id: set())
     refused = post(api, f"rule-due/{due['id']}/satisfied", {"due_on": start}, expected=409)
     assert refused is not None
+
+
+REFUND_CAP = {"kind": "max_usd", "action": "refund", "field": "amount_usd", "max_usd": 100}
+
+
+def test_a_typed_check_is_kept_exactly_and_judges_one_actions_params(api):
+    """Checked exactly: the check people adopt is the one that runs. Unknown keys are refused, not dropped; a missing
+    or non-numeric amount breaks a cap; another action is not this rule's; {} on edit takes the check off."""
+    from backend import org_rule_check as OC
+
+    org(api)
+    builtin_off(api)
+    body = {"kind": "internal", "text": "Refunds over $100 go to Ben first.", "who": {"all_bots": True}}
+    rule(api, {**body, "exact_check": {**REFUND_CAP, "per": "day"}}, expected=422)
+    made = rule(api, {**body, "exact_check": REFUND_CAP})
+    assert made["exact_check"] == REFUND_CAP
+    lists = rule(
+        api,
+        {
+            "kind": "internal",
+            "text": "Only mail the two partner domains.",
+            "who": {"bots": ["ops"]},
+            "exact_check": {
+                "kind": "allow_list",
+                "action": "mail",
+                "field": "to",
+                "values": [" Acme.example ", "beta.example"],
+            },
+        },
+    )
+    assert lists["exact_check"]["values"] == ["acme.example", "beta.example"]
+
+    def broken(author, action, params):
+        with api.app.state.store.read() as c:
+            return [(r["id"], r["reason"]) for r in OC.exact_check(c, author, action, params)]
+
+    assert broken("bot:ops", "refund", {"amount_usd": 80}) == []
+    assert broken("bot:ops", "refund", {"amount_usd": 150}) == [(made["id"], "amount_usd 150 is over $100")]
+    assert broken("bot:ops", "refund", {"amount_usd": "80"}) == [(made["id"], "amount_usd is not given in dollars")]
+    assert broken("bot:ops", "refund", {"amount_usd": float("nan")})
+    assert broken("bot:ops", "credit", {"amount_usd": 500}) == []
+    assert broken("human:cara", "refund", {"amount_usd": 500}) == []  # not in Who
+    assert broken("bot:ops", "mail", {"to": ["ACME.example", "beta.example"]}) == []
+    assert broken("bot:ops", "mail", {"to": ["acme.example", "evil.example"]}) == [
+        (lists["id"], "to evil.example is not on the list")
+    ]
+    assert broken("bot:finance", "mail", {"to": "evil.example"}) == []  # the allow list's Who is Ops alone
+
+    off = edit(api, made["id"], {"version": made["version"], "exact_check": {}})
+    assert off["exact_check"] is None and off["version"] == made["version"] + 1
+    assert broken("bot:ops", "refund", {"amount_usd": 150}) == []
+    rows = audit(api, made["id"])
+    assert json.loads(rows[0]["after"])["exact_check"] == REFUND_CAP
+    assert json.loads(rows[-1]["after"])["exact_check"] is None
+
+
+def test_a_rules_history_has_its_versions_its_holds_and_30_days_of_check_counts(api):
+    org(api)
+    made = rule(api, {"kind": "internal", "text": "Log every refund.", "who": {"all_bots": True}})
+    edit(api, made["id"], {"version": made["version"], "text": "Log every refund the same day."})
+    other = rule(api, {"kind": "internal", "text": "Cite your source.", "who": {"all_bots": True}})
+    target = "org_rule:" + made["id"]
+    with api.app.state.store.transaction() as c:
+        for action, at in (("rules.blocked", H.now()), ("rules.blocked", H.now()), ("rules.warned", H.now())):
+            c.execute("INSERT INTO events VALUES(?,?,?,?,?,?)", (H.new_id(), at, "bot:ops", action, target, "{}"))
+        old = H.shift(H.now(), days=-31)
+        c.execute("INSERT INTO events VALUES(?,?,?,?,?,?)", (H.new_id(), old, "bot:ops", "rules.blocked", target, "{}"))
+        c.execute(
+            "INSERT INTO events VALUES(?,?,?,?,?,?)",
+            (H.new_id(), H.now(), "bot:ops", "rules.blocked", "org_rule:" + other["id"], "{}"),
+        )
+        for hid, rules_, at in (
+            ("h-now", [made["id"]], H.now()),
+            ("h-old", [made["id"]], old),
+            ("h-other", [other["id"]], H.now()),
+        ):
+            c.execute(
+                "INSERT INTO org_rule_holds(id, operation, payload, author, rule_ids, nonce, state, created_at) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (hid, "comment", encode({"text": "x"}), "bot:ops", json.dumps(rules_), "n-" + hid, "held", at),
+            )
+    seen = get(api, f"rules/{made['id']}/history")
+    assert [v["after"]["version"] for v in seen["versions"]] == [2, 1]
+    assert seen["counts"] == {"rules.blocked": 2, "rules.warned": 1}
+    assert [h["id"] for h in seen["holds"]] == ["h-now"]
+    # A bot reads only its own holds; Cara, a member, reads the versions and counts and none of Ops's holds.
+    cara = get(api, f"rules/{made['id']}/history", token="cara-test")
+    assert cara["holds"] == [] and cara["counts"] == seen["counts"] and len(cara["versions"]) == 2
+    assert api.get("/api/v2/rules/nope/history", headers=headers("ana-test")).status_code == 404

@@ -112,6 +112,7 @@ org_rules(id, kind internal|external, text, description?, source_entity_id (exte
           who  {everyone: bool, all_bots: bool, groups: [], bots: [], people: []},
           with {groups: [], bots: [], people: []} (internal only, optional; empty = any output),
           if_broken block|escalate|warn (default block), reviewer? (a person; else person_above),
+               exact_check? {kind allow_list, action, field, values} | {kind max_usd, action, field, max_usd},
                status suggested|active|retired, suggested_by, decided_by, decided_at, via ui|cli|mcp|assistant,
                version, created_at, updated_at)
 ```
@@ -139,7 +140,17 @@ rule_due_status(due_date_id, due_on, satisfied_by, via routine|person, task_id?,
   already; a fetched link's exact text is saved as a Files version at the first read. Page monitors
   (`market_watch.py`) only detect changes: they keep one mutable `last_text`, not a history, and a change saves a new
   version for review. No new snapshot store.
-- Every change writes `audit_log` (`org_rule:<id>`) with actor and `via`.
+- Every change writes `audit_log` (`org_rule:<id>`) with actor and `via`. A rule's history
+  (`GET /api/v2/rules/{id}/history`) is those versions plus its last 30 days: its holds the reader may read and a count
+  of its `rules.*` events.
+- **Checked exactly:** `exact_check` is one stateless typed check on one action, adopted with exact params (unknown
+  keys are refused). `org_rule_check.exact_check(c, author, action, params)` returns the rules in force whose check the
+  params break; the sentence stays the rule people read.
+- **Constitution:** a locked doc at `rules/constitution.md` (five articles and the order of law), made once a company's
+  Rules page has an owner. Only people change a locked doc: not a bot, not an Assistant or BotOps acting for a person.
+- **Make this a rule** (`POST /api/v2/rules/make`) files a private task for the Rules page's owner, with the
+  constitution in it. Its clerk skill (`templates/catalog/_shared/.claude/skills/clerk-a-rule`) suggests one rule and
+  asks one OK (`POST /api/v2/rules/{id}/ok`); the person's OK accepts exactly that version, as them.
 
 ### 2. The Rules Owner reads a document and suggests rules
 
@@ -409,10 +420,15 @@ tico rules suggested [--from F]   tico rules accept <id> [--who ...]   tico rule
 tico rules check "<draft>" --to <teammate> [--as message|comment|task|assign]  # same check Decide runs on send
 tico rules appeal <hold-id> "<why>"                                             # a blocked bot asks its reviewer
 tico rules ask "<question>"                                                     # the Rules Owner answers with cites
+tico rules make "<words>"                                                       # the Rules page's owner drafts a rule
+tico rules ok <id> --task <task>                                                # ask one OK for your suggestion
+tico rules history <id>                                                         # versions and its last 30 days
+tico rules add|edit ... --exact '<json>'                                         # a typed check; {} on edit removes it
 ```
 
 - MCP: `tico_rules_list`, `tico_rules_add`, `tico_rules_read`, `tico_rules_suggested`, `tico_rules_accept`,
-  `tico_rules_edit`, `tico_rules_check`, `tico_rules_appeal`, `tico_rules_due`, `tico_rules_due_set`, `tico_rules_due_satisfied`, `tico_rules_ask`.
+  `tico_rules_edit`, `tico_rules_check`, `tico_rules_appeal`, `tico_rules_due`, `tico_rules_due_set`, `tico_rules_due_satisfied`, `tico_rules_ask`, `tico_rules_make`, `tico_rules_ok`,
+  `tico_rules_history`.
 - Each is a v2 route with one permission check. A bot's `add` lands as `suggested`.
 - **Permissions:** accept, retire or edit is open to the owner, admins, a lead of a group in Who, or an owner of a
   bot in Who. Everyone rules are owner and admins only. A With party can't edit a rule, but sees it. Any member can add a document.

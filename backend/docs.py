@@ -635,7 +635,10 @@ class Docs:
             raise Problem("forbidden", "Docs are for people and bots", 403)
 
     def admin(self, who):
-        return who.role in ("owner", "human") and self.auth.bot_admin(who)
+        """Who locks a doc and changes a locked one: an owner or bot administrator, by their own hand. Their Assistant or
+        BotOps acting for them is an agent, and a locked doc (the constitution) is changed by people only."""
+        acting = who.via in ("assistant", "botops") and not who.confirmed
+        return who.role in ("owner", "human") and not acting and self.auth.bot_admin(who)
 
     # -------------------------------------------------------------- views
     def doc_view(self, c, row, body=True, names=None):

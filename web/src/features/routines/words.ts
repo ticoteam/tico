@@ -1,4 +1,4 @@
-import type { Hook, OrgRule, Routine, Run, StageRule, Trigger } from './types';
+import type { ExactCheck, Hook, OrgRule, Routine, Run, StageRule, Trigger } from './types';
 
 /* Plain words for what the server stores: a schedule, a trigger, a stage rule's When / If / Then. Ported from the old
    app (ui/app/format.ts cronWords, ui/app/automations.ts auCronWords and auSource, ui/app/stage-rules.ts srParts),
@@ -302,6 +302,11 @@ export function stageParts(
 }
 
 /** A company rule as its own words, then what happens when it is broken. */
+/** A typed check in words: "refund: amount_usd at most $100", "mail: to only acme.example, beta.example". */
+export function exactWords(c: ExactCheck): string {
+  return c.kind === 'max_usd' ? `${c.action}: ${c.field} at most $${c.max_usd}` : `${c.action}: ${c.field} only ${c.values.join(', ')}`;
+}
+
 export function orgParts(r: Pick<OrgRule, 'text' | 'if_broken' | 'reviewer'>): string[] {
   const text = agentWords(r.text.trim());
   if (r.if_broken === 'escalate') return [text, r.reviewer?.name ? `Ask ${r.reviewer.name}` : 'Ask first'];

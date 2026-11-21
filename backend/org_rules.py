@@ -17,6 +17,15 @@ requires of us). A rule says who follows it and, for an internal rule, with whom
 - Every write: one permission check, an audit_log row (`org_rule:<id>`, actor, via) and an event.
 - A bot's settings (write audience, mail, spend, turns, task caps, the fixed limits) are read-only sentences on its
   Rules tab and in `--mine`. They are read from the modules that hold them and never stored as rules.
+- Checked exactly: a rule may carry one stateless typed check (`exact_check`, `exact_check_in`): an allow list or a
+  dollar cap on one action, adopted with exact params. `exact_broken` judges one action's params against it, and
+  org_rule_check.exact_check runs it for a write; the sentence stays the rule people read.
+- History (`history`): every version from audit_log, and the rule's last 30 days: its holds the caller may read and a
+  count of its `rules.*` events.
+- Adopting a suggestion by OK (`ask_ok`, `ok_given`): whoever suggested a rule asks one person to OK exactly that
+  version (task_asks subject `rule:<id>`); their OK accepts it as them, with their own rights.
+- The constitution (`ensure_constitution`): a locked doc at CONSTITUTION_PATH, made once; only people change a locked
+  doc (backend/docs.py).
 
 Unversioned and idempotent (`ensure`), like backend/strategy.py.
 """
@@ -58,6 +67,24 @@ SCOPE_MAX = 100  # the names one Who or With may hold, in all
 DUE_PER_RULE = 20  # the due dates a rule's view names; the rest are counted (`due_more`)
 SETTINGS_TASK_CAPS = 20  # the task limits a bot's settings name; the rest are counted
 SCOPE_KEYS = ("everyone", "all_bots", "outside_editions", "groups", "bots", "people", "names")
+EXACT_KINDS = ("allow_list", "max_usd")
+EXACT_NAME_MAX = 200  # an action's or a field's name
+EXACT_VALUES_MAX = 100  # the values one allow list holds
+EXACT_VALUE_MAX = 300
+EXACT_USD_MAX = 1_000_000_000
+HISTORY_DAYS = 30
+# The outcome events of a rule check (org_rule_check.ACTIONS) and of the gate on outside writes: a rule's history counts
+# them on its own target, through the events_action_target index.
+HISTORY_ACTIONS = (
+    "rules.blocked",
+    "rules.escalated",
+    "rules.warned",
+    "rules.unchecked",
+    "rules.passed",
+    "rules.refused",
+    "rules.held",
+)
+OK_SUBJECT = "rule:"  # task_asks subject of a suggestion's OK
 
 
 # ----------------------------------------------------------------------------- small helpers
@@ -138,6 +165,86 @@ def asks_only(terms):
     return bool(terms) and all(term == ASK for term in terms)
 
 
+def _exact_name(value, what):
+    text = str(value or "").strip() if isinstance(value, str) else ""
+    if not text or len(text) > EXACT_NAME_MAX:
+        raise Problem("validation", f"A typed check names its {what} in up to {EXACT_NAME_MAX} characters", 422)
+    return text
+
+
+def _exact_value(value):
+    return " ".join(str(value).split()).casefold()
+
+
+def exact_check_in(value):
+    """A typed check as stored, or None for none (`{}` or null): {kind: allow_list, action, field, values} or {kind:
+    max_usd, action, field, max_usd}. Its params are exact: any other key, or a value of the wrong type, is refused, never
+    dropped, so the check people OK'd is the check that runs. Allow-list values are kept trimmed and casefolded."""
+    if not value:
+        return None
+    if not isinstance(value, dict) or value.get("kind") not in EXACT_KINDS:
+        raise Problem("validation", "A typed check is an allow_list or a max_usd", 422)
+    keys = {"kind", "action", "field", "values" if value["kind"] == "allow_list" else "max_usd"}
+    if set(value) != keys:
+        raise Problem("validation", "A typed check takes exactly " + ", ".join(sorted(keys)), 422)
+    out = {
+        "kind": value["kind"],
+        "action": _exact_name(value["action"], "action"),
+        "field": _exact_name(value["field"], "field"),
+    }
+    if value["kind"] == "allow_list":
+        raw = value["values"]
+        if not isinstance(raw, list) or not 0 < len(raw) <= EXACT_VALUES_MAX:
+            raise Problem("validation", f"An allow list holds 1 to {EXACT_VALUES_MAX} values", 422)
+        values = []
+        for item in raw:
+            if not isinstance(item, str) or not item.strip() or len(item) > EXACT_VALUE_MAX:
+                raise Problem("validation", f"Each allowed value is text of up to {EXACT_VALUE_MAX} characters", 422)
+            if _exact_value(item) not in values:
+                values.append(_exact_value(item))
+        out["values"] = values
+    else:
+        cap = value["max_usd"]
+        if isinstance(cap, bool) or not isinstance(cap, (int, float)) or not 0 <= cap <= EXACT_USD_MAX:
+            raise Problem("validation", f"max_usd is a number of dollars from 0 to {EXACT_USD_MAX}", 422)
+        out["max_usd"] = cap
+    return out
+
+
+def exact_broken(check, action, params):
+    """Why one action's params break a typed check, or None when they keep it or the check is about another action.
+    Stateless: it reads only its arguments. A value it cannot read (missing, or not a number for a cap) breaks it."""
+    if not check or check["action"] != action:
+        return None
+    field = check["field"]
+    value = (params or {}).get(field)
+    if check["kind"] == "max_usd":
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return f"{field} is not given in dollars"
+        # NaN compares false, so it never passes
+        return None if value <= check["max_usd"] else f"{field} {value:g} is over ${check['max_usd']:g}"
+    items = value if isinstance(value, list) else [] if value is None else [value]
+    if not items:
+        return f"{field} is not given"
+    for item in items:
+        if (
+            not isinstance(item, (str, int, float))
+            or isinstance(item, bool)
+            or _exact_value(item) not in check["values"]
+        ):
+            return f"{field} {item} is not on the list"
+    return None
+
+
+def exact_words(check):
+    """A typed check as one line: what the Rules page and an OK show."""
+    if not check:
+        return ""
+    if check["kind"] == "max_usd":
+        return f"{check['action']}: {check['field']} at most ${check['max_usd']:g}"
+    return f"{check['action']}: {check['field']} only " + ", ".join(check["values"])
+
+
 def _where_hits(terms, place):
     """Whether a write's place meets a rule's `where`. No terms: every write. Otherwise one term must hold, and a write
     with no place (a task, a mail) meets none."""
@@ -174,6 +281,7 @@ def _row(r):
     # The From is the entity it names; the API keeps calling it source_id.
     d["source_id"] = d.pop("source_entity_id", None)
     d["toward_scope"] = json.loads(d.get("toward_scope") or "[]")
+    d["exact_check"] = json.loads(d.get("exact_check") or "null")
     return d
 
 
@@ -198,6 +306,7 @@ def _core(row):
         "where",
         "if_broken",
         "reviewer",
+        "exact_check",
         "status",
         "version",
     )
@@ -667,6 +776,7 @@ def view(c, auth, who, row, ctx, dues=None, quote=True):
         "source": ctx["sources"].get(row["source_id"]) if row["source_id"] else None,
         "if_broken": row["if_broken"],
         "reviewer": reviewer,
+        "exact_check": row["exact_check"],
         "status": row["status"],
         "suggested_by": row["suggested_by"],
         "decided_by": row["decided_by"],
@@ -870,6 +980,11 @@ def _scope_checked(c, auth, who, value):
     return scope
 
 
+def _exact_json(value):
+    check = exact_check_in(value)
+    return _json(check) if check else None
+
+
 def _structured_terms(toward, applies):
     """A structured rule's toward_scope (its terms, as backend/entities/rules.py reads them) and applies_when (a
     condition on self). A rule with no toward_scope is judged, so it takes no applies_when."""
@@ -941,6 +1056,7 @@ def add_rule(c, auth, who, body):
         "applies_when": applies,
         "if_broken": _if_broken(body.get("if_broken") or "block"),
         "reviewer": _reviewer(c, body.get("reviewer")),
+        "exact_check": _exact_json(body.get("exact_check")),
         "status": status,
         "suggested_by": who.actor,
         "decided_by": who.actor if status == "active" else None,
@@ -952,9 +1068,10 @@ def add_rule(c, auth, who, body):
     }
     c.execute(
         "INSERT INTO org_rules (id, kind, text, description, source_entity_id, cite, who, with_scope, "
-        "where_terms, toward_scope, applies_when, if_broken, reviewer, status, suggested_by, decided_by, decided_at, "
-        "via, version, created_at, updated_at) VALUES (:id, :kind, :text, :description, :source_id, :cite, :who, "
-        ":with_scope, :where_terms, :toward_scope, :applies_when, :if_broken, :reviewer, :status, :suggested_by, "
+        "where_terms, toward_scope, applies_when, if_broken, reviewer, exact_check, status, suggested_by, decided_by, "
+        "decided_at, via, version, created_at, updated_at) VALUES (:id, :kind, :text, :description, :source_id, :cite, "
+        ":who, :with_scope, :where_terms, :toward_scope, :applies_when, :if_broken, :reviewer, :exact_check, :status, "
+        ":suggested_by, "
         ":decided_by, :decided_at, :via, :version, :created_at, :updated_at)",
         row,
     )
@@ -992,6 +1109,10 @@ def edit_rule(c, auth, who, rule_id, body):
         changes["reviewer"] = _reviewer(c, body["reviewer"])
     if body.get("where") is not None:
         changes["where_terms"] = _json(_where_terms(c, body["where"]))
+    if body.get("exact_check") is not None:
+        check = _exact_json(body["exact_check"])
+        if check != (_json(row["exact_check"]) if row["exact_check"] else None):
+            changes["exact_check"] = check
     if body.get("source_id") is not None:
         if row["kind"] != "external":
             raise Problem("validation", "Only an external rule has a From", 422)
@@ -1373,6 +1494,159 @@ def ensure_builtin(c):
     return row["id"]
 
 
+CONSTITUTION_PATH = "rules/constitution.md"
+CONSTITUTION_ADDED = "rules.constitution"  # registry_metadata: made once; a doc a person moved or archived stays so
+CONSTITUTION = """# Constitution
+
+People change this page. Agents read it and never edit it.
+
+## 1. People decide
+People make, change and retire rules. An agent suggests a rule, and a person adds it.
+
+## 2. Act, then tell
+Agents act on steps that can be undone or that protect the company, and leave a note. They ask first only for spend
+over budget, a new payee or bank change, an outgoing send, a signature, a legal commitment, an action that cannot be
+undone, and security.
+
+## 3. Say no out loud
+A rule that stops something says which rule, why, how to fix it and how to appeal. Nothing is dropped in silence, and
+an owner's instruction is never refused in silence.
+
+## 4. Exact where it counts
+A limit on money, or on who may receive something, is checked exactly when it can be. The decision model reads the
+rest.
+
+## 5. Rules are open
+Every teammate reads every rule and its history. Private work stays private.
+
+## Order of law
+When two rules disagree, the higher one wins:
+1. The law, and orders of a court or an agency
+2. This constitution
+3. What we agreed with someone outside: contracts and terms
+4. Company rules
+5. An instruction on a task
+"""
+
+
+def ensure_constitution(c):
+    """The constitution, once per company whose Rules page has an owner to check drafts against it (page_owners
+    `rules`): a locked doc at CONSTITUTION_PATH, so only people change it (backend/docs.py locks). Its marker is written
+    with it, so a doc a person changed, moved or archived is left as they left it. Returns the doc's id when it was made
+    now, else None."""
+    from . import page_owners
+    from .docs import Docs
+
+    if c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (CONSTITUTION_ADDED,)).fetchone():
+        return None
+    if not page_owners.owner(c, "rules", fallback=False):
+        return None
+    found = c.execute("SELECT id FROM docs WHERE archived=0 AND path=? COLLATE NOCASE", (CONSTITUTION_PATH,)).fetchone()
+    doc_id = (
+        found["id"]
+        if found
+        else Docs(None, None, None, None).insert(
+            c, H.TICO_ACTOR, "Constitution", CONSTITUTION, CONSTITUTION_PATH, note="Built in"
+        )["id"]
+    )
+    c.execute("UPDATE docs SET locked=1 WHERE id=?", (doc_id,))
+    c.execute("INSERT INTO registry_metadata VALUES(?,?)", (CONSTITUTION_ADDED, _json({"doc": doc_id, "at": H.now()})))
+    return doc_id
+
+
+def constitution_text(c):
+    """The constitution as it reads now, or "" when there is none at its path."""
+    row = c.execute("SELECT body FROM docs WHERE archived=0 AND path=? COLLATE NOCASE", (CONSTITUTION_PATH,)).fetchone()
+    return row["body"] if row else ""
+
+
+# ----------------------------------------------------------------------------- history
+def history(c, auth, who, rule_id):
+    """One rule's history: every version (audit_log, newest first, a page of them), and its last HISTORY_DAYS days,
+    the holds of it the caller may read and the count of each `rules.*` outcome event on it."""
+    from . import org_rule_check as OC
+
+    auth.domain(who)
+    _get(c, rule_id)
+    target = "org_rule:" + rule_id
+    versions = audit_log.rows(c, obj=target, limit=LIST_MAX)
+    redact_audit(c, auth, who, versions["rows"])
+    since = H.shift(H.now(), days=-HISTORY_DAYS)
+    marks = ",".join("?" * len(HISTORY_ACTIONS))
+    counts = {
+        row[0]: row[1]
+        for row in c.execute(
+            f"SELECT action, COUNT(*) FROM events WHERE action IN ({marks}) AND target=? AND created_at>=? "
+            "GROUP BY action",
+            (*HISTORY_ACTIONS, target, since),
+        )
+    }
+    holds, more = OC.holds_of_rule(c, who, rule_id, since, auth=auth)
+    return {"versions": versions["rows"], "counts": counts, "holds": holds, "holds_more": more, "since": since}
+
+
+# ----------------------------------------------------------------------------- adopted by OK
+def ask_ok(c, auth, who, rule_id, task_id):
+    """Ask one person, on the task the suggestion was made for, to OK it exactly as it is now (task_asks subject
+    `rule:<id>`): the task's requester when that is a person here, else the owner or an Admin. Only whoever suggested
+    it asks. The same version asked again is the same ask; a new version replaces the old ask."""
+    from . import org_rule_check as OC
+    from . import task_asks
+
+    row = _get(c, rule_id)
+    if row["status"] != "suggested":
+        raise Problem("conflict", "Only a suggestion waits for an OK", 409)
+    if row["suggested_by"] != who.actor:
+        raise Problem("forbidden", "Whoever suggested a rule asks for its OK", 403)
+    task = H.task(c, task_id)
+    if not task:
+        raise Problem("not_found", f"There is no task {task_id}", 404)
+    requester = task.get("requester_id") or ""
+    person = requester if H.is_human(requester) and OC._present(c, requester) else OC.owner_or_admin(c)
+    if not person:
+        raise Problem("conflict", "Nobody is here to OK it", 409)
+    content = {
+        "rule": rule_id,
+        "version": row["version"],
+        "text": row["text"],
+        "who": row["who"],
+        "if_broken": row["if_broken"],
+        "exact_check": row["exact_check"],
+    }
+    asked = task_asks.ask_ok(
+        c,
+        who.actor,
+        person,
+        "Add this rule? " + row["text"],
+        shows=[OK_SUBJECT + rule_id],
+        subject=OK_SUBJECT + rule_id,
+        content=content,
+        task_id=task_id,
+    )
+    _event(c, who.actor, "ok_asked", rule_id, {"task_id": task_id, "to": person})
+    return {**asked, "asked_of": person}
+
+
+def ok_given(c, grant, ctx):
+    """The person OK'd a suggestion from its preview (task_asks.ON_OK), in that transaction: it is accepted as them, with
+    their own rights, only while it is still the version they were shown. The OK is used and its task is done."""
+    from . import task_asks
+
+    who = getattr(ctx, "who", None)
+    if who is None or who.actor != grant["ok_by_id"]:
+        raise Problem("approval", "A rule is OK'd from its preview in Tico", 409)
+    content = grant["content"] or {}
+    row = _get(c, str(content.get("rule") or ""))
+    if row["status"] != "suggested" or row["version"] != content.get("version"):
+        raise Problem("conflict", "This suggestion changed after it was asked: it needs a new ask", 409)
+    decide_rule(c, ctx.auth, who, row["id"], {"version": row["version"]}, "accept")
+    rid = grant["requirement_id"]
+    task_asks.use(c, rid, grant["subject"], content, grant["asked_by_id"])
+    task_id = task_asks.task_of(c, rid)
+    if task_id:
+        H.attempt(c, H.task_done, H.TICO_ACTOR, task_id, f"Added: {row['text']}"[:500])
+
+
 def _party(ctx, text):
     """A teammate named in a filter, as the key its scope keeps it under."""
     kind, found = _resolve(ctx, text)
@@ -1641,6 +1915,12 @@ class RuleCite(Contract):
     quote: str = Field(min_length=1, max_length=2000)
 
 
+EXACT_FIELD = (
+    "A typed check, checked exactly: {kind: allow_list, action, field, values} (the field's value, or each of a list, "
+    "is one of the values) or {kind: max_usd, action, field, max_usd} (the field is a number of dollars at most that)"
+)
+
+
 class RuleCreate(Contract):
     kind: Literal["internal", "external"]
     text: str = Field(min_length=1, max_length=TEXT_MAX)
@@ -1654,6 +1934,7 @@ class RuleCreate(Contract):
     where: list[str] = Field(default_factory=list, max_length=WHERE_MAX)
     toward_scope: list[str] = Field(default_factory=list, max_length=WHERE_MAX)
     applies_when: str | None = Field(default=None, max_length=200)
+    exact_check: dict | None = Field(default=None, description=EXACT_FIELD)
 
 
 class RuleEdit(Contract):
@@ -1666,6 +1947,11 @@ class RuleEdit(Contract):
     if_broken: Literal["block", "escalate", "warn"] | None = None
     reviewer: str | None = Field(default=None, max_length=200)
     where: list[str] | None = Field(default=None, max_length=WHERE_MAX)
+    exact_check: dict | None = Field(default=None, description=EXACT_FIELD + "; {} takes it off")
+
+
+class RuleOk(Contract):
+    task_id: str = Field(min_length=1, max_length=100, description="The task the suggestion was made for")
 
 
 class RuleDecide(Contract):
@@ -1903,6 +2189,34 @@ def install(app, store, auth, mutate):
 
         mutate(request, body, work)
         return fresh(who, rule_id)
+
+    @app.get(
+        "/api/v2/rules/{rule_id}/history",
+        **api_v2(
+            "Rules",
+            "getRuleHistory",
+            "One rule's versions, newest first, and its last 30 days: the holds of it you may read and a count of each rule check outcome",
+        ),
+    )
+    def rules_history(request: Request, rule_id: str):
+        """Every version of the rule (from the audit log), and its last 30 days: its holds you may read, as summaries,
+        and how many times each outcome (`rules.blocked`, `rules.warned`, ...) was recorded on it."""
+        with store.read() as c:
+            return history(c, auth, request.state.identity, rule_id)
+
+    @app.post(
+        "/api/v2/rules/{rule_id}/ok",
+        **api_v2(
+            "Rules",
+            "askRuleOk",
+            "Ask a person to OK your suggestion exactly as it is, on its task; their OK adds it as them",
+        ),
+    )
+    def rules_ask_ok(request: Request, rule_id: str, body: RuleOk):
+        """Whoever suggested a rule asks one person to OK it, on the task it was made for: the task's requester, else
+        the owner or an Admin. Their OK, from its preview, adds exactly the version they were shown, with their rights."""
+        who = request.state.identity
+        return mutate(request, body, lambda c: ask_ok(c, auth, who, rule_id, body.task_id))
 
     @app.post(
         "/api/v2/rules/{rule_id}/accept",
