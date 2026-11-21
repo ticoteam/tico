@@ -595,6 +595,22 @@ def test_a_cases_row_names_a_hold_only_past_the_undo_deadline_and_a_date_change_
         ).fetchone()
 
 
+def test_a_held_send_that_ends_without_going_is_still_shown_on_its_case(inbox, monkeypatch):
+    """A send held for weeks past its undo window that was then blocked dropped off its case at once: ended sends are
+    read by `send_after`, still its old undo deadline. It ends now, so the case says Not sent for a day."""
+    autonomous(inbox, undo_seconds=0)
+    case = _case(inbox)
+    day = H.shift(H.now(), days=20)[:10]
+    _not_before(inbox, case, day)
+    held = queue(inbox, raw=mime(body="Later."), actor="bot:ops", task_id=case)
+    policy(inbox, mode="never")
+    monkeypatch.setattr(H, "now", lambda: day + "T23:00:00.000000Z")
+    assert dispatch(inbox) == []
+    with inbox.app.state.store.read() as c:
+        row = S.for_tasks(c, [case])[case]
+        assert (row["id"], row["state"]) == (held["id"], "blocked")
+
+
 def test_the_drain_writes_nothing_for_an_inbox_that_only_holds_sends_for_later(inbox, monkeypatch):
     """Every drain pass opened a durable write for each inbox with queued mail, even one whose only sends wait for
     their matter's not before. It writes only when it may lease, or has an OK or a hand-over to look at."""

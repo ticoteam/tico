@@ -180,13 +180,15 @@ def saved(c, scope):
     )
 
 
-def effective(c, mailbox="", bot=""):
-    """Company Ask first is a default. Never and company safeguards are ceilings on every override."""
-    layers = [("company", saved(c, "company"))]
+def effective(c, mailbox="", bot="", read=None):
+    """Company Ask first is a default. Never and company safeguards are ceilings on every override. `read`: how a
+    layer's saved settings are read (`saved`), memoized by a caller that resolves many."""
+    read = read or (lambda scope: saved(c, scope))
+    layers = [("company", read("company"))]
     if mailbox:
-        layers.append(("inbox", saved(c, "inbox:" + mailbox)))
+        layers.append(("inbox", read("inbox:" + mailbox)))
     if bot:
-        layers.append(("bot", saved(c, "bot:" + bot)))
+        layers.append(("bot", read("bot:" + bot)))
     out, sources, never = dict(DEFAULTS), {key: "company" for key in DEFAULTS}, None
     recipient_rules, approval_rules = [], []
     for label, settings in layers:
@@ -700,7 +702,19 @@ def for_tasks(c, ids):
             held = newest.get(task)
             if held is None or (row["created_at"], row["n"]) > (held["created_at"], held["n"]):
                 newest[task] = row
-    out = {}
+    out, layers, policies = {}, {}, {}
+
+    def read(scope):
+        if scope not in layers:
+            layers[scope] = saved(c, scope)
+        return layers[scope]
+
+    def policy(mailbox, bot):
+        # Each inbox and agent's policy once a call, the company's settings once for all of them.
+        if (mailbox, bot) not in policies:
+            policies[mailbox, bot] = effective(c, mailbox, bot, read)
+        return policies[mailbox, bot]
+
     for task, row in newest.items():
         out[task] = {key: row[key] for key in TASK_FIELDS}
         if task != row["task_id"]:
@@ -710,7 +724,7 @@ def for_tasks(c, ids):
         held = latest_bound((row["dates"] or "").split(","))
         if held and row["state"] == "waiting_approval":
             # Its undo deadline is what an OK given now would set.
-            due = H.shift(now, seconds=effective(c, row["mailbox"], row["bot"])["undo_seconds"])
+            due = H.shift(now, seconds=policy(row["mailbox"], row["bot"])["undo_seconds"])
         else:
             due = row["send_after"]
         out[task]["not_before"] = in_company_zone(held) if held and held > max(due, now) else None
@@ -1440,8 +1454,11 @@ def _lease(c, auth, mailbox, runner_id, *, permit=False, lease=True):
             found["outcome"], found["reasons"] = "blocked", [reason]
         if found["outcome"] == "blocked":
             c.execute(
-                "UPDATE email_sends SET state='blocked',decision=?,detail=?,finished_at=?,raw='' WHERE id=?",
-                (dump(found), why(found), now, row["id"]),
+                # A send held past its undo window ends now: `send_after` too, so its task still shows how it ended
+                # (for_tasks reads ended sends by it).
+                "UPDATE email_sends SET state='blocked',decision=?,detail=?,finished_at=?,raw='',"
+                "send_after=max(send_after,?) WHERE id=?",
+                (dump(found), why(found), now, now, row["id"]),
             )
             settle_automation(c, row, "blocked", why(found))
             if bound:
@@ -1532,8 +1549,10 @@ def _outcome(c, row, status, detail=""):
 
 def _finish(c, row, status, message="", detail=""):
     c.execute(
-        "UPDATE email_sends SET state=?,provider_message_id=?,detail=?,finished_at=?,raw='' WHERE id=?",
-        (status, message, detail, H.now(), row["id"]),
+        # `send_after` ends no earlier than now: a send held past its undo window is still shown once it ended.
+        "UPDATE email_sends SET state=?,provider_message_id=?,detail=?,finished_at=?,raw='',"
+        "send_after=max(send_after,?) WHERE id=?",
+        (status, message, detail, H.now(), H.now(), row["id"]),
     )
     moved(c, row["id"])
     H.event(c, row["actor"], "email." + status, row["id"], {"mailbox": row["mailbox"], "provider_message_id": message})
