@@ -30,7 +30,7 @@ export async function loadTask(client: QueryClient, param: string, tab?: string,
     const selected = tab ? tabs.find((x) => x.slug === tab) : tabs[0];
     // An attached file can outrank the default document when the task is waiting for an answer: the file the ask is
     // about (a PDF to sign) opens over a page it also shows, so its tab waits for the files.
-    const target = targetOf(decisionOf(t));
+    const target = targetOf(decisionOf(t, null)); // as tabsOf reads it: the ask that is not an email's
     const asked = selected?.mark === 'ask' && (!target || selected.doc?.file_id === target.id);
     const doc = selected?.doc && (tab || asked || !decisionOf(t)) ? selected.doc : undefined;
     if (doc && isPage(doc)) void client.prefetchQuery(pageShownQuery(id, doc.file_id));
@@ -57,6 +57,8 @@ export interface TaskSearch {
   v?: number;
   vs?: number;
   part?: number;
+  /** The ask a card opened the task for (its requirement id): its tab, the version it pinned and its Approve. */
+  ask?: string;
 }
 
 const whole = (x: unknown): number => (typeof x === 'number' ? x : typeof x === 'string' && /^\d+$/.test(x) ? Number(x) : NaN);
@@ -71,6 +73,7 @@ export function taskSearch(raw: Record<string, unknown>): TaskSearch {
   if (typeof raw.tab === 'string' && raw.tab) out.tab = raw.tab;
   if (typeof raw.file === 'string' && raw.file) out.file = raw.file;
   if (typeof raw.full === 'string' && raw.full) out.full = raw.full;
+  if (typeof raw.ask === 'string' && raw.ask) out.ask = raw.ask;
   const v = n(raw.v);
   const vs = n(raw.vs);
   if (v) out.v = v;

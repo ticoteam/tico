@@ -13,14 +13,14 @@ const asked: string[] = [];
 /** Every address read. */
 const read: string[] = [];
 
-const ask = (task: string, by: string, send: string, since = '2026-11-19T09:00:00Z') => ({
+const ask = (task: string, by: string, send: string, since = '2026-11-19T09:00:00Z', rid = 'r1') => ({
   kind: 'ask',
-  id: `${task}:r1`,
+  id: `${task}:${rid}`,
   task_id: task,
   line: 'Send this email?',
   since,
   task: { id: task, number: 40, title: 'Send: Re: Notice of claim → dana@example.test', pipeline_id: 'general', stage_id: 'todo', owner_id: by },
-  ask: { requirement_id: 'r1', kind: 'ok', line: 'Send this email?', met: false, asked_by: by, shows: [`email:${send}`], may: ['ok', 'no'] },
+  ask: { requirement_id: rid, kind: 'ok', line: 'Send this email?', met: false, asked_by: by, shows: [`email:${send}`], may: ['ok', 'no'] },
 });
 
 let needs: unknown[] = [];
@@ -99,6 +99,12 @@ function answer(url: string): Reply {
     return { body: { task: { ...file, to_leave: [email, ...file.to_leave] } } };
   }
   if (url.endsWith('/api/v2/tasks/p3/files?all=1')) return { body: { files: [] } };
+  // two page OKs waiting on one task
+  if (url.endsWith('/api/v2/tasks/p4/files?all=1')) return { body: { files: [] } };
+  if (url.endsWith('/api/v2/tasks/p4')) {
+    const page = otherTask('p4', 'Two pages', ['page:file-a@2']);
+    return { body: { task: { ...page, to_leave: [...page.to_leave, { ...page.to_leave[0], requirement_id: 'r3', shows: ['page:file-b@1'] }] } } };
+  }
   if (url.endsWith('/api/v2/tasks/p2/files?all=1')) {
     const pdf = { id: 'pdf1', name: 'declaration.pdf', title: 'declaration.pdf', mime: 'application/pdf', archived: false, current_version: 1, links: [], writers: [], versions: [{ n: 1, mime: 'application/pdf' }] };
     const review = { id: 'file-a', name: 'review.md', title: 'Review', mime: 'text/markdown', archived: false, current_version: 2, links: [], versions: [], writers: [] };
@@ -195,7 +201,7 @@ describe('an approval waiting, as a card in the agent’s thread @approvals', ()
     expect(card.querySelectorAll('.file')).toHaveLength(1);
     expect(card.querySelector('.file em')?.textContent).toBe('MD');
     // it opens on the page it shows, as the task's page names its tab
-    expect(card.getAttribute('href')).toBe('/tasks/ops/41/release-report');
+    expect(card.getAttribute('href')).toBe('/tasks/ops/41/release-report?ask=r2');
     expect(card.parentElement?.dataset.from).toBe('bot:lo');
   });
 
@@ -206,16 +212,27 @@ describe('an approval waiting, as a card in the agent’s thread @approvals', ()
     const file = screen.getAllByRole('link', { name: /Approve/ }).find((a) => a.querySelector('.file'));
     // its own chips (the PDF and the review page it shows), opening on the PDF it is about, never the review page
     expect([...(file?.querySelectorAll('.file') ?? [])].map((f) => f.textContent)).toEqual(expect.arrayContaining([expect.stringContaining('declaration.pdf'), expect.stringContaining('Review')]));
-    expect(file?.getAttribute('href')).toBe('/tasks/ops/41/declaration-pdf');
+    expect(file?.getAttribute('href')).toBe('/tasks/ops/41/declaration-pdf?ask=r2');
   });
 
-  it('a file OK on another task’s file opens that file’s own page, the task page could not show it', async () => {
+  it('a file OK on another task’s file, behind an email OK, opens the task’s own tab for it, where Approve is', async () => {
     needs = [ask('p3', 'bot:lo', 's1'), { ...otherAsk('p3', 'ok', 'bot:lo', 'bot:lo', ['file:ext1@3']), id: 'p3:r2' }];
     show({ agent: 'bot:lo' });
     await waitFor(() => expect(screen.getAllByRole('link', { name: /Approve/ })).toHaveLength(2));
     const hrefs = screen.getAllByRole('link', { name: /Approve/ }).map((a) => a.getAttribute('href'));
-    // the email's card opens its tab; the file's card, the file itself
-    expect(hrefs.sort()).toEqual(['/library/files?file=ext1&v=3', '/tasks/ops/41/email']);
+    // the email's card opens its tab; the file's card, the task's tab of that file (tabsOf: never the Library)
+    expect(hrefs.sort()).toEqual(['/tasks/ops/41/email', '/tasks/ops/41/file?ask=r2']);
+  });
+
+  it('two page OKs on one task are two cards', async () => {
+    const first = otherAsk('p4', 'page', null, 'bot:lo', ['page:file-a@2']);
+    const second = { ...otherAsk('p4', 'page', null, 'bot:lo', ['page:file-b@1']), id: 'p4:r3', ask: { ...first.ask, requirement_id: 'r3', shows: ['page:file-b@1'] } };
+    needs = [first, second];
+    show({ agent: 'bot:lo' });
+    await waitFor(() => expect(screen.getAllByRole('link', { name: /Approve/ })).toHaveLength(2));
+    // each opens its own ask: the address names it, for its tab and its Approve (approvals.test: the page reads it)
+    const hrefs = screen.getAllByRole('link', { name: /Approve/ }).map((a) => a.getAttribute('href'));
+    expect(hrefs.map((h) => new URL(h ?? '', 'http://x').searchParams.get('ask')).sort()).toEqual(['r2', 'r3']);
   });
 
   it('an OK the agent asked for by its slug, on a finance item, is a card with no chips', async () => {
@@ -242,7 +259,7 @@ describe('an approval waiting, as a card in the agent’s thread @approvals', ()
 
   it('two OKs on one "Send:" task open two different emails on its own page', async () => {
     theMatter = { ...matter, children: [{ id: 't1', title: 'Send: A → a@example.test', status: 'open' }, { id: 't3', title: 'Send: B → b@example.test', status: 'open' }] };
-    needs = [ask('t4', 'bot:lo', 's1'), { ...ask('t4', 'bot:lo', 's5'), id: 't4:r5' }];
+    needs = [ask('t4', 'bot:lo', 's1'), { ...ask('t4', 'bot:lo', 's5', undefined, 'r5'), id: 't4:r5' }];
     show({ agent: 'bot:lo' });
     await waitFor(() => expect(screen.getAllByRole('link', { name: /Approve/ })).toHaveLength(2));
     const hrefs = screen.getAllByRole('link', { name: /Approve/ }).map((a) => a.getAttribute('href'));
@@ -261,7 +278,7 @@ describe('an approval waiting, as a card in the agent’s thread @approvals', ()
 
   it('two email OKs on one case are two cards, each opening its own email, and an older question hides neither', async () => {
     const question = { ...ask('c2', 'bot:lo', 's1', '2026-11-19T08:00:00Z'), ask: { requirement_id: 'q1', kind: 'question', line: 'Which date?', met: false, asked_by: 'bot:lo', shows: [], may: [] } };
-    needs = [question, ask('c2', 'bot:lo', 's1'), { ...ask('c2', 'bot:lo', 's3'), id: 'c2:r3' }];
+    needs = [question, ask('c2', 'bot:lo', 's1'), { ...ask('c2', 'bot:lo', 's3', undefined, 'r3'), id: 'c2:r3' }];
     show({ agent: 'bot:lo' });
     await waitFor(() => expect(screen.getAllByRole('link', { name: /Approve/ })).toHaveLength(2));
     const hrefs = screen.getAllByRole('link', { name: /Approve/ }).map((a) => a.getAttribute('href'));

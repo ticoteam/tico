@@ -9,7 +9,7 @@ import { Icon } from '@/kit/Icon';
 import { Pill } from '@/kit/Pill';
 import { toast } from '@/kit/Toast';
 import { useFollow } from '@/live/follow';
-import { changesAskedOf, decisionName, decisionOf, effectOf, emailOf, failedToast, heldUntil, personOf, reviewOf, sendTitle } from './model';
+import { askOf, changesAskedOf, decisionName, decisionOf, effectOf, emailOf, failedToast, heldUntil, personOf, reviewOf, sendTitle } from './model';
 import { answered } from './answered';
 import { AskCard, Docked, useAnswering } from './AskCard';
 import { HeldDecision, isRuleReview } from './Held';
@@ -31,15 +31,17 @@ export interface DecisionProps {
   /** The email whose tab is open: its own OK is the decision; null on another tab of the task: never an email's OK
       (its preview read counts as showing it); left out, whatever waits first. */
   email?: string | null;
+  /** The ask the address names (`?ask=`, a card opened it): that requirement is the decision, off an email tab. */
+  requirement?: string;
 }
 
 /** The decision while something waits on the person, or "Changes asked" once they asked for changes. An answer is shown
     first, which takes the request away; the box is held through the send, and after a refusal until the task's truth
     is back, so it can still say why. */
-export function Decision({ t, flow, dock = false, onAsking, email }: DecisionProps) {
+export function Decision({ t, flow, dock = false, onAsking, email, requirement }: DecisionProps) {
   const me = useQuery(meQuery).data?.id;
   const [held, setHeld] = useState<{ r: TaskRequirement; sending: boolean } | null>(null);
-  const live = decisionOf(t, email);
+  const live = requirement && !email ? askOf(t, requirement) : decisionOf(t, email);
   // The truth is back after a refusal: let go (React's "adjust state while rendering").
   if (live && held && !held.sending) setHeld(null);
   const r = held?.sending ? held.r : (live ?? held?.r);

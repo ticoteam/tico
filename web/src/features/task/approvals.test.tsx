@@ -228,6 +228,143 @@ describe('the thing is the first tab', () => {
     await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/tasks/t1/asks/r1/ok', body: { shown_hash: 'h-v1' } }));
   });
 
+  it('with an email OK first, a file OK keeps its tab at the version it pinned, its dot and Approve @approvals', async () => {
+    const at = (n: number) => ({ n, by: 'bot:lo', created_at: '2026-11-01T10:00:00Z', mime: 'application/pdf', size: 10, url: `/api/v2/files/f9?v=${n}`, answers: [], ask: null });
+    const pdf = { id: 'f9', name: 'declaration.pdf', title: 'declaration.pdf', mime: 'application/pdf', archived: false, current_version: 2, links: [], writers: [], versions: [at(1), at(2)] };
+    shown = task({ title: 'Search warrant', to_leave: [req(), req({ requirement_id: 'r2', shows: ['file:f9@1'], line: 'Sign the declaration' })] });
+    reply = (url) =>
+      url.endsWith('/files?all=1') ? { body: { files: [pdf] } } : url.endsWith('/oks/r2') ? { body: { subject: 'file:f9@1', shown_hash: 'h-v1', content: { file: 'f9', version: 1 } } } : null;
+    const router = show(
+      <>
+        <TaskPage task="12" pipeline="p1" />
+        <TaskChat task="12" />
+      </>,
+      '/tasks/p1/12',
+    );
+    // the email's OK came first: its tab opens first, and the file's tab waits on the person too
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/email'));
+    const tabs = screen.getByRole('navigation', { name: 'Search warrant pages' });
+    expect((await within(tabs).findByRole('link', { name: /declaration/ })).querySelector('.dot')).toBeTruthy();
+    cleanup();
+    show(
+      <>
+        <TaskPage task="12" pipeline="p1" tab="declaration-pdf" />
+        <TaskChat task="12" />
+      </>,
+      '/tasks/p1/12/declaration-pdf',
+    );
+    expect(await screen.findByRole('region', { name: 'declaration.pdf' })).toBeTruthy();
+    expect(pdfRead.at(-1)).toBe('/api/v2/files/f9?v=1'); // the version the ask pinned
+    const box = within(screen.getByRole('region', { name: 'Chat with Legal Owner' })).getByRole('region', { name: 'The decision' });
+    fireEvent.click(await ready(box));
+    await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/tasks/t1/asks/r2/ok', body: { shown_hash: 'h-v1' } }));
+  });
+
+  const twoPdfs = () => {
+    const at = (id: string, n: number) => ({ n, by: 'bot:lo', created_at: '2026-11-01T10:00:00Z', mime: 'application/pdf', size: 10, url: `/api/v2/files/${id}?v=${n}`, answers: [], ask: null });
+    const pdf = (id: string, name: string) => ({ id, name, title: name, mime: 'application/pdf', archived: false, current_version: 3, links: [], writers: [], versions: [at(id, 1), at(id, 2), at(id, 3)] });
+    const asks = (met: boolean) => [req({ shows: ['file:f9@1'], line: 'Sign A' }), req({ requirement_id: 'r3', shows: ['file:f8@2'], line: 'Sign B', ...(met && { met: true, may: [] }) })];
+    shown = task({ title: 'Two declarations', to_leave: asks(false) });
+    return { files: [pdf('f9', 'a.pdf'), pdf('f8', 'b.pdf')], after: task({ title: 'Two declarations', to_leave: asks(true) }) };
+  };
+
+  it('the ask the address names (a card opened it) is on screen at its pinned version, its tab keeps it, Approve answers it, and the next ask opens after @approvals', async () => {
+    const { files, after } = twoPdfs();
+    reply = (url, method) =>
+      method === 'POST' && url.endsWith('/asks/r3/ok')
+        ? { body: { task: after } }
+        : url.endsWith('/files?all=1')
+          ? { body: { files } }
+          : url.endsWith('/oks/r3')
+            ? { body: { subject: 'file:f8@2', shown_hash: 'h-b2', content: { file: 'f8', version: 2 } } }
+            : null;
+    const router = show(
+      <>
+        <TaskPage task="12" pipeline="p1" tab="b-pdf" />
+        <TaskChat task="12" />
+      </>,
+      '/tasks/p1/12/b-pdf?ask=r3&chat=agent%3Alo&via=thread&vs=1',
+    );
+    expect(await screen.findByRole('region', { name: 'b.pdf' })).toBeTruthy();
+    expect(pdfRead.at(-1)).toBe('/api/v2/files/f8?v=2'); // the version r3 pinned
+    // its tab keeps the ask: chosen again, it is still r3
+    const tabs = screen.getByRole('navigation', { name: 'Two declarations pages' });
+    const own = tabs.querySelector('[data-target="task-tab:b-pdf"]') as HTMLElement;
+    expect(new URL(own.getAttribute('href') ?? '', 'http://x').searchParams.get('ask')).toBe('r3');
+    fireEvent.click(own);
+    await waitFor(() => expect((router.state.location.search as { ask?: string }).ask).toBe('r3'));
+    const box = within(screen.getByRole('region', { name: 'Chat with Legal Owner' })).getByRole('region', { name: 'The decision' });
+    fireEvent.click(await ready(box));
+    await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/tasks/t1/asks/r3/ok', body: { shown_hash: 'h-b2' } }));
+    // then the next ask waiting (r1) opens for itself, its tab, the thread beside it kept
+    await waitFor(() => expect((router.state.location.search as { ask?: string }).ask).toBe('r1'));
+    expect(router.state.location.pathname).toBe('/tasks/p1/12/a-pdf');
+    expect(router.state.location.searchStr).toContain('chat=agent');
+    expect(router.state.location.searchStr).not.toContain('vs='); // the next page at its own pinned version
+  });
+
+  it('when the next ask after a file’s is an email’s, its Email tab opens, the thread kept and the answered ask gone @approvals', async () => {
+    const { files } = twoPdfs();
+    const asks = (met: boolean) => [req(), req({ requirement_id: 'r3', shows: ['file:f8@2'], line: 'Sign B', ...(met && { met: true, may: [] }) })];
+    shown = task({ title: 'Two declarations', to_leave: asks(false) });
+    const after = task({ title: 'Two declarations', to_leave: asks(true) });
+    reply = (url, method) =>
+      method === 'POST' && url.endsWith('/asks/r3/ok')
+        ? { body: { task: after } }
+        : url.endsWith('/files?all=1')
+          ? { body: { files } }
+          : url.endsWith('/oks/r3')
+            ? { body: { subject: 'file:f8@2', shown_hash: 'h-b2', content: { file: 'f8', version: 2 } } }
+            : null;
+    const router = show(
+      <>
+        <TaskPage task="12" pipeline="p1" tab="b-pdf" />
+        <TaskChat task="12" />
+      </>,
+      '/tasks/p1/12/b-pdf?ask=r3&chat=agent%3Alo&via=thread&vs=1',
+    );
+    expect(await screen.findByRole('region', { name: 'b.pdf' })).toBeTruthy();
+    const box = within(screen.getByRole('region', { name: 'Chat with Legal Owner' })).getByRole('region', { name: 'The decision' });
+    fireEvent.click(await ready(box));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/email'));
+    const params = new URLSearchParams(router.state.location.searchStr);
+    expect([params.get('chat'), params.get('via'), params.get('ask'), params.get('vs')]).toEqual(['agent:lo', 'thread', null, null]);
+  });
+
+  it('a refused answer to the ask the address names leaves the person on its file, at its version @approvals', async () => {
+    const { files } = twoPdfs();
+    reply = (url, method) =>
+      method === 'POST' && url.endsWith('/asks/r3/ok')
+        ? { status: 422, body: { error: { code: 'ok_refused', detail: 'This OK is no longer asked.' } } }
+        : url.endsWith('/files?all=1')
+          ? { body: { files } }
+          : url.endsWith('/oks/r3')
+            ? { body: { subject: 'file:f8@2', shown_hash: 'h-b2', content: { file: 'f8', version: 2 } } }
+            : null;
+    const router = show(
+      <>
+        <TaskPage task="12" pipeline="p1" tab="b-pdf" />
+        <TaskChat task="12" />
+      </>,
+      '/tasks/p1/12/b-pdf?ask=r3',
+    );
+    expect(await screen.findByRole('region', { name: 'b.pdf' })).toBeTruthy();
+    const box = within(screen.getByRole('region', { name: 'Chat with Legal Owner' })).getByRole('region', { name: 'The decision' });
+    fireEvent.click(await ready(box));
+    expect(await within(box).findByText('This OK is no longer asked.')).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'b.pdf' })).toBeTruthy();
+    expect(pdfRead.at(-1)).toBe('/api/v2/files/f8?v=2');
+    expect(router.state.location.pathname).toBe('/tasks/p1/12/b-pdf');
+  });
+
+  it('on a computer, opened beside the thread it came from (`?chat=`), the page holds its own Approve @approvals', async () => {
+    show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1/12/email?chat=agent%3Alo&via=thread');
+    const box = await decision();
+    // in the page, not in the phone's dock (which a computer does not draw)
+    expect(box.closest('[data-dock]')).toBeNull();
+    expect(await ready(box)).toBeTruthy();
+  });
+
   it('opens the version the address names over the one the ask pinned @approvals', async () => {
     const at = (n: number) => ({ n, by: 'bot:lo', created_at: '2026-11-01T10:00:00Z', mime: 'application/pdf', size: 10, url: `/api/v2/files/f9?v=${n}`, answers: [], ask: null });
     const pdf = { id: 'f9', name: 'declaration.pdf', title: 'declaration.pdf', mime: 'application/pdf', archived: false, current_version: 2, links: [], writers: [], versions: [at(1), at(2)] };
