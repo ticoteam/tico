@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useLocation } from '@tanstack/react-router';
 import { Conversation, MessageBones, ticoRoomQuery } from '@/conversation';
+import { AssistantCall } from '@/features/calls/exports';
 import { Button } from '@/kit/Button';
 import { Fault } from '@/kit/Fault';
 import { IconButton } from '@/kit/IconButton';
@@ -21,7 +22,7 @@ import { Tracker } from './Tracker';
    Tico's runs in the room (Conversation sets it). Tucked, the frame draws its edge with the Dot. While
    Tico is off, the sheet shows that in place of the chat, and the Dot is grey and hollow. Over its box, what to ask
    Tico about the open page (Chips). Over the chat, the tasks the person handed off (Tracker). Under a message that
-   links one OK waiting on the person, a card that opens it (OkCard). */
+   links one OK waiting on the person, a card that opens it (OkCard). In the head, a call with Tico (AssistantCall). */
 export function TicoSheet() {
   const power = useTicoPower();
   const room = useQuery(ticoRoomQuery);
@@ -33,6 +34,7 @@ export function TicoSheet() {
   return (
     <Sheet kind="tico" label="Tico">
       <SheetHead kind="tico" title="Tico" lead={phone ? undefined : <Dot size={TICO_MARK} />}>
+        {power?.available !== false && power?.bot && room.data && <AssistantCall thread={room.data} bot={power.bot} />}
         <IconButton icon="search" label="Search" onClick={() => openSearch()} />
       </SheetHead>
       {power?.available === false ? (

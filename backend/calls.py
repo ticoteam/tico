@@ -39,7 +39,7 @@ from datetime import datetime, timedelta, timezone
 from threading import Timer
 from typing import Literal
 
-from fastapi import Request
+from fastapi import Query, Request
 from pydantic import Field
 
 from . import (
@@ -144,6 +144,15 @@ def attachment_standing(c, joined_by, thread_id, slug):
         return who.role in ("human", "owner") and teammate_access.can(c, who, "write", f"bot:{slug}", auth=AUTH)
     except Problem:
         return False
+
+
+def room_owner(c, thread_id):
+    """The person whose own special personal room (their Assistant chat) this thread is, or a sub-thread of: its owner,
+    whoever else it may let read. None for any other thread."""
+    root = threads.root_of(c, thread_id)
+    if not root or threads.audience_of(root) != "personal" or not root.get("room_key"):
+        return None
+    return threads.personal_owner(root)
 
 
 def cancel_bot_turns(c, meeting_id, slug, reason):
@@ -2454,17 +2463,20 @@ class Calls:
                 found.append(shown)
         return {"calls": found}
 
-    def live(self, c, who):
+    def live(self, c, who, thread_id=""):
         """The live Tico Meet calls in threads `who` can read (the thread's own read rule), newest first, as call views:
-        the Meetings page's Live. An ending call is left out; it is over for anyone looking."""
+        the Meetings page's Live. An ending call is left out; it is over for anyone looking. With `thread_id`, every
+        live call in that thread, a Google Meet or an ending call too, since each refuses a start there (`_none_live`),
+        picked before the list's cap (the Assistant sheet's Call and Join)."""
         human_only(who)
         self.auth.domain(who)
         found = []
-        for r in c.execute(
-            "SELECT id,thread_id FROM calls WHERE state='live' AND provider='tico' AND ending_at IS NULL "
-            "ORDER BY started_at DESC LIMIT ?",
-            (LIVE_LIMIT * 5,),
-        ):
+        sql, args = "SELECT id,thread_id FROM calls WHERE state='live' ", []
+        if thread_id:
+            sql, args = sql + "AND thread_id=? ", [thread_id]
+        else:
+            sql += "AND provider='tico' AND ending_at IS NULL "
+        for r in c.execute(sql + "ORDER BY started_at DESC LIMIT ?", (*args, LIVE_LIMIT * 5)):
             if len(found) >= LIVE_LIMIT:
                 break
             if readable(c, who.actor, r["thread_id"]):
@@ -2752,13 +2764,16 @@ def install_calls(app, store, auth, write):
     @app.get(
         "/api/v2/calls/live",
         **api_v2(
-            "Calls", "listLiveCalls", "The live Tico Meet calls in threads you can read, newest first", "CallLive"
+            "Calls",
+            "listLiveCalls",
+            "The live Tico Meet calls in threads you can read, newest first; with thread, that thread's alone",
+            "CallLive",
         ),
     )
-    def live_calls(request: Request):
+    def live_calls(request: Request, thread: str = Query("", max_length=200)):
         who = request.state.identity
         with store.read() as c:
-            return calls.live(c, who)
+            return calls.live(c, who, thread)
 
     @app.get(
         "/api/v2/calls/{call_id}",

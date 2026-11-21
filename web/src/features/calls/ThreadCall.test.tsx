@@ -5,11 +5,11 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Call, CallList } from '@/api/schema';
 import { ActionsRoot } from '@/actions';
-import { queryClient } from '@/data';
+import { configQuery, queryClient } from '@/data';
 import { callCount, callLength, callWhen } from './model';
-import { callQuery, threadCallsQuery } from './queries';
+import { callQuery, threadCallsQuery, threadLiveQuery } from './queries';
 import { resetCall } from './session';
-import { callCardOf, CallCard, ThreadCallHead } from './ThreadCall';
+import { AssistantCall, callCardOf, CallCard, ThreadCallHead } from './ThreadCall';
 
 vi.mock('@/tico/dot', () => ({
   Dot: () => <span className="dot" />,
@@ -76,6 +76,7 @@ const list = (p: Partial<CallList> = {}): CallList => ({ available: true, calls:
 
 const sent: { method: string; url: string; body: unknown }[] = [];
 let answer: (url: string) => unknown = () => call();
+let hold: Promise<void> | undefined; // a write waits on this before it is answered
 const getUserMedia = vi.fn(async () => ({ getAudioTracks: () => [{ kind: 'audio' }], getTracks: () => [{ stop: vi.fn() }] }));
 
 beforeEach(() => {
@@ -83,6 +84,7 @@ beforeEach(() => {
   queryClient.clear();
   sent.length = 0;
   answer = () => call();
+  hold = undefined;
   Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: { getUserMedia } });
   queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'person', slug: null });
   queryClient.setQueryData(['directory'], {
@@ -92,6 +94,7 @@ beforeEach(() => {
   vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET';
     if (method !== 'GET') sent.push({ method, url: String(url), body: init?.body ? JSON.parse(String(init.body)) : null });
+    if (method !== 'GET') await hold;
     return new Response(JSON.stringify(answer(String(url))), { status: 200, headers: { 'Content-Type': 'application/json' } });
   });
 });
@@ -178,6 +181,46 @@ describe('A thread’s call control', () => {
     );
     await screen.findByText('Thread');
     expect(screen.queryByRole('button', { name: 'Call' })).toBeNull();
+  });
+});
+
+describe('The Assistant’s call', () => {
+  const meet = (on: boolean) => queryClient.setQueryData(configQuery.queryKey, { features: { tico_meet: on } } as never);
+
+  it('one press starts a voice call with the Assistant in its chat, busy until it starts, then opens it', async () => {
+    meet(true);
+    queryClient.setQueryData(threadLiveQuery('th1').queryKey, { calls: [] });
+    let started!: () => void;
+    hold = new Promise<void>((done) => (started = done));
+    const router = show(<AssistantCall thread="th1" bot="assistant" />);
+    const button = await screen.findByRole('button', { name: 'Call' });
+    fireEvent.click(button);
+    await waitFor(() => expect(button.getAttribute('aria-busy')).toBe('true'));
+    started();
+    await waitFor(() => expect(router.state.location.pathname).toBe(`/call/${ID}`));
+    expect(sent[0]).toEqual({ method: 'POST', url: '/api/v2/threads/th1/calls', body: { provider: 'tico', bots: ['assistant'] } });
+    expect(getUserMedia).toHaveBeenCalled();
+  });
+
+  it('is Join for the chat’s live Tico Meet call, and nothing without Tico Meet or while a start would be refused', async () => {
+    const head = async (calls: Call[], on = true) => {
+      cleanup();
+      meet(on);
+      queryClient.setQueryData(threadLiveQuery('th1').queryKey, { calls });
+      show(
+        <>
+          <p>Head</p>
+          <AssistantCall thread="th1" bot="assistant" />
+        </>,
+      );
+      await screen.findByText('Head');
+      return screen.queryAllByRole('button').map((b) => b.getAttribute('aria-label') ?? b.textContent);
+    };
+    queryClient.setQueryData(callQuery(ID).queryKey, call({ bots: ['assistant'] }));
+    expect(await head([call()])).toEqual(['Join call']);
+    expect(await head([], false)).toEqual([]);
+    expect(await head([call({ provider: 'google_meet' })])).toEqual([]);
+    expect(await head([call({ state: 'ending' as Call['state'] })])).toEqual([]);
   });
 });
 

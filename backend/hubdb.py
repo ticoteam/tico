@@ -4844,8 +4844,11 @@ def task_create(
         number = _number_free(conn, actor, number)
     if private:
         # A person's message routine's turn (automation_actions.start_turn, `routine_for` that person) stays the
-        # Assistant's, as it was; its runs are personal ones (rooms.personal_run).
-        routine_turn = bool(routine and is_human(routine_for) and target == assistant_actor(conn))
+        # Assistant's, as it was, and so does a follow-up from a call in their own room that they are the requester of
+        # (call_follow_ups.file_task); its runs are personal ones (rooms.personal_run).
+        routine_turn = bool(
+            (routine or requester == routine_for) and is_human(routine_for) and target == assistant_actor(conn)
+        )
         refuse_shared_assistant(conn, actor, *(() if routine_turn else (target, requester)), *(readers or ()))
     from contextlib import ExitStack
 

@@ -12,9 +12,9 @@ import { Menu, MenuItem } from '@/kit/Menu';
 import { Popover } from '@/kit/Popover';
 import { Segmented } from '@/kit/Segmented';
 import { callCount, callFaces, callLength, callWhen, running } from './model';
-import { LiveMark, press, useInCall, useMe, useNow, Who } from './parts';
+import { LiveMark, press, useInCall, useMe, useNow, useTicoMeet, Who } from './parts';
 import { PickRow } from './PeoplePick';
-import { callQuery, threadCallsQuery } from './queries';
+import { callQuery, threadCallsQuery, threadLiveQuery } from './queries';
 import './calls.css';
 
 /** A thread with more people than this rings nobody (backend/call_ring.py RING_MAX). */
@@ -48,6 +48,20 @@ export function ThreadCallHead({ thread, members, canPost }: ThreadCallHeadProps
     );
   if (!data.available || !canPost) return null;
   return <StartHere thread={thread} members={members} providers={data.providers} />;
+}
+
+/**
+ * The Assistant's call control in its sheet's head, only where Tico Meet is set up: one press starts a voice call with
+ * it in the person's Assistant chat, busy until it starts. While the chat has a live call, Join (or "In call") when it
+ * is a Tico Meet call one can join, and nothing for a Google Meet or one still ending: a start would be refused there.
+ */
+export function AssistantCall({ thread, bot }: { thread: string; bot: string }) {
+  const meet = useTicoMeet();
+  const { data: live } = useQuery({ ...threadLiveQuery(thread), enabled: meet.available });
+  if (!meet.available || !live) return null;
+  const on = live.calls[0];
+  if (on) return on.provider === 'tico' && on.state === 'live' ? <JoinHere id={on.id} /> : null;
+  return <IconButton icon="call" label="Call" onClick={() => press('calls.startIn', { thread, agents: [`bot:${bot}`] })} />;
 }
 
 /** A call that is on here: Join (with how many are in it), or "In call" when this window is. */
