@@ -364,6 +364,20 @@ describe('the Agent bar @4857', () => {
     expect((await screen.findByRole('link', { name: 'A question waits on you' })).getAttribute('href')).toBe('/threads/home-qa');
     act(() => foldSheet('chat', true));
     await waitFor(() => expect(edge()).toBeTruthy());
+    // folded away, it does not open by itself again; opened by hand while the question waits, the line is there @4857-S9
+    fireEvent.click(edge()!);
+    expect(await screen.findByRole('link', { name: 'A question waits on you' })).toBeTruthy();
+  });
+
+  it("counts a pipeline's own agent as its page's for a question with no task @4857-S26", async () => {
+    at(1100);
+    people(MAYA, QA);
+    owners.tasks = { bot: 'bot:gm', own: false };
+    asks.push({ by: 'bot:qa', pipeline: null, href: '/threads/home-qa' });
+    queryClient.setQueryData(['pipelines'], [{ id: 'eng', name: 'Engineering', stages: [], manager: 'bot:qa', owner: null }]);
+    show('/tasks/eng');
+    await screen.findByRole('complementary', { name: 'Chat with QA Owner' });
+    await waitFor(() => expect(bar()?.dataset.shut).toBeUndefined());
   });
 
   it("opens only for an ask on this page: not where its agent stands in, and a task's ask on its pipeline's page @4857-N1", async () => {
@@ -453,6 +467,21 @@ describe('the Agent bar @4857', () => {
     act(() => void router.navigate({ to: '/tasks/$pipeline' as never, params: { pipeline: 'eng' } as never }));
     await screen.findByRole('heading', { name: 'Board' });
     await waitFor(() => expect(lip().getAttribute('aria-expanded')).toBe('true'));
+  });
+
+  it("on a phone sets the card again moving from one pipeline's board to another's, one page in the fold @4857-S3", async () => {
+    at(390);
+    people(MAYA, QA);
+    owners.tasks = { bot: 'bot:qa' };
+    localStorage.setItem('tico-next:owner-bar.v1', JSON.stringify({ 'human:maya': { tasks: false } }));
+    const router = show('/tasks/eng');
+    const lip = (name: string) => document.querySelector(`button.lip[aria-label="${name}"]`)!;
+    await waitFor(() => expect(lip('Open QA Owner').getAttribute('aria-expanded')).toBe('true'));
+    fireEvent.click(lip('Open Menu'));
+    await waitFor(() => expect(lip('Open Menu').getAttribute('aria-expanded')).toBe('true'));
+    act(() => void router.navigate({ to: '/tasks/$pipeline' as never, params: { pipeline: 'ops' } as never }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/ops'));
+    await waitFor(() => expect(lip('Open QA Owner').getAttribute('aria-expanded')).toBe('true'));
   });
 
   it('on a phone sets the card again on every page change, when both pages keep the same fold @4857-S3', async () => {

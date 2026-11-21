@@ -25,7 +25,6 @@ function serve(over: Record<string, Reply> = {}, urls: URL[] = []) {
     '/growth/segments': ok({ segments: [] }),
     '/growth/read': ok(READ),
     '/page-owners': ok({ pages: {} }),
-    '/threads/dm': ok({ id: 'dm-gm1' }),
     ...over,
   };
   vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
@@ -219,7 +218,7 @@ describe('Growth on the one read @s400 @s444', () => {
     await waitFor(() => expect(router.state.location.search).toEqual({ month: '2026-10', chat: 'agent:gm1' }));
     // through the reader's own DM with it, never the old chat route (#4857 S5)
     expect(posts).toEqual([
-      { path: '/threads/dm-gm1/messages', body: { text: 'All, October 2026: Why is search over?', refs: { from_page: { page: 'growth', label: 'Growth' } } } },
+      { path: '/threads/dm/messages', body: { text: 'All, October 2026: Why is search over?', to_dm: 'bot:gm1', refs: { from_page: { page: 'growth', label: 'Growth' } } } },
     ]);
   });
 

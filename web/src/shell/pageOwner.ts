@@ -13,7 +13,7 @@ export interface PageAt {
   page: string;
   label: string;
   owner: 'page' | 'tico' | null;
-  /** What is open there (a doc, a pipeline, a task); its name is the page's own (its h1). */
+  /** What is open there (a doc, a pipeline, a task), as a pointer. */
   item?: { kind: string; id: string };
 }
 
@@ -117,17 +117,15 @@ function mapped(path: string): PageAt {
   }
 }
 
-/** The page context every message carries (`from_page`): the item's name is the page's own name, its h1. */
+/** The page context every message carries (`from_page`): the page's key and name, and what is open there as a pointer
+    {kind, id} with no words, which the agent reads under its own rights (backend/page_owners.py check_from). */
 export interface FromPage {
   page: string;
   label: string;
-  item?: { kind: string; id: string; name: string };
+  item?: { kind: string; id: string };
 }
-export function fromPage(at: PageAt, name: string): FromPage {
-  // a display name is one line of words (a title may hold breaks); the ids stay as they are
-  const line = name.replace(/\s+/g, ' ').trim();
-  const item = at.item && { ...at.item, name: (line || at.item.id).slice(0, 200) };
-  return { page: at.page, label: at.label, ...(item && { item }) };
+export function fromPage(at: PageAt): FromPage {
+  return { page: at.page, label: at.label, ...(at.item && { item: at.item }) };
 }
 
 /* The Agent bar's fold, per page per person, on this device: `{page: true}` folded by hand, `false` opened by hand.

@@ -36,6 +36,6 @@ describe('Ask Tico', () => {
     bind({ router });
     await run('tico.ask', { text: 'Who made this?' }, { via: 'click' });
     const ask = sent.find((s) => s.url === '/api/v2/assistant/messages');
-    expect(ask?.body).toEqual({ text: 'Who made this?', from_page: { page: 'docs', label: 'Files', item: { kind: 'file', id: 'f1', name: 'f1' } } });
+    expect(ask?.body).toEqual({ text: 'Who made this?', from_page: { page: 'docs', label: 'Files', item: { kind: 'file', id: 'f1' } } });
   });
 });

@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { queryClient, type Actor } from '@/data';
 import { upsertMessage, type TimelineData } from '@/live';
 import type * as Live from '@/live';
-import { Composer, readDraft } from './Composer';
+import { Composer } from './Composer';
 import { Conversation } from './Conversation';
 import { Message } from './Message';
 import { showPageName } from '@/tico/pageName';
@@ -67,7 +67,7 @@ function serve(reply: (url: string) => Reply) {
   });
 }
 
-const FROM = { page: 'tasks', label: 'Tasks', item: { kind: 'pipeline', id: 'engineering', name: 'Engineering' } };
+const FROM = { page: 'tasks', label: 'Tasks', item: { kind: 'pipeline', id: 'engineering' } };
 const chat = (id: string) => <Conversation id={id} variant="side" title="Ana" actor="bot:qa" from={FROM} />;
 const show = () =>
   render(chat(T), { wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider> });
@@ -192,17 +192,14 @@ describe('Conversation', () => {
     expect(sends()).toHaveLength(2);
   });
 
-  it('keeps the words and reads its DM again when the chat is no longer that DM alone @4857-S18', async () => {
-    serve(() => ({ status: 409, body: { error: { code: 'dm_changed', detail: 'This chat is no longer your chat with bot:qa alone' } } }));
-    const onStale = vi.fn();
-    render(<Conversation id={T} variant="side" title="Ana" actor="bot:qa" from={FROM} expectDm="bot:qa" draftId="agent:qa" onStale={onStale} />, {
+  it("sends the Agent bar's words to the sender's DM with that agent, found by the server, not the thread id it holds @4857", async () => {
+    serve(() => ({ status: 200, body: msg(3, ME, 'Ship it') }));
+    render(<Conversation id={T} variant="side" title="Ana" actor="bot:qa" from={FROM} toDm="bot:qa" />, {
       wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
     });
     type('Ship it');
-    await waitFor(() => expect(onStale).toHaveBeenCalled());
-    expect((sends()[0]?.body as { expect_dm?: string }).expect_dm).toBe('bot:qa');
-    expect(screen.queryByText('Not sent')).toBeNull();
-    expect(readDraft(ME, 'agent:qa')).toBe('Ship it');
+    await waitFor(() => expect(sends()).toHaveLength(1));
+    expect(sends()[0]).toEqual({ url: '/api/v2/threads/dm/messages', body: { text: 'Ship it', to_dm: 'bot:qa', refs: { from_page: { page: 'tasks', label: 'Tasks' } } } });
   });
 
   it('sends a retry with the page it was first written on, not the one shown now @4857-S15', async () => {
@@ -413,7 +410,7 @@ describe('the page it sits beside', () => {
     expect((sends()[1]?.body as { from_page: unknown }).from_page).toEqual({
       page: 'docs',
       label: 'Docs',
-      item: { kind: 'doc', id: 'd1', name: 'Records production' },
+      item: { kind: 'doc', id: 'd1' },
     });
     act(() => showPageName(''));
     window.history.pushState({}, '', '/');

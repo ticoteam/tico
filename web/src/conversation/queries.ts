@@ -2,13 +2,12 @@
 // Messages themselves reach the timeline through live/patch.ts (the built-in `messages` patcher); this file adds
 // what only a conversation knows: a pending send giving way to its echo, and a reply being written (`runs`).
 import { infiniteQueryOptions, queryOptions, type InfiniteData, type QueryKey } from '@tanstack/react-query';
-import { api, ApiError } from '@/api/client';
+import { api } from '@/api/client';
 import type { Assistant, SlackMessage, SlackThread } from '@/api/schema';
 import { keys, queryClient, quietRoot, write } from '@/data';
 import { onTopic } from '@/live';
 import { newId } from '@/lib/ids';
 import type { FromPage } from '@/shell/pageOwner';
-import { writeDraft } from './Composer';
 import type { ChatMessage, LiveRun, ReplyQuote, TimelinePage, Variant } from './types';
 
 const PAGE = 50;
@@ -121,11 +120,9 @@ export interface Send {
   files?: File[];
   /** The page it was written on (`from_page`, backend/page_owners.py check_from). */
   from?: FromPage | null;
-  /** The Agent bar's: the agent this chat must still be the sender's DM with alone (`expect_dm`; else 409
-      `dm_changed`). Then the words go back to the box's draft (`draftId`) and `onStale` reads the DM again. */
-  expectDm?: string;
-  draftId?: string;
-  onStale?: () => void;
+  /** The Agent bar's: sent to the sender's DM with exactly this agent, which the server finds (or makes) as it writes
+      (`/threads/dm/messages`, `to_dm`), never to a thread named by the id the page holds. */
+  toDm?: string;
   me: string;
   /** Retry: the failed row to send again in its place. */
   retry?: string;
@@ -149,16 +146,17 @@ function post(s: Send, idempotencyKey: string): Promise<Sent> {
     return api.post<Sent>('/api/v2/uploads/assistant/messages', f, opts);
   }
   const reply = s.replyTo ? { in_reply_to: s.replyTo } : {};
-  const dm = s.expectDm ? { expect_dm: s.expectDm } : {};
+  const where = s.toDm ? 'dm' : enc(s.id);
+  const dm = s.toDm ? { to_dm: s.toDm } : {};
   if (!files.length)
-    return api.post<Sent>(`/api/v2/threads/${enc(s.id)}/messages`, { text: s.text, refs: s.from ? { from_page: s.from } : {}, ...reply, ...dm }, opts);
+    return api.post<Sent>(`/api/v2/threads/${where}/messages`, { text: s.text, refs: s.from ? { from_page: s.from } : {}, ...reply, ...dm }, opts);
   const f = new FormData();
   f.set('text', s.text);
   if (s.replyTo) f.set('in_reply_to', s.replyTo);
   if (s.from) f.set('from_page', JSON.stringify(s.from));
-  if (s.expectDm) f.set('expect_dm', s.expectDm);
+  if (s.toDm) f.set('to_dm', s.toDm);
   for (const file of files) f.append('files', file);
-  return api.post<Sent>(`/api/v2/uploads/threads/${enc(s.id)}/messages`, f, opts);
+  return api.post<Sent>(`/api/v2/uploads/threads/${where}/messages`, f, opts);
 }
 
 /** The posted message, or null when the server held it (a hold has no id). */
@@ -222,13 +220,7 @@ export async function sendMessage(given: Send): Promise<ChatMessage | null> {
       offline: 'hold',
     });
     return answerOf(answer);
-  } catch (e) {
-    if (e instanceof ApiError && e.code === 'dm_changed') {
-      // not the DM it meant any more: nothing went, the words go back to the box, and the DM is read again
-      dropRow(timelineKey(s.id), tmp);
-      writeDraft(s.me, s.draftId ?? s.id, s.text);
-      s.onStale?.();
-    }
+  } catch {
     return null;
   }
 }

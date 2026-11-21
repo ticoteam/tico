@@ -20,8 +20,8 @@ key guard and key-grant cards, secret_drop.py and key_grants.py) asks for the pa
                                   "own": the owner is the page's own, not the General Manager standing in}}
   owner(c, page[, fallback])  the page's owner as an actor id, or None
   save(c, actor, page, bot)  sets or clears one page's owner (bot None: no owner; "default": its default); the saved row
-  check_from(refs)         a 422 unless refs.from_page, when present, is {page, label[, item {kind, id, name}]}; an
-                           item's name longer than its limit is shortened in place
+  check_from(refs)         a 422 unless refs.from_page, when present, is {page, label[, item {kind, id}]}, each value
+                           trimmed in place (an older client's item name is dropped)
 """
 
 import re
@@ -77,7 +77,7 @@ PAGES: dict[str, dict[str, str]] = {
 # Every company has the General Manager (onboarding.complete_company): the owner of last resort, to chat with only.
 FALLBACK = "general-manager"
 DEFAULT = "default"  # a save's bot that drops the page's choice: the page has its default again
-FROM_LIMITS = {"page": 40, "label": 80, "kind": 40, "id": 200, "name": 200}
+FROM_LIMITS = {"page": 40, "label": 80, "kind": 40, "id": 200}
 # A from_page value is a short line of words: no newline or other control character (the turn shows it as quoted text).
 _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
 
@@ -182,17 +182,16 @@ def _text(value: object, key: str) -> bool:
 
 
 def _item_ok(item: object) -> bool:
+    """What was open on the page, as a pointer only: {kind, id}, no words (an older client's `name` is dropped), which
+    the runner reads under its own rights, so a message naming it shows nothing a reader may not see."""
     if item is None:
         return True
     if not isinstance(item, dict):
         return False
     fields = cast("dict[str, object]", item)
+    fields.pop("name", None)
     _trimmed(fields)
-    name = fields.get("name")
-    if isinstance(name, str) and len(name) > FROM_LIMITS["name"]:
-        # A long title (a doc's, a goal's) is only what the chat shows: shortened, never refused.
-        fields["name"] = name[: FROM_LIMITS["name"] - 1].rstrip() + "…"
-    return set(fields) <= {"kind", "id", "name"} and all(_text(fields.get(k), k) for k in ("kind", "id", "name"))
+    return set(fields) == {"kind", "id"} and all(_text(fields.get(k), k) for k in ("kind", "id"))
 
 
 def check_from(refs: dict[str, object] | None) -> None:
@@ -213,6 +212,6 @@ def check_from(refs: dict[str, object] | None) -> None:
     if not ok:
         raise Problem(
             "from_page",
-            "refs.from_page is {page, label} and an optional item {kind, id, name}, each a short line of text",
+            "refs.from_page is {page, label} and an optional item {kind, id}, each a short line of text",
             422,
         )

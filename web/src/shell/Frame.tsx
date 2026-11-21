@@ -54,8 +54,10 @@ export interface FrameProps {
 }
 
 export interface AgentBar {
-  /** The page's key: a phone's card follows the fold of each page it moves to. */
+  /** The page's key, whose fold it keeps (two pipelines' boards are one page, Tasks). */
   page: string;
+  /** The page's address: moving to another one (another pipeline's board too), a phone's card is set again. */
+  address: string;
   name: string;
   face: ReactNode;
   fold: boolean | undefined;
@@ -387,7 +389,7 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
         chat={call ? undefined : p.chat}
         call={call ? p.page : undefined}
         tucked={tucked || lip}
-        chatKey={owner?.page}
+        chatKey={owner?.address}
         onCardChange={onCard}
         labels={owner ? { chat: owner.name } : undefined}
         lips={p.lips}

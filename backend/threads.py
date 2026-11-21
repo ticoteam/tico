@@ -68,9 +68,6 @@ PUBLIC_AUDIENCES = ("company", "team")
 # per-message check once its thread is readable. Anything else marks it `restricted`.
 SAFE_REF_KEYS = frozenset(
     {
-        # the page a message was written on (backend/page_owners.py check_from): its key and name alone are plain words;
-        # an item open there is one level deeper, so a message naming one takes the per-message check (`_ref_strings`)
-        "from_page",
         "via",
         "rule",
         "quiet",
@@ -1119,7 +1116,7 @@ def readable_ids(c, v, ids):
 
 # ----------------------------------------------------------------------------- writing: stamp and record
 # Safe keys whose value may be one level of structure (the rest are plain values): what threads itself writes.
-NESTED_REF_KEYS = ("origin", "mentions", "warnings", "from_page")
+NESTED_REF_KEYS = ("origin", "mentions", "warnings")
 _REFERENCE = re.compile(r"^task:|#/task/|/tasks/")
 
 
@@ -1144,6 +1141,10 @@ def _ref_strings(refs):
         return items is not None and all(flat(v, depth - 1) for v in items)
 
     for key, value in refs.items():
+        if key == "from_page":
+            # the page it was written on (backend/page_owners.py check_from): a page key, its name and at most a pointer
+            # {kind, id} with no words, which the runner reads under its own rights: nothing here to hide per message
+            continue
         if key not in SAFE_REF_KEYS:
             return None
         depth = 2 if key == "warnings" else 1 if key in NESTED_REF_KEYS else 0

@@ -89,8 +89,8 @@ class ThreadPost(BaseModel):
     unmarked: list[str] = Field(default_factory=list, max_length=50)
     # Files already in Tico shared with the message, as `<file id>@<version>` or {ref, title} (shared_files).
     attachments: list[M.Attachment] = Field(default_factory=list, max_length=10)
-    # The poster's own DM with this one (the Agent bar's): 409 `dm_changed` unless the thread is exactly them two.
-    expect_dm: str | None = Field(None, max_length=200)
+    # Posted to /threads/dm/messages: the poster's DM with exactly this one (the Agent bar's), found or made at write time.
+    to_dm: str | None = Field(None, max_length=200)
 
 
 class MessagePatch(BaseModel):
@@ -140,7 +140,7 @@ class ThreadUpload(BaseModel):
     defer_for: str | None = None
     attachments: list[M.Attachment] = Field(default_factory=list, max_length=10)  # as ThreadPost's
     from_page: dict | None = None  # the page it was written on, as a post's refs.from_page (sent as JSON)
-    expect_dm: str | None = Field(None, max_length=200)  # as ThreadPost's
+    to_dm: str | None = Field(None, max_length=200)  # as ThreadPost's
 
 
 SHARE_REFUSED = (
@@ -178,19 +178,10 @@ def _unmarked(who, body):
     return [] if getattr(who, "via_token", False) else list(getattr(body, "unmarked", None) or [])
 
 
-def _expect_dm(c, who, thread_id, body):
-    """A post naming `expect_dm` (the Agent bar's DM with a page's owner): 409 `dm_changed` unless the thread is still the
-    poster's DM with exactly that one, so words meant for one agent never reach a group a DM was turned into."""
-    expected = getattr(body, "expect_dm", None)
-    if not expected:
-        return
-    row = threads.thread_row(c, thread_id)
-    them = H.resolve_actor(c, expected)
-    people = (
-        set(threads._dm_members(c, row)) if row and threads.audience_of(row) in ("personal", "participants") else set()
-    )
-    if not them or people != {who.actor, them}:
-        raise Problem("dm_changed", "This chat is no longer your chat with " + str(expected) + " alone", 409)
+# `/threads/dm/messages` (and its upload): the poster's DM with `to_dm`, the open one with exactly those two (every kind
+# of member counted, as threads.dm looks one up) or a new one, found again inside the write, so a chat that has since
+# become a group is never the one written to.
+DM_ADDRESS = "dm"
 
 
 def _delivery_words(body):
@@ -522,6 +513,12 @@ def install(app, store, auth, mutate, rule_check):
             )
 
         return place
+
+    def dm_of(c, who, body):
+        """The thread `/threads/dm/messages` writes to (DM_ADDRESS): the poster's DM with exactly `to_dm`, or a new one."""
+        if not body.to_dm:
+            raise Problem("to_dm", "Name who the DM is with in to_dm", 422)
+        return threads.dm(c, threads.viewer(auth, who), [body.to_dm])["id"]
 
     def check(who, thread_id, body):
         """The org-rule check of one message, for a person or a bot alike (operation `threads`), outside the write. A
@@ -1005,14 +1002,20 @@ def install(app, store, auth, mutate, rule_check):
         """A message in the thread (in its sub-thread with `parent_message_id`). A person's or a bot's message passes the
         org-rule check first, outside the write; a held one writes nothing but its hold."""
         who = request.state.identity
+        to_dm = thread_id == DM_ADDRESS
+        if to_dm:
+            with store.transaction() as c:
+                thread_id = dm_of(c, who, body)  # named before the check, as a Home is
         # A room that moved is checked and written as its Home (bot_home_merge.named_home), named before the check.
         thread_id = bot_home_merge.named_home(store, thread_id)
         _delivery_words(body)
         rc = check(who, thread_id, body)
 
         def work(c):
+            nonlocal thread_id
             v = threads.viewer(auth, who)
-            _expect_dm(c, who, thread_id, body)
+            if to_dm:
+                thread_id = dm_of(c, who, body)
             replying = _reply_check(c, auth, who, thread_id, body)
             way, marks = _delivery_refs(c, auth, who, body, thread_id) if body.delivery else (None, {})
             shared = shared_files(c, app.state.files, who, body.attachments)
@@ -1352,12 +1355,17 @@ def install(app, store, auth, mutate, rule_check):
         who = request.state.identity
         if who.role not in ("owner", "human", "bot"):
             raise Problem("identity", "A person or a bot posts files to a thread", 403)
-        thread_id = bot_home_merge.named_home(store, thread_id)  # as post_message names it: the Home, before the check
+        to_dm = thread_id == DM_ADDRESS
+        thread_id = thread_id if to_dm else bot_home_merge.named_home(store, thread_id)  # the Home, before the check
         checked = {}
 
         def admit(body):
+            nonlocal thread_id
             _delivery_words(body)
             page_owners.check_from({"from_page": body.from_page})
+            if to_dm:
+                with store.transaction() as c:
+                    thread_id = bot_home_merge.named_home(store, dm_of(c, who, body))
             with store.read() as c:
                 threads.require(c, threads.viewer(auth, who), thread_id, write=True)
             checked["rc"] = check(who, thread_id, body)
@@ -1367,8 +1375,10 @@ def install(app, store, auth, mutate, rule_check):
             raise Problem("empty", "A message needs text or a file", 422)
 
         def work(c):
+            nonlocal thread_id
             v = threads.viewer(auth, who)
-            _expect_dm(c, who, thread_id, body)
+            if to_dm:
+                thread_id = dm_of(c, who, body)
             replying = _reply_check(c, auth, who, thread_id, body)
             way, marks = _delivery_refs(c, auth, who, body, thread_id) if body.delivery else (None, {})
             items = [register(c, who, **upload) for upload in uploads]

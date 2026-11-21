@@ -765,10 +765,8 @@ export const growthChannelQuery = (channel: string, month: string | undefined) =
   });
 
 /** A message to the Growth Manager, in the reader's own DM with it (the one its Agent bar shows), sent from the page. */
-export async function askGrowthManager(bot: string, text: string) {
-  const dm = await api.get<{ id: string }>(`/api/v2/threads/dm?with=${enc(bot)}`);
-  return api.post<unknown>(`/api/v2/threads/${enc(dm.id)}/messages`, { text, refs: { from_page: { page: 'growth', label: 'Growth' } } }, { idempotencyKey: newId() });
-}
+export const askGrowthManager = (bot: string, text: string) =>
+  api.post<unknown>('/api/v2/threads/dm/messages', { text, to_dm: bot, refs: { from_page: { page: 'growth', label: 'Growth' } } }, { idempotencyKey: newId() });
 
 export interface Segment {
   slug: string;

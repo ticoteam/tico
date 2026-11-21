@@ -283,7 +283,7 @@ function App() {
   if (callChat) chat = <SecondChat chat={callChat} />;
   // Every company page's owner, in the Agent bar beside it (master plan P5): the viewer's own DM with them.
   const place = pageAt(at.path);
-  const bar = useOwnerBar(place, me.data?.id);
+  const bar = useOwnerBar(place, me.data?.id, at.path);
   const barShown = !!bar && arrangement === 'page' && !chat;
   if (barShown) chat = <OwnerBar bar={bar} place={place} />;
   const hideCallChat = () => void run('calls.hideChat', {}, { via: 'click' });
@@ -568,7 +568,7 @@ type OwnerBarState = AgentBar & { owner: string; askHref: string | null };
     page's (backend/page_owners.py, which falls back to the General Manager); none on a personal page (Tico is its chat)
     or a page that is a chat already. Its fold is the person's for this page; an ask from the owner that waits on them
     opens it until they fold it again. */
-function useOwnerBar(place: PageAt, me: string | undefined): OwnerBarState | null {
+function useOwnerBar(place: PageAt, me: string | undefined, address: string): OwnerBarState | null {
   const company = place.owner === 'page';
   const { data: owners } = useQuery({ ...pageOwnersQuery, enabled: company && !!me });
   const { data: pipelines } = useQuery({ ...pipelinesQuery, enabled: company && !!me });
@@ -584,7 +584,9 @@ function useOwnerBar(place: PageAt, me: string | undefined): OwnerBarState | nul
   // a ❓ question or an ask from this owner that waits on you for this page (Needs you's own items, read by Flow already):
   // one on a task opens its pipeline's page; one with no task opens the pages the agent owns itself, never those where
   // it only stands in (the General Manager for a page with no owner)
-  const ownPage = !mine && owners?.pages[place.page]?.own === true;
+  // the agent owns this page itself: the pipeline's own agent while one is shown, else the page's own owner (not the
+  // General Manager standing in)
+  const ownPage = !!mine || owners?.pages[place.page]?.own === true;
   const pipe = pipeline?.id ?? null;
   const { data: asks } = useQuery({ ...flowQuery, enabled: opened && !!owner, select: (f) => f.asks });
   const waiting = owner ? asks?.find((a) => (a.by === owner || a.by === who?.id) && (a.pipeline ? a.pipeline === pipe : ownPage)) : undefined;
@@ -599,6 +601,7 @@ function useOwnerBar(place: PageAt, me: string | undefined): OwnerBarState | nul
     name,
     face: <Avatar decorative kind="agent" name={name} initials={short(name)} hue={who?.hue ?? 0} size={28} live={who?.working} />,
     page: place.page,
+    address,
     fold,
     ask: asking && dismissed !== place.page,
     askHref: waiting?.href ?? null,
@@ -612,7 +615,6 @@ function useOwnerBar(place: PageAt, me: string | undefined): OwnerBarState | nul
 /* The Agent bar's sheet: the owner's DM, never a shared thread. Opening it sends nothing: its latest messages, or words
    to start with while it is empty. Each message carries the page it was written on. */
 function OwnerBar({ bar, place }: { bar: OwnerBarState; place: PageAt }) {
-  const name = usePageName();
   // drawn only while it shows: a folded bar opens no chat, so it makes no DM and marks nothing read
   const sheet = useSheet();
   const phone = usePhoneCards();
@@ -623,7 +625,8 @@ function OwnerBar({ bar, place }: { bar: OwnerBarState; place: PageAt }) {
   return (
     <Sheet kind="chat" label={`Chat with ${bar.name}`}>
       {/* what waits on you, wherever it lives (this DM, a Home, a task's chat): one line to it */}
-      {shown && bar.ask && bar.askHref && (
+      {/* shown while the question waits, whether the bar opened for it or was folded and opened by hand */}
+      {shown && bar.askHref && (
         <Link className="bar-ask" to={bar.askHref as never}>
           A question waits on you
         </Link>
@@ -633,7 +636,7 @@ function OwnerBar({ bar, place }: { bar: OwnerBarState; place: PageAt }) {
           <ChatSheet
             dm
             chat={chatAddress(bar.owner, 'agent')}
-            from={fromPage(here, name)}
+            from={fromPage(here)}
             starters={[`What needs me on ${place.label}?`, `What changed on ${place.label} this week?`]}
           />
         </Suspense>

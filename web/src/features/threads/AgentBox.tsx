@@ -35,7 +35,7 @@ export function AgentBox({ agent, from }: AgentBoxProps) {
       attach={false}
       onSend={(text, files) => {
         if (!dm.data) return;
-        void sendMessage({ id: dm.data.id, variant: 'page', text, files, me, from });
+        void sendMessage({ id: dm.data.id, variant: 'page', text, files, me, from, toDm: agent });
         void navigate({ to: '.', search: (s: Record<string, unknown>) => ({ ...s, chat }) } as never);
       }}
     />

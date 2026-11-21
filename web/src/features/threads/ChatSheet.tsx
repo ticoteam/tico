@@ -13,7 +13,7 @@ export interface ChatSheetProps {
   /** The shell's `?chat=`: agent:<slug>, person:<id> or thread:<id>; or the page owner's, in the Agent bar. */
   chat: string;
   /** The Agent bar's: the page its messages carry, the words to start with while it is empty, and `dm`: each message
-      must still go to the viewer's DM with this agent alone (else the DM is read again and the words kept). */
+      goes to the viewer's DM with exactly this agent, which the server finds as it writes. */
   from?: FromPage;
   starters?: readonly string[];
   dm?: boolean;
@@ -64,7 +64,7 @@ export function ChatSheet({ chat, from, starters, dm = false }: ChatSheetProps) 
       canPost={t.me?.can_post !== false}
       from={from}
       starters={starters}
-      {...(dm && actor && { expectDm: actor, draftId: chat, onStale: () => void refetch() })}
+      {...(dm && actor && { toDm: actor })}
     />
   );
 }

@@ -102,7 +102,7 @@ describe('Mail @s159', () => {
           ? ok({ messages: [letter({ body: 'Hi, is the March invoice paid?' })] })
           : url.includes('/threads/dm?with=bot%3Aqa')
             ? ok({ id: 'd9', title: '', audience: 'personal', root_id: 'd9', last_seq: 0, last_unread_seq: 0, pinned_for_everyone: false, me: { can_manage: true, can_post: true } })
-            : method === 'POST' && url.endsWith('/threads/d9/messages')
+            : method === 'POST' && url.endsWith('/threads/dm/messages')
               ? ok({ id: 'm9', seq: 9, thread_id: 'd9', sender_id: 'human:me', body: 'Is it paid?', created_at: ago(0) })
               : undefined,
     );
@@ -114,9 +114,11 @@ describe('Mail @s159', () => {
     fireEvent.change(box, { target: { value: 'Is it paid?' } });
     await waitFor(() => expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-    await waitFor(() => expect(sent('POST', '/api/v2/threads/d9/messages')).toBeTruthy());
-    expect(sent('POST', '/api/v2/threads/d9/messages')?.body).toEqual({
+    // to the person's DM with the mailbox's agent, which the server finds as it writes
+    await waitFor(() => expect(sent('POST', '/api/v2/threads/dm/messages')).toBeTruthy());
+    expect(sent('POST', '/api/v2/threads/dm/messages')?.body).toEqual({
       text: 'Is it paid?',
+      to_dm: 'bot:qa',
       // the page only: what is open there goes to Tico alone (conversation/queries.ts pageFor)
       refs: { from_page: { page: 'mail', label: 'Mail' } },
     });

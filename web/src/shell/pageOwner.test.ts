@@ -80,18 +80,18 @@ describe('the page map', () => {
   });
 
   it('names the mail open in Mail, as its box and thread, for Ask Tico @4857-S17', () => {
-    expect(fromPage(pageAt('/threads/mail', '?box=help%40acme.example&open=th1'), 'Invoice question')).toEqual({
+    expect(fromPage(pageAt('/threads/mail', '?box=help%40acme.example&open=th1'))).toEqual({
       page: 'mail',
       label: 'Mail',
-      item: { kind: 'mail', id: 'help@acme.example/th1', name: 'Invoice question' },
+      item: { kind: 'mail', id: 'help@acme.example/th1' },
     });
     expect(pageAt('/threads/mail', '?box=help%40acme.example').item).toBeUndefined();
   });
 
-  it('carries the open item, named by the page’s own name, in from_page', () => {
-    expect(fromPage(pageAt('/library/d%201'), 'Pricing 2027')).toEqual({ page: 'docs', label: 'Docs', item: { kind: 'doc', id: 'd 1', name: 'Pricing 2027' } });
-    expect(fromPage(pageAt('/tasks/eng'), '')).toEqual({ page: 'tasks', label: 'Tasks', item: { kind: 'pipeline', id: 'eng', name: 'eng' } });
-    expect(fromPage(pageAt('/company/strategy/goals'), 'Goals')).toEqual({ page: 'goals', label: 'Goals' });
+  it('carries the open item as a pointer, with no words, in from_page', () => {
+    expect(fromPage(pageAt('/library/d%201'))).toEqual({ page: 'docs', label: 'Docs', item: { kind: 'doc', id: 'd 1' } });
+    expect(fromPage(pageAt('/tasks/eng'))).toEqual({ page: 'tasks', label: 'Tasks', item: { kind: 'pipeline', id: 'eng' } });
+    expect(fromPage(pageAt('/company/strategy/goals'))).toEqual({ page: 'goals', label: 'Goals' });
   });
 
   it('opens the bar on a wide window, folds it under, keeps a hand choice, and an ask opens it', () => {
