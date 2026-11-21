@@ -393,6 +393,7 @@ pub(super) const HUB_PATHS: &[&str] = &[
     "gateway digest",
     "gateway fetch",
     "gateway image",
+    "gateway reconcile",
     "gateway search",
     "gateway video",
     "gateway video-status",
