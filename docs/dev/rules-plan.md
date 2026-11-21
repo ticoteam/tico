@@ -445,18 +445,19 @@ the same org rule check as a task write, outside any transaction, on a budget of
 exactly one event on `link:<id>`: `rules.passed`, `rules.refused` (a Block rule broken) or `rules.held` (an Escalate rule
 broken), with the rules in its detail (backend/rule_links.py), written in a savepoint so a failure never changes the
 write. The links: each proxied tool (`tool:<id>`, checked before the proxy puts the key in; reads, and MCP calls that
-only read sent to exactly the tool's MCP address, are never counted), outgoing webhook sends, reports to Tico support (at
-their first delivery), Release now, and email. A write that would not be made (no right, an Idempotency-Key replay, a
-release already open) is not checked. Nothing is stopped yet: `would` in the detail marks an outcome that did not
+only read sent to exactly the tool's MCP address, query included, are never counted), outgoing webhook sends, Release
+now, and email. A write that would not be made (no right, no usable Idempotency-Key or a replay
+of one, a paused endpoint, a duplicate email, a release already open) is not checked; a proxied body over 1 MB is not
+read and is recorded unchecked. Nothing is stopped yet: `would` in the detail marks an outcome that did not
 happen. Email's own held path is older and does stop a mail, so email is Enforced by default and its event carries the
-rules of the hold it applied; each link's mode lives in registry_metadata (`rule-link-modes`, the owner's to change, not
-yet from any screen), and a label never makes a path that only logs read as Enforced. A proxied write is judged after
+rule ids its decision used; each link's mode lives in registry_metadata (`rule-link-modes`, the owner's to change, not
+yet from any screen), taken only when the link's path implements it. A proxied write is judged after
 its destination is checked and pinned, and its event goes in the same transaction as the call's own row. What the check reads of a proxied call is
 decoded and scrubbed: no header, the path, query and a JSON, form or plain text body with every proxy token (plain,
-percent-encoded, JSON-escaped or in base64) taken out and the tool's auth query parameters blanked; any other body, or
+percent-encoded, JSON-escaped, in base64, decoded to a fixed point of at most three passes) taken out and the tool's auth query parameters blanked; any other body, or
 one whose scrubbing cannot be verified, is not read. Rules › Links (`/company/rules/links`, from the Rules page's "⋯";
-the owner and Admins in person) lists them with 30-day counts, then the Not covered paths: tools whose keys go to
-computers, website tools, and calls a computer makes straight out, each tool only to a reader who may see it.
+the owner and Admins in person) lists them with 30-day counts, then the Not covered paths: reports to Tico support
+(#4869), tools whose keys go to computers, website tools, and calls a computer makes straight out, each tool only to a reader who may see it.
 Refusals, appeals and Allow once come next.
 
 ### 8. laws.sh (optional, later)

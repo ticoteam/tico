@@ -2,8 +2,8 @@
 """Rules › Links (docs/dev/rules-plan.md): the ways an agent's writes leave the company, and the org rule check on each,
 log-only for now.
 
-A link is one way out: a proxied tool (`tool:<id>`, backend/tool_proxy.py), outgoing webhooks (`webhook`), a report to
-Tico support (`support`), a release (`release`) and email (`email`). An agent's write on a link is checked the way a task
+A link is one way out: a proxied tool (`tool:<id>`, backend/tool_proxy.py), outgoing webhooks (`webhook`), a release
+(`release`) and email (`email`). An agent's write on a link is checked the way a task
 write is (`org_rule_check.check_as`, outside any transaction, on a budget of one call: needing more is unchecked) and
 leaves exactly one outcome event on `link:<id>`: `rules.passed`, `rules.refused` (a Block rule broken) or `rules.held`
 (an Escalate rule broken), with the rules in its detail. An agent's write is one whose sender is a bot: a bot's own, or
@@ -17,16 +17,18 @@ its event says what happened, with the rules the mail's decision applied. The ev
 failure to log never changes the write or its answer; the proxy writes it with the call's own row, after forwarding.
 
 Each link's mode lives in registry_metadata (`MODES`), by default Enforced for email and Informed only for the rest; only
-the owner changes one, and not from here. A label alone never makes a path that only logs read as Enforced.
+the owner changes one, and not from here. Only a mode the link's path implements is taken: a label never makes a path
+that only logs read as Enforced, nor email, which holds mail, read as Informed only.
 
 What the check reads of a proxied write is scrubbed first (`proxy_output`): no header at all (so no Authorization,
 Cookie or a tool's own auth header); the path, the query's names and values and a JSON, form or plain text body read
-decoded (percent escapes, JSON escapes, base64 content too) with every proxy token (`tpx1.*`, plain or inside base64 such as a Basic pair)
-taken out and the tool's auth query parameters blanked, never encoded again. A body of any other kind, or one whose
-scrubbing cannot be verified, is not read. It runs before the proxy puts the key in. Events never carry the text.
+decoded (percent and JSON escapes to a fixed point of at most DECODE_PASSES, base64 content too) with every proxy token
+(`tpx1.*`, plain or inside base64 such as a Basic pair) taken out and the tool's auth query parameters blanked, never
+encoded again. A value still escaped after that is not read; a body of any other kind, one over MAX_JUDGED or one whose
+scrubbing cannot be verified, is not read (an oversized one is recorded unchecked). It runs before the proxy puts the key in. Events never carry the text.
 
-Not covered: a tool whose key goes to computers, a website tool's browser sign-in, and any call a computer makes
-straight out. Rules › Links lists them, unmeasured.
+Not covered: reports to Tico support (#4869), a tool whose key goes to computers, a website tool's browser sign-in, and
+any call a computer makes straight out. Rules › Links lists them, unmeasured.
 """
 
 import base64
@@ -53,12 +55,14 @@ MODES = (
     "rule-link-modes"  # registry_metadata: {link id: "enforced" | "informed"}; a link it does not name has its default
 )
 ENFORCED_LINKS = frozenset({"email"})  # the links whose path really stops a write; every other is Informed only
-FIXED = {"email": "Email", "webhook": "Outgoing webhooks", "support": "Tico support", "release": "Releases"}
+FIXED = {"email": "Email", "webhook": "Outgoing webhooks", "release": "Releases"}
+UNCOVERED = {"support": "Tico support", "computer": "Calls straight from computers"}  # unmeasured paths, besides tools
+DECODE_PASSES = 3  # percent and JSON escapes undone to a fixed point within this many passes, or the value is not read
+MAX_JUDGED = 1024 * 1024  # a body over this is not copied or read: its check is recorded unchecked (too_large)
 OUTCOMES = ("rules.passed", "rules.refused", "rules.held")
 DAYS = 30
 TOOLS_LISTED = 500
 CALLS = 1  # the judge calls one link check may make
-COMPUTER = "computer"  # the Not covered row for calls a computer makes straight out
 TOKEN = re.compile(r"tpx1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")  # backend/tool_proxy.py TOKEN_RE
 BASE64 = re.compile(r"[A-Za-z0-9+/_-]{16,}={0,2}")
 URLSAFE = str.maketrans("-_", "+/")
@@ -68,47 +72,52 @@ FORM = "application/x-www-form-urlencoded"
 for _op, _words in (
     ("tool_call", "a call to an outside tool's API"),
     ("webhook", "an outgoing webhook"),
-    ("support_report", "a report to Tico support"),
     ("release", "a request for a release"),
 ):
     ORC.OPERATIONS.setdefault(_op, _words)
 
 
 # ----------------------------------------------------------------------------- what is judged
-def _decoded(text: str) -> str:
-    """`text` with percent escapes (up to three layers) and JSON `\\u` escapes undone."""
-    for _ in range(3):
-        once = unquote(text)
+def _decoded(text: str) -> str | None:
+    """`text` with percent escapes and JSON `\\u` escapes undone together, pass after pass, until nothing changes:
+    None when it still changes after DECODE_PASSES passes (an escape nested deeper than is read)."""
+    for _ in range(DECODE_PASSES + 1):
+        once = ESCAPE.sub(lambda m: chr(int(m.group(1), 16)), unquote(text))
         if once == text:
-            break
+            return text
         text = once
-    return ESCAPE.sub(lambda m: chr(int(m.group(1), 16)), text)
+    return None
 
 
 def _hidden(match: re.Match[str]) -> str:
     """A base64 run that holds a proxy token, read from any of its four offsets in either alphabet, its content decoded
-    in turn (percent and JSON escapes), as `[token]`."""
+    in turn (`_decoded`), as `[token]`; so is a run whose content cannot be decoded to its end."""
     raw = match.group(0).translate(URLSAFE)  # either alphabet, read as the standard one
     for offset in range(4):
         part = raw[offset:].rstrip("=")
         part = part[: len(part) // 4 * 4]  # whole quanta only: a run's tail never makes it fail to decode
         try:
-            if "tpx1" in _decoded(base64.b64decode(part, validate=True).decode("latin-1")).lower():
-                return "[token]"
+            plain = _decoded(base64.b64decode(part, validate=True).decode("latin-1"))
         except ValueError:
             continue
+        if plain is None or "tpx1" in plain.lower():
+            return "[token]"
     return match.group(0)
 
 
 def scrub(text: str) -> str:
-    """`text`, decoded, without a proxy token: plain, or inside a base64 run (a Basic `user:token` pair)."""
-    return BASE64.sub(_hidden, TOKEN.sub("[token]", _decoded(text)))
+    """`text`, decoded, without a proxy token: plain, or inside a base64 run (a Basic `user:token` pair). A value whose
+    escapes do not settle (`_decoded`) is not read."""
+    plain = _decoded(text)
+    if plain is None:
+        return "[a value not read]"
+    return BASE64.sub(_hidden, TOKEN.sub("[token]", plain))
 
 
 def clean(text: str) -> bool:
-    """Whether `text` holds no proxy token in any spelling `scrub` reads."""
+    """Whether `text` holds no proxy token in any spelling `scrub` reads, and nothing still escaped."""
     plain = _decoded(text)
-    return "tpx1" not in plain.lower() and BASE64.sub(_hidden, plain) == plain
+    return plain is not None and "tpx1" not in plain.lower() and BASE64.sub(_hidden, plain) == plain
 
 
 def _scrubbed(value: Any) -> Any:
@@ -267,20 +276,12 @@ def record(c: Any, found: Found | None, stopped: bool = False) -> Any:
     return row
 
 
-def mailed(c: Any, found: Any, result: Any) -> Found:
+def mailed(found: Any, result: Any) -> Found:
     """The email link's outcome from the decision the mail's own gate applied (email_sending.rule_gate), which holds a
     mail for real: `found` is (principal, sender, via) and `result` what `mail_decide` (or its structured fallback)
-    answered. Its rules: the applied hold's stored `rule_ids`, or the rules a delivered mail was warned on."""
-    held: Any = result.get("held")
-    hold_id = cast("dict[str, Any]", held).get("id") if isinstance(held, dict) else None
-    row = c.execute("SELECT rule_ids FROM org_rule_holds WHERE id=?", (hold_id,)).fetchone() if hold_id else None
-    stored: Any = json.loads(row[0] or "[]") if row else []
-    warning: Any = result.get("rule_warning")
-    warned: list[Any] = (cast("dict[str, Any]", warning).get("rules") or []) if isinstance(warning, dict) else []
-    applied = sorted(
-        {str(x) for x in cast("list[Any]", stored) if x}
-        | {str(w.get("id")) for w in (cast("dict[str, Any]", r) for r in warned if isinstance(r, dict)) if w.get("id")}
-    )
+    answered, with `rules`, the rule ids that decision used (a hold's, a warning's, a consumed approval's)."""
+    used: list[Any] = result.get("rules") or []
+    applied = sorted({str(r) for r in used if r})
     return {
         "link": "email",
         "actor": found[1],
@@ -290,6 +291,20 @@ def mailed(c: Any, found: Any, result: Any) -> Found:
         "rules": applied,
         "broken": applied,
         "unchecked": "unchecked" if result.get("outcome") == "unchecked" else "",
+    }
+
+
+def too_large(principal: str, sender: str, link: str, operation: str) -> Found:
+    """The outcome of a write too large to read (over MAX_JUDGED): not judged, recorded unchecked."""
+    return {
+        "link": link,
+        "actor": sender,
+        "for": principal,
+        "operation": operation,
+        "outcome": "passed",
+        "rules": [],
+        "broken": [],
+        "unchecked": "too_large",
     }
 
 
@@ -305,11 +320,11 @@ def modes(c: Any) -> dict[str, Any]:
 
 
 def mode(link: str, saved: dict[str, Any]) -> str:
-    """A link's mode from registry_metadata (`saved`), by default Enforced for email and Informed only for the rest.
-    Enforced only where the path really stops a write (ENFORCED_LINKS): a label alone never makes a log-only path
-    claim it."""
-    named = saved.get(link, ENFORCED if link in ENFORCED_LINKS else INFORMED)
-    return ENFORCED if named == ENFORCED and link in ENFORCED_LINKS else INFORMED
+    """A link's mode from registry_metadata (`saved`), taken only when its path implements it: Enforced where the path
+    stops a write (ENFORCED_LINKS, email), Informed only elsewhere. Any other label leaves the mode its path has."""
+    implemented = ENFORCED if link in ENFORCED_LINKS else INFORMED
+    named = saved.get(link, implemented)
+    return named if named == implemented else implemented  # a label the path does not implement is not taken
 
 
 def counts(c: Any, links: list[str], since: str) -> dict[str, dict[str, int]]:
@@ -350,7 +365,7 @@ def listing(c: Any, who: Any, admins: Any, auth: Any, now: str | None = None) ->
         for t in tools
         if not _proxied(t)
     ]
-    rows.append({"id": COMPUTER, "name": "Calls straight from computers", "mode": NOT_COVERED, "counts": None})
+    rows += [{"id": link, "name": name, "mode": NOT_COVERED, "counts": None} for link, name in UNCOVERED.items()]
     return {"links": rows, "days": DAYS}
 
 
