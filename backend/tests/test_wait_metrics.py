@@ -130,14 +130,34 @@ def test_ask_to_answer_counts_from_the_ask_or_its_give_and_the_median_of_an_even
     assert view(drafts, "SELECT answers, median_s FROM ask_answer_weekly") == [{"answers": 2, "median_s": 2700}]
 
 
-def test_the_median_keeps_fractions_of_a_second(drafts, time_machine):
+def test_the_median_is_of_whole_milliseconds_given_in_seconds(drafts, time_machine):
     with drafts.transaction() as c:
         task_id = X.new_task(c, ANA, "Draft the launch note", "drafts", assignee=BUILDER)["id"]
-        for seconds in (1, 2):
-            asked = X.ok_ask(c, task_id, BUILDER, "ana", f"OK part {seconds}?")["requirement_id"]
-            time_machine.shift(timedelta(seconds=seconds))
+        for ms in (1001, 2002):
+            asked = X.ok_ask(c, task_id, BUILDER, "ana", f"OK part {ms}?")["requirement_id"]
+            time_machine.shift(timedelta(milliseconds=ms))
             A.answer(c, task_id, asked, ANA, "ok")
-    assert view(drafts, "SELECT median_s FROM ask_answer_weekly") == [{"median_s": 1.5}]
+    assert view(drafts, "SELECT median_s FROM ask_answer_weekly") == [{"median_s": 1.5015}]
+
+
+def test_an_answer_by_someone_the_reader_may_not_see_still_counts(drafts, time_machine, monkeypatch):
+    """Cara may not see Ben: his name reads '' on the task's history, and his answer still ends the ask."""
+    from backend import teammate_access as TA
+
+    with drafts.transaction() as c:
+        task_id = X.new_task(c, ANA, "Draft the launch note", "drafts", assignee=BUILDER)["id"]
+        asked = X.ok_ask(c, task_id, BUILDER, "ben", "OK the outline?")["requirement_id"]
+        time_machine.shift(timedelta(hours=1))
+        A.answer(c, task_id, asked, BEN, "ok")
+    real = TA.hidden
+
+    def hidden(c, viewer, level="see", kinds=TA.KINDS, auth=None):
+        return {BEN} if "human" in kinds else real(c, viewer, level, kinds, auth)
+
+    monkeypatch.setattr(TA, "hidden", hidden)
+    cara = Identity("human:cara", "human")
+    assert view(drafts, "SELECT actor_id FROM history_events WHERE kind='answer'", cara) == [{"actor_id": ""}]
+    assert view(drafts, "SELECT answers, median_s FROM ask_answer_weekly", cara) == [{"answers": 1, "median_s": 3600}]
 
 
 def test_an_answer_taken_back_does_not_end_the_ask(drafts, time_machine):

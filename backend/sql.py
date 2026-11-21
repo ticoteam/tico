@@ -304,10 +304,12 @@ _AGENT_ACTION = (
     + " AND ".join(f"action NOT LIKE '{prefix}%'" for prefix in RT.BOOKKEEPING_PREFIXES)
 )
 _WEEK = "date({at}, '-6 days', 'weekday 1')"
-# Whether the answer in history row `{row}` was taken back (answers.undo writes `answer_undone` naming it).
+# Whether the answer in history row `{row}` was taken back (answers.undo writes `answer_undone` naming it): the ids
+# taken back are read once, and each answer is looked up among them.
 _UNDONE = (
-    "EXISTS (SELECT 1 FROM {{history_events}} u WHERE u.subject_type = 'task' AND u.subject_id = {row}.subject_id "
-    "AND u.kind = 'answer_undone' AND json_extract(u.data, '$.answer_id') = json_extract({row}.data, '$.answer_id'))"
+    "coalesce(json_extract({row}.data, '$.answer_id'), '') IN (SELECT json_extract(u.data, '$.answer_id') "
+    "FROM {{history_events}} u "
+    "WHERE u.subject_type = 'task' AND u.kind = 'answer_undone' AND json_extract(u.data, '$.answer_id') IS NOT NULL)"
 )
 
 
@@ -319,15 +321,19 @@ def _validate(stage: str) -> str:
     )
 
 
-# Each person's answer to a stored OK or page that was not taken back: its task, requirement, person, time and row (an
-# ok or no on anything else, such as an old structured question, is not one).
+# Each answer to a stored OK or page that was not taken back: its task, requirement, who gave it, time and row (an ok
+# or no on anything else, such as an old structured question, is not one). `{actor}` says whose answers count.
 _ANSWERS = (
     "SELECT a.subject_id AS task_id, json_extract(a.data, '$.requirement') AS requirement, a.actor_id AS person, "
-    "a.created_at, a.id FROM {history_events} a JOIN {all_requirements} kq "
+    "a.created_at, a.id FROM {{history_events}} a JOIN {{all_requirements}} kq "
     "ON kq.id = json_extract(a.data, '$.requirement') AND kq.kind IN ('ok', 'page') "
     "WHERE a.subject_type = 'task' AND a.kind = 'answer' "
-    "AND a.new IN ('ok', 'no') AND a.actor_id LIKE 'human:%' AND NOT " + _UNDONE.format(row="a")
+    "AND a.new IN ('ok', 'no') AND {actor} AND NOT " + _UNDONE.format(row="a").replace("{", "{{").replace("}", "}}")
 )
+# A person's answer, named: a repeat is keyed by who answered.
+_PEOPLES = _ANSWERS.format(actor="a.actor_id LIKE 'human:%'")
+# A person's answer, also one whose person the reader may not see (their name reads ''): an answer is an answer.
+_ANY_PERSONS = _ANSWERS.format(actor="(a.actor_id LIKE 'human:%' OR a.actor_id = '')")
 # Each recorded re-ask of one requirement, by task and requirement (DISTINCT: read once, then looked up by both): the
 # owner saying done again after a send back (`again`), or a new page replacing the one it asked about.
 _REASKS = (
@@ -442,30 +448,31 @@ DERIVED = {
         "SELECT task_id, requirement, person, occurrence, min(created_at) AS at FROM ("
         "SELECT a.task_id, a.requirement, a.person, a.created_at, count(r.created_at) + (SELECT count(*) "
         "FROM {history_events} m WHERE m.subject_type = 'task' AND m.subject_id = a.task_id AND m.kind = 'move' "
-        "AND m.created_at < a.created_at) AS occurrence FROM (" + _ANSWERS + ") a "
+        "AND m.created_at < a.created_at) AS occurrence FROM (" + _PEOPLES + ") a "
         "LEFT JOIN (" + _REASKS + ") r ON r.task_id = a.task_id AND r.requirement = a.requirement "
         "AND r.created_at < a.created_at GROUP BY a.id) GROUP BY task_id, requirement, person, occurrence)) "
         "GROUP BY week",
     ),
-    # Per week: OKs and pages added to one task and asked of a person (not in Product's Validate, by the stage of the visit
-    # the ask was added on: there an agent's OK waits for its page first) that were answered, and the median seconds
-    # from the ask, or its newest give to someone before the answer, to its first answer not taken back (the mean of the
-    # middle two for an even count). A stage's own OKs and pages, and ❓ questions, are not in it.
+    # Per week: OKs added to one task and asked of a person (not in Product's Validate, by the stage of the visit the ask
+    # was added on: there an agent's OK waits for its page first) that were answered, and the median seconds from the
+    # ask, or its newest give to someone before the answer, to its first answer not taken back (each to the millisecond;
+    # the mean of the middle two for an even count). A stage's own OKs and pages, and ❓ questions, are not in it.
     "ask_answer_weekly": (
         ("history_events", "requirements", "visits"),
         # Subqueries, not WITH: the inner requirements and visits are read only from this view itself (connect's
         # authorizer names the view a read is made in, and a WITH clause's name is not this view's).
         "SELECT week, count(*) AS answers, "
-        "round(avg(CASE WHEN n IN ((total + 1) / 2, (total + 2) / 2) THEN secs END), 3) AS median_s "
-        "FROM (SELECT week, secs, row_number() OVER (PARTITION BY week ORDER BY secs) AS n, "
+        "avg(CASE WHEN n IN ((total + 1) / 2, (total + 2) / 2) THEN ms END) / 1000.0 AS median_s "
+        "FROM (SELECT week, ms, row_number() OVER (PARTITION BY week ORDER BY ms) AS n, "
         "count(*) OVER (PARTITION BY week) AS total FROM (SELECT " + _WEEK.format(at="answered") + " AS week, "
-        "(julianday(answered) - julianday(asked)) * 86400 AS secs FROM ("
+        "CAST(round((julianday(answered) - julianday(asked)) * 86400000) AS INTEGER) AS ms FROM ("
         "SELECT f.answered, max(s.asked, coalesce(max(g.created_at), '')) AS asked "
         "FROM (SELECT r.subject_id AS task_id, r.new AS requirement, r.created_at AS asked "
-        "FROM {history_events} r JOIN {all_requirements} q ON q.id = r.new JOIN {all_visits} v ON v.id = q.visit_id "
+        "FROM {history_events} r JOIN {all_requirements} q ON q.id = r.new AND q.kind = 'ok' "
+        "JOIN {all_visits} v ON v.id = q.visit_id "
         "WHERE r.subject_type = 'task' AND r.kind = 'requirement' AND json_extract(r.data, '$.person') LIKE 'human:%' "
         "AND NOT " + _validate("v.stage_id") + ") s "
-        "JOIN (SELECT task_id, requirement, min(created_at) AS answered FROM (" + _ANSWERS + ") "
+        "JOIN (SELECT task_id, requirement, min(created_at) AS answered FROM (" + _ANY_PERSONS + ") "
         "GROUP BY task_id, requirement) f ON f.task_id = s.task_id AND f.requirement = s.requirement "
         "LEFT JOIN (SELECT DISTINCT subject_id AS task_id, json_extract(data, '$.requirement') AS requirement, "
         "created_at FROM {history_events} WHERE subject_type = 'task' AND kind = 'give') g "
