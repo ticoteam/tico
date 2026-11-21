@@ -224,6 +224,18 @@ pub fn fact(attempt: &str, key: &str, value: Value) {
     }
 }
 
+/// A fact of an open turn kept as first recorded (`warm`: the attempt's first harness, not a fallback's).
+pub fn fact_once(attempt: &str, key: &str, value: Value) {
+    if let Some(turn) = TURNS
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .as_mut()
+        .and_then(|t| t.get_mut(attempt))
+    {
+        turn.facts.entry(key.to_string()).or_insert(value);
+    }
+}
+
 /// Adds `n` to a counted fact of an open turn (`model_calls`, over every harness the attempt ran, fallbacks too).
 pub fn add(attempt: &str, key: &str, n: u64) {
     if let Some(turn) = TURNS
@@ -905,7 +917,8 @@ mod tests {
         phase("claude_spawned", &aid); // a relaunch keeps the first spawn
         phase("claude_result", &aid); // a steered turn's last result is the one that ends it
         fact(&aid, "transcript_bytes", json!(4096));
-        fact(&aid, "warm", json!(false));
+        fact_once(&aid, "warm", json!(false));
+        fact_once(&aid, "warm", json!(true)); // a fallback's harness does not change it
         let t = timings(&aid).unwrap();
         assert!(t["claimed_at"].as_f64().unwrap() > 1.0e9, "{t}");
         assert_eq!(t["transcript_bytes"], 4096, "{t}");

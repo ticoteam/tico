@@ -1284,8 +1284,9 @@ struct Inner {
     interrupted: HashSet<String>,
     compacted: HashSet<String>,
     context: HashMap<String, i64>,
-    /// The newest turn's process was one already running (from this attempt or the pool), not a new one.
-    warm: bool,
+    /// The attempt's first process came from the pool, already running (an earlier attempt's), not a new one: set
+    /// once, so a later turn on the process this attempt started (after `compact_first`, a second hop) stays cold.
+    warm: Option<bool>,
 }
 
 struct Shared {
@@ -1333,9 +1334,9 @@ impl PiHost {
         self.inner().up
     }
 
-    /// Whether the newest turn ran on a process already running (its timings' `warm`).
+    /// Whether this attempt's first process was a pooled one already running (its timings' `warm`).
     pub fn warm(&self) -> bool {
-        self.inner().warm
+        self.inner().warm.unwrap_or(false)
     }
 
     /// Stops every process this host holds; a turn still running ends as interrupted.
@@ -1543,9 +1544,13 @@ impl PiHost {
         let key = fingerprint(&argv, &env, &t.settings);
         let token = env.get("HUB_TOKEN").cloned().unwrap_or_default();
         let held = self.inner().procs.remove(thread_id);
-        let held = match held {
-            Some(p) => Some(p),
-            None => self.0.pool.take(thread_id).await,
+        let (held, pooled) = match held {
+            Some(p) => (Some(p), false),
+            None => {
+                let p = self.0.pool.take(thread_id).await;
+                let pooled = p.is_some();
+                (p, pooled)
+            }
         };
         if let Some(p) = held {
             if p.key == key && p.alive() {
@@ -1553,7 +1558,7 @@ impl PiHost {
                 p.token(&token);
                 let mut inner = self.inner();
                 inner.procs.insert(thread_id.into(), p.clone());
-                inner.warm = true;
+                inner.warm.get_or_insert(pooled);
                 return Ok(p);
             }
             p.stop().await;
@@ -1567,7 +1572,7 @@ impl PiHost {
             .map_err(|e| e.to_string())?;
         let mut inner = self.inner();
         inner.procs.insert(thread_id.into(), proc.clone());
-        inner.warm = false;
+        inner.warm.get_or_insert(false);
         Ok(proc)
     }
 
@@ -2670,12 +2675,11 @@ mod tests {
     ) {
         let (dir, host, mut rx) = rpc_host(&[REPLY], None);
         let thread = host.start_thread(&rpc_settings(&dir, &[("HUB_TOKEN", "synthetic-turn-1")]));
-        for warm in [false, true] {
+        for _ in 0..2 {
             host.start_turn(&thread, "hello", None).await.unwrap();
-            assert_eq!(
-                host.warm(),
-                warm,
-                "the second turn runs on the first one's pi"
+            assert!(
+                !host.warm(),
+                "the attempt started this pi: its second turn on it is cold too"
             );
             let events = turn_events(&mut rx).await;
             assert!(

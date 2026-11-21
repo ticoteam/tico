@@ -3072,7 +3072,7 @@ impl Runner {
                 self.start_turn(&aid, &bot, h, &th, &prompt, effort.as_deref(), &refs, &attempt, &mut goal, &own).await?
             };
             mark("harness_spawned", &aid);
-            crate::flight::fact(&aid, "warm", json!(h.warm()));
+            crate::flight::fact_once(&aid, "warm", json!(h.warm()));
             if side_ran || after_interrupt {
                 // Told once: this turn now holds what they said.
                 for key in [crate::continuity::side_key(&th), crate::continuity::interrupted_key(&th)] {
@@ -3515,7 +3515,7 @@ impl Runner {
                     }
                 }
                 let t = h.start_turn(&th, &text, hop.reasoning_effort.as_deref()).await?;
-                crate::flight::fact(&aid, "warm", json!(h.warm()));
+                crate::flight::fact_once(&aid, "warm", json!(h.warm()));
                 turn = Some(t.clone());
                 let d = Drive {
                     limit_name: &limit_name,
