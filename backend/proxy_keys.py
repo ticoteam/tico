@@ -3,53 +3,56 @@
 
     python -m backend.proxy_keys <database file>
 
-Read only (the file is opened `mode=ro`): it prints, as JSON, for the person who rotates the keys at each vendor:
-- `direct`: each grant of a Read and write key on such a tool (tool_services.GATED) whose run still gets the key itself:
-  granted before the move (`before`), or on a tool the proxy cannot call (`no_address`, Google Ads' several values);
-- `computers`: each computer whose runner predates proxy tokens (PROXY_RELEASE) or reports no release, whose runs could
-  not reach these tools through the proxy.
+Read only (backend.migrations.read_only: no byte of the file, its log or its index changes): it prints, as JSON, for
+the person who rotates the keys at each vendor:
+- `proxied`: each bot's effective grant of a Read and write key on such a tool, which now reaches its runs only through
+  the proxy (api_tools.writes_by_proxy): a run before this may have had the key itself, so it is one to rotate;
+- `direct`: each bot's effective grant of such a key that still reaches runs as it is (Google Ads, or a tool the proxy
+  cannot call): Not covered on Rules › Links;
+- `computers`: each computer whose runner predates proxy tokens (PROXY_RELEASE) or reports no release.
 Nothing is revoked, rotated or changed: rotating a key is the person's, at the vendor.
 """
 
 import json
-import sqlite3
 import sys
-from contextlib import closing
 from pathlib import Path
 from typing import Any
 
 from . import api_tools as _api_tools
+from . import credentials as _credentials
+from . import migrations as _migrations
 from . import releases as _releases
-from . import tool_proxy as _tool_proxy
 from . import tool_services as _tool_services
 
 # Untyped neighbours, typed as Any at the door.
 api_tools: Any = _api_tools
+credentials: Any = _credentials
+migrations: Any = _migrations
 releases: Any = _releases
-tool_proxy: Any = _tool_proxy
 TS: Any = _tool_services
 
 PROXY_RELEASE = "0.5.192"  # the first runner that takes a proxy token in a key's place (runner-rs/src/env.rs)
 
 
 def report(c: Any) -> dict[str, Any]:
-    """{direct, computers}, as the module's text says."""
-    since = c.execute("SELECT value FROM registry_metadata WHERE key=?", (api_tools.WRITE_PROXY_SINCE,)).fetchone()
-    direct: list[dict[str, Any]] = []
-    for tool in c.execute("SELECT * FROM tools WHERE delivery<>'proxy' ORDER BY lower(name), id").fetchall():
-        category = TS.gated(tool["service"], tool["name"])
+    """{proxied, direct, computers}, as the module's text says."""
+    out: dict[str, list[dict[str, Any]]] = {"proxied": [], "direct": []}
+    for tool in c.execute("SELECT * FROM tools WHERE kind='api' ORDER BY lower(name), id").fetchall():
+        host = tool["base_url"] or api_tools._field(tool, "mcp_url") or ""
+        category = TS.gated(tool["service"], tool["name"], host)
         if not category:
             continue
-        no_address = bool(tool_proxy.address_problem(tool["base_url"] or "", tool["name"] or tool["id"]))
+        way = "proxied" if tool["delivery"] == "proxy" or api_tools.writes_by_proxy(tool) else "direct"
         for row in c.execute(
             "SELECT k.*, g.subject, g.created_at AS granted_at FROM credentials k JOIN credential_grants g "
             "ON g.credential_id=k.id WHERE k.tool_id=? AND k.access_level='read_write' AND k.ciphertext IS NOT NULL "
-            "AND g.revoked_at IS NULL AND g.access_level='read_write' ORDER BY g.created_at, g.id",
+            "AND g.revoked_at IS NULL AND g.access_level='read_write' AND g.subject LIKE 'bot:%' "
+            "ORDER BY g.created_at, g.id",
             (tool["id"],),
         ).fetchall():
-            if api_tools.write_by_proxy(c, row, row["subject"]):
-                continue
-            direct.append(
+            if credentials.effective_grant(c, row["id"], row["subject"]) is None:
+                continue  # its parent grant was taken back: no run gets it
+            out[way].append(
                 {
                     "tool": tool["id"],
                     "name": tool["name"],
@@ -58,7 +61,6 @@ def report(c: Any) -> dict[str, Any]:
                     "env": row["env"],
                     "subject": row["subject"],
                     "granted_at": row["granted_at"],
-                    "why": "no_address" if no_address else "before",
                 }
             )
     want = releases.parse(PROXY_RELEASE)
@@ -70,13 +72,15 @@ def report(c: Any) -> dict[str, Any]:
         have = releases.parse(row["release"] or "")
         if not have or not want or have < want:
             computers.append({"id": row["id"], "label": row["label"], "release": row["release"] or ""})
-    return {"since": since[0] if since else None, "direct": direct, "computers": computers}
+    return {**out, "computers": computers}
 
 
 def main(argv: list[str]) -> None:
     if len(argv) != 2 or not Path(argv[1]).is_file():
         raise SystemExit("usage: python -m backend.proxy_keys <database file>")
-    with closing(sqlite3.connect(Path(argv[1]).resolve().as_uri() + "?mode=ro", uri=True)) as c:
+    import sqlite3
+
+    with migrations.read_only(Path(argv[1])) as c:
         c.row_factory = sqlite3.Row
         print(json.dumps(report(c), indent=2))
 

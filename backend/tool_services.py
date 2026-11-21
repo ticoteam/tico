@@ -254,38 +254,51 @@ TEMPLATES = {
 
 
 # Ads, payments and CRM (plan P3/W4): a write key of one of these reaches a run only through the proxy, where the
-# Rules gate (backend/rule_links.py) sees its writes (api_tools.write_by_proxy). With each, the POSTs its API answers
-# as a read (a search, a query), which are no write: any other call but GET, HEAD and OPTIONS is one.
+# Rules gate (backend/rule_links.py) sees its writes (api_tools.writes_by_proxy). With each, the POSTs its API answers
+# as a read (a search, a query), which are no write: any other call but GET, HEAD and OPTIONS is one. A tool is one of
+# these by its service, its name, or its API's host (a "Billing" tool at api.stripe.com is Stripe's).
 GATED = {
     "meta-ads": ("ads", ()),
-    "google-ads": ("ads", (r"/customers/[^/]+/googleAds:search(Stream)?$",)),
+    "google-ads": ("ads", (r"/v\d+/customers/[^/]+/googleAds:search(Stream)?",)),
     "stripe": ("payments", ()),
     "brex": ("payments", ()),
     "mercury": ("payments", ()),
-    "close-crm": ("crm", (r"/api/v1/data/search/?$",)),
-    "hubspot": ("crm", (r"/crm/v3/objects/[^/]+/(search|batch/read)$",)),
+    "close-crm": ("crm", (r"/api/v1/data/search/?",)),
+    # v3 and the date-versioned CRM (/crm/objects/2026-03/...): object search and batch read; list search
+    "hubspot": ("crm", (r"/crm/(v3/objects|objects/\d{4}-\d{2})/[^/]+/(search|batch/read)", r"/crm/v3/lists/search")),
     "pipedrive": ("crm", ()),
-    "attio": ("crm", (r"/v2/(objects/[^/]+/records|lists/[^/]+/entries)/query$",)),
+    "attio": ("crm", (r"/v2/(objects/[^/]+/records|lists/[^/]+/entries)/query",)),
 }
 
 
-def _gated(service="", name=""):
-    """The GATED entry of a tool: its service as stored, as matched, or as its vendor (`close` is Close CRM's)."""
-    for found in (str(service or "").strip().lower(), match(service=service, name=name), vendor_of(service, name)):
+# Of those, the ones whose keys stay with the run: Google Ads signs each call on the computer (an OAuth refresh and a
+# developer token on every call), which no proxy key can carry. Listed as Not covered, never refused.
+DIRECT = frozenset({"google-ads"})
+
+
+def gated_vendor(service="", name="", host=""):
+    """The GATED vendor of a tool, else "": its service as stored, as matched, as its vendor (`close` is Close CRM's),
+    or its API's host's (api.stripe.com is Stripe's)."""
+    for found in (
+        str(service or "").strip().lower(),
+        match(service=service, name=name),
+        vendor_of(service, name),
+        service_for_host(host) if host else "",
+    ):
         if found in GATED:
-            return GATED[found]
-    return ("", ())
+            return found
+    return ""
 
 
-def gated(service="", name=""):
-    """`ads`, `payments` or `crm` for a tool of one of those vendors (its service, else the one its name says), else
-    ""."""
-    return _gated(service, name)[0]
+def gated(service="", name="", host=""):
+    """`ads`, `payments` or `crm` for a tool of one of those vendors, else ""."""
+    return GATED.get(gated_vendor(service, name, host), ("", ()))[0]
 
 
-def vendor_read(service, method, path, name=""):
-    """A POST the vendor's API answers as a read (GATED), at this URL path: not a write."""
-    return method == "POST" and any(re.search(pattern, path) for pattern in _gated(service, name)[1])
+def vendor_read(service, method, path, name="", host=""):
+    """A POST the vendor's API answers as a read (GATED), at exactly this URL path (the whole path): not a write."""
+    reads = GATED.get(gated_vendor(service, name, host), ("", ()))[1]
+    return method == "POST" and any(re.fullmatch(pattern, path) for pattern in reads)
 
 
 # Vendors' own MCP servers (docs/connect-tools.md): Find or connect offers a sign-in with the vendor on these.

@@ -1071,7 +1071,8 @@ class Vault:
         H.event(c, who.actor, 'credential.revealed', cid, {'kind': LOGIN})
         return {'id': cid, 'value': value}
 
-    def reveal(self, c, who, cid):
+    def reveal(self, c, who, cid, delivered=False):
+        """`delivered`: the caller (credential-runtime) already decided this key goes to the run as it is."""
         validate_identity(c, who)
         found = c.execute('SELECT * FROM credentials WHERE id=?', (cid,)).fetchone()
         if found is not None and found['kind'] == LOGIN:
@@ -1082,11 +1083,20 @@ class Vault:
             require_seen(c, who, cid, self.admins)
         if not permitted(c, who, cid, self.admins):
             raise Problem('forbidden', 'You do not have access to this credential', 403)
-        if who.role == 'bot' and found is not None and found['tool_id']:
-            # A key its run reaches through the proxy stays here: the run has a proxy token for it, never the value.
-            from . import tool_proxy
+        if not delivered and found is not None and found['tool_id'] and not signed_in_person(who):
+            # A key whose tool is reached through the proxy stays here: a run has a proxy token for it, and an agent
+            # (a bot, or the Assistant or BotOps with a person's rights, confirmed or not) never sees the value; only
+            # a person signed in themselves does.
+            from . import api_tools
 
-            if held_at_read(c, tool_proxy.proxied_tools(c), found, who.actor, self.cipher)[0] is not None:
+            tool = c.execute('SELECT * FROM tools WHERE id=?', (found['tool_id'],)).fetchone()
+            proxied = {tool['id']: tool} if tool is not None and tool['delivery'] == 'proxy' else {}
+            stays = tool is not None and (
+                tool['delivery'] == 'proxy'
+                or (found['access_level'] == 'read_write' and api_tools.writes_by_proxy(tool))
+                or (who.role == 'bot' and held_at_read(c, proxied, found, who.actor, self.cipher)[0] is not None)
+            )
+            if stays:
                 raise Problem(
                     'proxied_key', 'This key stays with Tico: the run reaches its tool through the proxy', 403
                 )
@@ -1655,7 +1665,7 @@ def install_credentials(app, store, delegate=None, propose=None):
                         )
                         continue
                     if row['id'] in explicit:
-                        value = vault.reveal(c, who, row['id'])
+                        value = vault.reveal(c, who, row['id'], delivered=True)
                     else:
                         # A key the bot reads by default (backend/default_read.py) is a Read key: its value goes to
                         # the run as a granted one's does, and never to a reveal.

@@ -108,7 +108,7 @@ def dump(api, *tables):
 def test_a_proxied_key_never_reaches_the_run_and_is_scrubbed_from_answers_and_records(api):
     setup(api)
     tool(api)
-    tool(api, "acme-api", "Acme API", "bearer", delivery="computer", service="acme")
+    tool(api, "acme-api", "Acme API", "bearer", delivery="computer", base="https://api.acme.example", service="acme")
     full = key(api, "close-crm", FULL)
     give(api, full, "bot:ops")
     give(api, key(api, "acme-api", COMPUTER, env="ACME_API_KEY"), "bot:ops")
@@ -222,7 +222,8 @@ def test_read_on_a_computer_tool_goes_through_the_proxy_unless_a_read_key_or_no_
     else a proxy token so only reads get through; with no API address nothing can hold it to reads, and Who can use
     it says so."""
     setup(api)
-    tool(api, name="Ledger", delivery="computer", service="ledger")  # no ads, payments or CRM: its write key goes as is
+    # no ads, payments or CRM tool: its write key goes as it is
+    tool(api, name="Ledger", delivery="computer", base="https://api.ledger.example", service="ledger")
     full = key(api, "close-crm", FULL)
     give(api, full, "bot:ops", "read")
     give(api, full, "bot:finance", "read_write")
@@ -231,7 +232,7 @@ def test_read_on_a_computer_tool_goes_through_the_proxy_unless_a_read_key_or_no_
     _, ops = run(api)
     item = handed(api, ops)
     assert item["value"].startswith("tpx1.") and item["url_env"] == "TICO_TOOL_CLOSE_CRM_URL"
-    assert item["base_url"] == "https://api.close.example"
+    assert item["base_url"] == "https://api.ledger.example"
     assert call(api, "GET", "api/v1/me/", item["value"]).status_code == 200
     assert call(api, "POST", "api/v1/lead/", item["value"], json={"name": "Acme"}).status_code == 403
     _, finance = run(api, "finance")
@@ -617,37 +618,36 @@ def test_only_an_mcp_read_sent_to_exactly_the_tools_mcp_address_is_not_a_write(a
     assert send("mcp", search) == 3
 
 
-def test_a_new_write_grant_on_a_crm_tool_reaches_the_run_only_through_the_proxy_and_the_gate_sees_its_writes(api):
-    """Write keys of ads, payments and CRM tools live in the proxy (#4892): a Read and write grant made since the move
-    hands the run a proxy token even on a tool whose keys go to computers, never the key (nor its reveal), and each
-    write meets the Rules gate; a vendor's search POST is a read. A grant from before keeps its key, listed for
-    rotation with no change made."""
+def test_write_keys_of_ads_payments_and_crm_tools_reach_runs_only_through_the_proxy_and_meet_the_gate(api):
+    """#4892: every Read and write grant on an ads, payments or CRM tool, old or new and an upgrade from Read alike,
+    hands the run a proxy token even where the tool's keys go to computers: never the key, nor its reveal, and each
+    write meets the Rules gate, shown on Rules › Links. A tool is one of these by its API's host too. Google Ads, signed
+    on the computer, keeps its key and is Not covered; the report lists every such grant, changing nothing."""
+    from dataclasses import replace
+
     from backend import proxy_keys
+    from backend.auth import Identity
+    from backend.store import Problem
     from backend.tests.helpers.api import headers
+    from backend.tests.helpers.api_tools import level
     from backend.tests.helpers.org_rules import org, rule
 
     setup(api)
     org(api)
     judge = api.app.state.judge = Judge()
-    tool(api, delivery="computer")  # Close CRM: a CRM tool whose keys went to computers
+    tool(api, delivery="computer")  # Close CRM, its keys on computers
     full = key(api, "close-crm", FULL)
     rule(
         api,
         {"kind": "internal", "text": "Never write to Close CRM.", "who": {"bots": ["finance"]}, "if_broken": "block"},
     )
-
-    def since(at):
-        with api.app.state.store.transaction() as c:
-            c.execute(
-                "INSERT OR REPLACE INTO registry_metadata(key, value) VALUES(?, ?)", (api_tools.WRITE_PROXY_SINCE, at)
-            )
+    give(api, full, "bot:finance")
+    give(api, full, "bot:ops", "read")
 
     def outcomes():
         with api.app.state.store.read() as c:
             return [r[0] for r in c.execute("SELECT target FROM events WHERE action LIKE 'rules.%' ORDER BY rowid")]
 
-    since("2000-01-01T00:00:00.000000Z")
-    give(api, full, "bot:finance")
     vendor = Vendor()
     api.app.state.tool_proxy_transport = httpx.MockTransport(vendor)
     _, finance = run(api, "finance")
@@ -655,21 +655,66 @@ def test_a_new_write_grant_on_a_crm_tool_reaches_the_run_only_through_the_proxy_
     assert item["value"].startswith("tpx1.") and FULL not in json.dumps(item)
     reveal = api.post(f"/api/v2/credentials/{full}/reveal", json={}, headers=headers(finance["token"]))
     assert reveal.status_code == 403 and reveal.json()["error"]["code"] == "proxied_key" and FULL not in reveal.text
+    # Nor does an agent with a person's rights, even confirmed: only the person signed in themselves sees it.
+    assistant = replace(Identity("human:ana", "owner"), via="assistant", confirmed=True)
+    with api.app.state.store.transaction() as c, pytest.raises(Problem) as refused:
+        api.app.state.vault.reveal(c, assistant, full)
+    assert refused.value.code == "proxied_key"
+    assert post(api, f"credentials/{full}/reveal", {})["value"] == FULL  # Ana herself
     assert call(api, "POST", "api/v1/lead/", item["value"], how="basic", json={"name": "Acme"}).status_code == 200
     assert vendor.seen[-1].headers["authorization"] == "Basic " + base64.b64encode(f"{FULL}:".encode()).decode()
     assert outcomes() == ["link:tool:close-crm"] and len(judge.read) == 1  # the write was judged (log-only)
     assert call(api, "POST", "api/v1/data/search/", item["value"], how="basic", json={"q": "x"}).status_code == 200
     assert outcomes() == ["link:tool:close-crm"]  # Close's search is a read
-    with api.app.state.store.read() as c:
-        assert proxy_keys.report(c)["direct"] == []
-    # A grant from before the move keeps its key as it was, and is listed for rotation; nothing is changed.
-    since("2999-01-01T00:00:00.000000Z")
-    assert handed(api, finance)["value"] == FULL
+    # Read, then Read and write: still a proxy token, now one its writes go through on.
+    _, ops = run(api)
+    assert handed(api, ops)["value"].startswith("tpx1.")
+    level(api, "close-crm", "bot:ops", "read_write")
+    upgraded = handed(api, ops)["value"]
+    assert upgraded.startswith("tpx1.") and call(api, "POST", "api/v1/lead/", upgraded, how="basic").status_code == 200
+    # Rules › Links shows its outcomes, not Not covered.
+    links = {r["id"]: r for r in get(api, "rule-links")["links"]}
+    assert links["tool:close-crm"]["mode"] == "informed" and sum(links["tool:close-crm"]["counts"].values()) == 2
+    # A "Billing" tool at Stripe's API host is Stripe's; Google Ads keeps its key (Not covered), never refused.
+    tool(api, "billing", "Billing", "bearer", delivery="computer", base="https://api.stripe.com", service="")
+    tool(
+        api, "ads", "Ads", "bearer", delivery="computer", base="https://googleads.googleapis.com", service="google-ads"
+    )
+    give(api, key(api, "billing", "sk_synthetic_billing_0001", env="BILLING_KEY"), "bot:finance")
+    give(api, key(api, "ads", "ads-synthetic-0002", env="GOOGLE_ADS_KEY"), "bot:finance")
+    assert handed(api, finance, "BILLING_KEY")["value"].startswith("tpx1.")
+    assert handed(api, finance, "GOOGLE_ADS_KEY")["value"] == "ads-synthetic-0002"
+    links = {r["id"]: r for r in get(api, "rule-links")["links"]}
+    assert links["tool:billing"]["mode"] == "informed" and links["tool:ads"]["mode"] == "not_covered"
     with api.app.state.store.read() as c:
         listed = proxy_keys.report(c)
-    assert [(d["tool"], d["subject"], d["category"], d["why"]) for d in listed["direct"]] == [
-        ("close-crm", "bot:finance", "crm", "before")
+    assert sorted((d["tool"], d["subject"]) for d in listed["proxied"]) == [
+        ("billing", "bot:finance"),
+        ("close-crm", "bot:finance"),
+        ("close-crm", "bot:ops"),
     ]
-    assert FULL not in json.dumps(listed)
-    # The run's computer reports no release here: it is listed as one that may not take a proxy token.
-    assert [c["release"] for c in listed["computers"]] == [""]
+    assert [(d["tool"], d["category"]) for d in listed["direct"]] == [("ads", "ads")]
+    assert FULL not in json.dumps(listed) and [c["release"] for c in listed["computers"]] == ["", ""]
+
+
+def test_hubspots_documented_reads_are_no_writes_and_a_neighbouring_write_still_meets_the_gate(api):
+    from backend.tests.helpers.org_rules import org
+
+    setup(api)
+    org(api)
+    api.app.state.judge = Judge()
+    tool(api, "hubspot", "HubSpot", "bearer", base="https://api.hubapi.example", service="hubspot")
+    give(api, key(api, "hubspot", "hubspot-synthetic-0003", env="HUBSPOT_KEY"), "bot:ops")
+    api.app.state.tool_proxy_transport = httpx.MockTransport(Vendor())
+    _, ops = run(api)
+    token = handed(api, ops, "HUBSPOT_KEY")["value"]
+
+    def gated():
+        with api.app.state.store.read() as c:
+            return c.execute("SELECT count(*) FROM events WHERE action LIKE 'rules.%'").fetchone()[0]
+
+    for path in ("crm/v3/objects/contacts/search", "crm/objects/2026-03/deals/search", "crm/v3/lists/search"):
+        assert call(api, "POST", path, token, tid="hubspot", json={}).status_code == 200
+    assert gated() == 0
+    assert call(api, "POST", "crm/v3/objects/contacts/batch/create", token, tid="hubspot", json={}).status_code == 200
+    assert gated() == 1

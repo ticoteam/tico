@@ -199,12 +199,13 @@ def computer_way(c, row, subject):
       through (backend/tool_proxy.py);
     - `unenforced`: as `key`, because nothing can hold it to reads: the tool has no API address the proxy can call.
     A key on no tool, or held at Read and write, is `key`, except a write key of an ads, payments or CRM tool
-    (`write_by_proxy`): `proxy`, and the proxy lets its writes through, seen by the Rules gate."""
+    (`writes_by_proxy`): `proxy`, and the proxy lets its writes through, seen by the Rules gate."""
     if not row["tool_id"] or row["access_level"] == "read":
         return "key"
     held = _held(c, row["tool_id"], subject_of(c, subject))
     mine = [level for key, level in held if key["id"] == row["id"]]
-    if mine and mine[0] == "read_write" and write_by_proxy(c, row, subject):
+    tool = c.execute("SELECT * FROM tools WHERE id=?", (row["tool_id"],)).fetchone() if mine else None
+    if mine and mine[0] == "read_write" and tool is not None and writes_by_proxy(tool):
         return "proxy"
     if not mine or mine[0] != "read":
         return "key"
@@ -215,7 +216,6 @@ def computer_way(c, row, subject):
         for key, _level in held
     ):
         return "skip"
-    tool = c.execute("SELECT * FROM tools WHERE id=?", (row["tool_id"],)).fetchone()
     from .tool_proxy import address_problem
 
     if tool is not None and not address_problem(tool["base_url"] or "", tool["name"] or tool["id"]):
@@ -223,26 +223,20 @@ def computer_way(c, row, subject):
     return "unenforced"
 
 
-# When write keys of ads, payments and CRM tools moved into the proxy on this install (registry_metadata, stored by the
-# migration 20261121160703_write_keys_by_proxy): a grant made since reaches runs only through the proxy.
-WRITE_PROXY_SINCE = "write-keys-by-proxy-since"
-
-
-def write_by_proxy(c, row, subject):
-    """Whether `subject`'s run reaches this Read and write key's tool only through the proxy, never getting the key: a
-    tool of ads, payments or CRM (tool_services.GATED) the proxy can call, held by a grant made since WRITE_PROXY_SINCE.
-    A grant from before keeps the key until it is rotated at the vendor (`python -m backend.proxy_keys` lists them),
-    so a run that uses the key itself keeps working; a tool with no address the proxy can call keeps it too."""
-    tool = c.execute("SELECT * FROM tools WHERE id=?", (row["tool_id"],)).fetchone()
-    if tool is None or not TS.gated(tool["service"], tool["name"]):
-        return False
+def writes_by_proxy(tool):
+    """Whether a tool's write keys reach runs only through the proxy, where the Rules gate sees their writes, whatever
+    delivery its keys have: an ads, payments or CRM tool (tool_services.GATED) the proxy can call, but Google Ads, whose
+    calls are signed on the computer (tool_services.DIRECT). Such a key is never revealed to a run either; rotating one
+    a run had before is a person's, at the vendor (`python -m backend.proxy_keys` lists them)."""
     from .tool_proxy import address_problem
 
-    if address_problem(tool["base_url"] or "", tool["name"] or tool["id"]):
-        return False
-    grant = effective_grant(c, row["id"], subject_of(c, subject))
-    since = c.execute("SELECT value FROM registry_metadata WHERE key=?", (WRITE_PROXY_SINCE,)).fetchone()
-    return grant is None or since is None or grant["created_at"] >= since[0]
+    host = tool["base_url"] or _field(tool, "mcp_url") or ""
+    vendor = TS.gated_vendor(tool["service"], tool["name"], host)
+    return (
+        bool(vendor)
+        and vendor not in TS.DIRECT
+        and not address_problem(tool["base_url"] or "", tool["name"] or tool["id"])
+    )
 
 
 def subject_level(c, tool_id, subject):

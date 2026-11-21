@@ -28,7 +28,8 @@ path, query, header or value is read, so no credential can reach the judge. It r
 Events never carry the text. A proxied write is judged with or without an Idempotency-Key; with one, a retry under it
 within KEY_DAYS logs no second event.
 
-Not covered: a tool whose key goes to computers, a website tool's browser sign-in, and any call a computer makes
+Not covered: a tool whose key goes to computers (but an ads, payments or CRM tool's write keys, which reach runs only
+through the proxy: api_tools.writes_by_proxy), a website tool's browser sign-in, and any call a computer makes
 straight out. Rules › Links lists them, unmeasured.
 """
 
@@ -355,7 +356,13 @@ def listing(c: Any, who: Any, admins: Any, auth: Any, now: str | None = None) ->
 
 
 def _proxied(tool: Any) -> bool:
-    return tool["kind"] == "api" and tool["delivery"] == "proxy"
+    """A tool whose writes go through the proxy: a proxied tool, or one whose keys go to computers but whose write
+    keys reach runs only through the proxy (ads, payments, CRM: api_tools.writes_by_proxy). Any other tool, Google Ads
+    and a tool with no address the proxy can call among them, is Not covered: its write key reaches runs as it is."""
+    from . import api_tools as _api_tools
+
+    api_tools: Any = _api_tools
+    return tool["kind"] == "api" and (tool["delivery"] == "proxy" or bool(api_tools.writes_by_proxy(tool)))
 
 
 def install(app: FastAPI, store: Any, auth: Any) -> None:
