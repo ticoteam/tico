@@ -153,6 +153,8 @@ def test_a_second_approver_answers_through_the_task_api(api):
         rid = _shared(conn, ANA, BEN)
         # An ordinary OK of Ben's with the same line, ahead of the shared page: it never takes the shared ask's place.
         X.requirement(conn, "product-spec", "ok", person=BEN, line="Spec page", position=-1)
+        # One whose words are the shared ask's own dedupe key would collide if keys were text.
+        X.requirement(conn, "product-spec", "ok", person=BEN, line=f"shared:{rid}", position=-1)
         row = _task(conn)
         _, version = _submitted(conn, store, row)
         # A bot's snooze heads the task's waits; each approver's turn is still their own ask.
