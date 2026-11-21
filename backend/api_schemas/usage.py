@@ -114,6 +114,12 @@ SCHEMAS.update(
                 **{p + "_usd": NUM_N for p in PERIODS},
                 "source": {"type": "object", "description": "Where each cap comes from: bot, company or null"},
                 **{p + "_spent": NUM_N for p in ("hour", "day", "week", "month")},
+                "spent": {
+                    "type": "object",
+                    "description": "What the bot has spent in each window, capped or not: {30m, hour, day, week, "
+                    "month: usd}; the <period>_spent fields are set only under a limit for that period",
+                    "additionalProperties": {"type": "number"},
+                },
                 "percent": {
                     "type": "integer",
                     "description": "The highest share of one of the bot's own limits reached",

@@ -944,7 +944,7 @@ export const setLimit = (bot: string, monthly: number | null) =>
       const cur = v?.bots[bot];
       if (!v || !cur) return v;
       const shown = monthly ?? v.default.monthly_usd;
-      const percent = shown ? Math.round(((cur.month_spent ?? 0) / shown) * 100) : 0;
+      const percent = shown ? Math.round((monthSpent(cur) / shown) * 100) : 0;
       return { ...v, bots: { ...v.bots, [bot]: { ...cur, own_monthly_usd: monthly, monthly_usd: shown, percent } } };
     },
     send: (idempotencyKey) => api.put(`/api/v2/usage/limits/${enc(bot)}`, { monthly_usd: monthly }, { idempotencyKey }),
@@ -1324,10 +1324,15 @@ export interface UsagePool {
   parent?: string | null;
   monthly_usd: number | null;
   month_spent: number | null;
+  /** What it has spent in each window, capped or not: {month: usd, ...}. */
+  spent?: Record<string, number>;
   percent: number;
   blocked: string | null;
   may_edit?: boolean;
 }
+
+/** An agent's or pool's spend this month, capped or not: `month_spent` is set only under a monthly limit. */
+export const monthSpent = (x: { spent?: Record<string, number> | null; month_spent: number | null }) => x.spent?.month ?? x.month_spent ?? 0;
 
 export interface UsagePools {
   company: UsagePool | null;
@@ -1347,7 +1352,7 @@ export const setPoolLimit = (scope: string, monthly: number | null) =>
     optimistic: (v: UsageLimits | undefined) => {
       const p = poolsOf(v);
       if (!v || !p) return v;
-      const fix = (pool: UsagePool): UsagePool => ({ ...pool, monthly_usd: monthly, percent: monthly ? Math.round(((pool.month_spent ?? 0) / monthly) * 100) : 0 });
+      const fix = (pool: UsagePool): UsagePool => ({ ...pool, monthly_usd: monthly, percent: monthly ? Math.round((monthSpent(pool) / monthly) * 100) : 0 });
       const group = p.groups[scope];
       const next: UsagePools =
         scope === 'company' ? { ...p, company: p.company && fix(p.company) } : group ? { ...p, groups: { ...p.groups, [scope]: fix(group) } } : p;
