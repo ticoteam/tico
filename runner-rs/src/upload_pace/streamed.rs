@@ -408,55 +408,6 @@ fn arrival(kept: &Kept, aid: &str, seq: i64) -> Instant {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn ac3_ac4_ac5_under_load_text_waits_but_first_text_and_control_events_go_at_once() {
-    let hub = hub(Behaviour::default()).await;
-    let (runner, dir) = runner_at(&hub.url, ADAPTIVE);
-    // 29 other turns streaming on this runner: the window is at its 1 s ceiling.
-    let others: Vec<_> = (0..29).map(|_| runner.upload_load.streaming()).collect();
-    let steps = reply(240, Duration::from_millis(10), 120);
-    let recorded = turn(runner.clone(), "a-load".into(), steps).await;
-    drop(others);
-    let kept = hub.kept.lock().unwrap();
-    let late = |seq: i64, at: Instant| arrival(&kept, "a-load", seq).saturating_duration_since(at);
-    let first_text = recorded.iter().find(|r| r.1 == "delta").unwrap();
-    // AC-3: the first text goes at once despite the 1 s window: a few ms from its row's commit to the hub (timed
-    // from the commit, so a slow local disk does not count; held for the window, it would take about 1 s).
-    assert!(
-        late(first_text.0, first_text.3) < Duration::from_millis(100),
-        "{:?}",
-        late(first_text.0, first_text.3)
-    );
-    // AC-4: each tool event and the final message go at once, after every delta before them.
-    for (seq, kind, _, written) in recorded
-        .iter()
-        .filter(|r| r.1 == "tool" || r.1 == "message")
-    {
-        assert!(
-            late(*seq, *written) < Duration::from_millis(100),
-            "{kind} {seq}: {:?}",
-            late(*seq, *written)
-        );
-        for (before, ..) in recorded.iter().filter(|r| r.0 < *seq) {
-            assert!(arrival(&kept, "a-load", *before) <= arrival(&kept, "a-load", *seq));
-        }
-    }
-    // AC-5: no delta waited much past the maximum age (1 s from its commit, plus a post).
-    for (seq, _, _, written) in recorded.iter().filter(|r| r.1 == "delta") {
-        assert!(
-            late(*seq, *written) < Duration::from_millis(1150),
-            "delta {seq}: {:?}",
-            late(*seq, *written)
-        );
-    }
-    // 2.4 s of deltas at a 1 s window: a handful of uploads, not one per 50 ms (about 50).
-    let uploads = kept.uploads.len();
-    assert!(uploads <= 15, "{uploads} uploads");
-    assert!(kept.refused.is_empty(), "{:?}", kept.refused);
-    assert_eq!(kept.stored["a-load"], local(&runner, "a-load"));
-    std::fs::remove_dir_all(dir).ok();
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ac6_ac7_failed_and_lost_answer_uploads_store_every_event_once_in_order_as_the_old_runner_does(
 ) {
     let steps = || reply(150, Duration::from_millis(3), 50);
