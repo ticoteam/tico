@@ -1114,12 +1114,27 @@ def _part_read_only(api, runner, monkeypatch, hq=None, comments=None, clock=None
     store, auth = api.app.state.store, api.app.state.auth
     code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
     ctx = check_health.context(auth, store.settings, store)
+    # The readers share the engine's own read connection in one snapshot: no second connection from the pool before
+    # the write, and the snapshot has ended when the write begins.
+    readers, gather, taken, take, write = [], check_health.gather, [], store._take, store.transaction
+    monkeypatch.setattr(check_health, "gather", lambda c, ctx: readers.append((c, c.in_transaction)) or gather(c, ctx))
     with store.read() as r:
+        at_write = []
+
+        def transaction(*args, **kwargs):
+            if not at_write:
+                assert not r.in_transaction, "the read snapshot is still open at the write"
+                at_write.append(len(taken))
+            return write(*args, **kwargs)
+
+        monkeypatch.setattr(store, "_take", lambda *a, **k: taken.append(1) or take(*a, **k))
+        monkeypatch.setattr(store, "transaction", transaction)
         r.execute("PRAGMA query_only=1")  # a write on the read connection fails from here on
         try:
             result = check_health.run(r, ctx)
         finally:
             r.execute("PRAGMA query_only=0")
+        assert readers == [(r, True)] and at_write == [0]  # Maintenance's connection was the only one read
     assert result["woke"] == 1 and result["details"]["filed"] == ["push_stuck:A"]
     assert [t["owner_id"] for t in botops_tasks(api)] == ["bot:botops"]
 
