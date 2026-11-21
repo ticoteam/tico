@@ -339,10 +339,10 @@ def test_a_page_asks_row_is_its_pages_title_while_the_reader_reads_that_version(
     page's own title (`about` and `line`), only while the reader may read that version: once the page is deleted the
     list's version moves (`version=` is not "unchanged"), a cursor into the held build (backend/needs_cache.py) is
     built again, and every answer shows the ask's own line, never the page's title. A title that is only the file's
-    name ("spec.html") names nothing, and the team brief (views.fleet_snapshot) lists the same rows."""
+    name ("spec.html", this version's or an older one's) names nothing, and the team brief (views.fleet_snapshot) lists the same rows."""
     store = api.app.state.store
     store.blobs = store.blobs or Blobs(store.settings)
-    titles = ["Pause 3 rental Google campaigns", "Publish 3 comparison pages", "spec.html"]
+    titles = ["Pause 3 rental Google campaigns", "Publish 3 comparison pages", "spec.html", "older"]
     fids = []
     with store.transaction() as c:
         for slug in ("manager", "writer"):
@@ -351,6 +351,18 @@ def test_a_page_asks_row_is_its_pages_title_while_the_reader_reads_that_version(
         for n, title in enumerate(titles):
             row = X.new_task(c, ANA, f"Release report {n}", "product", assignee="bot:writer")
             fid, _ = _page(c, store, f"<h1>{title}</h1><p>Why, below.</p>")
+            if (
+                title == "older"
+            ):  # named by its first version's file ("spec.html"); the version asked about is "draft-2"
+                second, _ = _page(c, store, "<h1>Draft</h1><p>Two.</p>")
+                c.execute(
+                    "INSERT INTO bot_file_versions (file_id, version, blob_id, digest, size, name, mime, actor, created_at) "
+                    "SELECT ?, 2, blob_id, digest, size, 'draft-2.html', mime, actor, created_at FROM bot_file_versions "
+                    "WHERE file_id=?",
+                    (fid, second),
+                )
+                c.execute("UPDATE bot_files SET current_version=2 WHERE id=?", (fid,))
+                title = "spec.html"
             c.execute("UPDATE bot_files SET title=? WHERE id=?", (title, fid))
             made = P.attach(c, row["id"], "Spec page", "page:" + fid, "bot:writer", seen_version=row["version"])
             _say(c, made, "met")
@@ -363,7 +375,8 @@ def test_a_page_asks_row_is_its_pages_title_while_the_reader_reads_that_version(
     shown = rows(first)
     for fid, title in zip(fids[:2], titles, strict=False):
         assert (shown[fid]["about"], shown[fid]["line"]) == (title, title)
-    assert shown[fids[2]]["line"] == "Spec page" and "about" not in shown[fids[2]]
+    for fid in fids[2:]:  # a file's name, this version's or an older one's, is no title
+        assert shown[fid]["line"] == "Spec page" and "about" not in shown[fid]
     with store.read_transaction() as c:
         brief = V.fleet_snapshot(c, api.app.state.auth, WHO[ANA], lambda row, **k: row)["needs_you"]
     assert rows({"items": brief})[fids[0]]["about"] == titles[0]
