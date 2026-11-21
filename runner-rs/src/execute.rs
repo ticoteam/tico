@@ -2742,8 +2742,6 @@ impl Runner {
                 env = turn_env;
                 Host::Antigravity(warm)
             } else {
-                // Every other harness starts a new process for the turn: never warm.
-                crate::flight::fact(&aid, "warm", json!(false));
                 self.make_host(&bot, &runtime, &env, selected.as_ref(), tx)?
             };
             let h = host.insert(made);
@@ -3074,6 +3072,7 @@ impl Runner {
                 self.start_turn(&aid, &bot, h, &th, &prompt, effort.as_deref(), &refs, &attempt, &mut goal, &own).await?
             };
             mark("harness_spawned", &aid);
+            crate::flight::fact(&aid, "warm", json!(h.warm()));
             if side_ran || after_interrupt {
                 // Told once: this turn now holds what they said.
                 for key in [crate::continuity::side_key(&th), crate::continuity::interrupted_key(&th)] {
@@ -3516,6 +3515,7 @@ impl Runner {
                     }
                 }
                 let t = h.start_turn(&th, &text, hop.reasoning_effort.as_deref()).await?;
+                crate::flight::fact(&aid, "warm", json!(h.warm()));
                 turn = Some(t.clone());
                 let d = Drive {
                     limit_name: &limit_name,
@@ -4069,13 +4069,12 @@ impl Runner {
         // Where the turn's time went, up to here, kept with its result: saved before sending, so a resent result is
         // the same. An older server refuses the field (`run_timings`).
         if crate::follow::feature("run_timings") {
-            if let Some(mut timings) = crate::flight::timings(&aid) {
-                if !crate::follow::feature("run_timings_turn") {
-                    if let Some(t) = timings.as_object_mut() {
-                        t.remove("model_calls");
-                        t.remove("warm");
-                    }
-                }
+            if let Some(timings) = crate::flight::timings(&aid) {
+                let timings = if crate::follow::feature("run_timings_turn") {
+                    timings
+                } else {
+                    crate::flight::legacy(timings)
+                };
                 completion.insert("timings".into(), timings);
             }
         }

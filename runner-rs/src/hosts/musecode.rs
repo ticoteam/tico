@@ -178,14 +178,14 @@ pub fn session_log(env: &Env, session_id: &str) -> Option<PathBuf> {
     found
 }
 
-/// (input, cached, output, model) summed over the `model_completed` records of `run_id` (any run when None) from
-/// byte `offset` on, or None when there are none. Records that repeat the same counts (`goal_usage_attribution`)
-/// are not counted.
+/// (input, cached, output, model, model calls) summed over the `model_completed` records of `run_id` (any run when
+/// None) from byte `offset` on, or None when there are none. Records that repeat the same counts
+/// (`goal_usage_attribution`) are not counted.
 pub fn session_usage(
     path: &Path,
     offset: u64,
     run_id: Option<&str>,
-) -> Option<(i64, i64, i64, String)> {
+) -> Option<(i64, i64, i64, String, usize)> {
     let mut file = std::fs::File::open(path).ok()?;
     let size = file.metadata().ok()?.len();
     if offset > 0 && offset <= size {
@@ -194,6 +194,7 @@ pub fn session_usage(
     let mut bytes = vec![];
     file.read_to_end(&mut bytes).ok()?;
     let (mut found, mut model): (Option<(i64, i64, i64)>, String) = (None, String::new());
+    let mut calls = 0;
     for line in String::from_utf8_lossy(&bytes)
         .lines()
         .filter(|l| l.contains("model_completed"))
@@ -224,11 +225,12 @@ pub fn session_usage(
         );
         let (a, b, c) = found.unwrap_or_default();
         found = Some((a + row.0, b + row.1, c + row.2));
+        calls += 1;
         if let Some(m) = event["model"].as_str().filter(|m| !m.is_empty()) {
             model = m.into();
         }
     }
-    found.map(|(a, b, c)| (a, b, c, model))
+    found.map(|(a, b, c)| (a, b, c, model, calls))
 }
 
 fn placeholder_re() -> &'static Regex {
@@ -632,6 +634,8 @@ struct Turn {
     run: String,
     /// The model the run used (`run.model.configured`, else the session log's).
     model: String,
+    /// Its model requests: the session log's `model_completed` records, when the usage came from there.
+    calls: Option<usize>,
 }
 
 #[derive(Default)]
@@ -985,10 +989,11 @@ impl MuseCodeHost {
         let _ = std::fs::remove_file(&prompt);
         if state.usage.is_none() {
             let run = Some(state.run.as_str()).filter(|r| !r.is_empty());
-            if let Some((a, b, c, model)) =
+            if let Some((a, b, c, model, calls)) =
                 session_log(&env, &tid).and_then(|p| session_usage(&p, offset, run))
             {
                 state.usage = Some((a, b, c));
+                state.calls = Some(calls);
                 if !model.is_empty() {
                     state.model = model;
                 }
@@ -1081,6 +1086,9 @@ impl MuseCodeHost {
             let mut body = json!({"input": inp, "output": out, "total": inp + out, "usage": {"input": inp, "cached": cached, "output": out}});
             if !state.model.is_empty() {
                 body["model"] = json!(state.model);
+            }
+            if let Some(calls) = state.calls {
+                body["model_calls"] = json!(calls); // the runner's timings count them (drive.rs model_requests)
             }
             self.emit(event("tokens", Some(tid), Some(turn), body));
         }
@@ -1333,6 +1341,11 @@ mod tests {
             json!({"input": 37200, "cached": 24200, "output": 215})
         );
         assert_eq!(tokens[0]["model"], "muse-spark-1.3");
+        assert!(
+            tokens[0]["model_calls"].as_u64().unwrap() >= 1,
+            "{}",
+            tokens[0]
+        );
         let mut meter = crate::execute::Meter::default();
         meter.add(&tokens[0]);
         let r = meter.report("", "musecode", "subscription").unwrap();

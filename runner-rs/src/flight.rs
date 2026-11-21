@@ -224,6 +224,38 @@ pub fn fact(attempt: &str, key: &str, value: Value) {
     }
 }
 
+/// Adds `n` to a counted fact of an open turn (`model_calls`, over every harness the attempt ran, fallbacks too).
+pub fn add(attempt: &str, key: &str, n: u64) {
+    if let Some(turn) = TURNS
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .as_mut()
+        .and_then(|t| t.get_mut(attempt))
+    {
+        let was = turn.facts.get(key).and_then(Value::as_u64).unwrap_or(0);
+        turn.facts.insert(key.into(), json!(was + n));
+    }
+}
+
+/// The marks and facts only a server with feature `run_timings_turn` takes (an older one refuses the fields).
+const TURN_PHASES: [&str; 1] = ["first_text"];
+const TURN_FACTS: [&str; 2] = ["model_calls", "warm"];
+
+/// `timings` as a server without feature `run_timings_turn` takes them: exactly what was sent before those fields.
+pub fn legacy(mut timings: Value) -> Value {
+    if let Some(t) = timings.as_object_mut() {
+        for key in TURN_FACTS {
+            t.remove(key);
+        }
+        if let Some(phases) = t.get_mut("phases").and_then(Value::as_object_mut) {
+            for name in TURN_PHASES {
+                phases.remove(name);
+            }
+        }
+    }
+    timings
+}
+
 /// An open turn's timings so far, for its result (backend/models.py RunTimings): when it was claimed on this
 /// computer's clock, each mark's milliseconds since then, and its facts. None for a turn this process never claimed.
 pub fn timings(attempt: &str) -> Option<Value> {
@@ -886,6 +918,22 @@ mod tests {
             t.get("heard_ms").is_none(),
             "the server's timings take no heard gap: {t}"
         );
+        // An older server is sent exactly what it took before first_text, model_calls and warm.
+        phase("first_text", &aid);
+        add(&aid, "model_calls", 2);
+        add(&aid, "model_calls", 3); // a fallback's requests add to the primary's
+        let t = timings(&aid).unwrap();
+        assert_eq!(t["model_calls"], 5, "{t}");
+        assert!(t["phases"].get("first_text").is_some(), "{t}");
+        let mut before = t.clone();
+        let obj = before.as_object_mut().unwrap();
+        obj.remove("model_calls");
+        obj.remove("warm");
+        obj["phases"].as_object_mut().unwrap().remove("first_text");
+        assert_eq!(legacy(t), before);
+        let mut keys: Vec<_> = before.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, ["claimed_at", "phases", "transcript_bytes"]);
         turn_end(&aid, "acme-seo", "claude", "completed", true);
         assert!(timings(&aid).is_none());
     }

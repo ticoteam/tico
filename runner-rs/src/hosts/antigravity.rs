@@ -112,6 +112,8 @@ struct Inner {
     /// The thread and folder the process was started for: a turn on another one gets a new process (a kept host
     /// serves the next attempt, crate::warm).
     spawned_for: Option<(String, String)>,
+    /// The newest turn ran on the process an earlier turn left running, not a new or replacing one.
+    warm: bool,
 }
 
 struct Shared {
@@ -145,6 +147,7 @@ impl AntigravityHost {
                 reader: None,
                 generation: 0,
                 spawned_for: None,
+                warm: false,
             }),
         }))
     }
@@ -187,6 +190,11 @@ impl AntigravityHost {
 
     pub fn track_allocation(&self, turn: std::sync::Arc<std::sync::atomic::AtomicBool>) {
         self.0.allocation.track(turn);
+    }
+
+    /// Whether the newest turn ran on the process an earlier turn left running (its timings' `warm`).
+    pub fn warm(&self) -> bool {
+        self.inner().warm
     }
 
     pub fn alive(&self) -> bool {
@@ -385,6 +393,7 @@ impl AntigravityHost {
             // one conversation in one folder, so it is replaced, never handed this turn's prompt.
             Self::retire(&mut inner);
         }
+        inner.warm = inner.proc.is_some();
         if inner.proc.is_none() {
             inner.generation += 1;
             let (proc, stdout) = self.spawn(
@@ -865,13 +874,16 @@ mod tests {
         // The next turn on the same thread and folder writes to the running process.
         let thread = host.start_thread(&s);
         host.start_turn(&thread, "one", None).unwrap();
+        assert!(!host.warm());
         assert_eq!(reply(&turn_events(&mut rx).await), "turn 1");
         host.resume_thread(&thread, &s).unwrap();
         host.start_turn(&thread, "two", None).unwrap();
+        assert!(host.warm(), "the kept process took the turn");
         assert_eq!(reply(&turn_events(&mut rx).await), "turn 2");
         // A fresh session is a new thread: agy's conversation is the old one's, so a new process takes it.
         let fresh = host.start_thread(&s);
         host.start_turn(&fresh, "three", None).unwrap();
+        assert!(!host.warm(), "a replacing process is cold");
         let events = turn_events(&mut rx).await;
         assert_eq!(reply(&events), "turn 1", "{events:?}");
         // So does the same thread in another folder (a task that moved to its worktree).

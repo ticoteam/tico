@@ -377,7 +377,8 @@ lost because the writer fell behind). Turns never wait on the disk. `TICO_FLIGHT
 `tico-runner flight summary --since 1h` (or `--dir <folder>` for a copied state folder) prints recent turns with their
 phase timings, the slowest phases, slow heartbeats and slow git commands.
 
-The same timings, up to `finished`, also go to the server with the turn's result (`timings`, feature `run_timings`),
+The same timings, up to `finished`, also go to the server with the turn's result (`timings`, feature `run_timings`;
+`first_text`, `model_calls`, summed over every harness the attempt ran, and `warm` only with feature `run_timings_turn`),
 and the server adds `send_to_claim_ms` (the message to the claim), `rule_check_ms` (the completion's org rule check)
 and `received_ms` (the claim to the result's arrival, the runner's clock against the server's). Each run in
 `GET /api/v2/bots/{bot}/turns` (`tico run list`) carries them, so a turn's split is readable without the computer.

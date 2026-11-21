@@ -1120,6 +1120,16 @@ pub enum Host {
 }
 
 impl Host {
+    /// Whether the newest turn ran on a harness process already running: a kept Antigravity or pooled pi process.
+    /// Every other harness starts a process for each turn.
+    pub fn warm(&self) -> bool {
+        match self {
+            Host::Antigravity(h) => h.warm(),
+            Host::Pi(h) => h.warm(),
+            _ => false,
+        }
+    }
+
     pub fn track_allocation(&self, turn: std::sync::Arc<std::sync::atomic::AtomicBool>) {
         match self {
             Host::Claude(h) => h.track_allocation(turn),

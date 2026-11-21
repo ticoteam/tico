@@ -1284,6 +1284,8 @@ struct Inner {
     interrupted: HashSet<String>,
     compacted: HashSet<String>,
     context: HashMap<String, i64>,
+    /// The newest turn's process was one already running (from this attempt or the pool), not a new one.
+    warm: bool,
 }
 
 struct Shared {
@@ -1329,6 +1331,11 @@ impl PiHost {
 
     pub fn alive(&self) -> bool {
         self.inner().up
+    }
+
+    /// Whether the newest turn ran on a process already running (its timings' `warm`).
+    pub fn warm(&self) -> bool {
+        self.inner().warm
     }
 
     /// Stops every process this host holds; a turn still running ends as interrupted.
@@ -1544,7 +1551,9 @@ impl PiHost {
             if p.key == key && p.alive() {
                 self.0.allocation.mark();
                 p.token(&token);
-                self.inner().procs.insert(thread_id.into(), p.clone());
+                let mut inner = self.inner();
+                inner.procs.insert(thread_id.into(), p.clone());
+                inner.warm = true;
                 return Ok(p);
             }
             p.stop().await;
@@ -1556,7 +1565,9 @@ impl PiHost {
         let proc = self
             .spawn(&argv, &t.settings, &env, key, home, thinking)
             .map_err(|e| e.to_string())?;
-        self.inner().procs.insert(thread_id.into(), proc.clone());
+        let mut inner = self.inner();
+        inner.procs.insert(thread_id.into(), proc.clone());
+        inner.warm = false;
         Ok(proc)
     }
 
@@ -2659,8 +2670,13 @@ mod tests {
     ) {
         let (dir, host, mut rx) = rpc_host(&[REPLY], None);
         let thread = host.start_thread(&rpc_settings(&dir, &[("HUB_TOKEN", "synthetic-turn-1")]));
-        for _ in 0..2 {
+        for warm in [false, true] {
             host.start_turn(&thread, "hello", None).await.unwrap();
+            assert_eq!(
+                host.warm(),
+                warm,
+                "the second turn runs on the first one's pi"
+            );
             let events = turn_events(&mut rx).await;
             assert!(
                 events.contains(&json!({"kind": "turn_completed", "status": "completed"})),
@@ -2685,6 +2701,7 @@ mod tests {
             &rpc_settings(&dir, &[("HUB_TOKEN", "synthetic-turn-2")]),
         );
         next.start_turn(&thread, "again", None).await.unwrap();
+        assert!(next.warm(), "a pi from the pool is warm");
         assert!(turn_events(&mut rx)
             .await
             .contains(&json!({"kind": "turn_completed", "status": "completed"})));

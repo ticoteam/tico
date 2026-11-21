@@ -171,8 +171,6 @@ impl Runner {
         let mut last_flush: Option<Instant> = None;
         let mut first_output = false;
         let mut first_text = false;
-        // The turn's model requests, from its token events' per-request usage (a harness that lists them).
-        let mut model_calls = 0usize;
         let mut queue: Vec<Value> = vec![];
         // The outbox rows this drain has gathered, not yet written: (kind, JSON payload) in arrival order.
         let mut rows: Vec<(String, String)> = vec![];
@@ -571,9 +569,9 @@ impl Runner {
                     if kind == "tokens" {
                         tokens = event.clone();
                         segment.meter.add(&event);
+                        // The attempt's model requests, over every harness it ran (a fallback's add on).
                         if let Some(requests) = model_requests(&event) {
-                            model_calls += requests;
-                            crate::flight::fact(aid, "model_calls", json!(model_calls));
+                            crate::flight::add(aid, "model_calls", requests as u64);
                         }
                     }
                 }
@@ -792,9 +790,13 @@ fn reply_words(kind: &str, event: &Value) -> bool {
         && !text_of(&event["text"]).trim().is_empty()
 }
 
-/// How many model requests a `tokens` event lists (its per-request usage), when its harness lists them.
+/// How many model requests a `tokens` event names, when its harness counts them: its per-request usage (Claude), else
+/// its `model_calls` (Muse Code's `model_completed` records).
 fn model_requests(event: &Value) -> Option<usize> {
-    event["usage"]["requests"].as_array().map(Vec::len)
+    event["usage"]["requests"]
+        .as_array()
+        .map(Vec::len)
+        .or_else(|| event["model_calls"].as_u64().map(|n| n as usize))
 }
 
 #[cfg(test)]
@@ -1070,6 +1072,10 @@ mod tests {
         let tokens =
             json!({"input": 9, "usage": {"requests": [[1, 0, 2, 1], [3, 0, 4, 1], [5, 0, 6, 0]]}});
         assert_eq!(model_requests(&tokens), Some(3));
+        assert_eq!(
+            model_requests(&json!({"input": 9, "model_calls": 4})),
+            Some(4)
+        );
         assert_eq!(
             model_requests(&json!({"input": 9, "output": 2})),
             None,

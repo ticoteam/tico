@@ -1801,28 +1801,53 @@ def chat_room(c, settings, who, create=True):
     return ensure_room(c, who.actor, settings.assistant_bot) if create else find_room(c, who.actor)
 
 
-# The places a morning message links, its items: `[title](#/task/<id>)`, `[goal](#/goals/<id>)` and the like.
+# The places a morning message links, its items: `[title](#/task/<id>)`, `[goal](#/goals/<id>)` and the like, and the
+# pages it names in words (`page:file-<hex>@2`).
 _LINKED = re.compile(r"\]\(\s*([^)\s]+)")
+_FILE_REF = re.compile(r"(?<![\w/-])(?:page:)?(file-[0-9a-f]{12,40})")
+# One item however it is linked: a task by `#/task/<id>`, `#/tasks/<id>` or `/tasks/<pipeline>/<id>`; a page or file by
+# `#/file/<id>`, `/api/v2/files/<id>/versions/<n>`, `/library/files?file=<id>`, `page:<id>@<n>`; else `<kind>/<id>`.
+_ITEM_FORMS = (
+    ("file", re.compile(r"(?:^|[/:=])(file-[0-9a-f]{12,40})")),
+    ("file", re.compile(r"^(?:api/v2/)?(?:files?|pages?)/([^/?#@]+)")),
+    ("task", re.compile(r"^(?:tasks?|flow)/(?:[^/?#]+/)?([^/?#]+)$")),
+    ("", re.compile(r"^([^/?#]+/[^/?#]+)")),
+)
+
+
+def _item(target):
+    """A link target as the item it names (`task:412`, `file:file-ab12…`, `goals:g-1`), whatever form it took."""
+    path = re.sub(r"^[a-z]+://[^/]+", "", target.strip(), flags=re.I)
+    path = re.sub(r"^/?(?:next/)?#?/?", "", path)
+    for kind, form in _ITEM_FORMS:
+        m = form.search(unquote(path))
+        if m:
+            return (kind + ":" if kind else "") + m.group(1)
+    return path
 
 
 def morning_items(text):
-    """A stable hash of the items a morning message links, in any order and however often (None when it links none):
-    a morning that names the same items as the person's last one is not sent again."""
-    linked = sorted(set(_LINKED.findall(text)))
+    """A stable hash of the items a morning message links, in any order, form or number of times (None when it links
+    none): a morning that names the same items as the person's last one is not sent again."""
+    linked = sorted({_item(t) for t in _LINKED.findall(text or "") + _FILE_REF.findall(text or "")} - {""})
     return digest("\n".join(linked))[:16] if linked else None
 
 
 def last_morning_items(c, actor):
     """The items hash of the last morning message `actor` was sent in the last MORNING_LOOKBACK_DAYS, from its audit row
     (`assistant.morning`), or None. Read newest first on events_action_ts, within the window: at most a month of that
-    action's rows, and usually the newest few."""
+    action's rows, and usually the newest few. A row written before the hash was kept is read from the message it
+    names."""
     since = H.shift(H.now(), days=-MORNING_LOOKBACK_DAYS)
     row = c.execute(
-        "SELECT json_extract(detail,'$.items') FROM events WHERE action='assistant.morning' AND created_at>=? "
+        "SELECT json_extract(detail,'$.items'), target FROM events WHERE action='assistant.morning' AND created_at>=? "
         "AND actor=? ORDER BY created_at DESC LIMIT 1",
         (since, actor),
     ).fetchone()
-    return row[0] if row else None
+    if not row or row[0]:
+        return row[0] if row else None
+    sent = c.execute("SELECT body FROM messages WHERE id=?", (row[1],)).fetchone()
+    return morning_items(sent[0]) if sent else None
 
 
 def morning_day():

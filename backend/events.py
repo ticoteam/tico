@@ -2910,14 +2910,15 @@ def _live_text(event, shown):
 
 def _tool_label(event, shown):
     """A tool call's label as the live reply shows it (turns.tool_label: a few plain words, never its arguments or
-    output), for a call starting at the top of the turn; None for any other step, a call ending or a subagent's own."""
-    from .turns import TOOL_ENDED, tool_label
+    output), for a call starting at the top of the turn (turns.TOOL_START); None for any other step, any other update
+    of a call (ended, backgrounded, declined, interrupted) or a subagent's own."""
+    from .turns import TOOL_START, tool_label
 
     payload = (shown[0] or {}).get("payload") if event["kind"] == "tool" else None
     if not isinstance(payload, dict) or payload.get("parent_id"):
         return None
     status = str(payload.get("status") or payload.get("state") or payload.get("phase") or "").lower()
-    return None if status in TOOL_ENDED else tool_label(payload)
+    return tool_label(payload) if status in TOOL_START else None
 
 
 def _step_output(event, compact, shown):
