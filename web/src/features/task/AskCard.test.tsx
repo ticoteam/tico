@@ -12,6 +12,8 @@ describe('AskCard', () => {
   const where = (props: Partial<Parameters<typeof AskCard>[0]>) => {
     const { unmount } = render(<AskCard name="Send the letter" note="Sends now" end={<span />} {...props} />);
     const note = screen.queryByText('Sends now');
+    // ask.css .askcard-note: a long note shortens with an ellipsis rather than push out the ask and the face
+    if (note) expect(note.className).toBe('askcard-note');
     const at = note?.closest('.an-row') ? 'row' : note?.closest('.askcard-top') ? 'top' : null;
     unmount();
     return at;
@@ -32,4 +34,5 @@ describe('AskCard', () => {
     expect(where({ actions: approve })).toBe('top');
     expect(where({ actions: approve, asking: true })).toBe('top');
   });
+
 });

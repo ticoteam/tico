@@ -293,18 +293,24 @@ def test_a_person_archives_and_restores_a_task_file_from_the_cli_and_the_tool(ap
 
 
 def heard_from(api, change):
-    """(task, page) of each change to a task's files that `change()` logs; `change` answers 200."""
+    """(task, page) of each change to a task's files that `change()` logs, one entry a row; `change` answers 200."""
     with api.app.state.store.read() as c:
         seen = c.execute("SELECT max(seq) FROM changes").fetchone()[0] or 0
     answer = change()
     assert getattr(answer, "status_code", 200) == 200
     with api.app.state.store.read() as c:
-        return {
+        return [
             tuple(r)
             for r in c.execute(
-                "SELECT subject_id,ref FROM changes WHERE seq>? AND topic='tasks' AND kind='files'", (seen,)
+                "SELECT subject_id,ref FROM changes WHERE seq>? AND topic='tasks' AND kind='files' ORDER BY seq",
+                (seen,),
             )
-        }
+        ]
+
+
+def once(rows, fid, *tasks):
+    """Each of `tasks` heard of the page `fid` exactly once in `rows` (heard_from)."""
+    assert sorted((r for r in rows if r[0] in tasks), key=str) == sorted(((task, fid) for task in tasks), key=str)
 
 
 def archive(api, kind, fid, archived):
@@ -344,22 +350,23 @@ def test_a_page_archived_by_either_flag_is_listed_again_on_every_task_it_is_on(a
 
     for fid in pages:  # a task file's flag, a bot-wide file's flag, then the page's own
         for archived in (True, False):
-            assert heard(edit("files", fid, archived)) >= {(linked, fid), (pinned, fid)}
-        assert heard(edit("pages", fid, True)) >= {(home, fid), (linked, fid), (pinned, fid)}
+            assert set(heard(edit("files", fid, archived))) >= {(linked, fid), (pinned, fid)}
+        assert set(heard(edit("pages", fid, True))) >= {(home, fid), (linked, fid), (pinned, fid)}
 
     files, statements = traced(api, lambda: get(api, f"tasks/{home}/files", token="cara-test")["files"])
     assert {f["id"] for f in files if f["archived"]} == set(pages)
     one_page = page_links.LINKS_SQL.split("?")[0]  # its links read page by page, not in the listing's one batch
     assert not [s for s in statements if s.startswith(one_page)]
 
-    # A new version brings it back from either flag: the first is archived as a page, the second as a file.
-    _, policy = pages
+    # A new version brings it back, each task hearing once: the first is archived as a page and a file, the second
+    # as a file only.
+    brief, policy = pages
+    assert heard(edit("files", brief, True))
     assert heard(edit("pages", policy, False))
     assert heard(edit("files", policy, True))
     for fid, name in pages.items():
         body = {"page": fid, "name": name, "text": "<p>New</p>"}
-        republish = lambda: api.post("/api/v2/pages", json=body, headers=headers(token))  # noqa: E731
-        assert heard(republish) >= {(linked, fid), (pinned, fid)}
+        once(heard(lambda: api.post("/api/v2/pages", json=body, headers=headers(token))), fid, linked, pinned)
     assert not any(f["archived"] for f in get(api, f"tasks/{home}/files")["files"])
 
 
@@ -380,7 +387,8 @@ def test_a_document_written_again_lists_its_archived_page_again_on_every_task_it
     r = api.post(f"/api/v2/pages/{fid}/links", json={"target": "task:" + linked, "role": "related"}, headers=headers())
     assert r.status_code == 200, r.text
     post(api, "pins", {"place": "task:" + pinned, "item": "page:" + fid})
-    for kind in ("pages", "files"):  # archived as a page, then as a file
-        assert archive(api, kind, fid, True).status_code == 200
-        assert heard_from(api, lambda: write(kind)) >= {(linked, fid), (pinned, fid)}
+    for flags in (("pages",), ("pages", "files")):  # archived as a page, then as a page and a file: heard once
+        for kind in flags:
+            assert archive(api, kind, fid, True).status_code == 200
+        once(heard_from(api, lambda: write(len(flags))), fid, linked, pinned)
     assert not listed(api, home)[fid]["archived"]

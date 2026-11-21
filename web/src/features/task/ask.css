@@ -3,9 +3,9 @@
 .askcard-top{display:flex;align-items:center;gap:var(--s-2);min-height:24px;padding-right:var(--s-1)}
 .askcard-top .an-name{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .askcard .an-row{justify-content:flex-end;margin-top:var(--s-1h)}
-.askcard-note{font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
-/* on a computer, what answering does sits at the left of the buttons' row (AskCard.tsx), shortened before the buttons are */
-.askcard .an-row .askcard-note{flex:0 1 auto;min-width:0;margin-right:auto;overflow:hidden;text-overflow:ellipsis}
+.askcard-note{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
+/* on a computer, what answering does sits at the left of the buttons' row (AskCard.tsx); a long one shortens, wherever it is */
+.askcard .an-row .askcard-note{margin-right:auto}
 .askcard.is-asked{padding:var(--s-2h) var(--s-2) var(--s-2h) var(--s-3h)}
 .askcard.is-asked .hollow{flex:none;margin:0 var(--s-0)}
 .askcard.is-asked .askcard-note{margin-left:var(--s-1)}

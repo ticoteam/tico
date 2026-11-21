@@ -137,6 +137,18 @@ def list_again(c: sqlite3.Connection, fid: str, *, own: bool = False) -> None:
         )
 
 
+def back_again(c: sqlite3.Connection, fid: str) -> None:
+    """After an archive flag clears: each task it is on through a link or a pin lists it again, once, when neither
+    its file's flag nor its page's holds it back any more (a task lists it archived while either does)."""
+    held = c.execute(
+        "SELECT 1 FROM bot_files f LEFT JOIN pages p ON p.file_id=f.id AND p.deleted_at IS NULL "
+        "WHERE f.id=? AND (f.archived=1 OR p.archived=1)",
+        (fid,),
+    ).fetchone()
+    if not held:
+        list_again(c, fid)
+
+
 def removed_event(c, task_id, actor, fid, title, *, back=False):
     """The task's activity says which file was taken off it (or brought `back`), by its newest name."""
     row = c.execute(
@@ -1683,7 +1695,7 @@ class Files:
             "UPDATE bot_files SET " + ",".join(k + "=?" for k in fields) + " WHERE id=?", (*fields.values(), row["id"])
         )
         if changed and row["archived"]:
-            list_again(c, row["id"])
+            back_again(c, row["id"])
         return c.execute("SELECT * FROM bot_files WHERE id=?", (row["id"],)).fetchone(), created, changed
 
     @staticmethod
@@ -1773,7 +1785,6 @@ class Files:
             if row is not None and row["archived"]:
                 c.execute("UPDATE bot_files SET archived=0 WHERE id=?", (row["id"],))
                 self.relink(c, task_id, row["id"])
-                list_again(c, row["id"])
         if row is None and legacy is None and series:
             from . import page_links
 

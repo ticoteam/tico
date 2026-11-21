@@ -398,9 +398,9 @@ class Pages:
                 ),
             )
             if changed and was and was[0]:
-                from .files import list_again
+                from .files import back_again
 
-                list_again(c, row["id"])  # its new version brings the archived page back on each task it is on
+                back_again(c, row["id"])  # its new version brings the archived page back on each task it is on
             actor = editor.actor
             page_links.link(c, row["id"], actor, "writer", actor)
             if importing:

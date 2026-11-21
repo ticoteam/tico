@@ -115,6 +115,22 @@ def test_a_grant_past_all_ticked_repos_keeps_a_ticked_repository_github_cannot_r
     assert {r["full_name"]: r["access"] for r in chosen} == {"Acme/product": "write", "Acme/docs": "read"}
 
 
+def test_read_granted_on_a_repository_all_ticked_repos_covers_at_write_leaves_the_bot_there(api, gh):
+    catalog(api, gh)
+    api.app_state.auth.owner_email = "ana@acme.example"
+    for name in ("product", "docs"):
+        put(api, "repositories/Acme/" + name, {"enabled": True})
+    put(api, "bots/cpo/repositories", {"mode": "all", "all_access": "write"})
+    with api.app_state.store.transaction() as c:  # GitHub misses Acme/docs for a moment: the ask waits on a person
+        c.execute("UPDATE repositories SET reachable=0 WHERE full_name='Acme/docs'")
+        save_metadata(c, "repositories-confirmed-missing", {"acme/docs": time.time()})
+    asked = ask(api, "Acme/docs")
+    assert asked["state"] == "open"
+    tap(api, asked["id"], "grant")
+    got = api.get("/api/v2/bots/cpo/repositories", headers=auth()).json()
+    assert (got["mode"], got["all_access"]) == ("all", "write")
+
+
 def test_a_grant_past_all_ticked_repos_at_write_keeps_every_write_and_its_workflow_flags(api, gh):
     catalog(api, gh)
     api.app_state.auth.owner_email = "ana@acme.example"

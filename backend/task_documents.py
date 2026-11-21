@@ -97,10 +97,10 @@ def file_of(c: Any, task_id: str, name: str, visible: Callable[[Any], bool]) -> 
         )
     row = rows[0] if rows else None
     if row and row["archived"]:
-        from .files import list_again
+        from .files import back_again
 
         c.execute("UPDATE bot_files SET archived=0 WHERE id=?", (row["id"],))
-        list_again(c, row["id"])
+        back_again(c, row["id"])
         row = c.execute("SELECT * FROM bot_files WHERE id=?", (row["id"],)).fetchone()
     return row
 
@@ -117,9 +117,9 @@ def record(c: Any, task_id: str, name: str, file_id: str, by: str | None = None)
         (file_id, now, now),
     )
     if was and was[0]:
-        from .files import list_again
+        from .files import back_again
 
-        list_again(c, file_id)  # back from its page's archive on each task it is on
+        back_again(c, file_id)  # back from its page's archive on each task it is on
     if by is None:
         row = c.execute("SELECT bot_id FROM bot_files WHERE id=?", (file_id,)).fetchone()
         by = f"bot:{row['bot_id']}"
