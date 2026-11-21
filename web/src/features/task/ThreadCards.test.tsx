@@ -92,6 +92,13 @@ function answer(url: string): Reply {
     return { body: { task: { ...file, to_leave: [email, ...file.to_leave] } } };
   }
   if (url.endsWith('/api/v2/tasks/m1/files?all=1')) return { body: { files: [] } };
+  // an email's OK first, then an OK of a file that belongs to another task
+  if (url.endsWith('/api/v2/tasks/p3')) {
+    const file = otherTask('p3', 'Sign the lease', ['file:ext1@3']);
+    const email = { requirement_id: 'r1', kind: 'ok', line: 'Send this email?', met: false, may: ['ok', 'no'], shows: ['email:s1'], asked_by: 'bot:lo' };
+    return { body: { task: { ...file, to_leave: [email, ...file.to_leave] } } };
+  }
+  if (url.endsWith('/api/v2/tasks/p3/files?all=1')) return { body: { files: [] } };
   if (url.endsWith('/api/v2/tasks/p2/files?all=1')) {
     const pdf = { id: 'pdf1', name: 'declaration.pdf', title: 'declaration.pdf', mime: 'application/pdf', archived: false, current_version: 1, links: [], writers: [], versions: [{ n: 1, mime: 'application/pdf' }] };
     const review = { id: 'file-a', name: 'review.md', title: 'Review', mime: 'text/markdown', archived: false, current_version: 2, links: [], versions: [], writers: [] };
@@ -200,6 +207,15 @@ describe('an approval waiting, as a card in the agent’s thread @approvals', ()
     // its own chips (the PDF and the review page it shows), opening on the PDF it is about, never the review page
     expect([...(file?.querySelectorAll('.file') ?? [])].map((f) => f.textContent)).toEqual(expect.arrayContaining([expect.stringContaining('declaration.pdf'), expect.stringContaining('Review')]));
     expect(file?.getAttribute('href')).toBe('/tasks/ops/41/declaration-pdf');
+  });
+
+  it('a file OK on another task’s file opens that file’s own page, the task page could not show it', async () => {
+    needs = [ask('p3', 'bot:lo', 's1'), { ...otherAsk('p3', 'ok', 'bot:lo', 'bot:lo', ['file:ext1@3']), id: 'p3:r2' }];
+    show({ agent: 'bot:lo' });
+    await waitFor(() => expect(screen.getAllByRole('link', { name: /Approve/ })).toHaveLength(2));
+    const hrefs = screen.getAllByRole('link', { name: /Approve/ }).map((a) => a.getAttribute('href'));
+    // the email's card opens its tab; the file's card, the file itself
+    expect(hrefs.sort()).toEqual(['/library/files?file=ext1&v=3', '/tasks/ops/41/email']);
   });
 
   it('an OK the agent asked for by its slug, on a finance item, is a card with no chips', async () => {

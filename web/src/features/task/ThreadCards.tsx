@@ -134,8 +134,11 @@ function ThingCard({ sub, chat }: { sub: TaskData; chat?: string }) {
   // names its tabs (tabsOf), a file of another task included.
   const target = targetOf(decision);
   const tabs = target ? tabsOf(sub, files.data ?? (files.isError ? [] : undefined), decision) : [];
-  const slug = tabs.find((x) => (x.doc?.file_id ?? x.file?.id ?? x.other) === target?.id)?.slug;
-  return <Card to={tabAddress(sub, slug, false).to} chat={chat} what={sub.title} files={chips} />;
+  const tab = tabs.find((x) => (x.doc?.file_id ?? x.file?.id ?? x.other) === target?.id);
+  // A file of another task: the task's page may not show it as a tab (an email's OK first marks another), so the card
+  // opens the file's own page.
+  const away = tab?.other && target ? `/library/files?${new URLSearchParams({ file: target.id, ...(target.version && { v: String(target.version) }) })}` : null;
+  return <Card to={away ?? tabAddress(sub, tab?.slug, false).to} chat={chat} what={sub.title} files={chips} />;
 }
 
 /** An email's OK: the case it answers (else the subject) and who it goes to, from the OK task itself (its title and its
