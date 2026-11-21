@@ -160,9 +160,10 @@ NOTE_CHARS = 4000
 
 def _report_back(conn: "sqlite3.Connection", after: Row, by: str, why: str | None, revision: str | None) -> None:
     """A task the person handed off through their Assistant (its `task.create` event says via assistant: filed on their
-    Assistant turn, on their click on its card, or as a call's follow-up) has ended: one system line from the Assistant
-    in their Assistant chat (opened again if it is gone). Not when the move's own actor is the person (their close,
-    Done or move, by hand or by their Assistant for them); an engine or automatic move always reports. Its wake key is
+    Assistant turn or on their click on its card) has ended: one system line from the Assistant in their Assistant chat
+    (opened again if it is gone). Not when the move's own actor is the person (their close, Done or move, by hand or by
+    their Assistant for them), and not for a call's follow-up, which reports in its call (call_follow_ups._return); an
+    engine or automatic move always reports. Its wake key is
     the dedupe record, one per (task, terminal history event), so a reopen and a second end report again. All of it in
     its own savepoint: a report that fails is logged and never undoes the move."""
     if not revision:
@@ -198,8 +199,11 @@ def _write_report(conn: "sqlite3.Connection", after: Row, by: str, why: str | No
     person = str(made["actor"])
     if filed.get("via") != "assistant" or not H.is_human(person) or by == person:
         return
-    if conn.execute("SELECT 1 FROM messages WHERE wake_key=?", (key,)).fetchone():
-        return
+    if (
+        conn.execute("SELECT 1 FROM messages WHERE wake_key=?", (key,)).fetchone()
+        or conn.execute("SELECT 1 FROM call_follow_ups WHERE task_id=?", (task_id,)).fetchone()
+    ):
+        return  # already reported, or a call's follow-up, which reports in its call (call_follow_ups._return)
     from . import assistant, auth, rooms
 
     helper: Any = assistant

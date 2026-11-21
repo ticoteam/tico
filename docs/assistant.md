@@ -242,7 +242,8 @@ now?"). Say "that's enough" or "later" and it stops offering in that chat. It ne
 When work the Assistant handed off for you ends (Done or Closed), it tells you once in your Assistant chat: "Back on
 <title>: <closing note>", or "<title> ended without a result", with a link to the task. A reopened task that ends again
 is reported again. Nothing is sent when you (or your Assistant for you) closed it, marked it
-done or moved it there yourself. If you can no longer read the task, the message names it only by the title it was filed with.
+done or moved it there yourself, or for a call's follow-up, which reports in its call. If you can no longer read the
+task, the message names it only by the title it was filed with.
 
 ## Undo
 

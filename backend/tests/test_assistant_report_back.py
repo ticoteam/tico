@@ -114,10 +114,11 @@ def review(api, approver):
     return made["requirements"]["Review"][1]
 
 
-def test_a_call_follow_up_the_assistant_files_in_a_live_call_reports_back(meet):
+def test_a_call_follow_up_reports_in_its_call_not_in_the_assistant_chat(meet):
     with meet.app.state.store.transaction() as c:
         unrelated_task_managers(c, "ops")
-    call = start_call(meet, thread(meet), bots=["ops"])
+    room = thread(meet)
+    call = start_call(meet, room, bots=["ops"])
     join(meet, call["id"], "ben-test")
     _, attempt = assistant_turn(meet, "ben-test", "Have ops find the ship date")
     # Filed through the call's own route. Its response is refused to the Assistant's turn today (a private task, #4781),
@@ -131,8 +132,14 @@ def test_a_call_follow_up_the_assistant_files_in_a_live_call_reports_back(meet):
         task_id = c.execute("SELECT task_id FROM call_follow_ups WHERE call_id=?", (call["id"],)).fetchone()[0]
     with meet.app.state.store.transaction() as c:
         said_done(c, task_id, "June 3")
-    [report] = reports(meet)
-    assert report["recipient_id"] == "human:ben" and report["body"].endswith("\n\nJune 3")
+    meet.app.state.calls.sweep()
+    assert reports(meet) == []
+    with meet.app.state.store.read() as c:
+        said = c.execute(
+            "SELECT body FROM messages WHERE conversation_id=? AND json_extract(refs,'$.task')=?",
+            (room, task_id),
+        ).fetchall()
+    assert [r["body"].splitlines()[0] for r in said] == ["Back on Find the ship date: June 3"]
 
 
 def test_a_done_again_after_a_send_back_is_the_note(api):
