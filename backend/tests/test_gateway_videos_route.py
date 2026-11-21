@@ -493,6 +493,8 @@ def test_an_unknown_shot_waits_on_the_cards_person_until_they_mark_it_reconciled
         == 422
     )
     shots = {"shots": [s["key"] for s in waits[0]["shots"]]}  # the keys the person was shown
+    refused = api.post(f"/api/v2/tasks/{task['id']}/shots/reconcile", json=shots, headers=headers(token))
+    assert refused.status_code == 403, refused.text  # the agent never clears its own wait
     marked = api.post(f"/api/v2/tasks/{task['id']}/shots/reconcile", json=shots, headers=headers("ben-test"))
     assert marked.status_code == 200 and [s["name"] for s in marked.json()["reconciled"]] == ["Kettle wide"], (
         marked.text
@@ -584,3 +586,15 @@ def test_a_fresh_key_after_a_restart_and_a_stage_move_never_sends_the_shot_again
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM events WHERE action=?", (paid_renders.UNKNOWN,)).fetchone()[0] == 1
     assert len(sent) == 1
+
+
+def test_a_card_that_ended_still_asks_its_person_to_reconcile(api, monkeypatch):
+    connect(api)
+    task, token = turn(api)
+    unknown_now(api, token, "Kettle wide", monkeypatch)
+    closed = api.post(f"/api/v2/tasks/{task['id']}/move", json={"to": "closed", "why": "Dropped."}, headers=headers())
+    assert closed.status_code == 200, closed.text
+    read = api.get(f"/api/v2/tasks/{task['id']}", headers=headers()).json()["task"]
+    assert [w["line"] for w in read["waits"]] == ["Reconcile 1 shot: Kettle wide"]
+    needs = api.get("/api/v2/needs-you", headers=headers(read["waits"][0]["who"].replace("human:", "") + "-test"))
+    assert [i["line"] for i in needs.json()["items"] if i.get("task_id") == task["id"]] == [read["waits"][0]["line"]]

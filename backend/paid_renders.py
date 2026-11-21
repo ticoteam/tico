@@ -187,25 +187,29 @@ def _state(c: Any, key: str, last: str | None, detail: Row) -> Row | Problem | N
     return None
 
 
-# The same shot sent from another visit of its card: same asker, card, input and name.
+# The same shot under another key of its card: same asker, card, input and name. Read by the asker's events of one
+# action, from a time on (events_actor_action_created): unknown ever, which are few, and sent in the last SWEEP_DAYS.
 _TWINS = (
-    "SELECT s.target FROM events s WHERE s.actor=? AND s.action=? AND s.target<>? "
-    "AND json_extract(s.detail, '$.task')=? AND json_extract(s.detail, '$.input')=? "
-    "AND json_extract(s.detail, '$.shot')=?"
+    "SELECT s.target FROM events s INDEXED BY events_actor_action_created WHERE s.actor=? AND s.action=? "
+    "AND s.created_at>=? AND s.target<>? AND json_extract(s.detail, '$.task')=? "
+    "AND json_extract(s.detail, '$.input')=? AND json_extract(s.detail, '$.shot')=?"
 )
 
 
-def _twin(c: Any, who: Any, key: str, said: Row, write: bool = False) -> Problem | None:
-    """A new key's refusal when the card has the same shot (asker, input and name) under another visit's key that is
-    in flight (busy), unknown or reconciled: a stage move never makes it a new shot that may be charged again. One sent
-    and stranded is unknown; `write` marks it so. None outside a card, or with no such shot."""
+def _twin(c: Any, who: Any, key: str, said: Row, write: bool = False) -> Row | Problem | None:
+    """What a new key answers when its card has the same shot (asker, input and name) under another visit's key: one
+    unknown or reconciled is refused, one sent in the last `SWEEP_DAYS` is busy while in flight and unknown once
+    stranded (`write` marks it so), and one started answers its job. A stage move never makes a shot that may be charged
+    again. None outside a card, or with no such shot."""
     if not said.get("task"):
         return None
-    for (other,) in c.execute(_TWINS, (who.actor, SENT, key, said["task"], said["input"], said["shot"])).fetchall():
-        last, detail = _latest(c, str(other))
-        found = _settle(c, who, str(other)) if write else _state(c, str(other), last, detail)
-        if isinstance(found, Problem):
-            return found
+    shot = (key, said["task"], said["input"], said["shot"])
+    for action, since in ((UNKNOWN, ""), (SENT, H.shift(H.now(), days=-SWEEP_DAYS))):
+        for (other,) in c.execute(_TWINS, (who.actor, action, since, *shot)).fetchall():
+            last, detail = _latest(c, str(other))
+            found = _settle(c, who, str(other)) if write else _state(c, str(other), last, detail)
+            if found is not None:
+                return found
     return None
 
 

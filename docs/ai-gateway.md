@@ -362,8 +362,8 @@ judged by status and code (a 4xx, `503 unconfigured`, `502 auth`, `502 http`), l
 outcome is unknown (no answer, a timeout, any other 5xx, a restart mid-call; a shot a restart left unanswered is marked
 unknown within minutes) the shot is never sent again: the request is refused with `reconcile_shot`, and its `shots`
 name every unknown shot of the card by key and name. The card itself waits on its person: "Reconcile 1 shot", in their
-Needs you and status line, until they check Gateway usage and mark the shots reconciled (`tico gateway reconcile TASK --shot KEY`,
-or `POST /api/v2/tasks/{tid}/shots/reconcile`). A reconciled shot is never sent again; the agent names a new shot to
+Needs you and status line, until they check Gateway usage and mark the shots reconciled on the card (or
+`tico gateway reconcile TASK --shot KEY` in their own shell); an agent never may. A reconciled shot is never sent again; the agent names a new shot to
 render it again, and never renders an unknown one again under another name to get around it. A request with no shot name outside a task is keyed to its own Idempotency-Key (one without is refused),
 and a retry under the same key is the same shot, on the card and visit it was first asked on, even after the task moved
 on; the same key with another video or shot name is a 409 `idempotency_conflict`.

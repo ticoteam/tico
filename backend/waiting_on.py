@@ -1070,11 +1070,11 @@ def with_shots(
     """`waits` as the card's reads and Needs you show them: with its paid shots to reconcile, a wait on the card's
     person to check Gateway usage and mark them reconciled (backend/paid_renders.py), first among people's asks. Never
     in `of`: whose turn it is, wakes, Late and moves never see it, so it holds up no agent and no stage. `cards` is
-    paid_renders.cards for a list's reads; one card reads its own. Nothing for a task that waits on nothing (ended)."""
+    paid_renders.cards for a list's reads; one card reads its own. A card that ended shows it too, while it has any."""
     from . import paid_renders
 
     shots = cards.get(str(task_id)) if cards is not None else paid_renders.unsettled(conn, str(task_id))
-    row = E.task(conn, str(task_id)) if shots and waits else None
+    row = E.task(conn, str(task_id)) if shots else None
     if not shots or not row:
         return list(waits)
     keys = tuple((str(shot["key"]), str(shot["name"])) for shot in shots)
@@ -1347,8 +1347,8 @@ def candidates(conn: "sqlite3.Connection", person: str, shots: bool = False) -> 
     found |= _ladder_tasks(conn, person, company, pipelines, stage_asks)
     from . import paid_renders
 
-    if shots:
-        found |= set(paid_renders.cards(conn))  # few, and worked out in full: `_lists` keeps this person's
+    # Few, and worked out in full: `_lists` keeps this person's. A card that ended still asks (`with_shots`).
+    shot_cards = sorted(paid_renders.cards(conn)) if shots else []
     if stages:
         visits |= {
             str(row[0])
@@ -1365,15 +1365,28 @@ def candidates(conn: "sqlite3.Connection", person: str, shots: bool = False) -> 
                 _listed(visits),
             ).fetchall()
         }
+    if shot_cards:
+        shot_cards = [
+            str(row[0])
+            for row in conn.execute(
+                "SELECT id FROM tasks WHERE pipeline_id IS NOT NULL AND id IN (SELECT value FROM json_each(?))",
+                _listed(shot_cards),
+            )
+        ]
     if not found:
-        return []
-    return [
-        str(row[0])
-        for row in conn.execute(
-            _OPEN_SQL.replace("ORDER BY", "AND t.id IN (SELECT value FROM json_each(?)) ORDER BY") % "t.id",
-            _listed(found),
-        ).fetchall()
-    ]
+        return shot_cards
+    return sorted(
+        {
+            *shot_cards,
+            *(
+                str(row[0])
+                for row in conn.execute(
+                    _OPEN_SQL.replace("ORDER BY", "AND t.id IN (SELECT value FROM json_each(?)) ORDER BY") % "t.id",
+                    _listed(found),
+                ).fetchall()
+            ),
+        }
+    )
 
 
 def _dicts(cursor: "sqlite3.Cursor") -> list[Row]:

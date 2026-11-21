@@ -451,7 +451,7 @@ VIDEO_JOB = re.compile(r"gv_[0-9a-f]{24}")
     "optional PNG or JPEG files on this computer. It spends from the company's Gateway cap, held "
     "until the job ends. Name the `shot`: the same shot is made once, and one the Gateway never "
     "confirmed is refused with reconcile_shot: its card asks the task's person to check Gateway usage "
-    "and reconcile it (tico_gateway_reconcile); never render it again under another name.",
+    "and mark it reconciled; never render it again under another name.",
     {
         "prompt": _s("What the video shows"),
         "seconds": {
@@ -557,8 +557,8 @@ def gateway_video_status(api, args):
 
 @tool(
     "tico_gateway_reconcile",
-    "Mark a task's paid shots of unknown outcome reconciled, once its person checked Gateway usage: the `shots` "
-    "keys reconcile_shot named. They leave the card's Reconcile wait and are never sent again: name a new shot to "
+    "For a person: mark a task's paid shots of unknown outcome reconciled, once you checked Gateway usage: the "
+    "`shots` keys its wait shows. They leave the card's Reconcile wait and are never sent again: name a new shot to "
     "render one again. Answers {reconciled: [{key, name}]}.",
     {
         "task": TASK_ID,
@@ -631,7 +631,7 @@ GATEWAY = (
     ),
     Command(
         "gateway reconcile",
-        "mark a task's paid shots reconciled once Gateway usage was checked; they are never sent again",
+        "for a person: mark a task's paid shots reconciled once Gateway usage was checked; never sent again",
         args=(Arg("shots", "--shot", metavar="KEY", required=True),),
         example="tico gateway reconcile 1a2b3c4d --shot shot_0123456789abcdef0123456789abcdef",
     ),

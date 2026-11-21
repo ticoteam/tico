@@ -312,3 +312,4 @@ def test_a_tasks_paid_shots_are_marked_reconciled_from_the_cli(sent):
     with pytest.raises(SystemExit):  # never every shot by default: the keys are needed
         run(["gateway", "reconcile", "1a2b3c4d"])
     assert hubtools.BY_NAME["tico_gateway_reconcile"]["inputSchema"]["required"] == ["task", "shots"]
+    assert "bot" not in hubtools.AUDIENCE["tico_gateway_reconcile"]  # a person's tool, never an agent's

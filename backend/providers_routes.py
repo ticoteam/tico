@@ -356,14 +356,22 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
     )
     def shots_reconcile(tid: str, request: Request, body: M.ShotsReconcile):
         """Mark the card's paid shots of unknown outcome reconciled once its person checked Gateway usage
-        (`tico_gateway_reconcile`, backend/paid_renders.py). Whoever may comment on the card may, checked again on a
-        replay of the same Idempotency-Key. The receipt holds the task the id named, never only what was typed: a
+        (`tico_gateway_reconcile`, backend/paid_renders.py). A person who may comment on the card may, checked again on
+        a replay of the same Idempotency-Key; never an agent. The receipt holds the task the id named, never only what was typed: a
         replay through a prefix that now names another task is a conflict."""
         from types import SimpleNamespace
 
         from . import task_reads
 
         who = request.state.identity
+        if (
+            who.role == "bot"
+            or getattr(who, "via", "")
+            or getattr(who, "task_actor", None)
+            or not H.is_human(who.actor)
+        ):
+            # An agent never clears a wait on its own shots: the person checks Gateway usage.
+            raise Problem("forbidden", "Only a person, signed in as themselves, marks paid shots reconciled", 403)
         with store.read() as c:
             task_id = auth.resolve_task(c, who, tid)
         keyed = SimpleNamespace(model_dump=lambda: {**body.model_dump(), "task": task_id})

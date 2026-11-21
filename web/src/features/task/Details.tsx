@@ -127,6 +127,22 @@ const isShots = (w: { requirement_id: string | null } | null | undefined) => !!w
 /** The shots in batches of 50, the most one Mark reconciled sends. */
 const batches = <T,>(all: T[]) => Array.from({ length: Math.ceil(all.length / 50) }, (_, i) => all.slice(i * 50, i * 50 + 50));
 
+/** Mark reconciled: busy until the server answers, a refusal in a toast. */
+function Reconcile({ task, keys }: { task: string; keys: string[] }) {
+  const [busy, setBusy] = useState(false);
+  const mark = async () => {
+    setBusy(true);
+    const r = await run('task.reconcileShots', { task, shots: keys }, { via: 'click' });
+    setBusy(false);
+    if (!r.ok) toast(failedToast(r));
+  };
+  return (
+    <button type="button" className="dt-act" disabled={busy} aria-busy={busy} onClick={() => void mark()}>
+      Mark reconciled
+    </button>
+  );
+}
+
 /** The waiting question as a line: a leading "❓" goes, since the line already says it waits (and the emoji draws in red). */
 const question = (line: string | null | undefined) => (line ?? '').replace(/^\s*\u2753\uFE0F?\s*/u, '');
 
@@ -224,11 +240,7 @@ export function Details({ t, flow, adding = null, onAdding = () => undefined }: 
         {batches(shots?.shots ?? []).map((batch) => (
           <Kv key={batch[0]!.key} k="">
             <small>{batch.map((s) => s.name || s.key).join(', ')}</small>
-            {t.can_comment && (
-              <button type="button" className="dt-act" onClick={() => void run('task.reconcileShots', { task: t.id, shots: batch.map((s) => s.key) }, { via: 'click' }).then((r) => r.ok || toast(failedToast(r)))}>
-                Mark reconciled
-              </button>
-            )}
+            {t.can_comment && <Reconcile task={t.id} keys={batch.map((s) => s.key)} />}
           </Kv>
         ))}
         <EditKv
