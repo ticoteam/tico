@@ -248,21 +248,33 @@ def test_action_items_wait_out_a_gateway_outage_with_backoff_then_give_up_with_a
     assert _owed(meet, call_id)["finalized_at"] and _owed(meet, call_id)["action_items_posted_at"]
 
 
+REVIEW_ITEM = {"title": "Schedule the reliability review", "quote": SYNTHETIC_SPEECH, "owner": ""}
+REVIEW_SUMMARY = "Ana and Ben agreed to review reliability next week."
+
+
 @pytest.mark.parametrize(
-    "drafted_items",
-    [[], [{"title": "Schedule the reliability review", "quote": SYNTHETIC_SPEECH, "owner": ""}]],
-    ids=["no-items", "with-items"],
+    ("items", "summary", "posted"),
+    [
+        ([], [], []),
+        ([], [REVIEW_SUMMARY], [f"Action items: Acme launch call\n\nSummary:\n- {REVIEW_SUMMARY}"]),
+        ([REVIEW_ITEM], [], ["Action items: Acme launch call\n- Schedule the reliability review"]),
+        (
+            [REVIEW_ITEM],
+            [REVIEW_SUMMARY],
+            [f"Action items: Acme launch call\n- Schedule the reliability review\n\nSummary:\n- {REVIEW_SUMMARY}"],
+        ),
+    ],
+    ids=["nothing", "summary-only", "items-only", "items-and-summary"],
 )
-def test_the_action_items_post_only_when_there_are_some(meet, monkeypatch, drafted_items):
-    monkeypatch.setattr(call_items, "draft", lambda base, key, model, rows: {"summary": [], "items": drafted_items})
+def test_the_action_items_post_when_there_are_items_or_a_summary(meet, monkeypatch, items, summary, posted):
+    monkeypatch.setattr(call_items, "draft", lambda base, key, model, rows: {"summary": summary, "items": items})
     cid = thread(meet)
     call_id = start_call(meet, cid)["id"]
     join(meet, call_id, "ana-test")
     meet.app.state.calls.ingest(call_id, "human:ana", PCM_EIGHT_SECONDS, 0)
     settle(meet)
     post(meet, f"calls/{call_id}/end", {}, token="ana-test")
-    posted = [text for text in thread_texts(meet, cid) if text.startswith("Action items:")]
-    assert posted == (["Action items: Acme launch call\n- Schedule the reliability review"] if drafted_items else [])
+    assert [text for text in thread_texts(meet, cid) if text.startswith("Action items:")] == posted
     assert _owed(meet, call_id)["action_items_posted_at"]  # done, so the sweep does not draft them again
 
 

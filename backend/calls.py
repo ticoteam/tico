@@ -1969,9 +1969,10 @@ class Calls:
                 row = _call(c, call_id)
                 if row["action_items_posted_at"]:
                     return True
-                if items:  # nothing to act on posts nothing; the call is still done with its action items
-                    listed = "\n".join(f"- {item['title']}" for item in items)
-                    body = f"Action items: {row['title']}\n{listed}"
+                if items or summary:  # neither posts nothing; the call is still done with its action items
+                    body = f"Action items: {row['title']}"  # the header is what backend/call_notes.py looks for
+                    if items:
+                        body += "\n" + "\n".join(f"- {item['title']}" for item in items)
                     if summary:
                         body += "\n\nSummary:\n" + "\n".join(f"- {line}" for line in summary)
                     self._post_in_thread(c, row, body, notes=shown)
