@@ -70,6 +70,10 @@ NEEDS_ITEM = obj(
             "rows": items(
                 obj(
                     {
+                        "at": {
+                            "type": "integer",
+                            "description": "The row's place on the card: what Grant's keep names",
+                        },
                         "key": "s",
                         "tool_name": "s",
                         "level": {"type": "string", "enum": ["read", "read_write"]},
@@ -83,7 +87,9 @@ NEEDS_ITEM = obj(
             ),
         },
         "A key proposal's card (backend/key_grants.py): POST "
-        "/api/v2/tools-chat/proposals/{message_id}/grant with the positions of the rows kept (`keep`)",
+        "/api/v2/tools-chat/proposals/{message_id}/grant with the places of the rows kept (`keep`, each row's `at`), "
+        '`positions: "original"` (keep names places on the card as proposed: without it, a card with a row gone '
+        "answers 409) and `seen` (`losses`, the loss preview shown: 409 when it moved)",
     ),
     conversation_id={"type": "string", "description": "The thread a ❓ was written in"},
     root_id={"type": "string", "description": "A ❓'s root thread: the rail row it moves"},

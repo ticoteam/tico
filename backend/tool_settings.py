@@ -417,6 +417,9 @@ def _move_one(c: Any, vault: Any, row: Any) -> Any:
                 c.execute("DELETE FROM tool_calls WHERE tool_id=?", (gone,))
                 c.execute("DELETE FROM tool_checks WHERE tool_id=?", (gone,))
                 c.execute("DELETE FROM tools WHERE id=?", (gone,))
+                from . import key_grants
+
+                key_grants.tool_gone(c, gone)  # a key proposal naming it changes in its person's Needs you
                 H.event(c, "system", "tool.deleted", gone, {"name": env, "keys": 0, "moved_to": tool_id})
         H.event(c, "system", "tool.setting_moved", tool_id, {"name": env, "credential": row["id"]})
         return True

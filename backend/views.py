@@ -2181,8 +2181,17 @@ def needs_still_shown(c, auth, who, items):
 def needs_requests_still(c, auth, who, items):
     """Whether every access request, key card and key proposal in a held build (all of it: they are few, and its counts
     name them too) is still one the caller may settle, by each kind's own checks (request_items)."""
-    held = {str(item["id"]) for item in items if item.get("kind") in REQUEST_KINDS}
-    return not held or held <= {str(item["id"]) for item in request_items(c, auth, who)}
+    held = {str(item["id"]): _rows_of(item) for item in items if item.get("kind") in REQUEST_KINDS}
+    if not held:
+        return True
+    now = {str(item["id"]): _rows_of(item) for item in request_items(c, auth, who)}
+    return all(key in now and now[key] == rows for key, rows in held.items())
+
+
+def _rows_of(item):
+    """A key proposal's rows by their places on the card (`at`): a deleted tool's row leaves, and a held page with the
+    old rows is built again. Other requests have none."""
+    return [row.get("at") for row in (item.get("key_drop") or {}).get("rows") or ()]
 
 
 def needs_key(x):

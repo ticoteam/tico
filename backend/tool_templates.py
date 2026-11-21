@@ -648,6 +648,9 @@ def _apply(c: Any, vault: Any, template_id: Any, label: Any, parts: Any, survivo
         c.execute("UPDATE tool_checks SET tool_id=? WHERE tool_id=?", (survivor["id"], tool["id"]))
         c.execute("DELETE FROM tool_oauth_states WHERE tool_id=?", (tool["id"],))
         c.execute("DELETE FROM tools WHERE id=?", (tool["id"],))
+        from . import key_grants
+
+        key_grants.tool_gone(c, tool["id"])  # a key proposal naming it changes in its person's Needs you
     name = display_name(TS.vendor_name(spec["service"]), label)
     taken = c.execute("SELECT 1 FROM tools WHERE lower(name)=lower(?) AND id<>?", (name, survivor["id"])).fetchone()
     c.execute(

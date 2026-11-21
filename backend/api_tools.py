@@ -1522,6 +1522,9 @@ def delete_tool(c, who, tool_id, admins, kind="api"):
     c.execute("DELETE FROM tool_oauth_states WHERE tool_id=?", (tool_id,))
     c.execute("DELETE FROM tools WHERE id=?", (tool_id,))
     reconnect_tasks.gone(c, tool_id)
+    from . import key_grants
+
+    key_grants.tool_gone(c, tool_id)  # a key proposal naming it changes in its person's Needs you
     H.event(c, who.actor, "tool.deleted", tool_id, {"name": tool["name"], "keys": len(keys)})
     return {"deleted": True, "id": tool_id}
 

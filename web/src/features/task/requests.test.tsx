@@ -40,8 +40,9 @@ const DROP: FlowRequest = {
     state: 'proposed',
     losses: 'l0ss',
     rows: [
-      { key: 'JIRA_LOGIN', tool_name: 'Jira', level: 'read', bots: [{ id: 'bot:builder', name: 'Builder' }], replaces: null },
+      { at: 0, key: 'JIRA_LOGIN', tool_name: 'Jira', level: 'read', bots: [{ id: 'bot:builder', name: 'Builder' }], replaces: null },
       {
+        at: 1,
         key: 'CLOSE_KEY',
         tool_name: 'Close CRM',
         level: 'read_write',
@@ -55,7 +56,7 @@ const DROP: FlowRequest = {
 type Reply = { status?: number; body: unknown };
 const sent: { url: string; body: Record<string, unknown> }[] = [];
 let waiting: FlowRequest[] = [];
-let reply: (url: string) => Reply | null = () => null;
+let reply: (url: string) => Reply | Promise<Reply> | null = () => null;
 
 beforeAll(() => queryClient.setDefaultOptions({ queries: { ...queryClient.getDefaultOptions().queries, retry: false } }));
 beforeEach(() => {
@@ -69,7 +70,7 @@ beforeEach(() => {
     let r: Reply = { body: {} };
     if (method !== 'GET') {
       sent.push({ url: String(url), body: typeof init?.body === 'string' ? (JSON.parse(init.body) as Record<string, unknown>) : {} });
-      r = reply(String(url)) ?? { body: {} };
+      r = (await reply(String(url))) ?? { body: {} };
       if ((r.status ?? 200) === 200 && (r.body as { state?: string }).state !== 'open') waiting = waiting.filter((it) => !String(url).includes(`/${it.id.split(':')[1]}/`));
     } else if (String(url).includes('/needs-you')) r = { body: { actor: 'human:me', items: waiting, next: null } };
     return new Response(JSON.stringify(r.body), { status: r.status ?? 200, headers: { 'Content-Type': 'application/json' } });
@@ -133,6 +134,19 @@ describe('an access request in Needs you', () => {
     await gone('Access request');
   });
 
+  it('holds every button while one answer is with the server', async () => {
+    let answer!: (r: Reply) => void;
+    const pending = new Promise<Reply>((done) => (answer = done));
+    reply = () => pending;
+    show();
+    const box = await card('Access request');
+    fireEvent.click(within(box).getByRole('button', { name: 'Grant' }));
+    await waitFor(() => expect(within(box).getAllByRole('button').every((b) => (b as HTMLButtonElement).disabled)).toBe(true));
+    fireEvent.click(within(box).getByRole('button', { name: 'Decline' }));
+    expect(sent.map((s) => s.url)).toEqual(['/api/v2/access-requests/r1/grant']);
+    answer({ body: { state: 'granted', level: 'read_write' } });
+  });
+
   it('a refusal is said in the card, which stays', async () => {
     reply = () => ({ status: 403, body: { error: { code: 'forbidden', detail: 'You can’t grant this', retryable: false } } });
     show();
@@ -187,8 +201,19 @@ describe('a key-drop proposal in Needs you', () => {
     expect(box.textContent).toContain('Close CRM · Read and write · Sales OwnerReplaces Close old · Tools Owner lose access');
     fireEvent.click(within(box).getByText('Close CRM', { exact: false }));
     fireEvent.click(within(box).getByRole('button', { name: 'Grant selected' }));
-    await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/tools-chat/proposals/m1/grant', body: { keep: [0], seen: 'l0ss' } }]));
+    await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/tools-chat/proposals/m1/grant', body: { keep: [0], seen: 'l0ss', positions: 'original' } }]));
     await gone('Key proposal');
     await waitFor(() => expect(document.querySelector('.toasts')?.textContent).toContain('Granted, 1 not connected: JIRA_LOGIN for Jira'));
+  });
+
+  it('sends only the rows still on the card when a tool is deleted after it was drawn', async () => {
+    show();
+    const box = await card('Key proposal');
+    const [, close] = DROP.key_drop?.rows ?? [];
+    waiting = [{ ...DROP, key_drop: { ...DROP.key_drop!, rows: [{ ...close!, at: 1 }] } }];
+    queryClient.setQueryData(flowQuery.queryKey, { count: 1, items: [], requests: waiting, task_ids: [] });
+    await waitFor(() => expect(within(box).getAllByRole('checkbox')).toHaveLength(1));
+    fireEvent.click(within(box).getByRole('button', { name: 'Grant selected' }));
+    await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/tools-chat/proposals/m1/grant', body: { keep: [1], seen: 'l0ss', positions: 'original' } }]));
   });
 });
