@@ -252,10 +252,11 @@ def resolve(store: Any, who: Any, shot: Shot, operation: str | None = None) -> t
     if write:
         with store.transaction() as c:
             key, said, alias = _shot(c, who, shot, operation, pin)
-            if (
-                found != key
-            ):  # another visit's shot, checked again by its own key: one that started since answers its job
-                detail, state = _latest(c, found)[1], _settle(c, who, found)
+            # Another visit's shot, checked again by its own key: one that started since answers its job, and one
+            # reconciled or refused since blocks nothing, so this visit's shot is worked out as if it were not there.
+            last, detail = _latest(c, found) if found != key else (None, {})
+            if last in (SENT, UNKNOWN, STARTED):
+                state = _settle(c, who, found)
             else:
                 found, detail, state = _answer(c, who, key, said, write=True)
             if state is not None:
