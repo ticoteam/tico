@@ -185,10 +185,13 @@ def decide(
         own = bool(holder) and role in ("owner", "human") and (holder == who.actor or manages(c, who, holder, auth))
         return Decision(is_admin or own, "Ask a credential administrator or the account's holder to change this login.")
     if action == GRANT and subject and via in ("tools-owner", "assistant") and not getattr(who, "confirmed", False):
-        if not subject.startswith("bot:") and subject != "bots":
+        # One named bot at a time: a person, a team or every bot (`bots`, which takes in the built-in that acted) is
+        # the person's own tap.
+        if not subject.startswith("bot:"):
+            named = "every agent" if subject == "bots" else subject
             return Decision(
                 False,
-                f"Giving {subject} access is the person's own tap in Tools: open it and add them under Who can use it",
+                f"Giving {named} access is the person's own tap in Tools: open it and add them under Who can use it",
                 extra={"fix": "Add them under Who can use it", "link": "#/tools/keys?show=credentials"},
             )
     if action == GRANT and resource.kind in (KEY, ACCOUNT) and subject.startswith(("bot:", "human:")):

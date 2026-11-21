@@ -36,7 +36,9 @@ def test_sync_bot_repos_setup_overrides_and_unreachable(api, gh):
     assert rows['Acme/product']['setup_command'] == 'make install'
     assert rows['Acme/product']['setup_source'] == 'settings'
     assert api.get('/api/v2/repositories', headers=auth('person-test')).status_code == 200
-    assert api.get('/api/v2/bots/cpo/repositories', headers=auth('person-test')).status_code == 200
+    # A teammate reads an agent's repositories; only the owner or an admin may change them, and the read says which.
+    assert api.get('/api/v2/bots/cpo/repositories', headers=auth('person-test')).json()['can_change'] is False
+    assert api.get('/api/v2/bots/cpo/repositories', headers=auth()).json()['can_change'] is True
     assert (
         api.put('/api/v2/repositories/Acme/product', json={'enabled': False}, headers=auth('person-test')).status_code
         == 403

@@ -16,8 +16,8 @@ run is never a problem: it puts no tool under Needs you (Tools marks a proxied t
 A tool also holds Settings, its non-secret values (a host, a region, a project id), each delivered as a variable to
 every run that holds a level on the tool (backend/tool_settings.py). Tools lists one row a vendor (`vendor` on a row,
 `tool_services.vendor_of`: the tool's `service`, which a person may set, else its name, its keys' variables or its
-address), and `GET /api/v2/tool-vendors/{vendor}` answers a vendor's page in one read: its rows, an API tool's with its
-keys, levels and settings. Mailboxes, Tico's numbers and addresses and Tico's own tools have no vendor.
+address), and `GET /api/v2/tool-vendors/{vendor}` answers a vendor's page in one read: its rows, an API tool's with who
+holds which level and whether it is an MCP server. Mailboxes, Tico's numbers and addresses and Tico's own tools have no vendor.
 
 A check is one authenticated GET to the tool's `check_path` (its known service's when it has none:
 tool_services.check_path_for) with each stored key: 2xx is Working, 403 Works (limited) (the vendor knows the key, the
@@ -1882,12 +1882,6 @@ def _index_row(id, kind, name, status_, href, *, detail="", way="", who=(), who_
     }
 
 
-def _vendor(tool, keys):
-    """The vendor Tools lists an API tool under (`tool_services.vendor_of`), from its keys' variables too."""
-    host = tool["base_url"] or _field(tool, "mcp_url") or ""
-    return TS.vendor_of(tool["service"], tool["name"], [k["env"] for k in keys if k["env"]], host)
-
-
 def _api_rows(c, who, admins, view):
     admin = _admin(c, who, admins)
     person = who.role in ("owner", "human") and not who.support
@@ -1895,7 +1889,8 @@ def _api_rows(c, who, admins, view):
     for tool in c.execute("SELECT * FROM tools WHERE kind='api' ORDER BY lower(name), id").fetchall():
         if not (admin and tool["audience"] is None) and not visible(c, who, tool, admins, view.auth):
             if person and tool["audience"] is None:
-                # An Everyone tool a person holds nothing on: its name alone, so they can ask for an agent's access.
+                # An Everyone tool a person holds nothing on: its name and id alone, so they can ask for an agent's
+                # access to it. No service, vendor, address or delivery: nothing about how it is set up.
                 out.append(
                     _index_row(
                         "api:" + tool["id"],
@@ -1904,9 +1899,7 @@ def _api_rows(c, who, admins, view):
                         {"tone": "idle", "text": ""},
                         "#/tools/api/" + tool["id"],
                         needs_you=False,
-                        service=tool["service"],
-                        vendor=_vendor(tool, _keys(c, tool["id"])),
-                        delivery=tool["delivery"],
+                        vendor="",
                         requestable=True,
                     )
                 )
@@ -1933,7 +1926,12 @@ def _api_rows(c, who, admins, view):
                 who_total=len(people),
                 needs_you=state["needs_you"],
                 service=tool["service"],
-                vendor=_vendor(tool, keys),
+                vendor=TS.vendor_of(
+                    tool["service"],
+                    tool["name"],
+                    [k["env"] for k in keys if k["env"]],
+                    tool["base_url"] or _field(tool, "mcp_url") or "",
+                ),
                 delivery=tool["delivery"],
                 private=tool["audience"] is not None,
             )
@@ -2165,17 +2163,19 @@ BUILT_IN_VENDORS = {"github": "github", "slack": "slack"}
 
 def vendor_page(c, who, auth, settings, admins, vendor):
     """`GET /api/v2/tool-vendors/{vendor}`: everything the reader may see of one vendor, as its Tools rows, each API
-    tool's with its keys, who can use it at which level and its settings (`detail`). A vendor with nothing the reader
-    may see is a 404, as a tool is."""
+    tool's with who can use it at which level (at most WHO_MAX, `access_total` all of them) and whether it is an MCP
+    server. Its keys, settings, checks and calls are its own page's (`detail`). A vendor with nothing the reader may see
+    is a 404, as a tool is."""
     vendor = str(vendor or "").strip().lower()
     rows = [r for r in index_rows(c, who, auth, settings, admins) if vendor and r.get("vendor") == vendor]
     if not rows:
         raise Problem("not_found", "No such vendor", 404)
     out = []
     for row in rows[:INDEX_LIMIT_MAX]:
-        if row["kind"] == "api" and not row.get("requestable"):
-            page = detail(c, who, row["id"][len("api:") :], admins, auth)
-            row = row | {k: page[k] for k in ("tool", "keys", "access", "settings", "can_manage", "mcp")}
+        if row["kind"] == "api":
+            tool = _readable(c, who, row["id"][len("api:") :], admins, auth)
+            access = access_rows(c, who, tool["id"], admins, auth)
+            row = row | {"access": access[:WHO_MAX], "access_total": len(access), "mcp": bool(_field(tool, "mcp_url"))}
         out.append(row)
     return {"vendor": vendor, "name": TS.vendor_name(vendor), "rows": out}
 
@@ -2247,12 +2247,12 @@ def install(app, store, auth, settings):
         **api_v2(
             "Tools",
             "getToolVendor",
-            "One vendor's page: its rows on Tools (website logins, MCP servers, API tools, its connections), an API tool's with its keys (never a value), who can use it at which level and its settings",
+            "One vendor's page: its rows on Tools (website logins, MCP servers, API tools, its connections), an API tool's with who can use it at which level (access, at most 8; access_total) and mcp, whether it is an MCP server. A tool's keys and settings are on GET /api/v2/api-tools/{id}",
             "ToolVendor",
         ),
     )
     def tool_vendor(request: Request, vendor: str):
-        """One vendor's page on Tools: its website logins, MCP servers, API tools (keys, levels, settings) and the
+        """One vendor's page on Tools: its website logins, MCP servers, API tools (who holds which level) and the
         connections that are its, as the reader may see them."""
         with store.read_transaction() as c:
             return vendor_page(c, request.state.identity, auth, settings, vault().admins, vendor)

@@ -457,8 +457,9 @@ export interface ServiceKey {
 /** The service's keys on Tools (GET /api/v2/tool-index, then each API tool). A failed read throws: guessing "none"
     would store a second copy of a key already there. */
 export async function serviceKeys(service: KeyProvider): Promise<{ tools: { id: string; name: string; keys: ToolKey[] }[] }> {
-  const idx = await api.get<{ rows?: { id: string; kind: string; name: string; service?: string | null }[] }>('/api/v2/tool-index');
-  const rows = (idx.rows ?? []).filter((r) => r.kind === 'api' && String(r.service ?? '').trim().toLowerCase().replace(/_/g, '-') === service);
+  const idx = await api.get<{ rows?: { id: string; kind: string; name: string; service?: string | null; requestable?: boolean }[] }>('/api/v2/tool-index');
+  // A tool listed by name alone (`requestable`) is not the reader's: its page is a 404.
+  const rows = (idx.rows ?? []).filter((r) => r.kind === 'api' && !r.requestable && String(r.service ?? '').trim().toLowerCase().replace(/_/g, '-') === service);
   const tools = await Promise.all(
     rows.map(async (r) => {
       const id = String(r.id).replace(/^api:/, '');

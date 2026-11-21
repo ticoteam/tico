@@ -891,6 +891,10 @@ def register(c, auth, settings, who, bot, body, admins=()):
         entry = access_entry.clean(body.model_dump())
     except access_entry.EntryError as exc:
         raise Problem(exc.code, str(exc), 422) from None
+    mcp = entry.get("mcp")
+    url = str(mcp.get("url") or "") if isinstance(mcp, dict) else ""
+    if url:
+        TA.catalog_only(who, mcp_url=url)  # the Tools Owner's MCP servers are the catalog's, before BotOps gets one
     if body.dry_run:
         return {"ok": True, "yaml": access_entry.to_yaml(entry), "credentials": CREDENTIALS_NOTE}
     grant = covered(c, bot, entry)
@@ -1079,6 +1083,8 @@ def update(c, auth, settings, who, bot, tool_id, body, admins=()):
         if not (old.get("mcp") or body.mcp.get("url")):
             raise Problem("entry", "That tool is not an MCP server yet; send its url as well", 422)
         merged["mcp"] = {**(old.get("mcp") or {}), **body.mcp}
+        if merged["mcp"].get("url") != (old.get("mcp") or {}).get("url"):
+            TA.catalog_only(who, mcp_url=str(merged["mcp"].get("url") or ""))
     try:
         entry = access_entry.clean(merged)
     except access_entry.EntryError as exc:

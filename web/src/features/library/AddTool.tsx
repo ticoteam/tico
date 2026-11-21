@@ -11,7 +11,7 @@ import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
 import { Foot, press, ToolGlyph, trimmed, useGo } from './parts';
 import { ConnectMailboxDialog, MailingAddressDialog, NewAddressDialog, RequestNumberDialog, WebhookDialog } from './ToolDialogs';
-import { catalogQuery, probeMcp, toolsQuery, type CatalogService, type LoginAdd, type McpProbe } from './queries';
+import { addApiTool, catalogQuery, probeMcp, toolsQuery, type CatalogService, type LoginAdd, type McpProbe } from './queries';
 import { useAdmin } from './ToolShell';
 
 /* Find or connect (the plan's catalog-first Add): a service from the catalog, then one of its ways in (Sign in with
@@ -35,7 +35,7 @@ const ADD: Array<[Adding, string, string]> = [
 /** What only an owner or admin adds, as in the old app: a company mailbox, a paid number, a paid address. */
 const ADMIN_ONLY: Adding[] = ['mailbox', 'number', 'address'];
 
-type Way = 'mcp' | 'site';
+type Way = 'mcp' | 'key' | 'site';
 
 /** Find or connect: search the catalog and pick a service, or add a tool by its kind. `vendor` starts on that service's
     ways (a vendor's Add connection): what it offers comes from the catalog alone, never from the vendor's tools. */
@@ -49,6 +49,7 @@ export function ConnectDialog({ vendor, onKind, onClose }: { vendor?: string; on
   const service = catalog.find((s) => s.id === chosen);
   if (service && way === 'mcp') return <AddMcp onClose={onClose} start={{ url: service.mcp_url, name: service.name }} />;
   if (service && way === 'site') return <AddWebsite onClose={onClose} site={service.site} />;
+  if (service && way === 'key') return <PasteKey service={service} onClose={onClose} />;
   if (service) return <Ways service={service} onWay={setWay} onBack={vendor ? undefined : () => setChosen('')} onClose={onClose} />;
   const w = words.trim().toLowerCase();
   const found = catalog.filter((s) => !w || s.name.toLowerCase().includes(w) || s.id.includes(w));
@@ -75,20 +76,10 @@ export function ConnectDialog({ vendor, onKind, onClose }: { vendor?: string; on
   );
 }
 
-/** A catalog service's ways in: its MCP server's sign-in where it has one, a key, and its website. */
+/** A catalog service's ways in: its MCP server's sign-in where it has one, a key (for whoever manages keys), and its
+    website. */
 function Ways({ service, onWay, onBack, onClose }: { service: CatalogService; onWay: (w: Way) => void; onBack?: () => void; onClose: () => void }) {
-  const rows = useQuery(toolsQuery).data?.rows ?? [];
-  const [busy, setBusy] = useState(false);
-  // A key goes on the service's tool the reader already sees, else on a new one made from the catalog's entry.
-  const paste = async () => {
-    const mine = rows.find((r: ToolIndexRow) => r.kind === 'api' && r.service === service.id && !r.requestable);
-    setBusy(true);
-    const done = mine
-      ? await press('tools.open', { tool: mine.id })
-      : await press('tools.addApi', { name: service.name, service: service.id, auth_scheme: service.auth_scheme }, 'Not added');
-    setBusy(false);
-    if (done) onClose();
-  };
+  const admin = useAdmin();
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()} title={service.name} actions={onBack && <Button onClick={onBack}>Back</Button>}>
       <div className="connect-ways">
@@ -97,15 +88,65 @@ function Ways({ service, onWay, onBack, onClose }: { service: CatalogService; on
             {`Sign in with ${service.name}`}
           </Button>
         )}
-        <Button icon="keys" busy={busy} onClick={() => void paste()}>
-          Paste a key
-        </Button>
+        {admin && (
+          <Button icon="keys" onClick={() => onWay('key')}>
+            Paste a key
+          </Button>
+        )}
         {service.site && (
           <Button icon="globe" onClick={() => onWay('site')}>
             Sign in on the website
           </Button>
         )}
       </div>
+    </Dialog>
+  );
+}
+
+const NEW = 'new';
+
+/** A key for a catalog service, on the connection the person picks: one of the service's they see, or a new one, made
+    from the catalog's entry only when the key is sent. The key is only sent, never read back. */
+function PasteKey({ service, onClose }: { service: CatalogService; onClose: () => void }) {
+  const rows = (useQuery(toolsQuery).data?.rows ?? []).filter((r: ToolIndexRow) => r.kind === 'api' && r.service === service.id && !r.requestable);
+  const [target, setTarget] = useState(rows.length ? '' : NEW);
+  const [value, setValue] = useState('');
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    setBusy(true);
+    let tool = target.replace(/^api:/, '');
+    if (target === NEW) {
+      try {
+        tool = (await addApiTool({ name: service.name, service: service.id, auth_scheme: service.auth_scheme })).id;
+      } catch (e) {
+        setBusy(false);
+        toast({ text: e instanceof Error && e.message ? e.message : 'Not added', kind: 'failed' });
+        return;
+      }
+    }
+    const ok = await press('tools.setKey', { tool, value: value.trim() }, 'Not added');
+    setBusy(false);
+    if (!ok) return;
+    onClose();
+    void press('tools.open', { tool: `api:${tool}` });
+  };
+  return (
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title={`Paste a ${service.name} key`}
+      className="connect"
+      actions={<Foot onClose={onClose} label="Save" busy={busy} ready={!!target && !!value.trim()} onGo={() => void save()} />}
+    >
+      {rows.length > 0 && (
+        <Select
+          label="Connection"
+          options={[...rows.map((r) => ({ value: r.id, label: r.name })), { value: NEW, label: 'New connection' }]}
+          value={target}
+          onValueChange={setTarget}
+        />
+      )}
+      <Field label="Key" type="password" value={value} onValueChange={setValue} autoComplete="off" autoFocus wide />
     </Dialog>
   );
 }

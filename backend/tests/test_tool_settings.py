@@ -221,18 +221,18 @@ def test_tools_list_one_row_a_vendor_and_a_vendors_page_holds_its_website_mcp_to
         github: "github",
     }
     assert rows[prod]["vendor_name"] == "Raygun" and rows[aws[0]]["vendor_name"] == "AWS"
-    # The vendor's page, in one read: the website, the MCP token and the key, each API tool with its keys and settings.
+    # The vendor's page, in one read: the website, the MCP token and the key.
     page = get(api, "tool-vendors/raygun")
     assert page["name"] == "Raygun" and {r["id"] for r in page["rows"]} == {prod, staging, mcp, "website:" + site["id"]}
     by_id = {r["id"]: r for r in page["rows"]}
-    assert [k["env"] for k in by_id[prod]["keys"]] == ["RAYGUN_MCP_TOKEN"]
-    assert [(v["name"], v["value"]) for v in by_id[staging]["settings"]] == [("RAYGUN_REGION", "eu")]
+    # A summary: who holds each API tool and whether it is an MCP server; its keys and settings stay on its own page.
+    assert by_id[mcp]["mcp"] is True and by_id[prod]["mcp"] is False and by_id[prod]["access_total"] == 0
+    assert "keys" not in by_id[prod] and "settings" not in by_id[staging]
+    assert [k["env"] for k in get(api, "api-tools/" + prod[4:])["keys"]] == ["RAYGUN_MCP_TOKEN"]
     assert "acme-synthetic" not in json.dumps(page)
-    # A member who holds none of its keys sees only what everyone sees of it: the website, and the API tools by name
-    # alone, to ask for access (no keys, levels or settings).
-    seen = get(api, "tool-vendors/raygun", "cara-test")["rows"]
-    assert {r["id"] for r in seen} == {prod, staging, mcp, "website:" + site["id"]}
-    assert all(r["requestable"] and "keys" not in r and not r["who"] for r in seen if r["kind"] == "api")
+    # A member who holds none of its keys sees only what everyone sees of it: the website. Its API tools are hers to
+    # ask for by name alone, which says no vendor.
+    assert [r["id"] for r in get(api, "tool-vendors/raygun", "cara-test")["rows"]] == ["website:" + site["id"]]
     get(api, "tool-vendors/nobody", expected=404)
     # A person moves a tool to another vendor.
     other = keyed(api, "Ledger export", "LEDGER_KEY")

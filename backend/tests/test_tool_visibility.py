@@ -169,6 +169,7 @@ def test_null_audience_keeps_the_old_rules(api):
     # Tools lists it to her by name alone, to ask for an agent's access: no holders, no status, no key.
     row = index(api, "cara-test")["api:" + tid]
     assert row["requestable"] is True and row["who"] == [] and row["who_total"] == 0 and row["status"]["text"] == ""
+    assert not row["vendor"] and not row["detail"] and "service" not in row and "delivery" not in row
     assert "requestable" not in index(api, "ben-test")["api:" + tid]
 
 

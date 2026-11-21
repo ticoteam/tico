@@ -446,7 +446,7 @@ describe("An agent's Settings", () => {
   });
 
   it('gives it a chosen ticked repository at Read, for this agent alone', async () => {
-    const mine = { mode: 'own', all_access: 'write', chosen: [], all_repos: [], all_ticked: ['acme/api'], effective: [{ full_name: 'acme/ana', access: 'write' }] };
+    const mine = { mode: 'own', all_access: 'write', chosen: [], all_repos: [], all_ticked: ['acme/api'], effective: [{ full_name: 'acme/ana', access: 'write' }], can_change: true };
     serve((url, method) => {
       if (url.endsWith('/bots/ana/repositories')) return ok(method === 'PUT' ? {} : mine);
       if (url.endsWith('/api/v2/repositories')) return ok({ repositories: [{ full_name: 'acme/api', enabled: true }, { full_name: 'acme/old', enabled: false }] });
