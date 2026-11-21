@@ -166,6 +166,7 @@
         "make_page": {"type": "object", "additionalProperties": false, "required": ["task"], "properties": {"task": {"type": "object", "additionalProperties": true}}},
         "task_context": {"$ref": "#/$defs/TaskContext"},
         "updates": {"oneOf": [{"type": "object", "additionalProperties": true}, {"type": "null"}]},
+        "run_header": {"type": "string", "maxLength": 2000, "x-note": "Where the turn's card stands now and, in a person's own Assistant turn, their Needs you and open handoffs (backend/run_header.py), read just after the claim as whoever the turn acts for. The runner puts it in the turn's own part of the prompt, never the standing part. Omitted when there is nothing to say or it could not be read in time; an older server omits it."},
         "session_epoch": {"type": "integer"},
         "bot_session_epoch": {"type": "integer"}
       }

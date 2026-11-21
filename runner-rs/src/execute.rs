@@ -708,18 +708,19 @@ pub(crate) fn replacement_prompt(
     bot: &str,
     key: &str,
 ) -> String {
-    let mut text = crate::prompt::prompt(attempt, names, after, false);
+    let text = crate::prompt::prompt(attempt, names, after, false);
     let checkpoint = truthy(Some(&attempt["task"]["checkpoint"]));
     let stateless = crate::continuity::stateless(&attempt["config"]);
+    let mut notes = String::new();
     if let Some(note) = crate::continuity::Session::new(crate::continuity::NOT_FOUND, None)
         .prompt_note(checkpoint, stateless)
     {
-        text = format!("{text}\n\n{note}");
+        notes = format!("{notes}\n\n{note}");
     }
     if let Some(line) = crate::afterwatch::still_running(bot, key) {
-        text = format!("{text}\n\n{line}");
+        notes = format!("{notes}\n\n{line}");
     }
-    text
+    crate::prompt::before_header(attempt, &text, &notes)
 }
 
 /// How long a saved thread's compaction may take before the turn gives it up for a new session.
@@ -3042,7 +3043,7 @@ impl Runner {
             if let Some(line) = crate::afterwatch::still_running(&bot, &key) {
                 tail = format!("{tail}\n\n{line}");
             }
-            let prompt = format!("{}{tail}", built.text);
+            let prompt = crate::prompt::before_header(&attempt, &built.text, &tail);
             // A resumed session that turns out to be missing restarts as a new one under its id (hosts::Host::full_prompt),
             // given what a new session that replaces it is given: the repo rules, the checkpoint, the room since its
             // last turn with its own replies, and the new-session note.
@@ -3471,7 +3472,7 @@ impl Runner {
                     format!("{primary} was unavailable")
                 };
                 let note = crate::fallback::prompt_note(&because, &primary, &hop);
-                let fresh_text = format!("{}\n\n{note}", crate::prompt::replayed(&attempt, &names, None, false, &replay));
+                let fresh_text = crate::prompt::before_header(&attempt, &crate::prompt::replayed(&attempt, &names, None, false, &replay), &format!("\n\n{note}"));
                 let text = if side_resumed {
                     // Resumed: the checkpoint and the room since its last turn here, its own replies included, not the
                     // replay a new thread needs; the repo rules again, since nothing records that this thread holds them.
@@ -3480,7 +3481,7 @@ impl Runner {
                     resuming["_repo_rules_changed"] = json!(true);
                     let after = self.state.cursor(&th, None).map_err(Fail::runtime)?;
                     let built = crate::prompt::replayed(&resuming, &names, after.as_deref(), true, "");
-                    format!("{built}\n\n{note}\n\n{}", crate::continuity::SIDE_RESUMED)
+                    crate::prompt::before_header(&resuming, &built, &format!("\n\n{note}\n\n{}", crate::continuity::SIDE_RESUMED))
                 } else {
                     fresh_text.clone()
                 };
@@ -7841,6 +7842,31 @@ mod tests {
         ] {
             assert!(text.contains(kept), "{kept} is missing: {text}");
         }
+    }
+
+    #[test]
+    fn a_new_sessions_notes_go_before_the_run_header_which_ends_the_prompt() {
+        let names = crate::prompt::Names {
+            company: "Acme".into(),
+            app: "Tico".into(),
+            assistant: "assistant".into(),
+        };
+        let header = "Run header, read as this run starts (newer than anything earlier in this conversation):\nCard now: Ship is in Build (Engineering); version 3.";
+        let attempt = json!({"id": "a1", "bot": "ops", "_replaced": true, "run_header": header,
+            "conversation": {"id": "c1", "kind": "task"}, "message": {"id": "m3", "body": "Go"},
+            "task": {"id": "t1", "title": "Ship", "checkpoint": "Half done"}, "history": []});
+        let text = replacement_prompt(&attempt, &names, Some("m0"), "ops", "bot");
+        assert!(text.ends_with(&format!("\n\n{header}")), "{text}");
+        let note = text
+            .find("New session: your previous session")
+            .expect("the new-session note");
+        assert!(note < text.find(header).unwrap(), "{text}");
+        let tail =
+            crate::prompt::before_header(&attempt, &text, "\n\nStill running: a background wait.");
+        assert!(
+            tail.ends_with(&format!("Still running: a background wait.\n\n{header}")),
+            "{tail}"
+        );
     }
 
     #[tokio::test]

@@ -36,6 +36,15 @@ Claim attempts may include `task_context`: up to ten pages and ten meetings as i
 It contains no source content. An older server omits it; the runner then renders no context block. The bot pulls
 content with its normal read commands and its own permissions, the same during task work as in any other turn.
 Claim retries rebuild the reference list using current access ([Pages](pages.md#publishing)).
+
+Claim attempts may include `run_header`: at most 2,000 characters on where the turn's card stands now (stage, time in
+it, version, whose turn, what is met and missing, what others changed since the bot's last run there, the stage's rules
+and the org rules the bot follows) and, in a person's own Assistant turn, their Needs you count, its first five items
+and the open tasks their Assistant filed for them. A Make page turn's card is the task it makes the page for. The server
+reads it just after the claim's write, as whoever the turn acts for and as the task's own read shows it to them, and
+leaves it out when it is not ready within 300 ms. The runner puts it at the tail of the turn's own part of the prompt,
+after the room and the current message, never in the standing part, so a resumed session's cached prefix stays the same.
+
 Every saved runner receipt for a Make-page attempt uses the person stored on that attempt, including after it
 finishes. Replays require that person's current task access and the same computer assignment and generation;
 they do not require a live execution lease.
