@@ -374,11 +374,6 @@ def import_messages(c, provider, person, slug, ext_id, messages, images=None, wh
             enqueue(c, {"id": mid, "sender_id": sender, "recipient_id": target, "refs": dumped, "created_at": created})
             for item in attached:
                 c.execute("INSERT INTO message_assets VALUES(?,?)", (mid, item["id"]))
-            if sender == bot:
-                # A synced agent's reply answers its Assistant's ask like any other (backend/assistant_relay.py).
-                from . import assistant_relay
-
-                assistant_relay.replied(c, {"id": mid, "sender_id": bot}, room)
     if added:
         last = c.execute("SELECT max(created_at) FROM messages WHERE conversation_id=?", (room["id"],)).fetchone()[0]
         c.execute("UPDATE conversations SET last_message_at=? WHERE id=?", (last, room["id"]))

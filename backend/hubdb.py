@@ -2190,10 +2190,10 @@ def _write_message(
     if isinstance(refs, dict) and "awaiting_reply" in refs:
         refs = {k: v for k, v in refs.items() if k != "awaiting_reply"}  # server-owned: never a writer's own
     if VIA.get() == "assistant" and kind == "say" and is_human(actor) and is_bot(target) and conv:
-        # The Assistant asked an agent for the person: its first message in this thread comes back to their Assistant
-        # chat (backend/assistant_relay.py).
-        root = conv.get("root_id") or conv["id"]
-        refs = {**(refs or {}), "awaiting_reply": {"person": actor, "agent": target, "root": root}}
+        # The Assistant asked an agent for the person: its first message in this thread (or one under it) comes back to
+        # their Assistant chat (backend/assistant_relay.py).
+        mark = {"person": actor, "agent": target, "root": conv.get("root_id") or conv["id"], "thread": conv["id"]}
+        refs = {**(refs or {}), "awaiting_reply": mark}
     from . import wake_rules
 
     if actor == TICO_ACTOR and str(target).startswith("bot:") and is_human(wake_rules.CAUSE.get()):

@@ -68,6 +68,7 @@ def test_the_agents_first_reply_comes_back_once_with_a_link_that_opens_it(api):
         "person": "human:ben",
         "agent": "bot:ops",
         "root": asked["conversation_id"],
+        "thread": asked["conversation_id"],
     }
     ops_replies(api, "BD finds partners who resell TIDY.\n\nMore detail in the doc.")
     [relay] = relays(api)
@@ -153,6 +154,14 @@ def test_a_relay_that_fails_leaves_the_reply_intact_and_never_reopens_the_marker
 
 def test_one_reply_answers_every_waiting_ask_and_tells_each_person_once(api):
     asked = ask_ops(api, more=("And who leads it?",))
+    with api.app.state.store.transaction() as c:  # many more open asks than any page of them
+        via = H.VIA.set("assistant")
+        try:
+            room = H.conversation(c, asked["conversation_id"])
+            for n in range(60):
+                H._write_message(c, "human:ben", "bot:ops", f"Ask {n}", room, "say", {}, None, None)
+        finally:
+            H.VIA.reset(via)
     ops_writes(api, asked["conversation_id"], "BD finds partners; Dana leads it.")
     assert len(relays(api)) == 1
     with api.app.state.store.read() as c:
@@ -208,7 +217,7 @@ def test_a_reply_naming_a_task_or_carrying_files_has_no_excerpt(api, monkeypatch
         },
         token=token,
     )
-    assert [r["body"].split("\n\n")[0] for r in relays(api)] == ["ops replied", "ops replied"]
+    assert [r["body"].split("\n\n")[0] for r in relays(api)] == ["ops replied"] * 2
 
 
 def test_a_native_dm_with_just_the_agent_is_the_persons_own_chat(api):
@@ -218,9 +227,26 @@ def test_a_native_dm_with_just_the_agent_is_the_persons_own_chat(api):
     with api.app.state.store.transaction() as c:
         dm = threads.dm(c, Identity("human:ben", "human"), ["bot:ops"], private=True)["id"]
         assert H.conversation(c, dm)["scope"] == "direct"
-    ask_ops(api, conversation_id=dm)
+    asked = ask_ops(api, conversation_id=dm)
     ops_writes(api, dm, "BD finds partners.")
     assert [r["body"].split("\n\n")[0] for r in relays(api)] == ["ops replied: BD finds partners."]
+    # Someone added to it since: no longer their own one-to-one chat, whatever the old participant list says.
+    with api.app.state.store.transaction() as c:
+        now = H.now()
+        c.execute(
+            "INSERT INTO thread_members(id,thread_id,actor,role,added_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+            (H.new_id(), dm, "human:ana", "member", "human:ben", now, now),
+        )
+        via = H.VIA.set("assistant")
+        try:
+            H._write_message(
+                c, "human:ben", "bot:ops", "And who leads it?", H.conversation(c, dm), "say", {}, None, None
+            )
+        finally:
+            H.VIA.reset(via)
+    ops_writes(api, dm, "Dana leads it.")
+    assert [r["body"].split("\n\n")[0] for r in relays(api)][1:] == ["ops replied"]
+    assert asked["refs"]["awaiting_reply"]["thread"] == dm
 
 
 def test_a_person_who_has_left_gets_no_relay(api):
@@ -235,15 +261,14 @@ def test_a_person_who_has_left_gets_no_relay(api):
     assert relays(api) == []
 
 
-def test_a_reply_in_a_thread_the_person_no_longer_reads_has_no_excerpt(api):
+def test_a_reply_in_a_thread_the_person_no_longer_reads_is_not_told_at_all(api):
     asked = ask_ops(api, person="cara")
     with api.app.state.store.transaction() as c:
         # The chat now belongs to a private task Cara does not read: she no longer reads the thread.
         secret = H.task_create(c, "human:ana", "Plan the acquisition", "Private.", "bot:ops", private=True, lint=False)
         c.execute("UPDATE conversations SET task_id=? WHERE id=?", (secret["id"], asked["conversation_id"]))
-    reply = ops_writes(api, asked["conversation_id"], "The buyer is Acme.", to="human:cara")
-    [relay] = relays(api)
-    assert relay["body"] == f"ops replied\n\n[Open the reply](#/thread/{asked['conversation_id']}?m={reply['id']})"
+    ops_writes(api, asked["conversation_id"], "The buyer is Acme.", to="human:cara")
+    assert relays(api) == []
 
 
 def test_the_migration_clears_markers_written_before_the_server_owned_them(api):
@@ -255,10 +280,56 @@ def test_the_migration_clears_markers_written_before_the_server_owned_them(api):
         room = H.conversation(c, asked["conversation_id"])
         old = H._write_message(c, "human:ben", "bot:ops", "Older words.", room, "say", {}, None, None)
         c.execute("UPDATE messages SET refs=? WHERE id=?", (json.dumps(forged), old["id"]))
+        nulled = H._write_message(c, "human:ben", "bot:ops", "Null mark.", room, "say", {}, None, None)
+        c.execute("UPDATE messages SET refs='{\"awaiting_reply\": null}' WHERE id=?", (nulled["id"],))
         c.execute("UPDATE messages SET refs=json_remove(refs,'$.awaiting_reply') WHERE id=?", (asked["id"],))
         for statement in Path("backend/migrations/20261121210139_messages_awaiting_reply.sql").read_text().split(";"):
             if statement.strip():
                 c.execute(statement)
         assert json.loads(c.execute("SELECT refs FROM messages WHERE id=?", (old["id"],)).fetchone()[0]) == {}
+        assert json.loads(c.execute("SELECT refs FROM messages WHERE id=?", (nulled["id"],)).fetchone()[0]) == {}
     ops_writes(api, asked["conversation_id"], "BD finds partners.")
     assert relays(api) == []
+
+
+def test_a_post_in_a_sibling_sub_thread_does_not_answer_the_ask(api):
+    from backend import threads
+
+    asked = ask_ops(api)
+    with api.app.state.store.transaction() as c:
+        room = H.conversation(c, asked["conversation_id"])
+        other = H._write_message(c, "human:ben", "bot:ops", "Unrelated.", room, "say", {}, None, None)
+        sibling = threads.sub_thread(c, "human:ben", other["id"])["id"]
+        mine = threads.sub_thread(c, "human:ben", asked["id"])["id"]
+        via = H.VIA.set("assistant")
+        try:
+            H._write_message(
+                c, "human:ben", "bot:ops", "Which partners?", H.conversation(c, mine), "say", {}, None, None
+            )
+        finally:
+            H.VIA.reset(via)
+    ops_writes(api, sibling, "Something else.", to=None)
+    with api.app.state.store.read() as c:
+        waiting = c.execute(
+            "SELECT count(*) FROM messages WHERE json_extract(refs,'$.awaiting_reply.thread')=? "
+            "AND json_extract(refs,'$.awaiting_reply.reply_id') IS NULL",
+            (mine,),
+        ).fetchone()[0]
+    assert waiting == 1
+    ops_writes(api, mine, "Acme and Globex.", to=None)
+    assert any(r["body"].startswith("ops replied") for r in relays(api))
+
+
+def test_an_ask_on_a_tasks_chat_is_relayed_too(api):
+    _, attempt = assistant_turn(api, "ben-test", "Ask ops on the task")
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, "human:ben", "Launch plan", "Plan it.", "bot:ops", lint=False)
+    sent = post(
+        api,
+        "messages",
+        {"to": "ops", "text": "Any update?", "conversation_id": task["conversation_id"]},
+        token=attempt["token"],
+    )
+    assert sent["refs"]["awaiting_reply"]["thread"] == task["conversation_id"]
+    ops_writes(api, task["conversation_id"], "Draft is up.", to=None)
+    assert [r["body"].split("\n\n")[0] for r in relays(api)] == ["ops replied"]

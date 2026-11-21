@@ -24,7 +24,7 @@ import { onJump } from './Outline';
 import { ChatPlace } from './Rich';
 import { quoteFrom, quoteOf, Replying } from './Quote';
 import { SessionLine, type Session } from './Session';
-import { installConversationLive, isDmChanged, liveQuery, liveText, markRead, rowsOf, sendMessage, timelineQuery } from './queries';
+import { installConversationLive, isDmChanged, liveQuery, liveText, markRead, messageSeq, rowsOf, sendMessage, timelineQuery } from './queries';
 import type { ChatMessage, LiveRun, Variant } from './types';
 
 /** Within this many pixels of the end counts as "at the bottom": what comes in is read, and the asks over the box come back. */
@@ -246,28 +246,50 @@ export function Conversation({ id, variant, title, actor, session, from, starter
 
   /* ---- a jump from the Outline or a link's `?m=`: page back until the message is loaded, then bring it to the middle */
   const { fetchNextPage } = timeline;
+  // `live()` turns false once this chat changes or closes: a jump still paging then stops, with no scroll and no toast.
+  // With the message's `seq` the chat pages back until it reaches that seq, however far; without it (the Outline's
+  // jump) it gives up after JUMP_PAGES.
   const goTo = useCallback(
-    (message: string) => {
+    (message: string, live: () => boolean, seq?: number) => {
       void (async () => {
-        for (let n = 0; n <= JUMP_PAGES; n++) {
-          if (scroller.current?.scrollToKey(message)) return;
-          if (n === JUMP_PAGES) break;
+        let oldest = Infinity;
+        for (let n = 0; seq != null || n <= JUMP_PAGES; n++) {
+          if (!live() || scroller.current?.scrollToKey(message)) return;
+          if ((seq == null && n === JUMP_PAGES) || (seq != null && oldest <= seq)) break;
           const r = await fetchNextPage();
           await frame();
+          if (!live()) return;
+          for (const page of r.data?.pages ?? []) for (const m of page.messages) if (typeof m.seq === 'number' && m.seq < oldest) oldest = m.seq;
           if (!r.hasNextPage && !scroller.current?.scrollToKey(message)) break;
         }
-        if (!scroller.current?.scrollToKey(message)) toast({ text: 'That message is not in this chat', kind: 'failed' });
+        if (live() && !scroller.current?.scrollToKey(message)) toast({ text: 'That message is not in this chat', kind: 'failed' });
       })();
     },
     [fetchNextPage],
   );
-  useEffect(() => onJump(id, goTo), [id, goTo]);
+  useEffect(() => {
+    let on = true;
+    const off = onJump(id, (message) => goTo(message, () => on));
+    return () => {
+      on = false;
+      off();
+    };
+  }, [id, goTo]);
+  // A link's `?m=`: the server says first whether this person reads it and where it sits; then the chat loads to it.
   const openedAt = useRef('');
   const loaded = !!timeline.data;
   useEffect(() => {
     if (!openAt || !loaded || openedAt.current === `${id}:${openAt}`) return;
     openedAt.current = `${id}:${openAt}`;
-    void frame().then(() => goTo(openAt));
+    let on = true;
+    void messageSeq(openAt).then((seq) => {
+      if (!on) return;
+      if (seq == null) toast({ text: 'That message is not in this chat', kind: 'failed' });
+      else goTo(openAt, () => on, seq);
+    });
+    return () => {
+      on = false;
+    };
   }, [id, openAt, loaded, goTo]);
 
   /* ---- where the person is: scrolled up past UP_PX, the asks over the box fade; up more than a window, Jump to latest
