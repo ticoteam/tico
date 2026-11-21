@@ -672,8 +672,8 @@ export interface Flow {
   requests?: FlowRequest[];
   /** Every task the Needs you list names, a grouped item's (a paused agent's `task_ids`) each one too. */
   task_ids?: string[];
-  /** Each task with an approval (an OK or a page) that waits on the person, from every row of the list: `items` keeps
-      one row per task, the oldest, which may be another ask (Tico's approval card reads this). */
+  /** Each approval (an OK or a page) that waits on the person, from every row of the list, one per task and one per
+      email's OK: `items` keeps one row per task, the oldest, which may be another ask (the thread cards read this). */
   approvals?: FlowItem[];
 }
 
@@ -715,7 +715,10 @@ export const flowQuery = queryOptions({
       for (const id of [it.task_id, it.task?.id, ...((it as { task_ids?: string[] }).task_ids ?? [])]) if (id) named.add(id);
       const t = it.task;
       if (!t) continue;
-      if ((it.ask?.kind === 'ok' || it.ask?.kind === 'page') && !approvals.has(t.id)) approvals.set(t.id, flowItemOf(it, t));
+      // One approval per entry: an email's OK by its send, so two emails on one task are two approvals.
+      const email = it.ask?.shows?.find((x) => x.startsWith('email:'));
+      const key = email ? `${t.id}:${email}` : t.id;
+      if ((it.ask?.kind === 'ok' || it.ask?.kind === 'page') && !approvals.has(key)) approvals.set(key, flowItemOf(it, t));
       const at = seen.get(t.id);
       if (at !== undefined) {
         const row = items[at];

@@ -350,6 +350,17 @@ describe('the decision', () => {
     expect(await screen.findByRole('menuitem', { name: 'Details' })).toBeTruthy();
   });
 
+  it('reads the day a held email goes live, and drops it once the hold is cleared @approvals', async () => {
+    const held = { ...mail, not_before: '2099-11-25T00:00:00-08:00' };
+    reply = (url) => (url.endsWith('/api/v2/email/sends/s1') ? { body: held } : null);
+    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    const box = await decision();
+    expect(await within(box).findByText('Sends Nov 25')).toBeTruthy();
+    // the case's row on the stream says the hold is gone (live/patch.ts): an explicit null
+    await act(async () => queryClient.setQueryData(['email-send-state', 's1'], (s: object | undefined) => ({ ...s, not_before: null })));
+    expect(await within(box).findByText('Sends now')).toBeTruthy();
+  });
+
   it('says the day a held email goes and flags its archived file @approvals', async () => {
     const held = { ...mail, not_before: '2099-11-25T16:00:00.000000Z', send: { ...mail.send, attachments: [{ part: 2, name: 'letter.pdf', size: 4096, archived: true }] } };
     reply = (url) => (url.endsWith('/api/v2/email/sends/s1') ? { body: held } : null);

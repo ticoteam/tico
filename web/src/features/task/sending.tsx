@@ -171,7 +171,14 @@ export function followSend({ send, to, task, answer }: { send: string; to: reado
 
   let last: Send | undefined;
   const observer = new QueryObserver(queryClient, { ...sendStateQuery(send, true), staleTime: 0 });
+  // Held for its matter's day past the undo window: Undo stays through the window, then the toast says the day and lets go.
+  const heldPast = () => w.kind === 'sending' && !!w.on && countdown(w.until, Date.now()) === null;
+  const settleHeld = () => {
+    stop();
+    updateToast(id, { text: toastLine(w, who, Date.now()), kind: 'done', timeout: 5000 });
+  };
   const tick = setInterval(() => {
+    if (heldPast()) return settleHeld();
     if (w.kind === 'sending' && w.until !== null) show(last);
   }, 1000);
   const limit = setTimeout(() => {
@@ -184,6 +191,7 @@ export function followSend({ send, to, task, answer }: { send: string; to: reado
     const next = whereOf(r.data, true);
     if (!next) return;
     w = next;
+    if (heldPast()) return settleHeld();
     if (w.kind === 'sending') return show(r.data);
     stop();
     if (w.kind === 'sent') updateToast(id, { text: toastLine(w, who, Date.now()), kind: 'done', timeout: 5000 });

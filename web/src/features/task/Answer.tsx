@@ -14,7 +14,7 @@ import { answered } from './answered';
 import { AskCard, Docked, useAnswering } from './AskCard';
 import { HeldDecision, isRuleReview } from './Held';
 import { followSend } from './sending';
-import { addressesOf, answerKey, decisionShownQuery, emailSendQuery, type AnswerKey, type TaskData } from './queries';
+import { addressesOf, answerKey, decisionShownQuery, emailSendQuery, sendStateQuery, type AnswerKey, type TaskData } from './queries';
 
 /* The decision (plan/approvals.html): one box wherever a request waits on the person. It names the thing, who asks and
    what Approve does; Request changes opens one line in it; Approve is the one filled button, bound to exactly what was
@@ -62,7 +62,11 @@ function useNamed(t: TaskData, r: TaskRequirement) {
   const mail = useQuery({ ...emailSendQuery(t.id, send ?? ''), enabled: !!send });
   const all = mail.data ? addressesOf(mail.data).to : [];
   const to = all[0] ?? sendTitle(t.title)?.to;
-  const effect = heldUntil(mail.data?.not_before) ?? effectOf(t, r);
+  // The day it is held for, live: the send's shared state (patched from its case's row) once read, an explicit null
+  // there when the hold was cleared; else the preview's.
+  const state = useQuery({ ...sendStateQuery(send ?? ''), enabled: false }).data;
+  const notBefore = state && 'not_before' in state ? state.not_before : mail.data?.not_before;
+  const effect = heldUntil(notBefore) ?? effectOf(t, r);
   return { name: decisionName(t, r, to ? personOf(to) : undefined), effect, send, recipients: all.length ? all : to ? [to] : [], files: mail.data?.files ?? [] };
 }
 

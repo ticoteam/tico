@@ -5,10 +5,10 @@ import { Icon } from '@/kit/Icon';
 import { besideThread } from '@/lib';
 import { flowQuery, type FlowItem } from '@/features/tasks/routing';
 import { AskCard } from './AskCard';
-import { decisionOf, emailOf, personOf, sendTitle, tabAddress, thingsOf } from './model';
+import { decisionOf, emailOf, personOf, sendTitle, tabAddress, tabsOf, thingsOf } from './model';
 import { taskDetailQuery, taskFilesQuery, type TaskData } from './queries';
 import { matterOf } from './Waiting';
-import { sendTasksOf, sendToGo } from './waits';
+import { isSendTask, sendTasksOf, sendToGo } from './waits';
 
 /* An approval an agent asked for that waits on the person, as a card in the agent's thread at the time it was asked
    (plan/threads-team.html: an approval waiting, as a link in a thread). An OK the agent asked for (an email, a finance
@@ -55,9 +55,11 @@ export function useApprovalCards(scope: ApprovalScope, chat?: string): ChatMessa
     const by = it.ask?.by ?? (it.ask?.kind === 'page' ? it.owner_id : null);
     return by?.startsWith('bot:') ? (byId?.[by]?.id ?? by) : null;
   };
-  const asks = (on ? (data?.items ?? []) : []).filter((it) =>
+  // Each approval entry (`approvals`: one per email's OK), so another ask on the task hides none of them. A case's chat
+  // shows whoever asked (a person too); an agent's thread, what that agent asked.
+  const asks = (on ? (data?.approvals ?? []) : []).filter((it) =>
     hung
-      ? it.ask?.kind === 'ok' && !!whose(it) && hung.has(it.id) && (it.id !== task?.id || !!emailIn(it.ask?.shows ?? []))
+      ? it.ask?.kind === 'ok' && hung.has(it.id) && (it.id !== task?.id || !!emailIn(it.ask?.shows ?? []))
       : (it.ask?.kind === 'ok' || it.ask?.kind === 'page') && !!agent && whose(it) === agent,
   );
   const subs = useQueries({ queries: asks.map((it) => ({ ...taskDetailQuery(it.id), retry: false })) });
@@ -79,8 +81,8 @@ export function useApprovalCards(scope: ApprovalScope, chat?: string): ChatMessa
     } else if (files[i]?.isPending && files[i]?.fetchStatus !== 'idle') return [];
     // The words stand for the card where words are read (a row with none is not drawn).
     const row: ChatMessage = {
-      id: `approval:${it.id}`,
-      sender_id: whose(it) ?? undefined,
+      id: send ? `approval:${it.id}:${send}` : `approval:${it.id}`,
+      sender_id: whose(it) ?? it.ask?.by ?? undefined,
       created_at: it.since,
       kind: 'approval',
       body: `Approve: ${it.title}`,
@@ -99,7 +101,7 @@ export function approvalCard(m: ChatMessage) {
 function ApprovalCard({ task, send, chat }: Approval) {
   const sub = useQuery(taskDetailQuery(task)).data;
   if (!sub) return null;
-  return send ? <EmailCard sub={sub} chat={chat} /> : <ThingCard sub={sub} chat={chat} />;
+  return send ? <EmailCard sub={sub} send={send} chat={chat} /> : <ThingCard sub={sub} chat={chat} />;
 }
 
 /** Any other OK (a page, a file, a finance item): the task's title, and the files it shows as chips. It opens the task's
@@ -115,11 +117,13 @@ function ThingCard({ sub, chat }: { sub: TaskData; chat?: string }) {
     parent or the case that waits on it, `matterOf`): the email's preview is read only on its Email tab, since that
     read counts as showing it. It opens on the case's Email tab, or on the Send task's own page when the case has more
     than one email (the tab would be a guess). */
-function EmailCard({ sub, chat }: { sub: TaskData; chat?: string }) {
+function EmailCard({ sub, send, chat }: { sub: TaskData; send: string; chat?: string }) {
   const matter = matterOf(sub);
   const held = useQuery({ ...taskDetailQuery(matter?.id), retry: false }).data;
   const one = !!matter && (held?.id !== matter.id || sendTasksOf(held).length <= 1);
-  const to = one ? matter.to : tabAddress(sub, undefined, false).to;
+  // An OK on the case itself opens that email's own tab there, never another send's.
+  const own = !isSendTask(sub.title) ? tabsOf(sub).find((x) => x.email === send)?.slug : undefined;
+  const to = own ? tabAddress(sub, own, false).to : one ? matter.to : tabAddress(sub, undefined, false).to;
   const title = sendTitle(sub.title);
   const what = matter?.title ?? title?.subject ?? sub.title;
   return <Card to={to} chat={chat} what={title?.to ? `${what}, to ${personOf(title.to)}` : what} />;

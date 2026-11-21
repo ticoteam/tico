@@ -31,7 +31,8 @@ beforeEach(() => {
   vi.stubGlobal('fetch', async (url: string) => {
     const mine = String(url).endsWith('/api/v2/email/sends/s1');
     if (mine) reads++;
-    const body = mine ? { send: { ...base, ...send }, body: '', bodies: [], preview_complete: true } : {};
+    const { not_before, ...rest } = send;
+    const body = mine ? { send: { ...base, ...rest }, body: '', bodies: [], preview_complete: true, not_before: not_before ?? null } : {};
     return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
   });
   FakeEventSource.all = [];
@@ -82,6 +83,26 @@ describe('the toast after Approve on an email', () => {
     expect(await screen.findByText('Sent to dexter@acme.example')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
     expect(reads).toBe(1);
+    stop();
+  });
+
+  it('held for its matter’s day, keeps Undo through the undo window, then says the day and lets go', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
+    vi.setSystemTime(NOW);
+    send = { state: 'pending', send_after: '2026-11-19T13:21:58Z', not_before: '2026-12-08T00:00:00-08:00' };
+    shown();
+    let stop = () => {};
+    act(() => {
+      stop = followSend({ send: 's1', to: ['dexter@acme.example'], task: 't1', answer: 'a1' });
+    });
+    await vi.waitFor(() => expect(screen.getByText('Sends Dec 8 to dexter@acme.example · undo 1:58')).toBeTruthy());
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeTruthy();
+    await act(async () => {
+      vi.setSystemTime(NOW + 119_000);
+      vi.advanceTimersByTime(1000);
+    });
+    expect(screen.getByText('Sends Dec 8 to dexter@acme.example')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
     stop();
   });
 
