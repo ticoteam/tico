@@ -622,8 +622,8 @@ export interface FlowItem {
   /** The open tasks it holds up. */
   blocks?: { number: number | null }[];
   /** What it asks of the person, when an ask holds it (`ask`): its kind ("ok", "page"), who asked and what it shows
-      ("email:<send id>", "page:<file>@<v>"). */
-  ask?: { kind: string; by: string | null; shows: string[] };
+      ("email:<send id>", "page:<file>@<v>"), and its line. */
+  ask?: { kind: string; by: string | null; shows: string[]; line?: string };
   /** What its ask is about, when the server lets this person read it (Needs you `about`): a page ask's page title, a
       Finance OK's payee and amount. The row shows it in place of the task's title. */
   about?: string;
@@ -664,7 +664,28 @@ export interface Flow {
   items: FlowItem[];
   /** Every task the Needs you list names, a grouped item's (a paused agent's `task_ids`) each one too. */
   task_ids?: string[];
+  /** Each task with an approval (an OK or a page) that waits on the person, from every row of the list: `items` keeps
+      one row per task, the oldest, which may be another ask (Tico's approval card reads this). */
+  approvals?: FlowItem[];
 }
+
+type NeedsRow = Awaited<ReturnType<typeof needsYouItems>>[number];
+
+/** One Needs-you row on a task, as Flow lists it. */
+const flowItemOf = (it: NeedsRow, t: NonNullable<NeedsRow['task']>): FlowItem => ({
+  id: t.id,
+  number: t.number,
+  title: t.title,
+  pipeline_id: t.pipeline_id,
+  stage_id: t.stage_id,
+  owner_id: t.owner_id,
+  late: !!t.late,
+  stuck: !!t.stuck,
+  since: it.since ?? t.stage_since ?? new Date().toISOString(),
+  blocks: t.blocks,
+  ...(it.ask && { ask: { kind: it.ask.kind, by: it.ask.asked_by ?? null, shows: it.ask.shows ?? [], line: it.line } }),
+  ...(it.about && { about: it.about }),
+});
 
 /** Every task that waits on the person, across pipelines (GET /api/v2/needs-you). Asks without a task stay in chats. */
 export const flowQuery = queryOptions({
@@ -675,11 +696,13 @@ export const flowQuery = queryOptions({
     const seen = new Map<string, number>();
     const named = new Set<string>();
     const items: FlowItem[] = [];
+    const approvals = new Map<string, FlowItem>();
     for (const it of await needsYouItems()) {
       // a paused item names its tasks in task_ids (backend/views.py), which the generated type leaves out
       for (const id of [it.task_id, it.task?.id, ...((it as { task_ids?: string[] }).task_ids ?? [])]) if (id) named.add(id);
       const t = it.task;
       if (!t) continue;
+      if ((it.ask?.kind === 'ok' || it.ask?.kind === 'page') && !approvals.has(t.id)) approvals.set(t.id, flowItemOf(it, t));
       const at = seen.get(t.id);
       if (at !== undefined) {
         const row = items[at];
@@ -687,22 +710,9 @@ export const flowQuery = queryOptions({
         continue;
       }
       seen.set(t.id, items.length);
-      items.push({
-        id: t.id,
-        number: t.number,
-        title: t.title,
-        pipeline_id: t.pipeline_id,
-        stage_id: t.stage_id,
-        owner_id: t.owner_id,
-        late: !!t.late,
-        stuck: !!t.stuck,
-        since: it.since ?? t.stage_since ?? new Date().toISOString(),
-        blocks: t.blocks,
-        ...(it.ask && { ask: { kind: it.ask.kind, by: it.ask.asked_by ?? null, shows: it.ask.shows ?? [] } }),
-        ...(it.about && { about: it.about }),
-      });
+      items.push(flowItemOf(it, t));
     }
-    return { count: items.length, items, task_ids: [...named] };
+    return { count: items.length, items, task_ids: [...named], approvals: [...approvals.values()] };
   },
 });
 

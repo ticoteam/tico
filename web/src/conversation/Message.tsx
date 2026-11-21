@@ -243,6 +243,8 @@ export interface MessageProps {
   onRetry?: (m: ChatMessage) => void;
   /** What to draw in place of its text (a call's card), or nothing for a plain message. */
   card?: (m: ChatMessage) => ReactNode;
+  /** What to draw under its words when someone else wrote it (Tico's approval card). */
+  below?: (m: ChatMessage) => ReactNode;
   /** Reply to it: the quote goes above the box. Left out where the person cannot write. */
   onReply?: (m: ChatMessage) => void;
   /** What it answers, drawn above it. */
@@ -291,7 +293,7 @@ function Acts({ reply, read }: { reply: (() => void) | null; read: (() => void) 
 }
 
 /** What someone said. Yours sits in a bubble at the right; a failed send says so and offers Retry. */
-export function Message({ m, variant, me, cont, onRetry, card, onReply, quote, onQuote }: MessageProps) {
+export function Message({ m, variant, me, cont, onRetry, card, below, onReply, quote, onQuote }: MessageProps) {
   const [reading, setReading] = useState(false);
   const [full, setFull] = useState(false);
   const known = useActor(m.sender_name ? undefined : m.sender_id)?.name;
@@ -363,6 +365,7 @@ export function Message({ m, variant, me, cont, onRetry, card, onReply, quote, o
             )}
             {quoted}
             {shown ?? (text && md)}
+            {!m.deleted && below?.(m)}
             <Steps run={m.run} />
             <Shelf m={m} onPicture={pics.openAt} />
             {aid && <Proposal aid={aid} />}
