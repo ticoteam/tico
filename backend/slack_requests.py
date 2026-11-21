@@ -45,6 +45,18 @@ NOT_RUNNING = (
     "The Slack gateway is not answering, so Tico cannot reach Slack for bots. Start it: TICO_SLACK_GATEWAY_ENABLED=1 "
     "and the slack profile in COMPOSE_PROFILES (docs/slack-gateway.md), with the tokens in Tools > Slack."
 )
+HISTORY_REFUSALS = {
+    "not_in_channel": {
+        "code": "slack_not_in_channel",
+        "detail": "Invite @Tico to the Slack channel first.",
+        "status": 403,
+    },
+    "channel_not_found": {
+        "code": "not_found",
+        "detail": "Slack cannot find that channel for the Tico app. Check the channel reference or invite @Tico to it.",
+        "status": 404,
+    },
+}
 
 
 class Refused(Exception):
@@ -197,6 +209,8 @@ def serve(gateway: Any, limit: int = 4, workers: Workers | None = None) -> int:
 
 def answer(gateway: Any, row: Any) -> None:
     """Run one request's handler and write its answer, unless the API stopped waiting for it."""
+    from .slack_gateway import SlackError
+
     store, rid = gateway.store, row["id"]
     params = json.loads(row["params"] or "{}")
     try:
@@ -213,8 +227,10 @@ def answer(gateway: Any, row: Any) -> None:
     except Exception as exc:  # noqa: BLE001 Slack's refusal, Slack unreachable, or a bug: the bot is told, not left waiting
         code = str(getattr(exc, "code", "") or type(exc).__name__)
         state, result_text = "failed", None
-        error = {"code": "slack_failed", "detail": f"Slack refused or could not be reached ({code})", "status": 502}
-        LOG.warning("Slack %s request for %s failed: %s", row["kind"], row["bot"], code)
+        error = HISTORY_REFUSALS.get(code) if row["kind"] == "history" and isinstance(exc, SlackError) else None
+        if error is None:
+            error = {"code": "slack_failed", "detail": f"Slack refused or could not be reached ({code})", "status": 502}
+            LOG.warning("Slack %s request for %s failed: %s", row["kind"], row["bot"], code)
     with store.transaction() as c:
         written = c.execute(
             "UPDATE slack_requests SET state=?,result=?,error=?,updated_at=? WHERE id=? AND state='running'",
