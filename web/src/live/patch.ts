@@ -230,11 +230,14 @@ function patchTasks(batch: TaskEvent[]): void {
   // A relation (a sub-task filed or taken off) on any event of the batch, not only its last: a later update of the same
   // task in the frame never hides it.
   const related = new Set<string>();
+  // A matter's key date changed or was marked done (an `obligations` change) on any event of the batch, likewise.
+  const dated = new Set<string>();
   for (const e of batch) {
     const id = e.id ?? e.task_id;
     if (id) last.set(id, e);
     // A paid shot to reconcile came or went (backend/paid_renders.py): the row carries no waits, so the task reads them again.
     if (id && (e.kinds?.includes('relation') || e.kinds?.includes('shots'))) related.add(id);
+    if (id && e.kinds?.includes('obligations')) dated.add(id);
   }
   for (const [id, e] of last) {
     const detail = ['tasks', 'detail', id];
@@ -251,6 +254,9 @@ function patchTasks(batch: TaskEvent[]): void {
     // waits again on any change: the row carries only their summary, and who they wait on may have moved.
     const shots = !!held?.waits?.some((w) => w.requirement_id?.startsWith('paid_render:'));
     if (held && (related.has(id) || shots)) void queryClient.invalidateQueries({ queryKey: detail, exact: true }, { cancelRefetch: true });
+    // A matter's key date changed or was marked done (an `obligations` change on its task): the stream's row leaves out
+    // the matter, so the task's read, with its dates, starts again.
+    if (dated.has(id)) void queryClient.invalidateQueries({ queryKey: detail, exact: true }, { cancelRefetch: true });
     const task = e.task;
     if (!task) continue;
     // Writing the same data still counts as a write (and a redraw): only a real change is set.
