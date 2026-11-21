@@ -138,6 +138,16 @@ def _hidden(c: Any, who: Who, resource: Resource, admins: Any, auth: Any) -> boo
     return False
 
 
+def _login(c: Any, resource: Resource) -> bool:
+    """A website login: an account, or a vault credential of kind `login` (backend/website_tools.py)."""
+    if resource.kind == ACCOUNT:
+        return True
+    if resource.kind != KEY or not resource.id:
+        return False
+    row = c.execute("SELECT kind FROM credentials WHERE id=?", (resource.id,)).fetchone()
+    return row is not None and row["kind"] == "login"
+
+
 def acting_agent(who: Who) -> str:
     """The agent whose run makes this write, whoever's rights it carries: `by` on a delegation, else the run's own bot
     (`task_actor`, set on every lent identity), else the caller when it is a bot; "" for a person's own write. Every
@@ -183,9 +193,10 @@ def decide(
                 False, "The Tools Owner holds none of the keys it connects: give the level to the bot that needs it"
             )
         return Decision(False, "An agent never gives itself access: a person adds it under Who can use it")
-    # A login shared with every agent (agents added later included) is a person's own tap, never an agent's.
-    if action == GRANT and subject == "bots" and resource.kind == ACCOUNT and (acting or via):
-        return Decision(False, "Sharing a login with every agent is a person's own tap in Tools")
+    # A website login is shared only by a person's own tap: no agent shares one, with anyone's rights or its own, on
+    # any route (every grant of a login reaches here: the vault's `grant` as a key, All bots as an account).
+    if action == GRANT and (acting or via) and _login(c, resource):
+        return Decision(False, "Sharing a website login is a person's own tap in Tools")
     is_admin = admin(c, who, admins)
     if action == AUDIENCE:
         name = resource.name or (resource.row["name"] if resource.row is not None else "this tool")
@@ -330,13 +341,13 @@ def _note(c: Any, who: Who, bot_id: str, admins: Any, auth: Any) -> Decision:
 ADDRESS_FIELDS = ("base_url", "auth_scheme", "check_path")
 
 
-def catalog_only(c: Any, who: Who, service: Any = "", fields: Any = None, mcp_url: str = "") -> None:
-    """The Tools Owner (the Tools page's owner bot, whoever that is: `acting_agent`) defines a tool only from the
-    catalog (backend/tool_services.py): a known service with its own address, scheme and check path, or a vendor's
-    listed MCP server (`mcp_url`), in its own run or with a person's rights alike. An address of its own is a person's
-    to add. Its values never reach it either way (backend/tools_delegation.py)."""
-    acting = acting_agent(who)
-    if not acting or acting != _tools_owner(c):
+def catalog_only(who: Who, service: Any = "", fields: Any = None, mcp_url: str = "") -> None:
+    """The one guard on an address an agent brings (`acting_agent`: BotOps, the Assistant, the Tools Owner or any
+    agent, in its own run or with a person's rights): only the catalog's (backend/tool_services.py), a known service
+    with its own address, scheme and check path, or a vendor's listed MCP server (`mcp_url`). Called before anything
+    reaches the address (a probe, a check) or stores it (a tool, a bot.yaml entry for BotOps). Any other address is a
+    person's to add."""
+    if not acting_agent(who):
         return
     services: Any = importlib.import_module(".tool_services", __package__)
     if mcp_url:
@@ -346,9 +357,7 @@ def catalog_only(c: Any, who: Who, service: Any = "", fields: Any = None, mcp_ur
         given: Any = fields or {}
         ok = bool(known) and all(not given.get(k) or given[k] == known[k] for k in ADDRESS_FIELDS)
     if not ok:
-        raise Problem(
-            "catalog_only", "The Tools Owner adds tools from the catalog only: a person adds any other address", 403
-        )
+        raise Problem("catalog_only", "An agent adds tools from the catalog only: a person adds any other address", 403)
 
 
 def require(

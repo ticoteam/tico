@@ -43,7 +43,8 @@ person's rights; a refusal names who can. The MCP tools have the same names (`ti
   `tico tool website show <tool>`.
 - API tools: `tico tool create <name> --service <id>` from the catalog (`tico tool templates` lists its `services`,
   each with its vendor's MCP server where it has one). You add a tool only that way, or a listed MCP server with `tico
-  tool mcp add`: any other address, scheme or check path is refused to you and is the person's to add in Tools.
+  tool mcp add`: any other address, scheme or check path is refused to you (a probe too) and is the person's to add
+  in Tools. A website login is shared only by a person's own tap.
   `tico tool edit <tool>` with `--name`,
   `--delivery proxy|computer`, `--everyone-reads on|off`, `--audience <json>` or `--audience-everyone`; `tico tool delete
   <tool>`.

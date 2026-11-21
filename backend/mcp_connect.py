@@ -915,7 +915,7 @@ def install(app: Any, store: Any) -> None:
     def probe_mcp_tool(request: Request, body: McpProbe) -> Json:
         """What a remote MCP server offers: a token, an OAuth sign-in (with or without dynamic registration), or nothing
         to sign in with. Credential administrators only; the server is asked from here, never from the browser."""
-        admin(request)
+        TA.catalog_only(admin(request), mcp_url=body.url)  # before anything reaches the address
         found, _meta_ = probe(body.url)
         return found
 
@@ -925,8 +925,7 @@ def install(app: Any, store: Any) -> None:
         receipt: Any = _api()._Receipt
 
         who = admin(request)
-        with store.read() as c:
-            TA.catalog_only(c, who, mcp_url=body.url)  # before the probe reaches the address
+        TA.catalog_only(who, mcp_url=body.url)  # before the probe reaches the address
         found, meta = probe(body.url)
         if body.auth == "token" and body.token is None:
             raise Problem("token", "Paste the token", 422)

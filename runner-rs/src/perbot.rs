@@ -120,14 +120,19 @@ pub fn mcp_for_run(
         .collect();
     let (servers, problems) = crate::mcp::servers_for_run(&tools, &visible, proxied);
     let mut problems = crate::mcp::drop_covered(problems, &tools, from_grants);
-    let servers = crate::mcp::merge(servers, from_grants);
-    for (server, why) in crate::mcp::unsupported(&servers, runtime, harness) {
+    // What the harness cannot take goes first, then one server per connection, then the names.
+    for (server, why) in crate::mcp::unsupported(&servers, runtime, harness)
+        .into_iter()
+        .chain(crate::mcp::unsupported(from_grants, runtime, harness))
+    {
         problems.push(format!(
             "{}: MCP server not passed. {why}",
             text_of(&server["service"])
         ));
     }
-    (crate::mcp::supported(&servers, runtime, harness), problems)
+    let declared = crate::mcp::supported(&servers, runtime, harness);
+    let granted = crate::mcp::supported(from_grants, runtime, harness);
+    (crate::mcp::merge(declared, &granted), problems)
 }
 
 #[cfg(test)]
@@ -163,6 +168,31 @@ mod tests {
         assert!(problems[1].starts_with("docs: MCP server not passed. Codex cannot use it"));
         let (servers, _) = mcp_for_run(&dir, &env, &granted, "claude", "", &[], &[]);
         assert_eq!(servers.len(), 2);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_server_the_harness_cannot_take_never_hides_the_same_connection_it_can() {
+        let dir =
+            std::env::temp_dir().join(format!("tico-perbot-t-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // bot.yaml declares it over SSE, which pi cannot take; the grant brings the same connection over http.
+        std::fs::write(
+            dir.join("bot.yaml"),
+            "tools:\n  - service: notion\n    env: NOTION_KEY\n    mcp: {url: 'https://mcp.notion.com/mcp', transport: sse, headers: {Authorization: 'Bearer ${NOTION_KEY}'}}\n",
+        )
+        .unwrap();
+        let grants = [
+            json!({"name": "notion", "service": "notion", "url": "https://mcp.notion.com/mcp",
+                             "transport": "http", "headers": {"Authorization": "Bearer ${NOTION_KEY}"}, "env": "NOTION_KEY"}),
+        ];
+        let env: Env = [("NOTION_KEY".to_string(), "made-up".to_string())]
+            .into_iter()
+            .collect();
+        let held: BTreeSet<String> = ["NOTION_KEY".to_string()].into_iter().collect();
+        let (servers, _) = mcp_for_run(&dir, &env, &held, "pi", "", &[], &grants);
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0]["transport"], "http");
         std::fs::remove_dir_all(dir).ok();
     }
 

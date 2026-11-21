@@ -122,17 +122,24 @@ def test_the_tools_owner_defines_a_tool_from_the_catalog_only_never_an_address_o
     assert post(api, "api-tools", {"name": "Acme CRM", "base_url": "https://crm.acme.example"})["id"]
 
 
-def test_the_tools_owner_never_shares_a_login_with_every_agent_nor_itself(api):
+def test_no_agent_shares_a_website_login_only_a_persons_own_tap_does(api):
     vault(api)
     site = post(api, "website-tools", {"sites": ["app.acme.example"]})["id"]
     account = post(api, f"website-tools/{site}/accounts", {"password": "acme-synthetic-pass-01"})["id"]
     put(api, "page-owners/tools", {"bot": "ops"})
-    run = turn_of(api, "ops")  # Ana gave the Tools Owner this task
+    run = turn_of(api, "ops")  # Ana gave the Tools Owner this task: her rights
     access = f"website-tools/{site}/accounts/{account}/access/"
-    assert put(api, access + "bots", {"on": True}, run, expected=403)["error"]["code"] == "forbidden"
-    put(api, access + "bot:ops", {"on": True}, run, expected=403)
-    assert put(api, access + "bot:cpo", {"on": True}, run)["on"] is True
-    assert put(api, access + "bots", {"on": True})["on"] is True  # Ana's own tap
+    for subject in ("bots", "bot:ops", "bot:cpo", "human:cara"):
+        assert put(api, access + subject, {"on": True}, run, expected=403)["error"]["code"] == "forbidden", subject
+    # A login made by an agent is never shared with every agent either.
+    made = api.post(
+        f"/api/v2/website-tools/{site}/accounts",
+        json={"username": "ops@acme.example", "all_bots": True},
+        headers=headers(run),
+    )
+    assert made.status_code == 403, made.text
+    assert put(api, access + "bot:cpo", {"on": True})["on"] is True  # Ana's own tap
+    assert put(api, access + "bots", {"on": True})["on"] is True
 
 
 def test_the_tools_owner_registers_an_agents_mcp_server_only_from_the_catalog_before_botops_hears(api):
@@ -193,6 +200,13 @@ def test_botops_with_a_persons_rights_never_shares_a_login_with_every_agent_nor_
     assert "holds none" in refused["error"]["detail"]
     acme = {"name": "Acme CRM", "base_url": "https://crm.acme.example"}
     assert post(api, "api-tools" + lent, acme, run, expected=403)["error"]["code"] == "catalog_only"
+    # A key never rides on an agent's add; the catalog's tool without one does.
+    keyed = post(api, "api-tools" + lent, {"name": "Stripe", "service": "stripe", "key": SECRET}, run, expected=422)
+    assert keyed["error"]["code"] == "secret_in_request" and SECRET not in json.dumps(keyed)
+    assert post(api, "api-tools" + lent, {"name": "Stripe", "service": "stripe"}, run)["service"] == "stripe"
+    # An address an agent brings is the catalog's, before anything reaches it: the probe as well as the add.
+    probe = post(api, "mcp-tools/probe" + lent, {"url": "https://mcp.acme.example/mcp"}, run, expected=403)
+    assert probe["error"]["code"] == "catalog_only"
     assert put(api, f"api-tools/{tid}/access/bot:cpo{lent}", {"level": "read"}, run)["level"] == "read"  # Ana's rights
 
 

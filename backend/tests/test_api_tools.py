@@ -294,6 +294,15 @@ def test_a_tool_and_its_first_key_are_one_write_taken_once(api, monkeypatch):
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM tools WHERE service='stripe'").fetchone()[0] == 1
 
+    # A second connection of the service gets its key in a variable of its own: the plain one stays the first's.
+    second = api.post(
+        "/api/v2/api-tools",
+        json={"name": "Stripe sandbox", "service": "stripe", "key": SECRET_R},
+        headers=headers() | {"Idempotency-Key": "paste-3"},
+    ).json()["id"]
+    envs = [get(api, f"api-tools/{t}")["keys"][0]["env"] for t in (first.json()["id"], second)]
+    assert envs == ["STRIPE_API_KEY", "STRIPE_API_KEY_2"]
+
     def refused(*_args, **_kw):
         raise Problem("secret", "Made-up refusal", 422)
 
@@ -303,4 +312,23 @@ def test_a_tool_and_its_first_key_are_one_write_taken_once(api, monkeypatch):
     )
     assert r.status_code == 422
     with api.app.state.store.read() as c:  # a refused key makes no tool
-        assert c.execute("SELECT count(*) FROM tools WHERE service='stripe'").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM tools WHERE service='stripe'").fetchone()[0] == 2
+
+
+def test_an_agent_never_brings_a_tools_first_key(api):
+    """A key is a person's own paste: refused on an agent's add, with a person's rights or not, and BotOps' body
+    check names it as a secret on this route; the catalog's tool without one still goes."""
+    from dataclasses import replace
+
+    from backend import botops_act
+    from backend.auth import Identity
+
+    setup(api)
+    vault = api.app.state.vault
+    lent = replace(Identity("human:ana", "owner"), via="assistant")
+    body = api_tools.ToolCreate(name="Stripe", service="stripe", key=SECRET_RW)
+    with api.app.state.store.transaction() as c, pytest.raises(Problem) as refused:
+        api_tools.create_tool(c, lent, body, vault.admins, vault)
+    assert refused.value.code == "secret_in_request" and SECRET_RW not in str(refused.value.detail)
+    assert botops_act.secret_in_request("POST", "api-tools", {"name": "Stripe", "key": "x"}) == "key"
+    assert botops_act.secret_in_request("POST", "api-tools", {"name": "Stripe", "service": "stripe"}) is None

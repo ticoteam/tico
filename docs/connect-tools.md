@@ -22,7 +22,9 @@ Tico: use a supported API credential there, or a REST skill.
 
 **Tools → Add** finds a known service in the catalog and offers its ways in: **Sign in with** the vendor (its MCP
 server), **Paste a key**, or **Sign in on the website**. Anything else is added by its kind there (API, MCP server,
-website, webhook, mail). The Tools Owner adds tools from the catalog only, never an address of its own.
+website, webhook, mail). An agent (the Tools Owner, BotOps, the Assistant, with a person's rights or its own) adds a
+tool or an MCP server from the catalog only and probes no other address; a key is pasted and a website login shared
+only by a person in Tools.
 
 1. **The vendor's MCP server, if there is one.** A credential administrator adds it in **Tools → Add → MCP server**
    (its address, then a pasted token or a sign-in) and gives each bot that needs it a level. That grant is all a bot

@@ -585,9 +585,10 @@ def _person(subject, name):
     return {"kind": kind, "id": H.actor_id(subject), "name": name, "initials": _initials(name)}
 
 
-def access_rows(c, who, tool_id, admins, auth=None):
-    """Who can use the tool: one row per subject with an effective grant, its level and last use. Anyone but an
-    administrator (or the Tools page's owner bot, `tools_reader`) sees only their own row and the grants they made."""
+def access_rows(c, who, tool_id, admins, auth=None, usage=True):
+    """Who can use the tool: one row per subject with an effective grant, its level and (`usage`) last use. Anyone but
+    an administrator (or the Tools page's owner bot, `tools_reader`) sees only their own row and the grants they made.
+    A summary (a vendor's page) leaves the uses out: no `last_used_at`, nothing read from the call history."""
     from . import names
 
     admin = _admin(c, who, admins) or tools_reader(c, who)
@@ -610,14 +611,20 @@ def access_rows(c, who, tool_id, admins, auth=None):
     label = names.lookup(c, set(found))
     used = {}
     marks = ",".join("?" * len(keys))
-    for row in c.execute(
-        f"SELECT actor, bot, used_at FROM credential_uses WHERE credential_id IN ({marks})", list(keys)
+    for row in (
+        c.execute(f"SELECT actor, bot, used_at FROM credential_uses WHERE credential_id IN ({marks})", list(keys))
+        if usage
+        else ()
     ):
         subject = "bot:" + row["bot"] if row["bot"] else row["actor"]
         if row["used_at"] > used.get(subject, ""):
             used[subject] = row["used_at"]
-    for row in c.execute(
-        "SELECT actor, bot, max(created_at) AS at FROM tool_calls WHERE tool_id=? GROUP BY actor, bot", (tool_id,)
+    for row in (
+        c.execute(
+            "SELECT actor, bot, max(created_at) AS at FROM tool_calls WHERE tool_id=? GROUP BY actor, bot", (tool_id,)
+        )
+        if usage
+        else ()
     ):
         subject = "bot:" + row["bot"] if row["bot"] else row["actor"]
         if (row["at"] or "") > used.get(subject, ""):
@@ -627,7 +634,9 @@ def access_rows(c, who, tool_id, admins, auth=None):
     out = []
     for subject, level in found.items():
         name = label.get(subject) or H.actor_id(subject)
-        row = {"subject": subject, **_person(subject, name), "level": level, "last_used_at": used.get(subject)}
+        row = {"subject": subject, **_person(subject, name), "level": level}
+        if usage:
+            row["last_used_at"] = used.get(subject)
         # Read on a computer tool is held to reads by the proxy when only a Read and write key holds it; with no API
         # address nothing can, and the row says so. A Read key of its own goes to the run as it is.
         if on_computers and level == "read" and subject.startswith("bot:"):
@@ -1353,7 +1362,7 @@ def create_tool(c, who, body, admins, vault=None):
     TA.require(c, who, TA.tool(), action=TA.CREATE, admins=admins)
     fields = _clean(body.model_dump(exclude={"key"}))
     service = TS.match(service=fields["service"], name=fields["name"])
-    TA.catalog_only(c, who, service, fields)
+    TA.catalog_only(who, service, fields)
     known = TS.defaults(service)
     # A known service's check path belongs to its own address: a tool given another address gets none by default.
     own = not fields["base_url"] or fields["base_url"] == known.get("base_url")
@@ -1375,8 +1384,21 @@ def create_tool(c, who, body, admins, vault=None):
         tool,
     )
     H.event(c, who.actor, "tool.created", tool["id"], {"service": tool["service"], "delivery": tool["delivery"]})
+    if body.key is not None and (TA.acting_agent(who) or getattr(who, "via", "")):
+        # A value is a person's own to paste (plan P4): never an agent's, with anyone's rights or its own.
+        raise Problem("secret_in_request", "A key goes in through a person's own paste in Tools, never an agent", 422)
     if body.key is not None:
-        add_key(c, who, vault, tool["id"], KeyCreate(name="Key", value=body.key))
+        # Its own variable: another connection of the service (Stripe prod, Stripe sandbox) may hold the plain one.
+        base = (
+            TS.defaults(tool["service"]).get("env")
+            or re.sub(r"[^A-Z0-9]+", "_", tool["id"].upper()).strip("_") + "_API_KEY"
+        )
+        base = "_" + base if base[0].isdigit() else base
+        env, n = base, 1
+        while c.execute("SELECT 1 FROM credentials WHERE env=? LIMIT 1", (env,)).fetchone():
+            n += 1
+            env = f"{base}_{n}"
+        add_key(c, who, vault, tool["id"], KeyCreate(name="Key", value=body.key, env=env))
     return _tool_view(tool_row(c, tool["id"]))
 
 
@@ -1408,7 +1430,7 @@ def update_tool(c, who, tool_id, body, admins, auth=None):
     merged = tool | fields
     moved = {k: merged[k] for k in TA.ADDRESS_FIELDS if merged[k] != tool[k]}
     if moved:
-        TA.catalog_only(c, who, merged["service"], moved)
+        TA.catalog_only(who, merged["service"], moved)
     if merged["delivery"] == "proxy" and not merged["base_url"]:
         raise Problem("delivery", f"Set {tool['name']}'s address before moving it to the proxy", 422)
     if merged["delivery"] == "computer" and _field(tool, "mcp_oauth"):
@@ -2185,7 +2207,7 @@ def vendor_page(c, who, auth, settings, admins, vendor):
     for row in rows[:INDEX_LIMIT_MAX]:
         if row["kind"] == "api":
             tool = _readable(c, who, row["id"][len("api:") :], admins, auth)
-            access = access_rows(c, who, tool["id"], admins, auth)
+            access = access_rows(c, who, tool["id"], admins, auth, usage=False)
             row = row | {"access": access[:WHO_MAX], "access_total": len(access), "mcp": bool(_field(tool, "mcp_url"))}
         out.append(row)
     return {"vendor": vendor, "name": TS.vendor_name(vendor), "rows": out}

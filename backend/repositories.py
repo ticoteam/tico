@@ -1589,9 +1589,19 @@ def install(app, store, service):
             validate_identity(c, who)
         return who if who.role == 'bot' and who.actor == 'bot:' + bot else None
 
-    def owner_only(bot, who):
-        """A built-in agent's repositories are the Owner's alone to change (the read's `can_change` says the same)."""
-        return bool(app.state.auth.system_bot(bot)) and who.role != 'owner'
+    def may_change(request, bot):
+        """(who, may change `bot`'s repositories, why not): BotOps in its own run, the owner, or an admin, and a
+        built-in agent's only by the Owner. The PUT and the read's `can_change` both ask this."""
+        by_botops = botops(request, bot)
+        who = by_botops or itself(request, bot) or human(request)
+        if app.state.auth.system_bot(bot) and who.role != 'owner':
+            return who, False, 'Only the Owner changes Built-in bots'
+        ok = (
+            by_botops is not None
+            or who.role == 'owner'
+            or (who.role == 'human' and bool(app.state.auth.bot_admin(who)))
+        )
+        return who, ok, 'Only the owner or an admin changes repository access'
 
     @app.get(
         '/api/v2/bots/{bot}/repositories',
@@ -1600,16 +1610,13 @@ def install(app, store, service):
     def bot_get(request: Request, bot: str):
         with store.read() as c:
             bot = (H.resolve_bot(c, bot) or {}).get('id', bot)
-        who = botops(request, bot) or itself(request, bot) or human(request)
+        who, can_change, _why = may_change(request, bot)
         with store.read() as c:
             if who.role != 'bot' and not app.state.auth.bot_access(c, who, bot)['see']:
                 raise Problem('forbidden', 'This bot is not visible to you', 403)
             row = service.row(c)
             found = access(c, bot, row['org'] if row else store.settings.github_owner)
-        # As the PUT decides for a person: the owner, or an admin for any agent but a built-in one.
-        found['can_change'] = (
-            who.role == 'owner' or (who.role == 'human' and bool(app.state.auth.bot_admin(who)))
-        ) and not owner_only(bot, who)
+        found['can_change'] = can_change
         return found
 
     @app.put(
@@ -1621,9 +1628,9 @@ def install(app, store, service):
     def bot_set(request: Request, bot: str, body: RepoAccessUpdate):
         with store.read() as c:
             bot = (H.resolve_bot(c, bot) or {}).get('id', bot)
-        who = botops(request, bot) or human(request, True)
-        if owner_only(bot, who):
-            raise Problem('forbidden', 'Only the Owner changes Built-in bots', 403)
+        who, ok, why = may_change(request, bot)
+        if not ok:
+            raise Problem('forbidden', why, 403)
         with store.transaction() as c:
             row = service.row(c)
             org = row['org'] if row else store.settings.github_owner
