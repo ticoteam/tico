@@ -515,17 +515,22 @@ def test_an_agents_write_is_rule_checked_before_the_key_goes_in_logged_once_and_
         c.execute("UPDATE tools SET mcp_url='https://api.close.example/mcp' WHERE id='close-crm'")
     assert write("mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).status_code == 200
     assert len(logged()) == 2
-    # With no Idempotency-Key a write is forwarded as before, never judged, and recorded as its own outcome.
-    asked, forwarded = len(judge.read), len(vendor.seen)
+    # With no Idempotency-Key (a stock MCP client, curl) a write is judged all the same; with one, a retry under it
+    # is forwarded again but logs no second event.
+    forwarded = len(vendor.seen)
     assert write("api/v1/lead/", key=False, json=note).status_code == 200
     with api.app.state.store.read() as c:
-        last = c.execute("SELECT action, detail FROM events WHERE action LIKE 'rules.%' ORDER BY rowid DESC").fetchone()
-    assert (last[0], json.loads(last[1])["unchecked"]) == ("rules.unchecked", "no_key")
-    assert len(judge.read) == asked and len(vendor.seen) == forwarded + 1
+        last = c.execute("SELECT action FROM events WHERE action LIKE 'rules.%' ORDER BY rowid DESC").fetchone()
+    assert last[0] == "rules.refused" and len(logged()) == 3  # judged (the same names: the cached verdict)
+    again = {"Authorization": "Bearer " + token, "Idempotency-Key": "lead-2"}
+    for _ in range(2):
+        assert api.post("/api/v2/tool-proxy/close-crm/api/v1/lead/", headers=again, json=note).status_code == 200
+    assert len(logged()) == 4 and len(vendor.seen) == forwarded + 3
+    asked = len(judge.read)
     # A destination refused at its check is never judged: the address is checked and pinned first.
     ANSWERS["api.close.example"] = "10.0.0.5"
     assert write("api/v1/lead/", json=note).status_code == 403
-    assert len(logged()) == 3 and len(judge.read) == asked
+    assert len(logged()) == 4 and len(judge.read) == asked
 
 
 def test_only_an_mcp_read_sent_to_exactly_the_tools_mcp_address_is_not_a_write(api):

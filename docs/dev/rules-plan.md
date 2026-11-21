@@ -458,9 +458,9 @@ reason), the rules in its detail, written in a savepoint so a failure never chan
   goes in the same transaction as the call's own row. Reads, and read-only MCP calls sent to exactly the tool's MCP
   address (the final URL), are never counted; the read-only hints this trusts belong to that tool as made (id, MCP
   address, created_at). A write that would not be made (no right, no usable Idempotency-Key or a replay of one, a
-  paused endpoint, a duplicate email, a release already open) is not judged. A proxied write with no Idempotency-Key is
-  forwarded and recorded unchecked (`tico tools call` sends one); a webhook send that became eligible after its
-  preflight is recorded unchecked. A vendor's own replay under the same key can log a second event.
+  paused endpoint, a duplicate email, a release already open) is not judged. A proxied write is judged with or without
+  an Idempotency-Key (`tico tools call` sends one); with one, a retry under it within a day logs no second event. A
+  webhook send that became eligible after its preflight is recorded unchecked.
 - **Rules › Links** (`/company/rules/links`, from the Rules page's "⋯"; the owner and Admins in person) lists each link
   with its 30-day counts, unchecked apart (a tool's from when it was made), then the Not covered paths: reports to Tico
   support (#4869), tools whose keys go to computers, website tools, and calls a computer makes straight out. A tool is

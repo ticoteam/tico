@@ -24,12 +24,14 @@ What the check reads is names only, never a value (`proxy_output`): for a proxie
 method, an MCP call's method and tool name, and a JSON object body's top-level key names (short plain names: a key that
 could be a credential is left out); for a webhook send its event and endpoint names; for Release now nothing more. No
 path, query, header or value is read, so no credential can reach the judge. It runs before the proxy puts the key in.
-Events never carry the text. A vendor's own replay of a write under the same Idempotency-Key can log a second event.
+Events never carry the text. A proxied write is judged with or without an Idempotency-Key; with one, a retry under it
+within KEY_DAYS logs no second event.
 
 Not covered: reports to Tico support (#4869), a tool whose key goes to computers, a website tool's browser sign-in, and
 any call a computer makes straight out. Rules › Links lists them, unmeasured.
 """
 
+import hashlib
 import json
 import logging
 import re
@@ -53,6 +55,7 @@ FIXED = {"email": "Email", "webhook": "Outgoing webhooks", "release": "Releases"
 UNCOVERED = {"support": "Tico support", "computer": "Calls straight from computers"}  # unmeasured paths, besides tools
 MAX_JUDGED = 1024 * 1024  # a proxied body over this is not parsed for its key names (the check reads the rest)
 OUTCOMES = ("rules.passed", "rules.refused", "rules.held", "rules.unchecked")
+KEY_DAYS = 1  # how long a write's Idempotency-Key keeps a retry under it from logging a second event
 DAYS = 30
 TOOLS_LISTED = 500
 CALLS = 1  # the judge calls one link check may make
@@ -195,11 +198,21 @@ def record(c: Any, found: Found | None, stopped: bool = False) -> Any:
         detail["would"] = True
     if found["for"] != found["actor"]:
         detail["for"] = found["for"]
+    target = "link:" + found["link"]
+    if found.get("key"):
+        # The caller's Idempotency-Key, as a digest: a retry under it within KEY_DAYS logs no second event.
+        detail["key"] = hashlib.sha256(str(found["key"]).encode()).hexdigest()[:32]
+        if c.execute(
+            "SELECT 1 FROM events WHERE action IN (?,?,?,?) AND target=? AND created_at>=? AND actor=? "
+            "AND json_extract(detail, '$.key')=? LIMIT 1",
+            (*OUTCOMES, target, H.shift(H.now(), days=-KEY_DAYS), found["actor"], detail["key"]),
+        ).fetchone():
+            return None
     # Not judged (or the judge out) and nothing found: its own outcome, counted apart from a write that passed.
     action = "rules.unchecked" if found["unchecked"] and found["outcome"] == "passed" else "rules." + found["outcome"]
     c.execute("SAVEPOINT rule_link")
     try:
-        row = H.event(c, found["actor"], action, "link:" + found["link"], detail)
+        row = H.event(c, found["actor"], action, target, detail)
     except Exception:
         c.execute("ROLLBACK TO rule_link")
         c.execute("RELEASE rule_link")
@@ -229,8 +242,8 @@ def mailed(found: Any, result: Any) -> Found:
 
 
 def unchecked(principal: str, sender: str, link: str, operation: str, reason: str) -> Found:
-    """The outcome of an agent's write that is not judged (no Idempotency-Key, eligible only after its check): nothing
-    found, recorded as `rules.unchecked` with `reason`."""
+    """The outcome of an agent's write that is not judged (eligible only after its check): nothing found, recorded as
+    `rules.unchecked` with `reason`."""
     return {
         "link": link,
         "actor": sender,
@@ -258,22 +271,17 @@ def mode(link: str) -> str:
 
 
 def counts(c: Any, links: dict[str, str]) -> dict[str, dict[str, int]]:
-    """{link id: {passed, refused, held, unchecked}}, each since its own time (`links`: {link id: since}): one seek per (outcome,
-    link) on events_action_target, one query per distinct time."""
+    """{link id: {passed, refused, held, unchecked}}, each since its own time (`links`: {link id: since}), in one query:
+    the (target, since) pairs as a json_each list, each a seek on events_action_target (action, target, created_at)."""
     found = {link: {"passed": 0, "refused": 0, "held": 0, "unchecked": 0} for link in links}
-    by_since: dict[str, list[str]] = {}
-    for link, since in links.items():
-        by_since.setdefault(since, []).append("link:" + link)
-    for since, targets in by_since.items():
-        for start in range(0, len(targets), 300):
-            part = targets[start : start + 300]
-            rows: Any = c.execute(
-                "SELECT action, target, count(*) FROM events WHERE action IN (?,?,?,?) "
-                f"AND target IN ({','.join('?' * len(part))}) AND created_at>=? GROUP BY action, target",
-                (*OUTCOMES, *part, since),
-            )
-            for action, target, n in rows:
-                found[str(target)[5:]][str(action)[6:]] = int(n)
+    rows: Any = c.execute(
+        "WITH want(target, since) AS (SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?)) "
+        "SELECT e.action, e.target, count(*) FROM want w JOIN events e ON e.action IN (?,?,?,?) AND e.target=w.target "
+        "AND e.created_at>=w.since GROUP BY e.action, e.target",
+        (json.dumps([["link:" + link, since] for link, since in links.items()]), *OUTCOMES),
+    )
+    for action, target, n in rows:
+        found[str(target)[5:]][str(action)[6:]] = int(n)
     return found
 
 

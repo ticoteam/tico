@@ -669,17 +669,13 @@ def install(app, store):
             # The destination checked and pinned, a write meets the org rules on its names only (the tool, the method,
             # MCP methods and tools, a JSON body's key names: never a value) before it is forwarded with the key
             # (backend/rule_links.py). Log-only: its one outcome event goes with the call's own row, after forwarding.
+            # Judged with or without an Idempotency-Key; one only lets a retry under it log no second event.
+            sent = b''.join(chunks) if small and not gate_calls else None
+            found = await loop().run_in_executor(
+                None, gated, got['subject'], tool_id, tool['name'] or tool_id, method, sent, gate_calls
+            )
             idem = request.headers.get('idempotency-key', '')
-            if not idem or len(idem) > 200:
-                # No usable Idempotency-Key: not judged (a retry could not be told from a new write), recorded
-                # unchecked, and forwarded as before.
-                subject = got['subject']
-                checked['found'] = rule_links.unchecked(subject, subject, 'tool:' + tool_id, 'tool_call', 'no_key')
-            else:
-                sent = b''.join(chunks) if small and not gate_calls else None
-                checked['found'] = await loop().run_in_executor(
-                    None, gated, got['subject'], tool_id, tool['name'] or tool_id, method, sent, gate_calls
-                )
+            checked['found'] = {**found, 'key': idem} if found and 0 < len(idem) <= 200 else found
         client = httpx.AsyncClient(
             transport=getattr(app.state, 'tool_proxy_transport', None),
             timeout=TIMEOUT,
