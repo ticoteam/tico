@@ -943,6 +943,146 @@ pub async fn discard_pass(path: &Path, turn: &Env) -> Result<Vec<String>, String
     }
 }
 
+/// `args`, limited to memory/ and knowledge/.
+fn in_memory<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    args.iter()
+        .copied()
+        .chain(["--"])
+        .chain(MEMORY_FOLDERS.iter().copied())
+        .collect()
+}
+
+/// Whether this is the Assistant's turn in a person's own room (`scope: personal`). One Assistant serves the whole
+/// company, so such a turn keeps nothing in memory/ or knowledge/ (`drop_memory_writes`): what it wrote there could be
+/// one person's private work, which every other person's turn reads.
+pub fn personal_room(attempt: &Value, assistant: &str) -> bool {
+    !assistant.is_empty()
+        && text_of(&attempt["bot"]) == assistant
+        && attempt["conversation"]["scope"] == "personal"
+}
+
+/// A personal-room turn's checkout after its turn (`personal_room`): every change it made under memory/ and knowledge/
+/// since `start`, committed or not, through any tool, is undone before anything is pushed. Its other commits are kept as
+/// one commit of the run. Returns the paths it undid, for the run log, or the problem.
+pub async fn drop_memory_writes(
+    path: &Path,
+    start: &str,
+    aid: &str,
+    turn: &Env,
+) -> Result<Vec<String>, String> {
+    crate::repo_safety::outside_installation(path)?;
+    if start.is_empty() {
+        return Err("the turn's first commit is not known".into());
+    }
+    let env = crate::safegit::committing_environment(turn);
+    let names = |out: &Out| -> Vec<String> {
+        out.stdout
+            .split('\0')
+            .filter(|p| !p.is_empty())
+            .map(String::from)
+            .collect()
+    };
+    let done: Result<Result<Vec<String>, String>, Fault> = async {
+        let committed = g(
+            path,
+            &env,
+            &in_memory(&["diff", "-z", "--name-only", start, "HEAD"]),
+            15,
+        )
+        .await?;
+        let status = g(
+            path,
+            &env,
+            &in_memory(&["status", "-z", "--porcelain", "--untracked-files=all"]),
+            15,
+        )
+        .await?;
+        if !committed.ok() || !status.ok() {
+            return Ok(Err("git could not say what the turn changed".into()));
+        }
+        let mut undone = names(&committed);
+        undone.extend(
+            names(&status)
+                .iter()
+                .filter(|e| e.len() > 3)
+                .map(|e| e[3..].to_string()),
+        );
+        undone.sort();
+        undone.dedup();
+        if undone.is_empty() {
+            return Ok(Ok(undone));
+        }
+        let rewound = !committed.stdout.is_empty();
+        // The turn's commits become staged changes, so the memory folders can be taken out of them.
+        if rewound
+            && !g(path, &env, &["reset", "-q", "--soft", start], 15)
+                .await?
+                .ok()
+        {
+            return Ok(Err("git reset failed".into()));
+        }
+        // Every tracked path there that differs from `start`, in the tree or the index, goes back to it (or goes).
+        let mut tracked = names(
+            &g(
+                path,
+                &env,
+                &in_memory(&["diff", "-z", "--name-only", start]),
+                15,
+            )
+            .await?,
+        );
+        tracked.extend(names(
+            &g(
+                path,
+                &env,
+                &in_memory(&["diff", "-z", "--cached", "--name-only", start]),
+                15,
+            )
+            .await?,
+        ));
+        tracked.sort();
+        tracked.dedup();
+        if !tracked.is_empty() {
+            let literal: Vec<String> = tracked.iter().map(|p| format!(":(literal){p}")).collect();
+            let mut back = vec!["checkout", "-q", "--no-overlay", start, "--"];
+            back.extend(literal.iter().map(String::as_str));
+            if !g(path, &env, &back, 45).await?.ok() {
+                return Ok(Err("git checkout failed".into()));
+            }
+        }
+        if !g(path, &env, &in_memory(&["clean", "-fdq"]), 45)
+            .await?
+            .ok()
+        {
+            return Ok(Err("git clean failed".into()));
+        }
+        if rewound
+            && !g(path, &env, &["diff", "--cached", "--quiet"], 15)
+                .await?
+                .ok()
+        {
+            let message = format!("Changes from run {aid}\n\nTico-Run: {aid}");
+            if !g(
+                path,
+                &env,
+                &["commit", "-q", "--no-verify", "-m", &message],
+                15,
+            )
+            .await?
+            .ok()
+            {
+                return Ok(Err("git commit failed".into()));
+            }
+        }
+        Ok(Ok(undone))
+    }
+    .await;
+    match done {
+        Ok(result) => result,
+        Err(f) => Err(fault_name(&f)),
+    }
+}
+
 /// Take a closed task's worktree and branch away once nothing in it is unsaved. True when gone.
 pub async fn remove(main: &Path, path: &Path, task: &str, turn: &Env) -> bool {
     if crate::repo_safety::outside_installation(main).is_err()
@@ -2085,6 +2225,22 @@ impl Runner {
         };
         let _git = self.lanes.git_lock(&place.main_path).lock_owned().await;
         discard_pass(session, env).await
+    }
+
+    /// A personal-room turn's end, before anything is pushed: `drop_memory_writes` in its checkout, under the checkout's git
+    /// lock. A disposable checkout is never pushed and keeps nothing.
+    pub async fn drop_memory_writes_place(
+        &self,
+        place: &Place,
+        start: &str,
+        aid: &str,
+        env: &Env,
+    ) -> Result<Vec<String>, String> {
+        if place.disposable {
+            return Ok(vec![]);
+        }
+        let _git = self.lanes.git_lock(&place.main_path).lock_owned().await;
+        drop_memory_writes(&place.execution_path, start, aid, env).await
     }
 
     /// A finished task's worktree goes once its turn has ended, unless a file is still waiting to upload from it.

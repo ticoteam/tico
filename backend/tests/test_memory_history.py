@@ -58,6 +58,18 @@ def test_a_reported_update_shows_its_source_only_to_readers_of_that_chat(api):
     assert "Check the live PR" in files["memory/learnings.md"]
 
 
+def test_a_memory_commit_from_a_persons_own_assistant_chat_is_never_recorded(api):
+    """One Assistant serves everyone: what its turn in a person's own room wrote in memory/ is not shown to its readers."""
+    machine = runner(api)
+    assign(api, machine, "assistant")
+    ready(api, machine, ["assistant"])
+    post(api, "assistant/messages", {"text": "My salary is 90k"}, "ben-test")
+    attempt = claim(api, machine, "assistant")
+    body = {"commits": [commit(attempt=attempt["id"], subject="Ben earns 90k")]}
+    assert post(api, "bots/assistant/memory/report", body, machine["token"])["recorded"] == 0
+    assert history(api, "ana-test", "assistant")["updates"] == []
+
+
 def test_only_the_assigned_computer_reports_and_runs_must_be_the_bots_own(api):
     machine, other = runner(api), runner(api, label="Other Mac")
     assign(api, machine, "ops")

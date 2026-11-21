@@ -1,6 +1,7 @@
 """Task reads, writes, run models and org-rule replays."""
 
 import json
+from dataclasses import replace
 from . import views
 from . import read_cache
 from . import person_asks
@@ -875,6 +876,11 @@ def register_core(
             # BotOps filing for a bot that asked it: a bot's request lends nothing, so BotOps files the task as itself,
             # with its own rights, and is its requester (who filed it).
             who = Identity(who.task_actor, "bot", runner_id=who.runner_id, attempt_id=who.attempt_id, agent=who.agent)
+            request.state.identity = who
+        elif who.via == "assistant" and who.attempt_id and who.task_actor and H.is_human(who.actor):
+            # The person's own Assistant turn (auth.assistant_principal) files as the person for this one request, as a
+            # Make page request does: the shared Assistant becomes no reader or owner of a private task it hands on.
+            who = replace(who, task_actor="")
             request.state.identity = who
         cap_before_preflight(request, who, body.owner, body.parent)
         rc = rule_check(

@@ -20,6 +20,7 @@ from fastapi import Request
 from pydantic import Field
 
 from . import models as M
+from . import rooms
 from . import task_privacy as privacy
 from .shared_bots import copies, declared, source_of
 from .store import H, Problem, repo_url
@@ -69,7 +70,19 @@ def _run_of(c, bot, attempt):
     return attempt if row and row["bot_id"] in family(c, bot) else ""
 
 
-def record(c, who, bot, report):
+def personal_turn(c, attempt, assistant_bot):
+    """Whether the run is the Assistant's turn in a person's own room. One Assistant serves everyone, so what such a turn
+    wrote in memory/ or knowledge/ is undone on the runner (runner-rs/src/sessions.rs drop_memory_writes) and never
+    recorded here, where every reader of the bot sees it."""
+    row = c.execute(
+        "SELECT a.bot_id,v.scope FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
+        "JOIN conversations v ON v.id=m.conversation_id WHERE a.id=?",
+        (attempt,),
+    ).fetchone()
+    return bool(row) and row["bot_id"] == assistant_bot and row["scope"] == rooms.PERSONAL
+
+
+def record(c, who, bot, report, assistant_bot):
     """Store what a computer reported for a bot assigned to it. Returns how many commits were new or changed."""
     if not c.execute("SELECT 1 FROM assignments WHERE bot=? AND runner_id=?", (bot, who.runner_id)).fetchone():
         raise Problem("forbidden", "That bot is not assigned to this computer", 403)
@@ -81,6 +94,8 @@ def record(c, who, bot, report):
             continue
         committed = at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
         attempt = _run_of(c, bot, commit.attempt)
+        if attempt and personal_turn(c, attempt, assistant_bot):
+            continue
         before = c.execute(
             "SELECT attempt_id,shared FROM bot_memory_updates WHERE bot=? AND sha=?", (bot, commit.sha)
         ).fetchone()
@@ -200,7 +215,13 @@ def install_memory_history(app, store, auth, mutate):
         if who.role != "runner":
             raise Problem("forbidden", "Only the computer running a bot reports its memory history", 403)
         return mutate(
-            request, body, lambda c: {"recorded": record(c, who, (H.resolve_bot(c, bot) or {}).get("id", bot), body)}
+            request,
+            body,
+            lambda c: {
+                "recorded": record(
+                    c, who, (H.resolve_bot(c, bot) or {}).get("id", bot), body, store.settings.assistant_bot
+                )
+            },
         )
 
     @app.get("/api/v2/bots/{bot}/memory")

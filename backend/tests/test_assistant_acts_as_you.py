@@ -136,6 +136,27 @@ def test_a_run_that_is_not_the_persons_own_chat_lends_nothing(api):
         assert refused.value.code == "on_behalf_of"
 
 
+def test_two_peoples_private_work_stays_apart_and_a_private_handoff_is_filed_as_the_person(api):
+    """One Assistant serves everyone. Ana's own chat neither reads nor writes Ben's private task, and her private handoff
+    is filed as Ana for that one request: the shared Assistant becomes no reader or owner of it, so it still reads none."""
+    ben = post(api, "tasks", {"owner": "ops", "title": "Ben's raise", "body": "Salary.", "private": True}, "ben-test")
+    post(api, "tasks", {"owner": "ops", "title": "Ana's offer", "body": "Offer.", "private": True})
+    r, attempt = assistant_turn(api, "ana-test", text="Hand the payroll check to Ops, privately")
+    token = attempt["token"]
+    get(api, "tasks/" + ben["id"], token, expected=404)
+    post(api, f"tasks/{ben['id']}/comments", {"text": "Seen it"}, token=token, expected=404)
+    assert "Ben's raise" not in json.dumps(get(api, "tasks", token))
+    handed = post(
+        api, "tasks", {"owner": "ops", "title": "Check payroll", "body": "Mine.", "private": True}, token=token
+    )
+    assert handed["requester_id"] == "human:ana" and handed["owner_id"] == "bot:ops" and handed["readers"] == []
+    with api.app.state.store.read() as c:
+        row = H.task(c, handed["id"])
+        assert not H.task_private_readable(c, "bot:assistant", row) and H.task_private_readable(c, "human:ana", row)
+    get(api, "tasks/" + handed["id"], token, expected=404)
+    get(api, "tasks/" + handed["id"], "ben-test", expected=404)
+
+
 def test_a_batch_commit_never_oks_on_an_assistant_walk(api):
     with api.app.state.store.transaction() as c:
         made = H.task_create(c, "human:ana", "Run the LinkedIn ads", "Q4.", "bot:finance", lint=False)

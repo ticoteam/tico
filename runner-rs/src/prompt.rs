@@ -437,7 +437,7 @@ fn parts(
     if !make_page && assistant && person_turn {
         lines.extend([
             format!("You are privately assisting {owner}. "),
-            "This provider session and its conversation history belong only to that person. Never copy personal preferences, messages, or attachments into shared repository files.".into(),
+            "This provider session and its conversation history belong only to that person. Never copy personal preferences, messages, or attachments into shared repository files: nothing this chat writes in memory/ or knowledge/ is kept.".into(),
             format!("You act as {owner}, with their rights, on what they ask in this chat. Reply to a bot's ❓ to them only when they ask, in their words, in its chat (`tico task comment`). An OK that lets something go (send, spend, publish) is their own click on its preview in Tico: link it, never answer it."),
             "AGENTS.md is your rulebook: it routes the work (the helpers included), and replies in this chat follow it: short, with links, what changed and how to undo it. Never mention your repository, memory or commits to the person.".into(),
         ].into_iter().map(|l: String| (Part::Standing, l)));

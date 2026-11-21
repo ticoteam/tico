@@ -2348,6 +2348,8 @@ impl Runner {
         // A stateless bot (the Rules Owner) keeps nothing from one task to the next: a task resumes only its own session, and a
         // chat turn (no task) starts a new session each time and saves none (crate::continuity::stateless).
         let stateless = crate::continuity::stateless(&config);
+        // The Assistant in a person's own room keeps nothing in memory/ or knowledge/ (crate::sessions::personal_room).
+        let personal = crate::sessions::personal_room(&attempt, &self.names().await.assistant);
         let voice_call = attempt["message"]["sender_id"] == "keeper"
             && attempt["message"]["refs"]["live_meeting"]["voice_call"].is_string();
         let voice_reply = voice_call || config["voice_requires_subscription"] == true;
@@ -2782,7 +2784,7 @@ impl Runner {
                 mcp_servers: self.mcp_servers(&aid, &execution_path, &env, &vault, &runtime, &config),
                 background_wait: hosts::background_wait(&config),
                 require_existing_session: !continuing.is_empty(),
-                memory_dir: crate::instructions::memory_dir(&execution_path, stateless || p.disposable),
+                memory_dir: crate::instructions::memory_dir(&execution_path, stateless || personal || p.disposable),
                 output_style: hosts::output_style(&config),
                 verbosity: hosts::verbosity(&config),
             };
@@ -3403,7 +3405,7 @@ impl Runner {
                     mcp_servers: self.mcp_servers(&aid, &execution_path, &hop_env, &vault, &hop.runtime, &hop_config),
                     background_wait: hosts::background_wait(&config),
                     require_existing_session: false,
-                    memory_dir: crate::instructions::memory_dir(&execution_path, stateless || place.as_ref().is_none_or(|p| p.disposable)),
+                    memory_dir: crate::instructions::memory_dir(&execution_path, stateless || personal || place.as_ref().is_none_or(|p| p.disposable)),
                     output_style: hosts::output_style(&config),
                     verbosity: hosts::verbosity(&config),
                 };
@@ -4086,6 +4088,17 @@ impl Runner {
                     Ok(changed) if changed.is_empty() => {}
                     Ok(changed) => self.diagnose(&aid, &format!("Nightly memory tidy: this pass changed {} in its checkout; those changes were discarded and nothing was committed or pushed.", changed.join(", "))),
                     Err(problem) => self.diagnose(&aid, &format!("Nightly memory tidy: could not discard this pass's checkout ({problem}); nothing was pushed.")),
+                }
+            }
+        }
+        // A personal-room turn's writes to memory/ and knowledge/, through any tool, are undone here, whatever ended the
+        // turn and before anything is pushed (crate::sessions::drop_memory_writes).
+        if personal {
+            if let Some(p) = place.as_ref() {
+                match self.drop_memory_writes_place(p, &memory_before, &aid, &env).await {
+                    Ok(undone) if undone.is_empty() => {}
+                    Ok(undone) => self.diagnose(&aid, &format!("A personal chat keeps nothing in memory/ or knowledge/: undid {}.", undone.join(", "))),
+                    Err(problem) => self.diagnose(&aid, &format!("A personal chat keeps nothing in memory/ or knowledge/, but this turn's changes there could not be undone ({problem}).")),
                 }
             }
         }
@@ -7144,6 +7157,7 @@ mod tests {
              echo '{{\"type\": \"system\", \"subtype\": \"init\", \"session_id\": \"'$id'\"}}'\n\
              for c in $(cat '{d}/compacts-'$n 2>/dev/null); do echo '{{\"type\": \"system\", \"subtype\": \"compact_boundary\", \"compact_metadata\": {{\"trigger\": \"auto\"}}}}'; done\n\
              if [ -e '{d}/edits-'$n ]; then mkdir -p memory && echo 'rewritten' > memory/learnings.md && echo 'stray' > stray.txt && git add -A && git -c user.name=Fixture -c user.email=fixture@example.invalid commit -qm 'a pass commit' && echo 'more' >> memory/learnings.md; fi\n\
+             if [ -e '{d}/chat-writes-'$n ]; then echo 'Ana prefers mornings' >> memory/learnings.md && echo 'kept' > kept.txt && git add -A && git -c user.name=Fixture -c user.email=fixture@example.invalid commit -qm 'from a chat' && echo 'Ana earns 1' > knowledge/people.md && echo 'Ana only' > knowledge/company.md; fi\n\
              if [ -e '{d}/refuses-'$n ]; then echo '{{\"type\": \"result\", \"subtype\": \"success\", \"is_error\": true, \"num_turns\": 1, \"errors\": [\"API Error: 400 invalid_request_error: messages.1.content.0: Invalid signature in thinking block\"], \"usage\": {{\"input_tokens\": 348, \"output_tokens\": 0}}}}'; exit 1; fi\n\
              if [ -e '{d}/fails-'$n ]; then echo '{{\"type\": \"result\", \"subtype\": \"error_during_execution\", \"is_error\": true, \"num_turns\": 1, \"errors\": [\"Synthetic failure\"], \"usage\": {{\"input_tokens\": 348, \"output_tokens\": 2}}}}'; exit 1; fi\n\
              echo '{{\"type\": \"assistant\", \"message\": {{\"id\": \"m1\", \"content\": [{{\"type\": \"text\", \"text\": \"Done.\"}}]}}}}'\n\
@@ -9214,6 +9228,159 @@ for line in sys.stdin:
             "the discard is recorded before the turn settles"
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_personal_room_turn_keeps_nothing_it_wrote_in_memory_or_knowledge_by_file_or_shell() {
+        // One Assistant serves everyone: what its turn in Ana's own room writes in memory/ or knowledge/ is undone
+        // before the push, committed (a shell `git commit`) or not (a file tool's write); its other work is kept.
+        let base = Arc::new(Mutex::new(String::new()));
+        let remote_path = Arc::new(Mutex::new(PathBuf::new()));
+        let (base_out, remote_out) = (base.clone(), remote_path.clone());
+        let room = json!({"bot": "assistant", "conversation": {"id": "c1", "kind": "chat", "scope": "personal", "owner_actor": "human:ana@acme.example"}});
+        let (_threads, _prompts, completions, _injected, seen, dir) =
+            claude_rig_kept(&[json!({})], &[], &[], &[], room, move |projects: &Path| {
+                let root = projects.parent().unwrap().to_path_buf();
+                let checkout = projects.join("bot-assistant");
+                let remote = root.join("remote.git");
+                repo_git(
+                    &root,
+                    &[
+                        "init",
+                        "--bare",
+                        "-q",
+                        "-b",
+                        "main",
+                        remote.to_str().unwrap(),
+                    ],
+                );
+                let seed = root.join("seed");
+                repo_git(
+                    &root,
+                    &[
+                        "clone",
+                        "-q",
+                        remote.to_str().unwrap(),
+                        seed.to_str().unwrap(),
+                    ],
+                );
+                std::fs::write(seed.join("AGENTS.md"), "# Assistant\n").unwrap();
+                for (dir, file, text) in [
+                    ("memory", "learnings.md", "Shared lesson\n"),
+                    ("knowledge", "company.md", "Acme\n"),
+                ] {
+                    std::fs::create_dir_all(seed.join(dir)).unwrap();
+                    std::fs::write(seed.join(dir).join(file), text).unwrap();
+                }
+                repo_git(&seed, &["add", "-A"]);
+                repo_git(&seed, &["commit", "-qm", "start"]);
+                repo_git(&seed, &["push", "-q", "origin", "HEAD:main"]);
+                repo_git(
+                    &root,
+                    &[
+                        "clone",
+                        "-q",
+                        remote.to_str().unwrap(),
+                        checkout.to_str().unwrap(),
+                    ],
+                );
+                *base_out.lock().unwrap() = repo_git(&checkout, &["rev-parse", "HEAD"]);
+                *remote_out.lock().unwrap() = remote;
+                std::fs::write(root.join("chat-writes-0"), "").unwrap();
+            })
+            .await;
+        let (base, remote) = (
+            base.lock().unwrap().clone(),
+            remote_path.lock().unwrap().clone(),
+        );
+        assert_eq!(
+            completions[0]["outcome"], "completed",
+            "{:?}",
+            completions[0]
+        );
+        let checkout = dir.join("projects/bot-assistant");
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("memory/learnings.md")).unwrap(),
+            "Shared lesson\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("knowledge/company.md")).unwrap(),
+            "Acme\n"
+        );
+        assert!(
+            !checkout.join("knowledge/people.md").exists(),
+            "the file tool's new file stayed"
+        );
+        assert_eq!(
+            repo_git(&checkout, &["status", "--porcelain"]),
+            "",
+            "something was left behind"
+        );
+        // The runner's own commits before the turn (its template's files) may touch knowledge/; Ana's words never do.
+        let range = format!("{base}..HEAD");
+        assert!(
+            !repo_git(
+                &checkout,
+                &["log", "-p", &range, "--", "memory", "knowledge"]
+            )
+            .contains("Ana"),
+            "a memory commit stayed"
+        );
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("kept.txt")).unwrap(),
+            "kept\n",
+            "the turn's other work went"
+        );
+        assert_eq!(
+            repo_git(&checkout, &["log", "-1", "--format=%s"]),
+            "Changes from run a-claude-0"
+        );
+        let pushed = format!("{base}..main");
+        assert!(
+            repo_git(&remote, &["log", "--format=%s", &pushed])
+                .contains("Changes from run a-claude-0"),
+            "nothing was pushed"
+        );
+        assert!(
+            !repo_git(
+                &remote,
+                &["log", "-p", &pushed, "--", "memory", "knowledge"]
+            )
+            .contains("Ana"),
+            "a memory change reached the remote"
+        );
+        assert!(
+            seen.iter().any(|(_, _, body)| body
+                .to_string()
+                .contains("A personal chat keeps nothing in memory/ or knowledge/: undid")),
+            "the undo was not recorded on the run"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn only_the_assistants_turn_in_a_personal_room_is_kept_out_of_memory() {
+        let turn = |bot: &str, scope: &str| json!({"bot": bot, "conversation": {"scope": scope}});
+        assert!(crate::sessions::personal_room(
+            &turn("assistant", "personal"),
+            "assistant"
+        ));
+        assert!(
+            crate::sessions::personal_room(&turn("coo", "personal"), "coo"),
+            "a renamed Assistant"
+        );
+        assert!(!crate::sessions::personal_room(
+            &turn("ops", "personal"),
+            "assistant"
+        ));
+        assert!(!crate::sessions::personal_room(
+            &turn("assistant", "shared"),
+            "assistant"
+        ));
+        assert!(!crate::sessions::personal_room(
+            &json!({"bot": "assistant", "conversation": {"kind": "task"}}),
+            "assistant"
+        ));
     }
 
     async fn placement_wait_survives_start_window(kind: &str) {
