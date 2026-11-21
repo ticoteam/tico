@@ -2115,6 +2115,14 @@ def install_live_meetings(app, store, auth, write):
 
         def work(c):
             row = _participant(c, auth, who, rid)
+            from . import calls
+
+            call = c.execute(
+                "SELECT thread_id FROM calls WHERE live_meeting_id=? AND state IN ('live','scheduled')", (rid,)
+            ).fetchone()
+            if call and (body.add or body.visibility == "team") and calls.assistant_room(c, call["thread_id"]):
+                # A live or booked call in a person's Assistant chat is theirs alone: its meeting widens to nobody.
+                raise Problem("call_private", "A call in an Assistant chat is private: share it once it ends", 409)
             if who.actor != row["owner_actor"] and (
                 body.visibility is not None or any("human:" + H.actor_id(person) != who.actor for person in body.remove)
             ):
@@ -2272,6 +2280,10 @@ def install_live_meetings(app, store, auth, write):
             attached, added = [], []
             ids = [(H.resolve_bot(c, slug) or {}).get("id", slug) for slug in body.bots]
             check_call_bot_limit(c, rid, ids)
+            from . import calls
+
+            if call := c.execute("SELECT thread_id FROM calls WHERE live_meeting_id=?", (rid,)).fetchone():
+                calls.alone_with_assistant(c, call["thread_id"], ids)
             for slug, bot_id in zip(body.bots, ids, strict=True):
                 _active_bot(c, bot_id)
                 access = auth.bot_access(c, who, bot_id)
@@ -2288,7 +2300,7 @@ def install_live_meetings(app, store, auth, write):
                     added.append(bot_id)
                 if bot_id not in attached:  # one bot named twice (its slug and its id) is attached once
                     attached.append(bot_id)
-            from . import calls, call_sessions
+            from . import call_sessions
 
             if voice := calls.voice_call(c, rid):
                 for bot_id in attached:

@@ -2981,7 +2981,7 @@ impl Runner {
             if voice_call {
                 self.unpaced.lock().unwrap().insert(aid.clone());
                 let d = Drive { limit_name: &limit_name, aid: &aid, host: h, thread: &th, effort: effort.as_deref(), limit, flags: &flags, wake: &wake, redactor: redactor.as_ref(), runtime: &runtime, bot: &bot, session: &key, fresh: None };
-                let primer = text_of(&attempt["message"]["body"]);
+                let primer = voice::with_header(&text_of(&attempt["message"]["body"]), attempt["run_header"].as_str());
                 let meeting = &attempt["message"]["refs"]["live_meeting"];
                 let call_id = meeting["voice_call"].as_str().unwrap_or_default();
                 let stamp = text_of(&meeting["notes_stamp"]);

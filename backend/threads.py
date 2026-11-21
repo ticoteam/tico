@@ -337,6 +337,7 @@ class Viewer:
         # {thread id: whether a member}, while a sidebar page reads (`_prefetch_members`)
         self._members: dict | None = None
         self._member_rows = {}  # {thread id: its member actors}, read once a request (`_member_rows`)
+        self._gone: bool | None = None  # a lease of the shared Assistant whose person may not sign in (`_gone_run`)
 
     @property
     def is_bot(self):
@@ -511,6 +512,21 @@ def _bot_grant(c, v, row):
 _MISSING = (404, "not_found", "Thread not found")
 
 
+def _gone_run(c, v):
+    """A lease of the shared Assistant whose person may no longer sign in (rooms.run_scope "gone") reads no thread: a
+    deny only, never a wider read. Asked once a request."""
+    if v._gone is None:
+        who = v.who
+        lease = v.auth is not None and getattr(who, "attempt_id", "")
+        if lease and H.assistant_actor(c) in (v.actor, getattr(who, "task_actor", "")):
+            from . import rooms
+
+            v._gone = rooms.run_scope(c, who.attempt_id)[0] == "gone"
+        else:
+            v._gone = False
+    return v._gone
+
+
 def denial(c, v, row):
     """None when the viewer reads this thread, else (status, code, message) for why not: always a 404, since an
     unreadable thread is never confirmed to exist. The one Python rendering of C1; `readable`, `require` and
@@ -520,6 +536,8 @@ def denial(c, v, row):
     if row is None or row.get("deleted_at"):
         return _MISSING
     if v.is_person and not v.in_good_standing(c):
+        return _MISSING
+    if _gone_run(c, v):
         return _MISSING
     from .live_privacy import sources
     from .task_privacy import actor as principals
@@ -942,6 +960,8 @@ def readable_sql(
     and task looked up by id) rather than against every readable root and task, built whole for each statement. For a
     statement that tests few rows: building those lists reads every conversation and task."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
+    if _gone_run(c, v):
+        return "0"
     plain = inner is None and meeting is None and conversation is None and tasks == "SELECT id FROM tasks"
     per_row = per_row and plain and alias in ("r", "s")  # never rd or rt, which its own subqueries name
     t = inner or (lambda name: name)
@@ -3547,8 +3567,25 @@ def _with_participants(c, root, added):
         c.execute("UPDATE conversations SET participants=? WHERE id=?", (H._dump(people + fresh), root["id"]))
 
 
+def refuse_while_private_call(c, root):
+    """A call in a person's own Assistant chat is theirs alone (rooms.call_person): nobody is added to the chat, nor
+    the chat linked anywhere outside, while one is on or booked there, so who reads it never widens mid-call."""
+    from . import rooms
+
+    if not rooms.assistant_room_owner(root):
+        return
+    if c.execute(
+        "SELECT 1 FROM calls WHERE state IN ('live','scheduled') "
+        "AND thread_id IN (SELECT id FROM conversations WHERE id=? OR root_id=?) "
+        "LIMIT 1",
+        (root["id"], root["id"]),
+    ).fetchone():
+        raise Problem("call_private", "A call is on or booked in this Assistant chat: add people once it ends", 409)
+
+
 def add_member(c, principal, thread_id, actor, *, role="member"):
     me, v, root = _root_for_membership(c, principal, thread_id)
+    refuse_while_private_call(c, root)
     target = actor if str(actor).startswith(("group:",) + OUTSIDE_PREFIXES) else H.resolve_actor(c, actor)
     if not target:
         raise Problem("not_found", "Unknown teammate", 404)
@@ -5823,6 +5860,7 @@ def add_outside_delivery(c, thread_id, recipient, *, added_by=H.TICO_ACTOR):
     row = thread_row(c, thread_id)
     if row is None:
         raise Problem("not_found", "Thread not found", 404)
+    refuse_while_private_call(c, root_of(c, row))
     now = _now()
     c.execute(
         "INSERT OR IGNORE INTO thread_members(id,thread_id,actor,role,added_by,created_at,updated_at) "

@@ -5655,6 +5655,8 @@ class Execution:
                     **(
                         {"personal": True}
                         if rooms.personal_run(c, self.store.settings.assistant_bot, row["bot_id"], conv, task)
+                        # The Assistant's voice session in a call that is its person's alone: pinned to them now.
+                        or (voice_call and rooms.pin_call_lease(c, aid, row["id"]))
                         else {}
                     ),
                     "task": wire_task,

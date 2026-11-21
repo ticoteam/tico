@@ -182,6 +182,9 @@ def ring(c: Any, auth: Any, who: Any, call_id: str, actor: str) -> tuple[Row, Ro
         raise Problem("not_found", "Call not found", 404)
     if row["state"] != "live":
         raise Problem("call_ended", "This call has ended", 409)
+    if C.assistant_room(c, row["thread_id"]):
+        # A call in a person's Assistant chat is theirs alone: nobody is rung into it, nor added to the chat for it.
+        raise Problem("call_private", "A call in an Assistant chat rings nobody", 409)
     target = str(H.resolve_actor(c, actor) or actor)
     if not str(target).startswith("human:"):
         raise Problem("not_a_person", "Only a person is rung; add a bot to the call instead", 422)

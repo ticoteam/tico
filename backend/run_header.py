@@ -159,11 +159,26 @@ def for_turn(c: Any, auth: Any, attempt: Row, deadline: float = float("inf")) ->
     # The task the run was recorded for (a carrier in one task's room may start another's run), or a Make page target.
     task_id = str(making.get("id") or row["task_id"] or "")
     lines = card(c, auth, who, bot, task_id, making=bool(making)) if task_id else []
-    if acting is None:
+    # Their own Assistant turn, a Make page one included (Auth.assistant_principal), or the Assistant's voice session in
+    # a private call in their own chat (`call_reader`), which gets the same snapshot their own chat does.
+    reader = acting or call_reader(c, auth, row)
+    if reader is None:
         return lines, 0
-    # Their own Assistant turn, a Make page one included (Auth.assistant_principal).
-    told, unseen = snapshot(c, auth, acting, lines, deadline)
+    told, unseen = snapshot(c, auth, reader, lines, deadline)
     return lines + told, unseen
+
+
+def call_reader(c: Any, auth: Any, attempt: Row) -> Any:
+    """The person a voice-session lease reads the snapshot as, with their rights and nobody more (auth.chat_person: not
+    once they may not sign in): the one it was claimed for at its claim (rooms.pin_call_lease), while the call is still
+    theirs alone (rooms.call_person); else None."""
+    from . import rooms as _rooms
+
+    rooms: Any = _rooms
+    person = rooms.pinned_person(c, attempt["id"])
+    if not person or rooms.call_person(c, attempt["job_id"]) != person:
+        return None
+    return auth.chat_person(c, person, attempt["bot_id"], attempt["id"], attempt["runner_id"])
 
 
 # Room kept for the last "+N more" line, whatever N is.

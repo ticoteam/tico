@@ -155,6 +155,21 @@ def room_owner(c, thread_id):
     return threads.personal_owner(root)
 
 
+def assistant_room(c, thread_id):
+    """Whether the thread is a person's own Assistant chat or a sub-thread of it: a call there is theirs alone."""
+    from . import rooms
+
+    return bool(rooms.assistant_room_owner(threads.root_of(c, thread_id)))
+
+
+def alone_with_assistant(c, thread_id, slugs):
+    """A call in a person's own Assistant chat takes no agent but the Assistant, by either attach route and for its
+    whole life, before or after the Assistant leaves it: its voice session reads as that person (rooms.call_person)."""
+    assistant = H.actor_id(H.assistant_actor(c))
+    if any(slug != assistant for slug in slugs) and assistant_room(c, thread_id):
+        raise Problem("assistant_alone", "A call in an Assistant chat takes no agent but the Assistant", 409)
+
+
 def cancel_bot_turns(c, meeting_id, slug, reason):
     """A bot that leaves a call answers none of its open turns in it."""
     for turn in c.execute(
@@ -772,6 +787,8 @@ class Calls:
     def _ring_for(self, c, who, thread_id):
         """Who a call rings (backend/call_ring.py): the thread's people other than the caller who can read it, when it
         has at most RING_MAX people; nobody in a bigger thread. Bots are never rung."""
+        if assistant_room(c, thread_id):
+            return []  # an Assistant chat's call is its person's alone: it rings nobody
         people = self._people_of(c, thread_id)
         if len(people) > call_ring.RING_MAX:
             return []
@@ -914,7 +931,10 @@ class Calls:
         return str(uuid.uuid5(SCHEDULE_IDS, f"{who.actor}\n{thread_id}\n{key}"))
 
     def _invited(self, c, booker, thread_id):
-        """Who a scheduled call's event invites: the thread's people, other than its booker, who can read it now."""
+        """Who a scheduled call's event invites: the thread's people, other than its booker, who can read it now; nobody
+        for a call in a person's Assistant chat, which is theirs alone, booked or moved."""
+        if assistant_room(c, thread_id):
+            return []
         people = [a for a in self._people_of(c, thread_id) if a != booker and readable(c, a, thread_id)]
         return people[:INVITE_LIMIT]
 
@@ -929,6 +949,7 @@ class Calls:
             raise Problem("meet_unavailable", "Tico Meet is not set up on this server", 503)
         bots = bot_ids(c, bots)
         self._may_attach(c, who, bots)
+        alone_with_assistant(c, thread_id, bots)  # before the calendar is written
         call_id = self.schedule_id(who, thread_id, key)
         if c.execute("SELECT 1 FROM calls WHERE id=?", (call_id,)).fetchone():
             raise Problem("receipt_expired", "This booking's receipt expired; book it again", 409)
@@ -1413,6 +1434,7 @@ class Calls:
         call_id = row["id"]
         slugs = bot_ids(c, slugs)
         live_meetings.check_call_bot_limit(c, meeting["id"], slugs)
+        alone_with_assistant(c, row["thread_id"], slugs)
         self._may_attach(c, who, slugs)
         for slug in slugs:
             cursor = c.execute(
