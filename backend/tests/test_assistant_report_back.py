@@ -1,11 +1,11 @@
 """A task the person handed off through their Assistant reports back once in their Assistant chat when it ends
-(backend/task_effects.py `_report_back`): one message per terminal event, none when they ended it themselves, none for a
-call's follow-up, their own Assistant chat when the turn's room is gone, and only the title for a task they can no
-longer read."""
+(backend/task_effects.py `_report_back`): one system line per terminal event with this cycle's note, none when the person
+made the move themselves, none for a call's follow-up, a new Assistant chat when theirs is closed or deleted, only the
+title for a task they can no longer read, and never at the cost of the move."""
 
 import json
 
-from backend import task_effects
+from backend import assistant, task_effects
 from backend import task_engine as E
 from backend.store import H
 from backend.tests.helpers import engine as X
@@ -42,41 +42,43 @@ def end(api, task_id, to, by="bot:ops", why=None, notes=None):
 def reports(api):
     with api.app.state.store.read() as c:
         rows = c.execute(
-            "SELECT sender_id, recipient_id, conversation_id, body, refs, wake_key FROM messages "
+            "SELECT id, sender_id, recipient_id, conversation_id, body, refs, wake_key FROM messages "
             "WHERE json_extract(refs,'$.report_back')=1 ORDER BY created_at, rowid"
         ).fetchall()
     return [{**dict(r), "refs": json.loads(r["refs"])} for r in rows]
 
 
-def test_a_handoff_that_ends_reports_back_once_per_end_in_the_turns_room(api):
+def test_each_end_reports_once_with_this_cycles_note_as_a_system_line(api):
     [made], origin = handoff(api)
-    end(api, made["id"], E.DONE, why="Posted the draft in the launch doc.")
+    end(api, made["id"], E.DONE, notes="Draft is in the doc. Thanks @ops")
     [first] = reports(api)
     assert first["sender_id"] == "bot:assistant" and first["recipient_id"] == "human:ben"
     assert first["conversation_id"] == origin
-    assert first["body"] == (
-        f"Back on Draft the launch post: Posted the draft in the launch doc.\n\n[Open task](#/task/{made['id']})"
+    assert (
+        first["body"]
+        == f"Back on Draft the launch post: Draft is in the doc. Thanks @ops\n\n[Open task](#/task/{made['id']})"
     )
-    assert first["refs"]["task"] == made["id"]
+    assert first["refs"]["task"] == made["id"] and first["refs"]["no_mentions"] and first["refs"]["quiet"]
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM jobs WHERE message_id=?", (first["id"],)).fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM message_mentions WHERE message_id=?", (first["id"],)).fetchone()[0] == 0
     # The same terminal event again (a retried effect) writes nothing more: its key is already there.
     with api.app.state.store.transaction() as c:
         revision = first["wake_key"].rsplit(":", 1)[1]
         task_effects._report_back(c, E.task(c, made["id"]), "bot:ops", "Again", revision)
     assert len(reports(api)) == 1
-    # Reopened and ended again: a second report.
+    # Reopened and done again with no words: the first cycle's note is not reused.
     end(api, made["id"], E.REOPEN, by="human:ana", why="One more pass")
+    end(api, made["id"], E.DONE)
+    # Reopened and closed by someone else: the move's own note.
+    end(api, made["id"], E.REOPEN, by="human:ana", why="Again")
     end(api, made["id"], E.CLOSED, by="human:ana", why="Not needed after all")
-    later = reports(api)
-    assert len(later) == 2 and later[1]["wake_key"] != later[0]["wake_key"]
-    assert later[1]["body"].startswith("Back on Draft the launch post: Not needed after all")
-
-
-def test_the_owners_done_note_stands_in_and_no_note_says_it_ended_without_a_result(api):
-    (made, other), _ = handoff(api, "Draft the launch post", "Book the venue")
-    end(api, made["id"], E.DONE, notes="Draft is in the doc.")
-    end(api, other["id"], E.DONE)
     bodies = [r["body"].split("\n\n")[0] for r in reports(api)]
-    assert bodies == ["Back on Draft the launch post: Draft is in the doc.", "Book the venue ended without a result"]
+    assert bodies[1:] == [
+        "Draft the launch post ended without a result",
+        "Back on Draft the launch post: Not needed after all",
+    ]
+    assert len({r["wake_key"] for r in reports(api)}) == 3
 
 
 def test_no_report_when_the_person_closed_it_themselves_or_for_a_call_follow_up(api):
@@ -94,18 +96,47 @@ def test_no_report_when_the_person_closed_it_themselves_or_for_a_call_follow_up(
     assert reports(api) == []
 
 
-def test_a_gone_turn_room_reports_in_the_persons_own_assistant_chat(api):
-    [made], origin = handoff(api)
+def test_a_closed_or_deleted_assistant_room_gives_way_to_a_new_one(api):
+    (made, other), origin = handoff(api, "Draft the launch post", "Book the venue")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE conversations SET closed_at=? WHERE id=?", (H.now(), origin))
+        c.execute("UPDATE conversations SET deleted_at=? WHERE id=?", (H.now(), origin))
     end(api, made["id"], E.DONE, why="Done.")
     [report] = reports(api)
-    assert report["conversation_id"] != origin and report["wake_key"].startswith(f"report_back:{made['id']}:")
     with api.app.state.store.read() as c:
-        room = c.execute(
-            "SELECT scope, owner_id, room_key, closed_at FROM conversations WHERE id=?", (report["conversation_id"],)
-        ).fetchone()
-    assert dict(room) == {"scope": "personal", "owner_id": "human:ben", "room_key": "assistant", "closed_at": None}
+        rooms = {
+            r["id"]: dict(r)
+            for r in c.execute(
+                "SELECT id, scope, owner_id, room_key, closed_at, deleted_at FROM conversations WHERE id IN (?,?)",
+                (origin, report["conversation_id"]),
+            )
+        }
+    assert report["conversation_id"] != origin and rooms[origin]["closed_at"]
+    fresh = rooms[report["conversation_id"]]
+    assert (fresh["scope"], fresh["owner_id"], fresh["room_key"], fresh["closed_at"], fresh["deleted_at"]) == (
+        "personal",
+        "human:ben",
+        "assistant",
+        None,
+        None,
+    )
+    # A closed room: the next report opens another.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE conversations SET closed_at=? WHERE id=?", (H.now(), report["conversation_id"]))
+    end(api, other["id"], E.DONE, why="Booked.")
+    assert reports(api)[1]["conversation_id"] not in (origin, report["conversation_id"])
+
+
+def test_a_report_that_fails_never_undoes_the_move(api, monkeypatch):
+    [made], _ = handoff(api)
+
+    def paused(*_):
+        raise RuntimeError("the Assistant is paused")
+
+    monkeypatch.setattr(assistant, "ensure_room", paused)
+    end(api, made["id"], E.DONE, why="Shipped.")
+    with api.app.state.store.read() as c:
+        assert E.task(c, made["id"])["status"] == "done"
+    assert reports(api) == []
 
 
 def test_a_task_the_person_can_no_longer_read_is_reported_by_its_title_alone(api):

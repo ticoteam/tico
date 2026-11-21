@@ -126,39 +126,34 @@ def _tell_requester(conn: "sqlite3.Connection", after: Row, actor: str, why: str
         conn.execute("UPDATE messages SET wake_key=? WHERE id=?", (wake_key, message["id"]))
 
 
-# The latest done the task's owner said with words: what a report back says when the move itself carried no note.
+# The latest done the task's owner said with words in this completion cycle (since the last reopen): what a report back
+# says when the move itself carried no note.
 _DONE_SUMMARY_SQL = (
     "SELECT a.notes FROM visits v JOIN answers a ON a.visit_id=v.id JOIN requirements r ON r.id=a.requirement_id "
-    "WHERE v.task_id=? AND a.answer='done' AND r.kind='owner_done' AND a.undone_at IS NULL "
+    "WHERE v.task_id=?1 AND v.entered_at>=coalesce((SELECT max(entered_at) FROM visits WHERE task_id=?1 "
+    "AND entered_how='reopened'),'') AND a.answer='done' AND r.kind='owner_done' AND a.undone_at IS NULL "
     "AND trim(a.notes,char(9,10,13,32))<>'' ORDER BY a.created_at DESC,a.rowid DESC LIMIT 1"
-)
-# The person's message that started the Assistant turn which filed the task (backend/auth.py assistant_principal).
-_ORIGIN_ROOM_SQL = (
-    "SELECT v.id FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
-    "JOIN conversations v ON v.id=m.conversation_id WHERE a.id=? AND v.scope='personal' AND v.owner_id=? "
-    "AND v.room_key=? AND v.closed_at IS NULL"
 )
 NOTE_CHARS = 4000
 
 
-def _report_back(conn: "sqlite3.Connection", after: Row, actor: str, why: str | None, revision: str | None) -> None:
-    """A task the person handed off through their Assistant (filed on their Assistant turn, or on their click on its
-    card: the `task.create` event says via assistant) has ended: one message from the Assistant in the chat the turn
-    started in, else their own Assistant chat (opened if missing). Written here, in the move's transaction, with no run;
-    its wake key is the dedupe record, one per (task, terminal history event), so a reopen and a second end report
-    again. Not when the person ended it themselves, and not for a call's follow-up (call_follow_ups._return reports
-    those). Their read rights are checked now: a task they can no longer read is reported by its title alone."""
+def _report_back(conn: "sqlite3.Connection", after: Row, by: str, why: str | None, revision: str | None) -> None:
+    """A task the person handed off through their Assistant (its `task.create` event says via assistant: filed on their
+    Assistant turn or on their click on its card) has ended: one system line from the Assistant in their Assistant chat,
+    the room every such turn starts in (opened again if it is gone). Not when this move is the person's own (by hand,
+    or by their Assistant for them), and not for a call's follow-up (call_follow_ups._return reports those). Its wake
+    key is the dedupe record, one per (task, terminal history event), so a reopen and a second end report again. In
+    its own savepoint: a report that fails is logged and never undoes the move."""
     H = _h()
     task_id = str(after["id"])
-    if not revision or not H.is_human(after.get("requester_id")):
-        return
     made = conn.execute(
         "SELECT actor, detail FROM events WHERE action='task.create' AND target=? ORDER BY created_at, id LIMIT 1",
         (task_id,),
     ).fetchone()
-    detail: Row = (H._json(made["detail"], {}) or {}) if made else {}
-    person = str(made["actor"]) if made else ""
-    if detail.get("via") != "assistant" or not H.is_human(person) or actor == person:
+    if not made or not revision:
+        return
+    person = str(made["actor"])
+    if (H._json(made["detail"], {}) or {}).get("via") != "assistant" or not H.is_human(person) or by == person:
         return
     key = f"report_back:{task_id}:{revision}"
     if (
@@ -166,28 +161,42 @@ def _report_back(conn: "sqlite3.Connection", after: Row, actor: str, why: str | 
         or conn.execute("SELECT 1 FROM messages WHERE wake_key=?", (key,)).fetchone()
     ):
         return
+    from . import batch_work
+
+    work: Any = batch_work
+    with work.isolated(conn, "report_back", task_id, private=True):
+        _write_report(conn, after, person, why, key)
+
+
+def _write_report(conn: "sqlite3.Connection", after: Row, person: str, why: str | None, key: str) -> None:
+    """The report itself. The person's read rights are checked now: a task they can no longer read is named by its
+    title alone, since a link or a task reference to it would hide the whole message from them."""
+    H = _h()
     from . import assistant, rooms, task_asks
 
-    rooms_: Any = rooms
     helper: Any = assistant
     sender = str(task_asks.assistant_actor())
-    origin = conn.execute(_ORIGIN_ROOM_SQL, (detail.get("attempt_id"), person, rooms_.ASSISTANT_ROOM)).fetchone()
-    room = H.conversation(conn, origin[0]) if origin else None
-    room = room or helper.ensure_room(conn, person, H.actor_id(sender))
+    place: Any = rooms
+    # A deleted Assistant room still holds the person's one open place (one_active_personal_room): it gives it up.
+    conn.execute(
+        "UPDATE conversations SET closed_at=? WHERE scope='personal' AND owner_id=? AND room_key=? "
+        "AND closed_at IS NULL AND deleted_at IS NOT NULL",
+        (H.now(), person, place.ASSISTANT_ROOM),
+    )
+    room = helper.ensure_room(conn, person, H.actor_id(sender))
+    task_id = str(after["id"])
     title = str(after.get("title") or "A task").strip()
+    # A system line: names in it mention nobody and it starts no run.
+    refs: Row = {"assistant": True, "report_back": True, "quiet": True, "no_mentions": True}
     if H.task_private_readable(conn, person, after):
         note = (why or "").strip()
         if not note and after.get("status") == "done":
             summary = conn.execute(_DONE_SUMMARY_SQL, (task_id,)).fetchone()
             note = str(summary[0]).strip() if summary else ""
         said = f"Back on {title}: {note[:NOTE_CHARS]}" if note else f"{title} ended without a result"
-        body, refs = (
-            f"{said}\n\n[Open task](#/task/{task_id})",
-            {"assistant": True, "report_back": True, "task": task_id},
-        )
+        body, refs = f"{said}\n\n[Open task](#/task/{task_id})", {**refs, "task": task_id}
     else:
-        # A link or a task reference to a task they cannot read would hide the whole message from them.
-        body, refs = f"{title} has ended", {"assistant": True, "report_back": True}
+        body = f"{title} has ended"
     message = H._write_message(conn, sender, person, body, room, "say", refs, None, None, delivered_at=H.now())
     conn.execute("UPDATE messages SET wake_key=? WHERE id=?", (key, message["id"]))
 
@@ -255,7 +264,7 @@ def moved(
         deliveries.task_closed(conn, before)
         _tell_requester(conn, after, actor, why)
         if old not in ("done", "closed"):
-            _report_back(conn, after, actor, why, revision)
+            _report_back(conn, after, by, why, revision)
     H.event(conn, actor, "task.close" if new == "closed" else "task.update", after["id"], {"status": new, "note": why})
     H.recount(conn, [after.get("owner_id"), after.get("requester_id"), before.get("owner_id")])
     if new == "closed":

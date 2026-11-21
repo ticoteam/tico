@@ -239,10 +239,10 @@ now?"). Say "that's enough" or "later" and it stops offering in that chat. It ne
 
 ## Back on a task you handed off
 
-When work the Assistant handed off for you ends (Done or Closed), it tells you once, in the Assistant chat you asked in
-(your own Assistant chat if that one is gone): "Back on <title>: <closing note>", or "<title> ended without a result",
-with a link to the task. A reopened task that ends again is reported again. Nothing is sent when you ended it yourself,
-or for a call's follow-up, which reports in its call. If you can no longer read the task, the message names it only.
+When work the Assistant handed off for you ends (Done or Closed), it tells you once in your Assistant chat: "Back on
+<title>: <closing note>", or "<title> ended without a result", with a link to the task. A reopened task that ends again
+is reported again. Nothing is sent when you (or your Assistant for you) made that move, or for a call's follow-up, which
+reports in its call. If you can no longer read the task, the message names it only.
 
 ## Undo
 
