@@ -62,6 +62,10 @@ describe('the open task', () => {
     expect(tabsOf(own)[0]).toMatchObject({ slug: 'spec', version: 1 });
     const shown = task({ documents: [doc('f1', 'Spec')], to_leave: [req('r1', { shows: ['page:f1@1'] })] });
     expect(tabsOf(shown)[0]).toMatchObject({ slug: 'spec', version: 1 });
+    // a stage's OK that names no page shows the one pinned on an earlier stage: that page is the ask, at its version
+    const earlier = task({ documents: [doc('f2', 'Review'), doc('f1', 'Spec')], to_leave: [req('r1', { earlier: { file_id: 'f1', version: 1 } } as Partial<TaskRequirement>)] });
+    expect(tabsOf(earlier)[0]).toMatchObject({ slug: 'spec', mark: 'ask', version: 1 });
+    expect(defaultTab(tabsOf(earlier))).toBe('spec');
   });
 
   it('reads the second review: running while one is open, then reviewed @approvals', () => {

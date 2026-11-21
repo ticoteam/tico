@@ -38,7 +38,8 @@ export interface Versions {
     the page's list of versions does not reach back to it. */
 export function useVersions(doc: TaskDocument | undefined, v?: number, vs?: number, pinned?: number): Versions | null {
   const list = [...(doc?.versions ?? [])].sort((a, b) => b.n - a.n);
-  const named = doc && v && list.some((x) => x.n === v);
+  // A version the address names opens, read by its number even when the list does not reach it.
+  const named = !!doc && !!v;
   const shown = named ? v : (pinned ?? doc?.version ?? 0);
   const marked = !!vs && vs !== shown && list.some((x) => x.n === vs);
   const before = marked ? vs : list.find((x) => x.n < shown)?.n;

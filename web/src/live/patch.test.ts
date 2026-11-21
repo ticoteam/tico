@@ -68,6 +68,14 @@ describe('tasks', () => {
     }
   });
 
+  it('read a task’s children again when one of them is gone from the reader', () => {
+    const parent = ['tasks', 'detail', 't1'];
+    queryClient.setQueryData(parent, { ...task('t1'), children: [{ id: 't2', status: 'open', role: 'review' }] });
+    FakeEventSource.last.feed(frame(901, 'tasks', { seq: 901, actor: 'human:p1', at: AT, id: 't2', kind: 'delete', kinds: ['delete'], gone: true }));
+    flushFrame();
+    expect(queryClient.getQueryState(parent)?.isInvalidated).toBe(true);
+  });
+
   it('start a read of a task’s children again when a review ends while an older one is in flight: it ends Reviewed', async () => {
     const parent = ['tasks', 'detail', 't1'];
     const review = (status: string) => ({ id: 't2', status, role: 'review' });

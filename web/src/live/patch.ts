@@ -230,6 +230,9 @@ function patchTasks(batch: TaskEvent[]): void {
     const detail = ['tasks', 'detail', id];
     if (e.gone) {
       queryClient.removeQueries({ queryKey: detail });
+      // A sub-task gone from the reader: the task above that holds it reads its children again.
+      for (const [key, held] of queryClient.getQueriesData<{ children?: { id: string }[] }>({ queryKey: ['tasks', 'detail'] }))
+        if (key.length === 3 && held?.children?.some((c) => c.id === id)) void queryClient.invalidateQueries({ queryKey: key, exact: true }, { cancelRefetch: true });
       continue;
     }
     const held = queryClient.getQueryData<TaskRow>(detail);

@@ -80,6 +80,15 @@ export const taskFilesQuery = (id: string) =>
     queryFn: async ({ signal }) => (await api.get<TaskFileList>(`${taskPath(id)}/files?all=1`, { signal })).files,
   });
 
+/** One version of a file's name, size and type, without its bytes (GET /api/v2/files/{fid}/meta?v=<n>): a version
+    a task's listing no longer reaches. A version never changes once written. */
+export const fileMetaQuery = (file: string, n: number) =>
+  queryOptions({
+    queryKey: ['files', 'meta', file, n] as const,
+    queryFn: ({ signal }) => api.get<{ name: string; content_type: string; size?: number | null }>(`/api/v2/files/${enc(file)}/meta?v=${n}`, { signal }),
+    staleTime: Infinity,
+  });
+
 /** One version of a page as its text (GET /api/v2/files/{fid}?v=<n>). A version never changes once written. */
 export const pageVersionQuery = (file: string, n: number) =>
   queryOptions({

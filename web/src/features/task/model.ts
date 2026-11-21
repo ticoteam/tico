@@ -46,7 +46,7 @@ export function decisionOf(t: TaskData): TaskRequirement | null {
 export function thingsOf(r: TaskRequirement | null): Set<string> {
   const out = new Set<string>();
   if (!r) return out;
-  for (const id of [r.approval?.file_id, r.page?.file_id, ...(r.approval?.pages ?? []).map((p) => p.file_id), ...(r.page?.pages ?? []).map((p) => p.file_id)])
+  for (const id of [r.approval?.file_id, r.page?.file_id, r.approval?.file_id || r.page?.file_id ? null : r.earlier?.file_id, ...(r.approval?.pages ?? []).map((p) => p.file_id), ...(r.page?.pages ?? []).map((p) => p.file_id)])
     if (id) out.add(id);
   for (const ref of r.shows ?? []) {
     const m = /^(?:page|file):([^@]+)/.exec(ref);
@@ -58,8 +58,10 @@ export function thingsOf(r: TaskRequirement | null): Set<string> {
 /** What a requirement is about: the page a stage's OK names, else the first page or file it shows (an OK's subject,
     task_asks pins it first). A review page it also shows is not it. */
 export function targetOf(r: TaskRequirement | null): { id: string; version?: number } | null {
-  const own = r?.approval?.file_id ?? r?.page?.file_id;
-  const at = r?.approval?.version ?? r?.page?.version;
+  // A stage's OK whose page was pinned on an earlier stage says it in `earlier` alone.
+  const from = r?.approval?.file_id ? r.approval : r?.page?.file_id ? r.page : r?.earlier;
+  const own = from?.file_id;
+  const at = from?.version;
   if (own) return { id: own, ...(at && { version: at }) };
   for (const ref of r?.shows ?? []) {
     const m = /^(?:page|file):([^@]+)(?:@v?(\d+))?/.exec(ref);

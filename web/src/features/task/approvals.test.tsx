@@ -229,10 +229,16 @@ describe('the thing is the first tab', () => {
   });
 
   it('reads a pinned version the file’s listing no longer reaches by the file’s id @approvals', async () => {
-    const v2 = { n: 2, by: 'bot:lo', created_at: '2026-11-02T10:00:00Z', mime: 'application/pdf', size: 10, url: '/api/v2/files/f9?v=2', answers: [], ask: null };
-    const pdf = { id: 'f9', name: 'declaration.pdf', title: 'declaration.pdf', mime: 'application/pdf', archived: false, current_version: 2, links: [], writers: [], versions: [v2] };
+    // its newest version is another type: the pinned one is drawn by its own type, read from its meta
+    const v2 = { n: 2, by: 'bot:lo', created_at: '2026-11-02T10:00:00Z', mime: 'text/plain', size: 10, url: '/api/v2/files/f9?v=2', answers: [], ask: null };
+    const pdf = { id: 'f9', name: 'declaration.txt', title: 'declaration.pdf', mime: 'text/plain', archived: false, current_version: 2, links: [], writers: [], versions: [v2] };
     shown = task({ title: 'Search warrant', to_leave: [req({ shows: ['file:f9@1'], line: 'Sign the declaration' })] });
-    reply = (url) => (url.endsWith('/files?all=1') ? { body: { files: [pdf] } } : null);
+    reply = (url) =>
+      url.endsWith('/files?all=1')
+        ? { body: { files: [pdf] } }
+        : url.endsWith('/api/v2/files/f9/meta?v=1')
+          ? { body: { name: 'declaration.pdf', content_type: 'application/pdf', size: 10 } }
+          : null;
     show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
     expect(await screen.findByRole('region', { name: 'declaration.pdf' })).toBeTruthy();
     expect(pdfRead.at(-1)).toBe('/api/v2/files/f9?v=1');

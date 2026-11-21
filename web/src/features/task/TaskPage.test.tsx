@@ -510,6 +510,33 @@ describe('a page’s versions, a new page and a picture', () => {
     expect((await frame('Spec')).getAttribute('srcdoc')).toContain('Sign in with your email or phone.');
   });
 
+  it('opens the version the address names even when the list does not reach it @approvals', async () => {
+    const t = withVersions();
+    (t.documents![0] as { versions: unknown }).versions = versions.slice(1);
+    serve((url) => (url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1') ? { status: 200, body: detail(t) } : (html(url) ?? base(url))));
+    show(<TaskPage task="12" pipeline="p1" tab="spec" />, '/tasks/p1/12/spec?v=1');
+    expect((await frame('Spec, v1')).getAttribute('srcdoc')).toContain('Sign in with your email.');
+  });
+
+  it('a related page an ask pinned shows live only while it is that version @approvals', async () => {
+    const at = (n: number) => ({ n, by: 'bot:a1', created_at: '2026-11-01T10:00:00Z', mime: 'text/html', size: 10, url: `/api/v2/files/f7?v=${n}`, answers: [], ask: null });
+    const page = { id: 'f7', name: 'plan.html', title: 'Plan', mime: 'text/html', archived: false, current_version: 2, links: [], writers: [], versions: [at(1), at(2)] };
+    const t = task({ documents: [], to_leave: [{ requirement_id: 'r1', line: 'Plan approved', met: false, may: ['ok', 'no'], shows: ['file:f7@1'] } as never] });
+    serve((url) =>
+      url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1')
+        ? { status: 200, body: detail(t) }
+        : url.endsWith('/tasks/t1/files?all=1')
+          ? { status: 200, body: { files: [page] } }
+          : url.endsWith('/api/v2/pages/f7')
+            ? { status: 200, body: { page: { src: 'about:blank', version: 2 } } }
+            : url.endsWith('/api/v2/files/f7?v=1')
+              ? { status: 200, body: '<p>The plan as it was.</p>' }
+              : base(url),
+    );
+    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    expect((await frame('Plan')).getAttribute('srcdoc')).toContain('The plan as it was.');
+  });
+
   it('with a version pinned, picking the newest names it, so it does not snap back to the pin @approvals', async () => {
     pinnedAt(1, { src: 'about:blank', version: 2 });
     show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');

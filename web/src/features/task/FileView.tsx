@@ -18,7 +18,7 @@ import { download } from './Files';
 import { DETAILS, failedToast, isPage, tabAddress } from './model';
 import { Face, Go } from './parts';
 import { frameDoc, parsePage } from './changes';
-import { pageShownQuery, pageVersionQuery, taskFilesQuery, type TaskData } from './queries';
+import { fileMetaQuery, pageShownQuery, pageVersionQuery, taskFilesQuery, type TaskData } from './queries';
 import { isWord, WordPages } from './Word';
 
 /* What a task shows in its page sheet: one of its pages (a tab), or one of its files opened from Details. Both keep
@@ -74,9 +74,13 @@ export function FileTab({ task, f, version }: { task: string; f: TaskFileView; v
   const isPerson = useIsPerson();
   const now = currentOf(f);
   const listed = version !== undefined ? f.versions.find((x) => x.n === version) : now;
-  // A version the listing no longer reaches (it keeps the newest): read by its number from the file's id, as the file it is.
-  const v = listed ?? (now && { ...now, n: version as number, url: `/api/v2/files/${encodeURIComponent(f.id)}?v=${version}`, name: '', size: null });
-  if (!v) return null;
+  // A version the listing no longer reaches (it keeps the newest): its own name and type, read by the file's id.
+  const meta = useQuery({ ...fileMetaQuery(f.id, version ?? 0), enabled: !listed && version !== undefined });
+  const v =
+    listed ??
+    (now && meta.data && { ...now, n: version as number, url: `/api/v2/files/${encodeURIComponent(f.id)}?v=${version}`, mime: meta.data.content_type, name: meta.data.name, size: meta.data.size ?? null });
+  if (meta.isError) return <Empty icon="alert" title="This file did not load" />;
+  if (!v) return <PageBones />;
   const name = f.title || f.name;
   // A Word file is drawn as its words on paper, with Download beside it.
   if (isWord(f.name, v.mime))
@@ -94,7 +98,7 @@ export function FileTab({ task, f, version }: { task: string; f: TaskFileView; v
     );
   // At its current version a person may sign it here as in its file view; an older version pinned by an ask is read only.
   const file = <FileFrame id={f.id} version={v.n} mime={v.mime} title={name} url={v.url} name={v.name || f.name} size={v.size} signable={isPerson && v === now} />;
-  return <PageOrFile task={task} id={f.id} title={name} page={v.mime.startsWith('text/html')} file={file} />;
+  return <PageOrFile task={task} id={f.id} title={name} page={v.mime.startsWith('text/html')} pin={version} file={file} />;
 }
 
 const BONES = [38, 92, 86, 64, 90, 72, 48];
