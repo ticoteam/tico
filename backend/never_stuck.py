@@ -205,9 +205,13 @@ def check(
                 done["snoozes_ended"] += 1
             else:
                 read = read or _read(conn, task_id, seen)  # the one read `_one` and the span check share
+                handed = (done["to_manager"], done["to_person"])
                 _one(conn, task_id, at, done, seen, live, read)
-                # A flip no write made (checks finished, out of credit, room). After a write the task is read again.
-                wait_spans.recheck(conn, task_id, spans.get(task_id), read if conn.total_changes == changes else None)
+                # A flip no write made (checks finished, out of credit, room). What was read still holds after a wake;
+                # a hand-off down the ladder can change whose turn it is, so then the task is read again. A move
+                # synced its own span.
+                fresh = handed == (done["to_manager"], done["to_person"])
+                wait_spans.recheck(conn, task_id, spans.get(task_id), read if fresh else None)
         except Exception as error:
             # SQLite may already have ended the transaction (a full disk, an I/O error): that stops the pass.
             if failures is None or not conn.in_transaction or storage_error(error):

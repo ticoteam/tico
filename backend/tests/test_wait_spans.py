@@ -127,47 +127,43 @@ WEEK = "2030-01-07"
 
 def test_each_saved_query_answers_with_numbers(api):
     store = api.app.state.store
-    # Ben hands work to ops through his Assistant.
+    # Ben's Assistant turn on his message, and a task it hands to ops.
     _, attempt = assistant_turn(api, "ben-test", "Have ops draft the launch post")
     made = post(
         api, "tasks", {"owner": "ops", "title": "Draft the launch post", "body": "For Oct 1."}, token=attempt["token"]
     )
     task_id = made["id"]
+    room = post(api, "chat/ops", {"text": "Morning"})["conversation_id"]
     with store.transaction() as c:
         c.execute(
             "UPDATE attempts SET result=json_set(coalesce(result,'{}'),'$.timings',json(?)) WHERE id=?",
             (json.dumps({"claimed_at": 1, "phases": {"first_text": 1500}, "send_to_claim_ms": 500}), attempt["id"]),
         )
-        # Ops asks Ana for an OK at 9:00; she answers at 9:30.
+        # Ana answers ops' OK that week.
         asked = X.ok_ask(c, task_id, "bot:ops", "ana", "OK the outline?")["requirement_id"]
         A.answer(c, task_id, asked, ANA, "ok")
-        for kind, at in (("requirement", "09:00"), ("answer", "09:30")):
-            c.execute(
-                "UPDATE history_events SET created_at=? WHERE subject_id=? AND kind=?",
-                (f"{WEEK}T{at}:00.000000Z", task_id, kind),
-            )
+        c.execute(
+            "UPDATE history_events SET created_at=? WHERE subject_id=? AND kind='answer'",
+            (f"{WEEK}T09:30:00.000000Z", task_id),
+        )
         # Ops acts once that week; its SQL read and a refusal are no actions.
         for action in ("task.update", "sql.query", "refused"):
             H.event(c, "bot:ops", action, "wait-spans-marker", {})
         c.execute("UPDATE events SET created_at=? WHERE target='wait-spans-marker'", (f"{WEEK}T12:00:00.000000Z",))
-        # Ops finishes it, Ana reopens it, Cara closes it: two ends by others, each reported back once.
-        row = E.task(c, task_id)
-        X.say_done(c, row, "bot:ops")
-        E.move(c, task_id, E.DONE, "bot:ops", seen_version=row["version"])
-        E.move(c, task_id, E.REOPEN, ANA, "One more pass", seen_version=E.task(c, task_id)["version"])
-        E.move(c, task_id, E.CLOSED, "human:cara", "Not needed", seen_version=E.task(c, task_id)["version"])
-    touches = rows(api, f"SELECT kind FROM human_touches_v WHERE task_id='{task_id}' AND person_id='{ANA}'", "ana-test")
-    assert {"kind": "answer"} in touches and {"kind": "move"} in touches
+        # In Ana's own room with ops, ops asks about the task (its refs a list) and she replies: the reply is a touch on
+        # the task the question names.
+        chat = H.conversation(c, room)
+        question = H._write_message(c, "bot:ops", ANA, "Which outline?", chat, "say", {"task": [task_id]}, None, None)
+        reply = H._write_message(c, ANA, "bot:ops", "The short one", chat, "say", {}, question["id"], None)
+    touches = rows(
+        api, f"SELECT kind, at FROM human_touches_v WHERE task_id='{task_id}' AND person_id='{ANA}'", "ana-test"
+    )
+    assert {"kind": "answer", "at": f"{WEEK}T09:30:00.000000Z"} in touches
+    assert {"kind": "message", "at": reply["created_at"]} in touches
     decided = {w["week"]: w for w in rows(api, "SELECT * FROM human_decisions_weekly", "ana-test")}
     assert decided[WEEK] == {"week": WEEK, "decisions": 1, "agent_actions": 1, "per_1000_actions": 1000.0}
-    [asks] = rows(api, f"SELECT * FROM ask_answer_weekly WHERE week='{WEEK}'", "ana-test")
-    assert asks == {"week": WEEK, "answers": 1, "median_s": 1800}
     [first_text] = rows(api, "SELECT turns, p50_ms, p90_ms FROM first_text_weekly", "ben-test")
     assert first_text == {"turns": 1, "p50_ms": 2000, "p90_ms": 2000}
-    [reported] = rows(api, "SELECT ended, reported, report_back_pct FROM report_back_weekly", "ben-test")
-    assert reported == {"ended": 2, "reported": 2, "report_back_pct": 100.0}
-    # Ana handed nothing off: her report-back rate has no weeks.
-    assert rows(api, "SELECT * FROM report_back_weekly", "ana-test") == []
 
 
 def test_a_span_names_only_a_task_its_reader_may_read(api):

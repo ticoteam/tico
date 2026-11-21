@@ -248,13 +248,16 @@ def live_masks(unsettled):
 
 
 # A person's own act on a task, by their own hand (hubdb.OWN_HAND_VIA) or their Assistant's on their word: a row of its
-# history, or a message they wrote that names the task as the server attributes one (hubdb.MESSAGE_TASK_SQL: its refs,
-# else the message it replies to, as Settings > History reads a decision, else its conversation's task). BotOps or
-# another agent acting with their rights is not theirs, and Tico's carrier copy of a message is not a second touch.
+# history, or a message they wrote that names the task as the server attributes one (hubdb.MESSAGE_TASK_SQL: its refs'
+# task or task_id, a list read as its first), else as the message it replies to is attributed (the same way, then its
+# conversation's task), else its own conversation's task. BotOps or another agent acting with their rights is not
+# theirs, and Tico's carrier copy of a message is not a second touch.
 _OWN_VIA = "('', " + ", ".join(f"'{via}'" for via in (*H.OWN_HAND_VIA, "assistant")) + ")"
+_REFS_TASK = f"{H._task_ref_sql('$.task')}, {H._task_ref_sql('$.task_id')}"
 _MESSAGE_TASK = (
-    f"coalesce({H._task_ref_sql('$.task')}, {H._task_ref_sql('$.task_id')}, "
-    "(SELECT json_extract(q.refs, '$.task') FROM {messages} q WHERE q.id = m.in_reply_to), cv.task_id)"
+    f"coalesce({_REFS_TASK}, (SELECT coalesce({_REFS_TASK.replace('m.refs', 'q.refs')}, qc.task_id) "
+    "FROM {messages} q LEFT JOIN {conversations} qc ON qc.id = q.conversation_id WHERE q.id = m.in_reply_to), "
+    "cv.task_id)"
 )
 _TOUCHES = (
     "SELECT created_at AS at, subject_id AS task_id, actor_id AS person_id, kind FROM {history_events} "
@@ -273,15 +276,6 @@ _DECISIONS = (
 # (reads, SQL, tool-call stats, refusals, its own status and run bookkeeping).
 _AGENT_ACTION = f"actor LIKE 'bot:%' AND action NOT IN {qlist(sorted(RT.BOOKKEEPING))} AND " + " AND ".join(
     f"action NOT LIKE '{prefix}%'" for prefix in RT.BOOKKEEPING_PREFIXES
-)
-# When an OK answered in history row `a` was asked: the newest of the task entering its stage (a stage's own OK), the
-# ask added on the task (`requirement`, by id) and the owner saying done again after a send back (`again`).
-_ASKED_AT = (
-    "(SELECT max(h.created_at) FROM {history_events} h WHERE h.subject_type = 'task' AND h.subject_id = a.subject_id "
-    "AND h.created_at < a.created_at AND (h.kind = 'move' "
-    "OR (h.kind = 'requirement' AND h.new = json_extract(a.data, '$.requirement')) "
-    "OR (h.kind = 'answer' AND h.new = 'again' "
-    "AND json_extract(h.data, '$.requirement') = json_extract(a.data, '$.requirement'))))"
 )
 _WEEK = "date({at}, '-6 days', 'weekday 1')"
 
@@ -359,19 +353,6 @@ DERIVED = {
         "UNION ALL SELECT " + _WEEK.format(at="created_at") + ", 0 FROM {events} WHERE " + _AGENT_ACTION + ") "
         "GROUP BY week",
     ),
-    # Per week a person answered an OK (an `answer` row of ok or no, _OWN_VIA): how many, and the median seconds from
-    # its ask (_ASKED_AT) to the answer.
-    "ask_answer_weekly": (
-        ("history_events",),
-        "SELECT week, count(*) AS answers, max(CASE WHEN n = (total + 1) / 2 THEN secs END) AS median_s "
-        "FROM (SELECT week, secs, row_number() OVER (PARTITION BY week ORDER BY secs) AS n, "
-        "count(*) OVER (PARTITION BY week) AS total "
-        "FROM (SELECT " + _WEEK.format(at="a.created_at") + " AS week, "
-        "CAST(round((julianday(a.created_at) - julianday(" + _ASKED_AT + ")) * 86400) AS INTEGER) AS secs "
-        "FROM {history_events} a WHERE a.subject_type = 'task' AND a.kind = 'answer' AND a.new IN ('ok', 'no') "
-        f"AND a.actor_id LIKE 'human:%' AND coalesce(a.via, '') IN {_OWN_VIA}) WHERE secs IS NOT NULL) "
-        "GROUP BY week",
-    ),
     # Per week: the Assistant's turns on a person's message, and the 50th and 90th percentile milliseconds from the
     # person's send to its first words (attempts.result timings: send_to_claim_ms plus the runner's first_text mark).
     "first_text_weekly": (
@@ -385,22 +366,6 @@ DERIVED = {
         "AS INTEGER) AS ms FROM {attempts} WHERE bot_id = {assistant} AND trigger_kind = 'person_message' "
         "AND json_extract(result, '$.timings.phases.first_text') IS NOT NULL "
         "AND json_extract(result, '$.timings.send_to_claim_ms') IS NOT NULL)) "
-        "GROUP BY week",
-    ),
-    # Per week: each move that ended one of the reader's tasks handed off through their Assistant (a `move` history row
-    # of done or closed) made by anyone but them, and how many of those moves it reported back in their Assistant chat:
-    # the report's wake key names that exact move (backend/task_effects.py, `report_back:<task>:<move row id>`). The
-    # reader's own only: a report is in their private room, which nobody else reads.
-    "report_back_weekly": (
-        ("tasks", "events", "messages", "history_events"),
-        "SELECT week, count(*) AS ended, sum(reported) AS reported, "
-        "round(100.0 * sum(reported) / count(*), 1) AS report_back_pct "
-        "FROM (SELECT " + _WEEK.format(at="h.created_at") + " AS week, "
-        "EXISTS (SELECT 1 FROM {messages} m WHERE m.wake_key = 'report_back:' || t.id || ':' || h.id) AS reported "
-        "FROM {tasks} t JOIN {events} e ON e.target = t.id AND e.action = 'task.create' AND e.actor = {me} "
-        "JOIN {history_events} h ON h.subject_type = 'task' AND h.subject_id = t.id AND h.kind = 'move' "
-        "AND json_extract(h.data, '$.move') IN ('done', 'closed') AND h.actor_id <> {me} "
-        "WHERE t.requester_id = {me} AND json_extract(e.detail, '$.via') = 'assistant') "
         "GROUP BY week",
     ),
 }
@@ -1658,7 +1623,9 @@ def task_waits(conn, c, private, hidden):
     conn.executemany('INSERT INTO "task_waits" VALUES(?,?,?,?,?,?,?)', rows)
 
 
-def connect(path, c, auth, who, trace=None, seconds=None, statement="", pool=None, pool_age=0):
+def connect(
+    path, c, auth, who, trace=None, seconds=None, statement="", pool=None, pool_age=0, assistant_bot="assistant"
+):
     """A read-only connection whose temp views and authorizer carry this caller's visibility.
 
     `seconds` bounds building this request's visibility sets as `run` bounds the query itself. When `statement` is
@@ -1986,8 +1953,7 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement="", pool=Non
                     **{base: f'"{base}"' for base in bases},
                     **{"all_" + base: inner(base) for base in bases},
                     tool_names=qlist(sorted(outcome_stats.TOOL_NAMES)),
-                    assistant=q(getattr(getattr(c, "settings", None), "assistant_bot", "") or "assistant"),
-                    me=q(who.actor),
+                    assistant=q(assistant_bot or "assistant"),
                 )
             )
         if "task_waits" in worked_out:
@@ -2204,6 +2170,7 @@ def install_sql(app, store, auth):
                     statement=body.sql,
                     pool=pool,
                     pool_age=store.pool_age,
+                    assistant_bot=store.settings.assistant_bot,
                 )
                 try:
                     result = run(conn, body.sql, body.params, cap, seconds)
