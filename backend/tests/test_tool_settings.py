@@ -228,8 +228,11 @@ def test_tools_list_one_row_a_vendor_and_a_vendors_page_holds_its_website_mcp_to
     assert [k["env"] for k in by_id[prod]["keys"]] == ["RAYGUN_MCP_TOKEN"]
     assert [(v["name"], v["value"]) for v in by_id[staging]["settings"]] == [("RAYGUN_REGION", "eu")]
     assert "acme-synthetic" not in json.dumps(page)
-    # A member who holds none of its keys sees only what everyone sees of it: the website.
-    assert [r["id"] for r in get(api, "tool-vendors/raygun", "cara-test")["rows"]] == ["website:" + site["id"]]
+    # A member who holds none of its keys sees only what everyone sees of it: the website, and the API tools by name
+    # alone, to ask for access (no keys, levels or settings).
+    seen = get(api, "tool-vendors/raygun", "cara-test")["rows"]
+    assert {r["id"] for r in seen} == {prod, staging, mcp, "website:" + site["id"]}
+    assert all(r["requestable"] and "keys" not in r and not r["who"] for r in seen if r["kind"] == "api")
     get(api, "tool-vendors/nobody", expected=404)
     # A person moves a tool to another vendor.
     other = keyed(api, "Ledger export", "LEDGER_KEY")

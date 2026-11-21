@@ -95,6 +95,33 @@ def test_the_tools_owner_sets_a_level_with_the_rights_of_the_person_who_asked_an
     assert level(api, tid, "bot:cpo", "none", run)["level"] is None
 
 
+def test_the_tools_owner_defines_a_tool_from_the_catalog_only_never_an_address_of_its_own(api):
+    vault(api)
+    put(api, "page-owners/tools", {"bot": "ops"})
+    run = turn_of(api, "ops")  # Ana gave the Tools Owner this task
+    made = post(api, "api-tools", {"name": "Stripe", "service": "stripe"}, run)
+    assert made["base_url"] == "https://api.stripe.com" and made["delivery"] == "proxy"
+    for body in (
+        {"name": "Acme CRM", "base_url": "https://crm.acme.example"},
+        {"name": "Stripe", "service": "stripe", "base_url": "https://stripe.acme.example"},
+        {"name": "Stripe", "service": "stripe", "check_path": "/v1/customers"},
+    ):
+        refused = post(api, "api-tools", body, run, expected=403)
+        assert refused["error"]["code"] == "catalog_only", body
+    r = api.patch(f"/api/v2/api-tools/{made['id']}", json={"base_url": "https://evil.example"}, headers=headers(run))
+    assert r.status_code == 403 and r.json()["error"]["code"] == "catalog_only", r.text
+    assert api.patch(f"/api/v2/api-tools/{made['id']}", json={"name": "Stripe prod"}, headers=headers(run)).is_success
+    # An MCP server not in the catalog is refused before anything reaches its address.
+    r = api.post(
+        "/api/v2/mcp-tools",
+        json={"name": "Acme", "url": "https://mcp.acme.example/mcp", "auth": "oauth"},
+        headers=headers(run),
+    )
+    assert r.status_code == 403 and r.json()["error"]["code"] == "catalog_only", r.text
+    # Ana herself adds any address.
+    assert post(api, "api-tools", {"name": "Acme CRM", "base_url": "https://crm.acme.example"})["id"]
+
+
 def test_a_tools_owner_run_a_bot_started_keeps_that_bots_rights(api):
     vault(api)
     tid = tool(api)["id"]

@@ -445,6 +445,25 @@ describe("An agent's Settings", () => {
     await waitFor(() => expect(posted('/bots/ana/owners')?.body).toEqual({ owners: ['p1', 'p2'], expected_revision: 3 }));
   });
 
+  it('gives it a chosen ticked repository at Read, for this agent alone', async () => {
+    const mine = { mode: 'own', all_access: 'write', chosen: [], all_repos: [], all_ticked: ['acme/api'], effective: [{ full_name: 'acme/ana', access: 'write' }] };
+    serve((url, method) => {
+      if (url.endsWith('/bots/ana/repositories')) return ok(method === 'PUT' ? {} : mine);
+      if (url.endsWith('/api/v2/repositories')) return ok({ repositories: [{ full_name: 'acme/api', enabled: true }, { full_name: 'acme/old', enabled: false }] });
+      return undefined;
+    });
+    show(<TeamWho who="ana" tab="settings" />, '/team/ana?tab=settings');
+    const section = await screen.findByRole('region', { name: 'Repositories' });
+    expect(within(section).getByText('acme/ana')).toBeTruthy();
+    fireEvent.click(within(section).getByRole('button', { name: 'Edit repositories' }));
+    const dialog = await screen.findByRole('dialog', { name: "Ana's repositories" });
+    fireEvent.click(within(within(dialog).getByRole('group', { name: 'Reaches' })).getByRole('button', { name: 'Chosen' }));
+    fireEvent.click(await within(dialog).findByRole('checkbox', { name: 'acme/api' }));
+    expect(within(dialog).queryByRole('checkbox', { name: 'acme/old' })).toBeNull();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(sent.find((s) => s.method === 'PUT')).toEqual({ url: '/api/v2/bots/ana/repositories', method: 'PUT', body: { mode: 'chosen', chosen: [{ full_name: 'acme/api', access: 'read' }] } }));
+  });
+
   it('makes a credential for an agent that runs elsewhere, shown once and kept out of the cache @s723', async () => {
     const TOKEN = 'tok-made-up-9';
     queryClient.setQueryData(agentsQuery.queryKey, [{ ...anaRow, agent: { harness: 'hermes', profile: 'ana' } } as AgentRow]);

@@ -922,6 +922,7 @@ def install(app: Any, store: Any) -> None:
         receipt: Any = _api()._Receipt
 
         who = admin(request)
+        TA.catalog_only(who, mcp_url=body.url)  # before the probe reaches the address
         found, meta = probe(body.url)
         if body.auth == "token" and body.token is None:
             raise Problem("token", "Paste the token", 422)

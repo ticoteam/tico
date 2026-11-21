@@ -20,6 +20,10 @@ Tico: use a supported API credential there, or a REST skill.
 
 ## How a tool is connected
 
+**Tools → Add** finds a known service in the catalog and offers its ways in: **Sign in with** the vendor (its MCP
+server), **Paste a key**, or **Sign in on the website**. Anything else is added by its kind there (API, MCP server,
+website, webhook, mail). The Tools Owner adds tools from the catalog only, never an address of its own.
+
 1. **The vendor's MCP server, if there is one.** A credential administrator adds it in **Tools → Add → MCP server**
    (its address, then a pasted token or a sign-in) and gives each bot that needs it a level. That grant is all a bot
    needs: the server reaches its runs (through Tico's proxy when Tico holds the key) and shows on its Tools tab, with no

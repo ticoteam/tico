@@ -307,6 +307,28 @@ def _note(c: Any, who: Who, bot_id: str, admins: Any, auth: Any) -> Decision:
     )
 
 
+ADDRESS_FIELDS = ("base_url", "auth_scheme", "check_path")
+
+
+def catalog_only(who: Who, service: Any = "", fields: Any = None, mcp_url: str = "") -> None:
+    """The Tools Owner defines a tool for a person only from the catalog (backend/tool_services.py): a known service with
+    its own address, scheme and check path, or a vendor's listed MCP server (`mcp_url`). An address of its own is a
+    person's to add. Its values never reach it either way (backend/tools_delegation.py)."""
+    if getattr(who, "via", "") != "tools-owner":
+        return
+    services: Any = importlib.import_module(".tool_services", __package__)
+    if mcp_url:
+        ok = mcp_url.strip().rstrip("/") in {u.rstrip("/") for u in services.MCP_URLS.values()}
+    else:
+        known: Any = services.defaults(service)
+        given: Any = fields or {}
+        ok = bool(known) and all(not given.get(k) or given[k] == known[k] for k in ADDRESS_FIELDS)
+    if not ok:
+        raise Problem(
+            "catalog_only", "The Tools Owner adds tools from the catalog only: a person adds any other address", 403
+        )
+
+
 def require(
     c: Any,
     who: Who,

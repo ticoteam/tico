@@ -19,7 +19,7 @@ const ACCESS: FlowRequest = {
   line: 'Growth Manager asks for Meta Ads · Read and write',
   since: '2026-11-20T09:00:00Z',
   from_id: 'bot:growth',
-  access: { id: 'r1', state: 'open', subject: 'bot:growth', subject_name: 'Growth Manager', resource_name: 'Meta Ads', level: 'read_write', why: 'Pause 2 ad sets' },
+  access: { id: 'r1', state: 'open', subject: 'bot:growth', subject_name: 'Growth Manager', resource_type: 'tool', resource_name: 'Meta Ads', level: 'read_write', why: 'Pause 2 ad sets' },
 };
 const KEY: FlowRequest = {
   kind: 'key',
