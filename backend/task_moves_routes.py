@@ -1191,7 +1191,7 @@ def register(
             ).fetchone()
             if bound and not task_asks.own_click(who):
                 raise Problem("ok_not_yours", task_asks.NOT_YOURS, 403)
-            H.task_answer_undo(c, who.actor, answer_id)
+            H.task_answer_undo(c, who.actor, answer_id, own_click=task_asks.own_click(who))
             return answer(c, who, found[0])
 
         return mutate(request, body, write)

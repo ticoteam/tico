@@ -628,8 +628,9 @@ def task_give(
 
 
 @_task_write("answer")
-def task_answer_undo(conn: "sqlite3.Connection", actor: str, answer_id: str) -> Row:
-    """Take an answer back: only whoever gave it (may_handle_ask)."""
+def task_answer_undo(conn: "sqlite3.Connection", actor: str, answer_id: str, *, own_click: bool = False) -> Row:
+    """Take an answer back: only whoever gave it (may_handle_ask); a person's answer on a page several people approve
+    only by their own click (`own_click`, answers.undo)."""
     from . import answers as A
 
     found = conn.execute(
@@ -639,7 +640,7 @@ def task_answer_undo(conn: "sqlite3.Connection", actor: str, answer_id: str) -> 
         _refuse(conn, actor, "not-found", "No such answer")
     _open(conn, actor, str(found[0]), work=False)
     with task_effects.because(actor):
-        return A.undo(conn, answer_id, actor)
+        return A.undo(conn, answer_id, actor, own_click=own_click)
 
 
 # ----------------------------------------------------------------------------- snooze

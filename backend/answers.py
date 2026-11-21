@@ -596,7 +596,7 @@ def give_to(
     return out
 
 
-def undo(conn: "sqlite3.Connection", answer_id: str, by: str) -> Row:
+def undo(conn: "sqlite3.Connection", answer_id: str, by: str, *, own_click: bool = False) -> Row:
     """Take an answer back: only whoever gave it (task_calls.may_handle_ask). While the task is still in that visit the answer is marked
     undone. If the task moved on because of it, and has not moved since, it goes back to that stage: an ordinary move
     back."""
@@ -613,10 +613,15 @@ def undo(conn: "sqlite3.Connection", answer_id: str, by: str) -> Row:
         _refuse(conn, by, "identity", "Only who gave the answer takes it back", task_id)
     if found.get("undone_at"):
         return row
+    answered = R.get(conn, found["requirement_id"])
+    if answered and R.shared(answered) and is_human(found["by_id"]) and not own_click:
+        # A person's decision on a page several people approve is taken back as it was given: by their own click.
+        from . import task_asks
+
+        _refuse(conn, by, "task_requirement", task_asks.SHARED_OWN, task_id)
     now = _part(row, "visit")
     stays = visit.get("left_at") is None
     # Only an answer that meets a requirement can move a task: not a send back or a give on an OK.
-    answered = R.get(conn, found["requirement_id"])
     moved_by_it = (
         not R.steers(answered["kind"] if answered else "ok", found["answer"])
         and visit.get("how") == "met"

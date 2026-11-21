@@ -883,3 +883,22 @@ def test_person_refuses_nobody_and_a_list_on_anything_but_a_document_approval():
         P._requirement_fields(Api(), {"person": ","}, {"kind": "page", "settings": {"document": "Spec"}})
     with pytest.raises(ValueError, match="Only a document approval names a list"):
         P._requirement_fields(Api(), {"person": "me,human:ben"}, {"kind": "page", "settings": {}})
+
+
+def test_a_document_approval_is_added_with_its_approvers_and_unshared_back_to_one():
+    api = Api()
+    P.requirement_add(
+        api,
+        {"stage": "product-ideas", "kind": "page", "line": "Brief", "document": "Spec", "person": "me,human:ben"},
+    )
+    added = stage(saved(api)[1], "product-ideas")["requirements"][-1]
+    assert (added["settings"], added["person_id"], added["person_ids"]) == (
+        {"document": "Spec"},
+        "human:ana",
+        ["human:ana", "human:ben"],
+    )
+    shared = {"kind": "page", "settings": {"document": "Spec"}, "person_ids": ["human:ana", "human:ben"]}
+    one = P._requirement_fields(Api(), {"person": "human:ben", "unshare": True}, dict(shared))
+    assert (one["person_id"], one["person_ids"]) == ("human:ben", None)
+    with pytest.raises(ValueError, match="--unshare takes one --person"):
+        P._requirement_fields(Api(), {"person": "me,human:ben", "unshare": True}, dict(shared))

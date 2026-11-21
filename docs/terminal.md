@@ -103,7 +103,12 @@ tico stage move engineering-fixes-1 --after engineering-review-1
 tico requirement list product-spec
 tico requirement add product-spec --kind page --line "Spec page" --who-oks people_only --person me
 tico requirement update <requirement id> --who-oks people_only
+tico requirement add marketing-review --kind page --document Spec --person human:ana,human:ben
+tico requirement update <requirement id> --person human:ana --unshare
 ```
+
+A document approval (`--document`) may name several people, comma separated: whichever answers first settles it for
+all. `--unshare` with one `--person` takes it back to that one approver.
 
 A holder (`--holder`, `--manager`, `--person`) is a bot's slug, `bot:<id>`, `human:<id>`, `me`, or `assignee` for
 whoever the task is for. `--pick-from` (once per bot) makes the stage One of several instead: Tico picks one as each

@@ -273,3 +273,14 @@ def test_a_private_shared_page_waits_to_be_shared_only_when_no_approver_can_open
 def test_a_stored_list_that_is_not_json_names_only_the_one_approver():
     assert R.approvers({"kind": "page", "person_id": ANA, "person_ids": "not json"}) == (ANA,)
     assert R.approvers({"kind": "page", "person_id": ANA, "person_ids": json.dumps([ANA, BEN])}) == (ANA, BEN)
+
+
+def test_a_shared_answer_is_taken_back_only_by_the_approvers_own_click(c, company):
+    rid = _shared(c, ANA, BEN)
+    row = _task(c)
+    _, version = _submitted(c, company, row)
+    given = _answer(c, row, rid, ANA, "no", version, "Fix the headline")["answer_id"]
+    with pytest.raises(H.Refused, match="own click"):
+        A.undo(c, given, ANA)  # the Assistant, BotOps or a token acting for Ana
+    A.undo(c, given, ANA, own_click=True)
+    assert c.execute("SELECT undone_at FROM answers WHERE id=?", (given,)).fetchone()[0]
