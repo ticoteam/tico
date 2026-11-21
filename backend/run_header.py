@@ -79,6 +79,11 @@ def build(store: Any, auth: Any, attempt: Row, runner_id: str | None = None) -> 
     the lease no longer live there (a replayed claim), an error, or not ready within BUDGET_SECONDS (the build may go
     on in its worker; its answer is dropped)."""
     deadline = time.monotonic() + BUDGET_SECONDS
+    message: Row = attempt.get("message") or {}
+    said = message.get("refs")
+    refs: Row = cast(Row, said) if isinstance(said, dict) else {}
+    if refs.get("command"):  # a native command gets exactly what the person wrote (runner-rs prompt::build)
+        return None
     if not _SLOTS.acquire(blocking=False):
         log.warning("run header skipped for attempt %s: every worker is busy", attempt.get("id"))
         return None
@@ -121,13 +126,19 @@ def _build(store: Any, auth: Any, attempt: Row, runner_id: str | None, deadline:
         try:
             if not c.execute(LIVE_SQL, (attempt["id"], runner_id, H.now())).fetchone():
                 return None
-            lines, unseen = for_turn(c, auth, attempt)
+            lines, unseen = for_turn(c, auth, attempt, deadline)
         finally:
             c.set_progress_handler(None, 0)
-    return capped(lines, unseen)
+    text = capped(lines, unseen)
+    # Read again, fresh, once it is written: a turn that moved on meanwhile (started, lapsed, reassigned) gets none.
+    with store.read() as c:
+        live = c.execute(LIVE_SQL, (attempt["id"], runner_id, H.now())).fetchone()
+        if c.in_transaction:
+            c.rollback()
+    return text if live and time.monotonic() <= deadline else None
 
 
-def for_turn(c: Any, auth: Any, attempt: Row) -> tuple[list[str], int]:
+def for_turn(c: Any, auth: Any, attempt: Row, deadline: float = float("inf")) -> tuple[list[str], int]:
     """The header's lines for this attempt, read as whoever the turn acts for, and how many entries were not even read
     because MAX_CHARS could not show them."""
     row = c.execute("SELECT * FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
@@ -138,30 +149,44 @@ def for_turn(c: Any, auth: Any, attempt: Row) -> tuple[list[str], int]:
     who: Any = acting or Identity(bot, "bot", attempt_id=row["id"])
     page: Row = attempt.get("make_page") or {}
     making: Row = page.get("task") or {}
+    if (making or row["acting_person"]) and acting is None:
+        return [], 0  # the person it acts for cannot be resolved now: never the bot's rights instead
     task: Row = making or attempt.get("task") or {}
     task_id = str(task.get("id") or "")
     lines = card(c, auth, who, bot, task_id, making=bool(making)) if task_id else []
     if acting is None:
         return lines, 0
     # Their own Assistant turn, a Make page one included (Auth.assistant_principal).
-    told, unseen = snapshot(c, auth, acting, MAX_CHARS - len(HEAD) - sum(len(line) + 1 for line in lines))
+    told, unseen = snapshot(c, auth, acting, lines, deadline)
     return lines + told, unseen
+
+
+# Room kept for the last "+N more" line, whatever N is.
+RESERVE = len("\n+9999 more")
 
 
 def capped(lines: Sequence[str], unseen: int = 0) -> str | None:
     """`lines` under HEAD within MAX_CHARS, each whole or not at all, then a last line counting the entries left out
-    (`unseen` more were never read). A heading (a line ending in ":") goes with its bullets ("- " lines): it is kept
-    only with at least one of them and is no entry itself. None when there is nothing to say."""
+    (`unseen` more were never read). None when there is nothing to say."""
     if not lines:
         return None
+    out, left, _ = _pack(lines)
+    left += unseen
+    return "\n".join([*out, f"+{left} more"] if left else out)
+
+
+def _pack(lines: Sequence[str]) -> tuple[list[str], int, int]:
+    """What `capped` keeps of `lines` (HEAD first), how many entries it leaves out, and the characters kept. A heading
+    (a line ending in ":") goes with its bullets ("- " lines): it is kept only with at least one of them and is no entry
+    itself. An entry too big for what is left is skipped, and a later one that fits is still kept."""
     groups: list[list[str]] = []
     for line in (" ".join(line.split()) for line in lines):
         if line.startswith("- ") and groups:
             groups[-1].append(line)
         else:
             groups.append([line])
-    out, size, left = [HEAD], len(HEAD), unseen
-    room = MAX_CHARS - len(f"\n+{len(lines) + unseen} more")
+    out, size, left = [HEAD], len(HEAD), 0
+    room = MAX_CHARS - RESERVE
     for first, *bullets in groups:
         heading = first.endswith(":") and bool(bullets)
         if not heading and size + 1 + len(first) > room:
@@ -180,7 +205,7 @@ def capped(lines: Sequence[str], unseen: int = 0) -> str | None:
             continue
         out += [first, *kept]
         size += cost
-    return "\n".join([*out, f"+{left} more"] if left else out)
+    return out, left, size
 
 
 def card(c: Any, auth: Any, who: Any, bot: str, task_id: str, *, making: bool = False) -> list[str]:
@@ -267,6 +292,12 @@ def _view(c: Any, auth: Any, who: Any, task_id: str) -> Row:
     return shown
 
 
+def _label(entry: Row) -> str:
+    """What the page filter left in place of what it took."""
+    said = [entry.get(k) for k in ("label", "line", "standing") if entry.get(k) in files.REMOVED_LABELS]
+    return str(said[0] if said else files.REMOVED_LABELS[0])
+
+
 def _redacted(entry: Row) -> bool:
     """An entry the page checks took (whole, or its words)."""
     return bool(entry.get("removed")) or any(entry.get(k) in files.REMOVED_LABELS for k in ("line", "standing"))
@@ -275,22 +306,25 @@ def _redacted(entry: Row) -> bool:
 def _turn_line(view: Row, turn: Row) -> str:
     """Whose turn it is in words, said only as far as the requirement it waits on may be: its page label when the
     reader may not open the page its words come from, the private line for a bound OK they are no party of."""
+    if _redacted(turn):  # the page filter took the turn itself
+        return _label(turn)
     entries: list[Row] = view.get("to_leave") or []
     wanted = turn.get("requirement_id")
     empty: Row = {}
     entry = next((e for e in entries if e.get("requirement_id") == wanted), empty)
     if wanted and _redacted(entry):
-        said = [entry.get(k) for k in ("label", "line", "standing") if entry.get(k) in files.REMOVED_LABELS]
-        return str(said[0] if said else files.REMOVED_LABELS[0])
+        return _label(entry)
     if entry.get("line") == task_asks.PRIVATE_LINE:
         return task_asks.PRIVATE_LINE
     return str(turn.get("line") or "")
 
 
-# The bot's newest finished Make page turn for this task, as the same person: it read the task as they do.
+# The bot's newest Make page turn for this task, as the same person, that started and ended however it ended: it read
+# the task as they do.
 MADE_PAGE_SQL = (
     "SELECT max(a.finished_at) FROM attempts a JOIN messages m ON m.id=a.message_id WHERE a.bot_id=? "
-    "AND a.acting_person=? AND a.state='completed' AND json_extract(m.refs,'$.make_page.task')=?"
+    "AND a.acting_person=? AND a.started_at IS NOT NULL AND a.finished_at IS NOT NULL "
+    "AND json_extract(m.refs,'$.make_page.task')=?"
 )
 
 
@@ -347,30 +381,42 @@ def changes(c: Any, auth: Any, who: Any, task_id: str, bot: str, last: Row) -> l
 HANDOFFS_COUNT_SQL = "SELECT count(*) FROM (" + HANDOFFS_SQL + ")"
 
 
-def snapshot(c: Any, auth: Any, person: Any, room: int = MAX_CHARS) -> tuple[list[str], int]:
+def snapshot(
+    c: Any, auth: Any, person: Any, before: Sequence[str] = (), deadline: float = float("inf")
+) -> tuple[list[str], int]:
     """What waits on the person now (their Needs you count and its first TOP items, as the list they are served shows
     them) and the open tasks their Assistant filed for them, as they may read them; and how many of those tasks were
-    not read because `room` characters could not show them."""
+    not read or not kept. Handoffs are read only while what `capped` keeps after the lines `before` still has room."""
     items: list[Row] = sorted(views.needs_shown(c, auth, person), key=views.needs_key)
     out = [f"Needs you ({H.actor_name(c, person.actor)}): {len(items)}"]
     for item in items[:TOP]:
         task: Row = item.get("task") or {}
         title = task.get("title")
-        out.append(f"- {item['line']}" + (f" ({_clip(title, TITLE_MAX)})" if title else ""))
+        # What its ask is about when the server says (a page's title, a payee and amount), as `tico needs-you show`.
+        line = item.get("about") or item["line"]
+        out.append(f"- {line}" + (f" ({_clip(title, TITLE_MAX)})" if title else ""))
     rule: str = auth.task_sql(c, person)
     total = int(c.execute(HANDOFFS_COUNT_SQL % rule, (person.actor,)).fetchone()[0])
-    room -= sum(len(line) + 1 for line in out)
+    head = "Open handoffs you filed through me:"
+    room = MAX_CHARS - RESERVE - _pack([*before, *out])[2]
     lines: list[str] = []
     for r in c.execute(HANDOFFS_SQL % rule, (person.actor,)):
-        if room <= 0:
+        heading = 0 if lines else len(head) + 1
+        if room - heading < 4 or time.monotonic() > deadline:
             break
+        owner: str = H.actor_name(c, r["owner_id"]) if r["owner_id"] else "nobody"
+        base = f"{_clip(r['title'] or 'A task', TITLE_MAX)} ({owner})"
+        if len(base) + 3 + heading > room:  # too big even before whose turn it is: the next one may fit
+            continue
         view = _view(c, auth, person, r["id"])
         turn: Row = view.get("turn") or {}
-        owner: str = H.actor_name(c, r["owner_id"]) if r["owner_id"] else "nobody"
         said = _turn_line(view, turn) if turn else ""
-        lines.append(f"{_clip(r['title'] or 'A task', TITLE_MAX)} ({owner})" + (f": {said}" if said else ""))
-        room -= len(lines[-1]) + 3
-    out += _listed("Open handoffs you filed through me:", lines)
+        line = base + (f": {said}" if said else "")
+        if len(line) + 3 + heading > room:
+            continue
+        lines.append(line)
+        room -= len(line) + 3 + heading
+    out += _listed(head, lines)
     return out, total - len(lines)
 
 

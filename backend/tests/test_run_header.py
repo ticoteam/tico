@@ -123,7 +123,8 @@ def test_the_assistant_snapshot_holds_only_its_persons_own_items(api, monkeypatc
     assert "- OK the launch note (Ship the launch note)" in header, "Needs you reads as the list they are served"
     with api.app.state.store.read_transaction() as c:
         cara = Identity("human:cara", "human", "cara@acme.example")
-        lines, unseen = run_header.snapshot(c, api.app.state.auth, cara, room=0)
+        full = ["Card now: " + "y" * 90] * 19  # what the card took already: no room left for a handoff
+        lines, unseen = run_header.snapshot(c, api.app.state.auth, cara, full)
     assert unseen == 1 and not any("Book the venue" in line for line in lines), "past its room a handoff is not read"
 
 
@@ -203,7 +204,7 @@ def test_a_make_page_turn_counts_changes_from_its_last_page_for_the_same_person(
         earlier = H.shift(H.now(), minutes=-5)
         c.execute(
             "INSERT INTO attempts (id, job_id, bot_id, runner_id, generation, token_hash, state, lease_until, created_at, "
-            "started_at, finished_at, message_id, acting_person) VALUES (?,?,'assistant',?,1,'h','completed',?,?,?,?,?,?)",
+            "started_at, finished_at, message_id, acting_person) VALUES (?,?,'assistant',?,1,'h','failed',?,?,?,?,?,?)",
             (H.new_id(), msg["job_id"], r["runner_id"], earlier, earlier, earlier, earlier, msg["id"], ana.actor),
         )
         H.history_event(c, "task", tid, "human:ben", "title", "Ship it", "Ship the launch note")
@@ -224,6 +225,39 @@ def test_a_replayed_claim_whose_lease_is_no_longer_live_gets_no_header(api, monk
         c.execute("UPDATE attempts SET lease_until=? WHERE id=?", (H.shift(H.now(), seconds=-1), first["id"]))
     again = post(api, "jobs/claim", {}, token=r["token"], key="claim:once")["attempt"]
     assert again["id"] == first["id"] and "run_header" not in again
+
+
+def test_a_turn_that_moved_on_while_its_header_was_written_gets_none(api, monkeypatch):
+    monkeypatch.setattr(run_header, "BUDGET_SECONDS", 30.0)
+    store = api.app.state.store
+
+    def started_meanwhile(c, auth, attempt, deadline):
+        with store.transaction() as w:
+            w.execute("UPDATE attempts SET state='running' WHERE id=?", (attempt["id"],))
+        return ["Card now: written before it started."], 0
+
+    monkeypatch.setattr(run_header, "for_turn", started_meanwhile)
+    r = ops_runner(api)
+    card_for_ops(api)
+    assert "run_header" not in post(api, "jobs/claim", {}, token=r["token"])["attempt"]
+
+
+def test_a_turn_for_a_person_who_cannot_be_resolved_has_no_header_and_never_the_agents(api, monkeypatch):
+    monkeypatch.setattr(run_header, "BUDGET_SECONDS", 30.0)
+    r = ops_runner(api)
+    card_for_ops(api)
+    attempt = post(api, "jobs/claim", {}, token=r["token"])["attempt"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET acting_person='human:ana' WHERE id=?", (attempt["id"],))
+    with api.app.state.store.read_transaction() as c:
+        assert run_header.for_turn(c, api.app.state.auth, attempt) == ([], 0)
+
+
+def test_a_native_command_or_a_turn_taken_whole_by_the_page_filter_says_no_more():
+    command = {"id": "a1", "message": {"refs": {"command": True}}}
+    assert run_header.build(None, None, command) is None, "a native command reads no store"
+    taken = {"removed": True, "label": "A deleted page"}
+    assert run_header._turn_line({"to_leave": []}, taken) == "A deleted page"
 
 
 def test_no_header_is_built_when_every_worker_is_busy(api):
