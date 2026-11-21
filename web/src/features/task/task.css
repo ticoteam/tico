@@ -222,6 +222,10 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
 .tv-brief-text{overflow-wrap:anywhere}
 .tv-brief-text>:first-child{margin-top:0}
 .ap-scroll>.tv-brief{padding:var(--s-4) var(--pad-task) 0}
+/* The matter's open key dates: one line above its email, cut short at the end rather than wrapped. */
+.tv-dates{display:flex;gap:var(--s-3);min-width:0;margin:0;overflow:hidden;white-space:nowrap;font-size:var(--t-sm);color:var(--ink-2);font-variant-numeric:tabular-nums}
+.tv-dates>span{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.ap-scroll>.tv-dates{padding:var(--s-4) var(--pad-task) 0}
 
 /* ---------- an approval's head: the title, then one quiet line (pipeline · stage · how long) ---------- */
 .tv.is-quiet .pk-where{order:1;margin-top:var(--s-1h)}
@@ -244,7 +248,7 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
   .ap-doc:has(.fv-none){height:auto;min-height:0}
   .ap-doc .lib.fv-embed .fv-frame{border-radius:0;box-shadow:none}
   .tv-waits{padding:var(--s-2) var(--s-3)}
-  .tv-lead,.ap-scroll>.tv-brief{padding:var(--s-3h) var(--s-4) 0}
+  .tv-lead,.ap-scroll>.tv-brief,.ap-scroll>.tv-dates{padding:var(--s-3h) var(--s-4) 0}
   .fv-bar small{display:none}
   .fv-bar>b{min-width:0;flex:1}
   .fv-bar>.grow{display:none}

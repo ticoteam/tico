@@ -1,5 +1,6 @@
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
+import { dateLine } from '@/features/company/exports';
 import { meQuery } from '@/data';
 import { Button } from '@/kit/Button';
 import { Markdown } from '@/kit/Markdown';
@@ -100,10 +101,35 @@ export function MatterBrief({ t, send }: { t: TaskData; send: string }) {
   const self = matter?.id === t.id;
   const read = useQuery({ ...taskDetailQuery(self ? undefined : matter?.id), retry: false });
   // An OK on the case itself: the case's own brief, with no link to the page it is on.
-  if (self) return <Brief note={t.note} />;
+  if (self)
+    return (
+      <>
+        <Brief note={t.note} />
+        <MatterDates matter={t.matter} />
+      </>
+    );
   const m = read.data?.id === matter?.id ? read.data : undefined;
   if (!matter || !m) return null;
-  return <Brief note={m.note} title={m.title} to={tabAddress(m, undefined, false).to} />;
+  return (
+    <>
+      <Brief note={m.note} title={m.title} to={tabAddress(m, undefined, false).to} />
+      <MatterDates matter={m.matter} />
+    </>
+  );
+}
+
+/** The matter's open key dates, one line above its email: each its label and dates ("Hearing: Not before Nov 25 · Due
+    Dec 8"); a done date leaves the line, and nothing shows when none is open. */
+export function MatterDates({ matter }: { matter: TaskData['matter'] }) {
+  const open = (matter?.dates ?? []).filter((d) => !d.done_at);
+  if (!open.length) return null;
+  return (
+    <p className="tv-dates">
+      {open.map((d) => (
+        <span key={d.id}>{d.label ? `${d.label}: ${dateLine(d)}` : dateLine(d)}</span>
+      ))}
+    </p>
+  );
 }
 
 /** The matter an email's OK task came from, from the OK task alone: its own parent, else a task that waits on it.
