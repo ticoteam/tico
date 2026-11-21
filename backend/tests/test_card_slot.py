@@ -187,9 +187,6 @@ def test_ok_and_chat_across_a_runner_restart(api):
     assert claim(api, machine) is None
     assert (agent.drafts, agent.charges, agent.answers) == (1, 1, 1)
     assert _delivered(api, task, [asked]) == (1, 1, 1, True)
-    with api.app.state.store.read() as c:
-        rev = c.execute("SELECT slot_rev FROM jobs WHERE id=?", (again["job_id"],)).fetchone()[0]
-        assert rev == c.execute("SELECT rowid FROM messages WHERE id=?", (asked,)).fetchone()[0]
 
 
 def test_a_run_that_ends_after_a_stage_move_settles_no_successor_work(api):
@@ -419,6 +416,12 @@ def test_a_slot_run_takes_a_capped_batch_and_the_rest_wait(api, monkeypatch):
     assert run["message"]["id"] == first and "Draft" in run["message"]["body"]  # the wake fills the batch
     assert _jobs(api, second)[second] == "queued" and "music" not in run["message"]["body"]
     assert second not in {m["id"] for m in run["history"]}  # nor read in the run's history
+
+
+def test_a_command_waiting_in_the_room_keeps_the_card_on_its_slot(api):
+    _, task = _card(api)
+    draft = _ok(api, task)
+    _queue(api, task, H.TICO_ACTOR, "/goal clear", command=True)  # never a slot's, so never older work
+    asked = _ask(api, task)
     with api.app.state.store.read() as c:
-        rev = c.execute("SELECT slot_rev FROM jobs WHERE id=?", (run["job_id"],)).fetchone()[0]
-        assert rev == c.execute("SELECT rowid FROM messages WHERE id=?", (first,)).fetchone()[0]
+        assert c.execute("SELECT slot FROM jobs WHERE id=?", (asked,)).fetchone()[0] == f"{draft}:ops"

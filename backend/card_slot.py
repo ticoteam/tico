@@ -7,9 +7,8 @@ also carries its slot, `<visit id>:<bot id>` (`assign`):
 
 - The claim picks its job by the usual rules. Its run then takes the slot's other queued jobs of the same room and
   audience in its prompt, up to FOLD_MAX jobs and FOLD_BYTES (`Execution.fold_behind`), unless its job carries nothing
-  else (`carries_more`: a people-only claim, a redirect, a claim-error probe). `jobs.slot_rev` records the newest message
-  handed over; the slot's work not handed stays out of the run's history (`pending`). A message whose provenance some
-  reader of the room may not read gets no slot.
+  else (`carries_more`: a people-only claim, a redirect, a claim-error probe). The slot's work not handed stays out of
+  the run's history (`pending`). A message whose provenance some reader of the room may not read gets no slot.
 - Nothing is steered into a slot's run, and its completion coalesces nothing (`Execution.inputs`, `complete`). What
   arrives during the run stays queued and starts the slot's next run. So a completion settles only what its claim handed
   it, and a run that ends after a reassignment, reopen or stage move settles no successor work: that work is another
@@ -33,6 +32,7 @@ SWITCHED = frozenset({"video production"})  # pipeline names, case-folded
 LIVE = ("queued", "leased", "running", "input", "uncertain")  # older work not settled yet
 FOLD_MAX = 20  # jobs one run takes in its prompt; the rest wait for the slot's next run
 FOLD_BYTES = 32_000  # and their words, in bytes, at most
+_SWITCHED_SQL = f"SELECT 1 FROM pipelines WHERE name IN ({','.join('?' * len(SWITCHED))}) AND retired_at IS NULL LIMIT 1"  # pipelines.name is NOCASE
 
 
 def _refs(value: object) -> Row:
@@ -49,29 +49,36 @@ def assign(conn: Any, message: Row) -> str | None:
     from . import task_wakes, threads
 
     T: Any = threads  # untyped
-
     refs = _refs(message.get("refs"))
     if refs.get("command") or refs.get("live_meeting") or refs.get("wake") == T.NOTE_WAKE:
         return None  # a server command, a meeting's turn or a thread's notes are not the card's work
     if not H._has_table(conn, "visits"):  # a bare hub database has no cards
         return None
+    # Two key reads before anything else: most messages are not in a card's room, and most companies switch nothing.
+    room = conn.execute(
+        "SELECT cv.id, cv.task_id FROM messages m JOIN conversations cv ON cv.id = m.conversation_id WHERE m.id=?",
+        (message["id"],),
+    ).fetchone()
+    if not room or not room[1] or not conn.execute(_SWITCHED_SQL, tuple(SWITCHED)).fetchone():
+        return None
     task_id = task_wakes.message_task(conn, message["id"])
     found = conn.execute(
-        "SELECT v.id, p.name, t.conversation_id FROM messages m JOIN tasks t ON t.id=? AND t.conversation_id = "
-        "m.conversation_id JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL JOIN stages s ON s.id = v.stage_id "
-        "JOIN pipelines p ON p.id = s.pipeline_id WHERE m.id=?",
-        (task_id or "", message["id"]),
+        "SELECT v.id, p.name FROM tasks t JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL "
+        "JOIN stages s ON s.id = v.stage_id JOIN pipelines p ON p.id = s.pipeline_id WHERE t.id=? AND t.conversation_id=?",
+        (task_id or "", room[0]),
     ).fetchone()
     if not found or str(found[1]).casefold() not in SWITCHED:
         return None
     if T.message_narrower(conn, message):
         return None  # some reader of the room may not read it (or what it carries): its own run answers it
     # Any agent's live work in the card's room from before the switch settles first: until then the card stays on
-    # the older path, a reassign mid-run included.
+    # the older path, a reassign mid-run included. Work that never gets a slot (above) does not count.
     legacy = conn.execute(
         "SELECT 1 FROM jobs j JOIN messages m ON m.id = j.message_id WHERE j.slot IS NULL AND j.id<>? "
-        f"AND j.state IN ({','.join('?' * len(LIVE))}) AND m.conversation_id=? LIMIT 1",
-        (message["id"], *LIVE, found[2]),
+        f"AND j.state IN ({','.join('?' * len(LIVE))}) AND m.conversation_id=? "
+        "AND coalesce(json_extract(m.refs,'$.command'),0)=0 AND json_extract(m.refs,'$.live_meeting') IS NULL "
+        "AND coalesce(json_extract(m.refs,'$.wake'),'')<>? LIMIT 1",
+        (message["id"], *LIVE, room[0], T.NOTE_WAKE),
     ).fetchone()
     if legacy:
         return None
@@ -99,15 +106,6 @@ def release(conn: Any, attempt_id: str, job_id: str) -> None:
         "UPDATE jobs SET state='queued', attempt_id=NULL WHERE attempt_id=? AND id<>? AND slot IS NOT NULL "
         "AND state='input'",
         (attempt_id, job_id),
-    )
-
-
-def handed(conn: Any, job_id: str, message_ids: list[str]) -> None:
-    """Record on the claimed job the input revision its run was handed: the newest of these messages."""
-    marks = ",".join("?" * len(message_ids))
-    conn.execute(
-        f"UPDATE jobs SET slot_rev=(SELECT max(rowid) FROM messages WHERE id IN ({marks})) WHERE id=?",
-        (*message_ids, job_id),
     )
 
 

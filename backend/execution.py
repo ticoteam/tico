@@ -6358,14 +6358,13 @@ class Execution:
         results, comments: the claim's fence, unfenced_sql, kept them back), so no separate turn waits after it to
         read them again (Dev 543). Each joins this turn as an input given in its prompt, already acknowledged, and its
         job settles with the turn (complete); a lane's other work, a command and a redirect keep their own turns. A card
-        slot's run (backend/card_slot.py) takes its slot's queued jobs alone, at every claim, and records what it was
-        handed (`slot_rev`). A run whose job carries nothing else (`card_slot.carries_more`: a people-only claim, a
+        slot's run (backend/card_slot.py) takes its slot's queued jobs of the same room and audience alone, at every
+        claim, in a capped batch. A run whose job carries nothing else (`card_slot.carries_more`: a people-only claim, a
         redirect, a claim-error probe) takes no other job; the slot's work waits as any held start does."""
         from . import threads
 
         slot = row["slot"]
         if slot and not card_slot.carries_more(c, row, people_only):
-            card_slot.handed(c, row["id"], [row["message_id"]])
             return msg
         rows = (
             c.execute(
@@ -6388,7 +6387,7 @@ class Execution:
                 (row["bot_id"], row["id"], H.now(), task_id),
             ).fetchall()
         )
-        lines, folded, handed, size = [], [], [row["message_id"]], 0
+        lines, folded, size = [], [], 0
         audience = thread_payload(c, H.conversation(c, msg["conversation_id"]), msg)["audience_class"] if slot else None
         for queued in rows:
             if not privacy.message_readable(c, "bot:" + row["bot_id"], queued):
@@ -6439,9 +6438,6 @@ class Execution:
                 + (text if len(text) <= FOLD_TEXT else text[:FOLD_TEXT] + "\u2026")
             )
             folded.append(queued["job_id"])
-            handed.append(queued["id"])
-        if slot:
-            card_slot.handed(c, row["id"], handed)
         if not folded:
             return msg
         H.event(c, H.TICO_ACTOR, "job.fold_behind", aid, {"job_id": row["id"], "jobs": folded})

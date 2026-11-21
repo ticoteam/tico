@@ -1117,8 +1117,7 @@ refuses everything else.
 **Card slots (pilot: Video Production).** In a pipeline named in `card_slot.SWITCHED`, a card's work for an agent runs
 one run at a time per visit (`jobs.slot`, `<visit>:<agent>`), for messages in the card's own room that every reader of
 it may read. The claim picks its job by the usual rules; its run takes the slot's other queued messages of the same
-audience in its prompt (at most 20 and 32 KB), recording the newest as `jobs.slot_rev`, and reads none of the slot's
-work it was not handed. A people-only claim, a redirect or a claim-error probe takes nothing else. Nothing is steered
+audience in its prompt (at most 20 and 32 KB), and reads none of the slot's work it was not handed. A people-only claim, a redirect or a claim-error probe takes nothing else. Nothing is steered
 into the run or coalesced at its end: a comment made during it waits for the slot's next run, a run that ends after a
 move or a reassign settles nothing of the new visit's or agent's work, and a run that never starts puts what it took
 back in the queue. While any agent has live or unsettled work in the card's room from before the switch, the card stays
