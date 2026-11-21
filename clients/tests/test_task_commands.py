@@ -563,6 +563,21 @@ def test_needs_you_counts_each_kind_and_lists_the_items_oldest_first():
     assert hubtools.needs_you_show(Recorder(), {"kind": "ask"})["items"] == [{"kind": "ask"}, {"kind": "ask"}]
 
 
+def test_the_old_mention_kind_is_still_accepted_and_matches_nothing():
+    """Needs you lists no @ now (#4762); an old `--kind mention` still parses and gives an empty list."""
+    assert hubcli.parser().parse_args(["needs-you", "show", "--kind", "mention"]).fn == "needs-you show"
+
+    class Today(Recorder):
+        def get(self, path, **query):
+            return (
+                {"items": [{"kind": "ask"}, {"kind": "question"}]}
+                if path == "needs-you"
+                else super().get(path, **query)
+            )
+
+    assert hubtools.needs_you_show(Today(), {"kind": "mention"})["items"] == []
+
+
 def test_the_old_engines_tools_are_gone_and_a_call_by_one_is_an_unknown_tool():
     for name in (
         "tico_task_question",

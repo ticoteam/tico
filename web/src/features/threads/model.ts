@@ -32,6 +32,8 @@ export type Thread = Omit<ThreadView, 'me' | 'members'> & {
   /** An agent's Home with messages from before it had its own room, still closed to its readers. */
   earlier?: { count: number } | null;
   deletable?: boolean;
+  /** It holds an open @ of the viewer (the sidebar's `attention`, backend threads.py `_attention_roots`). */
+  mentioned?: boolean;
 };
 
 export interface ListPage {
@@ -43,9 +45,13 @@ export type ThreadList = InfiniteData<ListPage, unknown>;
 const time = (t: Thread) => (t.last_message_at ? Date.parse(t.last_message_at) : 0);
 const newestFirst = (a: Thread, b: Thread) => time(b) - time(a);
 
-/** One page of GET /api/v2/threads: its threads and its DMs, one list, newest first. */
-export function toPage(body: { threads?: Thread[]; dms?: Record<string, unknown>[]; next_cursor?: string | null }): ListPage {
-  const rows = [...(body.threads ?? []), ...((body.dms ?? []) as Thread[])].filter((t) => !t.archived_at && !t.parent_id);
+/** One page of GET /api/v2/threads: its threads and its DMs, one list, newest first. A row the page's `attention`
+    marks `mentioned` keeps the mark. */
+export function toPage(body: { attention?: Thread[]; threads?: Thread[]; dms?: Record<string, unknown>[]; next_cursor?: string | null }): ListPage {
+  const mentioned = new Set((body.attention ?? []).filter((t) => t.mentioned).map((t) => t.id));
+  const rows = [...(body.threads ?? []), ...((body.dms ?? []) as Thread[])]
+    .filter((t) => !t.archived_at && !t.parent_id)
+    .map((t) => (mentioned.has(t.id) ? { ...t, mentioned: true } : t));
   return { rows: rows.sort(newestFirst), next: body.next_cursor ?? null };
 }
 
@@ -141,8 +147,10 @@ export const isOneToOne = (t: Thread, me: string | undefined) =>
   (t.audience === 'personal' && (Number(t.dm_with_count) || othersOf(t, me).length) <= 1) || (t.audience === 'home' && !teamOf(t));
 
 /** The menu's Threads list: every conversation but your 1:1 DMs (those are in Team), newest first. A task's thread
-    belongs to its task. Nothing shows in both tabs. */
-export const conversationsOf = (rows: readonly Thread[], me: string | undefined) => rows.filter((t) => !t.task_id && !isOneToOne(t, me));
+    belongs to its task, unless it holds an open @ of you: Needs you lists no @, so it shows here. Nothing shows in both
+    tabs. */
+export const conversationsOf = (rows: readonly Thread[], me: string | undefined) =>
+  rows.filter((t) => (!t.task_id || t.mentioned) && !isOneToOne(t, me));
 
 /** A thread from outside (a Slack channel or DM not linked to a team): one of its members is a `slack:` destination.
     Its box talks only to the agent that handles it: the one agent in it. */

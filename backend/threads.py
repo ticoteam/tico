@@ -5364,7 +5364,9 @@ def read_marks(c, v, thread_ids):
 def _attention_roots(c, v):
     """{root id: extra row fields}: the roots of what waits on the viewer in Needs attention (thread_attention: open
     mentions and asks, unread DMs, held messages), and every root they are in whose bots' wakes the loop guard holds
-    (`capped`): a person's post there lets them go. `new_at` says where the oldest item is, when a sub-thread holds it."""
+    (`capped`): a person's post there lets them go. `new_at` says where the oldest item is, when a sub-thread holds it.
+    `mentioned` marks a root with an open @ of the viewer (open_mentions): Needs you lists no @, so a task's thread with
+    one is listed in Threads (#4762)."""
     from . import thread_attention
 
     roots = {}
@@ -5386,6 +5388,8 @@ def _attention_roots(c, v):
                 "new_at",
                 None if thread["id"] == root else {"thread_id": thread["id"], "message_id": item.get("message_id")},
             )
+            if item.get("kind") == "thread_mention":
+                roots[root]["mentioned"] = True
     for row in capped_rows:
         root = found.get(row["root_id"])
         if root is not None and _involved(c, v, root):

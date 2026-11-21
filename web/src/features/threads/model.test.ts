@@ -24,6 +24,14 @@ describe('the threads list', () => {
     expect(page.rows.map((t) => t.id)).toEqual(['dm', 'a']);
     expect(page.next).toBe('n1');
   });
+
+  it('lists a task\'s thread only while it holds an open @ of you: Needs you lists no @ (#4762)', () => {
+    const task = row('k1', 2, { task_id: 'task-1' });
+    const quiet = row('k2', 1, { task_id: 'task-2' });
+    const page = toPage({ attention: [{ ...task, mentioned: true }], threads: [task, quiet] });
+    expect(conversationsOf(page.rows, 'human:me').map((t) => [t.id, !!t.mentioned])).toEqual([['k1', true]]);
+    expect(conversationsOf(toPage({ threads: [task, quiet] }).rows, 'human:me')).toEqual([]);
+  });
 });
 
 describe('names', () => {

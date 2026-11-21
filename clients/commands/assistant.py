@@ -626,7 +626,8 @@ def batch_abandon(api, args):
     {
         "kind": {
             "type": "string",
-            "enum": ["task", "ask", "paused", "question"],
+            # `mention` is an old kind (Needs you lists no @ now): still accepted, it matches nothing.
+            "enum": ["task", "ask", "paused", "question", "mention"],
             "description": "Only this kind",
         },
         "limit": {

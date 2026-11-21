@@ -175,8 +175,12 @@ def test_a_persons_mention_alone_adds_nothing_to_needs_you(api):
     needs = get(api, "needs-you", token="cara-test")
     assert needs["count"] == before and not [i for i in needs["items"] if (i.get("task") or {}).get("id") == made["id"]]
     assert get(api, "needs-you?count=true", token="cara-test")["count"] == before
-    sidebar = get(api, "threads", token="cara-test")
-    assert made["conversation_id"] in str(sidebar.get("attention"))
+    # Threads lists the task's thread from the sidebar's `attention`, marked as holding an open @ of her.
+    attention = get(api, "threads", token="cara-test")["attention"]
+    assert [row.get("mentioned") for row in attention if row["id"] == made["conversation_id"]] == [True]
+    post(api, f"tasks/{made['id']}/comments", {"text": "Checked: both weekends are free."}, token="cara-test")
+    attention = get(api, "threads", token="cara-test")["attention"]
+    assert not [row for row in attention if row["id"] == made["conversation_id"] and row.get("mentioned")]
 
 
 def test_the_pipelines_read_and_save_their_settings_record(api):

@@ -66,7 +66,7 @@ export function MenuThreads({ asks }: MenuThreadsProps) {
         ) : null}
         {items.map((it) =>
           it.kind === 'thread' ? (
-            <ThreadLine key={it.key} t={it.t} ask={asks.has(it.t.id)} />
+            <ThreadLine key={it.key} t={it.t} ask={asks.has(it.t.id) || !!it.t.mentioned} />
           ) : it.kind === 'mail' ? (
             <MailLine key={it.key} r={it.r} box={it.box} organize={it.organize} swiped={swiped === it.key} onSwipe={swipe(it.key)} />
           ) : (
