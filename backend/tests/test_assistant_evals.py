@@ -156,6 +156,12 @@ def test_the_mcp_surface_lists_the_real_tools_and_logs_a_call_as_a_canon_line(tm
             "method": "tools/call",
             "params": {"name": "tico_task_close", "arguments": {"id": "x", "why": "y", "version": 3}},
         },
+        {
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": {"name": "tico_assistant_morning", "arguments": {"for_person": "human:dana", "body": "Hi"}},
+        },
     ]
     proc = subprocess.run(
         [sys.executable, str(server)],
@@ -167,13 +173,15 @@ def test_the_mcp_surface_lists_the_real_tools_and_logs_a_call_as_a_canon_line(tm
         check=False,
     )
     replies = {r["id"]: r for r in map(json.loads, proc.stdout.splitlines())}
-    assert set(replies) == {1, 2, 3}, proc.stderr
+    assert set(replies) == {1, 2, 3, 4}, proc.stderr
     real = [t["name"] for t in hubtools.listing(local=True, kind="assistant")]
     assert [t["name"] for t in replies[2]["result"]["tools"]] == real
     assert not replies[3]["result"]["isError"], replies[3]
     logged = [json.loads(l) for l in log.read_text().splitlines()]
-    assert logged[-1]["via"] == "mcp" and logged[-1]["tool"] == "tico_task_close", logged
-    assert re.search(r"^task close\b", logged[-1]["argv"]), logged[-1]
+    assert logged[-2]["via"] == "mcp" and logged[-2]["tool"] == "tico_task_close", logged
+    assert re.search(r"^task close\b", logged[-2]["argv"]), logged[-2]
+    # A tool argument named apart from its CLI flag logs the flag: the morning message's person is `--for`.
+    assert logged[-1]["argv"].startswith("assistant morning --for human:dana "), logged[-1]
 
 
 PROMPT_RS = Path(__file__).resolve().parents[2] / "runner-rs" / "src" / "prompt.rs"

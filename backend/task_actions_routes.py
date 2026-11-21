@@ -7,7 +7,7 @@ from . import person_asks
 from . import teammate_access
 from . import task_documents, task_followers
 from . import sources as SRC
-from . import ask_ingest, delivery, strategy_bot
+from . import ask_ingest, delivery
 from . import org_rule_check
 from .roadmaps import exact_approval
 from . import holds, task_caps, reach
@@ -547,15 +547,9 @@ def register_core(
             # owner lets the Assistant act without asking. BotOps then acts with the person's rights
             # (delegated_identity, `assistant`); the Strategy Owner and the Librarian work it with their own rights, so
             # what only the owner may change (strategy, goals) still reaches the owner as a proposal or a card.
-            if H.actor_id(owner) not in assistant_mod.HELPERS or not H.is_bot(owner):
-                raise Problem(
-                    "request_id",
-                    "Only a task for BotOps, the "
-                    + strategy_bot.name(c)
-                    + ", the Librarian or the Tools Owner carries the person's request",
-                    422,
-                )
-            asked_botops = assistant_instruction(c, who, request_id) if assistant_direct() else None
+            # Any other owner is handed the task as the person files it, and the citation lends it nothing.
+            if H.actor_id(owner) in assistant_mod.HELPERS and H.is_bot(owner):
+                asked_botops = assistant_instruction(c, who, request_id) if assistant_direct() else None
             request_id = None
         # A subtask for a person under a private task with no person on it, filed by the bot that owns it, makes them
         # its reader.

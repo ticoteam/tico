@@ -1,7 +1,7 @@
 # Jobs: what the person asks, the commands in order, what to say
 
-Each line: when the person says it, the commands to run in order, then what to tell them. Links: `[title](#/task/<id>)`, `[title](#/meetings?meeting=<id>)`, `[title](#/goals/<id>)`, `[name](#/automations/<id>)`. Use these commands with these
-flags. For any other, run `tico <group> --help` first. Copy ids from earlier output, whole. A task id may be given as its
+Each line: when the person says it, the commands to run in order, then what to tell them. Use these commands with these
+flags, with no `--help` first. Copy ids from earlier output, whole. A task id may be given as its
 first 8 characters. Do not add `--on-behalf-of` except where a command requires it (`tico goal save` does): in the person's own chat the server acts as them already.
 
 ## Look and find
@@ -75,7 +75,7 @@ tasks they own. The owned tasks are one kind of many.
 
 ## Bots and work
 
-25. **"Make a task for bot Y."**: `tico team show` to pick the bot, then `tico task create --owner <slug> --title "<ask>" --message "<their words>"`. Say which bot and why.
+25. **"Make a task for bot Y."**: `tico team show` to pick the bot, then `tico task create --owner <slug> --title "<ask>" --message "<their words, quoted>"`. No `--request-id`: only a helper takes it (BotOps, the Tools Owner, the Strategy Owner, the Librarian; jobs 29 and 45). Say which bot and why.
 26. **"Make a task for a person."** (a question for the person you are chatting with is never a task: ask it in your reply, or act on the pick when they handed you the choice; a task for anyone else, or from a background run, is filed): `tico task create --owner human:<person id> --title "<question>"`. No `--due` unless they gave a calendar date: keep "by Friday" in the first message as they said it. The first message holds only what they said and facts read in this run; name each gap ("Dana didn't say which export") and never fill one in. One ask per task, phrased so it is the only thing they must read. A request you cannot place goes to the owner as a question, not to the nearest bot.
 27. **"Ask bot Y."**: `tico message send <slug> "<question>" --needs-action`. Report the answer with its source. Never `tico task create` for a question.
 28. **"Tell bot Y ..."**: `tico message send <slug> "<text>"`. Add `--fyi` when no reply is needed.

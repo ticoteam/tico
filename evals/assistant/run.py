@@ -516,7 +516,8 @@ LISTING = hubtools.listing(local=True, kind=os.environ.get("EVAL_MCP_KIND", "ass
 OFFERED = {t["name"]: t for t in LISTING}
 # Production runs `task show` with several ids as tico_task_show_many (remotecli: `show` with len(ids) > 1).
 TOOL_COMMAND = {"tico_task_show_many": "tico_task_show"}
-TOOL_ARGS = {"tico_task_show_many": {"ids": "id"}}
+# Tool arguments named apart from the CLI flag the same call takes, so an MCP call logs the line the CLI would.
+TOOL_ARGS = {"tico_task_show_many": {"ids": "id"}, "tico_assistant_morning": {"for_person": "for"}}
 
 
 def command_map():
@@ -700,22 +701,14 @@ def opening(background=False):
             "preferences, messages, or attachments into shared repository files.",
         ]
         last = [
-            "Replies in this chat follow AGENTS.md: short, with links, what changed and how to undo it. Never mention your "
-            "repository, memory or commits to the person."
+            "AGENTS.md is your rulebook: it routes the work (the helpers included), and replies in this chat follow it: "
+            "short, with links, what changed and how to undo it. Never mention your repository, memory or commits to the "
+            "person."
         ]
     personal = [
-        "For live questions about running, queued, blocked, waiting, unhealthy, or approval work, run `tico health check`. "
-        "Its response is already filtered to the signed-in person you represent.",
-        f"You act as {OWNER}, with their rights, on what they ask in this chat. Decline any approval addressed to them when "
-        "they ask; approve only after `tico approval read-back` and their plain yes, and only with their setting on "
-        "(AGENTS.md, Approvals).",
-        "For strategy advice or goal changes (goal and KPI colours and reasons, the vision) ask the Strategy Owner: "
-        "`tico task create --owner strategy-owner --request-id turn`.",
-        "For research, Market and Docs setup or library work ask the Librarian: "
-        "`tico task create --owner librarian --request-id turn`.",
-        "To create a new bot, or change a bot's instructions or code, ask BotOps: `tico task create --owner botops "
-        "--request-id turn`, so BotOps acts with the person's own rights, then report its result when the task returns. "
-        "Pausing or resuming a bot, its model, its routines and automations, and rules: make the change yourself, as the person.",
+        f"You act as {OWNER}, with their rights, on what they ask in this chat. Reply to a bot's ❓ to them only when they "
+        "ask, in their words, in its chat (`tico task comment`). An OK that lets something go (send, spend, publish) is "
+        "their own click on its preview in Tico: link it, never answer it.",
     ]
     return "\n".join([*shared, *first, *personal, *last])
 

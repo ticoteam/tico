@@ -30,6 +30,8 @@ pub const DEFAULT_NAMES: &[(&str, &str)] = &[
 pub struct Names {
     pub company: String,
     pub app: String,
+    /// The Assistant's slug on this server (`TICO_ASSISTANT_BOT`, GET config `assistant_bot`).
+    pub assistant: String,
 }
 
 impl Names {
@@ -57,6 +59,7 @@ impl Names {
         Names {
             company: pick("company_name"),
             app: pick("app_name"),
+            assistant: pick("assistant_bot"),
         }
     }
 }
@@ -347,6 +350,7 @@ fn parts(
     let conversation = &attempt["conversation"];
     let app = &names.app;
     let bot = s(&attempt["bot"]);
+    let assistant = bot == names.assistant;
     let truthy = |v: &Value| crate::util::truthy(Some(v));
     let conv_id = s(&conversation["id"]);
     let setup = PARKED_STATES.contains(&attempt["onboarding"].as_str().unwrap_or("\u{0}"))
@@ -401,9 +405,9 @@ fn parts(
         lines.push((Part::Standing, tools));
     }
     crate::sessions::prompt_head(attempt, &mut lines);
-    // The Assistant's room: every person's one chat, the owner's included. The Strategy Owner, the Librarian and BotOps
-    // are helpers it hands work to (backend/assistant.py HELPERS); none of them has a person's chat.
-    if !make_page && bot == "assistant" && conversation["scope"] == "personal" {
+    // The Assistant's room: every person's one chat, the owner's included. Its rulebook (templates/catalog/assistant/
+    // AGENTS.md) routes work to the helpers (backend/assistant.py HELPERS); none of them has a person's chat.
+    if !make_page && assistant && conversation["scope"] == "personal" {
         let owner = if truthy(&conversation["owner_actor"]) {
             s(&conversation["owner_actor"])
         } else {
@@ -412,12 +416,8 @@ fn parts(
         lines.extend([
             format!("You are privately assisting {owner}. "),
             "This provider session and its conversation history belong only to that person. Never copy personal preferences, messages, or attachments into shared repository files.".into(),
-            "For live questions about running, queued, blocked, waiting, unhealthy, or approval work, run `tico health check`. Its response is already filtered to the signed-in person you represent.".into(),
             format!("You act as {owner}, with their rights, on what they ask in this chat. Reply to a bot's ❓ to them only when they ask, in their words, in its chat (`tico task comment`). An OK that lets something go (send, spend, publish) is their own click on its preview in Tico: link it, never answer it."),
-            "For strategy advice or goal changes (goal and KPI colours and reasons, the vision) ask the Strategy Owner: `tico task create --owner strategy-owner --request-id turn`.".into(),
-            "For research, Market and Docs setup or library work ask the Librarian: `tico task create --owner librarian --request-id turn`.".into(),
-            "To create a new bot, or change a bot's instructions or code, ask BotOps: `tico task create --owner botops --request-id turn`, so BotOps acts with the person's own rights, then report its result when the task returns. Pausing or resuming a bot, its model, its routines and automations, and rules: make the change yourself, as the person.".into(),
-            "Replies in this chat follow AGENTS.md: short, with links, what changed and how to undo it. Never mention your repository, memory or commits to the person.".into(),
+            "AGENTS.md is your rulebook: it routes the work (the helpers included), and replies in this chat follow it: short, with links, what changed and how to undo it. Never mention your repository, memory or commits to the person.".into(),
         ].into_iter().map(|l: String| (Part::Standing, l)));
         // Asked from the Ask panel on another page (backend/assistant.py post_message_sync `refs.page`).
         let page = &attempt["message"]["refs"]["page"];
@@ -521,12 +521,14 @@ fn parts(
         put(&mut lines, Part::Standing, "This is a shared bot room. Preserve each message's human author and assume every room member can read the reply.".into());
     }
     if !setup
+        && !assistant
         && !truthy(&attempt["task"])
         && !attempt["make_page"]["task"].is_object()
         && from_human(message)
     {
         // Filed for the person, from their message, the task names them as requester, so the bot's questions on it
-        // reach them (backend/reach.py handed) instead of being refused and relayed through its manager.
+        // reach them (backend/reach.py handed) instead of being refused and relayed through its manager. The Assistant
+        // routes work by its own rulebook (templates/catalog/assistant/AGENTS.md) and answers questions itself.
         put(&mut lines, Part::Standing, "If this asks for work, first file each distinct ask for the person who sent it, from this message (tico task create --owner <you> --for <that person> --from-message <the current message's id, beside its sender>), or update the task that already covers it. Ask them your questions on that task: they reach them while it is open. Then work them, up to three at a time, and finish each with `tico task done <id> -m \"<summary>\" --version N`. A question you answer at once needs no task.".into());
     }
     if truthy(&message["refs"]["update"]) {
@@ -726,11 +728,9 @@ fn parts(
     {
         put(&mut lines, Part::Standing, "Plain English in chat: your reply goes to a person. Answer first, in plain words a busy person reads in seconds, then only what they must decide or do. Leave out task IDs, commit hashes, message IDs, s3:// URIs, file paths, tool names and how you checked; that evidence belongs in the task note or a report. Offer it instead of pasting it. Name things as the person would: the vendor, the amount, the date. When you correct an earlier answer, say what changed in one sentence.".into());
     }
-    if kind == "chat" && !setup && person {
+    // The Assistant's replies and lookups follow its rulebook (templates/catalog/assistant/AGENTS.md), not this contract.
+    if kind == "chat" && !setup && person && !assistant {
         put(&mut lines, Part::Standing, "Human chat response contract: lead with the answer or outcome. Use enough explanation, comparison rows or list items to fulfill the request. If the person asks for one thing, focus on that thing; do not substitute the standing backlog or add unrelated tasks. For a next-priority question, first run `tico health check` and use its current open, doing, waiting, and needs-human state; never repeat an item that current state shows is done merely because it appears in conversation history. Check the current external source, such as a PR's actual state, when the Hub note may be stale. Use the task's attached URL for that check; do not guess a repository from its title. If the first lookup fails, inspect the attached URL and retry the exact source. Never call work blocked until you verify the missing permission or dependency. Carry forward the person's scoped authorization instead of asking again.".into());
-        if bot == "assistant" {
-            put(&mut lines, Part::Standing, "House chat style: sound like a helpful colleague, not a status report. Default to a short conversational paragraph. For 'top things needing my attention', give a few short bullets, each naming the concrete decision or action and any essential deadline. Usually 40–90 words total is enough; this is a default, not a hard limit. No introductory boilerplate, section headings, nested lists, task IDs, owner/status fields, or narration of tools and sources. Link the relevant item when useful. Keep supporting detail in the task; explain it when asked. Answer follow-ups without repeating the whole list. Give a complete longer list or deeper explanation when requested. Do the verification silently: completed work is not a current blocker, and an old task note or remembered PR state must not override current evidence.".into());
-        }
     }
     (lines, run)
 }
@@ -915,6 +915,7 @@ mod tests {
         let names = Names {
             company: "Acme".into(),
             app: "Tico".into(),
+            assistant: "assistant".into(),
         };
         let history = json!([
             {"id": "m1", "from_actor": "human:ana@acme.test", "body": "Earlier", "refs": {}},
@@ -967,6 +968,7 @@ mod tests {
         let names = Names {
             company: "Acme".into(),
             app: "Tico".into(),
+            assistant: "assistant".into(),
         };
         let mut attempt = json!({"id": "a7", "bot": "ops", "config": {"task_model": {"harness": "grok", "model": "grok-4.6"}},
             "conversation": {"id": "c7", "kind": "task"}, "message": {"id": "m7", "body": "Continue"},
@@ -1014,6 +1016,7 @@ mod tests {
         let names = Names {
             company: "Acme".into(),
             app: "Tico".into(),
+            assistant: "assistant".into(),
         };
         let turn = |finance: Value| {
             json!({"id": "a8", "bot": "ads", "finance": finance,
@@ -1041,6 +1044,7 @@ mod tests {
         let names = Names {
             company: "Acme".into(),
             app: "Tico".into(),
+            assistant: "assistant".into(),
         };
         let turn = |learned: Value| {
             json!({"id": "a6", "bot": "assistant", "learned": learned,
@@ -1085,6 +1089,7 @@ mod tests {
         let names = Names {
             company: "Acme".into(),
             app: "Tico".into(),
+            assistant: "assistant".into(),
         };
         let turn = json!({"id": "a8", "bot": "marketing", "conversation": {"id": "c8", "kind": "task", "scope": "shared"},
             "learned": {"brand": "Brand v2. Voice: warm, plain."},
@@ -1102,6 +1107,7 @@ mod tests {
         let names = Names {
             company: "Acme".into(),
             app: "Tico".into(),
+            assistant: "assistant".into(),
         };
         let turn = |updates: Value| {
             json!({"id": "a7", "bot": "assistant", "updates": updates,
@@ -1131,6 +1137,7 @@ mod tests {
         let names = Names {
             company: "Acme".into(),
             app: "Tico".into(),
+            assistant: "assistant".into(),
         };
         let turn = |refs: Value| {
             json!({"id": "a8", "bot": "assistant",
@@ -1153,10 +1160,11 @@ mod tests {
     }
 
     #[test]
-    fn only_the_assistant_assists_a_person_and_it_names_its_three_helpers() {
+    fn only_the_assistant_assists_a_person_and_its_rulebook_routes_the_work() {
         let names = Names {
             company: "Acme".into(),
             app: "Tico".into(),
+            assistant: "assistant".into(),
         };
         let turn = |bot: &str, room_key: &str| {
             json!({"id": "a5", "bot": bot,
@@ -1165,13 +1173,34 @@ mod tests {
         };
         let owner = prompt(&turn("assistant", "assistant"), &names, None, false);
         assert!(owner.contains("You are privately assisting human:ana."));
-        for helper in [
-            "--owner strategy-owner --request-id turn",
-            "--owner librarian --request-id turn",
-            "--owner botops --request-id turn",
+        // Its rulebook routes the work: no forced health check, no filing each ask for itself, no second reply contract.
+        for gone in [
+            "tico health check",
+            "first file each distinct ask",
+            "Human chat response contract",
         ] {
-            assert!(owner.contains(helper), "{helper}");
+            assert!(!owner.contains(gone), "{gone}");
         }
+        let other = prompt(&turn("ops", "ops"), &names, None, false);
+        assert!(
+            other.contains("first file each distinct ask")
+                && other.contains("Human chat response contract")
+        );
+        // The server names its Assistant (TICO_ASSISTANT_BOT): a renamed one is the Assistant, the slug alone is not.
+        let renamed = Names::from_config(Some(&json!({"assistant_bot": "coo"})));
+        let coo = prompt(&turn("coo", "coo"), &renamed, None, false);
+        assert!(
+            coo.contains("You are privately assisting human:ana.")
+                && !coo.contains("first file each distinct ask")
+        );
+        assert!(
+            !prompt(&turn("assistant", "assistant"), &renamed, None, false)
+                .contains("privately assisting")
+        );
+        // Routing, the helpers included, is the rulebook's alone: the runner repeats none of it.
+        assert!(
+            owner.contains("AGENTS.md is your rulebook") && !owner.contains("--request-id turn")
+        );
         // The owner's earlier Strategy Owner chat (room_key "ceo") is history: a turn queued there has no person's authority.
         for key in ["ceo", "strategy", "strategy-owner"] {
             assert!(
@@ -1221,6 +1250,7 @@ mod tests {
         let names = Names {
             company: "Acme".into(),
             app: "Tico".into(),
+            assistant: "assistant".into(),
         };
         let (first, next) = task_turns();
         let given = build(
@@ -1310,6 +1340,7 @@ mod tests {
         let names = Names {
             company: "Acme".into(),
             app: "Tico".into(),
+            assistant: "assistant".into(),
         };
         let (first, mut next) = task_turns();
         let given = build(
@@ -1409,6 +1440,7 @@ mod tests {
         let names = Names {
             company: "Acme".into(),
             app: "Tico".into(),
+            assistant: "assistant".into(),
         };
         let turn = |id: &str, refs: Value| {
             json!({"id": id, "bot": "assistant", "config": {"shared": true}, "branch_sync_problem": if id == "a2" { json!("it diverged") } else { Value::Null },
@@ -1456,6 +1488,7 @@ mod tests {
         let names = Names {
             company: "Acme".into(),
             app: "Tico".into(),
+            assistant: "assistant".into(),
         };
         let mut attempt = json!({"id": "r9", "bot": "counsel", "conversation": {"id": "c9", "kind": "task"},
             "message": {"id": "m9", "from_actor": "human:ana", "body": "Read the Acme terms"},
@@ -1523,6 +1556,7 @@ mod tests {
         let names = Names {
             company: "Acme".into(),
             app: "Tico".into(),
+            assistant: "assistant".into(),
         };
         let mut attempt = json!({"id": "r5", "bot": "ops", "conversation": {"id": "c5", "kind": "task"},
             "message": {"id": "m5", "from_actor": "human:ana", "body": "Ship it"},

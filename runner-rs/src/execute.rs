@@ -7822,6 +7822,7 @@ mod tests {
         let names = crate::prompt::Names {
             company: "Acme".into(),
             app: "Tico".into(),
+            assistant: "assistant".into(),
         };
         let attempt = json!({"id": "a1", "bot": "ops", "_replaced": true, "_repo_rules": "Repo rules for acme/app: ...\nRun make check.",
             "_repo_rules_changed": false, "conversation": {"id": "c1", "kind": "task"}, "message": {"id": "m3", "body": "Go"},

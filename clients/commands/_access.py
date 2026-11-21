@@ -336,10 +336,7 @@ COUNSEL_TOOLS = frozenset(
 # The tools whose route the Assistant's own turn may never make (backend/assistant.py `NEVER`): a credential, a key, a
 # sign-in, a support report, SQL, a message's redaction. The server refuses them on a turn whatever is offered; they are
 # not offered to the Assistant either, so the live Assistant is shown what its gate admits and nothing else.
-# Size: the Assistant's listing is asserted under 200,000 bytes (backend/tests/test_assistant_acts_as_you.py). It is
-# kept under by compacting the text at source (short descriptions, shared strings such as `operation_id` and
-# `SETUP_NOTE`) and by `listing()` dropping `additionalProperties: false` from its copy (`_advertised`), not by hiding
-# more here. Never hide a tool the Assistant template runs to make room; a tool added here is one the Assistant may not run.
+# A tool added here is one the Assistant may not run; what it is listed is ASSISTANT_TOOLS.
 ASSISTANT_HIDDEN = frozenset(
     {
         # Contacts schema and field history: a person's Assistant reads entities (get, find, rules, self).
@@ -391,79 +388,119 @@ ASSISTANT_HIDDEN = frozenset(
 )
 
 
-# The tools an Assistant turn is offered beyond the ones its audience already names: the ones the Assistant template
-# (templates/catalog/assistant) tells it to run, found by walking clients/hubcli's own command tree for each `hub ...` span
-# (the same tool each command runs, `remotecli.tool_name`), plus the few it needs to change automations, rules and its
-# proposals. The gate is unchanged: the CLI still reaches every route the gate admits; this only sizes the MCP listing.
+# The Assistant's whole tool listing: what its rulebook and playbooks (templates/catalog/assistant) and the runner's prompt
+# tell it to run, found by walking clients/hubcli's own command tree for each `tico ...` span (the same tool each command
+# runs, `remotecli.tool_name`), plus the rules reads the Rules Owner's answers use. Only these are listed to an Assistant
+# turn (listing), which keeps the model's tool list short; one of them that its audience does not name is also offered to
+# it. A read left out still runs when called by name, and the `tico` CLI still reaches every route the gate admits.
+# backend/tests/test_assistant_acts_as_you.py checks that every tool the template runs is here.
 ASSISTANT_TOOLS = frozenset(
     {
-        "tico_assistant_learn",
-        "tico_assistant_proposals",
-        "tico_assistant_propose",
-        "tico_assistant_withdraw",
-        "tico_automation_get",
-        "tico_automation_update",
-        "tico_bot_status_history",
-        "tico_bot_status_list",
-        "tico_bot_status_set",
-        "tico_brief",
-        "tico_conversation_show",
-        "tico_doc_read",
-        "tico_doc_search",
-        "tico_file_import",
-        "tico_file_link",
-        "tico_file_publish",
-        "tico_file_touch",
-        "tico_goal_list",
-        "tico_goal_read_back",
-        "tico_goal_save",
-        "tico_goal_show",
-        "tico_health_check",
-        "tico_kpi_list",
-        "tico_meeting_read",
-        "tico_meeting_search",
-        "tico_message_list",
-        "tico_message_send",
-        "tico_needs_you_commit",
-        "tico_needs_you_next",
-        "tico_proposal_list",
-        "tico_replay_show",
-        "tico_rules_add",
-        "tico_settings_find",
-        "tico_settings_set",
-        "tico_settings_show",
-        "tico_strategy_show",
+        # Tasks, the person's Needs you and undo (always listed).
+        "tico_task_create",
+        "tico_task_list",
+        "tico_task_show",
+        "tico_task_show_many",
+        "tico_task_comment",
+        "tico_task_close",
+        "tico_task_done",
+        "tico_task_move",
+        "tico_task_reassign",
         "tico_task_answer",
         "tico_task_ask",
-        "tico_task_close",
-        "tico_task_comment",
-        "tico_task_create",
-        "tico_task_done",
-        "tico_task_list",
-        "tico_task_move",
-        "tico_task_show",
-        "tico_task_update",
+        "tico_needs_you_show",
+        "tico_origin_show",
+        "tico_assistant_change_list",
+        "tico_assistant_change_restore",
+        # Its own proposals, what it learned, and the morning message.
+        "tico_assistant_propose",
+        "tico_assistant_learn",
+        "tico_assistant_morning",
+        # Looking things up.
+        "tico_whoami",
         "tico_team_show",
-        "tico_automation_restore",
-        "tico_automation_versions",
-        "tico_bot_model",
+        "tico_human_list",
+        "tico_brief",
+        "tico_health_check",
+        "tico_message_list",
+        "tico_message_send",
+        "tico_conversation_show",
+        "tico_replay_show",
+        "tico_run_list",
+        "tico_bot_status_list",
+        "tico_changelog_list",
+        "tico_doc_search",
+        "tico_doc_read",
+        "tico_file_search",
+        "tico_file_read",
+        "tico_meeting_search",
+        "tico_meeting_read",
+        "tico_meeting_pending",
+        "tico_meeting_approve",
+        "tico_tool_list",
+        # Goals and strategy (the owner's read-back).
+        "tico_goal_list",
+        "tico_goal_show",
+        "tico_goal_read_back",
+        "tico_goal_save",
+        "tico_proposal_list",
+        "tico_strategy_show",
+        # Bots, routines, rules and settings it changes for the person.
         "tico_bot_pause",
         "tico_bot_resume",
-        "tico_rules_retire",
-        # Admin jobs 42-49: groups, bot owners and access, routines, budgets, inbox audience, Pending meetings.
-        "tico_automation_create",
+        "tico_bot_model",
         "tico_bot_access",
         "tico_bot_owners",
-        "tico_finance_act",
-        "tico_inbound_audience",
+        "tico_automation_list",
+        "tico_automation_get",
+        "tico_automation_create",
+        "tico_automation_update",
+        "tico_automation_versions",
+        "tico_automation_restore",
         "tico_automation_guide",
         "tico_automation_templates",
         "tico_automation_template",
+        "tico_rules_list",
+        "tico_rules_add",
+        "tico_rules_retire",
+        "tico_rules_get",
+        "tico_rules_read",
+        "tico_rules_ask",
+        "tico_settings_find",
+        "tico_settings_show",
+        "tico_settings_set",
+        "tico_group_list",
+        "tico_group_update",
+        # Finance, inboxes and email.
+        "tico_finance_report",
+        "tico_finance_act",
+        "tico_inbound_inboxes",
+        "tico_inbound_audience",
         "tico_inbox_send",
-        "tico_meeting_approve",
-        "tico_meeting_pending",
+        "tico_email_mailboxes",
+        "tico_email_inbox",
+        "tico_email_search",
+        "tico_email_thread",
+        "tico_email_message",
+        "tico_email_archive",
+        "tico_email_unarchive",
+        "tico_email_label",
+        "tico_email_unlabel",
+        "tico_email_mark_read",
+        "tico_email_mark_unread",
+        # Publishing its work.
+        "tico_file_publish",
+        "tico_file_import",
+        "tico_file_link",
+        "tico_file_touch",
+        "tico_page_publish",
     }
 )
+
+
+# Tools an Assistant turn may call though they are not listed to it: the Needs you batch walk, which a person's Needs you
+# flow drives, and its own status line. Offered (the gate), never listed.
+ASSISTANT_UNLISTED = frozenset({"tico_needs_you_next", "tico_needs_you_commit", "tico_bot_status_set"})
 
 
 # The developer tool list (backend/mcp.py tool_profile): what a code bot (both Reviewers, the QA, Release and Code
@@ -543,7 +580,8 @@ PROFILES = {DEVELOPER: DEVELOPER_TOOLS, FEATURE: FEATURE_TOOLS}
 
 def offered_to(tool_):
     """The kinds a tool is offered to. The Assistant's turn is offered the tools it is told to run (ASSISTANT_TOOLS) and
-    what its audience already names, minus ASSISTANT_HIDDEN; the gate and the route decide what it may do."""
+    what its audience already names, minus ASSISTANT_HIDDEN; the gate and the route decide what it may do. It is listed
+    only ASSISTANT_TOOLS (listing)."""
     name = tool_["name"]
     if name in AUDIENCE:
         kinds = tuple(AUDIENCE[name])
@@ -553,7 +591,7 @@ def offered_to(tool_):
         kinds = KINDS
     if name in ASSISTANT_HIDDEN:
         kinds = tuple(k for k in kinds if k != "assistant")
-    elif name in ASSISTANT_TOOLS and "assistant" not in kinds:
+    elif (name in ASSISTANT_TOOLS or name in ASSISTANT_UNLISTED) and "assistant" not in kinds:
         kinds = (*kinds, "assistant")
     return (*kinds, COUNSEL) if name in COUNSEL_TOOLS else kinds
 
@@ -565,9 +603,9 @@ UNLISTED = frozenset({"tico_finance_card_fill"})
 
 def listing(local=False, kind=None, profile=None):
     """`tools/list` payload: the public fields of every tool this server may offer this kind of caller (all of them
-    when the kind is not known), never an UNLISTED one, and with a profile only its list (PROFILES). Sorted by
-    name, so the order never depends on where a tool is defined (and `tico_<noun>_<verb>` names keep a noun's tools
-    together). Only the Assistant's listing is compacted (_advertised): every other caller gets the full schema, which
+    when the kind is not known), never an UNLISTED one, the Assistant only ASSISTANT_TOOLS, and with a profile only its
+    list (PROFILES). Sorted by name, so the order never depends on where a tool is defined (and `tico_<noun>_<verb>`
+    names keep a noun's tools together). Only the Assistant's listing is compacted (_advertised): every other caller gets the full schema, which
     a caller checks (backend/tests/test_mcp.py)."""
     compact = kind == "assistant"
     return [
@@ -580,6 +618,7 @@ def listing(local=False, kind=None, profile=None):
         if t["name"] not in UNLISTED
         and (local or not t.get("local"))
         and (kind is None or kind in offered_to(t))
+        and (kind != "assistant" or t["name"] in ASSISTANT_TOOLS)
         and (profile not in PROFILES or t["name"] in PROFILES[profile])
     ]
 

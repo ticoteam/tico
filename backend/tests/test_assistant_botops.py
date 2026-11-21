@@ -71,9 +71,16 @@ def test_without_a_citation_the_assistants_botops_task_lends_nothing(api, botops
     assert acting(api, attempt["token"]) != "human:ben"
 
 
-def test_only_botops_carries_the_persons_request(api, botops):
+def test_a_handoff_to_any_other_bot_is_filed_as_the_person_and_lends_nothing(api, botops):
+    """Only a helper (assistant.HELPERS) carries the person's request; a task for any other bot citing the turn is filed
+    as the person, with no citation and none of their words handed on."""
     assign(api, botops, "ops")
-    _ask(api, botops, owner="ops", expected=422)
+    task, _ = _ask(api, botops, owner="ops")
+    assert (task["owner_id"], task["requester_id"], task["request_id"]) == ("bot:ops", "human:ben", None)
+    with api.app.state.store.read() as c:
+        assert not c.execute(
+            "SELECT 1 FROM messages WHERE recipient_id='bot:ops' AND body LIKE '%in their words%'"
+        ).fetchone()
 
 
 def test_a_message_more_than_30_minutes_old_is_not_this_turns_request(api, botops):

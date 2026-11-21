@@ -57,7 +57,8 @@ For the Strategy Owner and the Librarian the event `assistant.asked_helper` reco
 `cited`). Each helper runs its own turn with its own rights, and only BotOps borrows yours (below). So a strategy change
 stays the owner's: the Strategy Owner proposes it on a Confirm card, and only the owner can confirm. The Strategy Owner's goal
 suggestions are agreed the way your own goal changes are: a yes in your chat confirms one ([below](#goals-agreed-in-words)).
-A task for any other bot that cites your words is refused (`422 request_id`). A person's post to the Strategy Owner's DM (`POST /api/v2/chat/strategy-owner`) lands in their
+A task for any other bot is filed as you, with your words in its body; a citation on it lends nothing and is dropped.
+A person's post to the Strategy Owner's DM (`POST /api/v2/chat/strategy-owner`) lands in their
 Assistant DM instead.
 
 The owner used to message the Strategy Owner itself (`room_key: ceo`). That DM stays the owner's as read-only history:
@@ -378,8 +379,12 @@ Names come with ids (`sender_name`, `owner_name`, and an `actors` map), as elsew
 
 ## For the assistant bot
 
-Its instructions are `templates/catalog/assistant/AGENTS.md` and its playbooks: `assistant-chat.md` (the DM run),
-`tico-map.md` (how Tico is organised) and `acting-for-them.md`. The core rules: how to route work to the right bot, to
-answer briefly with links, never to act beyond you, to do the task actions you ask for (answers included), never to
-give an OK, to propose anything else with a side effect, several at once on one card, and to report what it did and what
-is left. They live in the bot's repository; edit them there or through BotOps.
+Its rulebook is one page, `templates/catalog/assistant/AGENTS.md`: the routing table (answer a question from the record
+itself, make a one-call change as you, hand real work to the bot that owns it with `tico task create --owner`), its
+authority (never beyond you, never an OK, a card for what the server holds) and its receipts (one line per change with
+its link and how to undo it, about 120 words a reply). Its playbooks are procedures it opens when a job needs one, never
+before each turn: `jobs.md` (the command per job), `assistant-chat.md` (cards, clearing a queue, goals),
+`acting-for-them.md` (bots' questions, inbox routines, email), `tico-map.md` (how Tico is organised) and
+`daily-sweep.md` (the morning message). Its MCP tool list is the short set those files name (`ASSISTANT_TOOLS` in
+`clients/commands/_access.py`); the `tico` CLI reaches the rest. They live in the bot's repository; edit them there or
+through BotOps.

@@ -31,10 +31,6 @@ made this week.
 An org rule is a standing instruction the bots follow, and it can stop a kind of task. `tico rules list` shows them. Reach is
 what bots may put on a person: the people and bots near them by default. `tico team show` shows who reports to whom.
 
-## OKs
-An OK to send, spend or publish is the person's own tap on its preview. The Assistant never gives it; it may send one back
-when they ask.
-
 ## Close the pile, then stop the source
 The queue's size is the total of `tico needs-you show`: asks, paused bots and mentions count too, not only tasks. Clearing the existing items does not stop new ones. Find the source with `tico origin show`, then stop it: pause or edit its
 automation, add a rule, or give BotOps a task when it is a bot's own code. Report counts before and after.
