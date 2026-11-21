@@ -25,6 +25,13 @@ describe('the Threads list from the threads topic', () => {
     expect(renamed?.pages[0]?.rows.find((t) => t.id === 'b')?.title).toBe('Launch plan');
   });
 
+  it('asks for a read when the reader\'s attention moves on a task\'s thread, a marked one, or one it does not hold', () => {
+    const start = list(row('plain', 5), row('task', 4, { task_id: 'k1' }), row('marked', 3, { mentioned: true }));
+    const attention = (id: string) => patchThreadList(start, { kind: 'attention', thread_id: id, root_id: id });
+    expect([attention('task'), attention('marked'), attention('new')]).toEqual([null, null, null]);
+    expect(attention('plain')).toBe(start);
+  });
+
   it('clears the unread count on read, and leaves the list as it was when nothing changed', () => {
     const start = list(row('a', 5, { me: { unread: 4 } }));
     expect(patchThreadList(start, { kind: 'read', thread_id: 'a', root_id: 'a', last_read_seq: 9 })?.pages[0]?.rows[0]?.me?.unread).toBe(0);

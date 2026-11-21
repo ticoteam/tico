@@ -421,6 +421,9 @@ export interface ThreadListRow {
   last_unread_seq?: number;
   me?: { unread?: number; activity?: boolean };
   members?: unknown;
+  task_id?: string | null;
+  /** Holds an open @ of the viewer: only a fresh list read knows (the sidebar's `attention`). */
+  mentioned?: boolean;
 }
 
 /** The Threads list as cached under `keys.threads.list()`: pages of rows, newest first. */
@@ -480,6 +483,12 @@ export function patchThreadList<T extends ThreadListRow>(data: ThreadListData<T>
       return mapThreads(data, (t) => (t.id === id ? null : t));
     case 'read':
       return mapThreads(data, (t) => (t.id === id && unreadIn(t) ? { ...t, me: { ...t.me, unread: 0, activity: false } } : t));
+    case 'attention': {
+      // The reader's own attention moved (an @ came or was answered). Whether a task's thread holds an open @ (and so is
+      // listed) is the list's read to say: read it again for a task's thread, a marked one, or one it does not hold.
+      const held = data.pages.flatMap((p) => p.rows).find((t) => t.id === id);
+      return !held || held.task_id || held.mentioned ? null : data;
+    }
     case 'counters':
       if (sub) return data;
       return mapThreads(data, (t) =>

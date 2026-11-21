@@ -104,6 +104,22 @@ describe('read-again topics', () => {
     expect(queryClient.getQueryState(['letters'])?.isInvalidated).toBe(true);
   });
 
+  it('read the Threads list again when an @ of the reader comes on a task\'s thread or is answered (#4762)', async () => {
+    const list = (rows: object[]) => ({ pages: [{ rows, next: null }], pageParams: [null] });
+    const attention = (seq: number, id: string) =>
+      FakeEventSource.last.feed(frame(seq, 'threads', { seq, actor: 'human:p1', at: AT, thread_id: id, root_id: id, kind: 'attention' }));
+    queryClient.setQueryData(keys.threads.list(), list([{ id: 'k1', task_id: 'task-1' }]));
+    attention(901, 'k1'); // the @ came: the list reads again and marks the row
+    flushFrame();
+    expect(queryClient.getQueryState(keys.threads.list())?.isInvalidated).toBe(true);
+    await vi.runAllTimersAsync();
+    queryClient.setQueryData(keys.threads.list(), list([{ id: 'k1', task_id: 'task-1', mentioned: true }]));
+    attention(902, 'k1'); // answered: read again, so the mark clears
+    flushFrame();
+    expect(queryClient.getQueryState(keys.threads.list())?.isInvalidated).toBe(true);
+    await vi.runAllTimersAsync();
+  });
+
   it('mark a call and the live and ringing lists stale on a call change in the threads topic', () => {
     for (const k of [['calls', 'c1'], ['calls', 'c1', 'notes'], ['calls', 'live'], ['calls', 'ringing'], ['calls', 'c2']]) queryClient.setQueryData(k, {});
     FakeEventSource.last.feed(frame(901, 'threads', { seq: 901, actor: 'human:p1', at: AT, thread_id: 'th1', kind: 'call.updated', call_id: 'c1' }));
