@@ -11,11 +11,13 @@ from types import SimpleNamespace
 from backend import paid_renders, task_wakes
 from backend import task_engine as E
 from backend.run_diagnostics import RESTART_TEXT
+from backend.store import H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import assign, claim, post, ready, runner
 
 ANA = "human:ana"
 QUESTION = "Did you get my OK on the storyboard?"
+ANSWER = "Yes, I have your OK."
 VIDEO = (
     {"name": "Storyboard", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
     {"name": "Draft", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
@@ -70,14 +72,30 @@ class Agent:
         return [m["id"] for m in post(self.api, f"attempts/{run['id']}/inputs", {}, self.machine["token"])["messages"]]
 
     def finish(self, run):
-        body = run["message"]["body"]
+        body, said = run["message"]["body"], []
         if run["message"]["refs"].get("wake") == "task_turn" and "Draft" in body:
             self.render(run)  # the same shot again is the one it already paid for (backend/paid_renders.py)
             self.drafts += 1
         if QUESTION in body:
             self.answers += 1
-        done = {"outcome": "completed", "last_seq": 0, "text": "Done."}
+            said.append(ANSWER)
+        done = {"outcome": "completed", "last_seq": 0, "text": " ".join(said) or "Nothing to do."}
         post(self.api, f"attempts/{run['id']}/complete", done, self.machine["token"], key="done-" + run["id"])
+
+
+def _delivered(api, task, asked):
+    """What was kept: (paid shots started for the card, answers posted in its room, every question delivered)."""
+    with api.app.state.store.read() as c:
+        shots = c.execute(
+            "SELECT count(*) FROM events WHERE action='paid_render.started' AND json_extract(detail,'$.task')=?",
+            (task["id"],),
+        ).fetchone()[0]
+        answers = c.execute(
+            "SELECT count(*) FROM messages WHERE conversation_id=? AND sender_id='bot:ops' AND body LIKE ?",
+            (task["conversation_id"], f"%{ANSWER}%"),
+        ).fetchone()[0]
+        read = all(c.execute("SELECT delivered_at FROM messages WHERE id=?", (i,)).fetchone()[0] for i in asked)
+    return shots, answers, read
 
 
 def _jobs(api, *ids):
@@ -105,6 +123,7 @@ def test_ok_then_chat_is_one_run_with_the_draft_and_the_answer(api):
     assert claim(api, machine) is None  # nothing left for a second run
     assert (agent.drafts, agent.charges, agent.answers) == (1, 1, 1)
     assert set(_jobs(api, asked, run["message"]["id"]).values()) == {"completed"}
+    assert _delivered(api, task, [asked]) == (1, 1, True)
 
 
 def test_chat_then_ok_answers_in_its_own_run_and_drafts_once_after(api):
@@ -122,6 +141,7 @@ def test_chat_then_ok_answers_in_its_own_run_and_drafts_once_after(api):
     assert work["message"]["id"] == wake
     agent.finish(work)
     assert (agent.drafts, agent.charges, agent.answers) == (1, 1, 1)
+    assert _delivered(api, task, [asked]) == (1, 1, True)
 
 
 def test_ok_and_chat_across_a_runner_restart(api):
@@ -143,6 +163,7 @@ def test_ok_and_chat_across_a_runner_restart(api):
     agent.finish(again)
     assert claim(api, machine) is None
     assert (agent.drafts, agent.charges, agent.answers) == (1, 1, 1)
+    assert _delivered(api, task, [asked]) == (1, 1, True)
     with api.app.state.store.read() as c:
         rev = c.execute("SELECT slot_rev FROM jobs WHERE id=?", (again["job_id"],)).fetchone()[0]
         assert rev == c.execute("SELECT rowid FROM messages WHERE id=?", (asked,)).fetchone()[0]
@@ -222,3 +243,117 @@ def test_a_computer_that_starts_only_peoples_messages_runs_the_question_alone(ap
     assert _jobs(api, wake)[wake] == "queued"  # the stage's work waits for the hold to lift
     monkeypatch.undo()
     assert agent.start()["message"]["id"] == wake
+
+
+def test_chat_then_ok_both_queued_before_the_first_claim(api):
+    machine, task = _card(api)
+    asked = _ask(api, task)  # Storyboard's slot
+    draft = _ok(api, task)  # Draft's slot, while the computer is still waking
+    agent = Agent(api, machine)
+    for _ in range(2):
+        agent.finish(agent.start())
+    assert claim(api, machine) is None
+    assert (agent.drafts, agent.charges, agent.answers) == (1, 1, 1)
+    assert _delivered(api, task, [asked]) == (1, 1, True)
+    assert _jobs(api, _wake(api, task, draft)) == {_wake(api, task, draft): "completed"}
+
+
+def test_a_private_chat_that_names_the_card_is_never_folded_into_its_run(api):
+    machine, task = _card(api)
+    draft = _ok(api, task)
+    with api.app.state.store.transaction() as c:
+        private = H.say(c, ANA, "bot:ops", "Between us: is the budget fine?", refs={"task": task["id"]})["id"]
+        assert c.execute("SELECT slot FROM jobs WHERE id=?", (private,)).fetchone()[0] is None
+    agent = Agent(api, machine)
+    first = agent.start()
+    assert first["message"]["id"] == private  # a person's chat goes first, in its own room's run
+    agent.finish(first)
+    work = agent.start()
+    assert work["message"]["id"] == _wake(api, task, draft) and "budget" not in work["message"]["body"]
+
+
+def test_a_stage_wake_waiting_out_its_claim_error_leaves_the_question_to_run_alone(api):
+    from backend import bot_stops
+
+    machine, task = _card(api)
+    draft = _ok(api, task)
+    wake = _wake(api, task, draft)
+    with api.app.state.store.transaction() as c:
+        bot_stops.hold_job(c, api.app.state.store.settings, wake, "RuntimeError")
+    asked = _ask(api, task)
+    run = Agent(api, machine).start()
+    assert run["message"]["id"] == asked and "Draft" not in run["message"]["body"]
+    assert _jobs(api, wake)[wake] == "queued"
+
+
+def test_a_lease_refused_after_the_card_moved_puts_its_folded_question_back(api):
+    machine, task = _card(api)
+    _ok(api, task)
+    asked = _ask(api, task)
+    run = claim(api, machine)
+    assert QUESTION in run["message"]["body"]  # folded into the Draft run, not started yet
+    with api.app.state.store.transaction() as c:
+        E.move(c, task["id"], "Storyboard", ANA)  # moved back before the computer started it
+    post(api, f"attempts/{run['id']}/started", {"thread_id": "t"}, machine["token"], expected=409)
+    post(api, f"attempts/{run['id']}/complete", {"outcome": "interrupted", "last_seq": 0}, machine["token"])
+    assert _jobs(api, asked)[asked] == "queued"
+    agent = Agent(api, machine)
+    again = agent.start()
+    assert QUESTION in again["message"]["body"]
+    agent.finish(again)
+    assert _delivered(api, task, [asked])[1] == 1
+
+
+def test_a_card_comment_through_a_thread_carrier_joins_the_slot(api):
+    from backend import threads
+
+    machine, task = _card(api)
+    draft = _ok(api, task)
+    with api.app.state.store.transaction() as c:
+        said = H.say(c, ANA, "human:ben", QUESTION, conversation_id=task["conversation_id"])
+        carried = threads._carrier(c, H.conversation(c, task["conversation_id"]), said, "bot:ops", "mention", None)
+        assert c.execute("SELECT slot FROM jobs WHERE id=?", (carried,)).fetchone()[0] == f"{draft}:ops"
+    run = Agent(api, machine).start()
+    assert run["message"]["id"] == _wake(api, task, draft) and QUESTION in run["message"]["body"]
+
+
+def test_a_reassign_during_older_work_stays_on_the_older_path_until_it_settles(api):
+    machine, task = _card(api, name="Video")
+    _ask(api, task)
+    run = Agent(api, machine).start()  # the old owner's run, from before the switch
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE pipelines SET name='Video Production' WHERE id='video'")
+        E.reassign(c, task["id"], "bot:cpo", ANA)
+        theirs = c.execute("SELECT slot FROM jobs WHERE bot_id='cpo' AND state='queued'").fetchall()
+    assert theirs and all(row[0] is None for row in theirs)
+    assert run
+
+
+def test_a_people_only_claim_reads_no_pending_stage_work(api, monkeypatch):
+    from backend import start_places
+
+    machine, task = _card(api)
+    draft = _ok(api, task)
+    wake = _wake(api, task, draft)
+    _ask(api, task)
+    monkeypatch.setattr(
+        start_places, "computer_hold", lambda *a, person=False, **k: None if person else ("busy", "Busy")
+    )
+    run = claim(api, machine)
+    prompt = [run["message"], *run["history"]]
+    assert wake not in {m["id"] for m in prompt} and not any("Draft" in (m.get("body") or "") for m in prompt)
+
+
+def test_a_slot_run_takes_a_capped_batch_and_the_rest_wait(api, monkeypatch):
+    from backend import card_slot
+
+    monkeypatch.setattr(card_slot, "FOLD_MAX", 1)
+    machine, task = _card(api)
+    _ok(api, task)
+    first = _ask(api, task)
+    second = post(api, f"conversations/{task['conversation_id']}/messages", {"text": "And the music?"})["message"]["id"]
+    run = claim(api, machine)
+    assert _jobs(api, first, second) == {first: "input", second: "queued"}
+    with api.app.state.store.read() as c:
+        rev = c.execute("SELECT slot_rev FROM jobs WHERE id=?", (run["job_id"],)).fetchone()[0]
+        assert rev == c.execute("SELECT rowid FROM messages WHERE id=?", (first,)).fetchone()[0]

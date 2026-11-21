@@ -4683,6 +4683,11 @@ class Execution:
         for i, row in enumerate(candidates):
             if failed is not None and failed.full():
                 break  # CLAIM_HOLDS jobs are held by this claim: it picks no more
+            # A card's slot starts from its stage wake, which the checks below judge (backend/card_slot.py); a wake
+            # this claim passed over or that waits out its claim error leaves `row` to start alone.
+            wake = card_slot.carrier(c, row, people_only)
+            if wake["id"] == row["id"] or not (wake["id"] in skip or claim_waiting(c, wake, loads)):
+                row = wake
             if (
                 row["id"] in skip
                 or (failed is not None and row["bot_id"] in failed.bots)
@@ -5075,8 +5080,7 @@ class Execution:
         """The preparation of the job a claim hands out: its turn, attempt, inputs and hand-out. The claim runs it in a
         savepoint of its own (claim), so an error here rolls back only this job's writes. `people_only`: the computer
         holds every start but a person's own message (held_starts), so a card slot's run takes that message alone."""
-        # A card's slot starts from its stage wake, except where only a person's message may start.
-        row = card_slot.carrier(c, row, people_only)
+        row = {"slot": None, **dict(row)}
         msg = H.message(c, row["message_id"])
         from . import threads
 
@@ -5370,6 +5374,10 @@ class Execution:
             since=epoch["updated_at"] if epoch else None,
         )["messages"]
         history = lane_history(c, row["bot_id"], followed, history, conv, lane)[-HISTORY_PAGE:]
+        if people_only and row["slot"]:
+            # A run that may not take the card's stage work does not read it waiting either.
+            pending = card_slot.pending_wakes(c, [m["id"] for m in history])
+            history = [m for m in history if m["id"] not in pending]
         conversation = thread_payload(c, conv, msg)
         if conversation and conversation.get("audience_class") == "public":
             from . import threads
@@ -6371,7 +6379,8 @@ class Execution:
             f"AND NOT {CLAIM_WAITING_SQL} AND {queued_task_sql()}=? AND (? IS NULL OR j.slot=?) ORDER BY m.rowid",
             (row["bot_id"], row["id"], H.now(), task_id, slot, slot),
         ).fetchall()
-        lines, folded, handed = [], [], [row["message_id"]]
+        lines, folded, handed, size = [], [], [row["message_id"]], 0
+        audience = thread_payload(c, H.conversation(c, msg["conversation_id"]), msg)["audience_class"] if slot else None
         for queued in rows:
             if not privacy.message_readable(c, "bot:" + row["bot_id"], queued):
                 continue
@@ -6380,6 +6389,16 @@ class Execution:
                 continue  # left queued: its own claim settles it
             if job_lane(c, row["bot_id"], followed, message, H.conversation(c, queued["conversation_id"])) != lane:
                 continue
+            if slot and (
+                queued["conversation_id"] != msg["conversation_id"]
+                or thread_payload(c, H.conversation(c, queued["conversation_id"]), message)["audience_class"]
+                != audience
+            ):
+                continue  # another audience, or another reply destination: its own run answers it
+            text = str(queued["body"] or "")
+            size += len(text[:FOLD_TEXT].encode())
+            if slot and (len(folded) >= card_slot.FOLD_MAX or size > card_slot.FOLD_BYTES):
+                break  # the rest wait for the slot's next run
             prior = c.execute(
                 "SELECT i.attempt_id,a.state FROM attempt_inputs i JOIN attempts a ON a.id=i.attempt_id "
                 "WHERE i.message_id=?",
@@ -6400,7 +6419,6 @@ class Execution:
             thread_bot_digest.grant(c, aid, dict(queued))
             c.execute("UPDATE jobs SET state='input',attempt_id=? WHERE id=?", (aid, queued["job_id"]))
             H.mark_delivered(c, H.TICO_ACTOR, queued["id"])
-            text = str(queued["body"] or "")
             # A Tico line reads by what made it ("Task update", "Stuck check"), never as Tico.
             who = (
                 (SRC.message_source({}, dict(queued))["name"] or "System")
@@ -7656,8 +7674,8 @@ class Execution:
                 )
         turn_task = work_task_id(msg, conv)
         for incoming in c.execute(
-            "SELECT i.message_id,m.kind FROM attempt_inputs i "
-            "JOIN messages m ON m.id=i.message_id WHERE i.attempt_id=?",
+            "SELECT i.message_id,m.kind,j.slot FROM attempt_inputs i "
+            "JOIN messages m ON m.id=i.message_id LEFT JOIN jobs j ON j.message_id=i.message_id WHERE i.attempt_id=?",
             (aid,),
         ).fetchall():
             message = H.message(c, incoming["message_id"], include_deleted=True)
@@ -7680,6 +7698,8 @@ class Execution:
                     (task_id, actor, row["started_at"] or row["created_at"]),
                 ).fetchone()
                 deferred = bool(task and task["status"] in H.ACTIVE_STATUSES and not outcome)
+            # A card slot's job folded into a turn refused before it started was never read: it waits again.
+            deferred = deferred or bool(skipped and incoming["slot"])
             state = (
                 "queued"
                 if deferred

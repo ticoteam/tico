@@ -1115,12 +1115,14 @@ refuses everything else.
    nothing.
 
 **Card slots (pilot: Video Production).** In a pipeline named in `card_slot.SWITCHED`, a card's work for an agent runs
-one run at a time per visit (`jobs.slot`, `<visit>:<agent>`). The claim starts from the stage's wake and hands the run
-every other queued message of the slot in its prompt, recording the newest as `jobs.slot_rev`. On a computer that
-holds every start but a person's own message, the person's message runs alone and the stage's work waits. Nothing is steered into
-the run or coalesced at its end: a comment made during it waits for the slot's next run, and a run that ends after a
-move or a reassign settles nothing of the new visit's or agent's work. A card with a live job from before the switch
-finishes it on the older path first. Other pipelines are unchanged; the switch goes once every pipeline runs by slot.
+one run at a time per visit (`jobs.slot`, `<visit>:<agent>`), for messages in the card's own room. The claim starts
+from the stage's wake and hands the run the slot's other queued messages of the same audience in its prompt (a capped
+batch), recording the newest as `jobs.slot_rev`. On a computer that holds every start but a person's own message, the
+person's message runs alone and the stage's work waits, out of its history too. Nothing is steered into the run or
+coalesced at its end: a comment made during it waits for the slot's next run, and a run that ends after a move or a
+reassign settles nothing of the new visit's or agent's work. While any agent has live work in the card's room from
+before the switch, the card stays on the older path. Other pipelines are unchanged; the switch goes once every pipeline
+runs by slot.
 
 ### Metadata
 
