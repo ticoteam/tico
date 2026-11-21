@@ -453,6 +453,8 @@ def task_dry_run(c, auth, who, body):
         if H.is_bot(who.actor) and H.TITLE_LINT != "off" and general:
             # plain-English titles: recorded on the task this week, refused once TICO_TITLE_LINT=refuse
             problems += [f"{p} (title lint, {H.TITLE_LINT})" for p in H.lint_title(title)]
+        from . import task_privacy
+
         dup = (
             None
             if unassigned
@@ -462,11 +464,9 @@ def task_dry_run(c, auth, who, body):
                 (who.actor, target, title),
             )
         )
-        if (
-            dup
-            and H.task_private_readable(c, who.actor, H.task(c, dup["id"]))
-            and (not who.task_actor or H.task_private_readable(c, who.task_actor, H.task(c, dup["id"])))
-        ):
+        if dup and task_privacy.principals_read(
+            c, task_privacy.actor(who), H.task(c, dup["id"])
+        ):  # as the request reads
             problems.append(f"{dup['id']} already asks {H.actor_name(c, target)} for this")
         try:
             # The create's own refusals of a parent it cannot read or a relation it cannot name.

@@ -182,7 +182,8 @@ def readable_history(c, who, history, visible_sql):
         }
         history = [e for e in history if not ({str(e.get(k)) for k in ("old", "new")} & hidden)]
     history = children_text(c, visible_sql, history)
-    return task_asks.private_history(c, who.actor, history)
+    principals = privacy.actor(who)  # a run of the shared Assistant reads as its run (hubdb.read_as)
+    return task_asks.private_history(c, principals[0] if isinstance(principals, tuple) else principals, history)
 
 
 def children_text(c, visible_sql, history):

@@ -145,6 +145,11 @@ def touch(c, sql, args):
         pass
 
 
+# Whom a read of a gone person's run is checked as (Auth.run_viewer): no actor and no role, so every read check refuses
+# it (a file, a page, a task SQL of "0").
+NOBODY = Identity("", "none")
+
+
 def standing(c, pid):
     """ "left" when marked as left on the roster (backend/app.py person_update, which also ended their tokens),
     "off" when an owner or admin turned their sign-in off (Settings > Humans), else ""."""
@@ -607,7 +612,10 @@ class Auth:
             if person is None:
                 raise Problem("privacy", "The person can no longer run this page request", 403)
             principal = replace(person, task_actor="")
-        if not privacy.attempt_readable(c, privacy.actor(principal), aid):
+        # As the run reads (task_privacy.actor: a run of the shared Assistant by its scope, rooms.run_scope, so a run
+        # whose person may no longer sign in has no receipt either).
+        gone = principal.actor == H.assistant_actor(c) and rooms.run_scope(c, aid)[0] == "gone"
+        if gone or not privacy.attempt_readable(c, privacy.actor(principal), aid):
             raise Problem("privacy", "This execution is no longer available", 403)
         if attempt["acting_person"]:
             for task_id in privacy.attempt_tasks(c, aid):
@@ -1086,7 +1094,24 @@ class Auth:
             f"OR {call_follow_ups.reader_sql(c, who.actor)})) "
             f"OR (coalesce(private,1)=0 AND (owner_id IN {parties} OR requester_id IN {parties} OR ({clear}))))"
         )
-        if who.task_actor:
+        if who.attempt_id and H.assistant_actor(c) in (who.actor, who.task_actor):
+            # One Assistant serves everyone, in either form of its lease (its own run, or a person's own chat as them),
+            # by the same rule as hubdb.task_private_readable (rooms.run_scope): in a person's own chat it reads the
+            # private tasks they read, by their own rule; a routine turn its own task alone; a run whose person may no
+            # longer sign in nothing at all; a run for nobody no private task.
+            kind, value = rooms.run_scope(c, who.attempt_id)
+            if kind == "gone":
+                return "0"
+            theirs = "0"
+            if kind == "person":
+                try:
+                    theirs = self.task_sql(c, self.identity_for_actor(c, value))
+                except Problem:
+                    return "0"  # gone since: nothing
+            elif kind == "task":
+                theirs = f"id={A.q(value)}"
+            audience = f"((coalesce(private,1)=0 AND {audience}) OR (coalesce(private,1)<>0 AND ({theirs})))"
+        elif who.task_actor:
             actor = A.q(who.task_actor)
             carried = A.qlist(sorted(private_subjects(c, who.task_actor)))
             from .task_asks import FILED_FOR_SQL, assistant_for
@@ -1104,16 +1129,10 @@ class Auth:
             )
         from . import counsel
 
-        denied = counsel.denied_page_copies(c, who, self)
+        denied = counsel.denied_page_copies(c, self.run_viewer(c, who), self)
         if denied:
             audience += " AND id NOT IN " + A.qlist(sorted(denied))
         return audience
-
-    @staticmethod
-    def _assistant_reads_own_ok(c, who, task_id):
-        from .task_asks import assistant_reads_own_ok
-
-        return assistant_reads_own_ok(c, who.actor, who.task_actor, task_id)
 
     def operator(self, c, who, bot):
         row = read_cache.one(c, OPERATOR_SQL, (bot,))
@@ -1363,6 +1382,22 @@ class Auth:
             via=who.via,
         )
 
+    def run_viewer(self, c, who):
+        """Whom a lease of the shared Assistant reads as, in either form (its own run, or a person's own chat as them):
+        the person whose own chat it is (rooms.run_scope), by their own rights; nobody (NOBODY: reads nothing, never the
+        Assistant itself) when that person is gone. Anyone else reads as themselves."""
+        if not (who.attempt_id and H.assistant_actor(c) in (who.actor, who.task_actor)):
+            return who
+        kind, person = rooms.run_scope(c, who.attempt_id)
+        if kind == "gone":
+            return NOBODY
+        if kind != "person":
+            return who
+        try:
+            return self.identity_for_actor(c, person)
+        except Problem:
+            return NOBODY
+
     def task_row(self, c, who, row):
         if self.task_snapshot(c) and row:
             row = H.task(c, row["id"])
@@ -1375,20 +1410,19 @@ class Auth:
         if (
             copied
             and (not copied["removed"] or copied["page"]["state"] == "deleted")
-            and not counsel.page_copy_readable(c, copied, who, self)
+            and not counsel.page_copy_readable(c, copied, self.run_viewer(c, who), self)
         ):
             raise Problem("not_found", "Task not found", 404)
-        if who.role not in ("owner", "human", "bot") or not H.task_private_readable(c, who.actor, row):
+        from . import task_privacy
+
+        # As the request reads (task_privacy.actor): a lease of the shared Assistant, in either form, as its run's person.
+        principals = task_privacy.actor(who)
+        if who.role not in ("owner", "human", "bot") or not task_privacy.principals_read(c, principals, row):
             raise Problem("not_found", "Task not found", 404)
-        if (
-            who.task_actor
-            and not H.task_private_readable(c, who.task_actor, row)
-            and not self._assistant_reads_own_ok(c, who, row["id"])
-        ):
-            raise Problem("not_found", "Task not found", 404)
+        me = principals[0] if isinstance(principals, tuple) else principals
         participants = (row["owner_id"], row["requester_id"])
         if not H.task_participant(c, who.actor, row) and not (
-            H.task_private(c, row) and H.task_private_readable(c, who.actor, row)
+            H.task_private(c, row) and H.task_private_readable(c, me, row)
         ):
             # A party to a task, or a private task's reader, always sees it; anyone else needs Read on every bot it
             # involves.

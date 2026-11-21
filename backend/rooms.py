@@ -43,6 +43,123 @@ def personal_run(c, assistant_bot, bot, conversation, task):
     return bot == assistant_bot and (personal_root(c, conversation) or bool(task and H.task_private(c, task)))
 
 
+def run_scope(c, attempt_id):
+    """What a run of the shared Assistant reads of private tasks, as (kind, value). "person": everything that person reads,
+    by their own rule, in their own room or a sub-thread of it (their own chat with it). "task": its own routine turn
+    task alone, the one filed for a person's message routine. "gone": nothing at all, its person may no longer sign in
+    (auth.standing). "": no person, so no private task; a call's turn is one. Kept for the read (read_cache)."""
+    return read_cache.value(c, ("run_scope", attempt_id), lambda: _run_scope(c, attempt_id), True)
+
+
+def _run_scope(c, attempt_id):
+    from .auth import standing
+
+    def kept(person, scope):
+        # Only while that person may sign in (auth.standing): a run for someone gone reads nothing.
+        human = H.human(c, H.actor_id(person)) if H.is_human(person) else None
+        return scope if human and not standing(c, human["id"]) else ("gone", "")
+
+    row = c.execute(
+        "SELECT a.task_id,m.conversation_id FROM attempts a JOIN jobs j ON j.id=a.job_id "
+        "JOIN messages m ON m.id=j.message_id WHERE a.id=?",
+        (attempt_id,),
+    ).fetchone()
+    if not row:
+        return ("", "")
+    task = H.task(c, row["task_id"]) if row["task_id"] else None
+    if task and task["owner_id"] == H.assistant_actor(c) and H.task_private(c, task):
+        # The turn it was woken for. An earlier turn named the Assistant itself as requester: its person is the one the
+        # routine run that filed it works for, by the version that run ran (`_routine_person`). None found: nothing.
+        filed_for = task["requester_id"] if H.is_human(task["requester_id"]) else _routine_person(c, task)
+        return kept(filed_for, ("task", task["id"]))
+    room = H.conversation(c, row["conversation_id"]) or {}
+    if room.get("scope") != PERSONAL and room.get("root_id") and room["root_id"] != room.get("id"):
+        room = H.conversation(c, room["root_id"]) or {}
+    if room.get("scope") != PERSONAL or room.get("room_key") != ASSISTANT_ROOM:
+        return ("", "")  # the person's own chat with the Assistant only, not their chat with another bot
+    person = str(room.get("owner_id") or "")
+    return kept(person, ("person", person)) if H.is_human(person) else ("", "")
+
+
+def _routine_person(c, task):
+    """The person a routine turn was filed for, from its stored wake (refs.automation_run, the run that filed it) and the
+    version that run ran, never the routine as it is now: that version's owner when a person, else the one person
+    whose email is the inbox it starts on; "" when it names none or more than one, or the run or its version is gone."""
+    wake = c.execute(
+        "SELECT json_extract(refs,'$.automation_run') FROM messages WHERE conversation_id=? "
+        "AND json_extract(refs,'$.automation_run') IS NOT NULL ORDER BY created_at,id LIMIT 1",
+        (task.get("conversation_id"),),
+    ).fetchone()
+    row = (
+        c.execute(
+            "SELECT v.flow FROM automation_runs r "
+            "JOIN automation_versions v ON v.automation_id=r.automation_id AND v.n=r.version WHERE r.id=?",
+            (wake[0],),
+        ).fetchone()
+        if wake and wake[0]
+        else None
+    )
+    try:
+        flow = (json.loads(row["flow"] or "{}") or {}) if row else {}
+    except ValueError:
+        return ""
+    if not isinstance(flow, dict):
+        return ""
+    owner = str(flow.get("owner") or "")
+    if owner.startswith("person:"):
+        return H.human_actor(owner.split(":", 1)[1])
+    trigger = flow.get("trigger") or {}
+    inbox = str(trigger.get("inbox") or "").strip().lower() if isinstance(trigger, dict) else ""
+    found = c.execute("SELECT id FROM humans WHERE lower(email)=?", (inbox,)).fetchall() if inbox else []
+    return H.human_actor(found[0]["id"]) if len(found) == 1 else ""
+
+
+def scoped_wake(c, auth, attempt):
+    """A claim of the shared Assistant's run as that run may read it: the other active tasks its wake lists to reconcile
+    with (refs.reconcile.active, stored when the task was filed) only as far as the run reads them by its whole task
+    rule (auth.task: its scope, rooms.run_scope, and the Assistant's bot activity access), in every copy of a message the
+    claim carries (`message`, `history`, `refs` and `refs_json`), at the claim and at its replay. The stored messages
+    stay as they are: what the run may read of them is decided as it reads (task_privacy). Changed in place; returns
+    it."""
+    from .auth import Identity
+
+    shared = H.assistant_actor(c)
+    if not isinstance(attempt, dict) or "bot:" + str(attempt.get("bot") or "") != shared:
+        return attempt
+    reader = Identity(shared, "bot", attempt_id=str(attempt.get("id") or ""))
+
+    def readable(task_id):
+        try:
+            auth.task(c, reader, task_id)
+            return True
+        except Problem:
+            return False
+
+    def scoped(message):
+        refs = message.get("refs")
+        if isinstance(refs, str):
+            refs = H._json(refs, {})
+        reconcile = refs.get("reconcile") if isinstance(refs, dict) else None
+        if not (isinstance(refs, dict) and isinstance(reconcile, dict) and isinstance(reconcile.get("active"), list)):
+            return message
+        kept = [i for i in reconcile["active"] if isinstance(i, dict) and readable(str(i.get("id") or ""))]
+        if len(kept) == len(reconcile["active"]):
+            return message
+        refs = {k: v for k, v in refs.items() if k != "reconcile"}
+        if kept:
+            refs["reconcile"] = {**reconcile, "active": kept}
+        shown = {**message, "refs": refs}
+        if "refs_json" in message:
+            shown["refs_json"] = json.dumps(refs)
+        return shown
+
+    if isinstance(attempt.get("message"), dict):
+        attempt["message"] = scoped(attempt["message"])
+    if isinstance(attempt.get("history"), list):
+        attempt["history"] = [scoped(m) if isinstance(m, dict) else m for m in attempt["history"]]
+    return attempt
+
+
 def personal_attempt(c, assistant_bot, attempt_id):
     """`personal_run` for a run by its id (backend/github_app.py token)."""
     row = c.execute(

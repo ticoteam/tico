@@ -748,8 +748,9 @@ def test_delegated_reader_needs_its_own_letter_permission_on_every_surface(api, 
 
 def test_a_delegated_reader_reads_the_letters_ok_task_but_never_the_letter(api, hq):
     """The Assistant reads a task that holds an OK asked of its person (task_asks.assistant_reads_own_ok), so it can
-    send it back on her word. With no letter permission of its own it reads only what the OK shows (the addresses,
-    the price, the settings and the hash it binds): never the letter's text, its proof or its source."""
+    send it back on her word. In her own chat it reads the OK as she does, the letter it names included (hubdb.read_as);
+    with no letter permission of its own it reads only what the OK shows (the addresses, the price, the settings and
+    the hash it binds): never the letter's text, its proof or its source."""
     from backend.tests.helpers.api import setup_attempt
     from backend.tests.helpers.assistant import assistant_turn
 
@@ -763,7 +764,7 @@ def test_a_delegated_reader_reads_the_letters_ok_task_but_never_the_letter(api, 
     _, attempt = assistant_turn(api, "ana-test")
     delegated = attempt["token"]
     task = json.dumps(get(api, "tasks/" + _task(api, row), delegated))
-    for secret in ["Hello from Acme", row["id"], RECIPIENT["name"], RECIPIENT["line1"], *blobs, *digests]:
+    for secret in ["Hello from Acme", RECIPIENT["name"], RECIPIENT["line1"], *blobs, *digests]:
         assert secret not in task, secret
     shown = get(api, "oks/" + row["approval_id"], delegated)
     assert shown["content"] == L.content(letter)

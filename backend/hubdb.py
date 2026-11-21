@@ -2374,6 +2374,23 @@ def task_private_readable(conn, actor, row):
     if not row:
         return False
     row = dict(row)
+    nobody = False
+    if isinstance(actor, RunPrincipal) and actor != assistant_actor(conn):
+        actor = str(actor)  # another bot's run reads as that bot
+    if isinstance(actor, RunPrincipal):
+        # One Assistant serves everyone (rooms.run_scope): in a person's own chat it reads exactly what they read, by
+        # their own rule (page copies included); a routine turn reads its own task and no other private one; a run whose
+        # person may no longer sign in reads nothing; a run for nobody reads no private task (below).
+        from .rooms import run_scope
+
+        kind, value = run_scope(conn, actor.attempt)
+        if kind == "person":
+            return task_private_readable(conn, value, row)
+        if kind == "gone":
+            return False
+        if kind == "task" and row.get("id") == value:
+            return True
+        actor, nobody = str(actor), True
     from . import counsel, teammate_access
 
     copied = counsel.page_copies(conn).get(row["id"])
@@ -2392,6 +2409,8 @@ def task_private_readable(conn, actor, row):
         row = task(conn, row["id"])
         if not row:
             return False
+    if nobody:
+        return False  # a run of the shared Assistant for nobody (above)
     if actor in (row["owner_id"], row["requester_id"]):
         return True
     from .task_rights import private_subjects
@@ -2543,6 +2562,41 @@ def _reader_target(conn, actor, value):
     if not who or not (is_human(who) and human(conn, actor_id(who)) or is_bot(who) and bot(conn, actor_id(who))):
         refuse(conn, actor, "not-found", f"{value} is not a person, bot or group on the team")
     return who
+
+
+class RunPrincipal(str):
+    """The shared Assistant as the identity of one of its runs (task_privacy.actor): it reads a task as the person that
+    run works for (task_private_readable). Equal to the plain actor everywhere else; a server-side check about the
+    Assistant itself (a wake, a notice, an owner) passes the plain actor and is not narrowed."""
+
+    attempt = ""
+
+    def __repr__(self):
+        # The cache key of a read made as it (threads, execution): one run's reads are never another's.
+        return f"RunPrincipal({str(self)!r}, {self.attempt!r})"
+
+
+def read_as(conn, actor):
+    """The actor a read check names, as it sees: the person, for a run of the shared Assistant in their own chat
+    (rooms.run_scope); "" for one whose person may no longer sign in; anyone else as themselves."""
+    if not isinstance(actor, RunPrincipal) or actor != assistant_actor(conn):
+        return actor
+    from .rooms import run_scope
+
+    kind, value = run_scope(conn, actor.attempt)
+    return value if kind == "person" else "" if kind == "gone" else str(actor)
+
+
+def running_as(conn, actor):
+    """`actor`, as the run of the request reads (RUN): the shared Assistant's run is a RunPrincipal (rooms.run_scope)."""
+    attempt = RUN.get()
+    return run_principal(actor, attempt) if attempt and actor == assistant_actor(conn) else actor
+
+
+def run_principal(actor, attempt):
+    principal = RunPrincipal(actor)
+    principal.attempt = attempt
+    return principal
 
 
 def assistant_actor(conn=None):
@@ -4757,6 +4811,15 @@ def task_create(
         ):
             refuse(conn, actor, "identity", "Human requester attribution requires the bot's own verified work")
         requester = requester_actor
+    # A person's message routine's turn (automation_actions.start_turn, `routine_for` that person) stays the Assistant's,
+    # as it was, and so does a follow-up from a call in their own room that they are the requester of
+    # (call_follow_ups.file_task); its runs are personal ones (rooms.personal_run). It is the person's own: they read it
+    # as its requester, from here on (the duplicate check included), and the Assistant's runs only when for them.
+    routine_turn = bool(
+        private and (routine or requester == routine_for) and is_human(routine_for) and target == assistant_actor(conn)
+    )
+    if routine_turn:
+        requester = routine_for
     title = str(title or "").strip()
     body = str(body or "")
     instructions = str(instructions or "").strip()
@@ -4823,7 +4886,7 @@ def task_create(
         )
     if (
         dup
-        and task_private_readable(conn, actor, task(conn, dup["id"]))
+        and task_private_readable(conn, running_as(conn, actor), task(conn, dup["id"]))
         and (turn or deduplicate or actor != TICO_ACTOR)
     ):
         detail = (
@@ -4843,12 +4906,6 @@ def task_create(
             )
         number = _number_free(conn, actor, number)
     if private:
-        # A person's message routine's turn (automation_actions.start_turn, `routine_for` that person) stays the
-        # Assistant's, as it was, and so does a follow-up from a call in their own room that they are the requester of
-        # (call_follow_ups.file_task); its runs are personal ones (rooms.personal_run).
-        routine_turn = bool(
-            (routine or requester == routine_for) and is_human(routine_for) and target == assistant_actor(conn)
-        )
         refuse_shared_assistant(conn, actor, *(() if routine_turn else (target, requester)), *(readers or ()))
     from contextlib import ExitStack
 
@@ -4995,6 +5052,8 @@ def task_create(
                 for item in related
                 if all(task_private_readable(conn, reader, item) for reader in readers)
                 and (private or not dedicated or not task_private(conn, item))
+                # A turn of the shared Assistant reads its own task and no other private one (rooms.run_scope).
+                and not (target == assistant_actor(conn) and task_private(conn, item))
             ]
         reconcile = (
             {
@@ -5152,7 +5211,7 @@ def _retitle(conn, actor, row, title, owner, general):
         (row["id"], row["requester_id"], target, parent or "", *ACTIVE_STATUSES),
         title,
     )
-    if dup and task_private_readable(conn, actor, task(conn, dup["id"])):
+    if dup and task_private_readable(conn, running_as(conn, actor), task(conn, dup["id"])):
         detail = (
             "An existing task already asks for this work"
             if VIA.get() and task_private(conn, task(conn, dup["id"]))

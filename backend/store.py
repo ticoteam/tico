@@ -1418,6 +1418,9 @@ class Store:
 
                     task = (saved.get("make_page") or {}).get("task") or saved.get("task")
                     saved["task_context"] = task_context.for_turn(c, replay_auth, replay_principal, task)
+                    from .rooms import scoped_wake
+
+                    scoped_wake(c, replay_auth, saved)  # what the run reads now, a claim saved before it included
                 # Cached results keep their retry semantics, but access is current on every retry.
                 task_ids = set()
                 for part in operation.split("/"):

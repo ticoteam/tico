@@ -1292,7 +1292,7 @@ def quiet_source_wait(c, job, facts=None, *, started_counts=None, attempt_times=
 
 def _held_key(who, actor, bot):
     # task_sql's fence depends on the role as well as the actor.
-    return ("readable_held", actor, who.role, bot)
+    return ("readable_held", repr(actor), who.role, bot)  # repr: a run's principal keys its own reads
 
 
 def _readable_held(c, who, auth, bot):
@@ -1333,7 +1333,7 @@ def prime_readable_held(c, who, auth, bots):
     chosen = _tico_chosen_for(c, who, todo)
     for bot in todo:
         values[_held_key(who, actor, bot)] = found[bot]
-        values[("tico_chosen", actor, bot)] = chosen[bot]
+        values[("tico_chosen", repr(actor), bot)] = chosen[bot]
 
 
 def _readable_held_for(c, who, auth, bots):
@@ -1418,7 +1418,7 @@ def tico_chosen(c, who, bot):
     every bot at once by prime_readable_held, so a status page pays no statement per bot for it."""
     from . import read_cache
 
-    values, key = read_cache.cache(c), ("tico_chosen", privacy.actor(who), bot)
+    values, key = read_cache.cache(c), ("tico_chosen", repr(privacy.actor(who)), bot)
     if values is not None and key in values:
         return values[key]
     return _tico_chosen_for(c, who, [bot])[bot]
@@ -5589,103 +5589,107 @@ class Execution:
         runner_wire.conversation(c, conversation)  # the claim's copy (thread_payload) was made before
         wire_task = runner_wire.task(task)
         return {
-            "attempt": {
-                "chat_goal": chat_goal,
-                "routine": routine,
-                "id": aid,
-                "deferred": deferred,
-                # The retired login queue's class: 0.6.x runners require the field (contracts/runner/wire.json).
-                "login_class": "other",
-                "recovery": {
-                    "resume_session": restart_reported(c, row["attempt_id"])
-                    or bool(cut_by_update(c, row["attempt_id"]))
-                    or bool(run_limit_minutes(c, row["attempt_id"]))
-                    or bool(
-                        c.execute(
-                            "SELECT 1 FROM attempts WHERE id=? AND state='expired' AND thread_id IS NOT NULL",
-                            (row["attempt_id"],),
-                        ).fetchone()
-                    )
-                }
-                if recovery
-                else None,
-                "computer_label": runner["label"],
-                "computer_logins_v1": True,
-                # The computer the bot's browser reaches the web through, or None (backend/browser_exit.py).
-                "browser_exit": browser_exit.for_turn(c, row["bot_id"]),
-                # A starter bot's chat while it is `needs_setup` is its setup (runner prompt).
-                "onboarding": (parked["onboarding_state"] if parked else "") or "",
-                "mailboxes": list(mail_levels),
-                "mailbox_levels": mail_levels,
-                "next_run": [],  # next-run tasks are gone; runners from before 0.6 read the list
-                "notes": notes,
-                "job_id": row["id"],
-                "bot": row["bot_id"],
-                "lane": lane,
-                "credential_vault": bool(subscriptions)
-                or c.execute(
-                    "SELECT 1 FROM credential_grants WHERE subject=? AND revoked_at IS NULL LIMIT 1",
-                    ("bot:" + row["bot_id"],),
-                ).fetchone()
-                is not None,
-                # The company subscriptions this turn signs in with: ids and kinds, never values, which the run
-                # reads from credential-runtime (backend/model_subscriptions.py).
-                **({"subscriptions": subscriptions} if subscriptions else {}),
-                # A run on a Tico model reaches the Gateway through its runner, which alone is handed the key
-                # (runner-gateway-credentials; runner-rs/src/gateway_relay.rs).
-                "gateway": gateway_connection.wanted(config),
-                "generation": row["generation"],
-                "lease_until": until,
-                **({"start_reservation_seconds": start_places.START_SECONDS} if body.start_places else {}),
-                # The claim granted the turn its start place (start_places.admit): its runner keeps it without asking
-                # start-place again a moment later. Omitted when not granted; an older runner ignores it.
-                **({"start_reserved": True} if admitted.get("reserved") else {}),
-                "lease_seconds": self.store.settings.lease_seconds,
-                "token": token,
-                # The thread's root and audience class key the turn's session (clients/sessions.py).
-                # A message in a sub-thread names the message it hangs off: the runner sends it back
-                # with the completion, and the reply lands in that sub-thread (Execution._say_reply).
-                "message": ({**msg, "parent_message_id": (conv or {}).get("parent_message_id")} if msg else msg),
-                "conversation": conversation,
-                # The Assistant in a person's own room serves one person out of a company-wide checkout: the runner keeps
-                # nothing such a turn writes in it (runner-rs/src/sessions.rs PersonalCopy).
-                **(
-                    {"personal": True}
-                    if rooms.personal_run(c, self.store.settings.assistant_bot, row["bot_id"], conv, task)
-                    else {}
-                ),
-                "task": wire_task,
-                **({"github_repository": github_repository} if github_repository else {}),
-                **({"continue_thread": continue_thread} if continue_thread else {}),
-                # A job the release policy let go to continue the bot's latest session (runner-rs forks it).
-                **({"fork_thread": fork_thread} if fork_thread else {}),
-                # A job the release policy let go to run in a session of its own (session `fresh`).
-                **({"fresh_session": True} if fresh_session else {}),
-                **({"source_continuation": source} if source else {}),
-                # The task's set-up worktrees on this computer, added to its session (runner-rs/src/sessions.rs).
-                "worktrees": worktrees.attached(c, task["id"], who.runner_id, row["bot_id"]) if task else [],
-                "history": history,
-                "principal": principal,
-                # What the person's chat bot has learned, read now: a deleted entry is gone from this turn
-                # (backend/learned.py; rendered by runner-rs/src/prompt.rs). Outside their own chat only
-                # `strategy`, the team's live strategy, which every turn carries (backend/strategy.py).
-                "learned": learned.for_turn(c, self.store.settings, conv, row["bot_id"]),
-                # What changed in Finance for whoever this turn is for: the person in their own Assistant turn, else the
-                # bot (backend/finance/brief.py). Standing lines in the prompt, so a resumed thread gets them when they change.
-                "finance": finance_brief.for_turn(c, (acting or bot_who).actor),
-                "task_context": task_context.for_turn(c, self.auth, acting or bot_who, make_page_task or task),
-                **({"make_page": {"task": runner_wire.task(make_page_task)}} if making_page else {}),
-                # place "updates": the recent updates that person may read and open, read now as them
-                # (backend/updates_chat.py). None for every other turn.
-                "updates": updates_chat.for_turn(c, self.auth, self.store.settings, conv, row["bot_id"], msg, aid),
-                # The owner's earlier Strategy Owner chat is a session of its own (backend/rooms.py).
-                "config": rooms.session_config(conv, row["bot_id"], config),
-                # Bumped by a session clear or reset (views.py clear_session, app.py reset_bot_sessions):
-                # a runner that sees it change starts a fresh provider thread (runner-rs/src/execute.rs).
-                "session_epoch": session_epoch["epoch"] if session_epoch else 0,
-                # Moved by any clear or reset of this bot: the runner starts the bot's shared thread anew.
-                "bot_session_epoch": bot_epoch[0] if bot_epoch else 0,
-            }
+            "attempt": rooms.scoped_wake(
+                c,
+                self.auth,
+                {
+                    "chat_goal": chat_goal,
+                    "routine": routine,
+                    "id": aid,
+                    "deferred": deferred,
+                    # The retired login queue's class: 0.6.x runners require the field (contracts/runner/wire.json).
+                    "login_class": "other",
+                    "recovery": {
+                        "resume_session": restart_reported(c, row["attempt_id"])
+                        or bool(cut_by_update(c, row["attempt_id"]))
+                        or bool(run_limit_minutes(c, row["attempt_id"]))
+                        or bool(
+                            c.execute(
+                                "SELECT 1 FROM attempts WHERE id=? AND state='expired' AND thread_id IS NOT NULL",
+                                (row["attempt_id"],),
+                            ).fetchone()
+                        )
+                    }
+                    if recovery
+                    else None,
+                    "computer_label": runner["label"],
+                    "computer_logins_v1": True,
+                    # The computer the bot's browser reaches the web through, or None (backend/browser_exit.py).
+                    "browser_exit": browser_exit.for_turn(c, row["bot_id"]),
+                    # A starter bot's chat while it is `needs_setup` is its setup (runner prompt).
+                    "onboarding": (parked["onboarding_state"] if parked else "") or "",
+                    "mailboxes": list(mail_levels),
+                    "mailbox_levels": mail_levels,
+                    "next_run": [],  # next-run tasks are gone; runners from before 0.6 read the list
+                    "notes": notes,
+                    "job_id": row["id"],
+                    "bot": row["bot_id"],
+                    "lane": lane,
+                    "credential_vault": bool(subscriptions)
+                    or c.execute(
+                        "SELECT 1 FROM credential_grants WHERE subject=? AND revoked_at IS NULL LIMIT 1",
+                        ("bot:" + row["bot_id"],),
+                    ).fetchone()
+                    is not None,
+                    # The company subscriptions this turn signs in with: ids and kinds, never values, which the run
+                    # reads from credential-runtime (backend/model_subscriptions.py).
+                    **({"subscriptions": subscriptions} if subscriptions else {}),
+                    # A run on a Tico model reaches the Gateway through its runner, which alone is handed the key
+                    # (runner-gateway-credentials; runner-rs/src/gateway_relay.rs).
+                    "gateway": gateway_connection.wanted(config),
+                    "generation": row["generation"],
+                    "lease_until": until,
+                    **({"start_reservation_seconds": start_places.START_SECONDS} if body.start_places else {}),
+                    # The claim granted the turn its start place (start_places.admit): its runner keeps it without asking
+                    # start-place again a moment later. Omitted when not granted; an older runner ignores it.
+                    **({"start_reserved": True} if admitted.get("reserved") else {}),
+                    "lease_seconds": self.store.settings.lease_seconds,
+                    "token": token,
+                    # The thread's root and audience class key the turn's session (clients/sessions.py).
+                    # A message in a sub-thread names the message it hangs off: the runner sends it back
+                    # with the completion, and the reply lands in that sub-thread (Execution._say_reply).
+                    "message": ({**msg, "parent_message_id": (conv or {}).get("parent_message_id")} if msg else msg),
+                    "conversation": conversation,
+                    # The Assistant in a person's own room serves one person out of a company-wide checkout: the runner keeps
+                    # nothing such a turn writes in it (runner-rs/src/sessions.rs PersonalCopy).
+                    **(
+                        {"personal": True}
+                        if rooms.personal_run(c, self.store.settings.assistant_bot, row["bot_id"], conv, task)
+                        else {}
+                    ),
+                    "task": wire_task,
+                    **({"github_repository": github_repository} if github_repository else {}),
+                    **({"continue_thread": continue_thread} if continue_thread else {}),
+                    # A job the release policy let go to continue the bot's latest session (runner-rs forks it).
+                    **({"fork_thread": fork_thread} if fork_thread else {}),
+                    # A job the release policy let go to run in a session of its own (session `fresh`).
+                    **({"fresh_session": True} if fresh_session else {}),
+                    **({"source_continuation": source} if source else {}),
+                    # The task's set-up worktrees on this computer, added to its session (runner-rs/src/sessions.rs).
+                    "worktrees": worktrees.attached(c, task["id"], who.runner_id, row["bot_id"]) if task else [],
+                    "history": history,
+                    "principal": principal,
+                    # What the person's chat bot has learned, read now: a deleted entry is gone from this turn
+                    # (backend/learned.py; rendered by runner-rs/src/prompt.rs). Outside their own chat only
+                    # `strategy`, the team's live strategy, which every turn carries (backend/strategy.py).
+                    "learned": learned.for_turn(c, self.store.settings, conv, row["bot_id"]),
+                    # What changed in Finance for whoever this turn is for: the person in their own Assistant turn, else the
+                    # bot (backend/finance/brief.py). Standing lines in the prompt, so a resumed thread gets them when they change.
+                    "finance": finance_brief.for_turn(c, (acting or bot_who).actor),
+                    "task_context": task_context.for_turn(c, self.auth, acting or bot_who, make_page_task or task),
+                    **({"make_page": {"task": runner_wire.task(make_page_task)}} if making_page else {}),
+                    # place "updates": the recent updates that person may read and open, read now as them
+                    # (backend/updates_chat.py). None for every other turn.
+                    "updates": updates_chat.for_turn(c, self.auth, self.store.settings, conv, row["bot_id"], msg, aid),
+                    # The owner's earlier Strategy Owner chat is a session of its own (backend/rooms.py).
+                    "config": rooms.session_config(conv, row["bot_id"], config),
+                    # Bumped by a session clear or reset (views.py clear_session, app.py reset_bot_sessions):
+                    # a runner that sees it change starts a fresh provider thread (runner-rs/src/execute.rs).
+                    "session_epoch": session_epoch["epoch"] if session_epoch else 0,
+                    # Moved by any clear or reset of this bot: the runner starts the bot's shared thread anew.
+                    "bot_session_epoch": bot_epoch[0] if bot_epoch else 0,
+                },
+            )
         }
 
     @staticmethod
@@ -5696,7 +5700,11 @@ class Execution:
         job). It fails now instead, once, with a reason in the bot's run history that names no task, and its job is
         never taken again: the claim takes the next job. The check itself is the same and no wider."""
         principal = privacy.make_page_actor(c, "bot:" + row["bot_id"], msg)
-        if privacy.attempt_readable(c, principal, aid):
+        # A run of the shared Assistant whose person may no longer sign in reads nothing (rooms.run_scope): no claim. A
+        # Make page request is refused before it is handed out, by its own check (the person who asked, chat_person).
+        page = isinstance((H._json((msg or {}).get("refs"), {}) or {}).get("make_page"), dict)
+        gone = not page and "bot:" + row["bot_id"] == H.assistant_actor(c) and rooms.run_scope(c, aid)[0] == "gone"
+        if not gone and privacy.attempt_readable(c, principal, aid):
             return False
         c.execute(
             "UPDATE attempts SET state='failed',finished_at=?,lease_until=?,final_text=? WHERE id=?",

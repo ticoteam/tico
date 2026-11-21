@@ -138,8 +138,13 @@ def test_a_run_that_is_not_the_persons_own_chat_lends_nothing(api):
 
 
 def test_two_peoples_private_work_stays_apart_and_a_private_handoff_is_filed_as_the_person(api):
-    """One Assistant serves everyone. Ana's own chat neither reads nor writes Ben's private task, and her private handoff
-    is filed as Ana for that one request: the shared Assistant becomes no reader or owner of it, so it still reads none."""
+    """One Assistant serves everyone and acts with the rights of the person its run is for. Ana's own chat neither reads
+    nor writes Ben's private task, and her private handoff is filed as Ana: the shared Assistant becomes no reader or
+    owner of it, and only Ana's runs read it, as she does."""
+    from backend.tests.helpers.api import unrelated_task_managers
+
+    with api.app.state.store.transaction() as c:
+        unrelated_task_managers(c)  # no org-chart line lets Ana read Ben's work
     ben = post(api, "tasks", {"owner": "ops", "title": "Ben's raise", "body": "Salary.", "private": True}, "ben-test")
     post(api, "tasks", {"owner": "ops", "title": "Ana's offer", "body": "Offer.", "private": True})
     r, attempt = assistant_turn(api, "ana-test", text="Hand the payroll check to Ops, privately")
@@ -154,8 +159,175 @@ def test_two_peoples_private_work_stays_apart_and_a_private_handoff_is_filed_as_
     with api.app.state.store.read() as c:
         row = H.task(c, handed["id"])
         assert not H.task_private_readable(c, "bot:assistant", row) and H.task_private_readable(c, "human:ana", row)
-    get(api, "tasks/" + handed["id"], token, expected=404)
+    get(api, "tasks/" + handed["id"], token)  # her run reads what she reads, by id and in her lists
+    assert handed["id"] in json.dumps(get(api, "tasks", token))
     get(api, "tasks/" + handed["id"], "ben-test", expected=404)
+    # In her own chat it reads what she reads, by her own rule: a private task Cara shared with her too.
+    shared = post(
+        api,
+        "tasks",
+        {"owner": "ops", "title": "Desk offer", "body": "Ours.", "private": True, "readers": ["human:ana"]},
+        token="cara-test",
+    )
+    company = post(api, "tasks", {"owner": "ops", "title": "Tidy the wiki", "body": "For all.", "private": False})
+    get(api, "tasks/" + shared["id"], token)
+    assert shared["id"] in json.dumps(get(api, "tasks", token))
+    # Ben's own chat does not, and once Ben may not sign in, his run reads nothing at all, company work included.
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "thread-ana"}, token=r["token"])
+    post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {"outcome": "completed", "text": "Done", "last_seq": 0},
+        token=r["token"],
+    )
+    say(api, "What's on my plate?", "ben-test")
+    bens = post(api, "jobs/claim", {}, token=r["token"])["attempt"]
+    get(api, "tasks/" + shared["id"], bens["token"], expected=404)
+    get(api, "tasks/" + company["id"], bens["token"])
+    with api.app.state.store.transaction() as c:
+        doc = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
+        for person in doc["people"]:
+            if person.get("id") == "ben":
+                person["sign_in"] = False
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(doc),))
+    get(api, "tasks/" + company["id"], bens["token"], expected=404)
+    assert get(api, "tasks", bens["token"])["tasks"] == []
+
+
+def test_a_task_read_in_the_persons_own_chat_shows_what_they_read_under_it(api):
+    """The task's own view reads what it names (its subtasks, what it waits on) as the request reads: in Ana's own chat,
+    by her rights, so her private subtask shows; Ben's chat sees "a private task" no more than he does."""
+    parent = post(api, "tasks", {"owner": "ops", "title": "Launch", "body": "Plan.", "private": False})
+    with api.app.state.store.transaction() as c:
+        child = H.task_create(c, "human:ana", "Launch budget", "Mine.", "bot:ops", parent_id=parent["id"], private=True)
+        handed = H.task_create(c, "human:ana", "Launch venue", "Mine.", "bot:ops", private=True)
+        c.execute(  # the launch handed this on (task_calls: the tasks it filed)
+            "INSERT INTO links(id,from_task_id,to_task_id,kind,created_at) VALUES(?,?,?,'handoff',?)",
+            (H.new_id(), parent["id"], handed["id"], H.now()),
+        )
+    r, attempt = assistant_turn(api, "ana-test", text="What's under the launch?")
+    shown = get(api, "tasks/" + parent["id"], attempt["token"])
+    assert child["id"] in json.dumps(shown["children"]), shown["children"]
+    assert handed["id"] in json.dumps(shown["task"]["filed"]), shown["task"]["filed"]
+    bens = get(api, "tasks/" + parent["id"], "ben-test")
+    assert child["id"] not in json.dumps(bens["children"]) and handed["id"] not in json.dumps(bens["task"]["filed"])
+
+
+def test_only_the_persons_own_assistant_chat_reads_with_their_rights(api):
+    """Person-wide reads are for the person's own chat with the Assistant: a room of theirs with another bot is not."""
+    from backend import rooms
+
+    r, attempt = assistant_turn(api, "ana-test", text="What's mine?")
+    with api.app.state.store.transaction() as c:
+        assert rooms._run_scope(c, attempt["id"]) == ("person", "human:ana")
+        c.execute("UPDATE conversations SET room_key='docs' WHERE id=?", (attempt["conversation"]["id"],))
+        assert rooms._run_scope(c, attempt["id"]) == ("", "")
+
+
+def test_an_install_with_its_own_assistant_slug_scopes_that_bots_runs(api, monkeypatch):
+    """The shared Assistant is whichever bot the install names (its settings' assistant_bot), not the word "assistant":
+    a run of it reads its own routine turn and no other private task it holds, though the bot itself still holds both."""
+    from backend import task_privacy as privacy
+    from backend.auth import Identity
+    from backend.tests.helpers.api import assign, claim, ready, runner
+
+    with api.app.state.store.transaction() as c:
+        turns = [
+            H.task_create(c, f"human:{p}", "Turn", "Mine.", "bot:ops", private=True)["id"] for p in ("ana", "cara")
+        ]
+    machine = runner(api)
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    attempt = claim(api, machine, "ops")
+    mine, other = turns if attempt["task"]["id"] == turns[0] else turns[::-1]
+    monkeypatch.setattr(api.app.state.store.settings, "assistant_bot", "ops")
+    with api.app.state.store.read() as c:
+        principal = privacy.actor(Identity("bot:ops", "bot", attempt_id=attempt["id"]))
+        assert all(H.task_private_readable(c, "bot:ops", H.task(c, t)) for t in turns)  # the bot, outside a run
+        assert H.task_private_readable(c, principal, H.task(c, mine))
+        assert not H.task_private_readable(c, principal, H.task(c, other))
+
+
+def test_an_ok_asked_of_the_person_reads_as_theirs_in_their_own_chat(api):
+    """A bound OK's words are its parties': in Ana's own chat her Assistant reads the OK asked of her, as she does;
+    Cara, no party, reads that it waits on a person's OK and no more."""
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, "human:ana", "Ship the fix", "Soon.", "bot:ops")
+        asked = X.ok_ask(c, task["id"], "bot:ops", "human:ana", "OK to ship the fix Friday?")
+        c.execute(  # bound to what it lets go (task_asks.ask_ok): its words are its parties'
+            "INSERT INTO ok_grants(requirement_id,asked_by_id,asked_of_id,subject,content_hash,content,filed,created_at) "
+            "VALUES(?,'bot:ops','human:ana','budget_raise:fix','x','{}',0,?)",
+            (asked["requirement_id"], H.now()),
+        )
+    r, attempt = assistant_turn(api, "ana-test", text="What waits on me?")
+
+    def lines(token):
+        return [entry.get("line") for entry in get(api, "tasks/" + task["id"], token)["task"]["to_leave"]]
+
+    assert "OK to ship the fix Friday?" in lines(attempt["token"])
+    assert "OK to ship the fix Friday?" not in lines("cara-test")
+
+
+def sign_in_off(api, person):
+    with api.app.state.store.transaction() as c:
+        doc = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
+        for entry in doc["people"]:
+            if entry.get("id") == person:
+                entry["sign_in"] = False
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(doc),))
+
+
+def test_a_chat_of_someone_who_may_no_longer_sign_in_is_never_handed_out_nor_its_receipts_replayed(api):
+    """A run for a person who may no longer sign in reads nothing: their next chat turn is never handed out, and an
+    earlier run's acknowledgement receipt is not replayed either."""
+    from backend.tests.helpers.api import claim
+
+    r, attempt = assistant_turn(api, "ben-test", text="What's on my plate?")
+    ack = headers(r["token"], key="ack-1")
+    assert (
+        api.post(f"/api/v2/attempts/{attempt['id']}/started", json={"thread_id": "t"}, headers=ack).status_code == 200
+    )
+    done = {"outcome": "completed", "text": "Done", "last_seq": 0}
+    post(api, f"attempts/{attempt['id']}/complete", done, token=r["token"])
+    say(api, "Still there?", "ben-test")
+    sign_in_off(api, "ben")
+    replayed = api.post(f"/api/v2/attempts/{attempt['id']}/started", json={"thread_id": "t"}, headers=ack)
+    assert replayed.status_code == 403, replayed.text
+    assert claim(api, r) is None
+
+
+def test_a_page_read_in_the_persons_own_chat_is_checked_against_its_audience_as_them(api):
+    """A page's audience is read as the run's person in their own chat (files.version_refusal, as file_visible), and as
+    nobody once that person may no longer sign in, never as the Assistant itself."""
+    from backend import files
+    from backend.auth import Identity
+
+    task = post(api, "tasks", {"owner": "ops", "title": "Pricing", "body": "Draft.", "private": False})
+    with api.app.state.store.transaction() as c:
+        fid = X.shown(c, "Pricing page", "ops", task["id"])[0].split(":", 1)[1]
+        c.execute(
+            "INSERT INTO pages(file_id,audience,created_at,updated_at) VALUES(?,?,?,?)",
+            (fid, json.dumps({"everyone": False, "people": ["ana"]}), H.now(), H.now()),
+        )
+    with api.app.state.store.transaction() as c:  # and one with no audience of its own
+        open_id = X.shown(c, "Pricing notes", "ops", task["id"])[0].split(":", 1)[1]
+        open_page = dict(c.execute("SELECT * FROM bot_files WHERE id=?", (open_id,)).fetchone())
+    r, attempt = assistant_turn(api, "ana-test", text="Show me the pricing page")
+    auth = api.app.state.auth
+
+    def refusal():
+        with api.app.state.store.read() as c:
+            who = auth.authenticate({"authorization": "Bearer " + attempt["token"]}, "/api/v2/files/" + fid, "GET")
+            row = dict(c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone())
+            return files.version_refusal(c, auth, who, row, 1, files.stored_version(c, fid, 1))
+
+    assert refusal() != "audience"
+    sign_in_off(api, "ana")
+    with api.app.state.store.read() as c:
+        run = auth.run_viewer(c, Identity("bot:assistant", "bot", attempt_id=attempt["id"]))
+        assert run.actor == "" and run.role == "none"
+        assert not files.page_audience_visible(c, auth, run, dict(open_page), {})  # not even a page open to all
+    assert refusal() == "audience"
 
 
 def test_a_private_task_is_never_the_shared_assistants_as_owner_or_reader(api):

@@ -3,7 +3,7 @@
 
 from collections.abc import Iterable
 from sqlite3 import Connection, Row
-from typing import Any
+from typing import Any, cast
 
 from fastapi import FastAPI, Request
 from pydantic import Field
@@ -382,7 +382,20 @@ def install(app: FastAPI, auth: Any, write: Any) -> None:
         def check(c: Connection) -> None:
             may_file(c, auth, who, call_id, body.bot)
 
-        def receipt(_: object) -> Identity | None:
-            return person
+        def receipt(made: Any) -> Identity | None:
+            """Who reads the receipt back: the person, for their own Assistant turn; for the Assistant's lease from this
+            call, the person the follow-up is filed for (file_task: its requester), whose work it is. A call's turn
+            otherwise reads no private task (rooms.run_scope)."""
+            if person:
+                return person
+            with auth.store.read() as c:
+                filed: Record = cast(Record, made) if isinstance(made, dict) else {}
+                task: Record | None = H.task(c, str(filed.get("task_id") or ""))
+                if not task or task["owner_id"] != H.assistant_actor(c) or not H.is_human(task["requester_id"]):
+                    return None
+                try:
+                    return auth.identity_for_actor(c, task["requester_id"])
+                except Problem:
+                    return None
 
-        return write(request, body, work, check=check, receipt=receipt if person else None)
+        return write(request, body, work, check=check, receipt=receipt)

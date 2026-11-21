@@ -48,8 +48,19 @@ def as_the_person(who):
 
 
 def actor(who):
+    """Whom a request reads as: its actor, or a person and whom they act as. A lease of the shared Assistant, in either
+    form, reads by its run's scope (hubdb.RunPrincipal, rooms.run_scope)."""
     other = getattr(who, "task_actor", "")
-    return (who.actor, other) if other and other != who.actor else who.actor
+    attempt = getattr(who, "attempt_id", "")
+
+    def run(a):
+        # Any bot's run is marked; hubdb.task_private_readable scopes only the install's shared Assistant (its
+        # connection's settings), and reads every other bot as itself.
+        return H.run_principal(a, attempt) if attempt and H.is_bot(a) else a
+
+    if other and other != who.actor:
+        return (run(who.actor), run(other))
+    return run(who.actor)
 
 
 def principals_read(c, principals, row):
@@ -571,9 +582,18 @@ def assistant_room_actor(c, actor, message):
         and not room.get("closed_at")
         and owner == message.get("sender_id")
         and str(owner).startswith("human:")
+        and _signs_in(c, owner)
     ):
         return owner
     return actor
+
+
+def _signs_in(c, person):
+    """Whether the person is on the roster and may sign in now (auth.standing)."""
+    from .auth import standing
+
+    human = H.human(c, H.actor_id(person))
+    return bool(human) and not standing(c, human["id"])
 
 
 def message_readable(c, actor, message, current=False):
@@ -609,6 +629,8 @@ def message_readable(c, actor, message, current=False):
             return False
         return message_readable(c, actor, source)
     try:
+        if _shared_run(c, actor):
+            message, stored = _no_reconcile(message), message
         return meeting_sources(c).message_readable(actor, message) and readable(
             c, actor, message_tasks(c, message, current=bool(stored))
         )
@@ -1092,11 +1114,25 @@ def hosted_owner_reads(c, who, owner, ids):
     return bool(hosted) and readable(c, "bot:" + owner, ids)
 
 
+def _shared_run(c, actor):
+    """Whether `actor` (one, or a person and whom they act as) reads as a run of the shared Assistant (hubdb.RunPrincipal):
+    a wake's reconcile list is then no part of what it reads, checked where it is shown (rooms.scoped_wake)."""
+    shared = H.assistant_actor(c)
+    return any(isinstance(a, H.RunPrincipal) and a == shared for a in (actor if isinstance(actor, tuple) else (actor,)))
+
+
+def _no_reconcile(message):
+    refs = H._json(message.get("refs"), {}) or {}
+    if isinstance(refs, dict) and "reconcile" in refs:
+        return {**message, "refs": {key: value for key, value in refs.items() if key != "reconcile"}}
+    return message
+
+
 def attempt_readable(c, actor, aid, memo=None):
     try:
         return (
             meeting_sources(c).attempt_readable(actor, aid)
-            and readable(c, actor, attempt_tasks(c, aid, memo))
+            and readable(c, actor, carried_tasks(c, aid) if _shared_run(c, actor) else attempt_tasks(c, aid, memo))
             and attempt_pages_readable(c, actor, aid)
         )
     except Problem:

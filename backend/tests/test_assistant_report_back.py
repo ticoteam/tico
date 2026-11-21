@@ -143,8 +143,9 @@ def test_a_call_follow_up_reports_in_its_call_not_in_the_assistant_chat(meet, mo
     call = start_call(meet, room, bots=["ops"])
     join(meet, call["id"], "ben-test")
     _, attempt = assistant_turn(meet, "ben-test", "Have ops find the ship date")
-    # Filed through the call's own route, as Ben: the private follow-up's receipt is his, the first time and on a retry,
-    # and the Assistant reads none. The turn itself (its lease) is what the write lock validates.
+    # Filed through the call's own route, as Ben: the private follow-up's receipt is his, the first time and on a retry;
+    # the Assistant is no party to it, and only Ben's runs read it, as he does. The turn itself (its lease) is what the
+    # write lock validates.
     validated = []
     real = auth_module.validate_identity
     monkeypatch.setattr(auth_module, "validate_identity", lambda c, who: (validated.append(who), real(c, who))[1])
@@ -155,7 +156,7 @@ def test_a_call_follow_up_reports_in_its_call_not_in_the_assistant_chat(meet, mo
     ben = [who for who in validated if who.actor == "human:ben"]
     assert ben and all(who.task_actor == "bot:assistant" for who in ben), validated
     task_id = filed.json()["task_id"]
-    assert meet.get("/api/v2/tasks/" + task_id, headers=headers(attempt["token"])).status_code == 404
+    assert meet.get("/api/v2/tasks/" + task_id, headers=headers(attempt["token"])).status_code == 200
     with meet.app.state.store.read() as c:
         assert not H.task_private_readable(c, "bot:assistant", H.task(c, task_id))
     with meet.app.state.store.transaction() as c:

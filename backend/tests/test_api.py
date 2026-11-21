@@ -159,6 +159,11 @@ def test_a_company_task_for_the_assistant_runs_in_its_own_room_not_as_a_personal
     attempt = claim(api, machine)
     assert attempt["task"]["id"] == task["id"] and attempt["conversation"]["id"] == task["conversation_id"]
     assert "personal" not in attempt and attempt["conversation"]["scope"] != "personal"
+    # A run for nobody keeps the Assistant's company reads and reads no private task.
+    company = post(api, "tasks", {"owner": "ops", "title": "Tidy the wiki", "body": "For all.", "private": False})
+    secret = post(api, "tasks", {"owner": "ops", "title": "Ana's offer", "body": "Mine.", "private": True})
+    get(api, "tasks/" + company["id"], attempt["token"])
+    get(api, "tasks/" + secret["id"], attempt["token"], expected=404)
 
 
 def test_shared_room_membership_updates_and_revokes_history_access(api):

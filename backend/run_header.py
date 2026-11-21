@@ -37,6 +37,7 @@ from . import stage_rules
 from . import store as _store
 from . import task_asks
 from . import task_calls
+from . import task_privacy as _task_privacy
 from . import task_engine as E
 from . import task_reads as _task_reads
 from . import task_requirements as R
@@ -52,6 +53,7 @@ files: Any = _files
 org_rules: Any = _org_rules
 task_reads: Any = _task_reads
 views: Any = _views
+task_privacy: Any = _task_privacy
 Row = dict[str, Any]
 
 log = logging.getLogger(__name__)
@@ -249,7 +251,9 @@ def card(c: Any, auth: Any, who: Any, bot: str, task_id: str, *, making: bool = 
         if entry.get("met"):
             rid = str(entry["requirement_id"])
             # A bound OK's pages are its parties' alone, as its line is (task_asks.hidden_from).
-            private = task_asks.hidden_from(c, who.task_actor or who.actor, rid)
+            principals: Any = task_privacy.actor(who)  # as the run reads (hubdb.read_as)
+            reader: Any = cast(Any, principals)[-1] if isinstance(principals, tuple) else principals
+            private = task_asks.hidden_from(c, reader, rid)
             said_at: Row = entry.get("answer") or {}
             at = str(said_at.get("at") or H.now())
             # A live requirement's from its evaluator; an OK a newer ask replaced, from the pages it showed; a stage's

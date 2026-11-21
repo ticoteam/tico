@@ -2176,7 +2176,10 @@ def needs_still_shown(c, auth, who, items):
     if pages and len(readable_titles(c, auth, who, pages)) < len(set(pages)):
         return False
     oks = [str(item["requirement_id"]) for item in told if (item.get("ask") or {}).get("kind") == "ok"]
-    return not oks or task_asks.parties_to_all(c, who.actor, oks)
+    from . import task_privacy
+
+    principals = task_privacy.actor(who)  # as the run reads (hubdb.read_as)
+    return not oks or task_asks.parties_to_all(c, principals[0] if isinstance(principals, tuple) else principals, oks)
 
 
 def needs_requests_still(c, auth, who, items):

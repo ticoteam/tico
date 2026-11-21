@@ -387,6 +387,222 @@ def test_a_persons_message_routine_turn_stays_the_assistants_and_runs_as_a_perso
     assert attempt["task"]["id"] == task["id"] and attempt["personal"] is True
 
 
+def test_an_assistant_run_reads_a_routine_turn_only_for_the_person_it_works_for(api):
+    """One Assistant serves everyone: Ana's routine turn task is hers (its requester), and her routine's run reads it
+    and no other private task, not even one shared with her; the Assistant's run for Ben, and its manager, read none of
+    hers."""
+    from backend.tests.helpers.api import assign, claim, ready, runner
+
+    set_templates(api, STAFF)
+    turns = {}
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='cpo' WHERE bot='assistant'")
+    for person, inbox in (("ana", "ana@acme.example"), ("ben", "ben@acme.example")):
+        flow = bot_flow(api, "assistant", inbox)
+        prompt = run_to_turn(flow, MAIL)["prompt"]
+        with api.app.state.store.transaction() as c:
+            started = AA.start_turn(
+                c, {"id": "auto_" + person, "flow": flow}, "run_" + person, "draft", "bot:assistant", prompt, None
+            )
+            turns[person] = H.task(c, started["ref"])
+    assert turns["ana"]["requester_id"] == "human:ana" and turns["ben"]["requester_id"] == "human:ben"
+    machine = runner(api)
+    with api.app.state.store.read() as c:
+        held = c.execute(
+            "SELECT generation FROM assignments WHERE bot=?", (H.resolve_bot(c, "assistant")["id"],)
+        ).fetchone()
+        assert not H.task_private_readable(c, "bot:cpo", turns["ana"])  # the Assistant's manager
+    with api.app.state.store.transaction() as c:  # shared with Ana, asked for by Cara
+        shared = H.task_create(c, "human:cara", "Offer", "Ours.", "bot:ops", private=True, readers=["human:ana"])
+    assign(api, machine, "assistant", held["generation"] if held else 0)
+    ready(api, machine, ["assistant"])
+    runs = {}
+    for _ in turns:
+        attempt = claim(api, machine)
+        assert attempt and attempt["personal"] is True, attempt
+        runs[next(p for p, t in turns.items() if t["id"] == attempt["task"]["id"])] = attempt["token"]
+    for person, token in runs.items():
+        other = "ben" if person == "ana" else "ana"
+        assert api.get("/api/v2/tasks/" + turns[person]["id"], headers=headers(token)).status_code == 200
+        assert api.get("/api/v2/tasks/" + turns[other]["id"], headers=headers(token)).status_code == 404
+        listed = api.get("/api/v2/tasks", headers=headers(token)).text
+        assert turns[other]["id"] not in listed
+        # A routine turn reads its own task and no other private one: not even one shared with its person.
+        assert api.get("/api/v2/tasks/" + shared["id"], headers=headers(token)).status_code == 404
+        assert shared["id"] not in listed
+    assert api.get("/api/v2/tasks/" + turns["ana"]["id"], headers=headers("ana-test")).status_code == 200
+
+
+def test_a_routine_turn_reads_the_turn_it_was_woken_for_and_no_other_of_its_persons(api):
+    """Two open turns of Ana's routine: an earlier one that named the Assistant as requester, and a new one hers. Each
+    run reads the turn it was woken for and not the other, the new turn's claim does not name the earlier one, and once
+    Ana may not sign in her turn's run reads nothing."""
+    from backend.tests.helpers.api import assign, claim, ready, runner
+
+    set_templates(api, STAFF)
+    flow = bot_flow(api, "assistant")
+    prompt = run_to_turn(flow, MAIL)["prompt"]
+    with api.app.state.store.transaction() as c:
+        earlier = H.task(
+            c,
+            AA.start_turn(c, {"id": "auto_old", "flow": flow}, "run_old", "draft", "bot:assistant", prompt, None)[
+                "ref"
+            ],
+        )
+        c.execute("UPDATE tasks SET requester_id='bot:assistant' WHERE id=?", (earlier["id"],))  # filed before #4851
+        newer = H.task(
+            c,
+            AA.start_turn(c, {"id": "auto_new", "flow": flow}, "run_new", "draft", "bot:assistant", prompt, None)[
+                "ref"
+            ],
+        )
+        # The earlier turn's routine, as the run that filed it ran it (its wake names run_old): whose inbox that version
+        # works on, Ana's (rooms._routine_person), though the routine works on Ben's now.
+        moved = {**flow, "trigger": {**flow["trigger"], "inbox": "ben@acme.example"}}
+        c.execute(
+            "INSERT INTO automations(id,name,owner_id,trigger_type,enabled,flow,version,created_at,created_by_id,"
+            "updated_at) VALUES('auto_old','Inbox','bot:assistant','message',1,?,2,?,'human:ana',?)",
+            (json.dumps(moved), H.now(), H.now()),
+        )
+        c.execute(
+            "INSERT INTO automation_versions(automation_id,n,actor,created_at,flow,status) "
+            "VALUES('auto_old',1,'human:ana',?,?,'active'),('auto_old',2,'human:ana',?,?,'active')",
+            (H.now(), json.dumps(flow), H.now(), json.dumps(moved)),
+        )
+        c.execute(
+            "INSERT INTO automation_runs(id,automation_id,version,started_at,status) "
+            "VALUES('run_old','auto_old',1,?,'running')",
+            (H.now(),),
+        )
+        # A wake stored before this release listed the earlier turn to reconcile with, and a company task of a bot the
+        # Assistant may not read the activity of.
+        from backend.tests.helpers.api import restrict
+
+        restrict(c, "finance", people=["ana"])
+        hidden = H.task_create(c, "human:ana", "Close the books", "Company.", "bot:finance", private=False, lint=False)
+        wake = c.execute(
+            "SELECT m.id,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE json_extract(m.refs,'$.task')=?",
+            (newer["id"],),
+        ).fetchone()
+        refs = {
+            **json.loads(wake["refs"]),
+            "reconcile": {"with_actor": "bot:assistant", "active": [{"id": earlier["id"]}, {"id": hidden["id"]}]},
+        }
+        c.execute("UPDATE messages SET refs=? WHERE id=?", (json.dumps(refs), wake["id"]))
+        stored = c.execute("SELECT refs FROM messages WHERE id=?", (wake["id"],)).fetchone()[0]
+    machine = runner(api)
+    with api.app.state.store.read() as c:
+        held = c.execute(
+            "SELECT generation FROM assignments WHERE bot=?", (H.resolve_bot(c, "assistant")["id"],)
+        ).fetchone()
+    assign(api, machine, "assistant", held["generation"] if held else 0)
+    ready(api, machine, ["assistant"])
+    runs, keys = {}, {}
+    for n in range(2):
+        attempt = claim(api, machine, key=f"claim-{n}")
+        runs[attempt["task"]["id"]], keys[attempt["task"]["id"]] = attempt, f"claim-{n}"
+    old, new = runs[earlier["id"]], runs[newer["id"]]
+    # A receipt saved before the filter: every copy of the wake in it (message and history, refs and refs_json) names
+    # both again; its replay names neither.
+    with api.app.state.store.transaction() as c:
+        saved = c.execute(
+            "SELECT rowid,response FROM idempotency WHERE operation='/api/v2/jobs/claim' AND key=?",
+            (keys[newer["id"]],),
+        ).fetchone()
+        receipt = json.loads(saved["response"])
+        stale = {"with_actor": "bot:assistant", "active": [{"id": earlier["id"]}, {"id": hidden["id"]}]}
+        for message in [receipt["attempt"]["message"], *receipt["attempt"].get("history", [])]:
+            if message.get("id") == wake["id"]:
+                message["refs"] = {**(message.get("refs") or {}), "reconcile": stale}
+                message["refs_json"] = json.dumps(message["refs"])
+        c.execute("UPDATE idempotency SET response=? WHERE rowid=?", (json.dumps(receipt), saved["rowid"]))
+    replayed = claim(api, machine, key=keys[newer["id"]])
+    with api.app.state.store.read() as c:  # the claim and its replay filter what they show, never the stored wake
+        assert c.execute("SELECT refs FROM messages WHERE id=?", (wake["id"],)).fetchone()[0] == stored
+    for shown in (new, replayed):
+        for named in (earlier["id"], hidden["id"]):
+            assert named not in json.dumps(shown), "the new turn's claim names a task it may not read"
+    for run, own, other in ((old, earlier, newer), (new, newer, earlier)):
+        assert api.get("/api/v2/tasks/" + own["id"], headers=headers(run["token"])).status_code == 200
+        assert api.get("/api/v2/tasks/" + other["id"], headers=headers(run["token"])).status_code == 404
+    # A duplicate it may not read is never named to it: not by a dry run, not by a create's refusal.
+    with api.app.state.store.transaction() as c:
+        twin = H.task_create(c, "human:ben", "Pay run", "Ben's.", "bot:ops", private=False, lint=False)["id"]
+        c.execute(  # an earlier private one the Assistant asked for, filed before #4841
+            "UPDATE tasks SET private=1, requester_id='bot:assistant' WHERE id=?", (twin,)
+        )
+    ask = {"owner": "ops", "title": "Pay run", "body": "Mine."}
+    for path in ("tasks/dry-run", "tasks"):
+        answer = api.post("/api/v2/" + path, json=ask, headers=headers(new["token"]))
+        assert twin not in answer.text, (path, answer.text)
+    with api.app.state.store.transaction() as c:
+        doc = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
+        for person in doc["people"]:
+            if person.get("id") == "ana":
+                person["sign_in"] = False
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(doc),))
+    for run, own in ((new, newer), (old, earlier)):  # the earlier turn too: its routine works on Ana's inbox
+        assert api.get("/api/v2/tasks/" + own["id"], headers=headers(run["token"])).status_code == 404
+
+
+def test_an_earlier_routine_turn_whose_routine_run_cannot_be_found_reads_nothing(api):
+    """An earlier turn named the Assistant as requester; with no run of its routine to say whose inbox it worked on, its
+    person is unknown, so its run reads nothing and is never handed out."""
+    from backend import rooms
+    from backend.tests.helpers.api import assign, claim, ready, runner
+
+    set_templates(api, STAFF)
+    flow = bot_flow(api, "assistant")
+    prompt = run_to_turn(flow, MAIL)["prompt"]
+    with api.app.state.store.transaction() as c:
+        turn = AA.start_turn(c, {"id": "auto_lost", "flow": flow}, "run_lost", "draft", "bot:assistant", prompt, None)
+        c.execute("UPDATE tasks SET requester_id='bot:assistant' WHERE id=?", (turn["ref"],))
+        assert rooms._routine_person(c, H.task(c, turn["ref"])) == ""
+    machine = runner(api)
+    with api.app.state.store.read() as c:
+        held = c.execute(
+            "SELECT generation FROM assignments WHERE bot=?", (H.resolve_bot(c, "assistant")["id"],)
+        ).fetchone()
+    assign(api, machine, "assistant", held["generation"] if held else 0)
+    ready(api, machine, ["assistant"])
+    assert claim(api, machine) is None
+
+
+def test_a_routine_turns_person_comes_from_the_version_its_run_ran_never_the_routine_now(api):
+    from backend import rooms
+
+    now = H.now()
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, "human:ana", "Turn", "x", "bot:ops", private=False, lint=False)
+        c.execute(
+            "INSERT INTO automations(id,name,owner_id,trigger_type,enabled,flow,version,created_at,created_by_id,"
+            "updated_at) VALUES('auto_pin','Inbox','person:cara','message',1,'{}',2,?,'human:cara',?)",
+            (now, now),
+        )
+        c.execute(
+            "INSERT INTO automation_versions(automation_id,n,actor,created_at,flow,status) "
+            "VALUES('auto_pin',1,'human:ana',?,?,'active')",
+            (now, json.dumps({"owner": "person:ana", "trigger": {"type": "message"}})),
+        )
+        c.execute(
+            "INSERT INTO automation_runs(id,automation_id,version,started_at,status) VALUES('run_pin','auto_pin',1,?,'running')",
+            (now,),
+        )
+        c.execute(
+            "INSERT INTO messages(id,conversation_id,sender_id,kind,body,refs,created_at) VALUES(?,?,?,?,?,?,?)",
+            (
+                H.new_id(),
+                task["conversation_id"],
+                H.TICO_ACTOR,
+                "notice",
+                "Run",
+                json.dumps({"automation_run": "run_pin"}),
+                now,
+            ),
+        )
+        assert rooms._routine_person(c, H.task(c, task["id"])) == "human:ana"
+
+
 def test_a_mail_turn_title_names_the_sender_when_the_subject_is_empty():
     about = E._turn_about({"message": {"source": "mail", "from": "jo@acme.example", "from_name": "", "subject": "Re:"}})
     assert about == "jo@acme.example"
