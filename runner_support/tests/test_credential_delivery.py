@@ -496,7 +496,11 @@ class BrowserHost:
 @pytest.mark.parametrize("harness", ["claude"])
 def test_a_website_login_with_a_password_and_2fa_signs_in_and_the_bot_never_sees_either(api, live, vendor, computer):
     tool = post(api, "website-tools", {"name": "Acme Portal", "sites": [SITE], "central_only": True})
-    post(api, f"website-tools/{tool['id']}/accounts", {"username": PORTAL_USER, "password": PASSWORD, "totp": TOTP_KEY})
+    post(
+        api,
+        f"website-tools/{tool['id']}/accounts",
+        {"username": PORTAL_USER, "password": PASSWORD, "totp": TOTP_KEY, "all_bots": True},
+    )
     host = BrowserHost(api, live, vendor)
     try:
         computer.start()
