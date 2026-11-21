@@ -13,12 +13,13 @@ import { TicoChips } from './Chips';
 import { askedFrom, usePageName } from './pageName';
 import { useTicoPower } from './power';
 import { TicoOff } from './TicoOff';
+import { Tracker } from './Tracker';
 
 /* Tico's sheet (system/shell.js ticoPane): the head with the Dot and search (talking to Tico or searching: both start
    here, on the phone's bar too), then Tico's own chat and its composer. The Dot follows
    Tico's runs in the room (Conversation sets it). Tucked, the frame draws its edge with the Dot. While
    Tico is off, the sheet shows that in place of the chat, and the Dot is grey and hollow. Over its box, what to ask
-   Tico about the open page (Chips). */
+   Tico about the open page (Chips). Over the chat, the tasks the person handed off (Tracker). */
 export function TicoSheet() {
   const power = useTicoPower();
   const room = useQuery(ticoRoomQuery);
@@ -35,7 +36,10 @@ export function TicoSheet() {
       {power?.available === false ? (
         <TicoOff canTurnOn={power.can_turn_on} />
       ) : room.data ? (
-        <Conversation id={room.data} variant="tico" page={askedFrom(address, name)} foot={<TicoChips room={room.data} />} />
+        <>
+          <Tracker />
+          <Conversation id={room.data} variant="tico" page={askedFrom(address, name)} foot={<TicoChips room={room.data} />} />
+        </>
       ) : room.isError ? (
         // The grey fault, then the one way out (the kit's empty-state row).
         <div className="chat-body">

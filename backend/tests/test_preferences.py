@@ -16,3 +16,13 @@ def test_send_way_keeps_only_a_way_the_web_menu_offers(api):
     assert get(api, "preferences/compose.send_way")["value"] == "defer:never"
     # Each person keeps their own.
     assert get(api, "preferences/compose.send_way", token="ben-test")["value"] is None
+
+
+def test_tracker_seen_at_keeps_only_a_time_with_a_timezone(api):
+    # Tico's tracker counts what came back since this time, so a value it cannot compare is refused.
+    at = "2026-11-20T10:00:00+00:00"
+    assert post(api, "preferences/ui.tracker_seen_at", {"value": at})["value"] == at
+    for wrong in ("yesterday", "2026-11-20T10:00:00", 1763632800, None):
+        r = api.post("/api/v2/preferences/ui.tracker_seen_at", json={"value": wrong}, headers=headers())
+        assert r.status_code == 422 and "ui.tracker_seen_at" in r.json()["error"]["detail"], (wrong, r.text)
+    assert get(api, "preferences/ui.tracker_seen_at")["value"] == at

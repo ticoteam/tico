@@ -62,6 +62,7 @@ LIST_FILTERS = frozenset(
         "late",
         "after",
         "counts",
+        "exact",
     }
 )
 # `on_behalf_of`, read by the BotOps middleware (above).
@@ -92,6 +93,8 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
             parameters={
                 "counts": "stage: also answer `counts`, the number of tasks these filters select in each stage across "
                 "every page (the rows a reader may not read are never counted). Not with changed_after",
+                "exact": "true: an owner or requester that names nobody answers 422, never the list without that "
+                "filter (a client asking for one person's tasks must not get every task)",
             },
         ),
     )
@@ -129,6 +132,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
         late: bool | None = None,
         after: str | None = None,
         counts: str | None = None,
+        exact: bool = False,
     ):
         """Tasks this reader may read. `pipeline` and `stage` (ids) keep a pipeline's or a stage's tasks;
         `waiting_on` (a person or a bot) keeps the open tasks with a wait on them (waiting_on.py: a person's or a
@@ -168,6 +172,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 member=member,
                 role=role,
                 snoozed=snoozed,
+                exact=exact,
                 # A snoozed task is off every list until its date unless asked for by id, number or filter.
                 by_id=ids is not None or number is not None or bool(re.fullmatch(r"#\d+", q.strip())),
             )

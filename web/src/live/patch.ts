@@ -112,7 +112,8 @@ export function listSeq(list: { cursor?: unknown } | undefined): number {
   return Number.isFinite(n) ? n : -1;
 }
 
-const PAGING = new Set(['limit', 'sort', 'brief', 'offset', 'after', 'snoozed']);
+// `exact` changes only whether an unknown name is refused, never which rows a list holds.
+const PAGING = new Set(['limit', 'sort', 'brief', 'offset', 'after', 'snoozed', 'exact']);
 const isActor = (v: unknown) => typeof v === 'string' && /^(human|bot):/.test(v);
 
 /**

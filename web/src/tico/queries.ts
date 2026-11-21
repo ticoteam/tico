@@ -2,7 +2,8 @@
 // `availability`): it is on when the assistant agent is active; only the owner may turn it on, and not while it is held.
 import { queryOptions } from '@tanstack/react-query';
 import { api } from '@/api/client';
-import { queryClient, quietRoot, write } from '@/data';
+import type { GetPreferenceResponse, Task } from '@/api/schema';
+import { keys, queryClient, quietRoot, write } from '@/data';
 import { readTicoInfo, ticoRoomQuery, type TicoInfo } from '@/conversation';
 import { onRefetch } from '@/live';
 
@@ -45,4 +46,51 @@ export async function turnOnTico(): Promise<string> {
   // On, the assistant's GET opens this person's room: read it again so the chat appears.
   void queryClient.invalidateQueries({ queryKey: ticoRoomQuery.queryKey });
   return answer.state ?? '';
+}
+
+/* ---------------------------------------------------------------- the tracker (Tracker.tsx) */
+
+/** A tracked task's fields: GET /api/v2/tasks brief rows (done_at and closed_at only once set). */
+export type TrackedTask = Pick<Task, 'id' | 'number' | 'title' | 'status' | 'pipeline_id' | 'owner_id' | 'updated_at'> & {
+  done_at?: string | null;
+  closed_at?: string | null;
+};
+interface TrackedList {
+  tasks: TrackedTask[];
+  cursor?: string;
+}
+
+/* Both lists sit under the tasks root, so the stream's tasks events patch them in place (live/patch.ts). They name the
+   person by actor id, never `me`, and send exact: a requester the server does not know answers 422, never every task. */
+const trackedParams = (me: string) => ({ requester: me, status: 'open', snoozed: 'all', exact: 'true', brief: 'true', limit: 500 });
+const backParams = (me: string) => ({ requester: me, status: 'done,closed', sort: 'finished', snoozed: 'all', exact: 'true', brief: 'true', limit: 50 });
+
+const taskList = (params: Record<string, string | number>) =>
+  queryOptions({
+    queryKey: keys.tasks.list(params),
+    queryFn: ({ signal }) => api.get<TrackedList>(`/api/v2/tasks?${new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)]))}`, { signal }),
+  });
+
+/** The open tasks the person asked for (`me`: their actor id). */
+export const trackedQuery = (me: string) => taskList(trackedParams(me));
+
+/** What came back: the tasks the person asked for, most recently finished first. The one read Back counts from;
+    report-back messages can take its place without changing the tracker's groups. */
+export const backQuery = (me: string) => taskList(backParams(me));
+
+const SEEN_KEY = 'ui.tracker_seen_at';
+
+/** When the person last opened the tracker (preference ui.tracker_seen_at); null before the first time. */
+export const trackerSeenQuery = queryOptions({
+  queryKey: ['tico', 'tracker', 'seen'] as const,
+  queryFn: async ({ signal }) => (await api.get<GetPreferenceResponse>(`/api/v2/preferences/${SEEN_KEY}`, { signal })).value as string | null,
+});
+
+/** Opening the tracker: Back starts counting again from `at`. */
+export function markTrackerSeen(at: string): Promise<unknown> {
+  return write({
+    key: trackerSeenQuery.queryKey,
+    optimistic: () => at,
+    send: (idempotencyKey) => api.post(`/api/v2/preferences/${SEEN_KEY}`, { value: at }, { idempotencyKey }),
+  });
 }

@@ -323,6 +323,23 @@ def test_an_unknown_filter_is_refused_not_ignored(api):
     assert get(api, "tasks?owner=bot:ops&status=open")["tasks"] == []  # owner= still filters
 
 
+def test_exact_refuses_a_requester_that_names_nobody_and_the_tracker_reads_only_its_person(api):
+    """Tico's tracker reads the open tasks one person asked for: requester=<their actor id>&exact=true. A requester the
+    roster does not know (the literal `me`) answers 422, never the list without that filter (#4779)."""
+    mine = post(api, "tasks", {"owner": "ben", "title": "Draft the agenda", "body": "Please."})
+    finished = post(api, "tasks", {"owner": "ben", "title": "Book the room", "body": "Please."})
+    post(api, f"tasks/{finished['id']}/move", {"to": "closed"})
+    theirs = post(api, "tasks", {"owner": "ana", "title": "Order lunch", "body": "Please."}, token="ben-test")
+    r = api.get("/api/v2/tasks?requester=me&status=open&exact=true", headers=headers())
+    assert r.status_code == 422 and r.json()["error"]["code"] == "requester", r.text
+    r = api.get("/api/v2/tasks?owner=nobody-here&exact=true", headers=headers())
+    assert r.status_code == 422 and r.json()["error"]["code"] == "owner", r.text
+    # Without exact the unknown name still drops the filter: the reason the tracker always sends it.
+    assert theirs["id"] in {t["id"] for t in tasks(api, "requester=me&status=open")["tasks"]}
+    tracked = tasks(api, "requester=human:ana&status=open&snoozed=all&exact=true")["tasks"]
+    assert [t["id"] for t in tracked] == [mine["id"]]
+
+
 def test_every_filter_the_list_takes_still_answers(api):
     from backend import task_list_routes
 
@@ -360,6 +377,7 @@ def test_every_filter_the_list_takes_still_answers(api):
         "late": "false",
         "after": base64.urlsafe_b64encode(json.dumps([0, 1, "", ""]).encode()).decode().rstrip("="),  # a queue key
         "counts": "stage",
+        "exact": "true",
         "on_behalf_of": "default",
     }
     assert set(values) == task_list_routes.LIST_FILTERS | {"on_behalf_of"}
