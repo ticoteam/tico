@@ -646,7 +646,9 @@ def needs_you_show(api, args):
         by_kind[item.get("kind")] = by_kind.get(item.get("kind"), 0) + 1
     shown = [item for item in items if not args.get("kind") or item.get("kind") == args["kind"]]
     limit = 20 if args.get("limit") is None else args["limit"]
-    return {"total": len(items), "by_kind": by_kind, "items": shown[:limit], "more": max(0, len(shown) - limit)}
+    # An item's line is what its ask is about when the server says (`about`: a page's title, a payee and amount).
+    listed = [{**item, "line": item.get("about") or item.get("line")} for item in shown[:limit]]
+    return {"total": len(items), "by_kind": by_kind, "items": listed, "more": max(0, len(shown) - limit)}
 
 
 @tool(

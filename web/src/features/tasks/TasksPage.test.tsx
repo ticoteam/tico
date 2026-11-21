@@ -619,7 +619,10 @@ describe('Flow @s5 @s112', () => {
         show(<FlowPage />, '/flow');
         expect((await screen.findByTitle('Pay 540.00 USD to Figma by ach')).closest('a')?.getAttribute('href')).toBe('/flow/10');
         expect(screen.queryByTitle('OK a Finance action')).toBeNull();
-        expect(queryClient.getQueryData<{ count: number }>(['flow'])?.count).toBe(1);
+        // One row, named by the ask's `about`, keeping its oldest item's own fields (no ask: a mention's).
+        const flow = queryClient.getQueryData<{ count: number; items: { about?: string; ask?: unknown }[] }>(['flow']);
+        expect(flow?.count).toBe(1);
+        expect(flow?.items[0]?.ask).toBeUndefined();
         cleanup();
       } finally {
         delete document.documentElement.dataset.layout;

@@ -2263,7 +2263,7 @@ def needs_summary(c, auth, who, task_view, limit):
                 "id": str(it["id"]),
                 "kind": it["kind"],
                 "task_id": it.get("task_id"),
-                "line": _clip(it.get("about") or it.get("line"), 80),
+                "line": it.get("about") or _clip(it.get("line"), 80),  # `about` is bounded where it is made
                 "since": created,
                 "age_days": round(age_days(created, now), 1),
             }

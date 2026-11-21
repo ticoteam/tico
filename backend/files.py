@@ -631,12 +631,12 @@ def readable_titles(c, auth, who, pinned):
     pinned = sorted({(str(f), int(v)) for f, v in pinned})
     if not pinned:
         return {}
-    denied = page_ref_denials(c, auth, who, [f"page:{f}@{v}" for f, v in pinned])
     rows = {
         r["id"]: r
         for r in c.execute(f"SELECT * FROM bot_files WHERE id IN {ANY_OF}", (json.dumps([f for f, _ in pinned]),))
     }
-    prime_visible(c, list(rows.values()))
+    prime_visible(c, list(rows.values()))  # first: page_ref_denials asks file_visible of a restricted page
+    denied = page_ref_denials(c, auth, who, [f"page:{f}@{v}" for f, v in pinned])
     stored = {
         (r["file_id"], r["version"]): r
         for r in c.execute(

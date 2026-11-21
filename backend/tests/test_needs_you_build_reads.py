@@ -126,6 +126,16 @@ def more(store, pages, questions, idle, start=0):
             Q.ask_in_chat(c, f"bot:{BOTS[k]}", ANA, f"Which tone should note {k} take?")
 
 
+def restrict(store):
+    """Every page an audience of its own (Ana's), so each title shown passes a restricted page's audience check."""
+    with store.transaction() as c:
+        c.execute(
+            "INSERT OR IGNORE INTO pages(file_id, audience, created_at, updated_at) "
+            "SELECT id, ?, ?, ? FROM bot_files WHERE mime='text/html'",
+            (json.dumps({"people": [ANA]}), H.now(), H.now()),
+        )
+
+
 def build(api, person, how, **kw):
     """(the person's Needs you, the statements it took): `how` "snapshot" in one read transaction, as the route
     reads it; "rows" with no snapshot cache (read_cache.cache gives None, as outside a snapshot), where nothing is
@@ -166,9 +176,13 @@ def test_more_pages_questions_and_idle_bots_read_no_more_statements(api):
     """A build's statements do not grow with its items: six times the pages, ❓s and bots that cannot run read the same
     statements, give or take a chunk."""
     store = company(api, pages=3, questions=2, idle=2)
+    restrict(store)
     few_items, few = build(api, ANA, "snapshot")
     more(store, pages=15, questions=12, idle=12, start=3)
+    restrict(store)
     many_items, many = build(api, ANA, "snapshot")
+    titled = [i for i in many_items if (i.get("ask") or {}).get("page") and i.get("about")]
+    assert len(titled) >= 18, len(titled)  # each spec's title shown, through its page's audience
     assert len(many_items) >= len(few_items) + 20
     assert many <= few + 3, (few, many)
     assert many <= 150, many

@@ -683,7 +683,7 @@ export const flowQuery = queryOptions({
       const at = seen.get(t.id);
       if (at !== undefined) {
         const row = items[at];
-        if (row && !row.about && it.about) items[at] = { ...row, about: it.about, ...(it.ask && { ask: { kind: it.ask.kind, by: it.ask.asked_by ?? null, shows: it.ask.shows ?? [] } }) };
+        if (row && !row.about && it.about) items[at] = { ...row, about: it.about };
         continue;
       }
       seen.set(t.id, items.length);

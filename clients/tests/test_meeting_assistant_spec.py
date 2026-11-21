@@ -97,3 +97,22 @@ def test_each_assistant_command_calls_its_tool(monkeypatch, argv, tool, sent):
     name, args = run_line(argv, monkeypatch)["tools"][0]
     assert name == tool
     assert args == {**sent, "operation_id": None}
+
+
+def test_needs_you_show_lines_an_item_by_what_its_ask_is_about():
+    """tico_needs_you_show reads /needs-you: an item the server says what it is about (`about`: a page's title, a
+    Finance OK's payee and amount, for that reader) is listed by it; any other by its own line."""
+    from clients.commands.assistant import needs_you_show
+
+    class Api:
+        def get(self, path):
+            assert path == "needs-you"
+            return {
+                "items": [
+                    {"kind": "ask", "line": "OK this in Finance?", "about": "Pay 540.00 USD to Figma by ach"},
+                    {"kind": "mention", "line": "Can you look?"},
+                ]
+            }
+
+    out = needs_you_show(Api(), {})
+    assert [item["line"] for item in out["items"]] == ["Pay 540.00 USD to Figma by ach", "Can you look?"]
