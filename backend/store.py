@@ -1239,6 +1239,11 @@ class Store:
                 c.provenance_start = provenance_clock.current(c)
                 since = events.mark(c) if notify else None
                 yield c
+                # Work a write queued to run once, last, inside it (files._ListedAgain).
+                queued = getattr(c, "after_commit", [])
+                for early in [hook for hook in queued if getattr(hook, "before_commit", False)]:
+                    queued.remove(early)
+                    early()
                 message_links.refresh_dirty(c)
                 H.owed_sync(c)
                 if notify:

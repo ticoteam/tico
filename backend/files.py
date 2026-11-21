@@ -118,10 +118,35 @@ def task_scoped(row):
     return bool(row["task_id"]) and row["scope"] == "task:" + row["task_id"] and row["locator"] == "tico_blob"
 
 
+class _ListedAgain:
+    """The tasks one write lists pages again on, flushed once before it commits (store.transaction runs a
+    `before_commit` hook): one change per task and page, and none where the write already logged that one (a link it
+    added does, backend/events.py)."""
+
+    before_commit = True
+
+    def __init__(self, c: sqlite3.Connection) -> None:
+        self.c, self.pages = c, dict[str, set[str]]()
+        self.start = c.execute("SELECT coalesce(max(seq),0) FROM changes").fetchone()[0]
+
+    def __call__(self) -> None:
+        now = H.now()
+        for fid, tasks in self.pages.items():
+            for task in sorted(tasks):
+                if not self.c.execute(
+                    "SELECT 1 FROM changes WHERE seq>? AND topic='tasks' AND kind='files' AND subject_id=? AND ref=?",
+                    (self.start, task, fid),
+                ).fetchone():
+                    self.c.execute(
+                        "INSERT INTO changes(topic,kind,subject_id,ref,created_at) VALUES('tasks','files',?,?,?)",
+                        (task, fid, now),
+                    )
+
+
 def list_again(c: sqlite3.Connection, fid: str, *, own: bool = False) -> None:
     """Each task a page is on through a link or a pin lists it again after an archive flag changes; `own` adds the
-    task it belongs to, which a change to the file's own flag already reaches (backend/events.py). The page is the
-    change's ref, as a link's is, so only readers who may see the page hear of it."""
+    task it belongs to. The page is the change's ref, as a link's is, so only readers who may see the page hear of
+    it. The write logs each task once, however many flags it changes (_ListedAgain)."""
     sql = (
         "SELECT substr(target,6) FROM page_links WHERE page_id=? AND target LIKE 'task:%' "
         "UNION SELECT substr(place,6) FROM pins WHERE item=? AND place LIKE 'task:%'"
@@ -130,23 +155,15 @@ def list_again(c: sqlite3.Connection, fid: str, *, own: bool = False) -> None:
     if own:
         sql += " UNION SELECT task_id FROM bot_files WHERE id=? AND task_id IS NOT NULL"
         args.append(fid)
-    now = H.now()
-    for (task,) in c.execute(sql, args).fetchall():
-        c.execute(
-            "INSERT INTO changes(topic,kind,subject_id,ref,created_at) VALUES('tasks','files',?,?,?)", (task, fid, now)
-        )
-
-
-def back_again(c: sqlite3.Connection, fid: str) -> None:
-    """After an archive flag clears: each task it is on through a link or a pin lists it again, once, when neither
-    its file's flag nor its page's holds it back any more (a task lists it archived while either does)."""
-    held = c.execute(
-        "SELECT 1 FROM bot_files f LEFT JOIN pages p ON p.file_id=f.id AND p.deleted_at IS NULL "
-        "WHERE f.id=? AND (f.archived=1 OR p.archived=1)",
-        (fid,),
-    ).fetchone()
-    if not held:
-        list_again(c, fid)
+    hooks = getattr(c, "after_commit", None)
+    pending = next((h for h in hooks if isinstance(h, _ListedAgain)), None) if hooks is not None else None
+    if pending is None:
+        pending = _ListedAgain(c)
+        if hooks is None:  # a plain connection, outside store.transaction: now
+            pending.pages[fid] = {task for (task,) in c.execute(sql, args)}
+            return pending()
+        hooks.append(pending)
+    pending.pages.setdefault(fid, set()).update(task for (task,) in c.execute(sql, args))
 
 
 def removed_event(c, task_id, actor, fid, title, *, back=False):
@@ -1695,7 +1712,7 @@ class Files:
             "UPDATE bot_files SET " + ",".join(k + "=?" for k in fields) + " WHERE id=?", (*fields.values(), row["id"])
         )
         if changed and row["archived"]:
-            back_again(c, row["id"])
+            list_again(c, row["id"])
         return c.execute("SELECT * FROM bot_files WHERE id=?", (row["id"],)).fetchone(), created, changed
 
     @staticmethod

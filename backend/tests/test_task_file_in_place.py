@@ -309,8 +309,8 @@ def heard_from(api, change):
 
 
 def once(rows, fid, *tasks):
-    """Each of `tasks` heard of the page `fid` exactly once in `rows` (heard_from)."""
-    assert sorted((r for r in rows if r[0] in tasks), key=str) == sorted(((task, fid) for task in tasks), key=str)
+    """Each of `tasks` heard of the page `fid` exactly once in `rows` (heard_from), as a change about that page."""
+    assert sorted(task for task, ref in rows if ref == fid and task in tasks) == sorted(tasks)
 
 
 def archive(api, kind, fid, archived):
@@ -358,16 +358,19 @@ def test_a_page_archived_by_either_flag_is_listed_again_on_every_task_it_is_on(a
     one_page = page_links.LINKS_SQL.split("?")[0]  # its links read page by page, not in the listing's one batch
     assert not [s for s in statements if s.startswith(one_page)]
 
-    # A new version brings it back, each task hearing once: the first is archived as a page and a file, the second
-    # as a file only.
+    # A new version logs one change per task, whichever flags it clears. Republished with --task, the brief (archived
+    # both ways) gains a link to the pinned task; the policy, written again as a file, comes back from its file's
+    # archive while its page's stays.
     brief, policy = pages
     assert heard(edit("files", brief, True))
-    assert heard(edit("pages", policy, False))
     assert heard(edit("files", policy, True))
-    for fid, name in pages.items():
-        body = {"page": fid, "name": name, "text": "<p>New</p>"}
-        once(heard(lambda: api.post("/api/v2/pages", json=body, headers=headers(token))), fid, linked, pinned)
-    assert not any(f["archived"] for f in get(api, f"tasks/{home}/files")["files"])
+    body = {"page": brief, "name": "brief.html", "text": "<p>New</p>", "task": pinned}
+    once(heard(lambda: api.post("/api/v2/pages", json=body, headers=headers(token))), brief, linked, pinned)
+    rewrite = {"name": "policy.html", "text": "<p>New</p>", "task": home, "scope": "bot"}
+    once(heard(lambda: publish(agent, rewrite)), policy, linked, pinned)
+    files = {f["id"]: f for f in get(api, f"tasks/{home}/files?all=1")["files"]}
+    assert not files[brief]["archived"]
+    assert (files[policy]["file_archived"], files[policy]["page_archived"]) == (False, True)
 
 
 def test_a_document_written_again_lists_its_archived_page_again_on_every_task_it_is_on(api):
@@ -390,5 +393,5 @@ def test_a_document_written_again_lists_its_archived_page_again_on_every_task_it
     for flags in (("pages",), ("pages", "files")):  # archived as a page, then as a page and a file: heard once
         for kind in flags:
             assert archive(api, kind, fid, True).status_code == 200
-        once(heard_from(api, lambda: write(len(flags))), fid, linked, pinned)
+        once(heard_from(api, lambda: write(len(flags))), fid, home, linked, pinned)
     assert not listed(api, home)[fid]["archived"]

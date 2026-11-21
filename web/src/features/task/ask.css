@@ -2,6 +2,7 @@
 .answer.askcard{position:relative;padding:var(--s-2h) var(--s-2) var(--s-2) var(--s-3h)}
 .askcard-top{display:flex;align-items:center;gap:var(--s-2);min-height:24px;padding-right:var(--s-1)}
 .askcard-top .an-name{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.askcard-top .askcard-note{max-width:45%}
 .askcard .an-row{justify-content:flex-end;margin-top:var(--s-1h)}
 .askcard-note{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
 /* on a computer, what answering does sits at the left of the buttons' row (AskCard.tsx); a long one shortens, wherever it is */

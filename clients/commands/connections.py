@@ -361,7 +361,8 @@ def _grant_view(bot, access_row, name):
 )
 def repo_show(api, args):
     person = _as_person(api)
-    row = _repo_row(person.get("repositories"), args["repository"])
+    listing = person.get("repositories")
+    row = _repo_row(listing, args["repository"])
     if not row:
         raise _not_listed(args["repository"])
     name = row["full_name"]
@@ -423,8 +424,7 @@ def repo_grant(api, args):
     flags = {k: args[k] for k in GRANT_FLAGS if args.get(k) is not None}
     if access == "read" and any(flags.values()):
         raise ValueError("Running workflows and editing workflow files need write access")
-    listing = person.get("repositories")
-    row = _repo_row(listing, args["repository"])
+    row = _repo_row(person.get("repositories"), args["repository"])
     if not row:
         raise _not_listed(args["repository"])
     name = row["full_name"]
