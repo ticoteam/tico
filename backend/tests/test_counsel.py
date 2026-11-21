@@ -1779,6 +1779,17 @@ def test_a_reassigned_clerk_task_keeps_one_ask_and_asks_someone_within_reach(api
     assert get(api, f"rules/{first['id']}")["status"] == "retired"
     with api.app.state.store.read() as c:
         assert task_asks.standing(c, asked.json()["requirement_id"]) == "withdrawn"
+
+    # A list reads its drafts' clerk tasks in one go, never one read per row.
+    def per_row(c, rule_id):
+        raise AssertionError("a list read a clerk task one row at a time")
+
+    one_by_one = O.bound_task
+    monkeypatch.setattr(O, "bound_task", per_row)
+    listed = get(api, "rules?status=suggested&limit=100", token="ben-test")["rules"]
+    mine = next(r for r in listed if r["id"] == second["id"])
+    assert mine["bound"] is True and mine["clerk_task"] == made["task_id"]
+    monkeypatch.setattr(O, "bound_task", one_by_one)
     # Ben sets the draft aside instead: its OK stops waiting, so no Approve is left to fail. Retire does the same.
     post(api, f"rules/{second['id']}/skip", {"version": second["version"]}, token="ben-test")
     with api.app.state.store.read() as c:

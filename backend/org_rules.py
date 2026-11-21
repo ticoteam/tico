@@ -754,10 +754,37 @@ def _readable_task(c, auth, who, task_id):
     return task_id
 
 
-def _bound_view(c, auth, who, row):
-    """A clerk's draft (`bound`): added only by its OK on its task, whose id (`clerk_task`) only its readers get."""
-    task = bound_task(c, row["id"]) if row["status"] == "suggested" else None
-    return {"bound": bool(task), "clerk_task": _readable_task(c, auth, who, task)}
+def bound_tasks(c, rule_ids):
+    """The clerk task of each of these rules that has one, in one read (a list's chunk; `bound_task` for one)."""
+    ids = ["org_rule:" + r for r in rule_ids]
+    if not ids:
+        return {}
+    marks = ",".join("?" * len(ids))
+    rows = c.execute(
+        f"SELECT target, json_extract(detail,'$.clerk_task') FROM events WHERE action='org_rule.added' "
+        f"AND target IN ({marks})",
+        ids,
+    ).fetchall()
+    return {str(target)[len("org_rule:") :]: task for target, task in rows if task}
+
+
+def _bound_view(c, auth, who, row, ctx):
+    """A clerk's draft (`bound`): added only by its OK on its task, whose id (`clerk_task`) only its readers get. A list
+    reads its chunk's clerk tasks once (`_renderer` puts them in ctx["bound"]) and checks each task once."""
+    if row["status"] != "suggested":
+        return {"bound": False, "clerk_task": None}
+    known = ctx.get("bound")
+    task = (
+        known.get(row["id"])
+        if known is not None and row["id"] in ctx.get("bound_read", ())
+        else bound_task(c, row["id"])
+    )
+    if not task:
+        return {"bound": False, "clerk_task": None}
+    readable = ctx.setdefault("readable", {})
+    if task not in readable:
+        readable[task] = _readable_task(c, auth, who, task)
+    return {"bound": True, "clerk_task": readable[task]}
 
 
 def view(c, auth, who, row, ctx, dues=None, quote=True):
@@ -780,7 +807,7 @@ def view(c, auth, who, row, ctx, dues=None, quote=True):
         "if_broken": row["if_broken"],
         "reviewer": reviewer,
         "exact_check": row["exact_check"],
-        **_bound_view(c, auth, who, row),
+        **_bound_view(c, auth, who, row, ctx),
         "status": row["status"],
         "suggested_by": row["suggested_by"],
         "decided_by": row["decided_by"],
@@ -1874,6 +1901,9 @@ def _renderer(c, auth, who, ctx):
 
     def render(chunk):
         dues = D.due_rows(c, [r["id"] for r in chunk])
+        suggested = [r["id"] for r in chunk if r["status"] == "suggested"]
+        ctx.setdefault("bound", {}).update(bound_tasks(c, suggested))
+        ctx.setdefault("bound_read", set()).update(suggested)
         return [view(c, auth, who, r, ctx, dues.get(r["id"], [])) for r in chunk]  # view hides a task's dates
 
     return render
