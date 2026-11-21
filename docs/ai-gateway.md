@@ -358,9 +358,9 @@ that started a job can read it.
 One charge per shot: before a video is sent, the server writes down its shot (who asks, the card's stage visit, the
 input and the shot name) and sends that key to the Gateway as the Idempotency-Key. Asking for the same shot again answers
 the same job without a second call, even when the Gateway or the budget would refuse a new one. Only a certain refusal
-lets a shot be sent again. When the outcome is unknown (no answer, a provider timeout, a restart mid-call) the shot is
-never sent again: the request is refused with `reconcile_shot`, and one question on the task from BotOps asks the
-person it falls to to reconcile it, listing every such shot. A shot a restart left unanswered is asked about within minutes, with no
+(by status and code) lets a shot be sent again. When the outcome is unknown (no answer, a provider timeout, a restart mid-call) the shot is
+never sent again: the request is refused with `reconcile_shot`, and the task gets one sub-task, "Reconcile shots",
+for the person it falls to, listing every such shot; closing it reconciles them. A shot a restart left unanswered is asked about within minutes, with no
 request needed. A request with no shot name outside a task is keyed to its own Idempotency-Key (one without is refused),
 and a retry under the same key is the same shot even after the task moved on; the same key with another video is a
 409 `idempotency_conflict`. A new take needs a new shot name.

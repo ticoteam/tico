@@ -89,7 +89,7 @@ overwritten), beside a sidecar `.json`, and the answer gives its seconds and cos
 save it then. A video costs by the second at the catalog's price (`tico gateway catalog video`), held when it starts and
 charged when it ends. Ask for a video only when a picture will not do. Name each shot with `--shot`: the same shot
 is made once (asking again answers the same job), and one the Gateway never confirmed is never sent again; it is
-refused with `reconcile_shot` and a person is asked on your task to reconcile it. A new take needs a new shot name.
+refused with `reconcile_shot` and a person gets a "Reconcile shots" sub-task on your task. A new take needs a new shot name.
 
 Images and videos are refused with `video_budget_reached` when the company's Video production budget is at its
 cutoff; say so and carry on without.

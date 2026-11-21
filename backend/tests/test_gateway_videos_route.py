@@ -7,6 +7,7 @@ import json
 import urllib.error
 
 from backend import paid_renders
+from backend import task_relations as TR
 from backend.store import H
 from backend.tests.helpers.held_runs import botops
 from backend.tests.helpers.api import assign, claim, headers, post, ready, runner
@@ -105,10 +106,9 @@ def test_a_refused_video_says_the_gateways_reason(api, monkeypatch):
     error = refused.json()["error"]
     assert refused.status_code == 503 and error["code"] == "gateway_video_failed", refused.text
     assert error["detail"] == f"Video failed: http: {REFUSAL}", refused.text
-    # A 5xx that gives no reason of its own may have started (and charged) the video: never sent again.
     monkeypatch.setattr(G, "video_submit", lambda *a: (502, {}, "http"))
     refused = api.post("/api/v2/gateway/videos", json={"prompt": "a kettle"}, headers=headers("ana-test"))
-    assert refused.json()["error"]["code"] == "reconcile_shot", refused.text
+    assert refused.json()["error"]["detail"] == "Video failed: http", refused.text
 
 
 def test_the_gateway_client_keeps_a_refusals_reason_trimmed_to_300_characters():
@@ -164,15 +164,26 @@ def turn(api, with_botops=True):
     return task, claim(api, r)["token"]
 
 
-def reconcile_asks(api, task):
-    """The open reconcile questions on the card: (person, first line, the shots its text names)."""
+def reconcile_tasks(api, card):
+    """The card's open "Reconcile shots" tasks: (owner, the shot names its text lists, one per line)."""
     with api.app.state.store.read() as c:
-        rows = c.execute(
-            "SELECT q.person_id, q.line, m.body FROM question_marks q JOIN messages m ON m.id=q.message_id "
-            "WHERE q.task_id=? AND q.cleared_at IS NULL AND q.line LIKE 'Reconcile%'",
-            (task["id"],),
+        children = c.execute(
+            "SELECT DISTINCT json_extract(e.detail, '$.child') FROM events e JOIN tasks t "
+            "ON t.id=json_extract(e.detail, '$.child') WHERE e.action=? AND e.target=? AND t.status='open'",
+            (paid_renders.RECONCILE, card["id"]),
         ).fetchall()
-    return [(person, line, [t[2:] for t in body.splitlines() if t.startswith("- ")]) for person, line, body in rows]
+        found = []
+        for (child,) in children:
+            task = c.execute("SELECT owner_id, title FROM tasks WHERE id=?", (child,)).fetchone()
+            body = c.execute(
+                "SELECT m.body FROM messages m JOIN tasks t ON t.conversation_id=m.conversation_id WHERE t.id=? "
+                "ORDER BY m.rowid LIMIT 1",
+                (child,),
+            ).fetchone()[0]
+            assert task["title"] == "Reconcile shots" and TR.parent_of(c, child) == card["id"]
+            names = [line[2:].split(": shot ")[0] for line in body.splitlines() if line.startswith("- ")]
+            found.append((task["owner_id"], names))
+    return found
 
 
 def video(api, token, body, key=None):
@@ -204,7 +215,7 @@ def test_a_shot_whose_answer_was_lost_is_never_sent_again_and_asks_once_to_recon
     assert sent[0].startswith("shot_")  # the shot key is the Gateway's Idempotency-Key
     for refused in (first, again):
         assert (refused.status_code, refused.json()["error"]["code"]) == (409, "reconcile_shot"), refused.text
-    assert reconcile_asks(api, task) == [("human:ana", "Reconcile 1 shot", ["a kettle on the stove, steam"])]
+    assert reconcile_tasks(api, task) == [("human:ana", ["a kettle on the stove, steam"])]
 
 
 def test_a_started_shot_answers_its_job_again_and_one_cut_off_by_a_restart_is_reconciled(api, monkeypatch):
@@ -232,7 +243,7 @@ def test_a_started_shot_answers_its_job_again_and_one_cut_off_by_a_restart_is_re
     paid_renders._IN_FLIGHT.clear()
     refused = api.post("/api/v2/gateway/videos", json=take, headers=headers(token, "four"))
     assert (refused.status_code, refused.json()["error"]["code"]) == (409, "reconcile_shot"), refused.text
-    assert len(sent) == 2 and reconcile_asks(api, task) == [("human:ana", "Reconcile 1 shot", ["Kettle wide"])]
+    assert len(sent) == 2 and reconcile_tasks(api, task) == [("human:ana", ["Kettle wide"])]
     # A refusal charged nothing, so that shot may be sent again.
     monkeypatch.setattr(G, "video_submit", lambda *a: (422, {}, "invalid"))
     retake = {**body, "shot": "Kettle top"}
@@ -251,7 +262,7 @@ def test_a_gateway_unavailable_answer_is_unknown_and_asked_about_once(api, monke
     body = {"prompt": "a kettle", "shot": "Kettle pour"}
     for key in ("one", "two"):
         assert video(api, token, body, key).json()["error"]["code"] == "reconcile_shot"
-    assert len(sent) == 1 and reconcile_asks(api, task) == [("human:ana", "Reconcile 1 shot", ["Kettle pour"])]
+    assert len(sent) == 1 and reconcile_tasks(api, task) == [("human:ana", ["Kettle pour"])]
 
 
 def test_the_sweep_asks_about_a_shot_a_restart_left_sent_with_no_request(api, monkeypatch):
@@ -271,30 +282,7 @@ def test_the_sweep_asks_about_a_shot_a_restart_left_sent_with_no_request(api, mo
         assert paid_renders.sweep(c) == 1
     with store.transaction() as c:
         assert paid_renders.sweep(c) == 0
-    assert len(sent) == 1 and reconcile_asks(api, task) == [("human:ana", "Reconcile 1 shot", ["Kettle wide"])]
-
-
-def test_unknown_shots_share_one_question_and_leave_the_agents_own_question_open(api, monkeypatch):
-    connect(api)
-    task, token = turn(api)
-    own = api.post(
-        f"/api/v2/tasks/{task['id']}/questions",
-        json={"to": "ana", "text": "Which tone should the launch video take?"},
-        headers=headers(token),
-    )
-    assert own.status_code == 200, own.text
-    monkeypatch.setattr(G, "video_submit", lambda *a: (0, {}, "unreachable"))
-    for shot in ("Kettle wide", "Kettle top"):
-        assert video(api, token, {"prompt": "a kettle", "shot": shot}).status_code == 409
-    assert reconcile_asks(api, task) == [("human:ana", "Reconcile 2 shots", ["Kettle wide", "Kettle top"])]
-    with api.app.state.store.read() as c:
-        opened = c.execute(
-            "SELECT line FROM question_marks WHERE task_id=? AND cleared_at IS NULL ORDER BY created_at", (task["id"],)
-        ).fetchall()
-    assert [row[0] for row in opened] == [
-        "Which tone should the launch video take?",
-        "Reconcile 2 shots",
-    ]
+    assert len(sent) == 1 and reconcile_tasks(api, task) == [("human:ana", ["Kettle wide"])]
 
 
 def test_a_started_shot_is_answered_again_without_the_send_checks(api, monkeypatch):
@@ -323,7 +311,7 @@ def test_the_reconcile_question_goes_to_the_pipelines_person(api, monkeypatch):
         c.execute("UPDATE tasks SET human_id=NULL WHERE id=?", (task["id"],))
     monkeypatch.setattr(G, "video_submit", lambda *a: (0, {}, "unreachable"))
     assert video(api, token, {"prompt": "a kettle", "shot": "Kettle wide"}).status_code == 409
-    assert reconcile_asks(api, task) == [("human:ben", "Reconcile 1 shot", ["Kettle wide"])]
+    assert reconcile_tasks(api, task) == [("human:ben", ["Kettle wide"])]
 
 
 def test_an_unnamed_video_outside_a_card_is_keyed_to_its_request(api, monkeypatch):
@@ -357,39 +345,6 @@ def test_a_retry_after_the_card_moved_on_is_the_same_shot(api, monkeypatch):
     assert len(sent) == 1
 
 
-def test_the_sweep_finds_a_resent_shot_and_asks_later_when_nobody_could(api, monkeypatch):
-    connect(api)
-    task, token = turn(api, with_botops=False)
-    own = api.post(
-        f"/api/v2/tasks/{task['id']}/questions",
-        json={"to": "ana", "text": "Which tone should the launch video take?"},
-        headers=headers(token),
-    )
-    assert own.status_code == 200, own.text
-    store = api.app.state.store
-    # Refused once, then sent again under the same key and cut off by a restart, long ago.
-    body = {"prompt": "a kettle", "shot": "Kettle wide"}
-    monkeypatch.setattr(G, "video_submit", lambda *a: (422, {}, "invalid"))
-    assert video(api, token, body).status_code == 422
-    with monkeypatch.context() as stopped:
-        stopped.setattr(paid_renders, "end", lambda *a: None)
-        monkeypatch.setattr(G, "video_submit", lambda *a: (202, {"id": JOB, "status": "queued"}, ""))
-        assert video(api, token, body).status_code == 202
-    paid_renders._IN_FLIGHT.clear()
-    with store.transaction() as c:
-        c.execute("UPDATE events SET created_at=? WHERE action LIKE 'paid_render.%'", (H.shift(H.now(), days=-3),))
-    # No BotOps: nobody asks yet (never the agent that rendered), and the shot stays unknown.
-    with store.transaction() as c:
-        assert paid_renders.sweep(c) == 1
-    assert reconcile_asks(api, task) == []
-    botops(api)
-    with store.transaction() as c:
-        assert paid_renders.sweep(c) == 1  # BotOps can ask now
-    with store.transaction() as c:
-        assert paid_renders.sweep(c) == 0
-    assert reconcile_asks(api, task) == [("human:ana", "Reconcile 1 shot", ["Kettle wide"])]
-
-
 def unknown_now(api, token, shot, monkeypatch):
     monkeypatch.setattr(G, "video_submit", lambda *a: (0, {}, "unreachable"))
     assert video(api, token, {"prompt": "a kettle", "shot": shot}).json()["error"]["code"] == "reconcile_shot"
@@ -398,11 +353,14 @@ def unknown_now(api, token, shot, monkeypatch):
 def test_only_certain_refusals_let_a_shot_be_sent_again(api, monkeypatch):
     connect(api)
     _, token = turn(api)
-    cases = [
+    cases = [  # by status and code only: a reason that comes with it changes nothing
         ((503, {}, "unconfigured"), 503, 2),  # refused before anything was sent
+        ((502, {}, "auth"), 503, 2),
+        ((502, {"detail": "No audio-free mode"}, "http"), 503, 2),
         ((504, {"detail": "The provider took too long"}, "http"), 409, 1),
         ((503, {"detail": "The provider timed out"}, "provider_timeout"), 409, 1),
         ((503, {}, "unavailable"), 409, 1),
+        ((502, {"detail": "An answer that could not be read"}, "unreadable"), 409, 1),
     ]
     for n, (answer, status, sends) in enumerate(cases):
         sent = []
@@ -446,8 +404,10 @@ def test_a_shot_sent_again_after_a_refusal_keeps_its_first_visit_and_name(api, m
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE visits SET id='visit-moved' WHERE task_id=? AND left_at IS NULL", (task["id"],))
     monkeypatch.setattr(G, "video_submit", lambda *a: (0, {}, "unreachable"))
-    # The retry names the shot otherwise: it is still the shot its key was first sent under, on its first visit.
-    assert video(api, token, {**body, "shot": "Another name"}, "the-request").status_code == 409
+    named = video(api, token, {**body, "shot": "Another name"}, "the-request")  # the key with another shot
+    assert (named.status_code, named.json()["error"]["code"]) == (409, "idempotency_conflict"), named.text
+    # The retry is still the shot its key was first sent under, on its first visit.
+    assert video(api, token, body, "the-request").status_code == 409
     with api.app.state.store.read() as c:
         sends = [
             json.loads(row[0]) for row in c.execute("SELECT detail FROM events WHERE action=?", (paid_renders.SENT,))
@@ -455,44 +415,82 @@ def test_a_shot_sent_again_after_a_refusal_keeps_its_first_visit_and_name(api, m
     assert [(d["visit"], d["shot"]) for d in sends] == [(first, "Kettle wide"), (first, "Kettle wide")]
 
 
-def test_botops_asks_only_when_its_question_slot_in_the_room_is_free(api, monkeypatch):
+def test_unknown_shots_share_one_task_one_line_each_even_with_one_name(api, monkeypatch):
+    connect(api)
+    task, token = turn(api)
+    monkeypatch.setattr(G, "video_submit", lambda *a: (0, {}, "unreachable"))
+    for prompt in ("a kettle", "a teapot"):  # two shots, both named Intro: two keys, two lines
+        assert video(api, token, {"prompt": prompt, "shot": "Intro"}).status_code == 409
+    assert reconcile_tasks(api, task) == [("human:ana", ["Intro", "Intro"])]
+    with api.app.state.store.read() as c:
+        keys = {row[0] for row in c.execute("SELECT target FROM events WHERE action=?", (paid_renders.UNKNOWN,))}
+        assert len(keys) == 2 and len(TR.child_ids(c, task["id"])) == 1
+    with api.app.state.store.transaction() as c:
+        assert paid_renders.sweep(c) == 0  # nothing new: the task stays as it is
+
+
+def test_closing_the_task_reconciles_its_shots_and_a_later_one_opens_a_new_task(api, monkeypatch):
+    connect(api)
+    task, token = turn(api)
+    unknown_now(api, token, "Kettle wide", monkeypatch)
+    store = api.app.state.store
+    with store.transaction() as c:
+        (child,) = TR.child_ids(c, task["id"])
+        H.task_done(c, "human:ana", child, "Checked Gateway usage.")  # the person closes it
+    with store.transaction() as c:
+        assert paid_renders.sweep(c) == 0  # reconciled: nothing opens again
+    assert reconcile_tasks(api, task) == []
+    unknown_now(api, token, "Kettle top", monkeypatch)
+    assert reconcile_tasks(api, task) == [("human:ana", ["Kettle top"])]
+
+
+def test_an_approval_on_the_card_leaves_the_reconcile_task_alone(api, monkeypatch):
     from backend import question_marks as Q
 
     connect(api)
     task, token = turn(api)
-    store = api.app.state.store
-    with store.transaction() as c:  # BotOps already asks Ana something in this card's chat
-        other = Q.ask(c, "bot:botops", task["id"], "human:ana", "Can you check the tool key?", checked=False)
     unknown_now(api, token, "Kettle wide", monkeypatch)
-    assert reconcile_asks(api, task) == []
-    with store.read() as c:
-        assert c.execute("SELECT cleared_at FROM question_marks WHERE id=?", (other["id"],)).fetchone()[0] is None
-    with store.transaction() as c:
-        c.execute("UPDATE question_marks SET cleared_at=?, cleared_reason='replied' WHERE id=?", (H.now(), other["id"]))
-    with store.transaction() as c:
-        assert paid_renders.sweep(c) == 1
-    assert reconcile_asks(api, task) == [("human:ana", "Reconcile 1 shot", ["Kettle wide"])]
+    with api.app.state.store.transaction() as c:  # a person's approval on the card clears what it answers there
+        Q.approval_answered(c, task["id"], "human:ana", "answer-1")
+    with api.app.state.store.transaction() as c:
+        assert paid_renders.sweep(c) == 0
+    assert reconcile_tasks(api, task) == [("human:ana", ["Kettle wide"])]
 
 
-def test_the_sweep_asks_again_when_the_question_went_unanswered_but_not_once_answered(api, monkeypatch):
+def test_a_person_who_cannot_read_the_card_is_not_given_the_task(api, monkeypatch):
     connect(api)
     task, token = turn(api)
-    store = api.app.state.store
-    unknown_now(api, token, "Kettle wide", monkeypatch)
-    for reason in ("replaced", "addressee_gone"):
-        with store.transaction() as c:
-            c.execute(
-                "UPDATE question_marks SET cleared_at=?, cleared_reason=? WHERE task_id=? AND cleared_at IS NULL",
-                (H.now(), reason, task["id"]),
-            )
-        assert reconcile_asks(api, task) == []
-        with store.transaction() as c:
-            assert paid_renders.sweep(c) == 1, reason
-        assert reconcile_asks(api, task) == [("human:ana", "Reconcile 1 shot", ["Kettle wide"])]
-    with store.transaction() as c:
-        assert paid_renders.sweep(c) == 0  # open and answerable: left alone
+    with api.app.state.store.transaction() as c:  # the pipeline's person cannot read this private card
         c.execute(
-            "UPDATE question_marks SET cleared_at=?, cleared_reason='replied' WHERE task_id=?", (H.now(), task["id"])
+            "UPDATE pipelines SET owner_id='human:ben' WHERE id=(SELECT pipeline_id FROM tasks WHERE id=?)",
+            (task["id"],),
         )
+        c.execute("UPDATE tasks SET human_id=NULL, private=1 WHERE id=?", (task["id"],))
+        assert not H.task_private_readable(c, "human:ben", H.task(c, task["id"]))
+    unknown_now(api, token, "Kettle wide", monkeypatch)
+    assert reconcile_tasks(api, task) == [("human:ana", ["Kettle wide"])]
+
+
+def test_an_alias_is_bookkeeping_not_the_runs_work():
+    from backend import run_triggers as RT
+
+    assert not RT.counts(paid_renders.ALIAS) and RT.counts(paid_renders.SENT)
+
+
+def test_the_sweep_finds_a_shot_sent_again_long_ago_whatever_came_before(api, monkeypatch):
+    connect(api)
+    task, token = turn(api)
+    body = {"prompt": "a kettle", "shot": "Kettle wide"}
+    monkeypatch.setattr(G, "video_submit", lambda *a: (422, {}, "invalid"))
+    assert video(api, token, body).status_code == 422  # refused once, then sent again and cut off by a restart
+    with monkeypatch.context() as stopped:
+        stopped.setattr(paid_renders, "end", lambda *a: None)
+        monkeypatch.setattr(G, "video_submit", lambda *a: (202, {"id": JOB, "status": "queued"}, ""))
+        assert video(api, token, body).status_code == 202
+    paid_renders._IN_FLIGHT.clear()
+    store = api.app.state.store
     with store.transaction() as c:
-        assert paid_renders.sweep(c) == 0  # answered: left alone
+        c.execute("UPDATE events SET created_at=? WHERE action LIKE 'paid_render.%'", (H.shift(H.now(), days=-3),))
+    with store.transaction() as c:
+        assert paid_renders.sweep(c) == 1
+    assert reconcile_tasks(api, task) == [("human:ana", ["Kettle wide"])]
