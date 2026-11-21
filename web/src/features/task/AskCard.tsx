@@ -19,8 +19,9 @@ export interface AskCardProps {
   /** The ask in one line; `note` what answering does ("Sends now") or where it stands ("Changes asked"). */
   name: ReactNode;
   note?: ReactNode;
-  /** Who asks (their face), or `end` in its place (Open, a chevron). */
+  /** Who asks (their face), or `end` in its place (Open, a chevron); `pill` stands before it (the second review). */
   who?: string | null;
+  pill?: ReactNode;
   end?: ReactNode;
   /** `asked`: it waits on someone else now (a hollow ring for the Dot); `asking`: "What should change?" is open. */
   asked?: boolean;
@@ -35,7 +36,7 @@ export interface AskCardProps {
   children?: ReactNode;
 }
 
-export function AskCard({ name, note, who, end, asked, asking, actions, error, href, label = 'The decision', target, children }: AskCardProps) {
+export function AskCard({ name, note, who, pill, end, asked, asking, actions, error, href, label = 'The decision', target, children }: AskCardProps) {
   const className = ['answer askcard', asked && 'is-asked', asking && 'is-asking', href && 'is-link'].filter(Boolean).join(' ');
   // On a computer what answering does sits at the left of the buttons' row while that row ends the card, and goes while
   // "What should change?" is open; on a phone, or with no row, it stays in the top line.
@@ -49,6 +50,7 @@ export function AskCard({ name, note, who, end, asked, asking, actions, error, h
         <b className="an-name">{name}</b>
         {where === 'top' && noted}
         <span className="grow" />
+        {pill}
         {end ?? <Face id={who} />}
       </div>
       {children}

@@ -51,11 +51,30 @@ export function thingsOf(r: TaskRequirement | null): Set<string> {
   return out;
 }
 
+/** What a requirement is about: the page a stage's OK names, else the first page or file it shows (an OK's subject,
+    task_asks pins it first). A review page it also shows is not it. */
+export function targetOf(r: TaskRequirement | null): string | null {
+  const own = r?.approval?.file_id ?? r?.page?.file_id;
+  if (own) return own;
+  for (const ref of r?.shows ?? []) {
+    const m = /^(?:page|file):([^@]+)/.exec(ref);
+    if (m?.[1]) return m[1];
+  }
+  return null;
+}
+
+/** The second review (a sub-task filed with `--role review`): "Review running" while one is open, then "Reviewed". */
+export function reviewOf(t: Pick<TaskData, 'children'>): string | null {
+  const reviews = (t.children ?? []).filter((c) => c.role === 'review');
+  if (reviews.some((c) => c.status === 'open')) return 'Review running';
+  return reviews.some((c) => c.status === 'done') ? 'Reviewed' : null;
+}
+
 /** The email a requirement shows (`email:<id>`): its send's id. */
 export const emailOf = (r: TaskRequirement | null | undefined): string | null => r?.shows?.find((x) => x.startsWith('email:'))?.slice(6) || null;
 
 /** What waits on the person comes first, marked with the Dot (plan/approvals.html): the page, the file or the email it
-    asks about. Then the stage's other pages and Markdown files, each with its state (more.js taskflow); the task's
+    asks about, the one it is about (`targetOf`) before the others it shows. Then the stage's other pages and Markdown files, each with its state (more.js taskflow); the task's
     other files but its pictures (Details walks those), so a PDF, a Word file or a sound opens as a tab too; the other
     emails its requirements show; the chat (a phone's tab); then Details. A page linked in two roles is one tab. */
 export function tabsOf(t: TaskData, files: TaskFileView[] = []): TaskTab[] {
@@ -86,8 +105,12 @@ export function tabsOf(t: TaskData, files: TaskFileView[] = []): TaskTab[] {
     emails.push({ slug: free('Email'), label: 'Email', mark: r === decision ? 'ask' : r.met ? 'ok' : 'none', email });
   }
   const all = [...docs, ...others, ...emails];
+  // What the ask is about opens first, before any other page it shows (a review page).
+  const target = targetOf(decision);
+  const isTarget = (x: TaskTab) => !!target && (x.doc?.file_id ?? x.file?.id) === target;
   return [
-    ...all.filter((x) => x.mark === 'ask'),
+    ...all.filter((x) => x.mark === 'ask' && isTarget(x)),
+    ...all.filter((x) => x.mark === 'ask' && !isTarget(x)),
     ...all.filter((x) => x.mark !== 'ask'),
     ...(t.conversation_id ? [{ slug: CHAT, label: 'Chat', chat: true }] : []),
     { slug: DETAILS, label: 'Details' },

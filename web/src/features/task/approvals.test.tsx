@@ -163,6 +163,46 @@ describe('the thing is the first tab', () => {
     expect(first.querySelector('.dot')).toBeTruthy();
   });
 
+  it('a PDF to sign opens over the review page it also shows; the chat’s card carries the review pill @approvals', async () => {
+    const pdf = {
+      id: 'f9',
+      name: 'declaration.pdf',
+      title: 'declaration.pdf',
+      mime: 'application/pdf',
+      archived: false,
+      current_version: 1,
+      links: [],
+      writers: [],
+      versions: [{ n: 1, by: 'bot:lo', created_at: '2026-11-01T10:00:00Z', mime: 'application/pdf', size: 10, url: '/api/v2/files/f9?v=1', answers: [], ask: null }],
+    };
+    const review = { id: 'k1', title: 'Review: second opinion', status: 'open', owner_id: 'bot:lo', role: 'review' };
+    shown = task({
+      title: 'Search warrant',
+      documents: [{ file_id: 'd1', name: 'Review', kind: 'page', version: 2 }] as never,
+      to_leave: [req({ shows: ['file:f9@1', 'page:d1@2'], line: 'Sign the declaration' })],
+    });
+    reply = (url) =>
+      url.endsWith('/files?all=1')
+        ? { body: { files: [pdf] } }
+        : url.endsWith('/api/v2/tasks/t1') || url.includes('/api/v2/tasks/%2312')
+          ? { body: { task: shown, runs: [], children: [review], can_comment: true, mover: true } }
+          : null;
+    const router = show(
+      <>
+        <TaskPage task="12" pipeline="p1" />
+        <TaskChat task="12" />
+      </>,
+      '/tasks/p1/12',
+    );
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/declaration-pdf'));
+    expect(await screen.findByRole('region', { name: 'declaration.pdf' })).toBeTruthy();
+    const box = within(screen.getByRole('region', { name: 'Chat with Legal Owner' })).getByRole('region', { name: 'The decision' });
+    expect(within(box).getByText('Review running')).toBeTruthy();
+    // the review ends: the stream's row lands in the children, and the pill turns
+    act(() => queryClient.setQueryData(keys.tasks.detail('t1'), { ...queryClient.getQueryData<TaskData>(keys.tasks.detail('t1'))!, children: [{ ...review, status: 'done' }] }));
+    expect(await within(screen.getByRole('region', { name: 'Chat with Legal Owner' })).findByText('Reviewed')).toBeTruthy();
+  });
+
   it('names a page by its version and says what Approve does @approvals', () => {
     const t = task({
       documents: [{ file_id: 'f2', name: 'QA report', version: 2 }] as never,

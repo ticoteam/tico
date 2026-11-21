@@ -207,6 +207,17 @@ describe('task route loading', () => {
     }
     await expect(loaded).resolves.toMatchObject({ tab: tab ?? 'attachment-pdf' });
   });
+
+  it('waits for the files when the ask is about a file and also shows a page @approvals', async () => {
+    const t = task();
+    t.to_leave = [{ ...t.to_leave![0]!, approval: undefined, shows: ['file:f6@1', 'page:f2@1'] }];
+    serve((url) => {
+      if (url.includes('/api/v2/tasks/%2312')) return { status: 200, body: detail(t) };
+      if (url.endsWith('/tasks/t1/files?all=1')) return { status: 200, body: { files: [{ id: 'f6', name: 'declaration.pdf', versions: [] }] } };
+      return base(url);
+    });
+    await expect(loadTask(queryClient, '12')).resolves.toMatchObject({ tab: 'declaration-pdf' });
+  });
 });
 
 describe('one open task', () => {

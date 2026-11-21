@@ -5,8 +5,10 @@ import type { TaskRequirement } from '@/api/schema';
 import { clock } from '@/conversation';
 import { meQuery } from '@/data';
 import { Button } from '@/kit/Button';
+import { Pill } from '@/kit/Pill';
 import { toast } from '@/kit/Toast';
-import { changesAskedOf, decisionName, decisionOf, effectOf, emailOf, failedToast, personOf, sendTitle } from './model';
+import { useFollow } from '@/live/follow';
+import { changesAskedOf, decisionName, decisionOf, effectOf, emailOf, failedToast, personOf, reviewOf, sendTitle } from './model';
 import { answered } from './answered';
 import { AskCard, Docked, useAnswering } from './AskCard';
 import { HeldDecision, isRuleReview } from './Held';
@@ -56,6 +58,14 @@ function useNamed(t: TaskData, r: TaskRequirement) {
   const all = mail.data ? addressesOf(mail.data).to : [];
   const to = all[0] ?? sendTitle(t.title)?.to;
   return { name: decisionName(t, r, to ? personOf(to) : undefined), effect: effectOf(t, r), send, recipients: all.length ? all : to ? [to] : [] };
+}
+
+/** The second review's state beside the ask; while one runs, the stream follows it, so the pill turns once it ends. */
+function ReviewPill({ t }: { t: TaskData }) {
+  const running = t.children.find((c) => c.role === 'review' && c.status === 'open')?.id;
+  useFollow(running ? { task: running } : null);
+  const review = reviewOf(t);
+  return review && <Pill>{review}</Pill>;
 }
 
 /** The face of who asks: the agent that asked, else whoever has the task. */
@@ -149,6 +159,7 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
       name={name}
       note={!fault && (changed ? 'Changed' : effect)}
       who={askerOf(t, r)}
+      pill={<ReviewPill t={t} />}
       asking={asking}
       target={`task-answer:${t.id}`}
       actions={

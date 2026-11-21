@@ -238,6 +238,13 @@ function patchTasks(batch: TaskEvent[]): void {
         { cancelRefetch: false },
       );
   }
+  // A sub-task's status shows on the task above it (the ask card's review pill): it lands in that task's children.
+  const statusOf = (id: string) => last.get(id)?.task?.status;
+  for (const [key, held] of queryClient.getQueriesData<{ children?: { id: string; status: string }[] }>({ queryKey: ['tasks', 'detail'] })) {
+    const kids = key.length === 3 ? held?.children : undefined;
+    if (!kids?.some((c) => statusOf(c.id) && statusOf(c.id) !== c.status)) continue;
+    queryClient.setQueryData(key, { ...held, children: kids.map((c) => ({ ...c, status: statusOf(c.id) ?? c.status })) });
+  }
 }
 
 /** A task row's email send (GET /api/v2/tasks `email_send`): the newest send that belongs to it or whose OK sits on it. */

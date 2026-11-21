@@ -26,6 +26,17 @@ const open = ['tasks', 'list', { status: 'open', pipeline: 'p1' }];
 const done = ['tasks', 'list', { status: 'done', pipeline: 'p1' }];
 
 describe('tasks', () => {
+  it('land a sub-task’s status in the children of the task above it', () => {
+    const parent = ['tasks', 'detail', 't1'];
+    queryClient.setQueryData(parent, { id: 't1', children: [{ id: 't2', status: 'open', role: 'review' }, { id: 't3', status: 'open' }] });
+    FakeEventSource.last.feed(taskFrame(901, task('t2', { status: 'done', version: 2 })));
+    flushFrame();
+    expect(queryClient.getQueryData<{ children: unknown[] }>(parent)?.children).toEqual([
+      { id: 't2', status: 'done', role: 'review' },
+      { id: 't3', status: 'open' },
+    ]);
+  });
+
   it('patch a row in place, keeping every row that did not change', () => {
     const [a, b, c] = [task('t1'), task('t2'), task('t3')];
     queryClient.setQueryData<TaskList>(open, { tasks: [a, b, c], cursor: '900.x' });

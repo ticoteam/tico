@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { TaskDocument, TaskRequirement } from '@/api/schema';
-import { decisionName, decisionOf, defaultTab, earlierStages, reasonOf, refusalOf, slugOf, tabAddress, tabsOf } from './model';
+import type { TaskDocument, TaskFileView, TaskRequirement } from '@/api/schema';
+import { decisionName, decisionOf, defaultTab, earlierStages, reasonOf, refusalOf, reviewOf, slugOf, tabAddress, tabsOf } from './model';
 import type { TaskData } from './queries';
 
 const doc = (file_id: string, name: string, more: Partial<TaskDocument> = {}) => ({ file_id, name, version: 2, ...more }) as TaskDocument;
@@ -35,6 +35,25 @@ describe('the open task', () => {
     expect(defaultTab(tabsOf(asking))).toBe('plan');
     expect(defaultTab(tabsOf(task({ documents: [doc('f1', 'Spec')] })))).toBe('spec');
     expect(defaultTab(tabsOf(task()))).toBe('details');
+  });
+
+  it('opens on the file the ask is about, not a review page it also shows @approvals', () => {
+    const pdf = { id: 'f9', name: 'declaration.pdf', title: 'declaration.pdf', archived: false, current_version: 1, versions: [{ n: 1, mime: 'application/pdf' }] } as unknown as TaskFileView;
+    // The review page is the newest change, so it is listed first; the ask names the PDF first (its subject).
+    const t = task({ documents: [doc('f1', 'Review')], to_leave: [req('r1', { shows: ['file:f9@1', 'page:f1@2'] })] });
+    expect(defaultTab(tabsOf(t, [pdf]))).toBe('declaration-pdf');
+    // A stage's own OK names its page: that page opens, whatever else it shows.
+    const own = task({ documents: [doc('f1', 'Review'), doc('f2', 'Spec')], to_leave: [req('r1', { page: { file_id: 'f2' }, shows: ['page:f1@2'] } as Partial<TaskRequirement>)] });
+    expect(defaultTab(tabsOf(own))).toBe('spec');
+  });
+
+  it('reads the second review: running while one is open, then reviewed @approvals', () => {
+    const kid = (status: string, role?: string) => ({ id: `k-${status}`, title: 'Review: second opinion', status, owner_id: 'bot:lo', role });
+    expect(reviewOf(task({ children: [] }))).toBeNull();
+    expect(reviewOf(task({ children: [kid('open')] }))).toBeNull();
+    expect(reviewOf(task({ children: [kid('done', 'review'), kid('open', 'review')] }))).toBe('Review running');
+    expect(reviewOf(task({ children: [kid('done', 'review'), kid('open', 'check')] }))).toBe('Reviewed');
+    expect(reviewOf(task({ children: [kid('closed', 'review')] }))).toBeNull();
   });
 
   it('decides only what is not met and the person may answer', () => {

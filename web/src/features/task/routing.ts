@@ -1,7 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query';
 import { timelineQuery } from '@/conversation';
 import { threadQuery } from '@/features/threads/routing';
-import { CHAT, decisionOf, defaultTab, isPage, tabsOf } from './model';
+import { CHAT, decisionOf, defaultTab, isPage, tabsOf, targetOf } from './model';
 import { pageShownQuery, taskDetailQuery, taskFilesQuery, taskRefQuery, type TaskData } from './queries';
 import { waitSlugs, waitsOnYou } from './waits';
 
@@ -28,8 +28,11 @@ export async function loadTask(client: QueryClient, param: string, tab?: string,
       return { task: t, tab: waitSlugs(1, tabsOf(t, client.getQueryData(fileQuery.queryKey)).map((x) => x.slug))[0]! };
     }
     const selected = tab ? tabs.find((x) => x.slug === tab) : tabs[0];
-    // An attached file can outrank the default document when the task is waiting for an answer.
-    const doc = selected?.doc && (tab || selected.mark === 'ask' || !decisionOf(t)) ? selected.doc : undefined;
+    // An attached file can outrank the default document when the task is waiting for an answer: the file the ask is
+    // about (a PDF to sign) opens over a page it also shows, so its tab waits for the files.
+    const target = targetOf(decisionOf(t));
+    const asked = selected?.mark === 'ask' && (!target || selected.doc?.file_id === target);
+    const doc = selected?.doc && (tab || asked || !decisionOf(t)) ? selected.doc : undefined;
     if (doc && isPage(doc)) void client.prefetchQuery(pageShownQuery(id, doc.file_id));
     // Details includes the file list in its body, where inserting the section late shifts the content.
     if (selected && (doc || (tab === CHAT && selected.chat))) return { task: t, tab: selected.slug };

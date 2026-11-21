@@ -34,6 +34,8 @@ export interface TaskChild {
   owner_id: string | null;
   label?: string | null;
   step?: string | null;
+  /** A check sub-task's role (`--role review|check`, backend/check_models.py); none for any other. */
+  role?: string | null;
 }
 
 function flat(d: TaskDetail): TaskData {
