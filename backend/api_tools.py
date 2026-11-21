@@ -86,7 +86,7 @@ from . import tool_templates
 from . import default_read
 from . import reconnect_tasks
 from . import tool_access as TA
-from .credentials import CredentialWrite, administrator, effective_grant, may_remove, owned
+from .credentials import CredentialWrite, administrator, effective_grant, may_remove, owned, signed_in_person
 from .models import AccessAudience, Contract
 from .store import H, Problem, encode
 from .api_contract import api_v2
@@ -1450,6 +1450,12 @@ def update_tool(c, who, tool_id, body, admins, auth=None):
             access_requests.settled(c, who, resource_type="tool", resource_id=tool_id, via="everyone-reads")
     fields = {k: v for k, v in _clean(asked).items()}
     merged = tool | fields
+    if proxy_policy(tool) == "proxy" and proxy_policy(merged) != "proxy" and not signed_in_person(who):
+        # Its write keys would reach runs as they are (another service, no address the proxy can call): a secret's
+        # way out of the proxy is a person's own act, never an agent's, confirmed or not.
+        raise Problem(
+            "forbidden", f"Only a person signed in themselves takes {tool['name']}'s write keys out of the proxy", 403
+        )
     # What the tool reaches after the change, whole: an agent's change of any part leaves only the catalog's.
     if any(merged[k] != tool[k] for k in (*TA.ADDRESS_FIELDS, "service")):
         TA.catalog_only(who, merged["service"], {k: merged[k] for k in TA.ADDRESS_FIELDS})

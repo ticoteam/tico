@@ -5,10 +5,11 @@
 
 Read only (backend.migrations.read_only: no byte of the file, its log or its index changes): it prints, as JSON, for
 the person who rotates the keys at each vendor:
-- `proxied`: each bot's effective grant of a Read and write key on such a tool, which now reaches its runs only through
-  the proxy (api_tools.proxy_policy): a run before this may have had the key itself, so it is one to rotate;
-- `direct`: each bot's effective grant of such a key that still reaches runs as it is (Google Ads, or a tool the proxy
-  cannot call): Not covered on Rules › Links;
+- `proxied`: each bot's effective grant on such a tool whose key reaches its runs only through the proxy (by the one
+  delivery decision, credentials.held_at_read): a run before this may have had a write key itself, so it is one to
+  rotate;
+- `direct`: each one whose key still reaches runs as it is, with its level: a Read key, or any key of Google Ads or of
+  a tool the proxy cannot call (Not covered on Rules › Links);
 - `computers`: each computer whose runner predates proxy tokens (PROXY_RELEASE) or reports no release.
 Nothing is revoked, rotated or changed: rotating a key is the person's, at the vendor.
 """
@@ -35,29 +36,34 @@ PROXY_RELEASE = "0.5.192"  # the first runner that takes a proxy token in a key'
 
 
 def report(c: Any) -> dict[str, Any]:
-    """{proxied, direct, computers}, as the module's text says."""
+    """{proxied, direct, computers}, as the module's text says: each bot's effective grant on such a tool, by how its
+    key actually reaches the bot's runs (credentials.held_at_read, the one delivery decision)."""
     out: dict[str, list[dict[str, Any]]] = {"proxied": [], "direct": []}
     for tool in c.execute("SELECT * FROM tools WHERE kind='api' ORDER BY lower(name), id").fetchall():
         category = TS.gated(tool["service"], tool["base_url"] or api_tools._field(tool, "mcp_url") or "")
         if not category:
             continue
-        way = "proxied" if api_tools.proxy_policy(tool) == "proxy" else "direct"  # the one decision's policy
+        proxied = {tool["id"]: tool} if tool["delivery"] == "proxy" else {}
         for row in c.execute(
-            "SELECT k.*, g.subject, g.created_at AS granted_at FROM credentials k JOIN credential_grants g "
-            "ON g.credential_id=k.id WHERE k.tool_id=? AND k.access_level='read_write' AND k.ciphertext IS NOT NULL "
-            "AND g.revoked_at IS NULL AND g.access_level='read_write' AND g.subject LIKE 'bot:%' "
-            "ORDER BY g.created_at, g.id",
+            "SELECT k.*, g.subject, g.created_at AS granted_at, g.access_level AS granted FROM credentials k "
+            "JOIN credential_grants g ON g.credential_id=k.id WHERE k.tool_id=? AND k.ciphertext IS NOT NULL "
+            "AND g.revoked_at IS NULL AND g.subject LIKE 'bot:%' ORDER BY g.created_at, g.id",
             (tool["id"],),
         ).fetchall():
             if credentials.effective_grant(c, row["id"], row["subject"]) is None:
                 continue  # its parent grant was taken back: no run gets it
-            out[way].append(
+            through, way = credentials.held_at_read(c, proxied, row, row["subject"])
+            if way == "skip":
+                continue  # a read key of the tool goes instead
+            level = "read" if row["access_level"] == "read" or row["granted"] == "read" else "read_write"
+            out["proxied" if through is not None else "direct"].append(
                 {
                     "tool": tool["id"],
                     "name": tool["name"],
                     "category": category,
                     "key": row["name"],
                     "env": row["env"],
+                    "level": level,
                     "subject": row["subject"],
                     "granted_at": row["granted_at"],
                 }

@@ -31,7 +31,8 @@ read_cache: Any = read_cache_module
 Row = Any
 
 CANDIDATES_SQL = (
-    "SELECT t.id AS tool_id, t.name AS tool_name, t.base_url, t.delivery, t.everyone_reads, t.auth_template, k.id, k.env, "
+    "SELECT t.id AS tool_id, t.name AS tool_name, t.base_url, t.delivery, t.service, t.mcp_url, t.everyone_reads, "
+    "t.auth_template, k.id, k.env, "
     "k.access_level FROM tools t JOIN credentials k ON k.tool_id=t.id "
     "WHERE t.audience IS NULL AND COALESCE(t.kind,'api')='api' "
     "AND k.ciphertext IS NOT NULL AND k.kind!='login' AND COALESCE(k.holder,'')='' "
@@ -40,7 +41,22 @@ CANDIDATES_SQL = (
 
 
 def _proxy_reaches(tool: Row) -> bool:
+    """Whether a Read and write key of this tool reaches a run at Read through the proxy, by the one delivery decision:
+    an ads, payments or CRM tool by its write-key policy first (api_tools.proxy_policy: `direct`, Google Ads, never;
+    its Read is only a real Read key), any other by its delivery or an address the proxy can call."""
     tool_proxy: Any = importlib.import_module(".tool_proxy", __package__)
+    api_tools: Any = importlib.import_module(".api_tools", __package__)
+    policy = api_tools.proxy_policy(
+        {
+            "id": tool["tool_id"],
+            "name": tool["tool_name"],
+            "service": tool["service"],
+            "base_url": tool["base_url"],
+            "mcp_url": tool["mcp_url"],
+        }
+    )
+    if policy is not None:
+        return policy == "proxy"
     return tool["delivery"] == "proxy" or not tool_proxy.address_problem(
         tool["base_url"] or "", tool["tool_name"] or tool["tool_id"]
     )

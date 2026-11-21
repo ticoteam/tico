@@ -1199,6 +1199,14 @@ def held_at_read(c, proxied, row, subject, cipher=None):
     return (tool, way) if way == 'proxy' else (None, way)
 
 
+def writes_by_proxy(c, tool):
+    """Whether this tool's write keys reach runs only through the proxy, by the one decision (`held_at_read`) on a
+    Read and write key of it: what Rules › Links reads to list the tool's outcomes or mark it Not covered."""
+    write_key = {'id': '', 'tool_id': tool['id'], 'access_level': 'read_write', 'env': ''}
+    proxied = {tool['id']: tool} if tool['delivery'] == 'proxy' else {}
+    return held_at_read(c, proxied, write_key, '')[0] is not None
+
+
 def _is_id(c, cipher, row):
     from . import tool_settings
 

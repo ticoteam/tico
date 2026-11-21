@@ -282,16 +282,40 @@ GATED = {
 DIRECT = frozenset({"google-ads"})
 
 
+def _gated_names():
+    """{a GATED vendor's id or one of its explicit aliases (SERVICES `aliases`, VENDOR_ALIASES): its id}."""
+    names = {key: key for key in GATED}
+    for key in GATED:
+        for alias in (SERVICES.get(key) or {}).get("aliases", ()):
+            names.setdefault(str(alias).lower(), key)
+    for alias, key in VENDOR_ALIASES.items():
+        if key in GATED:
+            names.setdefault(alias, key)
+    return names
+
+
+def _gated_hosts():
+    """{the exact hostname of a GATED vendor's API (api.stripe.com, graph.facebook.com): its id}."""
+    from urllib.parse import urlsplit
+
+    return {
+        urlsplit((SERVICES.get(key) or {}).get("base_url") or "").hostname: key
+        for key in GATED
+        if (SERVICES.get(key) or {}).get("base_url")
+    }
+
+
 def gated_vendor(service="", host=""):
-    """The GATED vendor of a tool, else "": its service (as stored, or its alias: `close` is Close CRM's), else the
-    known service whose API is at its host's domain (graph.facebook.com is Meta Ads'). Never its display name."""
-    service = str(service or "").strip().lower()
-    for found in (service, match(service=service), vendor_of(service) if service else ""):
-        if found in GATED:
-            return found
-    domain = _domain(host) if host else ""
-    found = next((key for key, row in SERVICES.items() if row["base_url"] and _domain(row["base_url"]) == domain), "")
-    return found if found in GATED else ""
+    """The GATED vendor of a tool, else "": its service when that is a vendor's id or one of its explicit aliases
+    (`close` is Close CRM's), else its address's exact hostname when that is the vendor's known API host
+    (api.stripe.com yes; dashboard.stripe.com, a "stripe-adapter" service no). Never its display name."""
+    from urllib.parse import urlsplit
+
+    found = _gated_names().get(str(service or "").strip().lower())
+    if found:
+        return found
+    hostname = urlsplit(host if "//" in str(host) else "//" + str(host or "")).hostname if host else None
+    return _gated_hosts().get(hostname, "") if hostname else ""
 
 
 def gated(service="", host=""):

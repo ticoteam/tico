@@ -753,3 +753,60 @@ def test_the_write_key_policy_comes_first_by_service_or_known_host_and_its_excep
     assert [d["tool"] for d in listed["direct"]] == ["ads"]
     assert sorted(d["tool"] for d in listed["proxied"]) == ["campaigns", "hubspot"]
     assert hubspot not in json.dumps(listed)
+
+
+def test_the_write_key_policy_holds_for_default_reads_edits_and_one_time_moves_and_reads_exact_hosts(api):
+    """Round three of #4892: a Google Ads tool with only a write key reads by default with nothing (its Read needs a
+    real Read key, which then goes as it is and is listed); an agent may not take a protected tool's write keys out of
+    the proxy, only a person signed in themselves; the one-time move of id-shaped keys never turns a protected write
+    key into a setting; and a tool is classified only by a vendor's id, an explicit alias or its exact API host."""
+    from backend import proxy_keys, tool_settings
+    from backend import tool_services as TS
+    from backend.tests.helpers.api import headers
+
+    setup(api)
+    tool(
+        api, "ads", "Ads", "bearer", delivery="computer", base="https://googleads.googleapis.com", service="google-ads"
+    )
+    ads_write = key(api, "ads", "ads-synthetic-write-0006", env="GOOGLE_ADS_KEY")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tools SET everyone_reads=1 WHERE id='ads'")
+    _, ops = run(api)
+    items = get(api, "credential-runtime", ops["token"])["credentials"]
+    assert "ads-synthetic-write-0006" not in json.dumps(items)  # Read never hands out a write key
+    ads_read = key(api, "ads", "ads-synthetic-read-0007", level="read", env="GOOGLE_ADS_KEY")
+    assert handed(api, ops, "GOOGLE_ADS_KEY")["value"] == "ads-synthetic-read-0007"
+    give(api, ads_read, "bot:ops", "read")
+    with api.app.state.store.read() as c:
+        listed = proxy_keys.report(c)
+    assert [(d["tool"], d["level"]) for d in listed["direct"]] == [("ads", "read")]
+    assert ads_write not in json.dumps(listed)
+    # A Stripe tool: an agent (the Assistant with Ana's rights) may not move its write keys out of the proxy.
+    tool(api, "billing", "Billing", "bearer", delivery="computer", base="https://api.stripe.com", service="stripe")
+    hubspot_id = "1a2b3c4d-1a2b-3c4d-5e6f-1a2b3c4d5e6f"  # an id-shaped value under an id-like name (made up)
+    tool(api, "hubspot", "HubSpot", "bearer", delivery="proxy", base="https://api.hubapi.com", service="hubspot")
+    protected = key(api, "hubspot", hubspot_id, env="HUBSPOT_ACCOUNT_ID")
+    from dataclasses import replace
+
+    from backend.auth import Identity
+    from backend.store import Problem
+
+    agent = replace(Identity("human:ana", "owner"), via="assistant", confirmed=True)
+    with api.app.state.store.transaction() as c, pytest.raises(Problem) as refused:
+        api_tools.update_tool(
+            c, agent, "billing", api_tools.ToolUpdate(base_url=""), api.app.state.vault.admins, api.app.state.auth
+        )
+    assert refused.value.status == 403
+    moved = api.patch("/api/v2/api-tools/billing", json={"base_url": ""}, headers=headers("ana-test"))
+    assert moved.status_code == 200, moved.text  # Ana herself
+    # The one-time move leaves the protected write key a key, never a setting.
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM registry_metadata WHERE key IN (?,?)", (tool_settings.MOVED, tool_settings.IDS_REPAIRED))
+    tool_settings.move_once(api.app.state.store, api.app.state.vault)
+    tool_settings.repair_ids_once(api.app.state.store, api.app.state.vault)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT tool_id FROM credentials WHERE id=?", (protected,)).fetchone()[0] == "hubspot"
+        assert not c.execute("SELECT 1 FROM tool_settings WHERE name='HUBSPOT_ACCOUNT_ID'").fetchone()
+    # Exact names and hosts only.
+    assert TS.gated_vendor("stripe-adapter", "") == "" and TS.gated_vendor("", "https://dashboard.stripe.com") == ""
+    assert TS.gated_vendor("close", "") == "close-crm" and TS.gated_vendor("", "https://api.stripe.com/v1") == "stripe"

@@ -29,8 +29,8 @@ Events never carry the text. A proxied write is judged with or without an Idempo
 within KEY_DAYS logs no second event.
 
 Not covered: a tool whose key goes to computers (but an ads, payments or CRM tool's write keys, which reach runs only
-through the proxy: api_tools.proxy_policy), a website tool's browser sign-in, and any call a computer makes straight
-out. Rules › Links lists them, unmeasured.
+through the proxy: credentials.writes_by_proxy), a website tool's browser sign-in, and any call a computer makes
+straight out. Rules › Links lists them, unmeasured.
 """
 
 import hashlib
@@ -337,7 +337,7 @@ def listing(c: Any, who: Any, admins: Any, auth: Any, now: str | None = None) ->
     tools = [t for t in rows_read if api_tools.visible(c, who, t, admins, auth)]
     links: list[tuple[str, str]] = [
         *FIXED.items(),
-        *(("tool:" + str(t["id"]), str(t["name"] or t["id"])) for t in tools if _proxied(t)),
+        *(("tool:" + str(t["id"]), str(t["name"] or t["id"])) for t in tools if _proxied(c, t)),
     ]
     since = str(H.shift(now or H.now(), days=-DAYS))
     # A tool's counts start when this tool was made: events of an earlier tool under the same id are not its own.
@@ -349,23 +349,20 @@ def listing(c: Any, who: Any, admins: Any, auth: Any, now: str | None = None) ->
     rows += [
         {"id": "tool:" + str(t["id"]), "name": str(t["name"] or t["id"]), "mode": NOT_COVERED, "counts": None}
         for t in tools
-        if not _proxied(t)
+        if not _proxied(c, t)
     ]
     rows += [{"id": link, "name": name, "mode": NOT_COVERED, "counts": None} for link, name in UNCOVERED.items()]
     return {"links": rows, "days": DAYS}
 
 
-def _proxied(tool: Any) -> bool:
-    """A tool whose writes go through the proxy, by the one decision (credentials.held_at_read): an ads, payments or CRM
-    tool by its write-key policy (api_tools.proxy_policy: Google Ads and one the proxy cannot call are Not covered,
-    whatever their delivery), any other by its own delivery."""
-    from . import api_tools as _api_tools
+def _proxied(c: Any, tool: Any) -> bool:
+    """A tool whose writes go through the proxy, by the one delivery decision (credentials.writes_by_proxy): an ads,
+    payments or CRM tool by its write-key policy (Google Ads and one the proxy cannot call are Not covered, whatever
+    their delivery), any other by its own delivery."""
+    from . import credentials as _credentials
 
-    api_tools: Any = _api_tools
-    if tool["kind"] != "api":
-        return False
-    policy = api_tools.proxy_policy(tool)
-    return policy == "proxy" or (policy is None and tool["delivery"] == "proxy")
+    credentials: Any = _credentials
+    return tool["kind"] == "api" and bool(credentials.writes_by_proxy(c, tool))
 
 
 def install(app: FastAPI, store: Any, auth: Any) -> None:

@@ -53,8 +53,12 @@ read key when there is one, else (only a Read and write key) a proxy token as fo
 the proxy's Read rules; a tool with no API address cannot be held to reads, and Who can use it marks that bot's row.
 
 **Write keys of ads, payments and CRM tools live in the proxy** (Meta Ads, Stripe, Brex, Mercury, Close, HubSpot,
-Pipedrive, Attio: `tool_services.GATED`, known by a tool's service or its API's known host, never its name). This
-policy comes first, before the tool's own delivery and before the check that hands an id as its value. Every Read and write grant on
+Pipedrive, Attio: `tool_services.GATED`, known by a vendor's id, an explicit alias or its API's exact host, never a
+display name). This policy comes first in the one delivery decision (`credentials.held_at_read`, which the runtime, a
+reveal, default reads, Rules › Links and the report follow): before the tool's own delivery and before the check that
+hands an id as its value. Reading by default never hands out such a write key (Google Ads reads by default only with a
+real Read key); only a person signed in themselves may take a tool's write keys out of the proxy (another service, no
+address); and no one-time move turns such a key into a setting. Every Read and write grant on
 one of them reaches the run as a proxy token, even where the tool's keys go to computers, so every write meets the
 Rules gate and shows on Rules › Links; no agent reveals such a key (a bot, or the Assistant or BotOps with a person's
 rights): only a person signed in themselves does. Google Ads, whose calls are signed on the computer, and a tool the

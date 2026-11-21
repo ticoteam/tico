@@ -368,9 +368,20 @@ def _grantees(c: Any, cid: Any) -> Any:
     return {s for s in subjects if effective_grant(c, cid, s) is not None}
 
 
+def _protected(c: Any, row: Any) -> bool:
+    """A write key that lives in the proxy (an ads, payments or CRM tool's: api_tools.proxy_policy): never turned
+    into a setting nor moved to a tool with no address, whatever its variable or value says."""
+    if not row["tool_id"] or row["access_level"] != "read_write":
+        return False
+    tool = c.execute("SELECT * FROM tools WHERE id=?", (row["tool_id"],)).fetchone()
+    return tool is not None and _api_tools().proxy_policy(tool) == "proxy"
+
+
 def _move_one(c: Any, vault: Any, row: Any) -> Any:
     """One stored key that is a setting, moved to a tool every one of its holders gets it from; False when none is."""
     api_tools: Any = _api_tools()
+    if _protected(c, row):
+        return False
     # Explicit grants only: a default read can be switched off, and then the variable would be gone.
     granted: Any = _credentials().explicitly_granted
 
@@ -486,7 +497,7 @@ def repair_ids_once(store: Any, vault: Any) -> Any:
             "SELECT k.* FROM credentials k JOIN tools t ON t.id=k.tool_id WHERE t.delivery='proxy' AND t.mcp_url='' "
             "AND k.env<>'' AND k.kind IN ('api_key','token') AND k.ciphertext IS NOT NULL ORDER BY k.id"
         ).fetchall():
-            if not known_name(row["env"]):
+            if not known_name(row["env"]) or _protected(c, row):
                 continue
             try:
                 value = vault.cipher.decrypt(c, row)
