@@ -270,6 +270,22 @@ class McpVendor:
         return httpx.Response(200, json=message)
 
 
+def test_a_read_callers_mcp_read_over_a_megabyte_still_passes(api):
+    """The gate reads at most 1 MB; Read authorization still parses a larger MCP call to see that it only reads."""
+    from backend import tool_proxy
+
+    tool_proxy.READ_ONLY_TOOLS.clear()
+    setup(api)
+    tool(api, scheme="bearer", base="https://mcp.close.example")
+    give(api, key(api, "close-crm", FULL), "bot:ops", "read")
+    api.app.state.tool_proxy_transport = httpx.MockTransport(McpVendor())
+    _, ops = run(api)
+    token = handed(api, ops)["value"]
+    assert call(api, "POST", "mcp", token, json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).status_code == 200
+    big = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "search", "q": "x" * (1024 * 1024)}}
+    assert call(api, "POST", "mcp", token, json=big).status_code == 200
+
+
 @pytest.mark.parametrize("sse", [False, True])
 def test_mcp_at_read_passes_set_up_listings_and_read_only_tools_and_refuses_the_rest(api, sse):
     from backend import tool_proxy
