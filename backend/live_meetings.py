@@ -495,7 +495,7 @@ def _decision_input(c, rid, *, source_key, source_kind, window_index, transcript
     }
 
 
-def _turn_prompt(c, rid, turn_id, slug):
+def _turn_prompt(c, rid, turn_id, slug, question=None):
     meeting = _meeting(c, rid)
     turn = c.execute(
         "SELECT transcript_seq,window_index,source_key FROM live_meeting_turns WHERE id=?", (turn_id,)
@@ -523,6 +523,8 @@ def _turn_prompt(c, rid, turn_id, slug):
         "meeting_title": meeting["title"][:800],
         "transcript": [bounded(row) for row in reversed(chunks)],
         "recent_chat": [bounded(row) for row in reversed(chat)],
+        # A 1:1 voice call's question: the person's whole turn, its pieces joined (call_voice.Voice.route).
+        **({"question": question[:4000]} if question else {}),
     }
     payload = encode(context)
     label = (c.execute("SELECT slug FROM bots WHERE id=?", (slug,)).fetchone() or [slug])[0]
@@ -642,16 +644,27 @@ def _turn_conversation(c, rid, slug, title):
     return conv
 
 
-def _dispatch_turn(c, rid, turn_id, slug, retry=0):
+def _dispatch_turn(c, rid, turn_id, slug, retry=0, question=None):
     """Put one scoped reply request on the existing durable runner job queue, in this bot's meeting conversation. A
     request that arrives while the bot's reply in this meeting runs is a follow-up in that conversation: a runtime that
-    steers takes it into the running turn (Execution.inputs), any other runs it right after."""
+    steers takes it into the running turn (Execution.inputs), any other runs it right after. A 1:1 voice call's
+    gathered turn carries its joined question (`question`, kept on the request's refs); a retry asks it again, from the
+    request it retries."""
     meeting = _meeting(c, rid)
     conv = _turn_conversation(c, rid, slug, meeting["title"])
+    if retry and question is None:
+        said = c.execute(
+            "SELECT json_extract(refs,'$.live_meeting.question') FROM messages WHERE conversation_id=? "
+            "AND json_extract(refs,'$.live_meeting.turn_id')=? ORDER BY created_at,id LIMIT 1",
+            (conv["id"], turn_id),
+        ).fetchone()
+        question = said[0] if said else None
     refs = {"live_meeting": {"meeting_id": rid, "turn_id": turn_id, **({"retry": retry} if retry else {})}}
+    if question:
+        refs["live_meeting"]["question"] = question[:4000]
     # A retry says so, and is a new event rather than a repeat the wake hold drops (wake_presets._SAME_EVENT).
     again = "Your last reply to this turn was empty. Answer it now, or answer exactly PASS.\n" if retry else ""
-    H.feed(c, "bot:" + slug, again + _turn_prompt(c, rid, turn_id, slug), conv, refs=refs)
+    H.feed(c, "bot:" + slug, again + _turn_prompt(c, rid, turn_id, slug, question), conv, refs=refs)
 
 
 def _enqueue(
@@ -667,6 +680,7 @@ def _enqueue(
     named=False,
     voice_input=None,
     voice_expires_at=None,
+    question=None,
 ):
     """Persist concurrent bot turns while respecting current-meeting and runner busy state. A bot named directly
     (`named`) is never passed over for being busy or in its cooldown: its turn goes into its meeting conversation all
@@ -715,9 +729,8 @@ def _enqueue(
             continue
         tid = str(uuid.uuid4())
         c.execute(
-            "INSERT OR IGNORE INTO live_meeting_turns "
-            "(id,meeting_id,bot,window_index,source_key,transcript_seq,status,created_at,voice_input,voice_expires_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            "INSERT OR IGNORE INTO live_meeting_turns (id,meeting_id,bot,window_index,source_key,transcript_seq,status,"
+            "created_at,voice_input,voice_expires_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
             (
                 tid,
                 rid,
@@ -734,7 +747,7 @@ def _enqueue(
         if c.execute("SELECT changes()").fetchone()[0]:
             selected.append({"id": tid, "bot": slug, "window_index": window_index, "transcript_seq": transcript_seq})
             if voice_input is None:
-                _dispatch_turn(c, rid, tid, slug)
+                _dispatch_turn(c, rid, tid, slug, question=question)
             if replying or busy:
                 deferred.append(
                     {
@@ -1746,6 +1759,8 @@ def append_chunks(c, rid, row, actor, chunks, *, route=True):
             "source_key": f"chunk:{chunk['seq']}",
             "seq": chunk["seq"],
             "at_ms": chunk["end_ms"],
+            "voiced_from": chunk.get("voiced_from"),
+            "voiced_to": chunk.get("voiced_to"),
             "heard": chunk.get("heard"),
             "spoken": bool(chunk.get("spoken")),
         }

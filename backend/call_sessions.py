@@ -163,7 +163,8 @@ def closed_attempt(c: Any, aid: str) -> bool:
 
 
 def dispatch_pending(c: Any, rid: str, bot: str) -> None:
-    """Convert unsent resident utterances to durable legacy deliveries under the claim's write lock."""
+    """Convert unsent resident utterances to durable legacy deliveries under the claim's write lock. A 1:1 call's
+    gathered turn (source_key `turn:`, call_voice.Voice._enqueue) takes its joined question, its voice_input, with it."""
     for turn in c.execute(
         "SELECT * FROM live_meeting_turns WHERE meeting_id=? AND bot=? AND voice_input IS NOT NULL "
         "AND status='pending' ORDER BY created_at,id",
@@ -173,7 +174,10 @@ def dispatch_pending(c: Any, rid: str, bot: str) -> None:
             live_meetings._finish_pass(c, rid, turn, "voice_deadline")
         else:
             c.execute("UPDATE live_meeting_turns SET voice_input=NULL WHERE id=?", (turn["id"],))
-            live_meetings._dispatch_turn(c, rid, turn["id"], bot)
+            from .call_voice import GATHERED_SOURCE
+
+            gathered = str(turn["source_key"] or "").startswith(GATHERED_SOURCE)
+            live_meetings._dispatch_turn(c, rid, turn["id"], bot, question=turn["voice_input"] if gathered else None)
 
 
 def inputs(
