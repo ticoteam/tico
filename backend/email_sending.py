@@ -1682,7 +1682,7 @@ def rule_gate(app, store, who, snap):
         else:
             result = rules.mail_decide(c, prep)
         # The email link's one outcome event (backend/rule_links.py), in the mail's write: a held mail is not sent.
-        rule_links.record(c, rule_links.mailed(found, prep, result), stopped=True)
+        rule_links.record(c, rule_links.mailed(found, result), stopped=True)
         return result
 
     return gate

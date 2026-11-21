@@ -7,7 +7,7 @@ export { StrategyPage, STRATEGY_TABS, strategyTabs, type StrategySearch, type St
 export type { GoalsSearch } from './GoalsPage';
 export { ProductsPage, type ProductsSearch } from './ProductsPage';
 export { RiskPage, type RiskSearch, type RiskView } from './RiskPage';
-export { RuleLinks } from './RuleLinks';
+export { LinksEntry, RuleLinks } from './RuleLinks';
 export { floorQuery, goalsTreeQuery, productsQuery, risksQuery, riskQuery, strategyQuery, type TreeGoal } from './queries';
 export {
   loadCompany,

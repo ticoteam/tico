@@ -20,6 +20,8 @@ with no OK (`report`, through the same send).
 `TICO_SUPPORT=off` removes the feature (an air-gapped install); PRIVACY.md and docs/support.md describe it.
 """
 
+import contextlib
+import contextvars
 import hashlib
 import json
 import logging
@@ -34,7 +36,7 @@ import httpx
 
 from pydantic import Field
 
-from . import diagnostics, support_asks, task_asks, team_rules
+from . import diagnostics, rule_links, support_asks, task_asks, team_rules
 from .census import hq_url
 from .auth import Identity, validate_identity
 from .models import Contract
@@ -44,6 +46,8 @@ from .store import H, Problem, encode, refusal_problem
 from .api_contract import api_v2
 
 log = logging.getLogger("tico.support")
+# (judge, identity) while a route may send a ticket: `file` checks the first delivery as that sender's (rule_links).
+LINK: contextvars.ContextVar[tuple | None] = contextvars.ContextVar("support_link", default=None)
 
 MAX_MESSAGE = 4000
 PER_DAY = 10  # new tickets one person may file in a day; HQ limits the address as well
@@ -574,6 +578,12 @@ class Support:
             payload["diagnostics"] = self.attachment(who, body.diagnostics)
         if body.kind != "support":
             payload["kind"] = sent["kind"] = body.kind
+        # An agent's report (its own, or a person's Assistant's or BotOps's) meets the org rules before its first
+        # delivery, one event with the ticket it makes (backend/rule_links.py). Log-only. A retry finds its ticket above.
+        asked = LINK.get()
+        found = (
+            rule_links.check(self.store, asked[0], asked[1], "support", "support_report", message) if asked else None
+        )
         answer = _ask_hq("POST", "/v1/support", body=payload, idem=idem)
         if answer.status_code == 422 and _refused_field(answer) == "fields":
             # An HQ from before source refuses it as an unknown field: the ticket goes again without it, keeping the
@@ -637,6 +647,7 @@ class Support:
             )
             if on_filed:
                 on_filed(c, ticket_id)
+            rule_links.record(c, found)
             return view(c.execute("SELECT * FROM support_tickets WHERE id=?", (ticket_id,)).fetchone())
 
     def report(self, who, payload, task_id="", check=None):
@@ -1018,6 +1029,15 @@ def install(app, store, settings, census):
         require_person(who)
         return who
 
+    @contextlib.contextmanager
+    def linked(request, who):
+        """While a route may send: whoever asked it to, for the support link's check at the first delivery (`LINK`)."""
+        token = LINK.set((request.app.state.judge, who))
+        try:
+            yield
+        finally:
+            LINK.reset(token)
+
     @app.get("/api/v2/support/tickets")
     def support_list(request: Request):
         who = person(request)
@@ -1071,7 +1091,8 @@ def install(app, store, settings, census):
         require_on(settings)
         # The person's own key, kept apart from the keys bots' tickets keep (approval:, health:): see OWN.
         key = (request.headers.get("idempotency-key") or "")[:200]
-        return support.file(who, body, "idem:" + key if key else "")
+        with linked(request, who):
+            return support.file(who, body, "idem:" + key if key else "")
 
     @app.get("/api/v2/support/setup-snapshot")
     def support_setup_snapshot(request: Request, asked_from: Literal["wizard", "health", "bot"] = "health"):
@@ -1115,26 +1136,19 @@ def install(app, store, settings, census):
 
             task_privacy.guard_write(c, getattr(request.state, "privacy_source", who), request.url.path, auth)
 
-        from . import rule_links
-
-        # An agent's report meets the org rules first (backend/rule_links.py), one event once it is made. Log-only.
-        said = str(body.payload.get("message") or "")
-        found = rule_links.check(store, request.app.state.judge, who, "support", "support_report", said)
         try:
-            out = support.report(who, body.payload, body.task_id, check=privacy_now)
+            with linked(request, who):
+                return support.report(who, body.payload, body.task_id, check=privacy_now)
         except H.Refused as exc:
             raise refusal_problem(exc) from None
-        if found:
-            with store.transaction() as c:
-                rule_links.record(c, found)
-        return out
 
     @app.post("/api/v2/support/tickets/from-approval")
     def support_file_approved(request: Request, body: SupportFromApproval):
         """A bot, a person's token or the Assistant sends the report a person OK'd (docs/support.md)."""
         require_on(settings)
         try:
-            return support.file_approved(request.state.identity, body.approval)
+            with linked(request, request.state.identity):
+                return support.file_approved(request.state.identity, body.approval)
         except H.Refused as exc:
             raise refusal_problem(exc) from None
 

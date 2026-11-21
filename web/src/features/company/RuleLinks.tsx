@@ -1,7 +1,9 @@
-import { useSuspenseQuery } from '@tanstack/react-query';
+import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
+import { useNavigate } from '@tanstack/react-router';
+import { MenuItem } from '@/kit/Menu';
 import { Table, Td, Th, Tr } from '@/kit/Table';
 import { List } from '@/pagekinds';
-import { ruleLinksQuery, type RuleLink } from './queries';
+import { accessQuery, ruleLinksQuery, type RuleLink } from './queries';
 import './company.css';
 
 /* Rules › Links (backend/rule_links.py): one table of the ways an agent's writes leave the company. A link is Enforced
@@ -59,4 +61,12 @@ function LinkRow({ link }: { link: RuleLink }) {
       </Td>
     </Tr>
   );
+}
+
+/** The Rules page's "⋯" entry to Links, for the owner and Admins only (the server refuses anyone else). */
+export function LinksEntry() {
+  const you = useQuery(accessQuery).data?.you;
+  const navigate = useNavigate();
+  if (you !== 'owner' && you !== 'admin') return null;
+  return <MenuItem label="Links" icon="link" onSelect={() => void navigate({ to: '/company/rules/links' })} />;
 }

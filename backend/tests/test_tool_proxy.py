@@ -470,17 +470,22 @@ def test_an_agents_write_is_rule_checked_before_the_key_goes_in_logged_once_and_
     [read] = judge.read
     for secret in (token, basic, token.split(".")[1], FULL):
         assert secret not in read
-    assert "favorite color is gold" in read and "[token]" in read and "api_key=%5Bkey%5D&mode=x" in read
+    assert "favorite color is gold" in read and "[token]" in read and "api_key=[key]&mode=x" in read
     with api.app.state.store.read() as c:
         rows = c.execute("SELECT actor, action, target, detail FROM events WHERE action LIKE 'rules.%'").fetchall()
     assert [(a, b, t) for a, b, t, _ in rows] == [("bot:ops", "rules.refused", "link:tool:close-crm")]
     detail = json.loads(rows[0]["detail"])
     assert (detail["rules"], detail["broken"], detail["would"]) == ([made["id"]], [made["id"]], True)
     assert token not in dump(api, "events", "tool_calls")
-    # A read, and an MCP call that only reads, are never counted.
+    # A read, and an MCP call that only reads sent to the tool's own MCP server, are never counted; the same call to
+    # any other address is a write like any other POST.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tools SET mcp_url='https://api.close.example/mcp' WHERE id='close-crm'")
     assert call(api, "GET", f"api/v1/lead/?api_key={token}", token).status_code == 200
     listing = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
     assert call(api, "POST", "mcp", token, json=listing).status_code == 200
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM events WHERE action LIKE 'rules.%'").fetchone()[0] == 1
-    assert len(judge.read) == 1
+    assert call(api, "POST", "api/v1/lead/", token, json=listing).status_code == 200
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM events WHERE action LIKE 'rules.%'").fetchone()[0] == 2
