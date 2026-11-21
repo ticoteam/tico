@@ -720,13 +720,12 @@ def _close(c: Any, row: Any, state: Any, actor: Any, via: Any, level: Any = None
 def _wake(c: Any, row: Any) -> Any:
     reconnects = _mod("reconnects")
 
-    # The waits on this request: its key, or the key it was asked under before Read only narrowed it. A repeat from a
-    # task can wait on a request first opened in chat, with no task of its own.
+    # The waits tied to this request, by its id: never another request's on the same key (Read only records Read, the
+    # key of a separate open request for Read). A repeat from a task can wait on a request first made in chat.
     keys = [
         r[0]
         for r in c.execute(
-            "SELECT DISTINCT key FROM task_reconnects WHERE key=? OR json_extract(fix,'$.request')=? ORDER BY key",
-            (_key(row), row["id"]),
+            "SELECT DISTINCT key FROM task_reconnects WHERE json_extract(fix,'$.request')=? ORDER BY key", (row["id"],)
         )
     ]
     if keys:

@@ -135,7 +135,7 @@ function KeyDropCard({ it, d }: { it: NeedsYouItem; d: NonNullable<NeedsYouItem[
       target={`request:${it.id}`}
       error={error}
       actions={
-        <Button variant="primary" disabled={!kept.size} onClick={once(() => grantKeyDrop(it.id, d.message_id, [...kept].sort((x, y) => x - y)), keyDropDone, name)}>
+        <Button variant="primary" disabled={!kept.size} onClick={once(() => grantKeyDrop(it.id, d.message_id, [...kept].sort((x, y) => x - y), d.losses), keyDropDone, name)}>
           Grant selected
         </Button>
       }

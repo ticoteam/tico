@@ -749,10 +749,11 @@ export interface KeyDropAnswer {
   results?: { key: string; ok: boolean; detail: string }[];
 }
 
-/** Grant the key-drop proposal's rows kept (their positions). */
-export const grantKeyDrop = (item: string, message: string, keep: number[]) =>
+/** Grant the key-drop proposal's rows kept (their positions), with the loss preview the card showed (`seen`): the
+    server refuses with a 409 when who keeps and loses access moved since. */
+export const grantKeyDrop = (item: string, message: string, keep: number[], seen: string) =>
   answerRequest(
     item,
-    (idem) => api.post<KeyDropAnswer>(`/api/v2/tools-chat/proposals/${enc(message)}/grant`, { keep }, { idempotencyKey: idem }),
+    (idem) => api.post<KeyDropAnswer>(`/api/v2/tools-chat/proposals/${enc(message)}/grant`, { keep, seen }, { idempotencyKey: idem }),
     (out) => out.state !== 'proposed',
   );

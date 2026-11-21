@@ -230,3 +230,33 @@ def test_read_only_on_a_repository_github_misses_closes_the_request_and_frees_it
         r["full_name"]: r["access"] for r in api.get("/api/v2/bots/cpo/repositories", headers=auth()).json()["chosen"]
     }
     assert chosen["Acme/docs"] == "read"
+
+
+def test_read_only_wakes_only_its_own_tasks_and_a_separate_read_request_settles_as_usual(api, gh):
+    from backend import reconnects
+    from backend.store import H
+
+    catalog(api, gh)
+    api.app_state.auth.owner_email = "ana@acme.example"
+    for name in ("product", "docs"):
+        put(api, "repositories/Acme/" + name, {"enabled": True})
+    put(api, "bots/cpo/repositories", {"mode": "all", "all_access": "write"})
+    missing(api, "Acme/docs")
+    with api.app_state.store.transaction() as c:
+        reads = H.task_create(c, "human:ana", "Read the docs", "Details.", "bot:cpo", lint=False)["id"]
+        writes = H.task_create(c, "human:ana", "Fix the docs", "Details.", "bot:cpo", lint=False)["id"]
+    reading = ask(api, "Acme/docs", task=reads)
+    writing = ask(api, "Acme/docs", "read_write", task=writes)
+    assert read_only(api, writing["id"])["state"] == "granted"
+    with api.app_state.store.read() as c:
+        assert reconnects.hold(c, writes) is None
+        assert reconnects.hold(c, reads) is not None  # its own request is still open: GitHub misses Acme/docs
+    assert row(api, reading["id"])["state"] == "open"
+    missing(api, "Acme/docs", gone=False)
+    from backend import access_requests as AR
+
+    with api.app_state.store.transaction() as c:
+        AR.settled(c)
+    with api.app_state.store.read() as c:
+        assert reconnects.hold(c, reads) is None
+    assert row(api, reading["id"])["state"] == "granted"

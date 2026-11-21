@@ -249,21 +249,31 @@ def propose(c: Any, who: Any, thread_id: str, rows: list[Row], note: str = "") -
 
 
 def _refusal(c: Any, vault: Any, who: Any, rows: list[Row]) -> Problem | None:
-    """Why `who` may not grant these rows, or None: a tool they cannot see is not there for them (404); one they see but
-    may not grant on is a 403. A deleted tool refuses nothing (`superseded` is for a card whose tools are all gone).
-    Listing and the whole card ask it of every row; Grant of the rows kept."""
+    """Why `who` may not grant these rows, or None: a tool they cannot see is not there for them (404), checked first;
+    then a person who may not grant keys, or a tool they see but may not grant on, is a 403 that names nobody. A
+    deleted tool refuses nothing (`superseded` is for a card whose tools are all gone). Listing and the whole card ask
+    it of every row; Grant of the rows kept."""
     from . import tool_access as TA
 
-    for row in rows:
-        tool = c.execute("SELECT * FROM tools WHERE id=?", (row["tool_id"],)).fetchone()
-        if tool is None:
-            continue
-        found = TA.decide(c, who, TA.tool(tool), "", TA.GRANT, admins=vault.admins, auth=vault.auth)
-        if found.hidden:
-            return Problem("not_found", "No key proposal here", 404)
-        if not found.ok:
-            return Problem("forbidden", "You can't grant this", 403)
+    def decide(tool: Any) -> Any:
+        return TA.decide(c, who, TA.tool(tool), "", TA.GRANT, admins=vault.admins, auth=vault.auth)
+
+    found = [c.execute("SELECT * FROM tools WHERE id=?", (row["tool_id"],)).fetchone() for row in rows]
+    tools = [t for t in found if t is not None]
+    if any(decide(t).hidden for t in tools):
+        return Problem("not_found", "No key proposal here", 404)
+    if not decide(None).ok or not all(decide(t).ok for t in tools):
+        return Problem("forbidden", "You can't grant this", 403)
     return None
+
+
+def losses(c: Any, rows: list[Row], owner: str) -> str:
+    """The card's loss preview as a short hash: which key each row replaces, and who keeps and loses access, as the
+    tools' grants stand now. Needs you shows it; Grant compares what the card showed with it."""
+    import hashlib
+
+    shown = json.dumps([_replaced(c, r, owner) for r in rows], sort_keys=True)
+    return hashlib.sha1(shown.encode()).hexdigest()[:12]
 
 
 def _superseded(c: Any, rows: list[Row]) -> bool:
@@ -304,7 +314,8 @@ def proposed_for(c: Any, vault: Any, who: Any) -> list[Row]:
         ):
             # Who keeps and who loses access, as the tools' grants stand now (Grant refuses when it moved since).
             rows = [r | {"replaces": _replaced(c, r, owner)} for r in card["rows"]]
-            out.append(card | {"rows": rows, "message_id": m["id"], "created_at": m["created_at"], "by": owner})
+            shown = {"losses": losses(c, card["rows"], owner), "message_id": m["id"], "created_at": m["created_at"]}
+            out.append(card | {"rows": rows, "by": owner} | shown)
     return out
 
 
@@ -353,51 +364,38 @@ def _save(c: Any, message_id: str, card: Row) -> None:
     c.execute("UPDATE messages SET refs=? WHERE id=?", (json.dumps(refs), message_id))
 
 
-def _losses(rows: list[Row]) -> list[Any]:
-    """Who each row says loses access with the key it replaces."""
-    out: list[Any] = []
-    for r in rows:
-        replaced: Row = r.get("replaces") or {}
-        out.append(replaced.get("loses") or [])
-    return out
-
-
-def grant(store: Any, vault: Any, who: Any, message_id: str, keep: list[int] | None = None) -> Row:
+def grant(
+    store: Any, vault: Any, who: Any, message_id: str, keep: list[int] | None = None, seen: str | None = None
+) -> Row:
     """The person's Grant: exactly the rows kept (`keep`: their positions; None keeps all), then each tool's check.
-    The card after it, with a result per row: Connected to <tool>, or Didn't work: <reason>. When who loses access
-    moved since the card said it, nothing is granted: the card is brought up to date and the answer is a 409."""
+    The card after it, with a result per row: Connected to <tool>, or Didn't work: <reason>. `seen`: the loss preview
+    the card showed (`losses`); when who keeps and loses access moved since, nothing is granted and the answer is a
+    409. An administrator's tap (`_refusal`)."""
     api_tools = _api_tools()
-    moved = False
     with store.transaction() as c:
-        from . import tool_access as TA
-
-        # An administrator's tap; a refusal names nobody.
-        if not TA.decide(c, who, TA.tool(), "", TA.GRANT, admins=vault.admins, auth=vault.auth).ok:
-            raise Problem("forbidden", "You can't grant this", 403)
         message: Row | None = H.message(c, message_id)
         card = _card(message or {})
         owner = _owner(c)
         if not owner or not message or card is None or message.get("sender_id") != owner:
-            raise Problem("not_found", "No key proposal here", 404)
-        thread = _thread(c, message["conversation_id"], owner)
-        if who.actor not in _members(c, thread):
             raise Problem("not_found", "No key proposal here", 404)
         if card["state"] == "proposed" and _superseded(c, card["rows"]):
             gone: Row = {**card, "state": "superseded"}  # its tools are all gone: it leaves the queue
             card = gone
             _save(c, message_id, card)
             _events().needs_moved(c, [card["person"]], "key_drop")
-        if card["state"] != "proposed":
-            refused = _refusal(c, vault, who, card["rows"])
-            if refused:
-                raise refused
-            return card
         positions = list(range(len(card["rows"]))) if keep is None else [int(i) for i in keep]
-        if not positions or any(i < 0 or i >= len(card["rows"]) for i in positions):
+        if card["state"] == "proposed" and (not positions or any(i < 0 or i >= len(card["rows"]) for i in positions)):
             raise Problem("proposal", "Keep at least one of the card's rows", 422)
-        refused = _refusal(c, vault, who, [card["rows"][i] for i in positions])
+        # A hidden tool first (404), then who may grant (403); then whose card it is (404).
+        refused = _refusal(
+            c, vault, who, [card["rows"][i] for i in positions] if card["state"] == "proposed" else card["rows"]
+        )
         if refused:
             raise refused
+        if who.actor not in _members(c, _thread(c, message["conversation_id"], owner)):
+            raise Problem("not_found", "No key proposal here", 404)
+        if card["state"] != "proposed":
+            return card
         # Checked again at Grant: the rows are the server's, and a key or bot may have changed since.
         again = [card["rows"][i] for i in positions]
         rows = _rows(
@@ -409,20 +407,13 @@ def grant(store: Any, vault: Any, who: Any, message_id: str, keep: list[int] | N
             card["person"],
             owner,
         )
-        if _losses(again) != _losses(rows):
-            fresh = list(card["rows"])
-            for i, row in zip(positions, rows, strict=True):
-                fresh[i] = fresh[i] | {"replaces": row["replaces"]}
-            _save(c, message_id, card | {"rows": fresh})
-            moved = True
-        else:
-            for row in rows:
-                _attach(c, who, vault, row)
-            card = card | {"state": "granted", "rows": rows, "granted_by": who.actor, "results": []}
-            _save(c, message_id, card)
-            _events().needs_moved(c, [card["person"]], "key_drop")  # settled: it leaves their Needs you
-    if moved:
-        raise Problem("changed", "Who loses access changed: check the card again", 409)
+        if seen is not None and seen != losses(c, card["rows"], owner):
+            raise Problem("changed", "Who loses access changed: check the card again", 409)
+        for row in rows:
+            _attach(c, who, vault, row)
+        card = card | {"state": "granted", "rows": rows, "granted_by": who.actor, "results": []}
+        _save(c, message_id, card)
+        _events().needs_moved(c, [card["person"]], "key_drop")  # settled: it leaves their Needs you
     results: list[Row] = []
     for tool_id in dict.fromkeys(r["tool_id"] for r in rows):
         try:

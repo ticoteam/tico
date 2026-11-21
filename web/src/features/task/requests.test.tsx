@@ -38,6 +38,7 @@ const DROP: FlowRequest = {
   key_drop: {
     message_id: 'm1',
     state: 'proposed',
+    losses: 'l0ss',
     rows: [
       { key: 'JIRA_LOGIN', tool_name: 'Jira', level: 'read', bots: [{ id: 'bot:builder', name: 'Builder' }], replaces: null },
       {
@@ -186,7 +187,7 @@ describe('a key-drop proposal in Needs you', () => {
     expect(box.textContent).toContain('Close CRM · Read and write · Sales OwnerReplaces Close old · Tools Owner lose access');
     fireEvent.click(within(box).getByText('Close CRM', { exact: false }));
     fireEvent.click(within(box).getByRole('button', { name: 'Grant selected' }));
-    await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/tools-chat/proposals/m1/grant', body: { keep: [0] } }]));
+    await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/tools-chat/proposals/m1/grant', body: { keep: [0], seen: 'l0ss' } }]));
     await gone('Key proposal');
     await waitFor(() => expect(document.querySelector('.toasts')?.textContent).toContain('Granted, 1 not connected: JIRA_LOGIN for Jira'));
   });

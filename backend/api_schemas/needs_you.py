@@ -66,6 +66,7 @@ NEEDS_ITEM = obj(
         {
             "message_id": "s",
             "state": "s",
+            "losses": "s",
             "rows": items(
                 obj(
                     {

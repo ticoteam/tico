@@ -72,7 +72,9 @@ def test_needs_you_lists_each_request_only_to_someone_who_may_settle_it_and_its_
     refusals = [
         post(api, f"access-requests/{rid}/grant", {}, "cara-test", expected=403),
         post(api, f"credential-requests/{mine['key']['key']['id']}/save", {"value": NEW}, "cara-test", expected=404),
-        post(api, f"tools-chat/proposals/{mid}/grant", {"keep": [0]}, "cara-test", expected=403),
+        post(
+            api, f"tools-chat/proposals/{mid}/grant", {"keep": [0]}, "cara-test", expected=404
+        ),  # she can't see the tool
     ]
     assert not any(name in str(refusals) for name in ("Ana", "Ben", "human:"))  # a refusal names nobody
 
@@ -183,3 +185,37 @@ def test_a_key_proposal_whose_tools_are_all_deleted_is_superseded(api, monkeypat
     assert api.delete(f"/api/v2/api-tools/{crm}", headers=headers()).status_code == 200
     assert "key_drop" not in requests(api, "ana-test")
     assert post(api, f"tools-chat/proposals/{mid}/grant", {"keep": [0]})["state"] == "superseded"
+
+
+def test_a_grant_from_a_card_whose_loss_preview_moved_is_refused(api, monkeypatch):
+    # Two tabs show the same proposal; a read key is put on Close CRM, so the proposal's row now replaces it. The tab
+    # still showing the old preview is refused with a 409; one showing the new preview grants.
+    _, mid, _ = world(api, monkeypatch)
+    stale = requests(api, "ana-test")["key_drop"]["key_drop"]
+    with api.app.state.store.read() as c:
+        crm = c.execute("SELECT id FROM tools WHERE name='Close CRM'").fetchone()[0]
+    key(api, crm, "acme-close-synthetic-read-0099887766", "read")
+    fresh = requests(api, "ana-test")["key_drop"]["key_drop"]
+    assert fresh["losses"] != stale["losses"] and fresh["rows"][0]["replaces"]["key"] == "Close read"
+    body = {"keep": [0], "seen": stale["losses"]}
+    assert post(api, f"tools-chat/proposals/{mid}/grant", body, expected=409)["error"]["code"] == "changed"
+    assert post(api, f"tools-chat/proposals/{mid}/grant", body | {"seen": fresh["losses"]})["state"] == "granted"
+
+
+def test_a_grant_refusal_says_not_found_for_a_hidden_tool_before_forbidden(api, monkeypatch):
+    from backend import key_grants
+
+    world(api, monkeypatch)
+    with api.app.state.store.read() as c:
+        crm = c.execute("SELECT id FROM tools WHERE name='Close CRM'").fetchone()[0]
+        ads = c.execute("SELECT id FROM tools WHERE name='Acme Ads'").fetchone()[0]
+    nobody = {"audience": {"everyone": False, "people": [], "teams": [], "bots": []}}
+    assert api.patch(f"/api/v2/api-tools/{ads}", json=nobody, headers=headers()).status_code == 200
+    cara = {"audience": {"everyone": False, "people": ["cara"], "teams": [], "bots": []}}  # she sees Close CRM
+    assert api.patch(f"/api/v2/api-tools/{crm}", json=cara, headers=headers()).status_code == 200
+    vault = api.app.state.vault
+    with api.app.state.store.read() as c:
+        cara = api.app.state.auth.identity_for_actor(c, "human:cara")
+        visible = key_grants._refusal(c, vault, cara, [{"tool_id": crm}])  # pyright: ignore[reportPrivateUsage]
+        hidden = key_grants._refusal(c, vault, cara, [{"tool_id": crm}, {"tool_id": ads}])  # pyright: ignore[reportPrivateUsage]
+    assert (visible.status, hidden.status) == (403, 404)
