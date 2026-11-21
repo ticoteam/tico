@@ -248,6 +248,26 @@ def test_an_install_with_its_own_assistant_slug_scopes_that_bots_runs(api, monke
         assert not H.task_private_readable(c, principal, H.task(c, other))
 
 
+def test_an_ok_asked_of_the_person_reads_as_theirs_in_their_own_chat(api):
+    """A bound OK's words are its parties': in Ana's own chat her Assistant reads the OK asked of her, as she does;
+    Cara, no party, reads that it waits on a person's OK and no more."""
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, "human:ana", "Ship the fix", "Soon.", "bot:ops")
+        asked = X.ok_ask(c, task["id"], "bot:ops", "human:ana", "OK to ship the fix Friday?")
+        c.execute(  # bound to what it lets go (task_asks.ask_ok): its words are its parties'
+            "INSERT INTO ok_grants(requirement_id,asked_by_id,asked_of_id,subject,content_hash,content,filed,created_at) "
+            "VALUES(?,'bot:ops','human:ana','budget_raise:fix','x','{}',0,?)",
+            (asked["requirement_id"], H.now()),
+        )
+    r, attempt = assistant_turn(api, "ana-test", text="What waits on me?")
+
+    def lines(token):
+        return [entry.get("line") for entry in get(api, "tasks/" + task["id"], token)["task"]["to_leave"]]
+
+    assert "OK to ship the fix Friday?" in lines(attempt["token"])
+    assert "OK to ship the fix Friday?" not in lines("cara-test")
+
+
 def test_a_private_task_is_never_the_shared_assistants_as_owner_or_reader(api):
     """One Assistant serves everyone, so a private task naming it would be read by its runs for all: refused as owner or
     reader, on create and on a later change, from the person's own chat and from the person directly."""

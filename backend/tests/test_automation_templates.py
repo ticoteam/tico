@@ -456,6 +456,26 @@ def test_a_routine_turn_reads_the_turn_it_was_woken_for_and_no_other_of_its_pers
                 "ref"
             ],
         )
+        # The earlier turn's routine, as it ran: whose inbox it works on (rooms._routine_person).
+        c.execute(
+            "INSERT INTO automations(id,name,owner_id,trigger_type,enabled,flow,version,created_at,created_by_id,"
+            "updated_at) VALUES('auto_old','Inbox','bot:assistant','message',1,?,1,?,'human:ana',?)",
+            (json.dumps(flow), H.now(), H.now()),
+        )
+        c.execute(
+            "INSERT INTO automation_holds(ref,automation_id,run_id,amount,created_at) VALUES(?,'auto_old','run_old',0,?)",
+            (earlier["id"], H.now()),
+        )
+        # A wake stored before this release listed the earlier turn to reconcile with.
+        wake = c.execute(
+            "SELECT m.id,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE json_extract(m.refs,'$.task')=?",
+            (newer["id"],),
+        ).fetchone()
+        refs = {
+            **json.loads(wake["refs"]),
+            "reconcile": {"with_actor": "bot:assistant", "active": [{"id": earlier["id"]}]},
+        }
+        c.execute("UPDATE messages SET refs=? WHERE id=?", (json.dumps(refs), wake["id"]))
     machine = runner(api)
     with api.app.state.store.read() as c:
         held = c.execute(
@@ -463,22 +483,35 @@ def test_a_routine_turn_reads_the_turn_it_was_woken_for_and_no_other_of_its_pers
         ).fetchone()
     assign(api, machine, "assistant", held["generation"] if held else 0)
     ready(api, machine, ["assistant"])
-    runs = {}
-    for _ in range(2):
-        attempt = claim(api, machine)
-        runs[attempt["task"]["id"]] = attempt
+    runs, keys = {}, {}
+    for n in range(2):
+        attempt = claim(api, machine, key=f"claim-{n}")
+        runs[attempt["task"]["id"]], keys[attempt["task"]["id"]] = attempt, f"claim-{n}"
     old, new = runs[earlier["id"]], runs[newer["id"]]
-    assert earlier["id"] not in json.dumps(new), "the new turn's claim names the earlier turn"
+    replayed = claim(api, machine, key=keys[newer["id"]])
+    for shown in (new, replayed):
+        assert earlier["id"] not in json.dumps(shown), "the new turn's claim names the earlier turn"
     for run, own, other in ((old, earlier, newer), (new, newer, earlier)):
         assert api.get("/api/v2/tasks/" + own["id"], headers=headers(run["token"])).status_code == 200
         assert api.get("/api/v2/tasks/" + other["id"], headers=headers(run["token"])).status_code == 404
+    # A duplicate it may not read is never named to it: not by a dry run, not by a create's refusal.
+    with api.app.state.store.transaction() as c:
+        twin = H.task_create(c, "human:ben", "Pay run", "Ben's.", "bot:ops", private=False, lint=False)["id"]
+        c.execute(  # an earlier private one the Assistant asked for, filed before #4841
+            "UPDATE tasks SET private=1, requester_id='bot:assistant' WHERE id=?", (twin,)
+        )
+    ask = {"owner": "ops", "title": "Pay run", "body": "Mine."}
+    for path in ("tasks/dry-run", "tasks"):
+        answer = api.post("/api/v2/" + path, json=ask, headers=headers(new["token"]))
+        assert twin not in answer.text, (path, answer.text)
     with api.app.state.store.transaction() as c:
         doc = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         for person in doc["people"]:
             if person.get("id") == "ana":
                 person["sign_in"] = False
         c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(doc),))
-    assert api.get("/api/v2/tasks/" + newer["id"], headers=headers(new["token"])).status_code == 404
+    for run, own in ((new, newer), (old, earlier)):  # the earlier turn too: its routine works on Ana's inbox
+        assert api.get("/api/v2/tasks/" + own["id"], headers=headers(run["token"])).status_code == 404
 
 
 def test_a_mail_turn_title_names_the_sender_when_the_subject_is_empty():

@@ -414,7 +414,10 @@ def file_visible(c, auth, who, row, cache):
     to the Rules Owner run a person asked to read it (asked_to_read)."""
     if who.role not in ("owner", "human", "bot"):
         return False
-    if not page_audience_visible(c, auth, who, row, cache):
+    # A page's own audience and its pins are read as the request sees (auth.run_viewer: a run of the shared Assistant in
+    # a person's own chat as that person); its task, below, by the run's principal.
+    reader = auth.run_viewer(c, who)
+    if not page_audience_visible(c, auth, reader, row, cache):
         return False
     if asked_to_read(c, who, row["id"], cache=cache, auth=auth):
         return True
@@ -448,7 +451,7 @@ def file_visible(c, auth, who, row, cache):
         return True
     from . import cards
 
-    return cards.widened(c, auth, who, row["id"], cache)
+    return cards.widened(c, auth, reader, row["id"], cache)
 
 
 def page_rows(c, ids):

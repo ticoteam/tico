@@ -820,7 +820,8 @@ PRIVATE_LINE = "Waits on a person's OK"
 def party(conn: "sqlite3.Connection", actor: object, row: Row) -> bool:
     """Whether `actor` is one of the OK's parties: who asked, who it was asked of (and gave it), or the company's owner
     or an Admin. Nobody else, not whoever the ask was handed to, nor anyone who reads its task."""
-    who = str(actor or "")
+    # A run of the shared Assistant sees an OK as the person whose own chat it runs in (hubdb.read_as).
+    who = str(_h().read_as(conn, actor) or "")
     if not who:
         return False
     if who in {row["asked_by_id"], row.get("asked_of_id"), row.get("ok_by_id")} - {None, ""}:

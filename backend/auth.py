@@ -607,7 +607,9 @@ class Auth:
             if person is None:
                 raise Problem("privacy", "The person can no longer run this page request", 403)
             principal = replace(person, task_actor="")
-        if not privacy.attempt_readable(c, privacy.actor(principal), aid):
+        # The lease's own standing, as the claim checks it (execution.refuse_unreadable): the actor itself. What the
+        # receipt shows is then read as the run (task_privacy.actor).
+        if not privacy.attempt_readable(c, principal.actor, aid):
             raise Problem("privacy", "This execution is no longer available", 403)
         if attempt["acting_person"]:
             for task_id in privacy.attempt_tasks(c, aid):

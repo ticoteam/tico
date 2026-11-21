@@ -2576,6 +2576,23 @@ class RunPrincipal(str):
         return f"RunPrincipal({str(self)!r}, {self.attempt!r})"
 
 
+def read_as(conn, actor):
+    """The actor a read check names, as it sees: the person, for a run of the shared Assistant in their own chat
+    (rooms.run_scope); "" for one whose person may no longer sign in; anyone else as themselves."""
+    if not isinstance(actor, RunPrincipal) or actor != assistant_actor(conn):
+        return actor
+    from .rooms import run_scope
+
+    kind, value = run_scope(conn, actor.attempt)
+    return value if kind == "person" else "" if kind == "gone" else str(actor)
+
+
+def running_as(conn, actor):
+    """`actor`, as the run of the request reads (RUN): the shared Assistant's run is a RunPrincipal (rooms.run_scope)."""
+    attempt = RUN.get()
+    return run_principal(actor, attempt) if attempt and actor == assistant_actor(conn) else actor
+
+
 def run_principal(actor, attempt):
     principal = RunPrincipal(actor)
     principal.attempt = attempt
@@ -4869,7 +4886,7 @@ def task_create(
         )
     if (
         dup
-        and task_private_readable(conn, actor, task(conn, dup["id"]))
+        and task_private_readable(conn, running_as(conn, actor), task(conn, dup["id"]))
         and (turn or deduplicate or actor != TICO_ACTOR)
     ):
         detail = (
@@ -5194,7 +5211,7 @@ def _retitle(conn, actor, row, title, owner, general):
         (row["id"], row["requester_id"], target, parent or "", *ACTIVE_STATUSES),
         title,
     )
-    if dup and task_private_readable(conn, actor, task(conn, dup["id"])):
+    if dup and task_private_readable(conn, running_as(conn, actor), task(conn, dup["id"])):
         detail = (
             "An existing task already asks for this work"
             if VIA.get() and task_private(conn, task(conn, dup["id"]))
