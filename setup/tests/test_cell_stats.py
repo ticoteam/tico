@@ -1220,6 +1220,45 @@ def test_requests_the_tick_has_no_time_for_wait_for_the_next(box):
     assert posted == [f"dbg_{i:016x}" for i in range(3)]
 
 
+def test_push_prunes_once_an_hour_from_the_core_it_runs_from(box):
+    enrolled(box)
+    pruned = []
+    real = box.run
+
+    def run(argv, timeout=20, cwd=None):
+        if argv[1:] == ["-m", "setup", "cell", "prune"]:
+            pruned.append((cwd, timeout))
+            return Result(0, '{"ok": true, "images_removed": 3, "cores_removed": 2}\n')
+        return real(argv, timeout, cwd)
+
+    box.run = run
+    out = io.StringIO()
+    cs.push(box, out=out)
+    assert json.loads(out.getvalue())["prune"] == {"ok": True, "images_removed": 3, "cores_removed": 2}
+    assert [c for c, _ in pruned] == [str(box.path(cs.CORE_LINK))] and 0 < pruned[0][1] <= cs.TICK_BUDGET
+    out = io.StringIO()
+    cs.push(box, out=out)  # the same hour: not again
+    assert json.loads(out.getvalue())["prune"] is None and len(pruned) == 1
+
+
+def test_a_full_disk_still_pushes_and_prunes(box, monkeypatch):
+    enrolled(box)
+    pruned = []
+    real = box.run
+    box.run = lambda argv, timeout=20, cwd=None: (
+        pruned.append(argv) or Result(0, '{"ok": true}\n') if argv[-1] == "prune" else real(argv, timeout, cwd)
+    )
+
+    def full(*a, **k):
+        raise OSError(28, "No space left on device")
+
+    cs._write_private(box.path(cs.QUEUE), {"items": []})  # a saved queue the tick rewrites
+    monkeypatch.setattr(cs, "_write_private", full)
+    out = io.StringIO()
+    assert cs.push(box, out=out) == 0
+    assert json.loads(out.getvalue())["prune"] == {"ok": True} and len(pruned) == 1
+
+
 def test_push_without_enrollment_says_so(box):
     with pytest.raises(SystemExit, match="not enrolled"):
         cs.push(box, out=io.StringIO())

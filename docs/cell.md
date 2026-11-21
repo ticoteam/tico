@@ -129,6 +129,7 @@ Each command prints exactly one JSON object on stdout and exits 0 or 1. An error
 | `pull_failed` | The image could not be pulled |
 | `stop_failed` | The server (or its Slack gateway) could not be stopped, or Docker still says it runs. From `update`: nothing changed and the old release runs again |
 | `snapshot_failed` | `update` could not copy the database; nothing changed and the old release runs again |
+| `disk_full` | `update`: the database copy would leave less than 1 GB free, even after `prune`; nothing was copied and the old release runs again |
 | `docker_failed` | A Docker or Compose call failed |
 | `router_failed` | The router refused its new config (the old config stays) |
 | `firewall_failed` | The metadata firewall rule, or Tico Meet's `INPUT` rules for 7880, could not be set |
@@ -193,12 +194,20 @@ A company's `state` is one of `running`, `starting`, `unhealthy`, `stopped`, `sl
 - **The backup key file** is either `KEY=VALUE` lines (`LITESTREAM_ACCESS_KEY_ID` and `LITESTREAM_SECRET_ACCESS_KEY`,
   or the `AWS_` names), or the JSON that `aws iam create-access-key` prints. Give each company its own key, limited to
   its own prefix of the bucket. Containers cannot use the host's role.
+- **Disk.** Every release leaves its server image and its core folder (`/opt/tico-cell/core-vX.Y.Z`) behind. `prune`
+  removes the ones no company needs: it keeps each company's release, the one a pending update would roll back to, and
+  anything newer or under way (`updater-status.json`). A core folder also stays while `init` ran from it (`cell.json`
+  `init_cores`: HQ runs every command from the core it installed), a link (`stats-core`) or a `tico-*` unit names it, a
+  process runs in it, or it is under an hour old. It runs after every successful `update` and hourly from
+  [cell stats](cell-stats.md); with no company on the host it removes nothing.
 - **Ports and networks.** Each company gets the smallest free slot `i`. The slot sets its loopback port
   (`20000 + i`), its default network (the `i`-th /24 of `10.208.0.0/12`) and its edge network (the `i`-th /28 of
   `10.224.0.0/16`). The slot is saved in `company.json`, so it survives restarts. It is freed only by `remove`
   without `--keep-data`.
 - **Updates.** `update` pulls the new image first: if the pull fails, nothing changes. It then stops the server and
-  waits until Docker says it is stopped, copies its database to `snapshots/` (the last two are kept), and only then
+  waits until Docker says it is stopped, copies its database to `snapshots/` (the last two are kept; the oldest goes
+  before the copy; short of room for it plus 1 GB, `update` runs `prune` before it stops the server, and a copy that
+  still does not fit fails as `disk_full`), and only then
   points `.env` at the new release, with the update marked pending in `company.json`. If the stop or the copy fails,
   nothing changes and the old release is started again. A running company starts the new release at once. A stopped
   company stays stopped, and its next `start` (or `add`) starts the new release; a sleeping one stays asleep, and its

@@ -345,6 +345,13 @@ DAEMON_SETTINGS = {"log-driver": "json-file", "log-opts": {"max-size": "10m", "m
 HEALTH_TIMEOUT = 300
 MEET_RENEW_EVERY = 600.0  # seconds between the cell updater's checks for a renewed TURN certificate (Cell.meet_renew)
 SNAPSHOTS_KEPT = 2
+SNAPSHOT_SPARE = 1 << 30  # free bytes a snapshot must leave beyond its own copy
+# Release folders, as HQ and the cell updater install them (setup/cell_updater.py CORES), under the host root.
+CORES = "opt/tico-cell"
+CORE_DIR_RE = re.compile(r"core-(v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.]+)?)")
+UNIT_DIR = "etc/systemd/system"
+FRESH_S = 3600  # a core folder this new may be a running update's; a leftover .prune-* this old is not
+PRUNE_S = 30  # seconds one prune may take (an update waits for its own); the next one goes on
 DB_FILES = ("hub.sqlite", "hub.sqlite-wal", "hub.sqlite-shm")
 STOPPED = ("", "exited", "created", "dead")  # container states in which nothing has the database open
 # Each company's updater (setup/cell_updater.py): this port on its default network's gateway address, nowhere else.
@@ -487,6 +494,10 @@ class System:
 
     def linux(self) -> bool:
         return sys.platform.startswith("linux")
+
+    def free_bytes(self, path: str) -> int:
+        v = os.statvfs(path)
+        return v.f_bavail * v.f_frsize
 
     def latest_release(self) -> str:
         from .wizard import _latest_release
@@ -885,6 +896,7 @@ def parser() -> Parser:
     k.add_argument("--company", required=True, metavar="SLUG")
     k.add_argument("state", choices=["on", "off"])
     k.add_argument("--timeout", type=int, default=HEALTH_TIMEOUT, help="seconds to wait for /healthz")
+    cmd("prune", "remove the release images and core folders no company here needs any more (also after each update)")
     u = cmd("update", "run another release; the database is snapshotted first and put back if it does not come up")
     u.add_argument("--company", required=True, metavar="SLUG")
     u.add_argument("--version", required=True)
@@ -2110,11 +2122,16 @@ class Cell:
             meet_domain = was_on
         if self.write_router(meet=bool(meet_domain)):
             changed.append("router")
+        # The cores the units ran from before this rewrites them: a host set up before init_cores keeps them pinned.
+        before = {f"core-{v}" for u in (UPDATER_UNIT, WAKE_UNIT) for v in CORE_DIR_RE.findall(_read(self.host / u))}
         if self.updater_service():
             changed.append("updater")
         if self.wake_service():
             changed.append("wake")
         cell = {**saved, "domain": domain, "router": f"http://{ROUTER_ADDRESS}:{ROUTER_PORT}"}
+        pinned = {*saved.get("init_cores", []), *before, *([own_core()] if CORE_DIR_RE.fullmatch(own_core()) else [])}
+        if pinned:  # HQ runs every later command from the core it last ran init from
+            cell["init_cores"] = sorted(pinned)
         for name, value in (("page_domain", page_domain), ("meet_domain", meet_domain), ("kms_key", kms_key)):
             if value:
                 cell[name] = value
@@ -3133,6 +3150,7 @@ class Cell:
         --kms-key and --kms-credentials-file put the company's stored secrets on KMS (`kms_values`); left out, the
         saved ones stay. The answer says whether KMS is set (`kms_answer`)."""
         answer = self._update(args)
+        self.prune_quietly()  # every release leaves an image and a core folder behind; outside the company's lock
         return {**answer, **kms_answer(envfile.parse(_read(self.dir(answer["company"]) / ".env")))}
 
     def _update(self, args) -> dict:
@@ -3178,7 +3196,9 @@ class Cell:
                 else:
                     ready = self.wait_healthy(c, started, args.timeout) if running else 0
                 return self.answer(c, ready, changed)
+            self.make_room(slug, args.version, pending)
             self.pull(args.version)
+            self.make_room(slug, args.version, pending)  # the pull may have taken the room
             try:
                 self.ensure_stopped(slug)
                 # An update still pending keeps its release and snapshot: the database has not moved on since.
@@ -3215,11 +3235,30 @@ class Cell:
         err.extra = {"version": c["version"]}
         return err
 
+    def make_room(self, slug: str, target: str, pending) -> None:
+        """Before an update stops the server: `prune` (keeping `target`) when its snapshot would not fit."""
+        if not pending and self.short_of_space(slug):
+            self.prune_quietly({target})
+
+    def short_of_space(self, slug: str) -> int:
+        """Bytes a snapshot of the company's database would still need on this disk (0: it fits with SNAPSHOT_SPARE)."""
+        data = self.dir(slug) / "data"
+        size = 0
+        for n in DB_FILES:
+            with contextlib.suppress(OSError):  # the server's WAL and SHM come and go
+                size += os.lstat(data / n).st_size
+        with contextlib.suppress(OSError):
+            return max(0, size + SNAPSHOT_SPARE - self.system.free_bytes(str(data)))
+        return 0
+
     def snapshot(self, slug: str, version: str) -> str:
         """The stopped server's database, before a new release migrates it, in snapshots/<name>; the name, or "" when
-        there is no database yet. The last SNAPSHOTS_KEPT are kept. data/ belongs to the server, and its updater lets
-        the company itself start this, so only plain files are copied: a symlink there would have root copy a host file
-        into snapshots/, and a rollback would hand it to the server."""
+        there is no database yet. The last SNAPSHOTS_KEPT are kept, the oldest removed before the copy so the disk
+        never holds one more. A copy that would leave less than SNAPSHOT_SPARE free is refused as disk_full before a
+        byte is copied (`update` has `prune` make room before it stops the server).
+        data/ belongs to the server, and its updater lets the company itself start this, so only plain files are
+        copied: a symlink there would have root copy a host file into snapshots/, and a rollback would hand it to the
+        server."""
         data, snaps = self.dir(slug) / "data", self.dir(slug) / "snapshots"
         found = [n for n in DB_FILES if os.path.lexists(data / n)]
         if "hub.sqlite" not in found:
@@ -3229,17 +3268,139 @@ class Cell:
                 "snapshot_failed",
                 "the database in data/ is not plain files (a symlink or other special file); nothing was copied",
             )
-        target = snaps / f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}-{version}"
-        try:
-            target.mkdir(parents=True, exist_ok=True, mode=0o700)
-            for name in found:
-                shutil.copy2(data / name, target / name, follow_symlinks=False)
-        except OSError as e:
-            shutil.rmtree(target, ignore_errors=True)
-            raise CellError("snapshot_failed", f"copying the database to {target}: {e.strerror or e}") from None
-        for old in sorted(p for p in snaps.iterdir() if p.is_dir())[:-SNAPSHOTS_KEPT]:
+        older = sorted(p for p in snaps.iterdir() if p.is_dir()) if snaps.is_dir() else []
+        for old in older[: max(0, len(older) - (SNAPSHOTS_KEPT - 1))]:
             shutil.rmtree(old, ignore_errors=True)
-        return target.name
+        short = self.short_of_space(slug)
+        if short:
+            raise CellError(
+                "disk_full",
+                f"copying the database needs {short / 1e9:.1f} GB more free space on this host; nothing was copied. "
+                "Free space on the host or grow its disk",
+            )
+        dest = snaps / f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}-{version}"
+        try:
+            dest.mkdir(parents=True, exist_ok=True, mode=0o700)
+            for name in found:
+                shutil.copy2(data / name, dest / name, follow_symlinks=False)
+        except OSError as e:
+            shutil.rmtree(dest, ignore_errors=True)
+            raise CellError("snapshot_failed", f"copying the database to {dest}: {e.strerror or e}") from None
+        return dest.name
+
+    # disk
+    def prune(self, args=None, keep: set[str] = frozenset()) -> dict:
+        """The server images and core folders (/opt/tico-cell/core-vX.Y.Z) no company here needs, removed: every
+        release leaves both behind, and nothing else ever removes them. Needed: each company's release and the one its
+        pending update would roll back to, `keep`, and any release newer than all of those (an update on its way in).
+        A core folder also stays while it is the one running this, one `init` ran from (cell.json `init_cores`: HQ runs
+        its commands from the core it installed), a link's target (stats-core), one a tico-* systemd unit names, any
+        process's working directory, or under FRESH_S old. An image a container uses stays (docker rmi refuses it); one
+        removed between an update's pull and its start is pulled again by `up`. With no company here nothing is
+        removed. One prune at a time."""
+        self.load_cell()
+        try:
+            with self.lock("prune", timeout=0):
+                in_use = {v for c in self.companies() for v in (c.get("version"), (c.get("pending") or {}).get("from"))}
+                in_use |= self.updates_under_way()
+                in_use = {v for v in in_use | set(keep) if isinstance(v, str) and VERSION_RE.fullmatch(v)}
+                if not in_use:
+                    return {"ok": True, "images_removed": 0, "cores_removed": 0}
+                newest = max(_release_key(v) for v in in_use)
+
+                def needed(v: str) -> bool:
+                    return v in in_use or _release_key(v) > newest
+
+                deadline = self.system.monotonic() + PRUNE_S
+                cores, images = self.prune_cores(needed, deadline), self.prune_images(needed, deadline)
+        except CellError as e:
+            if e.code != "busy":
+                raise
+            return {"ok": True, "busy": True}
+        return {"ok": True, "images_removed": images, "cores_removed": cores}
+
+    def updates_under_way(self) -> set[str]:
+        """The releases each company's updater is moving it to right now (its updater-status.json), so an update
+        between its pull or core install and its record keeps both."""
+        out = set()
+        for d in (self.root / "companies").glob("*/updater-status.json"):
+            with contextlib.suppress(OSError, ValueError, AttributeError):
+                s = json.loads(d.read_text())
+                if s.get("state") in ("pulling", "restarting"):
+                    out.add(s.get("to"))
+        return out
+
+    def cores_in_use(self) -> set[str]:
+        """The core folders some process runs in (its working directory under /opt/tico-cell)."""
+        out = set()
+        with contextlib.suppress(OSError):
+            for proc in (self.host / "proc").iterdir():
+                with contextlib.suppress(OSError):
+                    cwd = Path(os.readlink(proc / "cwd")).parts  # ("/", "opt", "tico-cell", "core-v…", …)
+                    if cwd[1:3] == tuple(CORES.split("/")) and len(cwd) > 3:
+                        out.add(cwd[3])
+        return out
+
+    def prune_quietly(self, keep: set[str] = frozenset()) -> None:
+        """`prune` where its failure must not fail the command that asked for it (update, snapshot)."""
+        with contextlib.suppress(Exception):
+            self.prune(keep=keep)
+
+    def prune_images(self, needed, deadline: float) -> int:
+        def left() -> float:
+            return deadline - self.system.monotonic()
+
+        removed = 0
+        if left() < 1:
+            return removed
+        r = self.system.run(["docker", "images", SERVER_IMAGE, "--format", "{{.Tag}}"], timeout=left())
+        for tag in sorted(set(r.stdout.split()) if not r.returncode else ()):
+            if VERSION_RE.fullmatch(tag) and not needed(tag) and left() >= 1:
+                removed += not self.system.run(["docker", "rmi", f"{SERVER_IMAGE}:{tag}"], timeout=left()).returncode
+        return removed
+
+    def prune_cores(self, needed, deadline: float) -> int:
+        base = self.host / CORES
+        try:
+            entries = sorted(base.iterdir())
+        except OSError:
+            return 0
+        held = {own_core(), *(self.saved_cell().get("init_cores") or [])}
+        for p in entries:
+            with contextlib.suppress(OSError):
+                if p.is_symlink():
+                    held.add(Path(os.readlink(p)).name)
+        with contextlib.suppress(OSError):
+            for unit in [*(self.host / UNIT_DIR).glob("tico-*.service"), *(self.host / UNIT_DIR).glob("tico-*.d/*")]:
+                held |= {f"core-{v}" for v in CORE_DIR_RE.findall(_read(unit))}
+        now, removed = time.time(), 0
+        for p in entries:
+            try:
+                st = p.lstat()
+            except OSError:
+                continue  # gone since the listing (a link swap, an installer's staging folder)
+            if not stat.S_ISDIR(st.st_mode):
+                continue
+            age = now - st.st_mtime
+            m = CORE_DIR_RE.fullmatch(p.name)
+            if (
+                m
+                and p.name not in held
+                and age > FRESH_S
+                and not needed(m[1])
+                and self.system.monotonic() < deadline
+                and p.name not in self.cores_in_use()  # read again at each: a command may have just started in it
+            ):
+                gone = base / f".prune-{p.name}.{os.getpid()}"
+                try:
+                    os.rename(p, gone)  # gone from core-v* at once: a half-removed folder never looks installed
+                except OSError:
+                    continue
+                shutil.rmtree(gone, ignore_errors=True)
+                removed += 1
+            elif p.name.startswith(".prune-") and age > FRESH_S and self.system.monotonic() < deadline:
+                shutil.rmtree(p, ignore_errors=True)  # a removal that was interrupted
+        return removed
 
     def rollback(self, c: dict, timeout: int, *, restart: bool = True) -> None:
         """Back to the release and database from before c's pending update. The database files are replaced only once
@@ -3614,6 +3775,17 @@ def kms_answer(env: dict[str, str]) -> dict:
         "warning": "KMS is not set: the company's stored secrets are opened by a key file that its backups carry; "
         "give it --kms-key and --kms-credentials-file with `update`, then run `rewrap`",
     }
+
+
+def own_core() -> str:
+    """The name of the core folder this runs from (core-vX.Y.Z on a cell host)."""
+    return Path(__file__).resolve().parent.parent.name
+
+
+def _release_key(v: str) -> tuple:
+    """v1.2.3 above v1.2.3-rc.9 above v1.2.2 (VERSION_RE's form)."""
+    core, _, pre = v[1:].partition("-")
+    return (*(int(x) for x in core.split(".")), not pre, pre)
 
 
 def _read(path: Path) -> str:

@@ -47,6 +47,7 @@ class FakeSystem:
         self.meet_cert = True  # `up` of an edge project with Tico Meet: the certificate Caddy gets its certificate
         # py-spy's download: what each url answers (missing: it fails), and the machine type
         self.downloads, self.arch = {}, "aarch64"
+        self.free = 1 << 50  # free bytes on the host's disk (free_bytes)
 
     def run(self, argv, *, input=None, timeout=900):
         self.calls.append(list(argv))
@@ -67,6 +68,12 @@ class FakeSystem:
                 else ([cell.IMDS_LINE] if self.imds else []) + ["-A DOCKER-USER -j RETURN"]
             )
             return Result(0, "-N DOCKER-USER\n" + "".join(r + "\n" for r in rules))
+        if argv[:2] == ["docker", "images"]:
+            repo = argv[2] + ":"
+            return Result(0, "".join(i[len(repo) :] + "\n" for i in sorted(self.images) if i.startswith(repo)))
+        if argv[:2] == ["docker", "rmi"]:
+            self.images.discard(argv[-1])
+            return Result(0)
         if argv[:2] == ["docker", "pull"]:
             self.images.add(argv[-1])
             return Result(0)
@@ -149,6 +156,9 @@ class FakeSystem:
 
     def linux(self):
         return True
+
+    def free_bytes(self, path):
+        return self.free
 
     def fetch(self, url, limit=64 << 20):
         if url not in self.downloads:

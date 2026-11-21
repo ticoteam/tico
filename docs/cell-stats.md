@@ -62,6 +62,9 @@ The slow parts run at most every 15 minutes per host or company, and their resul
 `/var/lib/tico-cell/stats-cache.json` (0600): `docker system df`, the top SQL shapes and the `blobs` walk. A push on a
 host with 50 companies takes a few hundred milliseconds of the collector's own CPU, plus the three Docker calls.
 
+Once an hour a push also runs `python3 -m setup cell prune` from `stats-core`, with what is left of the tick's budget
+([cell.md](cell.md), "Disk"), and its answer goes in the push's journal line (`prune`). The time is kept in the same cache.
+
 ### What leaves the box, and what never does
 
 Sent: counters, timings, sizes, container states, route templates, SQL statement shapes (literals and numbers folded
