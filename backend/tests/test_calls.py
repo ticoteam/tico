@@ -248,6 +248,24 @@ def test_action_items_wait_out_a_gateway_outage_with_backoff_then_give_up_with_a
     assert _owed(meet, call_id)["finalized_at"] and _owed(meet, call_id)["action_items_posted_at"]
 
 
+@pytest.mark.parametrize(
+    "drafted_items",
+    [[], [{"title": "Schedule the reliability review", "quote": SYNTHETIC_SPEECH, "owner": ""}]],
+    ids=["no-items", "with-items"],
+)
+def test_the_action_items_post_only_when_there_are_some(meet, monkeypatch, drafted_items):
+    monkeypatch.setattr(call_items, "draft", lambda base, key, model, rows: {"summary": [], "items": drafted_items})
+    cid = thread(meet)
+    call_id = start_call(meet, cid)["id"]
+    join(meet, call_id, "ana-test")
+    meet.app.state.calls.ingest(call_id, "human:ana", PCM_EIGHT_SECONDS, 0)
+    settle(meet)
+    post(meet, f"calls/{call_id}/end", {}, token="ana-test")
+    posted = [text for text in thread_texts(meet, cid) if text.startswith("Action items:")]
+    assert posted == (["Action items: Acme launch call\n- Schedule the reliability review"] if drafted_items else [])
+    assert _owed(meet, call_id)["action_items_posted_at"]  # done, so the sweep does not draft them again
+
+
 def test_a_thread_refusal_of_the_end_of_call_post_leaves_an_audit_row_and_a_hold_for_the_starter(meet, monkeypatch):
     """A thread that refuses the call's end-of-call posts is final: nothing retries them. The refusal leaves an
     audit row, and a hold on the call that only its starter sees."""
