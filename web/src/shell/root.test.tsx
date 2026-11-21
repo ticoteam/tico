@@ -22,7 +22,7 @@ import { tabTitle, useTabTitle } from './title';
 
 const { gate, q, catchUpRead, lists, owners, asks } = vi.hoisted(() => ({
   /** The ❓ questions and asks agents put to Maya that wait (Flow's `asks`, from Needs you's items). */
-  asks: [] as { by: string; pipeline: string | null }[],
+  asks: [] as { by: string; pipeline: string | null; href: string | null }[],
   gate: { screen: null as string | null, setup: false },
   /** Each page's owner, as GET /page-owners answers: none unless a test names one. */
   owners: {} as Record<string, { bot: string | null; own?: boolean }>,
@@ -356,10 +356,12 @@ describe('the Agent bar @4857', () => {
     at(1100);
     people(MAYA, QA);
     owners.tasks = { bot: 'bot:qa', own: true };
-    asks.push({ by: 'bot:other', pipeline: null }, { by: 'bot:qa', pipeline: null });
+    asks.push({ by: 'bot:other', pipeline: null, href: '/threads/other' }, { by: 'bot:qa', pipeline: null, href: '/threads/home-qa' });
     show('/tasks/eng');
     await screen.findByRole('complementary', { name: 'Chat with QA Owner' });
     await waitFor(() => expect(bar()?.dataset.shut).toBeUndefined());
+    // the question may wait outside this DM (its Home, a task's chat): one line goes to it
+    expect((await screen.findByRole('link', { name: 'A question waits on you' })).getAttribute('href')).toBe('/threads/home-qa');
     act(() => foldSheet('chat', true));
     await waitFor(() => expect(edge()).toBeTruthy());
   });
@@ -369,7 +371,7 @@ describe('the Agent bar @4857', () => {
     people(MAYA, QA);
     // the agent only stands in for this page's owner: its question in its own chat does not open the bar here
     owners.tasks = { bot: 'bot:qa', own: false };
-    asks.push({ by: 'bot:qa', pipeline: null });
+    asks.push({ by: 'bot:qa', pipeline: null, href: null });
     show('/tasks/eng');
     await waitFor(() => expect(edge()).toBeTruthy());
     expect(bar()?.dataset.shut).toBe('true');
@@ -378,31 +380,31 @@ describe('the Agent bar @4857', () => {
     people(MAYA, QA);
     // an ask on a task in Engineering opens Engineering's page, the pipeline's agent being QA
     asks.length = 0;
-    asks.push({ by: 'bot:qa', pipeline: 'eng' });
+    asks.push({ by: 'bot:qa', pipeline: 'eng', href: '/task/t1' });
     queryClient.setQueryData(['pipelines'], [{ id: 'eng', name: 'Engineering', stages: [], manager: 'bot:qa', owner: null }]);
     show('/tasks/eng');
     await screen.findByRole('complementary', { name: 'Chat with QA Owner' });
     await waitFor(() => expect(bar()?.dataset.shut).toBeUndefined());
   });
 
-  it('under 1200 follows only the saved fold: opened, it keeps its place in the row, and stays open on reload @4857-S4', async () => {
+  it('under 1200 follows only the saved fold: opened where the page would go under its floor, it is a card over the page, and stays open on reload @4857-S4', async () => {
     at(820);
     people(MAYA, QA);
     owners.tasks = { bot: 'bot:qa' };
     show('/tasks/eng');
     await waitFor(() => expect(edge()).toBeTruthy());
+    expect(document.documentElement.dataset.layout).toBe('sheets');
     fireEvent.click(edge()!);
-    await waitFor(() => expect(bar()?.dataset.shut).toBeUndefined());
-    expect(document.querySelector<HTMLElement>('.shell-place[data-sheet="tico"]')?.dataset.shut).toBe('true');
+    const lip = () => document.querySelector('button.lip[aria-label="Open QA Owner"]');
+    await waitFor(() => expect(lip()?.getAttribute('aria-expanded')).toBe('true'));
+    expect(document.documentElement.dataset.layout).toBe('cards');
     expect(JSON.parse(localStorage.getItem('tico-next:owner-bar.v1') ?? '{}')).toEqual({ 'human:maya': { tasks: false } });
-    // a reload: open from the saved fold, with nothing pressed
+    // a reload: the card is up from the saved fold, with nothing pressed
     cleanup();
     queryClient.clear();
     people(MAYA, QA);
     show('/tasks/eng');
-    await screen.findByRole('complementary', { name: 'Chat with QA Owner' });
-    await waitFor(() => expect(bar()?.dataset.shut).toBeUndefined());
-    expect(edge()).toBeNull();
+    await waitFor(() => expect(lip()?.getAttribute('aria-expanded')).toBe('true'));
   });
 
   it("is the pipeline's first agent that is set up and on the team, never a planned or gone one, before the page's owner @4857-S7", async () => {
@@ -451,6 +453,22 @@ describe('the Agent bar @4857', () => {
     act(() => void router.navigate({ to: '/tasks/$pipeline' as never, params: { pipeline: 'eng' } as never }));
     await screen.findByRole('heading', { name: 'Board' });
     await waitFor(() => expect(lip().getAttribute('aria-expanded')).toBe('true'));
+  });
+
+  it('on a phone sets the card again on every page change, when both pages keep the same fold @4857-S3', async () => {
+    at(390);
+    people(MAYA, QA);
+    owners.tasks = { bot: 'bot:qa' };
+    owners.finance = { bot: 'bot:qa' };
+    localStorage.setItem('tico-next:owner-bar.v1', JSON.stringify({ 'human:maya': { tasks: false, finance: false } }));
+    const router = show('/tasks/eng');
+    const lip = (name: string) => document.querySelector(`button.lip[aria-label="${name}"]`)!;
+    await waitFor(() => expect(lip('Open QA Owner').getAttribute('aria-expanded')).toBe('true'));
+    fireEvent.click(lip('Open Menu'));
+    await waitFor(() => expect(lip('Open Menu').getAttribute('aria-expanded')).toBe('true'));
+    act(() => void router.navigate({ to: '/company/finance' as never }));
+    await screen.findByRole('heading', { name: 'Finance' });
+    await waitFor(() => expect(lip('Open QA Owner').getAttribute('aria-expanded')).toBe('true'));
   });
 
   it('is not drawn on a personal page, whose chat is Tico, nor where no owner is set', async () => {

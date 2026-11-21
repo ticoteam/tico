@@ -1,5 +1,7 @@
 import * as z from 'zod/mini';
 import { defineAction } from '@/actions';
+import { fromPage, pageAt } from '@/shell/pageOwner';
+import { pageName } from '@/tico/pageName';
 import { decideProposal, meId, sendMessage } from './queries';
 
 /* A card an agent posts in a chat: the person's yes or no to a proposal (`refs.action`). Tico never presses these
@@ -48,8 +50,11 @@ export const replyAction = defineAction({
     message: z.string().check(z.minLength(1), z.maxLength(200), z.describe('a message id')),
     text: z.string().check(z.minLength(1), z.maxLength(20000)),
   }),
-  run: async (_ctx, { chat, message, text }) => {
-    const sent = await sendMessage({ id: chat, variant: 'page', text: text.trim(), me: signedIn(), replyTo: message });
+  run: async (ctx, { chat, message, text }) => {
+    // the page it was written on, as every message says it (the send boundary keeps what is open there for Tico)
+    const at = ctx.router.state.location;
+    const from = fromPage(pageAt(at.pathname, at.searchStr), pageName());
+    const sent = await sendMessage({ id: chat, variant: 'page', text: text.trim(), me: signedIn(), replyTo: message, from });
     if (!sent) throw new Error('Not sent');
     return sent;
   },

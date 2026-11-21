@@ -114,8 +114,9 @@ it('names the agents with a ❓ question or an ask waiting on the person, not th
     status: 200,
     body: {
       items: [
-        { id: 'q1', kind: 'question', from_id: 'bot:qa' },
+        { id: 'q1', kind: 'question', from_id: 'bot:qa', conversation_id: 'home-qa' },
         { id: 'a1', kind: 'ask', ask: { kind: 'ok', asked_by: 'bot:fin' }, task: { id: 't9', pipeline_id: 'finance' } },
+        { id: 'a2', kind: 'ask', ask: { kind: 'ok', asked_by: null }, task: { id: 't8', pipeline_id: 'eng', owner_id: 'human:me', requester_id: 'bot:eng' } },
         { id: 't1', kind: 'task', from_id: 'bot:ops' },
         { id: 'p1', kind: 'paused', bots: ['bot:ops'] },
         { id: 'r1', kind: 'access', from_id: 'bot:tools' },
@@ -123,8 +124,9 @@ it('names the agents with a ❓ question or an ask waiting on the person, not th
     },
   }));
   expect((await queryClient.fetchQuery(flowQuery)).asks).toEqual([
-    { by: 'bot:qa', pipeline: null },
-    { by: 'bot:fin', pipeline: 'finance' },
+    { by: 'bot:qa', pipeline: null, href: '/threads/home-qa' },
+    { by: 'bot:fin', pipeline: 'finance', href: '/task/t9' },
+    { by: 'bot:eng', pipeline: 'eng', href: '/task/t8' },
   ]);
 });
 

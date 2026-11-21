@@ -43,6 +43,9 @@ export interface PhoneCardsProps {
   /** The chat belongs to the page (a task's, an agent's own): it rests as a lip, so the page's head can be used, and
       comes up only when the address names a chat (`chat=`) or the person raises it. */
   tucked?: boolean;
+  /** Whose page's chat it is (the Agent bar's page key): moving to another page, the chat card follows that page's
+      `tucked`, even when it is the same as the last page's. */
+  chatKey?: string;
   onCardChange?: (card: PhoneCard) => void;
 }
 
@@ -105,7 +108,7 @@ type Drag = {
   samples: Sample[];
 };
 
-export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = {}, peek, handle = false, labels = {}, tucked = false, onCardChange }: PhoneCardsProps) {
+export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = {}, peek, handle = false, labels = {}, tucked = false, chatKey, onCardChange }: PhoneCardsProps) {
   const router = useRouter({ warn: false });
   // a chat that opens comes up; a call that starts takes over; either one ending tucks its card. An address that
   // already names one (a shared link, a reload) opens on it. A page's own chat (`tucked`) waits as a lip unless the
@@ -119,17 +122,19 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
 
   const [seen, setSeen] = useState(second);
   const [wasTucked, setWasTucked] = useState(tucked);
+  const [wasKey, setWasKey] = useState(chatKey);
   if (seen !== second) {
     setSeen(second);
     if (second === 'call' || (second === 'chat' && !seen && comesUp(second))) setCard('chat');
     else if (card === 'chat') setCard('none');
-  } else if (wasTucked !== tucked && second === 'chat') {
+  } else if ((wasTucked !== tucked || wasKey !== chatKey) && second === 'chat') {
     // a page's own chat follows its page both ways: one that stops waiting as a lip comes up (its fold is open, or an ask
     // from the page's owner waits on you), and one that waits as a lip again goes down unless the address names a chat
     if (!tucked) setCard('chat');
     else if (card === 'chat' && !named()) setCard('none');
   }
   if (wasTucked !== tucked) setWasTucked(tucked);
+  if (wasKey !== chatKey) setWasKey(chatKey);
 
   const isUp = (s: Slot) => slotOf(card) === s;
   const raised = slotOf(card);

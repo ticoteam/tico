@@ -497,8 +497,9 @@ function PagesLine({ agent }: { agent: string }) {
   // who may change a page's owner is the company's owner or an admin, as the server's PUT checks: not this agent's managers
   const manage = owners?.canChange === true;
   const set = useAction('settings.setPageOwner');
-  // by the choice, so a change shows at once: chosen, or on its default when the default is this agent
-  const owns = (row: PageOwnerRow) => row.choice === agent || ((row.choice ?? 'default') === 'default' && (row.default ?? row.bot) === agent);
+  // what the server says owns each page now (its choice, its default, or the General Manager standing in); a change is a
+  // choice, and the page reads again after it
+  const owns = (row: PageOwnerRow) => row.bot === agent;
   const shown = pages.filter(([, r]) => owns(r)).map(([page, r]) => r.name ?? page).join(', ') || 'None';
   if (!manage) return <LabelValue label="Pages">{shown}</LabelValue>;
   return (

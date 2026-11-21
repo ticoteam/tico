@@ -1861,14 +1861,6 @@ def _pair_conversation(conn, actor, other, kind, subject="", allow_held=False):
     home = chat_home(conn, actor, other, kind)
     if home:
         return conversation(conn, home)
-    if kind == "chat":
-        # A person and a bot: the person's open DM with it, when they have one (what the person's Agent bar and the
-        # bot's page show), before an older pair chat or a new one, so a bot's message or ❓ lands where they read it.
-        from . import threads
-
-        dm = threads._open_dm(conn, actor, [other])
-        if dm:
-            return conversation(conn, dm)
     for row in _rows(
         conn.execute(
             "SELECT * FROM conversations WHERE kind=? AND closed_at IS NULL AND task_id IS NULL "

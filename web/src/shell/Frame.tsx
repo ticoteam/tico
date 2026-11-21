@@ -54,6 +54,8 @@ export interface FrameProps {
 }
 
 export interface AgentBar {
+  /** The page's key: a phone's card follows the fold of each page it moves to. */
+  page: string;
   name: string;
   face: ReactNode;
   fold: boolean | undefined;
@@ -165,6 +167,13 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
   const sheets = L.mode === 'sheets' ? L.sheets : [];
   const stretch = L.mode === 'sheets' ? L.stretch : null;
   const find = (id: SheetId) => sheets.find(s => s.id === id);
+  /* An open Agent bar that would leave the page under its floor (C.FLOOR, at 820 say): the phone's cards instead, the
+     bar a card over the page, so opening it never squeezes the page. */
+  const cramped = !!bar && !!stretch && find('chat')?.state === 'open' && stretch.width < C.FLOOR;
+  const cards = mode === 'cards' || L.mode === 'cards' || !stretch || cramped;
+  useEffect(() => {
+    document.documentElement.dataset.layout = cards ? 'cards' : 'sheets';
+  }, [cards, mode]);
 
   /* a fold control, a shortcut, or a tucked sheet's edge (layout.md 5; plan/layers.html) */
   const onPress = (id: SheetId) => {
@@ -175,6 +184,8 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
       // keeps its place in the row (layout.ts) and the sheets above it tuck
       cause.current = 'fold';
       bar.onFold(cur.state === 'open');
+      // its edge always opens it: a sheet opened over the row for now (a panel) gives way
+      setOpened(null);
       return;
     }
     const r = press(width, spec, saved, id, forward);
@@ -343,7 +354,7 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
     }
   });
 
-  if (mode === 'cards' || L.mode === 'cards' || !stretch) {
+  if (cards || !stretch) {
     // a call takes the screen in the chat's place (phone/notes.md)
     const call = p.arr === 'call';
     // a teammate's own page: their page at the back, their chat the card over it. Theirs and a task's chat belong to
@@ -376,6 +387,7 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
         chat={call ? undefined : p.chat}
         call={call ? p.page : undefined}
         tucked={tucked || lip}
+        chatKey={owner?.page}
         onCardChange={onCard}
         labels={owner ? { chat: owner.name } : undefined}
         lips={p.lips}

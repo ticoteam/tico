@@ -51,6 +51,11 @@ export interface ConversationProps {
   from?: FromPage | null;
   /** With no messages yet: words to start with, each a press that puts them in the box (nothing is sent). */
   starters?: readonly string[];
+  /** The Agent bar's DM: the agent it must still be with alone (`expect_dm`), the box's draft kept under `draftId`
+      (the bar's address, not the thread's id), and `onStale` when it is not that DM any more. */
+  expectDm?: string;
+  draftId?: string;
+  onStale?: () => void;
   /** Above the composer, in the chat's foot: a card the chat is waiting on (a task's answer card). */
   foot?: ReactNode;
   /** What a message draws in place of its text, when it is more than words (a thread's call card). */
@@ -173,7 +178,7 @@ function withExtra(rows: ChatMessage[], extra: ChatMessage[] | undefined, more: 
   return [...out, ...left];
 }
 
-export function Conversation({ id, variant, title, actor, session, from, starters, foot, card, below, canPost = true, extra, chat }: ConversationProps) {
+export function Conversation({ id, variant, title, actor, session, from, starters, expectDm, draftId, onStale, foot, card, below, canPost = true, extra, chat }: ConversationProps) {
   useFollow(variant === 'tico' ? { conversation: id } : { thread: id });
 
   const { data: me } = useQuery(meQuery);
@@ -304,6 +309,7 @@ export function Conversation({ id, variant, title, actor, session, from, starter
       // a retry is the same message: it says the page it was first written on
       from: retry ? (retry.refs?.from_page ?? null) : at,
       me: myId,
+      ...(expectDm && { expectDm, draftId, onStale }),
       ...(retry && { retry: retry.id }),
       ...(answers && { replyTo: answers, quote }),
     });
@@ -390,7 +396,7 @@ export function Conversation({ id, variant, title, actor, session, from, starter
           ))}
         </div>
       )}
-      {myId && canPost && <Composer id={id} me={myId} to={name} fill={fill} canSend={!!timeline.data} onSend={(text, files) => send(text, files)} />}
+      {myId && canPost && <Composer id={draftId ?? id} me={myId} to={name} fill={fill} canSend={!!timeline.data} onSend={(text, files) => send(text, files)} />}
     </footer>
   );
 

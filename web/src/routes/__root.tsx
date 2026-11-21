@@ -562,7 +562,7 @@ function SecondChat({ chat }: { chat: string }) {
 
 /* ---------------------------------------------------------------- the Agent bar */
 
-type OwnerBarState = AgentBar & { owner: string };
+type OwnerBarState = AgentBar & { owner: string; askHref: string | null };
 
 /** The open page's owner for the Agent bar (shell/pageOwner.ts): a pipeline's own agent while one is shown, else the
     page's (backend/page_owners.py, which falls back to the General Manager); none on a personal page (Tico is its chat)
@@ -587,7 +587,8 @@ function useOwnerBar(place: PageAt, me: string | undefined): OwnerBarState | nul
   const ownPage = !mine && owners?.pages[place.page]?.own === true;
   const pipe = pipeline?.id ?? null;
   const { data: asks } = useQuery({ ...flowQuery, enabled: opened && !!owner, select: (f) => f.asks });
-  const asking = !!owner && !!asks?.some((a) => (a.by === owner || a.by === who?.id) && (a.pipeline ? a.pipeline === pipe : ownPage));
+  const waiting = owner ? asks?.find((a) => (a.by === owner || a.by === who?.id) && (a.pipeline ? a.pipeline === pipe : ownPage)) : undefined;
+  const asking = !!waiting;
   const [fold, setFold] = useBarFold(me, place.page);
   const [dismissed, setDismissed] = useState<string | null>(null);
   if (!asking && dismissed === place.page) setDismissed(null);
@@ -597,8 +598,10 @@ function useOwnerBar(place: PageAt, me: string | undefined): OwnerBarState | nul
     owner,
     name,
     face: <Avatar decorative kind="agent" name={name} initials={short(name)} hue={who?.hue ?? 0} size={28} live={who?.working} />,
+    page: place.page,
     fold,
     ask: asking && dismissed !== place.page,
+    askHref: waiting?.href ?? null,
     onFold: (folded) => {
       setFold(folded);
       if (folded && asking) setDismissed(place.page);
@@ -619,9 +622,16 @@ function OwnerBar({ bar, place }: { bar: OwnerBarState; place: PageAt }) {
   const here = file ? pageAt(location.pathname, `?file=${encodeURIComponent(file)}`) : place;
   return (
     <Sheet kind="chat" label={`Chat with ${bar.name}`}>
+      {/* what waits on you, wherever it lives (this DM, a Home, a task's chat): one line to it */}
+      {shown && bar.ask && bar.askHref && (
+        <Link className="bar-ask" to={bar.askHref as never}>
+          A question waits on you
+        </Link>
+      )}
       {shown && (
         <Suspense fallback={null}>
           <ChatSheet
+            dm
             chat={chatAddress(bar.owner, 'agent')}
             from={fromPage(here, name)}
             starters={[`What needs me on ${place.label}?`, `What changed on ${place.label} this week?`]}

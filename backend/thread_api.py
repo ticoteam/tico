@@ -89,6 +89,8 @@ class ThreadPost(BaseModel):
     unmarked: list[str] = Field(default_factory=list, max_length=50)
     # Files already in Tico shared with the message, as `<file id>@<version>` or {ref, title} (shared_files).
     attachments: list[M.Attachment] = Field(default_factory=list, max_length=10)
+    # The poster's own DM with this one (the Agent bar's): 409 `dm_changed` unless the thread is exactly them two.
+    expect_dm: str | None = Field(None, max_length=200)
 
 
 class MessagePatch(BaseModel):
@@ -138,6 +140,7 @@ class ThreadUpload(BaseModel):
     defer_for: str | None = None
     attachments: list[M.Attachment] = Field(default_factory=list, max_length=10)  # as ThreadPost's
     from_page: dict | None = None  # the page it was written on, as a post's refs.from_page (sent as JSON)
+    expect_dm: str | None = Field(None, max_length=200)  # as ThreadPost's
 
 
 SHARE_REFUSED = (
@@ -173,6 +176,21 @@ def _unmarked(who, body):
     """The suspects a person un-marked in the Tools chat (backend/secret_drop.py), which the backstop lets through only
     from the web chat: a post made with a personal access token is an API client, whose suspects are refused (AC-15)."""
     return [] if getattr(who, "via_token", False) else list(getattr(body, "unmarked", None) or [])
+
+
+def _expect_dm(c, who, thread_id, body):
+    """A post naming `expect_dm` (the Agent bar's DM with a page's owner): 409 `dm_changed` unless the thread is still the
+    poster's DM with exactly that one, so words meant for one agent never reach a group a DM was turned into."""
+    expected = getattr(body, "expect_dm", None)
+    if not expected:
+        return
+    row = threads.thread_row(c, thread_id)
+    them = H.resolve_actor(c, expected)
+    people = (
+        set(threads._dm_members(c, row)) if row and threads.audience_of(row) in ("personal", "participants") else set()
+    )
+    if not them or people != {who.actor, them}:
+        raise Problem("dm_changed", "This chat is no longer your chat with " + str(expected) + " alone", 409)
 
 
 def _delivery_words(body):
@@ -994,6 +1012,7 @@ def install(app, store, auth, mutate, rule_check):
 
         def work(c):
             v = threads.viewer(auth, who)
+            _expect_dm(c, who, thread_id, body)
             replying = _reply_check(c, auth, who, thread_id, body)
             way, marks = _delivery_refs(c, auth, who, body, thread_id) if body.delivery else (None, {})
             shared = shared_files(c, app.state.files, who, body.attachments)
@@ -1349,6 +1368,7 @@ def install(app, store, auth, mutate, rule_check):
 
         def work(c):
             v = threads.viewer(auth, who)
+            _expect_dm(c, who, thread_id, body)
             replying = _reply_check(c, auth, who, thread_id, body)
             way, marks = _delivery_refs(c, auth, who, body, thread_id) if body.delivery else (None, {})
             items = [register(c, who, **upload) for upload in uploads]

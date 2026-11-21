@@ -78,3 +78,6 @@ body.is-dragging .shell-place{pointer-events:none}
 .phone>.pg:has(>.shell-trail){--page-top:0px;--sat:0px}
 .phone>.pg>.shell-trail+*{flex:1;min-height:0;height:auto}
 .phone:has(>.pg>.shell-trail){--top:calc(var(--sat) + 57px + var(--ctl))}
+/* the Agent bar's one line to a question that waits on you, wherever it lives (routes/__root.tsx OwnerBar) */
+.bar-ask{display:block;padding:var(--s-2) var(--s-4);border-bottom:1px solid var(--line);font-size:var(--t-sm);color:var(--ink);text-decoration:none}
+.bar-ask:hover{text-decoration:underline}

@@ -227,6 +227,8 @@ describe('Team pages', () => {
       finance: { bot: 'bot:0190-ana', name: 'Finance', choice: 'default' },
       docs: { bot: 'bot:0190-ana', name: 'Docs', choice: 'bot:0190-ana' },
       growth: { bot: 'bot:gm', name: 'Growth', choice: 'default' },
+      // chosen, but not the owner now (the server gave it to the next in line): what the server says wins @4857-S22
+      rules: { bot: 'bot:gm', name: 'Rules', choice: 'bot:0190-ana' },
     };
     let admin = false;
     serve((url, method) => (method === 'GET' && url.includes('/api/v2/page-owners') ? ok({ pages, can_change: admin }) : method === 'PUT' ? ok({}) : undefined));

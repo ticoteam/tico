@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { queryClient, type Actor } from '@/data';
 import { upsertMessage, type TimelineData } from '@/live';
 import type * as Live from '@/live';
-import { Composer } from './Composer';
+import { Composer, readDraft } from './Composer';
 import { Conversation } from './Conversation';
 import { Message } from './Message';
 import { showPageName } from '@/tico/pageName';
@@ -190,6 +190,19 @@ describe('Conversation', () => {
     await waitFor(() => expect(screen.queryByText('Not sent')).toBeNull());
     expect(screen.getAllByText('Ship it')).toHaveLength(1);
     expect(sends()).toHaveLength(2);
+  });
+
+  it('keeps the words and reads its DM again when the chat is no longer that DM alone @4857-S18', async () => {
+    serve(() => ({ status: 409, body: { error: { code: 'dm_changed', detail: 'This chat is no longer your chat with bot:qa alone' } } }));
+    const onStale = vi.fn();
+    render(<Conversation id={T} variant="side" title="Ana" actor="bot:qa" from={FROM} expectDm="bot:qa" draftId="agent:qa" onStale={onStale} />, {
+      wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+    });
+    type('Ship it');
+    await waitFor(() => expect(onStale).toHaveBeenCalled());
+    expect((sends()[0]?.body as { expect_dm?: string }).expect_dm).toBe('bot:qa');
+    expect(screen.queryByText('Not sent')).toBeNull();
+    expect(readDraft(ME, 'agent:qa')).toBe('Ship it');
   });
 
   it('sends a retry with the page it was first written on, not the one shown now @4857-S15', async () => {

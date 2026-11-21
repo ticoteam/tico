@@ -305,17 +305,48 @@ def test_from_page_is_trimmed_before_it_is_checked_and_stored_trimmed(api):
     )
 
 
-def test_an_owners_message_and_question_land_in_the_dm_the_person_opened_with_it(api):
-    # #4857 S9: the person opened the owner's DM in the Agent bar before the owner wrote; the owner's message and ❓ go
-    # there, not to a new pair chat, so the bar that opens for the ❓ shows it.
+def test_an_owners_question_names_where_it_waits_so_the_bar_can_link_it(api):
+    # #4857 S9: the person opened the owner's DM in the Agent bar before the owner asked; the ❓ goes where the owner's
+    # messages go (routing as on main), and its Needs you item names that chat, which the bar links when it opens.
     from backend.tests.helpers.automation_api import as_bot
 
     token = as_bot(api, 'scout')
-    dm = get(api, 'threads/dm?with=bot:scout')
-    said = api.post('/api/v2/messages', json={'to': 'ana', 'text': 'Morning'}, headers=headers(token))
+    get(api, 'threads/dm?with=bot:scout')
     asked = api.post(
         '/api/v2/questions', json={'to': 'ana', 'text': 'Can you OK the October close?'}, headers=headers(token)
     )
-    assert said.status_code == 200 and asked.status_code == 200, (said.text, asked.text)
-    assert (said.json()['conversation_id'], asked.json()['conversation_id']) == (dm['id'], dm['id'])
-    assert get(api, 'threads/dm?with=bot:scout')['id'] == dm['id']
+    assert asked.status_code == 200, asked.text
+    [item] = [i for i in get(api, 'needs-you?limit=50')['items'] if i['kind'] == 'question']
+    assert (item['from_id'], item['conversation_id']) == ('bot:scout', asked.json()['conversation_id'])
+
+
+def test_a_message_meant_for_ones_dm_with_an_agent_is_refused_once_it_is_not_that_dm(api):
+    # #4857 S18: the Agent bar names the DM it means; a thread that became a group, or another one, is refused (409).
+    setup(api)
+    dm = get(api, 'threads/dm?with=bot:ops')
+    sent = post(api, f"threads/{dm['id']}/messages", {'text': 'Hi', 'expect_dm': 'bot:ops'})
+    assert sent['id']
+    group = post(api, 'threads/dm', {'members': ['bot:ops', 'ben'], 'title': 'Launch'})
+    post(api, f"threads/{group['id']}/messages", {'text': 'Hi', 'expect_dm': 'bot:ops'}, expected=409)
+    r = api.post(
+        f"/api/v2/uploads/threads/{group['id']}/messages",
+        data={'text': 'Look', 'expect_dm': 'bot:ops'},
+        files={'files': ('a.txt', b'hello', 'text/plain')},
+        headers={**headers('ana-test'), 'Idempotency-Key': 'expect-dm-upload'},
+    )
+    assert r.status_code == 409 and r.json()['error']['code'] == 'dm_changed', r.text
+
+
+def test_a_message_naming_only_its_page_skips_the_per_message_check_and_one_naming_an_item_takes_it(api):
+    # #4857 S23: the page key and name are plain words; an item open there is a reference, checked per message.
+    setup(api)
+    dm = get(api, 'threads/dm?with=bot:ops')
+    plain = post(
+        api, f"threads/{dm['id']}/messages", {'text': 'Hi', 'refs': {'from_page': {'page': 'docs', 'label': 'Docs'}}}
+    )
+    named = post(api, f"threads/{dm['id']}/messages", {'text': 'Hi', 'refs': {'from_page': FROM}})
+    with api.app.state.store.read() as c:
+        flags = dict(
+            c.execute("SELECT id, restricted FROM messages WHERE id IN (?, ?)", (plain['id'], named['id'])).fetchall()
+        )
+    assert (flags[plain['id']], flags[named['id']]) == (0, 1)

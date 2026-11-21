@@ -124,7 +124,9 @@ export interface FromPage {
   item?: { kind: string; id: string; name: string };
 }
 export function fromPage(at: PageAt, name: string): FromPage {
-  const item = at.item && { ...at.item, name: (name || at.item.id).slice(0, 200) };
+  // a display name is one line of words (a title may hold breaks); the ids stay as they are
+  const line = name.replace(/\s+/g, ' ').trim();
+  const item = at.item && { ...at.item, name: (line || at.item.id).slice(0, 200) };
   return { page: at.page, label: at.label, ...(item && { item }) };
 }
 
