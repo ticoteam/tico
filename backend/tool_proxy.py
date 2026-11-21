@@ -19,7 +19,7 @@ Every call also re-reads the subject's level, so taking a level away stops the n
 At Read with only a Read and write key, the proxy lets through GET, HEAD and OPTIONS, and a POST only as MCP calls that
 read (`MCP_READS`, and `tools/call` of a tool the server's own tools/list marked `readOnlyHint`). A bot held at Read on a
 tool whose keys go to computers is sent here too, when the tool has an API address (backend/api_tools.py
-`computer_way`).
+`computer_way`), and so is a write key of an ads, payments or CRM tool (`proxy_policy`), its writes gated.
 
 Refusals are the app's error envelope with a `detail` that names the one setting that would change it.
 """
@@ -40,6 +40,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from . import egress, outbound_tls, rule_links
+from . import tool_services as TS
 from .auth import Identity, validate_identity
 from .store import H, Problem
 
@@ -680,8 +681,10 @@ def install(app, store):
         except egress.Blocked as exc:
             await log(None, 'refused', exc.reason)
             return refused(403, 'tool_address', exc.reason)
-        if method not in SAFE and not (
-            mcp and gate_calls is not None and not mcp_write(hinted, gate_calls, GATE_READ_ONLY)
+        if (
+            method not in SAFE
+            and not TS.vendor_read(tool.get('service'), method, urlsplit(url).path, url)
+            and not (mcp and gate_calls is not None and not mcp_write(hinted, gate_calls, GATE_READ_ONLY))
         ):
             # The destination checked and pinned, a write meets the org rules on its names only (the tool, the method,
             # MCP methods and tools, a JSON body's key names: never a value) before it is forwarded with the key

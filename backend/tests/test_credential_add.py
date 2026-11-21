@@ -177,9 +177,10 @@ def test_a_bot_stores_a_key_it_holds_as_its_own_under_the_vendor_and_its_next_ru
         kinds = {r[0] for r in c.execute("SELECT action FROM events WHERE actor='bot:ops'")}
     assert {"credential.created", "credential.granted", "credential.set_for_bot", "tool.key_added"} <= kinds
     assert SECRET not in everything(api)
-    # Its next run gets the value back; another bot's run does not, nor does default read hand it out.
+    # Its next run reaches Close with it, through the proxy (a CRM write key never goes to a run as it is); another
+    # bot's run does not, nor does default read hand it out.
     later = next_run(api, machine, attempt)
-    assert runtime(api, later["token"])["CLOSE_API_KEY"] == SECRET
+    assert runtime(api, later["token"])["CLOSE_API_KEY"].startswith("tpx1.")
     _, other = turn(api, "cpo")  # cpo may read Close through the proxy with the company's key, never with ops's
     assert runtime(api, other["token"]).get("CLOSE_API_KEY") != SECRET
 
@@ -187,24 +188,30 @@ def test_a_bot_stores_a_key_it_holds_as_its_own_under_the_vendor_and_its_next_ru
 def test_a_bot_replaces_only_its_own_key(api, monkeypatch):
     vault(api)
     _, attempt = turn(api)
-    monkeypatch.setenv("CLOSE_API_KEY", SECRET)
-    first = run(api, attempt["token"], "tico_credential_add", {"name": "Close (ops)", "from_env": "CLOSE_API_KEY"})
-    monkeypatch.setenv("CLOSE_API_KEY", SECRET + "-rotated")
-    again = run(api, attempt["token"], "tico_credential_add", {"name": "Close (ops)", "from_env": "CLOSE_API_KEY"})
+    monkeypatch.setenv("OPENAI_API_KEY", SECRET)
+    first = run(api, attempt["token"], "tico_credential_add", {"name": "OpenAI (ops)", "from_env": "OPENAI_API_KEY"})
+    monkeypatch.setenv("OPENAI_API_KEY", SECRET + "-rotated")
+    again = run(api, attempt["token"], "tico_credential_add", {"name": "OpenAI (ops)", "from_env": "OPENAI_API_KEY"})
     assert again["replaced"] is True and again["id"] == first["id"]
-    assert runtime(api, attempt["token"])["CLOSE_API_KEY"] == SECRET + "-rotated"
+    assert runtime(api, attempt["token"])["OPENAI_API_KEY"] == SECRET + "-rotated"
+    # A CRM write key is a person's own to change (Rule P): the bot stores its own, but never replaces it.
+    monkeypatch.setenv("CLOSE_API_KEY", SECRET)
+    run(api, attempt["token"], "tico_credential_add", {"name": "Close (ops)", "from_env": "CLOSE_API_KEY"})
+    monkeypatch.setenv("CLOSE_API_KEY", SECRET + "-rotated")
+    with pytest.raises(APIError):
+        run(api, attempt["token"], "tico_credential_add", {"name": "Close (ops)", "from_env": "CLOSE_API_KEY"})
 
 
 def test_a_bot_removes_its_own_key_through_mcp(api, monkeypatch):
     vault(api)
     _, attempt = turn(api)
     token = attempt["token"]
-    monkeypatch.setenv("CLOSE_API_KEY", SECRET)
-    saved = run(api, token, "tico_credential_add", {"name": "Close (ops)", "from_env": "CLOSE_API_KEY"})
-    [own] = credential(api, "CLOSE_API_KEY")
+    monkeypatch.setenv("OPENAI_API_KEY", SECRET)
+    saved = run(api, token, "tico_credential_add", {"name": "OpenAI (ops)", "from_env": "OPENAI_API_KEY"})
+    [own] = credential(api, "OPENAI_API_KEY")
     err, out = call(api, "tico_credential_delete", {"credential": saved["id"]}, token=token)
     assert not err and out["deleted"]
-    assert credential(api, "CLOSE_API_KEY") == []
+    assert credential(api, "OPENAI_API_KEY") == []
     with api.app.state.store.read() as c:
         assert (
             c.execute(

@@ -358,6 +358,12 @@ def _attach(c: Any, who: Any, vault: Any, row: Row) -> None:
     the tool held at that level moves off it, and each bot and person who held it keeps their level on the new key:
     replacing a key never takes a tool away from anyone silently (the card names who keeps it and who loses it)."""
     api_tools = _api_tools()
+    from . import tool_access
+
+    # Rule P on both ends: the tool the key comes off (its own, if any) and the one it goes on.
+    came = c.execute("SELECT tool_id FROM credentials WHERE id=?", (row["credential_id"],)).fetchone()
+    for tool_id in {str(row["tool_id"] or ""), str(came["tool_id"] or "") if came else ""} - {""}:
+        tool_access.person_only(c, who, tool_access.tool(tool_id=tool_id))
     owner = _owner(c)
     old = c.execute(
         "SELECT id FROM credentials WHERE tool_id=? AND access_level=? AND id<>?",

@@ -52,6 +52,27 @@ environment as above, so whoever controls that computer can read it. Tools lists
 read key when there is one, else (only a Read and write key) a proxy token as for a proxied tool, so its calls go through
 the proxy's Read rules; a tool with no API address cannot be held to reads, and Who can use it marks that bot's row.
 
+**Write keys of ads, payments and CRM tools live in the proxy** (Meta Ads, Stripe, Brex, Mercury, Close, HubSpot,
+Pipedrive, Attio: `tool_services.GATED`, known by a vendor's id, an explicit alias or its API's exact host, never a
+display name). This policy comes first in the one delivery decision (`credentials.held_at_read`, which the runtime, a
+reveal, default reads, Rules › Links and the report follow): before the tool's own delivery and before the check that
+hands an id as its value. Reading by default never hands out such a write key (Google Ads reads by default only with a
+real Read key, and a bot held at Read never gets nor reveals its write key). On such a tool, and on a tool a change
+would make one, its keys (value, level, end date, removal, a key moved on or off it from the Tools chat), service,
+address and delivery change only by a person signed in themselves, never an agent, with a person's rights or not,
+confirmed or not, nor a person's token in a script. A key stored or brought
+from a computer under such a vendor's variable stays a key on a tool with the vendor's address, never an id's
+addressless tool nor a setting, and no one-time move makes it one. A service given at create is kept as given. Every Read and write grant on
+one of them reaches the run as a proxy token, even where the tool's keys go to computers, so every write meets the
+Rules gate and shows on Rules › Links; no agent reveals such a key (a bot, or the Assistant or BotOps with a person's
+rights): only a person signed in themselves does. Google Ads, whose calls are signed on the computer, and a tool the
+proxy cannot call keep their keys, and are Not covered. A run that had a key before may still hold it:
+`python -m backend.proxy_keys <database>` lists, read only, the bots' grants on these tools (`proxied`: to rotate at the
+vendor; `direct`: still as they are; `unknown`: where only the key's value would say) and the computers whose runner
+predates proxy tokens. Nothing is revoked or
+rotated. A vendor's search or query POST (HubSpot, Attio, Close, Google Ads), at the vendor's own API host only, is a
+read, not a write.
+
 **Status.** A tool's check is one authenticated GET to its check path (its known service's when it has none, at that
 service's own address) with each stored key, every 30 minutes for every tool with an address and a check path, its keys
 on the proxy or on computers alike (the server holds every value, and a check sends a key only to the tool's own public

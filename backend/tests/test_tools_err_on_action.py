@@ -108,14 +108,18 @@ def test_the_tools_owner_defines_a_tool_from_the_catalog_only_never_an_address_o
     ):
         refused = post(api, "api-tools", body, run, expected=403)
         assert refused["error"]["code"] == "catalog_only", body
+    # Stripe's address is a person's own to change (Rule P); its name the agent may change.
     r = api.patch(f"/api/v2/api-tools/{made['id']}", json={"base_url": "https://evil.example"}, headers=headers(run))
-    assert r.status_code == 403 and r.json()["error"]["code"] == "catalog_only", r.text
+    assert r.status_code == 403 and r.json()["error"]["code"] == "forbidden", r.text
     assert api.patch(f"/api/v2/api-tools/{made['id']}", json={"name": "Stripe prod"}, headers=headers(run)).is_success
+    openai = post(api, "api-tools", {"name": "OpenAI", "service": "openai"}, run)["id"]
+    r = api.patch(f"/api/v2/api-tools/{openai}", json={"base_url": "https://evil.example"}, headers=headers(run))
+    assert r.status_code == 403 and r.json()["error"]["code"] == "catalog_only", r.text
     # A person's own address: the agent's change of any part (its check path alone) is judged on the whole result.
-    own = post(api, "api-tools", {"name": "Stripe EU", "service": "stripe", "base_url": "https://eu.stripe.example"})[
+    own = post(api, "api-tools", {"name": "OpenAI EU", "service": "openai", "base_url": "https://eu.openai.example"})[
         "id"
     ]
-    r = api.patch(f"/api/v2/api-tools/{own}", json={"check_path": "/v1/balance"}, headers=headers(run))
+    r = api.patch(f"/api/v2/api-tools/{own}", json={"check_path": "/v1/models"}, headers=headers(run))
     assert r.status_code == 403 and r.json()["error"]["code"] == "catalog_only", r.text
     # An MCP server not in the catalog is refused before anything reaches its address.
     r = api.post(

@@ -21,6 +21,7 @@ from pydantic import ConfigDict, Field, SecretStr
 
 from . import providers
 from . import tool_access as TA
+from . import tool_services
 from .auth import validate_identity
 from .models import Contract, ID
 from .store import H, Problem, encode
@@ -870,6 +871,8 @@ class Vault:
         )
         if not member:
             TA.require(c, who, TA.key(), action=TA.EDIT if cid else TA.CREATE, admins=self.admins, auth=self.auth)
+        if cid:
+            TA.person_only(c, who, TA.key(cid))  # Rule P, on the key itself
         if cid and who.role in ('human', 'owner', 'bot'):
             require_seen(c, who, cid, self.admins)
         old = self.row(c, cid) if cid else None
@@ -1071,7 +1074,8 @@ class Vault:
         H.event(c, who.actor, 'credential.revealed', cid, {'kind': LOGIN})
         return {'id': cid, 'value': value}
 
-    def reveal(self, c, who, cid):
+    def reveal(self, c, who, cid, delivered=False):
+        """`delivered`: the caller (credential-runtime) already decided this key goes to the run as it is."""
         validate_identity(c, who)
         found = c.execute('SELECT * FROM credentials WHERE id=?', (cid,)).fetchone()
         if found is not None and found['kind'] == LOGIN:
@@ -1082,6 +1086,17 @@ class Vault:
             require_seen(c, who, cid, self.admins)
         if not permitted(c, who, cid, self.admins):
             raise Problem('forbidden', 'You do not have access to this credential', 403)
+        if not delivered and found is not None and found['tool_id'] and not signed_in_person(who):
+            # A key whose tool is reached through the proxy stays here: a run has a proxy token for it, and an agent
+            # (a bot, or the Assistant or BotOps with a person's rights, confirmed or not) never sees the value; only
+            # a person signed in themselves does.
+            tool = c.execute('SELECT * FROM tools WHERE id=?', (found['tool_id'],)).fetchone()
+            proxied = {tool['id']: tool} if tool is not None and tool['delivery'] == 'proxy' else {}
+            through, way = held_at_read(c, proxied, found, who.actor, self.cipher)
+            if through is not None or way == 'skip':
+                raise Problem(
+                    'proxied_key', 'This key stays with Tico: the run reaches its tool through the proxy', 403
+                )
         row = self.row(c, cid)
         if row['ciphertext'] is None:
             raise Problem('not_connected', 'This connection has no stored password or key', 409)
@@ -1159,23 +1174,62 @@ def same_value(c, cipher, env, value):
     return None
 
 
+# `held_at_read`'s cipher for a reader that cannot open values (the report): where the id check would decide, `unknown`.
+UNREAD = object()
+
+
 def held_at_read(c, proxied, row, subject, cipher=None):
-    """(tool row or None, way) for a held key: the tool when the run gets a proxy token for it, either because the
-    tool is proxied or because `subject` holds this Read and write key at Read only and the proxy can hold it to
-    reads (backend/api_tools.py `computer_way`). way `skip`: a read key of the same tool goes instead. An id stored
-    as a key (`tool_settings.is_setting`: its name and its value both say id, POSTHOG_PROJECT_ID, TWILIO_ACCOUNT_SID)
-    goes as its value, never as a proxy token: a bot sends it as it is, in a path or as a username."""
-    if cipher is not None and _is_id(c, cipher, row):
-        return None, 'key'
-    tool = proxied.get(row['tool_id'])
-    if tool is not None:
-        return tool, 'proxy'
+    """The one decision on how a held key reaches a run, which the runtime, a reveal, Rules › Links and the report all
+    follow: (tool row or None, way), the tool when the run gets a proxy token for it. In order:
+    - for a Read and write key of an ads, payments or CRM tool (backend/api_tools.py `proxy_policy`), ahead of anything
+      else, the tool's own delivery included: a holder at Read with a Read key gets that key alone (`skip`); then
+      `proxy` takes it through the proxy, and `direct` (Google Ads, or no address the proxy can call) hands it as it is
+      to a holder at Read and write only, never to one at Read (`skip`); a Read key of a `direct` tool goes as it is;
+    - an id stored as a key (`tool_settings.is_setting`: its name and its value both say id, POSTHOG_PROJECT_ID,
+      TWILIO_ACCOUNT_SID) goes as its value: a bot sends it as it is, in a path or as a username;
+    - a proxied tool's key: a proxy token;
+    - else `computer_way`: as it is, or a proxy token when `subject` holds a Read and write key at Read only and the
+      proxy can hold it to reads; way `skip`: a read key of the same tool goes instead."""
     from . import api_tools
 
-    way = api_tools.computer_way(c, row, subject)
-    if way == 'proxy':
-        return c.execute('SELECT * FROM tools WHERE id=?', (row['tool_id'],)).fetchone(), way
-    return None, way
+    tool = proxied.get(row['tool_id']) if row['tool_id'] else None
+    if tool is None and row['tool_id']:
+        tool = c.execute('SELECT * FROM tools WHERE id=?', (row['tool_id'],)).fetchone()
+    policy = api_tools.proxy_policy(tool) if tool is not None else None
+    if policy is not None and row['access_level'] == 'read_write':
+        # A holder at Read with a Read key gets that key alone, first; then the policy. Where its write keys go as
+        # they are (`direct`), a holder at Read with no Read key gets none: never the raw write key.
+        way = api_tools.computer_way(c, row, subject, tool)
+        if way == 'skip' or (policy == 'direct' and way != 'key'):
+            return None, 'skip'
+        return (tool, 'proxy') if policy == 'proxy' else (None, 'key')
+    if policy == 'direct':
+        return None, 'key'
+    known = cipher is UNREAD and bool(row['tool_id']) and _known_name(row['env'])
+    if cipher is not None and cipher is not UNREAD and _is_id(c, cipher, row):
+        return None, 'key'
+    if row['tool_id'] in proxied:
+        found = tool, 'proxy'
+    else:
+        way = api_tools.computer_way(c, row, subject, tool)
+        found = (tool, way) if way == 'proxy' else (None, way)
+    # Unread, an id-like name decides only where the key would go through the proxy: an id goes as it is instead.
+    return (None, 'unknown') if known and found[0] is not None else found
+
+
+def _known_name(env):
+    from . import tool_settings
+
+    return tool_settings.known_name(env)
+
+
+def writes_by_proxy(tool):
+    """Whether this tool's write keys reach runs only through the proxy, at the tool's level (no holder read): the
+    decision's first steps, the write-key policy, else the tool's own delivery. What Rules › Links reads."""
+    from . import api_tools
+
+    policy = api_tools.proxy_policy(tool)
+    return policy == 'proxy' or (policy is None and tool['delivery'] == 'proxy')
 
 
 def _is_id(c, cipher, row):
@@ -1326,7 +1380,12 @@ def install_credentials(app, store, delegate=None, propose=None):
                     (item.env, subject),
                 ).fetchone():
                     continue
-                if item.kind != 'file' and tool_settings.is_setting(item.env, item.value.get_secret_value()):
+                # A write key of an ads, payments or CRM vendor stays a key, policy first: never taken for a setting.
+                if (
+                    item.kind != 'file'
+                    and not tool_services.protected(tool_services.match(env=item.env) or '')
+                    and tool_settings.is_setting(item.env, item.value.get_secret_value())
+                ):
                     later.append(item)  # after the keys: a setting goes on a tool one of them is a key of
                     continue
                 keep(item)
@@ -1586,6 +1645,7 @@ def install_credentials(app, store, delegate=None, propose=None):
                     return delete_account(c, who, candidate['tool_id'], cid, vault.admins, vault.auth)
             elif api_tools.key_hidden(c, who, cid, vault.admins, vault.auth):
                 raise Problem('not_found', 'Credential not found', 404)
+            TA.person_only(c, who, TA.key(cid))  # Rule P, on the key itself
             api_tools.refuse_finance_key(c, [cid])  # a Finance source still reads it (409 key_in_use)
             row = vault.row(c, cid)
             from .model_subscriptions import before_delete
@@ -1647,7 +1707,7 @@ def install_credentials(app, store, delegate=None, propose=None):
                         )
                         continue
                     if row['id'] in explicit:
-                        value = vault.reveal(c, who, row['id'])
+                        value = vault.reveal(c, who, row['id'], delivered=True)
                     else:
                         # A key the bot reads by default (backend/default_read.py) is a Read key: its value goes to
                         # the run as a granted one's does, and never to a reveal.

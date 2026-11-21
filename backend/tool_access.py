@@ -138,6 +138,40 @@ def _hidden(c: Any, who: Who, resource: Resource, admins: Any, auth: Any) -> boo
     return False
 
 
+# Rule P: an ads, payments or CRM tool's keys (their values, levels, end dates, removal), its service, address, check
+# and delivery change only by a person signed in themselves (credentials.signed_in_person): never an agent, with a
+# person's rights or its own, confirmed or not, nor a person's token in a script.
+RULE_P = (
+    "On an ads, payments or CRM tool, its keys, service, address and delivery are a person's own to change in Tools"
+)
+
+
+def _protected(c: Any, resource: Resource) -> bool:
+    """Whether `resource` is, or is a key of, an ads, payments or CRM tool (tool_services.GATED, by its service or its
+    API's exact host)."""
+    tool: Any = None
+    if resource.kind == TOOL:
+        tool = resource.row
+        if tool is None and resource.id:
+            tool = c.execute("SELECT * FROM tools WHERE id=?", (resource.id,)).fetchone()
+    elif resource.kind == KEY and resource.id:
+        tool = c.execute(
+            "SELECT t.* FROM credentials k JOIN tools t ON t.id=k.tool_id WHERE k.id=?", (resource.id,)
+        ).fetchone()
+    if tool is None:
+        return False
+    services: Any = importlib.import_module(".tool_services", __package__)
+    keys = tool.keys()
+    host = tool["base_url"] or (tool["mcp_url"] if "mcp_url" in keys else "") or ""
+    return bool(services.gated_vendor(tool["service"], host))
+
+
+def person_only(c: Any, who: Who, resource: Resource) -> None:
+    """Rule P where the change is made without `require` (a key's own creator removing it)."""
+    if _protected(c, resource) and not _credentials().signed_in_person(who):
+        raise Problem("forbidden", RULE_P, 403)
+
+
 def _login(c: Any, resource: Resource) -> bool:
     """A website login: an account, or a vault credential of kind `login` (backend/website_tools.py)."""
     if resource.kind == ACCOUNT:
@@ -190,6 +224,14 @@ def decide(
         return _note(c, who, resource.id, admins, auth)
     if _hidden(c, who, resource, admins, auth):
         return Decision(False, "", hidden=True)
+    # Rule P; an access change (a level given to or taken from someone) is no change of the tool's own keys.
+    if (
+        action in (EDIT, STORE, DELETE)
+        and not (action == EDIT and subject)
+        and _protected(c, resource)
+        and not _credentials().signed_in_person(who)
+    ):
+        return Decision(False, RULE_P)
     subject = _subject(c, subject)
     via = str(getattr(who, "via", "") or "")
     acting = acting_agent(who)

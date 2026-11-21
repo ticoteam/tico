@@ -191,14 +191,15 @@ def _templated(c, tool_id):
     return row is not None and bool(_field(row, "auth_template"))
 
 
-def computer_way(c, row, subject):
+def computer_way(c, row, subject, tool=None):
     """How one key of a tool whose keys go to computers reaches `subject`'s run:
     - `key`: as it is;
     - `skip`: held at Read, and a read key of the same tool goes instead (the read key is preferred);
     - `proxy`: held at Read with only a Read and write key: the run gets a proxy token, and the proxy lets only reads
       through (backend/tool_proxy.py);
     - `unenforced`: as `key`, because nothing can hold it to reads: the tool has no API address the proxy can call.
-    A key on no tool, or held at Read and write, is `key`."""
+    A key on no tool, or held at Read and write, is `key` (credentials.held_at_read puts the write-key policy of ads,
+    payments and CRM tools, `proxy_policy`, ahead of this). `tool`: its row, when the caller has it."""
     if not row["tool_id"] or row["access_level"] == "read":
         return "key"
     held = _held(c, row["tool_id"], subject_of(c, subject))
@@ -212,12 +213,29 @@ def computer_way(c, row, subject):
         for key, _level in held
     ):
         return "skip"
-    tool = c.execute("SELECT * FROM tools WHERE id=?", (row["tool_id"],)).fetchone()
+    tool = tool if tool is not None else c.execute("SELECT * FROM tools WHERE id=?", (row["tool_id"],)).fetchone()
     from .tool_proxy import address_problem
 
     if tool is not None and not address_problem(tool["base_url"] or "", tool["name"] or tool["id"]):
         return "proxy"
     return "unenforced"
+
+
+def proxy_policy(tool):
+    """The write-key policy of an ads, payments or CRM tool (tool_services.GATED, by its service or its API's known
+    host), ahead of the tool's own delivery: `direct` for Google Ads, whose calls are signed on the computer
+    (tool_services.DIRECT), and for one the proxy cannot call, its write keys reaching runs as they are (Not covered);
+    `proxy` for the rest, a write key reaching runs only through the proxy, where the Rules gate sees its writes, and
+    never revealed to an agent. None for any other tool: its own delivery decides. Rotating a key a run had before is
+    a person's, at the vendor (`python -m backend.proxy_keys` lists them)."""
+    from .tool_proxy import address_problem
+
+    vendor = TS.gated_vendor(tool["service"], tool["base_url"] or _field(tool, "mcp_url") or "")
+    if not vendor:
+        return None
+    if vendor in TS.DIRECT or address_problem(tool["base_url"] or "", tool["name"] or tool["id"]):
+        return "direct"
+    return "proxy"
 
 
 def subject_level(c, tool_id, subject):
@@ -1120,11 +1138,17 @@ def _check_tool(store, vault, tool_id):
         together = tool_templates.check_auth(c, vault, tool, spec) if spec and spec.get("ways") else None
         held = [k for k in _keys(c, tool_id) if k["ciphertext"] is not None]
         # An id stored as a key (TWILIO_ACCOUNT_SID, POSTHOG_PROJECT_ID) is no key to the vendor, whatever its value
-        # looks like: sent as one it would read Key rejected. It is never decrypted for a check.
+        # looks like: sent as one it would read Key rejected. It is never decrypted for a check. The write-key policy
+        # comes first: an ads, payments or CRM tool's write key is a key, whatever its name.
+        protected = proxy_policy(tool) == "proxy"
         stored = (
             []
             if mcp or together
-            else [(k, vault.cipher.decrypt(c, k)) for k in held if not tool_settings.known_name(k["env"])]
+            else [
+                (k, vault.cipher.decrypt(c, k))
+                for k in held
+                if (protected and k["access_level"] == "read_write") or not tool_settings.known_name(k["env"])
+            ]
         )
         # The revision each value was checked at, read after decrypt (which may reseal it): an end date is kept only
         # while the key still holds that value (`_keep_end_date`), never on a value saved while the check was out.
@@ -1192,11 +1216,16 @@ def due(c, now=None):
     ):
         if not (tool["mcp_url"] or check_path_of(tool)):
             continue
-        envs = [
-            r[0]
-            for r in c.execute("SELECT env FROM credentials WHERE tool_id=? AND ciphertext IS NOT NULL", (tool["id"],))
-        ]
-        if not tool["mcp_url"] and envs and all(tool_settings.known_name(e) for e in envs):
+        keys = c.execute(
+            "SELECT env, access_level FROM credentials WHERE tool_id=? AND ciphertext IS NOT NULL", (tool["id"],)
+        ).fetchall()
+        # The write-key policy first: an ads, payments or CRM tool's write key is checked whatever its name says.
+        protected = proxy_policy(tool) == "proxy"
+        if (
+            not tool["mcp_url"]
+            and keys
+            and all(tool_settings.known_name(k[0]) and not (protected and k[1] == "read_write") for k in keys)
+        ):
             continue
         out.append(tool["id"])
     return out
@@ -1368,9 +1397,12 @@ def create_tool(c, who, body, admins, vault=None):
         # A value is a person's own to paste (plan P4): never an agent's, with anyone's rights or its own.
         raise Problem("secret_in_request", "A key goes in through a person's own paste in Tools, never an agent", 422)
     fields = _clean(body.model_dump(exclude={"key"}))
-    service = TS.match(service=fields["service"], name=fields["name"])
-    TA.catalog_only(who, service, fields)
-    known = TS.defaults(service)
+    # A service given is kept as given (a "stripe-adapter" is no Stripe); only none given is matched from the name. An
+    # alias given (`close`) is stored as given, its catalog service (Close CRM) reading the catalog's address and check.
+    service = fields["service"].strip().lower() if fields["service"] else TS.match(name=fields["name"])
+    canonical = TS.canonical(service or "")
+    TA.catalog_only(who, canonical, fields)
+    known = TS.defaults(canonical)
     # A known service's check path belongs to its own address: a tool given another address gets none by default.
     own = not fields["base_url"] or fields["base_url"] == known.get("base_url")
     tool = {
@@ -1411,7 +1443,9 @@ def update_tool(c, who, tool_id, body, admins, auth=None):
     asked = body.model_dump(exclude_none=True, exclude={"audience", "everyone_reads"})
     audience_set = "audience" in body.model_fields_set
     if asked or not audience_set or getattr(who, "role", "") != "owner":
-        TA.require(c, who, TA.tool(), action=TA.EDIT, admins=admins, auth=auth)
+        # Its service, address, check or delivery: on an ads, payments or CRM tool a person's own (tool_access Rule P).
+        reach = bool(set(asked) & {"service", "base_url", "auth_scheme", "check_path", "delivery"})
+        TA.require(c, who, TA.tool(tool_id=tool_id) if reach else TA.tool(), action=TA.EDIT, admins=admins, auth=auth)
     tool = dict(_readable(c, who, tool_id, admins, auth))
     if audience_set:
         set_audience(c, who, tool, body.audience.model_dump() if body.audience is not None else None, admins, auth)
@@ -1432,6 +1466,8 @@ def update_tool(c, who, tool_id, body, admins, auth=None):
             access_requests.settled(c, who, resource_type="tool", resource_id=tool_id, via="everyone-reads")
     fields = {k: v for k, v in _clean(asked).items()}
     merged = tool | fields
+    if any(merged[k] != tool[k] for k in ("service", "base_url", "auth_scheme", "check_path", "delivery")):
+        TA.person_only(c, who, TA.tool(merged))  # Rule P on what it would be too (moved onto Stripe's API)
     # What the tool reaches after the change, whole: an agent's change of any part leaves only the catalog's.
     if any(merged[k] != tool[k] for k in (*TA.ADDRESS_FIELDS, "service")):
         TA.catalog_only(who, merged["service"], {k: merged[k] for k in TA.ADDRESS_FIELDS})
@@ -1550,7 +1586,7 @@ def forget_audience_member(c, actor, field, ident):
 def delete_tool(c, who, tool_id, admins, kind="api"):
     """The tool, its checks and calls, and its keys with their grants: a key belongs to its tool (a website tool's
     accounts too)."""
-    TA.require(c, who, TA.tool(), action=TA.DELETE, admins=admins)
+    TA.require(c, who, TA.tool(tool_id=tool_id), action=TA.DELETE, admins=admins)
     tool = _readable(c, who, tool_id, admins, kind=kind)
     keys = [k["id"] for k in _keys(c, tool_id)]
     refuse_finance_key(c, keys)  # before anything goes
@@ -1658,7 +1694,10 @@ def ensure_tool(c, who, credential_id, from_computer=False, value=None):
         c.execute("UPDATE credentials SET tool_id=?, access_level='read_write' WHERE id=?", (home, credential_id))
         H.event(c, who.actor, "tool.key_added", home, {"credential": credential_id, "access_level": "read_write"})
         return home
-    if tool_settings.is_setting(env, value) if value is not None else tool_settings.known_name(env):
+    # A write key of an ads, payments or CRM vendor stays a key on its tool, policy first: never an id's own tool.
+    if not TS.protected(service or "") and (
+        tool_settings.is_setting(env, value) if value is not None else tool_settings.known_name(env)
+    ):
         tid = TS.insert_tool(c, service, row["name"], "computer", who.actor, H.now(), tid=_unique_id(c, TS.slug(env)))
         c.execute("UPDATE tools SET name=?, base_url='', check_path='' WHERE id=?", (env, tid))
         c.execute("UPDATE credentials SET tool_id=?, access_level='read_write' WHERE id=?", (tid, credential_id))
@@ -1795,7 +1834,8 @@ def delete_key(c, who, vault, tool_id, key_id):
     _readable(c, who, tool_id, vault.admins, vault.auth)
     key = _tool_key(c, tool_id, key_id)
     if not may_remove(who, key["created_by"], manages=TA.admin(c, who, vault.admins)):
-        TA.require(c, who, TA.tool(), action=TA.EDIT, admins=vault.admins, auth=vault.auth)
+        TA.require(c, who, TA.tool(tool_id=tool_id), action=TA.EDIT, admins=vault.admins, auth=vault.auth)
+    TA.person_only(c, who, TA.tool(tool_id=tool_id))
     _drop_key(c, who, key["id"])
     reconnect_tasks.redated(c, tool_id)  # the key it renewed is gone
     return {"deleted": True, "id": key_id}

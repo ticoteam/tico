@@ -20,6 +20,7 @@ stored key is a tool's and how its tool is made, shared by the data migration (o
 """
 
 import base64
+import functools
 import re
 
 from .slugs import slugify
@@ -251,6 +252,112 @@ TEMPLATES = {
         "ways": [{"headers": {"Authorization": "Bearer {token}"}}],
     },
 }
+
+
+# Ads, payments and CRM (plan P3/W4): a write key of one of these reaches a run only through the proxy, where the
+# Rules gate (backend/rule_links.py) sees its writes (api_tools.proxy_policy). With each, the POSTs its API answers
+# as a read (a search, a query), which are no write: any other call but GET, HEAD and OPTIONS is one. A tool is one of
+# these by its service or its API's known host (a "Billing" tool at api.stripe.com is Stripe's), never by its name.
+GATED = {
+    "meta-ads": ("ads", ()),
+    "google-ads": ("ads", (r"/v\d+/customers/[^/]+/googleAds:search(Stream)?",)),
+    "stripe": ("payments", ()),
+    "brex": ("payments", ()),
+    "mercury": ("payments", ()),
+    "close-crm": ("crm", (r"/api/v1/data/search/?",)),
+    # v3 and the date-versioned CRM (/crm/objects/2026-03/...): object search and batch read; list search
+    "hubspot": (
+        "crm",
+        (
+            r"/crm/(v3/objects|objects/\d{4}-\d{2})/[^/]+/(search|batch/read)",
+            r"/crm/(v3/lists|lists/\d{4}-\d{2})/search",
+        ),
+    ),
+    "pipedrive": ("crm", ()),
+    "attio": ("crm", (r"/v2/(objects/[^/]+/records|lists/[^/]+/entries)/query",)),
+}
+
+
+# Of those, the ones whose keys stay with the run: Google Ads signs each call on the computer (an OAuth refresh and a
+# developer token on every call), which no proxy key can carry. Listed as Not covered, never refused.
+DIRECT = frozenset({"google-ads"})
+
+
+@functools.lru_cache(maxsize=1)
+def _gated_names():
+    """{a GATED vendor's id or one of its explicit aliases (SERVICES `aliases`, VENDOR_ALIASES): its id}."""
+    names = {key: key for key in GATED}
+    for key in GATED:
+        for alias in (SERVICES.get(key) or {}).get("aliases", ()):
+            names.setdefault(str(alias).lower(), key)
+    for alias, key in VENDOR_ALIASES.items():
+        if key in GATED:
+            names.setdefault(alias, key)
+    return names
+
+
+@functools.lru_cache(maxsize=1)
+def _gated_hosts():
+    """{the exact hostname of a GATED vendor's API (api.stripe.com, graph.facebook.com): its id}. Google Ads has no
+    catalog address (its calls are signed on the computer), so its API's host is named here."""
+    from urllib.parse import urlsplit
+
+    hosts = {
+        urlsplit((SERVICES.get(key) or {}).get("base_url") or "").hostname: key
+        for key in GATED
+        if (SERVICES.get(key) or {}).get("base_url")
+    }
+    return {**hosts, "googleads.googleapis.com": "google-ads"}
+
+
+def gated_vendor(service="", host=""):
+    """The GATED vendor of a tool, else "": its service when that is a vendor's id or one of its explicit aliases
+    (`close` is Close CRM's), else its address's exact hostname when that is the vendor's known API host
+    (api.stripe.com yes; dashboard.stripe.com, a "stripe-adapter" service no). Never its display name."""
+    from urllib.parse import urlsplit
+
+    found = _gated_names().get(str(service or "").strip().lower())
+    if found:
+        return found
+    hostname = urlsplit(host if "//" in str(host) else "//" + str(host or "")).hostname if host else None
+    return _gated_hosts().get(hostname, "") if hostname else ""
+
+
+def canonical(service=""):
+    """The catalog's service for a service as given: itself when known, else the one it is an explicit alias of
+    (SERVICES `aliases`, VENDOR_ALIASES: `close` is Close CRM's), else itself."""
+    service = str(service or "").strip().lower()
+    if service in SERVICES:
+        return service
+    for key, row in SERVICES.items():
+        if service and service in row["aliases"]:
+            return key
+    return VENDOR_ALIASES.get(service, service) if VENDOR_ALIASES.get(service) in SERVICES else service
+
+
+def protected(service=""):
+    """Whether a key of this service is a write key that lives in the proxy (GATED, but not DIRECT): what the intake of
+    a stored or imported key reads before any id or setting guess, so such a key is never made a setting nor put on a
+    tool with no address."""
+    vendor = gated_vendor(service)
+    return bool(vendor) and vendor not in DIRECT
+
+
+def gated(service="", host=""):
+    """`ads`, `payments` or `crm` for a tool of one of those vendors, else ""."""
+    return GATED.get(gated_vendor(service, host), ("", ()))[0]
+
+
+def vendor_read(service, method, path, host=""):
+    """A POST the vendor's API answers as a read (GATED), at exactly this URL path (the whole path) and only at the
+    vendor's own known API host: not a write. Anywhere else the same path is a write."""
+    from urllib.parse import urlsplit
+
+    vendor = gated_vendor(service, host)
+    hostname = urlsplit(host if "//" in str(host) else "//" + str(host or "")).hostname if host else None
+    if not vendor or _gated_hosts().get(hostname) != vendor:
+        return False
+    return method == "POST" and any(re.fullmatch(pattern, path) for pattern in GATED[vendor][1])
 
 
 # Vendors' own MCP servers (docs/connect-tools.md): Find or connect offers a sign-in with the vendor on these.
