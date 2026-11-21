@@ -1801,55 +1801,15 @@ def chat_room(c, settings, who, create=True):
     return ensure_room(c, who.actor, settings.assistant_bot) if create else find_room(c, who.actor)
 
 
-# The places a morning message links, its items: `[title](#/task/<id>)`, `[goal](#/goals/<id>)` and the like, and the
-# pages it names in words (`page:file-<hex>@2`).
+# The places a morning message links, its items: `[title](#/task/<id>)`, `[goal](#/goals/<id>)` and the like.
 _LINKED = re.compile(r"\]\(\s*([^)\s]+)")
-_FILE_REF = re.compile(r"(?<![\w/-])(?:page:)?(file-[0-9a-f]{12,40})")
-# One item however it is linked: a page or file by `#/file/<id>`, `/api/v2/files/<id>/versions/<n>`,
-# `/library/files?file=<id>` or `page:<id>@<n>`; else `<kind>/<id>`. Tasks are read by _task_item.
-_FILE_FORMS = (
-    re.compile(r"(?:^|[/:=])(file-[0-9a-f]{12,40})"),
-    re.compile(r"^(?:api/v2/)?(?:files?|pages?)/([^/?#@]+)"),
-)
 
 
-def _task_ref(segs):
-    """The task a route names, from its path parts: `task/<ref>`, `flow/<ref>`, `tasks/<pipeline>/<ref>[/<tab>]`, or an
-    old `tasks/<number>`; None for any other page (a board, `tasks/<pipeline>/edit`)."""
-    if segs[0] in ("task", "flow") and len(segs) > 1:
-        return segs[1]
-    if segs[0] == "tasks" and len(segs) > 2 and segs[2] != "edit":
-        return segs[2]
-    if segs[0] == "tasks" and len(segs) == 2 and segs[1].isdigit():
-        return segs[1]
-    return None
-
-
-def _item(c, target):
-    """A link target as the item it names (`task:<id>`, `file:file-ab12…`, `goals/g-1`), whatever form it took: a task by
-    its id or its number, read as its id, so its routes, tabs and query strings all name the same task."""
-    path = re.sub(r"^[a-z]+://[^/]+", "", unquote(target.strip()), flags=re.I)
-    path = re.sub(r"^/?(?:next/)?#?/?", "", path)
-    for form in _FILE_FORMS:
-        m = form.search(path)
-        if m:
-            return "file:" + m.group(1)
-    route, _, query = path.partition("?")
-    segs = [p for p in route.split("#")[0].split("/") if p]
-    ref = _task_ref(segs) if segs else None
-    if ref:
-        found = c.execute(
-            "SELECT id FROM tasks WHERE number=?" if ref.isdigit() else "SELECT id FROM tasks WHERE id=?",
-            (int(ref) if ref.isdigit() else ref,),
-        ).fetchone()
-        return "task:" + (found[0] if found else ref)
-    return "/".join(segs[:2]) + ("?" + query if len(segs) < 2 and query else "")
-
-
-def morning_items(c, text):
-    """A stable hash of the items a morning message links, in any order, form or number of times (None when it links
-    none): a morning that names the same items as the person's last one is not sent again."""
-    linked = sorted({_item(c, t) for t in _LINKED.findall(text or "") + _FILE_REF.findall(text or "")} - {""})
+def morning_items(text):
+    """A stable hash of the link targets a morning message names, as written (trimmed, one leading `#` and a trailing
+    slash off), in any order and however often; None when it links none. Two spellings of one item count as two: a
+    repeat may go again, but a morning with a new item is never held back."""
+    linked = sorted({t.strip().removeprefix("#").rstrip("/") for t in _LINKED.findall(text or "")} - {""})
     return digest("\n".join(linked))[:16] if linked else None
 
 
@@ -1867,7 +1827,7 @@ def last_morning_items(c, actor):
     if not row or row[0]:
         return row[0] if row else None
     sent = c.execute("SELECT body FROM messages WHERE id=?", (row[1],)).fetchone()
-    return morning_items(c, sent[0]) if sent else None
+    return morning_items(sent[0]) if sent else None
 
 
 def morning_day():
@@ -2474,7 +2434,7 @@ def install(app, store, auth, mutate, onboarding):
                     409,
                     extra={"next_at": next_at},
                 )
-            items = morning_items(c, body.body)
+            items = morning_items(body.body)
             if items and items == last_morning_items(c, found.actor):
                 raise Problem(
                     "same_as_last",

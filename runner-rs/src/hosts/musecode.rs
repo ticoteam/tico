@@ -666,6 +666,8 @@ struct Turn {
     model: String,
     /// Its model requests: the session log's `model_completed` records, each once, wherever its usage came from.
     calls: Option<usize>,
+    /// Its stdout's `run.model.completed` records: the count when the session log has none.
+    streamed_calls: usize,
 }
 
 #[derive(Default)]
@@ -1018,7 +1020,9 @@ impl MuseCodeHost {
         };
         let _ = std::fs::remove_file(&prompt);
         let run = Some(state.run.as_str()).filter(|r| !r.is_empty());
-        state.calls = session_log(&env, &tid).and_then(|p| session_calls(&p, offset, run));
+        state.calls = session_log(&env, &tid)
+            .and_then(|p| session_calls(&p, offset, run))
+            .or((state.streamed_calls > 0).then_some(state.streamed_calls));
         if state.usage.is_none() {
             if let Some((a, b, c, model)) =
                 session_log(&env, &tid).and_then(|p| session_usage(&p, offset, run))
@@ -1053,6 +1057,9 @@ impl MuseCodeHost {
             if let Some(id) = payload["run_stream"]["id"].as_str() {
                 state.run = id.into();
             }
+        }
+        if kind == "run.model.completed" {
+            state.streamed_calls += 1;
         }
         if kind == "run.model.configured" {
             if let Some(m) = payload["model_id"].as_str().filter(|m| !m.is_empty()) {
@@ -1283,10 +1290,16 @@ mod tests {
             let thread = host.start_thread(&settings);
             host.start_turn(&thread, "hello", None).unwrap();
             let mut got = until_idle(&mut rx, 10).await;
+            if path.ends_with("failed.jsonl") {
+                // No session log: its stdout's one `run.model.completed` is the count.
+                let tokens = got.iter().find(|e| e["kind"] == "tokens").unwrap();
+                assert_eq!(tokens["model_calls"], 1, "{tokens}");
+            }
             for ev in &mut got {
+                // `model_calls` is the runner's own count, taken out before the event is kept (drive.rs).
                 ev.as_object_mut()
                     .unwrap()
-                    .retain(|k, _| k != "thread_id" && k != "turn_id");
+                    .retain(|k, _| k != "thread_id" && k != "turn_id" && k != "model_calls");
             }
             assert_eq!(got, expected, "{}", path.display());
         }
