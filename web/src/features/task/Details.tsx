@@ -233,7 +233,7 @@ export function Details({ t, flow, adding = null, onAdding = () => undefined }: 
         {shots && (
           <Kv k="Waiting on" target={`task-shots:${t.id}`}>
             {shots.who && <Face id={shots.who} />}
-            <small>{shots.line.split(':')[0]}</small>
+            <small>{shots.line}</small>
           </Kv>
         )}
         {/* Each batch the button sends (the server takes 50 keys at most), with every shot's full name it marks. */}

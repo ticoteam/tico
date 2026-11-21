@@ -2460,6 +2460,8 @@ class GatewayVideo(Contract):
 
 
 class ShotsReconcile(Contract):
+    """The paid shots to mark reconciled: their keys, as the task's wait shows them; required and never empty."""
+
     shots: list[Annotated[str, Field(min_length=1, max_length=40)]] = Field(min_length=1, max_length=50)
 
 

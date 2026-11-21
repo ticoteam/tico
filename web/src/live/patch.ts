@@ -245,10 +245,12 @@ function patchTasks(batch: TaskEvent[]): void {
         if (key.length === 3 && held?.children?.some((c) => c.id === id)) void queryClient.invalidateQueries({ queryKey: key, exact: true }, { cancelRefetch: true });
       continue;
     }
-    const held = queryClient.getQueryData<TaskRow>(detail);
+    const held = queryClient.getQueryData<TaskRow & { waits?: { requirement_id: string | null }[] }>(detail);
     // A sub-task filed under it or taken off (a relation): its children are read again (a second review's pill).
-    // A read already in flight is from before the change: it starts again.
-    if (held && related.has(id)) void queryClient.invalidateQueries({ queryKey: detail, exact: true }, { cancelRefetch: true });
+    // A read already in flight is from before the change: it starts again. A task with paid shots to reconcile reads its
+    // waits again on any change: the row carries only their summary, and who they wait on may have moved.
+    const shots = !!held?.waits?.some((w) => w.requirement_id?.startsWith('paid_render:'));
+    if (held && (related.has(id) || shots)) void queryClient.invalidateQueries({ queryKey: detail, exact: true }, { cancelRefetch: true });
     const task = e.task;
     if (!task) continue;
     // Writing the same data still counts as a write (and a redraw): only a real change is set.

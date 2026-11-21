@@ -1166,7 +1166,7 @@ def task_view(
     hidden = hidden_filed(conn, row, viewer, visible_sql)
     shown: Callable[[str], bool] = lambda task_id: task_id not in hidden
     raw_waits = W.of(conn, row, standings=standings) if live else []
-    said_waits = W.with_shots(conn, task_id, raw_waits)  # with its paid shots to reconcile: shown, never the engine's
+    said_waits = W.with_shots(conn, task_id, raw_waits)  # with paid shots to reconcile, keys and names: Details
     waits = [W.view(wait, shown) for wait in said_waits]
     answers = R.newest_answers(conn, visit["id"]) if live else {}
     works = bool(viewer) and can_work(conn, str(viewer), row)
@@ -1220,7 +1220,7 @@ def task_view(
     )
     # A page several people approve is each approver's turn: `viewer` sees it as theirs (waiting_on.head_for).
     # `turn_for`: the person the read is for (waiting_on.turn_viewer), apart from `viewer`, who decides access.
-    head = W.head_for(said_waits, turn_for or viewer)
+    head = W.head_for(raw_waits, turn_for or viewer)  # the workflow's turn: the run header's, never a shot's
     turn = waits[said_waits.index(head)] if head else None
     run = (
         task_reads.live_runs(conn, {task_id: head.who}).get(task_id)

@@ -349,8 +349,9 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
         **api_v2(
             "Tasks",
             "reconcileTaskShots",
-            "Mark a task's paid shots of unknown outcome reconciled: those `shots` names (the keys its wait showed), "
-            "or every one. They leave its Reconcile wait and are never sent again",
+            "A person marks a task's paid shots of unknown outcome reconciled: exactly the keys in `shots`, a "
+            "required, non-empty list (1 to 50, as its wait showed them), never every one by default. They leave "
+            "its Reconcile wait and are never sent again",
             ShotsReconciled,
         ),
     )

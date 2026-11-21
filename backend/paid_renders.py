@@ -8,7 +8,8 @@ a request, outside any transaction) and the shot's name. A request with no name 
 Idempotency-Key instead (none is a 422). A request's Idempotency-Key is kept as an alias of its shot
 (`paid_render.alias`) once that shot was sent: with its `sent`, or when the request finds it sent already. It is read
 first: a retry after the card moved to a new visit is the same shot, and the same key with another input is 409
-`idempotency_conflict`.
+`idempotency_conflict`. A new key for the same shot (asker, card, input and name) still sent or unknown under another
+visit of its card answers from it, at any age (`_twins`).
 
 `resolve` runs before the Gateway and budget checks, in a read: a shot that started answers its job, one in flight is
 busy (429), one whose outcome is unknown is refused (409 `reconcile_shot`, which no client retries) and one its person
@@ -58,7 +59,6 @@ ACTIONS = (SENT, STARTED, REFUSED, UNKNOWN, RECONCILED)
 ALIAS = "paid_render.alias"  # a request's Idempotency-Key -> the shot key it resolved to
 WAIT = "paid_render:"  # + the card's id: its "Reconcile N shots" wait's id (waiting_on.with_shots)
 NAME_WORDS = 6  # a shot with no name is named by its prompt's first words
-LINE_NAMES = 120  # how much of the shots' names the wait's line says
 STALE_MINUTES = 5  # a sent shot this old with no answer, and not in flight, is unknown (`sweep`)
 SWEEP_DAYS = 30  # how far back `sweep` reads
 # The 5xx answers that are a certain refusal: HQ refused before sending (`unconfigured`), the provider refused the key
@@ -187,30 +187,33 @@ def _state(c: Any, key: str, last: str | None, detail: Row) -> Row | Problem | N
     return None
 
 
-# The same shot under another key of its card: same asker, card, input and name. Read by the asker's events of one
-# action, from a time on (events_actor_action_created): unknown ever, which are few, and sent in the last SWEEP_DAYS.
-_TWINS = (
-    "SELECT s.target FROM events s INDEXED BY events_actor_action_created WHERE s.actor=? AND s.action=? "
-    "AND s.created_at>=? AND s.target<>? AND json_extract(s.detail, '$.task')=? "
-    "AND json_extract(s.detail, '$.input')=? AND json_extract(s.detail, '$.shot')=?"
-)
+def _twin_key(actor: str, said: Row) -> str:
+    """The shot on its card under any visit: asker, card, input and name. Kept as an alias of each key the shot is
+    sent under (`begin`), so `_twins` finds them by the events_action_target index, whatever their age."""
+    return "twin_" + _hash(actor, str(said["task"]), str(said["input"]), str(said["shot"]))
 
 
-def _twin(c: Any, who: Any, key: str, said: Row, write: bool = False) -> Row | Problem | None:
-    """What a new key answers when its card has the same shot (asker, input and name) under another visit's key: one
-    unknown or reconciled is refused, one sent in the last `SWEEP_DAYS` is busy while in flight and unknown once
-    stranded (`write` marks it so), and one started answers its job. A stage move never makes a shot that may be charged
-    again. None outside a card, or with no such shot."""
+def _twins(c: Any, actor: str, key: str, said: Row) -> list[str]:
+    """The other keys the same shot was sent under on its card (`_twin_key`); none outside a card."""
     if not said.get("task"):
-        return None
-    shot = (key, said["task"], said["input"], said["shot"])
-    for action, since in ((UNKNOWN, ""), (SENT, H.shift(H.now(), days=-SWEEP_DAYS))):
-        for (other,) in c.execute(_TWINS, (who.actor, action, since, *shot)).fetchall():
-            last, detail = _latest(c, str(other))
-            found = _settle(c, who, str(other)) if write else _state(c, str(other), last, detail)
-            if found is not None:
-                return found
-    return None
+        return []
+    rows = c.execute("SELECT detail FROM events WHERE action=? AND target=?", (ALIAS, _twin_key(actor, said)))
+    return [k for k in dict.fromkeys(str(json.loads(r[0] or "{}").get("key")) for r in rows) if k != key]
+
+
+def _answer(c: Any, who: Any, key: str, said: Row, write: bool) -> tuple[str, Row | None, Row | Problem | None]:
+    """The shot a request answers from, (key, its detail when it is another visit's, its state): its own key's state,
+    else the same shot still unresolved under another visit of its card (sent: busy in flight, unknown once stranded;
+    or unknown), at any age. One started, refused or reconciled there is not this visit's shot. `write` marks a
+    stranded one unknown (`_settle`), so its card's wait shows."""
+    state = _settle(c, who, key) if write else _state(c, key, *_latest(c, key))
+    if state is not None:
+        return key, None, state
+    for other in _twins(c, who.actor, key, said):
+        last, detail = _latest(c, other)
+        if last in (SENT, UNKNOWN):
+            return other, detail, _settle(c, who, other) if write else _state(c, other, last, detail)
+    return key, None, None
 
 
 def _settle(c: Any, who: Any, key: str) -> Row | Problem | None:
@@ -221,22 +224,31 @@ def _settle(c: Any, who: Any, key: str) -> Row | Problem | None:
     return _state(c, key, last, detail)
 
 
+def _keep(c: Any, who: Any, alias: tuple[str, Row] | None, found: str, detail: Row | None) -> None:
+    """Keep the request's Idempotency-Key as an alias of the shot it was answered from, on that shot's own card, visit
+    and name: its retry finds that shot first, whatever its age."""
+    if alias:
+        kept = alias[1] if detail is None else {**alias[1], **{k: detail.get(f) for k, f in _BOUND}}
+        H.event(c, who.actor, ALIAS, alias[0], {**kept, "key": found})
+
+
+_BOUND = (("task", "task"), ("visit", "visit"), ("name", "shot"))
+
+
 def resolve(store: Any, who: Any, shot: Shot, operation: str | None = None) -> Row | None:
     """Before any check: the job of a shot that started, or None for one that may be sent; raises for a shot in flight,
     unknown or reconciled. A read for a new shot, which `begin` writes down: it writes only for a shot sent before, to
-    mark it unknown when it was stranded and keep the request's key as its alias, so a retry after the card moved
-    finds that shot again."""
+    mark it unknown when it was stranded and keep the request's key as its alias."""
     with store.read() as c:
         key, said, alias = _shot(c, who, shot, operation)
-        last, detail = _latest(c, key)
-        stranded = _stranded(key, last)
-        state = None if stranded else _state(c, key, last, detail) or _twin(c, who, key, said)
-    if stranded or (alias and state is not None):
+        found, _, state = _answer(c, who, key, said, write=False)
+        write = state is not None and (alias is not None or _stranded(found, _latest(c, found)[0]))
+    if write:
         with store.transaction() as c:
             key, said, alias = _shot(c, who, shot, operation)
-            if alias:
-                H.event(c, who.actor, ALIAS, *alias)
-            state = _settle(c, who, key) or _twin(c, who, key, said, write=True)
+            found, detail, state = _answer(c, who, key, said, write=True)
+            if state is not None:
+                _keep(c, who, alias, found, detail)
     if isinstance(state, Problem):
         raise state
     return state
@@ -264,9 +276,7 @@ def begin(store: Any, who: Any, shot: Shot, operation: str | None = None) -> tup
     try:
         with store.transaction(durable=True) as c:
             key, said, alias = _shot(c, who, shot, operation)
-            if alias:  # kept whatever it finds: a request that lost a race retries into the same shot
-                H.event(c, who.actor, ALIAS, *alias)
-            state = _settle(c, who, key) or _twin(c, who, key, said, write=True)
+            found, detail, state = _answer(c, who, key, said, write=True)
             if state is None:
                 with _LOCK:
                     sending = key not in _IN_FLIGHT
@@ -275,6 +285,9 @@ def begin(store: Any, who: Any, shot: Shot, operation: str | None = None) -> tup
                     state = _busy()
                 else:
                     H.event(c, who.actor, SENT, key, said)
+                    if said.get("task"):
+                        H.event(c, who.actor, ALIAS, _twin_key(who.actor, said), {"key": key})
+            _keep(c, who, alias, found, detail)  # kept whatever it found: a request that lost a race retries into it
     except BaseException:
         if sending:
             with _LOCK:
@@ -362,24 +375,23 @@ def cards(c: Any) -> dict[str, list[Row]]:
 
 
 def line(shots: list[Row]) -> str:
-    """The card's wait: "Reconcile 2 shots: kettle close-up, intro", its names clipped to `LINE_NAMES`."""
-    count = len(shots)
-    names = ", ".join(s["name"] for s in shots if s["name"])
-    if len(names) > LINE_NAMES:
-        names = names[: LINE_NAMES - 1].rstrip(", ") + "\u2026"
-    return f"Reconcile {count} shot{'' if count == 1 else 's'}" + (f": {names}" if names else "")
+    """The card's wait: "Reconcile 2 shots". Their keys and names are on the card's own read (waiting_on.with_shots)."""
+    return f"Reconcile {len(shots)} shot{'' if len(shots) == 1 else 's'}"
 
 
 def reconcile(c: Any, actor: str, task_id: str, keys: Iterable[str]) -> list[Row]:
-    """Mark the card's unknown shots `keys` names reconciled (never all by default): a `paid_render.reconciled` each.
-    They leave the card's wait and are never sent again (`_state`). Answers the shots it marked, each {key, name}."""
-    wanted = set(keys)
-    shots = [s for s in unsettled(c, task_id) if s["key"] in wanted]
-    for s in shots:
-        H.event(c, actor, RECONCILED, s["key"], {**_latest(c, s["key"])[1], "task": task_id})
+    """Mark the shots `keys` names reconciled (never all by default), each found by its key (events_action_target) and
+    only while it is unknown on this card: a `paid_render.reconciled` each. They leave the card's wait and are never
+    sent again (`_state`). Answers the shots it marked, each {key, name}."""
+    shots: list[Row] = []
+    for key in dict.fromkeys(keys):
+        last, detail = _latest(c, key)
+        if last == UNKNOWN and detail.get("task") == task_id:
+            H.event(c, actor, RECONCILED, key, detail)
+            shots.append({"key": key, "name": str(detail.get("shot") or "")})
     if shots:
         _moved(c, task_id)
-    return [{"key": s["key"], "name": s["name"]} for s in shots]
+    return shots
 
 
 def _moved(c: Any, task_id: str) -> None:

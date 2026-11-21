@@ -725,6 +725,8 @@ const flowItemOf = (it: NeedsRow, t: NonNullable<NeedsRow['task']>): FlowItem =>
   blocks: t.blocks,
   ...(it.ask && { ask: { kind: it.ask.kind, by: it.ask.asked_by ?? null, shows: it.ask.shows ?? [], line: it.line, requirement: it.ask.requirement_id } }),
   ...(it.about && { about: it.about }),
+  // Paid shots to reconcile (backend/paid_renders.py): no ask to show, so the row says so beside the task's title.
+  ...(it.requirement_id?.startsWith('paid_render:') && { about: `${it.line} · ${t.title}` }),
 });
 
 /** Every task that waits on the person, across pipelines (GET /api/v2/needs-you). Asks without a task stay in chats. */

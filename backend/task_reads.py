@@ -338,6 +338,9 @@ def brief(c, rows, visible_sql="1", viewer=None):
         else set()
     )
     turns = {tid: W.view(head, shown.__contains__) if head else None for tid, head in heads.items()}
+    for turn in turns.values():
+        if turn:
+            turn.pop("shots", None)  # a row says only "Reconcile N shots"; the keys and names are the task's own read
     # Waits only on a person's OK or answer: it holds no slot in a stage with a limit (waiting_on.on_person_many).
     person = W.on_person_many(c, waits)
     running = live_runs(c, {tid: t["who"] for tid, t in turns.items() if t and t["state"] == "bot" and t["who"]})
