@@ -153,15 +153,20 @@ def test_a_second_approver_answers_through_the_task_api(api):
         rid = _shared(conn, ANA, BEN)
         row = _task(conn)
         _, version = _submitted(conn, store, row)
+        # A bot's snooze heads the task's waits; each approver's turn is still their own ask.
+        E.snooze(
+            conn, row["id"], "bot:writer", "Waiting on the approval", seen_version=E.task(conn, row["id"])["version"]
+        )
     for token, me in (("ana-test", ANA), ("ben-test", BEN)):
         read = api.get(f"/api/v2/tasks/{row['id']}", headers=headers(token))
         assert read.json()["task"]["turn"]["who"] == me, f"{token}: the turn is theirs too"
-        listed = api.get(f"/api/v2/tasks?turn={me}", headers=headers(token)).json()["tasks"]
+        listed = api.get(f"/api/v2/tasks?turn={me}&snoozed=all", headers=headers(token)).json()["tasks"]
         assert [t["turn"]["who"] for t in listed if t["id"] == row["id"]] == [me], f"{token}: the board's mark"
         (entry,) = [e for e in read.json()["task"]["to_leave"] if e["requirement_id"] == rid]
         assert sorted(entry["may"]) == ["no", "ok"], token
         needs = api.get("/api/v2/needs-you", headers=headers(token)).json()
-        assert rid in json.dumps(needs), f"{token}: the ask is in Needs you"
+        (item,) = [i for i in needs["items"] if (i.get("task") or {}).get("id") == row["id"]]
+        assert item["task"]["turn"]["who"] == me, f"{token}: the ask's card in Needs you is theirs"
     ok = api.post(
         f"/api/v2/tasks/{row['id']}/asks/{rid}/answer",
         json={"value": "ok", "page_version": version, "visit_id": row["visit"]["id"]},
@@ -303,3 +308,31 @@ def test_an_approver_taken_off_the_list_after_their_ok_no_longer_moves_the_stage
     done = next(r["id"] for r in R.for_visit(c, task["visit"]) if r["kind"] == "owner_done")
     A.answer(c, row["id"], done, "bot:writer", "done", seen_version=task["version"])
     assert E.task(c, row["id"])["stage"]["name"] == "Spec", "her OK no longer moves the stage"
+
+
+def test_a_page_unshared_between_the_read_and_the_write_is_refused_to_check_again(api, monkeypatch):
+    """A person's own click on a shared page skips the rule check; if the page is no longer shared by the write, the
+    write is refused to be sent again (and checked), never saved unchecked."""
+    store = api.app.state.store
+    store.blobs = store.blobs or Blobs(store.settings)
+    with store.transaction() as conn:
+        for slug in ("writer", "manager"):
+            X.bot(conn, slug)
+        rid = _shared(conn, ANA, BEN)
+        row = _task(conn)
+        _, version = _submitted(conn, store, row)
+    asked: list[str] = []
+
+    def shared_once(c, requirement_id):
+        asked.append(requirement_id)
+        return len(asked) == 1  # shared when the route reads it, single by the write
+
+    monkeypatch.setattr(T, "shared_page", shared_once)
+    sent = api.post(
+        f"/api/v2/tasks/{row['id']}/asks/{rid}/answer",
+        json={"value": "ok", "page_version": version, "visit_id": row["visit"]["id"]},
+        headers=headers("ana-test"),
+    )
+    assert sent.status_code == 409 and sent.json()["retryable"], sent.text
+    with store.read() as c:
+        assert c.execute("SELECT 1 FROM answers WHERE requirement_id=?", (rid,)).fetchone() is None

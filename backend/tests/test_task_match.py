@@ -160,3 +160,19 @@ def test_a_task_with_no_created_date_is_still_reached_page_by_page(api):
     whole = read(api, VIEW + "&search=report&limit=500")["tasks"]
     got, pages = every_page(api, VIEW + "&search=report", limit=1)
     assert [t["id"] for t in got] == [t["id"] for t in whole] and len(got) == 4 and pages == [1, 1, 1, 1]
+
+
+def test_waiting_on_a_private_blocker_matches_only_for_someone_who_may_open_it(api):
+    """The Waiting on filter reads each wait as the board says it to the reader (waiting_on.unnamed): a blocker the
+    reader may not open is said without its id, so its id never matches for them."""
+    product(api)
+    blocked = post(api, "tasks", {"title": "Ship the importer", "owner": "ben", "pipeline": "product"})
+    secret = post(api, "tasks", {"title": "Secret blocker", "owner": "ben", "pipeline": "product", "private": True})
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO task_relations (from_task, to_task, kind, created_by, created_at) VALUES (?,?,?,?,?)",
+            (blocked["id"], secret["id"], "depends_on", "human:ana", H.now()),
+        )
+    query = "pipeline=product&status=open&turn=" + urllib.parse.quote(secret["id"])
+    assert [t["id"] for t in read(api, query)["tasks"]] == [blocked["id"]]
+    assert [t["id"] for t in read(api, query, token="cara-test")["tasks"]] == []

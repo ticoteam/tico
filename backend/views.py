@@ -1971,7 +1971,7 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
     wanted = {i["task_id"] for i in raw if i.get("task_id")} | {t for i in raw for t in i.get("tasks") or ()}
     wanted |= {m["task_id"] for m in mentions if m.get("task_id")}
     readable = _readable_task_ids(c, visible, wanted)
-    briefs = {} if count_only else _briefs(c, readable, visible, getattr(who, "actor", None))
+    briefs = {} if count_only else _briefs(c, readable, visible, waiting_on.turn_viewer(who))
     items = []
     questions = [it for it in raw if it["kind"] == "question"]
     raw = [it for it in raw if it["kind"] != "question"]

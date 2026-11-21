@@ -212,12 +212,18 @@ def register(
         params: Any = None,
         ingest: Any = None,
         replaying: bool = False,
+        unchecked: bool = False,
     ) -> dict[str, Any]:
-        """The write inside the store's write, through its verdict: held, nothing is written but the hold."""
+        """The write inside the store's write, through its verdict: held, nothing is written but the hold. `unchecked`:
+        no rule check ran for it (`checked`), which only a write the gate never holds may take."""
         spec = writes[operation]
         # Refuses before any hold could keep the write, and a replay of one that must not wait (Send anyway); True
         # for a direct human action the rule gate never holds.
-        if spec["first"] and spec["first"](c, who, task_id, body, params or {}, verdict, replaying):
+        ungated = bool(spec["first"] and spec["first"](c, who, task_id, body, params or {}, verdict, replaying))
+        if unchecked and not ungated:
+            # Read as never gated, and no longer so (the page stopped being shared): check it again, from the start.
+            raise Problem("task_changed", task_rule_gate.CHANGED, 409, retryable=True)
+        if ungated:
             return spec["call"](c, who, task_id, body, None, params or {}, ingest) or {}
         replay: dict[str, Any] = {
             "task": task_id,
@@ -264,9 +270,15 @@ def register(
     def checked(request: Request, tid: str, body: Any, operation: str, params: Any = None) -> Any:
         """A route's write: checked outside the store's write, then made through its verdict inside it."""
         spec = writes[operation]
-        who = request.state.identity
-        rc = None if spec["unchecked"] and spec["unchecked"](who, params) else check(who, tid, body, operation, params)
-        return work(request, tid, body, lambda c, who, task_id: gated(c, who, task_id, body, rc, operation, params))
+        caller = request.state.identity
+        skip = bool(spec["unchecked"] and spec["unchecked"](caller, params))
+        rc = None if skip else check(caller, tid, body, operation, params)
+        return work(
+            request,
+            tid,
+            body,
+            lambda c, who, task_id: gated(c, who, task_id, body, rc, operation, params, unchecked=skip),
+        )
 
     def replays() -> None:
         """Send anyway on a held task write: the same write once, as its author, at the version it was checked at

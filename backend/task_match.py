@@ -169,9 +169,19 @@ def kept(c: sqlite3.Connection, m: Match, candidates: Sequence[Sequence[Any]], v
         from .store import H
 
         for part in _chunks(ids):
-            # Each person a page several people approve is asked of has its turn alike (waiting_on.heads).
+            # Each person a page several people approve is asked of has its turn alike (waiting_on.heads); a sub-task
+            # or blocker the reader may not open is said without its id, as on the board (waiting_on.unnamed).
             waits = cast(dict[str, list[Any]], H.task_waits(c, part))
-            out += [tid for tid in part if any(w.who in wanted for w in W.heads(waits.get(tid) or []))]
+            found = {tid: W.heads(waits.get(tid) or []) for tid in part}
+            named = sorted({w.about for ws in found.values() for w in ws if w.about})
+            shown = {
+                str(r[0])
+                for r in c.execute(
+                    f"SELECT id FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND ({visible_sql})",
+                    (json.dumps(named),),
+                )
+            }
+            out += [tid for tid in part if any(W.unnamed(w, shown.__contains__).who in wanted for w in found[tid])]
         ids = out
     return ids
 

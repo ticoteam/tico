@@ -94,6 +94,7 @@ class Wait:
     fix: str | None = None
     href: str | None = None
     share: tuple[str, ...] | None = None
+    shared: bool = False  # an ask of one approver of a page several people approve (`of`); never leaves the server
 
 
 # What a reader who may not open a task this one filed is told of it (`unnamed`).
@@ -131,7 +132,7 @@ def view(wait: Wait, shown: Callable[[str], bool]) -> Row:
     """A wait as JSON for a reader (`unnamed`), without `about`: which task a line came from is the server's. `href` only
     when the line has a page to fix it on."""
     out = asdict(unnamed(wait, shown))
-    del out["about"], out["fix"]
+    del out["about"], out["fix"], out["shared"]
     if out["href"] is None:
         del out["href"]
     if out["share"] is None:
@@ -618,7 +619,8 @@ def of(
                     continue
                 readable = [who for who in everyone if not E.not_shared(conn, row, who)]
                 for who in readable or [None]:
-                    out.append(_turn(conn, row, who, line, requirement["id"], since, True, seen))
+                    asked = _turn(conn, row, who, line, requirement["id"], since, True, seen)
+                    out.append(replace(asked, shared=True) if who and asked.state == PERSON else asked)
                 continue
             named = standing.on or person_for(conn, row)
             if not requirement.get("visit_id") and not is_bot(named) and on_filed(requirement["id"], since):
@@ -715,23 +717,24 @@ def of(
 
 
 def heads(waits: Sequence[Wait]) -> list[Wait]:
-    """The headline wait (the first), and with it the same ask's wait for each other person it is asked of: a page
-    several people approve is every approver's turn alike (`asked_of`)."""
-    if not waits:
-        return []
-    first = waits[0]
-    if first.state != PERSON or not first.ask:
-        return [first]
-    return [first] + [
-        w for w in waits[1:] if w.state == PERSON and w.ask and w.requirement_id == first.requirement_id and w.who
-    ]
+    """Whose turn a task is: its headline wait (the first), and each approver's ask of a page several people approve
+    (`Wait.shared`), wherever it stands in the list."""
+    return [*waits[:1], *(w for w in waits[1:] if w.shared)]
 
 
 def head_for(waits: Sequence[Wait], viewer: object = None) -> Wait | None:
-    """The wait a task's row and read show `viewer` as its turn: theirs among `heads` when they are one of those it is
-    asked of, else the first. The same shape for every reader; only whose name it carries differs."""
-    found = heads(waits)
-    return next((w for w in found if viewer and w.who == viewer), found[0] if found else None)
+    """The wait a task's row and read show `viewer` as its turn: their ask of a page several people approve when they
+    are one of its approvers, else the headline. The same shape for every reader; only whose name it carries differs.
+    `viewer` is whoever the read is for: `who.task_actor or who.actor` (`turn_viewer`)."""
+    mine = next((w for w in waits if w.shared and viewer and w.who == viewer), None)
+    return mine or (waits[0] if waits else None)
+
+
+def turn_viewer(who: object) -> str | None:
+    """Whom a read's `turn` is said to: the person a task actor works for, else the caller (task_calls.task_view's
+    viewer)."""
+    found = getattr(who, "task_actor", None) or getattr(who, "actor", None)
+    return str(found) if found else None
 
 
 def turns(conn: "sqlite3.Connection", row: Row, waits: Sequence[Wait] | None = None) -> set[str]:
