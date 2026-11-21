@@ -1115,10 +1115,19 @@ def install(app, store, settings, census):
 
             task_privacy.guard_write(c, getattr(request.state, "privacy_source", who), request.url.path, auth)
 
+        from . import rule_links
+
+        # An agent's report meets the org rules first (backend/rule_links.py), one event once it is made. Log-only.
+        said = str(body.payload.get("message") or "")
+        found = rule_links.check(store, request.app.state.judge, who, "support", "support_report", said)
         try:
-            return support.report(who, body.payload, body.task_id, check=privacy_now)
+            out = support.report(who, body.payload, body.task_id, check=privacy_now)
         except H.Refused as exc:
             raise refusal_problem(exc) from None
+        if found:
+            with store.transaction() as c:
+                rule_links.record(c, found)
+        return out
 
     @app.post("/api/v2/support/tickets/from-approval")
     def support_file_approved(request: Request, body: SupportFromApproval):

@@ -1652,7 +1652,7 @@ def rule_gate(app, store, who, snap):
     path as a judged one, and a check that cannot complete holds it too (fail closed). The judged check fails open, as
     it always has: an error is a `rules.unchecked` outcome, never a lost send. When the judged check cannot be prepared
     at all, the structured rules still decide the mail inside the write."""
-    from . import org_rule_check as rules
+    from . import org_rule_check as rules, rule_links
 
     found = rules.checked_as(who, store.settings.assistant_bot)
     if not found or not H.is_bot(found[1]):
@@ -1678,8 +1678,12 @@ def rule_gate(app, store, who, snap):
 
     def gate(c):
         if prep is None:
-            return rules.mail_unprepared(c, found, to, cc, snap["subject"], snap["body"], addresses)
-        return rules.mail_decide(c, prep)
+            result = rules.mail_unprepared(c, found, to, cc, snap["subject"], snap["body"], addresses)
+        else:
+            result = rules.mail_decide(c, prep)
+        # The email link's one outcome event (backend/rule_links.py), in the mail's write: a held mail is not sent.
+        rule_links.record(c, rule_links.mailed(found, prep, result), stopped=True)
+        return result
 
     return gate
 

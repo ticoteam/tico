@@ -438,21 +438,19 @@ tico rules ask "<question>"                                                     
 - Retiring an external rule that a gate links to leaves the gate (Finance owns it). The retire panel lists linked
   gates, and Finance gets an `org_rule.retired` event.
 
-### 7. Optional: enforcement on vendor API calls
+### 7. Links: agents' writes that leave the company (log-only)
 
-This was the original wrapper idea. It's kept here and not scheduled.
-
-- **What it is.** A hub-side adapter per vendor with fixed ops on fixed hosts (`hub vendor call buffer.create_post`;
-  `tico api` is already taken). Its credential is marked **hub only**, which means it's never delivered to a run.
-- **Checks per rule:** bot confirms (an attestation, recorded as a claim), Decide checks, or code. Modes are Warn,
-  Block or Ask, and the strictest wins. Ask uses a payload-bound approval, and the bot calls again with its id.
-- **Why it waits:**
-  - It's a new trust boundary. Today credentials are delivered to runs by design, and bots on one computer share a
-    filesystem (`SECURITY.md`).
-  - It's close to the per-action tool policy declined on Oct 29.
-  - Phase 2's **Ask** on existing send/publish approvals, plus the mail connector's per-send switch, cover the main
-    cases (the #ad post, marketing texts) without it.
-- Revisit it with its own plan once rules are in use and a specific vendor action keeps going wrong.
+An agent's write on a link (a bot's own, or a person's Assistant or BotOps acting for them; never a person's own) meets
+the same org rule check as a task write, one call at most, outside any transaction, and leaves exactly one event on
+`link:<id>`: `rules.passed`, `rules.refused` (a Block rule broken) or `rules.held` (an Escalate rule broken), with the
+rules in its detail (backend/rule_links.py). The links: each proxied tool (`tool:<id>`, checked before the proxy puts
+the key in; reads never counted), outgoing webhook sends, reports to Tico support, Release now, and email. Nothing is
+stopped yet: `would` in the detail marks an outcome that did not happen. Email's own held path is older and does stop a
+mail. What the check reads of a proxied call is scrubbed: no header, the tool's auth query parameters blanked, and every
+proxy token (plain or in base64) taken out. Each link's mode (Enforced or Informed only) lives in registry_metadata
+(`rule-link-modes`); every link is Informed only except email. Rules › Links (`/company/rules/links`, owner and Admins)
+lists them with 30-day counts, then the Not covered paths: tools whose keys go to computers, website tools, and calls a
+computer makes straight out. Refusals, appeals and Allow once come next.
 
 ### 8. laws.sh (optional, later)
 

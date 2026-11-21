@@ -29,6 +29,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import re
 import sqlite3
 import time
@@ -38,10 +39,11 @@ import httpx
 from fastapi import Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from . import egress, outbound_tls
+from . import egress, outbound_tls, rule_links
 from .auth import Identity, validate_identity
 from .store import H, Problem
 
+LOG = logging.getLogger('tico.tool_proxy')
 PREFIX = '/api/v2/tool-proxy/'
 TOKEN_PREFIX = 'tpx1.'
 TOKEN_RE = re.compile(r'tpx1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+')
@@ -478,6 +480,17 @@ def install(app, store):
                 record_use(c, subject, 'credential.proxied_call', credential_id, {'tool': tool_id}, windowed=True)
                 reconnect_tasks.called(c, tool_id, status)  # Key rejected opens its Reconnect task, Working ends it
 
+    def gated(subject, tool_id, method, rest, query, body, params):
+        try:
+            output = rule_links.proxy_output(method, rest, query, body, params)
+            found = rule_links.check_as(
+                store, getattr(app.state, 'judge', None), subject, subject, '', 'tool:' + tool_id, 'tool_call', output
+            )
+            with store.transaction() as c:
+                rule_links.record(c, found)
+        except Exception:  # log-only: a failure to log never stops the write
+            LOG.exception('The rule check of a proxied write could not be logged')
+
     def plan(request, tool_id, rest, method):
         """Everything the call needs, read once: (refusal, None) or (None, plan)."""
         with store.read() as c:
@@ -525,8 +538,11 @@ def install(app, store):
                 return (403, 'forbidden', read_only_detail(who, name), log), None
             # An MCP tool's sign-in has no stored key: its access token is fetched below.
             key = None if credential['kind'] == 'oauth' else vault.cipher.decrypt(c, credential)
+            scheme = tool['auth_scheme'] or ''
             return None, {
                 'auth': auth,
+                # Where a caller may put the key in the query: blanked from what the org rule check reads.
+                'auth_params': {*params, *([scheme[6:]] if scheme.startswith('query:') else [])},
                 'tool': dict(tool),
                 'credential': dict(credential),
                 'key': key,
@@ -622,6 +638,13 @@ def install(app, store):
                 detail = read_only_detail(ready['who'], ready['name'], '' if calls is None else write)
                 await log(403, 'refused', detail)
                 return refused(403, 'forbidden', detail)
+        if method not in SAFE and (calls is None or mcp_write(tool_id, calls)):
+            # A write meets the org rules before the key goes in (backend/rule_links.py): one outcome event on the
+            # tool's link, before it is forwarded. Log-only: nothing is stopped here yet.
+            sent = b''.join(chunks)
+            await loop().run_in_executor(
+                None, gated, got['subject'], tool_id, method, rest, query, sent, got['auth_params']
+            )
         listing = bool(calls) and any(m == 'tools/list' for m, _ in calls)
         url = tool['base_url'].rstrip('/') + '/' + rest.lstrip('/')
         query = outgoing_query(query, tool, key, auth['query'] if auth else None)
