@@ -251,7 +251,7 @@ prep message in the thread.
 **Who answers.** In a 1:1 call with a bot (one bot attached, and the thread's people are exactly one person and that
 bot) the bot answers each of the person's turns whole. Their speech is cut into pieces at pauses (an "um" too); a piece
 that starts less than 1.2 seconds after the last one's final voiced frame joins the same turn, measured on the call's
-own clock, so a recorder that reconnects keeps its place. A turn is asked as one question once the person has been quiet
+own clock as the audio arrives, so a recorder that reconnects or delivers in bursts keeps its place. A turn is asked as one question once the person has been quiet
 1.2 seconds and nothing more of theirs is being transcribed or stored; turns finished while the bot was busy are asked
 one by one, oldest first. A turn gathered while the call was one-to-one is asked as one even if the roster changes. A
 follow-up waits while a turn is being said. In any other voice call, a group DM with two people and a bot among them,

@@ -1990,9 +1990,9 @@ def _resident_dm(meet, monkeypatch):
 
 
 def _replay(meet, monkeypatch, call_id, voice, now, pieces, after_tick=lambda: None):
-    """Feed a call's recorded speech in order, 100 ms at a time on the voice's clock (call-relative), ticking after
-    each: loud frames where a piece's speech was (its clip less the PREROLL_MS of quiet the cut keeps at each end), quiet
-    between. Each clip is transcribed as the piece its length matches."""
+    """Feed a call's speech in order, one 20 ms frame at a time arriving as it ends on the voice's clock (call-relative),
+    ticking every 100 ms: loud frames where a piece's speech was (its clip less the PREROLL_MS of quiet the cut keeps at
+    each end), quiet between. Each clip is transcribed as the piece its length matches."""
     loud, quiet, frame = PCM_ONE_SECOND[:640], bytes(640), call_voice.FRAME_MS
     pre = call_voice.PREROLL_MS
     spans = [(start + pre, end - pre) for _, start, end in pieces]
@@ -2003,13 +2003,13 @@ def _replay(meet, monkeypatch, call_id, voice, now, pieces, after_tick=lambda: N
 
     monkeypatch.setattr(call_media, "transcribe", transcribe)
     calls = meet.app.state.calls
-    for at in range(0, pieces[-1][2] + 3000, 100):
-        pcm = b"".join(loud if any(a <= f < b for a, b in spans) else quiet for f in range(at, at + 100, frame))
-        now[0] = (at + 100) / 1000
-        calls.ingest(call_id, "human:ana", pcm, at)
-        assert calls.settle()
-        voice.tick()
-        after_tick()
+    for at in range(0, pieces[-1][2] + 3000, frame):
+        now[0] = (at + frame) / 1000
+        calls.ingest(call_id, "human:ana", loud if any(a <= at < b for a, b in spans) else quiet, at)
+        if (at + frame) % 100 == 0:
+            assert calls.settle()
+            voice.tick()
+            after_tick()
 
 
 def test_a_recorded_calls_pieces_are_asked_as_the_persons_turns_and_each_answered_once(meet, monkeypatch):
@@ -2045,14 +2045,23 @@ def test_a_recorded_calls_pieces_are_asked_as_the_persons_turns_and_each_answere
     assert [t["status"] for t in _turns(meet, call["meeting_id"])] == ["replied"] * len(asked)
 
 
+def _frames(api, call_id, now, start_ms, pcm):
+    """Feed `pcm` from `start_ms` on the audio timeline one 20 ms frame at a time, each arriving as it ends on the
+    voice's clock (call-relative), as a live recorder delivers it."""
+    step = call_voice.FRAME_MS * call_voice.BYTES_PER_MS
+    for i in range(0, len(pcm), step):
+        at = start_ms + i // call_voice.BYTES_PER_MS
+        now[0] = (at + call_voice.FRAME_MS) / 1000
+        api.app.state.calls.ingest(call_id, "human:ana", pcm[i : i + step], at)
+
+
 def _say(api, call_id, now, start_ms, text, *, quiet_ms=600):
-    """One second of speech at `start_ms` on the call's audio timeline, then `quiet_ms` of quiet, the voice's clock at
-    its end; transcribed as `text`."""
-    now[0] = (start_ms + 1000 + quiet_ms) / 1000
+    """One second of speech at `start_ms` on the call's audio timeline, then `quiet_ms` of quiet, frame by frame as it
+    arrives (`_frames`), the voice's clock at its end; transcribed as `text`."""
     original = call_media.transcribe
     call_media.transcribe = lambda base, key, audio, **kw: text
     try:
-        api.app.state.calls.ingest(call_id, "human:ana", PCM_ONE_SECOND + bytes(32 * quiet_ms), start_ms)
+        _frames(api, call_id, now, start_ms, PCM_ONE_SECOND + bytes(32 * quiet_ms))
         assert api.app.state.calls.settle()
     finally:
         call_media.transcribe = original
@@ -2176,15 +2185,13 @@ def test_a_pause_under_the_turns_end_joins_by_the_voiced_frames_not_the_clips_pa
     calls = meet.app.state.calls
     with monkeypatch.context() as m:
         m.setattr(call_media, "transcribe", lambda base, key, audio, **kw: "Which is the quickest")
-        now[0] = 1.0
-        calls.ingest(call["id"], "human:ana", PCM_ONE_SECOND, 0)
+        _frames(meet, call["id"], now, 0, PCM_ONE_SECOND)
         calls.flush(call["id"])  # cut where the speech ends (muted): no quiet tail on the clip
         assert calls.settle()
     with monkeypatch.context() as m:
         m.setattr(call_media, "transcribe", lambda base, key, audio, **kw: "way to export.")
-        now[0] = 4.4
         # 1.1 s after the last word: quiet, then speech and quiet.
-        calls.ingest(call["id"], "human:ana", bytes(32 * 900) + PCM_ONE_SECOND + bytes(32 * 1300), 1200)
+        _frames(meet, call["id"], now, 1200, bytes(32 * 900) + PCM_ONE_SECOND + bytes(32 * 1300))
         assert calls.settle()
     voice.tick()
     turn = post(meet, f"{path}/inputs", {}, token)["call_voice"]["turn"]
@@ -2264,6 +2271,7 @@ def test_a_recorder_that_reconnects_on_a_new_timeline_does_not_run_turns_togethe
         now[0] = before + 2.3
         calls.ingest(call["id"], "human:ana", PCM_ONE_SECOND + bytes(32 * 1300), 0)
         assert calls.settle()
+    now[0] += call_voice.TURN_END_MS / 1000  # quiet since that piece arrived
     voice.tick()
     turn = post(meet, f"{path}/inputs", {}, token)["call_voice"]["turn"]
     assert turn["text"] == "Which is the quickest"  # two turns, not one run together
@@ -2295,8 +2303,8 @@ def test_a_failure_after_the_turn_is_written_puts_it_back_at_the_head(meet, monk
 
 def test_a_gap_of_exactly_the_turns_end_starts_a_new_turn(meet, monkeypatch):
     call, voice, now, path, token = _resident_dm(meet, monkeypatch)
-    _say(meet, call["id"], now, 0, "Which is the quickest", quiet_ms=600)  # last voiced frame ends at 1000
-    _say(meet, call["id"], now, 2200, "way to export.", quiet_ms=1300)  # first voiced frame at 2200: 1200 ms on
+    _say(meet, call["id"], now, 0, "Which is the quickest", quiet_ms=600)  # last loud frame arrives at 1000
+    _say(meet, call["id"], now, 2180, "way to export.", quiet_ms=1300)  # first arrives at 2200: 1200 ms on
     voice.tick()
     assert post(meet, f"{path}/inputs", {}, token)["call_voice"]["turn"]["text"] == "Which is the quickest"
     assert [t["question"]["text"] for t in voice._found(call["id"]).gathering] == ["way to export."]
@@ -2319,6 +2327,86 @@ def test_a_clip_from_before_the_recorder_reconnected_still_comes_first(meet, mon
     calls.ingest(call["id"], "human:ana", PCM_ONE_SECOND + bytes(32 * 1300), 0)
     release.set()
     assert calls.settle()
+    now[0] += call_voice.TURN_END_MS / 1000  # quiet since the newer piece arrived
+    voice.tick()
     # In the order said, two turns: the older asked first, the newer waiting behind it.
     assert post(meet, f"{path}/inputs", {}, token)["call_voice"]["turn"]["text"] == "Older piece."
     assert [t["question"]["text"] for t in voice._found(call["id"]).gathering] == ["Newer piece."]
+
+
+class _Capture(calls.Calls):
+    """Calls' ingest alone, fed by a real recorder (call_media.Recorder) on a clock in hand: each clip's voiced span is
+    gathered as a 1:1 turn."""
+
+    def __init__(self, clock):
+        self.lock = threading.RLock()
+        self.closing, self.buffers, self.voiced = set(), {}, {}
+        self.voice = SimpleNamespace(clock=lambda: clock[0] / 1000, human_speaking=lambda _: None)
+        self.gathered = call_voice.CallVoice()
+
+    def _submit(self, call_id, identity, buffer):
+        question = {"text": "newer" if self.gathered.gathering else "older"}
+        question.update(voiced_from=buffer["voiced_from"], voiced_to=buffer["voiced_to"])
+        call_voice.Voice._gather(self.gathered, "ops", question)
+
+    def _transcribe_early(self, *args):
+        pass
+
+    def _drop_early(self, *args):
+        pass
+
+
+def _record(schedules):
+    """Replay frames into a real recorder: each schedule one listen, each entry the clock in ms it arrives at, or
+    (ms, pcm). Frames delivered in a burst (many at one clock) run the recorder's timeline ahead of the clock."""
+    clock, loud = [0], (2000).to_bytes(2, "little", signed=True) * 320
+
+    class Stream:
+        def __init__(self, schedule, **kwargs):
+            self.schedule = schedule
+
+        async def __aiter__(self):
+            for entry in self.schedule:
+                ms, data = entry if isinstance(entry, tuple) else (entry, loud)
+                clock[0] = ms
+                yield SimpleNamespace(frame=SimpleNamespace(data=data, samples_per_channel=320))
+
+        async def aclose(self):
+            pass
+
+    class Loop:
+        def time(self):
+            return clock[0] / 1000
+
+        def call_later(self, *args):
+            return SimpleNamespace(cancel=lambda: None)
+
+    capture = _Capture(clock)
+    recorder = call_media.Recorder(
+        SimpleNamespace(AudioStream=Stream),
+        Loop(),
+        "",
+        "",
+        lambda who, pcm, start: capture.ingest("call", who, pcm, start),
+        lambda who: capture.flush("call", who),
+    )
+    recorder.joined_at = 0
+
+    async def replay():
+        for schedule in schedules:
+            await recorder._listen(schedule, "human:ana")
+
+    asyncio.run(replay())
+    return capture
+
+
+def test_a_burst_of_frames_does_not_shorten_the_pause_that_parts_two_turns(monkeypatch):
+    monkeypatch.setattr(call_voice, "TURN_END_MS", 1200)
+    # 41 frames, 40 of them at 820 ms, then 1.46 s of nothing before the next speech arrives.
+    capture = _record([[20] + [820] * 40, list(range(2300, 3300, 20))])
+    assert [turn["question"]["text"] for turn in capture.gathered.gathering] == ["older", "newer"]
+
+
+def test_quiet_frames_after_a_burst_do_not_move_the_last_voiced_moment():
+    capture = _record([[20] + [820] * 40 + [(t, bytes(640)) for t in range(840, 1601, 20)]])
+    assert capture.voiced["call"] == 820

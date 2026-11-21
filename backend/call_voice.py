@@ -131,20 +131,22 @@ class Segmenter:
         self.start = self.voiced = self.quiet = 0
         self.barges = 0  # utterances that reached BARGE_IN_MS of speech: each one takes the floor from a bot's voice
         self.at = 0.0  # wall time of the last piece fed (the call's idle flush reads it)
-        self.loud_ms: int | None = None  # where on the audio timeline the last loud frame ended
-        self.first_ms = 0  # where the utterance under way's first loud frame began
-        # (first loud frame's start, last loud frame's end) of each utterance cut, in order, on the call's clock in ms
-        # (`offset_ms` added), for the caller to take with it (calls.Calls.ingest): a 1:1 call joins pieces by them.
+        # When the last loud frame arrived, and the utterance under way's first, on the call's clock in ms (`at`, the
+        # arrival of the piece that carried it): what a 1:1 call's turn is measured by, whatever the audio timeline does.
+        self.loud_at: int | None = None
+        self.first_at = 0
+        # (first loud frame's arrival, last loud frame's arrival) of each utterance cut, in order, on the call's clock in ms,
+        # for the caller to take with it (calls.Calls.ingest): a 1:1 call joins pieces by them.
         self.spans: list[tuple[int, int]] = []
-        # This recorder's timeline onto the call's clock in ms (calls.Calls.ingest sets it): a new timeline, a new one.
+        # This recorder's timeline onto the call's clock in ms, for ordering clips (calls.Calls.ingest sets it).
         self.offset_ms = 0
         # (start_ms, pcm) of the utterance under way once its pause reaches PREROLL_MS: byte for byte the clip `_take`
         # returns if no loud frame comes first, so its transcription can start before the pause ends. None otherwise.
         self.early: tuple[int, bytes] | None = None
 
     def voiced_at(self) -> int | None:
-        """The end of the last loud frame fed, on the call's clock in ms, or None before any."""
-        return None if self.loud_ms is None else self.loud_ms + self.offset_ms
+        """When the last loud frame arrived, on the call's clock in ms, or None before any."""
+        return self.loud_at
 
     @property
     def speaking(self) -> bool:
@@ -195,14 +197,14 @@ class Segmenter:
                 del self.preroll[: max(0, len(self.preroll) - PREROLL_MS * BYTES_PER_MS)]
                 return None
             self.pcm = bytearray(self.preroll) + frame
-            self.first_ms, self.loud_ms = at_ms, at_ms + FRAME_MS
+            self.first_at = self.loud_at = round(self.at * 1000)
             self.start = at_ms - len(self.preroll) // BYTES_PER_MS
             self.preroll = bytearray()
             self.voiced, self.quiet = FRAME_MS, 0
         else:
             self.pcm += frame
             if loud:
-                self.loud_ms = at_ms + FRAME_MS
+                self.loud_at = round(self.at * 1000)
                 self.voiced, self.quiet = self.voiced + FRAME_MS, 0
                 self.early = None
                 if self.voiced == BARGE_IN_MS:
@@ -222,8 +224,7 @@ class Segmenter:
             return None
         # The pause that ended it is not speech: a short tail of it stays, so the last word is not cut.
         trailing = max(0, quiet - PREROLL_MS) * BYTES_PER_MS
-        last = self.loud_ms if self.loud_ms is not None else self.first_ms
-        self.spans.append((self.first_ms + self.offset_ms, last + self.offset_ms))
+        self.spans.append((self.first_at, self.loud_at if self.loud_at is not None else self.first_at))
         return start, bytes(pcm[: len(pcm) - trailing] if trailing else pcm)
 
     def flush(self) -> tuple[int, bytes] | None:

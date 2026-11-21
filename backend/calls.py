@@ -1537,10 +1537,10 @@ class Calls:
                 # This timeline onto the call's clock in ms: the piece's end is now.
                 segmenter.offset_ms = now_ms - (start_ms + len(pcm) // call_voice.BYTES_PER_MS)
             segmenter.at = self.voice.clock()
-            was, barges = segmenter.speaking, segmenter.barges
+            was, barges, loud = segmenter.speaking, segmenter.barges, segmenter.voiced_at()
             clips = segmenter.feed(pcm, start_ms)
-            if (voiced := segmenter.voiced_at()) is not None:
-                voiced = min(voiced, now_ms)  # never later than now, however the timeline runs
+            if (voiced := segmenter.voiced_at()) is not None and voiced != loud:
+                # A loud frame arrived: the person's last voiced moment on the call's clock moves on.
                 self.voiced[call_id] = max(self.voiced.get(call_id, voiced), voiced)
             if segmenter.barges != barges:
                 self.voice.human_speaking(call_id)  # they have said enough to take the floor from a bot's voice
