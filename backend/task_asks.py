@@ -795,14 +795,18 @@ def party(conn: "sqlite3.Connection", actor: object, row: Row) -> bool:
 
 
 def parties_to_all(conn: "sqlite3.Connection", actor: object, requirement_ids: list[str]) -> bool:
-    """Whether `actor` is a party (`party`) to every bound OK of these requirements, read in one statement."""
-    who = str(actor or "")
+    """Whether `actor` is a party (`party`) to the bound OK of every one of these requirements, read in one statement.
+    False with no actor, no requirement, or one that names no bound OK: nothing then vouches for the reader."""
+    who, wanted = str(actor or ""), set(requirement_ids)
+    if not who or not wanted:
+        return False
     rows = conn.execute(
         "SELECT asked_by_id, asked_of_id, ok_by_id FROM ok_grants WHERE requirement_id IN (SELECT value FROM json_each(?))",
-        (json.dumps(requirement_ids),),
+        (json.dumps(sorted(wanted)),),
     ).fetchall()
-    named = all(who and who in (row[0], row[1], row[2]) for row in rows)
-    return named or bool(who) and owner_or_admin(conn, who)
+    if len(rows) != len(wanted):  # one is no bound OK (any more): nothing vouches for it
+        return False
+    return all(who in (row[0], row[1], row[2]) for row in rows) or owner_or_admin(conn, who)
 
 
 def hidden_from(conn: "sqlite3.Connection", viewer: object, requirement_id: str) -> bool:

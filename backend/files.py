@@ -689,14 +689,20 @@ def readable_titles(c, auth, who, pinned):
     names = defaultdict(set)
     for (fid, _), r in stored.items():
         names[fid].add(r["name"])
+
+    def readable(f, v):
+        return (f, v) in stored and version_refusal(c, auth, who, rows[f], v, stored[(f, v)]) is None
+
+    # The title is the file's now: shown for an older version only to a reader of the current one too, whose newer
+    # name it may be.
     return {
         (f, v): rows[f]["title"]
         for f, v in pinned
         if f in rows
         and f not in denied
-        and (f, v) in stored
         and rows[f]["title"] not in names[f]
-        and version_refusal(c, auth, who, rows[f], v, stored[(f, v)]) is None
+        and readable(f, v)
+        and (v == rows[f]["current_version"] or readable(f, rows[f]["current_version"]))
     }
 
 

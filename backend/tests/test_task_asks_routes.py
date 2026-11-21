@@ -478,6 +478,21 @@ def test_a_finance_oks_row_names_its_payee_and_amount_to_its_parties_only_cached
     assert held.json()["restart"] is True  # built again, not cut from the list he read as a party
 
 
+def test_parties_to_all_vouches_only_for_bound_oks_and_a_named_reader(api):
+    """The held-list recheck (views.needs_still_shown) asks this of every OK whose `about` a page shows: never true for
+    nobody, for no OK, or for an id that is no bound OK, however the rest stand."""
+    as_bot(api)
+    with api.app.state.store.transaction() as c:
+        rid = K.ask_ok(c, "bot:ops", "human:cara", "Send this?", shows=[], subject="email_send:p1", content={"a": 1})[
+            "requirement_id"
+        ]
+        assert K.parties_to_all(c, "human:cara", [rid]) and K.parties_to_all(c, "bot:ops", [rid, rid])
+        assert not K.parties_to_all(c, "", [rid]) and not K.parties_to_all(c, None, [rid])
+        assert not K.parties_to_all(c, "human:cara", [])
+        assert not K.parties_to_all(c, "human:cara", [rid, "no-such-requirement"])
+        assert not K.parties_to_all(c, "human:dana", [rid])
+
+
 def test_a_filed_oks_task_names_the_matter_the_asker_was_working_where_its_title_may_go(api):
     """A row of "Mail a letter" said nothing of which matter each was for: the OK's task takes the title of the task the
     asker was working. A private one's title goes there only when the person asked and the asker (as its owner or

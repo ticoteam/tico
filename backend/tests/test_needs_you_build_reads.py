@@ -393,6 +393,32 @@ def test_a_page_asks_row_is_its_pages_title_while_the_reader_reads_that_version(
         assert "comparison" not in json.dumps(answer)
 
 
+def test_an_older_versions_ask_shows_the_files_title_only_to_a_reader_of_its_current_version(api, monkeypatch):
+    """The title is the file's now, perhaps named for a newer version: an ask about version 1 shows it only to a reader
+    who may also read the current version; one refused it (here, its bytes' fence) keeps the ask's own line."""
+    from backend import files as F
+
+    store = api.app.state.store
+    store.blobs = store.blobs or Blobs(store.settings)
+    with store.transaction() as c:
+        X.bot(c, "writer")
+        fid, _ = _page(c, store, "<h1>Plan</h1>")
+        _page(c, store, "<h1>Plan, renamed for the merger</h1>", fid=fid)
+        c.execute("UPDATE bot_files SET title='Merger plan' WHERE id=?", (fid,))
+    auth, who = api.app.state.auth, WHO[ANA]
+    with store.read_transaction() as c:
+        assert F.readable_titles(c, auth, who, [(fid, 1), (fid, 2)]) == {
+            (fid, 1): "Merger plan",
+            (fid, 2): "Merger plan",
+        }
+    real = F.version_refusal
+    monkeypatch.setattr(
+        F, "version_refusal", lambda c, a, w, row, n, v: "blob_fence" if n == 2 else real(c, a, w, row, n, v)
+    )
+    with store.read_transaction() as c:
+        assert F.readable_titles(c, auth, who, [(fid, 1), (fid, 2)]) == {}
+
+
 def preset_company(api, count):
     """The software company's preset pipelines with `count` open tasks over their work stages: a third with an OK of
     Ana's or Ben's, a quarter with a subtask filed on their visit, a fifth with a PR, and each task in a stage that
