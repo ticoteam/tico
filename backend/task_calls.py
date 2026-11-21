@@ -243,7 +243,7 @@ def task_done(
             with task_effects.because(actor):
                 E.changed(conn, task_id, actor)
             return E.task(conn, task_id) or row
-    with task_effects.because(actor):
+    with task_effects.because(actor), task_effects.noting(task_id, note):
         return E.move(conn, task_id, NEXT, actor, None, seen_version)
 
 

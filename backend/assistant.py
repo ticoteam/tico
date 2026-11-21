@@ -1703,7 +1703,9 @@ def own_room(c, who, conversation_id):
     )
 
 
-def ensure_room(c, actor, bot):
+def ensure_room(c, actor, bot, allow_held=False):
+    """The person's Assistant room, opened if missing. `allow_held`: open it for a paused Assistant too (a system line
+    that must land, backend/task_effects.py report back)."""
     room = find_room(c, actor)
     if room:
         return room
@@ -1716,6 +1718,7 @@ def ensure_room(c, actor, bot):
         scope=rooms.PERSONAL,
         owner_actor=actor,
         room_key=rooms.ASSISTANT_ROOM,
+        allow_held=allow_held,
     )
 
 

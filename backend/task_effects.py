@@ -9,13 +9,15 @@ webhooks and automations hear, work on a closed task stops, whoever moves the ta
 The engine writes the history row, cancels and writes the wakes, closes sub-tasks and tells the task that filed this
 one. Those are not here.
 
-Nothing here tells a person: no chat, email or push about a task. A person reads Needs you.
+Nothing here tells a person: no chat, email or push about a task. A person reads Needs you. One exception: a task the
+person handed off through their Assistant is reported back in their Assistant chat when it ends (`_report_back`).
 """
 
+import re
 from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from . import hubdb_core
 
@@ -45,6 +47,22 @@ def because(actor: str) -> Generator[None]:
         yield
     finally:
         _CAUSE.reset(token)
+
+
+# A completion note said on a move that carries none (task_calls.task_done's plain forward move), for that task only:
+# `moved` keeps it on that move's history row (data.done_note), apart from its why, for the report back. It never
+# reaches the move itself, so it lets nothing past a gate.
+_NOTE: ContextVar[tuple[str, str] | None] = ContextVar("task_effects_note", default=None)
+
+
+@contextmanager
+def noting(task_id: str, note: str | None) -> Generator[None]:
+    """While this is open, `note` is the completion note of a move of `task_id` that carries none."""
+    token = _NOTE.set((str(task_id), note.strip()) if note and note.strip() else None)
+    try:
+        yield
+    finally:
+        _NOTE.reset(token)
 
 
 def cause(by: str) -> str:
@@ -125,6 +143,103 @@ def _tell_requester(conn: "sqlite3.Connection", after: Row, actor: str, why: str
         conn.execute("UPDATE messages SET wake_key=? WHERE id=?", (wake_key, message["id"]))
 
 
+# The latest completion note of this cycle (since the last reopen): the owner's done, a done again after a send back
+# (answers.reopen_sent_back), or a done's note kept on its move (`noting`). What a report back says when the move that
+# ended the task carried no note of its own.
+_CYCLE_NOTE_SQL = (
+    "WITH s(at) AS (SELECT coalesce(max(entered_at),'') FROM visits WHERE task_id=?1 AND entered_how='reopened') "
+    "SELECT note FROM (SELECT a.notes AS note,a.created_at AS at FROM visits v JOIN answers a ON a.visit_id=v.id "
+    "JOIN requirements r ON r.id=a.requirement_id WHERE v.task_id=?1 AND v.entered_at>=(SELECT at FROM s) "
+    "AND (a.answer='again' OR a.answer='done' AND r.kind='owner_done') AND a.undone_at IS NULL "
+    "UNION ALL SELECT json_extract(h.data,'$.done_note'),h.created_at FROM history_events h WHERE "
+    "h.subject_type='task' AND h.subject_id=?1 AND h.kind='move' AND h.created_at>=(SELECT at FROM s)) "
+    "WHERE trim(coalesce(note,''),char(9,10,13,32))<>'' ORDER BY at DESC LIMIT 1"
+)
+NOTE_CHARS = 4000
+
+
+def _report_back(conn: "sqlite3.Connection", after: Row, by: str, why: str | None, revision: str | None) -> None:
+    """A task the person handed off through their Assistant (its `task.create` event says via assistant: filed on their
+    Assistant turn or on their click on its card) has ended: one system line from the Assistant in their Assistant chat
+    (opened again if it is gone). Not when the move's own actor is the person (their close, Done or move, by hand or by
+    their Assistant for them), and not for a call's follow-up, which reports in its call (call_follow_ups._return); an
+    engine or automatic move always reports. Its wake key is
+    the dedupe record, one per (task, terminal history event), so a reopen and a second end report again. All of it in
+    its own savepoint: a report that fails is logged and never undoes the move."""
+    if not revision:
+        return
+    from . import batch_work
+
+    work: Any = batch_work
+    with work.isolated(conn, "report_back", after["id"], private=True):
+        _write_report(conn, after, by, why, f"report_back:{after['id']}:{revision}")
+
+
+def _plain(text: object) -> str:
+    """Text as plain Markdown on one line: whitespace collapsed, Markdown marks escaped, and no list marker or heading
+    at its start."""
+    flat = re.sub(r"([\\`*_\[\]<>#|~!])", r"\\\1", " ".join(str(text or "").split())) or "A task"
+    return re.sub(r"^(\d+)([.)])", r"\1\\\2", re.sub(r"^([-+])", r"\\\1", flat))
+
+
+def _write_report(conn: "sqlite3.Connection", after: Row, by: str, why: str | None, key: str) -> None:
+    """The report itself. The person's read right is checked now (auth.actor_reads_task): a task they can no longer
+    read is named by the title it was filed with, alone, since its current title, a link or a task reference would tell
+    or hide too much."""
+    H = _h()
+    task_id = str(after["id"])
+    made = conn.execute(
+        "SELECT actor, detail FROM events WHERE action='task.create' AND target=? ORDER BY created_at, id LIMIT 1",
+        (task_id,),
+    ).fetchone()
+    detail: object = H._json(made["detail"], {}) if made else None
+    if not isinstance(detail, dict):
+        return
+    filed = cast(Row, detail)
+    person = str(made["actor"])
+    if filed.get("via") != "assistant" or not H.is_human(person) or by == person:
+        return
+    if (
+        conn.execute("SELECT 1 FROM messages WHERE wake_key=?", (key,)).fetchone()
+        or conn.execute("SELECT 1 FROM call_follow_ups WHERE task_id=?", (task_id,)).fetchone()
+    ):
+        return  # already reported, or a call's follow-up, which reports in its call (call_follow_ups._return)
+    from . import assistant, auth, rooms
+
+    helper: Any = assistant
+    reads: Any = auth
+    place: Any = rooms
+    # The Assistant as the chat names it: the app's settings, which the connection carries (store.Store._take).
+    slug = str(getattr(getattr(conn, "settings", None), "assistant_bot", "") or "assistant")
+    # A deleted Assistant room still holds the person's one open place (one_active_personal_room): it gives it up.
+    conn.execute(
+        "UPDATE conversations SET closed_at=? WHERE scope='personal' AND owner_id=? AND room_key=? "
+        "AND closed_at IS NULL AND deleted_at IS NOT NULL",
+        (H.now(), person, place.ASSISTANT_ROOM),
+    )
+    room = helper.ensure_room(conn, person, slug, allow_held=True)
+    # A system line: names in it mention nobody and it starts no run.
+    refs: Row = {"assistant": True, "report_back": True, "quiet": True, "no_mentions": True}
+    if reads.actor_reads_task(conn, person, after):
+        title = _plain(after.get("title"))
+        note = (why or "").strip()
+        if not note:
+            found = conn.execute(_CYCLE_NOTE_SQL, (task_id,)).fetchone()
+            note = str(found[0]).strip() if found else ""
+        # The link is its own paragraph before the note, so nothing the note's Markdown leaves open can swallow it.
+        link = f"[Open task](#/task/{task_id})"
+        said = (
+            f"Back on {title}:\n\n{link}\n\n{note[:NOTE_CHARS]}"
+            if note
+            else f"{title} ended without a result\n\n{link}"
+        )
+        body, refs = said, {**refs, "task": task_id}
+    else:
+        body = f"{_plain(filed.get('title'))} has ended"
+    message = H._write_message(conn, "bot:" + slug, person, body, room, "say", refs, None, None, delivered_at=H.now())
+    conn.execute("UPDATE messages SET wake_key=? WHERE id=?", (key, message["id"]))
+
+
 def moved(
     conn: "sqlite3.Connection",
     before: Row,
@@ -142,6 +257,13 @@ def moved(
     H = _h()
     actor = cause(by)
     old, new = str(before.get("status")), str(after.get("status"))
+    noted = _NOTE.get()
+    if noted and noted[0] == after["id"] and revision:
+        # A done's note on a plain forward move, kept on that move's history row apart from its why (`noting`).
+        conn.execute(
+            "UPDATE history_events SET data=json_set(coalesce(data,'{}'),'$.done_note',?) WHERE id=?",
+            (noted[1], revision),
+        )
     if before.get("stage_id") != after.get("stage_id"):
         # The old stage's "leaves" and the new stage's "enters" read this one event: its from and its to.
         change: Row = {"field": "stage", "from": before.get("stage_id"), "to": after.get("stage_id"), "move": kind}
@@ -187,6 +309,7 @@ def moved(
         deliveries: Any = delivery
         deliveries.task_closed(conn, before)
         _tell_requester(conn, after, actor, why)
+        _report_back(conn, after, by, why, revision)
     H.event(conn, actor, "task.close" if new == "closed" else "task.update", after["id"], {"status": new, "note": why})
     H.recount(conn, [after.get("owner_id"), after.get("requester_id"), before.get("owner_id")])
     if new == "closed":
