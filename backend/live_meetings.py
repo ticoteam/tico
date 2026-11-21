@@ -498,8 +498,9 @@ def _decision_input(c, rid, *, source_key, source_kind, window_index, transcript
 def _turn_prompt(c, rid, turn_id, slug):
     meeting = _meeting(c, rid)
     turn = c.execute(
-        "SELECT transcript_seq,window_index,source_key FROM live_meeting_turns WHERE id=?", (turn_id,)
+        "SELECT transcript_seq,window_index,source_key,question FROM live_meeting_turns WHERE id=?", (turn_id,)
     ).fetchone()
+    question = turn["question"]
     transcript_seq = turn["transcript_seq"]
     chunks = c.execute(
         "SELECT seq,speaker,start_ms,end_ms,text FROM live_meeting_chunks WHERE meeting_id=? "
@@ -523,6 +524,8 @@ def _turn_prompt(c, rid, turn_id, slug):
         "meeting_title": meeting["title"][:800],
         "transcript": [bounded(row) for row in reversed(chunks)],
         "recent_chat": [bounded(row) for row in reversed(chat)],
+        # A 1:1 voice call's question: the person's whole turn, its pieces joined (call_voice.Voice.route).
+        **({"question": question[:4000]} if question else {}),
     }
     payload = encode(context)
     label = (c.execute("SELECT slug FROM bots WHERE id=?", (slug,)).fetchone() or [slug])[0]
@@ -645,7 +648,8 @@ def _turn_conversation(c, rid, slug, title):
 def _dispatch_turn(c, rid, turn_id, slug, retry=0):
     """Put one scoped reply request on the existing durable runner job queue, in this bot's meeting conversation. A
     request that arrives while the bot's reply in this meeting runs is a follow-up in that conversation: a runtime that
-    steers takes it into the running turn (Execution.inputs), any other runs it right after."""
+    steers takes it into the running turn (Execution.inputs), any other runs it right after. A 1:1 voice call's
+    gathered turn carries its joined question, from the turn itself, on every request, a retry's too."""
     meeting = _meeting(c, rid)
     conv = _turn_conversation(c, rid, slug, meeting["title"])
     refs = {"live_meeting": {"meeting_id": rid, "turn_id": turn_id, **({"retry": retry} if retry else {})}}
@@ -667,6 +671,7 @@ def _enqueue(
     named=False,
     voice_input=None,
     voice_expires_at=None,
+    question=None,
 ):
     """Persist concurrent bot turns while respecting current-meeting and runner busy state. A bot named directly
     (`named`) is never passed over for being busy or in its cooldown: its turn goes into its meeting conversation all
@@ -715,9 +720,8 @@ def _enqueue(
             continue
         tid = str(uuid.uuid4())
         c.execute(
-            "INSERT OR IGNORE INTO live_meeting_turns "
-            "(id,meeting_id,bot,window_index,source_key,transcript_seq,status,created_at,voice_input,voice_expires_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            "INSERT OR IGNORE INTO live_meeting_turns (id,meeting_id,bot,window_index,source_key,transcript_seq,status,"
+            "created_at,voice_input,voice_expires_at,question) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
             (
                 tid,
                 rid,
@@ -729,6 +733,7 @@ def _enqueue(
                 H.now(),
                 voice_input,
                 voice_expires_at,
+                question[:4000] if question else None,
             ),
         )
         if c.execute("SELECT changes()").fetchone()[0]:
@@ -1746,6 +1751,9 @@ def append_chunks(c, rid, row, actor, chunks, *, route=True):
             "source_key": f"chunk:{chunk['seq']}",
             "seq": chunk["seq"],
             "at_ms": chunk["end_ms"],
+            "from_ms": chunk["start_ms"],
+            "voiced_from": chunk.get("voiced_from"),
+            "voiced_to": chunk.get("voiced_to"),
             "heard": chunk.get("heard"),
             "spoken": bool(chunk.get("spoken")),
         }

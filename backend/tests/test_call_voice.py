@@ -22,7 +22,7 @@ import pytest
 from backend import call_media, call_sessions, call_voice, calls, events, live_meetings, providers, threads
 from backend import bot_settings as BS
 from backend.run_diagnostics import RESTART_TEXT
-from backend.store import H
+from backend.store import H, encode
 from backend.tests.helpers.api import assign, get, headers, post, put, ready, runner
 from backend.tests.helpers.call_media import CONFIG, fake_rtc, wait_until  # noqa: F401 - pytest discovers the RTC fixture
 from backend.tests.helpers.calls import (
@@ -1956,3 +1956,314 @@ def _quiet_voice(meet):
     """The voice ticker is off in these tests (the meet fixture): each test ticks it when it means to."""
     yield
     meet.app.state.calls.voice.stop()
+
+
+# A recorded call's pieces, as speech recognition cut them (#4916), with fictional words: each piece's text and where
+# its speech starts and ends in the call, in ms. One question came out as pieces at every "um".
+RECORDED_CALL = [
+    ("Sí.", 3909, 5529),
+    ("Can you hear me?", 6249, 7089),
+    ("Uh, I think the line dropped, didn't it?", 23109, 26069),
+    ("Um, could you check", 45209, 46729),
+    ("Like, is there one report that I should", 46989, 49709),
+    ("Uh, I was thinking about", 58669, 60937),
+    ("Which is the quickest", 67097, 67957),
+    ("way to export.", 68457, 69577),
+]
+
+
+def _resident_dm(meet, monkeypatch):
+    """A 1:1 call with Ops on a resident session, with the real end of a turn and the voice's clock in hand."""
+    monkeypatch.setattr(call_voice, "TURN_END_MS", 1200)
+    credential_setup(meet)
+    company(meet)
+    default = get(meet, "providers")["default"]
+    on(meet, "ops", default["runtime"], default["model"])
+    worker = machine(meet, caps=("model_subscriptions_v1", "private_lanes_v1", "voice_sessions_v1", "voice_inputs_v1"))
+    give(meet, worker, "claude", add(meet)["id"])
+    voice, now = meet.app.state.calls.voice, [0.0]
+    voice.clock = lambda: now[0]
+    call = start_call(meet, _dm(meet), bots=["ops"])
+    attempt = _claim(meet, worker, "ops")
+    return call, voice, now, f"attempts/{attempt['id']}", worker["token"]
+
+
+def _replay(meet, monkeypatch, call_id, voice, now, pieces, after_tick=lambda: None):
+    """Feed a call's recorded speech in order, 100 ms at a time on the voice's clock (call-relative), ticking after
+    each: loud frames where a piece's speech was (its clip less the PREROLL_MS of quiet the cut keeps at each end), quiet
+    between. Each clip is transcribed as the piece its length matches."""
+    loud, quiet, frame = PCM_ONE_SECOND[:640], bytes(640), call_voice.FRAME_MS
+    pre = call_voice.PREROLL_MS
+    spans = [(start + pre, end - pre) for _, start, end in pieces]
+
+    def transcribe(base, key, audio, **kw):
+        ms = len(audio) // 32
+        return min(pieces, key=lambda p: abs(p[2] - p[1] - ms))[0]
+
+    monkeypatch.setattr(call_media, "transcribe", transcribe)
+    calls = meet.app.state.calls
+    for at in range(0, pieces[-1][2] + 3000, 100):
+        pcm = b"".join(loud if any(a <= f < b for a, b in spans) else quiet for f in range(at, at + 100, frame))
+        now[0] = (at + 100) / 1000
+        calls.ingest(call_id, "human:ana", pcm, at)
+        assert calls.settle()
+        voice.tick()
+        after_tick()
+
+
+def test_a_recorded_calls_pieces_are_asked_as_the_persons_turns_and_each_answered_once(meet, monkeypatch):
+    call, voice, now, path, token = _resident_dm(meet, monkeypatch)
+    asked, seq = [], [0]
+
+    def answer():
+        turn = post(meet, f"{path}/inputs", {}, token)["call_voice"].get("turn")
+        if not turn:
+            return
+        asked.append((turn["text"], now[0]))
+        seq[0] += 2
+        events = [
+            {"seq": seq[0] - 1, "kind": "delta", "payload": {"voice_turn": turn["id"], "text": "Sure. "}},
+            {"seq": seq[0], "kind": "message", "payload": {"voice_turn": turn["id"], "text": "Sure.", "final": True}},
+        ]
+        post(meet, f"{path}/events", {"events": events}, token)
+        assert meet.app.state.calls.settle()
+
+    _replay(meet, monkeypatch, call["id"], voice, now, RECORDED_CALL, answer)
+    assert [text for text, _ in asked] == [
+        "Sí. Can you hear me?",
+        "Uh, I think the line dropped, didn't it?",
+        "Um, could you check Like, is there one report that I should",
+        "Uh, I was thinking about",
+        "Which is the quickest way to export.",
+    ]
+    # Each is asked on the first tick TURN_END_MS after its last word (its clip's end less the cut's quiet tail).
+    ends = [RECORDED_CALL[i][2] for i in (1, 2, 4, 5, 7)]
+    for (_, at), end in zip(asked, ends, strict=True):
+        waited = at - (end - call_voice.PREROLL_MS) / 1000
+        assert call_voice.TURN_END_MS / 1000 <= waited < call_voice.TURN_END_MS / 1000 + 0.15, (at, end)
+    assert [t["status"] for t in _turns(meet, call["meeting_id"])] == ["replied"] * len(asked)
+
+
+def _say(api, call_id, now, start_ms, text, *, quiet_ms=600):
+    """One second of speech at `start_ms` on the call's audio timeline, then `quiet_ms` of quiet, the voice's clock at
+    its end; transcribed as `text`."""
+    now[0] = (start_ms + 1000 + quiet_ms) / 1000
+    original = call_media.transcribe
+    call_media.transcribe = lambda base, key, audio, **kw: text
+    try:
+        api.app.state.calls.ingest(call_id, "human:ana", PCM_ONE_SECOND + bytes(32 * quiet_ms), start_ms)
+        assert api.app.state.calls.settle()
+    finally:
+        call_media.transcribe = original
+
+
+def _nonresident_dm(meet, monkeypatch):
+    monkeypatch.setattr(call_voice, "TURN_END_MS", 1200)
+    voice, now = meet.app.state.calls.voice, [0.0]
+    voice.clock = lambda: now[0]
+    call = start_call(meet, _dm(meet), bots=["ops"])
+    return call, voice, now, _machine(meet, "ops")
+
+
+def test_a_one_to_one_turn_goes_joined_to_a_runner_without_a_resident_session_and_to_its_retry(meet, monkeypatch):
+    call, voice, now, machine_ = _nonresident_dm(meet, monkeypatch)
+    _say(meet, call["id"], now, 0, "Which is the quickest")
+    _say(meet, call["id"], now, 1600, "way to export.", quiet_ms=1000)  # 0.6 s after the first: the same turn
+    voice.tick()
+    assert _turns(meet, call["meeting_id"]) == []  # quiet 1 s: the turn goes on
+    now[0] += 0.25
+    voice.tick()
+    joined = encode({"question": "Which is the quickest way to export."})[1:-1]
+    attempt = _claim(meet, machine_, "ops")
+    assert joined in attempt["message"]["body"]
+    _complete(meet, machine_, attempt, "")  # an empty reply is asked again, the same whole question
+    assert joined in _claim(meet, machine_, "ops")["message"]["body"]
+
+
+def test_a_continuation_still_being_stored_keeps_the_earlier_piece_from_being_asked_alone(meet, monkeypatch):
+    call, voice, now, machine_ = _nonresident_dm(meet, monkeypatch)
+    calls = meet.app.state.calls
+    _say(meet, call["id"], now, 0, "Which is the quickest")
+    entered, release = threading.Event(), threading.Event()
+    store = calls._store_clip
+
+    def slow_store(call_id, clip):
+        entered.set()
+        assert release.wait(10)
+        return store(call_id, clip)
+
+    monkeypatch.setattr(calls, "_store_clip", slow_store)
+    monkeypatch.setattr(call_media, "transcribe", lambda base, key, audio, **kw: "way to export.")
+    calls.ingest(call["id"], "human:ana", PCM_ONE_SECOND + bytes(32 * 1000), 1600)  # 0.6 s on: the same turn
+    assert entered.wait(10)  # its text is in and on its way to the router
+    now[0] = 5.0  # quiet long since: only the piece being stored holds the turn open
+    voice.tick()
+    assert _turns(meet, call["meeting_id"]) == []
+    release.set()
+    assert calls.settle()
+    [turn] = _turns(meet, call["meeting_id"])
+    body = _claim(meet, machine_, "ops")["message"]["body"]
+    assert encode({"question": "Which is the quickest way to export."})[1:-1] in body
+
+
+def test_a_gathered_turn_goes_with_its_bot_and_named_or_typed_turns_keep_their_prompt(meet, monkeypatch):
+    call, voice, now, machine_ = _nonresident_dm(meet, monkeypatch)
+    _say(meet, call["id"], now, 0, "Can you look at the, um,")
+    assert voice._found(call["id"]).gathering
+    gone = meet.request("DELETE", f"/api/v2/calls/{call['id']}/bots/ops", json={}, headers=headers("ana-test"))
+    assert gone.status_code == 200, gone.text
+    assert voice._found(call["id"]).gathering == []  # detached: its turn goes with it
+    # A typed line keeps today's prompt: no joined question in it.
+    attached = post(meet, f"calls/{call['id']}/bots", {"bots": ["ops"]})
+    assert attached["bots"] == ["ops"]
+    post(meet, f"live-meetings/{call['meeting_id']}/chat", {"text": "Ops, what is on today?"})
+    assert '"question"' not in _claim(meet, machine_, "ops")["message"]["body"]
+    post(meet, f"calls/{call['id']}/end", {})
+    # A group call asks a named bot as before: no joined question in its prompt.
+    group = start_call(meet, thread(meet), bots=["ops"])
+    _say(meet, group["id"], now, 0, "Ops, can you check the freight window?")
+    assert '"question"' not in _claim(meet, machine_, "ops")["message"]["body"]
+
+
+def test_a_follow_up_waits_while_the_persons_turn_is_being_gathered(meet, monkeypatch):
+    call, voice, now, _path, _token = _resident_dm(meet, monkeypatch)
+    now[0] = 10.0
+    _speak(meet, call["id"], 0, "Can you look at the, um,")
+    voice.follow_up(call["id"], "ops", "follow-up-1", "The freight window is Friday.")
+    voice.tick()
+    assert len(voice._found(call["id"]).follow_ups) == 1  # not taken up: the person still has the floor
+    now[0] += call_voice.TURN_END_MS / 1000 + 0.001
+    voice.tick()  # their turn is asked; the follow-up waits behind its answer
+    assert len(voice._found(call["id"]).follow_ups) == 1 and len(_turns(meet, call["meeting_id"])) == 1
+
+
+def _first_question(meet, call, voice, now, path, token):
+    """Ana asks a first question and the resident takes it up: it stays open, being answered."""
+    _say(meet, call["id"], now, 0, "First question?", quiet_ms=1300)
+    voice.tick()
+    turn = post(meet, f"{path}/inputs", {}, token)["call_voice"]["turn"]
+    assert turn["text"] == "First question?"
+    return turn
+
+
+def _finish(meet, path, token, turn):
+    events = [
+        {"seq": 1, "kind": "delta", "payload": {"voice_turn": turn["id"], "text": "Sure. "}},
+        {"seq": 2, "kind": "message", "payload": {"voice_turn": turn["id"], "text": "Sure.", "final": True}},
+    ]
+    post(meet, f"{path}/events", {"events": events}, token)
+    assert meet.app.state.calls.settle()
+
+
+def test_a_finished_turn_waits_for_the_person_to_stop_before_it_is_asked(meet, monkeypatch):
+    call, voice, now, path, token = _resident_dm(meet, monkeypatch)
+    first = _first_question(meet, call, voice, now, path, token)
+    _say(meet, call["id"], now, 2300, "Next, the freight window.")  # while the bot answers: a turn of its own
+    _say(meet, call["id"], now, 4600, "And the docks.")  # 1.3 s after it: a turn after it, the first one finished
+    _finish(meet, path, token, first)
+    now[0] = 5.6 + 0.7  # 0.7 s since her last word: she may go on
+    voice.tick()
+    assert len(_turns(meet, call["meeting_id"])) == 1  # the finished turn waits too
+    now[0] = 5.6 + call_voice.TURN_END_MS / 1000 + 0.01
+    voice.tick()
+    turn = post(meet, f"{path}/inputs", {}, token)["call_voice"]["turn"]
+    assert turn["text"] == "Next, the freight window."  # the two turns stay apart, the older first
+
+
+def test_a_pause_under_the_turns_end_joins_by_the_voiced_frames_not_the_clips_padding(meet, monkeypatch):
+    call, voice, now, path, token = _resident_dm(meet, monkeypatch)
+    calls = meet.app.state.calls
+    with monkeypatch.context() as m:
+        m.setattr(call_media, "transcribe", lambda base, key, audio, **kw: "Which is the quickest")
+        now[0] = 1.0
+        calls.ingest(call["id"], "human:ana", PCM_ONE_SECOND, 0)
+        calls.flush(call["id"])  # cut where the speech ends (muted): no quiet tail on the clip
+        assert calls.settle()
+    with monkeypatch.context() as m:
+        m.setattr(call_media, "transcribe", lambda base, key, audio, **kw: "way to export.")
+        now[0] = 4.4
+        # 1.1 s after the last word: quiet, then speech and quiet.
+        calls.ingest(call["id"], "human:ana", bytes(32 * 900) + PCM_ONE_SECOND + bytes(32 * 1300), 1200)
+        assert calls.settle()
+    voice.tick()
+    turn = post(meet, f"{path}/inputs", {}, token)["call_voice"]["turn"]
+    assert turn["text"] == "Which is the quickest way to export."
+
+
+def _bodies(c, meeting_id):
+    return [
+        r[0]
+        for r in c.execute(
+            "SELECT m.body FROM messages m JOIN live_meeting_turns t ON t.id=json_extract(m.refs,'$.live_meeting.turn_id') "
+            "WHERE t.meeting_id=? ORDER BY m.created_at",
+            (meeting_id,),
+        )
+    ]
+
+
+def test_a_turn_keeps_whether_it_was_gathered_whatever_the_roster_does_after(meet, monkeypatch):
+    from backend import call_sessions
+
+    call, voice, now, _path, _token = _resident_dm(meet, monkeypatch)
+    rid, joined = call["meeting_id"], encode({"question": "Which is the quickest way to export."})[1:-1]
+    _say(meet, call["id"], now, 0, "Which is the quickest")
+    _say(meet, call["id"], now, 1600, "way to export.", quiet_ms=1300)
+    voice.tick()  # asked while 1:1: a gathered turn
+    post(meet, f"live-meetings/{rid}/bots", {"bots": ["finance"]})  # then a second bot joins
+    with meet.app.state.store.transaction() as c:  # its resident is gone: it goes to a runner as a request
+        call_sessions.dispatch_pending(c, rid, "ops")
+        assert any(joined in body for body in _bodies(c, rid))
+    # A call with two bots asks a named turn as today, and it stays so once the call is 1:1 again.
+    post(meet, f"calls/{call['id']}/end", {})
+    group = start_call(meet, call["thread_id"], bots=["ops", "finance"])
+    _say(meet, group["id"], now, 0, "Ops, is the freight window open?", quiet_ms=1300)
+    [named] = _turns(meet, group["meeting_id"])
+    left = meet.request("DELETE", f"/api/v2/calls/{group['id']}/bots/finance", json={}, headers=headers("ana-test"))
+    assert left.status_code == 200, left.text
+    with meet.app.state.store.transaction() as c:
+        call_sessions.dispatch_pending(c, group["meeting_id"], "ops")
+        assert c.execute("SELECT question FROM live_meeting_turns WHERE id=?", (named["id"],)).fetchone()[0] is None
+        bodies = _bodies(c, group["meeting_id"])
+    assert bodies and not any('"question"' in body for body in bodies)
+
+
+def test_a_write_that_fails_after_its_turn_was_reserved_puts_the_turn_back(meet, monkeypatch):
+    call, voice, now, path, token = _resident_dm(meet, monkeypatch)
+    _say(meet, call["id"], now, 0, "Which is the quickest way to export?", quiet_ms=1000)
+    enqueue = voice._enqueue
+
+    def refused(*args, **kwargs):
+        raise RuntimeError("the write failed")
+
+    monkeypatch.setattr(voice, "_enqueue", refused)
+    now[0] += 0.3
+    with pytest.raises(RuntimeError):
+        voice.tick()
+    state = voice._found(call["id"])
+    assert state.open is None and [t["question"]["text"] for t in state.gathering] == [
+        "Which is the quickest way to export?"
+    ]
+    monkeypatch.setattr(voice, "_enqueue", enqueue)
+    voice.tick()
+    assert (
+        post(meet, f"{path}/inputs", {}, token)["call_voice"]["turn"]["text"] == "Which is the quickest way to export?"
+    )
+
+
+def test_a_recorder_that_reconnects_on_a_new_timeline_does_not_run_turns_together(meet, monkeypatch):
+    call, voice, now, path, token = _resident_dm(meet, monkeypatch)
+    calls = meet.app.state.calls
+    _say(meet, call["id"], now, 50_000, "Which is the quickest", quiet_ms=600)  # quiet 0.6 s: the turn goes on
+    calls.flush(call["id"])  # the recorder reconnects: its timeline starts again at 0
+    calls.buffers.clear()
+    now[0] += 2.0  # 2.6 s after the last word on the call's own clock
+    with monkeypatch.context() as m:
+        m.setattr(call_media, "transcribe", lambda base, key, audio, **kw: "Can you hear me?")
+        before = now[0]
+        now[0] = before + 2.3
+        calls.ingest(call["id"], "human:ana", PCM_ONE_SECOND + bytes(32 * 1300), 0)
+        assert calls.settle()
+    voice.tick()
+    turn = post(meet, f"{path}/inputs", {}, token)["call_voice"]["turn"]
+    assert turn["text"] == "Which is the quickest"  # two turns, not one run together
+    assert [t["question"]["text"] for t in voice._found(call["id"]).gathering] == ["Can you hear me?"]

@@ -6,7 +6,7 @@ from contextlib import aclosing
 
 import httpx
 import pytest
-from backend import call_media, gateway_connection
+from backend import call_media, call_voice, gateway_connection
 from backend.store import H
 from backend.tests.helpers.api import assign, headers, post, runner
 from backend.tests.helpers.call_media import CONFIG
@@ -126,6 +126,8 @@ class FakeMedia:
 def meet(live, monkeypatch):
     live.app.state.call_media = FakeMedia()
     live.app.state.calls.voice.ticking = False  # tests tick the voice by hand (calls.voice.tick)
+    # A 1:1 call asks a turn once its person is quiet: at once here, unless a test sets the real wait.
+    monkeypatch.setattr(call_voice, "TURN_END_MS", 0)
     monkeypatch.setattr(call_media, "transcribe", lambda base, key, audio, **kw: SYNTHETIC_SPEECH)
     monkeypatch.setattr(call_media, "SPEECH_TRANSPORT", httpx.MockTransport(lambda request: speech_response()))
     monkeypatch.setattr(call_media, "voices", lambda base, key: ["acme-alto", "acme-bass"])

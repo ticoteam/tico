@@ -249,7 +249,12 @@ open **People** and use the notes icon beside a bot. Scheduled prep writes to th
 prep message in the thread.
 
 **Who answers.** In a 1:1 call with a bot (one bot attached, and the thread's people are exactly one person and that
-bot) the bot answers every utterance. In any other voice call, a group DM with two people and a bot among them, only a
+bot) the bot answers each turn of the person's, whole: the utterances their speech is cut into at a pause (an "um" too)
+are joined into one turn while each starts less than 1.2 seconds after the last one's last voiced frame. A turn is asked
+as one question only once the person has been quiet that long and nothing more is on its way, turns finished while the
+bot was busy too, one by one, oldest first. A turn gathered while the call was one-to-one is asked as one even if the roster changes; later pieces follow
+the rules then in force. A follow-up waits while a turn
+is being said. In any other voice call, a group DM with two people and a bot among them, only a
 bot whose name was said answers; the router's other windows and its decisions on chat do not run in a voice call. A
 call has one open question: a bot asked while another answers waits its turn (the latest question for it), and a
 question is dropped with a note (`<bot> missed a question`) 30 seconds after it was heard. Lines sent to the meeting's

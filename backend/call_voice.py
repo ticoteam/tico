@@ -6,7 +6,8 @@ is cut into utterances where they pause (`Segmenter`); each utterance is transcr
 heard (backend/calls.py), and then routed here:
 
 - In a 1:1 call with a bot (one bot attached, and the thread's people are exactly one person and that bot) the bot
-  answers every utterance.
+  answers each turn of the person's, whole: the utterances it is cut into at their pauses ("um") are joined until they
+  have been quiet TURN_END_MS since their last voiced frame, and then asked as one question.
 - In any other voice call only a bot whose name was said (or typed) answers. The router's own decision windows do not
   run.
 - A call has one open question at a time. A bot asked while another answers waits; a question is dropped with a note
@@ -74,6 +75,9 @@ MIN_SPEECH_MS = 200  # less speech than this (a cough, a click) is not sent
 BARGE_IN_MS = 300
 
 # --- questions and answers
+# A 1:1 call's turn ends at this much silence since the person's last voiced frame: speech is cut at every pause, an
+# "um" too, and the pieces of one turn are asked as one question.
+TURN_END_MS = 1200
 ANSWER_SECONDS = 30  # a bot that has not answered this long after it was asked does not answer
 QUESTION_WAIT_SECONDS = 30  # a question waiting behind another this long is dropped
 NOTE_SECONDS = 10  # how long a note stays on the call view
@@ -127,9 +131,20 @@ class Segmenter:
         self.start = self.voiced = self.quiet = 0
         self.barges = 0  # utterances that reached BARGE_IN_MS of speech: each one takes the floor from a bot's voice
         self.at = 0.0  # wall time of the last piece fed (the call's idle flush reads it)
+        self.loud_ms: int | None = None  # where on the audio timeline the last loud frame ended
+        self.first_ms = 0  # where the utterance under way's first loud frame began
+        # (first loud frame's start, last loud frame's end) on the audio timeline of each utterance cut, in order, for
+        # the caller to take with it (calls.Calls.ingest): a 1:1 call joins pieces by the silence between them.
+        self.spans: list[tuple[int, int]] = []
         # (start_ms, pcm) of the utterance under way once its pause reaches PREROLL_MS: byte for byte the clip `_take`
         # returns if no loud frame comes first, so its transcription can start before the pause ends. None otherwise.
         self.early: tuple[int, bytes] | None = None
+
+    def voiced_at(self) -> float | None:
+        """The wall time of the last loud frame fed (`at`, less the audio fed after it), or None before any."""
+        if self.loud_ms is None or self.end is None:
+            return None
+        return self.at - max(0, self.end // BYTES_PER_MS - self.loud_ms) / 1000
 
     @property
     def speaking(self) -> bool:
@@ -180,12 +195,14 @@ class Segmenter:
                 del self.preroll[: max(0, len(self.preroll) - PREROLL_MS * BYTES_PER_MS)]
                 return None
             self.pcm = bytearray(self.preroll) + frame
+            self.first_ms, self.loud_ms = at_ms, at_ms + FRAME_MS
             self.start = at_ms - len(self.preroll) // BYTES_PER_MS
             self.preroll = bytearray()
             self.voiced, self.quiet = FRAME_MS, 0
         else:
             self.pcm += frame
             if loud:
+                self.loud_ms = at_ms + FRAME_MS
                 self.voiced, self.quiet = self.voiced + FRAME_MS, 0
                 self.early = None
                 if self.voiced == BARGE_IN_MS:
@@ -205,6 +222,7 @@ class Segmenter:
             return None
         # The pause that ended it is not speech: a short tail of it stays, so the last word is not cut.
         trailing = max(0, quiet - PREROLL_MS) * BYTES_PER_MS
+        self.spans.append((self.first_ms, self.loud_ms if self.loud_ms is not None else self.first_ms))
         return start, bytes(pcm[: len(pcm) - trailing] if trailing else pcm)
 
     def flush(self) -> tuple[int, bytes] | None:
@@ -354,6 +372,9 @@ class CallVoice:
         # bot -> the question (Voice.route) it was asked while another bot answered
         self.waiting: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self.follow_ups: deque[tuple[str, str, str]] = deque()
+        # A 1:1 call's turns not yet asked, oldest first: {"bot", "question": its latest piece with `text` its pieces
+        # joined}. A piece joins the last one or starts a new one (`_gather`); each is asked once the person is quiet.
+        self.gathering: list[dict[str, Any]] = []
         self.states: dict[str, tuple[str, str | None]] = {}  # bot -> (state, caption)
         self.note: tuple[str, float] | None = None  # (text, wall time)
         self.played: deque[str] = deque(maxlen=PLAYED_KEEP)
@@ -547,6 +568,20 @@ class Voice:
             return []
         self.warm()
         asked: list[str] = []
+        if only:
+            with voice.lock:
+                self._gather(voice, only, question)
+                if voice.open is None:
+                    self._set(voice, only, "listening")
+            # This piece is the one being stored: it does not count as pending in its own check.
+            if reserved := self._reserve(row["id"], voice, routing=True):
+                try:
+                    asked = self._dispatch(c, voice, row, *reserved) or []
+                except Exception:
+                    self._release(voice, reserved[1], reserved[0])
+                    raise
+            self.touch(row["id"], c)
+            return asked
         with voice.lock:
             for bot in targets:
                 if voice.open is not None or asked:
@@ -560,6 +595,122 @@ class Voice:
         self.touch(row["id"], c)
         return asked
 
+    @staticmethod
+    def _gather(voice: CallVoice, bot: str, question: dict[str, Any]) -> None:
+        """Add a 1:1 call's piece of speech to the person's turn (voice.lock held): to the last one when its first voiced
+        frame follows that turn's last voiced frame by less than TURN_END_MS on the voice's clock (calls.Calls.ingest
+        stamps them), else as a new turn after it. Turns keep their boundaries while they wait."""
+        question["gathered"] = True
+        last = voice.gathering[-1] if voice.gathering else None
+        if last is not None and last["bot"] == bot:
+            before = last["question"]
+            if question.get("voiced_from") is not None and before.get("voiced_to") is not None:
+                # first voiced frame after the last one before, on the voice's clock: call-wide, whatever the recorder
+                gap = (question["voiced_from"] - before["voiced_to"]) * 1000
+            else:  # no spans (a clip from before them): each clip keeps PREROLL_MS of quiet at either end
+                gap = (question.get("from_ms") or 0) - (before.get("at_ms") or 0) + 2 * PREROLL_MS
+            if gap < TURN_END_MS:
+                question["text"] = f"{before['text']} {question['text']}".strip()
+                last["question"] = question
+                return
+        voice.gathering.append({"bot": bot, "question": question})
+
+    def _turn_ready(self, call_id: str, voice: CallVoice, *, routing: bool = False) -> bool:
+        """Whether a 1:1 call's oldest gathered turn may be asked now: nothing open, the person quiet TURN_END_MS since
+        their last voiced frame and nothing being said, transcribed or stored (`routing`: but the piece now being
+        routed). Reads speech activity under calls.lock, then the voice under voice.lock inside it: ingest's order."""
+        with self.calls.lock:
+            pending = self.calls.turn_pending_locked(call_id, routing=routing)
+            voiced = self.calls.voiced.get(call_id)
+            with voice.lock:
+                if pending or voice.open is not None or not voice.gathering:
+                    return False
+                last = voiced if voiced is not None else voice.gathering[0]["question"]["heard"]
+                return self.clock() - last >= TURN_END_MS / 1000
+
+    def _reserve(
+        self, call_id: str, voice: CallVoice, *, routing: bool = False
+    ) -> tuple[dict[str, Any], dict[str, Any]] | None:
+        """Take the oldest gathered turn to ask when it is ready (`_turn_ready`): (turn, reservation), the reservation
+        held as the call's open question so that nothing else asks meanwhile; else None. Called inside the
+        transaction that dispatches it (the writer gate serializes dispatch)."""
+        if not self._turn_ready(call_id, voice, routing=routing):
+            return None
+        with voice.lock:
+            if voice.open is not None or not voice.gathering:
+                return None
+            turn = voice.gathering.pop(0)
+            reservation = {"bot": turn["bot"], "phase": "reserved", "asked": turn["question"]["heard"]}
+            voice.open = reservation
+            return turn, reservation
+
+    def _release(self, voice: CallVoice, reservation: dict[str, Any], turn: dict[str, Any] | None) -> None:
+        """Let a reservation go (its write failed or was refused): that exact one, and the turn back at the head of the
+        queue while it can still be asked."""
+        with voice.lock:
+            if voice.open is reservation:
+                voice.open = None
+                if turn is not None and self.clock() - turn["question"]["heard"] < QUESTION_WAIT_SECONDS:
+                    voice.gathering.insert(0, turn)
+
+    def _dispatch(
+        self, c: Any, voice: CallVoice, row: Any, turn: dict[str, Any], reservation: dict[str, Any]
+    ) -> list[str] | None:
+        """Ask a reserved gathered turn inside the transaction that reserved it: as a 1:1 turn, whatever has joined the
+        call since. voice.lock is held only to check and update the reservation, never across the database work.
+        Returns the bots asked ([] when it went unasked), or None when the reservation was canceled meanwhile."""
+        with voice.lock:
+            if voice.open is not reservation:
+                return None
+        bot, question = turn["bot"], turn["question"]
+        if row["state"] != "live" or row["ending_at"] or self.clock() - question["heard"] >= QUESTION_WAIT_SECONDS:
+            missed = row["state"] == "live" and not row["ending_at"]
+            name = _name(c, bot) if missed else ""
+            with voice.lock:
+                if voice.open is reservation:
+                    voice.open = None
+                self._set(voice, bot, "listening")
+                if missed:
+                    self._note(voice, f"{name} missed a question")
+            return []
+        try:
+            selected, warm = self._enqueue(c, row, bot, question)
+        except Exception:
+            self._release(voice, reservation, turn)
+            raise
+        with voice.lock:
+            if voice.open is not reservation:  # canceled while it was written: it is not asked
+                if selected:
+                    turn_row = c.execute("SELECT * FROM live_meeting_turns WHERE id=?", (selected[0]["id"],)).fetchone()
+                    live_meetings._finish_pass(c, row["live_meeting_id"], turn_row, "canceled")
+                return None
+            voice.open = None
+            if not selected:
+                self._set(voice, bot, "listening")
+                return []
+            self._opened(voice, bot, selected[0]["id"], question)
+        if warm:
+            events.queue_voice_inputs(c, self.store, row["id"], bot)
+        return [bot]
+
+    def _ask_turn(self, call_id: str, voice: CallVoice) -> None:
+        """The ticker's ask of a 1:1 call's oldest gathered turn, once it is ready."""
+        if not self._turn_ready(call_id, voice):
+            return
+        reserved = None
+        try:
+            with self.store.transaction(notify=True) as c:
+                row = c.execute("SELECT * FROM calls WHERE id=?", (call_id,)).fetchone()
+                reserved = self._reserve(call_id, voice) if row is not None else None
+                if reserved is None:
+                    return
+                if self._dispatch(c, voice, row, *reserved) is not None:  # asked, or unasked: the view changed
+                    self.touch(call_id, c)
+        except Exception:
+            if reserved is not None:
+                self._release(voice, reserved[1], reserved[0])
+            raise
+
     def _echo(self, call_id: str, text: str) -> bool:
         """Whether a person's utterance is a bot's own voice heard back: nearly the words a bot began saying in the last
         ECHO_SECONDS."""
@@ -571,36 +722,47 @@ class Voice:
             said = [sentence for at, sentence in voice.heard if now - at <= ECHO_SECONDS]
         return echoes(text, said)
 
-    def _ask(self, c: Any, voice: CallVoice, rid: str, bot: str, question: dict[str, Any]) -> bool:
-        """Put one bot's turn on the queue as the call's open question (voice.lock held, inside a transaction)."""
-        row = c.execute("SELECT * FROM calls WHERE live_meeting_id=?", (rid,)).fetchone()
+    def _enqueue(self, c: Any, row: Any, bot: str, question: dict[str, Any]) -> tuple[list[dict[str, Any]], bool]:
+        """Put one bot's turn on the queue (inside a transaction, no lock held): the turns made, and whether it goes to a
+        resident session. A gathered 1:1 turn keeps its joined question on the turn (live_meeting_turns.question)."""
         warm = call_sessions.ensure(c, self.store.settings, row, bot)
         selected, _skipped = live_meetings._enqueue(
             c,
-            rid,
+            row["live_meeting_id"],
             [bot],
             source_key=question["source_key"],
             transcript_seq=question.get("seq"),
             at_ms=question.get("at_ms"),
             named=True,
             voice_input=question["text"] if warm else None,
+            question=question["text"] if question.get("gathered") else None,
             voice_expires_at=H.shift(H.now(), seconds=question["heard"] + ANSWER_SECONDS - self.clock())
             if warm
             else None,
         )
-        if not selected:
-            self._set(voice, bot, "listening")
-            return False
-        if warm:
-            events.queue_voice_inputs(c, self.store, row["id"], bot)
+        return selected, warm
+
+    def _opened(self, voice: CallVoice, bot: str, turn_id: str, question: dict[str, Any]) -> None:
+        """The call's open question is now this turn (voice.lock held)."""
         voice.open = {
             "bot": bot,
-            "turn": selected[0]["id"],
+            "turn": turn_id,
             "asked": question["heard"],
             "stored": question.get("stored"),
             "phase": "thinking",
         }
         self._set(voice, bot, "thinking")
+
+    def _ask(self, c: Any, voice: CallVoice, rid: str, bot: str, question: dict[str, Any]) -> bool:
+        """Put one bot's turn on the queue as the call's open question (voice.lock held, inside a transaction)."""
+        row = c.execute("SELECT * FROM calls WHERE live_meeting_id=?", (rid,)).fetchone()
+        selected, warm = self._enqueue(c, row, bot, question)
+        if not selected:
+            self._set(voice, bot, "listening")
+            return False
+        if warm:
+            events.queue_voice_inputs(c, self.store, row["id"], bot)
+        self._opened(voice, bot, selected[0]["id"], question)
         return True
 
     def busy(self, call_id: str) -> bool:
@@ -624,6 +786,10 @@ class Voice:
         if voice is None:
             return
         now = self.clock()
+        with voice.lock:
+            gathered = bool(voice.gathering) and voice.open is None
+        if gathered:
+            self._ask_turn(call_id, voice)
         with voice.lock:
             current = dict(voice.open) if voice.open else None
             waiting = bool(voice.waiting)
@@ -724,6 +890,8 @@ class Voice:
                             break
             if moved:
                 self.touch(call_id, c)
+        if moved:
+            self.wake.set()  # a 1:1 turn gathered while this one was open is asked on the next tick, not a tick later
 
     # --- speaking
 
@@ -787,7 +955,8 @@ class Voice:
         if not self.calls.media.running(call_id) or self.calls.speech_pending(call_id):
             return
         with voice.lock:
-            if voice.open is not None or voice.waiting or not voice.follow_ups:
+            # A person's turn being gathered has the floor too: a follow-up waits until it is asked.
+            if voice.open is not None or voice.waiting or voice.gathering or not voice.follow_ups:
                 return
             bot, reply_id, text = voice.follow_ups.popleft()
             if reply_id in voice.played:
@@ -1134,6 +1303,7 @@ class Voice:
             voice.follow_ups = deque(item for item in voice.follow_ups if bot is not None and item[0] != bot)
             for one in [bot] if bot else list(voice.waiting):
                 voice.waiting.pop(one, None)
+            voice.gathering = [turn for turn in voice.gathering if bot is not None and turn["bot"] != bot]
             for one in [bot] if bot else list(voice.states):
                 voice.states.pop(one, None)
         media = self.calls.media

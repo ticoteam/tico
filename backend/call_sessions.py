@@ -163,7 +163,8 @@ def closed_attempt(c: Any, aid: str) -> bool:
 
 
 def dispatch_pending(c: Any, rid: str, bot: str) -> None:
-    """Convert unsent resident utterances to durable legacy deliveries under the claim's write lock."""
+    """Convert unsent resident utterances to durable legacy deliveries under the claim's write lock. A 1:1 call's
+    gathered turn keeps its joined question on the turn (live_meeting_turns.question), which its delivery reads."""
     for turn in c.execute(
         "SELECT * FROM live_meeting_turns WHERE meeting_id=? AND bot=? AND voice_input IS NOT NULL "
         "AND status='pending' ORDER BY created_at,id",

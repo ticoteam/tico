@@ -496,6 +496,7 @@ class Calls:
     def __init__(self, app, store, auth):
         self.app, self.store, self.auth = app, store, auth
         self.buffers = {}  # (call_id, identity) -> call_voice.Segmenter: one speaker's speech, cut at their pauses
+        self.voiced = {}  # call_id -> the voice clock's time of anyone's last voiced frame in it (`last_voiced`)
         # (call_id, identity) -> {"snapshot": the segmenter's early (start_ms, pcm), "future": its transcription}: started
         # as the speaker's pause begins, and used by the clip the pause ends if that clip is the same audio.
         self.early = {}
@@ -1525,14 +1526,46 @@ class Calls:
             segmenter.at = self.voice.clock()
             was, barges = segmenter.speaking, segmenter.barges
             clips = segmenter.feed(pcm, start_ms)
+            if (voiced := segmenter.voiced_at()) is not None:
+                self.voiced[call_id] = max(self.voiced.get(call_id, voiced), voiced)
             if segmenter.barges != barges:
                 self.voice.human_speaking(call_id)  # they have said enough to take the floor from a bot's voice
             for start, clip in clips:
-                self._submit(call_id, identity, {"pcm": clip, "start_ms": start})
+                self._submit(call_id, identity, {"pcm": clip, "start_ms": start, **self._voiced_span(segmenter)})
             self._transcribe_early(key, segmenter)
             if was and not segmenter.speaking and not clips:
                 self._kick(call_id)  # a cough, not speech: a clip it held back may be stored now
             return segmenter.idle_seconds()
+
+    def turn_pending_locked(self, call_id, *, routing=False):
+        """Whether a person is speaking in the call, or a clip of theirs waits for its text or is being stored: their
+        turn goes on until it reaches the router (self.lock held). `routing`: asked by the route of the clip being
+        stored, which does not count itself."""
+        order = self.order.get(call_id)
+        return bool(order and (order["queue"] or (order.get("storing") and not routing))) or any(
+            cid == call_id and segmenter.speaking for (cid, _), segmenter in self.buffers.items()
+        )
+
+    def turn_pending(self, call_id, *, routing=False):
+        with self.lock:
+            return self.turn_pending_locked(call_id, routing=routing)
+
+    @staticmethod
+    def _voiced_span(segmenter):
+        """The first and last voiced frame of the utterance just cut (Segmenter.spans), on the voice's clock: the time
+        it was fed, less the audio fed after them. Call-wide, so a recorder that reconnects with a new timeline does
+        not run one person's turns together."""
+        if not segmenter.spans or segmenter.end is None:
+            return {}
+        first, last = segmenter.spans.pop(0)
+        fed = segmenter.end // call_voice.BYTES_PER_MS
+        return {"voiced_from": segmenter.at - (fed - first) / 1000, "voiced_to": segmenter.at - (fed - last) / 1000}
+
+    def last_voiced(self, call_id):
+        """When anyone last made a voiced frame in the call, on the voice's clock, or None (a 1:1 call's turn ends a
+        moment after it, call_voice.TURN_END_MS)."""
+        with self.lock:
+            return self.voiced.get(call_id)
 
     def speech_pending(self, call_id):
         """A person is speaking or what they said has not yet reached the question router."""
@@ -1555,7 +1588,7 @@ class Calls:
                 if not segmenter.speaking:
                     self.buffers.pop(key, None)
                 if clip:
-                    self._submit(key[0], key[1], {"pcm": clip[1], "start_ms": clip[0]})
+                    self._submit(key[0], key[1], {"pcm": clip[1], "start_ms": clip[0], **self._voiced_span(segmenter)})
                 elif was:
                     self._kick(key[0])
                 self._drop_early(key)
@@ -1746,6 +1779,7 @@ class Calls:
                 if clip is None:
                     order["settling"] = False
                     return
+                order["storing"] = True  # until it has been routed (turn_pending)
             outcome = "store_failed"
             try:
                 outcome = self._store_clip(call_id, clip)
@@ -1754,6 +1788,8 @@ class Calls:
 
                 report("calls_store_clip", call_id, exc, logger="tico.calls")
             finally:
+                with self.lock:
+                    order["storing"] = False
                 clip["buffer"]["pcm"] = b""
                 self._log_clip(call_id, clip, outcome)
 
@@ -1797,6 +1833,8 @@ class Calls:
                 "end_ms": start + buffer["duration_ms"],
                 "text": text,
                 "heard": buffer.get("heard"),
+                "voiced_from": buffer.get("voiced_from"),
+                "voiced_to": buffer.get("voiced_to"),
                 "spoken": True,
             }
             live_meetings.append_chunks(c, meeting["id"], meeting, identity, [chunk])
@@ -1886,6 +1924,7 @@ class Calls:
         with self.store.transaction() as c:
             c.execute("UPDATE calls SET finalized_at=? WHERE id=? AND finalized_at IS NULL", (H.now(), call_id))
         with self.lock:
+            self.voiced.pop(call_id, None)
             for key in [key for key in self.buffers if key[0] == call_id]:
                 self.buffers.pop(key, None)
             self.early = {key: early for key, early in self.early.items() if key[0] != call_id}
