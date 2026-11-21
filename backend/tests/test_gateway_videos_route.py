@@ -786,7 +786,12 @@ def test_a_twin_reconciled_while_a_request_is_checked_lets_the_new_visit_send(ap
         (twin,) = [r[0] for r in c.execute("SELECT target FROM events WHERE action=?", (paid_renders.UNKNOWN,))]
         c.execute("UPDATE visits SET id='visit-moved' WHERE task_id=? AND left_at IS NULL", (task["id"],))
     sent = []
-    monkeypatch.setattr(G, "video_submit", counting(sent, (202, {"id": JOB, "status": "queued"}, "")))
+
+    def submit(base, key, body, header):  # what goes to the Gateway, its Idempotency-Key with it
+        sent.append(header.get("Idempotency-Key"))
+        return 202, {"id": JOB, "status": "queued"}, ""
+
+    monkeypatch.setattr(G, "video_submit", submit)
     checked = paid_renders._answer
 
     def reconciled_meanwhile(c, who, key, said, write):  # its person marks it reconciled between the read and the write
@@ -802,4 +807,4 @@ def test_a_twin_reconciled_while_a_request_is_checked_lets_the_new_visit_send(ap
     assert first.status_code == 202, first.text
     monkeypatch.setattr(paid_renders, "_answer", checked)
     assert video(api, token, body, "new-visit").status_code == 202  # its retry is the new visit's shot, not the old one
-    assert len(sent) == 1
+    assert len(sent) == 1 and sent[0] != twin  # sent as the new visit's shot, never under the reconciled one's key

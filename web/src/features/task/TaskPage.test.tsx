@@ -427,9 +427,10 @@ describe('one open task', () => {
   it('marks paid shots reconciled from Details: their names, busy until the server answers, the keys it showed', async () => {
     const shots = { state: 'person', who: 'human:me', line: 'Reconcile 1 shot', requirement_id: 'paid_render:t1', since: null, until: null, ask: true, shots: [{ key: 'shot_a', name: 'Kettle wide' }] };
     const answer = holdReply();
+    let waits: unknown[] = [shots];
     serve((url, method) => {
       if (method === 'POST' && url.endsWith('/api/v2/tasks/t1/shots/reconcile')) return answer.promise;
-      return reads(task({ waits: [shots] } as Partial<TaskData>))(url);
+      return reads(task({ waits } as Partial<TaskData>))(url);
     });
     details();
     const row = await waitFor(() => {
@@ -443,8 +444,10 @@ describe('one open task', () => {
     fireEvent.click(mark);
     await waitFor(() => expect(sent).toContainEqual({ method: 'POST', url: '/api/v2/tasks/t1/shots/reconcile', body: { shots: ['shot_a'] } }));
     expect((mark as HTMLButtonElement).disabled).toBe(true); // busy while the request is in flight
+    waits = []; // the task read after the answer has no shots left: the row and its button go
     await act(async () => answer.resolve({ status: 200, body: { reconciled: [{ key: 'shot_a', name: 'Kettle wide' }] } }));
-    await waitFor(() => expect((mark as HTMLButtonElement).disabled).toBe(false));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Mark reconciled' })).toBeNull());
+    expect(document.querySelector('[data-target="task-shots:t1"]')).toBeNull();
   });
 
   it('draws a file that is not a page or a picture with the library preview @s56', async () => {
