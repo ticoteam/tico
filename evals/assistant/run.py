@@ -512,8 +512,10 @@ from clients import hubtools              # the real tool table: listing, argume
 from clients.remotecli import tool_name   # the command -> tool derivation production uses
 import hubcli
 
-LISTING = hubtools.listing(local=True, kind=os.environ.get("EVAL_MCP_KIND", "assistant"))
-OFFERED = {t["name"]: t for t in LISTING}
+KIND = os.environ.get("EVAL_MCP_KIND", "assistant")
+# What tools/list shows (discovery); a call is gated as production gates it (clients/commands/_mcp.py): any tool its
+# kind is offered, listed or not.
+LISTING = hubtools.listing(local=True, kind=KIND)
 # Production runs `task show` with several ids as tico_task_show_many (remotecli: `show` with len(ids) > 1).
 TOOL_COMMAND = {"tico_task_show_many": "tico_task_show"}
 # Tool arguments named apart from the CLI flag the same call takes, so an MCP call logs the line the CLI would.
@@ -593,7 +595,7 @@ def tool_result(text, is_error):
 def call(name, args):
     """One tools/call: an argument the tool's inputSchema rejects is logged as invalid and answered as a tool error."""
     argv = argv_for(name, args)
-    problem = hubtools.argument_error(args, OFFERED[name]["inputSchema"])
+    problem = hubtools.argument_error(args, hubtools.BY_NAME[name]["inputSchema"])
     if problem:
         with open(os.environ["EVAL_LOG"], "a") as log:
             log.write(json.dumps({"argv": " ".join(argv), "via": "mcp", "tool": name, "exit": 1, "out": problem[:200],
@@ -624,9 +626,12 @@ def handle(message):
         name, args = params.get("name"), params.get("arguments", {})
         if not isinstance(name, str) or not isinstance(args, dict):
             return {"jsonrpc": "2.0", "id": rid, "error": {"code": -32602, "message": "name must be a string, arguments an object"}}
-        if name not in OFFERED:
+        if name not in hubtools.BY_NAME:
             return {"jsonrpc": "2.0", "id": rid, "error": {"code": -32602, "message": f"Unknown tool: {name}"}}
-        result = call(name, args)
+        if KIND not in hubtools.offered_to(hubtools.BY_NAME[name]):
+            result = tool_result(json.dumps({"error": "forbidden", "detail": f"{name} is not available to you"}), True)
+        else:
+            result = call(name, args)
     else:
         return {"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": f"Method not found: {method}"}}
     return {"jsonrpc": "2.0", "id": rid, "result": result}

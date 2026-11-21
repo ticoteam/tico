@@ -406,13 +406,20 @@ fn parts(
     }
     crate::sessions::prompt_head(attempt, &mut lines);
     // The Assistant's room: every person's one chat, the owner's included. Its rulebook (templates/catalog/assistant/
-    // AGENTS.md) routes work to the helpers (backend/assistant.py HELPERS); none of them has a person's chat.
-    if !make_page && assistant && conversation["scope"] == "personal" {
-        let owner = if truthy(&conversation["owner_actor"]) {
-            s(&conversation["owner_actor"])
-        } else {
-            s(&attempt["principal"])
-        };
+    // AGENTS.md) routes work to the helpers (backend/assistant.py HELPERS); none of them has a person's chat. Only the
+    // person's own words there start a turn that carries their rights, as the server reads it (backend/auth.py
+    // `assistant_principal`: the room owner's message marked `refs.assistant`); a wake there as the bot, such as a task it
+    // handed itself, acts as the bot.
+    let owner = if truthy(&conversation["owner_actor"]) {
+        s(&conversation["owner_actor"])
+    } else {
+        s(&attempt["principal"])
+    };
+    let person_turn = conversation["scope"] == "personal"
+        && !owner.is_empty()
+        && s(&message["from_actor"]) == owner
+        && truthy(&message["refs"]["assistant"]);
+    if !make_page && assistant && person_turn {
         lines.extend([
             format!("You are privately assisting {owner}. "),
             "This provider session and its conversation history belong only to that person. Never copy personal preferences, messages, or attachments into shared repository files.".into(),
@@ -505,7 +512,8 @@ fn parts(
     }
     // Every bot, by its own judgement (Visual replies, choice 5); Design and Video Owner are the ones the rest file
     // brand and edited work with, so they get the first sentence only.
-    if bot != "designer" && bot != "video-owner" {
+    // The Assistant finds who makes brand and edited work from its rulebook's roster lookup, not a fixed slug.
+    if bot != "designer" && bot != "video-owner" && !assistant {
         put(&mut lines, Part::Standing, "Add a visual (chart, table, diagram, mockup, screenshot, clip or recording) to a reply when it makes the answer clearer, never for a plain answer, and keep the text answer complete on its own. For brand assets, designed graphics or edited video, file a task for bot:designer or bot:video-owner; do not buy them.".into());
     } else {
         put(&mut lines, Part::Standing, "Add a visual (chart, table, diagram, mockup, screenshot, clip or recording) to a reply when it makes the answer clearer, never for a plain answer, and keep the text answer complete on its own.".into());
@@ -926,7 +934,7 @@ mod tests {
         let cases = [
             (
                 json!({"id": "a1", "bot": "assistant", "conversation": {"id": "c1", "kind": "chat", "scope": "personal", "owner_actor": "human:ana@acme.test"},
-                    "message": {"id": "m4", "from_actor": "human:ana@acme.test", "body": "Now", "refs": {"voice": true, "attachments": [{"id": "f2"}]}},
+                    "message": {"id": "m4", "from_actor": "human:ana@acme.test", "body": "Now", "refs": {"assistant": true, "voice": true, "attachments": [{"id": "f2"}]}},
                     "history": history, "notes": [{"body": "fyi", "at": "2026-10-14"}], "next_run": [{"id": "t9"}],
                     "deferred": "Deferred since your last turn: 1 message, 1 task"}),
                 Some("m1"),
@@ -1173,6 +1181,21 @@ mod tests {
         };
         let owner = prompt(&turn("assistant", "assistant"), &names, None, false);
         assert!(owner.contains("You are privately assisting human:ana."));
+        // Brand and edited work go to whoever the roster names, not a fixed slug; the visual guidance stays.
+        assert!(owner.contains("Add a visual") && !owner.contains("bot:designer"));
+        // A wake in that room that is not the person's own words (a task it handed itself, a notice) acts as the bot.
+        for message in [
+            json!({"id": "m6", "from_actor": "bot:assistant", "body": "Task done", "refs": {"task": "t1"}}),
+            json!({"id": "m7", "from_actor": "human:ana", "body": "Plan my week", "refs": {}}),
+        ] {
+            let mut wake = turn("assistant", "assistant");
+            wake["message"] = message;
+            let text = prompt(&wake, &names, None, false);
+            assert!(
+                !text.contains("privately assisting") && !text.contains("with their rights"),
+                "{text}"
+            );
+        }
         // Its rulebook routes the work: no forced health check, no filing each ask for itself, no second reply contract.
         for gone in [
             "tico health check",
@@ -1448,7 +1471,7 @@ mod tests {
             "message": {"id": id, "from_actor": "human:ben", "body": "Hi", "refs": refs}, "history": []})
         };
         let given = build(
-            &turn("a1", json!({})),
+            &turn("a1", json!({"assistant": true})),
             &names,
             None,
             false,
@@ -1459,7 +1482,7 @@ mod tests {
         let next = build(
             &turn(
                 "a2",
-                json!({"voice": true, "page": {"path": "#/docs/x", "title": "X"}}),
+                json!({"assistant": true, "voice": true, "page": {"path": "#/docs/x", "title": "X"}}),
             ),
             &names,
             None,

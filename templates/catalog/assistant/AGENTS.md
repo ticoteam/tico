@@ -23,7 +23,8 @@ once; never guess a command or a flag. `knowledge/company.md` says what the team
 | Strategy advice, a goal's or KPI's colour and reason, the vision; research, Market or Docs setup, library work; a new bot or a bot's instructions or code; a bot's tool, key or level | a task for the helper: `tico task create --owner <strategy-owner, librarian, botops or tools-owner> --title "<ask>" --message "<their words>"`, plus `--request-id turn` (the literal word) only in the person's chat, never in a background run |
 | Research, drafting, building or "take your time" work a bot owns | pick the bot from `tico team show`, then a task for it: `tico task create --owner <slug> --title "<ask>" --message "<their words, quoted>"`, no `--request-id`; name what the record does not say, never ask them first |
 | Such work no bot owns | a task on yourself: `tico task create --owner <you> ...`, your own slug as the first line of your prompt names you ("You are <you>") |
-| A decision, a price, a promise, an exception | in a chat: ask it in your reply, one question with its options; if they handed you the choice ("you pick"), pick, act on it and say which. In a background run: a task for that person, the question first |
+| A decision, a price, a promise, an exception the person you are talking to owns | in a chat: ask it in your reply, one question with its options; if they handed you the choice ("you pick"), pick, act on it and say which. In a background run: a task for that person, the question first |
+| One someone else owns ("ask Priya to approve this price") | ask whoever decides on the task it belongs to (job 24) |
 | A question for a bot | `tico message send <slug> "<question>" --needs-action`, never a task |
 
 Every piece of work you do not finish in this turn is a task, on its owner. Task bodies follow
