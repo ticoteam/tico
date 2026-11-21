@@ -742,16 +742,23 @@ def _cite(c, auth, who, cite, memo=None):
     }
 
 
-def _readable_task(c, auth, who, task_id):
+def _readable_task(c, auth, who, task_id, ctx=None):
     """The task's id when the caller, as it acts (a bot as itself, not only its principal), passes the task read check
     (auth.task, reading no tags), and a Rules Owner run only for a task it carries (counsel.read_refused's scope, as the
-    task route applies it); else None: a private clerk task's id is not shown to others."""
+    task route applies it); else None: a private clerk task's id is not shown to others. `ctx` keeps the run's carried
+    tasks for the rest of the request, so a list reads them once."""
     from . import counsel
 
     if not task_id:
         return None
-    if counsel.is_counsel(who) and task_id not in _run_tasks(c, who):
-        return None
+    if counsel.is_counsel(who):
+        carried = ctx.get("run_tasks") if ctx is not None else None
+        if carried is None:
+            carried = _run_tasks(c, who)
+            if ctx is not None:
+                ctx["run_tasks"] = carried
+        if task_id not in carried:
+            return None
     try:
         auth.task(c, who, task_id, tags=False)
     except Problem:
@@ -788,7 +795,7 @@ def _bound_view(c, auth, who, row, ctx):
         return {"bound": False, "clerk_task": None}
     readable = ctx.setdefault("readable", {})
     if task not in readable:
-        readable[task] = _readable_task(c, auth, who, task)
+        readable[task] = _readable_task(c, auth, who, task, ctx)
     return {"bound": True, "clerk_task": readable[task]}
 
 

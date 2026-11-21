@@ -1865,9 +1865,21 @@ def test_a_clerk_run_binds_every_draft_keeps_its_task_open_and_sees_only_its_own
                 "org_rule:" + revised["id"],
             ),
         )
+    # A second draft bound to the run's own task: the list reads the run's carried tasks once for both.
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE events SET detail=? WHERE action='org_rule.added' AND target=?",
+            (json.dumps({"kind": "internal", "status": "suggested", "clerk_task": own}), "org_rule:" + first["id"]),
+        )
+        c.execute("UPDATE org_rules SET status='suggested' WHERE id=?", (first["id"],))
+    reads = []
+    carried = O._run_tasks
+    monkeypatch.setattr(O, "_run_tasks", lambda c, who: reads.append(1) or carried(c, who))
     listed = api.get("/api/v2/rules?status=suggested&limit=100", headers=headers(run)).json()["rules"]
     seen = next(r for r in listed if r["id"] == revised["id"])
     assert seen["bound"] is True and seen["clerk_task"] is None
+    assert next(r for r in listed if r["id"] == first["id"])["clerk_task"] == own
+    assert len(reads) == 1
 
 
 def test_the_constitution_is_peoples_and_its_path_is_kept_for_it(api):
