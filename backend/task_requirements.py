@@ -400,7 +400,7 @@ def _ok(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | N
     person = person_of(conn, requirement, task["visit"]["id"])
     what = requirement.get("line") or "OK"
     if answer and answer["answer"] == "ok":
-        shows = tuple(str(r) for r in requirement.get("shows") or () if str(r).startswith("page:"))
+        shows = tuple(str(r) for r in requirement.get("shows") or () if str(r).startswith(("page:", "file:")))
         return Standing(requirement, MET, line="OK'd", approved=shows)
     if answer and answer["answer"] == "no":
         notes = (answer.get("notes") or "").strip()
@@ -863,7 +863,9 @@ def _one_page(
     if oks_anyway:
         # A people-only page that names nobody (or whose person left) is any person's: Jev passing it is never enough.
         return Standing(requirement, WAITING, person, approval_line(requirement), since=asked, notices=notices)
-    return Standing(requirement, MET, line="Decision model passed it")
+    return Standing(
+        requirement, MET, line="Decision model passed it", approved=(f"page:{page['file_id']}@{page['version']}",)
+    )
 
 
 def _same_code_ok(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row, page: Row) -> bool:

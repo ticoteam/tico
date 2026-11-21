@@ -589,7 +589,7 @@ def register(
             answer = mutate(request, body, work)
         # Read after the claim's write, outside it: the card and the person's snapshot as the turn starts.
         if isinstance(answer, dict) and isinstance(answer.get("attempt"), dict):
-            if header := run_header.build(store, auth, answer["attempt"]):
+            if header := run_header.build(store, auth, answer["attempt"], request.state.identity.runner_id):
                 answer = {**answer, "attempt": {**answer["attempt"], "run_header": header}}
         return answer
 

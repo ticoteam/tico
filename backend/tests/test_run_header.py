@@ -4,6 +4,7 @@ starts, read as whoever the turn acts for, and a header that cannot be read in t
 import json
 import threading
 
+from backend import files
 from backend import hubdb as H
 from backend import run_header
 from backend import task_engine as E
@@ -119,6 +120,11 @@ def test_the_assistant_snapshot_holds_only_its_persons_own_items(api, monkeypatc
     assert "Open handoffs you filed through me:\n- Book the venue" in header, header
     assert "Payroll" not in header and "payroll" not in header and "Ana's private handoff" not in header, header
     assert "Dana" not in header, "a handoff's turn says a bound OK only to its parties"
+    assert "- OK the launch note (Ship the launch note)" in header, "Needs you reads as the list they are served"
+    with api.app.state.store.read_transaction() as c:
+        cara = Identity("human:cara", "human", "cara@acme.example")
+        lines, unseen = run_header.snapshot(c, api.app.state.auth, cara, room=0)
+    assert unseen == 1 and not any("Book the venue" in line for line in lines), "past its room a handoff is not read"
 
 
 def test_a_claim_is_answered_while_a_stalled_header_is_still_being_built(api, monkeypatch):
@@ -162,12 +168,16 @@ def test_whose_turn_says_a_bound_ok_only_as_far_as_its_reader_may_read_it(api):
     assert "Whose turn: Ben: " in other and "Dana" not in other, other
 
 
-def test_a_turn_line_whose_page_the_reader_may_not_open_says_only_its_label():
-    view = {"to_leave": [{"removed": True, "label": "A page you can't open", "requirement_id": "r1"}]}
-    turn = {"requirement_id": "r1", "who": "human:ben", "line": "OK the Zebra budget"}
-    assert run_header._turn_line(view, turn) == "A page you can't open"
-    shown = {"to_leave": [{"requirement_id": "r1", "line": "OK the Zebra budget"}]}
-    assert run_header._turn_line(shown, turn) == "OK the Zebra budget"
+def test_a_requirement_whose_page_is_gone_is_left_out_and_whose_turn_says_only_its_label(api):
+    tid = card_for_ops(api)
+    with api.app.state.store.transaction() as c:
+        page = shown(c, "Zebra plan", "ops", task_id=tid)
+        ok_ask(c, tid, "bot:ops", "ben", "OK the Zebra budget", shows=page)
+        c.execute("UPDATE bot_files SET state='deleted' WHERE id=?", (page[0][len("page:") :],))
+    text = card_as(api, Identity("bot:ops", "bot"), tid)
+    turn = next(line for line in text.splitlines() if line.startswith("Whose turn: Ben: "))
+    assert turn[len("Whose turn: Ben: ") :] in files.REMOVED_LABELS, text
+    assert "Zebra" not in text and sum(text.count(label) for label in files.REMOVED_LABELS) == 1, text
 
 
 def test_an_ended_card_still_says_where_it_stands(api):
@@ -204,6 +214,18 @@ def test_a_make_page_turn_counts_changes_from_its_last_page_for_the_same_person(
     assert not any(line.startswith("Changes since") for line in chat), chat
 
 
+def test_a_replayed_claim_whose_lease_is_no_longer_live_gets_no_header(api, monkeypatch):
+    monkeypatch.setattr(run_header, "BUDGET_SECONDS", 30.0)
+    r = ops_runner(api)
+    card_for_ops(api)
+    first = post(api, "jobs/claim", {}, token=r["token"], key="claim:once")["attempt"]
+    assert "run_header" in first
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET lease_until=? WHERE id=?", (H.shift(H.now(), seconds=-1), first["id"]))
+    again = post(api, "jobs/claim", {}, token=r["token"], key="claim:once")["attempt"]
+    assert again["id"] == first["id"] and "run_header" not in again
+
+
 def test_no_header_is_built_when_every_worker_is_busy(api):
     held = [run_header._SLOTS.acquire(blocking=False) for _ in range(run_header.WORKERS)]
     try:
@@ -214,10 +236,16 @@ def test_no_header_is_built_when_every_worker_is_busy(api):
             run_header._SLOTS.release()
 
 
-def test_a_long_header_keeps_whole_entries_and_counts_the_ones_left_out():
-    long = "- " + "y" * 700
-    text = run_header.capped([long, *(f"- item {n} " + "x" * 80 for n in range(30))])
+def test_a_long_header_keeps_whole_entries_with_their_heading_and_counts_only_entries_left_out():
+    long = "Card now: " + "y" * 700
+    bullets = [f"- item {n} " + "x" * 80 for n in range(30)]
+    text = run_header.capped(
+        [long, "Missing to leave this stage:", *bullets, "Rules on this stage:", "- " + "z" * 1500]
+    )
     assert len(text) <= run_header.MAX_CHARS
     kept = text.splitlines()
     assert kept[1] == long, "an entry is kept whole, never cut"
-    assert kept[-1] == f"+{31 - (len(kept) - 2)} more", kept[-1]
+    assert kept[2] == "Missing to leave this stage:" and kept[3] == bullets[0]
+    assert "Rules on this stage:" not in kept, "a heading goes only with a bullet of its own"
+    shown = len([line for line in kept if line.startswith("- item")])
+    assert kept[-1] == f"+{30 - shown + 1} more", kept[-1]

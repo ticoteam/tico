@@ -323,6 +323,21 @@ fn assemble(
     }
 }
 
+/// `text` (a built prompt) with `notes` (the runner's own lines for this turn, each led by a blank line: a new
+/// session's, a fallback's, a background wait still running) put before the run header, which stays the turn's tail.
+pub fn before_header(attempt: &Value, text: &str, notes: &str) -> String {
+    let header = attempt["run_header"].as_str().unwrap_or_default();
+    match text
+        .strip_suffix(header)
+        .and_then(|head| head.strip_suffix("\n\n"))
+    {
+        Some(head) if !header.trim().is_empty() && !notes.is_empty() => {
+            format!("{head}{notes}\n\n{header}")
+        }
+        _ => format!("{text}{notes}"),
+    }
+}
+
 /// Whether a runtime's harness loads the repository's AGENTS.md by itself at the start of a session, as Claude Code,
 /// Codex, Cursor and pi do; any other is told to read it.
 pub fn loads_agents_md(runtime: &str) -> bool {

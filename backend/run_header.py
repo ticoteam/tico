@@ -57,8 +57,9 @@ log = logging.getLogger(__name__)
 
 MAX_CHARS = 2000
 BUDGET_SECONDS = 0.3
-TOP = 5  # the Needs you items shown before its "+N more"; every other list is cut by MAX_CHARS alone
+TOP = 5  # the Needs you items shown; every other list is cut by MAX_CHARS alone
 TITLE_MAX = 120
+REFS = ("page:", "file:")  # the refs an approval names a version by
 HEAD = "Run header, read as this run starts (newer than anything earlier in this conversation):"
 # A build that stalls (a lock, a slow connect) keeps its worker. A claim takes a slot or goes without a header, so the
 # pool never queues: at most WORKERS builds at once, and none waits for a worker.
@@ -73,21 +74,23 @@ HANDOFFS_SQL = (
 )
 
 
-def build(store: Any, auth: Any, attempt: Row) -> str | None:
-    """The header for a claimed turn (the claim answer's `attempt`), or None: nothing to say, an error, or not ready
-    within BUDGET_SECONDS (the build may go on in its worker; its answer is dropped)."""
+def build(store: Any, auth: Any, attempt: Row, runner_id: str | None = None) -> str | None:
+    """The header for a claimed turn (the claim answer's `attempt`, claimed by `runner_id`), or None: nothing to say,
+    the lease no longer live there (a replayed claim), an error, or not ready within BUDGET_SECONDS (the build may go
+    on in its worker; its answer is dropped)."""
     deadline = time.monotonic() + BUDGET_SECONDS
     if not _SLOTS.acquire(blocking=False):
         log.warning("run header skipped for attempt %s: every worker is busy", attempt.get("id"))
         return None
     try:
-        future = _WORKERS.submit(_slotted, store, auth, attempt, deadline)
+        future = _WORKERS.submit(_slotted, store, auth, attempt, runner_id, deadline)
     except Exception:  # noqa: BLE001 - a header never stops a turn
         _SLOTS.release()
         log.warning("run header skipped for attempt %s", attempt.get("id"), exc_info=True)
         return None
     try:
-        return future.result(timeout=BUDGET_SECONDS)
+        header = future.result(timeout=max(0.0, deadline - time.monotonic()))
+        return header if time.monotonic() <= deadline else None
     except Late:
         log.warning("run header skipped for attempt %s: not ready in %ss", attempt.get("id"), BUDGET_SECONDS)
     except Exception:  # noqa: BLE001 - a header never stops a turn
@@ -95,31 +98,41 @@ def build(store: Any, auth: Any, attempt: Row) -> str | None:
     return None
 
 
-def _slotted(store: Any, auth: Any, attempt: Row, deadline: float) -> str | None:
+def _slotted(store: Any, auth: Any, attempt: Row, runner_id: str | None, deadline: float) -> str | None:
     try:
-        return _build(store, auth, attempt, deadline)
+        return _build(store, auth, attempt, runner_id, deadline)
     finally:
         _SLOTS.release()
 
 
-def _build(store: Any, auth: Any, attempt: Row, deadline: float) -> str | None:
+# The turn is still this computer's to start: leased to it, not yet started, under its assignment's generation.
+LIVE_SQL = (
+    "SELECT 1 FROM attempts a JOIN assignments s ON s.bot=a.bot_id AND s.runner_id=a.runner_id "
+    "AND s.generation=a.generation WHERE a.id=? AND a.runner_id=? AND a.state='leased' AND a.lease_until>?"
+)
+
+
+def _build(store: Any, auth: Any, attempt: Row, runner_id: str | None, deadline: float) -> str | None:
     if time.monotonic() > deadline:  # its claim was answered already
         return None
     with store.read_transaction() as c:
         # A query still running at the deadline is interrupted (the connection is then not reused: Store taints it).
         c.set_progress_handler(lambda: time.monotonic() > deadline, 1000)
         try:
-            lines: list[str] = for_turn(c, auth, attempt)
+            if not c.execute(LIVE_SQL, (attempt["id"], runner_id, H.now())).fetchone():
+                return None
+            lines, unseen = for_turn(c, auth, attempt)
         finally:
             c.set_progress_handler(None, 0)
-    return capped(lines)
+    return capped(lines, unseen)
 
 
-def for_turn(c: Any, auth: Any, attempt: Row) -> list[str]:
-    """The header's lines for this attempt, read as whoever the turn acts for."""
+def for_turn(c: Any, auth: Any, attempt: Row) -> tuple[list[str], int]:
+    """The header's lines for this attempt, read as whoever the turn acts for, and how many entries were not even read
+    because MAX_CHARS could not show them."""
     row = c.execute("SELECT * FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
     if row is None:
-        return []
+        return [], 0
     bot = "bot:" + str(row["bot_id"])
     acting: Any = auth.assistant_principal(c, row)
     who: Any = acting or Identity(bot, "bot", attempt_id=row["id"])
@@ -128,25 +141,45 @@ def for_turn(c: Any, auth: Any, attempt: Row) -> list[str]:
     task: Row = making or attempt.get("task") or {}
     task_id = str(task.get("id") or "")
     lines = card(c, auth, who, bot, task_id, making=bool(making)) if task_id else []
-    if acting is not None:  # their own Assistant turn, a Make page one included (Auth.assistant_principal)
-        lines += snapshot(c, auth, acting)
-    return lines
+    if acting is None:
+        return lines, 0
+    # Their own Assistant turn, a Make page one included (Auth.assistant_principal).
+    told, unseen = snapshot(c, auth, acting, MAX_CHARS - len(HEAD) - sum(len(line) + 1 for line in lines))
+    return lines + told, unseen
 
 
-def capped(lines: Sequence[str]) -> str | None:
-    """`lines` under HEAD within MAX_CHARS: each line whole or not at all, and a last line counting those left out;
-    None when empty."""
+def capped(lines: Sequence[str], unseen: int = 0) -> str | None:
+    """`lines` under HEAD within MAX_CHARS, each whole or not at all, then a last line counting the entries left out
+    (`unseen` more were never read). A heading (a line ending in ":") goes with its bullets ("- " lines): it is kept
+    only with at least one of them and is no entry itself. None when there is nothing to say."""
     if not lines:
         return None
-    lines = [" ".join(line.split()) for line in lines]
-    out, size, left = [HEAD], len(HEAD), 0
-    room = MAX_CHARS - len(f"\n+{len(lines)} more")
-    for line in lines:
-        if size + 1 + len(line) > room:
-            left += 1
+    groups: list[list[str]] = []
+    for line in (" ".join(line.split()) for line in lines):
+        if line.startswith("- ") and groups:
+            groups[-1].append(line)
+        else:
+            groups.append([line])
+    out, size, left = [HEAD], len(HEAD), unseen
+    room = MAX_CHARS - len(f"\n+{len(lines) + unseen} more")
+    for first, *bullets in groups:
+        heading = first.endswith(":") and bool(bullets)
+        if not heading and size + 1 + len(first) > room:
+            left += 1 + len(bullets)
             continue
-        out.append(line)
-        size += 1 + len(line)
+        kept: list[str] = []
+        cost = 0 if heading else len(first) + 1
+        for bullet in bullets:
+            more = len(bullet) + 1 + (len(first) + 1 if heading and not kept else 0)  # a heading with its first bullet
+            if size + cost + more > room:
+                left += 1
+                continue
+            cost += more
+            kept.append(bullet)
+        if heading and not kept:
+            continue
+        out += [first, *kept]
+        size += cost
     return "\n".join([*out, f"+{left} more"] if left else out)
 
 
@@ -180,8 +213,7 @@ def card(c: Any, auth: Any, who: Any, bot: str, task_id: str, *, making: bool = 
     met: list[str] = []
     missing: list[str] = []
     for entry in view["to_leave"]:
-        if entry.get("removed"):
-            missing.append(str(entry.get("label")))
+        if _redacted(entry):  # the page checks took its words: neither met nor missing says it
             continue
         said = f"{entry['line']}: {entry['standing']}"
         if entry.get("met"):
@@ -196,7 +228,7 @@ def card(c: Any, auth: Any, who: Any, bot: str, task_id: str, *, making: bool = 
             earlier: Row = entry.get("earlier") or {}
             if earlier.get("ref"):
                 given.append(str(earlier["ref"]))
-            versions = [] if private else [_pinned(c, v, at) for v in dict.fromkeys(given) if v.startswith("page:")]
+            versions = [] if private else [_pinned(c, v, at) for v in dict.fromkeys(given) if v.startswith(REFS)]
             versions = [v for v in versions if _opens(c, auth, who, v)]
             met.append(said + (f" (approved {', '.join(versions)})" if versions else ""))
         else:
@@ -224,7 +256,20 @@ def _view(c: Any, auth: Any, who: Any, task_id: str) -> Row:
         return {}
     for entry in view["to_leave"]:
         files.readable_earlier(c, auth, who, entry)
-    return files.readable_page_refs(c, auth, who, view) or {}
+    ids = [entry.get("requirement_id") for entry in view["to_leave"]]
+    shown: Row = files.readable_page_refs(c, auth, who, view) or {}
+    # The page filter replaces an entry it takes whole by a placeholder without its requirement: keep which one it was,
+    # here only, so whose turn it is says no more than the entry does (`_turn_line`).
+    shown["to_leave"] = [
+        {**entry, "requirement_id": rid} if _redacted(entry) else entry
+        for entry, rid in zip(shown.get("to_leave") or [], ids, strict=True)
+    ]
+    return shown
+
+
+def _redacted(entry: Row) -> bool:
+    """An entry the page checks took (whole, or its words)."""
+    return bool(entry.get("removed")) or any(entry.get(k) in files.REMOVED_LABELS for k in ("line", "standing"))
 
 
 def _turn_line(view: Row, turn: Row) -> str:
@@ -234,8 +279,9 @@ def _turn_line(view: Row, turn: Row) -> str:
     wanted = turn.get("requirement_id")
     empty: Row = {}
     entry = next((e for e in entries if e.get("requirement_id") == wanted), empty)
-    if wanted and entry.get("removed"):
-        return str(entry.get("label"))
+    if wanted and _redacted(entry):
+        said = [entry.get(k) for k in ("label", "line", "standing") if entry.get(k) in files.REMOVED_LABELS]
+        return str(said[0] if said else files.REMOVED_LABELS[0])
     if entry.get("line") == task_asks.PRIVATE_LINE:
         return task_asks.PRIVATE_LINE
     return str(turn.get("line") or "")
@@ -297,32 +343,35 @@ def changes(c: Any, auth: Any, who: Any, task_id: str, bot: str, last: Row) -> l
     return out
 
 
-def snapshot(c: Any, auth: Any, person: Any) -> list[str]:
-    """What waits on the person now and the open tasks their Assistant filed for them, as they may read them."""
-    items: list[Row] = views.needs_shown(c, auth, person, count_only=True)
-    shown = items[:TOP]
-    ids = sorted({str(i["task_id"]) for i in shown if i.get("task_id")})
-    titles: dict[str, str] = (
-        {r[0]: r[1] for r in c.execute(f"SELECT id, title FROM tasks WHERE id IN ({','.join('?' * len(ids))})", ids)}
-        if ids
-        else {}
-    )
-    out = [f"Needs you ({H.actor_name(c, person.actor)}): {len(items)}"]
-    for item in shown:
-        title = titles.get(str(item.get("task_id")))
-        out.append(f"- {item['line']}" + (f" ({_clip(title, TITLE_MAX)})" if title else ""))
-    if len(items) > TOP:
-        out.append(f"+{len(items) - TOP} more")
+# How many open tasks the person's Assistant filed for them that they may read (HANDOFFS_SQL's rows).
+HANDOFFS_COUNT_SQL = "SELECT count(*) FROM (" + HANDOFFS_SQL + ")"
 
+
+def snapshot(c: Any, auth: Any, person: Any, room: int = MAX_CHARS) -> tuple[list[str], int]:
+    """What waits on the person now (their Needs you count and its first TOP items, as the list they are served shows
+    them) and the open tasks their Assistant filed for them, as they may read them; and how many of those tasks were
+    not read because `room` characters could not show them."""
+    items: list[Row] = sorted(views.needs_shown(c, auth, person), key=views.needs_key)
+    out = [f"Needs you ({H.actor_name(c, person.actor)}): {len(items)}"]
+    for item in items[:TOP]:
+        task: Row = item.get("task") or {}
+        title = task.get("title")
+        out.append(f"- {item['line']}" + (f" ({_clip(title, TITLE_MAX)})" if title else ""))
+    rule: str = auth.task_sql(c, person)
+    total = int(c.execute(HANDOFFS_COUNT_SQL % rule, (person.actor,)).fetchone()[0])
+    room -= sum(len(line) + 1 for line in out)
     lines: list[str] = []
-    for r in c.execute(HANDOFFS_SQL % auth.task_sql(c, person), (person.actor,)).fetchall():
+    for r in c.execute(HANDOFFS_SQL % rule, (person.actor,)):
+        if room <= 0:
+            break
         view = _view(c, auth, person, r["id"])
         turn: Row = view.get("turn") or {}
         owner: str = H.actor_name(c, r["owner_id"]) if r["owner_id"] else "nobody"
         said = _turn_line(view, turn) if turn else ""
         lines.append(f"{_clip(r['title'] or 'A task', TITLE_MAX)} ({owner})" + (f": {said}" if said else ""))
+        room -= len(lines[-1]) + 3
     out += _listed("Open handoffs you filed through me:", lines)
-    return out
+    return out, total - len(lines)
 
 
 def _listed(head: str, items: Sequence[str]) -> list[str]:
@@ -343,13 +392,14 @@ def _pinned(c: Any, ref: str, at: str) -> str:
     if "@" in ref:
         return ref
     found = c.execute(
-        "SELECT max(version) FROM bot_file_versions WHERE file_id=? AND created_at<=?", (ref[len("page:") :], at)
+        "SELECT max(version) FROM bot_file_versions WHERE file_id=? AND created_at<=?", (ref.partition(":")[2], at)
     ).fetchone()
     return f"{ref}@{found[0]}" if found and found[0] else ref
 
 
 def _opens(c: Any, auth: Any, who: Any, ref: str) -> bool:
-    return bool(files.page_refs_readable(c, auth, who, [ref]))
+    """Whether `who` may read that version of the page or file, through the file's own read check."""
+    return bool(files.page_refs_readable(c, auth, who, ["page:" + ref.partition(":")[2]]))
 
 
 def _name(c: Any, actor: object) -> str:
