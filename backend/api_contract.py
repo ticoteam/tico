@@ -35,6 +35,13 @@ ASK_REFUSED = error(
     "or org-rule hold. Progress notes should be posted as updates."
 )
 
+# The 409 of a bot's ask or ❓ a rule stops (backend/task_rule_gate.py `COVERS`): refused back, never held.
+QUESTION_REFUSED = error(
+    "task_rule: a bot's ask or question breaks a Block or Escalate rule of the company (a question too long to check "
+    "against one too); detail names the rule and how to fix it. Nothing is written or held, and it never counts "
+    "toward quarantine."
+)
+
 # The Idempotency-Key note of a PUT whose handler never passes through Store.mutate.
 KEYLESS = "Optional: this write does not check the header."
 

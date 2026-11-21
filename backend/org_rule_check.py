@@ -1743,7 +1743,11 @@ def _write_hold(
     """The hold a write is held in, written and told. `broken` are the rules that hold it, `strictest` the one the hold
     is on and `mode` its outcome (`block` or `escalate`; an escalation with no reviewer is a block). `check` is the check
     that held it: `judged`, or `structured` with `error`, the class of a check that could not complete. Returns apply's
-    answer: {"held": view, "rule", "hold_id"}."""
+    answer: {"held": view, "rule", "hold_id"}. A bot's ❓ to a person is never held: it is refused back to the bot
+    (task_rule_gate.refuse_question)."""
+    from . import task_rule_gate
+
+    task_rule_gate.refuse_question(c, verdict, strictest, too_large)
     author, operation = verdict["author"], verdict["operation"]
     target = "org_rule:" + strictest["id"] if strictest["id"] else "org_rule_check"
     reviewer = reviewer_for(c, author, broken)

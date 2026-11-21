@@ -292,6 +292,24 @@ def test_a_question_a_teams_block_rule_finds_broken_is_refused_back_to_the_bot_n
     assert ask_on(api, task, text="Should the launch note name a color at all?").status_code == 200, "lawful: asked"
 
 
+def test_a_question_whose_block_rule_turned_warn_while_it_was_checked_is_asked(ruled):
+    """Refused only where it would have been held: the rules in force at the write decide, not those at the check."""
+    api, judge = ruled
+    made = color_rule(api)
+    checks = judge.__call__
+
+    def turned_warn(state, questions, label=None):
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE org_rules SET if_broken='warn', version=version+1 WHERE id=?", (made["id"],))
+        return checks(state, questions, label)
+
+    api.app.state.judge = turned_warn
+    task = task_for_ops(api)
+    r = ask_on(api, task, text=COLORED)
+    assert r.status_code == 200 and r.json()["question"]["line"] == COLORED, r.text
+    assert sql(api, "SELECT count(*) AS n FROM org_rule_holds")[0]["n"] == 0
+
+
 def test_a_question_too_long_to_check_against_a_block_rule_is_refused_to_shorten(ruled, monkeypatch):
     from clients import judge as J
 
@@ -569,12 +587,13 @@ def test_send_anyway_posts_and_marks_a_held_question(ruled, where, monkeypatch):
     from backend import task_rule_gate
 
     api, judge = ruled
-    monkeypatch.setattr(task_rule_gate, "refuse_question", lambda c, who, verdict: None)
     judge.needles = {OR.ASKS_TO_A_PERSON: "**"}
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE org_rules SET if_broken='escalate', reviewer='ana' WHERE text=?", (OR.ASKS_TO_A_PERSON,))
     path = f"tasks/{task_for_ops(api)['id']}/questions" if where == "task" else "questions"
-    held = post(api, path, {"to": "ben", "text": "Should it go out **Friday**?"}, token="ops-test")["held"]
+    with monkeypatch.context() as before:  # only to make the hold; Send anyway below runs the real gate
+        before.setattr(task_rule_gate, "refuse_question", lambda *_: None)
+        held = post(api, path, {"to": "ben", "text": "Should it go out **Friday**?"}, token="ops-test")["held"]
     view = get(api, f"rule-holds/{held['id']}")
     assert view["can_send"], view
     post(api, f"rule-holds/{held['id']}/send", {"nonce": view["nonce"]})

@@ -11,11 +11,10 @@ from . import counsel
 from . import delivery
 from . import org_rule_check
 from . import question_marks
-from . import task_rule_gate
 from . import task_privacy as privacy
 from . import teammate_access
 from . import visuals
-from .api_contract import ASK_REFUSED, api_v2
+from .api_contract import ASK_REFUSED, QUESTION_REFUSED, api_v2
 from .api_answers.tasks import CommentResult, TaskComments
 
 
@@ -292,6 +291,7 @@ def register(
             "listed in their Needs you until they reply there or the task ends; no task is filed and nothing else is "
             "sent. One open ❓ per bot per chat: a new one replaces the old, and `warning` says so. Bots only",
             CommentResult,
+            responses={"409": QUESTION_REFUSED},
         ),
     )
     def task_question(request: Request, tid: str, body: M.Question):
@@ -364,7 +364,6 @@ def register(
         """A ❓ on a task's chat, as the route writes it and Send anyway replays it: the comment, then its mark, in one
         transaction. A Block or Escalate rule it breaks refuses it back to the bot, nothing written or held
         (task_rule_gate.refuse_question); a hold from before still replays here."""
-        task_rule_gate.refuse_question(c, who, rc)
         done = comment_write(c, who, tid, M.TaskComment(text=text), ingest, rc, who, ask_to=to)
         said = done.get("comment") or {}
         if not said.get("id"):

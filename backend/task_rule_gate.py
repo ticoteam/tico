@@ -182,23 +182,28 @@ def not_asked(rule: Row) -> str:
     return f'Not asked. A rule covers this: "{rule.get("text") or "a rule"}" Act on the rule instead of asking.'
 
 
-def refuse_question(c: Any, who: Any, verdict: Row | None) -> None:
-    """A bot's ❓ to a person (backend/task_comments_routes.py, backend/thread_api.py) a Block or Escalate rule finds broken is refused back to
-    the bot at once, with the rule and how to make it lawful, under `COVERS` (never counted toward quarantine), and
-    nothing is held: held, it sat on a review task the person never saw while the bot believed it had asked. Too long
-    to check against such a rule, it is refused to shorten. A Warn rule never stops it: it is asked, with its warning."""
-    rules = covering(verdict)
-    if rules:
-        text = rules[0].get("text") or "a rule"
-        H.refuse(
-            c,
-            who.actor,
-            COVERS,
-            f'Not asked. Your question breaks a rule: "{text}" Rewrite it so it keeps the rule and ask again, or act '
-            "on the rule instead of asking.",
-        )
-    if local_cause(verdict) == "too_large" and not only_warns(verdict):
-        H.refuse(c, who.actor, COVERS, NOT_ASKED_LOCAL["too_large"])
+# A bot's ❓ to a person: on a task's chat (backend/task_comments_routes.py) and in a direct chat (backend/thread_api.py).
+QUESTIONS = ("question", "chat_question")
+
+
+def refuse_question(c: Any, verdict: Row, rule: Row, too_large: bool) -> None:
+    """Where a bot's ❓ would be held (org_rule_check `_write_hold`: its permissions, audience and rules in force all
+    checked), it is refused back to the bot at once instead, with the rule and how to make it lawful, under `COVERS`
+    (never counted toward quarantine): held, it sat on a review task the person never saw while the bot believed it had
+    asked. Too long to check against a Block or Escalate rule, it is refused to shorten. A Warn rule never holds, so it
+    never reaches here: the ❓ is asked, with its warning. Any other write is held as before."""
+    author = str(verdict.get("author") or "")
+    if verdict.get("operation") not in QUESTIONS or not H.is_bot(author):
+        return
+    if too_large:
+        H.refuse(c, author, COVERS, NOT_ASKED_LOCAL["too_large"])
+    H.refuse(
+        c,
+        author,
+        COVERS,
+        f'Not asked. Your question breaks a rule: "{rule.get("text") or "a rule"}" Rewrite it so it keeps the rule '
+        "and ask again, or act on the rule instead of asking.",
+    )
 
 
 def note_first(

@@ -9,7 +9,7 @@ operation), an edit as `threads_edit`. Every list is paged and byte-capped by th
 """
 
 from . import views
-from . import ask_shape, question_marks, task_rule_gate
+from . import ask_shape, question_marks
 from . import ask_ingest, strategy_bot
 from . import bot_home_merge
 from . import recipients as recipient_gate
@@ -21,7 +21,7 @@ from . import rooms
 from . import updates
 from .store import encode
 from . import updates_routes
-from .api_contract import ASK_REFUSED
+from .api_contract import ASK_REFUSED, QUESTION_REFUSED
 from .api_answers.conversations import ChatResult, Message
 
 import asyncio
@@ -1700,6 +1700,7 @@ def register_messages(
             "askInChat",
             "A bot's ❓ in a direct chat: send `text` to `to` (in `conversation_id`, or the bot's chat with them) and "
             "mark it as needing their reply, until they reply there. Bots only",
+            responses={"409": QUESTION_REFUSED},
         ),
     )
     def chat_question(request: Request, body: M.ChatQuestion):
@@ -1724,7 +1725,6 @@ def register_messages(
         """A ❓ in a direct chat, as the route writes it and Send anyway replays it: the message, then its mark, in one
         transaction. A Block or Escalate rule it breaks refuses it back to the bot, nothing written or held
         (task_rule_gate.refuse_question); a hold from before still replays here."""
-        task_rule_gate.refuse_question(c, who, rc)
         message = message_write(c, who, sent, rc, ingest)
         if not message.get("id"):
             return message
