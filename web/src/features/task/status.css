@@ -1,0 +1,9 @@
+/* A task's one status line (StatusLine.tsx): on its board card, in its head and over its chat's message box. Quiet
+   words; Needs you a step up in ink with Flow's dot; Paused's Fix underlined. */
+.status-line{display:inline-flex;align-items:center;gap:var(--s-1);min-width:0;color:var(--muted);font-size:var(--t-sm);white-space:nowrap}
+.status-line.is-needs_you{color:var(--ink)}
+.status-line > span[aria-hidden]{display:inline-flex}
+.status-fix{color:var(--ink);text-decoration:underline;text-underline-offset:2px;cursor:pointer}
+.chat-foot > .status-line{display:flex;padding:0 var(--s-1) var(--s-1)}
+.status-fix-slot{visibility:hidden}
+.tk-item > .card-fix{position:absolute;font-size:var(--t-sm);line-height:var(--lh)}

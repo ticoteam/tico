@@ -14,6 +14,10 @@ def revoke(c, actor, runner_id, *, reason=None, at=None):
     )
     c.execute("DELETE FROM registry_metadata WHERE key='browser-host' AND value=?", (runner_id,))
     H.event(c, actor, "runner.revoked", runner_id, {"reason": reason} if reason else None)
+    from . import task_reads
+
+    # Its agents have no computer now: their tasks say Paused.
+    task_reads.status_moved(c, [r[0] for r in c.execute("SELECT bot FROM assignments WHERE runner_id=?", (runner_id,))])
 
 
 def disconnect(store, runner_id):

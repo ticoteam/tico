@@ -132,7 +132,10 @@ def view(wait: Wait, shown: Callable[[str], bool]) -> Row:
     """A wait as JSON for a reader (`unnamed`), without `about`: which task a line came from is the server's. `href` only
     when the line has a page to fix it on."""
     out = asdict(unnamed(wait, shown))
-    del out["about"], out["fix"], out["shared"]
+    fix = out.pop("fix")
+    del out["about"], out["shared"]
+    # A Paused wait a person fixes first (Connect GitHub) links to that fix, as its Needs you item does.
+    out["href"] = fix or out["href"]
     if out["href"] is None:
         del out["href"]
     if out["share"] is None:
@@ -716,7 +719,8 @@ def of(
     for wait in out:
         kept = ("shared", wait.requirement_id) if wait.shared else ("line", wait.line)
         once.setdefault((wait.state, wait.who, kept), wait)
-    return sorted(once.values(), key=lambda wait: _ORDER[wait.state])
+    # Among Paused waits a company's fix (Connect GitHub) comes first: the headline links to what unblocks every bot.
+    return sorted(once.values(), key=lambda wait: (_ORDER[wait.state], wait.state == PAUSED and not wait.fix))
 
 
 def heads(waits: Sequence[Wait]) -> list[Wait]:

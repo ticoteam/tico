@@ -257,6 +257,15 @@ describe('one open task', () => {
     expect(vi.mocked(useFollow)).toHaveBeenCalledWith({ task: 't1' });
   });
 
+  it('says its one status line in the head; Paused links Fix to where it is fixed', async () => {
+    const turn = { state: 'paused' as const, who: 'bot:a1', line: 'Birch has no computer', href: '#/settings/computers', requirement_id: null, since: null, until: null, ask: false };
+    serve(reads(task({ to_leave: [], status_line: 'paused', turn })));
+    details();
+    const said = await screen.findByTitle('Birch has no computer');
+    expect(said.closest('.page-sub, header')).toBeTruthy();
+    expect(within(said).getByRole('link', { name: 'Fix' }).getAttribute('href')).toBe('/settings/computers');
+  });
+
   it('draws Details: what it needs to leave its stage, with what is met folded @s58', async () => {
     serve(base);
     details();

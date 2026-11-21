@@ -237,6 +237,12 @@ def put(
     the row. A bot's own hold names it as its bot_id. `probe_job_id` is the one job let try after `until_at`, taken at
     `probe_at`."""
     now = str(H.now())
+    held = _held_bot(holdable_type, holdable_id, bot_id)
+    was = c.execute(
+        "SELECT until_at FROM holds INDEXED BY holds_open WHERE kind=? AND holdable_type=? AND holdable_id=? "
+        "AND coalesce(bot_id,'')=? AND released_at IS NULL",
+        (kind, holdable_type, holdable_id, held or ""),
+    ).fetchone()
     found = c.execute(
         "INSERT INTO holds(id,kind,holdable_type,holdable_id,bot_id,reason,details,streak,until_at,probe_at,"
         "upkeep_task_id,probe_job_id,created_by_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
@@ -263,6 +269,9 @@ def put(
         ),
     ).fetchall()
     _switch(c, kind, holdable_type, holdable_id, True)
+    # New, or a failed-run hold crossing from its back-off (an until_at) to a stop (none), or back.
+    if was is None or (was[0] is None) != (until_at is None):
+        _shown(c, found[0])
     return dict(found[0])
 
 
@@ -279,7 +288,20 @@ def release(
     ).fetchall()
     if found:
         _switch(c, kind, holdable_type, holdable_id, False)
+        _shown(c, found[0])
     return dict(found[0]) if found else None
+
+
+def _shown(c: Any, hold: Any) -> None:
+    """A hold opened, ended, or moved from a back-off to a stop: whatever kind it is stored as, its bot's tasks and the
+    task it is on are sent again on the live stream (task_reads.status_moved); a hold on no bot (the company's pause, a
+    login's limit) sends every list again."""
+    from . import task_reads
+
+    if hold["holdable_type"] == "automation":
+        return  # an automation's run guard holds its runs, never an agent or a task
+    task = [hold["holdable_id"]] if hold["holdable_type"] == "task" else []
+    task_reads.status_moved(c, [hold["bot_id"]] if hold["bot_id"] else None, task)
 
 
 def _task_sql() -> str:

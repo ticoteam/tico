@@ -59,14 +59,15 @@ export function OwnerButton({ actor }: { actor: string }) {
 /** What hangs in a row's margin: the Flow mark when it waits on you, else the stopped mark. */
 export function markOf(t: Pick<TaskItem, 'turn' | 'stuck'>, me: string | undefined): ReactNode {
   if (me && t.turn?.state === 'person' && t.turn.who === me) return <FlowMark />;
-  if (t.stuck)
-    return (
-      <span className="stuck" title="Stopped">
-        <Icon name="pause" />
-      </span>
-    );
-  return null;
+  return t.stuck ? <StoppedMark /> : null;
 }
+
+/** The ladder brought the task to a person: stopped. */
+export const StoppedMark = () => (
+  <span className="stuck" title="Stopped">
+    <Icon name="pause" />
+  </span>
+);
 
 export const waitsOnMe = (t: Pick<TaskItem, 'turn'>, me: string | undefined) => !!me && t.turn?.state === 'person' && t.turn.who === me;
 
@@ -85,12 +86,15 @@ export function Movable({
   task,
   stages,
   wrap,
+  after,
   children,
 }: {
   task: TaskItem;
   stages: readonly Stage[];
   /** The wrapper's own props: a card's drag. */
   wrap?: HTMLAttributes<HTMLDivElement> & { 'data-task'?: string; ref?: Ref<HTMLDivElement> };
+  /** Beside the card, after its menu: a link of its own (Paused's Fix). */
+  after?: ReactNode;
   children: ReactElement;
 }) {
   const move = useAction('tasks.move');
@@ -102,6 +106,7 @@ export function Movable({
     <div className="tk-item" {...wrap}>
       <ContextMenu items={items}>{children}</ContextMenu>
       <Menu trigger={<IconButton icon="more" label="Move to" size="sm" className="tk-more" />}>{items}</Menu>
+      {after}
     </div>
   );
 }

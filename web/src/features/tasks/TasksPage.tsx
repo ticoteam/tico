@@ -3,7 +3,7 @@ import { Link, useNavigate } from '@tanstack/react-router';
 import { useEffect, useState, type MouseEvent, type ReactNode } from 'react';
 import { useAction } from '@/actions';
 import { meQuery, useActor } from '@/data';
-import { TaskSend } from '@/features/task/exports';
+import { CardFix, lineFor, StatusLine, TaskSend } from '@/features/task/exports';
 import { useFollow } from '@/live/follow';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
@@ -27,13 +27,16 @@ import { Capped, CARD_H, COL_CAP, COL_SHOW, LIST_CAP, LIST_SHOW, moreText, PHONE
 import { DUE_NAMES, FilterItems, FilterMenu } from './FilterMenu';
 import { SelectBar, StageMenu } from './many';
 import { NewTask } from './NewTask';
-import { Blocks, Face, FlowButton, isPending, markOf, Movable, OwnerButton, taskHref, waitsOnMe } from './parts';
+import { Blocks, Face, FlowButton, isPending, markOf, Movable, OwnerButton, StoppedMark, taskHref, waitsOnMe } from './parts';
 import {
   flowQuery,
   isFiltered,
+  listParams,
   loadMore,
   pipelinesQuery,
   pipelineTasksQuery,
+  refreshLoaded,
+  STATUS_BACKSTOP_MS,
   stageCount,
   type Filters,
   type Pipeline,
@@ -77,6 +80,7 @@ interface PageProps {
 function OpenPage({ pipeline, p, pipes, search, view, head }: PageProps & { view: 'board' | 'list' }) {
   const filters = filtersOf(search);
   const tasks = useSuspenseQuery(pipelineTasksQuery(pipeline, filters)).data;
+  useBackstop(listParams(pipeline, filters));
   const me = useQuery(meQuery).data?.id;
   const [folds, setFolds] = usePref<string[]>(`${FOLD_PREF}:${pipeline}`, []);
   const edit = useAction('tasks.editPipeline');
@@ -328,6 +332,19 @@ export function Chips({ search }: { search: Filters }) {
   );
 }
 
+/** While the board is on screen, its loaded rows are read again every few minutes in place (`refreshLoaded`): the
+    stream sends each status line as it changes, and this heals one it missed. */
+function useBackstop(params: Record<string, string | number>) {
+  const key = JSON.stringify(params);
+  useEffect(() => {
+    const at = JSON.parse(key) as Record<string, string | number>;
+    const timer = setInterval(() => {
+      if (!document.hidden) void refreshLoaded(at).catch(() => undefined);
+    }, STATUS_BACKSTOP_MS);
+    return () => clearInterval(timer);
+  }, [key]);
+}
+
 /* ---------------------------------------------------------------- the body */
 
 interface BodyProps {
@@ -372,14 +389,22 @@ const picker = (toggle: BodyProps['toggle'], id: string) =>
   });
 
 function Card({ t, p, me, picked, onPick }: { t: TaskItem; p: Pipeline; me: string | undefined; picked?: boolean; onPick?: (e: MouseEvent) => void }) {
-  const mark = onPick ? <Pick on={!!picked} /> : markOf(t, me);
+  // The card's status line in the mark's place (Starting, Up next, Working, Needs you, Paused · Fix); Select's box while picking.
+  const line = !onPick && lineFor(t, me);
   const inner = (
     <>
       <span className="card-title">{t.title}</span>
       <span className="card-foot">
-        {(mark || t.late || t.blocks?.length || t.email_send) && (
+        {(onPick || line || t.stuck || t.late || t.blocks?.length || t.email_send) && (
           <span className="card-marks">
-            {mark}
+            {onPick ? (
+              <Pick on={!!picked} />
+            ) : (
+              <>
+                {line && <StatusLine t={t} me={me} inLink />}
+                {t.stuck && <StoppedMark />}
+              </>
+            )}
             {t.late && <LatePill />}
             <Blocks t={t} />
             <TaskSend send={t.email_send} />
@@ -465,7 +490,13 @@ function Columns({ p, rows, me, folds, fold, more, cut, countOf, picking, toggle
               height={CARD_H}
               measure
               draw={(t) => (
-                <Movable key={t.id} task={t} stages={p.stages} wrap={picking ? undefined : { 'data-task': t.id, ref: drag }}>
+                <Movable
+                  key={t.id}
+                  task={t}
+                  stages={p.stages}
+                  wrap={picking ? undefined : { 'data-task': t.id, ref: drag }}
+                  after={!picking && <CardFix t={t} me={me} />}
+                >
                   <Card t={t} p={p} me={me} picked={picking?.has(t.id)} onPick={picker(toggle, t.id)} />
                 </Movable>
               )}

@@ -139,6 +139,8 @@ class TaskFields(TypedDict):
     """In a side stage, the last main work stage this task visited in this pipeline. Null when there is no origin. A brief list omits the field when it is null."""
     turn: TaskWait | None
     """The headline wait: whose turn it is"""
+    status_line: NotRequired[Literal["starting", "up_next", "working", "needs_you", "paused"] | None]
+    """The card's one status line, on every read and the live stream (task_reads.status_line): starting (its agent's computer is waking or starting the run), up_next (its agent's turn, no run yet), working (a run going now), needs_you (a person's turn: `turn.who`), paused (its agent cannot run: `turn.line` says why, `turn.href` where it is fixed); null when none applies"""
     late: TaskLate | None
     stuck: NotRequired[bool]
     """Present and true when the never-stuck ladder brought it to a person (stuck or late)"""
@@ -242,9 +244,9 @@ class TaskWait(TypedDict):
     until: str | None
     ask: bool
     href: NotRequired[str | None]
-    """A paused bot's cause: the app page that shows it (#/settings/computers, #/settings/billing)"""
+    """A paused bot's cause: the app page that shows or fixes it (#/settings/computers, #/settings/billing, #/tools/github)"""
     running: NotRequired[bool]
-    """On a list row: a bot's turn (state bot) is a run going now; false while it waits to try again"""
+    """On a list row, on a bot's turn (state bot) only: a run is going now; false while it waits to try again"""
     share: NotRequired[list[str]]
     """A private task waits on these actors being let in (the next stage's owner and those it asks, or someone asked here, can't see it): move with to next and let_see set to exactly this list"""
 

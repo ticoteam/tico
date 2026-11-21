@@ -11,7 +11,7 @@ import { dispatch, installPatchers } from '@/live/patch';
 import { dragTo } from '@/test/drag';
 import { ArchivedSections } from './Archived';
 import { FlowPage } from './FlowPage';
-import { flowQuery, listParams, pipelinesQuery, type Pipeline, type TaskItem } from './queries';
+import { flowQuery, listParams, pipelinesQuery, refreshLoaded, type Pipeline, type TaskItem } from './queries';
 import { TasksPage } from './TasksPage';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
@@ -663,5 +663,73 @@ describe('an approved email on its card @s0', () => {
     const time = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(new Date(at));
     expect(await within(el).findByText(`Sent ${time}`)).toBeTruthy();
     expect(reads.filter((u) => u.includes('/email/sends/'))).toEqual([]);
+  });
+
+  it('a card shows its one status line, and the next one when the stream sends the row again', async () => {
+    serve((url) => ({ status: 200, body: url.includes('/api/v2/tasks?') ? { tasks: queryClient.getQueryData<{ tasks: TaskItem[] }>(listKey)?.tasks ?? [], cursor: '1' } : {} }));
+    const bot = { state: 'bot' as const, who: 'bot:b1', line: 'Fix the export', requirement_id: null, since: null, until: null, ask: false };
+    const card = task('a1', 7, 'Fix the export', 's1', { owner_id: 'bot:b1', turn: bot, status_line: 'up_next' });
+    seed([card]);
+    show(<TasksPage pipeline="eng" search={{ view: 'board' }} />, '/tasks/eng?view=board');
+    const el = (await screen.findByTitle('Fix the export')).closest('.card') as HTMLElement;
+    expect(within(el).getByText('Up next')).toBeTruthy();
+    const send = (seq: number, more: Partial<TaskItem>) =>
+      act(() => dispatch('tasks', [{ seq, id: 'a1', kind: 'run', kinds: ['run'], task: { ...card, version: seq, ...more } }]));
+    send(2, { status_line: 'working' });
+    expect(await within(el).findByText('Working')).toBeTruthy();
+    // Needs you is said only to the person it waits on: no "You" mark for anyone else.
+    send(3, { status_line: 'needs_you', turn: { ...bot, state: 'person', who: 'human:ana' } });
+    await waitFor(() => expect(within(el).queryByText('Working')).toBeNull());
+    expect(el.querySelector('.status-line')).toBeNull();
+    send(4, { status_line: 'needs_you', turn: { ...bot, state: 'person', who: ME } });
+    expect(await within(el).findByText('Needs you')).toBeTruthy();
+    send(5, { status_line: 'paused', turn: { ...bot, state: 'paused', line: 'Birch has no computer', href: '#/settings/computers' } });
+    const line = await within(el).findByTitle('Birch has no computer');
+    expect(line.textContent).toBe('Paused · Fix');
+    // Fix is a link of its own beside the card's (a link may not hold a link), so the keyboard reaches it.
+    const fix = screen.getByRole('link', { name: 'Fix: Birch has no computer' });
+    expect(fix.getAttribute('href')).toBe('/settings/computers');
+    expect(fix.closest('a.card, .card')).toBeNull();
+    expect(fix.closest('.tk-item')).toBe(el.closest('.tk-item'));
+    // Stopped by the ladder with no line: the Stopped mark stays.
+    send(6, { status_line: null, stuck: true });
+    expect(await within(el).findByTitle('Stopped')).toBeTruthy();
+    expect(el.querySelector('.status-line')).toBeNull();
+    // Stopped stays beside a line too.
+    send(7, { status_line: 'working', stuck: true, turn: bot });
+    expect(await within(el).findByText('Working')).toBeTruthy();
+    expect(within(el).getByTitle('Stopped')).toBeTruthy();
+  });
+
+  it("the backstop reads a list's loaded rows again in place, every page kept", async () => {
+    const rows = [task('a1', 7, 'One', 's1', { status_line: 'up_next' }), task('a2', 8, 'Two', 's1'), task('a3', 9, 'Three', 's2')];
+    seed(rows);
+    const reads: string[] = [];
+    serve((url) => {
+      reads.push(url);
+      return { status: 200, body: { tasks: [{ ...rows[0], status_line: 'paused' }], cursor: '2' } };
+    });
+    await refreshLoaded(listParams('eng', {}));
+    const held = queryClient.getQueryData<{ tasks: TaskItem[] }>(listKey)?.tasks ?? [];
+    expect(held.map((t) => t.id)).toEqual(['a1', 'a2', 'a3']);
+    expect(held[0]?.status_line).toBe('paused');
+    expect(new URLSearchParams(reads[0]?.split('?')[1]).get('ids')).toBe('a1,a2,a3');
+  });
+
+  it('the backstop puts back only the status, and leaves a row the stream changed while it read', async () => {
+    const rows = [task('a1', 7, 'One', 's1', { status_line: 'up_next' }), task('a2', 8, 'Two', 's1', { status_line: 'up_next' })];
+    seed(rows);
+    let answer!: (r: Reply) => void;
+    serve(() => new Promise<Reply>((done) => (answer = done)));
+    const read = refreshLoaded(listParams('eng', {}));
+    // The stream changes a2 while the read is out.
+    const streamed = { ...rows[1]!, status_line: 'working' as const };
+    queryClient.setQueryData<{ tasks: TaskItem[]; cursor: string }>(listKey, (cur) => cur && { ...cur, tasks: [cur.tasks[0]!, streamed] });
+    await vi.waitFor(() => expect(answer).toBeTruthy());
+    answer({ status: 200, body: { tasks: [{ ...rows[0], title: 'Renamed', status_line: 'paused' }, { ...rows[1], status_line: 'up_next' }], cursor: '2' } });
+    await read;
+    const held = queryClient.getQueryData<{ tasks: TaskItem[] }>(listKey)?.tasks ?? [];
+    expect([held[0]?.title, held[0]?.status_line]).toEqual(['One', 'paused']);
+    expect(held[1]?.status_line).toBe('working');
   });
 });

@@ -160,6 +160,19 @@ describe('tasks', () => {
     expect(unsure).toBe(true);
   });
 
+  it('match a board read with stage counts as one without, and put a status-only change in place on any list', () => {
+    expect(taskMatches(task('t1'), { status: 'open', counts: 'stage' })).toBe(true);
+    const held = task('t1');
+    const moved = { ...held, status_line: 'working' };
+    // A filter only the server answers would read the list again (resetting its pages); a status change does not.
+    const { list, unsure } = patchTaskList({ tasks: [held], cursor: '900.x' }, [{ seq: 901, id: 't1', kind: 'run', kinds: ['run'], task: moved }], { waiting: 'human:me' });
+    expect(unsure).toBe(false);
+    expect(list.tasks).toEqual([moved]);
+    const away = patchTaskList({ tasks: [], cursor: '900.x' }, [{ seq: 902, id: 't2', kind: 'status', kinds: ['status'], task: task('t2') }], { waiting: 'human:me' });
+    expect(away.unsure).toBe(false);
+    expect(away.list.tasks).toEqual([]);
+  });
+
   it('mark every list stale on a bulk change', () => {
     queryClient.setQueryData<TaskList>(open, { tasks: [], cursor: '900.x' });
     FakeEventSource.last.feed(frame(901, 'tasks', { seq: 901, actor: 'human:p1', at: AT, bulk: true }));

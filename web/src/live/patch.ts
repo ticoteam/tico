@@ -115,7 +115,11 @@ export function listSeq(list: { cursor?: unknown } | undefined): number {
 }
 
 // `exact` changes only whether an unknown name is refused, never which rows a list holds.
-const PAGING = new Set(['limit', 'sort', 'brief', 'offset', 'after', 'snoozed', 'exact']);
+const PAGING = new Set(['limit', 'sort', 'brief', 'offset', 'after', 'snoozed', 'exact', 'counts']);
+/** A task sent again only for its status line (backend task_reads: a run, or what lets its agent run, moved): it
+    changes no filter's answer a list read, so a row held is replaced in place and nothing is read again. */
+const STATUS_KINDS = new Set(['run', 'status']);
+const statusOnly = (e: { kind?: string; kinds?: string[] }) => (e.kinds?.length ? e.kinds : [e.kind ?? '']).every((k) => STATUS_KINDS.has(k));
 const isActor = (v: unknown) => typeof v === 'string' && /^(human|bot):/.test(v);
 
 /**
@@ -189,6 +193,11 @@ export function patchTaskList<T extends TaskRow>(
     const i = tasks.findIndex((t) => t.id === id);
     if (e.gone || !e.task) {
       if (e.gone && i >= 0) edit().splice(i, 1);
+      continue;
+    }
+    if (statusOnly(e)) {
+      const held = i >= 0 ? (tasks[i] as T) : undefined;
+      if (held && !older(e.task, held) && !same(held, e.task)) edit()[i] = e.task;
       continue;
     }
     const fits = taskMatches(e.task, params);

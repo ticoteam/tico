@@ -217,7 +217,10 @@ may             ["done", "ok", "no", "give", "undo", "withdraw"]   for this view
 
 Brief (`GET /api/v2/tasks`, lists, Needs you): `status, version, pipeline_id, stage_id, owner, assignee, turn, late,
 snoozed, stage_since` (when it entered its stage: its open visit, else when it was filed; a board card's age, task
-#220). `turn.state` is one of the nine in `waiting_on.STATES`. The fields `type_id, step_id, step, step_rank,
+#220), `status_line` (the card's one line, `task_reads.status_line`: starting, up_next, working, needs_you or paused,
+from the turn, its bot's live run and its cloud computer waking; the task's own read has it too, and a run leased,
+started or ended, a cloud machine starting or failing, a hold, or a computer assigned or taken away sends the task again
+on the live stream). `turn.state` is one of the nine in `waiting_on.STATES`. The fields `type_id, step_id, step, step_rank,
 waiting_on, blocked, blocked_reason, check_back_at, hold` are gone from both. A list builds `turn` for all its rows
 with one `H.task_waits(ids)`, never one read per row. A snoozed `turn.line` is clipped to 200 UTF-8 bytes in a
 brief row; the task's own read keeps the snooze's why whole.

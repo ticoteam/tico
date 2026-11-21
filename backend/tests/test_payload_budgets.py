@@ -137,7 +137,8 @@ def test_payloads_stay_under_their_budgets(api):
     board = api.get("/api/v2/tasks?brief=1&limit=500", headers=headers())
     # The aim is 200 KB. A brief task is still about 1.2 KB (its turn, about 200 B, rollups and empty fields, every one
     # sent); this holds today's 620 KB from growing until the brief row is cut down.
-    assert len(board.json()["tasks"]) == 500 and len(board.content) <= 640 * KB
+    # The status line (#4822) added about 12.5 KB: 640 KB became 660 KB.
+    assert len(board.json()["tasks"]) == 500 and len(board.content) <= 660 * KB
     status = api.get("/api/v2/status", headers=headers())
     # 60 bots' status lines measure about 35 KB (under 600 B a bot); held just above that, inside the 64 KB budget.
     assert len(status.json()["bots"]) == 60 and len(status.content) <= 40 * KB

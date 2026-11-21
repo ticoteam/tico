@@ -411,6 +411,9 @@ def retire_assignments(c):
             c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (bot,))
         H.setup_finished(c, bot, archived=True)
         c.execute("DELETE FROM assignments WHERE bot=?", (bot,))
+        from . import task_reads
+
+        task_reads.status_moved(c, [bot])  # no computer now: its tasks say Paused
         c.execute("UPDATE jobs SET state='canceled' WHERE bot_id=? AND state='queued'", (bot,))
         source = H.bot(c, str(config.get("shared_from") or ""))
         if not source or source["state"] == "archived":

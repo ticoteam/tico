@@ -20,6 +20,7 @@ import { DETAILS, earlierStages, failedToast, reasonOf, refusalOf, tabAddress, t
 import { FlowMark } from '@/kit/FlowMark';
 import { Face, Go, Mark } from './parts';
 import { retiredStagesQuery, waitingQuery, type TaskData } from './queries';
+import { TaskStatus } from './StatusLine';
 
 /* The head's controls: the where line (pipeline › stage pick, owner pick, time in the stage, Late), Flow's previous
    and next, and "⋯" with the rest. */
@@ -42,6 +43,7 @@ export function WhereLine({ t }: { t: TaskData }) {
       <OwnerPick t={t} />
       {t.stage_since && <Ago at={t.stage_since} className="row-age" />}
       {t.late && <LatePill />}
+      <TaskStatus t={t} />
     </>
   );
 }
@@ -60,6 +62,7 @@ export function QuietLine({ t, children }: { t: TaskData; children?: ReactNode }
       )}
       {children}
       {t.late && <LatePill />}
+      <TaskStatus t={t} />
     </span>
   );
 }

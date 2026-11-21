@@ -630,20 +630,52 @@ def visible_rows(c):
 def checked_in(c, runner_id):
     """A boot reached this server. Repair old starting rows too, without undoing a stop reservation."""
     # Every heartbeat reaches here: one read of the small cloud_machines table (a row per cloud bot at most).
-    c.execute(
+    moved = c.execute(
         "UPDATE cloud_machines SET state=CASE WHEN state='starting' THEN 'running' ELSE state END,"
         "problem=CASE WHEN problem=? THEN '' ELSE problem END,"
         "problem_at=CASE WHEN problem=? THEN NULL ELSE problem_at END,updated_at=? "
-        "WHERE runner_id=? AND (state='starting' OR problem=?)",
+        "WHERE runner_id=? AND (state='starting' OR problem=?) RETURNING bot",
         (OFFLINE_RESTARTING, OFFLINE_RESTARTING, H.now(), runner_id, OFFLINE_RESTARTING),
-    )
+    ).fetchall()
+    for found in moved:
+        _status_moved(c, found[0])
+
+
+# What a task's status line reads of a machine (task_reads.waking, task_wakes.cannot_run): a change to one of them sends
+# the tasks of the bots that wait on it again, so a start that fails before any lease shows on their cards at once.
+SHOWN = ("state", "problem", "start_asked_at", "runner_id", "mode", "placement")
 
 
 def save(c, key, **fields):
     fields["updated_at"] = H.now()
+    shown = [k for k in SHOWN if k in fields]
+    before = (
+        c.execute(f"SELECT {','.join(shown)} FROM cloud_machines WHERE bot=?", (key,)).fetchone() if shown else None
+    )
     c.execute(
         "UPDATE cloud_machines SET " + ",".join(k + "=?" for k in fields) + " WHERE bot=?", (*fields.values(), key)
     )
+    if before is not None and any(fields[k] != before[i] for i, k in enumerate(shown)):
+        _status_moved(c, key)
+
+
+def _status_moved(c, key):
+    """The bots that run on machine `key`, or wait for it (a cloud bot with no computer waits for the shared one): their
+    tasks are sent again on the live stream (task_reads.status_moved)."""
+    from . import task_reads
+
+    bots = (
+        [
+            r[0]
+            for r in c.execute(
+                "SELECT bot FROM cloud_machines WHERE bot<>? AND mode='cloud' AND (placement='shared' OR runner_id IS NULL)",
+                (SHARED,),
+            )
+        ]
+        if key == SHARED
+        else [key]
+    )
+    task_reads.status_moved(c, bots)
 
 
 def _config_of(c, bot):
@@ -726,6 +758,47 @@ def home(c, bot, current=None):
     if not current or current["mode"] != "cloud":
         return None
     return row(c, SHARED) if current["placement"] == "shared" else current
+
+
+def states(c, bots):
+    """{bot: "waking" or "failed"} of these bots whose cloud machine (their own, or the shared one: `home`) has its
+    computer and is not up (`start_state`). Their tasks say Starting, or Paused with Settings > Computers
+    (task_reads.machine). One statement for every bot."""
+    found = c.execute(
+        "SELECT b.value AS bot, m.state, m.problem, m.problem_at, m.updated_at, m.start_asked_at, m.woke_at, "
+        "rs.last_seen_at AS seen, (SELECT max(e.created_at) FROM events e WHERE e.action = "
+        "'cloud_machine.restart_failed' AND e.target = m.bot) AS restart_failed FROM json_each(?) b "
+        "JOIN cloud_machines own ON own.bot = b.value AND own.mode = 'cloud' "
+        "JOIN cloud_machines m ON m.bot = CASE WHEN own.placement = 'shared' THEN ? ELSE own.bot END "
+        "LEFT JOIN runner_states rs ON rs.runner_id = m.runner_id WHERE m.runner_id IS NOT NULL "
+        "AND NOT EXISTS (SELECT 1 FROM cloud_machine_deletions d WHERE d.machine_id = m.machine_id)",
+        (json.dumps(sorted(set(bots))), SHARED),
+    ).fetchall()
+    return {r["bot"]: said for r in found if (said := start_state(r))}
+
+
+def start_state(r):
+    """What a machine with a computer says of its start, from its own state and its computer's last check-in (`seen`):
+    "failed" when its start failed (HQ says `failed`, or one of `coming_status`'s failed problems) and its computer has
+    not checked in since that was recorded, or its offline restart failed (`restart_failed`) with no check-in and no
+    start since; "waking" when it was started again since that failed restart, was woken for work and HQ is starting it
+    or was asked to, or is restarting after going offline; None when it is up, or asleep with nothing asked of it."""
+    seen = r["seen"] or ""
+    problem = r["problem"] or ""
+    bad = problem.startswith(("hq:", "error:")) or problem in ("stuck", "no_enroll")
+    recorded = r["problem_at"] or r["updated_at"]  # when the failure was written; unknown: it stands
+    if (r["state"] == "failed" or (r["state"] != "running" and bad)) and (not recorded or seen <= recorded):
+        return "failed"
+    restart = r["restart_failed"]
+    if restart and seen <= restart:
+        started = max(r["start_asked_at"] or 0, r["woke_at"] or 0)
+        # A start since the failed restart supersedes it: on its way until its computer checks in.
+        return "waking" if started >= (epoch(restart) or 0) else "failed"
+    if problem == OFFLINE_RESTARTING or (
+        not problem and r["state"] != "running" and (r["state"] == "starting" or r["start_asked_at"] is not None)
+    ):
+        return "waking"
+    return None
 
 
 def first_home(c, bot):
@@ -2711,6 +2784,8 @@ def coming_status(c: Any, machine: Any) -> tuple[str, str]:
         return "out_of_credit", PROBLEMS["out_of_credit"]
     if problem.startswith(("hq:", "error:")) or problem in ("stuck", "no_enroll"):
         return "failed", problem_words(problem) or problem
+    if machine["state"] == "failed":
+        return "failed", "Didn't start"  # HQ says its start failed, with no problem of ours recorded
     if machine["state"] in GOING:
         return "stopped", "Stopped"
     if not machine["machine_id"] or machine["state"] in ("none", *DEAD):
