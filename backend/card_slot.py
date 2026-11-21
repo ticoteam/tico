@@ -5,22 +5,18 @@ Every message about a card still queues its own job (backend/enqueue.py), so a r
 for a message in the card's own room (a thread's carrier counts as the message it carries), in a switched pipeline,
 also carries its slot, `<visit id>:<bot id>` (`assign`):
 
-- The claim picks its job by the usual rules. Its run then takes the slot's other queued jobs of the same room and
-  audience in its prompt, up to FOLD_MAX jobs and FOLD_BYTES (`Execution.fold_behind`), unless its job carries nothing
-  else (`carries_more`: a people-only claim, a redirect, a claim-error probe). The slot's work not handed stays out of
-  the run's history (`pending`). A message whose provenance some reader of the room may not read gets no slot.
-- Nothing is steered into a slot's run, and its completion coalesces nothing (`Execution.inputs`, `complete`). What
-  arrives during the run stays queued and starts the slot's next run. So a completion settles only what its claim handed
-  it, and a run that ends after a reassignment, reopen or stage move settles no successor work: that work is another
-  slot's. A run that never starts (stopped, refused, handed back) puts the jobs it took back in the queue (`release`).
-- While any agent has live work in the card's room from before the switch, the card stays on the older path, so one
-  scheduler drives a card at a time.
+- While one of a slot's jobs has a run, its other queued jobs wait (`busy`), then run one at a time by the usual pick.
+- A slot's run carries its own job alone: nothing is steered into it and its completion coalesces nothing, and no
+  slot job is steered into or coalesced by another run (`Execution.inputs`, `complete`). So a completion settles only
+  its own job, never the work of the next visit or of the next agent, which is another slot's.
+- The card's room is the baseline audience: a message whose provenance narrows it further keeps its own older run.
+- While any agent has live or unsettled work in the card's room from before the switch, the card stays on the older
+  path, so one scheduler drives a card at a time.
 
 SWITCHED is temporary: it goes, with the older path, once every pipeline runs by slot.
 """
 
 import json
-from collections.abc import Collection
 from typing import Any, cast
 
 from . import hubdb
@@ -30,8 +26,7 @@ Row = dict[str, Any]
 
 SWITCHED = frozenset({"video production"})  # pipeline names, case-folded
 LIVE = ("queued", "leased", "running", "input", "uncertain")  # older work not settled yet
-FOLD_MAX = 20  # jobs one run takes in its prompt; the rest wait for the slot's next run
-FOLD_BYTES = 32_000  # and their words, in bytes, at most
+RUNNING = ("leased", "running", "input")
 _SWITCHED_SQL = f"SELECT 1 FROM pipelines WHERE name IN ({','.join('?' * len(SWITCHED))}) AND retired_at IS NULL LIMIT 1"  # pipelines.name is NOCASE
 
 
@@ -39,6 +34,40 @@ def _refs(value: object) -> Row:
     if isinstance(value, (str, bytes)):
         value = json.loads(value or "{}")
     return cast(Row, value) if isinstance(value, dict) else {}
+
+
+def of(row: Any) -> str | None:
+    """The slot of a job row (a dict or a database row), or None."""
+    return row["slot"] if row is not None and "slot" in row.keys() else None
+
+
+def busy(conn: Any, row: Any) -> bool:
+    """Whether another job of `row`'s slot has a run now: `row` waits for it."""
+    slot = of(row)
+    if not slot:
+        return False
+    marks = ",".join("?" * len(RUNNING))
+    found = conn.execute(
+        f"SELECT 1 FROM jobs WHERE slot=? AND state IN ({marks}) AND id<>? LIMIT 1", (slot, *RUNNING, row["id"])
+    ).fetchone()
+    return found is not None
+
+
+def _narrows(conn: Any, message: Row, private_room: bool) -> bool:
+    """Whether the message's provenance narrows the card room's audience. In a public room that is any reader of the
+    room who may not read it (threads.message_narrower). A private card's room is narrow already, so only a message
+    kept from some of its own readers (a legacy audience, on it or on the message it carries) narrows it."""
+    from . import threads
+
+    T: Any = threads  # untyped
+    if not private_room:
+        return bool(T.message_narrower(conn, message))
+    found = conn.execute(
+        "SELECT m.legacy_audience, s.legacy_audience FROM messages m "
+        "LEFT JOIN messages s ON s.id = json_extract(m.refs,'$.carries') WHERE m.id=?",
+        (message["id"],),
+    ).fetchone()
+    return bool(found and (found[0] or found[1]))
 
 
 def assign(conn: Any, message: Row) -> str | None:
@@ -63,21 +92,22 @@ def assign(conn: Any, message: Row) -> str | None:
         return None
     task_id = task_wakes.message_task(conn, message["id"])
     found = conn.execute(
-        "SELECT v.id, p.name FROM tasks t JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL "
+        "SELECT v.id, p.name, t.private FROM tasks t JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL "
         "JOIN stages s ON s.id = v.stage_id JOIN pipelines p ON p.id = s.pipeline_id WHERE t.id=? AND t.conversation_id=?",
         (task_id or "", room[0]),
     ).fetchone()
     if not found or str(found[1]).casefold() not in SWITCHED:
         return None
-    if T.message_narrower(conn, message):
-        return None  # some reader of the room may not read it (or what it carries): its own run answers it
+    if _narrows(conn, message, found[2] is None or bool(found[2])):
+        return None  # some reader of the card's room may not read it: its own run answers it
     # Any agent's live work in the card's room from before the switch settles first: until then the card stays on
-    # the older path, a reassign mid-run included. Work that never gets a slot (above) does not count.
+    # the older path, a reassign mid-run included. Work that never gets a slot (above, or kept from some of the room)
+    # does not count.
     legacy = conn.execute(
         "SELECT 1 FROM jobs j JOIN messages m ON m.id = j.message_id WHERE j.slot IS NULL AND j.id<>? "
         f"AND j.state IN ({','.join('?' * len(LIVE))}) AND m.conversation_id=? "
         "AND coalesce(json_extract(m.refs,'$.command'),0)=0 AND json_extract(m.refs,'$.live_meeting') IS NULL "
-        "AND coalesce(json_extract(m.refs,'$.wake'),'')<>? LIMIT 1",
+        "AND coalesce(json_extract(m.refs,'$.wake'),'')<>? AND m.legacy_audience IS NULL LIMIT 1",
         (message["id"], *LIVE, room[0], T.NOTE_WAKE),
     ).fetchone()
     if legacy:
@@ -85,39 +115,3 @@ def assign(conn: Any, message: Row) -> str | None:
     slot = f"{found[0]}:{str(message['recipient_id'])[4:]}"
     conn.execute("UPDATE jobs SET slot=? WHERE id=?", (slot, message["id"]))
     return slot
-
-
-def carries_more(conn: Any, row: Any, people_only: bool) -> bool:
-    """Whether the run of the claimed job `row` takes the slot's other queued jobs: not on a computer that starts only
-    people's messages, not for a redirect (it replaces a stopped turn) and not for a probe after a claim error."""
-    if people_only or row["redirect"]:
-        return False
-    probe = conn.execute(
-        "SELECT 1 FROM holds WHERE kind='claim_error' AND holdable_type='job' AND holdable_id=? AND released_at IS NULL",
-        (row["id"],),
-    ).fetchone()
-    return probe is None
-
-
-def release(conn: Any, attempt_id: str, job_id: str) -> None:
-    """A turn that never started gives back the slot jobs folded into it: they wait for the slot's next run, and what
-    ends the turn (a stop, a refusal, a failed start) is its own job's alone."""
-    conn.execute(
-        "UPDATE jobs SET state='queued', attempt_id=NULL WHERE attempt_id=? AND id<>? AND slot IS NOT NULL "
-        "AND state='input'",
-        (attempt_id, job_id),
-    )
-
-
-def pending(conn: Any, slot: str, message_ids: Collection[str]) -> set[str]:
-    """Of these messages, the ones whose job still waits in `slot`: work a run was not handed is not in its history."""
-    if not message_ids:
-        return set()
-    marks = ",".join("?" * len(message_ids))
-    return {
-        str(found[0])
-        for found in conn.execute(
-            f"SELECT message_id FROM jobs WHERE slot=? AND state='queued' AND message_id IN ({marks})",
-            (slot, *message_ids),
-        )
-    }

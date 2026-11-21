@@ -1,8 +1,9 @@
 """A card's slot on Video Production (backend/card_slot.py): one run at a time per (visit, agent).
 
 Replays of an OK that moves a card from Storyboard to Draft and a person's question about it, in either order and
-across a runner restart: each gives one delivered draft, one charge per paid shot and an answered question. Fencing: a
-run that ends after the card moved on or changed hands settles none of the work that came after it.
+across a runner restart: the runs go one at a time, and each replay gives one delivered draft, one charge per paid shot
+and an answered question. Fencing: a run settles its own job alone, so a run that ends after the card moved on or
+changed hands settles none of the work that came after it.
 
 Synthetic rows only: the fictional company's bots `ops` and `cpo`, and Ana."""
 
@@ -75,7 +76,7 @@ class Agent:
 
     def finish(self, run):
         body, said = run["message"]["body"], []
-        if "Draft" in body:  # handed the card's Draft turn, as its message or folded into its prompt
+        if run["message"]["refs"].get("wake") == "task_turn" and "Draft" in body:  # handed the card's Draft turn
             self.render(run)  # the same shot again is the one it already paid for (backend/paid_renders.py)
             with self.api.app.state.store.transaction() as c:
                 room = c.execute("SELECT conversation_id FROM messages WHERE id=?", (run["message"]["id"],)).fetchone()
@@ -107,16 +108,16 @@ def _delivered(api, task, asked):
         return posted(DRAFT), shots, posted(ANSWER), read
 
 
-def _queue(api, task, sender, body, **refs):
+def _queue(api, task, sender, body, audience=None, **refs):
     """A message to `ops` in the card's room as its writer queues it (enqueue), past the wake rules a say goes through."""
     from backend.enqueue import enqueue_stored
 
     mid = H.new_id()
     with api.app.state.store.transaction() as c:
         c.execute(
-            "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
-            "VALUES(?,?,?,'bot:ops','notice',?,?,?)",
-            (mid, task["conversation_id"], sender, body, json.dumps({"task": task["id"], **refs}), H.now()),
+            "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at,legacy_audience) "
+            "VALUES(?,?,?,'bot:ops','notice',?,?,?,?)",
+            (mid, task["conversation_id"], sender, body, json.dumps({"task": task["id"], **refs}), H.now(), audience),
         )
         enqueue_stored(c, mid)
     return mid
@@ -127,6 +128,11 @@ def _jobs(api, *ids):
         return {i: c.execute("SELECT state FROM jobs WHERE id=?", (i,)).fetchone()[0] for i in ids}
 
 
+def _slot(api, job_id):
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT slot FROM jobs WHERE id=?", (job_id,)).fetchone()[0]
+
+
 def _wake(api, task, visit):
     with api.app.state.store.read() as c:
         return c.execute(
@@ -135,18 +141,20 @@ def _wake(api, task, visit):
         ).fetchone()[0]
 
 
-def test_ok_then_chat_is_one_run_with_the_draft_and_the_answer(api):
+def test_ok_then_chat_runs_one_at_a_time_with_one_draft_and_the_answer(api):
     machine, task = _card(api)
     draft = _ok(api, task)
     asked = _ask(api, task)
     agent = Agent(api, machine)
-    run = agent.start()
-    assert run["message"]["id"] == asked  # a person's chat goes first, and the stage's work rides in its run
-    assert "Draft" in run["message"]["body"]
-    agent.finish(run)
-    assert claim(api, machine) is None  # nothing left for a second run
+    chat = agent.start()
+    assert chat["message"]["id"] == asked  # a person's chat goes first
+    assert claim(api, machine) is None  # the card's Draft turn waits for it
+    agent.finish(chat)
+    work = agent.start()
+    assert work["message"]["id"] == _wake(api, task, draft)
+    agent.finish(work)
+    assert claim(api, machine) is None
     assert (agent.drafts, agent.charges, agent.answers) == (1, 1, 1)
-    assert set(_jobs(api, asked, _wake(api, task, draft)).values()) == {"completed"}
     assert _delivered(api, task, [asked]) == (1, 1, 1, True)
 
 
@@ -158,7 +166,7 @@ def test_chat_then_ok_answers_in_its_own_run_and_drafts_once_after(api):
     assert chat["message"]["id"] == asked
     draft = _ok(api, task)
     wake = _wake(api, task, draft)
-    assert wake not in agent.inputs(chat)  # another slot's work is never steered in
+    assert wake not in agent.inputs(chat)  # a slot's run carries its own job alone
     agent.finish(chat)
     assert _jobs(api, wake)[wake] == "queued"  # the question's run settled nothing of Draft
     work = agent.start()
@@ -168,23 +176,36 @@ def test_chat_then_ok_answers_in_its_own_run_and_drafts_once_after(api):
     assert _delivered(api, task, [asked]) == (1, 1, 1, True)
 
 
+def test_chat_then_ok_both_queued_before_the_first_claim(api):
+    machine, task = _card(api)
+    asked = _ask(api, task)
+    draft = _ok(api, task)  # while the computer is still waking
+    agent = Agent(api, machine)
+    for _ in range(2):
+        agent.finish(agent.start())
+    assert claim(api, machine) is None
+    assert (agent.drafts, agent.charges, agent.answers) == (1, 1, 1)
+    assert _delivered(api, task, [asked]) == (1, 1, 1, True)
+    assert _jobs(api, _wake(api, task, draft)) == {_wake(api, task, draft): "completed"}
+
+
 def test_ok_and_chat_across_a_runner_restart(api):
     machine, task = _card(api)
-    _ok(api, task)
+    draft = _ok(api, task)
     agent = Agent(api, machine)
     first = agent.start()
     agent.render(first)  # the paid shot went out before the restart
     asked = _ask(api, task)
-    assert asked not in agent.inputs(first)  # a comment during the run stays pending
+    assert asked not in agent.inputs(first)  # a comment during the run waits for its own
     # The runner restarts mid-run and says so; the sweep puts the run back in line.
     stopped = {"outcome": "interrupted", "last_seq": 0, "text": RESTART_TEXT}
     post(api, f"attempts/{first['id']}/complete", stopped, machine["token"])
     with api.app.state.store.transaction() as c:
         assert [d["state"] for d in api.app.state.execution.auto_reconcile(c)] == ["queued"]
-    again = agent.start()
-    assert again["message"]["id"] == asked and "Draft" in again["message"]["body"]  # the resumed turn rides along
-    agent.finish(again)
+    for _ in range(2):
+        agent.finish(agent.start())
     assert claim(api, machine) is None
+    assert _jobs(api, _wake(api, task, draft), asked) == {_wake(api, task, draft): "completed", asked: "completed"}
     assert (agent.drafts, agent.charges, agent.answers) == (1, 1, 1)
     assert _delivered(api, task, [asked]) == (1, 1, 1, True)
 
@@ -217,6 +238,19 @@ def test_a_run_that_ends_after_a_reassign_settles_none_of_the_new_owners_work(ap
     assert set(_jobs(api, *(row[0] for row in theirs)).values()) == {"queued"}
 
 
+def test_a_slot_run_takes_in_and_settles_no_notice_waiting_in_the_room(api):
+    machine, task = _card(api)
+    kept = _queue(api, task, H.TICO_ACTOR, "For Ana only.", audience='["human:ana","bot:ops"]')  # narrower: no slot
+    asked = _ask(api, task)
+    agent = Agent(api, machine)
+    run = agent.start()
+    assert run["message"]["id"] == asked
+    notes = _queue(api, task, H.TICO_ACTOR, "Notes wait in this thread.", wake="thread_notes")  # never a slot's
+    assert _slot(api, kept) is None and not {kept, notes} & set(agent.inputs(run))
+    agent.finish(run)
+    assert _jobs(api, kept, notes) == {kept: "queued", notes: "queued"}
+
+
 def test_other_pipelines_keep_the_older_path(api):
     machine, task = _card(api, name="Video")
     draft = _ok(api, task)
@@ -224,7 +258,7 @@ def test_other_pipelines_keep_the_older_path(api):
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM jobs WHERE slot IS NOT NULL").fetchone()[0] == 0
     agent = Agent(api, machine)
-    assert agent.start()["message"]["id"] == asked  # a person's chat goes first, in a run of its own
+    assert agent.start()["message"]["id"] == asked
     assert _wake(api, task, draft)
 
 
@@ -234,115 +268,65 @@ def test_a_card_with_work_from_before_the_switch_finishes_it_on_the_older_path(a
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE pipelines SET name='Video Production' WHERE id='video'")
     asked = _ask(api, task)
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT slot FROM jobs WHERE id=?", (asked,)).fetchone()[0] is None
+    assert _slot(api, asked) is None
     agent = Agent(api, machine)
     agent.finish(agent.start())
     agent.finish(agent.start())
     assert claim(api, machine) is None and (agent.drafts, agent.answers) == (1, 1)
-    later = _ask(api, task)  # the card's older work has settled: it runs by slot now
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT slot FROM jobs WHERE id=?", (later,)).fetchone()[0] == f"{draft}:ops"
+    assert _slot(api, _ask(api, task)) == f"{draft}:ops"  # its older work settled: it runs by slot now
 
 
-def test_a_computer_that_starts_only_peoples_messages_runs_the_question_alone(api, monkeypatch):
-    from backend import start_places
-
-    machine, task = _card(api)
-    draft = _ok(api, task)
+def test_unsettled_older_work_keeps_the_card_on_the_older_path(api):
+    _, task = _card(api, name="Video")
     asked = _ask(api, task)
-    # The computer is busy: it holds every new start but a person's own message.
-    monkeypatch.setattr(
-        start_places, "computer_hold", lambda *a, person=False, **k: None if person else ("busy", "Busy")
-    )
-    agent = Agent(api, machine)
-    chat = agent.start()
-    assert chat["message"]["id"] == asked and "Draft" not in chat["message"]["body"]
-    agent.finish(chat)
-    wake = _wake(api, task, draft)
-    assert _jobs(api, wake)[wake] == "queued"  # the stage's work waits for the hold to lift
-    monkeypatch.undo()
-    assert agent.start()["message"]["id"] == wake
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='uncertain' WHERE id=?", (asked,))  # a run held for review
+        c.execute("UPDATE pipelines SET name='Video Production' WHERE id='video'")
+    assert _slot(api, _ask(api, task)) is None
 
 
-def test_chat_then_ok_both_queued_before_the_first_claim(api):
-    machine, task = _card(api)
-    asked = _ask(api, task)  # Storyboard's slot
-    draft = _ok(api, task)  # Draft's slot, while the computer is still waking
-    agent = Agent(api, machine)
-    for _ in range(2):
-        agent.finish(agent.start())
-    assert claim(api, machine) is None
-    assert (agent.drafts, agent.charges, agent.answers) == (1, 1, 1)
-    assert _delivered(api, task, [asked]) == (1, 1, 1, True)
-    assert _jobs(api, _wake(api, task, draft)) == {_wake(api, task, draft): "completed"}
-
-
-def test_a_private_chat_that_names_the_card_is_never_folded_into_its_run(api):
-    machine, task = _card(api)
+def test_a_command_waiting_in_the_room_keeps_the_card_on_its_slot(api):
+    _, task = _card(api)
     draft = _ok(api, task)
+    _queue(api, task, H.TICO_ACTOR, "/goal clear", command=True)  # never a slot's, so never older work
+    assert _slot(api, _ask(api, task)) == f"{draft}:ops"
+
+
+def test_a_reassign_during_older_work_stays_on_the_older_path_until_it_settles(api):
+    machine, task = _card(api, name="Video")
+    _ask(api, task)
+    assert Agent(api, machine).start()  # the old owner's run, from before the switch
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE pipelines SET name='Video Production' WHERE id='video'")
+        E.reassign(c, task["id"], "bot:cpo", ANA)
+        theirs = c.execute("SELECT slot FROM jobs WHERE bot_id='cpo' AND state='queued'").fetchall()
+    assert theirs and all(row[0] is None for row in theirs)
+
+
+def test_a_private_chat_that_names_the_card_gets_no_slot(api):
+    _, task = _card(api)
     with api.app.state.store.transaction() as c:
         private = H.say(c, ANA, "bot:ops", "Between us: is the budget fine?", refs={"task": task["id"]})["id"]
-        assert c.execute("SELECT slot FROM jobs WHERE id=?", (private,)).fetchone()[0] is None
-    agent = Agent(api, machine)
-    first = agent.start()
-    assert first["message"]["id"] == private  # a person's chat goes first, in its own room's run
-    agent.finish(first)
-    work = agent.start()
-    assert work["message"]["id"] == _wake(api, task, draft) and "budget" not in work["message"]["body"]
+    assert _slot(api, private) is None
 
 
-def test_a_stage_wake_waiting_out_its_claim_error_leaves_the_question_to_run_alone(api):
-    from backend import bot_stops
-
-    machine, task = _card(api)
-    draft = _ok(api, task)
-    wake = _wake(api, task, draft)
+def test_a_private_cards_own_room_is_the_baseline(api):
+    _, task = _card(api)
     with api.app.state.store.transaction() as c:
-        bot_stops.hold_job(c, api.app.state.store.settings, wake, "RuntimeError")
-    asked = _ask(api, task)
-    run = Agent(api, machine).start()
-    assert run["message"]["id"] == asked and "Draft" not in run["message"]["body"]
-    assert _jobs(api, wake)[wake] == "queued"
-
-
-def test_a_lease_refused_after_the_card_moved_puts_its_folded_work_back(api):
-    machine, task = _card(api)
+        c.execute("UPDATE tasks SET private=1 WHERE id=?", (task["id"],))
     draft = _ok(api, task)
-    note = _queue(api, task, "bot:cpo", "The music is licensed.")
-    run = claim(api, machine)
-    assert run["message"]["id"] == _wake(api, task, draft) and "licensed" in run["message"]["body"]
-    with api.app.state.store.transaction() as c:
-        E.move(c, task["id"], "Storyboard", ANA)  # moved back before the computer started it
-    post(api, f"attempts/{run['id']}/started", {"thread_id": "t"}, machine["token"], expected=409)
-    post(api, f"attempts/{run['id']}/complete", {"outcome": "interrupted", "last_seq": 0}, machine["token"])
-    assert _jobs(api, run["job_id"], note) == {run["job_id"]: "canceled", note: "queued"}
-
-
-def test_a_stop_before_start_ends_the_picked_job_and_puts_the_folded_work_back(api):
-    machine, task = _card(api)
-    draft = _ok(api, task)
-    asked = _ask(api, task)
-    run = claim(api, machine)
-    assert run["message"]["id"] == asked and "Draft" in run["message"]["body"]
-    post(api, "bots/ops/stop", {"run_id": run["id"]})
-    post(api, f"attempts/{run['id']}/complete", {"outcome": "interrupted", "last_seq": 0}, machine["token"])
-    wake = _wake(api, task, draft)
-    assert _jobs(api, asked, wake) == {asked: "canceled", wake: "queued"}
+    assert _slot(api, _ask(api, task)) == f"{draft}:ops"
 
 
 def test_a_card_comment_through_a_thread_carrier_joins_the_slot(api):
     from backend import threads
 
-    machine, task = _card(api)
+    _, task = _card(api)
     draft = _ok(api, task)
     with api.app.state.store.transaction() as c:
         said = H.say(c, ANA, "human:ben", QUESTION, conversation_id=task["conversation_id"])
         carried = threads._carrier(c, H.conversation(c, task["conversation_id"]), said, "bot:ops", "mention", None)
-        assert c.execute("SELECT slot FROM jobs WHERE id=?", (carried,)).fetchone()[0] == f"{draft}:ops"
-    run = Agent(api, machine).start()
-    assert QUESTION in run["message"]["body"] and "Draft" in run["message"]["body"]  # one run for both
-    assert set(_jobs(api, carried, _wake(api, task, draft)).values()) <= {"running", "input"}
+    assert _slot(api, carried) == f"{draft}:ops"
 
 
 def test_a_carrier_of_a_message_some_reader_may_not_read_gets_no_slot(api):
@@ -354,74 +338,16 @@ def test_a_carrier_of_a_message_some_reader_may_not_read_gets_no_slot(api):
         said = H.say(c, ANA, "human:ben", "Kept from the room.", conversation_id=task["conversation_id"])
         c.execute("UPDATE messages SET legacy_audience=? WHERE id=?", ('["human:ana","bot:ops"]', said["id"]))
         carried = threads._carrier(c, H.conversation(c, task["conversation_id"]), said, "bot:ops", "mention", None)
-        assert carried and c.execute("SELECT slot FROM jobs WHERE id=?", (carried,)).fetchone()[0] is None
+    assert carried and _slot(api, carried) is None
 
 
-def test_a_slot_run_leaves_a_threads_notes_wake_for_its_own_run(api):
-    machine, task = _card(api)
-    _ok(api, task)
-    notes = _queue(api, task, H.TICO_ACTOR, "Notes wait in this thread.", wake="thread_notes")
-    agent = Agent(api, machine)
-    agent.finish(agent.start())
-    assert _jobs(api, notes)[notes] == "queued"
+def test_a_deferred_comments_deadline_run_joins_the_slot(api):
+    from backend import delivery
 
-
-def test_unsettled_older_work_keeps_the_card_on_the_older_path(api):
-    _, task = _card(api, name="Video")
-    asked = _ask(api, task)
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='uncertain' WHERE id=?", (asked,))  # a run held for review
-        c.execute("UPDATE pipelines SET name='Video Production' WHERE id='video'")
-    later = _ask(api, task)
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT slot FROM jobs WHERE id=?", (later,)).fetchone()[0] is None
-
-
-def test_a_reassign_during_older_work_stays_on_the_older_path_until_it_settles(api):
-    machine, task = _card(api, name="Video")
-    _ask(api, task)
-    run = Agent(api, machine).start()  # the old owner's run, from before the switch
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE pipelines SET name='Video Production' WHERE id='video'")
-        E.reassign(c, task["id"], "bot:cpo", ANA)
-        theirs = c.execute("SELECT slot FROM jobs WHERE bot_id='cpo' AND state='queued'").fetchall()
-    assert theirs and all(row[0] is None for row in theirs)
-    assert run
-
-
-def test_a_people_only_claim_reads_no_pending_stage_work(api, monkeypatch):
-    from backend import start_places
-
-    machine, task = _card(api)
-    draft = _ok(api, task)
-    wake = _wake(api, task, draft)
-    _ask(api, task)
-    monkeypatch.setattr(
-        start_places, "computer_hold", lambda *a, person=False, **k: None if person else ("busy", "Busy")
-    )
-    run = claim(api, machine)
-    prompt = [run["message"], *run["history"]]
-    assert wake not in {m["id"] for m in prompt} and not any("Draft" in (m.get("body") or "") for m in prompt)
-
-
-def test_a_slot_run_takes_a_capped_batch_and_the_rest_wait(api, monkeypatch):
-    from backend import card_slot
-
-    monkeypatch.setattr(card_slot, "FOLD_MAX", 1)
-    machine, task = _card(api)
-    _ok(api, task)
-    first = _ask(api, task)
-    second = post(api, f"conversations/{task['conversation_id']}/messages", {"text": "And the music?"})["message"]["id"]
-    run = claim(api, machine)
-    assert run["message"]["id"] == first and "Draft" in run["message"]["body"]  # the wake fills the batch
-    assert _jobs(api, second)[second] == "queued" and "music" not in run["message"]["body"]
-    assert second not in {m["id"] for m in run["history"]}  # nor read in the run's history
-
-
-def test_a_command_waiting_in_the_room_keeps_the_card_on_its_slot(api):
     _, task = _card(api)
     draft = _ok(api, task)
-    _queue(api, task, H.TICO_ACTOR, "/goal clear", command=True)  # never a slot's, so never older work
-    asked = _ask(api, task)
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT slot FROM jobs WHERE id=?", (asked,)).fetchone()[0] == f"{draft}:ops"
+    waiting = _queue(api, task, ANA, QUESTION, quiet=True)  # deferred: no run until its deadline
+    with api.app.state.store.transaction() as c:
+        delivery.defer(c, "bot:ops", "comment", waiting, conversation_id=task["conversation_id"], task_id=task["id"])
+        job = delivery.now(c, "ops", task["conversation_id"])
+    assert job == waiting and _slot(api, job) == f"{draft}:ops"

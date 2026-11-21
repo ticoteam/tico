@@ -388,6 +388,10 @@ def _fire(conn, H, bot, conversation_id, at, external):
     conn.execute(
         "INSERT OR IGNORE INTO jobs(id,message_id,bot_id,created_at) VALUES(?,?,?,?)", (message_id, message_id, bot, at)
     )
+    from . import card_slot
+
+    stored = conn.execute("SELECT id,recipient_id,refs FROM messages WHERE id=?", (message_id,)).fetchone()
+    card_slot.assign(conn, {"id": stored[0], "recipient_id": stored[1], "refs": stored[2]})  # as enqueue does
     job = conn.execute("SELECT id FROM jobs WHERE message_id=?", (message_id,)).fetchone()[0]
     ids = [r["id"] for r in live]
     for part in H.chunks(ids):

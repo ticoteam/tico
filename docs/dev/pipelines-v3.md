@@ -1115,13 +1115,12 @@ refuses everything else.
    nothing.
 
 **Card slots (pilot: Video Production).** In a pipeline named in `card_slot.SWITCHED`, a card's work for an agent runs
-one run at a time per visit (`jobs.slot`, `<visit>:<agent>`), for messages in the card's own room that every reader of
-it may read. The claim picks its job by the usual rules; its run takes the slot's other queued messages of the same
-audience in its prompt (at most 20 and 32 KB), and reads none of the slot's work it was not handed. A people-only claim, a redirect or a claim-error probe takes nothing else. Nothing is steered
-into the run or coalesced at its end: a comment made during it waits for the slot's next run, a run that ends after a
-move or a reassign settles nothing of the new visit's or agent's work, and a run that never starts puts what it took
-back in the queue. While any agent has live or unsettled work in the card's room from before the switch, the card stays
-on the older path. Other pipelines are unchanged; the switch goes once every pipeline runs by slot.
+one run at a time per visit (`jobs.slot`, `<visit>:<agent>`), for messages in the card's own room whose provenance does
+not narrow that room's audience. While a slot's job has a run, its other jobs wait and then run one at a time by the
+usual pick. A slot's run carries its own job alone: nothing is steered into it, its completion coalesces nothing, and
+no slot job is steered into or coalesced by another run. So a run that ends after a move or a reassign settles nothing of
+the new visit's or agent's work. While any agent has live or unsettled work in the card's room from before the switch,
+the card stays on the older path. Other pipelines are unchanged; the switch goes once every pipeline runs by slot.
 
 ### Metadata
 
