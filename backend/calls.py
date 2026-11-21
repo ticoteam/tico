@@ -496,7 +496,7 @@ class Calls:
     def __init__(self, app, store, auth):
         self.app, self.store, self.auth = app, store, auth
         self.buffers = {}  # (call_id, identity) -> call_voice.Segmenter: one speaker's speech, cut at their pauses
-        self.voiced = {}  # call_id -> the voice clock's time of anyone's last voiced frame in it (`last_voiced`)
+        self.voiced = {}  # call_id -> the voice clock's time of anyone's last voiced frame in it (call_voice.Voice._ready_locked)
         # (call_id, identity) -> {"snapshot": the segmenter's early (start_ms, pcm), "future": its transcription}: started
         # as the speaker's pause begins, and used by the clip the pause ends if that clip is the same audio.
         self.early = {}

@@ -1751,7 +1751,6 @@ def append_chunks(c, rid, row, actor, chunks, *, route=True):
             "source_key": f"chunk:{chunk['seq']}",
             "seq": chunk["seq"],
             "at_ms": chunk["end_ms"],
-            "from_ms": chunk["start_ms"],
             "voiced_from": chunk.get("voiced_from"),
             "voiced_to": chunk.get("voiced_to"),
             "heard": chunk.get("heard"),

@@ -617,18 +617,21 @@ class Voice:
         activity is checked and the turn reserved in one critical section, calls.lock then voice.lock (ingest's order),
         both let go before any SQL: nothing open, nothing being said, transcribed or stored, and the person quiet
         TURN_END_MS since their last voiced frame on the call's clock."""
-        with self.calls.lock:
-            pending = self.calls.turn_pending_locked(call_id)
-            voiced = self.calls.voiced.get(call_id)
-            with voice.lock:
-                if pending or voice.open is not None or not voice.gathering:
-                    return None
-                if voiced is not None and round(self.clock() * 1000) - voiced < TURN_END_MS:
-                    return None
-                turn = voice.gathering.pop(0)
-                reservation = {"bot": turn["bot"], "phase": "reserved", "asked": turn["question"]["heard"]}
-                voice.open = reservation
-                return turn, reservation
+        with self.calls.lock, voice.lock:
+            if not self._ready_locked(call_id, voice):
+                return None
+            turn = voice.gathering.pop(0)
+            reservation = {"bot": turn["bot"], "phase": "reserved", "asked": turn["question"]["heard"]}
+            voice.open = reservation
+            return turn, reservation
+
+    def _ready_locked(self, call_id: str, voice: CallVoice) -> bool:
+        """Whether a 1:1 call's oldest gathered turn may be asked now (calls.lock, then voice.lock, held): nothing open,
+        nothing being said, transcribed or stored, and the person quiet TURN_END_MS since their last voiced frame."""
+        if self.calls.turn_pending_locked(call_id) or voice.open is not None or not voice.gathering:
+            return False
+        voiced = self.calls.voiced.get(call_id)
+        return voiced is None or round(self.clock() * 1000) - voiced >= TURN_END_MS
 
     def _release(self, voice: CallVoice, reservation: dict[str, Any], turn: dict[str, Any] | None) -> None:
         """Let a reservation go when its write failed anywhere: that exact one, and the turn back at the head of the
@@ -702,8 +705,9 @@ class Voice:
         voice = self._found(call_id)
         if voice is None:
             return
-        with voice.lock:
-            if voice.open is not None or not voice.gathering:
+        # Checked before taking the writer: while the person talks or pauses, the ticker asks 4 times a second.
+        with self.calls.lock, voice.lock:
+            if not self._ready_locked(call_id, voice):
                 return
         reserved = None
         try:

@@ -2410,3 +2410,19 @@ def test_a_burst_of_frames_does_not_shorten_the_pause_that_parts_two_turns(monke
 def test_quiet_frames_after_a_burst_do_not_move_the_last_voiced_moment():
     capture = _record([[20] + [820] * 40 + [(t, bytes(640)) for t in range(840, 1601, 20)]])
     assert capture.voiced["call"] == 820
+
+
+def test_a_turn_still_in_its_pause_takes_no_write(meet, monkeypatch):
+    call, voice, now, path, token = _resident_dm(meet, monkeypatch)
+    _say(meet, call["id"], now, 0, "Which is the quickest", quiet_ms=600)  # quiet 0.6 s: the turn goes on
+    assert voice._found(call["id"]).gathering
+
+    def no_write(*args, **kwargs):
+        raise AssertionError("a turn that may not be asked yet took the writer")
+
+    with monkeypatch.context() as m:
+        m.setattr(voice.store, "transaction", no_write)
+        voice.ask_ready(call["id"])  # the ticker's ask, 4 times a second while they pause
+    now[0] += call_voice.TURN_END_MS / 1000
+    voice.ask_ready(call["id"])
+    assert post(meet, f"{path}/inputs", {}, token)["call_voice"]["turn"]["text"] == "Which is the quickest"
