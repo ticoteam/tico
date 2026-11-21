@@ -154,15 +154,6 @@ describe('A thread @s157', () => {
   });
 });
 
-describe('A link to a reply @4918', () => {
-  it('opens a team thread\'s sub-thread as itself, at the message it names', async () => {
-    const sub = thread({ id: 's2', title: 'Launch reply', audience: 'home', home: { actor: 'group:g1' }, parent_id: 'h1', root_id: 'h1' });
-    seedThread(sub, [msg('m1', 'bot:qa', 'In the sub-thread', 's2')]);
-    show(<ThreadsPage pane="thread" thread="s2" message="m1" />, '/threads/s2?m=m1');
-    expect(await screen.findByText('In the sub-thread')).toBeTruthy();
-  });
-});
-
 describe('A thread from outside @4882', () => {
   const outside = () => {
     const t = thread({ id: 's1', title: 'Slack: Acme', root_id: 's1', members: { members: [{ actor: 'human:me' }, { actor: 'slack:U1' }, { actor: 'bot:qa' }] } });

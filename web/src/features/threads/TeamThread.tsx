@@ -48,9 +48,6 @@ export function teamCard(m: ChatMessage) {
 export interface TeamThreadProps {
   /** The team: its group id, or its address key `team:<name>` (features/team teamSlug). */
   who: string;
-  /** A message to open the thread at (the address's `?m=`), and which opening of the address this is. */
-  openAt?: string;
-  openKey?: string;
 }
 
 /**
@@ -58,7 +55,7 @@ export interface TeamThreadProps {
  * cards in the timeline. The meetings are the thread's own call messages; the updates are read from Updates and set
  * among them by time.
  */
-export function TeamThread({ who, openAt, openKey }: TeamThreadProps) {
+export function TeamThread({ who }: TeamThreadProps) {
   const groups = useQuery(groupsQuery);
   const group = groups.data?.find((g) => teamSlug(g.name) === who || g.id === who);
   const thread = useQuery({ ...teamThreadQuery(group?.id ?? ''), enabled: !!group });
@@ -85,5 +82,5 @@ export function TeamThread({ who, openAt, openKey }: TeamThreadProps) {
   if (groups.data && !group) return <Empty icon="people" title="No such team" />;
   if (!thread.data) return <MessageBones />;
   const t = thread.data;
-  return <Conversation key={t.id} id={t.id} variant="page" title={group?.name} card={teamCard} canPost={t.me?.can_post !== false} extra={extra} openAt={openAt} openKey={openKey} />;
+  return <Conversation key={t.id} id={t.id} variant="page" title={group?.name} card={teamCard} canPost={t.me?.can_post !== false} extra={extra} />;
 }

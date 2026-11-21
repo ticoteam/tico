@@ -1,5 +1,5 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { refusalFor } from '@/actions';
 import { toast } from '@/kit/Toast';
 import { meQuery, useActor, type Actor } from '@/data';
@@ -24,7 +24,7 @@ import { onJump } from './Outline';
 import { ChatPlace } from './Rich';
 import { quoteFrom, quoteOf, Replying } from './Quote';
 import { SessionLine, type Session } from './Session';
-import { installConversationLive, isDmChanged, liveQuery, liveText, markRead, messageSeq, rowsOf, sendMessage, timelineQuery } from './queries';
+import { installConversationLive, isDmChanged, liveQuery, liveText, markRead, rowsOf, sendMessage, timelineQuery } from './queries';
 import type { ChatMessage, LiveRun, Variant } from './types';
 
 /** Within this many pixels of the end counts as "at the bottom": what comes in is read, and the asks over the box come back. */
@@ -69,10 +69,6 @@ export interface ConversationProps {
   /** This thread as the shell's `?chat=` (a second chat's own address): a page a message links to opens beside it.
       Defaults to `thread:<id>`; Tico's sheet has none (it is always there). */
   chat?: string;
-  /** A message to open at (a link's `?m=`): once the first page is in, the chat pages back to it, as a jump from the
-      Outline does. `openKey` names each opening of it, so the same link opened again jumps again. */
-  openAt?: string;
-  openKey?: string;
 }
 
 type Item =
@@ -182,7 +178,7 @@ function withExtra(rows: ChatMessage[], extra: ChatMessage[] | undefined, more: 
   return [...out, ...left];
 }
 
-export function Conversation({ id, variant, title, actor, session, from, starters, toDm, onMoved, foot, card, below, canPost = true, extra, chat, openAt, openKey }: ConversationProps) {
+export function Conversation({ id, variant, title, actor, session, from, starters, toDm, onMoved, foot, card, below, canPost = true, extra, chat }: ConversationProps) {
   useFollow(variant === 'tico' ? { conversation: id } : { thread: id });
 
   const { data: me } = useQuery(meQuery);
@@ -245,57 +241,24 @@ export function Conversation({ id, variant, title, actor, session, from, starter
     if (!scroller.current?.scrollToKey(message)) toast({ text: 'That message is not loaded', kind: 'failed' });
   };
 
-  /* ---- a jump from the Outline or a link's `?m=`: page back until the message is loaded, then bring it to the middle */
+  /* ---- a jump from the Outline: page back until the message is loaded, then bring it to the middle */
   const { fetchNextPage } = timeline;
-  // `live()` turns false once this chat changes or closes: a jump still paging then stops, with no scroll and no toast.
-  // With the message's `seq` the chat pages back until it reaches that seq, however far; without it (the Outline's
-  // jump) it gives up after JUMP_PAGES. A page that fails, or one that brings nothing older, stops it with a load error.
-  const goTo = useCallback(
-    (message: string, live: () => boolean, seq?: number) => {
-      void (async () => {
-        let oldest = Infinity;
-        for (let n = 0; seq != null || n <= JUMP_PAGES; n++) {
-          if (!live() || scroller.current?.scrollToKey(message)) return;
-          if ((seq == null && n === JUMP_PAGES) || (seq != null && oldest <= seq)) break;
-          const r = await fetchNextPage();
-          await frame();
-          if (!live()) return;
-          const before = oldest;
-          for (const page of r.data?.pages ?? []) for (const m of page.messages) if (typeof m.seq === 'number' && m.seq < oldest) oldest = m.seq;
-          if (r.isError || (r.hasNextPage && oldest >= before && before !== Infinity)) {
-            toast({ text: 'This chat did not load further', kind: 'failed' });
-            return;
+  useEffect(
+    () =>
+      onJump(id, (message) => {
+        void (async () => {
+          for (let n = 0; n <= JUMP_PAGES; n++) {
+            if (scroller.current?.scrollToKey(message)) return;
+            if (n === JUMP_PAGES) break;
+            const r = await fetchNextPage();
+            await frame();
+            if (!r.hasNextPage && !scroller.current?.scrollToKey(message)) break;
           }
-          if (!r.hasNextPage && !scroller.current?.scrollToKey(message)) break;
-        }
-        if (live() && !scroller.current?.scrollToKey(message)) toast({ text: 'That message is not in this chat', kind: 'failed' });
-      })();
-    },
-    [fetchNextPage],
+          if (!scroller.current?.scrollToKey(message)) toast({ text: 'That message is not in this chat', kind: 'failed' });
+        })();
+      }),
+    [id, fetchNextPage],
   );
-  useEffect(() => {
-    let on = true;
-    const off = onJump(id, (message) => goTo(message, () => on));
-    return () => {
-      on = false;
-      off();
-    };
-  }, [id, goTo]);
-  // A link's `?m=` (`openKey` changes each time it is opened, so opening the same link again jumps again): the server
-  // says first whether this person reads it and where it sits; then the chat loads to it. Each setup owns its lookup.
-  const loaded = !!timeline.data;
-  useEffect(() => {
-    if (!openAt || !loaded) return;
-    let on = true;
-    void messageSeq(openAt).then((seq) => {
-      if (!on) return;
-      if (seq == null) toast({ text: 'That message is not in this chat', kind: 'failed' });
-      else goTo(openAt, () => on, seq);
-    });
-    return () => {
-      on = false;
-    };
-  }, [id, openAt, openKey, loaded, goTo]);
 
   /* ---- where the person is: scrolled up past UP_PX, the asks over the box fade; up more than a window, Jump to latest
      shows, counting what came in since. Set only when that changes, so scrolling draws nothing. */

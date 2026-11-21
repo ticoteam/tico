@@ -61,17 +61,6 @@ export const timelineQuery = (id: string) =>
     getNextPageParam: (last) => last.next_cursor ?? undefined,
   });
 
-/** Where one message sits in its thread, read through the server's own permission check (`GET /api/v2/messages/{id}`):
-    its seq, or null when the viewer may not read it or it is gone. */
-export async function messageSeq(id: string): Promise<number | null> {
-  try {
-    const m = await api.get<{ seq?: number | null }>(`/api/v2/messages/${enc(id)}`);
-    return typeof m.seq === 'number' ? m.seq : null;
-  } catch {
-    return null;
-  }
-}
-
 /** Oldest first, as the list draws it. */
 export function rowsOf(data: Timeline | undefined): ChatMessage[] {
   if (!data) return [];

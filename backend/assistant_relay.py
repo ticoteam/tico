@@ -4,11 +4,11 @@
 When the Assistant writes to an agent for the person (a delegated send: `hubdb.VIA` is "assistant"; a say or a steer, not
 an FYI notice), `_write_message` records that the person is waiting on that agent in that thread (`awaiting_replies`, a
 server-only table: no client reads or sets it). The agent's first say or steer in that thread, or in any thread under
-it, consumes every such wait there in one statement, in its own transaction (its id goes on each as `reply_id`, whether
-or not it is ever delivered). Only then, just before that write commits (`flush`, from store.Store.transaction), each
+it, consumes (deletes) every such wait there in one statement, in its own transaction, whether or not it is ever
+delivered. Only then, just before that write commits (`flush`, from store.Store.transaction), each
 person waiting is told once in their Assistant chat: "<agent> replied", with a link that opens the reply, when they can
 read the reply as it will commit; a reply they cannot read is not told at all. Each delivery is best-effort in its own
-savepoint: a failure is logged, never touches the reply and never reopens a wait.
+savepoint: a failure is logged on the server, never touches the reply and never reopens a wait.
 """
 
 import logging
@@ -19,17 +19,10 @@ from . import task_effects, task_requirements
 
 Row = dict[str, Any]
 LOG = logging.getLogger("tico.assistant_relay")
-# Every open wait on this agent in the reply's thread or one above it (awaiting_replies_open), consumed at once.
+# Every wait on this agent in the reply's thread or one above it (awaiting_replies_agent), consumed at once.
 _CONSUME_SQL = (
-    "UPDATE awaiting_replies SET reply_id=? WHERE agent_id=? AND root_id=? AND thread_id IN ({threads}) "
-    "AND reply_id IS NULL RETURNING person_id"
+    "DELETE FROM awaiting_replies WHERE agent_id=? AND root_id=? AND thread_id IN ({threads}) RETURNING person_id"
 )
-
-
-def _work() -> Any:
-    from . import batch_work
-
-    return batch_work
 
 
 def asked(conn: sqlite3.Connection, message_id: str, person: str, agent: str, conv: Row | None) -> None:
@@ -60,7 +53,7 @@ def replied(conn: sqlite3.Connection, reply: Row, conv: Row | None) -> None:
         people = [
             str(row[0])
             for row in conn.execute(
-                _CONSUME_SQL.format(threads=",".join("?" * len(above))), (reply["id"], agent, root, *above)
+                _CONSUME_SQL.format(threads=",".join("?" * len(above))), (agent, root, *above)
             ).fetchall()
         ]
     except sqlite3.Error:
@@ -94,28 +87,45 @@ def _deliver(conn: sqlite3.Connection, reply_id: str, people: list[str]) -> None
     if not reply:
         return
     for person in people:
-        with _work().isolated(conn, "assistant_relay", f"{reply_id}:{person}", private=True):
+        # Best-effort and server-side only: a failure is logged and rolled back to here, and nothing else records it.
+        conn.execute("SAVEPOINT assistant_relay")
+        try:
             if task_requirements.active_person(conn, person):
                 _tell(conn, reply, person)
+        except Exception:  # one person's relay never touches the reply or the next person's
+            conn.execute("ROLLBACK TO assistant_relay")
+            LOG.exception("assistant relay failed for message %s", reply_id)
+        finally:
+            conn.execute("RELEASE assistant_relay")
+
+
+def _reads(conn: sqlite3.Connection, person: str, reply: Row) -> bool:
+    """Whether `person` reads the reply now, by the read check GET /api/v2/messages/{id} makes (thread_api), through
+    the database's own authorization (recipients._recipient_auth): a right taken away since the ask counts."""
+    from . import recipients, thread_api
+    from .store import Problem
+
+    gate: Any = recipients
+    route: Any = thread_api
+    auth = gate._recipient_auth(conn)
+    try:
+        route.require_message_read(conn, auth, auth.identity_for_actor(conn, person), reply)
+    except Problem:
+        return False
+    return True
 
 
 def _tell(conn: sqlite3.Connection, reply: Row, person: str) -> None:
-    from . import hubdb, task_privacy, threads
+    from . import hubdb
 
     H: Any = hubdb
-    privacy: Any = task_privacy
-    chats: Any = threads
-    viewer = chats.actor_viewer(conn, person)
-    if not (
-        viewer is not None
-        and chats.message_readable(conn, viewer, reply)
-        and privacy.message_readable(conn, person, reply)
-    ):
+    if not _reads(conn, person, reply):
         return  # a reply they cannot read is not told at all: hidden and absent look the same
     key = f"assistant_relay:{reply['id']}:{person}"
     if conn.execute("SELECT 1 FROM messages WHERE wake_key=?", (key,)).fetchone():
         return  # told already: one relay per reply per person
     name = task_effects.plain_line(H.actor_name(conn, reply["sender_id"]), "An agent")
-    body = f"{name} replied\n\n[Open the reply](#/thread/{reply['conversation_id']}?m={reply['id']})"
-    line: Row = {"assistant": True, "assistant_relay": True, "quiet": True, "no_mentions": True}
+    # The agent's chat, where the reply is its newest message.
+    body = f"{name} replied\n\n[Open the reply](#/thread/{reply['conversation_id']})"
+    line: Row = {"assistant": True, "quiet": True, "no_mentions": True}
     task_effects.assistant_line(conn, person, body, line, key)

@@ -55,11 +55,12 @@ def ops_writes(api, conversation_id, text, refs=None, to="human:ben", kind="say"
 
 
 def relays(api):
+    """What the Assistant delivered into anyone's Assistant chat."""
     with api.app.state.store.read() as c:
         rows = c.execute(
             "SELECT m.sender_id, m.recipient_id, m.body, m.refs, v.owner_id, v.room_key FROM messages m "
-            "JOIN conversations v ON v.id=m.conversation_id WHERE json_extract(m.refs,'$.assistant_relay')=1 "
-            "ORDER BY m.rowid"
+            "JOIN conversations v ON v.id=m.conversation_id WHERE v.scope='personal' AND v.room_key='assistant' "
+            "AND m.sender_id='bot:assistant' AND m.delivered_at IS NOT NULL ORDER BY m.rowid"
         ).fetchall()
     return [{**dict(r), "refs": json.loads(r["refs"])} for r in rows]
 
@@ -81,12 +82,11 @@ def latest_from_ops(api):
 def test_the_agents_first_reply_comes_back_once_with_a_link_that_opens_it(api):
     asked = ask_ops(api, needs_action=True)
     [wait] = waits(api)
-    assert (wait["message_id"], wait["person_id"], wait["agent_id"], wait["thread_id"], wait["reply_id"]) == (
+    assert (wait["message_id"], wait["person_id"], wait["agent_id"], wait["thread_id"]) == (
         asked["id"],
         "human:ben",
         "bot:ops",
         asked["conversation_id"],
-        None,
     )
     ops_replies(api, "BD finds partners who resell TIDY.\n\nMore detail in the doc.")
     [relay] = relays(api)
@@ -97,9 +97,9 @@ def test_the_agents_first_reply_comes_back_once_with_a_link_that_opens_it(api):
         "assistant",
     )
     reply = latest_from_ops(api)
-    assert relay["body"] == f"ops replied\n\n[Open the reply](#/thread/{reply['conversation_id']}?m={reply['id']})"
+    assert relay["body"] == f"ops replied\n\n[Open the reply](#/thread/{reply['conversation_id']})"
     assert relay["refs"]["quiet"] and relay["refs"]["no_mentions"]
-    assert waits(api)[0]["reply_id"] == reply["id"]
+    assert waits(api) == []
     # The wait is spent: a second message is not relayed.
     ops_writes(api, reply["conversation_id"], "One more thing.")
     assert len(relays(api)) == 1
@@ -127,9 +127,9 @@ def test_a_reply_in_a_shared_chat_is_relayed_after_someone_elses_post(api):
         shared = H.open_conversation(c, "human:ana", ["human:ben", "bot:ops"], kind="chat", subject="Launch")["id"]
     ask_ops(api, conversation_id=shared)
     post(api, "messages", {"to": "ops", "text": "Me too, please.", "conversation_id": shared}, token="ana-test")
-    reply = ops_writes(api, shared, "BD finds partners.", to=None)
+    ops_writes(api, shared, "BD finds partners.", to=None)
     [relay] = relays(api)
-    assert relay["body"] == f"ops replied\n\n[Open the reply](#/thread/{shared}?m={reply['id']})"
+    assert relay["body"] == f"ops replied\n\n[Open the reply](#/thread/{shared})"
 
 
 def test_a_reply_in_a_sub_thread_of_the_ask_is_relayed(api):
@@ -138,9 +138,9 @@ def test_a_reply_in_a_sub_thread_of_the_ask_is_relayed(api):
     asked = ask_ops(api)
     with api.app.state.store.transaction() as c:
         sub = threads.sub_thread(c, "human:ben", asked["id"])["id"]
-    reply = ops_writes(api, sub, "BD finds partners.", to=None)
+    ops_writes(api, sub, "BD finds partners.", to=None)
     [relay] = relays(api)
-    assert relay["body"].endswith(f"[Open the reply](#/thread/{sub}?m={reply['id']})")
+    assert relay["body"].endswith(f"[Open the reply](#/thread/{sub})")
 
 
 def test_a_post_in_a_sibling_sub_thread_does_not_answer_the_ask(api):
@@ -154,9 +154,9 @@ def test_a_post_in_a_sibling_sub_thread_does_not_answer_the_ask(api):
         mine = threads.sub_thread(c, "human:ben", asked["id"])["id"]
     assistant_writes(api, mine, "Which partners?")
     ops_writes(api, sibling, "Something else.", to=None)
-    assert [w["reply_id"] for w in waits(api) if w["thread_id"] == mine] == [None]
+    assert [w["thread_id"] for w in waits(api)].count(mine) == 1
     ops_writes(api, mine, "Acme and Globex.", to=None)
-    assert [w["reply_id"] for w in waits(api) if w["thread_id"] == mine] != [None]
+    assert mine not in [w["thread_id"] for w in waits(api)]
     assert relays(api)
 
 
@@ -164,9 +164,9 @@ def test_a_steer_asks_and_answers_and_an_fyi_notice_asks_nothing(api):
     asked = ask_ops(api)
     ops_writes(api, asked["conversation_id"], "Answered.")
     assistant_writes(api, asked["conversation_id"], "FYI: the doc moved.", kind="notice")
-    assert len(waits(api)) == 1
+    assert waits(api) == []
     assistant_writes(api, asked["conversation_id"], "Stop and check the numbers first.", kind="steer")
-    assert len(waits(api)) == 2
+    assert len(waits(api)) == 1
     ops_writes(api, asked["conversation_id"], "Checked: they hold.", kind="steer")
     assert len(relays(api)) == 2
 
@@ -191,7 +191,7 @@ def test_a_relay_that_fails_leaves_the_reply_intact_and_never_reopens_the_wait(a
     reply = ops_writes(api, asked["conversation_id"], "BD finds partners.")
     with api.app.state.store.read() as c:
         assert c.execute("SELECT body FROM messages WHERE id=?", (reply["id"],)).fetchone()[0] == "BD finds partners."
-    assert waits(api)[0]["reply_id"] == reply["id"]
+    assert waits(api) == []
     monkeypatch.undo()
     ops_writes(api, asked["conversation_id"], "And one more thing.")
     assert relays(api) == []
@@ -203,7 +203,7 @@ def test_one_reply_answers_every_waiting_ask_and_tells_each_person_once(api):
         assistant_writes(api, asked["conversation_id"], f"Ask {n}")
     ops_writes(api, asked["conversation_id"], "BD finds partners; Dana leads it.")
     assert len(relays(api)) == 1
-    assert [w for w in waits(api) if w["reply_id"] is None] == []
+    assert waits(api) == []
 
 
 def test_a_person_who_has_left_gets_no_relay(api):
@@ -241,3 +241,48 @@ def test_an_ask_on_a_tasks_chat_is_relayed_too(api):
     assert [w["thread_id"] for w in waits(api)] == [task["conversation_id"]]
     ops_writes(api, task["conversation_id"], "Draft is up.", to=None)
     assert [r["body"].split("\n\n")[0] for r in relays(api)] == ["ops replied"]
+
+
+def test_a_right_taken_away_between_the_ask_and_the_reply_sends_nothing(api):
+    """The read check is the one GET /api/v2/messages/{id} makes: Cara leaves the shared thread after the ask."""
+    with api.app.state.store.transaction() as c:
+        shared = H.open_conversation(c, "human:ana", ["human:cara", "bot:ops"], kind="chat", subject="Launch")["id"]
+    ask_ops(api, person="cara", conversation_id=shared)
+    with api.app.state.store.transaction() as c:
+        room = H.conversation(c, shared)
+        c.execute(
+            "UPDATE conversations SET participants=? WHERE id=?",
+            (json.dumps([p for p in room["participants"] if p != "human:cara"]), shared),
+        )
+        c.execute("DELETE FROM thread_members WHERE thread_id=? AND actor='human:cara'", (shared,))
+    reply = ops_writes(api, shared, "BD finds partners.", to=None)
+    get(api, f"messages/{reply['id']}", "cara-test", expected=404)
+    assert relays(api) == []
+
+
+def test_a_rolled_back_reply_leaves_no_relay_owed_on_its_connection(api):
+    asked = ask_ops(api)
+    store = api.app.state.store
+    held = None
+    try:
+        with store.transaction() as c:
+            held = c
+            H._write_message(
+                c,
+                "bot:ops",
+                "human:ben",
+                "Half a reply.",
+                H.conversation(c, asked["conversation_id"]),
+                "say",
+                {},
+                None,
+                None,
+            )
+            assert c.relay_pending
+            raise RuntimeError("the request failed after the reply was written")
+    except RuntimeError:
+        pass
+    assert held is not None and held.relay_pending == []
+    assert len(waits(api)) == 1 and relays(api) == []
+    ops_writes(api, asked["conversation_id"], "The whole reply.")
+    assert len(relays(api)) == 1

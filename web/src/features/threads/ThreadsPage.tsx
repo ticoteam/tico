@@ -14,32 +14,28 @@ export interface ThreadsPageProps {
   /** What the page holds: the thread `thread`, or nothing open yet. */
   pane: 'thread' | 'none';
   thread?: string;
-  /** A message to open the thread at (the address's `?m=`), and which opening of the address this is. */
-  message?: string;
-  openKey?: string;
 }
 
 /** Threads: one open conversation. Its list is anchored in the menu's Threads tab (plan/threads-team.html). */
-export function ThreadsPage({ pane, thread, message, openKey }: ThreadsPageProps) {
+export function ThreadsPage({ pane, thread }: ThreadsPageProps) {
   if (pane === 'none' || !thread) return <ThreadsIndex />;
   return (
     <ThreadPane>
       <ThreadHead id={thread} />
-      <ThreadConversation id={thread} message={message} openKey={openKey} />
+      <ThreadConversation id={thread} />
     </ThreadPane>
   );
 }
 
 /** A team's thread draws its updates and meetings as cards; a thread from outside has a box only to its agent. */
-function ThreadConversation({ id, message, openKey }: { id: string; message?: string; openKey?: string }) {
+function ThreadConversation({ id }: { id: string }) {
   const { data } = useQuery(threadQuery(id));
   const title = useTitle(data);
   // A thread with an agent shows what it asked you to approve, as cards among its messages; a card's page opens
   // beside this thread.
   const approvals = useApprovalCards({ agent: agentOf(data, useMe()) }, `thread:${id}`);
   const team = data && teamOf(data);
-  // A team's own thread draws its updates; one of its sub-threads (a link to a reply in it) opens as itself.
-  if (team && !data?.parent_id) return <TeamThread who={team} openAt={message} openKey={openKey} />;
+  if (team) return <TeamThread who={team} />;
   const outside = outsideOf(data);
   return (
     <Conversation
@@ -49,8 +45,6 @@ function ThreadConversation({ id, message, openKey }: { id: string; message?: st
       card={(m) => approvalCard(m) ?? callCard(m)}
       extra={approvals}
       canPost={!outside && data?.me?.can_post !== false}
-      openAt={message}
-      openKey={openKey}
       foot={outside?.handler ? <AgentBox agent={outside.handler} from={{ page: 'thread', label: 'Thread', item: { kind: 'thread', id } }} draftId={`agent:/threads/${id}`} /> : undefined}
     />
   );

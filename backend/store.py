@@ -1180,6 +1180,9 @@ class Store:
 
     def _give(self, c):
         c.read_cache.clear()
+        getattr(
+            c, "relay_pending", []
+        ).clear()  # no relay a rolled-back write owed outlives it on the pooled connection
         # Only a connection left as it was handed out goes back: no open transaction, nothing per-caller installed.
         try:
             if c.in_transaction:
@@ -1265,6 +1268,7 @@ class Store:
             except BaseException:
                 c.rollback()
                 c.after_commit.clear()
+                c.relay_pending.clear()  # pyright: ignore[reportAttributeAccessIssue]
                 raise
             finally:
                 done()
