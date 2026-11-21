@@ -1,5 +1,6 @@
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
+import { matterWhen } from '@/features/company/exports';
 import { meQuery } from '@/data';
 import { Button } from '@/kit/Button';
 import { Markdown } from '@/kit/Markdown';
@@ -94,16 +95,49 @@ export function Brief({ note, title, to }: { note: string | null | undefined; ti
   );
 }
 
-/** On an email's OK: the matter it answers, by name, and its brief, above the email; nothing when it has no note. */
-export function MatterBrief({ t, send }: { t: TaskData; send: string }) {
+/** The matter an email's OK answers, read as its page reads: the task itself when it is the case, else the case's page. */
+function useMatterRead(t: TaskData, send: string) {
   const matter = useMatterOf(t, send);
   const self = matter?.id === t.id;
   const read = useQuery({ ...taskDetailQuery(self ? undefined : matter?.id), retry: false });
+  const m = self ? t : read.data?.id === matter?.id ? read.data : undefined;
+  return { matter, self, m };
+}
+
+/** On an email's OK: the matter it answers, by name, and its brief, above the email; nothing when it has no note. */
+export function MatterBrief({ t, send }: { t: TaskData; send: string }) {
+  const { matter, self, m } = useMatterRead(t, send);
   // An OK on the case itself: the case's own brief, with no link to the page it is on.
-  if (self) return <Brief note={t.note} />;
-  const m = read.data?.id === matter?.id ? read.data : undefined;
+  if (self)
+    return (
+      <>
+        <Brief note={t.note} />
+        <MatterDates matter={t.matter} />
+      </>
+    );
   if (!matter || !m) return null;
-  return <Brief note={m.note} title={m.title} to={tabAddress(m, undefined, false).to} />;
+  return (
+    <>
+      <Brief note={m.note} title={m.title} to={tabAddress(m, undefined, false).to} />
+      <MatterDates matter={m.matter} />
+    </>
+  );
+}
+
+/** The open key dates of the case an email answers, one line above the email: read the same way as MatterBrief. */
+export function MatterDatesOf({ t, send }: { t: TaskData; send: string }) {
+  const { m } = useMatterRead(t, send);
+  return <MatterDates matter={m?.matter} />;
+}
+
+/** The matter's open key dates, one line above its email, in the API's order (by date): each its date then its label
+    ("Nov 25 Their delivery records"), joined by " · "; a done date leaves the line, and nothing shows when none is open. */
+export function MatterDates({ matter }: { matter: TaskData['matter'] }) {
+  const line = (matter?.dates ?? [])
+    .filter((d) => !d.done_at && (d.due_at || d.starts_at))
+    .map((d) => [matterWhen(d.due_at || d.starts_at || ''), d.label].filter(Boolean).join(' '));
+  if (!line.length) return null;
+  return <p className="tv-dates">{line.join(' · ')}</p>;
 }
 
 /** The matter an email's OK task came from, from the OK task alone: its own parent, else a task that waits on it.
