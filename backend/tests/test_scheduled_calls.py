@@ -147,7 +147,7 @@ def _prep_tasks(api):
         return [
             (r["title"], r["owner_id"], r["private"])
             for r in c.execute(
-                "SELECT title,owner_id,private FROM tasks WHERE title LIKE 'Prepare for %' ORDER BY created_at"
+                "SELECT title,owner_id,private FROM tasks WHERE title LIKE 'Prepare for %' ORDER BY created_at, rowid"
             )
         ]
 
