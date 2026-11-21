@@ -226,7 +226,8 @@ export interface OrgRule {
   created_at?: string;
   /** Checked exactly (backend/org_rules.py exact_check_in): an allow list or a dollar cap on one action. */
   exact_check?: ExactCheck | null;
-  /** A clerk's draft: added only by its OK on this "Make this a rule" task. */
+  /** A clerk's draft: added only by its OK on its "Make this a rule" task, whose id only that task's readers get. */
+  bound?: boolean;
   clerk_task?: string | null;
 }
 export type ExactCheck =

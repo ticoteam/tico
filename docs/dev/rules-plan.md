@@ -155,8 +155,10 @@ rule_due_status(due_date_id, due_on, satisfied_by, via routine|person, task_id?,
   run on that task, which binds the suggestion to the task, and asks one OK from that run (`POST
   /api/v2/rules/{id}/ok`, line "Approve this rule") of the requester when they may add it, else the owner or an Admin.
   The preview binds the sentence, Who, With, Where, If broken and the typed check; a revised draft replaces the ask and
-  sets the old draft aside, whoever asked (a reassigned task). The fallback is the first owner or Admin who may add it
-  and is within the clerk's reach. A clerk's draft may name Everyone; the person's OK accepts exactly that version, as
+  sets the old draft aside, whoever asked (a reassigned task); Set aside withdraws its ask. The person asked is the first
+  of the requester, the owner and the Admins who already reads the task, may add it and is within the clerk's reach: an
+  ask shares the task with no one. A draft with a toward scope or condition is not asked about. Only the task's readers
+  get its id on the draft (`clerk_task`); others see `bound`. A clerk's draft may name Everyone; the person's OK accepts exactly that version, as
   them, on its bound task only, and a direct accept of a bound draft is refused.
 
 ### 2. The Rules Owner reads a document and suggests rules

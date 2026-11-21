@@ -737,6 +737,7 @@ describe('a rule to add', () => {
     with: { groups: [], bots: [], people: [{ id: 'ben', name: 'Ben' }] },
     where: [],
     if_broken: 'escalate',
+    reviewer: { id: 'ben', name: 'Ben' },
     exact_check: { kind: 'max_usd', action: 'refund', field: 'amount_usd', max_usd: 100 },
   };
   const ruleTask = () => task({ title: 'Make this a rule: refunds', to_leave: [req({ line: 'Approve this rule', shows: ['rule:o7'] })] });
@@ -753,6 +754,7 @@ describe('a rule to add', () => {
       ['With', 'Ben'],
       ['Where', 'Everywhere'],
       ['If broken', 'Ask first'],
+      ['Ask', 'Ben'],
       ['Checked exactly', 'refund: amount_usd at most $100'],
     ]);
     fireEvent.click(await ready(box));

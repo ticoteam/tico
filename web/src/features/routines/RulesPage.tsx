@@ -392,9 +392,11 @@ function SuggestedTab({ search, asked }: TabProps) {
             who={r.suggested_by}
             at={r.created_at ? <Ago at={r.created_at} /> : ''}
             verb={
-              r.clerk_task
-                ? // a clerk's draft is added by its OK on its task, where it shows exactly what is added
-                  { label: 'Open task', onClick: () => void navigate({ to: '/task/$task', params: { task: r.clerk_task ?? '' } }) }
+              // a clerk's draft is added by its OK on its task, where it shows exactly what is added
+              r.bound
+                ? r.clerk_task
+                  ? { label: 'Open task', onClick: () => void navigate({ to: '/task/$task', params: { task: r.clerk_task ?? '' } }) }
+                  : undefined
                 : { label: 'Add', onClick: () => (hasWho(r) ? void press('rules.accept', { rule: r.id, kind: 'org' }) : setWhoFor(r)) }
             }
             more={<MenuItem label="Set aside" icon="archive" onSelect={() => void press('rules.skip', { rule: r.id, kind: 'org' })} />}

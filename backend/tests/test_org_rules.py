@@ -450,6 +450,8 @@ def test_a_typed_check_is_kept_exactly_and_judges_one_actions_params(api):
     rule(api, {**body, "exact_check": {**REFUND_CAP, "per": "day"}}, expected=422)
     toward = {**body, "toward_scope": ["entity:organization/acme-lights"]}
     rule(api, {**toward, "exact_check": REFUND_CAP}, expected=422)  # a rule checked in code takes no typed check
+    outside = {"kind": "internal", "text": "Editions quote no refund over $100.", "who": {"outside_editions": True}}
+    rule(api, {**outside, "exact_check": REFUND_CAP}, expected=422)  # no teammate's write meets it
     coded = rule(api, toward)
     edit(api, coded["id"], {"version": coded["version"], "exact_check": REFUND_CAP}, expected=422)
     made = rule(api, {**body, "exact_check": REFUND_CAP})

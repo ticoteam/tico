@@ -46,7 +46,7 @@ from . import files as F
 from . import hubdb as H
 from . import org_rules as O
 from . import people as P
-from . import screening
+from . import reach, screening, task_caps
 from .auth import Identity
 from .blobs import register
 from .models import Contract
@@ -966,6 +966,9 @@ def make(c, who, text):
     owner = page_owners.owner(c, "rules", fallback=False)
     if not owner:
         raise Problem("counsel_off", "The Rules page has no owner to draft it", 409)
+    # the checks every task filed for a teammate passes first (task_actions_routes create): its cap, then reach
+    task_caps.check(c, who.actor, owner)
+    reach.check(c, who, owner, "task")
     O.ensure_constitution(c)  # the first clerk task finds it there, whenever the Rules page's owner became live
     law = (O.constitution(c) or {}).get("body") or ""
     lines = [

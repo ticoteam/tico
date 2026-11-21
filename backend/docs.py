@@ -826,7 +826,7 @@ class Docs:
                 text = H.librarian_text(text)
             archived = int(body.archived) if body.archived is not None else row["archived"]
             path = clean_path(body.path) if body.path is not None else row["path"]
-            if path.casefold() != row["path"].casefold():
+            if not archived:  # a doc that stays or becomes active at the reserved path is checked, moved or not
                 reserved(c, path, row["id"], who.actor)
             if not archived and (path.casefold() != row["path"].casefold() or row["archived"]):
                 path = self.free_path(c, path, own=row["id"])
@@ -973,8 +973,7 @@ class Docs:
                 path = row["path"]
             if row["archived"]:  # restoring an archived doc: its path may have been taken since
                 path = self.free_path(c, path, own=doc_id, unique=True)
-            if path.casefold() != row["path"].casefold():
-                reserved(c, path, doc_id, who.actor)
+            reserved(c, path, doc_id, who.actor)  # a restore leaves it active where it lands
             if (old["title"], old["body"], path, 0) == (row["title"], row["body"], row["path"], row["archived"]):
                 return {"doc": self.doc_view(c, row)}
             c.execute(
