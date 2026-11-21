@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data';
 import { useFollow } from '@/live/follow';
@@ -33,14 +33,18 @@ const BACK: Record<string, { tasks: ReturnType<typeof task>[]; next_after: strin
   b2: { tasks: [task('t5', 'Old result', 'bot:ops', 'done', hour(24 * 9))], next_after: 'b3' },
   b3: { tasks: [], next_after: null },
 };
+const FIRST_BACK = BACK['']!;
 let gets: string[] = [];
 let posts: { url: string; body: unknown }[] = [];
 let seen: string | null = null;
+const ASK = { id: 'v1:r1', kind: 'ask', task_id: 't1', task: { id: 't1', number: 1, title: 'Research e-signature vendors' } };
+let needs: unknown[] = [ASK];
 
 beforeEach(() => {
   gets = [];
   posts = [];
   seen = null;
+  needs = [ASK];
   vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
     const u = String(url);
     if (init?.method === 'POST') {
@@ -51,7 +55,7 @@ beforeEach(() => {
     const body = u.startsWith('/api/v2/tasks')
       ? (q.get('status') === 'open' ? OPEN : BACK)[q.get('after') ?? '']
       : u.startsWith('/api/v2/needs-you')
-        ? { items: [{ id: 'v1:r1', task_id: 't1', task: { id: 't1', number: 1, title: 'Research e-signature vendors' } }], next: null }
+        ? { items: needs, next: null }
         : { key: 'ui.tracker_seen_at', value: seen };
     return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
   });
@@ -98,6 +102,37 @@ describe("Tico's tracker", () => {
     expect(row.textContent).not.toContain('back');
     fireEvent.click(row);
     expect(screen.queryByRole('button', { name: /^Back/ })).toBeNull();
+  });
+
+  it('counts every task a grouped Needs you item names as needing the person', async () => {
+    // A paused agent is one item naming several tasks (task_ids), its brief only the first.
+    needs = [{ id: 'paused:abc', kind: 'paused', task_ids: ['t1', 't2'], task: { id: 't1', number: 1, title: 'Research e-signature vendors' } }];
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Tracker />
+      </QueryClientProvider>,
+    );
+    const row = await screen.findByRole('button', { name: /Tracking 2/ });
+    await waitFor(() => expect(row.textContent).toContain('2 needs you'));
+  });
+
+  it('drops a result from the Back count when it ages past 7 days, on one timer', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      BACK[''] = { tasks: [task('t4', 'Add Builder 3', 'bot:ops', 'done', hour(24 * 7 - 0.5))], next_after: null };
+      render(
+        <QueryClientProvider client={queryClient}>
+          <Tracker />
+        </QueryClientProvider>,
+      );
+      const row = await screen.findByRole('button', { name: /Tracking 2/ });
+      await waitFor(() => expect(row.textContent).toContain('1 back'));
+      await act(() => vi.advanceTimersByTimeAsync(31 * 60_000));
+      expect(row.textContent).not.toContain('back');
+    } finally {
+      BACK[''] = FIRST_BACK;
+      vi.useRealTimers();
+    }
   });
 
   it('a tracked list takes the stream as its rows: exact narrows no row, so a change patches in place', () => {

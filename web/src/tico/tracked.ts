@@ -40,3 +40,9 @@ export function trackerGroups(open: TrackedTask[], back: TrackedTask[], waiting:
       .sort((a, b) => Date.parse(finishedAt(b)) - Date.parse(finishedAt(a))),
   };
 }
+
+/** When the first of these leaves Back by age (BACK_DAYS after it finished); null for none. */
+export function nextAgeOut(back: TrackedTask[]): number | null {
+  const ends = back.map((t) => Date.parse(finishedAt(t)) + BACK_DAYS * 86_400_000).filter(Number.isFinite);
+  return ends.length ? Math.min(...ends) : null;
+}

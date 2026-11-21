@@ -9,7 +9,7 @@ import { TaskRow } from '@/kit/Row';
 import { Section } from '@/kit/SectionHead';
 import { useFollow } from '@/live/follow';
 import { backQuery, markTrackerSeen, trackedQuery, trackerSeenQuery, type TrackedTask } from './queries';
-import { backSince, trackerGroups } from './tracked';
+import { backSince, nextAgeOut, trackerGroups } from './tracked';
 import './tracker.css';
 
 /* The tracker (plan: the assistant as a delegator): one row at the top of Tico's chat counting every open task the
@@ -47,7 +47,7 @@ export function Tracker() {
   useFollow(me ? { party: me } : null);
   const open = useQuery({ ...trackedQuery(me ?? ''), enabled: !!me, select: rows });
   const back = useQuery({ ...backQuery(me ?? ''), enabled: !!me, select: rows });
-  const { data: waiting } = useQuery({ ...flowQuery, select: (f) => new Set(f.items.map((i) => i.id)) });
+  const { data: waiting } = useQuery({ ...flowQuery, select: (f) => new Set(f.task_ids ?? f.items.map((i) => i.id)) });
   const seen = useQuery(trackerSeenQuery);
   // Open: when, and the last opening before it, which Back counts from while it stays open.
   const [opened, setOpened] = useState<{ at: number; seen: string | null } | null>(null);
@@ -58,15 +58,27 @@ export function Tracker() {
     marked.current = opened.at;
     void markTrackerSeen(new Date(opened.at).toISOString()).catch(() => undefined);
   }, [opened]);
-  // Nothing shows until the lists and the last opening are read: a count from half the reads would be wrong.
-  if (!me || !open.isSuccess || !back.isSuccess || !seen.isSuccess) return null;
-  // One cutoff, from the newest read or change of what came back: the same for the count and the open group.
-  const now = Math.max(back.dataUpdatedAt, opened?.at ?? 0);
-  const groups = trackerGroups(open.data, back.data, waiting ?? new Set(), me, backSince(opened ? opened.seen : seen.data, now));
+  // The time Back's 7 days count back from: now when drawn, then again whenever its next result ages out.
+  const [now, setNow] = useState(() => Date.now());
+  const at = Math.max(now, back.dataUpdatedAt, opened?.at ?? 0);
+  // Nothing shows until the lists and the last opening are read: a count from half the reads would be wrong. One
+  // cutoff serves the count and the open group (which counts from the opening before this one).
+  const groups =
+    me && open.isSuccess && back.isSuccess && seen.isSuccess
+      ? trackerGroups(open.data, back.data, waiting ?? new Set(), me, backSince(opened ? opened.seen : seen.data, at))
+      : null;
+  const ageOut = groups ? nextAgeOut(groups.back) : null;
+  useEffect(() => {
+    if (ageOut == null) return;
+    // One timer for the next result to leave, not a poll: redrawing then sets the one after.
+    const timer = setTimeout(() => setNow(Date.now()), Math.max(0, ageOut - Date.now()));
+    return () => clearTimeout(timer);
+  }, [ageOut]);
+  if (!groups) return null;
   const tracking = groups.needs.length + groups.open.length;
   const backCount = opened ? 0 : groups.back.length;
   if (!opened && !tracking && !backCount) return null;
-  const toggle = () => setOpened(opened ? null : { at: Date.now(), seen: seen.data });
+  const toggle = () => setOpened(opened ? null : { at: Date.now(), seen: seen.data ?? null });
   return (
     <div className="tracker">
       <button type="button" className="tracker-row" aria-expanded={!!opened} onClick={toggle}>

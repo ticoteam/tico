@@ -1,11 +1,16 @@
-/* Tico's tracker (Tracker.tsx): one quiet row over the chat; open, its groups take at most half the sheet. */
-.tracker{flex:none;border-bottom:1px solid var(--line)}
-.tracker-row{width:100%;height:36px;display:flex;align-items:center;gap:var(--s-2);padding:0 var(--s-4);border:0;background:none;color:var(--ink-2);font:inherit;font-size:var(--t-sm);cursor:pointer}
+/* Tico's tracker (Tracker.tsx): one quiet row over the chat. Open, it takes at most 45% of the sheet as it shows (the
+   phone's 410px half card, or less while typing) and gives way before the composer: the groups scroll inside it. */
+.tracker{flex:0 1 auto;min-height:0;max-height:45%;display:flex;flex-direction:column;border-bottom:1px solid var(--line)}
+.tracker-row{flex:none;width:100%;height:36px;display:flex;align-items:center;gap:var(--s-2);padding:0 var(--s-4);border:0;background:none;color:var(--ink-2);font:inherit;font-size:var(--t-sm);cursor:pointer}
 .tracker-row:hover{color:var(--ink)}
 .tracker-row:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap-in)}
 .tracker-n{color:var(--ink);font-weight:var(--w-strong)}
 .tracker-tag{display:inline-flex;align-items:center;gap:var(--s-1);color:var(--muted)}
 .tracker-row>.ico{width:12px;height:12px;margin-left:auto;color:var(--muted);transition:transform var(--dur) var(--ease)}
 .tracker-row[aria-expanded="false"]>.ico{transform:rotate(-90deg)}
-.tracker-groups{max-height:50vh;overflow:auto;padding:0 var(--s-2) var(--s-2)}
+.tracker-groups{flex:0 1 auto;min-height:0;overflow:auto;padding:0 var(--s-2) var(--s-2)}
 :root[data-layout="cards"] .tracker-row{height:44px;font-size:var(--t-md)}
+/* the phone's card: against what shows of it (shell/phone/phone.css --vis: 410px half, 204px half while typing) */
+.phone[data-card="tico-half"] .ly-tico .tracker{max-height:calc(var(--vis) * .45)}
+.phone[data-card="tico"] .ly-tico .tracker{max-height:45dvh}
+.phone[data-typing="tico"][data-card="tico"] .ly-tico .tracker{max-height:calc((100dvh - var(--at) - var(--kb)) * .45)}

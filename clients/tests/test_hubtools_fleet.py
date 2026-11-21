@@ -185,6 +185,10 @@ def test_task_list_asks_for_the_callers_own_requests_with_requester_me():
         "tasks",
         {"owner": None, "requester": "bot:botops", "status": None, "label": None, "exact": "true"},
     )
+    hubtools.BY_NAME["tico_task_list"]["fn"](Api(), {"owner": "", "requester": "", "exact": True})
+    assert asked[-1][1]["owner"] == "" and asked[-1][1]["requester"] == ""  # sent, so the server refuses them
+    hubtools.BY_NAME["tico_task_list"]["fn"](Api(), {"owner": ""})
+    assert asked[-1][1]["owner"] is None
 
 
 class _Sync:
