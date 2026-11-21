@@ -23,6 +23,7 @@ key guard and key-grant cards, secret_drop.py and key_grants.py) asks for the pa
                            item's name longer than its limit is shortened in place
 """
 
+import re
 from typing import TYPE_CHECKING, Any, cast
 
 from . import access as Access
@@ -76,6 +77,8 @@ PAGES: dict[str, dict[str, str]] = {
 FALLBACK = "general-manager"
 DEFAULT = "default"  # a save's bot that drops the page's choice: the page has its default again
 FROM_LIMITS = {"page": 40, "label": 80, "kind": 40, "id": 200, "name": 200}
+# A from_page value is a short line of words: no newline or other control character (the turn shows it as quoted text).
+_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
 
 
 def _kept(c: "sqlite3.Connection") -> dict[str, str | None]:
@@ -164,7 +167,7 @@ def save(c: "sqlite3.Connection", actor: str, page: str, bot: str | None) -> dic
 
 
 def _text(value: object, key: str) -> bool:
-    return isinstance(value, str) and 0 < len(value.strip()) <= FROM_LIMITS[key]
+    return isinstance(value, str) and 0 < len(value.strip()) <= FROM_LIMITS[key] and not _CONTROL.search(value)
 
 
 def _item_ok(item: object) -> bool:
@@ -196,6 +199,6 @@ def check_from(refs: dict[str, object] | None) -> None:
     if not ok:
         raise Problem(
             "from_page",
-            "refs.from_page is {page, label} and an optional item {kind, id, name}, each a short text",
+            "refs.from_page is {page, label} and an optional item {kind, id, name}, each a short line of text",
             422,
         )

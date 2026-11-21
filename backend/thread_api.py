@@ -137,6 +137,7 @@ class ThreadUpload(BaseModel):
     delivery: Way | None = None
     defer_for: str | None = None
     attachments: list[M.Attachment] = Field(default_factory=list, max_length=10)  # as ThreadPost's
+    from_page: dict | None = None  # the page it was written on, as a post's refs.from_page (sent as JSON)
 
 
 SHARE_REFUSED = (
@@ -1337,6 +1338,7 @@ def install(app, store, auth, mutate, rule_check):
 
         def admit(body):
             _delivery_words(body)
+            page_owners.check_from({"from_page": body.from_page})
             with store.read() as c:
                 threads.require(c, threads.viewer(auth, who), thread_id, write=True)
             checked["rc"] = check(who, thread_id, body)
@@ -1361,7 +1363,7 @@ def install(app, store, auth, mutate, rule_check):
                 body.text,
                 kind=body.kind,
                 to_actor=body.to,
-                refs=marks or None,
+                refs={**marks, **({"from_page": body.from_page} if body.from_page else {})} or None,
                 parent_message_id=body.parent_message_id,
                 checked=checked["rc"],
                 attachments=items or None,

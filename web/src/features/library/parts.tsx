@@ -43,12 +43,6 @@ export function Who({ actor, name, className = 'doc-owner' }: { actor: string | 
   );
 }
 
-/** The Tools page's old owner face: the shell's Agent bar shows every page's owner now (master plan P5), so it draws
-    nothing. It goes with the Tools page's rebuild in Library (#4855), which is built in parallel and not edited here. */
-export function OwnerButton(_: { page: 'tools' }) {
-  return null;
-}
-
 /** A teammate's face that opens their chat beside the page (a file's maker, a page's owner). */
 export function ChatWith({ actor }: { actor: string | null }) {
   const who = useActor(actor);

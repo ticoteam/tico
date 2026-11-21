@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
 import { motionLevel } from '@/motion';
-import { PhoneCards, type PhoneCardsProps } from '@/shell/phone';
+import { PhoneCards, type PhoneCard, type PhoneCardsProps } from '@/shell/phone';
 import { Dot } from '@/tico/dot';
 import { useArrangement } from './arrangement';
 import { Icon } from '@/kit/Icon';
@@ -148,6 +148,8 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
   /* the sheet opened by its edge, for this arrangement only */
   const [opened, setOpened] = useState<{ arr: Arrangement; id: SheetId } | null>(null);
   const [dragging, setDragging] = useState<SheetId | null>(null);
+  /* the phone's card before its last change: the Agent bar's lip keeps the page's fold as the desktop's edge does */
+  const card = useRef<PhoneCard>('none');
   const drag = useRef<Drag | null>(null);
   const cause = useRef<Cause>(null);
   const places = useRef(new Map<SheetId, HTMLElement>());
@@ -157,8 +159,9 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
   const bar = typeof spec === 'object' && 'bar' in spec && p.bar ? p.bar : null;
   const arr = typeof spec === 'string' ? spec : spec.name; // which memory: a panel alone uses the chat one
   const mem = draft ?? saved;
-  // opened by its edge only while it would be tucked without it: once the window has room, the usual layout is back
-  const forward = forwardFor(width, spec, mem, opened?.arr === p.arr ? opened.id : null);
+  // opened by its edge only while it would be tucked without it: once the window has room, the usual layout is back.
+  // An ask from the page's owner brings its Agent bar forward the same way when there is no room for it in the row.
+  const forward = forwardFor(width, spec, mem, opened?.arr === p.arr ? opened.id : bar?.ask ? 'chat' : null);
   const L = layout(width, spec, mem, forward);
   const sheets = L.mode === 'sheets' ? L.sheets : [];
   const stretch = L.mode === 'sheets' ? L.stretch : null;
@@ -171,8 +174,10 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
     if (id === 'chat' && bar && cur.state !== 'tucked') {
       // the Agent bar: its fold is the page's, kept by the root; tucked for room, its edge opens it for now as any sheet's
       cause.current = 'fold';
-      bar.onFold(cur.state === 'open');
-      if (forward === 'chat') setOpened(null);
+      const open = cur.state === 'open';
+      bar.onFold(open);
+      // opened where the row has no room for it, it comes forward over the sheets above it, in the same move
+      setOpened(open ? null : { arr: p.arr, id: 'chat' });
       return;
     }
     const r = press(width, spec, saved, id, forward);
@@ -262,6 +267,7 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
       if (drag.current) endDrag(false);
       else if (forward) {
         cause.current = 'fold';
+        if (forward === 'chat' && bar?.ask) bar.onFold(true);
         setOpened(null);
       } else if (inChat && p.arr === 'chat' && !bar && p.onCloseChat && (!typing(t) || !(t as HTMLInputElement).value)) p.onCloseChat();
       else if (inPanel && p.onClosePanel) p.onClosePanel();
@@ -354,8 +360,18 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
       </>
     );
     if (p.arr === 'agent' && p.widgets) return <PhoneCards page={trailed(p.widgets)} tico={p.tico} menu={p.menu} chat={p.page} tucked lips={p.lips} lipActs={p.lipActs} />;
-    // the page's Agent bar rests as a lip with its owner's name, and comes up when an ask from them waits on you
+    // the page's Agent bar rests as a lip with its owner's name, folded or open as the page's fold says (a phone is never
+    // wide), and comes up when an ask from them waits on you. Raising it or putting it down (a tap, a drag, Back) is
+    // kept as that fold; what the fold or an ask did by itself is not.
     const owner = p.bar && p.chat ? p.bar : null;
+    const lip = !!owner && barFolded(owner.fold, owner.ask, false);
+    const onCard = (next: PhoneCard) => {
+      const was = card.current;
+      card.current = next;
+      if (!owner) return;
+      if (next === 'chat' && was !== 'chat' && lip) owner.onFold(false);
+      else if (next === 'none' && was === 'chat' && !lip) owner.onFold(true);
+    };
     return (
       <PhoneCards
         page={call ? null : trailed(p.page)}
@@ -363,7 +379,8 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
         menu={p.menu}
         chat={call ? undefined : p.chat}
         call={call ? p.page : undefined}
-        tucked={tucked || (!!owner && !owner.ask)}
+        tucked={tucked || lip}
+        onCardChange={onCard}
         labels={owner ? { chat: owner.name } : undefined}
         lips={p.lips}
         lipActs={p.lipActs}

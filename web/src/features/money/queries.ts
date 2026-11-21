@@ -764,9 +764,11 @@ export const growthChannelQuery = (channel: string, month: string | undefined) =
       api.get<GrowthRead>(`/api/v2/growth/read?${qs({ scope: `channel:${channel}`, detail: 'campaigns,series', period: month })}`, { signal }),
   });
 
-/** A message to the Growth Manager in its chat (POST /api/v2/chat/{bot}, backend/thread_api.py), sent from the page. */
-export const askGrowthManager = (bot: string, text: string) =>
-  api.post<unknown>(`/api/v2/chat/${enc(bot.replace(/^bot:/, ''))}`, { text, refs: { from_page: { page: 'growth', label: 'Growth' } } });
+/** A message to the Growth Manager, in the reader's own DM with it (the one its Agent bar shows), sent from the page. */
+export async function askGrowthManager(bot: string, text: string) {
+  const dm = await api.get<{ id: string }>(`/api/v2/threads/dm?with=${enc(bot)}`);
+  return api.post<unknown>(`/api/v2/threads/${enc(dm.id)}/messages`, { text, refs: { from_page: { page: 'growth', label: 'Growth' } } }, { idempotencyKey: newId() });
+}
 
 export interface Segment {
   slug: string;
