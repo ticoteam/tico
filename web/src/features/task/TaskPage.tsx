@@ -116,7 +116,8 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
   const files = useQuery(taskFilesQuery(t.id));
   // An email's OK filed as its own task (a "Send:" sub-task) that waits on the person: the matter opens on it.
   const waiting = useWaiting(t);
-  const own = tabsOf(t, files.data);
+  // The files did not load: what the ask is about still opens, read by its id, never another page it shows.
+  const own = tabsOf(t, files.data ?? (files.isError ? [] : undefined));
   // The file the ask is about when it is another task's: its tab is named once its record is read.
   const away = own.find((x) => x.other);
   const other = useQuery({ ...fileQuery(away?.other ?? ''), enabled: !!away });
@@ -166,7 +167,7 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
   const owner = useActor(t.owner_id);
 
   const current = unresolved ? undefined : tabs.find((x) => x.slug === on);
-  const versions = useVersions(current?.doc, search.v, search.vs);
+  const versions = useVersions(current?.doc, search.v, search.vs, current?.version);
   // The change stepped to, from Changes' two arrows; a new page, version or comparison starts before the first.
   const [step, setStep] = useState({ key: '', at: -1 });
   const key = `${on}:${versions?.shown ?? ''}:${versions?.on ? versions.before : ''}`;

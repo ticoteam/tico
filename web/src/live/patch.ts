@@ -203,6 +203,9 @@ export function patchTaskList<T extends TaskRow>(
   return { list: tasks === list.tasks ? list : { ...list, tasks }, unsure };
 }
 
+/** Tasks whose children are being read again after a relation's event (a sub-task filed or taken off). */
+const rereading = new Set<string>();
+
 function patchTasks(batch: TaskEvent[]): void {
   if (batch.some((e) => e.bulk)) {
     void queryClient.invalidateQueries({ queryKey: ['tasks'] }, { cancelRefetch: false });
@@ -216,9 +219,13 @@ function patchTasks(batch: TaskEvent[]): void {
     if (unsure) refetchSoon(key);
   }
   const last = new Map<string, TaskEvent>();
+  // A relation (a sub-task filed or taken off) on any event of the batch, not only its last: a later update of the same
+  // task in the frame never hides it.
+  const related = new Set<string>();
   for (const e of batch) {
     const id = e.id ?? e.task_id;
     if (id) last.set(id, e);
+    if (id && e.kinds?.includes('relation')) related.add(id);
   }
   for (const [id, e] of last) {
     const detail = ['tasks', 'detail', id];
@@ -226,13 +233,16 @@ function patchTasks(batch: TaskEvent[]): void {
       queryClient.removeQueries({ queryKey: detail });
       continue;
     }
+    const held = queryClient.getQueryData<TaskRow>(detail);
+    // A sub-task filed under it or taken off (a relation): its children are read again (a second review's pill).
+    if (held && related.has(id)) {
+      rereading.add(id);
+      void queryClient.invalidateQueries({ queryKey: detail, exact: true }, { cancelRefetch: false });
+    }
     const task = e.task;
     if (!task) continue;
-    const held = queryClient.getQueryData<TaskRow>(detail);
     // Writing the same data still counts as a write (and a redraw): only a real change is set.
     if (held && !older(task, held) && !same({ ...held, ...task }, held)) queryClient.setQueryData(detail, { ...held, ...task });
-    // A sub-task filed under it or taken off (a relation): its children are read again (a second review's pill).
-    if (held && e.kinds?.includes('relation')) void queryClient.invalidateQueries({ queryKey: detail, exact: true }, { cancelRefetch: false });
     // A file or a linked page changed: whatever the task view reads under its detail key (not the detail itself).
     if (e.kinds?.includes('files'))
       void queryClient.invalidateQueries(
@@ -242,10 +252,21 @@ function patchTasks(batch: TaskEvent[]): void {
   }
   // A sub-task's status shows on the task above it (the ask card's review pill): it lands in that task's children.
   const statusOf = (id: string) => last.get(id)?.task?.status;
-  for (const [key, held] of queryClient.getQueriesData<{ children?: { id: string; status: string }[] }>({ queryKey: ['tasks', 'detail'] })) {
-    const kids = key.length === 3 ? held?.children : undefined;
+  const details = queryClient.getQueriesData<{ children?: { id: string; status: string }[] }>({ queryKey: ['tasks', 'detail'] }).filter(([key]) => key.length === 3);
+  const known = new Set(details.flatMap(([key, held]) => [String(key[2]), ...(held?.children ?? []).map((c) => c.id)]));
+  for (const [key, held] of details) {
+    const kids = held?.children;
     if (!kids?.some((c) => statusOf(c.id) && statusOf(c.id) !== c.status)) continue;
     queryClient.setQueryData(key, { ...held, children: kids.map((c) => ({ ...c, status: statusOf(c.id) ?? c.status })) });
+  }
+  // A task no held read knows yet (a sub-task just filed, which may already have ended): a task whose children are being
+  // read again is read once more, so that read sees the change rather than the one in flight before it.
+  if (!rereading.size || ![...last.keys()].some((id) => !known.has(id))) return;
+  for (const id of rereading) {
+    const key = ['tasks', 'detail', id];
+    const state = queryClient.getQueryState(key);
+    if (state?.isInvalidated || state?.fetchStatus === 'fetching') void queryClient.invalidateQueries({ queryKey: key, exact: true }, { cancelRefetch: true });
+    else rereading.delete(id);
   }
 }
 

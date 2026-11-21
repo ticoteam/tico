@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { QueryObserver } from '@tanstack/react-query';
+import { act } from '@testing-library/react';
 import { queryClient } from '@/data/query-client';
 import { keys } from '@/data/keys';
 import { FakeEventSource, frame, message, messageFrame, opening, task, taskFrame, AT } from './fake-stream';
@@ -26,26 +28,44 @@ const open = ['tasks', 'list', { status: 'open', pipeline: 'p1' }];
 const done = ['tasks', 'list', { status: 'done', pipeline: 'p1' }];
 
 describe('tasks', () => {
-  it('keep a task’s children current: one filed is read again, one that ends or reopens lands in place', () => {
+  it('keep a task’s children current: one filed is read again, one that ends or reopens lands in place', async () => {
     const parent = ['tasks', 'detail', 't1'];
+    const review = (status: string) => ({ id: 't2', status, role: 'review' });
+    // The server's children, read when a read starts; each read answers once released.
+    let server: unknown[] = [];
+    const reads: (() => void)[] = [];
+    const read = () => {
+      const kids = [...server];
+      return new Promise((done) => reads.push(() => done({ ...task('t1'), children: kids })));
+    };
+    queryClient.setQueryData(parent, { ...task('t1'), children: [] });
+    const seen = new QueryObserver(queryClient, { queryKey: parent, queryFn: read, staleTime: Infinity });
+    const stop = seen.subscribe(() => {});
     const children = () => queryClient.getQueryData<{ children: unknown[] }>(parent)?.children;
-    queryClient.setQueryData(parent, { ...task('t1'), children: [{ id: 't2', status: 'open', role: 'review' }, { id: 't3', status: 'open' }] });
-    // a review filed under it: the relation's event on the task above marks its read stale, to be read again
-    FakeEventSource.last.feed(taskFrame(901, task('t1', { version: 2 }), 'relation'));
-    flushFrame();
-    expect(queryClient.getQueryState(parent)?.isInvalidated).toBe(true);
-    FakeEventSource.last.feed(taskFrame(902, task('t2', { status: 'done', version: 2 })));
-    flushFrame();
-    expect(children()).toEqual([
-      { id: 't2', status: 'done', role: 'review' },
-      { id: 't3', status: 'open' },
-    ]);
-    FakeEventSource.last.feed(taskFrame(903, task('t2', { status: 'open', version: 3 })));
-    flushFrame();
-    expect(children()).toEqual([
-      { id: 't2', status: 'open', role: 'review' },
-      { id: 't3', status: 'open' },
-    ]);
+    try {
+      // A review filed: the relation's event, then the task's own update in the same frame, which must not hide it.
+      server = [review('open')];
+      FakeEventSource.last.feed(taskFrame(901, task('t1', { version: 2 }), 'relation'));
+      FakeEventSource.last.feed(taskFrame(902, task('t1', { version: 3 })));
+      flushFrame();
+      expect(reads).toHaveLength(1);
+      // It ends before that read answers: its event names a task no read knows yet, so the children are read again.
+      server = [review('done')];
+      FakeEventSource.last.feed(taskFrame(903, task('t2', { status: 'done', version: 2 })));
+      flushFrame();
+      expect(reads).toHaveLength(2);
+      await act(() => reads.forEach((go) => go()));
+      expect(children()).toEqual([review('done')]);
+      // Reopened, and done again: each lands in place.
+      FakeEventSource.last.feed(taskFrame(904, task('t2', { status: 'open', version: 3 })));
+      flushFrame();
+      expect(children()).toEqual([review('open')]);
+      FakeEventSource.last.feed(taskFrame(905, task('t2', { status: 'done', version: 4 })));
+      flushFrame();
+      expect(children()).toEqual([review('done')]);
+    } finally {
+      stop();
+    }
   });
 
   it('patch a row in place, keeping every row that did not change', () => {

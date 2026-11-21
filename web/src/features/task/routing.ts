@@ -37,7 +37,9 @@ export async function loadTask(client: QueryClient, param: string, tab?: string,
     // Details includes the file list in its body, where inserting the section late shifts the content.
     if (selected && (doc || (tab === CHAT && selected.chat))) return { task: t, tab: selected.slug };
     await files;
-    return { task: t, tab: tab ?? defaultTab(tabsOf(t, client.getQueryData(fileQuery.queryKey))) };
+    // The files did not load: what the ask is about still opens, read by its id (tabsOf's tab of its own).
+    const read = client.getQueryData(fileQuery.queryKey) ?? (client.getQueryState(fileQuery.queryKey)?.status === 'error' ? [] : undefined);
+    return { task: t, tab: tab ?? defaultTab(tabsOf(t, read)) };
   } catch {
     return null;
   }

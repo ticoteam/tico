@@ -32,9 +32,11 @@ export interface Versions {
   failed: boolean;
 }
 
-export function useVersions(doc: TaskDocument | undefined, v?: number, vs?: number): Versions | null {
+/** `pinned`, the version an ask is about, opens unless the address names another; it is read by its number even when
+    the page's list of versions does not reach back to it. */
+export function useVersions(doc: TaskDocument | undefined, v?: number, vs?: number, pinned?: number): Versions | null {
   const list = [...(doc?.versions ?? [])].sort((a, b) => b.n - a.n);
-  const shown = doc && v && list.some((x) => x.n === v) ? v : (doc?.version ?? 0);
+  const shown = doc && v && list.some((x) => x.n === v) ? v : (pinned ?? doc?.version ?? 0);
   const named = !!vs && vs !== shown && list.some((x) => x.n === vs);
   const before = named ? vs : list.find((x) => x.n < shown)?.n;
   const newest = shown === doc?.version;

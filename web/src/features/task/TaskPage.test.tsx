@@ -208,6 +208,17 @@ describe('task route loading', () => {
     await expect(loaded).resolves.toMatchObject({ tab: tab ?? 'attachment-pdf' });
   });
 
+  it('keeps what the ask is about when the files do not load: its own tab, read by its id, not the page beside it @approvals', async () => {
+    const t = task();
+    t.to_leave = [{ ...t.to_leave![0]!, approval: undefined, shows: ['file:f6@1', 'page:f2@1'] }];
+    serve((url) => {
+      if (url.includes('/api/v2/tasks/%2312')) return { status: 200, body: detail(t) };
+      if (url.endsWith('/tasks/t1/files?all=1')) return { status: 500, body: { error: { code: 'oops', detail: 'down' } } };
+      return base(url);
+    });
+    await expect(loadTask(queryClient, '12')).resolves.toMatchObject({ tab: 'file' });
+  });
+
   it('waits for the files when the ask is about a file and also shows a page @approvals', async () => {
     const t = task();
     t.to_leave = [{ ...t.to_leave![0]!, approval: undefined, shows: ['file:f6@1', 'page:f2@1'] }];
@@ -468,6 +479,18 @@ describe('a page’s versions, a new page and a picture', () => {
     return null;
   };
   const frame = (title: string) => screen.findByTitle(title) as Promise<HTMLIFrameElement>;
+
+  it.each([
+    ['its list of versions', versions],
+    ['a list that no longer reaches it', versions.slice(1)],
+  ])('opens a page an ask pinned at v1 with v2 present, from %s @approvals', async (_, listed) => {
+    const t = withVersions();
+    (t.documents![0] as { versions: unknown }).versions = listed;
+    t.to_leave = [{ requirement_id: 'r1', line: 'Spec approved', met: false, may: ['ok', 'no'], approval: { document: 'Spec', file_id: 'f1', version: 1 } } as never];
+    serve((url) => (url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1') ? { status: 200, body: detail(t) } : (html(url) ?? base(url))));
+    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    expect((await frame('Spec, v1')).getAttribute('srcdoc')).toContain('Sign in with your email.');
+  });
 
   it('opens an older version and marks what changed since the one before @s55', async () => {
     serve((url) => (url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1') ? { status: 200, body: detail(withVersions()) } : (html(url) ?? base(url))));

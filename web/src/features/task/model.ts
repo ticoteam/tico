@@ -59,7 +59,8 @@ export function thingsOf(r: TaskRequirement | null): Set<string> {
     task_asks pins it first). A review page it also shows is not it. */
 export function targetOf(r: TaskRequirement | null): { id: string; version?: number } | null {
   const own = r?.approval?.file_id ?? r?.page?.file_id;
-  if (own) return { id: own };
+  const at = r?.approval?.version ?? r?.page?.version;
+  if (own) return { id: own, ...(at && { version: at }) };
   for (const ref of r?.shows ?? []) {
     const m = /^(?:page|file):([^@]+)(?:@v?(\d+))?/.exec(ref);
     if (m?.[1]) return { id: m[1], ...(m[2] && { version: Number(m[2]) }) };
@@ -100,7 +101,7 @@ export function tabsOf(t: TaskData, files?: TaskFileView[]): TaskTab[] {
     seen.add(doc.file_id);
     const slug = free(doc.name);
     const ok = doc.approved_version !== undefined && doc.approved_version === doc.version && !doc.changed_since_ok;
-    return [{ slug, label: tabLabel(doc.title || doc.name), mark: asked.has(doc.file_id) ? 'ask' : ok ? 'ok' : 'none', doc }];
+    return [{ slug, label: tabLabel(doc.title || doc.name), mark: asked.has(doc.file_id) ? 'ask' : ok ? 'ok' : 'none', doc, ...pinned(doc.file_id) }];
   });
   const others = (files ?? [])
     .filter((f) => !f.archived && !seen.has(f.id) && (asked.has(f.id) || !(f.versions.find((v) => v.n === f.current_version) ?? f.versions.at(-1))?.mime.startsWith('image/')))

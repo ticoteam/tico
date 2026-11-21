@@ -57,6 +57,11 @@ describe('the open task', () => {
     // one of this task's own files keeps the version it pinned
     const pdf = { id: 'x9', name: 'declaration.pdf', title: '', archived: false, current_version: 2, versions: [{ n: 1, mime: 'application/pdf' }, { n: 2, mime: 'application/pdf' }] } as unknown as TaskFileView;
     expect(tabsOf(t, [pdf])[0]).toMatchObject({ slug: 'declaration-pdf', version: 1, file: pdf });
+    // a page a stage's OK is asked on, and one an ask shows, keep theirs
+    const own = task({ documents: [doc('f1', 'Spec')], to_leave: [req('r1', { approval: { file_id: 'f1', version: 1 } } as Partial<TaskRequirement>)] });
+    expect(tabsOf(own)[0]).toMatchObject({ slug: 'spec', version: 1 });
+    const shown = task({ documents: [doc('f1', 'Spec')], to_leave: [req('r1', { shows: ['page:f1@1'] })] });
+    expect(tabsOf(shown)[0]).toMatchObject({ slug: 'spec', version: 1 });
   });
 
   it('reads the second review: running while one is open, then reviewed @approvals', () => {
