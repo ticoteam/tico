@@ -32,6 +32,13 @@ describe('the threads list', () => {
     expect(conversationsOf(page.rows, 'human:me').map((t) => [t.id, !!t.mentioned])).toEqual([['k1', true]]);
     expect(conversationsOf(toPage({ threads: [task, quiet] }).rows, 'human:me')).toEqual([]);
   });
+
+  it('knows a task\'s thread a live brief added without its task_id, by audience or kind, and lists it only when marked', () => {
+    const byAudience = row('b1', 3, { audience: 'task' });
+    const byKind = row('b2', 2, { kind: 'task' });
+    expect(conversationsOf([byAudience, byKind, row('t1', 1)], 'human:me').map((t) => t.id)).toEqual(['t1']);
+    expect(conversationsOf([{ ...byAudience, mentioned: true }, byKind], 'human:me').map((t) => t.id)).toEqual(['b1']);
+  });
 });
 
 describe('names', () => {

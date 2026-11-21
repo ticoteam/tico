@@ -69,6 +69,9 @@ export function rowsOf(data: ThreadList | undefined): Thread[] {
   return out.sort(newestFirst);
 }
 
+/** A task's thread: by its task, or (a row a live `activity` brief added, which has no `task_id`) by its audience or kind. */
+export const isTaskThread = (t: Pick<Thread, 'task_id' | 'audience' | 'kind'>) => !!t.task_id || t.audience === 'task' || t.kind === 'task';
+
 export const isDm = (t: Pick<Thread, 'audience'> | undefined) => t?.audience === 'personal' || t?.audience === 'participants';
 
 /** Who else is in it: `dm_with`, else the members read with the view. The viewer is left out. */
@@ -116,7 +119,7 @@ export function asksOf(catchUp: { items: { thread: Thread; mention?: boolean }[]
   const threads = new Set<string>();
   const mates = new Set<string>();
   const add = (t: Thread) => {
-    if (t.task_id) return;
+    if (isTaskThread(t)) return;
     threads.add(t.id);
     const other = t.audience === 'personal' ? othersOf(t, me)[0] : undefined;
     if (other) mates.add(other);
@@ -150,7 +153,7 @@ export const isOneToOne = (t: Thread, me: string | undefined) =>
     belongs to its task, unless it holds an open @ of you: Needs you lists no @, so it shows here. Nothing shows in both
     tabs. */
 export const conversationsOf = (rows: readonly Thread[], me: string | undefined) =>
-  rows.filter((t) => (!t.task_id || t.mentioned) && !isOneToOne(t, me));
+  rows.filter((t) => (!isTaskThread(t) || t.mentioned) && !isOneToOne(t, me));
 
 /** A thread from outside (a Slack channel or DM not linked to a team): one of its members is a `slack:` destination.
     Its box talks only to the agent that handles it: the one agent in it. */
