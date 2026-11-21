@@ -18,6 +18,7 @@ Task filters: `tico task list` takes `--owner`, `--requester`, `--member` and `-
 8. **"Who owns X?" / "who is on the team?"**: `tico team show`, or `tico team show --person <id>`.
 9. **"What is my goal?"**: `tico goal list`, then `tico goal show <id>` for one with its KPIs.
 10. **"Why did X happen?"**: `tico conversation show <conversation id>` for what was said, `tico replay show --from <ISO> --to <ISO>` for a window of up to 31 days.
+10a. **"How many decisions do people make per 1,000 agent actions?" / ask-to-answer time, repeat asks, avoidable waits**: you cannot run `tico sql`; hand it off. `tico team show` to pick an agent, then `tico message send <slug> "<their question>. Answer from tico sql: <view>" --needs-action`, naming the view: `human_decisions_weekly`, `person_wait_weekly` (ask-to-answer median, repeats, avoidable), or `human_touches_v` for each touch. Report the answer with its source. The Assistant's first-words time and report-back rate are in their own Assistant chat, which no agent reads: give them `tico sql "SELECT * FROM first_text_weekly"` or `report_back_weekly` to run themselves.
 
 ## Queue, close, reopen
 
