@@ -453,8 +453,7 @@ of one, a paused endpoint, a duplicate email, a release already open) is not che
 after that read is recorded unchecked; a proxied body over 1 MB is not
 read and is recorded unchecked. Nothing is stopped yet: `would` in the detail marks an outcome that did not
 happen. Email's own held path is older and does stop a mail, so email is Enforced by default and its event carries the
-rule ids its decision used; each link's mode lives in registry_metadata (`rule-link-modes`, the owner's to change, not
-yet from any screen), taken only when the link's path implements it. A proxied write is judged after
+rule ids its decision used; a link's mode is what its path does, with no setting until a link can switch. A proxied write is judged after
 its destination is checked and pinned, and its event goes in the same transaction as the call's own row. What the check reads of a proxied call is
 decoded and scrubbed: no header, the path, query and a JSON, form or plain text body with every proxy token (plain,
 percent-encoded, JSON-escaped, in base64, decoded to a fixed point of at most three passes) taken out and the tool's auth query parameters blanked; any other body, or

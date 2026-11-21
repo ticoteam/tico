@@ -328,9 +328,6 @@ def test_rules_links_lists_each_link_with_its_mode_and_30_day_counts(ruled, monk
         # Before this tool was made: an earlier tool's under the same id, not counted.
         earlier = H.event(c, "bot:ops", "rules.held", "link:tool:close", {})
         c.execute("UPDATE events SET created_at=? WHERE id=?", (H.shift(now, days=-1), earlier["id"]))
-        # A label in registry_metadata never makes a path that only logs read as Enforced.
-        modes = {"webhook": "enforced", "email": "informed"}  # neither is what its path does: neither is taken
-        c.execute("INSERT INTO registry_metadata VALUES(?,?)", (L.MODES, json.dumps(modes)))
     links = {row["id"]: row for row in get(api, "rule-links")["links"]}
     # Email is the one path that really stops a write; nothing relabels another.
     assert {k: v["mode"] for k, v in links.items()} == {

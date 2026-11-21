@@ -637,7 +637,8 @@ def install(app, store):
                 await log(413, 'refused', 'Request body over 25 MB')
                 return refused(413, 'too_large', 'A tool call sends at most 25 MB.')
             chunks.append(chunk)
-        calls = rpc_calls(b''.join(chunks)) if method == 'POST' else None
+        # A body over what the gate reads is never parsed as JSON-RPC: not an MCP call (its check is too_large).
+        calls = rpc_calls(b''.join(chunks)) if method == 'POST' and total <= rule_links.MAX_JUDGED else None
         if ready['reads_only'] and method == 'POST':
             # A POST passes at Read only as MCP calls that only read.
             write = mcp_write(tool_id, calls) if calls is not None else 'not MCP'
