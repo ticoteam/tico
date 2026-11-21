@@ -2044,6 +2044,8 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
                 **({"snoozed_until": it["snoozed_until"]} if it.get("snoozed_until") else {}),
             }
         )
+    if snoozed != "only":
+        items += request_items(c, auth, who)
     if not count_only:
         # An ask carries its requirement as the task's own read gives it (`to_leave`), with what this person may do:
         # that entry alone (task_calls.ask_entry), not the whole view of its task.
@@ -2079,6 +2081,56 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
                         if said:
                             item["about"] = said
     return sorted(items, key=needs_key)
+
+
+def request_items(c, auth, who):
+    """The person's open access requests, key cards and key-drop proposals as Needs-you items (`kind` access, key,
+    key_drop), each read through its own list and authority check, which its action checks again: an item the person
+    may not settle is never listed. The card as each kind draws it rides along under its kind."""
+    from types import SimpleNamespace
+
+    from . import access_requests, credential_cards, key_grants
+
+    vault = SimpleNamespace(admins=auth.settings.credential_admins, auth=auth)
+    items = []
+    for r in access_requests.open_for(c, who, vault, auth):
+        level = access_requests.LEVELS[r["level"]]
+        line = f"{r['subject_name']} asks for {r['resource_name']} · {level}"
+        items.append(
+            {
+                "kind": "access",
+                "id": "access:" + r["id"],
+                "from_id": r["subject"],
+                "line": line,
+                "since": r["created_at"],
+                "access": r,
+            }
+        )
+    for r in credential_cards.pending_for(c, vault, who):
+        line = r["title"]
+        items.append(
+            {
+                "kind": "key",
+                "id": "key:" + r["id"],
+                "from_id": "bot:" + r["bot"],
+                "line": line,
+                "since": r["created_at"],
+                "key": r,
+            }
+        )
+    for r in key_grants.proposed_for(c, vault, who):
+        line = "Grant " + "; ".join(f"{row['key']} to {row['tool_name']}" for row in r["rows"])
+        items.append(
+            {
+                "kind": "key_drop",
+                "id": "key_drop:" + r["message_id"],
+                "from_id": r["by"],
+                "line": line,
+                "since": r["created_at"],
+                "key_drop": r,
+            }
+        )
+    return items
 
 
 def _asked_page(item):

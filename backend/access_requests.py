@@ -64,6 +64,8 @@ def _mod(name: str) -> Any:
         from . import credentials as found
     elif name == "default_read":
         from . import default_read as found
+    elif name == "events":
+        from . import events as found
     elif name == "page_owners":
         from . import page_owners as found
     elif name == "reconnects":
@@ -93,6 +95,11 @@ VIA: contextvars.ContextVar[str] = contextvars.ContextVar("access_request_via", 
 # Set while a level change is half made (api_tools.set_level grants, then sets the grant's level): nothing is settled
 # until it is whole.
 DEFERRED: contextvars.ContextVar[bool] = contextvars.ContextVar("access_request_deferred", default=False)
+
+
+class AccessGrantBody(Contract):
+    # Read only: Grant on a request for Read and write gives Read alone.
+    level: str | None = Field(default=None, pattern=r"^read$")
 
 
 class AccessRequestBody(Contract):
@@ -340,13 +347,18 @@ def _post_card(c: Any, auth: Any, person: Any, row: Any) -> Any:
 
 
 def _refresh_cards(c: Any, row: Any) -> Any:
-    """Every copy of the request's card shows where it stands now: resolved copies ask nothing."""
+    """Every copy of the request's card shows where it stands now: resolved copies ask nothing, and leave each person's
+    Needs you."""
+    events = _mod("events")
+
     card = json.dumps(card_of(c, row))
-    for message_id in json.loads(row["cards"] or "{}").values():
+    copies = json.loads(row["cards"] or "{}")
+    for message_id in copies.values():
         c.execute(
             "UPDATE messages SET refs=json_set(coalesce(refs,'{}'),'$.access_request',json(?)) WHERE id=?",
             (card, message_id),
         )
+    events.needs_moved(c, copies, "access")
 
 
 def _row(c: Any, rid: Any) -> Any:
@@ -775,21 +787,31 @@ def _open_row(c: Any, who: Any, rid: Any, vault: Any, auth: Any) -> Any:
     return row
 
 
-def grant(c: Any, who: Any, rid: Any, vault: Any, auth: Any) -> Any:
-    """The card's Grant: the access given as this person's own tap, and every copy of the card resolved."""
+def grant(c: Any, who: Any, rid: Any, vault: Any, auth: Any, level: Any = None) -> Any:
+    """The card's Grant: the access given as this person's own tap, and every copy of the card resolved. `level` "read"
+    is Read only on a request for Read and write: Read is given, and the request is granted as one for Read."""
     api_tools = _mod("api_tools")
 
     row = _open_row(c, who, rid, vault, auth)
     if row["state"] != "open":
         return view(c, row)
+    given = row | {"level": level} if level and level != row["level"] else row
+    narrow = {"subject": row["subject"], "resource_type": row["resource_type"], "resource_id": row["resource_id"]}
     token = VIA.set("card")
     try:
-        if not has(c, row):
+        if not has(c, given):
             if row["resource_type"] == TOOL:
-                api_tools.set_level(c, who, vault, row["resource_id"], row["subject"], row["level"])
+                api_tools.set_level(c, who, vault, row["resource_id"], row["subject"], given["level"])
             else:
-                _give_repository(c, row, who.actor, person=True)
-        settled(c, who, subject=row["subject"], resource_type=row["resource_type"], resource_id=row["resource_id"])
+                _give_repository(c, given, who.actor, person=True)
+        settled(c, who, **narrow)
+        if given is not row:
+            # An open request for Read on the same thing closed just above, so this one can be it now.
+            c.execute(
+                "UPDATE access_requests SET level=?,kind=? WHERE id=? AND state='open'",
+                (given["level"], _kind(row["resource_type"], given["level"]), rid),
+            )
+            settled(c, who, **narrow)
     finally:
         VIA.reset(token)
     return view(c, _row(c, rid))
@@ -800,6 +822,23 @@ def decline(c: Any, who: Any, rid: Any, vault: Any, auth: Any) -> Any:
     if row["state"] == "open":
         _close(c, row, "declined", who.actor, "card")
     return view(c, _row(c, rid))
+
+
+def open_for(c: Any, who: Any, vault: Any, auth: Any) -> Any:
+    """The open requests whose card reached `who` and that they may still grant (`may_unblock`, as Grant checks it),
+    oldest first, each as its card shows it: their access cards in Needs you (views.needs_items)."""
+    if not _present(c):
+        return []
+    rows = c.execute(
+        "SELECT * FROM access_requests WHERE state='open' AND EXISTS(SELECT 1 FROM json_each(cards) WHERE key=?) "
+        "ORDER BY created_at, id",
+        (who.actor,),
+    ).fetchall()
+    return [
+        card_of(c, row) | {"created_at": row["created_at"]}
+        for row in map(dict, rows)
+        if may_unblock(c, who, row, vault, auth)
+    ]
 
 
 def take_back(c: Any, who: Any, rid: Any, vault: Any, auth: Any) -> Any:
@@ -1013,9 +1052,11 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> Any:
             return fn(c, who, rid, vault(), auth)
 
     @app.post("/api/v2/access-requests/{rid}/grant")
-    def access_request_grant(request: Request, rid: str):
-        """Grant on the card: the access given as this person, every other copy of the card resolved."""
-        return tap(request, rid, grant)
+    def access_request_grant(request: Request, rid: str, body: AccessGrantBody | None = None):
+        """Grant on the card: the access given as this person, every other copy of the card resolved. `level` "read" is
+        Read only on a request for Read and write."""
+        level = body.level if body else None
+        return tap(request, rid, lambda c, who, rid, vault, auth: grant(c, who, rid, vault, auth, level))  # pyright: ignore[reportUnknownLambdaType]
 
     @app.post("/api/v2/access-requests/{rid}/decline")
     def access_request_decline(request: Request, rid: str):

@@ -17,8 +17,13 @@
 /* "What should change?": one line in the card */
 .askcard-field{display:block;margin:var(--s-2h) var(--s-1) 0 0;padding:var(--s-2) var(--s-3) var(--s-2h);border-radius:var(--r-ctl);background:var(--well);box-shadow:inset 0 0 0 1px var(--line-strong)}
 .askcard-field>span:first-child{display:block;font-size:var(--t-xs);color:var(--muted)}
-.askcard-field textarea{display:block;width:100%;margin-top:var(--s-0);padding:0;border:0;background:none;color:var(--ink);font:inherit;line-height:var(--lh-read);resize:none;outline:none}
+.askcard-field :is(textarea,input){display:block;width:100%;margin-top:var(--s-0);padding:0;border:0;background:none;color:var(--ink);font:inherit;line-height:var(--lh-read);resize:none;outline:none}
 .askcard.is-asking .an-row{margin-top:var(--s-2)}
+
+/* a request's body (Requests.tsx): what it is for, a key's field and where to get one, a proposal's rows to tick */
+.askcard-help{display:inline-block;margin-top:var(--s-1h);font-size:var(--t-sm);color:var(--muted);text-decoration:underline;text-underline-offset:2px}
+.askcard-help:hover{color:var(--ink)}
+.askcard-rows{display:flex;flex-direction:column;gap:var(--s-1h);margin:var(--s-2) var(--s-1) 0 0;color:var(--ink-2);overflow-wrap:anywhere}
 
 /* in a thread the card is a link, drawn in line with the timeline's cards: no lift, its files as chips */
 .askcard.is-link{display:block;margin:var(--s-1) 0 var(--s-0);background:none;box-shadow:inset 0 0 0 1px var(--line-strong);color:var(--ink);text-decoration:none}

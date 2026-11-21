@@ -621,13 +621,15 @@ def batch_abandon(api, args):
     "tico_needs_you_show",
     "What is on the person's Needs you: the total, the number per kind (task: a private task they "
     "must let someone see; ask: an OK or question with their name; paused: a bot that cannot run "
-    "until they fix it; question: a bot's ❓ for them), and the items, oldest first, each "
-    "with its task. Use it to see the pile before closing or stopping anything.",
+    "until they fix it; question: a bot's ❓ for them; access: an access request they can grant; "
+    "key: a key card they can fill; key_drop: the Tools owner's key proposal they can grant), and "
+    "the items, oldest first, each with its task or its card. Use it to see the pile before closing "
+    "or stopping anything.",
     {
         "kind": {
             "type": "string",
             # `mention` is an old kind (Needs you lists no @ now): still accepted, it matches nothing.
-            "enum": ["task", "ask", "paused", "question", "mention"],
+            "enum": ["task", "ask", "paused", "question", "access", "key", "key_drop", "mention"],
             "description": "Only this kind",
         },
         "limit": {

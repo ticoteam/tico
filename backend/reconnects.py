@@ -293,8 +293,16 @@ def _retire(c, wait):
             "UPDATE credential_requests SET status='canceled',updated_at=? WHERE id=? AND status='pending'",
             (_H().now(), request),
         )
+        _needs_moved(c, wait)
     if wait["key"].startswith("login:"):
         _unfold_hold(c, wait["bot"])
+
+
+def _needs_moved(c, wait):
+    """Its key card left the person's Needs you (views.needs_items lists a pending one)."""
+    from . import events
+
+    events.needs_moved(c, [wait["person"]], "key")
 
 
 def _standing(c, wait):
@@ -374,6 +382,7 @@ def _settle_requests(c, waits, at):
                 "UPDATE credential_requests SET status='saved',updated_at=? WHERE id=? AND status='pending'",
                 (at, request),
             )
+            _needs_moved(c, wait)
 
 
 def dropped(c, request_id):

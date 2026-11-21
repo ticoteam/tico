@@ -29,7 +29,7 @@ from pydantic import Field, SecretStr
 from .auth import validate_identity
 from .credentials import CredentialWrite, administrator, admin_names as _admin_names, ask_admin_detail, owned
 from .models import Contract, ID
-from . import reconnect_tasks, reconnects, runner_online
+from . import events, reconnect_tasks, reconnects, runner_online
 from .store import H, Problem
 
 ENV = r"^[A-Z_][A-Z0-9_]{0,99}$"
@@ -270,53 +270,86 @@ def redact_value(c, person, value, env, conversation_id="", attempt_id="", messa
 
 
 # ------------------------------------------------------------------ routes
+def card_view(c, vault, row, viewer):
+    """A key card as `viewer` sees it: whether they may type the value (`can_save`), else whom to ask."""
+    from . import tool_access as TA
+
+    bot = H.bot(c, row["bot"]) or {}
+    name = bot.get("display_name") or bot.get("slug") or row["bot"]
+    # A Reconnect card (backend/reconnect_tasks.py) replaces a tool's key: whoever may change that tool saves it.
+    replacing = reconnect_tasks.card_tool(c, row)
+    allowed = (
+        reconnect_tasks.may_replace(c, viewer, replacing)
+        if replacing is not None
+        else TA.may_change_access(
+            c, viewer, TA.key(), "bot:" + row["bot"], TA.STORE, admins=vault.admins, auth=vault.auth
+        )
+    )
+    note = None
+    if replacing is not None and not allowed:
+        names = admin_names(c, vault)
+        note = "Only a credential admin can replace this key" + (". Ask " + ", ".join(names[:3]) if names else "") + "."
+    elif row["status"] == "pending" and not allowed:
+        names = admin_names(c, vault)
+        note = (
+            "Only a credential admin, or someone who manages this bot, can store this"
+            + (". Ask " + ", ".join(names[:3]) if names else "")
+            + "."
+        )
+    return {
+        "id": row["id"],
+        "status": row["status"],
+        "env": row["env"],
+        "bot": row["bot"],
+        "bot_name": name,
+        "label": row["label"],
+        "title": f"{name} needs {row['label'] or row['env']}",
+        "format": row["format"],
+        "help_url": row["help_url"],
+        "kind": row["kind"],
+        "can_save": allowed and row["status"] == "pending",
+        "note": note,
+        "credential_id": row["credential_id"],
+    }
+
+
+def card_row(c, vault, rid, viewer):
+    """The card `rid` for `viewer`: its requester or a credential administrator, while they can read its task; else 404."""
+    row = c.execute("SELECT * FROM credential_requests WHERE id=?", (rid,)).fetchone()
+    if not row or (row["requester"] != viewer.actor and not administrator(c, viewer, vault.admins)):
+        raise Problem("not_found", "No such request", 404)
+    # A card in a task's thread is for someone who can read the task now: one made private since asks them nothing.
+    task_id = (H.conversation(c, row["conversation_id"]) or {}).get("task_id")
+    if task_id and not H.task_private_readable(c, viewer.actor, H.task(c, task_id)):
+        raise Problem("not_found", "No such request", 404)
+    return row
+
+
+def pending_for(c, vault, viewer):
+    """The key cards that wait on `viewer`, oldest first, as `card_view` draws them: each pending card they were asked
+    to fill that `card_row` still opens for them and that they may save. Their key cards in Needs you
+    (views.needs_items)."""
+    out = []
+    for found in c.execute(
+        "SELECT id FROM credential_requests WHERE requester=? AND status='pending' ORDER BY created_at, id",
+        (viewer.actor,),
+    ).fetchall():
+        try:
+            row = card_row(c, vault, found["id"], viewer)
+        except Problem:
+            continue
+        shown = card_view(c, vault, row, viewer)
+        if shown["can_save"]:
+            out.append(shown | {"created_at": row["created_at"]})
+    return out
+
+
 def install_credential_cards(app, store, vault, auth, botops, delegate, manager):
     """`botops` is the built-in bot's slug, `delegate(c, who, ref)` BotOps' acting-as-the-requester check, and
     `manager(c, person, bot)` the rule for who may manage a bot."""
-    from . import tool_access as TA
 
     def view(c, row, viewer):
-        bot = H.bot(c, row["bot"]) or {}
-        name = bot.get("display_name") or bot.get("slug") or row["bot"]
-        # A Reconnect card (backend/reconnect_tasks.py) replaces a tool's key: whoever may change that tool saves it.
-        replacing = reconnect_tasks.card_tool(c, row)
-        allowed = (
-            reconnect_tasks.may_replace(c, viewer, replacing)
-            if replacing is not None
-            else TA.may_change_access(
-                c, viewer, TA.key(), "bot:" + row["bot"], TA.STORE, admins=vault.admins, auth=vault.auth
-            )
-        )
-        note = None
-        if replacing is not None and not allowed:
-            names = admin_names(c, vault)
-            note = (
-                "Only a credential admin can replace this key"
-                + (". Ask " + ", ".join(names[:3]) if names else "")
-                + "."
-            )
-        elif row["status"] == "pending" and not allowed:
-            names = admin_names(c, vault)
-            note = (
-                "Only a credential admin, or someone who manages this bot, can store this"
-                + (". Ask " + ", ".join(names[:3]) if names else "")
-                + "."
-            )
-        return {
-            "id": row["id"],
-            "status": row["status"],
-            "env": row["env"],
-            "bot": row["bot"],
-            "bot_name": name,
-            "label": row["label"],
-            "title": f"{name} needs {row['label'] or row['env']}",
-            "format": row["format"],
-            "help_url": row["help_url"],
-            "kind": row["kind"],
-            "can_save": allowed and row["status"] == "pending",
-            "note": note,
-            "credential_id": row["credential_id"],
-        }
+        return card_view(c, vault, row, viewer)
 
     def tools_page_owner(c):
         """The Tools page's own owner (never the General Manager standing in): it asks for any bot's credential, as BotOps
@@ -415,14 +448,7 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
         return who
 
     def load(c, rid, viewer):
-        row = c.execute("SELECT * FROM credential_requests WHERE id=?", (rid,)).fetchone()
-        if not row or (row["requester"] != viewer.actor and not administrator(c, viewer, vault.admins)):
-            raise Problem("not_found", "No such request", 404)
-        # A card in a task's thread is for someone who can read the task now: one made private since asks them nothing.
-        task_id = (H.conversation(c, row["conversation_id"]) or {}).get("task_id")
-        if task_id and not H.task_private_readable(c, viewer.actor, H.task(c, task_id)):
-            raise Problem("not_found", "No such request", 404)
-        return row
+        return card_row(c, vault, rid, viewer)
 
     @app.post("/api/v2/credential-requests")
     def open_card(request: Request, body: CredentialRequest):
@@ -558,6 +584,7 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             row = load(c, rid, who)
             if row["status"] == "pending":
                 c.execute("UPDATE credential_requests SET status='canceled',updated_at=? WHERE id=?", (H.now(), rid))
+                events.needs_moved(c, [row["requester"]], "key")
                 row = c.execute("SELECT * FROM credential_requests WHERE id=?", (rid,)).fetchone()
                 reconnects.dropped(c, rid)  # a task waiting on this card goes on without it
             return view(c, row, who)
@@ -571,6 +598,7 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             if row["status"] != "pending":
                 raise Problem("state", "This card is already " + row["status"], 409)
             value = check_format(row["format"], body.value.get_secret_value())
+            events.needs_moved(c, [row["requester"]], "key")  # it leaves their Needs you, whoever saves it
             if reconnect_tasks.card_tool(c, row) is not None:
                 # A Reconnect card: the value replaces the tool's key in place, every grant kept, and its task ends.
                 reconnect_tasks.save(c, vault, who, row, value)

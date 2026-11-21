@@ -698,3 +698,31 @@ export const wordQuery = (url: string) =>
     },
     staleTime: Infinity,
   });
+
+/* ---------------------------------------------------------------- requests in Needs you */
+
+/** Answer an access request, a key card or a key-drop proposal from Needs you, through its own route: the row stays,
+    busy, until the server has taken it, then leaves Flow; every other copy of it settles on the server. */
+function answerRequest<T>(item: string, send: (idem: string) => Promise<T>): Promise<T> {
+  return write<T>({
+    key: flowQuery.queryKey,
+    wait: true,
+    optimistic: (cur: { count: number; requests?: { id: string }[] } | undefined) => {
+      if (!cur?.requests?.some((r) => r.id === item)) return cur;
+      return { ...cur, count: cur.count - 1, requests: cur.requests.filter((r) => r.id !== item) };
+    },
+    send,
+  });
+}
+
+/** Grant (`read` for Read only on a request for Read and write) or decline an access request. */
+export const grantAccess = (item: string, rid: string, level?: 'read') =>
+  answerRequest(item, (idem) => api.post(`/api/v2/access-requests/${enc(rid)}/grant`, level ? { level } : {}, { idempotencyKey: idem }));
+export const declineAccess = (item: string, rid: string) =>
+  answerRequest(item, (idem) => api.post(`/api/v2/access-requests/${enc(rid)}/decline`, {}, { idempotencyKey: idem }));
+/** The key the person typed into a key card: it goes to the server alone, never into a message. */
+export const saveKey = (item: string, rid: string, value: string) =>
+  answerRequest(item, (idem) => api.post(`/api/v2/credential-requests/${enc(rid)}/save`, { value }, { idempotencyKey: idem }));
+/** Grant the key-drop proposal's rows kept (their positions). */
+export const grantKeyDrop = (item: string, message: string, keep: number[]) =>
+  answerRequest(item, (idem) => api.post(`/api/v2/tools-chat/proposals/${enc(message)}/grant`, { keep }, { idempotencyKey: idem }));

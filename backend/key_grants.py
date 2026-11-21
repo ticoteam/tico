@@ -42,6 +42,12 @@ def _api_tools() -> Any:
     return api_tools
 
 
+def _events() -> Any:
+    from . import events
+
+    return events
+
+
 def _credentials() -> Any:
     from . import credentials
 
@@ -242,6 +248,33 @@ def propose(c: Any, who: Any, thread_id: str, rows: list[Row], note: str = "") -
         MINTING.reset(token)
 
 
+def proposed_for(c: Any, vault: Any, who: Any) -> list[Row]:
+    """The key proposals that wait on `who`, oldest first: each card still proposed in their chat with the Tools page's
+    owner, while they may grant (`grant`'s own checks), as the card with its message_id, created_at and who proposed it
+    (`by`). Their key-drop
+    proposals in Needs you (views.needs_items)."""
+    from . import tool_access as TA
+
+    owner = _owner(c)
+    if not owner or not TA.decide(c, who, TA.tool(), "", TA.GRANT, admins=vault.admins, auth=vault.auth).ok:
+        return []
+    out: list[Row] = []
+    for m in c.execute(
+        "SELECT id, conversation_id, created_at, refs FROM messages WHERE sender_id=? AND kind='notice' "
+        "AND deleted_at IS NULL AND json_extract(refs,'$.card')=? AND json_extract(refs,'$.key_grant.state')='proposed' "
+        "AND json_extract(refs,'$.key_grant.person')=? ORDER BY created_at, id",
+        (owner, CARD, who.actor),
+    ).fetchall():
+        card = _card(dict(m))
+        try:
+            thread = _thread(c, m["conversation_id"], owner)
+        except Problem:
+            continue
+        if card is not None and who.actor in _members(c, thread):
+            out.append(card | {"message_id": m["id"], "created_at": m["created_at"], "by": owner})
+    return out
+
+
 def _attach(c: Any, who: Any, vault: Any, row: Row) -> None:
     """The key becomes its tool's key at the row's level (a password kind counts as the tool's key from now on). A key
     the tool held at that level moves off it, and each bot and person who held it keeps their level on the new key:
@@ -281,10 +314,12 @@ def _attach(c: Any, who: Any, vault: Any, row: Row) -> None:
 
 
 def _save(c: Any, message_id: str, card: Row) -> None:
+    """The card as it stands now; granted, it leaves the person's Needs you."""
     raw = c.execute("SELECT refs FROM messages WHERE id=?", (message_id,)).fetchone()["refs"]
     refs = json.loads(raw or "{}")
     refs[CARD] = card
     c.execute("UPDATE messages SET refs=? WHERE id=?", (json.dumps(refs), message_id))
+    _events().needs_moved(c, [card["person"]], "key_drop")
 
 
 def grant(store: Any, vault: Any, who: Any, message_id: str, keep: list[int] | None = None) -> Row:

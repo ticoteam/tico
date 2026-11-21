@@ -155,6 +155,17 @@ def _needs(kind, *actors, where=None, lists=()):
     )
 
 
+def needs_moved(c, people, kind):
+    """A `needs` row for each person among `people`, from the write itself where no table's trigger sees it (an access
+    request, key card or key proposal settled in a message's refs or its own table): their Needs-you list may have
+    moved."""
+    now = H.now()
+    c.executemany(
+        "INSERT INTO changes(topic,kind,subject_id,created_at) VALUES('needs',?,?,?)",
+        [(kind, p, now) for p in dict.fromkeys(str(p) for p in people) if p.startswith("human:")],
+    )
+
+
 def _changed(*columns):
     return " OR ".join(f"OLD.{column} IS NOT NEW.{column}" for column in columns)
 
