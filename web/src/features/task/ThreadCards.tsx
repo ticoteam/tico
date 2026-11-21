@@ -138,15 +138,20 @@ function ThingCard({ sub, chat }: { sub: TaskData; chat?: string }) {
     than one email (the tab would be a guess). */
 function EmailCard({ sub, send, chat }: { sub: TaskData; send: string; chat?: string }) {
   const matter = matterOf(sub);
-  const held = useQuery({ ...taskDetailQuery(matter?.id), retry: false }).data;
-  const one = !!matter && (held?.id !== matter.id || sendTasksOf(held).length <= 1);
-  // An OK on the case itself opens that email's own tab there, as the task's page names it (useTabs), never another
-  // send's.
-  const { tabs, settled } = useTabs(sub);
+  const read = useQuery({ ...taskDetailQuery(matter?.id), retry: false });
+  const held = read.data?.id === matter?.id ? read.data : undefined;
+  const one = !!matter && (!held || sendTasksOf(held).length <= 1);
+  // The tab it opens, as the page it opens names it (useTabs), by this send: the case's own tab for an OK on the case
+  // itself; for a "Send:" task, its tab on the matter, or on the task's own page when the matter has more than one.
   const direct = !isSendTask(sub.title);
-  if (direct && !settled) return null; // its tab is named once the files are read, never guessed first
-  const own = direct ? tabs.find((x) => x.email === send && !x.wait)?.slug : undefined;
-  const to = own ? tabAddress(sub, own, false).to : one ? matter.to : tabAddress(sub, undefined, false).to;
+  const target = direct || !one ? sub : held;
+  const own = useTabs(sub);
+  const onMatter = useTabs(held ?? sub);
+  const resolver = target === sub ? own : target ? onMatter : null;
+  // Named once what it reads is in, never guessed first.
+  if ((matter && !read.isFetched) || (resolver && !resolver.settled)) return null;
+  const slug = resolver?.tabs.find((x) => x.email === send && (target === sub ? !x.wait : !!x.wait))?.slug;
+  const to = target && slug ? tabAddress(target, slug, false).to : one && matter ? matter.to : tabAddress(sub, undefined, false).to;
   const title = sendTitle(sub.title);
   const what = matter?.title ?? title?.subject ?? sub.title;
   return <Card to={to} chat={chat} what={title?.to ? `${what}, to ${personOf(title.to)}` : what} />;
