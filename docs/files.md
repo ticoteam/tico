@@ -163,7 +163,8 @@ A picture, SVG, HTML page, video or audio clip can also go on a thread reply or 
 [Visuals in replies](visuals.md).
 
 `tico file archive <id>` also accepts a task attachment's ID. A task participant or a human who may move the task can
-archive it, and restore it (`PATCH /api/v2/files/{id}` with `archived: false`); the action is recorded. It stays listed
+archive it, and restore it (`tico file archive <id> --restore`, `PATCH /api/v2/files/{id}` with `archived: false`); the
+action is recorded. It stays listed
 on the task as archived, with its stored bytes and version history.
 
 ## Visibility

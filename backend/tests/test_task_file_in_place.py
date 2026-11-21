@@ -8,7 +8,7 @@ from backend.blobs import register
 from backend.tests.helpers.api import get, headers, post  # noqa: F401
 from backend.tests.helpers.automation_api import as_bot
 from backend.tests.helpers.automation_cli import Client
-from clients import hubcli, hubtools, remotecli
+from clients import cli_spec, hubcli, hubtools, remotecli
 from clients.tico import MultipartBody
 
 attach = hubtools.BY_NAME["tico_task_attach"]["fn"]
@@ -275,3 +275,16 @@ def test_who_may_not_read_a_file_or_may_not_manage_its_file_neither_archives_nor
     assert listed(api, tid)[shared]["can_restore"]
     assert api.patch(f"/api/v2/files/{shared}", json={"archived": False}, headers=headers()).status_code == 200
     assert not listed(api, tid)[shared]["archived"]
+
+
+def test_a_person_archives_and_restores_a_task_file_from_the_cli_and_the_tool(api):
+    tid = post(api, "tasks", {"title": "Lease", "owner": "ops", "body": "Sign it."})["id"]
+    fid = post(api, f"tasks/{tid}/files", {"name": "lease.md", "text": "Terms"})["file_id"]
+    person = Client(api, "ana-test")
+    for argv, archived in ((["file", "archive", fid], True), (["file", "archive", fid, "--restore"], False)):
+        args = hubcli.parser().parse_args(argv)
+        assert cli_spec.of(args).call(person, args) == {"file": {"id": fid, "archived": archived}}
+        assert listed(api, tid)[fid]["archived"] is archived
+    archive = hubtools.BY_NAME["tico_file_archive"]["fn"]
+    assert archive(person, {"id": fid})["file"]["archived"] is True
+    assert archive(person, {"id": fid, "restore": True})["file"]["archived"] is False

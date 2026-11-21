@@ -35,13 +35,13 @@ def doc_archive(api, args):
 
 @tool(
     "tico_file_archive",
-    "Archive a File or detach a task attachment with your rights; its history stays.",
-    {"id": _s("File or task attachment id")},
+    "Archive a File or detach a task attachment with your rights; its history stays. With restore, bring it back.",
+    {"id": _s("File or task attachment id"), "restore": {"type": "boolean", "description": "Bring it back instead"}},
     required=("id",),
     writes=True,
 )
 def file_archive(api, args):
-    return _as_person(api).patch(f"files/{args['id']}", {"archived": True}, key=_key(args))
+    return _as_person(api).patch(f"files/{args['id']}", {"archived": not args.get("restore")}, key=_key(args))
 
 
 FILE_REF = re.compile(r"[^/@\s]+(?:@[1-9][0-9]*)?")
@@ -1126,7 +1126,7 @@ def doc_write_body(client, fields):
 # bytes (files_publish_path), so the file's name and text are not flags.
 FILE = (
     Group("file", "what you publish for people: reports, documents, imported objects"),
-    Command("file archive", "archive a File with your rights", example="tico file archive f1"),
+    Command("file archive", "archive a File with your rights, or --restore it", example="tico file archive f1"),
     Command("file list", "the files on your page, newest activity first", example="tico file list --limit 10"),
     Command(
         "file publish",

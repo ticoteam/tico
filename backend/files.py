@@ -1812,26 +1812,34 @@ class Files:
                 "forbidden", "Only a task participant or someone who can move it archives its attachments", 403
             )
 
-    def page_rights(self, c, who, row):
-        """Whether `who` may archive this file as far as its page goes: a page's managers and writers, or no page."""
+    def page_rights(self, c, who, row, is_page=None):
+        """Whether `who` may archive this file as far as its page goes: a page's managers and writers, or no page.
+        `is_page`, when the caller's read already joined the page, saves looking it up."""
         from . import page_links
         from .pages import may_manage
 
-        if not c.execute("SELECT 1 FROM pages WHERE file_id=? AND deleted_at IS NULL", (row["id"],)).fetchone():
+        if is_page is None:
+            is_page = c.execute("SELECT 1 FROM pages WHERE file_id=? AND deleted_at IS NULL", (row["id"],)).fetchone()
+        if not is_page:
             return True
         return may_manage(c, self.auth, who, row) or page_links.may_write(c, self.auth, who, row)
 
-    def can_restore(self, c, who, row):
-        """Whether `who` may bring back an archived file on a task listing: each flag that archived it under its own
-        rule, a page's (page managers and writers), a task file's (participants with page rights), else a file's
-        (its managers)."""
-        if (row["page_archived"] or task_scoped(row)) and not self.page_rights(c, who, row):
+    def can_restore(self, c, who, row, memo):
+        """Whether `who` may bring back an archived file on a task listing (rows joined to their page): each flag that
+        archived it under its own rule, a page's (page managers and writers), a task file's (participants with page
+        rights), else a file's (its managers). `memo` keeps each task's and the managers' answer for one listing."""
+        if (row["page_archived"] or task_scoped(row)) and not self.page_rights(c, who, row, bool(row["page_id"])):
             return False
         if not row["archived"]:
             return True
-        if task_scoped(row):
-            return self.participant(c, who, H.task(c, row["task_id"]))
-        return who.role in ("owner", "human") and bool(self.auth.bot_admin(who))
+        key = row["task_id"] if task_scoped(row) else ""
+        if key not in memo:
+            memo[key] = (
+                self.participant(c, who, H.task(c, key))
+                if key
+                else who.role in ("owner", "human") and bool(self.auth.bot_admin(who))
+            )
+        return memo[key]
 
     def archive_task_file(self, c, who, stored, archived):
         """Take a task file off its task, or bring it back. Its versions stay either way."""
@@ -1894,7 +1902,7 @@ class Files:
         signed = signed_versions(c, [r["id"] for r in rows if r["mime"] == "application/pdf"])
         if all_pages:
             page_links.prime(c, [row for row in rows if row["page_id"]])
-        listed = []
+        listed, restorers = [], {}
         for row in rows:
             fid = row["id"]
             history = histories.get(fid, [])
@@ -1923,7 +1931,7 @@ class Files:
                         "mime": row["mime"],
                         "current_version": row["current_version"],
                         "archived": archived,
-                        **({"can_restore": self.can_restore(c, who, row)} if archived else {}),
+                        **({"can_restore": self.can_restore(c, who, row, restorers)} if archived else {}),
                         "versions": [
                             {
                                 "n": v["version"],
