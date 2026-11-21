@@ -86,7 +86,7 @@ def record(c, who, bot, report, assistant_bot):
     """Store what a computer reported for a bot assigned to it. Returns how many commits were new or changed."""
     if not c.execute("SELECT 1 FROM assignments WHERE bot=? AND runner_id=?", (bot, who.runner_id)).fetchone():
         raise Problem("forbidden", "That bot is not assigned to this computer", 403)
-    now, changed = H.now(), 0
+    now, changed, withheld = H.now(), 0, False
     for commit in report.commits:
         files = [f for f in commit.files if f.startswith(FOLDERS) and ".." not in f.split("/")]
         at = H.parse_ts(commit.committed)
@@ -95,7 +95,14 @@ def record(c, who, bot, report, assistant_bot):
         committed = at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
         attempt = _run_of(c, bot, commit.attempt)
         if attempt and personal_turn(c, attempt, assistant_bot):
+            # A person's own chat wrote it (an older runner, which still runs those turns in the shared checkout): never
+            # shown, withdrawn if an earlier report showed it before its run was known, and this report's documents,
+            # which may now hold it, are not kept either.
+            withheld = True
+            changed += c.execute("DELETE FROM bot_memory_updates WHERE bot=? AND sha=?", (bot, commit.sha)).rowcount
             continue
+        if bot == assistant_bot and not attempt:
+            continue  # the Assistant's commit is shown only once its run is known not to be a person's own chat
         before = c.execute(
             "SELECT attempt_id,shared FROM bot_memory_updates WHERE bot=? AND sha=?", (bot, commit.sha)
         ).fetchone()
@@ -127,6 +134,8 @@ def record(c, who, bot, report, assistant_bot):
             ),
         )
         changed += 1
+    if withheld:
+        return changed
     oversized = {path for path in report.oversized if path in DOCUMENTS}
     for path, content in report.documents.items():
         if path not in DOCUMENTS:

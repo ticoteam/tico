@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from backend.store import H
 from backend.memory_history import MAX_DOCUMENT_BYTES, MAX_REPORT_BYTES
 from backend.tests.helpers.api import assign, claim, headers, post, ready, runner  # noqa: F401  (fixtures)
 
@@ -59,15 +60,30 @@ def test_a_reported_update_shows_its_source_only_to_readers_of_that_chat(api):
 
 
 def test_a_memory_commit_from_a_persons_own_assistant_chat_is_never_recorded(api):
-    """One Assistant serves everyone: what its turn in a person's own room wrote in memory/ is not shown to its readers."""
+    """One Assistant serves everyone. An older runner still runs a person's own chat in the shared checkout: what that
+    turn committed in memory/ is never shown (withdrawn if shown before its run was known), nor that report's documents,
+    and an Assistant commit whose run is not known waits."""
     machine = runner(api)
     assign(api, machine, "assistant")
     ready(api, machine, ["assistant"])
     post(api, "assistant/messages", {"text": "My salary is 90k"}, "ben-test")
     attempt = claim(api, machine, "assistant")
-    body = {"commits": [commit(attempt=attempt["id"], subject="Ben earns 90k")]}
-    assert post(api, "bots/assistant/memory/report", body, machine["token"])["recorded"] == 0
-    assert history(api, "ana-test", "assistant")["updates"] == []
+    assert attempt["personal"] is True
+    unknown = {"commits": [commit(subject="Ben earns 90k")]}
+    assert post(api, "bots/assistant/memory/report", unknown, machine["token"])["recorded"] == 0
+    with api.app.state.store.transaction() as c:  # shown by an older server before its run was known
+        c.execute(
+            "INSERT INTO bot_memory_updates(bot,sha,subject,author,committed_at,files,diff,truncated,attempt_id,shared,"
+            "runner_id,reported_at) VALUES('assistant',?,'Ben earns 90k','',?,'[]','',0,'',1,'',?)",
+            (SHA, H.now(), H.now()),
+        )
+    known = {
+        "commits": [commit(attempt=attempt["id"], subject="Ben earns 90k")],
+        "documents": {"memory/learnings.md": "- Ben earns 90k\n"},
+    }
+    assert post(api, "bots/assistant/memory/report", known, machine["token"])["recorded"] == 1
+    shown = history(api, "ana-test", "assistant")
+    assert shown["updates"] == [] and "90k" not in json.dumps(shown)
 
 
 def test_only_the_assigned_computer_reports_and_runs_must_be_the_bots_own(api):

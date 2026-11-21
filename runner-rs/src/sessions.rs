@@ -943,146 +943,6 @@ pub async fn discard_pass(path: &Path, turn: &Env) -> Result<Vec<String>, String
     }
 }
 
-/// `args`, limited to memory/ and knowledge/.
-fn in_memory<'a>(args: &[&'a str]) -> Vec<&'a str> {
-    args.iter()
-        .copied()
-        .chain(["--"])
-        .chain(MEMORY_FOLDERS.iter().copied())
-        .collect()
-}
-
-/// Whether this is the Assistant's turn in a person's own room (`scope: personal`). One Assistant serves the whole
-/// company, so such a turn keeps nothing in memory/ or knowledge/ (`drop_memory_writes`): what it wrote there could be
-/// one person's private work, which every other person's turn reads.
-pub fn personal_room(attempt: &Value, assistant: &str) -> bool {
-    !assistant.is_empty()
-        && text_of(&attempt["bot"]) == assistant
-        && attempt["conversation"]["scope"] == "personal"
-}
-
-/// A personal-room turn's checkout after its turn (`personal_room`): every change it made under memory/ and knowledge/
-/// since `start`, committed or not, through any tool, is undone before anything is pushed. Its other commits are kept as
-/// one commit of the run. Returns the paths it undid, for the run log, or the problem.
-pub async fn drop_memory_writes(
-    path: &Path,
-    start: &str,
-    aid: &str,
-    turn: &Env,
-) -> Result<Vec<String>, String> {
-    crate::repo_safety::outside_installation(path)?;
-    if start.is_empty() {
-        return Err("the turn's first commit is not known".into());
-    }
-    let env = crate::safegit::committing_environment(turn);
-    let names = |out: &Out| -> Vec<String> {
-        out.stdout
-            .split('\0')
-            .filter(|p| !p.is_empty())
-            .map(String::from)
-            .collect()
-    };
-    let done: Result<Result<Vec<String>, String>, Fault> = async {
-        let committed = g(
-            path,
-            &env,
-            &in_memory(&["diff", "-z", "--name-only", start, "HEAD"]),
-            15,
-        )
-        .await?;
-        let status = g(
-            path,
-            &env,
-            &in_memory(&["status", "-z", "--porcelain", "--untracked-files=all"]),
-            15,
-        )
-        .await?;
-        if !committed.ok() || !status.ok() {
-            return Ok(Err("git could not say what the turn changed".into()));
-        }
-        let mut undone = names(&committed);
-        undone.extend(
-            names(&status)
-                .iter()
-                .filter(|e| e.len() > 3)
-                .map(|e| e[3..].to_string()),
-        );
-        undone.sort();
-        undone.dedup();
-        if undone.is_empty() {
-            return Ok(Ok(undone));
-        }
-        let rewound = !committed.stdout.is_empty();
-        // The turn's commits become staged changes, so the memory folders can be taken out of them.
-        if rewound
-            && !g(path, &env, &["reset", "-q", "--soft", start], 15)
-                .await?
-                .ok()
-        {
-            return Ok(Err("git reset failed".into()));
-        }
-        // Every tracked path there that differs from `start`, in the tree or the index, goes back to it (or goes).
-        let mut tracked = names(
-            &g(
-                path,
-                &env,
-                &in_memory(&["diff", "-z", "--name-only", start]),
-                15,
-            )
-            .await?,
-        );
-        tracked.extend(names(
-            &g(
-                path,
-                &env,
-                &in_memory(&["diff", "-z", "--cached", "--name-only", start]),
-                15,
-            )
-            .await?,
-        ));
-        tracked.sort();
-        tracked.dedup();
-        if !tracked.is_empty() {
-            let literal: Vec<String> = tracked.iter().map(|p| format!(":(literal){p}")).collect();
-            let mut back = vec!["checkout", "-q", "--no-overlay", start, "--"];
-            back.extend(literal.iter().map(String::as_str));
-            if !g(path, &env, &back, 45).await?.ok() {
-                return Ok(Err("git checkout failed".into()));
-            }
-        }
-        if !g(path, &env, &in_memory(&["clean", "-fdq"]), 45)
-            .await?
-            .ok()
-        {
-            return Ok(Err("git clean failed".into()));
-        }
-        if rewound
-            && !g(path, &env, &["diff", "--cached", "--quiet"], 15)
-                .await?
-                .ok()
-        {
-            let message = format!("Changes from run {aid}\n\nTico-Run: {aid}");
-            if !g(
-                path,
-                &env,
-                &["commit", "-q", "--no-verify", "-m", &message],
-                15,
-            )
-            .await?
-            .ok()
-            {
-                return Ok(Err("git commit failed".into()));
-            }
-        }
-        Ok(Ok(undone))
-    }
-    .await;
-    match done {
-        Ok(result) => result,
-        Err(f) => Err(fault_name(&f)),
-    }
-}
-
 /// Take a closed task's worktree and branch away once nothing in it is unsaved. True when gone.
 pub async fn remove(main: &Path, path: &Path, task: &str, turn: &Env) -> bool {
     if crate::repo_safety::outside_installation(main).is_err()
@@ -1782,13 +1642,17 @@ pub struct Place {
     pub execution_path: PathBuf,
     pub add_dirs: Vec<String>,
     pub rules_digest: String,
-    /// Make page and a retired lane from a previous hub release both use a disposable checkout.
+    /// Make page, a person's own Assistant chat (PersonalCopy) and a retired lane from a previous hub release use a
+    /// disposable checkout: nothing in it is pushed or reported.
     pub disposable: bool,
+    /// A person's own Assistant chat (`personal` on the claim): it runs in its PersonalCopy.
+    pub personal: bool,
     /// The turn is a person's: it goes first for the checkout and never waits for its worktree.
     person: bool,
     _lane: OwnedMutexGuard<()>,
     checkout: Option<OwnedMutexGuard<()>>,
     _scratch: Option<MakePageScratch>,
+    _copy: Option<PersonalCopy>,
 }
 
 /// Outside every checkout and scan root; all outcomes, including a canceled future, discard the turn's files.
@@ -1818,6 +1682,77 @@ impl Drop for MakePageScratch {
                 self.0.display()
             ));
         }
+    }
+}
+
+/// A personal turn's own copy of the bot's checkout (`personal` on the claim: the Assistant in a person's own room). One
+/// Assistant serves the whole company, so nothing such a turn writes may reach the checkout every other person's turn
+/// reads: it runs in a local clone with no remote, which its environment has no git credentials to push from either
+/// (crate::gitcred::without_credentials), and the clone is removed when the turn ends. Its path is the same for every
+/// turn in the room, so the harness finds the room's session again. The shared checkout is only read.
+pub(crate) struct PersonalCopy(pub PathBuf);
+
+impl PersonalCopy {
+    pub(crate) fn path_for(attempt: &Value) -> PathBuf {
+        let conversation = &attempt["conversation"];
+        let room = [&conversation["root_id"], &conversation["id"]]
+            .into_iter()
+            .map(text_of)
+            .find(|r| !r.is_empty())
+            .unwrap_or_else(|| text_of(&attempt["id"]));
+        let key = gitrun::sha256_hex(format!("{}\n{room}", text_of(&attempt["bot"])).as_bytes());
+        std::env::temp_dir().join(format!("tico-personal-{}", &key[..16]))
+    }
+
+    /// Clone `main` (already refreshed for this turn) into the room's path, replacing a copy a stopped turn left.
+    pub(crate) async fn make(main: &Path, attempt: &Value) -> Result<Self, String> {
+        let copy = Self(Self::path_for(attempt));
+        copy.remove();
+        crate::isolation::mkdir(&copy.0, 0o700)
+            .map_err(|e| format!("cannot make this chat's copy of the checkout: {e}"))?;
+        crate::checkout_groups::prepare(copy.0.clone()).await;
+        let env = crate::safegit::clean_environment(&crate::env::process_environment());
+        let (from, to) = (main.display().to_string(), copy.0.display().to_string());
+        let cloned = g(main, &env, &["clone", "-q", "--local", ".", &to], 120)
+            .await
+            .map_err(|f| fault_name(&f))?;
+        if !cloned.ok() {
+            return Err(format!(
+                "cannot copy {from} for this chat: {}",
+                git_reason(&cloned)
+            ));
+        }
+        let remotes = g(&copy.0, &env, &["remote"], 15)
+            .await
+            .map_err(|f| fault_name(&f))?;
+        for remote in remotes.stdout.lines().filter(|r| !r.trim().is_empty()) {
+            let gone = g(&copy.0, &env, &["remote", "remove", remote.trim()], 15)
+                .await
+                .map_err(|f| fault_name(&f))?;
+            if !gone.ok() {
+                return Err(format!(
+                    "cannot take this chat's copy off its remote: {}",
+                    git_reason(&gone)
+                ));
+            }
+        }
+        Ok(copy)
+    }
+
+    fn remove(&self) {
+        match std::fs::remove_dir_all(&self.0) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => log(&format!(
+                "Tico runner: cannot remove a chat's copy of its checkout {}: {e}",
+                self.0.display()
+            )),
+            _ => {}
+        }
+    }
+}
+
+impl Drop for PersonalCopy {
+    fn drop(&mut self) {
+        self.remove();
     }
 }
 
@@ -1855,7 +1790,9 @@ impl Runner {
         let lane = turn_lane(attempt);
         let make_page = attempt["make_page"]["task"].is_object();
         let legacy_meeting = lane.starts_with(LEGACY_MEETING_LANE);
-        let task = if !slug_ok(&bot) || make_page {
+        // A person's own Assistant chat, a task's turn there included, works in its PersonalCopy, never a worktree.
+        let personal = truthy(Some(&attempt["personal"])) && !make_page;
+        let task = if !slug_ok(&bot) || make_page || personal {
             String::new()
         } else if legacy_meeting {
             private_of(&lane)
@@ -1908,11 +1845,13 @@ impl Runner {
             session_path: None,
             add_dirs: vec![],
             rules_digest: String::new(),
-            disposable: legacy_meeting || make_page,
+            disposable: legacy_meeting || make_page || personal,
+            personal,
             person,
             _lane: lane_guard,
             checkout,
             _scratch: scratch,
+            _copy: None,
         })
     }
 
@@ -1971,6 +1910,12 @@ impl Runner {
     ) -> Result<&'static str, String> {
         if place._scratch.is_some() {
             return Ok("");
+        }
+        if place.personal {
+            // Its own copy, made from the checkout refreshed for this turn; the checkout itself is never its workspace.
+            let copy = PersonalCopy::make(&place.main_path, attempt).await?;
+            place.execution_path = copy.0.clone();
+            place._copy = Some(copy);
         }
         let mut suffix = "";
         if !place.task.is_empty() {
@@ -2225,22 +2170,6 @@ impl Runner {
         };
         let _git = self.lanes.git_lock(&place.main_path).lock_owned().await;
         discard_pass(session, env).await
-    }
-
-    /// A personal-room turn's end, before anything is pushed: `drop_memory_writes` in its checkout, under the checkout's git
-    /// lock. A disposable checkout is never pushed and keeps nothing.
-    pub async fn drop_memory_writes_place(
-        &self,
-        place: &Place,
-        start: &str,
-        aid: &str,
-        env: &Env,
-    ) -> Result<Vec<String>, String> {
-        if place.disposable {
-            return Ok(vec![]);
-        }
-        let _git = self.lanes.git_lock(&place.main_path).lock_owned().await;
-        drop_memory_writes(&place.execution_path, start, aid, env).await
     }
 
     /// A finished task's worktree goes once its turn has ended, unless a file is still waiting to upload from it.

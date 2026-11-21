@@ -142,15 +142,17 @@ def test_a_call_follow_up_reports_in_its_call_not_in_the_assistant_chat(meet):
     call = start_call(meet, room, bots=["ops"])
     join(meet, call["id"], "ben-test")
     _, attempt = assistant_turn(meet, "ben-test", "Have ops find the ship date")
-    # Filed through the call's own route. Its response is refused to the Assistant's turn today (a private task, #4781),
-    # but the follow-up is filed, so the status is not what this test is about.
-    meet.post(
+    # Filed through the call's own route, as Ben: the private follow-up's receipt is his, and the Assistant reads none.
+    filed = meet.post(
         f"/api/v2/calls/{call['id']}/follow-ups",
         json={"ask": "Find the ship date", "bot": "ops"},
         headers=headers(attempt["token"]),
     )
+    assert filed.status_code == 200, filed.text
+    task_id = filed.json()["task_id"]
+    assert meet.get("/api/v2/tasks/" + task_id, headers=headers(attempt["token"])).status_code == 404
     with meet.app.state.store.read() as c:
-        task_id = c.execute("SELECT task_id FROM call_follow_ups WHERE call_id=?", (call["id"],)).fetchone()[0]
+        assert not H.task_private_readable(c, "bot:assistant", H.task(c, task_id))
     with meet.app.state.store.transaction() as c:
         said_done(c, task_id, "June 3")
     meet.app.state.calls.sweep()

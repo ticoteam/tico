@@ -343,7 +343,10 @@ def install(app: FastAPI, auth: Any, write: Any) -> None:
         **api_v2("Calls", "createCallFollowUp", "Hand a live call's question to a bot's normal task", "CallFollowUp"),
     )
     def follow_up(request: Request, call_id: str, body: FollowUp) -> Any:
-        who: Identity = request.state.identity
+        # A follow-up is a private task: the person's own Assistant turn files it and reads its receipt as the person
+        # (task_privacy.as_the_person), so the shared Assistant becomes no reader of it.
+        who: Identity = task_privacy.as_the_person(request.state.identity) or request.state.identity
+        request.state.identity = who
 
         def work(c: Connection) -> dict[str, str]:
             row, bot = may_file(c, auth, who, call_id, body.bot)

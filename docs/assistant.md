@@ -124,9 +124,9 @@ Everyone, the owner and administrators included, has the Assistant.
 The team owner and administrators cannot read anyone else's, and no other route reaches the assistant: the ordinary
 chat routes still refuse it (`403`).
 
-One Assistant serves everyone, so nothing a turn in your DM writes in the Assistant's memory/ or knowledge/ is kept: the
-runner undoes it before anything is pushed, and the server records none of it in the Assistant's learnings. A private
-task it hands off for you is filed as you; the Assistant itself becomes no reader or owner of it.
+One Assistant serves everyone, so nothing a turn in your DM writes in the Assistant's files is kept: the runner runs it in
+a throwaway copy it cannot push from, and the server records none of its memory/ or knowledge/ in the Assistant's
+learnings. A private task it hands off for you is filed as you; the Assistant itself becomes no reader or owner of it.
 
 You may let bots you choose view it, read only. On **What it has learned** (your Assistant's settings), the line
 **Bots that can view this chat** says None until you add one: **Add a bot**, type part of its name, pick it. Nobody is

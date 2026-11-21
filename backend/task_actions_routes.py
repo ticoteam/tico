@@ -1,7 +1,6 @@
 """Task reads, writes, run models and org-rule replays."""
 
 import json
-from dataclasses import replace
 from . import views
 from . import read_cache
 from . import person_asks
@@ -650,7 +649,10 @@ def register_core(
         if body.for_actor:
             # A bot files a person's own ask: the person asked for it, so it is theirs (Ideas: say it once, #227).
             requester_actor = filed_for(c, who, body.for_actor, body.from_message)
-        if private and actual_bot and actual_bot not in (requester_actor or who.actor, owner):
+        # The person's own Assistant turn files their private handoff as them (privacy.as_the_person): the Assistant
+        # stays out of it, so it is no participant to require.
+        person = privacy.as_the_person(who) if private else None
+        if private and actual_bot and not person and actual_bot not in (requester_actor or who.actor, owner):
             raise Problem("privacy", "The acting bot must be a current participant of the private task", 403)
         if reach_to:
             H.task_reach(c, who.actor, parent, owner)
@@ -830,7 +832,7 @@ def register_core(
             )
         )
         return {
-            "task": task_view(H.task(c, row["id"]), c, visible_sql=auth.task_sql(c, who), who=who),
+            "task": task_view(H.task(c, row["id"]), c, visible_sql=auth.task_sql(c, person or who), who=person or who),
             **({"readback": readback} if readback else {}),
             **ask_ingest.reply(gate),
             **org_rule_check.answer(rule_gate),
@@ -877,11 +879,6 @@ def register_core(
             # with its own rights, and is its requester (who filed it).
             who = Identity(who.task_actor, "bot", runner_id=who.runner_id, attempt_id=who.attempt_id, agent=who.agent)
             request.state.identity = who
-        elif who.via == "assistant" and who.attempt_id and who.task_actor and H.is_human(who.actor):
-            # The person's own Assistant turn (auth.assistant_principal) files as the person for this one request, as a
-            # Make page request does: the shared Assistant becomes no reader or owner of a private task it hands on.
-            who = replace(who, task_actor="")
-            request.state.identity = who
         cap_before_preflight(request, who, body.owner, body.parent)
         rc = rule_check(
             who,
@@ -898,12 +895,17 @@ def register_core(
         return ask_ingest.judged(
             store,
             ingest,
-            lambda: mutate(
-                request,
-                body,
-                lambda c: task_create(c, request.state.identity, body, ingest=ingest, rule=rc),
-            ),
+            lambda: mutate(request, body, lambda c: filed(c, request, body, ingest, rc)),
         )
+
+    def filed(c, request, body, ingest, rc):
+        """task_create, and its receipt: a private handoff the person's own Assistant turn filed is returned as the person
+        (privacy.as_the_person), for this request only."""
+        made = task_create(c, request.state.identity, body, ingest=ingest, rule=rc)
+        person = privacy.as_the_person(request.state.identity)
+        if person and (made.get("task") or {}).get("private"):
+            request.state.identity = person
+        return made
 
     def rule_prepare_task(store_, bot, replay):
         body = replay.get("body") or {}

@@ -583,6 +583,33 @@ pub(crate) fn git_environment(env: &mut Env, token: &str, helper: &str) {
     }
 }
 
+/// A turn that must push nothing (a person's own Assistant chat, crate::sessions::PersonalCopy): no GitHub token, no
+/// credential socket and no credential helper, so neither git nor gh has anything to sign in with.
+pub fn without_credentials(env: &mut Env) {
+    for key in [
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        OTHER_TOKEN_KEY,
+        TOKENS_KEY,
+        SOCKET_ENV,
+        REPOSITORY_KEY,
+    ] {
+        env.remove(key);
+    }
+    let count: usize = env
+        .get("GIT_CONFIG_COUNT")
+        .and_then(|c| c.parse().ok())
+        .unwrap_or(0);
+    for i in 0..count {
+        let helper = env.get(&format!("GIT_CONFIG_KEY_{i}")).is_some_and(|k| {
+            k.starts_with("credential.") && k.ends_with(".helper") || k == "credential.helper"
+        });
+        if helper {
+            env.insert(format!("GIT_CONFIG_VALUE_{i}"), String::new());
+        }
+    }
+}
+
 /// Git refuses a work tree another user owns. A Gateway turn's leased user works in the bot's checkout, so the
 /// turn trusts exactly these paths (never `*`), after the entries `git_environment` set.
 pub fn trust_directories(env: &mut Env, paths: &[PathBuf]) {
