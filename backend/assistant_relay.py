@@ -8,7 +8,7 @@ chat: a short summary and a link to the full reply, read with the person's own a
 dedupe record (task_effects.assistant_line, as the report back writes).
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     import sqlite3
@@ -36,7 +36,8 @@ def replied(conn: "sqlite3.Connection", reply: Row) -> None:
     asked = conn.execute(_ASKED_SQL, (reply["conversation_id"], reply["id"])).fetchone()
     if not asked or asked["sender_id"] != person or asked["recipient_id"] != agent or asked["kind"] != "say":
         return
-    if (H._json(asked["refs"], {}) or {}).get("via") != "assistant":
+    refs: object = H._json(asked["refs"], {})
+    if not isinstance(refs, dict) or cast(Row, refs).get("via") != "assistant":
         return
     key = f"assistant_relay:{asked['id']}"
     if conn.execute("SELECT 1 FROM messages WHERE wake_key=?", (key,)).fetchone():
