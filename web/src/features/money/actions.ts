@@ -542,6 +542,15 @@ export const askManager = defineAction({
   kind: 'change',
   input: z.strictObject({ text: z.optional(z.string().check(z.minLength(1), z.maxLength(4000))) }),
   run: async ({ router, queryClient: qc }, { text }): Promise<string> => {
+    // where it was asked from (the page, its month, segment and open panel), before anything is awaited: the chat
+    // opens beside only if the person is still there
+    const here = () => {
+      const q = new URLSearchParams(router.state.location.searchStr);
+      q.delete('chat');
+      q.sort();
+      return `${router.state.location.pathname}?${q.toString()}`;
+    };
+    const at = here();
     const who = await findGrowthManager(qc);
     if (!who) throw new Error('No Growth Manager');
     const words = text?.trim();
@@ -558,7 +567,7 @@ export const askManager = defineAction({
       const thread = sent.conversation_id || sent.thread_id;
       if (thread) chat = `thread:${thread}`;
     }
-    await router.navigate({ to: '.', search: (prev: Record<string, unknown>) => ({ ...prev, chat }) });
+    if (here() === at) await router.navigate({ to: '.', search: (prev: Record<string, unknown>) => ({ ...prev, chat }) });
     return chat;
   },
   did: ({ text }, out) => (out === HELD ? 'Held for a check' : text?.trim() ? 'Asked the Growth Manager' : 'Opened the chat'),

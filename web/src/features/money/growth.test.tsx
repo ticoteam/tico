@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider, useSearch } from '@tanstack/react-router';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClient, type Actor } from '@/data';
 import { Toasts } from '@/kit/Toast';
@@ -19,7 +19,7 @@ const broken: Reply = { status: 500, body: {} };
 
 const posts: { path: string; body: Record<string, unknown> }[] = [];
 /** What a message to an agent's DM answers: the message and the thread it went to, or a hold. */
-let dmReply: Record<string, unknown> = { id: 'm1', conversation_id: 'dm-gm1', thread_id: 'dm-gm1' };
+let dmReply: Record<string, unknown> | Promise<Record<string, unknown>> = { id: 'm1', conversation_id: 'dm-gm1', thread_id: 'dm-gm1' };
 
 /** Growth's reads, each replaceable (`path?scope=` for one scope); anything else is not found. Every POST is kept. */
 function serve(over: Record<string, Reply> = {}, urls: URL[] = []) {
@@ -35,7 +35,7 @@ function serve(over: Record<string, Reply> = {}, urls: URL[] = []) {
     if ((init?.method ?? 'GET') === 'POST') {
       posts.push({ path, body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown> });
       // a message to an agent's DM answers with the message and the thread it went to
-      const sent = path === '/threads/dm/messages' ? dmReply : {};
+      const sent = path === '/threads/dm/messages' ? await dmReply : {};
       return new Response(JSON.stringify(sent), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }
     urls.push(u);
@@ -224,6 +224,26 @@ describe('Growth on the one read @s400 @s444', () => {
     expect(posts).toEqual([
       { path: '/threads/dm/messages', body: { text: 'All, October 2026: Why is search over?', to_dm: 'bot:gm1', refs: { from_page: { page: 'growth', label: 'Growth' } } } },
     ]);
+  });
+
+  it('opens no chat when the person moved to another month before the answer came @4882-S8', async () => {
+    let answer!: (r: Record<string, unknown>) => void;
+    dmReply = new Promise((r) => (answer = r));
+    try {
+      directory(GM());
+      serve(OWNED);
+      const router = show('/company/growth?month=2026-10');
+      fireEvent.change(await screen.findByRole('textbox', { name: 'Ask the Growth Manager' }), { target: { value: 'Why is search over?' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+      await waitFor(() => expect(posts).toHaveLength(1));
+      act(() => void router.navigate({ to: '.', search: { month: '2026-09' } } as never));
+      await waitFor(() => expect(router.state.location.search).toEqual({ month: '2026-09' }));
+      await act(async () => answer({ id: 'm1', conversation_id: 'dm-gm1', thread_id: 'dm-gm1' }));
+      await waitFor(() => expect((screen.getByRole('textbox', { name: 'Ask the Growth Manager' }) as HTMLInputElement).value).toBe(''));
+      expect(router.state.location.search).toEqual({ month: '2026-09' });
+    } finally {
+      dmReply = { id: 'm1', conversation_id: 'dm-gm1', thread_id: 'dm-gm1' };
+    }
   });
 
   it('says a held ask was held, clears the line and opens no chat @4882-S2', async () => {

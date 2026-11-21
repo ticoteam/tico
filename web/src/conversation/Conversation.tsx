@@ -23,7 +23,7 @@ import { onJump } from './Outline';
 import { ChatPlace } from './Rich';
 import { quoteFrom, quoteOf, Replying } from './Quote';
 import { SessionLine, type Session } from './Session';
-import { installConversationLive, liveQuery, liveText, markRead, rowsOf, sendMessage, strandedQuery, timelineQuery } from './queries';
+import { installConversationLive, liveQuery, liveText, markRead, rowsOf, sendMessage, timelineQuery, useStranded } from './queries';
 import type { ChatMessage, LiveRun, Variant } from './types';
 
 /** Within this many pixels of the end counts as "at the bottom": what comes in is read, and the asks over the box come back. */
@@ -185,9 +185,9 @@ export function Conversation({ id, variant, title, actor, session, from, starter
   const timeline = useInfiniteQuery(timelineQuery(id));
   const { data: live = [] } = useQuery(liveQuery(id));
   // the Agent bar's rows that failed when its DM changed under them, kept by its agent, for Retry here
-  const { data: stranded } = useQuery({ ...strandedQuery(toDm ?? ''), enabled: !!toDm });
+  const stranded = useStranded(toDm);
   const ownRows = rowsOf(timeline.data);
-  const own = stranded?.length ? [...ownRows, ...stranded.filter((m) => !ownRows.some((r) => r.id === m.id))] : ownRows;
+  const own = stranded.length ? [...ownRows, ...stranded.filter((m) => !ownRows.some((r) => r.id === m.id))] : ownRows;
   const rows = withExtra(own, extra, !!timeline.hasNextPage);
   const extraIds = new Set(extra?.map((m) => m.id));
 
@@ -300,8 +300,11 @@ export function Conversation({ id, variant, title, actor, session, from, starter
   const send = (text: string, files: File[], retry?: ChatMessage) => {
     if (!myId) return;
     jump.current = true;
-    const answers = retry ? retry.in_reply_to : replyTo?.id;
-    const quote = retry ? retry.reply_to : replyTo && quoteFrom(replyTo);
+    // a retry in another thread than its own (a stranded row of the Agent bar) answers nothing there: what it replied
+    // to is in the thread it was first written in
+    const home = !retry || (retry.thread_id || retry.conversation_id) === id;
+    const answers = retry ? (home ? retry.in_reply_to : undefined) : replyTo?.id;
+    const quote = retry ? (home ? retry.reply_to : undefined) : replyTo && quoteFrom(replyTo);
     if (!retry) setReplying(null);
     void sendMessage({
       id,

@@ -25,8 +25,13 @@ export function AgentBox({ agent, from, draftId }: AgentBoxProps) {
   const me = useMe();
   const who = useActor(agent);
   const router = useRouter();
-  // what is open where the box is: the page, and the item its address names (the mail open in Mail)
-  const here = () => `${router.state.location.pathname}?${new URLSearchParams(router.state.location.searchStr).get('open') ?? ''}`;
+  // where the box is: the page and all its address names (Mail's mailbox, view and open mail), but the chat beside it
+  const here = () => {
+    const q = new URLSearchParams(router.state.location.searchStr);
+    q.delete('chat');
+    q.sort();
+    return `${router.state.location.pathname}?${q.toString()}`;
+  };
   if (!me) return null;
   return (
     <Composer

@@ -1414,8 +1414,8 @@ def install(app, store, auth, mutate, rule_check):
             _delivery_words(body)
             page_owners.check_from({"from_page": body.from_page})
             if to_dm:
-                # the DM and the right to write in it, read together, before any byte is taken
-                with store.read() as c:
+                # the DM and the right to write in it, read in one snapshot, before any byte is taken
+                with store.read_transaction() as c:
                     found = checked["found"] = dm_target(c, who, body)
                     if found:
                         threads.require(c, threads.viewer(auth, who), found, write=True)

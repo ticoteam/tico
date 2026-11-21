@@ -227,7 +227,10 @@ describe('Conversation', () => {
     const view = render(bar(T), { wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider> });
     type('Ship it');
     await waitFor(() => expect(onMoved).toHaveBeenCalledWith(''));
-    // the bar reads its DM again and shows another thread: the row is still there
+    // the bar reads its DM again and shows another thread, and the cache starts over (a stream reset): the row is not
+    // in it, and is still there
+    queryClient.removeQueries({ queryKey: ['threads'] });
+    queryClient.removeQueries({ queryKey: ['thread', T] });
     queryClient.setQueryData(['thread', 'T2', 'timeline'], { pages: [{ messages: [], next_cursor: null, read_marks: {} }], pageParams: [null] });
     view.rerender(bar('T2'));
     expect(await screen.findByText('Not sent')).toBeTruthy();
