@@ -207,6 +207,10 @@ def test_a_link_check_asks_one_provider_and_never_falls_back(ruled):
 
     def up(state, questions, label=None):
         asked.append("second")
+        if str(label or "").startswith("rule-part@"):  # the held mail's part call: point at the part with the needle
+            hit = next(p["id"] for p in state["parts"] if "favorite color is" in p["text"].lower())
+            answers = {qid: {"type": "choice", "choice": hit, "confidence": 0.9} for qid in questions}
+            return {"model": "jev-1.14", "usage": {"input_tokens": 10, "output_tokens": 0}, "ms": 1, "answers": answers}
         return Judge()(state, questions, label)
 
     two = type("Two", (), {"steps": [down, up]})()
@@ -339,6 +343,10 @@ def test_email_keeps_its_own_judge_and_falls_back_to_a_second_provider(ruled):
 
     def up(state, questions, label=None):
         asked.append("second")
+        if str(label or "").startswith("rule-part@"):  # the held mail's part call: point at the part with the needle
+            hit = next(p["id"] for p in state["parts"] if "favorite color is" in p["text"].lower())
+            answers = {qid: {"type": "choice", "choice": hit, "confidence": 0.9} for qid in questions}
+            return {"model": "jev-1.14", "usage": {"input_tokens": 10, "output_tokens": 0}, "ms": 1, "answers": answers}
         return Judge()(state, questions, label)
 
     api.app.state.judge = type("Two", (), {"steps": [down, up]})()
@@ -355,6 +363,14 @@ def test_email_keeps_its_own_judge_and_falls_back_to_a_second_provider(ruled):
     K.settle_parts()
     assert asked == ["first", "second", "first", "second"]
     assert link_events(api, "email")[0][2]["rules"] == [blocked["id"]]
+    # Both calls answered from the second provider, none failed: the part call's answer is the held part on the hold.
+    with api.app.state.store.read() as c:
+        calls = [
+            json.loads(r[0]) for r in c.execute("SELECT detail FROM events WHERE action='judge.call' ORDER BY rowid")
+        ]
+        [verdict] = [json.loads(r[0]) for r in c.execute("SELECT verdict FROM org_rule_holds WHERE operation='mail'")]
+    assert len(calls) == 2 and all(call.get("fallback") and "error" not in call for call in calls)
+    assert verdict["parts"] == {blocked["id"]: "Our favorite color is gold."} and "parts_pending" not in verdict
 
 
 def test_a_mail_decision_keeps_its_unchecked_reason_beside_a_directory_warning(ruled):
