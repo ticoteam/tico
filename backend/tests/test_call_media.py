@@ -167,6 +167,7 @@ def test_transcribing_returns_the_gateway_text_and_a_failed_gateway_is_unavailab
     method, url, body, headers = calls[0]
     assert method == "POST" and url == "https://gateway.acme.example/v1/audio/transcriptions"
     assert body["model"] == media.TRANSCRIBE_MODEL and body["input_audio"]["format"] == "wav"
+    assert body["language"] == "en"
     assert headers == {"Authorization": "Bearer gw-key"}
 
     monkeypatch.setattr(gateway, "relay", lambda *args, **kwargs: (503, b"{}"))
