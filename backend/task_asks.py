@@ -832,7 +832,7 @@ def party(conn: "sqlite3.Connection", actor: object, row: Row) -> bool:
 def parties_to_all(conn: "sqlite3.Connection", actor: object, requirement_ids: list[str]) -> bool:
     """Whether `actor` is a party (`party`) to the bound OK of every one of these requirements, read in one statement.
     False with no actor, no requirement, or one that names no bound OK: nothing then vouches for the reader."""
-    who, wanted = str(actor or ""), set(requirement_ids)
+    who, wanted = str(_h().read_as(conn, actor) or ""), set(requirement_ids)  # as the run sees (hubdb.read_as)
     if not who or not wanted:
         return False
     rows = conn.execute(
@@ -915,8 +915,13 @@ def private_history(conn: "sqlite3.Connection", viewer: object, events: list[Row
 def may_see(conn: "sqlite3.Connection", auth: object, who: object, requirement_id: str) -> bool:
     """Whether `who`, who reads the OK's task, may also open its preview: only its parties (`party`), and of those
     only whom the subject's own reader check lets read it (SEES: a file's audience). Anyone else gets "No such OK"."""
+    from . import task_privacy as _task_privacy
+
+    reads_as: Any = cast(Any, _task_privacy).actor  # task_privacy is untyped: as the run reads (hubdb.read_as)
+    principals: Any = reads_as(who) if who is not None else ""
+    reader: Any = cast(Any, principals)[0] if isinstance(principals, tuple) else principals
     row = grant(conn, requirement_id)
-    if not row or not party(conn, getattr(who, "actor", ""), row):
+    if not row or not party(conn, reader, row):
         return False
     check = SEES.get(kind_of(row["subject"]))
     return bool(check(conn, auth, who, row)) if check else True

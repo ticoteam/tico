@@ -268,6 +268,63 @@ def test_an_ok_asked_of_the_person_reads_as_theirs_in_their_own_chat(api):
     assert "OK to ship the fix Friday?" not in lines("cara-test")
 
 
+def sign_in_off(api, person):
+    with api.app.state.store.transaction() as c:
+        doc = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
+        for entry in doc["people"]:
+            if entry.get("id") == person:
+                entry["sign_in"] = False
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(doc),))
+
+
+def test_a_chat_of_someone_who_may_no_longer_sign_in_is_never_handed_out_nor_its_receipts_replayed(api):
+    """A run for a person who may no longer sign in reads nothing: their next chat turn is never handed out, and an
+    earlier run's acknowledgement receipt is not replayed either."""
+    from backend.tests.helpers.api import claim
+
+    r, attempt = assistant_turn(api, "ben-test", text="What's on my plate?")
+    ack = headers(r["token"], key="ack-1")
+    assert (
+        api.post(f"/api/v2/attempts/{attempt['id']}/started", json={"thread_id": "t"}, headers=ack).status_code == 200
+    )
+    done = {"outcome": "completed", "text": "Done", "last_seq": 0}
+    post(api, f"attempts/{attempt['id']}/complete", done, token=r["token"])
+    say(api, "Still there?", "ben-test")
+    sign_in_off(api, "ben")
+    replayed = api.post(f"/api/v2/attempts/{attempt['id']}/started", json={"thread_id": "t"}, headers=ack)
+    assert replayed.status_code == 403, replayed.text
+    assert claim(api, r) is None
+
+
+def test_a_page_read_in_the_persons_own_chat_is_checked_against_its_audience_as_them(api):
+    """A page's audience is read as the run's person in their own chat (files.version_refusal, as file_visible), and as
+    nobody once that person may no longer sign in, never as the Assistant itself."""
+    from backend import files
+    from backend.auth import Identity
+
+    task = post(api, "tasks", {"owner": "ops", "title": "Pricing", "body": "Draft.", "private": False})
+    with api.app.state.store.transaction() as c:
+        fid = X.shown(c, "Pricing page", "ops", task["id"])[0].split(":", 1)[1]
+        c.execute(
+            "INSERT INTO pages(file_id,audience,created_at,updated_at) VALUES(?,?,?,?)",
+            (fid, json.dumps({"everyone": False, "people": ["ana"]}), H.now(), H.now()),
+        )
+    r, attempt = assistant_turn(api, "ana-test", text="Show me the pricing page")
+    auth = api.app.state.auth
+
+    def refusal():
+        with api.app.state.store.read() as c:
+            who = auth.authenticate({"authorization": "Bearer " + attempt["token"]}, "/api/v2/files/" + fid, "GET")
+            row = dict(c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone())
+            return files.version_refusal(c, auth, who, row, 1, files.stored_version(c, fid, 1))
+
+    assert refusal() != "audience"
+    sign_in_off(api, "ana")
+    with api.app.state.store.read() as c:
+        run = auth.run_viewer(c, Identity("bot:assistant", "bot", attempt_id=attempt["id"]))
+        assert run.actor == "" and run.role == "none"
+
+
 def test_a_private_task_is_never_the_shared_assistants_as_owner_or_reader(api):
     """One Assistant serves everyone, so a private task naming it would be read by its runs for all: refused as owner or
     reader, on create and on a later change, from the person's own chat and from the person directly."""

@@ -5591,6 +5591,7 @@ class Execution:
         return {
             "attempt": rooms.scoped_wake(
                 c,
+                self.auth,
                 {
                     "chat_goal": chat_goal,
                     "routine": routine,
@@ -5699,7 +5700,11 @@ class Execution:
         job). It fails now instead, once, with a reason in the bot's run history that names no task, and its job is
         never taken again: the claim takes the next job. The check itself is the same and no wider."""
         principal = privacy.make_page_actor(c, "bot:" + row["bot_id"], msg)
-        if privacy.attempt_readable(c, principal, aid):
+        # A run of the shared Assistant whose person may no longer sign in reads nothing (rooms.run_scope): no claim. A
+        # Make page request is refused before it is handed out, by its own check (the person who asked, chat_person).
+        page = isinstance((H._json((msg or {}).get("refs"), {}) or {}).get("make_page"), dict)
+        gone = not page and "bot:" + row["bot_id"] == H.assistant_actor(c) and rooms.run_scope(c, aid)[0] == "gone"
+        if not gone and privacy.attempt_readable(c, principal, aid):
             return False
         c.execute(
             "UPDATE attempts SET state='failed',finished_at=?,lease_until=?,final_text=? WHERE id=?",

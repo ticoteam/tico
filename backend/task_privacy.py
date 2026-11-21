@@ -582,9 +582,18 @@ def assistant_room_actor(c, actor, message):
         and not room.get("closed_at")
         and owner == message.get("sender_id")
         and str(owner).startswith("human:")
+        and _signs_in(c, owner)
     ):
         return owner
     return actor
+
+
+def _signs_in(c, person):
+    """Whether the person is on the roster and may sign in now (auth.standing)."""
+    from .auth import standing
+
+    human = H.human(c, H.actor_id(person))
+    return bool(human) and not standing(c, human["id"])
 
 
 def message_readable(c, actor, message, current=False):

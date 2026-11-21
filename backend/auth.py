@@ -145,6 +145,11 @@ def touch(c, sql, args):
         pass
 
 
+# Whom a read of a gone person's run is checked as (Auth.run_viewer): no actor and no role, so every read check refuses
+# it (a file, a page, a task SQL of "0").
+NOBODY = Identity("", "none")
+
+
 def standing(c, pid):
     """ "left" when marked as left on the roster (backend/app.py person_update, which also ended their tokens),
     "off" when an owner or admin turned their sign-in off (Settings > Humans), else ""."""
@@ -607,9 +612,10 @@ class Auth:
             if person is None:
                 raise Problem("privacy", "The person can no longer run this page request", 403)
             principal = replace(person, task_actor="")
-        # The lease's own standing, as the claim checks it (execution.refuse_unreadable): the actor itself. What the
-        # receipt shows is then read as the run (task_privacy.actor).
-        if not privacy.attempt_readable(c, principal.actor, aid):
+        # As the run reads (task_privacy.actor: a run of the shared Assistant by its scope, rooms.run_scope, so a run
+        # whose person may no longer sign in has no receipt either).
+        gone = principal.actor == H.assistant_actor(c) and rooms.run_scope(c, aid)[0] == "gone"
+        if gone or not privacy.attempt_readable(c, privacy.actor(principal), aid):
             raise Problem("privacy", "This execution is no longer available", 403)
         if attempt["acting_person"]:
             for task_id in privacy.attempt_tasks(c, aid):
@@ -1378,14 +1384,19 @@ class Auth:
 
     def run_viewer(self, c, who):
         """Whom a lease of the shared Assistant reads as, in either form (its own run, or a person's own chat as them):
-        the person whose own chat it is (rooms.run_scope), by their own rights. Anyone else reads as themselves."""
+        the person whose own chat it is (rooms.run_scope), by their own rights; nobody (NOBODY: reads nothing, never the
+        Assistant itself) when that person is gone. Anyone else reads as themselves."""
         if not (who.attempt_id and H.assistant_actor(c) in (who.actor, who.task_actor)):
             return who
         kind, person = rooms.run_scope(c, who.attempt_id)
-        try:
-            return self.identity_for_actor(c, person) if kind == "person" else who
-        except Problem:
+        if kind == "gone":
+            return NOBODY
+        if kind != "person":
             return who
+        try:
+            return self.identity_for_actor(c, person)
+        except Problem:
+            return NOBODY
 
     def task_row(self, c, who, row):
         if self.task_snapshot(c) and row:

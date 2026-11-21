@@ -417,7 +417,7 @@ def file_visible(c, auth, who, row, cache):
     # A page's own audience and its pins are read as the request sees (auth.run_viewer: a run of the shared Assistant in
     # a person's own chat as that person); its task, below, by the run's principal.
     reader = auth.run_viewer(c, who)
-    if not page_audience_visible(c, auth, reader, row, cache):
+    if reader.role == "none" or not page_audience_visible(c, auth, reader, row, cache):
         return False
     if asked_to_read(c, who, row["id"], cache=cache, auth=auth):
         return True
@@ -602,7 +602,7 @@ def version_refusal(c, auth, who, row, number, v):
     """The check that refuses `who` version `number` of the file `row` (`v`, its `stored_version`, None when there is
     none), or None when they may read its bytes: the one read check Files.serve makes, for every caller that hands
     those bytes on. Checks run in serve's order and the first refusal is named."""
-    if not page_audience_visible(c, auth, who, row, {}):
+    if not page_audience_visible(c, auth, auth.run_viewer(c, who), row, {}):  # as file_visible reads it
         return "audience"
     if v and not page_blob_visible(c, auth, who, v["blob_id"]):
         return "blob_fence"

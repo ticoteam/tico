@@ -68,10 +68,10 @@ def _run_scope(c, attempt_id):
         return ("", "")
     task = H.task(c, row["task_id"]) if row["task_id"] else None
     if task and task["owner_id"] == H.assistant_actor(c) and H.task_private(c, task):
-        # The turn it was woken for. An earlier turn named the Assistant itself as requester: its person is the one its
-        # routine's saved version works for (`_routine_person`), when that names one.
-        filed_for = task["requester_id"] if H.is_human(task["requester_id"]) else _routine_person(c, task["id"])
-        return kept(filed_for, ("task", task["id"])) if filed_for else ("task", task["id"])
+        # The turn it was woken for. An earlier turn named the Assistant itself as requester: its person is the one the
+        # routine run that filed it works for, by the version that run ran (`_routine_person`). None found: nothing.
+        filed_for = task["requester_id"] if H.is_human(task["requester_id"]) else _routine_person(c, task)
+        return kept(filed_for, ("task", task["id"]))
     room = H.conversation(c, row["conversation_id"]) or {}
     if room.get("scope") != PERSONAL and room.get("root_id") and room["root_id"] != room.get("id"):
         room = H.conversation(c, room["root_id"]) or {}
@@ -81,18 +81,24 @@ def _run_scope(c, attempt_id):
     return kept(person, ("person", person)) if H.is_human(person) else ("", "")
 
 
-def _routine_person(c, task_id):
-    """The person a routine turn was filed for, from the routine run that filed it (automation_holds) and the version it
-    ran: the routine's owner when a person, else the one person whose email is the inbox that starts it; "" when its
-    provenance names none or more than one."""
-    import json
-
-    row = c.execute(
-        "SELECT a.owner_id, coalesce(v.flow, a.flow) AS flow FROM automation_holds h "
-        "JOIN automations a ON a.id=h.automation_id LEFT JOIN automation_runs r ON r.id=h.run_id "
-        "LEFT JOIN automation_versions v ON v.automation_id=h.automation_id AND v.n=r.version WHERE h.ref=?",
-        (task_id,),
+def _routine_person(c, task):
+    """The person a routine turn was filed for, from its stored wake (refs.automation_run, the run that filed it) and the
+    version that run ran: the routine's owner when a person, else the one person whose email is the inbox that version
+    starts on; "" when it names none or more than one, or the run or its version is gone."""
+    wake = c.execute(
+        "SELECT json_extract(refs,'$.automation_run') FROM messages WHERE conversation_id=? "
+        "AND json_extract(refs,'$.automation_run') IS NOT NULL ORDER BY created_at,id LIMIT 1",
+        (task.get("conversation_id"),),
     ).fetchone()
+    row = (
+        c.execute(
+            "SELECT a.owner_id, v.flow FROM automation_runs r JOIN automations a ON a.id=r.automation_id "
+            "JOIN automation_versions v ON v.automation_id=r.automation_id AND v.n=r.version WHERE r.id=?",
+            (wake[0],),
+        ).fetchone()
+        if wake and wake[0]
+        else None
+    )
     if not row:
         return ""
     owner = str(row["owner_id"] or "")
@@ -107,35 +113,51 @@ def _routine_person(c, task_id):
     return H.human_actor(found[0]["id"]) if len(found) == 1 else ""
 
 
-def scoped_wake(c, attempt):
+def scoped_wake(c, auth, attempt):
     """A claim of the shared Assistant's run as that run may read it: the other active tasks its wake lists to reconcile
-    with (refs.reconcile.active, stored when the task was filed) only as far as the run's scope reads them (run_scope),
-    at the claim and at its replay; the stored wake loses them too. Changed in place; returns it."""
+    with (refs.reconcile.active, stored when the task was filed) only as far as the run reads them by its whole task
+    rule (auth.task: its scope, rooms.run_scope, and the Assistant's bot activity access), in every copy of a message the
+    claim carries (`message`, `history`, `refs` and `refs_json`), at the claim and at its replay; the stored messages
+    lose them too. Changed in place; returns it."""
+    from .auth import Identity
+
     shared = H.assistant_actor(c)
     if not isinstance(attempt, dict) or "bot:" + str(attempt.get("bot") or "") != shared:
         return attempt
-    message = attempt.get("message")
-    if not isinstance(message, dict):
-        return attempt
-    refs = message.get("refs")
-    reconcile = refs.get("reconcile") if isinstance(refs, dict) else None
-    if isinstance(refs, dict) and isinstance(reconcile, dict) and isinstance(reconcile.get("active"), list):
-        principal = H.run_principal(shared, str(attempt.get("id") or ""))
-        kept = [
-            item
-            for item in reconcile["active"]
-            if isinstance(item, dict) and H.task_private_readable(c, principal, H.task(c, str(item.get("id") or "")))
-        ]
-        # A copy: the stored message stays as it was.
+    reader = Identity(shared, "bot", attempt_id=str(attempt.get("id") or ""))
+
+    def readable(task_id):
+        try:
+            auth.task(c, reader, task_id)
+            return True
+        except Problem:
+            return False
+
+    def scoped(message):
+        refs = message.get("refs")
+        if isinstance(refs, str):
+            refs = H._json(refs, {})
+        reconcile = refs.get("reconcile") if isinstance(refs, dict) else None
+        if not (isinstance(refs, dict) and isinstance(reconcile, dict) and isinstance(reconcile.get("active"), list)):
+            return message
+        kept = [i for i in reconcile["active"] if isinstance(i, dict) and readable(str(i.get("id") or ""))]
+        if len(kept) == len(reconcile["active"]):
+            return message
         refs = {k: v for k, v in refs.items() if k != "reconcile"}
         if kept:
             refs["reconcile"] = {**reconcile, "active": kept}
-        attempt["message"] = {**message, "refs": refs}
-        if "refs_json" in message:  # the stored form a claim carries too
-            attempt["message"]["refs_json"] = json.dumps(refs)
-        if message.get("id") and len(kept) != len(reconcile["active"]):
-            # The stored wake too, so every later read of it (a replay of this claim) sees the same.
+        shown = {**message, "refs": refs}
+        if "refs_json" in message:
+            shown["refs_json"] = json.dumps(refs)
+        if message.get("id"):
+            # The stored message too, so every later read of it (a replay of this claim) sees the same.
             c.execute("UPDATE messages SET refs=? WHERE id=?", (json.dumps(refs), message["id"]))
+        return shown
+
+    if isinstance(attempt.get("message"), dict):
+        attempt["message"] = scoped(attempt["message"])
+    if isinstance(attempt.get("history"), list):
+        attempt["history"] = [scoped(m) if isinstance(m, dict) else m for m in attempt["history"]]
     return attempt
 
 
