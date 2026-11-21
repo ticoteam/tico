@@ -107,15 +107,18 @@ def test_the_assistant_snapshot_holds_only_its_persons_own_items(api, monkeypatc
         ok_ask(c, theirs["id"], "bot:ops", "ana", "OK the payroll change")
         token = H.VIA.set("assistant")
         try:
-            H.task_create(c, "human:cara", "Book the venue", "For the offsite.", "bot:ops")
+            venue = H.task_create(c, "human:cara", "Book the venue", "For the offsite.", "bot:ops", pipeline="general")
             H.task_create(c, "human:ana", "Ana's private handoff", "Hers alone.", "bot:ops", private=True)
         finally:
             H.VIA.reset(token)
+        held = ok_ask(c, venue["id"], "human:ana", "ben", "OK Dana's catering deposit")
+        bind(c, held["requirement_id"], "human:ana", "human:ben")
     _, attempt = assistant_turn(api, "cara-test", "What needs me today?")
     header = attempt["run_header"]
     assert "Needs you (" in header and "Ship the launch note" in header, header
     assert "Open handoffs you filed through me:\n- Book the venue" in header, header
     assert "Payroll" not in header and "payroll" not in header and "Ana's private handoff" not in header, header
+    assert "Dana" not in header, "a handoff's turn says a bound OK only to its parties"
 
 
 def test_a_claim_is_answered_while_a_stalled_header_is_still_being_built(api, monkeypatch):
@@ -138,8 +141,83 @@ def test_a_claim_is_answered_while_a_stalled_header_is_still_being_built(api, mo
         release.set()
 
 
-def test_a_long_header_is_cut_to_its_cap_with_what_was_left_out():
-    text = run_header.capped([f"- item {n} " + "x" * 80 for n in range(60)])
+def bind(c, requirement_id, asked_by, asked_of):
+    """Make an OK a bound one (task_asks.ask_for): its words are its parties' alone."""
+    c.execute(
+        "INSERT INTO ok_grants (requirement_id, asked_by_id, asked_of_id, subject, content_hash, content, filed, "
+        "created_at) VALUES (?,?,?,'pay','h','{}',0,?)",
+        (requirement_id, asked_by, asked_of, H.now()),
+    )
+
+
+def test_whose_turn_says_a_bound_ok_only_as_far_as_its_reader_may_read_it(api):
+    tid = card_for_ops(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET readers=? WHERE id=?", (json.dumps(["human:cara"]), tid))
+        bound = ok_ask(c, tid, "human:ana", "ben", "OK paying Dana's salary advance")
+        bind(c, bound["requirement_id"], "human:ana", "human:ben")
+    party = card_as(api, Identity("human:ben", "human", "ben@acme.example"), tid)
+    assert "Whose turn: Ben: " in party and "Dana" in party, party
+    other = card_as(api, Identity("human:cara", "human", "cara@acme.example"), tid)
+    assert "Whose turn: Ben: " in other and "Dana" not in other, other
+
+
+def test_a_turn_line_whose_page_the_reader_may_not_open_says_only_its_label():
+    view = {"to_leave": [{"removed": True, "label": "A page you can't open", "requirement_id": "r1"}]}
+    turn = {"requirement_id": "r1", "who": "human:ben", "line": "OK the Zebra budget"}
+    assert run_header._turn_line(view, turn) == "A page you can't open"
+    shown = {"to_leave": [{"requirement_id": "r1", "line": "OK the Zebra budget"}]}
+    assert run_header._turn_line(shown, turn) == "OK the Zebra budget"
+
+
+def test_an_ended_card_still_says_where_it_stands(api):
+    tid = card_for_ops(api)
+    with api.app.state.store.transaction() as c:
+        E.move(c, tid, E.CLOSED, "human:ana", "No longer needed")
+    text = card_as(api, Identity("bot:ops", "bot"), tid)
+    assert text.startswith("Card now: Ship the launch note is closed in Closed; version"), text
+
+
+def test_a_make_page_turn_counts_changes_from_its_last_page_for_the_same_person(api):
+    r = ops_runner(api)
+    tid = card_for_ops(api)
+    ana = Identity("human:ana", "owner", "ana@acme.example")
+    with api.app.state.store.transaction() as c:
+        # The page was asked for in the person's own chat, not on the task.
+        other = new_task(c, "human:ana", "Another errand", assignee="bot:ops")["id"]
+        msg = c.execute(
+            "SELECT m.id, j.id AS job_id FROM messages m JOIN jobs j ON j.message_id=m.id WHERE m.wake_key LIKE ?",
+            (other + ":%",),
+        ).fetchone()
+        c.execute("UPDATE messages SET refs=? WHERE id=?", (json.dumps({"make_page": {"task": tid}}), msg["id"]))
+        earlier = H.shift(H.now(), minutes=-5)
+        c.execute(
+            "INSERT INTO attempts (id, job_id, bot_id, runner_id, generation, token_hash, state, lease_until, created_at, "
+            "started_at, finished_at, message_id, acting_person) VALUES (?,?,'assistant',?,1,'h','completed',?,?,?,?,?,?)",
+            (H.new_id(), msg["job_id"], r["runner_id"], earlier, earlier, earlier, earlier, msg["id"], ana.actor),
+        )
+        H.history_event(c, "task", tid, "human:ben", "title", "Ship it", "Ship the launch note")
+    with api.app.state.store.read_transaction() as c:
+        made = run_header.card(c, api.app.state.auth, ana, "bot:assistant", tid, making=True)
+        chat = run_header.card(c, api.app.state.auth, ana, "bot:assistant", tid)
+    assert "- Ben: changed title" in made, made
+    assert not any(line.startswith("Changes since") for line in chat), chat
+
+
+def test_no_header_is_built_when_every_worker_is_busy(api):
+    held = [run_header._SLOTS.acquire(blocking=False) for _ in range(run_header.WORKERS)]
+    try:
+        assert all(held)
+        assert run_header.build(api.app.state.store, api.app.state.auth, {"id": "nope"}) is None
+    finally:
+        for _ in held:
+            run_header._SLOTS.release()
+
+
+def test_a_long_header_keeps_whole_entries_and_counts_the_ones_left_out():
+    long = "- " + "y" * 700
+    text = run_header.capped([long, *(f"- item {n} " + "x" * 80 for n in range(30))])
     assert len(text) <= run_header.MAX_CHARS
     kept = text.splitlines()
-    assert kept[-1] == f"+{60 - (len(kept) - 2)} more", kept[-1]
+    assert kept[1] == long, "an entry is kept whole, never cut"
+    assert kept[-1] == f"+{31 - (len(kept) - 2)} more", kept[-1]

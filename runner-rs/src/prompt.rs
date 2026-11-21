@@ -400,15 +400,6 @@ fn parts(
         .map(|l: String| (Part::Standing, l))
         .collect();
     }
-    // The card (and the person's snapshot), read as the run starts (backend/run_header.py), right after the opening. It
-    // changes from turn to turn, so it is this turn's own part: the standing part a resumed session already holds stays
-    // byte-identical.
-    if let Some(header) = attempt["run_header"]
-        .as_str()
-        .filter(|h| !h.trim().is_empty())
-    {
-        lines.push((Part::Turn, header.to_string()));
-    }
     let tools = proxied_tools(&attempt["_proxied_tools"]);
     if !tools.is_empty() {
         lines.push((Part::Standing, tools));
@@ -748,6 +739,15 @@ fn parts(
     // The Assistant's replies and lookups follow its rulebook (templates/catalog/assistant/AGENTS.md), not this contract.
     if kind == "chat" && !setup && person && !assistant {
         put(&mut lines, Part::Standing, "Human chat response contract: lead with the answer or outcome. Use enough explanation, comparison rows or list items to fulfill the request. If the person asks for one thing, focus on that thing; do not substitute the standing backlog or add unrelated tasks. For a next-priority question, first run `tico health check` and use its current open, doing, waiting, and needs-human state; never repeat an item that current state shows is done merely because it appears in conversation history. Check the current external source, such as a PR's actual state, when the Hub note may be stale. Use the task's attached URL for that check; do not guess a repository from its title. If the first lookup fails, inspect the attached URL and retry the exact source. Never call work blocked until you verify the missing permission or dependency. Carry forward the person's scoped authorization instead of asking again.".into());
+    }
+    // The card (and the person's snapshot), read as the run starts (backend/run_header.py), at the turn's tail: after
+    // the room and the current message, last of all. It changes from turn to turn, so it is this turn's own part: the
+    // standing part a resumed session already holds stays byte-identical.
+    if let Some(header) = attempt["run_header"]
+        .as_str()
+        .filter(|h| !h.trim().is_empty())
+    {
+        lines.push((Part::Turn, header.to_string()));
     }
     (lines, run)
 }
@@ -1391,16 +1391,14 @@ mod tests {
             (without.standing.as_str(), without.task.as_str())
         );
         let at = given.text.find(was).expect("the header is in the prompt");
-        assert_eq!(given.text[..at], without.text[..at]);
-        assert_eq!(
-            given.text.replacen(&format!("{was}\n\n"), "", 1),
-            without.text
-        );
-        // It opens the turn's own part: before the room, the task and the message.
-        for after in ["Assigned task:", "Conversation history", "Current message"] {
+        // Everything before it is byte for byte the prompt without it.
+        assert_eq!(format!("{}\n\n{was}", without.text), given.text);
+        // It is the turn's tail: after the task, the room and the current message, last of all.
+        assert!(given.text.ends_with(was), "{}", given.text);
+        for before in ["Assigned task:", "Conversation history", "Current message"] {
             assert!(
-                given.text.find(after).is_some_and(|p| p > at),
-                "{after}: {}",
+                given.text.find(before).is_some_and(|p| p < at),
+                "{before}: {}",
                 given.text
             );
         }
@@ -1412,12 +1410,12 @@ mod tests {
         );
         let t = &short.text;
         assert!(t.starts_with(STANDING_SEEN), "{t}");
-        assert!(t.contains(now) && !t.contains(was), "{t}");
+        assert!(t.ends_with(now) && !t.contains(was), "{t}");
         assert!(!short.restore.contains(now), "{}", short.restore);
     }
 
     #[test]
-    fn a_make_page_turn_keeps_its_run_header_after_the_opening() {
+    fn a_make_page_turn_keeps_its_run_header_at_its_tail() {
         let header = "Run header, read as this run starts (newer than anything earlier in this conversation):\nCard now: Launch plan is in Spec (Product); version 2.";
         let attempt = json!({"id": "a9", "bot": "assistant", "run_header": header,
             "conversation": {"id": "c9", "kind": "chat", "scope": "personal"},
@@ -1428,12 +1426,11 @@ mod tests {
         let at = given
             .find(header)
             .expect("the header is in a Make page prompt");
-        let opened = given.find("Continue until the page is published").unwrap();
-        assert!(opened < at, "{given}");
         assert!(
-            at < given.find("Make a page for task t9").unwrap(),
+            given.find("Make a page for task t9").unwrap() < at,
             "{given}"
         );
+        assert!(given.ends_with(header), "{given}");
         let mut bare = attempt.clone();
         bare.as_object_mut().unwrap().remove("run_header");
         assert_eq!(
