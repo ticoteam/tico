@@ -1686,28 +1686,47 @@ impl Drop for MakePageScratch {
     }
 }
 
+/// Whether the server marked the claim personal (backend/execution.py claim: the Assistant in a person's own room), a
+/// Make page one included: such a turn gets no git credentials (crate::gitcred::for_turn). All but Make page, which
+/// keeps its scratch folder, also run in a PersonalCopy.
+pub fn personal_claim(attempt: &Value) -> bool {
+    truthy(attempt.get("personal"))
+}
+
 /// A personal turn's own copy of the bot's checkout (`personal` on the claim: the Assistant in a person's own room). One
 /// Assistant serves the whole company, so nothing such a turn writes may reach the checkout every other person's turn
 /// reads: it runs in a local clone with no remote, which its environment has no git credentials to push from either
 /// (crate::gitcred::without_credentials), and the clone is removed when the turn ends. Its path is the same for every
-/// turn in the room, so the harness finds the room's session again. The shared checkout is only read.
+/// turn in the room on this runner's workspace (`projects`), so the harness finds the room's session again, and another
+/// runner on this computer never shares it. The shared checkout is only read.
 pub(crate) struct PersonalCopy(pub PathBuf);
 
 impl PersonalCopy {
-    pub(crate) fn path_for(attempt: &Value) -> PathBuf {
+    pub(crate) fn path_for(projects: &Path, attempt: &Value) -> PathBuf {
         let conversation = &attempt["conversation"];
         let room = [&conversation["root_id"], &conversation["id"]]
             .into_iter()
             .map(text_of)
             .find(|r| !r.is_empty())
             .unwrap_or_else(|| text_of(&attempt["id"]));
-        let key = gitrun::sha256_hex(format!("{}\n{room}", text_of(&attempt["bot"])).as_bytes());
+        let key = gitrun::sha256_hex(
+            format!(
+                "{}\n{}\n{room}",
+                projects.display(),
+                text_of(&attempt["bot"])
+            )
+            .as_bytes(),
+        );
         std::env::temp_dir().join(format!("tico-personal-{}", &key[..16]))
     }
 
     /// Clone `main` (already refreshed for this turn) into the room's path, replacing a copy a stopped turn left.
-    pub(crate) async fn make(main: &Path, attempt: &Value) -> Result<Self, String> {
-        let copy = Self(Self::path_for(attempt));
+    pub(crate) async fn make(
+        main: &Path,
+        projects: &Path,
+        attempt: &Value,
+    ) -> Result<Self, String> {
+        let copy = Self(Self::path_for(projects, attempt));
         copy.remove();
         crate::isolation::mkdir(&copy.0, 0o700)
             .map_err(|e| format!("cannot make this chat's copy of the checkout: {e}"))?;
@@ -1804,7 +1823,7 @@ impl Runner {
         let make_page = attempt["make_page"]["task"].is_object();
         let legacy_meeting = lane.starts_with(LEGACY_MEETING_LANE);
         // A person's own Assistant chat, a task's turn there included, works in its PersonalCopy, never a worktree.
-        let personal = truthy(Some(&attempt["personal"])) && !make_page;
+        let personal = personal_claim(attempt) && !make_page;
         let task = if !slug_ok(&bot) || make_page || personal {
             String::new()
         } else if legacy_meeting {
@@ -1926,7 +1945,8 @@ impl Runner {
         }
         if place.personal {
             // Its own copy, made from the checkout refreshed for this turn; the checkout itself is never its workspace.
-            let copy = PersonalCopy::make(&place.main_path, attempt).await?;
+            let copy =
+                PersonalCopy::make(&place.main_path, &self.config.projects_dir(), attempt).await?;
             place.execution_path = copy.0.clone();
             place._copy = Some(copy);
             // No other folder: the claim's worktrees are not this chat's to reach (granted_paths).

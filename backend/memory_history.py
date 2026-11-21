@@ -70,26 +70,34 @@ def _run_of(c, bot, attempt):
     return attempt if row and row["bot_id"] in family(c, bot) else ""
 
 
-def personal_turn(c, attempt, assistant_bot):
-    """Whether the run is the Assistant's turn in a person's own room. One Assistant serves everyone, so what such a turn
-    wrote in memory/ or knowledge/ is undone on the runner (runner-rs/src/sessions.rs drop_memory_writes) and never
-    recorded here, where every reader of the bot sees it."""
+def guarded(c, assistant_bot):
+    """The Assistant and every bot that writes its repository (its branches). One Assistant serves everyone, so their
+    history is shown only with a known run from a room that is not a person's own chat, and their documents, which name
+    no run, never (a person's own chat on an older runner wrote in the shared checkout)."""
+    return family(c, assistant_bot) if H.bot(c, assistant_bot) else {assistant_bot}
+
+
+def run_room(c, attempt):
+    """The scope of the room the run came from, or None when the run or its room does not resolve."""
     row = c.execute(
-        "SELECT a.bot_id,v.scope FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
+        "SELECT v.scope FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
         "JOIN conversations v ON v.id=m.conversation_id WHERE a.id=?",
         (attempt,),
     ).fetchone()
-    return bool(row) and row["bot_id"] == assistant_bot and row["scope"] == rooms.PERSONAL
+    return row["scope"] if row else None
 
 
-# Rows of the Assistant's history shown to readers: only those whose run is known and is not a person's own chat, so a
-# row an older server stored before its run was known, or one from a person's own chat, is never shown (`personal_turn`).
-# The other bots' rows are all shown. Takes the Assistant's slug.
-SHOWN = (
-    "(bot<>? OR (attempt_id<>'' AND NOT EXISTS (SELECT 1 FROM attempts a JOIN jobs j ON j.id=a.job_id "
-    "JOIN messages m ON m.id=j.message_id JOIN conversations v ON v.id=m.conversation_id "
-    "WHERE a.id=bot_memory_updates.attempt_id AND v.scope='personal')))"
-)
+def shown(c, assistant_bot):
+    """The SQL condition (and its values) for the history rows readers see (`guarded`): another bot's, or a guarded bot's
+    whose run resolves to one of that family in a room that is not a person's own chat. An orphaned run never shows."""
+    bots = sorted(guarded(c, assistant_bot))
+    marks = ",".join("?" * len(bots))
+    return (
+        f"(bot NOT IN ({marks}) OR EXISTS (SELECT 1 FROM attempts a JOIN jobs j ON j.id=a.job_id "
+        "JOIN messages m ON m.id=j.message_id JOIN conversations v ON v.id=m.conversation_id "
+        f"WHERE a.id=bot_memory_updates.attempt_id AND a.bot_id IN ({marks}) AND v.scope<>'personal'))",
+        [*bots, *bots],
+    )
 
 
 def record(c, who, bot, report, assistant_bot):
@@ -97,6 +105,7 @@ def record(c, who, bot, report, assistant_bot):
     if not c.execute("SELECT 1 FROM assignments WHERE bot=? AND runner_id=?", (bot, who.runner_id)).fetchone():
         raise Problem("forbidden", "That bot is not assigned to this computer", 403)
     now, changed, withheld = H.now(), 0, False
+    checked = bot in guarded(c, assistant_bot)
     for commit in report.commits:
         files = [f for f in commit.files if f.startswith(FOLDERS) and ".." not in f.split("/")]
         at = H.parse_ts(commit.committed)
@@ -104,15 +113,15 @@ def record(c, who, bot, report, assistant_bot):
             continue
         committed = at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
         attempt = _run_of(c, bot, commit.attempt)
-        if attempt and personal_turn(c, attempt, assistant_bot):
+        scope = run_room(c, attempt) if checked and attempt else None
+        if checked and scope == rooms.PERSONAL:
             # A person's own chat wrote it (an older runner, which still runs those turns in the shared checkout): never
-            # shown, withdrawn if an earlier report showed it before its run was known, and this report's documents,
-            # which may now hold it, are not kept either.
+            # shown, and withdrawn if an earlier report showed it before its run was known.
             withheld = True
             changed += c.execute("DELETE FROM bot_memory_updates WHERE bot=? AND sha=?", (bot, commit.sha)).rowcount
             continue
-        if bot == assistant_bot and not attempt:
-            continue  # the Assistant's commit is shown only once its run is known not to be a person's own chat
+        if checked and scope is None:
+            continue  # kept only once its run and that run's room resolve (`guarded`)
         before = c.execute(
             "SELECT attempt_id,shared FROM bot_memory_updates WHERE bot=? AND sha=?", (bot, commit.sha)
         ).fetchone()
@@ -144,9 +153,8 @@ def record(c, who, bot, report, assistant_bot):
             ),
         )
         changed += 1
-    if withheld or bot == assistant_bot:
-        # A document says nothing of which runs wrote it, so the Assistant's, which a person's own chat may have written
-        # (an older runner), are never kept: not even from a report that carries documents alone.
+    if withheld or checked:
+        # A document says nothing of which runs wrote it (`guarded`): never kept, not even from a report of documents alone.
         return changed
     oversized = {path for path in report.oversized if path in DOCUMENTS}
     for path, content in report.documents.items():
@@ -177,8 +185,8 @@ def commit_base(c, bot, github_owner=""):
 
 
 def documents(c, bot, assistant_bot):
-    """The bot's stored memory documents; never the Assistant's, whose provenance is not known (`record`)."""
-    if bot == assistant_bot:
+    """The bot's stored memory documents; never those of the Assistant's family (`guarded`)."""
+    if bot in guarded(c, assistant_bot):
         return {}
     return {
         row["path"]: row["content"]
@@ -187,7 +195,7 @@ def documents(c, bot, assistant_bot):
 
 
 def document_status(c, bot, assistant_bot):
-    if bot == assistant_bot:
+    if bot in guarded(c, assistant_bot):
         return {}
     saved = {
         r["path"]: r["updated_at"]
@@ -261,10 +269,11 @@ def install_memory_history(app, store, auth, mutate):
                 raise Problem("not_found", "Bot not found", 404)
             auth.require_read(c, who, bot)
             limit = max(1, min(limit, 50))
+            visible, values = shown(c, store.settings.assistant_bot)
             rows = c.execute(
-                f"SELECT * FROM bot_memory_updates WHERE bot=? AND (?='' OR committed_at<?) AND {SHOWN} "
+                f"SELECT * FROM bot_memory_updates WHERE bot=? AND (?='' OR committed_at<?) AND {visible} "
                 "ORDER BY committed_at DESC, sha LIMIT ?",
-                (bot, before, before, store.settings.assistant_bot, limit + 1),
+                (bot, before, before, *values, limit + 1),
             ).fetchall()
             row = c.execute("SELECT seen_at FROM bot_memory_seen WHERE actor=? AND bot=?", (who.actor, bot)).fetchone()
             # Before a first visit, only the last few days count as new, not years of history reported at once.
@@ -272,8 +281,8 @@ def install_memory_history(app, store, auth, mutate):
                 (row["seen_at"], "reported_at") if row else (H.shift(H.now(), days=-NEW_DAYS), "committed_at")
             )
             unseen = c.execute(
-                f"SELECT count(*) FROM bot_memory_updates WHERE bot=? AND {column}>? AND {SHOWN}",
-                (bot, seen, store.settings.assistant_bot),
+                f"SELECT count(*) FROM bot_memory_updates WHERE bot=? AND {column}>? AND {visible}",
+                (bot, seen, *values),
             ).fetchone()[0]
             base = commit_base(c, bot, store.settings.github_owner)
             # Only a commit that reached the shared repository has an address to open.

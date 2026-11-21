@@ -583,6 +583,27 @@ pub(crate) fn git_environment(env: &mut Env, token: &str, helper: &str) {
     }
 }
 
+/// A turn's git credentials from `granted` (`apply_granted`), with the credential socket when it has one. A personal
+/// claim (crate::sessions::PersonalCopy) gets none: `env` is left with nothing to sign in with, and the runner's grant
+/// goes only into the environment returned, which refreshes the shared checkout before the turn's copy is made.
+pub fn for_turn(
+    env: &mut Env,
+    granted: Result<Value, ApiError>,
+    bot: &str,
+    socket: Option<&Path>,
+    state_dir: &Path,
+    personal: bool,
+) -> Option<Env> {
+    if !personal {
+        apply_granted(env, granted, bot, socket, state_dir);
+        return None;
+    }
+    let mut refresh = env.clone();
+    apply_granted(&mut refresh, granted, bot, None, state_dir);
+    without_credentials(env);
+    Some(refresh)
+}
+
 /// A turn that must push nothing (a person's own Assistant chat, crate::sessions::PersonalCopy): no GitHub token, no
 /// credential socket, no SSH agent or askpass program, no system git config and no credential helper (an empty
 /// `credential.helper` read last clears every helper the user's own config names), so git and gh have nothing to sign in

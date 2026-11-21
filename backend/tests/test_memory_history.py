@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from backend import bot_settings as BS
 from backend.store import H
 from backend.memory_history import MAX_DOCUMENT_BYTES, MAX_REPORT_BYTES
 from backend.tests.helpers.api import assign, claim, headers, post, ready, runner  # noqa: F401  (fixtures)
@@ -110,6 +111,28 @@ def test_the_assistants_documents_and_rows_of_unknown_runs_are_never_shown(api):
     )
     files = api.get("/api/employees/assistant/files", headers=headers("ana-test")).json()
     assert "80k" not in json.dumps(files)
+
+
+def test_a_branch_of_the_assistant_and_an_orphaned_run_get_the_same_guard(api):
+    """A bot that writes the Assistant's repository (its branch) keeps and shows no documents either, and a row whose run
+    does not resolve to a run and a room never shows, whoever stored it."""
+    machine = runner(api)
+    assign(api, machine, "cpo")
+    with api.app.state.store.transaction() as c:
+        BS.update(c, "cpo", {"shared_from": "assistant"})
+    post(api, "bots/cpo/memory/report", {"documents": {"memory/learnings.md": "- Ben earns 90k\n"}}, machine["token"])
+    orphan = {"commits": [commit(attempt="not-a-run", subject="Ben earns 90k")]}
+    assert post(api, "bots/cpo/memory/report", orphan, machine["token"])["recorded"] == 0
+    with api.app.state.store.transaction() as c:
+        assert c.execute("SELECT count(*) FROM bot_memory_documents WHERE bot='cpo'").fetchone()[0] == 0
+        c.execute(
+            "INSERT INTO bot_memory_updates(bot,sha,subject,author,committed_at,files,diff,truncated,attempt_id,shared,"
+            "runner_id,reported_at) VALUES('assistant',?,'Ana earns 80k','',?,'[]','',0,'gone-run',1,'',?)",
+            (SHA, H.now(), H.now()),
+        )
+    for bot in ("cpo", "assistant"):
+        shown = history(api, "ana-test", bot)
+        assert shown["updates"] == [] and shown["documents"] == {} and "k\n" not in json.dumps(shown), bot
 
 
 def test_only_the_assigned_computer_reports_and_runs_must_be_the_bots_own(api):
