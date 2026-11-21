@@ -395,7 +395,7 @@ export function LiveRow({ r, variant, text }: { r: LiveRun; variant: Variant; te
         <div className="msg-meta">
           <b>{who.name}</b>
         </div>
-        {text ? <Markdown text={text} compact tail={r.ended ? null : dots} /> : <p>{r.doing === 'work' ? 'Working' : 'Thinking'}{dots}</p>}
+        {text ? <Markdown text={text} compact tail={r.ended ? null : dots} /> : <p>{r.doing === 'work' ? r.label || 'Working' : 'Thinking'}{dots}</p>}
       </div>
     </div>
   );

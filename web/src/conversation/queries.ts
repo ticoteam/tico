@@ -236,7 +236,7 @@ interface RunEvent {
   conversation_id?: string;
   bot_id?: string;
   state?: string;
-  output?: { kind?: string; compact?: boolean; payload?: { text?: string; final?: boolean; delta_kind?: string } };
+  output?: { kind?: string; compact?: boolean; label?: string; payload?: { text?: string; final?: boolean; delta_kind?: string } };
 }
 interface MessageEvent {
   id?: string;
@@ -287,7 +287,8 @@ export function stepRun(runs: LiveRun[], d: RunEvent): LiveRun[] {
     else if (text.trim() && last?.trim() !== text.trim()) parts = [...parts, text];
     next = { ...r, parts, typing: null, doing: 'type' };
   } else if (out.kind === 'tool') {
-    next = { ...r, parts: r.typing !== null ? [...r.parts, r.typing] : r.parts, typing: null, doing: 'work' };
+    // a call starting carries its label ("Filing a task"); one ending keeps the last
+    next = { ...r, parts: r.typing !== null ? [...r.parts, r.typing] : r.parts, typing: null, doing: 'work', label: out.label || r.label };
   } else return runs;
   return runs.with(i, next);
 }

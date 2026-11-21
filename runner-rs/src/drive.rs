@@ -170,6 +170,7 @@ impl Runner {
         let mut earlier_tokens: Option<Value> = None;
         let mut last_flush: Option<Instant> = None;
         let mut first_output = false;
+        let mut first_text = false;
         let mut queue: Vec<Value> = vec![];
         // The outbox rows this drain has gathered, not yet written: (kind, JSON payload) in arrival order.
         let mut rows: Vec<(String, String)> = vec![];
@@ -399,6 +400,11 @@ impl Runner {
                     continue;
                 }
                 let kind = text_of(&event["kind"]);
+                if kind == "model_calls" {
+                    // A harness's own request count (Muse Code): the run's timings only, never kept or sent on.
+                    crate::flight::add(aid, "model_calls", event["count"].as_u64().unwrap_or(0));
+                    continue;
+                }
                 if kind == "turn_failed" || (kind == "error" && truthy(event.get("host_restart"))) {
                     // A harness killed at its memory limit fails with whatever its own exit looks like; the
                     // turn's scope knows why (crate::turn_limits).
@@ -547,10 +553,20 @@ impl Runner {
                         json!(d.limit.saturating_duration_since(Instant::now()).as_secs() / 60);
                 }
                 if STREAMED.contains(&kind.as_str()) {
+                    // The attempt's model requests, over every harness it ran (a fallback's add on).
+                    if kind == "tokens" {
+                        if let Some(requests) = model_requests(&event) {
+                            crate::flight::add(aid, "model_calls", requests as u64);
+                        }
+                    }
                     let clean = scrubbed(d.redactor, &event);
                     if !first_output && (kind == "delta" || kind == "message") {
                         first_output = true;
                         mark("first_output", aid);
+                    }
+                    if !first_text && reply_words(&kind, &event) {
+                        first_text = true;
+                        mark("first_text", aid);
                     }
                     if kind == "message" && (truthy(event.get("final")) || reply.is_empty()) {
                         reply = text_of(&clean["text"]);
@@ -772,6 +788,19 @@ impl Runner {
             yielded: false,
         })
     }
+}
+
+/// Whether a streamed event is the reply's own words (its timings' `first_text`): a text delta or a message with text;
+/// a thought is not.
+fn reply_words(kind: &str, event: &Value) -> bool {
+    ((kind == "delta" && event["delta_kind"] != "thought") || kind == "message")
+        && !text_of(&event["text"]).trim().is_empty()
+}
+
+/// How many model requests a `tokens` event lists in its per-request usage (Claude, pi), when it lists them. Muse Code
+/// sends its count as a `model_calls` event instead.
+pub(crate) fn model_requests(event: &Value) -> Option<usize> {
+    event["usage"]["requests"].as_array().map(Vec::len)
 }
 
 #[cfg(test)]
@@ -1028,6 +1057,30 @@ mod tests {
         .await
         .expect("the drive ends");
         (drove, carried, goal)
+    }
+
+    #[test]
+    fn first_text_is_the_replys_own_words_and_model_calls_are_the_listed_requests() {
+        let text = |kind: &str, v: Value| reply_words(kind, &v);
+        assert!(text(
+            "delta",
+            json!({"text": "Acme's", "delta_kind": "text"})
+        ));
+        assert!(text("message", json!({"text": "Acme's renewal is due."})));
+        assert!(!text(
+            "delta",
+            json!({"text": "Weighing it", "delta_kind": "thought"})
+        ));
+        assert!(!text("message", json!({"text": "  "})));
+        assert!(!text("tool", json!({"text": "tico task show 1"})));
+        let tokens =
+            json!({"input": 9, "usage": {"requests": [[1, 0, 2, 1], [3, 0, 4, 1], [5, 0, 6, 0]]}});
+        assert_eq!(model_requests(&tokens), Some(3));
+        assert_eq!(
+            model_requests(&json!({"input": 9, "output": 2})),
+            None,
+            "unknown stays unknown"
+        );
     }
 
     #[tokio::test]

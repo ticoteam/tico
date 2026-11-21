@@ -1635,12 +1635,26 @@
   },
   "RunTimings": {
    "additionalProperties": false,
-   "description": "Where a turn's time went on its computer, up to its result (runner-rs/src/flight.rs timings, feature\n`run_timings`): when the runner claimed it on its own clock (Unix seconds), each mark's milliseconds since then, and\nthe size of the session it resumed. The completion adds the server's own (backend/performance.py note_timings).",
+   "description": "Where a turn's time went on its computer, up to its result (runner-rs/src/flight.rs timings, feature\n`run_timings`): when the runner claimed it on its own clock (Unix seconds), each mark's milliseconds since then, and\nthe size of the session it resumed; `first_text` among the marks is its first words of reply. With feature\n`run_timings_turn`, how many model requests it made (when the harness counts them) and whether it ran warm, on a\nharness process an earlier turn left running. The completion adds the server's own (backend/performance.py\nnote_timings).",
    "properties": {
     "claimed_at": {
      "minimum": 0,
      "title": "Claimed At",
      "type": "number"
+    },
+    "model_calls": {
+     "anyOf": [
+      {
+       "maximum": 1000000,
+       "minimum": 0,
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Model Calls"
     },
     "phases": {
      "additionalProperties": {
@@ -1667,6 +1681,18 @@
      ],
      "default": null,
      "title": "Transcript Bytes"
+    },
+    "warm": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Warm"
     }
    },
    "required": [

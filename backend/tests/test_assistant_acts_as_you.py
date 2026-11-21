@@ -360,6 +360,37 @@ def test_a_second_morning_message_the_same_company_day_is_refused_with_the_next_
     assert refused.json()["error"]["next_at"] == "2026-11-06T08:00:00.000000Z", refused.text
 
 
+def test_a_morning_that_names_the_same_items_as_the_last_one_is_not_sent(api):
+    """Quiet mornings: the items are the ids the Assistant names (`items`), deduped and in any order; the same set as the
+    person's last morning is 409 same_as_last and writes nothing. Other items go, a message with no items is never held
+    back (nor one after it), and what the Markdown says has no part in it."""
+    coo = setup_attempt(api, "assistant")[2]["token"]
+
+    def next_day():
+        # The day's cap aside (one lease cannot span days): the morning already sent becomes yesterday's.
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE messages SET refs=json_set(refs,'$.morning','2000-01-01') WHERE refs LIKE '%morning%'")
+
+    def send(body, items=None, expected=200):
+        sent = {"for": "human:ana", "body": body, **({"items": items} if items is not None else {})}
+        r = api.post("/api/v2/assistant/morning", json=sent, headers=headers(coo))
+        assert r.status_code == expected, r.text
+        if expected == 409:
+            assert r.json()["error"]["code"] == "same_as_last", r.text
+        next_day()
+
+    send("Close [the invoice](#/task/t-1) to move [Q4 cash](#/goals/g-1).", ["t-1", "g-1"])
+    odd = "~~~\n[x](#/task/t-9)\n~~~ [[nested] link](/a/) `[y](#/task/t-8)` [z](</b (c)>)"
+    send(odd, ["g-1", "t-1", "t-1"], expected=409)
+    with api.app.state.store.read() as c:
+        sent = c.execute("SELECT COUNT(*) FROM messages WHERE json_extract(refs,'$.morning') IS NOT NULL").fetchone()[0]
+    assert sent == 1
+    send(odd, ["t-1", "g-2"])
+    send("A quiet one.")
+    send("A quiet one.")
+    send("Back to it.", ["t-1", "g-2"])
+
+
 def test_only_the_assistants_background_run_sends_the_morning_message(api):
     coo = setup_attempt(api, "assistant")[2]["token"]
     other_bot = setup_attempt(api, "ops")[2]["token"]

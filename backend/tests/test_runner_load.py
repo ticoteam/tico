@@ -77,16 +77,19 @@ def test_attempt_stores_fresh_start_and_end_snapshots_visible_in_run_list(api):
 
 def test_a_runs_timings_join_the_servers_own_and_show_in_its_run_list(api):
     r, msg, a = setup_attempt(api)
-    assert get(api, "runners/desired", token=r["token"])["features"]["run_timings"] is True
+    features = get(api, "runners/desired", token=r["token"])["features"]
+    assert features["run_timings"] is True and features["run_timings_turn"] is True
     post(api, f"attempts/{a['id']}/started", {"thread_id": "timing-test"}, token=r["token"])
     claimed_at = time.time() - 5
-    phases = {"claimed": 0, "placed": 900, "claude_spawned": 1200, "claude_init": 2500, "claude_result": 4000}
-    timings = {"claimed_at": claimed_at, "phases": phases, "transcript_bytes": 4096}
+    phases = {"claimed": 0, "placed": 900, "claude_spawned": 1200, "claude_init": 2500, "first_text": 3100}
+    phases["claude_result"] = 4000
+    timings = {"claimed_at": claimed_at, "phases": phases, "transcript_bytes": 4096, "model_calls": 3, "warm": False}
     body = {"outcome": "completed", "text": "Finished", "last_seq": 0, "timings": timings}
     post(api, f"attempts/{a['id']}/complete", body, token=r["token"], key="complete-timed")
     run = next(x for x in get(api, "bots/ops/turns") if x["id"] == a["id"])
     got = run["timings"]
     assert got["phases"] == phases and got["transcript_bytes"] == 4096 and got["claimed_at"] == claimed_at
+    assert got["phases"]["first_text"] == 3100 and got["model_calls"] == 3 and got["warm"] is False
     assert got["rule_check_ms"] >= 0 and 4000 <= got["received_ms"] < 60_000
     with api.app.state.store.read() as c:
         sent = H.parse_ts(c.execute("SELECT created_at FROM messages WHERE id=?", (msg["id"],)).fetchone()[0])

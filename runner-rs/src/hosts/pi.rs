@@ -1284,6 +1284,9 @@ struct Inner {
     interrupted: HashSet<String>,
     compacted: HashSet<String>,
     context: HashMap<String, i64>,
+    /// The attempt's first process came from the pool, already running (an earlier attempt's), not a new one: set
+    /// once, so a later turn on the process this attempt started (after `compact_first`, a second hop) stays cold.
+    warm: Option<bool>,
 }
 
 struct Shared {
@@ -1329,6 +1332,11 @@ impl PiHost {
 
     pub fn alive(&self) -> bool {
         self.inner().up
+    }
+
+    /// Whether this attempt's first process was a pooled one already running (its timings' `warm`).
+    pub fn warm(&self) -> bool {
+        self.inner().warm.unwrap_or(false)
     }
 
     /// Stops every process this host holds; a turn still running ends as interrupted.
@@ -1536,15 +1544,21 @@ impl PiHost {
         let key = fingerprint(&argv, &env, &t.settings);
         let token = env.get("HUB_TOKEN").cloned().unwrap_or_default();
         let held = self.inner().procs.remove(thread_id);
-        let held = match held {
-            Some(p) => Some(p),
-            None => self.0.pool.take(thread_id).await,
+        let (held, pooled) = match held {
+            Some(p) => (Some(p), false),
+            None => {
+                let p = self.0.pool.take(thread_id).await;
+                let pooled = p.is_some();
+                (p, pooled)
+            }
         };
         if let Some(p) = held {
             if p.key == key && p.alive() {
                 self.0.allocation.mark();
                 p.token(&token);
-                self.inner().procs.insert(thread_id.into(), p.clone());
+                let mut inner = self.inner();
+                inner.procs.insert(thread_id.into(), p.clone());
+                inner.warm.get_or_insert(pooled);
                 return Ok(p);
             }
             p.stop().await;
@@ -1556,7 +1570,9 @@ impl PiHost {
         let proc = self
             .spawn(&argv, &t.settings, &env, key, home, thinking)
             .map_err(|e| e.to_string())?;
-        self.inner().procs.insert(thread_id.into(), proc.clone());
+        let mut inner = self.inner();
+        inner.procs.insert(thread_id.into(), proc.clone());
+        inner.warm.get_or_insert(false);
         Ok(proc)
     }
 
@@ -2661,6 +2677,10 @@ mod tests {
         let thread = host.start_thread(&rpc_settings(&dir, &[("HUB_TOKEN", "synthetic-turn-1")]));
         for _ in 0..2 {
             host.start_turn(&thread, "hello", None).await.unwrap();
+            assert!(
+                !host.warm(),
+                "the attempt started this pi: its second turn on it is cold too"
+            );
             let events = turn_events(&mut rx).await;
             assert!(
                 events.contains(&json!({"kind": "turn_completed", "status": "completed"})),
@@ -2685,6 +2705,7 @@ mod tests {
             &rpc_settings(&dir, &[("HUB_TOKEN", "synthetic-turn-2")]),
         );
         next.start_turn(&thread, "again", None).await.unwrap();
+        assert!(next.warm(), "a pi from the pool is warm");
         assert!(turn_events(&mut rx)
             .await
             .contains(&json!({"kind": "turn_completed", "status": "completed"})));

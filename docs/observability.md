@@ -364,18 +364,21 @@ registration file, `~/.config/tico/` on a Mac, the runner user's home in Docker,
 files (`.1` to `.4`), in the server's record format (version 1): one JSON object per line with `v` (1), `ts` (Unix
 seconds, milliseconds as decimals) and `kind`, here always `runner.*`: `runner.start` (version, build,
 pid), `runner.turn` (attempt, bot, runtime, outcome, `total_ms`, and `phases`: milliseconds since the turn was claimed
-for `placed`, `harness_started`, `harness_spawned`, `first_output`, `first_delta_posted`, then the hand-in's
+for `placed`, `harness_started`, `harness_spawned`, `first_output`, `first_text` (the reply's first words, not a thought),
+`first_delta_posted`, then the hand-in's
 `model_done`, `scrubbed` (the secret scrub of the changed files), `finished_at`, `saved` (the result in runner.sqlite),
 `flushed` (the last events sent), `complete_posted` and `done`; a Claude turn adds `claude_spawned` (its process
 started, before any cold sign-in hold), `claude_init` (its `system/init`) and `claude_result` (its last `result`), and
-`transcript_bytes`, the size of the session it resumed), `runner.heartbeat` (round trips of a second or more, and every failure), `runner.git` (git commands of two
+`transcript_bytes`, the size of the session it resumed; every turn has `warm`, whether it ran on a harness process an
+earlier turn left running, and `model_calls`, its model requests, when its harness lists them), `runner.heartbeat` (round trips of a second or more, and every failure), `runner.git` (git commands of two
 seconds or more and every timeout, the scrub's included: verb, checkout folder name, milliseconds, exit code; never arguments) and
 `runner.process` once a minute (resident memory, CPU time, finished children's CPU, open turns, and `dropped`: records
 lost because the writer fell behind). Turns never wait on the disk. `TICO_FLIGHT_RECORDER=0` turns it off.
 `tico-runner flight summary --since 1h` (or `--dir <folder>` for a copied state folder) prints recent turns with their
 phase timings, the slowest phases, slow heartbeats and slow git commands.
 
-The same timings, up to `finished`, also go to the server with the turn's result (`timings`, feature `run_timings`),
+The same timings, up to `finished`, also go to the server with the turn's result (`timings`, feature `run_timings`;
+`first_text`, `model_calls`, summed over every harness the attempt ran, and `warm` only with feature `run_timings_turn`),
 and the server adds `send_to_claim_ms` (the message to the claim), `rule_check_ms` (the completion's org rule check)
 and `received_ms` (the claim to the result's arrival, the runner's clock against the server's). Each run in
 `GET /api/v2/bots/{bot}/turns` (`tico run list`) carries them, so a turn's split is readable without the computer.

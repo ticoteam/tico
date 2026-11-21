@@ -35,7 +35,7 @@ pub const GIT_SLOW_MS: u64 = 2000;
 /// refresh (crate::fetch_fresh): `fetch_skipped`, it started on the runner's recent fetch, and `fetched_first`, it
 /// fetched before it started. A third, `start_asked`, is the turn's first start-place ask: a turn without it kept the
 /// place the hub granted at its claim up to `started` (execute.rs keep_start_place).
-const PHASES: [&str; 20] = [
+const PHASES: [&str; 21] = [
     "claimed",
     "prepared",
     "refreshed",
@@ -47,6 +47,7 @@ const PHASES: [&str; 20] = [
     "harness_spawned",
     "claude_init",
     "first_output",
+    "first_text",
     "first_delta_posted",
     "claude_result",
     "model_done",
@@ -71,7 +72,7 @@ struct Turn {
     /// When it was claimed, Unix seconds on this computer's clock.
     wall: f64,
     phases: Vec<(String, u64)>,
-    /// Numbers about the turn beside its marks (`transcript_bytes`).
+    /// Facts about the turn beside its marks (`transcript_bytes`, `model_calls`, `warm`).
     facts: Map<String, Value>,
     /// From the work frame last heard (`heard`) to this claim, when one was heard shortly before: the flight file's
     /// record only, never the timings the server is sent.
@@ -210,16 +211,61 @@ pub fn phase(name: &str, attempt: &str) {
     }
 }
 
-/// A number about an open turn, kept beside its marks (`transcript_bytes`).
-pub fn fact(attempt: &str, key: &str, value: u64) {
+/// A fact about an open turn, kept beside its marks: `transcript_bytes`, `model_calls` (its model requests, when the
+/// harness counts them) and `warm` (it ran on a harness process an earlier turn left running).
+pub fn fact(attempt: &str, key: &str, value: Value) {
     if let Some(turn) = TURNS
         .lock()
         .unwrap_or_else(|p| p.into_inner())
         .as_mut()
         .and_then(|t| t.get_mut(attempt))
     {
-        turn.facts.insert(key.into(), json!(value));
+        turn.facts.insert(key.into(), value);
     }
+}
+
+/// A fact of an open turn kept as first recorded (`warm`: the attempt's first harness, not a fallback's).
+pub fn fact_once(attempt: &str, key: &str, value: Value) {
+    if let Some(turn) = TURNS
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .as_mut()
+        .and_then(|t| t.get_mut(attempt))
+    {
+        turn.facts.entry(key.to_string()).or_insert(value);
+    }
+}
+
+/// Adds `n` to a counted fact of an open turn (`model_calls`, over every harness the attempt ran, fallbacks too).
+pub fn add(attempt: &str, key: &str, n: u64) {
+    if let Some(turn) = TURNS
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .as_mut()
+        .and_then(|t| t.get_mut(attempt))
+    {
+        let was = turn.facts.get(key).and_then(Value::as_u64).unwrap_or(0);
+        turn.facts.insert(key.into(), json!(was + n));
+    }
+}
+
+/// The marks and facts only a server with feature `run_timings_turn` takes (an older one refuses the fields).
+const TURN_PHASES: [&str; 1] = ["first_text"];
+const TURN_FACTS: [&str; 2] = ["model_calls", "warm"];
+
+/// `timings` as a server without feature `run_timings_turn` takes them: exactly what was sent before those fields.
+pub fn legacy(mut timings: Value) -> Value {
+    if let Some(t) = timings.as_object_mut() {
+        for key in TURN_FACTS {
+            t.remove(key);
+        }
+        if let Some(phases) = t.get_mut("phases").and_then(Value::as_object_mut) {
+            for name in TURN_PHASES {
+                phases.remove(name);
+            }
+        }
+    }
+    timings
 }
 
 /// An open turn's timings so far, for its result (backend/models.py RunTimings): when it was claimed on this
@@ -870,10 +916,13 @@ mod tests {
         std::thread::sleep(Duration::from_millis(30));
         phase("claude_spawned", &aid); // a relaunch keeps the first spawn
         phase("claude_result", &aid); // a steered turn's last result is the one that ends it
-        fact(&aid, "transcript_bytes", 4096);
+        fact(&aid, "transcript_bytes", json!(4096));
+        fact_once(&aid, "warm", json!(false));
+        fact_once(&aid, "warm", json!(true)); // a fallback's harness does not change it
         let t = timings(&aid).unwrap();
         assert!(t["claimed_at"].as_f64().unwrap() > 1.0e9, "{t}");
         assert_eq!(t["transcript_bytes"], 4096, "{t}");
+        assert_eq!(t["warm"], false, "{t}");
         assert_eq!(t["phases"]["claimed"], 0, "{t}");
         assert!(t["phases"]["claude_spawned"].as_u64().unwrap() < 30, "{t}");
         assert!(t["phases"]["claude_result"].as_u64().unwrap() >= 30, "{t}");
@@ -882,6 +931,22 @@ mod tests {
             t.get("heard_ms").is_none(),
             "the server's timings take no heard gap: {t}"
         );
+        // An older server is sent exactly what it took before first_text, model_calls and warm.
+        phase("first_text", &aid);
+        add(&aid, "model_calls", 2);
+        add(&aid, "model_calls", 3); // a fallback's requests add to the primary's
+        let t = timings(&aid).unwrap();
+        assert_eq!(t["model_calls"], 5, "{t}");
+        assert!(t["phases"].get("first_text").is_some(), "{t}");
+        let mut before = t.clone();
+        let obj = before.as_object_mut().unwrap();
+        obj.remove("model_calls");
+        obj.remove("warm");
+        obj["phases"].as_object_mut().unwrap().remove("first_text");
+        assert_eq!(legacy(t), before);
+        let mut keys: Vec<_> = before.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, ["claimed_at", "phases", "transcript_bytes"]);
         turn_end(&aid, "acme-seo", "claude", "completed", true);
         assert!(timings(&aid).is_none());
     }

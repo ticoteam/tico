@@ -2340,6 +2340,10 @@ def test_the_morning_message_posts_its_person_and_body_to_the_assistant(monkeypa
     remotecli.run(args)
     (sent,) = wire.writes()
     assert (sent.path, sent.body) == ("/api/v2/assistant/morning", {"for": "human:ana", "body": "Hi"})
+    # The items it names, one `--item` each, go as `items` (the server's repeat check).
+    argv = ["assistant", "morning", "--for", "human:ana", "--body", "Hi", "--item", "t-1", "--item", "g-1"]
+    remotecli.run(hubcli.parser().parse_args(argv))
+    assert wire.writes()[-1].body == {"for": "human:ana", "body": "Hi", "items": ["t-1", "g-1"]}
 
 
 @pytest.mark.parametrize(

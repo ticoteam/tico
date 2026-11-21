@@ -3072,6 +3072,7 @@ impl Runner {
                 self.start_turn(&aid, &bot, h, &th, &prompt, effort.as_deref(), &refs, &attempt, &mut goal, &own).await?
             };
             mark("harness_spawned", &aid);
+            crate::flight::fact_once(&aid, "warm", json!(h.warm()));
             if side_ran || after_interrupt {
                 // Told once: this turn now holds what they said.
                 for key in [crate::continuity::side_key(&th), crate::continuity::interrupted_key(&th)] {
@@ -3514,6 +3515,7 @@ impl Runner {
                     }
                 }
                 let t = h.start_turn(&th, &text, hop.reasoning_effort.as_deref()).await?;
+                crate::flight::fact_once(&aid, "warm", json!(h.warm()));
                 turn = Some(t.clone());
                 let d = Drive {
                     limit_name: &limit_name,
@@ -4068,6 +4070,11 @@ impl Runner {
         // the same. An older server refuses the field (`run_timings`).
         if crate::follow::feature("run_timings") {
             if let Some(timings) = crate::flight::timings(&aid) {
+                let timings = if crate::follow::feature("run_timings_turn") {
+                    timings
+                } else {
+                    crate::flight::legacy(timings)
+                };
                 completion.insert("timings".into(), timings);
             }
         }
@@ -4265,6 +4272,10 @@ impl Runner {
             }
             match text_of(&ev["kind"]).as_str() {
                 "tokens" => {
+                    // The compaction's requests are the attempt's too (drive.rs model_requests).
+                    if let Some(requests) = crate::drive::model_requests(&ev) {
+                        crate::flight::add(aid, "model_calls", requests as u64);
+                    }
                     if let Some(m) = meter.as_deref_mut() {
                         m.add(&ev);
                     }

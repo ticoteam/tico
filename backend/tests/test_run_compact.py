@@ -203,3 +203,27 @@ def test_a_reply_s_text_goes_whole_to_a_reader_of_the_thread_as_it_is_written_an
     assert outputs("cara-test") == {}
     monkeypatch.setattr(org_rule_check, "watched", lambda c, bot: True)
     assert sorted(outputs("ana-test")) == [4]
+
+
+def test_a_compact_tool_step_says_what_the_run_is_doing_in_plain_words_and_never_its_arguments(api):
+    """The live reply shows the run's newest call ("Filing a task", turns.tool_label), not "Working": a call starting
+    at the top of the turn carries its label; the same call ending, backgrounded, declined or interrupted, an update
+    with no status and a subagent's own call carry none."""
+    r, msg, aid, after = started_run(api)
+    secret = "--title 'Acme renewal' --message 'private words'"
+    write(
+        api,
+        r,
+        aid,
+        (1, "tool", {"name": "Bash", "summary": "tico task create " + secret, "item_id": "c1", "status": "running"}),
+        (2, "tool", {"name": "Bash", "summary": "tico task create " + secret, "item_id": "c1", "status": "completed"}),
+        (3, "tool", {"name": "Bash", "summary": "tico task show 9", "item_id": "c2", "parent_id": "c9"}),
+        *[
+            (4 + n, "tool", {"name": "Bash", "summary": "tico task show 9", "item_id": "c3", "status": status})
+            for n, status in enumerate(("backgrounded", "declined", "interrupted", ""))
+        ],
+    )
+    got = {d["output"]["seq"]: d["output"] for _, d, _ in read(api, "ana-test", after, True)[0] if "output" in d}
+    assert got[1]["label"] == "Filing a task" and "payload" not in got[1], got[1]
+    assert [seq for seq, step in got.items() if "label" in step] == [1], got
+    assert "Acme" not in json.dumps(got)
