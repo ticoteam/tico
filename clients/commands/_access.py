@@ -443,6 +443,7 @@ ASSISTANT_TOOLS = frozenset(
         "tico_goal_show",
         "tico_goal_read_back",
         "tico_goal_save",
+        "tico_kpi_target",
         "tico_proposal_list",
         "tico_strategy_show",
         # Bots, routines, rules and settings it changes for the person.
@@ -488,7 +489,8 @@ ASSISTANT_TOOLS = frozenset(
         "tico_email_unlabel",
         "tico_email_mark_read",
         "tico_email_mark_unread",
-        # Publishing its work.
+        # Publishing its work, and a page it makes for a task (its context, then the page).
+        "tico_task_context",
         "tico_file_publish",
         "tico_file_import",
         "tico_file_link",

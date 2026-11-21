@@ -524,7 +524,7 @@ def _template_tools():
 
 def test_the_assistant_turn_is_offered_the_tools_its_template_runs_and_never_the_hidden_ones():
     """The Assistant's MCP listing is its short allowlist (ASSISTANT_TOOLS): every tool its template runs, none of the
-    NEVER tools, and nothing else (91 tools, 83,789 bytes at this commit, down from 285)."""
+    NEVER tools, and nothing else (93 tools, 85,364 bytes at this commit, down from 285)."""
     from clients.commands._access import ASSISTANT_TOOLS, ASSISTANT_UNLISTED
 
     everything = {t["name"] for t in hubtools.TOOLS}
