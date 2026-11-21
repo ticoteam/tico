@@ -31,6 +31,9 @@
 .askcard.is-link:hover{background:var(--hover)}
 .askcard.is-link .askcard-top>.ico{width:14px;height:14px;color:var(--faint)}
 .askcard-what{margin-top:var(--s-1);color:var(--ink-2);line-height:var(--lh-read);overflow-wrap:anywhere}
+/* A rule's OK binds every field it shows: each is shown whole, wrapped, never cut short. */
+.askcard-rule .fact-t{overflow:visible;white-space:normal;overflow-wrap:anywhere}
+.askcard-rule .facts .fact{align-items:start;padding-top:var(--s-1);padding-bottom:var(--s-1)}
 .askcard-files{display:flex;flex-wrap:wrap;gap:var(--s-1h);margin-top:var(--s-1h)}
 .askcard-files .file{height:28px;margin-top:0;min-width:0;max-width:100%;padding:0 var(--s-2h);border-radius:var(--r-chip);font-size:var(--t-sm);color:var(--ink-2)}
 .askcard-files .file>span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}

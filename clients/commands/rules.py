@@ -348,13 +348,18 @@ def rules_edit(api, args):
 
 @tool(
     "tico_rules_history",
-    "One org rule's history: every version, newest first, and its last 30 days: the holds of it you may read and how "
-    "many times each rule check outcome was recorded on it.",
-    {"id": _s("The rule's id")},
+    "One org rule's history: its versions, newest first, and the holds of it from the last 30 days you may read, each "
+    "a page: pass versions_next as versions_cursor, or holds_next as holds_cursor, for the rest.",
+    {
+        "id": _s("The rule's id"),
+        "versions_cursor": _s("versions_next from the last page"),
+        "holds_cursor": _s("holds_next from the last page"),
+    },
     required=("id",),
 )
 def rules_history(api, args):
-    return _as_person(api).get(f"rules/{args['id']}/history")
+    query = _present({"versions_cursor": args.get("versions_cursor"), "holds_cursor": args.get("holds_cursor")})
+    return _as_person(api).get(f"rules/{args['id']}/history", **query)
 
 
 @tool(
@@ -731,8 +736,8 @@ CLI = (
     Command("rules skip", "set a suggestion aside", example="tico rules skip r1"),
     Command(
         "rules history",
-        "one rule's versions and its last 30 days: holds and check outcomes",
-        example="tico rules history r1",
+        "one rule's versions and its holds from the last 30 days, each paged by its own cursor",
+        example="tico rules history r1 --versions-cursor '2026-11-20T10:00:00Z|a2'",
     ),
     Command(
         "rules make",

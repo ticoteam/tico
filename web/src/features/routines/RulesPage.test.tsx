@@ -470,11 +470,18 @@ describe('Rules: Suggested', () => {
 
   it('a clerk’s draft is not added here: Open task goes to its task, where its OK adds it', async () => {
     const sent = record();
-    queryClient.setQueryData(orgRulesQuery('suggested').queryKey, [org({ id: 'o6', status: 'suggested', text: 'Refunds over $100 go to Ben first', clerk_task: 't5' })]);
+    queryClient.setQueryData(orgRulesQuery('suggested').queryKey, [
+      org({ id: 'o6', status: 'suggested', text: 'Refunds over $100 go to Ben first', bound: true, clerk_task: 't5' }),
+      // a clerk's draft on a task this reader cannot open: no Add, and nothing names the task
+      org({ id: 'o5', status: 'suggested', text: 'Mail only the partner domains', bound: true, clerk_task: null }),
+    ]);
     stageRules([], 'suggested');
     const router = show('/company/rules?tab=suggested');
     const row = await screen.findByTitle('Refunds over $100 go to Ben first');
     expect(within(row).queryByRole('button', { name: 'Add' })).toBeNull();
+    const hidden = screen.getByTitle('Mail only the partner domains');
+    expect(within(hidden).queryByRole('button', { name: 'Add' })).toBeNull();
+    expect(within(hidden).queryByRole('button', { name: 'Open task' })).toBeNull();
     fireEvent.click(within(row).getByRole('button', { name: 'Open task' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/task/t5'));
     expect(sent).toHaveLength(0);

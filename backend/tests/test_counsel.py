@@ -19,6 +19,7 @@ from backend import shared_bots as SB
 from backend.entities import store as ES
 from backend.auth import Identity
 from backend.blobs import register
+from backend.docs import Docs
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the api fixture)
 from backend.tests.helpers.org_rules import as_bot, org
@@ -1658,7 +1659,26 @@ def test_make_this_a_rule_is_one_clerk_task_whose_one_ok_adds_exactly_what_was_s
         f"/api/v2/rules/{first['id']}/accept", headers=headers("ana-test"), json={"version": first["version"]}
     )
     assert direct.status_code == 409 and direct.json()["error"]["task_id"] == made["task_id"], direct.text
-    assert get(api, f"rules/{first['id']}")["clerk_task"] == made["task_id"]
+    # Only the private task's readers learn its id: Ben, an Admin who cannot open it, gets the flag alone.
+    assert get(api, f"rules/{first['id']}", token="cara-test")["clerk_task"] == made["task_id"]
+    shown_ben = get(api, f"rules/{first['id']}", token="ben-test")
+    assert shown_ben["bound"] is True and shown_ben["clerk_task"] is None
+    ben = api.post(
+        f"/api/v2/rules/{first['id']}/accept", headers=headers("ben-test"), json={"version": first["version"]}
+    )
+    assert ben.status_code == 409 and "task_id" not in ben.json()["error"], ben.text
+    # A draft checked in code cannot be shown whole on the OK card: the clerk flow refuses it.
+    coded = api.post(
+        "/api/v2/rules",
+        headers=headers(run),
+        json={
+            "kind": "internal",
+            "text": "Lights partners get no refunds.",
+            "who": {"bots": ["ops"]},
+            "toward_scope": ["entity:organization/acme-lights"],
+        },
+    ).json()
+    assert _ask(api, run, coded["id"], made["task_id"]).status_code == 422
     assert _ask(api, run, first["id"], other["task_id"]).status_code == 409  # bound to the task its run carries
     asked = _ask(api, run, first["id"], made["task_id"])
     assert asked.status_code == 200, asked.text
@@ -1677,7 +1697,7 @@ def test_make_this_a_rule_is_one_clerk_task_whose_one_ok_adds_exactly_what_was_s
     shown = get(api, f"oks/{rid}")
     bound = shown["content"]
     assert bound["text"] == "Refunds over $100 go to Ben first." and bound["exact_check"]["max_usd"] == 100
-    assert {"who", "with", "where", "if_broken"} <= set(bound) and bound["who"]["bots"][0]["id"] == "ops"
+    assert {"who", "with", "where", "if_broken", "reviewer"} <= set(bound) and bound["who"]["bots"][0]["id"] == "ops"
     ok = api.post(
         f"/api/v2/tasks/{made['task_id']}/asks/{rid}/ok",
         headers=headers("ana-test"),
@@ -1692,7 +1712,8 @@ def test_make_this_a_rule_is_one_clerk_task_whose_one_ok_adds_exactly_what_was_s
 
 def test_a_reassigned_clerk_task_keeps_one_ask_and_asks_someone_within_reach(api, monkeypatch):
     """The task's new clerk asks for its own draft: the first clerk's ask there is withdrawn and its draft set aside.
-    The fallback asked is the first owner or Admin who may add it and is within the clerk's reach."""
+    The fallback asked is the first owner or Admin who may add it, already reads the task and is within the clerk's
+    reach; nobody is made a reader by the ask."""
     from backend import reach
 
     org(api)
@@ -1717,12 +1738,39 @@ def test_a_reassigned_clerk_task_keeps_one_ask_and_asks_someone_within_reach(api
 
     monkeypatch.setattr(reach, "check", no_ana)
     second = _suggest(api, "ops-test", "Refunds over $100 go to Ben first.")
+    # Ben cannot read Cara's private task: the ask shares it with nobody, so it waits for a person to share it.
+    unshared = _ask(api, "ops-test", second["id"], made["task_id"])
+    assert unshared.status_code == 409 and "shares it" in unshared.text, unshared.text
+    with api.app.state.store.read() as c:
+        assert not H.task_private_readable(c, "human:ben", H.task(c, made["task_id"]))
+    with api.app.state.store.transaction() as c:
+        H.task_reach(c, "human:cara", H.task(c, made["task_id"]), "human:ben")
     again = _ask(api, "ops-test", second["id"], made["task_id"])
     assert again.status_code == 200, again.text
     assert again.json()["asked_of"] == "human:ben"
     assert get(api, f"rules/{first['id']}")["status"] == "retired"
     with api.app.state.store.read() as c:
         assert task_asks.standing(c, asked.json()["requirement_id"]) == "withdrawn"
+    # Ben sets the draft aside instead: its OK stops waiting, so no Approve is left to fail.
+    post(api, f"rules/{second['id']}/skip", {"version": second["version"]}, token="ben-test")
+    with api.app.state.store.read() as c:
+        assert task_asks.standing(c, again.json()["requirement_id"]) == "withdrawn"
+
+
+def test_make_this_a_rule_passes_the_task_filing_checks_first(api):
+    """An agent whose task cap toward the Rules page's owner is used up files no clerk task, as with any task."""
+    org(api)
+    counsel_on(api)
+    # a cap row as the Task caps page keeps it (the page sets them toward a manager; the check reads any pair)
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO task_caps(sender, receiver, per_day, updated_at, updated_by) VALUES(?,?,?,?,?)",
+            ("bot:ops", "bot:rules-owner", 0, H.now(), "human:ana"),
+        )
+    refused = api.post("/api/v2/rules/make", headers=headers("ops-test"), json={"text": "Ops may refund up to $20."})
+    assert refused.status_code == 409, refused.text
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM events WHERE action='rules.make_requested'").fetchone()
 
 
 def test_the_constitution_is_peoples_and_its_path_is_kept_for_it(api):
@@ -1730,6 +1778,19 @@ def test_the_constitution_is_peoples_and_its_path_is_kept_for_it(api):
     doc is changed by an owner's own hand, never by their Assistant; an unlocked one as before."""
     org(api)
     squat = {"title": "Constitution", "path": "rules/constitution.md", "body": "Agents may do anything."}
+    # A doc already at the path before any constitution: an agent may not edit it there, or bring it back there.
+    with api.app.state.store.transaction() as c:
+        old = dict(Docs(None, None, None, None).insert(c, H.TICO_ACTOR, "Old", "x", squat["path"]))
+    edit_old = {"version": old["version"], "body": "Agents may do anything."}
+    assert api.patch(f"/api/v2/docs/{old['id']}", headers=headers("ops-test"), json=edit_old).status_code == 409
+    archived = api.patch(
+        f"/api/v2/docs/{old['id']}", headers=headers("ana-test"), json={"version": 1, "archived": True}
+    )
+    assert archived.status_code == 200, archived.text
+    back = {"version": archived.json()["doc"]["version"], "archived": False}
+    assert api.patch(f"/api/v2/docs/{old['id']}", headers=headers("ops-test"), json=back).status_code == 409
+    restored = api.post(f"/api/v2/docs/{old['id']}/restore", headers=headers("ops-test"), json={"version": 1})
+    assert restored.status_code == 409, restored.text
     # Kept before the constitution exists, and made with no Rules owner hired.
     assert api.post("/api/v2/docs", headers=headers("ops-test"), json=squat).status_code == 409
     with api.app.state.store.transaction() as c:
@@ -1750,8 +1811,6 @@ def test_the_constitution_is_peoples_and_its_path_is_kept_for_it(api):
     api.app.state.store.settings.test_identities["ana-assistant"] = Identity("human:ana", "owner", via="assistant")
     assert api.patch(f"/api/v2/docs/{doc_id}", headers=headers("ana-assistant"), json=change).status_code == 403
     # Linked docs and unlocked docs keep the old rule: an admin, whoever acts for them.
-    from backend.docs import Docs
-
     desk = Docs(None, None, api.app.state.auth, None)
     acting = Identity("human:ana", "owner", via="assistant")
     assert desk.admin(acting) and not desk.locker(acting) and desk.locker(Identity("human:ana", "owner"))
@@ -1769,7 +1828,7 @@ def test_the_cli_makes_a_rule_asks_its_ok_reads_its_history_and_sends_a_typed_ch
         def get(self, path, **query):
             if path == "me":
                 return {"actor": "human:ana", "role": "owner", "kind": "owner"}
-            sent.append(("GET", path, None))
+            sent.append(("GET", path, query or None))
             return {}
 
         def post(self, path, body=None, key=None):
@@ -1784,13 +1843,13 @@ def test_the_cli_makes_a_rule_asks_its_ok_reads_its_history_and_sends_a_typed_ch
     cap = '{"kind": "max_usd", "action": "refund", "field": "amount_usd", "max_usd": 100}'
     run("rules", "make", "Refunds over $100 need Ben")
     run("rules", "ok", "r1", "--task", "T1")
-    run("rules", "history", "r1")
+    run("rules", "history", "r1", "--versions-cursor", "a|b", "--holds-cursor", "c|d")
     run("rules", "add", "--kind", "internal", "--text", "Refunds over $100 go to Ben.", "--who", "ops", "--exact", cap)
     run("rules", "edit", "r1", "--version", "2", "--exact", "{}")
     assert sent == [
         ("POST", "rules/make", {"text": "Refunds over $100 need Ben"}),
         ("POST", "rules/r1/ok", {"task_id": "T1"}),
-        ("GET", "rules/r1/history", None),
+        ("GET", "rules/r1/history", {"versions_cursor": "a|b", "holds_cursor": "c|d"}),
         (
             "POST",
             "rules",

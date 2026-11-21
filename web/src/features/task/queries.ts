@@ -236,10 +236,11 @@ export interface BoundRule {
   rule: string;
   version: number;
   text: string;
-  who: { everyone?: boolean; all_bots?: boolean; groups?: Named[]; bots?: Named[]; people?: Named[] };
+  who: { everyone?: boolean; all_bots?: boolean; outside_editions?: boolean; groups?: Named[]; bots?: Named[]; people?: Named[] };
   with: { groups?: Named[]; bots?: Named[]; people?: Named[] };
   where: string[];
   if_broken: 'block' | 'escalate' | 'warn';
+  reviewer: Named | null;
   exact_check: { kind: 'allow_list'; action: string; field: string; values: string[] } | { kind: 'max_usd'; action: string; field: string; max_usd: number } | null;
 }
 
@@ -265,7 +266,7 @@ export const decisionShownQuery = (task: string, rid: string, version: number, s
       // A rule's OK binds the rule and every field that enforces it: Approve waits until all of them are there to show.
       if (shown.subject.startsWith('rule:')) {
         const rule = shown.content as BoundRule | null;
-        const whole = !!rule && typeof rule.text === 'string' && !!rule.who && !!rule.with && Array.isArray(rule.where) && !!rule.if_broken && 'exact_check' in rule;
+        const whole = !!rule && typeof rule.text === 'string' && !!rule.who && !!rule.with && Array.isArray(rule.where) && !!rule.if_broken && 'reviewer' in rule && 'exact_check' in rule;
         return { hash: whole ? shown.shown_hash : null, complete: whole, ...(whole && { rule }) };
       }
       if (!shown.subject.startsWith('email_send:')) return { hash: shown.shown_hash, complete: true };

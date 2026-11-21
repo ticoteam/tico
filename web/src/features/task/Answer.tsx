@@ -259,7 +259,9 @@ const BROKEN_WORDS = { block: 'Stop', escalate: 'Ask first', warn: 'Warn' } as c
 
 /** The rule a rule's OK adds, exactly as it was asked: its words and every field that decides what it stops. */
 function RuleShown({ rule }: { rule: BoundRule }) {
-  const who = rule.who.everyone ? ['Everyone'] : [...(rule.who.all_bots ? ['Every agent'] : []), ...names(rule.who)];
+  const who = rule.who.everyone
+    ? ['Everyone']
+    : [...(rule.who.all_bots ? ['Every agent'] : []), ...(rule.who.outside_editions ? ['Outside editions'] : []), ...names(rule.who)];
   const withWho = names(rule.with);
   const c = rule.exact_check;
   return (
@@ -270,6 +272,7 @@ function RuleShown({ rule }: { rule: BoundRule }) {
         <LabelValue label="With">{withWho.join(', ') || 'Anyone'}</LabelValue>
         <LabelValue label="Where">{rule.where.join(', ') || 'Everywhere'}</LabelValue>
         <LabelValue label="If broken">{BROKEN_WORDS[rule.if_broken]}</LabelValue>
+        {rule.if_broken === 'escalate' && <LabelValue label="Ask">{rule.reviewer?.name || rule.reviewer?.id || 'Manager'}</LabelValue>}
         <LabelValue label="Checked exactly">
           {!c ? 'No' : c.kind === 'max_usd' ? `${c.action}: ${c.field} at most $${c.max_usd}` : `${c.action}: ${c.field} only ${c.values.join(', ')}`}
         </LabelValue>
