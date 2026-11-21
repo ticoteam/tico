@@ -34,7 +34,7 @@ import { useTabs, type Tab } from './tabs';
 import { TaskStatus } from './StatusLine';
 import { approvalCard, useApprovalCards } from './ThreadCards';
 import { PageView, useVersions, VersionBar } from './Versions';
-import { Brief, EmailPointers, MatterBrief, MatterDatesOf, WaitingOnYou } from './Waiting';
+import { Brief, EmailPointers, MatterBrief, MatterDates, MatterDatesOf, WaitingOnYou } from './Waiting';
 import { waitsNow } from './waits';
 import './task.css';
 
@@ -266,7 +266,7 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
         lead={
           <div className="tv-lead">
             <Brief note={t.note} />
-            <MatterDatesOf t={t} send={current.email} />
+            <MatterDates matter={t.matter} />
             <Decision t={current.wait} flow={false} />
           </div>
         }

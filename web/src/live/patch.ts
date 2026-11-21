@@ -248,6 +248,9 @@ function patchTasks(batch: TaskEvent[]): void {
     // A sub-task filed under it or taken off (a relation): its children are read again (a second review's pill).
     // A read already in flight is from before the change: it starts again.
     if (held && related.has(id)) void queryClient.invalidateQueries({ queryKey: detail, exact: true }, { cancelRefetch: true });
+    // A matter's key date changed or was marked done (an `obligations` change on its task): the stream's row leaves out
+    // the matter, so the task's read, with its dates, starts again.
+    if (e.kinds?.includes('obligations')) void queryClient.invalidateQueries({ queryKey: detail, exact: true }, { cancelRefetch: true });
     const task = e.task;
     if (!task) continue;
     // Writing the same data still counts as a write (and a redraw): only a real change is set.
