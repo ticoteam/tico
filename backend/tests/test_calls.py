@@ -248,26 +248,27 @@ def test_action_items_wait_out_a_gateway_outage_with_backoff_then_give_up_with_a
     assert _owed(meet, call_id)["finalized_at"] and _owed(meet, call_id)["action_items_posted_at"]
 
 
-REVIEW_ITEM = {"title": "Schedule the reliability review", "quote": SYNTHETIC_SPEECH, "owner": ""}
 REVIEW_SUMMARY = "Ana and Ben agreed to review reliability next week."
 
 
 @pytest.mark.parametrize(
-    ("items", "summary", "posted"),
+    ("summary", "posted"),
     [
-        ([], [], []),
-        ([], [REVIEW_SUMMARY], [f"Action items: Acme launch call\n\nSummary:\n- {REVIEW_SUMMARY}"]),
-        ([REVIEW_ITEM], [], ["Action items: Acme launch call\n- Schedule the reliability review"]),
-        (
-            [REVIEW_ITEM],
-            [REVIEW_SUMMARY],
-            [f"Action items: Acme launch call\n- Schedule the reliability review\n\nSummary:\n- {REVIEW_SUMMARY}"],
-        ),
+        ([], []),
+        ([REVIEW_SUMMARY], [f"Action items: Acme launch call\n\nSummary:\n- {REVIEW_SUMMARY}"]),
     ],
-    ids=["nothing", "summary-only", "items-only", "items-and-summary"],
+    ids=["nothing", "summary-only"],
 )
-def test_the_action_items_post_when_there_are_items_or_a_summary(meet, monkeypatch, items, summary, posted):
-    monkeypatch.setattr(call_items, "draft", lambda base, key, model, rows: {"summary": summary, "items": items})
+def test_a_call_with_no_action_items_posts_only_its_summary_and_is_not_drafted_again(
+    meet, monkeypatch, summary, posted
+):
+    drafts = []
+
+    def draft(base, key, model, rows):
+        drafts.append(len(rows))
+        return {"summary": summary, "items": []}
+
+    monkeypatch.setattr(call_items, "draft", draft)
     cid = thread(meet)
     call_id = start_call(meet, cid)["id"]
     join(meet, call_id, "ana-test")
@@ -275,7 +276,10 @@ def test_the_action_items_post_when_there_are_items_or_a_summary(meet, monkeypat
     settle(meet)
     post(meet, f"calls/{call_id}/end", {}, token="ana-test")
     assert [text for text in thread_texts(meet, cid) if text.startswith("Action items:")] == posted
-    assert _owed(meet, call_id)["action_items_posted_at"]  # done, so the sweep does not draft them again
+    notes = get(meet, f"calls/{call_id}/notes")  # the meeting window reads the summary from the call's notes
+    assert notes["pending"] is False and notes["items"] == [] and notes["summary"] == summary
+    meet.app.state.calls.sweep()
+    assert len(drafts) == 1 and _owed(meet, call_id)["action_items_posted_at"]
 
 
 def test_a_thread_refusal_of_the_end_of_call_post_leaves_an_audit_row_and_a_hold_for_the_starter(meet, monkeypatch):
