@@ -174,6 +174,21 @@ describe('an approval waiting, as a card in the agent’s thread @approvals', ()
     expect(card.parentElement?.dataset.from).toBe('bot:lo');
   });
 
+  it('a page OK on a task that also has an older question is still a card', async () => {
+    const question = { ...otherAsk('p1', 'page', null, 'bot:lo', []), id: 'p1:q1', since: '2026-11-19T08:00:00Z', ask: { requirement_id: 'q1', kind: 'question', line: 'Which week?', met: false, asked_by: 'bot:lo', shows: [], may: [] } };
+    needs = [question, otherAsk('p1', 'page', null, 'bot:lo', ['page:file-a@2'])];
+    show({ agent: 'bot:lo' });
+    const card = await screen.findByRole('link', { name: /Approve/ });
+    expect(card.textContent).toContain('Release report');
+  });
+
+  it('an email card reads the file list of the page it opens, once', async () => {
+    show({ agent: 'bot:lo' });
+    await screen.findByRole('link', { name: /Approve/ });
+    // a "Send:" task's card opens its matter (m1): only the matter's files are read, once
+    expect(read.filter((u) => u.includes('/files?all=1'))).toEqual(['/api/v2/tasks/m1/files?all=1']);
+  });
+
   it('an OK the agent asked for by its slug, on a finance item, is a card with no chips', async () => {
     needs = [otherAsk('f1', 'ok', 'bot:legal-owner', 'bot:lo', ['finance:x1'])];
     show({ agent: 'bot:lo' });

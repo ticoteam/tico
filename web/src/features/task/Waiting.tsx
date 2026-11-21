@@ -23,9 +23,9 @@ export interface Waiting {
 /** Each email's OK hung on a task that waits on the person (or that they asked changes on, or whose answer is being
     sent), once its send is read, so one already sent or canceled never flashes. `settled` once every read is in. An
     answer in flight keeps it: its tab, and the decision on it, stay until the server says, so a refusal shows there. */
-export function useWaiting(t: TaskData): { items: Waiting[]; settled: boolean } {
+export function useWaiting(t: TaskData | undefined): { items: Waiting[]; settled: boolean } {
   const me = useQuery(meQuery).data?.id;
-  const reads = useQueries({ queries: sendTasksOf(t).map((id) => ({ ...taskDetailQuery(id), retry: false })) });
+  const reads = useQueries({ queries: (t ? sendTasksOf(t) : []).map((id) => ({ ...taskDetailQuery(id), retry: false })) });
   const subs = reads
     .flatMap((q) => (q.data ? [q.data] : []))
     .flatMap((sub) => {

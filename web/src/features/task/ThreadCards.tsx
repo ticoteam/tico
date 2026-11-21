@@ -57,17 +57,15 @@ export function useApprovalCards(scope: ApprovalScope, chat?: string): ChatMessa
     const by = it.ask?.by ?? (it.ask?.kind === 'page' ? it.owner_id : null);
     return by?.startsWith('bot:') ? (byId?.[by]?.id ?? by) : null;
   };
-  // An email's card stands for its own approval entry (`approvals`: one per email's OK), so another ask on the task
-  // hides none; any other OK or page keeps the task's row (`items`). A case's chat shows whoever asked (a person too);
-  // an agent's thread, what that agent asked.
+  // Each card stands for its own approval entry (`approvals`: one per approval, one per email's OK), so another ask on
+  // the task (an older question) hides none. A case's chat shows whoever asked (a person too); an agent's thread, what
+  // that agent asked.
   const mine = (it: FlowItem) =>
     hung
       ? it.ask?.kind === 'ok' && hung.has(it.id) && (it.id !== task?.id || !!emailIn(it.ask?.shows ?? []))
       : (it.ask?.kind === 'ok' || it.ask?.kind === 'page') && !!agent && whose(it) === agent;
   const isEmail = (it: FlowItem) => !!emailIn(it.ask?.shows ?? []);
-  const asks = on
-    ? [...(data?.items ?? []).filter((it) => !isEmail(it) && mine(it)), ...(data?.approvals ?? []).filter((it) => isEmail(it) && mine(it))]
-    : [];
+  const asks = on ? (data?.approvals ?? []).filter(mine) : [];
   const subs = useQueries({ queries: asks.map((it) => ({ ...taskDetailQuery(it.id), retry: false })) });
   // The files any other OK shows (its chips, ThingCard), read before the card draws.
   const files = useQueries({
@@ -145,12 +143,11 @@ function EmailCard({ sub, send, chat }: { sub: TaskData; send: string; chat?: st
   // itself; for a "Send:" task, its tab on the matter, or on the task's own page when the matter has more than one.
   const direct = !isSendTask(sub.title);
   const target = direct || !one ? sub : held;
-  const own = useTabs(sub);
-  const onMatter = useTabs(held ?? sub);
-  const resolver = target === sub ? own : target ? onMatter : null;
+  // Read once, for the page it opens only.
+  const resolver = useTabs(target);
   // Named once what it reads is in, never guessed first.
-  if ((matter && !read.isFetched) || (resolver && !resolver.settled)) return null;
-  const slug = resolver?.tabs.find((x) => x.email === send && (target === sub ? !x.wait : !!x.wait))?.slug;
+  if ((matter && !read.isFetched) || (target && !resolver.settled)) return null;
+  const slug = resolver.tabs.find((x) => x.email === send && (target === sub ? !x.wait : !!x.wait))?.slug;
   const to = target && slug ? tabAddress(target, slug, false).to : one && matter ? matter.to : tabAddress(sub, undefined, false).to;
   const title = sendTitle(sub.title);
   const what = matter?.title ?? title?.subject ?? sub.title;
