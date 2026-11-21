@@ -1849,6 +1849,13 @@ describe('Loading a Library page', () => {
     }
   });
 
+  it('never reads the page of a tool the list shows by name alone', async () => {
+    const sent = serve((url) => (url.startsWith('/api/v2/tool-index') ? { rows: [indexRow({ id: 'api:crm', name: 'Acme CRM', requestable: true })], next: null } : undefined));
+    queryClient.clear();
+    await loadTools(queryClient, { tool: 'api:crm' });
+    expect(reads(sent)()).not.toContain('/api/v2/api-tools/crm');
+  });
+
   it('lets a failed main read through to the router, and leaves an open tool’s failure in its place', async () => {
     queryClient.clear();
     serve((url) => (url.startsWith('/api/v2/tool-index') ? { rows: [] } : refused(403, 'forbidden')));

@@ -80,8 +80,18 @@ export const loadSkills = (qc: QueryClient, s: Pick<SkillsSearch, 'skill' | 'pro
   // Waiting changes decide the empty state, so they come in with the list (a failure leaves them out).
   return Promise.all([qc.ensureQueryData(skillsQuery), qc.prefetchQuery(proposalsQuery)]);
 };
+// An open API tool's page starts with the list, unless the list shows it by name alone (`requestable`): that page is
+// not the reader's, and reading it would only answer 404.
 export const loadTools = (qc: QueryClient, s: Pick<ToolsSearch, 'tool'>) => {
-  if (s.tool?.startsWith('api:')) void qc.prefetchQuery(apiToolQuery(s.tool.slice(4)));
+  const tool = s.tool?.startsWith('api:') ? s.tool : undefined;
+  const cached = tool && qc.getQueryData(toolsQuery.queryKey)?.rows.find((r) => r.id === tool);
+  if (tool && !cached) {
+    return qc.ensureQueryData(toolsQuery).then((index) => {
+      if (!index.rows.find((r) => r.id === tool)?.requestable) void qc.prefetchQuery(apiToolQuery(tool.slice(4)));
+      return index;
+    });
+  }
+  if (tool && cached && !cached.requestable) void qc.prefetchQuery(apiToolQuery(tool.slice(4)));
   return qc.ensureQueryData(toolsQuery);
 };
 // The tabs and an open card come in after the list.
