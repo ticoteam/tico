@@ -16,7 +16,8 @@ from backend import company_file as C
 from backend import bot_settings as BS
 from backend.slugs import slugify
 from backend.store import H
-from backend.tests.helpers.api import assign, get, post, put, runner
+from backend import models as M
+from backend.tests.helpers.api import assign, get, headers, post, put, runner
 from backend.tests.helpers.template_renames import employees_file
 from clients import catalog
 from runner_support import catalog_job
@@ -37,10 +38,16 @@ ALIAS_PATHS = (
 # (team_rules.OLD_NAMES), and the old default title an exported company file still carries (draft.RENAMED_TITLES).
 ALIAS_WORDS = ("bots_botops", "botops_direct", "botops_manages_bots", 'RENAMED_TITLES = {"botops": "BotOps"}')
 OLD = re.compile(r"(?i:botops)|\bBot[ -]Ops\b")
+# The tasks the server files for the built-in name its id, so they reach it whatever bot holds a slug: these call
+# sites, and the test that reads one back.
+ALIAS_AT = {
+    "backend/general_manager.py": "--owner botops",
+    "backend/hubdb.py": "--owner botops",
+    "backend/tests/test_maintenance_health.py": "--owner botops",
+}
 # The id itself: quoted ("botops", `botops`, a SQL or keyword value =botops), an actor (bot:botops), a route or
-# repository (bots/botops, ticoteam/botops), a stored event name (botops.request_carried), or a task the server files
-# for the built-in, which must reach it even when a company's own bot holds the slug agent-ops (--owner botops).
-ID = re.compile(r"""(?:["'`/=]|bot:|--owner )botops(?![\w-])|(?<![\w-])botops(?=["'`]|\.[a-z_])""")
+# repository (bots/botops, ticoteam/botops) or a stored event name (botops.request_carried).
+ID = re.compile(r"""(?:["'`/=]|bot:)botops(?![\w-])|(?<![\w-])botops(?=["'`]|\.[a-z_])""")
 
 
 def _bad_lines(text, first=1):
@@ -78,7 +85,7 @@ def test_the_old_name_is_left_only_as_the_id():
         if name.startswith(ALIAS_PATHS):
             continue
         text = (ROOT / name).read_text(encoding="utf-8")
-        for word in ALIAS_WORDS:
+        for word in (*ALIAS_WORDS, *([ALIAS_AT[name]] if name in ALIAS_AT else [])):
             text = text.replace(word, "x" * len(word))
         lines = _python(text) if name.endswith(".py") else _bad_lines(text)
         offenders += [f"{name}:{n}: {text.splitlines()[n - 1].strip()[:120]}" for n in sorted(set(lines))]
@@ -170,6 +177,75 @@ def test_a_name_a_person_chose_stays(company):
         _migrate(c)
         assert (H.bot(c, "botops")["slug"], H.bot(c, "botops")["display_name"]) == ("agent-ops", "Fleet Fixer")
         assert BS.read(c, "botops")["template"] == "agent-ops"  # a seed that gave it no template names its own now
+
+
+def test_the_built_in_takes_the_slug_from_a_company_bot_that_held_it(api):
+    with api.app.state.store.transaction() as c:
+        H.sync_registry(c, {"botops": {"display_name": "BotOps", "status": "active"}}, [])
+        c.execute("UPDATE bots SET slug='agent-ops', display_name='Ops Helper' WHERE id='ops'")
+        _migrate(c)
+        assert (H.bot(c, "botops")["slug"], H.bot(c, "ops")["slug"], H.bot(c, "ops")["display_name"]) == (
+            "agent-ops",
+            "agent-ops-2",
+            "Ops Helper",
+        )
+        moved = c.execute("SELECT actor, detail FROM events WHERE action='bot.renamed' AND target='ops'").fetchone()
+        assert moved["actor"] == H.TICO_ACTOR and json.loads(moved["detail"])["to"] == "agent-ops-2"
+    # The slug stays the built-in's: no other bot is renamed to it.
+    revision = get(api, "bots/ops")["revision"]
+    post(api, "bots/ops/definition", {"slug": "agent-ops", "expected_revision": revision}, expected=409)
+
+
+def test_a_new_companys_agent_ops_repository_is_one_tico_names_not_a_chosen_one(tmp_path):
+    from backend.app import create_app
+    from backend import repositories as R
+    from backend.tests.helpers.fresh_install import OWNER_EMAIL, settings_for
+    from clients.environments import seed_registry
+
+    seed_registry(tmp_path, "Owner", OWNER_EMAIL, {"company_name": "Acme", "app_name": "Tico", "assistant_name": "A"})
+    app = create_app(settings_for(tmp_path, github_owner="acme"))
+    app.state.store.initialize()
+    app.state.store.seed()
+    with app.state.store.read() as c:
+        assert H.bot(c, "botops")["slug"] == "agent-ops"
+        assert "acme/bot-agent-ops" not in R.metadata(c, R.CHOSEN)  # the cross-install guard still applies to it
+        assert BS.read(c, "botops")["template"] == "agent-ops"
+    app.state.store.close()
+
+
+def test_its_checkout_made_under_its_id_still_checks(tmp_path):
+    from clients import preflight
+
+    (tmp_path / "bot.yaml").write_text("name: botops\n")
+    report = preflight.Report("agent-ops")
+    assert preflight.check_manifest(report, "agent-ops", tmp_path)["name"] == "botops" and not report.counts["FAIL"]
+    assert catalog_job.PUBLIC_SLUGS[H.FLEET_MAINTAINER] == H.AGENT_OPS_SLUG  # a new checkout's manifest says agent-ops
+
+
+def test_a_rules_change_retried_across_the_update_matches_its_first_request(api):
+    from backend.store import digest, encode
+
+    key = "rules-retry-1"
+    body = {"agent_ops_direct": False}
+    first = api.put("/api/v2/access/rules", json=body, headers=headers("ana-test", key))
+    assert first.status_code == 200, first.text
+    legacy = {
+        {"agent_ops_direct": "botops_direct", "agent_ops_manages_bots": "botops_manages_bots"}.get(k, k): v
+        for k, v in M.AccessRules(**body).model_dump().items()
+    }
+    with api.app.state.store.transaction() as c:  # the key as a release before the rename saved it
+        c.execute("UPDATE idempotency SET request_hash=? WHERE key=?", (digest(encode(legacy)), key))
+    again = api.put("/api/v2/access/rules", json=body, headers=headers("ana-test", key))
+    assert again.status_code == 200, again.text
+
+
+def test_only_the_renamed_cards_exact_old_title_reads_the_new_name():
+    from backend.company_file import draft as D
+
+    assert D.renamed({"template": "botops", "title": "BotOps"})["title"] == "Agent Ops"
+    assert D.renamed({"template": "botops", "title": "Fleet Fixer"})["title"] == "Fleet Fixer"
+    assert "title" not in D.renamed({"template": "botops"})  # no default title for a row that had none
+    assert D.renamed({"template": "bookkeeper"}) == {"template": "finance-owner"}
 
 
 def _picked(c, choice):

@@ -166,6 +166,19 @@ def current(template):
     return RENAMED.get(template, template) if isinstance(template, str) else template
 
 
+def renamed(row):
+    """A file's role under this release's template (a copy when it changes). A title that is the renamed card's exact
+    old default takes the card's new name; any other title, a missing one included, stays as it was."""
+    old = row.get("template")
+    new = current(old)
+    if new == old:
+        return row
+    out = {**row, "template": new}
+    if old in RENAMED_TITLES and row.get("title") == RENAMED_TITLES[old]:
+        out["title"] = next((r["name"] for r in ROLES if r["slug"] == new), row["title"])
+    return out
+
+
 # The company models a chart starts from (model_<key>.json), in the order the setup chat tries them: the first whose
 # `picks_when` signal the company has, else Everything. On-site work comes before services, so a cleaning company that
 # also sells its hours is a local service business.
@@ -947,8 +960,7 @@ def _current_bots(rows):
         if isinstance(b, dict) and not b.get("existing") and isinstance(b.get("template"), str):
             if b["template"] in RETIRED:
                 continue
-            if current(b.get("template")) != b.get("template"):
-                b = {**b, "template": current(b["template"])}
+            b = renamed(b)
         out.append(b)
     return out
 

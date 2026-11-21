@@ -76,7 +76,7 @@ def test_every_bot_has_one_manager_and_the_built_ins_are_the_general_managers_te
     owner = first["general-manager"]
     assert owner.startswith("human:") and first["assistant"] == owner
     for slug in (
-        "botops",
+        "agent-ops",
         "librarian",
         "strategy-owner",
         "rules-owner",
@@ -116,7 +116,7 @@ def test_a_new_company_puts_agent_ops_under_the_general_manager_whatever_line_th
     owner = first["general-manager"]
     assert owner.startswith("human:") and first["assistant"] == owner and first["finance-owner"] == owner
     team = (
-        "botops",
+        "agent-ops",
         "librarian",
         "strategy-owner",
         "rules-owner",
@@ -130,7 +130,7 @@ def test_a_new_company_puts_agent_ops_under_the_general_manager_whatever_line_th
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET reports_to='assistant' WHERE bot='botops'")  # a person moves it back
         api.app.state.onboarding.complete_company(c)
-    assert lines(api) == {**first, "botops": "assistant"}
+    assert lines(api) == {**first, "agent-ops": "assistant"}
 
 
 @pytest.mark.parametrize("agent_ops_line", ["assistant", "general-manager"])
@@ -147,7 +147,7 @@ def test_a_company_started_on_rc7_starts_again_with_the_same_bots_and_lines(envi
         rc7.setattr(Onboarding, "ensure_general_team", lambda self, c, laid=(): fill(self, c))
         assert api.post("/api/v2/setup/complete", json={}, headers=signed_in()).status_code == 200
         machine(api)
-    assert lines(api)["botops"] == "assistant"
+    assert lines(api)["agent-ops"] == "assistant"
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET reports_to=? WHERE bot='botops'", (agent_ops_line,))
 
@@ -163,7 +163,7 @@ def test_a_company_started_on_rc7_starts_again_with_the_same_bots_and_lines(envi
     with restarted.app.state.store.transaction() as c:
         restarted.app.state.onboarding.complete_company(c)
     assert company() == before
-    assert before[0]["botops"] == agent_ops_line and [slug for slug, line in before[0].items() if not line] == []
+    assert before[0]["agent-ops"] == agent_ops_line and [slug for slug, line in before[0].items() if not line] == []
     slugs = [row["slug"] for row in before[1]]
     assert len(slugs) == len(set(slugs)) and not {"growth-manager-2", "agent-ops-2", "general-manager-2"} & set(slugs)
 

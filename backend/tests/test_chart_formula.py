@@ -407,7 +407,7 @@ def test_industry_owners_are_kept_up_to_three_and_their_topic_reads_in_the_reaso
 
 def test_an_industry_owner_takes_no_built_in_card():
     built_in = {role["slug"] for role in D.ROLES if role["core"]}
-    assert {"assistant", "botops", "strategy-owner", "librarian"} <= built_in
+    assert {"assistant", "agent-ops", "strategy-owner", "librarian"} <= built_in
     assert not (F.INDUSTRY_TEMPLATES & built_in)
     industry = [{"title": "%s Owner" % slug.title(), "template": slug} for slug in sorted(built_in)]
     seats = F.build({"segments": [], "channels": [], "initiatives": [], "industry": industry})["employees"]

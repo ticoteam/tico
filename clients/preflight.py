@@ -92,6 +92,10 @@ def check_repo(r, d):
     return True
 
 
+# A built-in's slug and the id it keeps, either of which its checkout's manifest may name: Agent Ops (#4863).
+RETAINED = [{"agent-ops", "botops"}]
+
+
 def check_manifest(r, slug, d):
     """bot.yaml (older: employee.yaml) parses and identifies this employee. Returns the parsed manifest or None."""
     p = manifest_path(d)
@@ -104,8 +108,8 @@ def check_manifest(r, slug, d):
         r.fail(f"{p.name}: does not parse: {str(e).splitlines()[0][:120]}")
         return None
     r.ok(f"{p.name}: parses")
-    if m.get("name") == slug:
-        r.ok(f"{p.name}: name is {slug}")
+    if m.get("name") == slug or {slug, m.get("name")} in RETAINED:
+        r.ok(f"{p.name}: name is {m.get('name')}")
     else:
         r.fail(f"{p.name}: name is {m.get('name')!r}, expected {slug!r}")
     return m

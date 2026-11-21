@@ -1,9 +1,18 @@
 -- BotOps is Agent Ops (#4863). Its id stays 'botops', so every actor string, reference and history row that names it
 -- is unchanged; its slug, its default name, its template and the two team rules named after it follow the new name.
--- A name a person gave it is kept, and so is a slug another bot already holds.
+-- A name a person gave it is kept. The built-in always takes the slug agent-ops: a company's own bot that held it moves
+-- to agent-ops-2 (or agent-ops-<its id> when that is taken too), keeping its name, and an event says so.
+INSERT INTO events (id, created_at, actor, action, target, detail)
+SELECT lower(hex(randomblob(16))), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 'keeper', 'bot.renamed', b.id,
+  json_object('from', 'agent-ops', 'to', CASE WHEN EXISTS (SELECT 1 FROM bots WHERE id = 'agent-ops-2' OR slug = 'agent-ops-2')
+    THEN 'agent-ops-' || b.id ELSE 'agent-ops-2' END, 'why', 'agent-ops is the built-in Agent Ops')
+FROM bots b
+WHERE b.slug = 'agent-ops' AND b.id <> 'botops' AND EXISTS (SELECT 1 FROM bots WHERE id = 'botops');
+UPDATE bots SET slug = CASE WHEN EXISTS (SELECT 1 FROM bots o WHERE o.id = 'agent-ops-2' OR o.slug = 'agent-ops-2')
+    THEN 'agent-ops-' || id ELSE 'agent-ops-2' END
+WHERE slug = 'agent-ops' AND id <> 'botops' AND EXISTS (SELECT 1 FROM bots WHERE id = 'botops');
 UPDATE bots SET slug = 'agent-ops'
-WHERE id = 'botops' AND slug = 'botops'
-  AND NOT EXISTS (SELECT 1 FROM bots WHERE id = 'agent-ops' OR slug = 'agent-ops');
+WHERE id = 'botops' AND slug = 'botops' AND NOT EXISTS (SELECT 1 FROM bots WHERE id = 'agent-ops' OR slug = 'agent-ops');
 UPDATE bots SET display_name = 'Agent Ops' WHERE id = 'botops' AND display_name = 'BotOps';
 UPDATE bot_settings SET extra = json_set(extra, '$.display_name', 'Agent Ops')
 WHERE bot_id = 'botops' AND json_valid(extra) AND json_extract(extra, '$.display_name') = 'BotOps';

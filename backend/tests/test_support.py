@@ -356,7 +356,7 @@ REPORT = "tico task update failed since 0.2.17 with: refused (version). Tried a 
 def as_bot(api, slug="assistant"):
     """The bot, connected as an external agent (a Hermes profile): its own standing credential, no runner lease."""
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bots SET state='active' WHERE slug=?", (slug,))
+        c.execute("UPDATE bots SET state='active' WHERE ? IN (id, slug)", (slug,))
         c.execute(
             "INSERT OR IGNORE INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
             (slug, "hermes", "hash-" + slug, "2026-01-01T00:00:00Z", "human:test"),

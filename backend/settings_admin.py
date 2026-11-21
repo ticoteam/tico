@@ -1266,6 +1266,8 @@ class SettingsAdmin:
         bot keeps its slug (code names it by that), and no bot takes a slug or an id another bot answers to."""
         if bot in H.PRODUCT_BOT_SLUGS or bot == self.settings.assistant_bot or self.auth.system_bot(bot):
             raise Problem("slug", "A built-in bot keeps its slug", 422)
+        if slug == H.AGENT_OPS_SLUG:
+            raise Problem("duplicate", "That slug is Agent Ops'", 409)  # the built-in's, held for it
         other = H.resolve_bot(c, slug)
         if other and other["id"] != bot:
             raise Problem("duplicate", "That bot slug already exists", 409)

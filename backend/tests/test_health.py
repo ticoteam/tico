@@ -1487,7 +1487,7 @@ def test_the_update_hold_names_each_turn_by_bot_task_and_start_but_never_a_priva
         add_bot(api, bot)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE runners SET label='Mac' WHERE id=?", (runner,))
-        c.execute("UPDATE bots SET display_name='Agent Ops' WHERE slug='botops'")
+        c.execute("UPDATE bots SET display_name='Agent Ops' WHERE id='botops'")
         for bot in ("ops", "botops", "audit"):
             c.execute(
                 "INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,1,?,'t')",

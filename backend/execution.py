@@ -3902,13 +3902,16 @@ class Execution:
             )
             if row['owner_id'] != runner['owner_id'] and runner['owner_id'] != owner and not takes:
                 continue
-            config = providers.fill(company, follow(c, row['bot'], json.loads(row['config']), configs.get))
-            config = runner_versions.wire_template(config)
+            stored = json.loads(row['config'])
+            config = runner_versions.wire_template(
+                providers.fill(company, follow(c, row['bot'], dict(stored), configs.get))
+            )
             # Runner wire (backend/runner_wire.py): the stored text under its old name, beside the decoded `config`, with
             # the same template name.
             wired = runner_wire.assignment(row)
-            if config.get("template") != json.loads(row['config']).get("template"):
-                wired["config_json"] = json.dumps(runner_versions.wire_template(json.loads(row['config'])))
+            sent = runner_versions.wire_template(stored)
+            if sent is not stored:
+                wired["config_json"] = json.dumps(sent)
             result.append(
                 {
                     **dict(row),

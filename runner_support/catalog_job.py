@@ -37,6 +37,7 @@ BOOTSTRAP_TEMPLATES = {
     "librarian": "librarian",
     "strategy-owner": "strategy-owner",
 }
+PUBLIC_SLUGS = {"botops": "agent-ops"}  # a built-in whose id is not its slug: Agent Ops keeps its first id
 OLD_NAMES = {"botops": "agent-ops"}  # the server names it so to a computer it cannot tell is new (#4863)
 FETCH_RETRY_S = 120  # how long a repository that could not be cloned is left before the next try
 
@@ -182,7 +183,7 @@ class BotSetup:
             chosen = (record.get("selected") or {}).get(bot) or {}
             catalog.materialize(
                 template,
-                bot,
+                PUBLIC_SLUGS.get(bot, bot),  # the manifest names the bot by its slug; the folder stays its id's
                 Path(self.config["projects_dir"]),
                 self.names(),
                 record.get("answers") or {},

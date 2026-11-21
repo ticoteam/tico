@@ -64,7 +64,7 @@ def test_a_starter_is_created_onboarding_and_leaves_it_only_when_a_person_above_
     rows = {row["slug"]: row for row in record["bots"]}
     assert rows["support-owner"]["onboarding_state"] == rows["chief-of-staff"]["onboarding_state"] == "needs_setup"
     assert (
-        rows["botops"]["onboarding_state"] == rows["assistant"]["onboarding_state"] == ""
+        rows["agent-ops"]["onboarding_state"] == rows["assistant"]["onboarding_state"] == ""
     )  # built in: they work at once
     assert (
         rows["support-owner"]["setup_task_id"] is None

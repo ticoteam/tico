@@ -405,7 +405,8 @@ def from_yaml(text):
     for at, b in enumerate(employees):
         if isinstance(b.get("template"), str) and b["template"] in D.RETIRED:
             continue  # its built-in comes with every install, as draft.check lets it go
-        template = D.current(b.get("template"))  # an older release's slug reads as the template that has it now
+        b = D.renamed(b)  # an older release's slug reads as the template that has it now, its old default title too
+        template = b.get("template")
         role = (
             next((r for r in D.ROLES if r["slug"] == template), None)
             or next((r for r in D.HELPERS if r["slug"] == template), None)
@@ -419,9 +420,7 @@ def from_yaml(text):
         bot = {
             "id": _str(b.get("id")),
             "template": role["slug"],
-            "title": role["name"]
-            if D.RENAMED_TITLES.get(b.get("template")) == b.get("title")
-            else _str(b.get("title")),
+            "title": _str(b.get("title")),
             "dept": b.get("department"),
             "lead": role["lead"],
             "core": role["core"],

@@ -53,7 +53,14 @@ def register(app, admin_only, auth, mutate, onboarding, owner_only, recruiter, s
             admin_only(who, "changes " + ", ".join(sorted(sent)))
         else:
             owner_only(who, "changes the team's rules")
-        result = mutate(request, body, lambda c: team_rules.save(c, who.actor, body.model_dump()))
+        # A retry of a request made before the rename hashed the rules' old names (team_rules.OLD_NAMES).
+        legacy = {new: old for old, new in team_rules.OLD_NAMES.items()}
+        result = mutate(
+            request,
+            body,
+            lambda c: team_rules.save(c, who.actor, body.model_dump()),
+            retry_body=lambda _c, _result: {legacy.get(k, k): v for k, v in body.model_dump().items()},
+        )
         with store.read() as c:
             auth.sync_access(c)  # who is a credential administrator follows the rule
         return result
