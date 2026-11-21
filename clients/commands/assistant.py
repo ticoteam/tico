@@ -384,12 +384,21 @@ def assistant_propose(api, args):
     {
         "for_person": _s("The person (human:<id>) whose Assistant chat gets it"),
         "body": _s("The message, in Markdown, at most 2000 characters"),
+        "items": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {"type": "string", "maxLength": 200},
+            "description": "The ids of the tasks, files and pages it names: the same set as last time is not sent",
+        },
     },
     required=("for_person", "body"),
     writes=True,
 )
 def assistant_morning(api, args):
-    return api.post("assistant/morning", {"for": args["for_person"], "body": args["body"]}, key=_key(args))
+    sent = {"for": args["for_person"], "body": args["body"]}
+    if args.get("items"):
+        sent["items"] = args["items"]
+    return api.post("assistant/morning", sent, key=_key(args))
 
 
 @tool(
@@ -763,8 +772,12 @@ ASSISTANT = (
     Command(
         "assistant morning",
         "the Assistant's one morning message to a person (background run only)",
-        args=(Arg("for_person", flag="--for"), Arg("body", flag="--body")),
-        example="tico assistant morning --for human:ana --body 'Good morning'",
+        args=(
+            Arg("for_person", flag="--for"),
+            Arg("body", flag="--body"),
+            Arg("items", flag="--item", action="append", metavar="ID"),
+        ),
+        example="tico assistant morning --for human:ana --body 'Good morning' --item 91c2d7e4-…",
     ),
     Command(
         "assistant learn",

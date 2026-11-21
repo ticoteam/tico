@@ -3181,6 +3181,8 @@ class AssistantMorning(Contract):
 
     for_person: Annotated[str, Field(min_length=1, max_length=200)] = Field(alias="for")
     body: Annotated[str, Field(min_length=1, max_length=2000)]
+    # The ids of the tasks, files and pages it names: the same set as the person's last morning is not sent again.
+    items: list[Annotated[str, Field(min_length=1, max_length=200)]] | None = Field(default=None, max_length=50)
 
 
 class InboxOnly(Contract):

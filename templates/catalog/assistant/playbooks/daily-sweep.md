@@ -7,12 +7,14 @@ one per person per company day. It is not a tidy-up: no card, no close, no decli
 2. For each person, run `skills/where-we-stand/SKILL.md` for that person alone (its morning-run reads). Never mix one
    person's goals into another's message.
 3. Nothing worth their time: send nothing for them, and go to the next person. A quiet day gets no message.
-4. Otherwise send ONE message: `tico assistant morning --for human:<id> --body "<message>"`. Under 120 words, plain words,
+4. Otherwise send ONE message: `tico assistant morning --for human:<id> --body "<message>" --item <id> --item <id>`, one
+   `--item` per task, file or page it names (their full ids). Under 120 words, plain words,
    to "you":
    - one line on what moved since yesterday, only if the record shows it;
    - then one to three things only they can do today, each with its goal linked and one link to act.
    No queue counts, no task lists, no offer of more, no Next line.
-5. The server answers 409 `already_sent_today`, or refuses in any other way: stop for that person. Never retry, never send
+5. The server answers 409 `already_sent_today`, 409 `same_as_last` (the same items as their last one), or refuses in any
+   other way: stop for that person. Never retry, never send
    them a second message. Go to the next person.
 6. A stalled Marketing task (the skill's step 5) is its bot's to move. Add at most one comment for that bot, if your last
    comment on it is more than two weeks old (`tico task show <id>`): `tico task comment <id> "<what is stalled, and what it

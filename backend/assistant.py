@@ -1801,66 +1801,25 @@ def chat_room(c, settings, who, create=True):
     return ensure_room(c, who.actor, settings.assistant_bot) if create else find_room(c, who.actor)
 
 
-# The places a morning message links, its items: `[title](#/task/<id>)`, `[goal](#/goals/<id>)` and the like. Read as
-# Markdown reads a link, never inside fenced code or a code span: its destination is `<...>`, or runs to whitespace or
-# the `)` that closes it, with balanced `(...)` and `\)` kept inside.
-_FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})[^\n]*\n.*?(?:^[ \t]{0,3}\1[`~]*[ \t]*$|\Z)", re.M | re.S)
-_CODE_SPAN = re.compile(r"(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)", re.S)
-_LINK_OPEN = re.compile(r"\[(?:[^\[\]\\]|\\.)*\]\(")
-
-
-def _link_targets(text):
-    """The destination of each Markdown link in `text`, as written."""
-    text = _CODE_SPAN.sub(" ", _FENCE.sub("", text))
-    found = []
-    for opened in _LINK_OPEN.finditer(text):
-        i = opened.end()
-        while i < len(text) and text[i] in " \t":
-            i += 1
-        if text.startswith("<", i):
-            end = text.find(">", i)
-            if end > i and "\n" not in text[i:end]:
-                found.append(text[i + 1 : end])
-            continue
-        j, depth = i, 0
-        while j < len(text) and not text[j].isspace():
-            if text[j] == "\\":
-                j += 1
-            elif text[j] == "(":
-                depth += 1
-            elif text[j] == ")":
-                if not depth:
-                    break
-                depth -= 1
-            j += 1
-        if j > i:
-            found.append(text[i:j])
-    return found
-
-
-def morning_items(text):
-    """A stable hash of the link targets a morning message names, as written (trimmed, one leading `#` and a trailing
-    slash off), in any order and however often; None when it links none. Two spellings of one item count as two: a
-    repeat may go again, but a morning with a new item is never held back."""
-    linked = sorted({t.strip().removeprefix("#").rstrip("/") for t in _link_targets(text or "")} - {""})
-    return digest("\n".join(linked))[:16] if linked else None
+def morning_items(items):
+    """A stable hash of the items (task, file or page ids) a morning message names, deduped and in any order; None
+    when it names none: such a message is never held back as a repeat."""
+    named = sorted({item.strip() for item in items or ()} - {""})
+    return digest("\n".join(named))[:16] if named else None
 
 
 def last_morning_items(c, actor):
     """The items hash of the last morning message `actor` was sent in the last MORNING_LOOKBACK_DAYS, from its audit row
     (`assistant.morning`), or None. Read newest first on events_action_ts, within the window: at most a month of that
-    action's rows, and usually the newest few. A row written before the hash was kept is read from the message it
-    names."""
+    action's rows, and usually the newest few. A row without a hash (no items, or from before they were kept) matches
+    nothing."""
     since = H.shift(H.now(), days=-MORNING_LOOKBACK_DAYS)
     row = c.execute(
-        "SELECT json_extract(detail,'$.items'), target FROM events WHERE action='assistant.morning' AND created_at>=? "
+        "SELECT json_extract(detail,'$.items') FROM events WHERE action='assistant.morning' AND created_at>=? "
         "AND actor=? ORDER BY created_at DESC LIMIT 1",
         (since, actor),
     ).fetchone()
-    if not row or row[0]:
-        return row[0] if row else None
-    sent = c.execute("SELECT body FROM messages WHERE id=?", (row[1],)).fetchone()
-    return morning_items(sent[0]) if sent else None
+    return row[0] if row else None
 
 
 def morning_day():
@@ -2430,7 +2389,7 @@ def install(app, store, auth, mutate, onboarding):
         **api_v2(
             "Assistant",
             "sendAssistantMorning",
-            "The Assistant's background run only: one morning message for a person, in their own Assistant chat, as the Assistant (no card). Once a company day per person: a second is 409 already_sent_today; one linking the same items as the last is 409 same_as_last",
+            "The Assistant's background run only: one morning message for a person, in their own Assistant chat, as the Assistant (no card). Once a company day per person: a second is 409 already_sent_today; one naming the same `items` as the last is 409 same_as_last",
         ),
     )
     def morning(request: Request, body: M.AssistantMorning):
@@ -2467,7 +2426,7 @@ def install(app, store, auth, mutate, onboarding):
                     409,
                     extra={"next_at": next_at},
                 )
-            items = morning_items(body.body)
+            items = morning_items(body.items)
             if items and items == last_morning_items(c, found.actor):
                 raise Problem(
                     "same_as_last",

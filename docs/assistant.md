@@ -230,9 +230,9 @@ stand?" or "what should I do next?" any time, or it runs for you as the morning 
 The **morning message** is the Assistant's one routine (the routine id is still `daily-sweep`, now titled "Morning message").
 Once a day it sends each person at most one message in their Assistant DM, with `tico assistant morning --for human:<id>
 --body`. A quiet day gets no message. A second send on the same company day is refused (`409 already_sent_today`), as is
-one that links the same items as the person's last morning message (`409 same_as_last`), and the Assistant does not retry. The message never closes, answers or proposes anything: it has no Confirm card. Stalled
-Marketing
-tasks go to their owning bot as a comment, not to you.
+one that names the same items (`--item`, the task, file and page ids it names) as the person's last morning message
+(`409 same_as_last`), and the Assistant does not retry. The message never closes, answers or proposes anything: it has
+no Confirm card. Stalled Marketing tasks go to their owning bot as a comment, not to you.
 
 In a chat, after it finishes an ask about your goals, the Assistant may offer one next step ("Next: <thing> for <goal>. Do it
 now?"). Say "that's enough" or "later" and it stops offering in that chat. It never follows up on its own.
@@ -312,9 +312,10 @@ The same run may send you **one morning message a day**: `tico assistant morning
 /api/v2/assistant/morning`, `tico_assistant_morning`). It is a plain message in your own Assistant DM, from the
 Assistant, with no card and nothing to confirm: what you can do today to move your goals. The server allows one per
 person per company day (the company's clock, not UTC); a second that day is `409 already_sent_today` and says when the
-next can go. A message whose links (its items, in any order) are the same as your last morning message's is not sent
-(`409 same_as_last`): the last one's items are kept as a hash in its `assistant.morning` audit row. Only the Assistant bot may send it, for an active person; other callers get `403`, and a person who is
-gone or signed out gets `404`.
+next can go. It may name its `items` (`--item <id>`, the ids of the tasks, files and pages it names): one with the same
+set as your last morning message in 30 days is not sent (`409 same_as_last`), and one with none is never held back. The
+set is kept as a hash in the `assistant.morning` audit row. Only the Assistant bot may send it, for an active person;
+other callers get `403`, and a person who is gone or signed out gets `404`.
 
 Any teammate, person or bot, can withdraw a Confirm card that still waits (`tico assistant withdraw <id>`, `POST
 /api/v2/assistant/actions/{aid}/withdraw`, or `tico_assistant_withdraw`; `tico assistant proposals` lists the waiting cards
