@@ -5034,7 +5034,7 @@ class Execution:
         while True:
             c.execute("SAVEPOINT claim_start")
             try:
-                answer = self.start_claimed(c, who, body, runner, row)
+                answer = self.start_claimed(c, who, body, runner, row, people_only=people_only)
             except Exception as exc:
                 scope = shared_scope(exc)
                 if not c.in_transaction or storage_error(exc) or scope == "team":
@@ -5071,10 +5071,12 @@ class Execution:
                     holds.release(c, holds.CLAIM_ERROR, "bot", bot, actor=H.TICO_ACTOR, how="probe_passed")
             return answer
 
-    def start_claimed(self, c, who, body, runner, row):
+    def start_claimed(self, c, who, body, runner, row, *, people_only=False):
         """The preparation of the job a claim hands out: its turn, attempt, inputs and hand-out. The claim runs it in a
-        savepoint of its own (claim), so an error here rolls back only this job's writes."""
-        row = card_slot.carrier(c, row)  # a card's slot starts from its stage wake
+        savepoint of its own (claim), so an error here rolls back only this job's writes. `people_only`: the computer
+        holds every start but a person's own message (held_starts), so a card slot's run takes that message alone."""
+        # A card's slot starts from its stage wake, except where only a person's message may start.
+        row = card_slot.carrier(c, row, people_only)
         msg = H.message(c, row["message_id"])
         from . import threads
 
@@ -5480,7 +5482,7 @@ class Execution:
                 + recovery['note'],
             }
         if task and (recovery or row["slot"]):
-            msg = self.fold_behind(c, row, aid, msg, task["id"], followed, lane)
+            msg = self.fold_behind(c, row, aid, msg, task["id"], followed, lane, people_only=people_only)
         # The model's capacity stopped this job's turn after it acted: the runner continues that same thread, or holds
         # the run for review when it no longer has it (runner-rs/src/execute.rs CONTINUE_LOST).
         continue_thread = continuation_thread(c, row['id'])
@@ -6344,16 +6346,20 @@ class Execution:
         return msg
 
     @staticmethod
-    def fold_behind(c, row, aid, msg, task_id, followed, lane):
+    def fold_behind(c, row, aid, msg, task_id, followed, lane, *, people_only=False):
         """A resumed run takes the work that queued behind it on its task while it was held (verdicts, subtask
         results, comments: the claim's fence, unfenced_sql, kept them back), so no separate turn waits after it to
         read them again (Dev 543). Each joins this turn as an input given in its prompt, already acknowledged, and its
         job settles with the turn (complete); a lane's other work, a command and a redirect keep their own turns. A card
         slot's run (backend/card_slot.py) takes its slot's queued jobs alone, at every claim, and records what it was
-        handed (`slot_rev`)."""
+        handed (`slot_rev`). On a computer that holds every start but a person's own (`people_only`), a slot's run
+        takes no other job: its stage work waits as any held start does."""
         from . import threads
 
         slot = row["slot"]
+        if slot and people_only:
+            card_slot.handed(c, row["id"], [row["message_id"]])
+            return msg
         rows = c.execute(
             "SELECT m.*,j.id AS job_id FROM jobs j JOIN messages m ON m.id=j.message_id "
             "JOIN conversations cv ON cv.id=m.conversation_id "

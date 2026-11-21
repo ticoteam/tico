@@ -202,3 +202,23 @@ def test_a_card_with_work_from_before_the_switch_finishes_it_on_the_older_path(a
     later = _ask(api, task)  # the card's older work has settled: it runs by slot now
     with api.app.state.store.read() as c:
         assert c.execute("SELECT slot FROM jobs WHERE id=?", (later,)).fetchone()[0] == f"{draft}:ops"
+
+
+def test_a_computer_that_starts_only_peoples_messages_runs_the_question_alone(api, monkeypatch):
+    from backend import start_places
+
+    machine, task = _card(api)
+    draft = _ok(api, task)
+    asked = _ask(api, task)
+    # The computer is busy: it holds every new start but a person's own message.
+    monkeypatch.setattr(
+        start_places, "computer_hold", lambda *a, person=False, **k: None if person else ("busy", "Busy")
+    )
+    agent = Agent(api, machine)
+    chat = agent.start()
+    assert chat["message"]["id"] == asked and "Draft" not in chat["message"]["body"]
+    agent.finish(chat)
+    wake = _wake(api, task, draft)
+    assert _jobs(api, wake)[wake] == "queued"  # the stage's work waits for the hold to lift
+    monkeypatch.undo()
+    assert agent.start()["message"]["id"] == wake

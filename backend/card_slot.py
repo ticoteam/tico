@@ -68,12 +68,13 @@ def assign(conn: Any, message: Row) -> str | None:
     return slot
 
 
-def carrier(conn: Any, row: Any) -> Row:
+def carrier(conn: Any, row: Any, people_only: bool = False) -> Row:
     """The job a claim of `row` starts, as a dict: the slot's oldest queued stage wake when `row` is another job of a
-    slot, else `row`. The claim's other columns (the computer's generation) ride along."""
+    slot, else `row`. The claim's other columns (the computer's generation) ride along. `people_only`: the computer
+    holds every start but a person's own message, so `row`, that message, starts alone."""
     row = {"slot": None, **dict(row)}
     slot = row["slot"]
-    if not slot:
+    if not slot or people_only:
         return row
     found = conn.execute(
         "SELECT j.* FROM jobs j JOIN messages m ON m.id = j.message_id WHERE j.slot=? AND j.state='queued' "
