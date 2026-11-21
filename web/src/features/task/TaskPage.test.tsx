@@ -793,6 +793,26 @@ describe('Details: the facts @s58', () => {
     expect(rows[0]?.getAttribute('href')).toBe('/task/13');
   });
 
+  it('says how long the task has waited and on whom', async () => {
+    const since = new Date(Date.now() - 2 * 3600_000).toISOString();
+    serve(reads(task({ turn: { state: 'person', who: 'human:bo', line: 'OK the draft?', since, ask: true } } as Partial<TaskData>)));
+    details();
+    await facts();
+    const label = await screen.findByText('Waiting');
+    const line = label.parentElement as HTMLElement;
+    expect(line.textContent).toBe('Waiting2h on Bo Lee');
+  });
+
+  it('says only whom the task waits on after a reassignment in the same stage', async () => {
+    // The wait's time is still the stage's: it says nothing of how long the new owner has had it.
+    const entered = '2026-11-01T10:00:00Z';
+    serve(reads(task({ stage_since: entered, owner_id: 'bot:a1', turn: { state: 'bot', who: 'bot:a1', line: 'Draft the post', since: entered, ask: false } } as Partial<TaskData>)));
+    details();
+    await facts();
+    const label = await screen.findByText('Waiting');
+    expect((label.parentElement as HTMLElement).textContent).toBe('Waitingon Builder');
+  });
+
   it('sets the Human in place', async () => {
     serve(base);
     details();

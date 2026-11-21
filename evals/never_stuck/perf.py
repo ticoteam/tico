@@ -1,7 +1,7 @@
 """How long one never-stuck pass takes over many open tasks: `python -m evals.never_stuck.perf [--tasks 10000]`.
 
 Seeded and mostly idle, as an org's tasks are: most bot tasks have had their run and wait for their next try, some wait
-on a person's answer, some are snoozed, a few are due for a try now. It times one pass of the real check after the
+on a person's answer, some are snoozed or blocked by another task, a few are due for a try now. It times one pass of the real check after the
 first (the first only sets each task's next try time), counts its SQL statements by kind, and prints where the time
 goes. It changes nothing in the engine."""
 
@@ -21,20 +21,45 @@ from . import world as Wd
 from .world import ANA, BEN, BUILDER, CARA, GENERAL, REVIEWER, WRITER, World
 
 
-def fill(world: World, count: int, rng: random.Random, *, queued: bool = False) -> dict[str, int]:
+QUEUE = "queue"
+QUEUE_RECORD: dict[str, Any] = {
+    "id": QUEUE,
+    "name": "Queue",
+    "goal": "Requests that wait for room.",
+    "prefix": "Q",
+    "stages": [
+        {"name": "Ideas", "owner": ANA, "by_hand": True, "requests_move_on": True, "requirements": []},
+        # By hand, so the task that fills it is no task of the ladder's.
+        {
+            "name": "Next",
+            "owner": "assignee",
+            "by_hand": True,
+            "task_limit": 1,
+            "requirements": [{"kind": "owner_done"}],
+        },
+    ],
+}
+
+
+def fill(world: World, count: int, rng: random.Random, *, queued: bool = False, ladder: bool = True) -> dict[str, int]:
     """`count` open General tasks. Returns how many of each kind. With `queued`, each bot task's wake is still queued
-    (its bot has not taken it yet); else every wake had its run and the task waits for its next try."""
+    (its bot has not taken it yet); else every wake had its run and the task waits for its next try. Without `ladder`,
+    no General task: only `count` people's requests queued behind a full stage."""
+    from backend import pipeline_settings as PS
     from backend import task_engine as E
+    from backend import task_relations as TR
     from backend.store import H
 
     kinds: Counter[str] = Counter()
+    first = None
     bots = (BUILDER, WRITER, REVIEWER)
     with world.tx() as c:
-        for n in range(count):
+        for n in range(count if ladder else 0):
             bot = bots[n % len(bots)]
             row = H.task_create(
                 c, ANA, f"Chore {n}", "What to do and how to tell it is done.", bot, pipeline=GENERAL, lint=False
             )
+            first = first or row["id"]
             roll = rng.random()
             if roll < 0.10:
                 E.add_requirement(c, row["id"], ANA, "ok", rng.choice((BEN, CARA)), "OK the plan")
@@ -42,8 +67,20 @@ def fill(world: World, count: int, rng: random.Random, *, queued: bool = False) 
             elif roll < 0.15:
                 E.snooze(c, row["id"], ANA, None, H.shift(H.now(), days=3))
                 kinds["snoozed"] += 1
+            elif roll < 0.25 and row["id"] != first:
+                TR.relate(c, ANA, row["id"], first, "depends_on")  # blocked until the first task ends
+                kinds["blocked"] += 1
             else:
                 kinds["a bot's turn"] += 1
+        # People's requests in a by-hand stage that moves them on, queued behind a next stage that is full (one task
+        # holds its one slot): their wait reads that stage's room (never_stuck._requests, waiting_on.of).
+        PS.save(c, E.SYSTEM, dict(QUEUE_RECORD, stages=[dict(stage) for stage in QUEUE_RECORD["stages"]]))
+        for n in range((max(1, count // 5) if ladder else count) + 1):
+            row = H.task_create(c, ANA, f"Request {n}", "Please look at this.", BUILDER, pipeline=QUEUE, lint=False)
+            if n == 0:
+                E.move(c, row["id"], "Next", ANA)
+            else:
+                kinds["queued behind a full stage"] += 1
         if queued:
             return dict(kinds)
         # Every wake so far had its run, which ended: the bots' tasks wait for their next try.
@@ -69,7 +106,17 @@ def _started(c: Any) -> None:
 
 
 # The rows one task on the engine is made of, as `fill` makes them: what `clone` copies.
-CLONED = ("conversations", "tasks", "visits", "requirements", "snoozes", "messages", "jobs", "attempts")
+CLONED = (
+    "conversations",
+    "tasks",
+    "visits",
+    "requirements",
+    "snoozes",
+    "messages",
+    "jobs",
+    "attempts",
+    "task_relations",
+)
 _ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 
@@ -91,7 +138,8 @@ def clone(world: World, times: int) -> int:
             if table == "requirements":
                 found = [row for row in found if row[names.index("visit_id")]]  # a stage's own stay as they are
             rows[table] = (names, found)
-            ids |= {str(row[names.index("id")]) for row in found}
+            if "id" in names:  # a relation has no id of its own: its tasks' ids are swapped
+                ids |= {str(row[names.index("id")]) for row in found}
         for n in range(1, times + 1):
             new = {old: old[:-6] + f"{n:06x}" for old in ids}
 
@@ -126,15 +174,18 @@ def measure(
     copies: int = 0,
     queued: bool = False,
     due: float = 0.02,
+    backfill: bool = False,
+    ladder: bool = True,
 ) -> dict[str, Any]:
     """One pass over `count` tasks made through the engine, times 1 + `copies` (`clone`). `due`: the share of tasks
-    whose next try is due in the pass measured."""
+    whose next try is due in the pass measured. `backfill`: no task has a wait span yet, as on the first pass after
+    they came in (backend/wait_spans.py). `ladder` False: no task the ladder checks, only queued requests (`fill`)."""
     from backend import never_stuck as NS
 
     rng = random.Random(seed)
     with World(seed) as world:
         started = time.perf_counter()
-        kinds = fill(world, count, rng, queued=queued)
+        kinds = fill(world, count, rng, queued=queued, ladder=ladder)
         count = clone(world, copies) if copies else count
         made = time.perf_counter() - started
         world.shift(30)
@@ -148,6 +199,8 @@ def measure(
                 "(SELECT id FROM visits WHERE left_at IS NULL ORDER BY id LIMIT ?)",
                 (Wd.ts(world.at() + dt.timedelta(minutes=10)), int(count * due)),
             )
+            if backfill:
+                c.execute("DELETE FROM task_wait_spans")
         Wd.METER.trace = []
         before = Wd.METER.count
         profiler = cProfile.Profile() if profile else None
