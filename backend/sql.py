@@ -27,6 +27,7 @@ from fastapi import Request
 from pydantic import Field
 
 from . import outcome_stats
+from . import question_marks
 from . import run_triggers as RT
 from . import task_privacy as privacy
 from . import teammate_access as TA
@@ -247,12 +248,13 @@ def live_masks(unsettled):
     }
 
 
-# A person's own act on a task, by their own hand (hubdb.OWN_HAND_VIA) or their Assistant's on their word: a row of its
+# A person's own act on a task, written as the question engine takes a reply from them (question_marks.REPLY_VIA: their
+# own hand, Slack, their personal token, their Assistant on their word): a row of its
 # history, or a message they wrote that names the task as the server attributes one (hubdb.MESSAGE_TASK_SQL: its refs'
 # task or task_id, a list read as its first), else as the message it replies to is attributed (the same way, then its
 # conversation's task), else its own conversation's task. BotOps or another agent acting with their rights is not
 # theirs, and Tico's carrier copy of a message is not a second touch.
-_OWN_VIA = "('', " + ", ".join(f"'{via}'" for via in (*H.OWN_HAND_VIA, "assistant")) + ")"
+_OWN_VIA = "(" + ", ".join(f"'{via or ''}'" for via in question_marks.REPLY_VIA if via is not None) + ")"
 _REFS_TASK = f"{H._task_ref_sql('$.task')}, {H._task_ref_sql('$.task_id')}"
 _MESSAGE_TASK = (
     f"coalesce({_REFS_TASK}, (SELECT coalesce({_REFS_TASK.replace('m.refs', 'q.refs')}, qc.task_id) "
@@ -267,7 +269,7 @@ _TOUCHES = (
     f"AND coalesce(json_extract(m.refs, '$.via'), '') IN {_OWN_VIA}"
 )
 # The history kinds that are a person deciding something about a task (one row each: a move's owner and status rows are
-# its consequences, not more decisions).
+# its consequences, not more decisions, and so is the move back that taking an answer back makes, `undone_answer`).
 _DECISIONS = (
     "('answer', 'answer_undone', 'give', 'move', 'snooze', 'unsnooze', 'reassign', 'try_again', 'requirement', "
     "'requirement_withdrawn')"
@@ -349,7 +351,7 @@ DERIVED = {
         "round(1000.0 * sum(decision) / nullif(sum(1 - decision), 0), 1) AS per_1000_actions "
         "FROM (SELECT " + _WEEK.format(at="created_at") + " AS week, 1 AS decision FROM {history_events} "
         f"WHERE subject_type = 'task' AND actor_id LIKE 'human:%' AND coalesce(via, '') IN {_OWN_VIA} "
-        "AND kind IN " + _DECISIONS + " "
+        "AND kind IN " + _DECISIONS + " AND json_extract(data, '$.undone_answer') IS NULL "
         "UNION ALL SELECT " + _WEEK.format(at="created_at") + ", 0 FROM {events} WHERE " + _AGENT_ACTION + ") "
         "GROUP BY week",
     ),

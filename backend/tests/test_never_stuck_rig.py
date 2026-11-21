@@ -69,6 +69,17 @@ def test_one_pass_reads_as_many_statements_over_a_thousand_idle_tasks_as_over_a_
     assert big["reads"] < 60, big["top_statements"]
 
 
+def test_the_first_pass_over_tasks_with_no_wait_spans_reads_as_many_statements_at_any_size() -> None:
+    """Cost: the pass that opens a wait span for every task already there (backend/wait_spans.py) writes them after
+    every read, so each write empties no read of the pass: as many statements over 1,000 tasks as over 100, the blocked
+    and snoozed ones (read for their spans only) growing with them."""
+    small = perf.measure(25, profile=False, copies=3, due=0, backfill=True)
+    big = perf.measure(25, profile=False, copies=39, due=0, backfill=True)
+    assert small["kinds"]["blocked"] and small["kinds"]["snoozed"]
+    assert big["reads"] == small["reads"], big["top_statements"]
+    assert big["reads"] < 60, big["top_statements"]
+
+
 def test_a_world_puts_the_environment_back() -> None:
     before = {name: os.environ.get(name) for name in world.OFFLINE}
     with world.World(1):

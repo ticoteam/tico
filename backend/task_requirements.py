@@ -367,6 +367,24 @@ def people_of(conn: "sqlite3.Connection", requirement: Row, visit_id: str) -> li
     return [found for found in approvers(requirement) if acts(found)]
 
 
+def given_at(conn: "sqlite3.Connection", requirement: Row, visit_id: str) -> str | None:
+    """When an OK or a page was last given to someone on this visit, or None: from then it waits on them. An ask added
+    to the task keeps it in its settings (answers.give_to); a stage's is its newest `give` answer (`people_of`)."""
+    if requirement["kind"] not in STEERED:
+        return None
+    if requirement.get("visit_id"):
+        raw: Any = requirement.get("settings")  # its JSON, or already read as a dict
+        settings: Any = json.loads(raw) if isinstance(raw, str) and raw else raw or {}
+        given: Any = settings.get("given_at")
+        return str(given) if given else None
+    gives = [
+        str(row["created_at"])
+        for row in _cached(conn, "answers_on_visit", ANSWERS_SQL, "visit_id", visit_id)
+        if row["requirement_id"] == requirement["id"] and row["answer"] == "give"
+    ]
+    return gives[-1] if gives else None
+
+
 _FILED = (
     "SELECT l.to_task_id AS id, COALESCE(t.title, 'A deleted task') AS title, "
     "COALESCE(t.status, 'closed') AS status, t.number, t.id IS NULL AS deleted, "

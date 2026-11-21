@@ -165,6 +165,7 @@ def check(
     # A ❓ whose person can no longer answer it (a change the roster and readers hooks did not see) goes nowhere.
     question_marks.clear_gone(conn)
     spans = wait_spans.open_spans(conn)  # each task's open wait span, compared with what the pass reads of it
+    wanted: dict[str, wait_spans.Key | None] = {}  # and the span each should have, written after every read
     # A snooze of a task that was deleted, or is not on the engine, is no task's: it is left alone.
     due = conn.execute(
         "SELECT z.task_id FROM snoozes z JOIN tasks t ON t.id = z.task_id AND t.pipeline_id IS NOT NULL "
@@ -211,7 +212,7 @@ def check(
                 # a hand-off down the ladder can change whose turn it is, so then the task is read again. A move
                 # synced its own span.
                 fresh = handed == (done["to_manager"], done["to_person"])
-                wait_spans.recheck(conn, task_id, spans.get(task_id), read if fresh else None)
+                wanted[task_id] = wait_spans.want_of(conn, task_id, read if fresh else None)
         except Exception as error:
             # SQLite may already have ended the transaction (a full disk, an I/O error): that stops the pass.
             if failures is None or not conn.in_transaction or storage_error(error):
@@ -231,7 +232,12 @@ def check(
     timers: Any = stage_rule_timers
     _step(conn, "stage_rules", failures, lambda: timers.sweep(conn, at))
     # Every other open task's span, then those of tasks that ended. Nobody is woken for them.
-    _step(conn, "wait_spans", failures, lambda: wait_spans.reconcile(conn, others, spans))
+    _step(
+        conn,
+        "wait_spans",
+        failures,
+        lambda: wait_spans.write(conn, {**wanted, **wait_spans.wants(conn, others)}, spans),
+    )
     _step(conn, "ended_spans", failures, lambda: wait_spans.close_ended(conn))
     return done
 

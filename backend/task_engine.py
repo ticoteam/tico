@@ -727,7 +727,8 @@ def wake_turn(conn: "sqlite3.Connection", row: Row) -> str | None:
 
 
 def _sync_wait(conn: "sqlite3.Connection", task_id: str) -> None:
-    """After a move that ended the task, a snooze or its end: its wait span follows its headline (wait_spans.sync)."""
+    """After a move that ended the task, a snooze or its end, a pick that found everyone full: its wait span follows
+    its headline (wait_spans.sync)."""
     from . import wait_spans
 
     wait_spans.sync(conn, task_id)
@@ -801,6 +802,8 @@ def pick_again(conn: "sqlite3.Connection", task_id: str) -> bool:
             )
             if choice.state == stage_pick.NOBODY:
                 _wake_turn(conn, _task(conn, task_id))  # the manager is told why, once for the visit
+            else:
+                _sync_wait(conn, task_id)  # it waits for a free bot now
         return False
     ts = _h().now()
     fields: Row = {"owner_id": choice.bot, "version": int(row.get("version") or 0) + 1, "updated_at": ts}
@@ -1176,10 +1179,12 @@ def move(
     seen_version: int | str | None = None,
     *,
     cascade: bool = False,
+    undone: str | None = None,
 ) -> Row:
     """Move a task: forward, push past, back, done, close or reopen. `to` is a stage id or name, or NEXT, DONE, CLOSED
     or REOPEN. A forward move is held to what the stage needs and to room; with `why` it pushes past. Back, close and
-    reopen are never held. `cascade` is the engine closing a task with the one that filed it."""
+    reopen are never held. `cascade` is the engine closing a task with the one that filed it. `undone` is the answer
+    whose taking back makes this move (answers.undo): its history row says so, so the move is not a second decision."""
     H = _h()
     row = task(conn, task_id)
     if not row:
@@ -1317,6 +1322,7 @@ def move(
             "was_owner": row.get("owner_id"),
             **({"pushed_past": pushed} if pushed else {}),
             **({"stage_rule": ruled["id"]} if ruled else {}),
+            **({"undone_answer": undone} if undone else {}),
         },
     )
     if ruled:

@@ -585,7 +585,12 @@ def give_to(
     if person == current:
         return row
     if requirement.get("visit_id"):
-        conn.execute("UPDATE requirements SET person_id=? WHERE id=?", (person, requirement_id))
+        # When it was given (task_requirements.given_at): it waits on them from then.
+        conn.execute(
+            "UPDATE requirements SET person_id=?, settings=json_set(coalesce(settings, '{}'), '$.given_at', ?) "
+            "WHERE id=?",
+            (person, H.now(), requirement_id),
+        )
         H._task_event(conn, task_id, by, "give", current, person, None, data={"requirement": requirement_id})
         E.changed(conn, task_id, by)
         return E.task(conn, task_id) or row
@@ -644,4 +649,6 @@ def undo(conn: "sqlite3.Connection", answer_id: str, by: str, *, own_click: bool
         if moved is None:
             E.changed(conn, task_id, by)  # whoever has it now is woken by the never-stuck check
         return moved or E.task(conn, task_id) or row
-    return E.move(conn, task_id, visit["stage_id"], by, "Answer taken back", seen_version=row.get("version"))
+    return E.move(
+        conn, task_id, visit["stage_id"], by, "Answer taken back", seen_version=row.get("version"), undone=answer_id
+    )

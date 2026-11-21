@@ -2,20 +2,21 @@
 """How long a task waited on what: `task_wait_spans`, one row per stretch of the same headline wait.
 
     sync(conn, task_id, row=None, waits=None) -> bool     bring the task's open span in line with its headline now
-    recheck(conn, task_id, have, found=None)               the never-stuck pass's backstop for one task it read
-    reconcile(conn, task_ids, have) -> int                 the same for the open tasks the ladder does not check
+    want_of(conn, task_id, found=None) / wants(conn, ids)  the span each task should have, read and not written
+    write(conn, wanted, have) -> int                       the never-stuck pass's backstop writes, after its reads
     close_ended(conn) -> int                               close the open spans of tasks that are no longer open
     open_spans(conn) -> dict[str, Key]                     every open span, by task, in one read
 
 `waiting_on` works out what a task waits on and forgets it; this keeps when each headline (its visit, state and who)
 began and ended. The engine calls `sync` with the waits it already worked out after a write (a move, a change, an
 answer, a snooze), and the card slot's reconcile calls it the same way. The never-stuck pass compares what it read of
-each task it checks with the open spans (`recheck`), then every other open task on the engine (by hand, blocked,
-snoozed: `reconcile`), and closes the spans of tasks that ended (`close_ended`): that is what catches a flip no write
-made, such as checks finishing, a bot running out of credit or a stage getting room. Nothing reads or writes spans on
+each task it checks, and every other open task on the engine (by hand, blocked, snoozed), with the open spans
+(`want_of`, `wants`), writes the ones that differ once it has read everything (`write`), and closes the spans of tasks
+that ended (`close_ended`): that is what catches a flip no write made, such as checks finishing, a bot running out of credit or a stage getting room. Nothing reads or writes spans on
 a read of a task. A write is one statement or two, only when the headline changed.
 """
 
+import json
 from typing import TYPE_CHECKING, Any
 
 from . import task_depends
@@ -108,35 +109,50 @@ def open_spans(conn: "sqlite3.Connection") -> dict[str, Key]:
     }
 
 
-def recheck(
-    conn: "sqlite3.Connection",
-    task_id: str,
-    have: Key | None,
-    found: "tuple[Row, Any, list[W.Wait]] | None" = None,
-) -> bool:
-    """The backstop for one task: `have` is its open span when the pass began, and `found` what the pass read of it
-    (row, standings, waits), still true for its headline. Writes only when the headline differs, and never over a span a
-    write in this pass already moved: that write read the task fresh."""
+def want_of(
+    conn: "sqlite3.Connection", task_id: str, found: "tuple[Row, Any, list[W.Wait]] | None" = None
+) -> Key | None:
+    """The span the task should have open: from `found`, what the pass read of it (row, standings, waits) while that
+    still holds, else read now. Writes nothing."""
     row, waits = (found[0], found[2]) if found else (E.task(conn, task_id), None)
-    want = _want(conn, row, waits)
-    if want == have:
-        return False
-    open_id, now = _open(conn, task_id)
-    if now != have:
-        return False
-    _put(conn, task_id, open_id, want)
-    return True
+    return _want(conn, row, waits)
 
 
 # Every open task on the engine.
 OPEN_TASKS = "SELECT id FROM tasks WHERE pipeline_id IS NOT NULL AND status = 'open' ORDER BY id"
 
 
-def reconcile(conn: "sqlite3.Connection", task_ids: list[str], have: dict[str, Key]) -> int:
-    """`recheck` for each of these tasks, read together (waiting_on.prime: nothing more when the pass read them
-    already and wrote nothing since). Returns how many spans it changed."""
+def wants(conn: "sqlite3.Connection", task_ids: list[str]) -> dict[str, Key | None]:
+    """`want_of` for each of these tasks, read together (waiting_on.prime: nothing more when the pass read them already
+    and wrote nothing since)."""
     W.prime(conn, task_ids)
-    return sum(recheck(conn, task_id, have.get(task_id)) for task_id in task_ids)
+    return {task_id: want_of(conn, task_id) for task_id in task_ids}
+
+
+_OPEN_OF = (
+    "SELECT task_id, id, visit_id, kind, who FROM task_wait_spans WHERE closed_at IS NULL "
+    "AND task_id IN (SELECT value FROM json_each(?))"
+)
+
+
+def write(conn: "sqlite3.Connection", wanted: dict[str, Key | None], have: dict[str, Key]) -> int:
+    """The backstop's writes, after every read of the pass: each task whose span should differ from `have` (its open
+    span when the pass began) gets one, unless a write in this pass already moved its span (that write read the task
+    fresh). One read of the open spans, then a statement or two a task. Returns how many spans it changed."""
+    differ = {task_id: want for task_id, want in wanted.items() if want != have.get(task_id)}
+    if not differ:
+        return 0
+    found = {
+        str(row[0]): (str(row[1]), (row[2], str(row[3]), row[4]))
+        for row in conn.execute(_OPEN_OF, (json.dumps(sorted(differ)),)).fetchall()
+    }
+    changed = 0
+    for task_id, want in differ.items():
+        open_id, now = found.get(task_id, (None, None))
+        if now == have.get(task_id):
+            _put(conn, task_id, open_id, want)
+            changed += 1
+    return changed
 
 
 def close_ended(conn: "sqlite3.Connection") -> int:
