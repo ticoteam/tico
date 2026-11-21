@@ -283,7 +283,9 @@ function App() {
   if (callChat) chat = <SecondChat chat={callChat} />;
   // Every company page's owner, in the Agent bar beside it (master plan P5): the viewer's own DM with them.
   const place = pageAt(at.path);
-  const bar = useOwnerBar(place, me.data?.id, at.path);
+  // the phone's card is set again on any change of the full address (path and search); the fold stays per page
+  const address = useLocation({ select: (l) => `${l.pathname}${l.searchStr}` });
+  const bar = useOwnerBar(place, me.data?.id, address);
   const barShown = !!bar && arrangement === 'page' && !chat;
   if (barShown) chat = <OwnerBar bar={bar} place={place} />;
   const hideCallChat = () => void run('calls.hideChat', {}, { via: 'click' });
@@ -562,7 +564,7 @@ function SecondChat({ chat }: { chat: string }) {
 
 /* ---------------------------------------------------------------- the Agent bar */
 
-type OwnerBarState = AgentBar & { owner: string; askHref: string | null };
+type OwnerBarState = AgentBar & { owner: string; askHref: string | null; askKind: 'question' | 'ask' | null };
 
 /** The open page's owner for the Agent bar (shell/pageOwner.ts): a pipeline's own agent while one is shown, else the
     page's (backend/page_owners.py, which falls back to the General Manager); none on a personal page (Tico is its chat)
@@ -589,11 +591,12 @@ function useOwnerBar(place: PageAt, me: string | undefined, address: string): Ow
   const ownPage = !!mine || owners?.pages[place.page]?.own === true;
   const pipe = pipeline?.id ?? null;
   const { data: asks } = useQuery({ ...flowQuery, enabled: opened && !!owner, select: (f) => f.asks });
-  const waiting = owner ? asks?.find((a) => (a.by === owner || a.by === who?.id) && (a.pipeline ? a.pipeline === pipe : ownPage)) : undefined;
-  const asking = !!waiting;
+  // the questions the person folded the bar on, by their Needs you item: a new one opens it again, that one does not
+  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => new Set());
+  const waitingHere = (owner ? asks?.filter((a) => (a.by === owner || a.by === who?.id) && (a.pipeline ? a.pipeline === pipe : ownPage)) : undefined) ?? [];
+  const fresh = waitingHere.find((a) => !dismissed.has(a.id));
+  const waiting = fresh ?? waitingHere[0];
   const [fold, setFold] = useBarFold(me, place.page);
-  const [dismissed, setDismissed] = useState<string | null>(null);
-  if (!asking && dismissed === place.page) setDismissed(null);
   if (!owner) return null;
   const name = who?.name ?? 'Agent';
   return {
@@ -603,11 +606,12 @@ function useOwnerBar(place: PageAt, me: string | undefined, address: string): Ow
     page: place.page,
     address,
     fold,
-    ask: asking && dismissed !== place.page,
+    ask: !!fresh,
     askHref: waiting?.href ?? null,
+    askKind: waiting?.kind ?? null,
     onFold: (folded) => {
       setFold(folded);
-      if (folded && asking) setDismissed(place.page);
+      if (folded && fresh) setDismissed(new Set([...dismissed, ...waitingHere.map((a) => a.id)]));
     },
   };
 }
@@ -628,7 +632,7 @@ function OwnerBar({ bar, place }: { bar: OwnerBarState; place: PageAt }) {
       {/* shown while the question waits, whether the bar opened for it or was folded and opened by hand */}
       {shown && bar.askHref && (
         <Link className="bar-ask" to={bar.askHref as never}>
-          A question waits on you
+          {bar.askKind === 'ask' ? 'An OK waits on you' : 'A question waits on you'}
         </Link>
       )}
       {shown && (

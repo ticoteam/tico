@@ -51,8 +51,10 @@ export interface ConversationProps {
   from?: FromPage | null;
   /** With no messages yet: words to start with, each a press that puts them in the box (nothing is sent). */
   starters?: readonly string[];
-  /** The Agent bar's: each message goes to the sender's DM with exactly this agent, found by the server as it writes. */
+  /** The Agent bar's: each message goes to the sender's DM with exactly this agent, found by the server as it writes;
+      `onMoved` when that is another thread than this one (the chat then shows that one). */
   toDm?: string;
+  onMoved?: (thread: string) => void;
   /** Above the composer, in the chat's foot: a card the chat is waiting on (a task's answer card). */
   foot?: ReactNode;
   /** What a message draws in place of its text, when it is more than words (a thread's call card). */
@@ -175,7 +177,7 @@ function withExtra(rows: ChatMessage[], extra: ChatMessage[] | undefined, more: 
   return [...out, ...left];
 }
 
-export function Conversation({ id, variant, title, actor, session, from, starters, toDm, foot, card, below, canPost = true, extra, chat }: ConversationProps) {
+export function Conversation({ id, variant, title, actor, session, from, starters, toDm, onMoved, foot, card, below, canPost = true, extra, chat }: ConversationProps) {
   useFollow(variant === 'tico' ? { conversation: id } : { thread: id });
 
   const { data: me } = useQuery(meQuery);
@@ -306,7 +308,7 @@ export function Conversation({ id, variant, title, actor, session, from, starter
       // a retry is the same message: it says the page it was first written on
       from: retry ? (retry.refs?.from_page ?? null) : at,
       me: myId,
-      ...(toDm && { toDm }),
+      ...(toDm && { toDm, onMoved }),
       ...(retry && { retry: retry.id }),
       ...(answers && { replyTo: answers, quote }),
     });

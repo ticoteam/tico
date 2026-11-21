@@ -320,14 +320,24 @@ def test_an_owners_question_names_where_it_waits_so_the_bar_can_link_it(api):
     assert (item['from_id'], item['conversation_id']) == ('bot:scout', asked.json()['conversation_id'])
 
 
-def test_a_message_to_ones_dm_with_an_agent_lands_in_that_exact_dm_never_a_group(api):
-    # #4857: the Agent bar names the agent, not a thread; the server finds the viewer's DM with exactly that one (or
-    # makes it) at write time, for a post and an upload, so a group that includes the agent is never written to.
+def test_a_message_to_ones_dm_with_an_agent_lands_in_that_exact_private_dm_never_a_group_or_an_older_chat(api):
+    # #4857 S28: the Agent bar names the agent, not a thread; the server writes to the viewer's member-private DM with
+    # exactly that one, the one the bar reads (?private=true): never a group with it, never an older pair chat read by
+    # its participant list (setup's), which the company's owner could read. A post and an upload alike.
     setup(api)
+    older = get(api, 'threads/dm?with=bot:ops')
     group = post(api, 'threads/dm', {'members': ['bot:ops', 'ben'], 'title': 'Launch'})
+    with api.app.state.store.read() as c:
+        before = c.execute("SELECT count(*) FROM conversations WHERE audience='personal'").fetchone()[0]
+    # a send that does not go makes no DM (S33)
+    post(api, 'threads/dm/messages', {'text': '', 'to_dm': 'bot:ops'}, expected=422)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM conversations WHERE audience='personal'").fetchone()[0] == before
     sent = post(api, 'threads/dm/messages', {'text': 'Hi', 'to_dm': 'bot:ops', 'refs': {'from_page': FROM}})
-    dm = get(api, 'threads/dm?with=bot:ops')
-    assert sent['conversation_id'] == dm['id'] != group['id']
+    dm = get(api, 'threads/dm?with=bot:ops&private=true')
+    assert sent['conversation_id'] == dm['id'] and dm['id'] not in (group['id'], older['id'])
+    again = post(api, 'threads/dm/messages', {'text': 'Again', 'to_dm': 'bot:ops'})
+    assert again['conversation_id'] == dm['id']
     r = api.post(
         '/api/v2/uploads/threads/dm/messages',
         data={'text': 'Look', 'to_dm': 'bot:ops'},
@@ -336,6 +346,29 @@ def test_a_message_to_ones_dm_with_an_agent_lands_in_that_exact_dm_never_a_group
     )
     assert r.status_code == 200 and r.json()['message']['conversation_id'] == dm['id'], r.text
     post(api, 'threads/dm/messages', {'text': 'Hi'}, expected=422)
+
+
+def test_a_first_file_to_an_agent_makes_the_private_dm_with_it(api):
+    from backend.tests.helpers.automation_api import as_bot
+
+    as_bot(api, 'scout')
+    r = api.post(
+        '/api/v2/uploads/threads/dm/messages',
+        data={'text': 'Look', 'to_dm': 'bot:scout'},
+        files={'files': ('a.txt', b'hello', 'text/plain')},
+        headers={**headers('ana-test'), 'Idempotency-Key': 'to-dm-first-upload'},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()['message']['conversation_id'] == get(api, 'threads/dm?with=bot:scout&private=true')['id']
+
+
+def test_from_page_is_no_part_of_a_messages_task_provenance_or_its_links(api):
+    # #4857 S32: a pointer to a task open on the page makes the message about no task.
+    from backend import message_links, task_privacy
+
+    refs = {'from_page': {'page': 'task', 'label': 'Task', 'item': {'kind': 'task', 'id': 'tsk_1'}}}
+    assert task_privacy.about(refs) == {}
+    assert message_links.links_for({'refs': json.dumps(refs), 'in_reply_to': None}) == set()
 
 
 def test_a_message_naming_its_page_and_what_was_open_takes_no_per_message_check(api):

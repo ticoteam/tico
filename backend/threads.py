@@ -2520,7 +2520,7 @@ def _post_making(c, principal, thread_id, body, start, parent_message_id, checke
         start = dict(start)
         if "dm" in start:
             members = _dm_members_for(c, actor, start.get("dm"))
-            existing = _open_dm(c, actor, members)
+            existing = _open_dm(c, actor, members, legacy=not start.get("private"))
             plan = (
                 None
                 if existing
@@ -3125,14 +3125,14 @@ def _require_write(c, v, target):
         raise Problem("forbidden", f"You can see {target} but not add them. Ask whoever manages them for Write.", 403)
 
 
-def dm(c, principal, members, *, title="", make=True):
+def dm(c, principal, members, *, title="", make=True, private=False):
     """A personal thread with exactly these teammates: the open one, or a new one. With a first message it is
     `post(..., start={"dm": members})`: a held first message makes no DM. `make=False` only looks: with no DM yet it
     answers as starting one would, then a 404, so opening a teammate's DM tab leaves nothing behind."""
     actor, v = _actor_of(principal)
     resolved = _dm_members_for(c, actor, members)
     # Write gates starting a DM (`_create_plan`). Opening one you are already in needs nothing more.
-    existing = _open_dm(c, actor, resolved)
+    existing = _open_dm(c, actor, resolved, legacy=not private)
     if existing and (v is None or denial(c, v, thread_row(c, existing)) is None):
         return view(c, principal, thread_row(c, existing))
     if not make:
@@ -3155,8 +3155,9 @@ def _dm_members_for(c, actor, members):
     return resolved
 
 
-def _open_dm(c, actor, resolved):
-    """The open personal thread with exactly `resolved` and the actor, or None."""
+def _open_dm(c, actor, resolved, legacy=True):
+    """The open personal thread with exactly `resolved` and the actor, or None. `legacy` False: only a member-private
+    one (audience personal, its members exactly these), never an older chat read by its participant list."""
     want = set(resolved) | {actor}
     for r in c.execute(
         "SELECT c.id FROM conversations c JOIN thread_members m ON m.thread_id=c.id "
@@ -3167,6 +3168,8 @@ def _open_dm(c, actor, resolved):
         have = {x[0] for x in c.execute("SELECT actor FROM thread_members WHERE thread_id=?", (r[0],))}
         if have == want:
             return r[0]
+    if not legacy:
+        return None
     # A migrated DM or personal chat has no stored audience: its participant list is who it is with.
     for r in c.execute(
         "SELECT c.id, c.participants, c.scope, c.owner_id FROM conversations c "

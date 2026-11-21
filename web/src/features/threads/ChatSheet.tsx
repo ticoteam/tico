@@ -22,7 +22,7 @@ export interface ChatSheetProps {
 /** The second chat's body: the address resolved to a thread, drawn as the side conversation (its head and the
     conversation). The root puts it in the shell's chat sheet. */
 export function ChatSheet({ chat, from, starters, dm = false }: ChatSheetProps) {
-  const { data: t, isError, refetch } = useQuery(chatQuery(chat));
+  const { data: t, isError, refetch } = useQuery(chatQuery(chat, dm ? 'private' : undefined));
   const me = useMe();
   const nameOf = useNameOf();
   const title = useTitle(t);
@@ -64,7 +64,7 @@ export function ChatSheet({ chat, from, starters, dm = false }: ChatSheetProps) 
       canPost={t.me?.can_post !== false}
       from={from}
       starters={starters}
-      {...(dm && actor && { toDm: actor })}
+      {...(dm && actor && { toDm: actor, onMoved: () => void refetch() })}
     />
   );
 }

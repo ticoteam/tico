@@ -202,6 +202,18 @@ describe('Conversation', () => {
     expect(sends()[0]).toEqual({ url: '/api/v2/threads/dm/messages', body: { text: 'Ship it', to_dm: 'bot:qa', refs: { from_page: { page: 'tasks', label: 'Tasks' } } } });
   });
 
+  it('switches the Agent bar to the thread the server wrote to when it is not the one shown @4857-S31', async () => {
+    seed([]);
+    serve(() => ({ status: 200, body: { ...msg(3, ME, 'Ship it'), conversation_id: 'dm-new', thread_id: 'dm-new' } }));
+    const onMoved = vi.fn();
+    render(<Conversation id={T} variant="side" title="Ana" actor="bot:qa" from={FROM} toDm="bot:qa" onMoved={onMoved} />, {
+      wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+    });
+    type('Ship it');
+    await waitFor(() => expect(onMoved).toHaveBeenCalledWith('dm-new'));
+    expect(screen.queryByText('Ship it')).toBeNull();
+  });
+
   it('sends a retry with the page it was first written on, not the one shown now @4857-S15', async () => {
     let fail = true;
     serve(() => (fail ? { status: 500, body: { error: { code: 'boom', detail: 'Broke' } } } : { status: 200, body: msg(3, ME, 'Ship it') }));

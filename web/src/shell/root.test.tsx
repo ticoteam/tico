@@ -22,7 +22,7 @@ import { tabTitle, useTabTitle } from './title';
 
 const { gate, q, catchUpRead, lists, owners, asks } = vi.hoisted(() => ({
   /** The ❓ questions and asks agents put to Maya that wait (Flow's `asks`, from Needs you's items). */
-  asks: [] as { by: string; pipeline: string | null; href: string | null }[],
+  asks: [] as { id: string; kind?: 'question' | 'ask'; by: string; pipeline: string | null; href: string | null }[],
   gate: { screen: null as string | null, setup: false },
   /** Each page's owner, as GET /page-owners answers: none unless a test names one. */
   owners: {} as Record<string, { bot: string | null; own?: boolean }>,
@@ -356,7 +356,7 @@ describe('the Agent bar @4857', () => {
     at(1100);
     people(MAYA, QA);
     owners.tasks = { bot: 'bot:qa', own: true };
-    asks.push({ by: 'bot:other', pipeline: null, href: '/threads/other' }, { by: 'bot:qa', pipeline: null, href: '/threads/home-qa' });
+    asks.push({ id: 'n1', by: 'bot:other', pipeline: null, href: '/threads/other' }, { id: 'n2', by: 'bot:qa', pipeline: null, href: '/threads/home-qa' });
     show('/tasks/eng');
     await screen.findByRole('complementary', { name: 'Chat with QA Owner' });
     await waitFor(() => expect(bar()?.dataset.shut).toBeUndefined());
@@ -369,11 +369,36 @@ describe('the Agent bar @4857', () => {
     expect(await screen.findByRole('link', { name: 'A question waits on you' })).toBeTruthy();
   });
 
+  it('opens by itself again for a new question after one was folded away, as each is its own Needs you item @4857-S9', async () => {
+    at(1100);
+    people(MAYA, QA);
+    owners.tasks = { bot: 'bot:qa', own: true };
+    asks.push({ id: 'q1', by: 'bot:qa', pipeline: null, href: '/threads/home-qa' });
+    show('/tasks/eng');
+    await screen.findByRole('complementary', { name: 'Chat with QA Owner' });
+    await waitFor(() => expect(bar()?.dataset.shut).toBeUndefined());
+    act(() => foldSheet('chat', true));
+    await waitFor(() => expect(edge()).toBeTruthy());
+    act(() => queryClient.setQueryData(['flow'], { count: 4, items: [], asks: [{ id: 'q1', by: 'bot:qa', pipeline: null, href: '/threads/home-qa' }] }));
+    expect(edge()).toBeTruthy();
+    act(() =>
+      queryClient.setQueryData(['flow'], {
+        count: 4,
+        items: [],
+        asks: [
+          { id: 'q1', by: 'bot:qa', pipeline: null, href: '/threads/home-qa' },
+          { id: 'q2', by: 'bot:qa', pipeline: null, href: '/threads/home-qa' },
+        ],
+      }),
+    );
+    await waitFor(() => expect(bar()?.dataset.shut).toBeUndefined());
+  });
+
   it("counts a pipeline's own agent as its page's for a question with no task @4857-S26", async () => {
     at(1100);
     people(MAYA, QA);
     owners.tasks = { bot: 'bot:gm', own: false };
-    asks.push({ by: 'bot:qa', pipeline: null, href: '/threads/home-qa' });
+    asks.push({ id: 'n3', by: 'bot:qa', pipeline: null, href: '/threads/home-qa' });
     queryClient.setQueryData(['pipelines'], [{ id: 'eng', name: 'Engineering', stages: [], manager: 'bot:qa', owner: null }]);
     show('/tasks/eng');
     await screen.findByRole('complementary', { name: 'Chat with QA Owner' });
@@ -385,7 +410,7 @@ describe('the Agent bar @4857', () => {
     people(MAYA, QA);
     // the agent only stands in for this page's owner: its question in its own chat does not open the bar here
     owners.tasks = { bot: 'bot:qa', own: false };
-    asks.push({ by: 'bot:qa', pipeline: null, href: null });
+    asks.push({ id: 'n4', by: 'bot:qa', pipeline: null, href: null });
     show('/tasks/eng');
     await waitFor(() => expect(edge()).toBeTruthy());
     expect(bar()?.dataset.shut).toBe('true');
@@ -394,11 +419,13 @@ describe('the Agent bar @4857', () => {
     people(MAYA, QA);
     // an ask on a task in Engineering opens Engineering's page, the pipeline's agent being QA
     asks.length = 0;
-    asks.push({ by: 'bot:qa', pipeline: 'eng', href: '/task/t1' });
+    asks.push({ id: 'n5', kind: 'ask', by: 'bot:qa', pipeline: 'eng', href: '/task/t1' });
     queryClient.setQueryData(['pipelines'], [{ id: 'eng', name: 'Engineering', stages: [], manager: 'bot:qa', owner: null }]);
     show('/tasks/eng');
     await screen.findByRole('complementary', { name: 'Chat with QA Owner' });
     await waitFor(() => expect(bar()?.dataset.shut).toBeUndefined());
+    // an OK is named as one, its link to the task it waits on
+    expect((await screen.findByRole('link', { name: 'An OK waits on you' })).getAttribute('href')).toBe('/task/t1');
   });
 
   it('under 1200 follows only the saved fold: opened where the page would go under its floor, it is a card over the page, and stays open on reload @4857-S4', async () => {
@@ -481,6 +508,21 @@ describe('the Agent bar @4857', () => {
     await waitFor(() => expect(lip('Open Menu').getAttribute('aria-expanded')).toBe('true'));
     act(() => void router.navigate({ to: '/tasks/$pipeline' as never, params: { pipeline: 'ops' } as never }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/ops'));
+    await waitFor(() => expect(lip('Open QA Owner').getAttribute('aria-expanded')).toBe('true'));
+  });
+
+  it('on a phone sets the card again when only the search of the address changes @4857-S3', async () => {
+    at(390);
+    people(MAYA, QA);
+    owners.tasks = { bot: 'bot:qa' };
+    localStorage.setItem('tico-next:owner-bar.v1', JSON.stringify({ 'human:maya': { tasks: false } }));
+    const router = show('/tasks/eng');
+    const lip = (name: string) => document.querySelector(`button.lip[aria-label="${name}"]`)!;
+    await waitFor(() => expect(lip('Open QA Owner').getAttribute('aria-expanded')).toBe('true'));
+    fireEvent.click(lip('Open Menu'));
+    await waitFor(() => expect(lip('Open Menu').getAttribute('aria-expanded')).toBe('true'));
+    act(() => void router.navigate({ to: '/tasks/$pipeline' as never, params: { pipeline: 'eng' } as never, search: { view: 'list' } as never }));
+    await waitFor(() => expect(router.state.location.searchStr).toContain('view=list'));
     await waitFor(() => expect(lip('Open QA Owner').getAttribute('aria-expanded')).toBe('true'));
   });
 

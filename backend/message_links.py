@@ -54,9 +54,9 @@ def links_for(row):
     """The (kind, target) links of one messages row, from the row alone. Only id-shaped strings are kept as
     task links; a task whose id is not id-shaped is never looked up here (`candidates`). A deleted message
     keeps the links of its current refs: its replies still inherit its tasks."""
-    from .task_privacy import _candidates
+    from .task_privacy import _candidates, about
 
-    refs = H._json(row["refs"], {}) or {}
+    refs = about(H._json(row["refs"], {}) or {})
     links = set()
     if row["in_reply_to"]:
         links.add(("parent", row["in_reply_to"]))

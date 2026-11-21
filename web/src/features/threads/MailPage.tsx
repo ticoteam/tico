@@ -237,7 +237,9 @@ function LetterBody({ box, id }: { box: string; id: string }) {
 
 /** Under an open mail: a box to the mailbox's agent about this mail. */
 function MailAgentBox({ box, id, agent }: { box: string; id: string; agent: string }) {
-  return <AgentBox agent={`bot:${agent}`} from={{ page: 'mail', label: 'Mail', item: { kind: 'mail', id: `${box}/${id}`.slice(0, 200) } }} />;
+  const { data } = useQuery(letterQuery(box, id));
+  const title = data?.[0]?.subject || '(no subject)';
+  return <AgentBox agent={`bot:${agent}`} page={{ path: `/threads/mail${defaultStringifySearch({ box, open: id })}`, title }} />;
 }
 
 /** What the mailbox's agent works from; written in the agent's own files, so read only here. */

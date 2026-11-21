@@ -8,7 +8,7 @@ import { keys, queryClient, quietRoot, write } from '@/data';
 import { onTopic } from '@/live';
 import { newId } from '@/lib/ids';
 import type { FromPage } from '@/shell/pageOwner';
-import type { ChatMessage, LiveRun, ReplyQuote, TimelinePage, Variant } from './types';
+import type { ChatMessage, LiveRun, PageRef, ReplyQuote, TimelinePage, Variant } from './types';
 
 const PAGE = 50;
 const enc = encodeURIComponent;
@@ -120,9 +120,14 @@ export interface Send {
   files?: File[];
   /** The page it was written on (`from_page`, backend/page_owners.py check_from). */
   from?: FromPage | null;
+  /** A box from outside (AgentBox): the conversation it is about, as `refs.page` (as main sends it). */
+  page?: PageRef | null;
   /** The Agent bar's: sent to the sender's DM with exactly this agent, which the server finds (or makes) as it writes
       (`/threads/dm/messages`, `to_dm`), never to a thread named by the id the page holds. */
   toDm?: string;
+  /** With `toDm`: the server wrote to another thread than the one shown (the DM is new, or another one now); the
+      chat shows that one from here on. */
+  onMoved?: (thread: string) => void;
   me: string;
   /** Retry: the failed row to send again in its place. */
   retry?: string;
@@ -149,7 +154,7 @@ function post(s: Send, idempotencyKey: string): Promise<Sent> {
   const where = s.toDm ? 'dm' : enc(s.id);
   const dm = s.toDm ? { to_dm: s.toDm } : {};
   if (!files.length)
-    return api.post<Sent>(`/api/v2/threads/${where}/messages`, { text: s.text, refs: s.from ? { from_page: s.from } : {}, ...reply, ...dm }, opts);
+    return api.post<Sent>(`/api/v2/threads/${where}/messages`, { text: s.text, refs: s.from ? { from_page: s.from } : s.page ? { page: s.page } : {}, ...reply, ...dm }, opts);
   const f = new FormData();
   f.set('text', s.text);
   if (s.replyTo) f.set('in_reply_to', s.replyTo);
@@ -184,6 +189,9 @@ const markRow = (tmp: string, pending: ChatMessage['pending']) => (rows: ChatMes
     own rights; any other chat's members may not read it, so they are told the page alone. Every send passes here. */
 const pageFor = (s: Send): FromPage | null => (!s.from ? null : s.variant === 'tico' ? s.from : { page: s.from.page, label: s.from.label });
 
+/** The thread a `toDm` send was written to, when it is not the one the chat shows. */
+const movedTo = (s: Send, real: ChatMessage) => !!s.toDm && !!(real.conversation_id || real.thread_id) && (real.conversation_id || real.thread_id) !== s.id;
+
 export async function sendMessage(given: Send): Promise<ChatMessage | null> {
   const s = { ...given, from: pageFor(given) };
   const tmp = s.retry ?? `tmp:${newId()}`;
@@ -196,6 +204,7 @@ export async function sendMessage(given: Send): Promise<ChatMessage | null> {
     created_at: new Date().toISOString(),
     refs: {
       ...(s.from && { from_page: s.from }),
+      ...(s.page && { page: s.page }),
       ...(s.files?.length && { attachments: s.files.map((f, i) => ({ id: `${tmp}:${i}`, name: f.name, content_type: f.type })) }),
     },
     pending: 'sending',
@@ -210,6 +219,8 @@ export async function sendMessage(given: Send): Promise<ChatMessage | null> {
       settle: (d: Timeline | undefined, answer: Sent) => {
         const real = answerOf(answer);
         if (!real) return withRows(d, markRow(tmp, 'held'));
+        // written elsewhere (`toDm`): this timeline keeps nothing of it; the chat switches to that thread (below)
+        if (movedTo(s, real)) return withRows(d, (rows) => rows.filter((m) => m.id !== tmp && m.id !== real.id));
         if (!d) return d;
         const has = d.pages.some((p) => p.messages.some((m) => m.id === real.id));
         const out = withRows(d, (rows) => rows.filter((m) => m.id !== tmp));
@@ -219,7 +230,9 @@ export async function sendMessage(given: Send): Promise<ChatMessage | null> {
       revert: (d: Timeline | undefined) => withRows(d, markRow(tmp, 'failed')),
       offline: 'hold',
     });
-    return answerOf(answer);
+    const real = answerOf(answer);
+    if (real && movedTo(s, real)) s.onMoved?.(real.conversation_id ?? real.thread_id ?? '');
+    return real;
   } catch {
     return null;
   }

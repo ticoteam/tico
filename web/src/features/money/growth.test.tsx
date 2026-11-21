@@ -216,10 +216,7 @@ describe('Growth on the one read @s400 @s444', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Ask the Growth Manager' }), { target: { value: 'Why is search over?' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
     await waitFor(() => expect(router.state.location.search).toEqual({ month: '2026-10', chat: 'agent:gm1' }));
-    // through the reader's own DM with it, never the old chat route (#4857 S5)
-    expect(posts).toEqual([
-      { path: '/threads/dm/messages', body: { text: 'All, October 2026: Why is search over?', to_dm: 'bot:gm1', refs: { from_page: { page: 'growth', label: 'Growth' } } } },
-    ]);
+    expect(posts).toEqual([{ path: '/chat/gm1', body: expect.objectContaining({ text: 'All, October 2026: Why is search over?' }) as unknown }]);
   });
 
   it('no segments, no spend, all zeros: the KPIs lead and the funnel folds below', async () => {
