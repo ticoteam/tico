@@ -227,7 +227,13 @@ opens and joins it.
 **Call the Assistant.** Where Tico Meet is set up, the phone in the Assistant's head starts a voice call with it in
 your Assistant chat (busy until it starts). While that chat has a live Tico Meet call it shows Join instead, and nothing
 while a Google Meet or a call still ending is on there, since a start would be refused. Its voice turns run as the
-Assistant with its normal context, never as you. A call in a person's own room gets no prep task, whoever starts it. An
+Assistant, never as you. A call in your Assistant chat is private by nature: it rings nobody, invites nobody when booked
+or moved, takes no agent but the Assistant for its whole life (409 `assistant_alone`), and nobody is added to the chat,
+nor is it linked to Slack, while it is on (409 `call_private`). Its voice session, claimed while the call is yours
+alone, then reads as you, as your own chat with the Assistant does: your private tasks through its tools, no snapshot
+put in its prompt. That claim is pinned to you for its life: a personal run (a throwaway checkout, no Git credential),
+which reads as you only while the call still qualifies and you may still sign in. A call in a person's own room gets no prep task, whoever
+starts it. An
 Assistant-owned follow-up from it, filed by you directly or by the Assistant in that call, names you as requester, so it
 is in your tracker; the Assistant keeps it as a private task for you, and its runs are personal ones, like your
 routines' turns. Any other private follow-up of the Assistant's is refused.

@@ -333,6 +333,7 @@ def request_link(store, who, thread_id, channel_ref, history=False, auth=None):
         thread = _thread(c, thread_id) if _can_see(c, core, auth or _auth(store), who, thread_id) else None
         if not thread:
             raise Problem("not_found", "That thread was not found", 404)
+        core.refuse_while_private_call(c, core.root_of(c, thread_id) or thread)
         if (thread.get("root_id") or thread["id"]) != thread["id"]:
             raise Problem("not_root", "Link the root thread: a link covers the whole thread and its sub-threads", 422)
         if thread.get("audience") not in ("company", "members"):

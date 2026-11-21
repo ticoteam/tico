@@ -3547,8 +3547,24 @@ def _with_participants(c, root, added):
         c.execute("UPDATE conversations SET participants=? WHERE id=?", (H._dump(people + fresh), root["id"]))
 
 
+def refuse_while_private_call(c, root):
+    """A call in a person's own Assistant chat is theirs alone (rooms.call_person): nobody is added to the chat, nor
+    the chat linked anywhere outside, while one is on there, so who reads it never widens mid-call."""
+    from . import rooms
+
+    if not rooms.assistant_room_owner(root):
+        return
+    if c.execute(
+        "SELECT 1 FROM calls WHERE state='live' AND thread_id IN (SELECT id FROM conversations WHERE id=? OR root_id=?) "
+        "LIMIT 1",
+        (root["id"], root["id"]),
+    ).fetchone():
+        raise Problem("call_private", "A call is on in this Assistant chat: add people once it ends", 409)
+
+
 def add_member(c, principal, thread_id, actor, *, role="member"):
     me, v, root = _root_for_membership(c, principal, thread_id)
+    refuse_while_private_call(c, root)
     target = actor if str(actor).startswith(("group:",) + OUTSIDE_PREFIXES) else H.resolve_actor(c, actor)
     if not target:
         raise Problem("not_found", "Unknown teammate", 404)
@@ -5823,6 +5839,7 @@ def add_outside_delivery(c, thread_id, recipient, *, added_by=H.TICO_ACTOR):
     row = thread_row(c, thread_id)
     if row is None:
         raise Problem("not_found", "Thread not found", 404)
+    refuse_while_private_call(c, root_of(c, row))
     now = _now()
     c.execute(
         "INSERT OR IGNORE INTO thread_members(id,thread_id,actor,role,added_by,created_at,updated_at) "

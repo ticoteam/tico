@@ -104,6 +104,9 @@ with `closed` and, when a question is ready, its turn ID, text and notes. The ru
 `voice_turn` on its delta and final message events. The lease and the attachment must still belong to that attempt
 when the server accepts output. The optional `voice=busy` query parameter checks the current utterance without
 claiming another. `voice=restart` returns a fresh primer and notes stamp with a bounded transcript recap.
+The Assistant's resident job in a call in a person's own Assistant chat, while nobody else reads the chat or is in
+the call, is claimed with `personal: true` (backend/rooms.py call_person, pinned to that person for the lease's life):
+it runs as the person's own chat with the Assistant does, in a throwaway checkout with no Git credential.
 After a call closes, the runner can acknowledge discarded output and settle the stopped lease with usage counts.
 Older hubs negotiate the capability away through the heartbeat 422 fallback.
 

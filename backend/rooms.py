@@ -39,15 +39,95 @@ def personal_root(c, conversation):
 def personal_run(c, assistant_bot, bot, conversation, task):
     """Whether a run is the Assistant's for one person: in their own room or a sub-thread of one (`personal_root`), or on
     a private task, which the Assistant holds only as a person's own message routine's turn
-    (hubdb.refuse_shared_assistant). Its claim says `personal`, and it is issued no git credential."""
+    (hubdb.refuse_shared_assistant). Its claim says `personal`, and it is issued no git credential. A voice session in a
+    call in their own room is one too, pinned at its claim (`pin_call_lease`)."""
     return bot == assistant_bot and (personal_root(c, conversation) or bool(task and H.task_private(c, task)))
+
+
+def assistant_room_owner(root):
+    """The person whose own private Assistant chat this root is, or "": scope and stored audience personal (a row with
+    none stored reads as its scope says, threads.audience_of), the Assistant's room key, a person as owner. The one test
+    call_person and threads.refuse_while_private_call share."""
+    from . import threads
+
+    person = str((root or {}).get("owner_id") or "")
+    if (
+        not root
+        or root.get("scope") != PERSONAL
+        or root.get("room_key") != ASSISTANT_ROOM
+        or threads.audience_of(root) != "personal"
+        or not H.is_human(person)
+    ):
+        return ""
+    return person
+
+
+CALL_LEASE = "attempt.call_personal"  # event: target the attempt, detail {"person"}; written once, at its claim
+
+
+def call_person(c, job_id):
+    """The person the shared Assistant's voice session (job `job_id`) may be claimed for, or "". Only a job Tico
+    dispatched itself counts: the call's `voice_job`, which call_sessions.ensure writes, never a ref a message carries
+    (the ref only says where to look: the job's own meeting row must name the job). Its call is live, in that person's
+    own Assistant room (or a sub-thread of it), which grants no other person or group a read, nobody else has been in
+    the call and no other agent is attached. Read by primary keys: an ordinary job stops at its own message."""
+    bot = H.actor_id(H.assistant_actor(c))
+    row = c.execute(
+        "SELECT s.id,s.thread_id,s.live_meeting_id FROM jobs j JOIN messages m ON m.id=j.message_id "
+        "JOIN live_meeting_bots b ON b.meeting_id=json_extract(m.refs,'$.live_meeting.meeting_id') AND b.bot=? "
+        "AND b.voice_job=j.id "
+        "JOIN calls s ON s.live_meeting_id=b.meeting_id AND s.state='live' AND s.ending_at IS NULL "
+        "WHERE j.id=? AND j.bot_id=? AND m.sender_id=?",
+        (bot, job_id, bot, H.TICO_ACTOR),
+    ).fetchone()
+    room = (H.conversation(c, row["thread_id"]) or {}) if row else {}
+    root = (H.conversation(c, room["root_id"]) or {}) if room.get("root_id") not in (None, room.get("id")) else room
+    person = assistant_room_owner(root)
+    if not person:
+        return ""
+    # Any member but the person and the Assistant reads the room: a person, a group, or another bot.
+    others = c.execute(
+        "SELECT 1 FROM thread_members WHERE thread_id IN (?,?) AND actor NOT IN (?,?) "
+        "UNION ALL SELECT 1 FROM call_participants WHERE call_id=? AND actor<>? "
+        "UNION ALL SELECT 1 FROM live_meeting_bots WHERE meeting_id=? AND bot<>? LIMIT 1",
+        (root["id"], room["id"], person, "bot:" + bot, row["id"], person, row["live_meeting_id"], bot),
+    ).fetchone()
+    return "" if others else person
+
+
+def pin_call_lease(c, attempt_id, job_id):
+    """At a claim: when the lease is the Assistant's voice session in a call that is its person's alone
+    (`call_person`), record that person against it, once; returns them, or "". The lease is a personal one for its whole
+    life from then on (`personal_attempt`: no git credential), and reads as them only while the call still qualifies
+    (`call_lease_person`)."""
+    person = call_person(c, job_id)
+    if person and not pinned_person(c, attempt_id):
+        H.event(c, H.TICO_ACTOR, CALL_LEASE, attempt_id, {"person": person})
+    return person
+
+
+def pinned_person(c, attempt_id):
+    """The person a lease was claimed personal for (`pin_call_lease`), or ""."""
+    row = c.execute(
+        "SELECT json_extract(detail,'$.person') FROM events WHERE action=? AND target=? LIMIT 1",
+        (CALL_LEASE, attempt_id),
+    ).fetchone()
+    return str(row[0] or "") if row else ""
+
+
+def call_lease_person(c, attempt_id, job_id):
+    """The person a voice-session lease reads as now: the one it was claimed personal for, while its call still
+    qualifies for that same person; else ""."""
+    pinned = pinned_person(c, attempt_id)
+    return pinned if pinned and call_person(c, job_id) == pinned else ""
 
 
 def run_scope(c, attempt_id):
     """What a run of the shared Assistant reads of private tasks, as (kind, value). "person": everything that person reads,
     by their own rule, in their own room or a sub-thread of it (their own chat with it). "task": its own routine turn
     task alone, the one filed for a person's message routine. "gone": nothing at all, its person may no longer sign in
-    (auth.standing). "": no person, so no private task; a call's turn is one. Kept for the read (read_cache)."""
+    (auth.standing). "": no person, so no private task; a call's turn is one, except the Assistant's voice session in a
+    call in the person's own room (`call_lease_person`). Kept for the read (read_cache)."""
     return read_cache.value(c, ("run_scope", attempt_id), lambda: _run_scope(c, attempt_id), True)
 
 
@@ -60,12 +140,14 @@ def _run_scope(c, attempt_id):
         return scope if human and not standing(c, human["id"]) else ("gone", "")
 
     row = c.execute(
-        "SELECT a.task_id,m.conversation_id FROM attempts a JOIN jobs j ON j.id=a.job_id "
+        "SELECT a.task_id,a.job_id,m.conversation_id FROM attempts a JOIN jobs j ON j.id=a.job_id "
         "JOIN messages m ON m.id=j.message_id WHERE a.id=?",
         (attempt_id,),
     ).fetchone()
     if not row:
         return ("", "")
+    if called := call_lease_person(c, attempt_id, row["job_id"]):
+        return kept(called, ("person", called))  # its voice session in a call in that person's own room
     task = H.task(c, row["task_id"]) if row["task_id"] else None
     if task and task["owner_id"] == H.assistant_actor(c) and H.task_private(c, task):
         # The turn it was woken for. An earlier turn named the Assistant itself as requester: its person is the one the
@@ -161,7 +243,10 @@ def scoped_wake(c, auth, attempt):
 
 
 def personal_attempt(c, assistant_bot, attempt_id):
-    """`personal_run` for a run by its id (backend/github_app.py token)."""
+    """`personal_run` for a run by its id, or a lease claimed personal (`pin_call_lease`), for its whole life
+    (backend/github_app.py token)."""
+    if pinned_person(c, attempt_id):
+        return True
     row = c.execute(
         "SELECT a.bot_id,a.task_id,m.conversation_id FROM attempts a JOIN jobs j ON j.id=a.job_id "
         "JOIN messages m ON m.id=j.message_id WHERE a.id=?",

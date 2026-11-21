@@ -137,7 +137,7 @@
         "token": {"type": "string", "x-note": "The turn's own bearer token; a fixture holds a placeholder."},
         "message": {"type": "object", "additionalProperties": true},
         "conversation": {"type": "object", "additionalProperties": true},
-        "personal": {"const": true, "x-note": "The server's configured Assistant in a person's own room (backend/execution.py claim); omitted otherwise. The runner runs the turn in a throwaway clone of the bot's checkout that it cannot push from, and keeps nothing it wrote (runner-rs/src/sessions.rs PersonalCopy). An older runner ignores it and only the server's memory history backstops apply."},
+        "personal": {"const": true, "x-note": "The server's configured Assistant in a person's own room, or its voice session in a call there that is that person's alone (backend/execution.py claim, backend/rooms.py call_person); omitted otherwise. The runner runs the turn in a throwaway clone of the bot's checkout that it cannot push from, and keeps nothing it wrote (runner-rs/src/sessions.rs PersonalCopy). An older runner ignores it and only the server's memory history backstops apply."},
         "task": {"oneOf": [{"type": "object", "additionalProperties": true}, {"type": "null"}]},
         "github_repository": {"type": "string", "x-note": "The one GitHub repository (owner/name) the task's work is in: the repository of every PR linked to the task and to the tasks it filed that the bot may read (backend/stage_inputs.py repository). The runner sets it as the turn's GH_REPO. Omitted when no PR is linked or they are in more than one repository; an older server omits it."},
         "history": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
