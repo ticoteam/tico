@@ -581,6 +581,7 @@ class SignedVersion(TypedDict):
 @answer
 class TaskFileVersion(TypedDict):
     n: int
+    name: str
     size: int
     mime: str
     sha256: str

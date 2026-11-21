@@ -597,6 +597,9 @@ def task_follow(api, args):
     return api.call("PUT", f"tasks/{args['id']}/followers", body, key=_key(args))
 
 
+REPLACES_ALONE = "replaces is for a file: a document or a page requirement continues its own page"
+
+
 @tool(
     "tico_task_attach",
     "Attach a deliverable (a report, a draft) to a task so the people on it "
@@ -653,6 +656,8 @@ def task_follow(api, args):
     writes=True,
 )
 def task_attach(api, args):
+    if args.get("replaces") and (args.get("document") or args.get("req") or args.get("page")):
+        raise ValueError(REPLACES_ALONE)
     if args.get("document"):
         return _document(api, args)
     if args.get("req") or args.get("page"):

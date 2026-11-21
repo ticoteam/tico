@@ -116,8 +116,10 @@ function Body({ f, v, onPicture, signable = false }: { f: TaskFileView; v: FileV
     ) : (
       <img src={v.url} alt={`${name}, v${v.n}`} />
     );
-  if (isWord(f.name, v.mime)) return <WordPages url={v.url} name={`${name}, v${v.n}`} />;
-  return <FileFrame id={f.id} version={v.n} mime={v.mime} title={`${name}, v${v.n}`} url={v.url} name={f.name} size={v.size} signable={signable} />;
+  // Each version keeps the name it was stored under: an older draft opens and saves as it was named then.
+  const stored = v.name || f.name;
+  if (isWord(stored, v.mime)) return <WordPages url={v.url} name={`${name}, v${v.n}`} />;
+  return <FileFrame id={f.id} version={v.n} mime={v.mime} title={`${name}, v${v.n}`} url={v.url} name={stored} size={v.size} signable={signable} />;
 }
 
 /** A file open in the page sheet (more.js fileBar): back to Details, its name, which of the task's files it is, and its
@@ -169,16 +171,18 @@ export function FileView({ t, file, full, flow }: { t: TaskData; file: string; f
     toast({ text: 'Removed', name: x.title || x.name, action: { label: 'Undo', run: () => void run('task.archiveFile', { task: t.id, file: x.id, archived: false }, { via: 'click' }).then((u) => u.ok || toast(failedToast(u))) } });
     void navigate({ to: details.to as never, search: back as never });
   };
-  // The full listing names a page's writers, and a page is restored as a page.
+  // The full listing names a page's writers. A page is restored as a page, by whoever may archive it (its ⋯ rule).
+  const page = !!f && 'writers' in f;
+  const shown = useQuery({ ...pageShownQuery(t.id, file), enabled: page && !!f?.archived });
+  const mayRestore = page ? !!shown.data?.can_manage || !!shown.data?.page?.may_write : mayRemove;
   const restore = async (x: TaskFileView) => {
-    const { id } = x;
-    const r = await ('writers' in x ? run('task.archivePage', { task: t.id, page: id, archived: false }, { via: 'click' }) : run('task.archiveFile', { task: t.id, file: id, archived: false }, { via: 'click' }));
+    const r = await (page ? run('task.archivePage', { task: t.id, page: x.id, archived: false }, { via: 'click' }) : run('task.archiveFile', { task: t.id, file: x.id, archived: false }, { via: 'click' }));
     toast(r.ok ? { text: 'Restored', name: x.title || x.name } : failedToast(r));
   };
 
   const menu = f && v && (
     <Menu trigger={<IconButton icon="more" label="More" size="sm" data-target={`task-version:${t.id}`} />}>
-      <MenuItem label="Download" icon="download" onSelect={() => download(v.url, f.name)} />
+      <MenuItem label="Download" icon="download" onSelect={() => download(v.url, v.name || f.name)} />
       {versions.length > 1 && (
         <MenuSub label="Versions" icon="clock">
           {versions.map((x) => (
@@ -194,7 +198,7 @@ export function FileView({ t, file, full, flow }: { t: TaskData; file: string; f
       {pair && (
         <MenuItem label="Compare" icon="columns" on={!!other} onSelect={() => void run('task.compare', { task: t.id, against: other ? null : pair.n }, { via: 'click' })} />
       )}
-      {mayRemove && (
+      {(f.archived ? mayRestore : mayRemove) && (
         <>
           <MenuRule />
           {f.archived ? <MenuItem label="Restore" icon="archive" onSelect={() => void restore(f)} /> : <MenuItem label="Remove file" icon="close" onSelect={() => void remove(f)} />}

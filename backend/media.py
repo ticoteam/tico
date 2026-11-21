@@ -824,7 +824,9 @@ def install_media(
         if request.headers.get("content-type", "").lower().startswith("multipart/form-data"):
             from .file_upload import parse
 
-            fields, uploads, stack = await parse(request, store.settings.upload_max_bytes, blobs.directory)
+            fields, uploads, stack = await parse(
+                request, store.settings.upload_max_bytes, blobs.directory, ("name", "note", "ask", "replaces")
+            )
             try:
                 if fields.get("document"):
                     raise Problem("validation", "A document is HTML text: send it as text", 422)
@@ -923,8 +925,7 @@ def install_media(
             task = comment_rights(c, auth, who, tid)
             H._writer(c, who.actor, task_id=tid)
             item = register(c, who, digest, size, name, content_type)
-            bot_actor = next((a for a in (who.actor, task["owner_id"], task["requester_id"]) if H.is_bot(a)), None)
-            bot = H.actor_id(bot_actor) if bot_actor else default_bot(c, store.settings)
+            bot = files.task_bot(c, who, task)
             document, submitted = None, None
             if body.document:
                 from . import task_documents as TD

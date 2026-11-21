@@ -863,6 +863,20 @@ describe('a task’s files and pages @s56 @s76 @s780', () => {
       fireEvent.click(await screen.findByRole('menuitem', { name: 'Restore' }));
       await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/files/f7', method: 'PATCH', body: { archived: false } }));
     });
+
+    it('restore a page as a page for a writer of it, who need not move the task', async () => {
+      const brief = { ...draft, id: 'f5', name: 'brief.html', title: 'Brief', mime: 'text/html', links: [], writers: [] };
+      serve((url, method) => {
+        if (url.endsWith('/api/v2/tasks/t1/files?all=1')) return { status: 200, body: { files: [brief] } };
+        if (url.endsWith('/api/v2/pages/f5')) return method === 'PATCH' ? { status: 200, body: { page: { file_id: 'f5', archived: false } } } : { status: 200, body: { page: { file_id: 'f5', archived: true, may_write: true }, can_manage: false } };
+        return reads(task({ mover: false, owner_id: 'bot:a1', requester_id: 'human:other', documents: [], to_leave: [] } as unknown as Partial<TaskData>))(url);
+      });
+      show(<TaskPage task="12" pipeline="p1" tab="details" file="f5" />, '/tasks/p1/12/details?file=f5');
+      await waitFor(() => expect(calls).toContain('GET /api/v2/pages/f5'));
+      await lastMore();
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'Restore' }));
+      await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/pages/f5', method: 'PATCH', body: { archived: false } }));
+    });
   });
 
   it('a page’s ⋯ archives the page and goes back to Details', async () => {
