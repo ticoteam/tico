@@ -771,7 +771,7 @@ def readers(auth):
         # The rows each row's from_person reads, read for the whole page first; each row is still decided one at a
         # time by the same code below.
         views.prime_list_origins(c, visible_sql, rows)
-        task_reads.brief(c, rows, visible_sql)
+        task_reads.brief(c, rows, visible_sql, getattr(who, "actor", None))
         tags = list_tags(c, who, rows)
         result = []
         for row in rows:

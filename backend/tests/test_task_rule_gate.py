@@ -661,7 +661,7 @@ def test_a_shared_page_answer_by_an_approvers_own_click_is_never_held_and_a_held
     from backend.blobs import Blobs
     from backend.tests.helpers.page_requirement import _page, _pipeline, _say, _task
 
-    api, _ = ruled
+    api, judge = ruled
     store = api.app.state.store
     store.blobs = store.blobs or Blobs(store.settings)
     with store.transaction() as c:
@@ -699,7 +699,10 @@ def test_a_shared_page_answer_by_an_approvers_own_click_is_never_held_and_a_held
     api.post(f"/api/v2/rule-holds/{view['id']}/send", json={"nonce": view["nonce"]}, headers=headers("ben-test"))
     assert sql(api, "SELECT 1 FROM answers WHERE requirement_id=?", (rid,)) == []
     holds = len(sql(api, "SELECT 1 FROM org_rule_holds"))
+    asked = len(judge.calls)
+    said = {**said, "note": "Our favorite color is red; the headline says so."}  # new words: nothing cached
     settled = api.post(path, json=said, headers=headers("ana-test"))
+    assert len(judge.calls) == asked, "a person's own click on a shared page is never checked: no judge call"
     assert settled.status_code == 200 and not settled.json().get("held"), settled.text
     assert len(sql(api, "SELECT 1 FROM org_rule_holds")) == holds
     assert [r["answer"] for r in sql(api, "SELECT answer FROM answers WHERE requirement_id=?", (rid,))] == ["no"]

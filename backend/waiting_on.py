@@ -714,6 +714,26 @@ def of(
     return sorted(once.values(), key=lambda wait: _ORDER[wait.state])
 
 
+def heads(waits: Sequence[Wait]) -> list[Wait]:
+    """The headline wait (the first), and with it the same ask's wait for each other person it is asked of: a page
+    several people approve is every approver's turn alike (`asked_of`)."""
+    if not waits:
+        return []
+    first = waits[0]
+    if first.state != PERSON or not first.ask:
+        return [first]
+    return [first] + [
+        w for w in waits[1:] if w.state == PERSON and w.ask and w.requirement_id == first.requirement_id and w.who
+    ]
+
+
+def head_for(waits: Sequence[Wait], viewer: object = None) -> Wait | None:
+    """The wait a task's row and read show `viewer` as its turn: theirs among `heads` when they are one of those it is
+    asked of, else the first. The same shape for every reader; only whose name it carries differs."""
+    found = heads(waits)
+    return next((w for w in found if viewer and w.who == viewer), found[0] if found else None)
+
+
 def turns(conn: "sqlite3.Connection", row: Row, waits: Sequence[Wait] | None = None) -> set[str]:
     """The bots whose turn it is on this task: each bot it waits on (Paused ones too: their wake waits until they can
     run), and the pipeline's manager bot while the ladder has the task at its level. Empty at level `person`: the

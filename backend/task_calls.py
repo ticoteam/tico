@@ -1234,7 +1234,8 @@ def task_view(
         "visit_id": visit.get("id") if live else None,
         "owner_id": row.get("owner_id"),
         "assignee_id": row.get("assignee_id"),
-        "turn": waits[0] if waits else None,
+        # A page several people approve is each approver's turn: `viewer` sees it as theirs (waiting_on.head_for).
+        "turn": waits[raw_waits.index(head)] if (head := W.head_for(raw_waits, viewer)) else None,
         "waits": waits,
         "to_leave": to_leave,
         "inputs": handed,

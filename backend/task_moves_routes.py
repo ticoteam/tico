@@ -176,10 +176,12 @@ def register(
         ask: bool = False,
         late: bool = False,
         first: Callable[..., bool] | None = None,
+        unchecked: Callable[[Any, Any], bool] | None = None,
     ) -> None:
         """`also(c, params)`: actors the write reaches besides the task's people and `to` (an answer's asker). `late`:
         under rules that only warn, the write goes first and its check right after; its call says where its words went
-        (org_rule_check `late_on`)."""
+        (org_rule_check `late_on`). `unchecked(caller, params)`: a write no rule checks at all (a person's own click
+        on a page several people approve), so no check, nor its model, runs for it."""
         writes[operation] = {
             "model": model,
             "said": said,
@@ -190,6 +192,7 @@ def register(
             "ask": ask,
             "late": late,
             "first": first,
+            "unchecked": unchecked,
         }
 
     def carry(c: Any, who: Any, task_id: str, gate: Any, text: Any, version: Any) -> tuple[Any, Any]:
@@ -260,7 +263,9 @@ def register(
 
     def checked(request: Request, tid: str, body: Any, operation: str, params: Any = None) -> Any:
         """A route's write: checked outside the store's write, then made through its verdict inside it."""
-        rc = check(request.state.identity, tid, body, operation, params)
+        spec = writes[operation]
+        who = request.state.identity
+        rc = None if spec["unchecked"] and spec["unchecked"](who, params) else check(who, tid, body, operation, params)
         return work(request, tid, body, lambda c, who, task_id: gated(c, who, task_id, body, rc, operation, params))
 
     def replays() -> None:
@@ -915,7 +920,22 @@ def register(
         ).fetchone()
         return [found[0]] if found and found[0] else []
 
-    says("task_ask_answer", M.TaskAskAnswer, answer_said, answer_call, also=asker, first=answer_first)
+    def answer_unchecked(who: Any, params: Any) -> bool:
+        """A person's own click on a page several people approve: never gated (`answer_first`), so never checked."""
+        if not task_asks.own_click(who):
+            return False
+        with store.read() as c:
+            return task_asks.shared_page(c, params["requirement_id"])
+
+    says(
+        "task_ask_answer",
+        M.TaskAskAnswer,
+        answer_said,
+        answer_call,
+        also=asker,
+        first=answer_first,
+        unchecked=answer_unchecked,
+    )
 
     @app.post(
         "/api/v2/tasks/{tid}/asks/{requirement_id}/answer",

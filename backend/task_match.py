@@ -9,7 +9,8 @@ meaning, and answers one bounded keyset page of matches (`after`, hubdb.KEYSET_S
   50 words, a bound the page's search box never reaches in practice. Text is
   lowered in Python, as the browser lowers it (SQLite's lower() knows only ASCII), over the view's narrow columns.
 - `owners`, `stages`, `requesters`, `labels`: one or several values each, comma-separated; any of them.
-- `turn`: one or several people or bots whose turn it is, the list row's headline wait (`turn.who`), as Waiting on
+- `turn`: one or several people or bots whose turn it is, the list row's headline wait (`turn.who`, any approver of a
+  page several people approve: waiting_on.heads), as Waiting on
   matches on the page. Worked out with the list's own rule (task_reads.brief), for the open tasks the other filters
   leave.
 - `due`: overdue, week (due within 7 days, past due included) or any (has a date). `late`: an open task late in its
@@ -164,9 +165,13 @@ def kept(c: sqlite3.Connection, m: Match, candidates: Sequence[Sequence[Any]], v
     if m.turn is not None:
         wanted: set[str] = set(m.turn)
         out: list[str] = []
+        from . import waiting_on as W
+        from .store import H
+
         for part in _chunks(ids):
-            rows = cast(list[dict[str, Any]], reads.brief(c, [{"id": tid} for tid in part], visible_sql))
-            out += [row["id"] for row in rows if row["turn"] and row["turn"].get("who") in wanted]
+            # Each person a page several people approve is asked of has its turn alike (waiting_on.heads).
+            waits = cast(dict[str, list[Any]], H.task_waits(c, part))
+            out += [tid for tid in part if any(w.who in wanted for w in W.heads(waits.get(tid) or []))]
         ids = out
     return ids
 

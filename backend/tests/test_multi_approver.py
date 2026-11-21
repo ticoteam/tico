@@ -153,8 +153,11 @@ def test_a_second_approver_answers_through_the_task_api(api):
         rid = _shared(conn, ANA, BEN)
         row = _task(conn)
         _, version = _submitted(conn, store, row)
-    for token in ("ana-test", "ben-test"):
+    for token, me in (("ana-test", ANA), ("ben-test", BEN)):
         read = api.get(f"/api/v2/tasks/{row['id']}", headers=headers(token))
+        assert read.json()["task"]["turn"]["who"] == me, f"{token}: the turn is theirs too"
+        listed = api.get(f"/api/v2/tasks?turn={me}", headers=headers(token)).json()["tasks"]
+        assert [t["turn"]["who"] for t in listed if t["id"] == row["id"]] == [me], f"{token}: the board's mark"
         (entry,) = [e for e in read.json()["task"]["to_leave"] if e["requirement_id"] == rid]
         assert sorted(entry["may"]) == ["no", "ok"], token
         needs = api.get("/api/v2/needs-you", headers=headers(token)).json()
