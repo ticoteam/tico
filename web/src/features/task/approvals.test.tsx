@@ -228,6 +228,38 @@ describe('the thing is the first tab', () => {
     await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/tasks/t1/asks/r1/ok', body: { shown_hash: 'h-v1' } }));
   });
 
+  it('with an email OK first, a file OK keeps its tab at the version it pinned, its dot and Approve @approvals', async () => {
+    const at = (n: number) => ({ n, by: 'bot:lo', created_at: '2026-11-01T10:00:00Z', mime: 'application/pdf', size: 10, url: `/api/v2/files/f9?v=${n}`, answers: [], ask: null });
+    const pdf = { id: 'f9', name: 'declaration.pdf', title: 'declaration.pdf', mime: 'application/pdf', archived: false, current_version: 2, links: [], writers: [], versions: [at(1), at(2)] };
+    shown = task({ title: 'Search warrant', to_leave: [req(), req({ requirement_id: 'r2', shows: ['file:f9@1'], line: 'Sign the declaration' })] });
+    reply = (url) =>
+      url.endsWith('/files?all=1') ? { body: { files: [pdf] } } : url.endsWith('/oks/r2') ? { body: { subject: 'file:f9@1', shown_hash: 'h-v1', content: { file: 'f9', version: 1 } } } : null;
+    const router = show(
+      <>
+        <TaskPage task="12" pipeline="p1" />
+        <TaskChat task="12" />
+      </>,
+      '/tasks/p1/12',
+    );
+    // the email's OK came first: its tab opens first, and the file's tab waits on the person too
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/email'));
+    const tabs = screen.getByRole('navigation', { name: 'Search warrant pages' });
+    expect((await within(tabs).findByRole('link', { name: /declaration/ })).querySelector('.dot')).toBeTruthy();
+    cleanup();
+    show(
+      <>
+        <TaskPage task="12" pipeline="p1" tab="declaration-pdf" />
+        <TaskChat task="12" />
+      </>,
+      '/tasks/p1/12/declaration-pdf',
+    );
+    expect(await screen.findByRole('region', { name: 'declaration.pdf' })).toBeTruthy();
+    expect(pdfRead.at(-1)).toBe('/api/v2/files/f9?v=1'); // the version the ask pinned
+    const box = within(screen.getByRole('region', { name: 'Chat with Legal Owner' })).getByRole('region', { name: 'The decision' });
+    fireEvent.click(await ready(box));
+    await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/tasks/t1/asks/r2/ok', body: { shown_hash: 'h-v1' } }));
+  });
+
   it('opens the version the address names over the one the ask pinned @approvals', async () => {
     const at = (n: number) => ({ n, by: 'bot:lo', created_at: '2026-11-01T10:00:00Z', mime: 'application/pdf', size: 10, url: `/api/v2/files/f9?v=${n}`, answers: [], ask: null });
     const pdf = { id: 'f9', name: 'declaration.pdf', title: 'declaration.pdf', mime: 'application/pdf', archived: false, current_version: 2, links: [], writers: [], versions: [at(1), at(2)] };

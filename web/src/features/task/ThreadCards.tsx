@@ -6,7 +6,7 @@ import { Icon } from '@/kit/Icon';
 import { besideThread } from '@/lib';
 import { flowQuery, type FlowItem } from '@/features/tasks/routing';
 import { AskCard } from './AskCard';
-import { decisionOf, personOf, sendTitle, tabAddress, tabsOf, targetOf, thingsOf } from './model';
+import { askOf, decisionOf, personOf, sendTitle, tabAddress, tabsOf, targetOf, thingsOf } from './model';
 import { taskDetailQuery, taskFilesQuery, type TaskData } from './queries';
 import { useTabs } from './tabs';
 import { matterOf } from './Waiting';
@@ -26,12 +26,19 @@ interface Approval {
   task: string;
   /** The email it shows: its send's id. */
   send: string | null;
+  /** The requirement it answers, when Needs you names it. */
+  requirement?: string;
   /** The thread the card sits in, as the shell's `?chat=`: what it opens comes beside that thread (plan/layers.html). */
   chat?: string;
 }
 
 const approvalOf = (m: ChatMessage): Approval | null => (m.kind === 'approval' ? ((m.refs?.approval as Approval | undefined) ?? null) : null);
 const emailIn = (shows: readonly string[]) => shows.find((x) => x.startsWith('email:'))?.slice(6) || null;
+
+/** The open requirement a card stands for: the one its entry names, else the task's own (an email's, or one that is
+    not an email's). */
+const cardAsk = (sub: TaskData, requirement: string | undefined, send: string | null) =>
+  requirement ? askOf(sub, requirement) : decisionOf(sub, send ?? null);
 
 /** Which approvals a thread shows: those `agent` asked for (the person's DM with it, or its Home; its id or slug), or
     those hung on `task` (a case's chat: its "Send:" OKs). */
@@ -64,24 +71,23 @@ export function useApprovalCards(scope: ApprovalScope, chat?: string): ChatMessa
     hung
       ? it.ask?.kind === 'ok' && hung.has(it.id) && (it.id !== task?.id || !!emailIn(it.ask?.shows ?? []))
       : (it.ask?.kind === 'ok' || it.ask?.kind === 'page') && !!agent && whose(it) === agent;
-  const isEmail = (it: FlowItem) => !!emailIn(it.ask?.shows ?? []);
   const asks = on ? (data?.approvals ?? []).filter(mine) : [];
   const subs = useQueries({ queries: asks.map((it) => ({ ...taskDetailQuery(it.id), retry: false })) });
   // The files any other OK shows (its chips, ThingCard), read before the card draws.
   const files = useQueries({
     queries: asks.map((it, i) => {
       const sub = subs[i]?.data;
-      return { ...taskFilesQuery(it.id), enabled: !!sub && !emailIn(it.ask?.shows ?? []) && thingsOf(decisionOf(sub, null)).size > 0, retry: false };
+      return { ...taskFilesQuery(it.id), enabled: !!sub && !emailIn(it.ask?.shows ?? []) && thingsOf(cardAsk(sub, it.ask?.requirement, null)).size > 0, retry: false };
     }),
   });
-  // An approval entry its task's cached read does not have yet (a new email's OK): that read is refreshed, once.
+  // An approval entry its task's cached read does not have yet (a new OK): that read is refreshed, once.
   const client = useQueryClient();
   const stale = asks
     .filter((it, i) => {
       const sub = subs[i]?.data;
-      return !!sub && isEmail(it) && !decisionOf(sub, emailIn(it.ask?.shows ?? []) ?? undefined);
+      return !!sub && !cardAsk(sub, it.ask?.requirement, emailIn(it.ask?.shows ?? []));
     })
-    .map((it) => `${it.id}:${emailIn(it.ask?.shows ?? [])}`)
+    .map((it) => `${it.id}:${it.ask?.requirement ?? emailIn(it.ask?.shows ?? [])}`)
     .join(',');
   useEffect(() => {
     for (const id of new Set(stale.split(',').filter(Boolean).map((k) => k.split(':')[0]!)))
@@ -92,19 +98,19 @@ export function useApprovalCards(scope: ApprovalScope, chat?: string): ChatMessa
     const send = emailIn(it.ask?.shows ?? []);
     // An email's card stands for that email's own open OK on the task, never another ask there.
     // Any other card, the task's own decision that is not an email's (an email's OK beside it has its own card).
-    if (!sub || !decisionOf(sub, send ?? null)) return [];
+    if (!sub || !cardAsk(sub, it.ask?.requirement, send)) return [];
     // An email's: still to go out, as its OK task's row says (sendToGo); its preview is read only on its Email tab.
     if (send) {
       if (!sendToGo(sub, send)) return [];
     } else if (files[i]?.isPending && files[i]?.fetchStatus !== 'idle') return [];
     // The words stand for the card where words are read (a row with none is not drawn).
     const row: ChatMessage = {
-      id: send ? `approval:${it.id}:${send}` : `approval:${it.id}`,
+      id: `approval:${it.id}:${it.ask?.requirement ?? send ?? ''}`,
       sender_id: whose(it) ?? it.ask?.by ?? undefined,
       created_at: it.since,
       kind: 'approval',
       body: `Approve: ${it.title}`,
-      refs: { approval: { task: it.id, send, chat } },
+      refs: { approval: { task: it.id, send, chat, ...(it.ask?.requirement && { requirement: it.ask.requirement }) } },
     };
     return [row];
   });
@@ -116,17 +122,17 @@ export function approvalCard(m: ChatMessage) {
   return a ? <ApprovalCard {...a} /> : null;
 }
 
-function ApprovalCard({ task, send, chat }: Approval) {
+function ApprovalCard({ task, send, chat, requirement }: Approval) {
   const sub = useQuery(taskDetailQuery(task)).data;
   if (!sub) return null;
-  return send ? <EmailCard sub={sub} send={send} chat={chat} /> : <ThingCard sub={sub} chat={chat} />;
+  return send ? <EmailCard sub={sub} send={send} chat={chat} /> : <ThingCard sub={sub} chat={chat} requirement={requirement} />;
 }
 
 /** Any other OK (a page, a file, a finance item): the task's title, and the files it shows as chips. It opens the task's
     page, which opens on what waits on the person. */
-function ThingCard({ sub, chat }: { sub: TaskData; chat?: string }) {
-  // Its own decision, never an email's OK beside it on the task (that has its own card).
-  const decision = decisionOf(sub, null);
+function ThingCard({ sub, chat, requirement }: { sub: TaskData; chat?: string; requirement?: string }) {
+  // Its own requirement, never an email's OK or another ask beside it on the task (each has its own card).
+  const decision = cardAsk(sub, requirement, null);
   const shown = thingsOf(decision);
   const files = useQuery({ ...taskFilesQuery(sub.id), enabled: shown.size > 0, retry: false });
   const chips = (files.data ?? []).filter((f) => shown.has(f.id)).map((f) => ({ key: f.id, name: f.title || f.name, type: typeOf(f.name, undefined) }));
@@ -135,10 +141,8 @@ function ThingCard({ sub, chat }: { sub: TaskData; chat?: string }) {
   const target = targetOf(decision);
   const tabs = target ? tabsOf(sub, files.data ?? (files.isError ? [] : undefined), decision) : [];
   const tab = tabs.find((x) => (x.doc?.file_id ?? x.file?.id ?? x.other) === target?.id);
-  // A file of another task: the task's page may not show it as a tab (an email's OK first marks another), so the card
-  // opens the file's own page.
-  const away = tab?.other && target ? `/library/files?${new URLSearchParams({ file: target.id, ...(target.version && { v: String(target.version) }) })}` : null;
-  return <Card to={away ?? tabAddress(sub, tab?.slug, false).to} chat={chat} what={sub.title} files={chips} />;
+  // Always the task's own tab, where Approve is (the page marks and pins the same file: tabsOf).
+  return <Card to={tabAddress(sub, tab?.slug, false).to} chat={chat} what={sub.title} files={chips} />;
 }
 
 /** An email's OK: the case it answers (else the subject) and who it goes to, from the OK task itself (its title and its

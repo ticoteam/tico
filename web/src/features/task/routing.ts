@@ -30,7 +30,7 @@ export async function loadTask(client: QueryClient, param: string, tab?: string,
     const selected = tab ? tabs.find((x) => x.slug === tab) : tabs[0];
     // An attached file can outrank the default document when the task is waiting for an answer: the file the ask is
     // about (a PDF to sign) opens over a page it also shows, so its tab waits for the files.
-    const target = targetOf(decisionOf(t));
+    const target = targetOf(decisionOf(t, null)); // as tabsOf reads it: the ask that is not an email's
     const asked = selected?.mark === 'ask' && (!target || selected.doc?.file_id === target.id);
     const doc = selected?.doc && (tab || asked || !decisionOf(t)) ? selected.doc : undefined;
     if (doc && isPage(doc)) void client.prefetchQuery(pageShownQuery(id, doc.file_id));

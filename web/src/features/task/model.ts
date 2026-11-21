@@ -50,6 +50,9 @@ export function decisionOf(t: TaskData, email?: string | null): TaskRequirement 
   return (t.to_leave ?? []).find((r) => answerable(r) && belongs(r, email)) ?? null;
 }
 
+/** The task's open requirement `rid` the person may answer now, or null (answered, withdrawn, or not read yet). */
+export const askOf = (t: TaskData, rid: string): TaskRequirement | null => (t.to_leave ?? []).find((r) => r.requirement_id === rid && answerable(r)) ?? null;
+
 /** The files a requirement shows: the page it approves, and each `page:` or `file:` it names. */
 export function thingsOf(r: TaskRequirement | null): Set<string> {
   const out = new Set<string>();
@@ -93,8 +96,11 @@ export const emailOf = (r: TaskRequirement | null | undefined): string | null =>
     this task's opens as a tab of its own once the files are read (`files` given), never the review page beside it. Then the stage's other pages and Markdown files, each with its state (more.js taskflow); the task's
     other files but its pictures (Details walks those), so a PDF, a Word file or a sound opens as a tab too; the other
     emails its requirements show; the chat (a phone's tab); then Details. A page linked in two roles is one tab.
-    `decision`: what the tabs are marked for, the task's first ask unless a caller names another (a card for one ask). */
-export function tabsOf(t: TaskData, files?: TaskFileView[], decision: TaskRequirement | null = decisionOf(t)): TaskTab[] {
+    `decision`: what the tabs are marked for and pinned at: the task's first ask that is not an email's (an email's OK
+    has its own tab), unless a caller names another (a card for one ask). When an email's OK comes first, its tab still
+    comes first. */
+export function tabsOf(t: TaskData, files?: TaskFileView[], decision: TaskRequirement | null = decisionOf(t, null)): TaskTab[] {
+  const emailFirst = !!emailOf(decisionOf(t));
   const asked = thingsOf(decision);
   const target = targetOf(decision);
   const pinned = (id: string) => (target?.id === id && target.version ? { version: target.version } : {});
@@ -127,9 +133,11 @@ export function tabsOf(t: TaskData, files?: TaskFileView[], decision: TaskRequir
   const all = [...docs, ...others, ...away, ...emails];
   // What the ask is about opens first, before any other page it shows (a review page).
   const isTarget = (x: TaskTab) => !!target && (x.doc?.file_id ?? x.file?.id ?? x.other) === target.id;
+  const asks = all.filter((x) => x.mark === 'ask');
   return [
-    ...all.filter((x) => x.mark === 'ask' && isTarget(x)),
-    ...all.filter((x) => x.mark === 'ask' && !isTarget(x)),
+    ...(emailFirst ? asks.filter((x) => x.email) : []),
+    ...asks.filter((x) => isTarget(x)),
+    ...asks.filter((x) => !isTarget(x) && !(emailFirst && x.email)),
     ...all.filter((x) => x.mark !== 'ask'),
     ...(t.conversation_id ? [{ slug: CHAT, label: 'Chat', chat: true }] : []),
     { slug: DETAILS, label: 'Details' },

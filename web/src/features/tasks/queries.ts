@@ -652,7 +652,7 @@ export interface FlowItem {
   blocks?: { number: number | null }[];
   /** What it asks of the person, when an ask holds it (`ask`): its kind ("ok", "page"), who asked and what it shows
       ("email:<send id>", "page:<file>@<v>"), and its line. */
-  ask?: { kind: string; by: string | null; shows: string[]; line?: string };
+  ask?: { kind: string; by: string | null; shows: string[]; line?: string; requirement?: string };
   /** What its ask is about, when the server lets this person read it (Needs you `about`): a page ask's page title, a
       Finance OK's payee and amount. The row shows it in place of the task's title. */
   about?: string;
@@ -701,8 +701,8 @@ export interface Flow {
   requests?: FlowRequest[];
   /** Every task the Needs you list names, a grouped item's (a paused agent's `task_ids`) each one too. */
   task_ids?: string[];
-  /** Each approval (an OK or a page) that waits on the person, from every row of the list, one per task and one per
-      email's OK: `items` keeps one row per task, the oldest, which may be another ask (the thread cards read this). */
+  /** Each approval (an OK or a page) that waits on the person, from every row of the list, one per requirement: `items`
+      keeps one row per task, the oldest, which may be another ask (the thread cards read this). */
   approvals?: FlowItem[];
 }
 
@@ -720,7 +720,7 @@ const flowItemOf = (it: NeedsRow, t: NonNullable<NeedsRow['task']>): FlowItem =>
   stuck: !!t.stuck,
   since: it.since ?? t.stage_since ?? new Date().toISOString(),
   blocks: t.blocks,
-  ...(it.ask && { ask: { kind: it.ask.kind, by: it.ask.asked_by ?? null, shows: it.ask.shows ?? [], line: it.line } }),
+  ...(it.ask && { ask: { kind: it.ask.kind, by: it.ask.asked_by ?? null, shows: it.ask.shows ?? [], line: it.line, requirement: it.ask.requirement_id } }),
   ...(it.about && { about: it.about }),
 });
 
@@ -744,9 +744,8 @@ export const flowQuery = queryOptions({
       for (const id of [it.task_id, it.task?.id, ...((it as { task_ids?: string[] }).task_ids ?? [])]) if (id) named.add(id);
       const t = it.task;
       if (!t) continue;
-      // One approval per entry: an email's OK by its send, so two emails on one task are two approvals.
-      const email = it.ask?.shows?.find((x) => x.startsWith('email:'));
-      const key = email ? `${t.id}:${email}` : t.id;
+      // One approval per entry (its requirement): two OKs on one task, emails or not, are two approvals.
+      const key = it.ask?.requirement_id ? `${t.id}:${it.ask.requirement_id}` : it.id;
       if ((it.ask?.kind === 'ok' || it.ask?.kind === 'page') && !approvals.has(key)) approvals.set(key, flowItemOf(it, t));
       const at = seen.get(t.id);
       if (at !== undefined) {
