@@ -691,7 +691,8 @@ def _wake_turn(
     from . import wait_spans
     from . import waiting_on as W
 
-    waits = W.of(conn, row) if row["status"] == "open" else []
+    # A snoozed or ended task wakes nobody, and its span needs no waits worked out (wait_spans._settled).
+    waits = W.of(conn, row) if row["status"] == "open" and not row.get("snooze") else None
     wait_spans.sync(conn, str(row["id"]), row, waits)
     refs, instructions = task_wakes.split_instructions(refs)
     if row["stage"]["kind"] != "work":
@@ -713,7 +714,7 @@ def _wake_turn(
     )
     if instructions and not out:
         task_wakes.keep_instructions(conn, row, instructions)
-    for wait in W.of(conn, row):
+    for wait in waits or ():
         if wait.state in (W.BOT, W.PAUSED) and wait.ask and wait.requirement_id and wait.who != target:
             task_wakes.ask(conn, row, R.get(conn, wait.requirement_id), wait.who)
     return out

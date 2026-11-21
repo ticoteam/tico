@@ -647,7 +647,9 @@ def of(
                 continue
             # Not met: whoever has the task's work has this too.
             out.append(_turn(conn, row, has, line, requirement["id"], since, False, seen, standing.about))
-    if by_hand and not unmet and E.not_held_by_hand(conn, row):
+    # A task blocked by one it depends on waits on that alone (below): no room in the next stage is read for it.
+    blockers = task_depends.blockers(conn, str(row["id"]))
+    if by_hand and not unmet and not blockers and E.not_held_by_hand(conn, row):
         # A person's request is not held by hand: it waits for room in the next stage (never_stuck._requests).
         ahead = E.next_stage(conn, row)
         name = ahead["name"] if ahead else "the next stage"
@@ -659,7 +661,7 @@ def of(
     elif not unmet and idea_checks.holds(conn, row):
         # An idea in Product's Ideas: Jev's duplicate check comes first, for two minutes at most (idea_checks).
         out.append(Wait(JEV, None, "Decision model is checking it against open ideas", None, entered))
-    elif not unmet:
+    elif not unmet and not blockers:
         # Everything is met. It waits for a slot in the next stage; with room, the engine takes it on its next pass.
         ahead = E.next_stage(conn, row)
         full = bool(ahead) and not E.has_room(conn, ahead, task_row=row)
@@ -696,7 +698,6 @@ def of(
         out = [wait for wait in out if not (wait.state in (BOT, PAUSED) and not wait.fix and wait.who in asking)]
     for m in marks:
         out.append(Wait(PERSON, m["person_id"], m["line"], question_marks.wait_id(m), m["created_at"], ask=True))
-    blockers = task_depends.blockers(conn, str(row["id"]))
     if blockers:
         # It depends on a task still open: that is all it waits on, nobody's turn, until the task ends (task_depends).
         # An OK or an answer asked of a person, and a cause a person fixes first, stay theirs, as under a bot's snooze.

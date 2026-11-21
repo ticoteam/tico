@@ -18,6 +18,7 @@ a read of a task. A write is one statement or two, only when the headline change
 
 from typing import TYPE_CHECKING, Any
 
+from . import task_depends
 from . import task_engine as E
 from . import waiting_on as W
 
@@ -49,26 +50,53 @@ def headline(row: Row | None, waits: list[W.Wait]) -> Key | None:
     return (str(visit["id"]) if visit.get("id") else None, head.state, head.who)
 
 
-def sync(conn: "sqlite3.Connection", task_id: str, row: Row | None = None, waits: list[W.Wait] | None = None) -> bool:
-    """Close the task's open span when its headline wait is no longer the same, and open one for the headline it has
-    now. `row` (task_engine.task) and `waits` (waiting_on.of) save reading them again when the caller has them. Returns
-    whether it wrote."""
-    row = row if row is not None else E.task(conn, task_id)
-    if waits is None:
-        waits = W.of(conn, row) if row and row.get("status") == "open" else []
-    want = headline(row, waits)
-    have = conn.execute(_OPEN_SQL, (task_id,)).fetchone()
-    if (tuple(have[1:]) if have else None) == want:
-        return False
+def _settled(conn: "sqlite3.Connection", row: Row) -> Key | None:
+    """The headline when it is known without working the waits out: a snoozed task that no open task blocks waits on
+    its snooze first (waiting_on.of)."""
+    snooze: Row | None = row.get("snooze")
+    if not snooze or row.get("status") != "open" or row["stage"].get("kind") != "work":
+        return None
+    if task_depends.blockers(conn, str(row["id"])):
+        return None
+    return (str(row["visit"]["id"]), W.SNOOZED, snooze["by_id"])
+
+
+def _want(conn: "sqlite3.Connection", row: Row | None, waits: list[W.Wait] | None) -> Key | None:
+    if waits is None and row and row.get("status") == "open":
+        settled = _settled(conn, row)
+        if settled:
+            return settled
+        waits = W.of(conn, row)
+    return headline(row, waits or [])
+
+
+def _open(conn: "sqlite3.Connection", task_id: str) -> tuple[str | None, Key | None]:
+    found = conn.execute(_OPEN_SQL, (task_id,)).fetchone()
+    return (str(found[0]), (found[1], str(found[2]), found[3])) if found else (None, None)
+
+
+def _put(conn: "sqlite3.Connection", task_id: str, open_id: str | None, want: Key | None) -> None:
+    """Close the open span and open one for `want`: one statement or two."""
     H = _h()
     now = H.now()
-    if have:
-        conn.execute("UPDATE task_wait_spans SET closed_at=? WHERE id=?", (now, have[0]))
+    if open_id:
+        conn.execute("UPDATE task_wait_spans SET closed_at=? WHERE id=?", (now, open_id))
     if want:
         conn.execute(
             "INSERT INTO task_wait_spans (id, task_id, visit_id, kind, who, opened_at) VALUES (?,?,?,?,?,?)",
             (H.new_id(), task_id, *want, now),
         )
+
+
+def sync(conn: "sqlite3.Connection", task_id: str, row: Row | None = None, waits: list[W.Wait] | None = None) -> bool:
+    """Close the task's open span when its headline wait is no longer the same, and open one for the headline it has
+    now. `row` (task_engine.task) and `waits` (waiting_on.of) are what the caller read just now, so nothing is worked
+    out again. Returns whether it wrote."""
+    want = _want(conn, row if row is not None else E.task(conn, task_id), waits)
+    open_id, have = _open(conn, task_id)
+    if have == want:
+        return False
+    _put(conn, task_id, open_id, want)
     return True
 
 
@@ -86,15 +114,18 @@ def recheck(
     have: Key | None,
     found: "tuple[Row, Any, list[W.Wait]] | None" = None,
 ) -> bool:
-    """The backstop for one task the pass read and did not change: `have` is its open span when the pass began, and
-    `found` what the pass read of it (row, standings, waits). Writes only when the headline differs; a span another
-    task's write already moved is read again first (`sync`)."""
+    """The backstop for one task: `have` is its open span when the pass began, and `found` what the pass read of it
+    (row, standings, waits), still true for its headline. Writes only when the headline differs, and never over a span a
+    write in this pass already moved: that write read the task fresh."""
     row, waits = (found[0], found[2]) if found else (E.task(conn, task_id), None)
-    if waits is None:
-        waits = W.of(conn, row) if row and row.get("status") == "open" else []
-    if headline(row, waits) == have:
+    want = _want(conn, row, waits)
+    if want == have:
         return False
-    return sync(conn, task_id, row, waits)
+    open_id, now = _open(conn, task_id)
+    if now != have:
+        return False
+    _put(conn, task_id, open_id, want)
+    return True
 
 
 # Every open task on the engine.
