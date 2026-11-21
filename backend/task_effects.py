@@ -16,7 +16,7 @@ person handed off through their Assistant is reported back in their Assistant ch
 from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from . import hubdb_core
 
@@ -152,8 +152,8 @@ def _report_back(conn: "sqlite3.Connection", after: Row, by: str, why: str | Non
     ).fetchone()
     if not made or not revision:
         return
-    person = str(made["actor"])
-    if (H._json(made["detail"], {}) or {}).get("via") != "assistant" or not H.is_human(person) or by == person:
+    person, detail = str(made["actor"]), cast(Row, H._json(made["detail"], {}) or {})
+    if detail.get("via") != "assistant" or not H.is_human(person) or by == person:
         return
     key = f"report_back:{task_id}:{revision}"
     if (
