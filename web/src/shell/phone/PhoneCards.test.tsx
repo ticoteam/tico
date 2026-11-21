@@ -19,12 +19,13 @@ vi.mock('@/motion', () => ({ motionLevel: () => 'off' }));
 const fs = (await import(/* @vite-ignore */ 'node:' + 'fs')) as { readFileSync(file: URL, encoding: 'utf8'): string };
 const here = import.meta.url; // not inline: Vite would turn `new URL('…', import.meta.url)` into an asset import
 const phoneCss = fs.readFileSync(new URL('./phone.css', here), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
-/** The declarations of every rule whose selector list includes `selector` exactly. */
-const rule = (selector: string): string =>
-  [...phoneCss.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
-    .filter((m) => m[1]!.split(',').some((s) => s.trim() === selector))
-    .map((m) => m[2]!.replace(/\s+/g, ' '))
-    .join(';');
+/** The declarations of the rule whose selector list includes `selector` exactly. */
+const rule = (selector: string): string => {
+  for (const m of phoneCss.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (m[1]!.split(',').some((s) => s.trim() === selector)) return m[2]!.replace(/\s+/g, ' ');
+  }
+  return '';
+};
 
 const width = (w: number) =>
   act(() => {
@@ -462,9 +463,9 @@ describe('phone: the cards behind a raised one peek above it', () => {
   it('while typing, the cards in front go under the keyboard and the peeks behind stay, clear of the box', () => {
     expect(rule('.phone[data-typing]>.ly:not(.is-up):not(.is-behind)')).toContain('--ty:calc(100% + 48px)');
     expect(rule('.phone[data-typing="tico"][data-card="tico"]>.ly-tico>.full')).toContain('--vis:calc(100% - var(--at) - var(--kb))');
-    // #4920: typing to Tico, the tracker's row and the chips fold so the latest messages keep the room over the box
-    expect(rule('.phone[data-typing="tico"] .ly-tico .tracker')).toContain('display:none');
-    expect(rule('.phone[data-typing="tico"] .ly-tico .qchips')).toContain('display:none');
+    // #4920: typing to Tico, the tracker's row and the chips fold at once so the latest messages keep the room over the box
+    expect(rule('.phone[data-typing="tico"] .ly-tico .qchips')).toContain('display:none;transition:none');
+    expect(rule('.phone[data-typing] .ly-tico .chat-foot')).toContain('padding-bottom:8px');
   });
 });
 

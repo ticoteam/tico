@@ -99,7 +99,7 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
 .phone>.ly:focus{outline:none}
 .phone>.ly-chat{z-index:var(--z-chat);background:var(--c-chat);--surface:var(--c-chat);--ty:calc(100% - var(--cards-h) + var(--drawM) + var(--drawC))}
 .phone>.ly-menu{z-index:var(--z-nav);background:var(--c-menu);--surface:var(--c-menu);--ty:calc(100% - var(--sab) - var(--lipT) - var(--lipM) + var(--drawM))}
-.phone>.ly-tico{z-index:var(--z-tico);background:var(--c-tico);--surface:var(--c-tico);--ty:calc(100% - var(--sab) - var(--lipT))}
+.phone>.ly-tico{z-index:var(--z-tico);background:var(--c-tico);--surface:var(--c-tico);--ty:calc(100% - var(--sab) - var(--lipT));top:var(--sat);height:calc(100% - var(--sat))}
 .phone:not(.has-chat)>.ly-chat{--ty:calc(100% + 48px)}
 .phone.is-handle>.ly{--ty:calc(100% + 48px)}
 /* a request that waits on the person holds the bottom with its decision (plan/approvals.html): nothing rests over it,
@@ -117,10 +117,9 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
 .phone[data-card^="tico"]>.ly-chat.is-behind{--ty:calc(var(--at) - var(--peek) * 2)}
 /* a call's card starts at the top of the screen, not at --top: a place counted from --top is moved down by it */
 .phone.is-call[data-card="menu"]>.ly-chat.is-behind{--ty:calc(var(--top) + var(--at) - var(--peek))}
-.phone.is-call[data-card="tico"]>.ly-chat.is-behind{--ty:calc(var(--top) + var(--at) - var(--peek) * 2)}
-/* Tico raised fills the screen: its card starts under the status bar, not at --top, with only the peeks of the cards
-   behind it above, moved up as far (#4920). Its lip and half sit where they did: they are counted from the bottom. */
-.phone>.ly-tico{top:var(--sat);height:calc(100% - var(--sat))}
+/* Tico raised fills the screen: its card starts under the status bar (.ly-tico), not at --top, with only the peeks of
+   the cards behind it above, moved up as far (#4920). Its lip and half sit where they did: they are counted from the
+   bottom. A call's card starts at the top of the screen. */
 .phone[data-card="tico"]>.ly-menu.is-behind{--ty:calc(var(--at) - var(--peek) - var(--top) + var(--sat))}
 .phone[data-card="tico"]>.ly-chat.is-behind{--ty:calc(var(--at) - var(--peek) * 2 - var(--top) + var(--sat))}
 .phone.is-call[data-card="tico"]>.ly-chat.is-behind{--ty:calc(var(--sat) + var(--at) - var(--peek) * 2)}
@@ -196,7 +195,7 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
 .phone .tico-head{flex:none;height:58px;display:flex;align-items:center;gap:4px;padding:0 6px 0 56px}
 .phone .tico-head b{font-weight:var(--w-title);font-size:var(--t-md);line-height:var(--lh-tight);margin-right:auto}
 .phone .ly-tico .chat-body{padding:4px 16px 8px}
-.phone .tico-foot{flex:none;padding:4px 10px calc(var(--sab) + 6px);display:flex;flex-direction:column;align-items:flex-start;gap:8px}
+.phone .ly-tico .chat-foot{flex:none;padding:4px 10px calc(var(--sab) + 6px);display:flex;flex-direction:column;align-items:flex-start;gap:8px}
 .phone .composer{min-height:48px;font-size:var(--t-md)}
 .phone .did{min-height:28px}
 .phone .msg p,.phone .msg ul{font-size:15px}
@@ -263,11 +262,11 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
 .phone[data-typing="tico"][data-card="tico"]>.ly-tico>.full{--vis:calc(100% - var(--at) - var(--kb))}
 .phone[data-typing="tico"][data-card="tico-half"] .tico-head{display:none}
 /* typing to Tico, the latest messages keep the room over the box: the tracker's row and the chips fold away */
-.phone[data-typing="tico"] .ly-tico .tracker,.phone[data-typing="tico"] .ly-tico .qchips{display:none}
+.phone[data-typing="tico"] .ly-tico .tracker,.phone[data-typing="tico"] .ly-tico .qchips{display:none;transition:none}
 .phone[data-typing="tico"][data-card="tico-half"] .ly-tico .tico-dot{opacity:0}
 /* stylelint-disable-next-line color-no-hex -- mask */
 .phone[data-typing="tico"][data-card="tico-half"] .ly-tico .chat-body{padding-top:18px;-webkit-mask-image:linear-gradient(transparent 4px,#000 16px);mask-image:linear-gradient(transparent 4px,#000 16px)}
-.phone[data-typing] .tico-foot,.phone[data-typing] .p-dock{padding-bottom:8px}
+.phone[data-typing] .ly-tico .chat-foot,.phone[data-typing] .p-dock{padding-bottom:8px}
 .phone[data-typing="chat"]>.ly-chat>.full{height:calc(100% - var(--kb))}
 .phone[data-typing="menu"]>.ly-menu>.full{height:calc(100% - var(--at) - var(--kb))}
 .phone[data-typing="chat"] .ly-chat .chat-body{padding-bottom:8px}

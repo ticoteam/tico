@@ -21,7 +21,7 @@ type Slot = 'tico' | 'menu' | 'chat';
 export interface PhoneCardsProps {
   /** The back card: the page that fills the screen. */
   page: ReactNode;
-  /** Tico's card when up (head with `.tico-head`, chat, `.tico-foot`). */
+  /** Tico's card when up (head with `.tico-head`, chat, `.chat-foot`). */
   tico: ReactNode;
   /** The menu's card when up. */
   menu: ReactNode;
