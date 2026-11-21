@@ -791,7 +791,9 @@ pub struct Follower {
     started: String,
     commit: String,
     pinned: bool,
-    drain_timeout: Duration,
+    /// The computer's `drain_timeout_seconds` (at least DRAIN_WAIT_S), if it set one: how long a checkout's drain waits
+    /// for running turns before it gives claims back and tries the update again later. Without one it waits for them.
+    drain_timeout: Option<Duration>,
     /// Supervised, and neither `self_update: false` nor TICO_RUNNER_SELF_UPDATE=0 (service.py under_supervisor).
     self_update: bool,
     /// Gets the runner binary for the checkout as it now is (`python -m runner_support.engine prepare`); non-zero on failure.
@@ -834,14 +836,11 @@ pub fn init(config: &Map<String, Value>, directory: &Path) {
         release,
         commit,
         pinned,
-        drain_timeout: Duration::from_secs(
-            config
-                .get("drain_timeout_seconds")
-                .and_then(Value::as_u64)
-                .filter(|s| *s > 0)
-                .unwrap_or(crate::drain::DEFAULT_LIMIT_S)
-                .max(DRAIN_WAIT_S),
-        ),
+        drain_timeout: config
+            .get("drain_timeout_seconds")
+            .and_then(Value::as_u64)
+            .filter(|s| *s > 0)
+            .map(|s| Duration::from_secs(s.max(DRAIN_WAIT_S))),
         self_update,
         prepare: [
             crate::env::python().to_string_lossy().into_owned(),
@@ -1265,16 +1264,16 @@ impl Follower {
             self.launch(&pending).await;
             return self.draining();
         }
-        if self.kind != "docker"
-            && since.is_some_and(|t| {
-                t.elapsed()
-                    >= if drain {
-                        self.drain_timeout
-                    } else {
-                        Duration::from_secs(DRAIN_S + DRAIN_WAIT_S)
-                    }
-            })
-        {
+        // A drain keeps claims closed until running turns finish; only a configured drain_timeout_seconds gives them back
+        // meanwhile (on an old server, after its claim window as well).
+        let limit = self.drain_timeout.map(|t| {
+            if drain {
+                t
+            } else {
+                t.max(Duration::from_secs(DRAIN_S + DRAIN_WAIT_S))
+            }
+        });
+        if self.kind != "docker" && since.zip(limit).is_some_and(|(t, l)| t.elapsed() >= l) {
             // Preparation can outlast the turn cap. Give claims back instead of draining without an end.
             let (state, error) = defer_update(
                 &self.directory,
@@ -2377,7 +2376,8 @@ scope['main'](sys.argv[1:])
                 s.features = json!({"runner_drain": true});
             }
             assert!(f.blocks_claims(true).await); // quiet work still gets its normal drain time
-            f.inner.lock().unwrap().pending_since = Instant::now().checked_sub(f.drain_timeout);
+            f.inner.lock().unwrap().pending_since =
+                Instant::now().checked_sub(f.drain_timeout.unwrap());
             assert!(!f.blocks_claims(true).await);
             assert!(!f.draining());
             let status = read_status(&f.directory);
@@ -2397,9 +2397,36 @@ scope['main'](sys.argv[1:])
         f.inner.lock().unwrap().desired = Some("0.3.46".into());
         f.decide().await;
         assert!(f.draining());
-        f.inner.lock().unwrap().pending_since = Instant::now().checked_sub(f.drain_timeout);
+        f.inner.lock().unwrap().pending_since =
+            Instant::now().checked_sub(f.drain_timeout.unwrap());
         assert!(!f.blocks_claims(true).await);
         assert_eq!(read_status(&f.directory)["deferrals"], 1);
+        std::fs::remove_dir_all(f.directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_checkout_without_a_drain_timeout_keeps_claims_closed_until_its_turns_finish() {
+        let mut f = checkout_follower();
+        f.drain_timeout = None;
+        std::env::set_var("TICO_SUPERVISED", "1");
+        {
+            let mut s = f.inner.lock().unwrap();
+            s.desired = Some("0.3.45".into());
+            s.pending = Some("0.3.45".into());
+            s.pending_since = Instant::now().checked_sub(Duration::from_secs(6 * 3600));
+            s.features = json!({"runner_drain": true});
+        }
+        assert!(f.blocks_claims(true).await); // six hours on, a running turn still holds the update's drain
+        assert!(f.draining());
+        assert!(read_status(&f.directory).get("not_before").is_none()); // nothing was deferred
+                                                                        // An old server's runner keeps claiming through its claim window, then holds the same way.
+        f.inner.lock().unwrap().features = json!({});
+        f.inner.lock().unwrap().pending_since = Some(Instant::now());
+        assert!(!f.blocks_claims(true).await);
+        f.inner.lock().unwrap().pending_since =
+            Instant::now().checked_sub(Duration::from_secs(6 * 3600));
+        assert!(f.blocks_claims(true).await);
+        assert!(read_status(&f.directory).get("not_before").is_none());
         std::fs::remove_dir_all(f.directory).unwrap();
     }
 
@@ -2447,7 +2474,7 @@ scope['main'](sys.argv[1:])
             started: String::new(),
             commit: String::new(),
             pinned: false,
-            drain_timeout: Duration::from_secs(DRAIN_WAIT_S),
+            drain_timeout: Some(Duration::from_secs(DRAIN_WAIT_S)),
             self_update: true,
             prepare: vec!["true".into()],
             sidecar: Sidecar {
@@ -2521,7 +2548,7 @@ scope['main'](sys.argv[1:])
             started: String::new(),
             commit: String::new(),
             pinned: false,
-            drain_timeout: Duration::from_secs(DRAIN_WAIT_S),
+            drain_timeout: Some(Duration::from_secs(DRAIN_WAIT_S)),
             self_update: true,
             prepare: vec!["true".into()],
             // Nothing listens on the discard port: the sidecar is stopped.
@@ -2578,7 +2605,7 @@ scope['main'](sys.argv[1:])
             started: String::new(),
             commit: String::new(),
             pinned: false,
-            drain_timeout: Duration::from_secs(DRAIN_WAIT_S),
+            drain_timeout: Some(Duration::from_secs(DRAIN_WAIT_S)),
             self_update: true,
             prepare: vec!["true".into()],
             sidecar: Sidecar {

@@ -1882,7 +1882,7 @@ mod tests {
         assert!(runner.drain.start("acme-late"));
         runner
             .drain
-            .begin(Instant::now() - Duration::from_secs(crate::drain::DEFAULT_LIMIT_S));
+            .stop(Instant::now() - Duration::from_secs(crate::drain::STOP_LIMIT_S));
         let mut f = flags(false);
         *f.deadline.get_mut().unwrap() = Instant::now() + Duration::from_secs(60);
         let original = acme_goal();

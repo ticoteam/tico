@@ -8817,7 +8817,7 @@ for line in sys.stdin:
         );
         let drain = async {
             tokio::task::yield_now().await; // `drive` is polled first and owns the already-started turn
-            runner.shut_down();
+            runner.drain.begin(Instant::now()); // an update's drain: drain_timeout_seconds is its limit
         };
         let result = tokio::time::timeout(Duration::from_secs(5), async {
             let (result, ()) = tokio::join!(work, drain);
@@ -9911,7 +9911,7 @@ else:
             while posted(&seen, "/attempts/a-active/inputs") < 2 {
                 tokio::task::yield_now().await;
             }
-            runner.shut_down();
+            runner.drain.begin(Instant::now()); // an update's drain: drain_timeout_seconds is its limit
         };
         let result = tokio::time::timeout(Duration::from_secs(12), async {
             let (result, ()) = tokio::join!(work, drain);

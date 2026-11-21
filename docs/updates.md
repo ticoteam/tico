@@ -137,17 +137,18 @@ The runner is a git checkout. When the server's release is newer, the runner:
 1. stops taking new work and immediately returns turns parked in login, turn-share, usage or checkout queues.
    Preparation already in progress (a pull, product-file refresh, sign-in or harness start) finishes before handback;
    the start boundary prevents that turn from starting during the drain. A Git operation keeps its checkout lock
-   until it finishes so the next runner does not inherit a lock. Turns already running have five minutes to finish,
-   then are interrupted, their work and resumable session are saved, and they are queued to continue after the update.
-   A turn with no session to continue, because it was running on a fallback (a side session is not kept), is held for
-   review like any other interrupt instead.
-   Each handback appears in run history. Set `drain_timeout_seconds` in `runner.json` to change the five-minute active-turn
-   limit; it does not cancel preparation in progress. Health still warns after 34 minutes without a completed restart;
+   until it finishes so the next runner does not inherit a lock. Turns already running finish, however long they take,
+   and claims stay closed until they do. Set `drain_timeout_seconds` in `runner.json` to give an update's drain a limit
+   instead: at it running turns are interrupted, their work and resumable session are saved, and they are queued to
+   continue after the update, and a checkout still running work then (ten minutes at least, and after an older server's
+   claim window) gives claims back and tries the update again later (below). A turn with no session to continue, because
+   it was running on a fallback (a side session is not kept), is held for review like any other interrupt instead.
+   Each handback appears in run history. The limit does not cancel preparation in progress. Health still warns after 34 minutes without a completed restart;
    choosing a long drain does not extend that warning.
    Queued work says **Waiting for the computer to update: N running, M handed back** in chat and on its task;
    Health shows the same progress. Counts contain no other task's name. Older runners keep their previous
-   twenty-minute claim window until they update. A graceful container stop or a requested Restart uses the same
-   handback and time limit;
+   twenty-minute claim window until they update. A requested Restart uses the same handback. A graceful container stop
+   (SIGTERM) has its own fixed five minutes for running turns, whatever `drain_timeout_seconds` says, and no update ends it;
 2. starts a separate update process, which fetches the tag `vX.Y.Z` from `origin` (the public repository) and
    checks that it exists and is not a tag that moved, then checks out that commit (detached);
 3. re-runs the install step: `pip install -r backend/requirements.txt` when the release changed it, and gets the
@@ -175,8 +176,8 @@ a reason and lets the runner take new work. The same rule covers a ten-minute wa
 lock, work still running after the drain wait, work that starts before the final check, and a release whose runner
 binary is not published yet. Current Rust runners retry these delays after 2, 5, 15, 30, then 60 minutes,
 capped at 60 minutes. The status file saves a `not_before` time, so a restart keeps the wait. Between tries the
-runner reports `idle` for the update and takes new work. If a drain has not finished within ten minutes
-(or the configured active-turn limit, when longer), it ends that attempt and uses the same short wait. The
+runner reports `idle` for the update and takes new work. With `drain_timeout_seconds` set, a drain not finished by
+then (ten minutes at least) ends that attempt and uses the same short wait. The
 updater's second check for active work also ends after ten minutes.
 Active work and busy locks never count as blocked. Other causes report `blocked` only after the same cause occurs
 three times in a row, or after two hours of such delays. Active work or a busy lock resets that cause history.
@@ -445,8 +446,8 @@ computer moved back to a release from before the move (hosted staff can set an o
 
 The runner computer's `docker/runner.compose.yaml` has an `updater` sidecar, the same image and code as the server's
 updater (`docker/updater.py`) in runner mode (`TICO_UPDATER_MODE=runner`). The runner drains the same way as a
-checkout: it immediately returns claims parked in queues, finishes preparation already in progress, waits up to five minutes for active turns, then saves and requeues
-any remaining turns. Once all claims settle it asks the sidecar for the release its server names; it pulls `ghcr.io/ticoteam/tico-runner:vX.Y.Z`, replaces `runner.compose.yaml` with the release's copy (same checksum check, rolled back with the image), recreates the runner
+checkout: it immediately returns claims parked in queues, finishes preparation already in progress, lets active turns finish (or saves and requeues them at its `drain_timeout_seconds`).
+Once all claims settle it asks the sidecar for the release its server names; it pulls `ghcr.io/ticoteam/tico-runner:vX.Y.Z`, replaces `runner.compose.yaml` with the release's copy (same checksum check, rolled back with the image), recreates the runner
 container, waits up to three minutes for the container's health check, and puts the old image back if it does not
 turn healthy. The runner then reports the outcome (`rolled_back`, `failed`) from the sidecar's `/status`, and does not
 ask for that release again unless the failure was disk space and space has since freed. A sidecar that does not answer, or refuses the call, cannot start an update, so the runner reports `failed` ("the updater did not answer", or "the updater answered" and the status code) and keeps taking work; it asks the sidecar again on its next check. While the sidecar says `pulling` or `restarting` the runner takes no work, so the sidecar always finishes: each Docker command it runs has a time limit and is stopped when it runs over, an overrun is rolled back like any failure before the new version is healthy (after that it is kept and named, as on the server), and it says `rolled_back` or `failed` only after its last command. Stopping a command does not cancel what Docker already accepted (a stop it accepted runs to its end), so when a command that changes containers runs over, the outcome is unknown: the sidecar says `uncertain`, and the runner takes no work, whatever its version. The sidecar then recreates the runner on the old version until Docker answers and that recreate's container is the only one (an earlier stop can act only on the containers it was given, which the recreate removed), and only then says `rolled_back`, or `failed` if it is not healthy. It retries every minute, says why in its message, picks this up again after it restarts (it saves `restarting` before the switch, so an updater stopped mid-switch settles it too), and refuses a new update meanwhile. Once the runner sees `restarting` or `uncertain`, it keeps its hold in its state directory until the sidecar reports `rolled_back`, `failed` or `healthy` for that same update: a sidecar that stops answering, answers `idle` (its status lost) or reports an older update does not end it, and neither does a runner restart. The runner also keeps the hold in memory, so one it could not save (a full disk) still holds while it runs, its error says the save failed, and the save is tried again on every check (with or without an answer from the sidecar) until it is on disk; a saved hold that cannot be read holds until someone removes it. A sidecar that lost its status (it answers `idle`, for example an older updater restarted mid-switch) never reports the outcome, so that hold ends only by hand. In the install directory, check that `docker compose ps -a runner` shows a single runner container, then run `docker compose exec runner sh -c 'rm /home/runner/state-*/docker-update-hold.json' && docker compose restart runner`. The same ends a saved hold that cannot be read. Removing the file alone is not enough, because the running runner saves its hold again. An updater stopped after a switch that went well also settles back to the old version and says `rolled_back`; as after any rollback, the runner does not ask for that release again, and the next release updates it as usual. Only a sidecar that does not answer when no update was changing containers leaves the runner claiming, as above. The sign-in and the bots' repositories are in the `runner-home` volume and are kept.

@@ -186,7 +186,7 @@ impl Runner {
             .get("drain_timeout_seconds")
             .and_then(Value::as_u64)
             .filter(|s| *s > 0)
-            .unwrap_or(crate::drain::DEFAULT_LIMIT_S);
+            .map(Duration::from_secs);
         Runner {
             profiles_read: Mutex::new(config.data.clone()),
             config,
@@ -194,7 +194,7 @@ impl Runner {
             client,
             events: Events::new(),
             stop: AtomicBool::new(false),
-            drain: crate::drain::Drain::new(Duration::from_secs(drain_limit)),
+            drain: crate::drain::Drain::new(drain_limit),
             capacity,
             turn_limit: AtomicUsize::new(capacity),
             tokens: Arc::new(TokenCache::new()),
@@ -255,7 +255,8 @@ impl Runner {
         if at.is_none() {
             *at = Some(Instant::now());
             if crate::follow::feature("runner_drain") {
-                self.drain.begin(Instant::now());
+                // Docker kills the container at the end of its grace: running turns are saved before that.
+                self.drain.stop(Instant::now());
             }
             log("Tico runner: stopping; taking no new work and letting the running turns finish");
         } else {
@@ -1357,8 +1358,8 @@ impl Runner {
         maintenance: &mut Option<JoinHandle<Result<(), ApiError>>>,
         paused_note: &mut String,
     ) -> Result<(), ApiError> {
-        if self.shutdown.lock().unwrap().is_some()
-            || self.restart.lock().unwrap().is_some()
+        // A stop runs its own timer (Drain::stop); it never starts an update's drain.
+        if self.restart.lock().unwrap().is_some()
             || crate::follow::shared().is_some_and(|f| f.draining())
         {
             if crate::follow::feature("runner_drain") {
