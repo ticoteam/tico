@@ -11,6 +11,7 @@ from . import counsel
 from . import delivery
 from . import org_rule_check
 from . import question_marks
+from . import task_rule_gate
 from . import task_privacy as privacy
 from . import teammate_access
 from . import visuals
@@ -361,7 +362,9 @@ def register(
 
     def question_write(c, who, tid, text, to, rc, ingest=None):
         """A ❓ on a task's chat, as the route writes it and Send anyway replays it: the comment, then its mark, in one
-        transaction. Held by a rule, nothing is written and nothing is marked."""
+        transaction. A Block or Escalate rule it breaks refuses it back to the bot, nothing written or held
+        (task_rule_gate.refuse_question); a hold from before still replays here."""
+        task_rule_gate.refuse_question(c, who, rc)
         done = comment_write(c, who, tid, M.TaskComment(text=text), ingest, rc, who, ask_to=to)
         said = done.get("comment") or {}
         if not said.get("id"):

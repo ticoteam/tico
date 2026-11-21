@@ -12,7 +12,8 @@ applied inside it.
   finds broken is refused with the rule's words, under `COVERS`, an engine-style refusal that never counts toward
   quarantine. With the judge out the ask goes; a cause here (`LOCAL`: every call slot busy, the day's calls spent, too
   long to check) refuses it to try again. A Warn rule never stops an ask: the ask reaches its person and the bot is told
-  the rule (`rule_warning`), whether it was found broken or could not be checked.
+  the rule (`rule_warning`), whether it was found broken or could not be checked. A bot's ❓ (on a task's chat or in a
+  direct chat) is refused the same way, never held (`refuse_question`).
 - The check cannot run (an error here, not the judge being out): nothing is written (fail closed).
 
 The hold's text is what the write says. A hand-off also says the task to its new owner, so the judge reads the task's
@@ -179,6 +180,25 @@ def stale(verdict: Row, obj_now: Any, audience_now: Any) -> bool:
 
 def not_asked(rule: Row) -> str:
     return f'Not asked. A rule covers this: "{rule.get("text") or "a rule"}" Act on the rule instead of asking.'
+
+
+def refuse_question(c: Any, who: Any, verdict: Row | None) -> None:
+    """A bot's ❓ to a person (backend/task_comments_routes.py, backend/thread_api.py) a Block or Escalate rule finds broken is refused back to
+    the bot at once, with the rule and how to make it lawful, under `COVERS` (never counted toward quarantine), and
+    nothing is held: held, it sat on a review task the person never saw while the bot believed it had asked. Too long
+    to check against such a rule, it is refused to shorten. A Warn rule never stops it: it is asked, with its warning."""
+    rules = covering(verdict)
+    if rules:
+        text = rules[0].get("text") or "a rule"
+        H.refuse(
+            c,
+            who.actor,
+            COVERS,
+            f'Not asked. Your question breaks a rule: "{text}" Rewrite it so it keeps the rule and ask again, or act '
+            "on the rule instead of asking.",
+        )
+    if local_cause(verdict) == "too_large" and not only_warns(verdict):
+        H.refuse(c, who.actor, COVERS, NOT_ASKED_LOCAL["too_large"])
 
 
 def note_first(

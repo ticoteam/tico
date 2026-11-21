@@ -15,6 +15,8 @@ from backend.store import H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, restrict, runner
 from backend.tests.helpers.org_rule_check import (  # noqa: F401 - fixtures
+    COLOR,
+    color_rule,
     not_a_friday,
     ruled,
     sql,
@@ -264,6 +266,55 @@ def test_the_asks_to_a_person_rule_checks_a_question_mark(ruled):
     assert sql(api, "SELECT count(*) AS n FROM org_rule_holds")[0]["n"] == 0
 
 
+COLORED = "Should the launch note say Acme's favorite color is teal?"
+
+
+def nothing_asked(api, task):
+    assert sql(api, "SELECT count(*) AS n FROM org_rule_holds")[0]["n"] == 0, "no hold"
+    assert sql(api, "SELECT count(*) AS n FROM question_marks WHERE task_id=?", (task["id"],))[0]["n"] == 0
+    assert sql(api, "SELECT count(*) AS n FROM messages WHERE body LIKE '%teal%'")[0]["n"] == 0
+
+
+@pytest.mark.parametrize("where", ["task", "direct"])
+@pytest.mark.parametrize("if_broken", ["block", "escalate"])
+def test_a_question_a_teams_block_rule_finds_broken_is_refused_back_to_the_bot_not_held(ruled, if_broken, where):
+    """Legal B1: held, a bot's ❓ sat on a review task the person never saw while the bot believed it had asked."""
+    api, _ = ruled
+    color_rule(api, if_broken=if_broken)
+    task = task_for_ops(api)
+    if where == "task":
+        r = ask_on(api, task, text=COLORED)
+    else:
+        r = api.post("/api/v2/questions", json={"to": "ana", "text": COLORED}, headers=headers("ops-test"))
+    assert r.status_code == 409 and r.json()["error"] == "task_rule", r.text
+    assert COLOR in r.json()["detail"] and "Rewrite it so it keeps the rule" in r.json()["detail"]
+    nothing_asked(api, task)
+    assert ask_on(api, task, text="Should the launch note name a color at all?").status_code == 200, "lawful: asked"
+
+
+def test_a_question_too_long_to_check_against_a_block_rule_is_refused_to_shorten(ruled, monkeypatch):
+    from clients import judge as J
+
+    api, _ = ruled
+    color_rule(api)
+    task = task_for_ops(api)
+    monkeypatch.setattr(J, "MAX_STATE_CHARS", 200)
+    r = ask_on(api, task, text=COLORED)
+    assert r.status_code == 409 and r.json()["error"] == "task_rule" and "Shorten it" in r.json()["detail"], r.text
+    nothing_asked(api, task)
+
+
+def test_a_question_a_warn_rule_finds_broken_is_asked_with_the_warning(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    task = task_for_ops(api)
+    r = ask_on(api, task, text=COLORED)
+    assert r.status_code == 200 and r.json()["rule_warning"]["rules"][0]["text"] == COLOR, r.text
+    [mark] = sql(api, "SELECT line FROM question_marks WHERE cleared_at IS NULL AND task_id=?", (task["id"],))
+    assert mark["line"] == COLORED
+    assert sql(api, "SELECT count(*) AS n FROM org_rule_holds")[0]["n"] == 0
+
+
 def test_a_question_mark_is_in_the_persons_needs_you_until_they_reply_and_files_nothing(ruled):
     api, _ = ruled
     task = task_for_ops(api)
@@ -507,13 +558,18 @@ def test_a_task_question_checks_the_rules_for_the_person_it_asks(ruled):
     )
     judge.needles[text] = "Friday"
     r = ask_on(api, task_for_ops(api), to="ben", text="Should it go out Friday?")
-    assert r.status_code == 200 and r.json().get("held"), r.text
+    assert r.status_code == 409 and text in r.json()["detail"], r.text  # refused back to the bot, never held
+    assert sql(api, "SELECT count(*) AS n FROM org_rule_holds")[0]["n"] == 0
     assert sql(api, "SELECT count(*) AS n FROM question_marks")[0]["n"] == 0
 
 
 @pytest.mark.parametrize("where", ["task", "direct"])
-def test_send_anyway_posts_and_marks_a_held_question(ruled, where):
+def test_send_anyway_posts_and_marks_a_held_question(ruled, where, monkeypatch):
+    """A ❓ a rule holds is refused now (task_rule_gate.refuse_question); one held before still sends."""
+    from backend import task_rule_gate
+
     api, judge = ruled
+    monkeypatch.setattr(task_rule_gate, "refuse_question", lambda c, who, verdict: None)
     judge.needles = {OR.ASKS_TO_A_PERSON: "**"}
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE org_rules SET if_broken='escalate', reviewer='ana' WHERE text=?", (OR.ASKS_TO_A_PERSON,))

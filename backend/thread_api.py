@@ -9,7 +9,7 @@ operation), an edit as `threads_edit`. Every list is paged and byte-capped by th
 """
 
 from . import views
-from . import ask_shape, question_marks
+from . import ask_shape, question_marks, task_rule_gate
 from . import ask_ingest, strategy_bot
 from . import bot_home_merge
 from . import recipients as recipient_gate
@@ -1722,7 +1722,9 @@ def register_messages(
 
     def chat_question_write(c, who, sent, rc, ingest):
         """A ❓ in a direct chat, as the route writes it and Send anyway replays it: the message, then its mark, in one
-        transaction. Held by a rule, nothing is written and nothing is marked."""
+        transaction. A Block or Escalate rule it breaks refuses it back to the bot, nothing written or held
+        (task_rule_gate.refuse_question); a hold from before still replays here."""
+        task_rule_gate.refuse_question(c, who, rc)
         message = message_write(c, who, sent, rc, ingest)
         if not message.get("id"):
             return message
