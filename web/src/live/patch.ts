@@ -422,7 +422,6 @@ export interface ThreadListRow {
   me?: { unread?: number; activity?: boolean };
   members?: unknown;
   task_id?: string | null;
-  audience?: string;
   /** Holds an open @ of the viewer: only a fresh list read knows (the sidebar's `attention`). */
   mentioned?: boolean;
 }
@@ -508,16 +507,14 @@ export function patchThreadList<T extends ThreadListRow>(data: ThreadListData<T>
 
 /**
  * Whether the list must be read again for `mentioned` (the sidebar's `attention`: a task's thread with an open @ of the
- * reader is listed, #4762), which only a list read gives. The reader's attention moved (an @ came or was answered) on a
- * task's thread, a marked one, or one the list does not hold; or a marked thread has new activity, which may be the
- * reply that answers it (from the CLI, say, where no `attention` reaches this browser first).
+ * reader is listed, #4762), which only a list read gives: on every `attention` event (it is the reader's own: an @
+ * came, was edited in, or was answered), and on new activity in a marked thread, which may be the reply that answers
+ * it (from the CLI, say, where no `attention` reaches this browser first).
  */
 export function mentionMayHaveMoved<T extends ThreadListRow>(data: ThreadListData<T>, e: ThreadEvent<T>): boolean {
+  if (e.kind === 'attention') return true;
   const id = e.root_id ?? e.thread_id;
-  if (!id || (e.kind !== 'attention' && e.kind !== 'activity')) return false;
-  const held = data.pages.flatMap((p) => p.rows).find((t) => t.id === id);
-  if (e.kind === 'activity') return !!held?.mentioned;
-  return !held || !!held.task_id || held.audience === 'task' || !!held.mentioned;
+  return e.kind === 'activity' && !!id && !!data.pages.some((p) => p.rows.some((t) => t.id === id && t.mentioned));
 }
 
 /** The list, the open threads' views and Catch up's count, from one frame of the `threads` topic. */

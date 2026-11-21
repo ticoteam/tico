@@ -176,11 +176,20 @@ def test_a_persons_mention_alone_adds_nothing_to_needs_you(api):
     assert needs["count"] == before and not [i for i in needs["items"] if (i.get("task") or {}).get("id") == made["id"]]
     assert get(api, "needs-you?count=true", token="cara-test")["count"] == before
     # Threads lists the task's thread from the sidebar's `attention`, marked as holding an open @ of her.
-    attention = get(api, "threads", token="cara-test")["attention"]
-    assert [row.get("mentioned") for row in attention if row["id"] == made["conversation_id"]] == [True]
+    tid = made["conversation_id"]
+
+    def listed():
+        sidebar = get(api, "threads", token="cara-test")
+        attention = [row.get("mentioned") for row in sidebar["attention"] if row["id"] == tid]
+        return attention, [row["id"] for row in sidebar["threads"] if row["id"] == tid]
+
+    assert listed() == ([True], [tid])
+    # Opening it reads it: the @ is still open (no reply yet), so the thread stays listed and marked.
+    seq = get(api, f"threads/{tid}", token="cara-test")["last_seq"]
+    post(api, f"threads/{tid}/read", {"seq": seq}, token="cara-test")
+    assert listed() == ([True], [tid])
     post(api, f"tasks/{made['id']}/comments", {"text": "Checked: both weekends are free."}, token="cara-test")
-    attention = get(api, "threads", token="cara-test")["attention"]
-    assert not [row for row in attention if row["id"] == made["conversation_id"] and row.get("mentioned")]
+    assert listed() == ([], [])
 
 
 def test_the_pipelines_read_and_save_their_settings_record(api):

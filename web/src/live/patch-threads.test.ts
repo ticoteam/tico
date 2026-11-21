@@ -25,10 +25,10 @@ describe('the Threads list from the threads topic', () => {
     expect(renamed?.pages[0]?.rows.find((t) => t.id === 'b')?.title).toBe('Launch plan');
   });
 
-  it('asks for a list read when attention moves on a task\'s thread, a marked one, or an unknown one, or a marked one has activity', () => {
-    const start = list(row('plain', 5), row('task', 4, { audience: 'task' }), row('marked', 3, { mentioned: true }));
+  it('asks for a list read on every attention event, and on activity in a marked thread', () => {
+    const start = list(row('plain', 5), row('task', 4, { task_id: 'k1' }), row('marked', 3, { mentioned: true }));
     const moved = (kind: string, id: string) => mentionMayHaveMoved(start, { kind, thread_id: id, root_id: id });
-    expect(['task', 'marked', 'new', 'plain'].map((id) => moved('attention', id))).toEqual([true, true, true, false]);
+    expect(['task', 'marked', 'new', 'plain'].map((id) => moved('attention', id))).toEqual([true, true, true, true]);
     expect(['marked', 'task', 'plain'].map((id) => moved('activity', id))).toEqual([true, false, false]);
     expect(patchThreadList(start, { kind: 'attention', thread_id: 'task', root_id: 'task' })).toBe(start);
   });

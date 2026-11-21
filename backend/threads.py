@@ -5674,6 +5674,7 @@ def _sidebar_page(c, v, cursor, limit, sort):
     args = {
         "me": v.actor,
         "needing": json.dumps(sorted(needing)),
+        "mentioned": json.dumps(sorted(root for root, extra in needing.items() if extra.get("mentioned"))),
         "history": json.dumps(history),
         "fetch": limit * 3,
         **{f"name{i}": name for i, name in enumerate(names)},
@@ -5698,14 +5699,16 @@ def _sidebar_page(c, v, cursor, limit, sort):
         "recent": f"CASE WHEN {is_needing} THEN 0 ELSE 1 END",
         "important": f"CASE WHEN {is_needing} THEN 0 ELSE {thread_rank.LEVELS + 1}-importance END",
     }[sort]
-    # A task's thread lists only while it has unread for the viewer: its parties (maker, requester, owner) and anyone who
-    # posted in it are no reason on their own. The full Threads page, the Tasks page and search still show it.
+    # A task's thread lists only while it has unread for the viewer, or an open @ of them (read or not, until they reply:
+    # Needs you lists no @, #4762): its parties (maker, requester, owner) and anyone who posted in it are no reason on
+    # their own. The full Threads page, the Tasks page and search still show it.
     is_task = f"COALESCE(r.audience,{_derived_audience('r')})='task'"
+    is_mentioned = "r.id IN (SELECT value FROM json_each(:mentioned))"
     where = [
         "r.parent_id IS NULL",
         "r.archived_at IS NULL",
         "r.closed_at IS NULL",
-        f"(NOT {is_task} OR {by_person} OR {to_viewer})",
+        f"(NOT {is_task} OR {by_person} OR {to_viewer} OR {is_mentioned})",
         f"(r.audience IN ('company','team') OR r.owner_id=:me OR {is_needing} OR EXISTS (SELECT 1 FROM "
         f"thread_members m WHERE m.thread_id=r.id AND m.actor IN ({marks})) OR r.id IN (SELECT s.root_id FROM "
         f"thread_followers f JOIN conversations s ON s.id=f.thread_id WHERE f.actor=:me AND f.following=1 "
