@@ -167,12 +167,14 @@ describe('PhoneCards', () => {
     fireEvent.click(screen.getByRole('link', { name: 'Approve' }));
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(document.querySelector('.phone')?.getAttribute('data-card')).toBe('none');
-    // it slides home even if the case's decision docks meanwhile (#4820: only resting cards leave at once), then rests
-    const chat = document.querySelector<HTMLElement>('.ly-chat')!;
-    expect(chat.classList.contains('is-going')).toBe(true);
-    expect(rule('.phone:has(>.pg [data-dock][data-fresh] .askcard)>.ly:not(.is-up):not(.is-behind):not(.is-going)')).toContain('transition:none');
-    fireEvent.transitionEnd(chat, { propertyName: 'transform' });
-    expect(chat.classList.contains('is-going')).toBe(false);
+  });
+
+  // #4820: a decision docked at the page's bottom sends the resting cards (the chat's lip, Tico's bar) off at once, so
+  // it is whole from its first frame; a card the person raises over it still moves as usual
+  it('a docked decision sends the resting cards below the screen without their spring', () => {
+    const resting = rule('.phone:has(>.pg [data-dock] .askcard)>.ly:not(.is-up):not(.is-behind)');
+    expect(resting).toContain('--ty:calc(100% + 48px)');
+    expect(resting).toContain('transition:none');
   });
 
   it("a page opened from Tico's card (a tracked task) tucks Tico, and Back brings it up again", async () => {

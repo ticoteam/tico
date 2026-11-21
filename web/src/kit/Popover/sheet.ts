@@ -3,6 +3,8 @@ import { popLayer, popMotion } from './Popover';
 
 const root = () => document.documentElement;
 const read = () => root().dataset.layout === 'cards';
+const no = () => false;
+const unwatched = () => () => {};
 function subscribe(changed: () => void) {
   const watch = new MutationObserver(changed);
   watch.observe(root(), { attributes: true, attributeFilter: ['data-layout'] });
@@ -16,7 +18,8 @@ export const CardsContext = createContext<boolean | null>(null);
 /** True on the phone's cards (`html[data-layout="cards"]`, which the shell sets): a menu is then a sheet. */
 export function useCards() {
   const shell = use(CardsContext);
-  const html = useSyncExternalStore(subscribe, read, () => false);
+  // the attribute only outside the frame (a call's own window), where nothing gives the mode
+  const html = useSyncExternalStore(shell == null ? subscribe : unwatched, shell == null ? read : no, no);
   return shell ?? html;
 }
 

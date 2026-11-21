@@ -78,29 +78,15 @@ export function AskCard({ name, note, who, pill, end, asked, asking, actions, er
   );
 }
 
-/** On a phone the card holds the page's bottom (its dock); elsewhere it stands where it is drawn. The dock is drawn
-    where it ends: on its first frames (`data-fresh`) the cards resting over the page's bottom leave at once rather
-    than spring away over it (phone.css), so the card is never shown under them. */
-export function Docked({ dock, children }: { dock: boolean; children: ReactNode }) {
-  const [fresh, setFresh] = useState(true);
-  useEffect(() => {
-    if (!dock) return;
-    // two frames: the first one painted is the one that moves the cards
-    let next = 0;
-    const first = requestAnimationFrame(() => (next = requestAnimationFrame(() => setFresh(false))));
-    return () => {
-      cancelAnimationFrame(first);
-      cancelAnimationFrame(next);
-    };
-  }, [dock]);
-  return dock ? (
-    <div className="dock" data-dock data-fresh={fresh || undefined}>
+/** On a phone the card holds the page's bottom (its dock); elsewhere it stands where it is drawn. */
+export const Docked = ({ dock, children }: { dock: boolean; children: ReactNode }) =>
+  dock ? (
+    <div className="dock" data-dock>
       {children}
     </div>
   ) : (
     children
   );
-}
 
 /** Around a card's answer: a refusal is said in the card, or in a toast once the card has gone (never silent). After
     the answer, in Flow, the next task that waits on the person opens (`nextUp`, picked before answering: the answered
