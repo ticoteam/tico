@@ -10,6 +10,7 @@ import { validateRulesSearch } from './load';
 import {
   constitutionQuery,
   dueQuery,
+  pageOwnersQuery,
   holdsQuery,
   orgRulesQuery,
   reachQuery,
@@ -236,10 +237,11 @@ describe('Rules: checked exactly, history, the constitution and the clerk', () =
     expect(within(versions).queryByRole('button', { name: 'More' })).toBeNull();
   });
 
-  it('the constitution heads Company and opens its doc; Make this a rule sends the words and links the task', async () => {
-    const sent = record((url, method) => (method === 'POST' && url.endsWith('/api/v2/rules/make') ? ok({ task_id: 't9', owner: 'bot:rules-owner' }) : nothing()));
+  it('the constitution heads Company and opens its doc; Make this a rule files a normal task for the Rules owner', async () => {
+    const sent = record((url, method) => (method === 'POST' && url.endsWith('/api/v2/tasks') ? ok({ task: { id: 't9' } }) : nothing()));
     company([]);
     queryClient.setQueryData(constitutionQuery.queryKey, () => ({ id: 'doc-1', title: 'Constitution', locked: true }));
+    queryClient.setQueryData(pageOwnersQuery.queryKey, { rules: { bot: 'bot:rules-owner' } });
     show('/company/rules');
     expect(href(await screen.findByTitle('Constitution'))).toBe('/library/doc-1');
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
@@ -248,7 +250,13 @@ describe('Rules: checked exactly, history, the constitution and the clerk', () =
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Rule' }), { target: { value: '  Refunds over $100 go to Ben first ' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Send' }));
     await waitFor(() => expect(sent).toHaveLength(1));
-    expect(sent[0]!.body).toEqual({ text: 'Refunds over $100 go to Ben first' });
+    expect(sent[0]!.body).toEqual({
+      title: 'Make this a rule: Refunds over $100 go to Ben first',
+      body: 'Make these words into one rule with the clerk-a-rule skill. The constitution is doc doc-1: read it with `tico doc read doc-1`.\n\nThe words:\nRefunds over $100 go to Ben first',
+      owner: 'bot:rules-owner',
+      labels: ['make-rule'],
+      private: true,
+    });
     const done = await screen.findByRole('dialog', { name: 'Make this a rule' });
     expect(href(await within(done).findByRole('link', { name: 'Open task' }))).toBe('/task/t9');
   });

@@ -15,10 +15,10 @@ and answers "can I...?" from the rules in force (docs/dev/rules-plan.md §2, §5
   cites only the exact (file, version) it was asked to read, named in the cite, and the quote must appear in that
   version's normalized text. A quote that does not is dropped (the response says so, and `rules.quote_dropped` counts
   it), never stored. Only the Rules Owner and a person cite; no other bot can.
-- `POST /api/v2/rules/make` ("Make this a rule", an incident or a refusal) files one task for the Rules page's owner
-  (page_owners `rules`), who runs the clerk skill (templates/catalog/_shared/.claude/skills/clerk-a-rule): it drafts the
-  rule and its typed check, checks them against the constitution (in the task) and the rules in force, suggests it and
-  asks one OK (`POST /api/v2/rules/{id}/ok`, org_rules.ask_ok).
+- "Make this a rule" is a normal task (`POST /api/v2/tasks`, label org_rules.MAKE_LABEL) for the Rules page's owner,
+  who runs the clerk skill (templates/catalog/_shared/.claude/skills/clerk-a-rule): it reads the constitution (the one
+  doc outside its task it may read, `docs.constitution_id`), drafts the rule and its typed check, checks them against
+  the constitution and the rules in force, suggests it and asks one OK (`POST /api/v2/rules/{id}/ok`, org_rules.ask_ok).
 - `POST /api/v2/rules/ask` answers "can I...?" with the active rules that share words with the question, at once, and
   opens a private Rules Owner task for the full answer. Every answer carries the one line that it is not legal advice.
 
@@ -46,7 +46,7 @@ from . import files as F
 from . import hubdb as H
 from . import org_rules as O
 from . import people as P
-from . import reach, screening, task_caps
+from . import screening
 from .auth import Identity
 from .blobs import register
 from .models import Contract
@@ -83,10 +83,6 @@ class RuleRead(Contract):
 
 class RuleAsk(Contract):
     question: str = Field(min_length=3, max_length=QUESTION_MAX)
-
-
-class RuleMake(Contract):
-    text: str = Field(min_length=3, max_length=NOTE_MAX, description="What should become a rule, in your own words")
 
 
 def available(c):
@@ -768,6 +764,7 @@ COUNSEL_ROUTES = tuple(
         (GET, r"rules/(?!counts$|due$|stats$)[^/]+"),
         (WRITE, r"rules"),
         (WRITE, r"rules/[^/]+/ok"),  # the clerk's one OK ask on its own suggestion (org_rules.ask_ok)
+        (GET, r"docs/[^/]+"),  # the constitution alone (read_refused)
         (GET | WRITE, r"tasks/(?!(?:flow|labels|stuck|dry-run)$)[^/]+"),  # one task, never a collection route
         (WRITE, r"tasks/[^/]+/comments"),
         (GET, r"files/[^/]+"),
@@ -813,6 +810,11 @@ def read_refused(store, auth, who, method, path, query):
     kind, ident, rest = parts[0], (parts[1] if len(parts) > 1 else ""), parts[2:]
     if kind in ("attempts", "turns"):  # `turns` is an older client's path for a run
         return READ_SCOPE if ident != who.attempt_id else None
+    if kind == "docs":  # the constitution, which a clerk checks drafts against; no other doc
+        from . import docs
+
+        with store.read() as c:
+            return None if ident and ident == docs.constitution_id(c) and not rest else READ_SCOPE
     if kind not in ("tasks", "files"):
         return None
     from .task_privacy import carried_tasks
@@ -957,60 +959,7 @@ def ask(c, auth, who, question):
     return {"task_id": task["id"], "matches": matches, "disclaimer": NOT_ADVICE}
 
 
-def make(c, who, text):
-    """ "Make this a rule": the words as one private task for the Rules page's owner (its requester and the owner only),
-    with the constitution as it reads now, to be drafted, checked and asked about (the clerk skill)."""
-    from . import page_owners
-
-    H._writer(c, who.actor)
-    owner = page_owners.owner(c, "rules", fallback=False)
-    if not owner:
-        raise Problem("counsel_off", "The Rules page has no owner to draft it", 409)
-    # the checks every task filed for a teammate passes first (task_actions_routes create): its cap, then reach
-    task_caps.check(c, who.actor, owner)
-    reach.check(c, who, owner, "task")
-    O.ensure_constitution(c)  # the first clerk task finds it there, whenever the Rules page's owner became live
-    law = (O.constitution(c) or {}).get("body") or ""
-    lines = [
-        "Make these words into one rule. Follow the clerk-a-rule skill: draft one plain sentence and, when a limit fits "
-        "one, a typed check; check them against the constitution and the rules in force; suggest it; then ask for one "
-        "OK with `tico rules ok <rule> --task <this task>` from this run. If it conflicts, say so in your last line: "
-        "never drop it.",
-        "",
-        "The words (whoever asked):",
-        fence(text),
-        "",
-        "The constitution:",
-        fence(law) if law else "- none",
-    ]
-    task = H.task_create(
-        c,
-        who.actor,
-        "Make this a rule: " + " ".join(text.split())[:150],
-        "\n".join(lines),
-        owner,
-        labels=["rules"],
-        private=True,
-    )
-    H.event(c, who.actor, "rules.make_requested", task["id"], {"owner": owner})
-    return {"task_id": task["id"], "owner": owner}
-
-
 def install(app, store, auth, mutate):
-    @app.post(
-        "/api/v2/rules/make",
-        **api_v2(
-            "Rules",
-            "makeRule",
-            "Make this a rule: your words become a task for the Rules page's owner, who drafts the rule and asks you one OK",
-        ),
-    )
-    def rules_make(request: Request, body: RuleMake):
-        """Your words become a private task for the Rules page's owner: it drafts one rule (and a typed check where a
-        limit fits one), checks it against the constitution and the rules in force, and asks you one OK to add it."""
-        who = request.state.identity
-        return mutate(request, body, lambda c: make(c, who, body.text))
-
     @app.post(
         "/api/v2/rules/read",
         **api_v2(

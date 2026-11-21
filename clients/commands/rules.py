@@ -364,16 +364,40 @@ def rules_history(api, args):
 
 @tool(
     "tico_rules_make",
-    "Make this a rule: your words (an answer, an incident, a refusal) become a task for the Rules page's owner, who "
-    "drafts one rule and its typed check, checks it against the constitution and the rules in force, and asks one OK. "
-    "The Assistant files it as the person, citing their words (on_behalf_of).",
+    "Make this a rule: your words (an answer, an incident, a refusal) become a normal task for the Rules page's owner, "
+    "who drafts one rule and its typed check, checks it against the constitution and the rules in force, and asks one "
+    "OK. The Assistant files it as the person, citing their words (on_behalf_of).",
     {"text": _s("What should become a rule, in your own words"), "on_behalf_of": ASKED},
     required=("text",),
     writes=True,
 )
 def rules_make(api, args):
     who = _asked(api, args) if args.get("on_behalf_of") else _as_person(api)
-    return who.post("rules/make", {"text": args["text"]}, key=_key(args))
+    owner = ((who.get("page-owners").get("pages") or {}).get("rules") or {}).get("bot")
+    if not owner:
+        raise APIError("counsel_off", "The Rules page has no owner to draft it", 409)
+    law = (who.get("rules/counts") or {}).get("constitution") or {}
+    return who.post("tasks", make_task(args["text"], owner, law.get("id")), key=_key(args))
+
+
+MAKE_LABEL = "make-rule"  # backend/org_rules.py MAKE_LABEL: what makes a task a clerk's
+
+
+def make_task(text, owner, constitution=None):
+    """A "Make this a rule" task as `POST /api/v2/tasks` takes it: the words, the Rules page's owner, its label, private
+    to the one who asks and the owner. The web app files the same (web/src/features/routines/queries.ts makeRule)."""
+    words = " ".join(str(text).split())
+    law = (
+        f" The constitution is doc {constitution}: read it with `tico doc read {constitution}`." if constitution else ""
+    )
+    body = f"Make these words into one rule with the clerk-a-rule skill.{law}\n\nThe words:\n{text}"
+    return {
+        "title": "Make this a rule: " + words[:150],
+        "body": body,
+        "owner": owner,
+        "labels": [MAKE_LABEL],
+        "private": True,
+    }
 
 
 @tool(
@@ -741,7 +765,7 @@ CLI = (
     ),
     Command(
         "rules make",
-        "make this a rule: the Rules page's owner drafts it, checks it and asks you one OK",
+        "make this a rule: a task for the Rules page's owner, who drafts it, checks it and asks one OK",
         example="tico rules make 'Refunds over $100 need Ben'",
     ),
     Command(

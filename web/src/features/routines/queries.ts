@@ -480,13 +480,30 @@ export const constitutionQuery = queryOptions({
   ...quiet,
 });
 
-/** "Make this a rule": the words become a task for the Rules page's owner, who drafts it and asks one OK. */
-export function makeRule(text: string) {
-  return write<{ task_id: string; owner: string }>({
+/** What makes a task a clerk's (backend/org_rules.py MAKE_LABEL). */
+export const MAKE_LABEL = 'make-rule';
+
+/** "Make this a rule": a normal task (POST /api/v2/tasks, every check a filed task passes) for the Rules page's owner,
+    labelled for its clerk skill, private to the one who asks and the owner, naming the constitution to read. `tico rules
+    make` files the same (clients/commands/rules.py make_task). */
+export async function makeRule(text: string): Promise<{ task_id: string }> {
+  const owner = (await queryClient.fetchQuery(pageOwnersQuery)).rules?.bot;
+  if (!owner) throw Object.assign(new Error('The Rules page has no owner to draft it'), { code: 'counsel_off: The Rules page has no owner to draft it' });
+  const law = await queryClient.fetchQuery(constitutionQuery);
+  const read = law ? ` The constitution is doc ${law.id}: read it with \`tico doc read ${law.id}\`.` : '';
+  const body = {
+    title: `Make this a rule: ${text.split(/\s+/).join(' ').slice(0, 150)}`,
+    body: `Make these words into one rule with the clerk-a-rule skill.${read}\n\nThe words:\n${text}`,
+    owner,
+    labels: [MAKE_LABEL],
+    private: true,
+  };
+  const made = await write<{ task: { id: string } }>({
     key: [orgRulesQuery('suggested').queryKey],
     optimistic: (cur: unknown) => cur,
-    send: (idempotencyKey) => api.post<{ task_id: string; owner: string }>('/api/v2/rules/make', { text }, { idempotencyKey }),
+    send: (idempotencyKey) => api.post<{ task: { id: string } }>('/api/v2/tasks', body, { idempotencyKey }),
   });
+  return { task_id: made.task.id };
 }
 
 export interface StageRules {

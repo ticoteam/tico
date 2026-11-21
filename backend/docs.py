@@ -795,7 +795,8 @@ class Docs:
             locking = body.locked is not None and bool(body.locked) != bool(row["locked"])
             if locking and not self.locker(who):
                 raise Problem("forbidden", "Only an owner or bot administrator can lock or unlock a doc", 403)
-            if row["locked"] and not self.locker(who):
+            if (row["locked"] or row["id"] == constitution_id(c)) and not self.locker(who):
+                # the constitution is people's even if someone unlocked it: by its recorded id, not only its lock
                 raise Problem("locked", "This doc is locked: only an owner or bot administrator can change it", 403)
             mine_only = body.own_version_only and row["updated_by_id"] != who.actor
             partial = body.body is not None and (body.section is not None or body.append)
@@ -959,7 +960,7 @@ class Docs:
 
         def work(c):
             row = self.get_row(c, doc_id)
-            if row["locked"] and not self.locker(who):
+            if (row["locked"] or row["id"] == constitution_id(c)) and not self.locker(who):
                 raise Problem("locked", "This doc is locked: only an owner or bot administrator can change it", 403)
             old = c.execute(
                 "SELECT * FROM doc_versions WHERE doc_id=? AND version=?", (doc_id, body.version)

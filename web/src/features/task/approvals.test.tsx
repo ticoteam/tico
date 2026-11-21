@@ -762,6 +762,21 @@ describe('a rule to add', () => {
     expect(sent.at(-1)?.body).toMatchObject({ shown_hash: 'h-rule' });
   });
 
+  it('shows Outside editions beside Everyone, and each allowed value as its own item @approvals', async () => {
+    shown = ruleTask();
+    const wide = {
+      ...bound,
+      who: { ...bound.who, everyone: true, outside_editions: true },
+      exact_check: { kind: 'allow_list', action: 'mail', field: 'to', values: ['a.example, b.example', 'c.example'] },
+    };
+    reply = (url) => (url.endsWith('/api/v2/oks/r1') ? { body: { requirement_id: 'r1', subject: 'rule:o7', content: wide, shown_hash: 'h-rule', standing: 'waiting' } } : null);
+    show(<TaskChat task="12" />, '/tasks/p1/12');
+    const box = await decision();
+    const facts = await within(box).findByRole('group', { name: 'The rule' });
+    expect(within(facts).getByText('Everyone, Outside editions, Ops')).toBeTruthy();
+    expect(within(facts).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['a.example, b.example', 'c.example']);
+  });
+
   it('keeps Approve off while a field that enforces the rule is missing from what is shown @approvals', async () => {
     shown = ruleTask();
     const { with: _w, ...partial } = bound;

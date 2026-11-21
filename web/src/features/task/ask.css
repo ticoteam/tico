@@ -33,6 +33,7 @@
 .askcard-what{margin-top:var(--s-1);color:var(--ink-2);line-height:var(--lh-read);overflow-wrap:anywhere}
 /* A rule's OK binds every field it shows: each is shown whole, wrapped, never cut short. */
 .askcard-rule .fact-t{overflow:visible;white-space:normal;overflow-wrap:anywhere}
+.askcard-values{margin:var(--s-1) 0 0;padding-left:var(--s-3)}
 .askcard-rule .facts .fact{align-items:start;padding-top:var(--s-1);padding-bottom:var(--s-1)}
 .askcard-files{display:flex;flex-wrap:wrap;gap:var(--s-1h);margin-top:var(--s-1h)}
 .askcard-files .file{height:28px;margin-top:0;min-width:0;max-width:100%;padding:0 var(--s-2h);border-radius:var(--r-chip);font-size:var(--t-sm);color:var(--ink-2)}
