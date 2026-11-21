@@ -2078,6 +2078,43 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
     return sorted(items, key=needs_key)
 
 
+def _asked_page(item):
+    """The page a page ask of a Needs-you item submits ({file_id, version, ref}), or None."""
+    ask = (item.get("ask") or {}) if item.get("kind") == "ask" else {}
+    return ask.get("page") if ask.get("kind") == "page" else None
+
+
+def needs_lines(c, auth, who, items):
+    """Needs-you items as they are served, each time, from a build or a held one (backend/needs_cache.py): a page ask's
+    row is the submitted page's own title (`about`) and first line (`line`) instead of its document's name ("Release
+    report"), once the reader is seen to read that version (files.page_refs_readable). A changed item is a copy, so a
+    held list stays as built."""
+    from .files import page_lines, page_refs_readable
+
+    out = []
+    for item in items:
+        page = _asked_page(item)
+        if page and page_refs_readable(c, auth, who, [page["ref"]]):
+            title, first = page_lines(c, page["file_id"], page["version"])
+            if title:
+                item = {**item, "about": title, "line": first or title}
+        out.append(item)
+    return out
+
+
+def needs_still_party(c, who, items):
+    """Whether the caller is still a party (task_asks.party) to every OK a held list says what it is about (`about`: a
+    Finance action's payee and amount), before a page is cut from that build (backend/needs_cache.py)."""
+    from . import task_asks
+
+    for item in items:
+        if item.get("about") and (item.get("ask") or {}).get("kind") == "ok":
+            found = task_asks.grant(c, item["requirement_id"])
+            if found and not task_asks.party(c, who.actor, found):
+                return False
+    return True
+
+
 def needs_key(x):
     """An item's place in the list: oldest first."""
     return (str(x.get("since") or ""), str(x["id"]))
@@ -3482,25 +3519,26 @@ def install_views(app, store, auth, mutate, task_view):
             built = held.get(viewer, cursor.partition(".")[0])
             if built is not None:
                 with store.read_transaction() as c:
-                    readable = needs_still_readable(c, auth, who, built.task_ids)
-                if readable:
-                    return needs_paged(
-                        who, built.items, built.version, limit, cursor, built.snoozed_until, built.counts
-                    )
+                    if needs_still_readable(c, auth, who, built.task_ids) and needs_still_party(c, who, built.items):
+                        out = needs_paged(
+                            who, built.items, built.version, limit, cursor, built.snoozed_until, built.counts
+                        )
+                        return {**out, "items": needs_lines(c, auth, who, out["items"])}
                 held.drop(viewer, built)
         began = needs_cache.begin()
         with store.read_transaction() as c:
             if count:
                 items = needs_items(c, auth, who, count_only=True)
                 return {"actor": who.actor, "count": len(items)}
-            items = needs_items(c, auth, who)
-            current = needs_marks(items)[1]
+            listed = needs_items(c, auth, who)
+            current = needs_marks(listed)[1]
+            items = needs_lines(c, auth, who, listed)  # as served; the held build is checked again when it serves
             # When an ask this person snoozed comes back: the page reads the list again then (backend/ask_snoozes.py).
             from . import ask_snoozes
 
             woken = {"snoozed_until": ask_snoozes.next_end(c, who)}
         counts = {}  # the page counts, worked out by the first page, kept for the next ones
-        held.keep(viewer, current, items, woken["snoozed_until"], began, counts)
+        held.keep(viewer, current, listed, woken["snoozed_until"], began, counts)
         if version and version == current and not cursor:
             return {"actor": who.actor, "count": len(items), "version": current, "unchanged": True, **woken}
         if ids is not None:

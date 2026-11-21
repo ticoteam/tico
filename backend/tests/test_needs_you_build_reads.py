@@ -320,6 +320,48 @@ def test_a_page_cut_from_a_held_build_leaves_out_a_task_the_caller_no_longer_rea
     assert later["items"] == rebuilt["items"][:2] and later["count"] == first["count"] - 1
 
 
+def test_a_page_asks_row_is_its_pages_title_and_first_line_while_the_reader_reads_that_version(api):
+    """Marketing C3: seven page asks all read "Release report", the document's name. A page ask's row is the submitted
+    page's own title (`about`) and first line (`line`), and only while the reader may read that version: once the page
+    is deleted, a page cut from the held build (backend/needs_cache.py) and a new build both show the ask's own line,
+    never the page's words."""
+    store = api.app.state.store
+    store.blobs = store.blobs or Blobs(store.settings)
+    pages = {
+        "Pause 3 rental Google campaigns": "$269 of $514 spent with 0 booked demos",
+        "Publish 3 comparison pages": "TIDY vs Vacasa, Evolve and a local manager",
+    }
+    fids = []
+    with store.transaction() as c:
+        for slug in ("manager", "writer"):
+            X.bot(c, slug)
+        X.pipeline(c, "product", "Product", SPEC, manager="bot:manager")
+        for n, (title, first) in enumerate(pages.items()):
+            row = X.new_task(c, ANA, f"Release report {n}", "product", assignee="bot:writer")
+            fid, _ = _page(c, store, f"<title>{title}</title><h1>{title}</h1><p>{first}</p><p>Why, below.</p>")
+            made = P.attach(c, row["id"], "Spec page", "page:" + fid, "bot:writer", seen_version=row["version"])
+            _say(c, made, "met")
+            fids.append(fid)
+
+    def rows(answer):
+        return {i["ask"]["page"]["file_id"]: i for i in answer["items"] if (i.get("ask") or {}).get("page")}
+
+    first = api.get("/api/v2/needs-you?limit=50", headers=headers("ana-test")).json()
+    shown = rows(first)
+    for fid, (title, line) in zip(fids, pages.items(), strict=True):
+        assert (shown[fid]["about"], shown[fid]["line"]) == (title, line)
+    with store.transaction() as c:
+        c.execute("UPDATE bot_files SET state='deleted' WHERE id=?", (fids[1],))
+    held = api.get(f"/api/v2/needs-you?limit=50&cursor={first['version']}.0", headers=headers("ana-test")).json()
+    rebuilt = api.get("/api/v2/needs-you", headers=headers("ana-test")).json()
+    assert "restart" not in held and held["version"] == first["version"]  # cut from the held build
+    for answer in (held, rebuilt):
+        shown = rows(answer)
+        assert shown[fids[0]]["about"] == "Pause 3 rental Google campaigns"
+        assert shown[fids[1]]["line"] == "Spec page" and "about" not in shown[fids[1]]
+        assert "comparison" not in json.dumps(answer) and "Vacasa" not in json.dumps(answer)
+
+
 def preset_company(api, count):
     """The software company's preset pipelines with `count` open tasks over their work stages: a third with an OK of
     Ana's or Ben's, a quarter with a subtask filed on their visit, a fifth with a PR, and each task in a stage that

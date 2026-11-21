@@ -436,6 +436,13 @@ def needs_brief(items, n):
     ]
 
 
+def needs_rows(ctx, items, n):
+    """needs_brief of the first `n` items as they are served (views.needs_lines: a page ask by its page's title)."""
+    from . import views
+
+    return needs_brief(views.needs_lines(ctx.c, ctx.auth, ctx.who, items[:n]), n)
+
+
 def needs_you(ctx, s):
     """The reader's own Needs you; with a team, the items its bots are behind."""
     if not ctx.person or not ctx.task_view:
@@ -446,7 +453,7 @@ def needs_you(ctx, s):
     if s["team"]:
         bots = {"bot:" + b for b in ctx.team_bots(s["team"])}
         items = [it for it in items if views.needs_actor(it, ctx.who.actor) in bots]
-    return {"count": len(items), "items": needs_brief(items, 3)}
+    return {"count": len(items), "items": needs_rows(ctx, items, 3)}
 
 
 def needs_attention(ctx, s):
@@ -454,7 +461,7 @@ def needs_attention(ctx, s):
     if not ctx.person or not ctx.task_view:
         return None
     items = needs_list(ctx)
-    return {"count": len(items), "items": needs_brief(items, 5)}
+    return {"count": len(items), "items": needs_rows(ctx, items, 5)}
 
 
 def thread_rows(ctx, limit):

@@ -423,6 +423,44 @@ def test_a_filed_oks_needs_you_row_names_what_it_is_about_to_its_party_only(api)
     assert "Globex Records Office" not in cara.text and not handed[mail["requirement_id"]].get("about")
 
 
+def test_a_finance_oks_row_names_its_payee_and_amount_to_its_parties_only_cached_reads_too(api):
+    """Marketing C3: five Finance asks read only "OK a Finance action". The filed task keeps that title, and a party's
+    row says what the action does from the payload the OK binds (its plan's summary: payee and amount), without its
+    reasons or action id. Handed to Ben, an Admin, he reads it as a party; made a plain member, a page cut from his
+    held list (backend/needs_cache.py) is checked again and he reads only that it waits on a person's OK."""
+    from backend.finance.store.tico import OK_LINE
+    from backend.tests.helpers.api import as_member
+
+    as_bot(api)
+    content = {
+        "source": "finance",
+        "action_id": "fa1",
+        "kind": "payment_send",
+        "what": "Pay 540.00 USD to Figma by ach; Over the design budget (Finance action fa1)",
+        "payload": {"recipient_id": "r1", "amount": 54000},
+        "amount": 54000,
+        "account": "bank",
+    }
+    with api.app.state.store.transaction() as c:
+        pay = K.ask_ok(c, "bot:ops", "human:ana", OK_LINE, shows=[], subject="finance:fa1", content=content)
+        assert H.task(c, pay["task_id"])["title"] == "OK a Finance action"
+        c.execute("UPDATE tasks SET private=0 WHERE id=?", (pay["task_id"],))
+        version = H.task(c, pay["task_id"])["version"]
+        H.task_give(c, "human:ana", pay["task_id"], pay["requirement_id"], "human:ben", version)
+    first = get(api, "needs-you?limit=50", token="ben-test")
+    items = {i.get("requirement_id"): i for i in first["items"]}
+    assert items[pay["requirement_id"]]["about"] == "Pay 540.00 USD to Figma by ach"
+    assert "Figma" not in api.get("/api/v2/needs-you", headers=headers("cara-test")).text
+    as_member(api, "ben@acme.example")
+    held = api.get(f"/api/v2/needs-you?limit=50&cursor={first['version']}.0", headers=headers("ben-test"))
+    rebuilt = api.get("/api/v2/needs-you", headers=headers("ben-test"))
+    for answer in (held, rebuilt):
+        items = {i.get("requirement_id"): i for i in answer.json()["items"]}
+        assert items[pay["requirement_id"]]["line"] == K.PRIVATE_LINE, answer.text
+        assert "Figma" not in answer.text and "USD" not in answer.text
+    assert held.json()["restart"] is True  # built again, not cut from the list he read as a party
+
+
 def test_a_filed_oks_task_names_the_matter_the_asker_was_working_where_its_title_may_go(api):
     """A row of "Mail a letter" said nothing of which matter each was for: the OK's task takes the title of the task the
     asker was working. A private one's title goes there only when the person asked and the asker (as its owner or

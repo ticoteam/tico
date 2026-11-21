@@ -38,6 +38,7 @@ import contextvars
 import hashlib
 import json
 import os
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, NoReturn, cast
@@ -335,7 +336,16 @@ ABOUT: dict[str, Callable[[object], str]] = {
     "edition": lambda c: f"Publish: {t}" if (t := _named(c, "title")) else "",
     "webhook": lambda c: f"Make webhook endpoint {n}" if (n := _named(c, "name")) else "",
     "publish": lambda c: f"Publish to the roadmap: {t}" if (t := _published_title(c)) else "",
+    "finance": lambda c: _finance_summary(c),
 }
+
+
+def _finance_summary(content: object) -> str:
+    """What a Finance OK does, from the action it binds (finance/actions.py `_approval_payload`): its plan's summary,
+    which names the payee and the amount of a payment ("Pay 540.00 USD to Figma by ach"), without the reasons it needs
+    an OK or its action id."""
+    what = _named(content, "what")
+    return re.sub(r" \(Finance action [^)]*\)$", "", what.split("; ", 1)[0]) if what else ""
 
 
 def _published_title(content: object) -> str:
@@ -352,7 +362,7 @@ def _published_title(content: object) -> str:
 
 def about(conn: "sqlite3.Connection", requirement_id: str, line: str = "") -> str:
     """What one OK is about for its parties' Needs you rows: its subject's words (ABOUT); else the ask's own line when it
-    says more than a question of the kind does (a Finance action's line names the payee and amount); else ""."""
+    says more than a question of the kind does; else "". A Finance OK's words name its payee and amount."""
     found = grant(conn, requirement_id)
     if not found:
         return ""
