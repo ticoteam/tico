@@ -162,14 +162,18 @@ def resource(c: Any, who: Any, ref: Any, admins: Any = (), auth: Any = None) -> 
     name = rest.strip() if kind else text
     if kind in ("", "tool", "api"):
         wanted = name.removeprefix("api:")
-        # Only the tools the asker may see are candidates, so a hidden tool never hides a visible one of the same name
-        # and an answer never tells a hidden tool from no tool.
+        # The candidates are the tools anyone may ask for (Everyone) and the Only listed ones the asker may see, so a
+        # hidden tool never hides another of the same name and an answer never tells a hidden tool from no tool. Asking
+        # is for access one lacks, so an Everyone tool counts though its Tools list shows it only to holders. `tool:<id>`
+        # picks by id; a bare name is a name first, so two tools called Sentry are offered even when one's id is `sentry`.
         seen = [
             row
             for row in c.execute("SELECT * FROM tools WHERE id=? OR lower(name)=lower(?) ORDER BY id", (wanted, wanted))
             if row["audience"] is None or api_tools.visible(c, who, row, admins, auth)
         ]
-        named = [row for row in seen if row["id"] == wanted] or seen
+        by_id = [row for row in seen if row["id"] == wanted]
+        by_name = [row for row in seen if str(row["name"]).lower() == wanted.lower()]
+        named = (by_id or by_name) if kind else (by_name or by_id)
         apis = [row for row in named if api_tools.kind_of(row) == "api"]
         if len(apis) > 1:
             choices = [{"resource": "tool:" + str(row["id"]), "name": str(row["name"])} for row in apis]

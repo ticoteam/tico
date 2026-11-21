@@ -743,7 +743,7 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
 
 def new_bot_default(c, fallback='read'):
     """The team's New agents get (a key of NEW_BOT_ACCESS), or `fallback` while nobody has chosen: a bot made in
-    Settings, by hiring or from a template reads every repository in use (settings_admin.create_bot)."""
+    Settings, by hiring, from a template or as a shared bot's branch reads every repository in use."""
     chosen = metadata(c, SETTINGS).get('new_bot_default')
     return chosen if chosen in NEW_BOT_ACCESS else fallback
 
@@ -800,15 +800,18 @@ def seat_default(c, catalog_dir, bot, actor):
     """A seat's bot gets the access its template's card declares (`card_access`) on All repos in use, so every
     repository In use now and later reaches it at that level, with Run workflows and Edit workflow files off: the
     Builder pushes to the team's repository, never a fork. Only while nobody has chosen for it: still on Their own repo
-    (where a new bot starts) and `untouched`. Audited as `bot.repos_changed` with `default`. Returns whether it changed
-    the bot."""
+    or reading All repos in use (where a new bot starts), and `untouched`. Audited as `bot.repos_changed` with
+    `default`. Returns whether it changed the bot."""
     declared = BS.read(c, bot)
     want = card_access(catalog_dir, declared.get('template'))
-    if want.get('repo_access_mode') != 'all' or (declared.get('repo_access_mode') or 'own') != 'own':
+    mode = declared.get('repo_access_mode') or 'own'
+    level = 'write' if want.get('repo_all_access') == 'write' else 'read'
+    started = mode == 'own' or (mode == 'all' and declared.get('repo_all_access') == 'read' and level == 'write')
+    if want.get('repo_access_mode') != 'all' or not started:
         return False
     if not untouched(c, bot):
         return False
-    body = RepoAccessUpdate(mode='all', all_access='write' if want['repo_all_access'] == 'write' else 'read')
+    body = RepoAccessUpdate(mode='all', all_access=level)
     set_access(c, bot, body, _org(c), actor, default=True)
     return True
 

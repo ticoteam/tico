@@ -185,3 +185,19 @@ def test_a_new_agent_reads_every_repository_in_use_unless_the_team_chose_and_exi
     assert _effective(api, REVIEWER) == {"Acme/emp-cmo": "write"}  # a bot made before is unchanged
     put(api, "repositories/settings", {"new_bot_default": "own"})
     assert make("ads")[1] == {}
+
+
+def test_a_new_bot_that_fills_a_builder_seat_writes_over_the_read_it_started_with(api, gh):
+    catalog(api, gh)
+    put(api, "repositories/Acme/product", {"enabled": True})
+    for slug, team in (("maker", None), ("maker-2", "read")):
+        if team:
+            put(api, "repositories/settings", {"new_bot_default": team})
+        body = {"slug": slug, "display_name": slug.title(), "description": "Builds", "status": "planned"}
+        assert api.post("/api/v2/bots", json=body, headers={**auth(), "Idempotency-Key": slug}).status_code == 200
+        with api.app_state.store.read() as c:
+            bot = H.resolve_bot(c, slug)["id"]
+        assert _effective(api, bot)["Acme/product"] == "read"
+        with api.app_state.store.transaction() as c:
+            _seat(c, bot, "builder")
+        assert bot in _start(api) and _effective(api, bot)["Acme/product"] == "write"

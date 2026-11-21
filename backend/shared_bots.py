@@ -185,6 +185,9 @@ def add_copy(c, who, source, runner_id, settings_admin, execution, github_owner)
         }
         profiles.apply(config, profiles.DOER, {})
         config.update({key: value for key, value in _as_followed(original).items() if key in FOLLOWED})
+        from .repositories import NEW_BOT_ACCESS, new_bot_default
+
+        config.update(NEW_BOT_ACCESS[new_bot_default(c)])  # a new branch is a new bot: New agents get
         team = settings_admin._team(c, bot_id, config)
         now = H.now()
         c.execute(

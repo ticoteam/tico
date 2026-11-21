@@ -813,7 +813,7 @@ REPO = (
     ),
     Command(
         "repo default",
-        "the repository access a new bot starts with: own or all; without a mode, read it",
+        "the repository access a new bot starts with: own, read (the default) or all; without a mode, show it",
         args=(Arg("mode", positional=True, nargs="?"),),
         convert=_key_if_set,
         example="tico repo default own",
