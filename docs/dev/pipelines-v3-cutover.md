@@ -129,7 +129,7 @@ caller does these, and none may be skipped:
 | reassign, before | the checks today's owner change runs: may this owner take tasks, same department for a task manager, `strategy_acts.gate` |
 | reassign, after | `task.assigned` to the same three; `reconnects.moved`; the new owner's private default (and every task under it); drop temporary delegations; demote the old owner's sessions; move the worktree link; `task_run_models.moved`; `task_followers.owner_moved`; clear the task goal; the task keeps its rank (its place in the stage; one with none goes to the end of the new owner's queue); `reconnects.access_changed` |
 
-Done does not finish sub-tasks. No chat, email or push goes to a person about a task: a person learns from Needs you.
+Done does not finish sub-tasks. No chat, email or push goes to a person about a task: a person learns from Needs you. One exception: a task the person handed off through their Assistant is reported back once in their Assistant chat when it ends (`task_effects._report_back`).
 
 Two more Paused causes join `task_wakes`: a sign-in the bot needs is missing (`reconnects`), and the task's worktree is
 not ready (`worktree_waits`, for that task only). Each stops the tries and shows with its fix.
