@@ -466,8 +466,8 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
     tuck();
   };
 
-  // a page opened from the chat (an approval card, plan/layers.html): the chat tucks and the page comes forward. Its own
-  // entry stays, so Back (the page's ✕ or back arrow) brings the chat up again.
+  // a page opened from the chat (an approval card, plan/layers.html) or from Tico's (a tracked task): the card tucks and
+  // the page comes forward. Its own entry stays, so Back (the page's ✕ or back arrow) brings the card up again.
   const onChatClick = (e: MouseEvent<HTMLDivElement>) => {
     const a = (e.target as HTMLElement).closest<HTMLAnchorElement>('a[href]');
     if (!a || a.target || a.origin !== location.origin) return;
@@ -506,7 +506,7 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
           {lip}
         </button>
         {act && <div className="lip-act">{act}</div>}
-        <div className="full" id={`${id}-${s}`} inert={!up} onClickCapture={s === 'menu' ? onMenuClick : s === 'chat' && second === 'chat' ? onChatClick : undefined}>
+        <div className="full" id={`${id}-${s}`} inert={!up} onClickCapture={s === 'menu' ? onMenuClick : s === 'tico' || (s === 'chat' && second === 'chat') ? onChatClick : undefined}>
           {full}
         </div>
       </section>

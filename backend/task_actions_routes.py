@@ -134,9 +134,10 @@ def register_core(
         nobody, where a list would quietly drop the filter: a bulk change must never widen to every task."""
         found_owner = H.resolve_actor(c, owner) if owner else None
         found_requester = H.resolve_actor(c, requester) if requester else None
-        if exact and (owner and not found_owner or requester and not found_requester):
+        # Given at all, even empty (`requester=`), a name must resolve: dropping it would widen the selection.
+        if exact and (owner is not None and not found_owner or requester is not None and not found_requester):
             raise Problem(
-                "owner" if owner and not found_owner else "requester",
+                "owner" if owner is not None and not found_owner else "requester",
                 "owner and requester are a person or a bot on the roster",
                 422,
             )

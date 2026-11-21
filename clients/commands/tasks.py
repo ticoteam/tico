@@ -777,6 +777,11 @@ def _first_stage_picks(api, pipeline):
         "pipeline": _s("Only this pipeline's tasks: its id"),
         "stage": _s("Only the tasks in this stage: its id (engineering-build), or its name with pipeline"),
         "waiting_on": _s("Only open tasks waiting on this person or bot: `me`, a human id or a bot slug"),
+        "exact": {
+            "type": "boolean",
+            "default": False,
+            "description": "Refuse an owner or requester that names nobody, instead of listing without that filter",
+        },
     },
 )
 def task_list(api, args):
@@ -798,10 +803,20 @@ def task_list(api, args):
             more["role"] = args["role"]
     if args.get("brief"):
         more["brief"] = "true"
+    if args.get("exact"):
+        more["exact"] = "true"
+
+    def named(field):
+        # Under exact an empty name still goes, so the server refuses it instead of listing without the filter.
+        value = args.get(field)
+        if value:
+            return _target(api, value)
+        return "" if args.get("exact") and value is not None else None
+
     page = api.get(
         "tasks",
-        owner=_target(api, args.get("owner")) if args.get("owner") else None,
-        requester=_target(api, args.get("requester")) if args.get("requester") else None,
+        owner=named("owner"),
+        requester=named("requester"),
         status=",".join(args["status"]) if args.get("status") else None,
         label=args.get("label") or None,
         **more,

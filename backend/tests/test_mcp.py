@@ -291,6 +291,17 @@ def test_validation_identifies_fields_and_never_echoes_invalid_values(api):
         assert "private-example-value" not in payload["detail"]
 
 
+def test_task_list_with_exact_sends_an_empty_name_and_the_server_refuses_it(api):
+    """tico_task_list with exact never drops an empty owner or requester: the list route answers 422, not every task."""
+    token = post(api, "me/tokens", {"label": "QA agent"})["token"]
+    post(api, "tasks", {"owner": "ben", "title": "Draft the agenda", "body": "Please."})
+    for field in ("owner", "requester"):
+        err, out = call(api, "tico_task_list", {field: "", "exact": True}, token=token)
+        assert err and out["error"] == field, (field, out)
+    err, out = call(api, "tico_task_list", {"requester": "", "status": ["open"]}, token=token)
+    assert not err and out["result"], "without exact an empty name is no filter, as before"
+
+
 def test_personal_token_api_bot_settings_and_archive_use_the_humans_rights(api):
     token = post(api, "me/tokens", {"label": "QA agent"})["token"]
     err, out = call(api, "tico_api", {"method": "GET", "path": "me"}, token=token)

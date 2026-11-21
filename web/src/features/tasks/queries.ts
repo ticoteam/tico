@@ -659,6 +659,8 @@ export function flowGroups(items: readonly FlowItem[], pipelines: readonly Pipel
 export interface Flow {
   count: number;
   items: FlowItem[];
+  /** Every task the Needs you list names, a grouped item's (a paused agent's `task_ids`) each one too. */
+  task_ids?: string[];
 }
 
 /** Every task that waits on the person, across pipelines (GET /api/v2/needs-you). Asks without a task stay in chats. */
@@ -667,8 +669,11 @@ export const flowQuery = queryOptions({
   // The Flow loader still needs this result if the shell unsubscribes.
   queryFn: async (): Promise<Flow> => {
     const seen = new Set<string>();
+    const named = new Set<string>();
     const items: FlowItem[] = [];
     for (const it of await needsYouItems()) {
+      // a paused item names its tasks in task_ids (backend/views.py), which the generated type leaves out
+      for (const id of [it.task_id, it.task?.id, ...((it as { task_ids?: string[] }).task_ids ?? [])]) if (id) named.add(id);
       const t = it.task;
       if (!t || seen.has(t.id)) continue;
       seen.add(t.id);
@@ -686,7 +691,7 @@ export const flowQuery = queryOptions({
         ...(it.ask && { ask: { kind: it.ask.kind, by: it.ask.asked_by ?? null, shows: it.ask.shows ?? [] } }),
       });
     }
-    return { count: items.length, items };
+    return { count: items.length, items, task_ids: [...named] };
   },
 });
 

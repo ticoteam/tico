@@ -41,6 +41,7 @@ KEYS = frozenset(
         "tasks.pins",
         "pipeline.rail_hidden",
         "meetings.auto_share",
+        "ui.tracker_seen_at",
         strategy_bot.HIDE_PREF,
     }
 )
@@ -68,6 +69,11 @@ def check(who: Any, key: str, value: object) -> None:
         value in ("steer", "queue") or isinstance(value, str) and value in SEND_WAY_DEFERS
     ):
         raise Problem("validation", "compose.send_way is steer, queue or defer:<30m|1h|4h|24h|2d|7d|never>", 422)
+    # When the person last opened Tico's tracker (web/src/tico/Tracker.tsx): Back counts what finished since.
+    if key == "ui.tracker_seen_at":
+        at = H.parse_ts(value) if isinstance(value, str) else None
+        if at is None or at.tzinfo is None:
+            raise Problem("validation", "ui.tracker_seen_at is an ISO-8601 date/time with a timezone", 422)
     # Hide from my chart on the Strategy Owner: a person's own view.
     if key == strategy_bot.HIDE_PREF:
         views.human_only(who)
@@ -81,7 +87,7 @@ def register(app: "FastAPI", auth: Any, mutate: "Callable[..., Any]", store: Any
         **api_v2(
             "Team",
             "getPreference",
-            "One of your own preferences (the keys clients keep: compose.send_way, ui.rails, org.history, org.mine, tasks.view, tasks.pins, pipeline.rail_hidden, chart.hide_strategy_bot, meetings.auto_share); null when unset",
+            "One of your own preferences (the keys clients keep: compose.send_way, ui.rails, org.history, org.mine, tasks.view, tasks.pins, pipeline.rail_hidden, chart.hide_strategy_bot, meetings.auto_share, ui.tracker_seen_at); null when unset",
             "PreferenceValue",
         ),
     )
