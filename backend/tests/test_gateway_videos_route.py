@@ -485,7 +485,14 @@ def test_an_unknown_shot_waits_on_the_cards_person_until_they_mark_it_reconciled
         c.execute("UPDATE visits SET id='visit-moved' WHERE task_id=? AND left_at IS NULL", (task["id"],))
     assert shown("ben-test")[1] == ["Reconcile 1 shot: Kettle wide"]
 
-    shots = {"shots": waits[0]["shots"]}  # the keys the person was shown
+    assert [s["name"] for s in waits[0]["shots"]] == ["Kettle wide"]
+    with store.read() as c:  # shown to the person, never weighed in the load ask ingest counts
+        assert not [i for i in W.needs(c, "human:ben", own_work=True) if i["line"].startswith("Reconcile")]
+    assert (
+        api.post(f"/api/v2/tasks/{task['id']}/shots/reconcile", json={"shots": []}, headers=headers()).status_code
+        == 422
+    )
+    shots = {"shots": [s["key"] for s in waits[0]["shots"]]}  # the keys the person was shown
     marked = api.post(f"/api/v2/tasks/{task['id']}/shots/reconcile", json=shots, headers=headers("ben-test"))
     assert marked.status_code == 200 and [s["name"] for s in marked.json()["reconciled"]] == ["Kettle wide"], (
         marked.text
@@ -508,7 +515,8 @@ def test_a_fresh_key_after_the_card_moved_never_sends_an_unknown_shot_again(api,
     monkeypatch.setattr(G, "video_submit", counting(sent, (202, {"id": JOB, "status": "queued"}, "")))
     assert named(video(api, token, {"prompt": "a kettle", "shot": "Kettle wide"}, "fresh")) == ["Kettle wide"]
     shown = api.get(f"/api/v2/tasks/{task['id']}", headers=headers()).json()["task"]["waits"][0]["shots"]
-    marked = api.post(f"/api/v2/tasks/{task['id']}/shots/reconcile", json={"shots": shown}, headers=headers())
+    keys = {"shots": [shot["key"] for shot in shown]}
+    marked = api.post(f"/api/v2/tasks/{task['id']}/shots/reconcile", json=keys, headers=headers())
     assert len(marked.json()["reconciled"]) == 1, marked.text
     again = video(api, token, {"prompt": "a kettle", "shot": "Kettle wide"}, "fresher")
     assert (again.status_code, again.json()["error"]["code"]) == (409, "shot_reconciled"), again.text
@@ -536,7 +544,43 @@ def test_a_request_that_loses_the_race_keeps_its_key_on_the_shot_it_found(api, m
 def test_a_replayed_reconcile_is_refused_once_access_is_gone(api):
     task = post(api, "tasks", {"owner": "ops", "title": "Make the shots", "body": "From the storyboard."})
     path = f"/api/v2/tasks/{task['id']}/shots/reconcile"
-    assert api.post(path, json={}, headers=headers("cara-test", "once")).status_code == 200
+    body = {"shots": ["shot_x"]}
+    assert api.post(path, json=body, headers=headers("cara-test", "once")).status_code == 200
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET private=1, readers=NULL WHERE id=?", (task["id"],))
-    assert api.post(path, json={}, headers=headers("cara-test", "once")).status_code in (403, 404)
+    assert api.post(path, json=body, headers=headers("cara-test", "once")).status_code in (403, 404)
+
+
+def test_a_replay_through_a_prefix_that_now_names_another_task_is_a_conflict(api):
+    first = post(api, "tasks", {"owner": "ops", "title": "Make the shots", "body": "From the storyboard."})
+    prefix = first["id"][:8]
+    path, body = f"/api/v2/tasks/{prefix}/shots/reconcile", {"shots": ["shot_x"]}
+    assert api.post(path, json=body, headers=headers("cara-test", "once")).status_code == 200
+    with api.app.state.store.transaction() as c:  # another task now has the prefix, and cara no longer sees the first
+        row = dict(c.execute("SELECT * FROM tasks WHERE id=?", (first["id"],)).fetchone())
+        number = c.execute("SELECT max(number) + 1 FROM tasks").fetchone()[0]
+        row.update(id=prefix + "-other", number=number, conversation_id=None, stage_id=None, pipeline_id=None)
+        c.execute(f"INSERT INTO tasks({','.join(row)}) VALUES({','.join('?' * len(row))})", tuple(row.values()))
+        c.execute("UPDATE tasks SET private=1, readers=NULL WHERE id=?", (first["id"],))
+    replay = api.post(path, json=body, headers=headers("cara-test", "once"))
+    assert (replay.status_code, replay.json()["error"]["code"]) == (409, "idempotency_conflict"), replay.text
+
+
+def test_a_fresh_key_after_a_restart_and_a_stage_move_never_sends_the_shot_again(api, monkeypatch):
+    connect(api)
+    task, token = turn(api)
+    sent = []
+    monkeypatch.setattr(G, "video_submit", counting(sent, (202, {"id": JOB, "status": "queued"}, "")))
+    body = {"prompt": "a kettle", "shot": "Kettle wide"}
+    with monkeypatch.context() as stopped:  # sent, and still waiting on the Gateway
+        stopped.setattr(paid_renders, "end", lambda *a: None)
+        assert video(api, token, body, "first").status_code == 202
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE visits SET id='visit-moved' WHERE task_id=? AND left_at IS NULL", (task["id"],))
+    busy = video(api, token, body, "fresh")  # in flight under the card's earlier visit
+    assert (busy.status_code, busy.json()["error"]["code"]) == (429, "paid_render_busy"), busy.text
+    paid_renders._IN_FLIGHT.clear()  # a restart: its outcome is unknown
+    assert named(video(api, token, body, "fresher")) == ["Kettle wide"]
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM events WHERE action=?", (paid_renders.UNKNOWN,)).fetchone()[0] == 1
+    assert len(sent) == 1

@@ -94,7 +94,7 @@ its person "Reconcile N shots" until they check Gateway usage and mark them reco
 never render it again under another name to get around it. When the person tells you they checked, mark them yourself:
 
 ```
-tico gateway reconcile TASK [--shot KEY]...
+tico gateway reconcile TASK --shot KEY [--shot KEY]...
 ```
 
 A reconciled shot is refused with `shot_reconciled`: render it again only under a new shot name, and only if the

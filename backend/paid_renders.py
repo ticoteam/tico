@@ -195,16 +195,17 @@ _TWINS = (
 )
 
 
-def _twin(c: Any, actor: str, key: str, said: Row) -> Problem | None:
-    """A new key's refusal when the card has the same shot unknown or reconciled under another visit's key: a stage
-    move never makes it a new shot that may be charged again. None outside a card, or with no such shot."""
+def _twin(c: Any, who: Any, key: str, said: Row, write: bool = False) -> Problem | None:
+    """A new key's refusal when the card has the same shot (asker, input and name) under another visit's key that is
+    in flight (busy), unknown or reconciled: a stage move never makes it a new shot that may be charged again. One sent
+    and stranded is unknown; `write` marks it so. None outside a card, or with no such shot."""
     if not said.get("task"):
         return None
-    for (other,) in c.execute(_TWINS, (actor, SENT, key, said["task"], said["input"], said["shot"])).fetchall():
+    for (other,) in c.execute(_TWINS, (who.actor, SENT, key, said["task"], said["input"], said["shot"])).fetchall():
         last, detail = _latest(c, str(other))
-        if last in (UNKNOWN, RECONCILED):
-            found = _state(c, str(other), last, detail)
-            return found if isinstance(found, Problem) else None
+        found = _settle(c, who, str(other)) if write else _state(c, str(other), last, detail)
+        if isinstance(found, Problem):
+            return found
     return None
 
 
@@ -225,13 +226,13 @@ def resolve(store: Any, who: Any, shot: Shot, operation: str | None = None) -> R
         key, said, alias = _shot(c, who, shot, operation)
         last, detail = _latest(c, key)
         stranded = _stranded(key, last)
-        state = None if stranded else _state(c, key, last, detail) or _twin(c, who.actor, key, said)
+        state = None if stranded else _state(c, key, last, detail) or _twin(c, who, key, said)
     if stranded or (alias and state is not None):
         with store.transaction() as c:
             key, said, alias = _shot(c, who, shot, operation)
             if alias:
                 H.event(c, who.actor, ALIAS, *alias)
-            state = _settle(c, who, key) or _twin(c, who.actor, key, said)
+            state = _settle(c, who, key) or _twin(c, who, key, said, write=True)
     if isinstance(state, Problem):
         raise state
     return state
@@ -261,7 +262,7 @@ def begin(store: Any, who: Any, shot: Shot, operation: str | None = None) -> tup
             key, said, alias = _shot(c, who, shot, operation)
             if alias:  # kept whatever it finds: a request that lost a race retries into the same shot
                 H.event(c, who.actor, ALIAS, *alias)
-            state = _settle(c, who, key) or _twin(c, who.actor, key, said)
+            state = _settle(c, who, key) or _twin(c, who, key, said, write=True)
             if state is None:
                 with _LOCK:
                     sending = key not in _IN_FLIGHT
@@ -365,11 +366,11 @@ def line(shots: list[Row]) -> str:
     return f"Reconcile {count} shot{'' if count == 1 else 's'}" + (f": {names}" if names else "")
 
 
-def reconcile(c: Any, actor: str, task_id: str, keys: Iterable[str] = ()) -> list[Row]:
-    """Mark the card's unknown shots reconciled, every one or those `keys` names: a `paid_render.reconciled` each. They
-    leave the card's wait and are never sent again (`_state`). Answers the shots it marked, each {key, name}."""
+def reconcile(c: Any, actor: str, task_id: str, keys: Iterable[str]) -> list[Row]:
+    """Mark the card's unknown shots `keys` names reconciled (never all by default): a `paid_render.reconciled` each.
+    They leave the card's wait and are never sent again (`_state`). Answers the shots it marked, each {key, name}."""
     wanted = set(keys)
-    shots = [s for s in unsettled(c, task_id) if not wanted or s["key"] in wanted]
+    shots = [s for s in unsettled(c, task_id) if s["key"] in wanted]
     for s in shots:
         H.event(c, actor, RECONCILED, s["key"], {**_latest(c, s["key"])[1], "task": task_id})
     if shots:

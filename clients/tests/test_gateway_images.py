@@ -308,6 +308,7 @@ def test_a_video_needs_an_out_file_an_mp4_name_and_a_job_id(video, tmp_path):
 
 def test_a_tasks_paid_shots_are_marked_reconciled_from_the_cli(sent):
     run(["gateway", "reconcile", "1a2b3c4d", "--shot", "shot_a", "--shot", "shot_b"])
-    run(["gateway", "reconcile", "1a2b3c4d"])
-    path = "tasks/1a2b3c4d/shots/reconcile"
-    assert sent == [(path, {"shots": ["shot_a", "shot_b"]}), (path, {})]
+    assert sent == [("tasks/1a2b3c4d/shots/reconcile", {"shots": ["shot_a", "shot_b"]})]
+    with pytest.raises(SystemExit):  # never every shot by default: the keys are needed
+        run(["gateway", "reconcile", "1a2b3c4d"])
+    assert hubtools.BY_NAME["tico_gateway_reconcile"]["inputSchema"]["required"] == ["task", "shots"]

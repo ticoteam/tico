@@ -95,7 +95,9 @@ class Wait:
     href: str | None = None
     share: tuple[str, ...] | None = None
     shared: bool = False  # an ask of one approver of a page several people approve (`of`); never leaves the server
-    shots: tuple[str, ...] | None = None  # the keys of the paid shots it asks to reconcile (`with_shots`)
+    shots: tuple[tuple[str, str], ...] | None = (
+        None  # (key, name) of each paid shot it asks to reconcile (`with_shots`)
+    )
 
 
 # What a reader who may not open a task this one filed is told of it (`unnamed`).
@@ -146,7 +148,7 @@ def view(wait: Wait, shown: Callable[[str], bool]) -> Row:
     if out["shots"] is None:
         del out["shots"]
     else:
-        out["shots"] = list(out["shots"])
+        out["shots"] = [{"key": key, "name": name} for key, name in out["shots"]]
     return out
 
 
@@ -1075,7 +1077,7 @@ def with_shots(
     row = E.task(conn, str(task_id)) if shots and waits else None
     if not shots or not row:
         return list(waits)
-    keys = tuple(shot["key"] for shot in shots)
+    keys = tuple((str(shot["key"]), str(shot["name"])) for shot in shots)
     line, since = paid_renders.line(shots), shots[-1]["since"]
     wait = Wait(PERSON, person_for(conn, row), line, paid_renders.WAIT + str(task_id), since, ask=True, shots=keys)
     return sorted([wait, *waits], key=lambda found: _ORDER[found.state])
@@ -1210,7 +1212,7 @@ def _held_tasks(conn: "sqlite3.Connection") -> set[str]:
     return out | set(task_wakes.worktree_holds(conn))
 
 
-def candidates(conn: "sqlite3.Connection", person: str) -> list[str]:
+def candidates(conn: "sqlite3.Connection", person: str, shots: bool = False) -> list[str]:
     """The open tasks that can put something in `person`'s Needs you, in id order: every task `needs_by_person` would
     list for them, and others it reads to be sure. A task reaches a person in one of these ways (`of`,
     `needs_by_person`):
@@ -1226,7 +1228,8 @@ def candidates(conn: "sqlite3.Connection", person: str) -> list[str]:
       its pipeline, are the first person above its manager bot, are the company's person, or ask for or read it;
     - for the company's person, a cause they fix first (`Wait.fix`, Connect GitHub);
     - for the owner or the Admin who stands in (`admin_person`), a page whose approvers have all gone;
-    - a paid shot on it whose outcome is unknown waits on its person (`with_shots`, backend/paid_renders.py).
+    - with `shots`, a paid shot on it whose outcome is unknown waits on its person (`with_shots`,
+      backend/paid_renders.py).
 
     Most people own or manage no pipeline, so only their own rows are read, by index. Someone whose ladder reaches a
     pipeline reads a few columns of each of its open tasks, and works out in full only those that may fall to them."""
@@ -1344,7 +1347,8 @@ def candidates(conn: "sqlite3.Connection", person: str) -> list[str]:
     found |= _ladder_tasks(conn, person, company, pipelines, stage_asks)
     from . import paid_renders
 
-    found |= set(paid_renders.cards(conn))  # few, and worked out in full: `_lists` keeps this person's
+    if shots:
+        found |= set(paid_renders.cards(conn))  # few, and worked out in full: `_lists` keeps this person's
     if stages:
         visits |= {
             str(row[0])
@@ -1453,6 +1457,7 @@ def needs(
     *,
     own_work: bool = False,
     among: Callable[[list[str]], list[str]] | None = None,
+    shots: bool = False,
 ) -> list[Row]:
     """Needs you, for one person, oldest first: only what someone asks of them. Each OK or answer that names them is its
     own entry (`kind` "ask"). A task whose own work is theirs, with nothing asked of them, is not listed: it lives in
@@ -1481,10 +1486,10 @@ def needs(
     they reach the person from outside the candidates."""
     if not is_human(person):
         return []
-    found = candidates(conn, person)
+    found = candidates(conn, person, shots)
     if among is not None:
         found = among(found)
-    return _lists(conn, found, person, snoozed=snoozed, own_work=own_work).get(person, [])
+    return _lists(conn, found, person, snoozed=snoozed, own_work=own_work, shots=shots).get(person, [])
 
 
 def needs_by_person(conn: "sqlite3.Connection") -> dict[str, list[Row]]:
@@ -1574,11 +1579,13 @@ def _lists(
     *only_people: str,
     snoozed: str = "hide",
     own_work: bool = False,
+    shots: bool = False,
 ) -> dict[str, list[Row]]:
     """Needs you from these open tasks (in id order), for every person, or only for `only_people`: each task's waits
     are worked out whoever they are for, and only the chosen people's entries are kept. An ask a person snoozed for
     themselves is left out of their list (`snoozed` "hide"), listed with its `snoozed_until` ("keep"), or the only kind
-    listed ("only")."""
+    listed ("only"). `shots`: the list a person is shown, with paid shots to reconcile (`with_shots`); never a count
+    or budget the engine weighs."""
     only: Any = set(only_people) if only_people else _Everyone()
     snoozes = ask_snoozes(conn, *only_people)
     out: dict[str, list[Row]] = {}
@@ -1589,7 +1596,7 @@ def _lists(
     question_marks.open_rows(conn)
     from . import paid_renders
 
-    cards = paid_renders.cards(conn)
+    cards = paid_renders.cards(conn) if shots else {}
     read = prime(conn, task_ids)
     for task_id in task_ids:
         row = read[str(task_id)] if str(task_id) in read else E.task(conn, task_id)

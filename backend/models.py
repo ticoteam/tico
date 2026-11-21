@@ -2460,7 +2460,7 @@ class GatewayVideo(Contract):
 
 
 class ShotsReconcile(Contract):
-    shots: list[Annotated[str, Field(min_length=1, max_length=40)]] | None = Field(default=None, max_length=50)
+    shots: list[Annotated[str, Field(min_length=1, max_length=40)]] = Field(min_length=1, max_length=50)
 
 
 class SystemUpdate(Contract):

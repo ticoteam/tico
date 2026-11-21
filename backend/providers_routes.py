@@ -357,20 +357,22 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
     def shots_reconcile(tid: str, request: Request, body: M.ShotsReconcile):
         """Mark the card's paid shots of unknown outcome reconciled once its person checked Gateway usage
         (`tico_gateway_reconcile`, backend/paid_renders.py). Whoever may comment on the card may, checked again on a
-        replay of the same Idempotency-Key."""
+        replay of the same Idempotency-Key. The receipt holds the task the id named, never only what was typed: a
+        replay through a prefix that now names another task is a conflict."""
+        from types import SimpleNamespace
+
+        from . import task_reads
+
         who = request.state.identity
-
-        def may(c):
-            from . import task_reads
-
-            task_reads.comment_rights(c, auth, who, auth.resolve_task(c, who, tid))
-
-        def work(c):
-            return {
-                "reconciled": paid_renders.reconcile(c, who.actor, auth.resolve_task(c, who, tid), body.shots or ())
-            }
-
-        return mutate(request, body, work, check=may)
+        with store.read() as c:
+            task_id = auth.resolve_task(c, who, tid)
+        keyed = SimpleNamespace(model_dump=lambda: {**body.model_dump(), "task": task_id})
+        return mutate(
+            request,
+            keyed,
+            lambda c: {"reconciled": paid_renders.reconcile(c, who.actor, task_id, body.shots)},
+            check=lambda c: task_reads.comment_rights(c, auth, who, task_id),
+        )
 
     @app.get("/api/v2/gateway/videos/{job_id}")
     def gateway_video_status(job_id: str, request: Request):

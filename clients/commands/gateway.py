@@ -557,23 +557,24 @@ def gateway_video_status(api, args):
 
 @tool(
     "tico_gateway_reconcile",
-    "Mark a task's paid shots of unknown outcome reconciled, once its person checked Gateway usage: every one, or "
-    "only the `shots` keys reconcile_shot named. They leave the card's Reconcile wait and are never sent again: "
-    "name a new shot to render one again. Answers {reconciled: [{key, name}]}.",
+    "Mark a task's paid shots of unknown outcome reconciled, once its person checked Gateway usage: the `shots` "
+    "keys reconcile_shot named. They leave the card's Reconcile wait and are never sent again: name a new shot to "
+    "render one again. Answers {reconciled: [{key, name}]}.",
     {
         "task": TASK_ID,
         "shots": {
             "type": "array",
+            "minItems": 1,
             "maxItems": 50,
             "items": _s("A shot's key, e.g. shot_0123456789abcdef0123456789abcdef"),
-            "description": "Only these shots (default: every one on the task)",
+            "description": "The shots to mark reconciled, by key",
         },
     },
-    required=("task",),
+    required=("task", "shots"),
     writes=True,
 )
 def gateway_reconcile(api, args):
-    body = {"shots": [str(shot) for shot in args["shots"]]} if args.get("shots") else {}
+    body = {"shots": [str(shot) for shot in args["shots"]]}
     return api.post(f"tasks/{args['task']}/shots/reconcile", body, key=_key(args))
 
 
@@ -631,7 +632,7 @@ GATEWAY = (
     Command(
         "gateway reconcile",
         "mark a task's paid shots reconciled once Gateway usage was checked; they are never sent again",
-        args=(Arg("shots", "--shot", metavar="KEY"),),
+        args=(Arg("shots", "--shot", metavar="KEY", required=True),),
         example="tico gateway reconcile 1a2b3c4d --shot shot_0123456789abcdef0123456789abcdef",
     ),
 )
