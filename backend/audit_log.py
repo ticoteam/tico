@@ -45,10 +45,13 @@ def _row(r):
     }
 
 
-def rows(c, obj=None, actor=None, limit=LIMIT, before=None):
+def rows(c, obj=None, actor=None, limit=LIMIT, before=None, versions=False):
     """Newest first, paged by `before`: the last row's `<at>|<id>`, so rows sharing a time are never skipped. A page
-    stops at LIST_BYTES too (a row carries whole objects), and the next page starts at the first row it left out."""
+    stops at LIST_BYTES too (a row carries whole objects), and the next page starts at the first row it left out.
+    `versions`: only the rows whose object carries a version (an org rule's own, not its due dates')."""
     sql, args = "SELECT * FROM audit_log WHERE 1=1", []
+    if versions:
+        sql += " AND (json_extract(after,'$.version') IS NOT NULL OR json_extract(before,'$.version') IS NOT NULL)"
     for column, value in (("object", obj), ("actor", actor)):
         if value:
             sql += f" AND {column}=?"

@@ -20,12 +20,13 @@ Steps:
 4. Read the rules in force: `tico rules list --limit 100`, then each `next_cursor`. Note any rule the draft repeats or
    contradicts.
 5. Check the draft against the constitution, article by article, and against its order of law.
-6. Suggest it once: `tico rules add --kind internal --text "<sentence>" --who <team, agent or person> [--exact '<json>']`.
-   Always name Who: the person you ask must be able to add it for them.
-7. Ask for one OK on this task: `tico rules ok <rule id> --task <this task>`. Say in your last line what it repeats or
-   contradicts, if anything.
-8. If the person sends it back, change the suggestion (a new suggestion, then a new `tico rules ok`), or close the task
-   with why.
+6. Suggest it once, in this run: `tico rules add --kind internal --text "<sentence>" --who <team, agent or person>
+   [--exact '<json>']`. Always name Who. A suggestion made in this run belongs to this task.
+7. Ask for one OK on this task, in this run: `tico rules ok <rule id> --task <this task>`. Tico asks the requester when
+   they may add it, else the owner or an Admin. Say in your last line what it repeats or contradicts, if anything.
+   If the answer is that nobody here may add it, close the task and say why.
+8. If the person sends it back, suggest a revised draft and ask again with `tico rules ok`: the new ask replaces the old
+   one and the old draft is set aside. Or close the task with why.
 
 Never:
 - Drop words that came from an owner because they conflict. Draft them anyway and name the conflict; the person decides.

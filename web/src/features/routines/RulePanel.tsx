@@ -21,7 +21,7 @@ import { RULES, type RuleTab } from './actions';
 import { PartyPick, useNamer } from './CompanyRules';
 import { DuePanel } from './DuePanel';
 import { Face, press, RemoveItem, useConfirmRemove, useName, Verb, Word } from './parts';
-import { orgRulesQuery, partiesOf, ruleHistoryQuery, ruleSourcesQuery, stageRulesQuery, teamsQuery } from './queries';
+import { orgRulesQuery, partiesOf, ruleHistoryMore, ruleHistoryQuery, ruleSourcesQuery, stageRulesQuery, teamsQuery } from './queries';
 import type { OrgRule, RuleHold, RuleVersion, StageRule } from './types';
 import { agentWords, BROKEN, cap, dayWords, exactWords, STAGE_EVENTS, STAGE_THENS, STAGE_TIMERS, stageParts } from './words';
 
@@ -446,17 +446,6 @@ function StageEditor({ rule, onDone, onClose }: { rule?: StageRule; onDone: () =
 /** A hold's state, as its row's mark says it: held until its reviewer sends it anyway or keeps it blocked. */
 const HOLD_MARK: Record<string, string> = { held: 'Waits on you', sent: 'Sent anyway', kept: 'Kept blocked' };
 
-/** The check outcomes a rule's last 30 days count, in the order they are said. */
-const OUTCOMES: [string, string][] = [
-  ['rules.refused', 'refused'],
-  ['rules.blocked', 'stopped'],
-  ['rules.held', 'held'],
-  ['rules.escalated', 'asked first'],
-  ['rules.warned', 'warned'],
-  ['rules.unchecked', 'unchecked'],
-  ['rules.passed', 'passed'],
-];
-
 /** What one version changed, in a word or two. */
 function versionWords(v: RuleVersion): string {
   const a = v.after;
@@ -474,34 +463,55 @@ function versionWords(v: RuleVersion): string {
   return said.length ? `Changed ${said.join(', ').toLowerCase()}` : 'Changed';
 }
 
-/** Its versions, newest first, then its last 30 days: the check counts and the holds the reader may read. */
+/** Its holds from the last 30 days the reader may read, then its versions, newest first; each continues on More. */
 function History({ id }: { id: string }) {
   const q = useQuery(ruleHistoryQuery(id));
+  // later pages, read on More: each list keeps its own cursor
+  const [more, setMore] = useState<{ versions: RuleVersion[]; holds: RuleHold[]; versionsNext?: string | null; holdsNext?: string | null }>({ versions: [], holds: [] });
+  const [busy, setBusy] = useState(false);
   if (!q.data) return null;
-  const { counts, holds } = q.data;
-  // the rule's own versions (its due dates write their audit rows under the rule too), newest first
-  const versions = q.data.versions.filter((v) => v.after?.version != null).sort((a, b) => (b.after?.version ?? 0) - (a.after?.version ?? 0));
-  const said = OUTCOMES.filter(([k]) => counts[k]).map(([k, w]) => `${counts[k]} ${w}`);
+  const versions = [...q.data.versions, ...more.versions];
+  const holds = [...q.data.holds, ...more.holds];
+  const versionsNext = more.versionsNext === undefined ? q.data.versions_next : more.versionsNext;
+  const holdsNext = more.holdsNext === undefined ? q.data.holds_next : more.holdsNext;
+  const next = async (part: 'versions' | 'holds', cursor: string) => {
+    setBusy(true);
+    try {
+      const r = await ruleHistoryMore(id, part, cursor);
+      setMore((m) =>
+        part === 'versions' ? { ...m, versions: [...m.versions, ...r.versions], versionsNext: r.versions_next ?? null } : { ...m, holds: [...m.holds, ...r.holds], holdsNext: r.holds_next ?? null },
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <>
       <section className="rail-sec" aria-label="Last 30 days">
         <h3>Last 30 days</h3>
-        <p className="row-sub">{said.length ? said.join(', ') : 'Nothing checked'}</p>
-        {holds.map((h) => (
-          <HoldRow key={h.id} h={h} />
-        ))}
+        {holds.length ? holds.map((h) => <HoldRow key={h.id} h={h} />) : <p className="row-sub">No holds</p>}
+        {holdsNext && (
+          <Button variant="quiet" busy={busy} onClick={() => void next('holds', holdsNext)}>
+            More
+          </Button>
+        )}
       </section>
       {versions.length > 0 && (
         <section className="rail-sec" aria-label="Versions">
           <h3>Versions</h3>
           {versions.map((v) => (
             <Row key={v.id} className="hold" title={versionWords(v)} target={`version:${v.id}`}>
-              <span className="hold-mark">{`v${v.after?.version ?? ''}`}</span>
+              <span className="hold-mark">{`v${v.after?.version ?? v.before?.version ?? ''}`}</span>
               <span className="row-title">{versionWords(v)}</span>
               <Face id={v.actor} />
               <Ago at={v.created_at} className="row-age" />
             </Row>
           ))}
+          {versionsNext && (
+            <Button variant="quiet" busy={busy} onClick={() => void next('versions', versionsNext)}>
+              More
+            </Button>
+          )}
         </section>
       )}
     </>

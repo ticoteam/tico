@@ -47,6 +47,24 @@ STOP = frozenset(
 )
 
 
+# The constitution (backend/org_rules.py ensure_constitution): its doc's id is recorded under CONSTITUTION_KEY and it is
+# read by that id, never by its path. Its path is reserved: no one but Tico puts another doc there.
+CONSTITUTION_PATH = "rules/constitution.md"
+CONSTITUTION_KEY = "rules.constitution"
+
+
+def constitution_id(c):
+    """The recorded constitution's doc id, or None."""
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (CONSTITUTION_KEY,)).fetchone()
+    return (json.loads(row[0]) or {}).get("doc") if row else None
+
+
+def reserved(c, path, doc_id, actor):
+    """Refuse a doc other than the constitution at the constitution's path, unless Tico puts it there."""
+    if actor != H.TICO_ACTOR and str(path).casefold() == CONSTITUTION_PATH and doc_id != constitution_id(c):
+        raise Problem("path_taken", "That path is kept for the constitution", 409)
+
+
 # ------------------------------------------------------------------ list cursors
 def list_cursor(row):
     """Where the next page starts: after this row in `ORDER BY path COLLATE NOCASE, id`."""
@@ -635,10 +653,13 @@ class Docs:
             raise Problem("forbidden", "Docs are for people and bots", 403)
 
     def admin(self, who):
-        """Who locks a doc and changes a locked one: an owner or bot administrator, by their own hand. Their Assistant or
-        BotOps acting for them is an agent, and a locked doc (the constitution) is changed by people only."""
+        return who.role in ("owner", "human") and self.auth.bot_admin(who)
+
+    def locker(self, who):
+        """Who locks a doc, or changes or restores a locked one: an owner or bot administrator by their own hand. Their
+        Assistant or BotOps acting for them unconfirmed is an agent, and a locked doc (the constitution) is people's."""
         acting = who.via in ("assistant", "botops") and not who.confirmed
-        return who.role in ("owner", "human") and not acting and self.auth.bot_admin(who)
+        return self.admin(who) and not acting
 
     # -------------------------------------------------------------- views
     def doc_view(self, c, row, body=True, names=None):
@@ -727,6 +748,7 @@ class Docs:
             if path
             else self.free_path(c, slugify(str(title).casefold(), limit=80, fallback="untitled") + ".md", unique=True)
         )
+        reserved(c, path, None, actor)
         if actor == "bot:librarian":
             body = H.librarian_text(body)
         now, doc_id = H.now(), "doc-" + secrets.token_hex(6)
@@ -767,9 +789,9 @@ class Docs:
         def work(c):
             row = self.get_row(c, doc_id)
             locking = body.locked is not None and bool(body.locked) != bool(row["locked"])
-            if locking and not self.admin(who):
+            if locking and not self.locker(who):
                 raise Problem("forbidden", "Only an owner or bot administrator can lock or unlock a doc", 403)
-            if row["locked"] and not self.admin(who):
+            if row["locked"] and not self.locker(who):
                 raise Problem("locked", "This doc is locked: only an owner or bot administrator can change it", 403)
             mine_only = body.own_version_only and row["updated_by_id"] != who.actor
             partial = body.body is not None and (body.section is not None or body.append)
@@ -800,6 +822,8 @@ class Docs:
                 text = H.librarian_text(text)
             archived = int(body.archived) if body.archived is not None else row["archived"]
             path = clean_path(body.path) if body.path is not None else row["path"]
+            if path.casefold() != row["path"].casefold():
+                reserved(c, path, row["id"], who.actor)
             if not archived and (path.casefold() != row["path"].casefold() or row["archived"]):
                 path = self.free_path(c, path, own=row["id"])
             changed = (title, text, path, archived) != (row["title"], row["body"], row["path"], row["archived"])
@@ -931,7 +955,7 @@ class Docs:
 
         def work(c):
             row = self.get_row(c, doc_id)
-            if row["locked"] and not self.admin(who):
+            if row["locked"] and not self.locker(who):
                 raise Problem("locked", "This doc is locked: only an owner or bot administrator can change it", 403)
             old = c.execute(
                 "SELECT * FROM doc_versions WHERE doc_id=? AND version=?", (doc_id, body.version)
@@ -945,6 +969,8 @@ class Docs:
                 path = row["path"]
             if row["archived"]:  # restoring an archived doc: its path may have been taken since
                 path = self.free_path(c, path, own=doc_id, unique=True)
+            if path.casefold() != row["path"].casefold():
+                reserved(c, path, doc_id, who.actor)
             if (old["title"], old["body"], path, 0) == (row["title"], row["body"], row["path"], row["archived"]):
                 return {"doc": self.doc_view(c, row)}
             c.execute(

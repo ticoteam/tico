@@ -462,20 +462,21 @@ export const orgRulesQuery = (status: 'active' | 'suggested') =>
     queryFn: async ({ signal }) => (await api.get<{ rules: OrgRule[] }>(`/api/v2/rules?status=${status}&limit=100`, { signal })).rules,
   });
 
-/** One rule's versions and its last 30 days: its holds the reader may read and its check counts. */
+/** One rule's versions and its holds from the last 30 days the reader may read: the first page of each. */
 export const ruleHistoryQuery = (id: string) =>
   queryOptions({
     queryKey: ['rules', 'history', id],
     queryFn: ({ signal }) => api.get<RuleHistory>(`/api/v2/rules/${enc(id)}/history`, { signal }),
   });
 
-/** The constitution at the root of Rules: the locked doc at its path (backend/org_rules.py CONSTITUTION_PATH). */
+/** The next page of a rule's versions or holds, from its cursor. */
+export const ruleHistoryMore = (id: string, part: 'versions' | 'holds', cursor: string) =>
+  api.get<RuleHistory>(`/api/v2/rules/${enc(id)}/history?${part}_cursor=${enc(cursor)}`);
+
+/** The constitution at the root of Rules: the recorded doc (GET /rules/counts), never whatever sits at its path. */
 export const constitutionQuery = queryOptions({
   queryKey: ['rules', 'constitution'],
-  queryFn: async ({ signal }) => {
-    const r = await api.get<{ docs: { id: string; title: string; locked: boolean }[] }>('/api/v2/docs?path_prefix=rules/constitution.md&limit=1', { signal });
-    return r.docs[0] ?? null;
-  },
+  queryFn: async ({ signal }) => (await api.get<{ constitution?: { id: string; title: string } | null }>('/api/v2/rules/counts', { signal })).constitution ?? null,
   ...quiet,
 });
 

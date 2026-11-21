@@ -966,11 +966,13 @@ def make(c, who, text):
     owner = page_owners.owner(c, "rules", fallback=False)
     if not owner:
         raise Problem("counsel_off", "The Rules page has no owner to draft it", 409)
-    law = O.constitution_text(c)
+    O.ensure_constitution(c)  # the first clerk task finds it there, whenever the Rules page's owner became live
+    law = (O.constitution(c) or {}).get("body") or ""
     lines = [
         "Make these words into one rule. Follow the clerk-a-rule skill: draft one plain sentence and, when a limit fits "
         "one, a typed check; check them against the constitution and the rules in force; suggest it; then ask for one "
-        "OK with `tico rules ok <rule> --task <this task>`. If it conflicts, say so in the ask: never drop it.",
+        "OK with `tico rules ok <rule> --task <this task>` from this run. If it conflicts, say so in your last line: "
+        "never drop it.",
         "",
         "The words (whoever asked):",
         fence(text),

@@ -6,6 +6,7 @@ Tier 2 group under it. Finance is a bot in Support Tier 2; Ops is a bot on the p
 
 import json
 from datetime import timedelta
+from urllib.parse import quote
 
 from backend import org_rules as O
 from backend import rule_due as D
@@ -447,6 +448,10 @@ def test_a_typed_check_is_kept_exactly_and_judges_one_actions_params(api):
     builtin_off(api)
     body = {"kind": "internal", "text": "Refunds over $100 go to Ben first.", "who": {"all_bots": True}}
     rule(api, {**body, "exact_check": {**REFUND_CAP, "per": "day"}}, expected=422)
+    toward = {**body, "toward_scope": ["entity:organization/acme-lights"]}
+    rule(api, {**toward, "exact_check": REFUND_CAP}, expected=422)  # a rule checked in code takes no typed check
+    coded = rule(api, toward)
+    edit(api, coded["id"], {"version": coded["version"], "exact_check": REFUND_CAP}, expected=422)
     made = rule(api, {**body, "exact_check": REFUND_CAP})
     assert made["exact_check"] == REFUND_CAP
     lists = rule(
@@ -489,23 +494,21 @@ def test_a_typed_check_is_kept_exactly_and_judges_one_actions_params(api):
     assert json.loads(rows[-1]["after"])["exact_check"] is None
 
 
-def test_a_rules_history_has_its_versions_its_holds_and_30_days_of_check_counts(api):
+def test_a_rules_history_pages_its_versions_apart_from_its_due_dates_and_its_recent_holds(api):
+    """Versions are the rule's own audit rows (a due date's row is not one), newest first, and continue by their
+    cursor; holds are the rule's from the last 30 days the reader may read, and continue by theirs."""
+    from backend import audit_log
+
     org(api)
     made = rule(api, {"kind": "internal", "text": "Log every refund.", "who": {"all_bots": True}})
     edit(api, made["id"], {"version": made["version"], "text": "Log every refund the same day."})
     other = rule(api, {"kind": "internal", "text": "Cite your source.", "who": {"all_bots": True}})
-    target = "org_rule:" + made["id"]
+    old = H.shift(H.now(), days=-31)
     with api.app.state.store.transaction() as c:
-        for action, at in (("rules.blocked", H.now()), ("rules.blocked", H.now()), ("rules.warned", H.now())):
-            c.execute("INSERT INTO events VALUES(?,?,?,?,?,?)", (H.new_id(), at, "bot:ops", action, target, "{}"))
-        old = H.shift(H.now(), days=-31)
-        c.execute("INSERT INTO events VALUES(?,?,?,?,?,?)", (H.new_id(), old, "bot:ops", "rules.blocked", target, "{}"))
-        c.execute(
-            "INSERT INTO events VALUES(?,?,?,?,?,?)",
-            (H.new_id(), H.now(), "bot:ops", "rules.blocked", "org_rule:" + other["id"], "{}"),
-        )
+        audit_log.write(c, "human:ana", "org_rule:" + made["id"], None, {"due": "d1"}, None)
         for hid, rules_, at in (
             ("h-now", [made["id"]], H.now()),
+            ("h-next", [made["id"]], H.shift(H.now(), seconds=1)),
             ("h-old", [made["id"]], old),
             ("h-other", [other["id"]], H.now()),
         ):
@@ -515,10 +518,17 @@ def test_a_rules_history_has_its_versions_its_holds_and_30_days_of_check_counts(
                 (hid, "comment", encode({"text": "x"}), "bot:ops", json.dumps(rules_), "n-" + hid, "held", at),
             )
     seen = get(api, f"rules/{made['id']}/history")
-    assert [v["after"]["version"] for v in seen["versions"]] == [2, 1]
-    assert seen["counts"] == {"rules.blocked": 2, "rules.warned": 1}
-    assert [h["id"] for h in seen["holds"]] == ["h-now"]
-    # A bot reads only its own holds; Cara, a member, reads the versions and counts and none of Ops's holds.
+    assert [v["after"]["version"] for v in seen["versions"]] == [2, 1] and seen["versions_next"] is None
+    assert "counts" not in seen
+    assert [h["id"] for h in seen["holds"]] == ["h-now", "h-next"]
+    first = seen["versions"][0]
+    cursor = quote(f"{first['created_at']}|{first['id']}")
+    rest = get(api, f"rules/{made['id']}/history?versions_cursor={cursor}")
+    assert [v["after"]["version"] for v in rest["versions"]] == [1]
+    nxt = f"{seen['holds'][0]['created_at']}|h-now"  # the cursor a page that stopped after h-now hands back
+    more = get(api, f"rules/{made['id']}/history?holds_cursor={quote(nxt)}")
+    assert [h["id"] for h in more["holds"]] == ["h-next"]
+    # Cara, a member, reads the versions and none of Ops's holds.
     cara = get(api, f"rules/{made['id']}/history", token="cara-test")
-    assert cara["holds"] == [] and cara["counts"] == seen["counts"] and len(cara["versions"]) == 2
+    assert cara["holds"] == [] and len(cara["versions"]) == 2
     assert api.get("/api/v2/rules/nope/history", headers=headers("ana-test")).status_code == 404

@@ -20,17 +20,20 @@ requires of us). A rule says who follows it and, for an internal rule, with whom
 - Checked exactly: a rule may carry one stateless typed check (`exact_check`, `exact_check_in`): an allow list or a
   dollar cap on one action, adopted with exact params. `exact_broken` judges one action's params against it, and
   org_rule_check.exact_check runs it for a write; the sentence stays the rule people read.
-- History (`history`): every version from audit_log, and the rule's last 30 days: its holds the caller may read and a
-  count of its `rules.*` events.
-- Adopting a suggestion by OK (`ask_ok`, `ok_given`): whoever suggested a rule asks one person to OK exactly that
-  version (task_asks subject `rule:<id>`); their OK accepts it as them, with their own rights.
-- The constitution (`ensure_constitution`): a locked doc at CONSTITUTION_PATH, made once; only people change a locked
-  doc (backend/docs.py).
+- History (`history`): its versions from audit_log and the holds of it from its last 30 days the caller may read,
+  each paged by its own cursor.
+- Adopting a suggestion by OK (`ask_ok`, `ok_given`): a suggestion an agent makes in a run on a "Make this a rule" task
+  is bound to that task (its `org_rule.added` event). From that run it asks one person who may add it and reads the
+  task to OK exactly that version (task_asks subject `rule:<id>`, line OK_LINE); a revised draft replaces the last ask
+  on the task. Their OK accepts it as them, with their own rights, only on its bound task.
+- The constitution (`ensure_constitution`): a locked doc made once, recorded and read by its id (docs.CONSTITUTION_KEY),
+  its path reserved; only people change a locked doc (backend/docs.py).
 
 Unversioned and idempotent (`ensure`), like backend/strategy.py.
 """
 
 import json
+from types import SimpleNamespace
 from datetime import timedelta
 from typing import Literal
 
@@ -73,18 +76,9 @@ EXACT_VALUES_MAX = 100  # the values one allow list holds
 EXACT_VALUE_MAX = 300
 EXACT_USD_MAX = 1_000_000_000
 HISTORY_DAYS = 30
-# The outcome events of a rule check (org_rule_check.ACTIONS) and of the gate on outside writes: a rule's history counts
-# them on its own target, through the events_action_target index.
-HISTORY_ACTIONS = (
-    "rules.blocked",
-    "rules.escalated",
-    "rules.warned",
-    "rules.unchecked",
-    "rules.passed",
-    "rules.refused",
-    "rules.held",
-)
+HISTORY_PAGE = 50
 OK_SUBJECT = "rule:"  # task_asks subject of a suggestion's OK
+OK_LINE = "Approve this rule"  # the ask's line; the rule itself is in the bound preview
 
 
 # ----------------------------------------------------------------------------- small helpers
@@ -980,6 +974,9 @@ def _scope_checked(c, auth, who, value):
     return scope
 
 
+NO_EXACT_WITH_TOWARD = "A rule checked in code by its toward scope takes no typed check"
+
+
 def _exact_json(value):
     check = exact_check_in(value)
     return _json(check) if check else None
@@ -1038,6 +1035,8 @@ def add_rule(c, auth, who, body):
     )
     where = _where_terms(c, body.get("where"))
     toward, applies = _structured_terms(body.get("toward_scope"), body.get("applies_when"))
+    if toward and exact_check_in(body.get("exact_check")):
+        raise Problem("validation", NO_EXACT_WITH_TOWARD, 422)
     # A bot's add is a suggestion, and so is a person's add they may not manage (the rule is theirs to suggest). Whoever may
     # manage the rule, Everyone included, makes it active at once.
     status = "active" if who.role != "bot" and may_manage(c, auth, who, scope, ctx) else "suggested"
@@ -1077,7 +1076,10 @@ def add_rule(c, auth, who, body):
     )
     stored = _get(c, row["id"])
     _audit(c, who.actor, row["id"], None, _core(stored), who)
-    _event(c, who.actor, "added", row["id"], {"kind": kind, "status": status})
+    clerk = _bind(c, who) if status == "suggested" else None
+    _event(
+        c, who.actor, "added", row["id"], {"kind": kind, "status": status, **({"clerk_task": clerk} if clerk else {})}
+    )
     return view(c, auth, who, stored, ctx, quote=False)
 
 
@@ -1111,6 +1113,8 @@ def edit_rule(c, auth, who, rule_id, body):
         changes["where_terms"] = _json(_where_terms(c, body["where"]))
     if body.get("exact_check") is not None:
         check = _exact_json(body["exact_check"])
+        if check and row["toward_scope"]:
+            raise Problem("validation", NO_EXACT_WITH_TOWARD, 422)
         if check != (_json(row["exact_check"]) if row["exact_check"] else None):
             changes["exact_check"] = check
     if body.get("source_id") is not None:
@@ -1494,8 +1498,6 @@ def ensure_builtin(c):
     return row["id"]
 
 
-CONSTITUTION_PATH = "rules/constitution.md"
-CONSTITUTION_ADDED = "rules.constitution"  # registry_metadata: made once; a doc a person moved or archived stays so
 CONSTITUTION = """# Constitution
 
 People change this page. Agents read it and never edit it.
@@ -1531,66 +1533,115 @@ When two rules disagree, the higher one wins:
 
 def ensure_constitution(c):
     """The constitution, once per company whose Rules page has an owner to check drafts against it (page_owners
-    `rules`): a locked doc at CONSTITUTION_PATH, so only people change it (backend/docs.py locks). Its marker is written
-    with it, so a doc a person changed, moved or archived is left as they left it. Returns the doc's id when it was made
-    now, else None."""
-    from . import page_owners
-    from .docs import Docs
+    `rules`; "Make this a rule" makes sure of it too): Tico's own locked doc, so only people change it (backend/docs.py
+    locks), recorded under docs.CONSTITUTION_KEY and read by that id. Its path is reserved; a doc someone put there
+    before keeps it, and the constitution goes beside it. A doc a person changed, moved or archived stays as they left it.
+    Returns the doc's id when it was made now, else None."""
+    from . import docs, page_owners
 
-    if c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (CONSTITUTION_ADDED,)).fetchone():
+    if docs.constitution_id(c) or not page_owners.owner(c, "rules", fallback=False):
         return None
-    if not page_owners.owner(c, "rules", fallback=False):
-        return None
-    found = c.execute("SELECT id FROM docs WHERE archived=0 AND path=? COLLATE NOCASE", (CONSTITUTION_PATH,)).fetchone()
-    doc_id = (
-        found["id"]
-        if found
-        else Docs(None, None, None, None).insert(
-            c, H.TICO_ACTOR, "Constitution", CONSTITUTION, CONSTITUTION_PATH, note="Built in"
-        )["id"]
-    )
+    taken = c.execute(
+        "SELECT 1 FROM docs WHERE archived=0 AND path=? COLLATE NOCASE", (docs.CONSTITUTION_PATH,)
+    ).fetchone()
+    path = None if taken else docs.CONSTITUTION_PATH
+    doc_id = docs.Docs(None, None, None, None).insert(
+        c, H.TICO_ACTOR, "Constitution", CONSTITUTION, path, note="Built in"
+    )["id"]
     c.execute("UPDATE docs SET locked=1 WHERE id=?", (doc_id,))
-    c.execute("INSERT INTO registry_metadata VALUES(?,?)", (CONSTITUTION_ADDED, _json({"doc": doc_id, "at": H.now()})))
+    c.execute(
+        "INSERT INTO registry_metadata VALUES(?,?)", (docs.CONSTITUTION_KEY, _json({"doc": doc_id, "at": H.now()}))
+    )
     return doc_id
 
 
-def constitution_text(c):
-    """The constitution as it reads now, or "" when there is none at its path."""
-    row = c.execute("SELECT body FROM docs WHERE archived=0 AND path=? COLLATE NOCASE", (CONSTITUTION_PATH,)).fetchone()
-    return row["body"] if row else ""
+def constitution(c):
+    """The recorded constitution as it reads now ({id, title, body}), or None when there is none or it was archived."""
+    from . import docs
+
+    doc_id = docs.constitution_id(c)
+    row = (
+        c.execute("SELECT id, title, body FROM docs WHERE id=? AND archived=0", (doc_id,)).fetchone()
+        if doc_id
+        else None
+    )
+    return dict(row) if row else None
 
 
 # ----------------------------------------------------------------------------- history
-def history(c, auth, who, rule_id):
-    """One rule's history: every version (audit_log, newest first, a page of them), and its last HISTORY_DAYS days,
-    the holds of it the caller may read and the count of each `rules.*` outcome event on it."""
+def history(c, auth, who, rule_id, versions_cursor=None, holds_cursor=None):
+    """One rule's history: its versions (the audit rows that carry one, newest first; its due dates' rows are on the
+    due dates) and the holds of it from its last HISTORY_DAYS days that the caller may read, each a page with its own
+    cursor."""
     from . import org_rule_check as OC
 
     auth.domain(who)
     _get(c, rule_id)
-    target = "org_rule:" + rule_id
-    versions = audit_log.rows(c, obj=target, limit=LIST_MAX)
+    versions = audit_log.rows(c, obj="org_rule:" + rule_id, limit=HISTORY_PAGE, before=versions_cursor, versions=True)
     redact_audit(c, auth, who, versions["rows"])
     since = H.shift(H.now(), days=-HISTORY_DAYS)
-    marks = ",".join("?" * len(HISTORY_ACTIONS))
-    counts = {
-        row[0]: row[1]
-        for row in c.execute(
-            f"SELECT action, COUNT(*) FROM events WHERE action IN ({marks}) AND target=? AND created_at>=? "
-            "GROUP BY action",
-            (*HISTORY_ACTIONS, target, since),
-        )
-    }
-    holds, more = OC.holds_of_rule(c, who, rule_id, since, auth=auth)
-    return {"versions": versions["rows"], "counts": counts, "holds": holds, "holds_more": more, "since": since}
+    holds, more = OC.holds_of_rule(c, who, rule_id, since, holds_cursor, auth=auth)
+    return {"versions": versions["rows"], "versions_next": versions["next"], "holds": holds, "holds_next": more}
 
 
 # ----------------------------------------------------------------------------- adopted by OK
-def ask_ok(c, auth, who, rule_id, task_id):
-    """Ask one person, on the task the suggestion was made for, to OK it exactly as it is now (task_asks subject
-    `rule:<id>`): the task's requester when that is a person here, else the owner or an Admin. Only whoever suggested
-    it asks. The same version asked again is the same ask; a new version replaces the old ask."""
+def clerk_task(c, task_id):
+    """Whether a task is a "Make this a rule" task (counsel.make records it)."""
+    return (
+        c.execute(
+            "SELECT 1 FROM events WHERE action='rules.make_requested' AND target=? LIMIT 1", (task_id,)
+        ).fetchone()
+        is not None
+    )
+
+
+def _run_tasks(c, who):
+    from . import task_privacy
+
+    return set(task_privacy.carried_tasks(c, who.attempt_id)) if who.attempt_id else set()
+
+
+def _bind(c, who):
+    """The clerk task a bot's suggestion is made for: the one "Make this a rule" task its run carries and it owns."""
+    if who.role != "bot":
+        return None
+    found = [
+        t for t in sorted(_run_tasks(c, who)) if clerk_task(c, t) and (H.task(c, t) or {}).get("owner_id") == who.actor
+    ]
+    return found[0] if len(found) == 1 else None
+
+
+def bound_task(c, rule_id):
+    """The clerk task a suggestion was bound to when it was made, or None."""
+    row = c.execute(
+        "SELECT detail FROM events WHERE action='org_rule.added' AND target=? LIMIT 1", ("org_rule:" + rule_id,)
+    ).fetchone()
+    return (json.loads(row[0] or "{}") or {}).get("clerk_task") if row else None
+
+
+def _adopter(c, auth, row, task):
+    """Who is asked: the task's requester when they may add this rule, else the owner or an Admin. A person asked who
+    cannot read the task yet is brought onto it. None when nobody here may add it."""
     from . import org_rule_check as OC
+
+    ctx = _ctx(c)
+    for person in (task.get("requester_id") or "", OC.owner_or_admin(c)):
+        if not person or not H.is_human(person) or not OC._present(c, person):
+            continue
+        try:
+            ident = auth.identity_for_actor(c, person)
+        except Problem:
+            continue
+        if may_manage(c, auth, ident, row["who"], ctx):
+            return person
+    return None
+
+
+def ask_ok(c, auth, who, rule_id, task_id):
+    """Ask one person to OK a suggestion exactly as it is now, on the clerk task it is bound to, from the run on that
+    task (task_asks subject `rule:<id>`, line OK_LINE; the preview carries the rule and every field that enforces it).
+    The person is the requester when they may add it, else the owner or an Admin. The asker's earlier asks for other
+    drafts on the task are withdrawn and those drafts set aside: one ask waits on the task."""
     from . import task_asks
 
     row = _get(c, rule_id)
@@ -1598,38 +1649,61 @@ def ask_ok(c, auth, who, rule_id, task_id):
         raise Problem("conflict", "Only a suggestion waits for an OK", 409)
     if row["suggested_by"] != who.actor:
         raise Problem("forbidden", "Whoever suggested a rule asks for its OK", 403)
-    task = H.task(c, task_id)
-    if not task:
-        raise Problem("not_found", f"There is no task {task_id}", 404)
-    requester = task.get("requester_id") or ""
-    person = requester if H.is_human(requester) and OC._present(c, requester) else OC.owner_or_admin(c)
+    if bound_task(c, rule_id) != task_id:
+        raise Problem("conflict", "This suggestion was not made on that task: suggest it from that task's run", 409)
+    if task_id not in _run_tasks(c, who):
+        raise Problem("forbidden", "Ask from your run on that task", 403)
+    if not _has(row["who"]):
+        raise Problem("validation", "Say who follows it: suggest it again with a Who", 422)
+    task = H.task(c, task_id) or {}
+    person = _adopter(c, auth, row, task)
     if not person:
-        raise Problem("conflict", "Nobody is here to OK it", 409)
+        raise Problem("conflict", "Nobody here may add this rule: close the task and say so", 409)
+    if not H.task_private_readable(c, person, task):
+        H.task_reach(c, who.actor, task, person)
+    ctx = _ctx(c)
     content = {
         "rule": rule_id,
         "version": row["version"],
         "text": row["text"],
-        "who": row["who"],
+        "who": _scope_view(ctx, row["who"]),
+        "with": _scope_view(ctx, row["with"], flags=False),
+        "where": row["where"],
         "if_broken": row["if_broken"],
         "exact_check": row["exact_check"],
     }
+    subject = OK_SUBJECT + rule_id
     asked = task_asks.ask_ok(
-        c,
-        who.actor,
-        person,
-        "Add this rule? " + row["text"],
-        shows=[OK_SUBJECT + rule_id],
-        subject=OK_SUBJECT + rule_id,
-        content=content,
-        task_id=task_id,
+        c, who.actor, person, OK_LINE, shows=[subject], subject=subject, content=content, task_id=task_id
     )
+    earlier = c.execute(
+        "SELECT requirement_id, subject FROM ok_grants WHERE asked_by_id=? AND subject LIKE 'rule:%' AND subject!=? "
+        "AND used_at IS NULL",
+        (who.actor, subject),
+    ).fetchall()
+    for rid, old in earlier:
+        if task_asks.task_of(c, rid) != task_id:
+            continue
+        task_asks.withdraw(c, rid, "A revised draft replaces it")
+        _replaced(c, old[len(OK_SUBJECT) :], rule_id)
     _event(c, who.actor, "ok_asked", rule_id, {"task_id": task_id, "to": person})
     return {**asked, "asked_of": person}
 
 
+def _replaced(c, old_id, by_id):
+    """A draft a revised one replaced is set aside, as a person's Skip would."""
+    old = _get(c, old_id)
+    if old["status"] != "suggested":
+        return
+    _save(c, old_id, status="retired", extra={"decided_by": H.TICO_ACTOR, "decided_at": H.now()})
+    _audit(c, H.TICO_ACTOR, old_id, _core(old), _core(_get(c, old_id)), SimpleNamespace(via="", actor=H.TICO_ACTOR))
+    _event(c, H.TICO_ACTOR, "replaced", old_id, {"by": by_id})
+
+
 def ok_given(c, grant, ctx):
     """The person OK'd a suggestion from its preview (task_asks.ON_OK), in that transaction: it is accepted as them, with
-    their own rights, only while it is still the version they were shown. The OK is used and its task is done."""
+    their own rights, only on the clerk task it is bound to and while it is still the version they were shown. The OK is
+    used and its task is done."""
     from . import task_asks
 
     who = getattr(ctx, "who", None)
@@ -1637,14 +1711,15 @@ def ok_given(c, grant, ctx):
         raise Problem("approval", "A rule is OK'd from its preview in Tico", 409)
     content = grant["content"] or {}
     row = _get(c, str(content.get("rule") or ""))
+    rid = grant["requirement_id"]
+    task_id = task_asks.task_of(c, rid)
+    if not task_id or bound_task(c, row["id"]) != task_id:
+        raise Problem("conflict", "This OK is not on the task the rule was drafted on", 409)
     if row["status"] != "suggested" or row["version"] != content.get("version"):
         raise Problem("conflict", "This suggestion changed after it was asked: it needs a new ask", 409)
     decide_rule(c, ctx.auth, who, row["id"], {"version": row["version"]}, "accept")
-    rid = grant["requirement_id"]
     task_asks.use(c, rid, grant["subject"], content, grant["asked_by_id"])
-    task_id = task_asks.task_of(c, rid)
-    if task_id:
-        H.attempt(c, H.task_done, H.TICO_ACTOR, task_id, f"Added: {row['text']}"[:500])
+    H.attempt(c, H.task_done, H.TICO_ACTOR, task_id, f"Added: {row['text']}"[:500])
 
 
 def _party(ctx, text):
@@ -1891,6 +1966,7 @@ def counts(c, auth, who):
         "external": sum(1 for r in rows if r["kind"] == "external"),
         "due": len(dues),
         "suggested": c.execute("SELECT count(*) FROM org_rules WHERE status='suggested'").fetchone()[0],
+        "constitution": {k: v for k, v in (constitution(c) or {}).items() if k != "body"} or None,
     }
 
 
@@ -2195,14 +2271,16 @@ def install(app, store, auth, mutate):
         **api_v2(
             "Rules",
             "getRuleHistory",
-            "One rule's versions, newest first, and its last 30 days: the holds of it you may read and a count of each rule check outcome",
+            "One rule's versions, newest first, and the holds of it from its last 30 days you may read, each paged",
         ),
     )
-    def rules_history(request: Request, rule_id: str):
-        """Every version of the rule (from the audit log), and its last 30 days: its holds you may read, as summaries,
-        and how many times each outcome (`rules.blocked`, `rules.warned`, ...) was recorded on it."""
+    def rules_history(
+        request: Request, rule_id: str, versions_cursor: str | None = None, holds_cursor: str | None = None
+    ):
+        """The rule's versions (from the audit log, newest first) and the holds of it from its last 30 days you may
+        read, as summaries. Each is a page: pass `versions_next` as `versions_cursor`, `holds_next` as `holds_cursor`."""
         with store.read() as c:
-            return history(c, auth, request.state.identity, rule_id)
+            return history(c, auth, request.state.identity, rule_id, versions_cursor, holds_cursor)
 
     @app.post(
         "/api/v2/rules/{rule_id}/ok",

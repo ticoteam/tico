@@ -206,28 +206,34 @@ describe('Rules: the page and Company', () => {
 });
 
 describe('Rules: checked exactly, history, the constitution and the clerk', () => {
-  it('a rule with a typed check says Checked exactly, then its last 30 days and its versions, newest first', async () => {
-    record();
+  it('a rule with a typed check says Checked exactly, then its holds and its versions, each continuing on More', async () => {
+    const sent = record((url) =>
+      url.includes('/history?versions_cursor=')
+        ? ok({ versions: [{ id: 'a1', created_at: '2026-11-19T10:00:00Z', actor: 'bot:rel', before: null, after: { status: 'suggested', version: 1 } }], versions_next: null, holds: [], holds_next: null })
+        : nothing(),
+    );
     company([org({ id: 'o7', text: 'Refunds over $100 go to Ben first', exact_check: { kind: 'max_usd', action: 'refund', field: 'amount_usd', max_usd: 100 } })]);
     queryClient.setQueryData(ruleHistoryQuery('o7').queryKey, {
       versions: [
-        { id: 'a1', created_at: '2026-11-19T10:00:00Z', actor: 'bot:rel', before: null, after: { status: 'suggested', version: 1 } },
-        { id: 'd1', created_at: '2026-11-19T11:00:00Z', actor: 'human:ann', before: null, after: { due: 'd1' } as never },
         { id: 'a2', created_at: '2026-11-20T10:00:00Z', actor: 'human:ann', before: { text: 'Refunds go to Ben', status: 'active', version: 1 }, after: { text: 'Refunds over $100 go to Ben first', status: 'active', version: 2 } },
       ],
-      counts: { 'rules.blocked': 2, 'rules.warned': 1 },
+      versions_next: '2026-11-20T10:00:00Z|a2',
       holds: [{ id: 'h1', state: 'held', created_at: '2026-11-20T11:00:00Z', author: 'bot:rel', rules: [{ id: 'o7' }], to: ['Ann Lee'] }],
+      holds_next: null,
     });
     show('/company/rules?panel=org:o7');
     const panel = await screen.findByRole('complementary', { name: 'Rule' });
+    expect(within(panel).getByRole('heading', { name: 'Checked exactly' })).toBeTruthy();
     expect(within(panel).getByText('refund: amount_usd at most $100')).toBeTruthy();
     const days = within(panel).getByRole('region', { name: 'Last 30 days' });
-    expect(within(days).getByText('2 stopped, 1 warned')).toBeTruthy();
     expect(within(days).getByTitle('Ann Lee')).toBeTruthy();
+    expect(within(days).queryByRole('button', { name: 'More' })).toBeNull();
     const versions = within(panel).getByRole('region', { name: 'Versions' });
-    expect(within(versions).getAllByText(/Changed words|Suggested/).map((e) => e.textContent)).toEqual(['Changed words', 'Suggested']);
-    expect(within(panel).getByRole('heading', { name: 'Checked exactly' })).toBeTruthy();
-    expect(within(versions).queryByText('Added')).toBeNull(); // a due date's audit row is not a version
+    expect(within(versions).getAllByText(/Changed words|Suggested/).map((e) => e.textContent)).toEqual(['Changed words']);
+    fireEvent.click(within(versions).getByRole('button', { name: 'More' }));
+    await waitFor(() => expect(within(versions).getAllByText(/Changed words|Suggested/).map((e) => e.textContent)).toEqual(['Changed words', 'Suggested']));
+    expect(sent.reads.some((u) => u.endsWith('/api/v2/rules/o7/history?versions_cursor=2026-11-20T10%3A00%3A00Z%7Ca2'))).toBe(true);
+    expect(within(versions).queryByRole('button', { name: 'More' })).toBeNull();
   });
 
   it('the constitution heads Company and opens its doc; Make this a rule sends the words and links the task', async () => {

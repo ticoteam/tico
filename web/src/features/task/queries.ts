@@ -230,6 +230,19 @@ function sendAnswer(id: string, rid: string, value: 'ok' | 'no', note: string | 
   return post(`${taskPath(id)}/asks/${enc(rid)}/answer`, { value, ...(note && { note }), ...on }, idem);
 }
 
+type Named = { id: string; name?: string };
+/** A rule's OK as it was asked (backend/org_rules.py ask_ok): the rule and every field that enforces it. */
+export interface BoundRule {
+  rule: string;
+  version: number;
+  text: string;
+  who: { everyone?: boolean; all_bots?: boolean; groups?: Named[]; bots?: Named[]; people?: Named[] };
+  with: { groups?: Named[]; bots?: Named[]; people?: Named[] };
+  where: string[];
+  if_broken: 'block' | 'escalate' | 'warn';
+  exact_check: { kind: 'allow_list'; action: string; field: string; values: string[] } | { kind: 'max_usd'; action: string; field: string; max_usd: number } | null;
+}
+
 /** What the decision binds Approve to (plan/approvals.html): the hash of exactly what was shown. An OK's own preview
     (GET /api/v2/oks/{rid}) gives it, or an email's (GET /api/v2/email/sends/{sid}, which the Email tab reads too).
     A stage's own OK has no grant (404): `hash` is null and Approve answers with the page version. `complete` is false
@@ -239,7 +252,7 @@ function sendAnswer(id: string, rid: string, value: 'ok' | 'no', note: string | 
 export const decisionShownQuery = (task: string, rid: string, version: number, send?: string | null) =>
   queryOptions({
     queryKey: [...keys.tasks.detail(task), 'shown', rid, version, send ?? null] as const,
-    queryFn: async ({ signal }): Promise<{ hash: string | null; complete: boolean }> => {
+    queryFn: async ({ signal }): Promise<{ hash: string | null; complete: boolean; rule?: BoundRule }> => {
       const shown = await api.get<OkPreview>(`/api/v2/oks/${enc(rid)}`, { signal }).catch((e: unknown) => {
         if (e instanceof ApiError && e.status === 404) return null;
         throw e;
@@ -248,6 +261,12 @@ export const decisionShownQuery = (task: string, rid: string, version: number, s
         if (!send) return { hash: null, complete: true };
         const mail = await queryClient.fetchQuery({ ...emailSendQuery(task, send), staleTime: 0 });
         return { hash: null, complete: mail.preview_complete };
+      }
+      // A rule's OK binds the rule and every field that enforces it: Approve waits until all of them are there to show.
+      if (shown.subject.startsWith('rule:')) {
+        const rule = shown.content as BoundRule | null;
+        const whole = !!rule && typeof rule.text === 'string' && !!rule.who && !!rule.with && Array.isArray(rule.where) && !!rule.if_broken && 'exact_check' in rule;
+        return { hash: whole ? shown.shown_hash : null, complete: whole, ...(whole && { rule }) };
       }
       if (!shown.subject.startsWith('email_send:')) return { hash: shown.shown_hash, complete: true };
       const mail = await queryClient.fetchQuery({ ...emailSendQuery(task, shown.subject.slice(11)), staleTime: 0 });
