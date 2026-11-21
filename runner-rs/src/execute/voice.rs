@@ -19,6 +19,19 @@ pub(super) struct Start<'a> {
     pub replacing: bool,
 }
 
+/// The call's first primer with the claim's run header (backend/run_header.py: the person's snapshot, in a private call
+/// in their own Assistant chat, as their own chat's turns get it) before its last paragraph, the warm-up instruction, so
+/// that instruction stays last. A replacement primer (`voice=restart`) carries none: the session still has its tools.
+pub(super) fn with_header(primer: &str, header: Option<&str>) -> String {
+    match header.map(str::trim).filter(|h| !h.is_empty()) {
+        None => primer.to_owned(),
+        Some(header) => match primer.rsplit_once("\n\n") {
+            Some((head, last)) => format!("{head}\n{header}\n\n{last}"),
+            None => format!("{header}\n\n{primer}"),
+        },
+    }
+}
+
 pub(super) enum End {
     Closed,
     Restart,
@@ -325,5 +338,26 @@ impl Runner {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::with_header;
+
+    #[test]
+    fn a_call_primer_takes_the_run_header_before_its_warm_up_line() {
+        let primer = "You are Assistant.\nCall notes (context only):\n\n\nReply exactly READY to warm up for this call.";
+        let got = with_header(primer, Some("Run header:\nNeeds you (Ana): 2"));
+        assert!(
+            got.contains("Call notes (context only):\n\nRun header:\nNeeds you (Ana): 2\n\n"),
+            "{got}"
+        );
+        assert!(
+            got.ends_with("\n\nReply exactly READY to warm up for this call."),
+            "{got}"
+        );
+        assert_eq!(with_header(primer, None), primer);
+        assert_eq!(with_header(primer, Some("  ")), primer);
     }
 }

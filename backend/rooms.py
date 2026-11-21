@@ -87,12 +87,32 @@ def call_person(c, job_id):
     parties = H._json(parties, []) if isinstance(parties, str) else parties
     if not person or any(p not in (person, "bot:" + bot) for p in parties):
         return ""  # a stored participant but the person and the Assistant reads the room too
-    # Any member but the person and the Assistant reads the room: a person, a group, or another bot.
+    # Any member but the person and the Assistant reads the room: a person, a group, or another bot. The call's meeting
+    # is private and names nobody else either.
+    meeting = row["live_meeting_id"]
     others = c.execute(
         "SELECT 1 FROM thread_members WHERE thread_id IN (?,?) AND actor NOT IN (?,?) "
         "UNION ALL SELECT 1 FROM call_participants WHERE call_id=? AND actor<>? "
-        "UNION ALL SELECT 1 FROM live_meeting_bots WHERE meeting_id=? AND bot<>? LIMIT 1",
-        (root["id"], room["id"], person, "bot:" + bot, row["id"], person, row["live_meeting_id"], bot),
+        "UNION ALL SELECT 1 FROM live_meeting_bots WHERE meeting_id=? AND bot<>? "
+        "UNION ALL SELECT 1 FROM live_meeting_access WHERE meeting_id=? AND actor<>? "
+        "UNION ALL SELECT 1 FROM live_meeting_humans WHERE meeting_id=? AND actor<>? "
+        "UNION ALL SELECT 1 FROM live_meetings WHERE id=? AND (visibility<>'private' OR owner_actor<>?) LIMIT 1",
+        (
+            root["id"],
+            room["id"],
+            person,
+            "bot:" + bot,
+            row["id"],
+            person,
+            meeting,
+            bot,
+            meeting,
+            person,
+            meeting,
+            person,
+            meeting,
+            person,
+        ),
     ).fetchone()
     return "" if others else person
 

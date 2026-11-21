@@ -787,9 +787,11 @@ class Calls:
     def _ring_for(self, c, who, thread_id):
         """Who a call rings (backend/call_ring.py): the thread's people other than the caller who can read it, when it
         has at most RING_MAX people; nobody in a bigger thread. Bots are never rung."""
-        people = self._people_of(c, thread_id)
-        if len(people) > call_ring.RING_MAX or assistant_room(c, thread_id):
+        if assistant_room(c, thread_id):
             return []  # an Assistant chat's call is its person's alone: it rings nobody
+        people = self._people_of(c, thread_id)
+        if len(people) > call_ring.RING_MAX:
+            return []
         return [actor for actor in people if actor != who.actor and readable(c, actor, thread_id)]
 
     def start(

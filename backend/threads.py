@@ -337,6 +337,7 @@ class Viewer:
         # {thread id: whether a member}, while a sidebar page reads (`_prefetch_members`)
         self._members: dict | None = None
         self._member_rows = {}  # {thread id: its member actors}, read once a request (`_member_rows`)
+        self._run: Viewer | None = None  # whom a lease of the shared Assistant reads as (`as_run`), once a request
 
     @property
     def is_bot(self):
@@ -511,11 +512,28 @@ def _bot_grant(c, v, row):
 _MISSING = (404, "not_found", "Thread not found")
 
 
+def as_run(c, v: "Viewer") -> "Viewer":
+    """The reader a lease of the shared Assistant reads threads as, in either form of its lease (Auth.run_viewer by
+    rooms.run_scope): the person its run is for, by their own rights ("person": their own chat, or a private call in
+    it), nobody when that person may not sign in ("gone"), else itself. Anyone else reads as themselves."""
+    who = v.who
+    if v.auth is None or not getattr(who, "attempt_id", ""):
+        return v
+    run = v._run
+    if run is None:
+        run = v
+        if H.assistant_actor(c) in (v.actor, getattr(who, "task_actor", "")):
+            reader = v.auth.run_viewer(c, who)
+            run = v if reader is who else Viewer(v.auth, reader)
+        v._run = run
+    return run
+
+
 def denial(c, v, row):
     """None when the viewer reads this thread, else (status, code, message) for why not: always a 404, since an
     unreadable thread is never confirmed to exist. The one Python rendering of C1; `readable`, `require` and
     Auth.conversation all ask it."""
-    v = viewer(None, v) if not isinstance(v, Viewer) else v
+    v = as_run(c, viewer(None, v) if not isinstance(v, Viewer) else v)
     row = thread_row(c, row)
     if row is None or row.get("deleted_at"):
         return _MISSING
@@ -941,7 +959,7 @@ def readable_sql(
     `per_row` (a person's check, with none of the options above, over alias r or s): the same answer, tested row by row (the row's root
     and task looked up by id) rather than against every readable root and task, built whole for each statement. For a
     statement that tests few rows: building those lists reads every conversation and task."""
-    v = viewer(None, v) if not isinstance(v, Viewer) else v
+    v = as_run(c, viewer(None, v) if not isinstance(v, Viewer) else v)
     plain = inner is None and meeting is None and conversation is None and tasks == "SELECT id FROM tasks"
     per_row = per_row and plain and alias in ("r", "s")  # never rd or rt, which its own subqueries name
     t = inner or (lambda name: name)
@@ -5630,7 +5648,7 @@ def sidebar(c, v, *, cursor=None, limit=50, sort=None):
     unread in each one-bot DM (bot_dm_unread), which is not Needs attention."""
     if sort is not None and sort not in SIDEBAR_SORTS:
         raise Problem("sort", "sort is important or recent", 422)
-    v = viewer(None, v) if not isinstance(v, Viewer) else v
+    v = as_run(c, viewer(None, v) if not isinstance(v, Viewer) else v)  # an Assistant lease lists as its person
     v._members = {}
     try:
         return _sidebar_page(c, v, cursor, limit, sort)

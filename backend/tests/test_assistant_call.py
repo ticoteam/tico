@@ -5,6 +5,8 @@ turns; a private follow-up of the Assistant's anywhere else is refused (#4781)."
 import json
 import uuid
 
+import pytest
+
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post
@@ -15,6 +17,14 @@ from backend.tests.helpers.live_meetings import live  # noqa: F401 - the meet fi
 from backend.tests.helpers.model_subscriptions import add, company, give, machine, on
 
 DONE = {"outcome": "completed", "last_seq": 0}
+
+
+@pytest.fixture(autouse=True)
+def _header_in_time(monkeypatch):
+    """The run header is built within its budget on a loaded test machine too."""
+    from backend import run_header
+
+    monkeypatch.setattr(run_header, "BUDGET_SECONDS", 30.0)
 
 
 def _resident(api):
@@ -151,7 +161,8 @@ def _anas_errand(api):
 def test_the_private_calls_voice_session_reads_your_private_tasks_as_your_own_chat_does(meet):
     call, session, _ = _private_call(meet)
     errand = _anas_errand(meet)
-    assert session["personal"] is True and "run_header" not in session  # no snapshot is put in its prompt
+    # Its claim's run header has the snapshot the person's own chat gets (run_header.snapshot, read as Ana).
+    assert session["personal"] is True and "Needs you (" in session["run_header"]
     assert _scope(meet, session["id"]) == ("person", "human:ana")
     assert get(meet, f"tasks/{errand}", session["token"])["task"]["id"] == errand
     # A personal lease gets no git credential.
@@ -332,3 +343,58 @@ def test_a_pinned_lease_reads_nothing_while_its_person_may_not_sign_in_even_once
                 person["sign_in"] = False
         c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(roster),))
     assert _scope(meet, session["id"]) == ("gone", "")
+
+
+def test_a_booked_call_in_your_assistant_chat_shares_its_meeting_with_nobody_before_its_first_join(meet):
+    from datetime import datetime, timedelta, timezone
+
+    rid = room(meet)["room_id"]
+    start = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(hours=2)
+    body = {"title": "Call", "starts_at": start.isoformat(), "ends_at": (start + timedelta(minutes=30)).isoformat()}
+    booked = post(meet, f"threads/{rid}/calls", {**body, "bots": ["assistant"]})
+    assert booked["state"] == "scheduled"
+    for widen in ({"add": ["ben"]}, {"visibility": "team"}):
+        shared = post(meet, f"live-meetings/{booked['meeting_id']}/access", widen, expected=409)
+        assert shared["error"]["code"] == "call_private"
+
+
+def test_the_private_calls_lease_reads_threads_as_you_and_none_once_you_cannot_sign_in(meet):
+    from backend.store import encode
+
+    call, session, _ = _private_call(meet)
+    from backend import threads
+
+    with meet.app.state.store.transaction() as c:  # a thread of Ana's and Ben's, which the Assistant alone may not read
+        ana = threads.viewer(meet.app.state.auth, meet.app.state.auth.identity_for_actor(c, "human:ana"))
+        dm = threads.create(c, ana, title="Plans", audience="members", members=["human:ben"])["id"]
+    assert get(meet, f"threads/{dm}", session["token"])["id"] == dm
+    listed = get(meet, "threads?limit=200", session["token"])
+    assert dm in json.dumps(listed)
+    with meet.app.state.store.transaction() as c:  # Ana's sign-in is turned off
+        roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
+        for person in roster["people"]:
+            if person["id"] == "ana":
+                person["sign_in"] = False
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(roster),))
+    get(meet, f"threads/{dm}", session["token"], expected=404)
+    get(meet, f"threads/{call['thread_id']}", session["token"], expected=404)
+    assert dm not in json.dumps(get(meet, "threads?limit=200", session["token"]))
+
+
+def test_a_call_whose_meeting_names_anyone_else_gets_no_snapshot(meet):
+    worker = _resident(meet)
+    rid = room(meet)["room_id"]
+    for widen in (
+        "INSERT INTO live_meeting_access VALUES(?,'human:ben','human:ana',?)",
+        "INSERT INTO live_meeting_humans VALUES(?,'human:ben',?)",
+        "UPDATE live_meetings SET visibility='team' WHERE id=? AND ?<>''",
+    ):
+        call = start_call(meet, rid, bots=["assistant"])
+        with meet.app.state.store.transaction() as c:  # written before the voice session is claimed
+            c.execute(widen, (call["meeting_id"], H.now()))
+        session = _claim(meet, worker)
+        assert session["message"]["refs"]["live_meeting"]["voice_call"] == call["id"]
+        assert "Needs you" not in (session.get("run_header") or "") and not session.get("personal"), widen
+        post(meet, f"attempts/{session['id']}/complete", DONE, worker["token"])
+        meet.request("DELETE", f"/api/v2/calls/{call['id']}/bots/assistant", json={}, headers=headers("ana-test"))
+        post(meet, f"calls/{call['id']}/end", {})
