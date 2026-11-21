@@ -314,8 +314,13 @@ def proposed_for(c: Any, vault: Any, who: Any) -> list[Row]:
             and not _superseded(c, card["rows"])
             and _refusal(c, vault, who, card["rows"]) is None
         ):
-            # Who keeps and who loses access, as the tools' grants stand now (Grant refuses when it moved since).
-            rows = [r | {"replaces": _replaced(c, r, owner)} for r in card["rows"]]
+            # Who keeps and who loses access, as the tools' grants stand now (Grant refuses when it moved since). A row
+            # whose tool was deleted is left out; each row keeps its place on the card (`at`), which Grant takes.
+            rows = [
+                r | {"at": at, "replaces": _replaced(c, r, owner)}
+                for at, r in enumerate(card["rows"])
+                if c.execute("SELECT 1 FROM tools WHERE id=?", (r["tool_id"],)).fetchone()
+            ]
             shown = {"losses": losses(c, card["rows"], owner), "message_id": m["id"], "created_at": m["created_at"]}
             out.append(card | {"rows": rows, "by": owner} | shown)
     return out
@@ -385,7 +390,7 @@ def grant(
             card = gone
             _save(c, message_id, card)
             _events().needs_moved(c, [card["person"]], "key_drop")
-        positions = list(range(len(card["rows"]))) if keep is None else [int(i) for i in keep]
+        positions = list(range(len(card["rows"]))) if keep is None else list(dict.fromkeys(int(i) for i in keep))
         if card["state"] == "proposed" and (not positions or any(i < 0 or i >= len(card["rows"]) for i in positions)):
             raise Problem("proposal", "Keep at least one of the card's rows", 422)
         # A hidden tool first (404), then who may grant (403); then whose card it is (404).

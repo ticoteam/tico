@@ -61,7 +61,20 @@ export function accessDone(pressed: 'grant' | 'decline', out: AccessAnswer): str
 /** An agent asks for a level on a tool or a repository: Grant, Read only (when it asked for write) or Decline. */
 function AccessCard({ it, a }: { it: NeedsYouItem; a: NonNullable<NeedsYouItem['access']> }) {
   const [error, setError] = useState('');
-  const once = useOnce(setError);
+  const [busy, setBusy] = useState(false);
+  const answer = useOnce(setError);
+  // One answer at a time: while one is with the server, every button of the card waits.
+  const once: typeof answer = (...args) => {
+    const run = answer(...args);
+    return async () => {
+      setBusy(true);
+      try {
+        await run();
+      } finally {
+        setBusy(false);
+      }
+    };
+  };
   const name = `${a.subject_name} asks for ${a.resource_name}`;
   return (
     <AskCard
@@ -73,11 +86,15 @@ function AccessCard({ it, a }: { it: NeedsYouItem; a: NonNullable<NeedsYouItem['
       error={error}
       actions={
         <>
-          <Button onClick={once(() => taken(declineAccess(it.id, a.id)), (out) => accessDone('decline', out), a.resource_name)}>Decline</Button>
+          <Button disabled={busy} onClick={once(() => taken(declineAccess(it.id, a.id)), (out) => accessDone('decline', out), a.resource_name)}>
+            Decline
+          </Button>
           {a.level === 'read_write' && (
-            <Button onClick={once(() => taken(grantAccess(it.id, a.id, 'read')), (out) => accessDone('grant', out), a.resource_name)}>Read only</Button>
+            <Button disabled={busy} onClick={once(() => taken(grantAccess(it.id, a.id, 'read')), (out) => accessDone('grant', out), a.resource_name)}>
+              Read only
+            </Button>
           )}
-          <Button variant="primary" onClick={once(() => taken(grantAccess(it.id, a.id)), (out) => accessDone('grant', out), a.resource_name)}>
+          <Button variant="primary" disabled={busy} onClick={once(() => taken(grantAccess(it.id, a.id)), (out) => accessDone('grant', out), a.resource_name)}>
             Grant
           </Button>
         </>
@@ -123,7 +140,8 @@ function KeyCard({ it, k }: { it: NeedsYouItem; k: NonNullable<NeedsYouItem['key
     left ticked are granted. */
 function KeyDropCard({ it, d }: { it: NeedsYouItem; d: NonNullable<NeedsYouItem['key_drop']> }) {
   const [error, setError] = useState('');
-  const [kept, setKept] = useState<ReadonlySet<number>>(() => new Set(d.rows.map((_, i) => i)));
+  // A row's place on the card (`at`): Needs you leaves out a row whose tool was deleted.
+  const [kept, setKept] = useState<ReadonlySet<number>>(() => new Set(d.rows.map((r) => r.at)));
   const once = useOnce(setError);
   const name = keysName(d.rows);
   const flip = (i: number, on: boolean) => setKept((was) => (on ? new Set(was).add(i) : new Set([...was].filter((x) => x !== i))));
@@ -144,8 +162,8 @@ function KeyDropCard({ it, d }: { it: NeedsYouItem; d: NonNullable<NeedsYouItem[
         {d.rows.map((r, i) => (
           <Checkbox
             key={`${r.key}:${i}`}
-            checked={kept.has(i)}
-            onCheckedChange={(on) => flip(i, on)}
+            checked={kept.has(r.at)}
+            onCheckedChange={(on) => flip(r.at, on)}
             label={
               <span>
                 <b>{r.key}</b> → {r.tool_name} · {LEVEL[r.level]} · {r.bots.map((b) => b.name).join(', ')}

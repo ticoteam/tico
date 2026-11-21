@@ -70,6 +70,10 @@ NEEDS_ITEM = obj(
             "rows": items(
                 obj(
                     {
+                        "at": {
+                            "type": "integer",
+                            "description": "The row's place on the card: what Grant's keep names",
+                        },
                         "key": "s",
                         "tool_name": "s",
                         "level": {"type": "string", "enum": ["read", "read_write"]},

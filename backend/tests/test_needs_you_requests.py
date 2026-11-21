@@ -263,3 +263,31 @@ def test_a_task_key_card_is_neither_listed_nor_saved_once_its_person_cannot_read
         c.execute("UPDATE bot_config SET access=? WHERE bot='ops'", (json.dumps(only_ana),))
     assert requests(api, "cara-test") == {}
     post(api, f"credential-requests/{card['id']}/save", {"value": NEW}, "cara-test", expected=404)
+
+
+def test_a_proposal_with_one_deleted_tool_lists_and_grants_the_other_row(api, monkeypatch):
+    # Two keys for two tools; Acme Ads is deleted. Needs you leaves its row out, the other keeps its place (`at`), and
+    # Grant takes that place, named twice or not.
+    machine, _ = setup(api)
+    put(api, "page-owners/tools", {"bot": "ops"})
+    dm = post(api, "threads/dm", {"members": ["bot:ops"]})
+    creds.setup(api)
+    monkeypatch.setattr(api_tools, "send_check", lambda url, hdrs, params: api_tools.Reply(200))
+    crm = tool(api)["id"]
+    ads = tool(api, "Acme Ads", base_url="https://ads.acme.example")["id"]
+    for name in ("ADS_LOGIN", "JIRA_LOGIN"):
+        secret = {"name": name, "kind": "password", "env": name, "secret": PASSWORD, "source": "tools-chat"}
+        post(api, "credentials", secret)
+    post(api, f"threads/{dm['id']}/messages", {"text": "keys [saved ADS_LOGIN] [saved JIRA_LOGIN]"})
+    bot = claim(api, machine)["token"]
+    rows = [
+        {"key": "ADS_LOGIN", "tool": ads, "level": "read", "bots": ["cpo"]},
+        {"key": "JIRA_LOGIN", "tool": crm, "level": "read", "bots": ["cpo"]},
+    ]
+    proposal = post(api, "tools-chat/proposals", {"thread_id": dm["id"], "rows": rows}, bot)
+    assert api.delete(f"/api/v2/api-tools/{ads}", headers=headers()).status_code == 200
+    card = requests(api, "ana-test")["key_drop"]["key_drop"]
+    assert [(r["at"], r["key"]) for r in card["rows"]] == [(1, "JIRA_LOGIN")]
+    body = {"keep": [1, 1], "seen": card["losses"]}
+    done = post(api, f"tools-chat/proposals/{proposal['id']}/grant", body)
+    assert done["state"] == "granted" and [r["key"] for r in done["rows"]] == ["JIRA_LOGIN"]

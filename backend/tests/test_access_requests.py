@@ -420,3 +420,17 @@ def test_read_only_frees_a_task_that_waits_on_a_repeat_of_a_request_first_made_i
     post(api, f"access-requests/{asked['id']}/grant", {"level": "read"}, "ben-test")
     with api.app.state.store.read() as c:
         assert reconnects.hold(c, tid) is None
+
+
+def test_a_task_whose_older_wait_was_fixed_is_still_woken_when_its_request_is_granted(api):
+    world(api)
+    crm = tool(api)["id"]
+    key(api, crm, SECRET)
+    tid = task(api, "bot:ops", "Update the deal stages")
+    asked = ask(api, crm, "read_write", task=tid)
+    with api.app.state.store.transaction() as c:  # its wait was fixed already, by an older path
+        c.execute("UPDATE task_reconnects SET fixed_at=?, ended='fixed', woke_at=? WHERE task_id=?", ("t", "t", tid))
+    post(api, f"access-requests/{asked['id']}/grant", {}, "ben-test")
+    with api.app.state.store.read() as c:
+        woke = c.execute("SELECT body FROM messages WHERE recipient_id='bot:ops' AND body LIKE 'Granted:%'").fetchall()
+    assert len(woke) == 1 and "Close CRM · Read and write" in woke[0]["body"]
