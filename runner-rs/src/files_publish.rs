@@ -92,6 +92,8 @@ pub const PROGRAM_MAGIC: &[&[u8]] = &[
     b"\xce\xfa\xed\xfe",
     b"\xcf\xfa\xed\xfe",
     b"\xca\xfe\xba\xbe",
+    b"\xca\xfe\xba\xbf",
+    b"\xbf\xba\xfe\xca",
 ];
 
 pub const TABLES: &str = "
@@ -946,6 +948,13 @@ mod tests {
         );
         assert!(local_file(&dir, "reports/run").is_err());
         assert!(local_file(&dir, "reports/mac").is_err());
+        // A universal (fat) 64-bit Mach-O, in either byte order.
+        for fat in [
+            b"\xca\xfe\xba\xbf\x00\x00\x00\x02",
+            b"\xbf\xba\xfe\xca\x02\x00\x00\x00",
+        ] {
+            assert!(check_program("universal", fat).is_err());
+        }
         assert!(local_file(&dir, "reports/run.").is_err());
         assert!(local_file(&dir, "reports/cities.csv").is_ok());
         assert!(check_name("tool.exe.").is_err());

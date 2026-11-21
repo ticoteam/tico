@@ -101,6 +101,9 @@ def test_local_mcp_attach_refuses_unsafe_paths(monkeypatch, tmp_path, bad):
         BF.read_local(root, 'tool')  # publishing a file reads its first bytes
     with pytest.raises(BF.Refused):
         BF.check_program('run.', b'#!/bin/sh')  # a trailing dot is no extension, as in the runner
+    for fat in (b'\xca\xfe\xba\xbf\x00\x00\x00\x02', b'\xbf\xba\xfe\xca\x02\x00\x00\x00'):  # universal 64-bit Mach-O
+        with pytest.raises(BF.Refused):
+            BF.check_program('universal', fat)
     assert BF.check_name('.gitignore') == ('.gitignore', 'application/octet-stream')
     with pytest.raises(BF.Refused):
         BF.check_name('..')

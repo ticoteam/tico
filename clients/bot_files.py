@@ -90,6 +90,8 @@ PROGRAM_MAGIC = (
     b"\xce\xfa\xed\xfe",
     b"\xcf\xfa\xed\xfe",
     b"\xca\xfe\xba\xbe",
+    b"\xca\xfe\xba\xbf",
+    b"\xbf\xba\xfe\xca",
 )
 KINDS = {
     ".mp4": "video",

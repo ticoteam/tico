@@ -46,6 +46,10 @@ def test_media_must_start_with_the_container_its_name_says(api):
     assert raw_upload(api, attempt["token"], "/api/v2/files/uploads?name=clip.mp4", wav).status_code == 422
     assert raw_upload(api, attempt["token"], "/api/v2/files/uploads?name=clip.wav", MP4_HEAD).status_code == 422
     assert raw_upload(api, attempt["token"], "/api/v2/files/uploads?name=clip.wav", wav).status_code == 200
+    # A program under a video's name is refused as a program before anything is stored.
+    elf = b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 64
+    program = raw_upload(api, attempt["token"], "/api/v2/files/uploads?name=clip.mp4", elf)
+    assert program.status_code == 422 and "is a program" in program.text, program.text
 
 
 def test_other_kinds_keep_the_25_mb_cap(api):

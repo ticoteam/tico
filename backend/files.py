@@ -2164,6 +2164,11 @@ class Files:
                 raise Problem("blob_storage", "Upload staging failed; free disk space and retry", 503, True) from None
             if size == 0:
                 raise refused(BF.Refused("An empty file is not published"))
+            if who.role in ("bot", "runner"):
+                try:
+                    BF.check_program(name, head)
+                except BF.Refused as exc:
+                    raise refused(exc) from exc
             if not BF.media_matches(name, head):
                 raise refused(BF.Refused(f"{name} is not that kind of file: its first bytes do not match"))
             stream.seek(0)
