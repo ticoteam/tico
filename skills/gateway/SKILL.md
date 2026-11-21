@@ -1,7 +1,7 @@
 ---
 name: gateway
 version: 1
-description: Read when you need to know which Tico AI Gateway models and services exist, what they cost, or which one a job should run on - when you need a web search with sources, a page read, a picture (low, high or a vector SVG) or a short video. Tico's `tico_gateway_catalog`, `tico_gateway_search`, `tico_gateway_fetch`, `tico_gateway_image`, `tico_gateway_video` and `tico_gateway_video_status` tools, or `tico gateway catalog`, `tico gateway search`, `tico gateway fetch`, `tico gateway image` and `tico gateway video`.
+description: Read when you need to know which Tico AI Gateway models and services exist, what they cost, or which one a job should run on - when you need a web search with sources, a page read, a picture (low, high or a vector SVG) or a short video. Tico's `tico_gateway_catalog`, `tico_gateway_search`, `tico_gateway_fetch`, `tico_gateway_image`, `tico_gateway_video`, `tico_gateway_video_status` and `tico_gateway_reconcile` tools, or `tico gateway catalog`, `tico gateway search`, `tico gateway fetch`, `tico gateway image`, `tico gateway video` and `tico gateway reconcile`.
 ---
 
 # The Tico AI Gateway
@@ -75,7 +75,7 @@ with its prompt, model and cost. An existing file is never overwritten: pick a n
 (`tico gateway catalog images` or `tico gateway catalog svg`): at cost plus 25%, per image, so ask for what you need and
 not more. Use `--count` only when you want variants to choose from.
 
-## Make a video: `tico_gateway_video` and `tico_gateway_video_status`
+## Make a video: `tico_gateway_video`, `tico_gateway_video_status` and `tico_gateway_reconcile`
 
 ```
 tico gateway video "what the video shows" [--seconds 8] [--resolution 720p] [--aspect 16:9] [--no-audio] [--first-frame FILE] [--last-frame FILE] [--shot NAME]
@@ -89,9 +89,16 @@ overwritten), beside a sidecar `.json`, and the answer gives its seconds and cos
 save it then. A video costs by the second at the catalog's price (`tico gateway catalog video`), held when it starts and
 charged when it ends. Ask for a video only when a picture will not do. Name each shot with `--shot`: the same shot
 is made once (asking again answers the same job), and one the Gateway never confirmed is never sent again; it is
-refused with `reconcile_shot`, which names every unknown shot of your task. Then ask the task's person with your
-normal question: "Reconcile shot NAME: check Gateway usage before re-rendering". Never render that shot again under
-another name to get around it.
+refused with `reconcile_shot`, which names every unknown shot of your task. You need not ask anyone: the card shows
+its person "Reconcile N shots" until they check Gateway usage and mark them reconciled. Carry on without the shot, and
+never render it again under another name to get around it. When the person tells you they checked, mark them yourself:
+
+```
+tico gateway reconcile TASK [--shot KEY]...
+```
+
+A reconciled shot is refused with `shot_reconciled`: render it again only under a new shot name, and only if the
+person wants it.
 
 Images and videos are refused with `video_budget_reached` when the company's Video production budget is at its
 cutoff; say so and carry on without.

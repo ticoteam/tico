@@ -312,6 +312,13 @@ export async function addSubtask(id: string, title: string, owner?: string | nul
   return r;
 }
 
+/** The card's paid shots of unknown outcome marked reconciled (backend/paid_renders.py): its Reconcile wait goes. */
+export async function reconcileShots(id: string) {
+  const r = await api.post<{ reconciled: { key: string; name: string }[] }>(`${taskPath(id)}/shots/reconcile`, {});
+  await reread(id);
+  return r;
+}
+
 /** Ask a person or an agent for an OK, as a requirement of the stage. */
 export async function askSomeone(id: string, to: string, line: string) {
   const version = queryClient.getQueryData<TaskData>(keys.tasks.detail(id))?.version;

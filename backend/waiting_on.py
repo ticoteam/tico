@@ -696,6 +696,14 @@ def of(
         out = [wait for wait in out if not (wait.state in (BOT, PAUSED) and not wait.fix and wait.who in asking)]
     for m in marks:
         out.append(Wait(PERSON, m["person_id"], m["line"], question_marks.wait_id(m), m["created_at"], ask=True))
+    from . import paid_renders
+
+    shots = paid_renders.unsettled(conn).get(str(row["id"]))
+    if shots:
+        # A paid shot whose outcome is unknown waits on the card's person to check Gateway usage and mark it reconciled
+        # (backend/paid_renders.py). It holds nothing else up: the bot still has its work, and the card still moves.
+        wait_id = paid_renders.WAIT + str(row["id"])
+        out.append(Wait(PERSON, person_for(conn, row), paid_renders.line(shots), wait_id, shots[-1]["since"], ask=True))
     blockers = task_depends.blockers(conn, str(row["id"]))
     if blockers:
         # It depends on a task still open: that is all it waits on, nobody's turn, until the task ends (task_depends).
@@ -1053,8 +1061,12 @@ def headline(conn: "sqlite3.Connection", task_id: str) -> Wait | None:
 
 
 def all_met(waits: list[Wait]) -> bool:
-    """Whether a task's waits say it is ready to move on: nothing is missing and it only waits for a slot."""
-    return bool(waits) and all(wait.state == ROOM for wait in waits)
+    """Whether a task's waits say it is ready to move on: nothing is missing and it only waits for a slot. Shots to
+    reconcile (backend/paid_renders.py) wait on a person without holding the card in its stage."""
+    from . import paid_renders
+
+    rest = [wait for wait in waits if not str(wait.requirement_id or "").startswith(paid_renders.WAIT)]
+    return bool(rest) and all(wait.state == ROOM for wait in rest)
 
 
 def _visit_id(row: Row) -> str | None:
@@ -1201,7 +1213,8 @@ def candidates(conn: "sqlite3.Connection", person: str) -> list[str]:
     - nobody it names can act, so it falls to its person (`person_for`), and they are on its ladder: they own or manage
       its pipeline, are the first person above its manager bot, are the company's person, or ask for or read it;
     - for the company's person, a cause they fix first (`Wait.fix`, Connect GitHub);
-    - for the owner or the Admin who stands in (`admin_person`), a page whose approvers have all gone.
+    - for the owner or the Admin who stands in (`admin_person`), a page whose approvers have all gone;
+    - a paid shot on it whose outcome is unknown waits on its person (backend/paid_renders.py).
 
     Most people own or manage no pipeline, so only their own rows are read, by index. Someone whose ladder reaches a
     pipeline reads a few columns of each of its open tasks, and works out in full only those that may fall to them."""
@@ -1317,6 +1330,9 @@ def candidates(conn: "sqlite3.Connection", person: str) -> list[str]:
                 ).fetchall()
             }
     found |= _ladder_tasks(conn, person, company, pipelines, stage_asks)
+    from . import paid_renders
+
+    found |= set(paid_renders.unsettled(conn))  # few, and worked out in full: `_lists` keeps this person's
     if stages:
         visits |= {
             str(row[0])

@@ -122,6 +122,9 @@ function Tasks({ name, rows, adding, onAdd, children }: { name: string; rows: Li
   );
 }
 
+/** Paid shots whose outcome is unknown (backend/paid_renders.py): the card waits on its person to mark them reconciled. */
+const isShots = (w: { requirement_id: string | null } | null | undefined) => !!w?.requirement_id?.startsWith('paid_render:');
+
 /** The waiting question as a line: a leading "❓" goes, since the line already says it waits (and the emoji draws in red). */
 const question = (line: string | null | undefined) => (line ?? '').replace(/^\s*\u2753\uFE0F?\s*/u, '');
 
@@ -139,6 +142,7 @@ export function Details({ t, flow, adding = null, onAdding = () => undefined }: 
   const files = useQuery(taskFilesQuery(t.id));
   const criteria = t.acceptance_criteria ?? [];
   const leave = t.to_leave ?? [];
+  const shots = t.waits?.find(isShots);
   const left = leave.filter((r) => !r.met);
   const met = leave.filter((r) => r.met);
   const kids: Linked[] = t.children.map((c) => ({ id: c.id, title: c.title, owner: c.owner_id, stage: c.stage, done: c.status !== 'open' }));
@@ -199,13 +203,22 @@ export function Details({ t, flow, adding = null, onAdding = () => undefined }: 
             }
           />
         </div>
-        {t.turn?.who && t.turn.who !== t.owner_id && (
+        {t.turn?.who && t.turn.who !== t.owner_id && !isShots(t.turn) && (
           <Kv k="Waiting on">
             <Face id={t.turn.who} />
             <span>
               <NameOf id={t.turn.who} />
             </span>
             {question(t.turn.line) && <small>{question(t.turn.line)}</small>}
+          </Kv>
+        )}
+        {shots && (
+          <Kv k="Waiting on" target={`task-shots:${t.id}`}>
+            {shots.who && <Face id={shots.who} />}
+            <small>{shots.line}</small>
+            <button type="button" className="dt-act" onClick={() => void run('task.reconcileShots', { task: t.id }, { via: 'click' }).then((r) => r.ok || toast(failedToast(r)))}>
+              Mark reconciled
+            </button>
           </Kv>
         )}
         <EditKv

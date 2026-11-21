@@ -7873,6 +7873,7 @@
           "value": {
             "enum": [
               "own",
+              "read",
               "all"
             ]
           }
@@ -9706,6 +9707,25 @@
             "minimum": 1
           },
           "pipeline": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "task.reconcileShots",
+      "title": "Mark paid shots reconciled",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "task": {
             "type": "string",
             "minLength": 1,
             "maxLength": 100

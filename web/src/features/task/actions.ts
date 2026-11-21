@@ -12,6 +12,7 @@ import {
   markDone,
   moveTask,
   newTaskPage,
+  reconcileShots,
   relateTask,
   renameTask,
   setTaskDue,
@@ -169,6 +170,16 @@ export const subtask = defineAction({
   run: (_ctx, i) => said(i.subtask !== undefined ? setTaskParent(i.subtask, i.task) : addSubtask(i.task, (i.title ?? '').trim(), i.owner)),
   did: (i) => (i.subtask !== undefined ? 'Moved it under the task' : 'Added a subtask'),
   target: (i) => (i.subtask !== undefined ? { kind: 'task-parent', id: i.subtask } : { kind: 'task-subtasks', id: i.task }),
+});
+
+/** Its paid shots of unknown outcome, checked in Gateway usage: they leave the card's wait and are never sent again. */
+export const reconcile = defineAction({
+  id: 'task.reconcileShots',
+  title: 'Mark paid shots reconciled',
+  kind: 'change',
+  input: z.strictObject({ task }),
+  run: (_ctx, i) => said(reconcileShots(i.task)),
+  did: () => 'Marked reconciled',
 });
 
 export const ask = defineAction({
