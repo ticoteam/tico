@@ -1,7 +1,7 @@
 // One conversation for Tico's sheet, a second chat, a thread, a task's chat and an agent's page.
 import './conversation.css';
 
-export { Conversation, type ConversationProps } from './Conversation';
+export { Conversation, SideHead, type ConversationProps } from './Conversation';
 export { Composer, type ComposerProps } from './Composer';
 export { Message, LiveRow, type MessageProps } from './Message';
 export { MessageBones } from './Bones';

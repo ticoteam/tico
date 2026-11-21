@@ -124,7 +124,7 @@ function GrowthBoard({ search }: { search: GrowthSearch }) {
   const phone = usePhone();
   const segments = useQuery(segmentsQuery);
   const d = useSuspenseQuery(growthReadQuery(search.segment, search.month)).data;
-  const owners = useQuery(pageOwnersQuery).data;
+  const owners = useQuery(pageOwnersQuery).data?.pages;
   const manager = useDirectory((dir) => growthManager(owners, dir)) ?? null;
   const segs = segments.data?.segments ?? [];
   const series = d.series ?? [];

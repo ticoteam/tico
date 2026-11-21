@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { Conversation, MessageBones, type FromPage, type Session } from '@/conversation';
+import { Conversation, MessageBones, SideHead, type FromPage, type Session } from '@/conversation';
 import { callCard } from '@/features/calls/exports';
 import { approvalCard, useApprovalCards } from '@/features/task/exports';
 import { Button } from '@/kit/Button';
@@ -30,9 +30,13 @@ export function ChatSheet({ chat, from, starters }: ChatSheetProps) {
   const approvals = useApprovalCards({ agent: actor }, chat);
   if (isError)
     return (
-      <Empty icon="alert" title="This chat did not load">
-        <Button onClick={() => refetch()}>Try again</Button>
-      </Empty>
+      <>
+        {/* the head stays, with the frame's fold or close control */}
+        <SideHead actor={actor} name={(actor && nameOf(actor)) || 'Chat'} />
+        <Empty icon="alert" title="This chat did not load">
+          <Button onClick={() => refetch()}>Try again</Button>
+        </Empty>
+      </>
     );
   if (!t) return <MessageBones />;
   const name = (actor && nameOf(actor)) || title;

@@ -8,4 +8,4 @@ export { write, NeedsConnection, isNetworkError, quietRoot, isQuiet, QUIET_STALE
 export { heldCount, useHeldCount, type HeldCount } from './held';
 export { directoryQuery, useActor, useActors, useDirectory, withStatus, type Actor, type Directory, type StatusLine, type Team } from './directory';
 export { needsYouItems } from './needs';
-export { pageOwnersMayQuery, pageOwnersQuery, waitingAgentsQuery, type PageOwnerRow } from './pageOwners';
+export { pageOwnersQuery, type PageOwnerRow, type PageOwners } from './pageOwners';

@@ -142,6 +142,23 @@ function useHerePage(): FromPage {
 
 installConversationLive();
 
+/** A second chat's head: the face and the name, which go to the teammate's page (one link is read out, the face's is
+    for the pointer), and which of their chats this is; the frame adds its fold or close control. Drawn too while the chat
+    cannot load, so that control stays. */
+export function SideHead({ actor, name, session }: { actor?: string; name: string; session?: Session }) {
+  const { data: me } = useQuery(meQuery);
+  const mateHref = teammateHref(actor, useActor(actor));
+  const face = <Face who={{ ...whoOf({ sender_id: actor ?? '' }, 'side', me?.id), name }} size={28} />;
+  return (
+    <SheetHead
+      kind="side"
+      title={mateHref ? <Link className="head-name" href={mateHref}>{name}</Link> : name}
+      lead={mateHref ? <Link className="head-face" href={mateHref} tabIndex={-1} aria-hidden>{face}</Link> : face}
+      sub={session && <SessionLine session={session} />}
+    />
+  );
+}
+
 /** The thread's rows with `extra` among them by time; while older pages are left, none from before the oldest loaded. */
 function withExtra(rows: ChatMessage[], extra: ChatMessage[] | undefined, more: boolean): ChatMessage[] {
   if (!extra?.length) return rows;
@@ -182,7 +199,6 @@ export function Conversation({ id, variant, title, actor, session, from, starter
   const mate = useActor(actor);
   // never a stand-in word for someone: their name, else what they are
   const name = variant === 'tico' ? 'Tico' : (title ?? mate?.name ?? (actor?.startsWith('bot:') ? 'Agent' : 'Person'));
-  const mateHref = teammateHref(actor, mate);
   const here = useHerePage();
   const at = from === undefined ? here : from;
   // a starter puts its words in the box; opening the chat never sends anything, so it never starts a run
@@ -285,9 +301,8 @@ export function Conversation({ id, variant, title, actor, session, from, starter
       variant,
       text,
       files,
-      // what is open there goes only to Tico, which acts with the person's own rights; another chat's members may not
-      // read it, so they are told the page alone
-      from: at && (variant === 'tico' ? at : { page: at.page, label: at.label }),
+      // a retry is the same message: it says the page it was first written on
+      from: retry ? (retry.refs?.from_page ?? null) : at,
       me: myId,
       ...(retry && { retry: retry.id }),
       ...(answers && { replyTo: answers, quote }),
@@ -387,17 +402,9 @@ export function Conversation({ id, variant, title, actor, session, from, starter
       </div>
     );
   if (variant === 'side') {
-    const who = whoOf({ sender_id: actor ?? '' }, variant, myId);
-    const face = <Face who={{ ...who, name }} size={28} />;
-    // The face and the name go to the teammate's page; one link is read out, the face's is for the pointer.
     return (
       <>
-        <SheetHead
-          kind="side"
-          title={mateHref ? <Link className="head-name" href={mateHref}>{name}</Link> : name}
-          lead={mateHref ? <Link className="head-face" href={mateHref} tabIndex={-1} aria-hidden>{face}</Link> : face}
-          sub={session && <SessionLine session={session} />}
-        />
+        <SideHead actor={actor} name={name} session={session} />
         {body}
         {footer}
       </>

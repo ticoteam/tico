@@ -51,12 +51,16 @@ const SETTINGS: Record<string, [string, string]> = { computers: ['computers', 'C
 /** A map's own entry for an address part: never one the object inherits ('constructor', '__proto__'). */
 const own = (map: Record<string, [string, string]>, key: string | undefined) => (key !== undefined && Object.hasOwn(map, key) ? map[key] : undefined);
 
-/** The page an address is; `search` (the address's search) names a file open over it (`?file=`, files.view), which is
-    then what is open there. */
+/** The page an address is; `search` (the address's search) names what is open there when the path does not: a file
+    open over any page (`?file=`, files.view), or the mail open in Mail (`?box=&open=`, as AgentBox names it). */
 export function pageAt(path: string, search = ''): PageAt {
   const at = mapped(path);
-  const file = new URLSearchParams(search).get('file');
-  return file ? { ...at, item: { kind: 'file', id: file.slice(0, 200) } } : at;
+  const q = new URLSearchParams(search);
+  const file = q.get('file');
+  if (file) return { ...at, item: { kind: 'file', id: file.slice(0, 200) } };
+  const open = q.get('open');
+  if (at.page === 'mail' && open) return { ...at, item: { kind: 'mail', id: `${q.get('box') ?? ''}/${open}`.slice(0, 200) } };
+  return at;
 }
 
 function mapped(path: string): PageAt {

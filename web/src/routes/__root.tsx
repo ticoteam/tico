@@ -4,7 +4,7 @@ import { Fragment, Suspense, lazy, useEffect, useState, type ReactNode } from 'r
 import { ActionsRoot, run } from '@/actions';
 import { reportCallToDesktop, useCallWindow } from '@/desktop';
 import { ticoRoomQuery } from '@/conversation';
-import { configQuery, meQuery, pageOwnersQuery, recordVisit, useActor, useDirectory, useHeldCount, waitingAgentsQuery, type Actor, type Directory } from '@/data';
+import { configQuery, meQuery, pageOwnersQuery, recordVisit, useActor, useDirectory, useHeldCount, type Actor, type Directory } from '@/data';
 import { TOGGLE_MUTE, isCallActive, ringingQuery, useCall } from '@/features/calls/routing';
 import { useFileOpen } from '@/features/library/routing';
 import { AssetRecovery, DesktopMove, PlanLock } from '@/features/notices/exports';
@@ -574,15 +574,20 @@ function useOwnerBar(place: PageAt, me: string | undefined): OwnerBarState | nul
   const { data: pipelines } = useQuery({ ...pipelinesQuery, enabled: company && !!me });
   const pipeline =
     place.item?.kind === 'pipeline' ? pipelines?.find((p) => p.id === place.item!.id) : place.page === 'roadmap' && pipelines ? roadmapPipeline(pipelines) : null;
-  // the pipeline's first agent still on the team (the directory holds no archived one), else the page's
-  const mine = useDirectory((d) => (pipeline ? [pipeline.manager, pipeline.owner].find((a) => !!a?.startsWith('bot:') && !!d.byId[a]) : undefined));
-  const bot = owners?.[place.page]?.bot;
+  // the pipeline's first agent that is set up and on the team (never a planned or archived one), else the page's
+  const live = (a: Actor | undefined) => a?.kind === 'agent' && a.lifecycle !== 'planned' && a.lifecycle !== 'archived';
+  const mine = useDirectory((d) => (pipeline ? [pipeline.manager, pipeline.owner].find((a) => !!a?.startsWith('bot:') && live(d.byId[a])) : undefined));
+  const bot = owners?.pages[place.page]?.bot;
   const owner = !company ? null : (mine ?? (bot ? (bot.includes(':') ? bot : `bot:${bot}`) : null));
   const who = useActor(owner);
   const opened = usePageOpened();
-  // a question or an ask from this owner waiting on you (Needs you's count per agent, not a page of Catch up)
-  const { data: waiting } = useQuery({ ...waitingAgentsQuery, enabled: opened && !!owner });
-  const asking = !!owner && (waiting?.[who?.id ?? owner] ?? waiting?.[owner] ?? 0) > 0;
+  // a ❓ question or an ask from this owner that waits on you for this page (Needs you's own items, read by Flow already):
+  // one on a task opens its pipeline's page; one with no task opens the pages the agent owns itself, never those where
+  // it only stands in (the General Manager for a page with no owner)
+  const ownPage = !mine && owners?.pages[place.page]?.own === true;
+  const pipe = pipeline?.id ?? null;
+  const { data: asks } = useQuery({ ...flowQuery, enabled: opened && !!owner, select: (f) => f.asks });
+  const asking = !!owner && !!asks?.some((a) => (a.by === owner || a.by === who?.id) && (a.pipeline ? a.pipeline === pipe : ownPage));
   const [fold, setFold] = useBarFold(me, place.page);
   const [dismissed, setDismissed] = useState<string | null>(null);
   if (!asking && dismissed === place.page) setDismissed(null);

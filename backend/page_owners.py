@@ -16,7 +16,8 @@ key guard and key-grant cards, secret_drop.py and key_grants.py) asks for the pa
 
   PAGES                    the pages that have an owner, with their name and default bot
   read(c)                  {page: {"bot": the owner now ("bot:<id>" or None), "name": the page's name,
-                                  "choice": "default", "none" or the chosen "bot:<id>", "default": who Default gives}}
+                                  "choice": "default", "none" or the chosen "bot:<id>", "default": who Default gives,
+                                  "own": the owner is the page's own, not the General Manager standing in}}
   owner(c, page[, fallback])  the page's owner as an actor id, or None
   save(c, actor, page, bot)  sets or clears one page's owner (bot None: no owner; "default": its default); the saved row
   check_from(refs)         a 422 unless refs.from_page, when present, is {page, label[, item {kind, id, name}]}; an
@@ -132,18 +133,21 @@ def _choice(kept: dict[str, str | None], page: str) -> str:
     return "bot:" + bot if bot else "none"
 
 
-def read(c: "sqlite3.Connection") -> dict[str, dict[str, str | None]]:
+def read(c: "sqlite3.Connection") -> dict[str, dict[str, Any]]:
     kept: dict[str, str | None] = _kept(c)
     seen: dict[str, str | None] = {}
-    return {
-        page: {
-            "bot": _owner(c, page, kept, seen),
+    out: dict[str, dict[str, Any]] = {}
+    for page, spec in PAGES.items():
+        bot = _owner(c, page, kept, seen)
+        out[page] = {
+            "bot": bot,
             "name": spec["name"],
             "choice": _choice(kept, page),
             "default": _owner(c, page, kept, seen, chosen=False),
+            # the page's own owner (its choice or its default), not the General Manager standing in for none
+            "own": bot is not None and bot == _owner(c, page, kept, seen, fallback=False),
         }
-        for page, spec in PAGES.items()
-    }
+    return out
 
 
 def save(c: "sqlite3.Connection", actor: str, page: str, bot: str | None) -> dict[str, str | None]:
@@ -166,8 +170,15 @@ def save(c: "sqlite3.Connection", actor: str, page: str, bot: str | None) -> dic
     return {"page": page, "bot": chosen, "name": PAGES[page]["name"], "choice": chosen or "none"}
 
 
+def _trimmed(fields: dict[str, object]) -> None:
+    """Each text value with its surrounding spaces taken off, in place: what is checked is what is stored."""
+    for key, value in fields.items():
+        if isinstance(value, str):
+            fields[key] = value.strip()
+
+
 def _text(value: object, key: str) -> bool:
-    return isinstance(value, str) and 0 < len(value.strip()) <= FROM_LIMITS[key] and not _CONTROL.search(value)
+    return isinstance(value, str) and 0 < len(value) <= FROM_LIMITS[key] and not _CONTROL.search(value)
 
 
 def _item_ok(item: object) -> bool:
@@ -176,10 +187,11 @@ def _item_ok(item: object) -> bool:
     if not isinstance(item, dict):
         return False
     fields = cast("dict[str, object]", item)
+    _trimmed(fields)
     name = fields.get("name")
-    if isinstance(name, str) and len(name.strip()) > FROM_LIMITS["name"]:
+    if isinstance(name, str) and len(name) > FROM_LIMITS["name"]:
         # A long title (a doc's, a goal's) is only what the chat shows: shortened, never refused.
-        fields["name"] = name.strip()[: FROM_LIMITS["name"] - 1].rstrip() + "…"
+        fields["name"] = name[: FROM_LIMITS["name"] - 1].rstrip() + "…"
     return set(fields) <= {"kind", "id", "name"} and all(_text(fields.get(k), k) for k in ("kind", "id", "name"))
 
 
@@ -189,6 +201,8 @@ def check_from(refs: dict[str, object] | None) -> None:
     if given is None:
         return
     fields = cast("dict[str, object]", given) if isinstance(given, dict) else None
+    if fields is not None:
+        _trimmed(fields)
     ok = (
         fields is not None
         and set(fields) <= {"page", "label", "item"}

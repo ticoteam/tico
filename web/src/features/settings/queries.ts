@@ -23,7 +23,7 @@ import type {
   UsageFigures,
   UsageLimits,
 } from '@/api/schema';
-import { configQuery, pageOwnersQuery, queryClient, quietRoot, write, type PageOwnerRow } from '@/data';
+import { configQuery, pageOwnersQuery, queryClient, quietRoot, write, type PageOwnerRow, type PageOwners } from '@/data';
 import type { TaskCaps } from '@/api/schema';
 import type { ProductRepositoryPreview, ProductRepositoryResult, Repository, RepositoryList } from '@/api/schema';
 
@@ -211,7 +211,7 @@ export { pageOwnersQuery, type PageOwnerRow };
 export const setPageOwner = (page: string, choice: string) =>
   write({
     key: pageOwnersQuery.queryKey,
-    optimistic: (v: Record<string, PageOwnerRow> | undefined) => v && { ...v, [page]: { ...v[page], choice } },
+    optimistic: (v: PageOwners | undefined) => v && { ...v, pages: { ...v.pages, [page]: { ...v.pages[page], choice } } },
     send: (idempotencyKey) =>
       api.put(
         `/api/v2/page-owners/${enc(page)}`,

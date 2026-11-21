@@ -192,6 +192,19 @@ describe('Conversation', () => {
     expect(sends()).toHaveLength(2);
   });
 
+  it('sends a retry with the page it was first written on, not the one shown now @4857-S15', async () => {
+    let fail = true;
+    serve(() => (fail ? { status: 500, body: { error: { code: 'boom', detail: 'Broke' } } } : { status: 200, body: msg(3, ME, 'Ship it') }));
+    const view = show();
+    type('Ship it');
+    expect(await screen.findByText('Not sent')).toBeTruthy();
+    view.rerender(<Conversation id={T} variant="side" title="Ana" actor="bot:qa" from={{ page: 'docs', label: 'Docs' }} />);
+    fail = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(sends()).toHaveLength(2));
+    expect((sends()[1]?.body as { refs: unknown }).refs).toEqual({ from_page: { page: 'tasks', label: 'Tasks' } });
+  });
+
   it('follows and reads new messages at the bottom, and waits for the reader to scroll back otherwise', async () => {
     const settle = () => act(async () => {});
     const reads = () => posts.filter((p) => p.url === `/api/v2/threads/${T}/read`).map((p) => p.body);

@@ -225,7 +225,8 @@ export function layout(width: number, arrangement: ArrangementSpec, saved: Saved
   const order = L ? [...ids.slice(li + 1).reverse(), ...ids.slice(0, li)] : ids.slice().reverse();
   for (const id of order) {
     if (!tooMany() && !short()) break;
-    if (id === F || !open(id)) continue;
+    // an open Agent bar is the person's choice for the page: it keeps its place, and the sheets above it tuck
+    if (id === F || !open(id) || (id === 'chat' && bar === 'open')) continue;
     set(id, 'tucked', 'room');
     acting.push(`${id} under its left neighbour: ${tooMany() ? `the window keeps ${openCount(width)} open` : 'no room'}`);
   }
