@@ -224,6 +224,14 @@ starts a Tico Meet call with the bots in it: in the viewer's DM when one teammat
 else in a new thread with them all, named for the call's title or, without one, for who is in it. Its meeting window
 opens and joins it.
 
+**Call the Assistant.** Where Tico Meet is set up, the phone in the Assistant's head starts a voice call with it in
+your Assistant chat (busy until it starts). While that chat has a live Tico Meet call it shows Join instead, and nothing
+while a Google Meet or a call still ending is on there, since a start would be refused. Its voice turns run as the
+Assistant with its normal context, never as you. A call in a person's own room gets no prep task, whoever starts it. An
+Assistant-owned follow-up from it, filed by you directly or by the Assistant in that call, names you as requester, so it
+is in your tracker; the Assistant keeps it as a private task for you, and its runs are personal ones, like your
+routines' turns. Any other private follow-up of the Assistant's is refused.
+
 **Bot notes.** Each bot has a brief for the call. If it joins without prep, Tico queues a background prep task
 immediately. The bot uses the built-in `meeting-prep` skill to add the latest figures, recent work
 and open tasks people are likely to ask it about. It can add useful facts as it finds them. In the meeting window,
@@ -279,8 +287,12 @@ failed synthesis leaves the reply text in the thread. Detach, lost access and En
 voice session.
 
 **Timing.** Each turn writes one `call_voice_turn` line to support diagnostics with its call, bot, turn, outcome and any skip
-reason. `first_token_ms`, `first_sentence_ms` and `first_audio_ms` use the recorder's monotonic clock, starting
-when it heard the utterance. The line also records transcription, queue, answer and speech durations, and
+reason. `first_token_ms`, `first_sentence_ms` and `first_audio_ms` use the recorder's monotonic clock and start when the
+utterance is cut, once its ending pause has lasted 450 ms (700 ms after a short phrase). The end of speech, the last
+loud frame, is that pause earlier. `first_audio_p90_ms` is the nearest-rank p90 of `first_audio_ms` over the latest 100
+turns this server process spoke (turns skipped or left as text are not sampled). It starts at the cut, and the pause
+differs from turn to turn, so it is not the end-of-speech to first audio p90 whose target is under 5 s; that one needs
+the pause added turn by turn. The line also records transcription, queue, answer and speech durations, and
 `tts_first_chunk_ms` measures the speech request to the first response bytes. A milestone the
 turn never reaches is `null`.
 
@@ -366,7 +378,7 @@ same as a call that does not exist. `call_meeting` (409) when the live meeting's
 | `GET /api/v2/threads/{thread_id}/calls` | The thread's calls, newest first. `limit` (1-50) and `before` page through them. A page also stays under 256 KB; `next_before` is the cursor for the next page, `null` at the end. `providers` is what the viewer could start, in order; `available` says whether that is anything; `next_scheduled` is the thread's soonest scheduled call (with `can_edit`), or `null` |
 | `POST /api/v2/threads/{thread_id}/calls` | Start a call. Body: `title` (optional), `speak_replies` (optional; on for Tico Meet, off for Google Meet), `provider` (`auto`, `google_meet` or `tico`; default `auto`; bots or voice make it Tico Meet), `bots` (optional, up to 10 slugs attached at the start), `starts_at` and `ends_at` (optional, ISO 8601 with an offset: both schedule a Tico Meet call for then, up to 8 hours long; see Scheduled calls) |
 | `GET /api/v2/calls/ringing` | The live calls ringing the caller now |
-| `GET /api/v2/calls/live` | The live Tico Meet calls in threads the caller can read (the thread's own read rule), newest first, as call views; an ending call is left out. The Meetings page lists them under Live, above Upcoming, read again on the `threads` topic's `call.*` changes |
+| `GET /api/v2/calls/live[?thread=<id>]` | The live Tico Meet calls in threads the caller can read (the thread's own read rule), newest first, as call views; an ending call is left out. With `thread`, every live call in that thread, a Google Meet or an ending call too (each refuses a start there): the Assistant's Call and Join. The Meetings page lists them under Live, above Upcoming, read again on the `threads` topic's `call.*` changes |
 | `GET /api/v2/calls/upcoming` | The scheduled calls the caller is in (booked by them, or with them among the thread's people), soonest first. Each row is compact: `id`, `title`, `thread_id`, `scheduled_start`, `scheduled_end`, `people` (up to 8, the booker first), and `can_edit` |
 | `GET /api/v2/calls/{call_id}` | One call: state (`scheduled`, `live`, `ending` or `ended`), `scheduled_start` and `scheduled_end`, connector, people (each with `in_call`), bots, `speak_replies`, how it ended, `holds` (the connector only: posts the thread refused at the end), and `provider`, `meet_uri`, `join_url`, `live_count`, `status_source`, `seen_at`, `duration_s`, `ring`, `card_message_id`, `transcript_message_id`, and `voice` (see Voice; `null` without voice) |
 | `POST /api/v2/calls/{call_id}/follow-ups` | File a normal task from a live call. Body: `ask` and optional `bot` (for a person choosing an attached bot). Returns `task_id`. |

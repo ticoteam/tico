@@ -86,6 +86,7 @@ SPOKEN_CHARS = 600  # the part of a reply that is spoken; the whole reply is in 
 VOICE_CAP_MS = 30 * 60 * 1000  # the bots' spoken time in one call
 SPOKEN_CHARS_PER_SECOND = 14  # a little slower than the Gateway's voices speak, so the estimate errs long
 PLAYED_KEEP = 200  # reply ids remembered per call, so a reply is spoken once
+FIRST_AUDIO_WINDOW = 100  # the spoken turns, this process's latest, that `first_audio_p90_ms` is read over
 # An utterance heard this soon after a bot said nearly the same words is the bot's own voice coming back through a
 # speaker (echo the browser did not cancel): it is never asked, or the bot would answer itself.
 ECHO_SECONDS = 20
@@ -388,6 +389,8 @@ class Voice:
         self.makers = ThreadPoolExecutor(max_workers=4, thread_name_prefix="tico-meet-tts")
         self.players = ThreadPoolExecutor(max_workers=4, thread_name_prefix="tico-meet-voice")
         self.playing: list[Future[None]] = []  # playback futures, for settle
+        self.first_audio: deque[int] = deque(maxlen=FIRST_AUDIO_WINDOW)  # first_audio_ms of the latest spoken turns
+        self.first_audio_lock = threading.Lock()
 
     # --- state
 
@@ -1178,10 +1181,13 @@ class Voice:
 
             # The support ring captures warnings and clips long lines. Keep the latency milestones up front.
             log.warning(
-                "call_voice_turn first_token_ms=%s first_sentence_ms=%s first_audio_ms=%s "
+                "call_voice_turn first_token_ms=%s first_sentence_ms=%s first_audio_ms=%s first_audio_p90_ms=%s "
                 "call_id=%s bot=%s turn=%s outcome=%s skip_reason=%s transcribe_ms=%s queue_ms=%s "
                 "answer_ms=%s speech_ms=%s total_ms=%s heard_to_transcript_ms=%s tts_first_chunk_ms=%s",
-                *("null" if v is None else v for v in (first("token"), first("sentence"), first("audio"))),
+                *(
+                    "null" if v is None else v
+                    for v in (first("token"), first("sentence"), first("audio"), self._p90(first("audio")))
+                ),
                 call_id,
                 timing["bot"],
                 timing["turn"],
@@ -1202,6 +1208,14 @@ class Voice:
             )
         except Exception as exc:  # noqa: BLE001 - a timing line never stops the call's voice
             report("calls_voice", call_id, exc, logger="tico.call_voice")
+
+    def _p90(self, first_audio: int | None) -> int | None:
+        """The nearest-rank p90 of first_audio_ms over the latest FIRST_AUDIO_WINDOW spoken turns, this one counted."""
+        with self.first_audio_lock:
+            if first_audio is not None:
+                self.first_audio.append(first_audio)
+            seen = sorted(self.first_audio)
+        return seen[math.ceil(0.9 * len(seen)) - 1] if seen else None
 
     def settle(self, timeout: float = 30) -> bool:
         """Wait for the replies being spoken (tests)."""

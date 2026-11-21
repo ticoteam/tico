@@ -418,8 +418,11 @@ def test_each_voice_turn_logs_one_timing_line_with_no_words_in_it(meet, monkeypa
         "first_token_ms",
         "first_sentence_ms",
         "first_audio_ms",
+        "first_audio_p90_ms",
     }
     assert set(spoken) == set(skipped) == fields
+    # A skipped turn adds nothing to the p90: it is the one spoken turn's.
+    assert spoken["first_audio_p90_ms"] == skipped["first_audio_p90_ms"] == spoken["first_audio_ms"]
     assert (spoken["call_id"], spoken["bot"], spoken["outcome"], spoken["skip_reason"]) == (
         call["id"],
         "ops",
@@ -519,9 +522,10 @@ def test_call_warms_one_subscription_run_and_speaks_before_the_final_reply(meet,
     line = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("call_voice_turn "))
     timing = dict(piece.split("=", 1) for piece in line.split()[1:])
     assert 0 <= int(timing["first_token_ms"]) <= int(timing["first_sentence_ms"]) <= int(timing["first_audio_ms"])
+    assert timing["first_audio_p90_ms"] == timing["first_audio_ms"]  # the one spoken turn so far
     bundle = json.loads(get(meet, "support/diagnostics")["text"])
     record = [line for line in bundle["logs"]["server"] if "call_voice_turn " in line][-1]
-    for field in ("first_token_ms", "first_sentence_ms", "first_audio_ms"):
+    for field in ("first_token_ms", "first_sentence_ms", "first_audio_ms", "first_audio_p90_ms"):
         assert f"{field}={timing[field]} " in record
     with meet.app.state.store.read() as c:
         assert (
@@ -545,6 +549,16 @@ def test_call_warms_one_subscription_run_and_speaks_before_the_final_reply(meet,
         token,
     )
     assert len(media.said) == 2 and "Too late." not in thread_texts(meet, cid)
+
+
+def test_first_audio_p90_is_the_nearest_rank_over_the_latest_spoken_turns():
+    voice = call_voice.Voice(None, None, None)
+    assert voice._p90(None) is None
+    assert [voice._p90(ms) for ms in range(100, 1100, 100)][-1] == 900  # ten spoken turns: the ninth
+    assert voice._p90(None) == 900  # a turn that was never spoken counts for nothing
+    for _ in range(call_voice.FIRST_AUDIO_WINDOW):
+        voice._p90(50)
+    assert voice._p90(None) == 50  # only the latest FIRST_AUDIO_WINDOW turns
 
 
 @pytest.mark.parametrize("resident", [True, False], ids=["resident", "legacy"])

@@ -151,7 +151,11 @@ def may_file(c: Connection, auth: Any, who: Identity, call_id: str, bot: str | N
 
 
 def file_task(c: Connection, auth: Any, who: Identity, row: Record, bot: str, ask: str) -> dict[str, str]:
+    """The follow-up task, owned by the attached bot. An Assistant-owned one from a call in a person's own room
+    (`_personal_for`) asks for that person, so it is in their tracker, and the Assistant may keep it private for them,
+    its runs personal ones (rooms.personal_run); its answer still comes back to the call (`_return`)."""
     owner = auth.target(c, who, f"bot:{bot}", need="write")
+    person = _personal_for(c, who, row, owner)
     task_caps.check(c, who.actor, owner)
     reach.check(c, who, owner, "task")
     auth.require_bot_contact(c, who, owner, kind="task")
@@ -173,9 +177,31 @@ def file_task(c: Connection, auth: Any, who: Identity, row: Record, bot: str, as
         private=True,
         reconcile_related=False,
         instructions="Answer the call's request. Put the answer in your task completion note or final reply.",
+        requester_actor=person if who.role == "bot" else None,
+        routine_for=person,  # the Assistant may keep it, private, as the person's own (hubdb.task_create)
     )
     c.execute("INSERT INTO call_follow_ups(task_id,call_id,bot_id) VALUES(?,?,?)", (task["id"], row["id"], bot))
     return {"task_id": task["id"]}
+
+
+def _personal_for(c: Connection, who: Identity, row: Record, owner: str) -> str | None:
+    """The person an Assistant-owned follow-up is the private work of: the owner of the room the call is in (their
+    Assistant chat), when they file it themselves, directly, or the Assistant files it in a lease from this call. None
+    for any other follow-up."""
+    from . import calls as _calls
+
+    calls: Any = _calls
+    person: str | None = calls.room_owner(c, row["thread_id"])
+    if not person or owner != H.assistant_actor(c):
+        return None
+    if who.role in ("human", "owner") and not who.via:
+        return person if who.actor == person else None
+    lease = c.execute(
+        "SELECT json_extract(m.refs,'$.live_meeting.meeting_id') FROM attempts a JOIN jobs j ON j.id=a.job_id "
+        "JOIN messages m ON m.id=j.message_id WHERE a.id=? AND a.bot_id=?",
+        (who.attempt_id, H.actor_id(who.actor)),
+    ).fetchone()
+    return person if who.role == "bot" and lease and lease[0] == row["live_meeting_id"] else None
 
 
 def _ready(c: Connection) -> list[Row]:

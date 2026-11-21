@@ -245,6 +245,11 @@ class Prep:
         ).fetchall()
         if not bots:
             return []
+        from . import calls as _calls
+
+        calls: Any = _calls
+        if calls.room_owner(c, row["thread_id"]):
+            return []  # a call in a person's own room (their Assistant chat) needs no prep, whoever started it
         private = bool(self.calls.thread_private(c, row["thread_id"]))
         from_attachment = live or added is not None
 

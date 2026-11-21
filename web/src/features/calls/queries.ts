@@ -380,6 +380,13 @@ export const liveCallsQuery = queryOptions({
   queryFn: ({ signal }) => api.get<CallLive>('/api/v2/calls/live', { signal }),
 });
 
+/** One thread's live Tico Meet call, if any, looked up in that thread before the live list's cap. Under callKeys.live. */
+export const threadLiveQuery = (thread: string) =>
+  queryOptions({
+    queryKey: [...callKeys.live, thread] as const,
+    queryFn: ({ signal }) => api.get<CallLive>(`/api/v2/calls/live?thread=${enc(thread)}`, { signal }),
+  });
+
 export const callQuery = (id: string) =>
   queryOptions({ queryKey: callKeys.one(id), queryFn: ({ signal }) => api.get<Call>(`/api/v2/calls/${enc(id)}`, { signal }) });
 
