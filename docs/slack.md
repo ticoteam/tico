@@ -108,7 +108,9 @@ at a time (`limit`, `cursor`; follow `next_cursor`).
 | Socket Mode did not connect | The app-level token is wrong or lacks `connections:write`, or Socket Mode is off (the manifest turns it on). |
 | Missing scopes in `docker compose logs slack` | Paste the current manifest over the app's, then reinstall it. |
 | No reply in a channel | Tico must be invited to it, and the sender must be on the roster. |
-| A bot is refused a channel ("not on the team's Slack channel list") | Add the channel and the bot as a reader under Tools > Slack channels, or ask BotOps. |
+| A bot's Slack history says it does not declare Slack access or lacks `read` | Add `service: slack` with `can: [read]` to the bot's `tools:` in `bot.yaml`. |
+| A bot's Slack history says it may not read the channel | Add the channel to the bot's Slack `channels:` or add the bot as a reader under Tools > Slack channels. |
+| Slack history says to invite @Tico | Check the channel name or ID and use `/invite @Tico` in the channel. |
 | Replies show as "Tico", not the bot | The `chat:write.customize` scope is missing; update the manifest and reinstall. |
 
 Kill switch: remove `slack` from `COMPOSE_PROFILES` and run `docker compose up -d --remove-orphans`.

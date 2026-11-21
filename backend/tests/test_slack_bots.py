@@ -252,6 +252,23 @@ def test_history_is_refused_outside_the_bots_channels_and_for_slack_connect(slac
     assert missing["code"] == "not_found" and "invite @Tico" in missing["detail"]
 
 
+@pytest.mark.parametrize(
+    "method, slack_method, slack_code, status, code",
+    [
+        ("history_range", "conversations.history", "not_in_channel", 403, "slack_not_in_channel"),
+        ("conversations_info", "conversations.info", "channel_not_found", 404, "not_found"),
+    ],
+)
+def test_history_reports_slack_channel_refusals(slack, monkeypatch, method, slack_method, slack_code, status, code):
+    def refused(*_args):
+        raise SG.SlackError(slack_method, slack_code)
+
+    monkeypatch.setattr(slack.fake, method, refused)
+    error = call(slack, "GET", "slack/history", status, params={"channel": "#general", "oldest": 0}).json()
+    assert error["code"] == code and not error["retryable"]
+    assert "invite @tico" in error["detail"].lower()
+
+
 def test_a_channel_is_authorized_on_its_id_never_on_the_name_beside_it(slack):
     """Codex P1-1: `<#C...|general>` names #quiet's id beside an allowed name. The id decides: refused, and nothing is
     asked of Slack. A name is sent to the gateway as the listed channel's id."""
