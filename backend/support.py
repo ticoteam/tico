@@ -28,7 +28,7 @@ import re
 import secrets
 import threading
 from datetime import datetime, timedelta, timezone
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal, cast
 
 import httpx
 
@@ -44,6 +44,8 @@ from .store import H, Problem, encode, refusal_problem
 from .api_contract import api_v2
 
 log = logging.getLogger("tico.support")
+REPORT_SAID = "A support request to Tico support"  # what the support link's check reads of a report (names only)
+UNSET = object()  # `Support.file`'s checked: not made by its caller
 
 MAX_MESSAGE = 4000
 PER_DAY = 10  # new tickets one person may file in a day; HQ limits the address as well
@@ -527,14 +529,16 @@ class Support:
             raise Problem("diagnostics_stale", "This preview expired. Refresh diagnostics and review again.", 409)
         return bundle
 
-    def file(self, who, body, key="", on_filed=None, source="", idem="", asker=None, before_send=None):
+    def file(self, who, body, key="", on_filed=None, source="", idem="", asker=None, before_send=None, checked=UNSET):
         """Send the ticket to HQ, then keep HQ's id and secret. Nothing is kept when HQ refuses or cannot be reached.
         `on_filed(c, ticket_id)` runs in the transaction that keeps it (an approval spent with it). `source` is who
         filed it, as HQ's queue sorts tickets (one of SOURCES; the body's own when not given). `idem` is an OK already
         used for this report (file_approved): HQ hears it as Idempotency-Key, and the day's cap, counted when it was
         asked, refuses nothing after the claim. `asker`: the agent that asked for this send, (principal, sender, via):
         checked on the support link (backend/rule_links.py) before this delivery, its one event kept with the ticket.
-        `before_send()` runs after that check and right before the first request to HQ (an OK's authority, rechecked)."""
+        `before_send()` runs after that check and right before the first request to HQ (an OK's authority, rechecked).
+        `checked`: that check, made already by a caller that holds the lock `sending` (no judge call is made under it);
+        None from such a caller means it found no delivery, so one made after all is recorded unchecked."""
         message, email = clean_message(body.message), clean_email(body.email)
         with self.store.read() as c:
             if key:
@@ -577,7 +581,13 @@ class Support:
             payload["diagnostics"] = self.attachment(who, body.diagnostics)
         if body.kind != "support":
             payload["kind"] = sent["kind"] = body.kind
-        found = self._link_check(asker, body.kind)
+        said = f"A {body.kind or 'support'} request to Tico support"
+        if checked is UNSET:
+            found = self._link_check(asker, said)
+        elif checked is None and asker:
+            found = rule_links.unchecked(asker[0], asker[1], "support", "support_report", "changed_during_check")
+        else:
+            found = cast(Any, checked)  # the check its caller made (or None: no agent)
         if before_send:
             before_send()
         answer = _ask_hq("POST", "/v1/support", body=payload, idem=idem)
@@ -646,14 +656,13 @@ class Support:
             rule_links.record(c, found)  # one ticket, one event: with the row it makes
             return view(c.execute("SELECT * FROM support_tickets WHERE id=?", (ticket_id,)).fetchone())
 
-    def _link_check(self, asker, kind):
-        """The support link's check of an agent's delivery (backend/rule_links.py), outside any write, names only; None
-        when no agent asked for it. A retry before the ticket is kept may be judged again (log-only: its event is
-        still one, with the ticket)."""
+    def _link_check(self, asker, said):
+        """The support link's check of an agent's write (backend/rule_links.py), outside any write and never under the
+        lock `sending`, on its names only (`said`); None when no agent asked for it. A retry before the ticket is kept
+        may be judged again (log-only: its event is still one, with the ticket)."""
         if not asker:
             return None
         judge = getattr(getattr(self.app, "state", None), "judge", None)
-        said = f"A {kind or 'support'} request to Tico support"
         principal, sender, via = asker
         return rule_links.check_as(self.store, judge, principal, sender, via, "support", "support_report", said)
 
@@ -672,6 +681,8 @@ class Support:
         if problems or not H.support_text_matches(payload):
             raise Problem("validation", "; ".join(problems) or "The message does not match its hash", 422)
         key = "approval:" + _key_of(who.actor, payload)
+        asker = rule_links.agent_of(self.store, who)
+        checked = self._report_checked(who, payload, key, asker) if asker else None
         with self.sending:
             claimed_rid = None
             with self.store.transaction() as c:
@@ -735,7 +746,7 @@ class Support:
                     if task_asks.standing(c, rid) == task_asks.WAITING:
                         task_asks.withdraw(c, rid, "Sent to Tico support under the team rule")
             if claimed_rid:
-                sent = self._file_approved(who, claimed_rid)
+                sent = self._file_approved(who, claimed_rid, checked=checked)
                 return {
                     "ticket": sent["ticket"],
                     "sent": True,
@@ -748,7 +759,8 @@ class Support:
                 payload,
                 "bot_report",
                 key,
-                asker=rule_links.agent_of(self.store, who),
+                asker=asker,
+                checked=checked,
             )
             return {
                 "ticket": ticket,
@@ -764,10 +776,39 @@ class Support:
         then the report goes with Idempotency-Key `tico-support:<rid>`. HQ refusing or out of reach leaves the OK used
         with no ticket; calling again (Maintenance does, for the Health Monitor) sends the same report under the same
         key. A call once the ticket is kept answers with it."""
+        with self.store.read() as c:
+            found = task_asks.grant(c, rid)
+            kept = c.execute(
+                "SELECT 1 FROM support_tickets WHERE request_key IN (?,?)", ("approval:" + rid, "draft:" + rid)
+            )
+            kept = kept.fetchone()
+        # The support link's check, before the lock: never a judge call while `sending` is held.
+        checked = self._link_check(self._approval_asker(found, who), REPORT_SAID) if found and not kept else None
         with self.sending:
-            return self._file_approved(who, rid)
+            return self._file_approved(who, rid, checked=checked)
 
-    def _file_approved(self, who, rid):
+    def _approval_asker(self, grant, who):
+        """The agent an OK'd report is checked as: the bot that asked for the OK, else the agent sending it now (a
+        person's Assistant or BotOps, whose OK keeps the person's id), else None."""
+        by = str(grant["asked_by_id"])
+        return (by, by, "") if H.is_bot(by) else rule_links.agent_of(self.store, who)
+
+    def _report_checked(self, who, payload, key, asker):
+        """`report`'s support check before the lock, only when the report will be delivered now (under the team rule,
+        or a person's OK it already claimed) and is not already kept; None otherwise (a draft spends no call)."""
+        with self.store.read() as c:
+            if c.execute("SELECT 1 FROM support_tickets WHERE request_key=?", (key,)).fetchone():
+                return None
+            direct = who.role == "bot" and team_rules.load(c)[RULE] and not from_source()
+            subject = SUBJECT + _key_of(who.actor, payload)
+            ready = any(
+                r["asked_by_id"] == who.actor
+                and (task_asks.grant(c, r["requirement_id"]) or {}).get("subject") == subject
+                for r in claimed(c)
+            )
+        return self._link_check(asker, REPORT_SAID) if direct or ready else None
+
+    def _file_approved(self, who, rid, checked=None):
         """The send itself, under the lock `sending` that report and file_approved both hold."""
         with self.store.read() as c:
             found = task_asks.grant(c, rid)
@@ -860,9 +901,9 @@ class Support:
         def settle(c, _ticket_id=None):
             task_asks.settle(c, rid, "Sent the report to Tico support.")
 
-        # Checked as whoever asked for the OK when that is an agent (the grant keeps it), an approval from before too.
-        by = str(found["asked_by_id"])
-        asker = (by, by, "") if H.is_bot(by) else None
+        # Checked as whoever asked for the OK when that is an agent (the grant keeps it), an approval from before too;
+        # else as the person's Assistant or BotOps sending it now.
+        asker = self._approval_asker(found, who)
         ticket = self._send(
             person,
             payload,
@@ -872,10 +913,11 @@ class Support:
             idem="tico-support:" + rid,
             asker=asker,
             before_send=before_send,
+            checked=checked,
         )
         return {"ticket": ticket, "approval": rid, "filed_as": person.actor, "again": False}
 
-    def _send(self, person, payload, source, key, on_filed=None, idem="", asker=None, before_send=None):
+    def _send(self, person, payload, source, key, on_filed=None, idem="", asker=None, before_send=None, checked=None):
         """File a report as `person`, once per `key`: a ticket kept under that key answers again."""
         with self.store.read() as c:
             done = c.execute(
@@ -896,12 +938,16 @@ class Support:
             idem=idem,
             asker=asker,
             before_send=before_send,
+            checked=checked,
         )
 
-    def write(self, who, ticket_id, text, attachment=""):
-        """Add a message to one of the person's own tickets (the chat's; a bot's ticket is not theirs to write on)."""
+    def write(self, who, ticket_id, text, attachment="", asker=None):
+        """Add a message to one of the person's own tickets (the chat's; a bot's ticket is not theirs to write on).
+        `asker`: the agent writing it for the person (their Assistant or BotOps), checked on the support link before it
+        goes and logged once it went."""
         text = clean_message(text)
         row = self._own(who, ticket_id)
+        found = self._link_check(asker, "A message on a Tico support request")
         payload = {"message": text}
         if attachment:
             payload["diagnostics"] = self.attachment(who, attachment)
@@ -913,6 +959,9 @@ class Support:
                 422,
             )
         _answer(answer, (201, 200))
+        if found:
+            with self.store.transaction() as c:
+                rule_links.record(c, found)
         self._pull(row)
         return self.one(who, ticket_id)
 
@@ -1182,7 +1231,7 @@ def install(app, store, settings, census):
     def support_write(request: Request, ticket_id: str, body: SupportMessage):
         who = person(request)
         require_on(settings)
-        return support.write(who, ticket_id, body.message, body.diagnostics)
+        return support.write(who, ticket_id, body.message, body.diagnostics, asker=rule_links.agent_of(store, who))
 
     @app.post("/api/v2/support/tickets/{ticket_id}/read")
     def support_read(request: Request, ticket_id: str):

@@ -162,10 +162,13 @@ def answer_feedback(store, support, who, body):
     if body.answer.strip():
         when = "after the first bot result" if body.moment == "first_result" else body.moment.replace("day_", "day ")
         message = clean_message("%s (%s)\n\n%s" % (QUESTION, when, body.answer.strip()))
+        from . import rule_links
+
         ticket = support.file(
             who,
             SupportTicket(message=message, kind="feedback", include_ids=False, diagnostics=""),
             "feedback:" + body.moment,
+            asker=rule_links.agent_of(store, who),  # a person's Assistant or BotOps answering: checked on the link
         )
     with store.transaction() as c:
         record = _load(c, who)
