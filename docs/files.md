@@ -593,7 +593,8 @@ a custom server image, or supply a poster. Pillow and the multipart parser ship 
 ## Task file reviews
 
 Task attachments are versioned by name within their task, across uploaders. Reusing a name
-adds a version; an archived name starts a new file. Existing attachments are v1. Task files
+adds a version; an archived name starts a new file, unless the upload names the file it `replaces`. Existing
+attachments are v1. Task files
 and their versions are listed by `GET /api/v2/tasks/{id}/files`, with notes, questions, all
 answers and nullable media metadata. Downloads accept `?v=<n>` for an exact version.
 The version's author can edit its note or question through

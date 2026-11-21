@@ -408,17 +408,21 @@ rest of the ladder. Task create and update take `"human": "human:charlie"` (`""`
 ## Files
 
 Attach a file to the task so anyone who can read the task can open it. Uploading the same name on the same task adds a
-new version. Each version records who uploaded it, when, its size and type, and an optional note.
+new version; `--replaces <file id>` (MCP `replaces`) makes an upload the next version of that file whatever its name, and
+brings it back if it was archived. Each version records who uploaded it, when, its size and type, and an optional note;
+older versions stay behind the file's version menu.
 
 ```sh
 tico task attach <id> report.md --note "Revised introduction"
+tico task attach <id> letter-final.md --replaces <file id>
 tico task comment <id> "Choose a draft" --attach draft-a.md --attach draft-b.md
 tico task comment <id> "The export" --file <file-id>@1
 ```
 
-`POST /api/v2/tasks/{id}/files` takes `name`, `text` or `content_base64`, and `note`. `GET /api/v2/tasks/{id}/files`
+`POST /api/v2/tasks/{id}/files` takes `name`, `text` or `content_base64`, `note` and `replaces`. `GET /api/v2/tasks/{id}/files`
 lists them with their versions. The task's **Files** strip shows each file at its newest version; a comment's pictures
-and pages show under it ([Visuals](visuals.md#in-a-chat-or-task-conversation)).
+and pages show under it ([Visuals](visuals.md#in-a-chat-or-task-conversation)). Archived files and pages leave the
+task's tabs for the **Archive (N)** menu at the end of the tab row, where each still opens.
 
 ### Attach a page to a page requirement
 

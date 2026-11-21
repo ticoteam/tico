@@ -1209,6 +1209,14 @@ TASK_UPLOAD_SERIES_SQL = (
     "ORDER BY f.last_activity_at DESC"
 )
 
+# The file on this task an upload names as the one it replaces: one the series above could continue.
+TASK_REPLACE_SQL = (
+    "SELECT f.*,p.file_id IS NOT NULL AS is_page FROM bot_files f LEFT JOIN pages p ON p.file_id=f.id "
+    "WHERE f.id=? AND f.task_id=? AND f.locator='tico_blob' AND f.state<>'deleted' AND f.current_version>0 "
+    "AND NOT EXISTS (SELECT 1 FROM page_links l WHERE l.page_id=f.id AND l.target=? "
+    "AND l.role NOT IN ('writer','related'))"
+)
+
 TASK_VERSIONS_SQL = (
     "SELECT v.*,r.note,r.comment_id FROM json_each(?) ids JOIN bot_file_versions v ON v.file_id=ids.value "
     "AND v.version>=CASE WHEN ? > 0 THEN coalesce((SELECT older.version FROM bot_file_versions older "
@@ -1631,10 +1639,23 @@ class Files:
         fid, _ = self.attach_task(c, who, task_id, item, digest, bot)
         return fid
 
-    def attach_task(self, c, who, task_id, item, digest, bot, *, file=None, series=True):
+    def attach_task(self, c, who, task_id, item, digest, bot, *, file=None, series=True, replaces=None):
         """Continue a writable series on this task unless it is linked here as a document.
-        A named document is passed as `file` after cleaning. With `series` off and no `file`, start a new series."""
+        A named document is passed as `file` after cleaning. With `series` off and no `file`, start a new series.
+        `replaces` names the file to continue whatever the new name; an archived one comes back with the new version."""
         row = file
+        if replaces:
+            from . import page_links
+
+            row = c.execute(TASK_REPLACE_SQL, (replaces, task_id, "task:" + task_id)).fetchone()
+            if (
+                not row
+                or not self.visible(c, who, row, {})
+                or (row["is_page"] and not page_links.may_write(c, self.auth, who, row))
+            ):
+                raise Problem("not_found", "No file on this task to replace by that id", 404)
+            if row["archived"]:
+                c.execute("UPDATE bot_files SET archived=0 WHERE id=?", (row["id"],))
         if row is None and series:
             from . import page_links
 

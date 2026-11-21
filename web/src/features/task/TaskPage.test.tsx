@@ -823,6 +823,48 @@ describe('a task’s files and pages @s56 @s76 @s780', () => {
     await waitFor(() => expect((router.state.location.search as { file?: string }).file).toBeUndefined());
   });
 
+  describe('archived files', () => {
+    const live = {
+      id: 'f8',
+      name: 'letter.md',
+      title: 'Letter',
+      mime: 'text/markdown',
+      archived: false,
+      current_version: 1,
+      versions: [{ n: 1, by: 'bot:a1', created_at: '2026-11-02T10:00:00Z', mime: 'text/markdown', url: '/api/v2/files/f8?v=1', answers: [], ask: null }],
+    };
+    const draft = { ...live, id: 'f7', name: 'letter-v1.md', title: 'Letter draft', archived: true, versions: [{ ...live.versions[0], url: '/api/v2/files/f7?v=1' }] };
+    const withDraft = (url: string, method: string): Reply | undefined => {
+      if (url.endsWith('/api/v2/tasks/t1/files?all=1')) return { status: 200, body: { files: [live, draft] } };
+      if (method === 'PATCH' && url.endsWith('/api/v2/files/f7')) return ok;
+      if (url.endsWith('/api/v2/files/f7/info')) return { status: 200, body: { file: { id: 'f7', name: 'letter-v1.md', title: 'Letter draft', mime: 'text/markdown', library_kind: 'document', version: 1 } } };
+      if (url.endsWith('/api/v2/files/f7/versions')) return { status: 200, body: { versions: [{ version: 1, current: true, mime: 'text/markdown', name: 'letter-v1.md' }] } };
+      if (url.endsWith('/api/v2/files/f7/versions/1')) return { status: 200, body: 'Dear Dana,' };
+      return files(url);
+    };
+
+    it('leave the tabs for the Archive menu at the row’s end, where each opens', async () => {
+      serve(withDraft);
+      const router = show(<TaskPage task="12" pipeline="p1" />);
+      expect(await screen.findByRole('link', { name: 'Letter' })).toBeTruthy();
+      expect(screen.queryByRole('link', { name: 'Letter draft' })).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'Archive (1)' }));
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'Letter draft' }));
+      await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/details'));
+      expect((router.state.location.search as { file?: string }).file).toBe('f7');
+    });
+
+    it('open and restore from their own ⋯', async () => {
+      serve(withDraft);
+      show(<TaskPage task="12" pipeline="p1" tab="details" file="f7" />, '/tasks/p1/12/details?file=f7');
+      expect(await screen.findByText('Dear Dana,')).toBeTruthy();
+      await lastMore();
+      expect(screen.queryByRole('menuitem', { name: 'Remove file' })).toBeNull();
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'Restore' }));
+      await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/files/f7', method: 'PATCH', body: { archived: false } }));
+    });
+  });
+
   it('a page’s ⋯ archives the page and goes back to Details', async () => {
     serve((url, method) => (method === 'PATCH' && url.endsWith('/api/v2/pages/f2') ? { status: 200, body: { page: { ...page, archived: true } } } : files(url)));
     const router = show(<TaskPage task="12" pipeline="p1" />);

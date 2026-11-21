@@ -535,8 +535,9 @@ def run(args, who=None):
                 return via_tool(client, args, page=args.file)
             path = Path(args.file)
             body = {"name": args.name or path.name}
-            if getattr(args, "note", None) is not None:
-                body["note"] = args.note
+            for field in ("note", "replaces"):
+                if getattr(args, field, None) is not None:
+                    body[field] = getattr(args, field)
             if client.features().get("task_files_multipart"):
                 uploads = {"file": path}
                 if getattr(args, "poster", None):

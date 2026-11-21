@@ -127,9 +127,10 @@ export function FileView({ t, file, full, flow }: { t: TaskData; file: string; f
   const me = useQuery(meQuery);
   const search = useSearch({ strict: false }) as TaskSearch;
   const navigate = useNavigate();
+  // An archived file opens from the Archive menu too; it is not one of the task's files to step through.
   const list = (files.data ?? []).filter((f) => !f.archived);
   const i = list.findIndex((f) => f.id === file);
-  const f = list[i];
+  const f = (files.data ?? []).find((x) => x.id === file);
   const details = tabAddress(t, DETAILS, flow);
   const at = (id: string) => (flow ? { tab: DETAILS, file: id } : { file: id });
   const back = flow ? { tab: DETAILS } : {};
@@ -168,6 +169,12 @@ export function FileView({ t, file, full, flow }: { t: TaskData; file: string; f
     toast({ text: 'Removed', name: x.title || x.name, action: { label: 'Undo', run: () => void run('task.archiveFile', { task: t.id, file: x.id, archived: false }, { via: 'click' }).then((u) => u.ok || toast(failedToast(u))) } });
     void navigate({ to: details.to as never, search: back as never });
   };
+  // The full listing names a page's writers, and a page is restored as a page.
+  const restore = async (x: TaskFileView) => {
+    const { id } = x;
+    const r = await ('writers' in x ? run('task.archivePage', { task: t.id, page: id, archived: false }, { via: 'click' }) : run('task.archiveFile', { task: t.id, file: id, archived: false }, { via: 'click' }));
+    toast(r.ok ? { text: 'Restored', name: x.title || x.name } : failedToast(r));
+  };
 
   const menu = f && v && (
     <Menu trigger={<IconButton icon="more" label="More" size="sm" data-target={`task-version:${t.id}`} />}>
@@ -190,7 +197,7 @@ export function FileView({ t, file, full, flow }: { t: TaskData; file: string; f
       {mayRemove && (
         <>
           <MenuRule />
-          <MenuItem label="Remove file" icon="close" onSelect={() => void remove(f)} />
+          {f.archived ? <MenuItem label="Restore" icon="archive" onSelect={() => void restore(f)} /> : <MenuItem label="Remove file" icon="close" onSelect={() => void remove(f)} />}
         </>
       )}
     </Menu>
@@ -218,8 +225,8 @@ export function FileView({ t, file, full, flow }: { t: TaskData; file: string; f
             <b>{i + 1}</b> of {list.length}
           </span>
         )}
-        {list.length > 1 && step(-1, 'Previous', true)}
-        {list.length > 1 && step(1, 'Next', false)}
+        {list.length > 1 && i >= 0 && step(-1, 'Previous', true)}
+        {list.length > 1 && i >= 0 && step(1, 'Next', false)}
         {menu}
       </div>
       {files.isError ? (

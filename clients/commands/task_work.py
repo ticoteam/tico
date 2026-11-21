@@ -602,6 +602,8 @@ def task_follow(api, args):
     "Attach a deliverable (a report, a draft) to a task so the people on it "
     "can open it in Tico. Returns the link to put in your note; never link a path on your "
     "Mac or an s3:// URI. Send the text as-is, or content_base64 for a binary file. "
+    "A new draft of a file is its next version, not a new file: the same name adds one, and replaces (its file id) "
+    "continues it under a new name; its older versions stay behind its version menu. "
     "With req and page instead, attach a page to the stage's page requirement: the decision model checks it, then the person it "
     "names OKs that version. Attaching again replaces it; on a document approval (QA report, Spec) a different page "
     "also replaces the pages attached to it in this stage, unless add is true (then every page is judged together). "
@@ -623,6 +625,7 @@ def task_follow(api, args):
         "page": _s("page:<file id> for its newest version, or page:<file id>@<version>"),
         "version": VERSION,
         "name": _s("File name with its extension, e.g. 2026-09-15-draft-review.md"),
+        "replaces": _s("The file id of a file on this task this is the next version of"),
         "path": _s("A local file to stream when this server supports multipart uploads"),
         "poster": _s("Optional local PNG or JPEG poster with path"),
         "text": _s("The file's text, for a text or Markdown file"),
@@ -671,7 +674,7 @@ def task_attach(api, args):
         path, _ = BF.local_file(BF.checkout_root(), args["path"])
         with path.open("rb") as source:
             BF.check_program(path.name, source.read(16))
-        fields = {k: args[k] for k in ("name", "note") if args.get(k) is not None}
+        fields = {k: args[k] for k in ("name", "note", "replaces") if args.get(k) is not None}
         if api.features().get("task_files_multipart"):
             uploads = {"file": path}
             if args.get("poster"):
@@ -684,7 +687,7 @@ def task_attach(api, args):
         if len(data) > 10_000_000:
             raise ValueError("This server accepts files up to 10 MB")
         body["content_base64"] = base64.b64encode(data).decode()
-    for field in ("text", "content_base64", "note"):
+    for field in ("text", "content_base64", "note", "replaces"):
         if args.get(field) is not None:
             body[field] = args[field]
     return api.post(f"tasks/{args['id']}/files", body, key=_key(args))
