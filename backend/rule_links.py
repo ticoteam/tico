@@ -37,7 +37,7 @@ import logging
 import re
 from collections.abc import Callable, Collection
 from typing import Any, cast
-from urllib.parse import parse_qsl, unquote
+from urllib.parse import unquote
 
 from fastapi import FastAPI, Request
 
@@ -138,7 +138,7 @@ def _body(body: bytes, content_type: str) -> str | None:
         if not kind or kind.endswith("/json") or kind.endswith("+json"):
             out = json.dumps(_scrubbed(json.loads(text)), ensure_ascii=False)
         elif kind == FORM:
-            out = "&".join(f"{scrub(k)}={scrub(v)}" for k, v in parse_qsl(text, keep_blank_values=True))
+            out = "&".join(f"{scrub(k)}={scrub(v)}" for k, v in _pairs(text))
         elif kind == "text/plain":
             out = scrub(text)
         else:
@@ -148,15 +148,20 @@ def _body(body: bytes, content_type: str) -> str | None:
     return out if clean(out) else None
 
 
+def _pairs(text: str) -> list[tuple[str, str]]:
+    """A query or form body's (name, value) pairs, split but not decoded: `scrub` undoes every layer of escapes itself,
+    so a path, a query and a form share one limit (DECODE_PASSES)."""
+    return [(k, v) for k, _, v in (part.partition("=") for part in text.split("&") if part)]
+
+
 def proxy_output(
     method: str, rest: str, query: str, body: bytes, params: Collection[str] = (), content_type: str = ""
 ) -> str:
     """What the check reads of a proxied write: its method, path and query, and its body, each decoded and scrubbed and
     never encoded again. The tool's auth query parameters (`params`) are blanked; no header is read. A body (or an
     address) that cannot be read safely is named, not read."""
-    pairs = parse_qsl(query, keep_blank_values=True)
     path = "/".join(scrub(part) for part in rest.lstrip("/").split("/"))
-    asked = "&".join(f"{scrub(k)}={'[key]' if k in params else scrub(v)}" for k, v in pairs)
+    asked = "&".join(f"{scrub(k)}={'[key]' if (_decoded(k) or k) in params else scrub(v)}" for k, v in _pairs(query))
     head = f"{method} /{path}" + ("?" + asked if asked else "")
     if not clean(head):
         head = f"{method} [an address not read]"
@@ -167,8 +172,9 @@ def proxy_output(
 
 
 def mcp_endpoint(tool: Any, forwarded: str) -> bool:
-    """Whether the address a proxied call is forwarded to (before its query) is exactly the tool's MCP server, trailing
-    slash included: the one address the MCP read exemption and its read-only hints cover."""
+    """Whether the final address a proxied call is forwarded to (its query, the key's own parameters included) is exactly
+    the tool's MCP server, trailing slash included: the one address the gate's MCP read exemption and the read-only
+    hints it trusts cover. A tool whose key goes in the query never matches: its writes are all checked."""
     url = str(tool.get("mcp_url") or "")
     return bool(url) and forwarded == url
 
@@ -290,12 +296,14 @@ def mailed(found: Any, result: Any) -> Found:
         "outcome": "held" if result.get("outcome") == "held" else "passed",
         "rules": applied,
         "broken": applied,
-        "unchecked": "unchecked" if result.get("outcome") == "unchecked" else "",
+        # Kept when the decision went on unchecked, an approved mail's over-budget recheck included.
+        "unchecked": str(result.get("unchecked") or ("unchecked" if result.get("outcome") == "unchecked" else "")),
     }
 
 
-def too_large(principal: str, sender: str, link: str, operation: str) -> Found:
-    """The outcome of a write too large to read (over MAX_JUDGED): not judged, recorded unchecked."""
+def unchecked(principal: str, sender: str, link: str, operation: str, reason: str) -> Found:
+    """The outcome of an agent's write that is not judged (too large to read, no Idempotency-Key, eligible only after its
+    check): passed, recorded unchecked with `reason`."""
     return {
         "link": link,
         "actor": sender,
@@ -304,8 +312,16 @@ def too_large(principal: str, sender: str, link: str, operation: str) -> Found:
         "outcome": "passed",
         "rules": [],
         "broken": [],
-        "unchecked": "too_large",
+        "unchecked": reason,
     }
+
+
+def unchecked_for(store: Any, who: Any, link: str, operation: str, reason: str) -> Found | None:
+    """`unchecked` for a write made by `who`: None when it is not an agent's (`check`)."""
+    found: Any = ORC.checked_as(who, store.settings.assistant_bot)
+    if not found or not H.is_bot(found[1]):
+        return None
+    return unchecked(found[0], found[1], link, operation, reason)
 
 
 # ----------------------------------------------------------------------------- Rules › Links
@@ -327,19 +343,23 @@ def mode(link: str, saved: dict[str, Any]) -> str:
     return named if named == implemented else implemented  # a label the path does not implement is not taken
 
 
-def counts(c: Any, links: list[str], since: str) -> dict[str, dict[str, int]]:
-    """{link id: {passed, refused, held}} since `since`: one seek per (outcome, link) on events_action_target."""
+def counts(c: Any, links: dict[str, str]) -> dict[str, dict[str, int]]:
+    """{link id: {passed, refused, held}}, each since its own time (`links`: {link id: since}): one seek per (outcome,
+    link) on events_action_target, one query per distinct time."""
     found = {link: {"passed": 0, "refused": 0, "held": 0} for link in links}
-    targets = ["link:" + link for link in links]
-    for start in range(0, len(targets), 300):
-        part = targets[start : start + 300]
-        rows: Any = c.execute(
-            "SELECT action, target, count(*) FROM events WHERE action IN (?,?,?) "
-            f"AND target IN ({','.join('?' * len(part))}) AND created_at>=? GROUP BY action, target",
-            (*OUTCOMES, *part, since),
-        )
-        for action, target, n in rows:
-            found[str(target)[5:]][str(action)[6:]] = int(n)
+    by_since: dict[str, list[str]] = {}
+    for link, since in links.items():
+        by_since.setdefault(since, []).append("link:" + link)
+    for since, targets in by_since.items():
+        for start in range(0, len(targets), 300):
+            part = targets[start : start + 300]
+            rows: Any = c.execute(
+                "SELECT action, target, count(*) FROM events WHERE action IN (?,?,?) "
+                f"AND target IN ({','.join('?' * len(part))}) AND created_at>=? GROUP BY action, target",
+                (*OUTCOMES, *part, since),
+            )
+            for action, target, n in rows:
+                found[str(target)[5:]][str(action)[6:]] = int(n)
     return found
 
 
@@ -355,7 +375,10 @@ def listing(c: Any, who: Any, admins: Any, auth: Any, now: str | None = None) ->
         *FIXED.items(),
         *(("tool:" + str(t["id"]), str(t["name"] or t["id"])) for t in tools if _proxied(t)),
     ]
-    seen = counts(c, [link for link, _ in links], str(H.shift(now or H.now(), days=-DAYS)))
+    since = str(H.shift(now or H.now(), days=-DAYS))
+    # A tool's counts start when this tool was made: events of an earlier tool under the same id are not its own.
+    made = {"tool:" + str(t["id"]): str(t["created_at"] or "") for t in tools}
+    seen = counts(c, {link: max(since, made.get(link, "")) for link, _ in links})
     saved = modes(c)
     rows: list[dict[str, Any]] = [
         {"id": link, "name": name, "mode": mode(link, saved), "counts": seen[link]} for link, name in links

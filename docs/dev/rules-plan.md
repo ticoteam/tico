@@ -441,13 +441,16 @@ tico rules ask "<question>"                                                     
 ### 7. Links: agents' writes that leave the company (log-only)
 
 An agent's write on a link (a bot's own, or a person's Assistant or BotOps acting for them; never a person's own) meets
-the same org rule check as a task write, outside any transaction, on a budget of one call with no part call, and leaves
+the same org rule check as a task write, outside any transaction, on a budget of one call to one provider (no fallback)
+with no part call, and leaves
 exactly one event on `link:<id>`: `rules.passed`, `rules.refused` (a Block rule broken) or `rules.held` (an Escalate rule
 broken), with the rules in its detail (backend/rule_links.py), written in a savepoint so a failure never changes the
 write. The links: each proxied tool (`tool:<id>`, checked before the proxy puts the key in; reads, and MCP calls that
-only read sent to exactly the tool's MCP address, query included, are never counted), outgoing webhook sends, Release
+only read sent to exactly the tool's MCP address, the final query included, are never counted; a proxied write with
+no Idempotency-Key is forwarded and recorded unchecked, `tico tools call` sends one), outgoing webhook sends, Release
 now, and email. A write that would not be made (no right, no usable Idempotency-Key or a replay
-of one, a paused endpoint, a duplicate email, a release already open) is not checked; a proxied body over 1 MB is not
+of one, a paused endpoint, a duplicate email, a release already open) is not checked, and a webhook send that became eligible
+after that read is recorded unchecked; a proxied body over 1 MB is not
 read and is recorded unchecked. Nothing is stopped yet: `would` in the detail marks an outcome that did not
 happen. Email's own held path is older and does stop a mail, so email is Enforced by default and its event carries the
 rule ids its decision used; each link's mode lives in registry_metadata (`rule-link-modes`, the owner's to change, not
@@ -456,7 +459,7 @@ its destination is checked and pinned, and its event goes in the same transactio
 decoded and scrubbed: no header, the path, query and a JSON, form or plain text body with every proxy token (plain,
 percent-encoded, JSON-escaped, in base64, decoded to a fixed point of at most three passes) taken out and the tool's auth query parameters blanked; any other body, or
 one whose scrubbing cannot be verified, is not read. Rules › Links (`/company/rules/links`, from the Rules page's "⋯";
-the owner and Admins in person) lists them with 30-day counts, then the Not covered paths: reports to Tico support
+the owner and Admins in person) lists them with 30-day counts (a tool's from when it was made), then the Not covered paths: reports to Tico support
 (#4869), tools whose keys go to computers, website tools, and calls a computer makes straight out, each tool only to a reader who may see it.
 Refusals, appeals and Allow once come next.
 

@@ -46,3 +46,35 @@ def test_call_names_itself_so_cloudflare_lets_it_through():
     assert seen["auth"] == "Bearer " + token
     assert seen["agent"] == tool_call.USER_AGENT
     assert not seen["agent"].startswith("Python-urllib")
+
+
+def test_a_write_carries_one_idempotency_key_and_a_read_none():
+    """The proxy checks a write against the org rules only with an Idempotency-Key (backend/rule_links.py)."""
+    seen = []
+
+    class Proxy(BaseHTTPRequestHandler):
+        def answer(self):
+            seen.append(self.headers.get("Idempotency-Key"))
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        do_GET = do_POST = answer
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Proxy)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        environ = {
+            "TICO_TOOL_CLOSE_URL": f"http://127.0.0.1:{server.server_port}/api/v2/tool-proxy/close",
+            "CLOSE_KEY": token_for("close"),
+        }
+        tool_call.call("close", "GET", "/leads", environ=environ)
+        tool_call.call("close", "POST", "/leads", {"name": "Acme"}, environ=environ)
+        tool_call.call("close", "POST", "/leads", {"name": "Acme"}, environ=environ, idempotency_key="op-7")
+    finally:
+        server.shutdown()
+    assert seen[0] is None and seen[1].startswith("tico-tool-call-") and seen[2] == "op-7"

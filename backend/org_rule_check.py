@@ -780,7 +780,8 @@ def check_as(
                 return {**verdict, "outcome": "too_large", "broken": [r["id"] for r in rules]}
             if most_calls is not None and len(batches) > most_calls:
                 return {**verdict, "outcome": "unchecked", "error": "too_many_calls"}
-            engine = B.server_engine(store, c, primary)
+            # A call budget is one provider: no fallback to a second after the first fails (unchecked instead).
+            engine = B.server_engine(store, c, primary, first_only=most_calls is not None)
             if engine is None:
                 capped = B.over_spend_cap(c, store.settings)
                 return {**verdict, "outcome": "unchecked", "error": "budget" if capped else "no_engine"}
@@ -3324,7 +3325,9 @@ def mail_decide(c, prep):
             return {"outcome": "held", **answer(gate), "rules": used(gate)}
         if gate and gate.get("warned"):
             return {"outcome": "warn", "warning_line": mail_warning_line(gate), **answer(gate), "rules": used(gate)}
-        return {"outcome": "unchecked" if verdict and verdict["outcome"] == "unchecked" else "pass", "rules": []}
+        if verdict and verdict["outcome"] == "unchecked":
+            return {"outcome": "unchecked", "rules": [], "unchecked": verdict.get("error") or "unchecked"}
+        return {"outcome": "pass", "rules": []}
 
     waiting = open_mail_hold(c, author, key, operation) if holds(verdict) else None
     if approved:

@@ -203,6 +203,76 @@ def test_a_value_escaped_deeper_than_is_read_is_not_read():
     assert "tpx1" not in L.proxy_output("POST", "leads", "q=" + deep, b"", ())
 
 
+def test_four_layers_of_escapes_are_not_read_in_a_path_a_query_or_a_form():
+    four = TOKEN.replace(".", "%" + "25" * 3 + "2E")  # %25252525 2E: four layers, one more than is read
+    form = "application/x-www-form-urlencoded"
+    for read in (
+        L.proxy_output("POST", "leads/" + four, "", b"", ()),
+        L.proxy_output("POST", "leads", "q=" + four, b"", ()),
+        L.proxy_output("POST", "leads", "", ("a=" + four).encode(), (), form),
+    ):
+        assert "tpx1" not in read.lower() and "not read" in read
+    three = TOKEN.replace(".", "%" + "25" * 2 + "2E")
+    assert "[token]" in L.proxy_output("POST", "leads", "", ("a=" + three).encode(), (), form)
+
+
+def test_a_link_check_asks_one_provider_and_never_falls_back(ruled):
+    api, _ = ruled
+    from clients import judge as J
+
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"bots": ["ops"]}, "if_broken": "block"})
+    asked = []
+
+    def down(state, questions, label=None):
+        asked.append("first")
+        raise J.JudgeError("unavailable", "down")
+
+    def up(state, questions, label=None):
+        asked.append("second")
+        return Judge()(state, questions, label)
+
+    two = type("Two", (), {"steps": [down, up]})()
+    found = L.check_as(api.app.state.store, two, "bot:ops", "bot:ops", "", "tool:x", "tool_call", "Our favorite color")
+    assert (found["outcome"], found["unchecked"], asked) == ("passed", "unavailable", ["first"])
+
+
+def test_a_send_that_became_eligible_after_its_preflight_is_logged_unchecked(ruled, monkeypatch):
+    from backend import egress, webhooks as W
+    from backend.tests.helpers.webhooks import PUBLIC, make
+
+    api, judge = ruled
+    monkeypatch.setattr(egress, "resolve", lambda host: PUBLIC)
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"bots": ["ops"]}, "if_broken": "block"})
+    hook = make(api, events=["custom.*"])
+    with api.app.state.store.transaction() as c:
+        ana = api.app.state.auth.identity_for_actor(c, "human:ana")
+        S.update_policy(c, ana, "bot:ops", S.PolicyUpdate(mode="on_their_own"))
+    real, calls = W.publishable, []
+
+    def paused_at_first(*a, **kw):  # the endpoint resumed between the preflight and the write
+        calls.append(1)
+        if len(calls) == 1:
+            raise W.Refused("That endpoint is paused")
+        return real(*a, **kw)
+
+    monkeypatch.setattr(W, "publishable", paused_at_first)
+    r = api.post(
+        f"/api/v2/webhooks/{hook['id']}/send",
+        json={"type": "custom.color", "data": {"say": "Our favorite color is gold"}},
+        headers=headers("ops-test"),
+    )
+    assert r.status_code == 200, r.text
+    [(actor, action, detail)] = link_events(api, "webhook")
+    assert (actor, action, detail["unchecked"]) == ("bot:ops", "rules.passed", "changed_during_check")
+    assert judge.read == []
+
+
+def test_an_approved_mails_unchecked_recheck_keeps_its_reason_on_the_link():
+    result = {"outcome": "pass", "rules": ["r1"], "unchecked": "too_many_calls", "approved": "h1"}
+    found = L.mailed(("bot:ops", "bot:ops", ""), result)
+    assert (found["outcome"], found["unchecked"], found["rules"]) == ("passed", "too_many_calls", ["r1"])
+
+
 def test_a_body_that_cannot_be_read_safely_is_named_not_read():
     assert "not read]" in L.proxy_output("POST", "page", "", ("<p>" + TOKEN).encode(), (), "text/html")
     read = L.proxy_output("POST", "files", "", b"\x89PNG" + TOKEN.encode(), (), "image/png")
@@ -255,6 +325,9 @@ def test_rules_links_lists_each_link_with_its_mode_and_30_day_counts(ruled, monk
         H.event(c, "bot:ops", "rules.refused", "link:tool:close", {})
         old = H.event(c, "bot:ops", "rules.refused", "link:tool:close", {})
         c.execute("UPDATE events SET created_at=? WHERE id=?", (H.shift(now, days=-31), old["id"]))
+        # Before this tool was made: an earlier tool's under the same id, not counted.
+        earlier = H.event(c, "bot:ops", "rules.held", "link:tool:close", {})
+        c.execute("UPDATE events SET created_at=? WHERE id=?", (H.shift(now, days=-1), earlier["id"]))
         # A label in registry_metadata never makes a path that only logs read as Enforced.
         modes = {"webhook": "enforced", "email": "informed"}  # neither is what its path does: neither is taken
         c.execute("INSERT INTO registry_metadata VALUES(?,?)", (L.MODES, json.dumps(modes)))

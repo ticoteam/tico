@@ -13,8 +13,10 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 
 TOKEN_PREFIX = "tpx1."
+READS = frozenset(("GET", "HEAD", "OPTIONS"))
 MAX_ANSWER = 1_000_000
 TIMEOUT = 130
 # Cloudflare in front of Tico refuses Python's default User-Agent (error 1010, "browser signature banned") before the
@@ -63,8 +65,10 @@ def find(tool, environ=None):
     raise CallError(f"No token for {tool} in this run's environment")
 
 
-def call(tool, method, path, data=None, query=(), environ=None):
-    """Make the call and return {status, content_type, body}: JSON parsed when the answer is JSON, else text."""
+def call(tool, method, path, data=None, query=(), environ=None, idempotency_key=None):
+    """Make the call and return {status, content_type, body}: JSON parsed when the answer is JSON, else text. A write
+    carries an Idempotency-Key, one per call (`idempotency_key`, else a new one): the proxy checks a write against the
+    org rules only with one."""
     address, token = find(tool, environ)
     url = address + "/" + path.lstrip("/")
     pairs = []
@@ -76,6 +80,8 @@ def call(tool, method, path, data=None, query=(), environ=None):
     if pairs:
         url += ("&" if "?" in url else "?") + urllib.parse.urlencode(pairs)
     headers = {"Authorization": "Bearer " + token, "Accept": "application/json, */*", "User-Agent": USER_AGENT}
+    if method.upper() not in READS:
+        headers["Idempotency-Key"] = idempotency_key or "tico-tool-call-" + uuid.uuid4().hex
     body = None
     if data is not None:
         body = (data if isinstance(data, str) else json.dumps(data)).encode()

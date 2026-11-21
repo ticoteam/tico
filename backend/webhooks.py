@@ -1615,8 +1615,13 @@ def install(app, settings, store, auth, mutate):
         )
 
         def write(c):
-            rule_links.record(c, found)
-            return send_custom(c, who, hook_id, body)
+            sent = send_custom(c, who, hook_id, body)
+            # A send its preflight found ineligible that went after all (the endpoint resumed in between): logged
+            # unchecked, never judged inside the write.
+            rule_links.record(
+                c, found or rule_links.unchecked_for(store, who, "webhook", "webhook", "changed_during_check")
+            )
+            return sent
 
         return mutate(request, body, write)
 
