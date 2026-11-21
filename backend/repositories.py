@@ -796,17 +796,20 @@ def _org(c):
     return str(row[0] or '') if row else ''
 
 
-def seat_default(c, catalog_dir, bot, actor):
+def seat_default(c, catalog_dir, bot, actor, new=False):
     """A seat's bot gets the access its template's card declares (`card_access`) on All repos in use, so every
     repository In use now and later reaches it at that level, with Run workflows and Edit workflow files off: the
-    Builder pushes to the team's repository, never a fork. Only while nobody has chosen for it: still on Their own repo
-    or reading All repos in use (where a new bot starts), and `untouched`. Audited as `bot.repos_changed` with
-    `default`. Returns whether it changed the bot."""
+    Builder pushes to the team's repository, never a fork. Only while nobody has chosen for it (`untouched`) and it is
+    still on Their own repo, or, for a bot just made to fill the seat (`new`), still reading All repos in use where it
+    started: a startup never turns an existing bot's read into write. Audited as `bot.repos_changed` with `default`.
+    Returns whether it changed the bot."""
     declared = BS.read(c, bot)
     want = card_access(catalog_dir, declared.get('template'))
     mode = declared.get('repo_access_mode') or 'own'
     level = 'write' if want.get('repo_all_access') == 'write' else 'read'
-    started = mode == 'own' or (mode == 'all' and declared.get('repo_all_access') == 'read' and level == 'write')
+    started = mode == 'own' or (
+        new and mode == 'all' and declared.get('repo_all_access') == 'read' and level == 'write'
+    )
     if want.get('repo_access_mode') != 'all' or not started:
         return False
     if not untouched(c, bot):

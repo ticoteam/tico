@@ -174,9 +174,8 @@ def resource(c: Any, who: Any, ref: Any, admins: Any = (), auth: Any = None) -> 
         by_id = [row for row in seen if row["id"] == wanted]
         by_name = [row for row in seen if str(row["name"]).lower() == wanted.lower()]
         named = (by_id or by_name) if kind else (by_name or by_id)
-        apis = [row for row in named if api_tools.kind_of(row) == "api"]
-        if len(apis) > 1:
-            choices = [{"resource": "tool:" + str(row["id"]), "name": str(row["name"])} for row in apis]
+        if len(named) > 1:
+            choices = [{"resource": "tool:" + str(row["id"]), "name": str(row["name"])} for row in named]
             raise Problem(
                 "ambiguous",
                 f"Several tools are named {name}: ask again for one of "
@@ -184,11 +183,11 @@ def resource(c: Any, who: Any, ref: Any, admins: Any = (), auth: Any = None) -> 
                 409,
                 extra={"choices": choices},
             )
-        if apis:
-            return TOOL, str(apis[0]["id"]), str(apis[0]["name"]), apis[0]
         if named:
             row = named[0]
-            raise Problem("resource", f"{row['name']} is a website tool: ask for its account in Tools", 422)
+            if api_tools.kind_of(row) != "api":
+                raise Problem("resource", f"{row['name']} is a website tool: ask for its account in Tools", 422)
+            return TOOL, str(row["id"]), str(row["name"]), row
     if kind in ("", "repo", "repository", "github"):
         row = _repository(c, name)
         if row is not None:

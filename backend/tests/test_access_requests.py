@@ -257,6 +257,12 @@ def test_a_name_finds_the_tool_the_asker_may_see_and_two_it_may_see_are_offered_
     both = ask(api, "sentry", "read_write", token="cara-test", expected=409)["error"]
     assert sorted(choice["resource"] for choice in both["choices"]) == sorted(["tool:" + first, "tool:" + second])
     assert ask(api, "tool:" + first, "read_write", token="cara-test")["resource_id"] == first
+    # An API tool and a website tool by one name are two matches too; picking the website tool says where its account is.
+    ledger = tool(api, "Ledger", base_url="https://ledger.acme.example")["id"]
+    site = post(api, "website-tools", {"name": "Ledger", "sites": ["ledger.acme.example"]})["id"]
+    two = ask(api, "Ledger", token="cara-test", expected=409)["error"]
+    assert sorted(choice["resource"] for choice in two["choices"]) == sorted(["tool:" + ledger, "tool:" + site])
+    assert ask(api, "tool:" + site, token="cara-test", expected=422)["error"]["code"] == "resource"
 
 
 def test_titles_of_old_access_tasks_tie_only_when_certain(api):
