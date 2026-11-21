@@ -26,7 +26,7 @@ pub(super) fn with_header(primer: &str, header: Option<&str>) -> String {
     match header.map(str::trim).filter(|h| !h.is_empty()) {
         None => primer.to_owned(),
         Some(header) => match primer.rsplit_once("\n\n") {
-            Some((head, last)) => format!("{head}\n{header}\n\n{last}"),
+            Some((head, last)) => format!("{}\n\n{header}\n\n{last}", head.trim_end()),
             None => format!("{header}\n\n{primer}"),
         },
     }
@@ -356,6 +356,14 @@ mod tests {
         assert!(
             got.ends_with("\n\nReply exactly READY to warm up for this call."),
             "{got}"
+        );
+        let with_notes = with_header(
+            "Call notes (context only):\nShip on Friday\n\n\nReply exactly READY",
+            Some("Run header:"),
+        );
+        assert_eq!(
+            with_notes,
+            "Call notes (context only):\nShip on Friday\n\nRun header:\n\nReply exactly READY"
         );
         assert_eq!(with_header(primer, None), primer);
         assert_eq!(with_header(primer, Some("  ")), primer);

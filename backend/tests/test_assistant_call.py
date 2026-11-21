@@ -398,3 +398,44 @@ def test_a_call_whose_meeting_names_anyone_else_gets_no_snapshot(meet):
         post(meet, f"attempts/{session['id']}/complete", DONE, worker["token"])
         meet.request("DELETE", f"/api/v2/calls/{call['id']}/bots/assistant", json={}, headers=headers("ana-test"))
         post(meet, f"calls/{call['id']}/end", {})
+
+
+def test_the_private_calls_lease_reads_as_you_but_never_writes_as_you(meet):
+    from backend import threads
+
+    _call, session, _ = _private_call(meet)
+    token = session["token"]
+    with meet.app.state.store.transaction() as c:  # a thread of Ana's and Ben's, which the Assistant alone may not read
+        ana = threads.viewer(meet.app.state.auth, meet.app.state.auth.identity_for_actor(c, "human:ana"))
+        plans = threads.create(c, ana, title="Plans", audience="members", members=["human:ben"])["id"]
+        said = threads.post(c, ana, plans, "Ship on Friday")
+    assert get(meet, f"threads/{plans}", token)["id"] == plans  # reads it as Ana
+    for refused in (
+        meet.post(f"/api/v2/threads/{plans}/messages", json={"text": "Hello"}, headers=headers(token)),
+        meet.post(f"/api/v2/threads/{plans}/members", json={"actor": "human:cara"}, headers=headers(token)),
+        meet.put(f"/api/v2/messages/{said['id']}/reactions/👍", json={}, headers=headers(token)),
+    ):
+        assert refused.status_code in (403, 404), refused.text
+    with meet.app.state.store.read() as c:
+        assert [r[0] for r in c.execute("SELECT body FROM messages WHERE conversation_id=?", (plans,))] == [
+            "Ship on Friday"
+        ]
+        assert not c.execute(
+            "SELECT 1 FROM thread_members WHERE thread_id=? AND actor='human:cara'", (plans,)
+        ).fetchone()
+
+
+def test_the_private_calls_lease_reads_a_migrated_homes_history_as_you_do(meet):
+    from backend import threads
+    from backend.tests.helpers.thread_rail_batches import home as _home
+
+    _call, session, _ = _private_call(meet)
+    home = _home(meet, "human:cara", token="cara-test")
+    with meet.app.state.store.transaction() as c:  # a Home that still holds shared-room history
+        old = threads.post(c, "human:cara", home["id"], "From the shared room")
+        c.execute("UPDATE messages SET legacy_audience='shared:ops', restricted=1 WHERE id=?", (old["id"],))
+    shown = json.dumps(get(meet, f"threads/{home['id']}/timeline", session["token"]))
+    assert "From the shared room" in shown  # as Ana, one of its old readers, reads it; the Assistant itself does not
+    with meet.app.state.store.read() as c:
+        lease = threads.viewer(meet.app.state.auth, meet.app.state.auth.identity_for_actor(c, "human:ana"))
+        assert not threads.legacy_hidden(c, lease, dict(H.message(c, old["id"])))
