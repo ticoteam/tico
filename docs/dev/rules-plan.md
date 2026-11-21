@@ -464,21 +464,35 @@ tico rules add|edit ... --exact '<json>'                                        
 - Retiring an external rule that a gate links to leaves the gate (Finance owns it). The retire panel lists linked
   gates, and Finance gets an `org_rule.retired` event.
 
-### 7. Optional: enforcement on vendor API calls
+### 7. Links: agents' writes that leave the company (log-only)
 
-This was the original wrapper idea. It's kept here and not scheduled.
+An agent's write on a link (a bot's own, or a person's Assistant or BotOps acting for them; never a person's own) meets
+the org rules and leaves exactly one event on `link:<id>` (backend/rule_links.py): `rules.passed`, `rules.refused` (a
+Block rule broken), `rules.held` (an Escalate rule broken) or `rules.unchecked` (not judged, or the judge out, with the
+reason), the rules in its detail, written in a savepoint so a failure never changes the write. Nothing is stopped yet:
+`would` marks an outcome that did not happen.
 
-- **What it is.** A hub-side adapter per vendor with fixed ops on fixed hosts (`hub vendor call buffer.create_post`;
-  `tico api` is already taken). Its credential is marked **hub only**, which means it's never delivered to a run.
-- **Checks per rule:** bot confirms (an attestation, recorded as a claim), Decide checks, or code. Modes are Warn,
-  Block or Ask, and the strictest wins. Ask uses a payload-bound approval, and the bot calls again with its id.
-- **Why it waits:**
-  - It's a new trust boundary. Today credentials are delivered to runs by design, and bots on one computer share a
-    filesystem (`SECURITY.md`).
-  - It's close to the per-action tool policy declined on Oct 29.
-  - Phase 2's **Ask** on existing send/publish approvals, plus the mail connector's per-send switch, cover the main
-    cases (the #ad post, marketing texts) without it.
-- Revisit it with its own plan once rules are in use and a specific vendor action keeps going wrong.
+- **The links.** Each proxied tool (`tool:<id>`), outgoing webhook sends, Release now: Informed only. Email: Enforced,
+  as its own held path already stops a mail. A link's mode is what its path does; no setting changes it yet.
+- **What is judged: names only.** A proxied write is judged on the tool's name, the HTTP method, an MCP call's method
+  and tool name, and a JSON body's top-level key names; a webhook send on its event and endpoint names; Release now on
+  its name. Never a value, path, query or header, so no credential reaches the judge.
+- **How.** The Informed only links ask one provider (no fallback), one call, no part call; a failure is unchecked.
+  Email keeps its own judge exactly as before this PR, fallback provider and part call included, and logs the rule ids
+  its decision used with any unchecked reason.
+- **When.** A proxied write is judged after its destination is checked and pinned, before the key goes in; its event
+  goes in the same transaction as the call's own row. Reads, and read-only MCP calls sent to exactly the tool's MCP
+  address (the final URL), are never counted; the read-only hints this trusts belong to that tool as made (id, MCP
+  address, created_at). A write that would not be made (no right, no usable Idempotency-Key or a replay of one, a
+  paused endpoint, a duplicate email, a release already open) is not judged. A proxied write is judged with or without
+  an Idempotency-Key (`tico tools call` sends one); with one, a retry under it within a day logs no second event. A
+  webhook send that became eligible after its preflight is recorded unchecked.
+- **Rules › Links** (`/company/rules/links`, from the Rules page's "⋯"; the owner and Admins in person) lists each link
+  with its 30-day counts, unchecked apart (a tool's from when it was made), then the Not covered paths: reports to Tico
+  support (#4869), tools whose keys go to computers, website tools, and calls a computer makes straight out. A tool is
+  listed only to a reader who may see it.
+
+Refusals, appeals and Allow once come next.
 
 ### 8. laws.sh (optional, later)
 

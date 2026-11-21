@@ -65,6 +65,36 @@ function FaceMenu({ id, label, children }: { id: string; label: string; children
 
 const none = <small>None</small>;
 
+/** The wait states whose `who` is a teammate; the rest name a task, a stage or a source, which the line says. */
+const ON_SOMEONE = new Set(['person', 'bot', 'paused']);
+
+/** One quiet line: who or what the open task waits on, and for how long when its time is the wait's own: an ask
+    (when it was asked) or a snooze (when it was set). Another wait's time is its stage's or requirement's, which a
+    reassignment in the same stage leaves as it was. */
+export function WaitFact({ t }: { t: TaskData }) {
+  const turn = t.status === 'open' ? t.turn : null;
+  if (!turn) return null;
+  const since = turn.ask || turn.state === 'snoozed' ? turn.since : null;
+  return (
+    <Kv k="Waiting">
+      <small>
+        {since && (
+          <>
+            <Ago at={since} />{' '}
+          </>
+        )}
+        {turn.who && ON_SOMEONE.has(turn.state) ? (
+          <>
+            on <NameOf id={turn.who} />
+          </>
+        ) : (
+          turn.line
+        )}
+      </small>
+    </Kv>
+  );
+}
+
 /** Size, before Tags (more.js facts order). */
 export function SizeFact({ t }: { t: TaskData }) {
   return (

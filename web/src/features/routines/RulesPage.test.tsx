@@ -125,6 +125,15 @@ describe('Rules: the page and Company', () => {
     expect(await screen.findByRole('complementary', { name: 'New rule' })).toBeTruthy();
   });
 
+  it('takes an owner or Admin to Rules › Links from the ⋯', async () => {
+    record((url) => (url.endsWith('/api/v2/access') ? ok({ you: 'admin' }) : nothing()));
+    company([]);
+    const router = show('/company/rules');
+    fireEvent.click(await screen.findByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Links' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/company/rules/links'));
+  });
+
   it('Company: who on the left, their reach and limits, their rules and the exceptions; a reach change is sent @s517', async () => {
     const sent = record((url, method) => (method === 'PUT' && url.includes('/reach/settings/') ? ok({}) : nothing()));
     company([org()]);

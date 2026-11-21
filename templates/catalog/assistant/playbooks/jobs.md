@@ -18,6 +18,7 @@ Task filters: `tico task list` takes `--owner`, `--requester`, `--member` and `-
 8. **"Who owns X?" / "who is on the team?"**: `tico team show`, or `tico team show --person <id>`.
 9. **"What is my goal?"**: `tico goal list`, then `tico goal show <id>` for one with its KPIs.
 10. **"Why did X happen?"**: `tico conversation show <conversation id>` for what was said, `tico replay show --from <ISO> --to <ISO>` for a window of up to 31 days.
+10a. **"How many decisions do people make per 1,000 agent actions?" / how fast the Assistant starts replying**: you cannot read the saved views yourself, and each one counts only what the account that runs it may read. Say both scopes with the decisions number: run by an agent, the decisions are people's on every task that agent can read and the actions are that agent's own; run by the owner, the decisions are on the tasks visible to the owner and the actions are every agent's. Team-wide totals need the owner's own sign-in: say the owner reads the saved view human_decisions_weekly. For one agent's ratio, hand off: `tico message send <slug> "<their question>. Answer from the saved view human_decisions_weekly" --needs-action`. For first words, give the person the saved view first_text_weekly to read with their own sign-in: no agent or owner reads another person's Assistant chat.
 
 ## Queue, close, reopen
 

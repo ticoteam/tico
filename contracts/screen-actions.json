@@ -651,6 +651,65 @@
       }
     },
     {
+      "id": "agents.setRepositories",
+      "title": "Change which repositories an agent reaches",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "an agent's slug"
+          },
+          "mode": {
+            "enum": [
+              "own",
+              "all",
+              "chosen"
+            ]
+          },
+          "all_access": {
+            "enum": [
+              "read",
+              "write"
+            ]
+          },
+          "chosen": {
+            "maxItems": 500,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "full_name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "access": {
+                  "enum": [
+                    "read",
+                    "write"
+                  ]
+                }
+              },
+              "required": [
+                "full_name",
+                "access"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "slug",
+          "mode"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "agents.setRole",
       "title": "Change an agent's role",
       "kind": "change",
@@ -7873,6 +7932,7 @@
           "value": {
             "enum": [
               "own",
+              "read",
               "all"
             ]
           }
@@ -11969,6 +12029,42 @@
         "required": [
           "tool",
           "setting"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tools.requestAccess",
+      "title": "Request access to a tool",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "agent": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "level": {
+            "enum": [
+              "read",
+              "read_write"
+            ]
+          },
+          "why": {
+            "type": "string",
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "tool",
+          "agent",
+          "level"
         ],
         "additionalProperties": false
       }

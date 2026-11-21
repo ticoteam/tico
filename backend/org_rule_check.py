@@ -682,6 +682,9 @@ def check_as(
     attempt_id="",
     origin=None,
     late=False,
+    most_calls=None,
+    parts=True,
+    first_only=False,
 ):
     """Check one output held as `principal` (a person or a bot). `sender` is who made it and `via` the route
     (`checked_as` reads both from an identity). `place`: the write's place, or a function of (c, principal,
@@ -692,7 +695,11 @@ def check_as(
     decided (Send anyway asks only the rules changed or added since its hold); the verdict's `matched` is every pair that matched, to check again inside the write. `origin`:
     where an outside message came from (`inbound`), kept on the verdict and its hold. `late`: the write may be saved
     before its check (`deferred`): when every rule it meets only warns and the verdict is not cached, nothing is asked
-    now, and the verdict says so (`late`), for `apply` to queue the one check to run right after the write."""
+    now, and the verdict says so (`late`), for `apply` to queue the one check to run right after the write.
+    `most_calls`: the calls this check may make (preflight, recheck and mail_prepare pass it on); needing more is
+    unchecked (`too_many_calls`), asking nothing. `parts` False: never mark a holding verdict for its part call (the
+    link checks of backend/rule_links.py). `first_only`: ask one provider, never a second after it fails (unchecked
+    instead): the Informed only link checks; email keeps its fallback."""
     author = principal
     if not author:
         return None
@@ -773,7 +780,9 @@ def check_as(
             )
             if batches is None:
                 return {**verdict, "outcome": "too_large", "broken": [r["id"] for r in rules]}
-            engine = B.server_engine(store, c, primary)
+            if most_calls is not None and len(batches) > most_calls:
+                return {**verdict, "outcome": "unchecked", "error": "too_many_calls"}
+            engine = B.server_engine(store, c, primary, first_only=first_only)
             if engine is None:
                 capped = B.over_spend_cap(c, store.settings)
                 return {**verdict, "outcome": "unchecked", "error": "budget" if capped else "no_engine"}
@@ -805,10 +814,9 @@ def check_as(
                 "error": errors[0],
                 "unchecked_rules": failed,
             }
-            return _later_parts(store, engine, partial, output)
-        done = _later_parts(
-            store, engine, {**verdict, "broken": broken, "outcome": "broken" if broken else "pass"}, output
-        )
+            return _later_parts(store, engine, partial, output) if parts else partial
+        found = {**verdict, "broken": broken, "outcome": "broken" if broken else "pass"}
+        done = _later_parts(store, engine, found, output) if parts else found
         # A complete verdict is cached as a plain list of the rules it broke; its hold's part call, after the write,
         # adds the parts it finds beside them (`_fill_parts`).
         with store.transaction() as c:
@@ -1152,6 +1160,8 @@ def preflight(
     contacts=(),
     targets=(),
     late=False,
+    most_calls=None,
+    parts=True,
 ):
     """The stable entry for a write one identity makes (core's `threads.post` calls it): `check_as` for the principal,
     sender and route `checked_as` reads from `who`. `place`: the write's place, or a function of (c, principal,
@@ -1203,6 +1213,8 @@ def preflight(
             place=place,
             attempt_id=attempt_id,
             late=late,
+            most_calls=most_calls,
+            parts=parts,
         )
     except Problem as exc:
         from . import task_rule_gate
@@ -2846,7 +2858,7 @@ def _same_audience(c, hold, audience=None, auth=None):
         )
 
 
-def recheck(store, primary, hold, audience=None, auth=None):
+def recheck(store, primary, hold, audience=None, auth=None, most_calls=None, parts=True):
     """Outside the write, before Send anyway or an approved mail: when the rules that match now differ from those at the
     hold (a rule edited or added since), the rules changed or added are a new check, on the same input the first check
     had (text, audience, context, object, place). Returns (the pairs matching now, that verdict or None). The write
@@ -2880,6 +2892,8 @@ def recheck(store, primary, hold, audience=None, auth=None):
         place=place,
         attempt_id=prov.get("attempt_id") or "",
         origin=prov.get("origin"),
+        most_calls=most_calls,
+        parts=parts,
     )
     if fresh is None:
         return sorted(now), verdict
@@ -3285,7 +3299,7 @@ def health_findings(c, settings):
 
 
 # ----------------------------------------------------------------------------- HTTP
-def mail_prepare(store, primary, who, author, to, cc, subject, body, contacts=()):
+def mail_prepare(store, primary, who, author, to, cc, subject, body, contacts=(), most_calls=None, parts=True):
     """The org rule check of one mail, before its write: None when no rule is in force, else what `mail_decide` needs.
     `author` is the teammate the mail is checked as (a person, when BotOps sends it for one): its holds and approvals
     are found under it; `who` stays the caller, for the write's permission and audit. An approved mail (Send anyway) is
@@ -3298,7 +3312,7 @@ def mail_prepare(store, primary, who, author, to, cc, subject, body, contacts=()
             return None  # no rule in force: no roster read for the recipients, nothing written
         approved = mail_approved(c, author, key)
         recipients = mail_recipients(c, [*to, *cc])
-    check = recheck(store, primary, approved) if approved else None
+    check = recheck(store, primary, approved, most_calls=most_calls, parts=parts) if approved else None
     verdict = (
         check[1]
         if approved
@@ -3311,6 +3325,8 @@ def mail_prepare(store, primary, who, author, to, cc, subject, body, contacts=()
             recipients,
             context={"to": [a.lower() for a in [*to, *cc]]},
             contacts=contacts,
+            most_calls=most_calls,
+            parts=parts,
         )
     )
     return {"author": author, "key": key, "output": output, "approved": approved, "check": check, "verdict": verdict}
@@ -3318,20 +3334,38 @@ def mail_prepare(store, primary, who, author, to, cc, subject, body, contacts=()
 
 def mail_decide(c, prep):
     """Inside the mail's (or letter's, `prep["operation"]`) write: {"outcome": "pass" | "unchecked" | "warn" (with
-    `warning_line`) | "held" (with `held`, whose `text` says the rule and whom to appeal to)}. A held mail is never
-    sent."""
+    `warning_line`) | "held" (with `held`, whose `text` says the rule and whom to appeal to), "rules": the rule ids
+    this decision used (the hold it wrote or returned, a warning's, a consumed approval's; none for a refusal that
+    names no rule)}. A held mail is never sent."""
     if prep is None:
         return {"outcome": "pass"}
     author, key, output, approved, verdict = (prep[k] for k in ("author", "key", "output", "approved", "verdict"))
     operation = prep.get("operation") or "mail"
     noun, replay = NOUNS[operation], {SEND_KEYS[operation]: key}
 
+    def rules_of(hold):
+        return sorted(json.loads(hold["rule_ids"] or "[]")) if hold else []
+
+    def used(gate):
+        if gate and gate.get("hold_id"):
+            return rules_of(_hold(c, gate["hold_id"]))
+        return sorted(r["id"] for r in (gate or {}).get("warned", {}).get("rules", []))
+
+    def why():
+        """The judged check's unchecked reason, kept beside whatever else the decision used (a Directory warning)."""
+        if verdict and (verdict["outcome"] == "unchecked" or verdict.get("unchecked_rules")):
+            return {"unchecked": verdict.get("error") or "unchecked"}
+        return {}
+
     def outcome(gate):
         if gate and gate.get("held"):
-            return {"outcome": "held", **answer(gate)}
+            return {"outcome": "held", **answer(gate), "rules": used(gate), **why()}
         if gate and gate.get("warned"):
-            return {"outcome": "warn", "warning_line": mail_warning_line(gate), **answer(gate)}
-        return {"outcome": "unchecked" if verdict and verdict["outcome"] == "unchecked" else "pass"}
+            warned = {"warning_line": mail_warning_line(gate), **answer(gate)}
+            return {"outcome": "warn", **warned, "rules": used(gate), **why()}
+        if verdict and verdict["outcome"] == "unchecked":
+            return {"outcome": "unchecked", "rules": [], **why()}
+        return {"outcome": "pass", "rules": [], **why()}
 
     waiting = open_mail_hold(c, author, key, operation) if holds(verdict) else None
     if approved:
@@ -3342,27 +3376,30 @@ def mail_decide(c, prep):
                     "id": approved["id"],
                     "text": f"The rules changed while this {noun} was checked. Send it again to check it.",
                 },
+                "rules": [],
             }
         if holds(verdict):
             # A newer rule holds an approved mail: the old approval is spent, and the mail has one hold.
             supersede_mail(c, approved["id"])
             if waiting:
-                return {"outcome": "held", "held": held_again(c, waiting, verdict)}
+                return {"outcome": "held", "held": held_again(c, waiting, verdict), "rules": rules_of(waiting)}
             return outcome(apply(c, verdict, output, replay))
         if not claim_mail(c, approved["id"]):
             # Another send already used this approval: this one stays a draft.
             return {
                 "outcome": "held",
                 "held": {"id": approved["id"], "text": f"This {noun}'s approval was already used. It stays a draft."},
+                "rules": [],
             }
         gate = apply(c, verdict, output, replay) if verdict else None
         return {
             **outcome(gate),
             "outcome": "warn" if gate and gate.get("warned") else "pass",
             "approved": approved["id"],
+            "rules": sorted({*rules_of(approved), *used(gate)}),  # the approval it consumed, and any warning
         }
     if waiting:
-        return {"outcome": "held", "held": held_again(c, waiting, verdict)}
+        return {"outcome": "held", "held": held_again(c, waiting, verdict), "rules": rules_of(waiting)}
     return outcome(apply(c, verdict, output, replay))
 
 

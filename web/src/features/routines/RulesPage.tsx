@@ -9,6 +9,7 @@ import { Icon } from '@/kit/Icon';
 import { Link } from '@/kit/Link';
 import { Row } from '@/kit/Row';
 import { MenuItem } from '@/kit/Menu';
+import { LinksEntry } from '@/features/company/exports';
 import { pipelinesQuery, type Pipeline } from '@/features/tasks/routing';
 import { List, PageMore, Section, type PageTab } from '@/pagekinds';
 import { hasWho, ROUTINES, RULES, type RuleTab } from './actions';
@@ -129,6 +130,7 @@ function Page({ search, asked, state, retry, empty, dialogs, children }: Omit<Ta
           <MenuItem label="Add due date" icon="calendar" onSelect={() => void press('rules.newDue', {})} />
           <MenuItem label="Add document" icon="file" onSelect={() => setReading(true)} />
           <MenuItem label="Make this a rule" icon="edit" onSelect={() => setMaking(true)} />
+          <LinksEntry />
         </PageMore>
       }
       state={state}

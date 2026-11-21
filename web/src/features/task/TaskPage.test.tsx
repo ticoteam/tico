@@ -424,6 +424,32 @@ describe('one open task', () => {
     expect(screen.queryByText(/\u2753/u)).toBeNull();
   });
 
+  it('marks paid shots reconciled from Details: their names, busy until the server answers, the keys it showed', async () => {
+    const shots = { state: 'person', who: 'human:me', line: 'Reconcile 1 shot', requirement_id: 'paid_render:t1', since: null, until: null, ask: true, shots: [{ key: 'shot_a', name: 'Kettle wide' }] };
+    const answer = holdReply();
+    let waits: unknown[] = [shots];
+    serve((url, method) => {
+      if (method === 'POST' && url.endsWith('/api/v2/tasks/t1/shots/reconcile')) return answer.promise;
+      return reads(task({ waits } as Partial<TaskData>))(url);
+    });
+    details();
+    const row = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>('[data-target="task-shots:t1"]');
+      if (!found) throw new Error('no shots row yet');
+      return found;
+    });
+    expect(within(row).getByText('Reconcile 1 shot')).toBeTruthy();
+    expect(screen.getByText('Kettle wide')).toBeTruthy();
+    const mark = screen.getByRole('button', { name: 'Mark reconciled' });
+    fireEvent.click(mark);
+    await waitFor(() => expect(sent).toContainEqual({ method: 'POST', url: '/api/v2/tasks/t1/shots/reconcile', body: { shots: ['shot_a'] } }));
+    expect((mark as HTMLButtonElement).disabled).toBe(true); // busy while the request is in flight
+    waits = []; // the task read after the answer has no shots left: the row and its button go
+    await act(async () => answer.resolve({ status: 200, body: { reconciled: [{ key: 'shot_a', name: 'Kettle wide' }] } }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Mark reconciled' })).toBeNull());
+    expect(document.querySelector('[data-target="task-shots:t1"]')).toBeNull();
+  });
+
   it('draws a file that is not a page or a picture with the library preview @s56', async () => {
     const notes = {
       id: 'f6',
@@ -765,6 +791,26 @@ describe('Details: the facts @s58', () => {
     const rows = related.getAllByRole('link', { name: 'Plan the rollout' });
     expect(rows).toHaveLength(1);
     expect(rows[0]?.getAttribute('href')).toBe('/task/13');
+  });
+
+  it('says how long the task has waited and on whom', async () => {
+    const since = new Date(Date.now() - 2 * 3600_000).toISOString();
+    serve(reads(task({ turn: { state: 'person', who: 'human:bo', line: 'OK the draft?', since, ask: true } } as Partial<TaskData>)));
+    details();
+    await facts();
+    const label = await screen.findByText('Waiting');
+    const line = label.parentElement as HTMLElement;
+    expect(line.textContent).toBe('Waiting2h on Bo Lee');
+  });
+
+  it('says only whom the task waits on after a reassignment in the same stage', async () => {
+    // The wait's time is still the stage's: it says nothing of how long the new owner has had it.
+    const entered = '2026-11-01T10:00:00Z';
+    serve(reads(task({ stage_since: entered, owner_id: 'bot:a1', turn: { state: 'bot', who: 'bot:a1', line: 'Draft the post', since: entered, ask: false } } as Partial<TaskData>)));
+    details();
+    await facts();
+    const label = await screen.findByText('Waiting');
+    expect((label.parentElement as HTMLElement).textContent).toBe('Waitingon Builder');
   });
 
   it('sets the Human in place', async () => {

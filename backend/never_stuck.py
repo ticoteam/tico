@@ -29,6 +29,8 @@ are on it:
   tasks (backend/stage_rule_timers.py): they tell the manager, in one wake an hour, tell the owner or move the task back.
 - A snooze the owner bot set on its own task ends when everything is met and there is room, and the task moves
   (`_ready_snoozes`).
+- Each task's open wait span (backend/wait_spans.py) is compared with the waits the pass read, and the spans of tasks
+  that ended are closed: the backstop for a flip no write made (checks finished, a bot out of credit, room).
 
 A pass is one write transaction, opened by the caller. Each task is done on its own inside it: a task the check cannot
 work out is left as it was and named in `failures`, and the pass goes on to the next one. Doing a pass twice is
@@ -58,6 +60,7 @@ from . import (
     stage_rule_timers,
     task_depends,
     task_wakes,
+    wait_spans,
 )
 from . import task_engine as E
 from . import task_requirements as R
@@ -161,6 +164,8 @@ def check(
     _ready_snoozes(conn, done, failures)
     # A ❓ whose person can no longer answer it (a change the roster and readers hooks did not see) goes nowhere.
     question_marks.clear_gone(conn)
+    spans = wait_spans.open_spans(conn)  # each task's open wait span, compared with what the pass reads of it
+    wanted: dict[str, wait_spans.Key | None] = {}  # and the span each should have, written after every read
     # A snooze of a task that was deleted, or is not on the engine, is no task's: it is left alone.
     due = conn.execute(
         "SELECT z.task_id FROM snoozes z JOIN tasks t ON t.id = z.task_id AND t.pipeline_id IS NOT NULL "
@@ -169,6 +174,10 @@ def check(
     ).fetchall()
     todo = [(str(found[0]), True) for found in due]
     todo += [(str(found[0]), False) for found in conn.execute(_OPEN).fetchall()]
+    # The open tasks the ladder does not check (by hand, blocked, snoozed): only their wait spans are kept, from the
+    # same first read.
+    listed = {each for each, _ in todo}
+    others = [str(found[0]) for found in conn.execute(wait_spans.OPEN_TASKS) if str(found[0]) not in listed]
     ahead: Ahead | None = None
     quiet = 0  # tasks in a row that changed nothing
     for n, (task_id, wake_up) in enumerate(todo):
@@ -183,7 +192,7 @@ def check(
             if ahead is None or ahead.changes != conn.total_changes or task_id not in ahead.asked:
                 rest = [each for each, woke in todo[n:] if not woke]
                 if ahead is None:
-                    ahead = read_ahead(conn, rest, seen)
+                    ahead = read_ahead(conn, rest, seen, others)
                 elif quiet >= QUIET:
                     ahead = read_ahead(conn, rest[: 2 * quiet], seen)
             if ahead and ahead.changes == conn.total_changes:
@@ -196,7 +205,14 @@ def check(
                 E.unsnooze(conn, task_id, SYSTEM)
                 done["snoozes_ended"] += 1
             else:
+                read = read or _read(conn, task_id, seen)  # the one read `_one` and the span check share
+                handed = (done["to_manager"], done["to_person"])
                 _one(conn, task_id, at, done, seen, live, read)
+                # A flip no write made (checks finished, out of credit, room). What was read still holds after a wake;
+                # a hand-off down the ladder can change whose turn it is, so then the task is read again. A move
+                # synced its own span.
+                fresh = handed == (done["to_manager"], done["to_person"])
+                wanted[task_id] = wait_spans.want_of(conn, task_id, read if fresh else None)
         except Exception as error:
             # SQLite may already have ended the transaction (a full disk, an I/O error): that stops the pass.
             if failures is None or not conn.in_transaction or storage_error(error):
@@ -211,31 +227,60 @@ def check(
                 else:
                     _keeping_reads(conn, "RELEASE never_stuck_task")
         quiet = quiet + 1 if conn.total_changes == changes else 0
-    _keeping_reads(conn, "SAVEPOINT never_stuck_room")
-    try:
-        done["moved"] += _requests(conn)
-    except Exception as error:
-        if failures is None or not conn.in_transaction or storage_error(error):
-            raise
-        conn.execute("ROLLBACK TO never_stuck_room")
-        failures.append(("room", error))
-    finally:
-        if conn.in_transaction:
-            conn.execute("RELEASE never_stuck_room")
-    _keeping_reads(conn, "SAVEPOINT never_stuck_stage_rules")
-    try:
-        # Stage rules whose When is a timer: tables only, no model (backend/stage_rule_timers.py).
-        timers: Any = stage_rule_timers
-        timers.sweep(conn, at)
-    except Exception as error:
-        if failures is None or not conn.in_transaction or storage_error(error):
-            raise
-        conn.execute("ROLLBACK TO never_stuck_stage_rules")
-        failures.append(("stage_rules", error))
-    finally:
-        if conn.in_transaction:
-            conn.execute("RELEASE never_stuck_stage_rules")
+
+    def room() -> int:
+        # The queued requests are among the open tasks the ladder does not check: read with them, as one read (nothing
+        # more when the ladder's read ahead took them already and nothing was written since).
+        W.prime(conn, others)
+        return _requests(conn)
+
+    done["moved"] += _step(conn, "room", failures, room)
+    # Stage rules whose When is a timer: tables only, no model (backend/stage_rule_timers.py).
+    timers: Any = stage_rule_timers
+    _step(conn, "stage_rules", failures, lambda: timers.sweep(conn, at))
+    # Every other open task's span, then those of tasks that ended. Nobody is woken for them.
+    _step(
+        conn,
+        "wait_spans",
+        failures,
+        lambda: wait_spans.write(conn, {**wanted, **wait_spans.wants(conn, others)}, spans),
+    )
+    _step(conn, "ended_spans", failures, lambda: wait_spans.close_ended(conn))
     return done
+
+
+def _read(
+    conn: "sqlite3.Connection", task_id: str, seen: dict[str, str | None]
+) -> "tuple[Row, list[R.Standing], list[W.Wait]] | None":
+    """A task the pass did not read ahead, read as `read_ahead` reads each one: its row, standings and waits."""
+    row = E.task(conn, task_id)
+    if not row:
+        return None
+    standings = R.standings(conn, row)
+    return row, standings, W.of(conn, row, seen, standings)
+
+
+def _step(
+    conn: "sqlite3.Connection", name: str, failures: list[tuple[str, Exception]] | None, work: Callable[[], Any]
+) -> Any:
+    """One step of the pass after the tasks, in its own savepoint: a step that raises is undone alone and named in
+    `failures` (without the list, the error is raised). Returns what `work` returns, 0 when it raised."""
+    _keeping_reads(conn, f"SAVEPOINT never_stuck_{name}")
+    rolled_back = False
+    try:
+        return work()
+    except Exception as error:
+        if failures is None or not conn.in_transaction or storage_error(error):
+            raise
+        conn.execute(f"ROLLBACK TO never_stuck_{name}")
+        rolled_back = True
+        failures.append((name, error))
+        return 0
+    finally:
+        if conn.in_transaction and rolled_back:
+            conn.execute(f"RELEASE never_stuck_{name}")
+        elif conn.in_transaction:
+            _keeping_reads(conn, f"RELEASE never_stuck_{name}")  # what the pass read stays for the next step
 
 
 # ----------------------------------------------------------------------------- the pass in a read snapshot first
@@ -417,7 +462,8 @@ def _requests(conn: "sqlite3.Connection") -> int:
         if not row or not E.not_held_by_hand(conn, row) or R.unmet(conn, row):
             continue
         nxt = E.next_stage(conn, row)
-        if not nxt or nxt["kind"] != "work" or not E.has_room(conn, nxt, task_row=row) or E.shut_out(conn, row, nxt):
+        # A request no task filed rides with no filer (E.not_held_by_hand), so the stage's room is one read for all.
+        if not nxt or nxt["kind"] != "work" or not E.has_room(conn, nxt) or E.shut_out(conn, row, nxt):
             continue
         E.move(conn, row["id"], nxt["id"], SYSTEM, seen_version=row.get("version"))
         moved += 1
@@ -463,11 +509,14 @@ _PART_READS = (
 _SNOOZE_ENDED = "SELECT MAX(ended_at) FROM snoozes WHERE visit_id=? AND ended_at IS NOT NULL"
 
 
-def read_ahead(conn: "sqlite3.Connection", task_ids: list[str], seen: dict[str, str | None]) -> Ahead:
+def read_ahead(
+    conn: "sqlite3.Connection", task_ids: list[str], seen: dict[str, str | None], also: list[str] | None = None
+) -> Ahead:
     """Read what the pass needs for every one of these tasks in a fixed number of statements, however many tasks there
     are: each one-task read the check makes is made once for the list and kept in the snapshot's read cache
     (`read_cache`), where the one-task read finds it. Then each task's row, standings and waits are worked out from it.
-    A connection with no read cache reads each task as before."""
+    A connection with no read cache reads each task as before. `also` are tasks read with them for later in the pass
+    (wait_spans.reconcile), whose waits are not worked out here."""
     import json
 
     from . import read_cache
@@ -482,7 +531,7 @@ def read_ahead(conn: "sqlite3.Connection", task_ids: list[str], seen: dict[str, 
     for sql, of_tasks in _PART_READS:
         parts = {(str(row["id"]),): row for row in conn.execute(sql.replace("id=?", f"id IN ({of_tasks})"), (listed,))}
         RC.prime(conn, sql, parts)
-    W.prime(conn, task_ids)
+    W.prime(conn, [*task_ids, *(also or ())])
     tasks = [row for row in (E.task(conn, each) for each in task_ids) if row and row.get("visit")]
     visits: list[Row] = [row["visit"] for row in tasks]
     visit_ids = json.dumps([str(visit["id"]) for visit in visits])

@@ -1100,3 +1100,16 @@ export function removeMatterDate(task: string, date: string) {
     wait: true,
   });
 }
+
+/** Rules › Links: each way an agent's writes leave the company, its mode and its last 30 days of checked writes
+    (GET /api/v2/rule-links, backend/rule_links.py; owner and Admins). A Not covered path is unmeasured. */
+export interface RuleLink {
+  id: string;
+  name: string;
+  mode: 'enforced' | 'informed' | 'not_covered';
+  counts: { passed: number; refused: number; held: number; unchecked: number } | null;
+}
+export const ruleLinksQuery = queryOptions({
+  queryKey: ['rules', 'links'],
+  queryFn: async ({ signal }) => (await api.get<{ links: RuleLink[] }>('/api/v2/rule-links', { signal })).links,
+});

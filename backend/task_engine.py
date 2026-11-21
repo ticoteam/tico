@@ -313,6 +313,14 @@ def rides_with_filer(conn: "sqlite3.Connection", task_id: str, stage_id: str) ->
     return conn.execute(_FILER_IN, (stage_id, task_id)).fetchone() is not None
 
 
+# The open tasks in a stage that could hold a slot: not snoozed, not blocked.
+_IN_STAGE_COUNT = (
+    "SELECT COUNT(*) FROM tasks t WHERE t.pipeline_id IS NOT NULL AND t.stage_id=? AND t.status='open' "
+    "AND NOT EXISTS (SELECT 1 FROM snoozes s WHERE s.task_id = t.id AND s.ended_at IS NULL) "
+    f"AND NOT {task_depends.BLOCKED % 't'}"
+)
+
+
 def has_room(conn: "sqlite3.Connection", stage_row: Row, extra: int = 0, task_row: Row | None = None) -> bool:
     """A stage has room when it has no limit, or fewer of its tasks hold a slot than its limit. A task holds a slot
     while it is open, not snoozed and not blocked by a task it depends on (task_depends), unless it waits only on a person's OK or answer (`waiting_on.slots`): bots keep
@@ -324,12 +332,9 @@ def has_room(conn: "sqlite3.Connection", stage_row: Row, extra: int = 0, task_ro
         return True
     if task_row and rides_with_filer(conn, str(task_row["id"]), str(stage_row["id"])):
         return True
-    everyone = conn.execute(
-        "SELECT COUNT(*) FROM tasks t WHERE t.pipeline_id IS NOT NULL AND t.stage_id=? AND t.status='open' "
-        "AND NOT EXISTS (SELECT 1 FROM snoozes s WHERE s.task_id = t.id AND s.ended_at IS NULL) "
-        f"AND NOT {task_depends.BLOCKED % 't'}",
-        (stage_row["id"],),
-    ).fetchone()[0]
+    from . import read_cache
+
+    everyone = read_cache.one(conn, _IN_STAGE_COUNT, (stage_row["id"],))[0]  # once a snapshot for each stage
     if everyone + extra < limit:
         return True  # room even if every task held a slot: no task's waits are read
     from . import waiting_on
@@ -660,10 +665,11 @@ def _event(
     return str(_h()._task_event(conn, task_id, by, kind, old, new, note or "", data=data))
 
 
-def _turn_of(conn: "sqlite3.Connection", row: Row) -> tuple[str | None, str]:
+def _turn_of(conn: "sqlite3.Connection", row: Row, waits: "list[Any] | None" = None) -> tuple[str | None, str]:
     """The one bot to wake about an open task now, as the never-stuck ladder picks it (`waiting_on.turn`), and the
     lead its wake starts with when it is not the owner: a stage with nobody set wakes the manager bot to pick someone
-    (C25); a bot named on an OK is told what it is asked. None when it is nobody's turn, or a person's."""
+    (C25); a bot named on an OK is told what it is asked. None when it is nobody's turn, or a person's. `waits` saves
+    reading them again when the caller has them."""
     from . import waiting_on as W
 
     if row["status"] != "open" or row.get("snooze") or row["stage"].get("by_hand"):
@@ -671,7 +677,7 @@ def _turn_of(conn: "sqlite3.Connection", row: Row) -> tuple[str | None, str]:
     visit = _part(row, "visit")
     if not row.get("owner_id") and visit.get("pick_state") == stage_pick.FULL:
         return None, ""  # it waits for a free bot of the stage's list: nobody is woken
-    waits = W.of(conn, row)
+    waits = W.of(conn, row) if waits is None else waits
     target = W.turn(conn, row, waits, paused=True)
     if target and not row.get("owner_id") and target == _part(row, "pipeline").get("manager_id"):
         if visit.get("pick_state") == stage_pick.NOBODY:
@@ -697,14 +703,19 @@ def _wake_turn(
     """Tell whoever has the turn in a stage the task just entered, once per visit: the bot the ladder would wake, and
     each other bot an OK or an answer names while it has a turn too (its ask's one wake: task_wakes.ask). A person is
     not told: their list is a read. After that the ladder tries only its own bot. `lead` opens the wake when the turn's
-    own lead says nothing; `refs`, `trigger` and `source` are a new task's own (`enter`)."""
+    own lead says nothing; `refs`, `trigger` and `source` are a new task's own (`enter`). The task's wait span follows
+    the waits read here (wait_spans.sync)."""
+    from . import wait_spans
     from . import waiting_on as W
 
+    # A snoozed or ended task wakes nobody, and its span needs no waits worked out (wait_spans._settled).
+    waits = W.of(conn, row) if row["status"] == "open" and not row.get("snooze") else None
+    wait_spans.sync(conn, str(row["id"]), row, waits)
     refs, instructions = task_wakes.split_instructions(refs)
     if row["stage"]["kind"] != "work":
         task_wakes.keep_instructions(conn, row, instructions)
         return None
-    target, turn_lead = _turn_of(conn, row)
+    target, turn_lead = _turn_of(conn, row, waits)
     if not target:
         task_wakes.keep_instructions(conn, row, instructions)
         return None
@@ -720,7 +731,7 @@ def _wake_turn(
     )
     if instructions and not out:
         task_wakes.keep_instructions(conn, row, instructions)
-    for wait in W.of(conn, row):
+    for wait in waits or ():
         if wait.state in (W.BOT, W.PAUSED) and wait.ask and wait.requirement_id and wait.who != target:
             task_wakes.ask(conn, row, R.get(conn, wait.requirement_id), wait.who)
     return out
@@ -732,16 +743,28 @@ def wake_turn(conn: "sqlite3.Connection", row: Row) -> str | None:
     return _wake_turn(conn, row)
 
 
+def _sync_wait(conn: "sqlite3.Connection", task_id: str) -> None:
+    """After a move that ended the task, a snooze or its end, a pick that found everyone full: its wait span follows
+    its headline (wait_spans.sync)."""
+    from . import wait_spans
+
+    wait_spans.sync(conn, task_id)
+
+
 def _drop_stale(conn: "sqlite3.Connection", task_id: str) -> int:
     """The turn may have gone to someone else: cancel the wakes still queued for a bot that has no turn on the task
     now, and keep those of a bot that still has one, a bot named on an OK or an answer included (R2). A snoozed or
-    ended task, or one at level `person`, keeps none."""
+    ended task, or one at level `person`, keeps none. Its wait span follows the waits read here (wait_spans.sync)."""
+    from . import wait_spans
     from . import waiting_on as W
 
     row = task(conn, task_id)
     if not row or row["status"] != "open" or row.get("snooze"):
+        wait_spans.sync(conn, task_id, row)
         return task_wakes.drop(conn, task_id)
-    return task_wakes.drop(conn, task_id, keep=W.turns(conn, row))
+    waits = W.of(conn, row)
+    wait_spans.sync(conn, task_id, row, waits)
+    return task_wakes.drop(conn, task_id, keep=W.turns(conn, row, waits))
 
 
 # ----------------------------------------------------------------------------- one of several
@@ -796,6 +819,8 @@ def pick_again(conn: "sqlite3.Connection", task_id: str) -> bool:
             )
             if choice.state == stage_pick.NOBODY:
                 _wake_turn(conn, _task(conn, task_id))  # the manager is told why, once for the visit
+            else:
+                _sync_wait(conn, task_id)  # it waits for a free bot now
         return False
     ts = _h().now()
     fields: Row = {"owner_id": choice.bot, "version": int(row.get("version") or 0) + 1, "updated_at": ts}
@@ -1171,10 +1196,12 @@ def move(
     seen_version: int | str | None = None,
     *,
     cascade: bool = False,
+    undone: str | None = None,
 ) -> Row:
     """Move a task: forward, push past, back, done, close or reopen. `to` is a stage id or name, or NEXT, DONE, CLOSED
     or REOPEN. A forward move is held to what the stage needs and to room; with `why` it pushes past. Back, close and
-    reopen are never held. `cascade` is the engine closing a task with the one that filed it."""
+    reopen are never held. `cascade` is the engine closing a task with the one that filed it. `undone` is the answer
+    whose taking back makes this move (answers.undo): its history row says so, so the move is not a second decision."""
     H = _h()
     row = task(conn, task_id)
     if not row:
@@ -1312,6 +1339,8 @@ def move(
             "was_owner": row.get("owner_id"),
             **({"pushed_past": pushed} if pushed else {}),
             **({"stage_rule": ruled["id"]} if ruled else {}),
+            **({"undone_answer": undone} if undone else {}),
+            **({"consequence": "cascade"} if cascade else {}),  # closed with what filed it: no decision of its own
         },
     )
     if ruled:
@@ -1324,8 +1353,10 @@ def move(
     moved = _task(conn, task_id)
     if target["kind"] == "work":
         _wake_turn(conn, moved, stage_effects.enter(conn, moved, by))
-    elif not cascade:
-        _ended(conn, moved, by)
+    else:
+        _sync_wait(conn, task_id)  # it ended: its span closes
+        if not cascade:
+            _ended(conn, moved, by)
     if pushed:
         _tell_manager(conn, moved, f"Pushed past {', '.join(p['name'] for p in pushed)}: {why}", "pushed_past")
     if moved["status"] != "open" or kind == "forward":
@@ -1541,6 +1572,8 @@ def refile(
     moved = _task(conn, task_id)
     if target["kind"] == "work":
         _wake_turn(conn, moved, stage_effects.enter(conn, moved, by))
+    else:
+        _sync_wait(conn, task_id)
     task_effects.moved(conn, row, moved, MOVED, by, why, revision, batch=batch)
     return _task(conn, task_id)
 
@@ -1863,6 +1896,10 @@ def move_on_past_own_snooze(conn: "sqlite3.Connection", task_id: str, why: str, 
     return True
 
 
+# Whether a task filed this one.
+FILED_SQL = "SELECT 1 FROM links WHERE to_task_id=?"
+
+
 def not_held_by_hand(conn: "sqlite3.Connection", row: Row) -> bool:
     """A person's request (one a person asked for that no task filed, as C8 reads it) on its first visit, in a by-hand
     stage whose "a person's request moves on" setting is on (`requests_move_on`: Product's Ideas): the person already
@@ -1877,7 +1914,9 @@ def not_held_by_hand(conn: "sqlite3.Connection", row: Row) -> bool:
         return False
     if not is_human(row.get("requester_id")):
         return False
-    return not conn.execute("SELECT 1 FROM links WHERE to_task_id=?", (row["id"],)).fetchone()
+    from . import read_cache
+
+    return not read_cache.one(conn, FILED_SQL, (row["id"],))  # primed for many tasks by waiting_on.prime
 
 
 def fill_open_slots(conn: "sqlite3.Connection", stage_ids: Sequence[str] | None = None) -> list[str]:
@@ -2131,9 +2170,9 @@ def _end_snooze(conn: "sqlite3.Connection", snoozed: Row, by: str, ts: str) -> N
 
 def on_delete(conn: "sqlite3.Connection", task_ids: Sequence[str], by: str) -> int:
     """The delete path (`task_delete.delete_tasks`), before the rows go: a deleted task keeps no place in a pipeline.
-    Its snooze, its visits with their answers, the asks added to them and the effects they owed are removed, and its
-    queued wakes are canceled. The links to and from it stay: the task that filed it reads a deleted task as closed,
-    and a restore (`restore`) starts it on a new visit. Returns how many visits went."""
+    Its snooze, its visits with their answers, the asks added to them and the effects they owed are removed, its
+    queued wakes are canceled and its open wait span is closed. The links to and from it stay: the task that filed it
+    reads a deleted task as closed, and a restore (`restore`) starts it on a new visit. Returns how many visits went."""
     ids = [str(task_id) for task_id in task_ids if task_id]
     if not ids:
         return 0
@@ -2145,6 +2184,9 @@ def on_delete(conn: "sqlite3.Connection", task_ids: Sequence[str], by: str) -> i
     conn.execute(f"DELETE FROM answers WHERE visit_id IN ({visits})", ids)
     conn.execute(f"DELETE FROM requirements WHERE visit_id IN ({visits})", ids)
     conn.execute(f"DELETE FROM snoozes WHERE task_id IN ({marks})", ids)
+    conn.execute(
+        f"UPDATE task_wait_spans SET closed_at=? WHERE closed_at IS NULL AND task_id IN ({marks})", (_h().now(), *ids)
+    )
     conn.execute(f"DELETE FROM idea_checks WHERE task_id IN ({marks})", ids)  # an owed check is for this visit
     conn.execute(f"DELETE FROM related_inputs WHERE task_id IN ({marks})", ids)  # likewise Jev's related bots
     conn.execute(f"DELETE FROM ask_opinions WHERE task_id IN ({marks})", ids)  # and Flow's opinion on each ask
@@ -2304,6 +2346,7 @@ def snooze(
     task_wakes.drop(conn, task_id)  # nothing wakes for a snoozed task
     _event(conn, task_id, by, "snooze", None, until, why)
     H.event(conn, by, "task.snoozed", task_id, {"until": until, "why": why or "", "stage": row["stage_id"]})
+    _sync_wait(conn, task_id)
     out = _task(conn, task_id)
     if not until and is_bot(by):
         _tell_manager(conn, out, f"On ice, with no end date: {why}", f"on_ice:{out['snooze']['id']}")
@@ -2341,11 +2384,14 @@ def refusal_line(rule: Row, line: str) -> str:
     return f"{said} (rule {rule['id']})"
 
 
-def unsnooze(conn: "sqlite3.Connection", task_id: str, by: str, why: str | None = None) -> Row:
+def unsnooze(
+    conn: "sqlite3.Connection", task_id: str, by: str, why: str | None = None, *, consequence: str | None = None
+) -> Row:
     """End a task's snooze. Its end is not a change either: no wake is written here, and the ladder's count and level
     are as they were. The task is due at once, and the never-stuck check wakes whoever has the turn on its next pass,
     as the next try (at level `person` nobody is woken: it is back in that person's Needs you). It can leave the stage
-    one over its limit."""
+    one over its limit. `consequence` names the act that ends it by itself (an answer, a done, a reply): its history
+    row says so, so it is not a second decision of whoever acted."""
     H = _h()
     row = task(conn, task_id)
     if not row:
@@ -2356,7 +2402,17 @@ def unsnooze(conn: "sqlite3.Connection", task_id: str, by: str, why: str | None 
     ts = H.now()
     _end_snooze(conn, row["snooze"], by, ts)
     conn.execute("UPDATE visits SET next_try_at=? WHERE id=?", (ts, row["visit"]["id"]))
-    _event(conn, task_id, by, "unsnooze", row["snooze"].get("until_at"), None, why)
+    _event(
+        conn,
+        task_id,
+        by,
+        "unsnooze",
+        row["snooze"].get("until_at"),
+        None,
+        why,
+        {"consequence": consequence} if consequence else None,
+    )
+    _sync_wait(conn, task_id)
     return _task(conn, task_id)
 
 

@@ -373,6 +373,18 @@ def _fan_out(c, hooks, name, subject, data, actor, revision):
 
 
 def _publish_only(c, type_, subject, data, actor, only, revision):
+    hook, name = publishable(c, type_, subject, data, actor, only)
+    event_id = _event_id(name, subject, revision)
+    _event_row(c, event_id, name, subject, data, actor, only=only)
+    queued = _queue(c, hook, event_id, name, subject, data)
+    if queued:
+        _refresh(c)
+    return queued
+
+
+def publishable(c, type_, subject, data, actor, only):
+    """What `publish(only=...)` checks before it writes, read only: (endpoint row, event name), or Refused. Rules ›
+    Links reads it before an agent's send is checked (backend/rule_links.py), so no call goes on a send refused here."""
     hook = c.execute("SELECT * FROM webhooks WHERE id=?", (only,)).fetchone()
     if not hook or hook["deleted_at"]:
         raise Refused("That endpoint does not exist")
@@ -393,12 +405,7 @@ def _publish_only(c, type_, subject, data, actor, only, revision):
         raise Refused("The data is over 64 KB")
     if view_for(c, hook["created_by"], name, subject, data, {}) is None:
         raise Refused("The person who owns that endpoint may not read this")
-    event_id = _event_id(name, subject, revision)
-    _event_row(c, event_id, name, subject, data, actor, only=only)
-    queued = _queue(c, hook, event_id, name, subject, data)
-    if queued:
-        _refresh(c)
-    return queued
+    return hook, name
 
 
 # ----------------------------------------------------------------------------------------------------- endpoint filters
@@ -1583,7 +1590,44 @@ def install(app, settings, store, auth, mutate):
     )
     def webhook_send(request: Request, hook_id: str, body: WebhookSend):
         """A custom event (custom.<name>) to one endpoint."""
-        return mutate(request, body, lambda c: send_custom(c, request.state.identity, hook_id, body))
+        from . import rule_links
+
+        who = request.state.identity
+        names = {}
+
+        def sendable(c):
+            name = body.type.strip()
+            if not CUSTOM.fullmatch(name):
+                return False
+            hook = _row(c, hook_id)
+            may_send(c, who, hook, name)
+            try:
+                publishable(c, name, body.subject or name, body.data, who.actor, hook_id)
+            except Refused:
+                return False
+            names.update(event=name, endpoint=hook["name"])
+            return True
+
+        # An agent's send meets the org rules first (backend/rule_links.py), its one event in the send's write; only a
+        # send that would be made is checked, on its names only (the event and the endpoint, never its data). Log-only.
+        found = (
+            rule_links.check(
+                store, request.app.state.judge, who, "webhook", "webhook", f"{names['event']} to {names['endpoint']}"
+            )
+            if rule_links.would_write(store, who, request, sendable)
+            else None
+        )
+
+        def write(c):
+            sent = send_custom(c, who, hook_id, body)
+            # A send its preflight found ineligible that went after all (the endpoint resumed in between): logged
+            # unchecked, never judged inside the write.
+            rule_links.record(
+                c, found or rule_links.unchecked_for(store, who, "webhook", "webhook", "changed_during_check")
+            )
+            return sent
+
+        return mutate(request, body, write)
 
     @app.post(
         "/api/v2/webhooks/{hook_id}/example",

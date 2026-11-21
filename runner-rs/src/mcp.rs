@@ -266,6 +266,28 @@ pub fn declared(tools: &Value) -> Vec<(Value, Value)> {
     found
 }
 
+/// Tico's own MCP server's name on every harness (hosts insert it after the bot's servers): no bot.yaml or granted
+/// server takes it, so none is silently replaced by it.
+pub const TICO_SERVER: &str = "tico";
+
+/// The names a run's servers may not take: Tico's own.
+fn reserved() -> HashSet<String> {
+    HashSet::from([TICO_SERVER.to_string()])
+}
+
+/// `server_name(service)`, else it with `_2`, `_3`... the first `used` does not hold, which then holds it: two servers
+/// never share a name, the same input always gives the same names.
+fn unique_name(service: &str, used: &mut HashSet<String>) -> String {
+    let base = server_name(service);
+    let (mut name, mut n) = (base.clone(), 1);
+    while used.contains(&name) {
+        n += 1;
+        name = format!("{base}_{n}");
+    }
+    used.insert(name.clone());
+    name
+}
+
 /// The name a harness shows the model: the service, safe for a tool name (`google-drive` -> `google_drive`).
 pub fn server_name(service: &str) -> String {
     let name: String = service
@@ -313,7 +335,7 @@ pub fn servers_for_run(
     env: &Env,
     proxied: &[ProxiedTool],
 ) -> (Vec<Value>, Vec<String>) {
-    let (mut servers, mut problems, mut used) = (vec![], vec![], HashSet::new());
+    let (mut servers, mut problems, mut used) = (vec![], vec![], reserved());
     for (entry, mcp) in declared(tools) {
         let service = service_of(&entry);
         let mut needs: Vec<String> = mcp["headers"]
@@ -334,7 +356,8 @@ pub fn servers_for_run(
             ));
             continue;
         }
-        let mut url = mcp["url"].clone();
+        let upstream = mcp["url"].clone();
+        let mut url = upstream.clone();
         if let Some(tool) = proxied.iter().find(|t| needs.contains(&t.env)) {
             match through_proxy(&text_of(&url), tool) {
                 Some(via) => url = json!(via),
@@ -351,13 +374,8 @@ pub fn servers_for_run(
                 }
             }
         }
-        let (mut name, mut n) = (server_name(&service), 1);
-        while used.contains(&name) {
-            n += 1;
-            name = format!("{}_{n}", server_name(&service));
-        }
-        used.insert(name.clone());
-        servers.push(json!({"name": name, "service": service, "url": url, "transport": mcp["transport"],
+        let name = unique_name(&service, &mut used);
+        servers.push(json!({"name": name, "service": service, "url": url, "upstream": upstream, "transport": mcp["transport"],
                             "headers": mcp.get("headers").cloned().unwrap_or(json!({})), "env": entry_env(&entry)}));
     }
     (servers, problems)
@@ -370,6 +388,9 @@ pub fn servers_for_run(
 /// (servers, problems), servers shaped as `servers_for_run`'s.
 pub fn granted(items: &Value, server: &str, held: &BTreeSet<String>) -> (Vec<Value>, Vec<String>) {
     let (mut servers, mut problems) = (vec![], vec![]);
+    // Every grant that passes its checks, each with a name of its own: `merge` passes one per connection, after the
+    // harness's transports have been applied, so a grant it cannot take never hides one it can.
+    let mut used = reserved();
     for item in items.as_array().into_iter().flatten() {
         let label = text_of(&item["tool"]);
         let service = text_of(&item["name"]).trim().to_lowercase();
@@ -390,6 +411,12 @@ pub fn granted(items: &Value, server: &str, held: &BTreeSet<String>) -> (Vec<Val
         }
         let url = text_of(&item["url"]);
         let proxied = item["proxied"] == true;
+        // The server's own address: a proxied one's `url` is Tico's proxy (an older server sends no `upstream`).
+        let upstream = match text_of(&item["upstream"]) {
+            u if !u.is_empty() => u,
+            _ if !proxied => url.clone(),
+            _ => String::new(),
+        };
         let (checked, url) = if proxied {
             let Some(at) = url.find("/api/v2/tool-proxy/") else {
                 problems.push(format!(
@@ -414,24 +441,40 @@ pub fn granted(items: &Value, server: &str, held: &BTreeSet<String>) -> (Vec<Val
         let block =
             json!({"url": checked, "transport": item["transport"], "headers": item["headers"]});
         match clean_mcp(&block, &env) {
-            Ok(m) => servers.push(json!({"name": server_name(&service), "service": service, "url": url,
-                                         "transport": m["transport"], "headers": m.get("headers").cloned().unwrap_or(json!({})),
-                                         "env": env})),
+            Ok(m) => {
+                servers.push(
+                    json!({"name": unique_name(&service, &mut used), "service": service, "url": url,
+                                    "upstream": upstream, "env": env, "transport": m["transport"],
+                                    "headers": m.get("headers").cloned().unwrap_or(json!({}))}),
+                );
+            }
             Err(why) => problems.push(format!("{label}: MCP server not passed. {why}")),
         }
     }
     (servers, problems)
 }
 
-/// `problems` without the bot.yaml servers left out for a variable the bot does not hold whose name a granted MCP
-/// tool's server takes: `merge` passes the granted one, so a grant alone is enough and nothing is missing.
+/// A server's connection: the server's own address (`upstream`, whatever proxy address the run reaches it by) and the
+/// variable its credential comes in. Two servers are one connection only when both match, so two accounts on one
+/// endpoint stay two, and a proxied grant of bot.yaml's server is that server.
+pub fn connection(server: &Value) -> (String, String) {
+    let upstream = text_of(&server["upstream"]);
+    let url = if upstream.is_empty() {
+        text_of(&server["url"])
+    } else {
+        upstream
+    };
+    (url, text_of(&server["env"]))
+}
+
+/// `problems` without the bot.yaml servers left out for a variable the bot does not hold whose very connection (its
+/// address and variable) a granted MCP tool brings: `merge` passes the granted one, so nothing is missing.
 pub fn drop_covered(problems: Vec<String>, tools: &Value, granted: &[Value]) -> Vec<String> {
-    let names: HashSet<String> = granted.iter().map(|s| text_of(&s["name"])).collect();
+    let brought: HashSet<(String, String)> = granted.iter().map(connection).collect();
     let covered: Vec<String> = declared(tools)
         .iter()
-        .map(|(entry, _)| service_of(entry))
-        .filter(|service| names.contains(&server_name(service)))
-        .map(|service| format!("{service}: MCP server not passed, "))
+        .filter(|(entry, mcp)| brought.contains(&(text_of(&mcp["url"]), entry_env(entry))))
+        .map(|(entry, _)| format!("{}: MCP server not passed, ", service_of(entry)))
         .collect();
     problems
         .into_iter()
@@ -439,14 +482,23 @@ pub fn drop_covered(problems: Vec<String>, tools: &Value, granted: &[Value]) -> 
         .collect()
 }
 
-/// bot.yaml's servers, then each granted one whose name bot.yaml does not already use: bot.yaml wins on a name.
-pub fn merge(mut servers: Vec<Value>, granted: &[Value]) -> Vec<Value> {
-    for s in granted {
-        if !servers.iter().any(|d| d["name"] == s["name"]) {
-            servers.push(s.clone());
+/// bot.yaml's servers, then the granted ones, as one list: each connection (`connection`: address and variable) once,
+/// bot.yaml's first (a duplicate declaration too), then every name from one set, Tico's own `tico` held back, so two
+/// connections never share a name and none is dropped. Callers pass only the servers the harness can take.
+pub fn merge(declared: Vec<Value>, granted: &[Value]) -> Vec<Value> {
+    let (mut out, mut seen, mut used) = (vec![], HashSet::new(), reserved());
+    for mut s in declared.into_iter().chain(granted.iter().cloned()) {
+        if !seen.insert(connection(&s)) {
+            continue;
         }
+        let base = match text_of(&s["service"]) {
+            service if !service.is_empty() => service,
+            _ => text_of(&s["name"]),
+        };
+        s["name"] = json!(unique_name(&base, &mut used));
+        out.push(s);
     }
-    servers
+    out
 }
 
 /// (name, transports, why) for a harness (mcp_servers.SUPPORT): its manifest's `mcp_transports` and
@@ -628,11 +680,15 @@ pub fn codex_config(servers: &[Value], env: &Env, process_env: &Env) -> Map<Stri
 /// already use takes a `bot_` prefix, so a bot's table never merges into a disabled stub or replaces Tico's.
 pub fn codex_merge(servers: &mut Map<String, Value>, remote: Map<String, Value>) {
     for (name, table) in remote {
-        let key = if servers.contains_key(&name) || name == "tico" {
-            format!("bot_{name}")
-        } else {
-            name
-        };
+        let (mut key, mut n) = (name.clone(), 1);
+        if servers.contains_key(&key) || key == TICO_SERVER {
+            key = format!("bot_{name}");
+        }
+        // Never over another table, a `bot_` one included: the next free `bot_<name>_<n>`.
+        while servers.contains_key(&key) {
+            n += 1;
+            key = format!("bot_{name}_{n}");
+        }
         servers.insert(key, table);
     }
 }
@@ -894,10 +950,117 @@ mod tests {
             problems[1],
             "Acme Missing: MCP server not passed, its key did not reach this turn"
         );
-        let declared = vec![json!({"name": "acme_errors", "url": "https://from.bot.yaml/mcp"})];
+        // bot.yaml's entry for the same connection (its address and variable): bot.yaml's is passed
+        let declared = vec![
+            json!({"name": "acme_errors", "env": "ACME_ERRORS_MCP_TOKEN",
+                                   "url": "http://server:8080/api/v2/tool-proxy/acme-errors/mcp"}),
+        ];
         let merged = merge(declared, &servers);
         assert_eq!(merged.len(), 2);
-        assert_eq!(text_of(&merged[0]["url"]), "https://from.bot.yaml/mcp");
+        assert_eq!(text_of(&merged[1]["name"]), "acme_docs");
+    }
+
+    #[test]
+    fn merged_servers_share_one_set_of_names_and_codex_never_writes_over_a_table() {
+        let yaml = |env: &str, url: &str| json!({"name": "linear", "service": "linear", "url": url, "env": env});
+        // the same server declared twice is one
+        let declared = vec![
+            yaml("LINEAR_API_KEY", "https://mcp.linear.example/mcp"),
+            yaml("LINEAR_API_KEY", "https://mcp.linear.example/mcp"),
+        ];
+        let granted = [
+            // bot.yaml's own connection (its address and variable), granted too: passed once, as bot.yaml's
+            json!({"name": "linear", "service": "linear", "url": "https://mcp.linear.example/mcp", "env": "LINEAR_API_KEY"}),
+            // another account on the same endpoint: its own name, never dropped
+            json!({"name": "linear", "service": "linear", "url": "https://mcp.linear.example/mcp", "env": "LINEAR_OPS"}),
+        ];
+        let names: Vec<String> = merge(declared, &granted)
+            .iter()
+            .map(|s| text_of(&s["name"]))
+            .collect();
+        assert_eq!(names, ["linear", "linear_2"]);
+        let mut tables = Map::new();
+        for name in ["tico", "bot_linear", "linear"] {
+            tables.insert(name.to_string(), json!({"stub": name}));
+        }
+        let mut remote = Map::new();
+        remote.insert(
+            "linear".to_string(),
+            json!({"url": "https://mcp.linear.example/mcp"}),
+        );
+        remote.insert(
+            "tico".to_string(),
+            json!({"url": "https://tico-tool.example/mcp"}),
+        );
+        codex_merge(&mut tables, remote);
+        assert_eq!(tables["bot_linear"], json!({"stub": "bot_linear"}));
+        assert_eq!(
+            tables["bot_linear_2"],
+            json!({"url": "https://mcp.linear.example/mcp"})
+        );
+        assert_eq!(tables["tico"], json!({"stub": "tico"}));
+        assert_eq!(
+            tables["bot_tico"],
+            json!({"url": "https://tico-tool.example/mcp"})
+        );
+    }
+
+    #[test]
+    fn a_proxied_grant_of_bot_yamls_own_server_is_that_server() {
+        let declared = json!([{"service": "linear", "env": "LINEAR_API_KEY",
+                               "mcp": {"url": "https://mcp.linear.example/mcp", "headers": {"Authorization": "Bearer ${LINEAR_API_KEY}"}}}]);
+        let grant = json!([{"name": "linear", "tool": "Linear", "transport": "http", "env": "LINEAR_API_KEY", "proxied": true,
+                            "url": "https://tico.acme.example/api/v2/tool-proxy/linear/mcp", "upstream": "https://mcp.linear.example/mcp",
+                            "headers": {"Authorization": "Bearer ${LINEAR_API_KEY}"}}]);
+        let held: BTreeSet<String> = ["LINEAR_API_KEY".to_string()].into_iter().collect();
+        let (granted, _) = granted(&grant, "", &held);
+        // bot.yaml's key did not reach the run: no warning, as the grant brings that very server
+        let (_, problems) = servers_for_run(&declared, &env(&[]), &[]);
+        assert!(drop_covered(problems, &declared, &granted).is_empty());
+        // both there: passed once
+        let (servers, _) =
+            servers_for_run(&declared, &env(&[("LINEAR_API_KEY", "lin_made_up")]), &[]);
+        assert_eq!(merge(servers, &granted).len(), 1);
+    }
+
+    #[test]
+    fn granted_servers_never_share_a_name_nor_take_ticos_own() {
+        let item = |name: &str, env: &str| {
+            json!({"name": name, "tool": name, "transport": "http", "env": env,
+                   "url": format!("https://{}.acme.example/mcp", name.replace(['_', '.'], "-")),
+                   "headers": {"Authorization": format!("Bearer ${{{env}}}")}})
+        };
+        let items = json!([
+            item("tico", "TICO_MCP_TOKEN"),
+            item("acme-docs", "ACME_DOCS_TOKEN"),
+            item("acme.docs", "ACME_DOCS_TWO_TOKEN"),
+            // the same key again: one connection, passed once
+            item("acme-docs", "ACME_DOCS_TOKEN"),
+            // the same tool's second key, in its own variable: a second connection, never dropped
+            item("acme-docs", "ACME_DOCS_OPS_TOKEN")
+        ]);
+        let held: BTreeSet<String> = [
+            "TICO_MCP_TOKEN",
+            "ACME_DOCS_TOKEN",
+            "ACME_DOCS_TWO_TOKEN",
+            "ACME_DOCS_OPS_TOKEN",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let (servers, problems) = granted(&items, "", &held);
+        assert!(problems.is_empty(), "{problems:?}");
+        // `merge` passes each connection once (the repeated key), then names them from one set.
+        assert_eq!(
+            merge(vec![], &servers)
+                .iter()
+                .map(|s| text_of(&s["name"]))
+                .collect::<Vec<_>>(),
+            ["tico_2", "acme_docs", "acme_docs_2", "acme_docs_3"]
+        );
+        let declared = json!([{"service": "tico", "mcp": {"url": "https://tico.example/mcp"}}]);
+        let (servers, _) = servers_for_run(&declared, &env(&[]), &[]);
+        assert_eq!(text_of(&servers[0]["name"]), "tico_2");
     }
 
     #[test]

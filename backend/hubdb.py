@@ -6041,7 +6041,7 @@ def task_run_now(conn, actor, task_id):
         # snoozed, the engine holds the run it queues (task_wakes.may_start) and Run now did nothing.
         from . import task_engine
 
-        task_engine.unsnooze(conn, task_id, actor, "Run now")
+        task_engine.unsnooze(conn, task_id, actor, "Run now", consequence="run_now")
     waiting = None
     try:
         waiting = _one(

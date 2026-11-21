@@ -604,6 +604,7 @@ KEEP = (
             "task_tags",
             "task_trash",
             "task_trash_assets",
+            "task_wait_spans",  # how long each task waited on what (backend/wait_spans.py): history, kept with its task
             "tasks",
             # The one task engine (backend/task_engine.py): what a pipeline is, where each task stands and how it got
             # there. task_move_guards is the one row the tasks_move_only trigger reads.

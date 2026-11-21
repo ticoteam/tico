@@ -2,6 +2,7 @@ import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query';
 import { api, ApiError } from '@/api/client';
 import type {
   BotDreamView,
+  BotRepositories,
   BotFileList,
   BrowserControl,
   BrowserControlState,
@@ -16,6 +17,7 @@ import type {
   CloudAgentRequest,
   ComputerScreen,
   Problem,
+  RepositoryList,
   ScreenMode,
   ScreenSession,
   ScreenSessionStart,
@@ -686,6 +688,37 @@ export const lastStopQuery = (slug: string) =>
 
 /** Read it again: its status moved on the stream. */
 export const lastStopAgain = (slug: string) => void queryClient.invalidateQueries({ queryKey: lastStopQuery(slug).queryKey });
+
+/* ---------------------------------------------------------------- repositories */
+
+/** Which repositories an agent reaches: its mode and what that gives it now (`effective`). */
+export const agentReposQuery = (slug: string) =>
+  queryOptions({
+    queryKey: ['team', 'repos', slug] as const,
+    queryFn: ({ signal }) => api.get<BotRepositories>(`/api/v2/bots/${at(slug)}/repositories`, { signal }),
+  });
+
+/** The team's repositories, of which the ticked ones are what an agent may be given. */
+export const teamReposQuery = queryOptions({
+  queryKey: ['team', 'repositories'] as const,
+  queryFn: ({ signal }) => api.get<RepositoryList>('/api/v2/repositories', { signal }),
+});
+
+export interface ReposChange {
+  mode: BotRepositories['mode'];
+  all_access?: BotRepositories['all_access'];
+  chosen?: Array<{ full_name: string; access: 'read' | 'write' }>;
+}
+
+/** Set the agent's mode. Workflow and repository-making settings are left out, so each keeps what it holds; taking a
+    repository away here is for this agent only, never the team's tick. */
+export const setAgentRepos = (slug: string, change: ReposChange) =>
+  write({
+    key: agentReposQuery(slug).queryKey,
+    wait: true,
+    optimistic: (cur: BotRepositories | undefined) => cur && { ...cur, ...change, chosen: change.chosen ?? cur.chosen },
+    send: (idempotencyKey) => api.put<unknown>(`/api/v2/bots/${at(slug)}/repositories`, change, { idempotencyKey }),
+  });
 
 /* ---------------------------------------------------------------- changes */
 

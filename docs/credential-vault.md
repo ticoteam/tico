@@ -40,7 +40,8 @@ in `TICO_TOOL_<ID>_URL`; it calls `$TICO_TOOL_<ID>_URL/<path>` with the token wh
 and `/api/v2/tool-proxy/<id>/<path>` checks the token, picks the key by the caller's level (a Read caller gets the read
 key; with no read key it may only make GET, HEAD and OPTIONS calls, and POSTs that are MCP calls which only read: the
 session's set-up, listings, and `tools/call` of a tool the server's own `tools/list` marks `readOnlyHint`), sends the call on with the vendor's auth, scrubs
-the key out of the answer and logs one row (path and query keys, never values or bodies) on the tool's Activity. A token
+the key out of the answer and logs one row (path and query keys, never values or bodies) on the tool's Activity. A write
+meets the org rules before the key goes in, log-only for now (docs/dev/rules-plan.md, Links). A token
 is signed by the server, names one tool and one bot, and works only while the run it was made for is leased or running
 (a watcher's while its bot is assigned to that computer, for at most 12 hours); taking the level away stops the next
 call. The proxy sends only to a public https address: it resolves the tool's name at each call, refuses it when any

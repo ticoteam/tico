@@ -4,6 +4,7 @@ tool and its live run, and the caller's level picks the key and the methods. The
 import base64
 import ipaddress
 import json
+import uuid
 
 import httpx
 import pytest
@@ -229,11 +230,14 @@ def test_read_on_a_computer_tool_goes_through_the_proxy_unless_a_read_key_or_no_
     assert call(api, "POST", "api/v1/lead/", item["value"], json={"name": "Acme"}).status_code == 403
     _, finance = run(api, "finance")
     assert handed(api, finance)["value"] == FULL  # Read and write on a computer tool: the key itself
-    # A read key of the tool goes instead of the Read and write one.
+    access = lambda: {r["subject"]: r for r in get(api, "api-tools/close-crm")["access"]}  # noqa: E731 - read 3 times
+    assert access()["bot:ops"].get("proxied_read") is True and "proxied_read" not in access()["bot:finance"]
+    # A read key of the tool goes instead of the Read and write one, as it is: no longer through the proxy.
     read = key(api, "close-crm", READ, level="read", env="CLOSE_READ_KEY")
     give(api, read, "bot:ops", "read")
     items = get(api, "credential-runtime", ops["token"])["credentials"]
     assert [(i["env"], i["value"]) for i in items] == [("CLOSE_READ_KEY", READ)]
+    assert "proxied_read" not in access()["bot:ops"]
     # No address to call through: the key itself, and the row is marked.
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM credential_grants WHERE credential_id=?", (read,))
@@ -267,6 +271,22 @@ class McpVendor:
                 200, headers={"content-type": "text/event-stream"}, text=f"data: {json.dumps(message)}\n\n"
             )
         return httpx.Response(200, json=message)
+
+
+def test_a_read_callers_mcp_read_over_a_megabyte_still_passes(api):
+    """The gate reads at most 1 MB; Read authorization still parses a larger MCP call to see that it only reads."""
+    from backend import tool_proxy
+
+    tool_proxy.READ_ONLY_TOOLS.clear()
+    setup(api)
+    tool(api, scheme="bearer", base="https://mcp.close.example")
+    give(api, key(api, "close-crm", FULL), "bot:ops", "read")
+    api.app.state.tool_proxy_transport = httpx.MockTransport(McpVendor())
+    _, ops = run(api)
+    token = handed(api, ops)["value"]
+    assert call(api, "POST", "mcp", token, json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).status_code == 200
+    big = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "search", "q": "x" * (1024 * 1024)}}
+    assert call(api, "POST", "mcp", token, json=big).status_code == 200
 
 
 @pytest.mark.parametrize("sse", [False, True])
@@ -424,3 +444,121 @@ def test_a_streamed_401_reaches_the_caller_unchanged_with_the_phrase_split_acros
     assert r.status_code == 401 and r.content == b"".join(parts)
     with api.app.state.store.read() as c:
         assert [row[0] for row in c.execute("SELECT detail FROM tool_calls")] == [api_tools.MISSING_SCOPE]
+
+
+class Judge:
+    """The org rule check's model (backend/org_rule_check.py): a rule is broken when what it reads says NEEDLE."""
+
+    NEEDLE = "post to close crm"  # a write to Close CRM: what the check reads is names only
+
+    def __init__(self):
+        self.read = []
+
+    def __call__(self, state, questions, label=None):
+        self.read.append(state["output"])
+        broken = self.NEEDLE in state["output"].lower()
+        answers = {qid: {"type": "noul", "noul": 0.95 if broken else 0.05} for qid in questions}
+        return {"model": "jev-1.14", "usage": {"input_tokens": 10, "output_tokens": 0}, "ms": 1, "answers": answers}
+
+
+def test_an_agents_write_is_rule_checked_before_the_key_goes_in_logged_once_and_never_stopped(api):
+    """Rules › Links, log-only (backend/rule_links.py): a write by a bot meets the org rules before the proxy puts the key
+    in, and leaves one outcome event on the tool's link with the rule in it. A Block rule broken is a would-be refusal:
+    the write still goes. What the check reads is names only, so no credential reaches it, and a read is never
+    counted."""
+    from backend.tests.helpers.org_rules import org, rule
+
+    setup(api)
+    org(api)
+    judge = api.app.state.judge = Judge()
+    tool(api, scheme="query:api_key")
+    give(api, key(api, "close-crm", FULL), "bot:ops")
+    made = rule(
+        api, {"kind": "internal", "text": "Never write to Close CRM.", "who": {"bots": ["ops"]}, "if_broken": "block"}
+    )
+    vendor = Vendor()
+    api.app.state.tool_proxy_transport = httpx.MockTransport(vendor)
+    _, attempt = run(api)
+    token = handed(api, attempt)["value"]
+    basic = base64.b64encode((token + ":").encode()).decode()
+    note = {"note": "Our favorite color is gold", "copy": token, "basic": basic}
+    r = api.post(
+        f"/api/v2/tool-proxy/close-crm/api/v1/lead/?api_key={token}&mode=x",
+        headers={
+            "Authorization": "Basic " + basic,
+            "Cookie": "session=" + token,
+            "X-Vendor-Auth": token,
+            "Idempotency-Key": "lead-1",
+        },
+        json=note,
+    )
+    assert r.status_code == 200 and len(vendor.seen) == 1  # log-only: the would-be refusal still went
+    assert "api_key=" + FULL in str(vendor.seen[0].url)  # the key went in after the check
+    [read] = judge.read
+    assert read == "POST to Close CRM\nFields: basic, copy, note"  # names only: no value, path, query or header
+    with api.app.state.store.read() as c:
+        rows = c.execute("SELECT actor, action, target, detail FROM events WHERE action LIKE 'rules.%'").fetchall()
+    assert [(a, b, t) for a, b, t, _ in rows] == [("bot:ops", "rules.refused", "link:tool:close-crm")]
+    detail = json.loads(rows[0]["detail"])
+    assert (detail["rules"], detail["broken"], detail["would"]) == ([made["id"]], [made["id"]], True)
+    assert token not in dump(api, "events", "tool_calls")
+
+    def write(path, key=True, **kw):
+        sent = {"Authorization": "Bearer " + token, **({"Idempotency-Key": uuid.uuid4().hex} if key else {})}
+        return api.post("/api/v2/tool-proxy/close-crm/" + path, headers=sent, **kw)
+
+    def logged():
+        with api.app.state.store.read() as c:
+            return [json.loads(r[0]) for r in c.execute("SELECT detail FROM events WHERE action LIKE 'rules.%'")]
+
+    # A read is never counted.
+    assert call(api, "GET", f"api/v1/lead/?api_key={token}", token).status_code == 200 and len(logged()) == 1
+    # Its key goes in the query, so no call to it is ever exactly its MCP address: an MCP read there is checked too.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tools SET mcp_url='https://api.close.example/mcp' WHERE id='close-crm'")
+    assert write("mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).status_code == 200
+    assert len(logged()) == 2
+    # With no Idempotency-Key (a stock MCP client, curl) a write is judged all the same; with one, a retry under it
+    # is forwarded again but logs no second event.
+    forwarded = len(vendor.seen)
+    assert write("api/v1/lead/", key=False, json=note).status_code == 200
+    with api.app.state.store.read() as c:
+        last = c.execute("SELECT action FROM events WHERE action LIKE 'rules.%' ORDER BY rowid DESC").fetchone()
+    assert last[0] == "rules.refused" and len(logged()) == 3  # judged (the same names: the cached verdict)
+    again = {"Authorization": "Bearer " + token, "Idempotency-Key": "lead-2"}
+    for _ in range(2):
+        assert api.post("/api/v2/tool-proxy/close-crm/api/v1/lead/", headers=again, json=note).status_code == 200
+    assert len(logged()) == 4 and len(vendor.seen) == forwarded + 3
+    asked = len(judge.read)
+    # A destination refused at its check is never judged: the address is checked and pinned first.
+    ANSWERS["api.close.example"] = "10.0.0.5"
+    assert write("api/v1/lead/", json=note).status_code == 403
+    assert len(logged()) == 4 and len(judge.read) == asked
+
+
+def test_only_an_mcp_read_sent_to_exactly_the_tools_mcp_address_is_not_a_write(api):
+    setup(api)
+    api.app.state.judge = Judge()
+    tool(api, scheme="bearer", base="https://mcp.close.example")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tools SET mcp_url='https://mcp.close.example/mcp' WHERE id='close-crm'")
+    give(api, key(api, "close-crm", FULL), "bot:ops")
+    api.app.state.tool_proxy_transport = httpx.MockTransport(McpVendor())
+    _, attempt = run(api)
+    token = handed(api, attempt)["value"]
+    listing = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+    search = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "search"}}
+
+    def send(path, body):
+        sent = {"Authorization": "Bearer " + token, "Idempotency-Key": uuid.uuid4().hex}
+        assert api.post("/api/v2/tool-proxy/close-crm/" + path, headers=sent, json=body).status_code == 200
+        with api.app.state.store.read() as c:
+            return c.execute("SELECT count(*) FROM events WHERE action LIKE 'rules.%'").fetchone()[0]
+
+    for path in ("mcp", "mcp/", "mcp?session=1"):  # only the first is exactly the MCP address
+        send(path, listing)
+    assert send("mcp", search) == 2  # `search` is read-only by the listing the MCP address gave
+    # The same id made again: the hints of the tool it replaced are not its own.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tools SET created_at='2099-01-01T00:00:00Z' WHERE id='close-crm'")
+    assert send("mcp", search) == 3

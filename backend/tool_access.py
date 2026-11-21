@@ -138,12 +138,39 @@ def _hidden(c: Any, who: Who, resource: Resource, admins: Any, auth: Any) -> boo
     return False
 
 
-def _acting_builtin(who: Who) -> str:
-    """The built-in acting for the person (`by` on the delegation, else the run's own bot), or ""."""
-    if getattr(who, "via", "") not in DELEGATED:
-        return ""
+def _login(c: Any, resource: Resource) -> bool:
+    """A website login: an account, or a vault credential of kind `login` (backend/website_tools.py)."""
+    if resource.kind == ACCOUNT:
+        return True
+    if resource.kind != KEY or not resource.id:
+        return False
+    row = c.execute("SELECT kind FROM credentials WHERE id=?", (resource.id,)).fetchone()
+    return row is not None and row["kind"] == "login"
+
+
+def acting_agent(who: Who) -> str:
+    """The agent whose run makes this write, whoever's rights it carries: `by` on a delegation, else the run's own bot
+    (`task_actor`, set on every lent identity), else the caller when it is a bot; "" for a person's own write. Every
+    check on what an agent may do (itself, every agent, the catalog) reads this, never `via` or the principal."""
     lent: Any = H.DELEGATION.get() or {}
-    return str(lent.get("by") or getattr(who, "task_actor", "") or "")
+    if lent.get("by"):
+        return str(lent["by"])
+    if getattr(who, "task_actor", ""):
+        return str(who.task_actor)
+    return str(getattr(who, "actor", "")) if getattr(who, "role", "") == "bot" else ""
+
+
+def persons_own(who: Who) -> bool:
+    """A person's own act: no agent in it, or one the person confirmed (`confirmed`: their read-back and yes on a
+    proposal, as docs.locker treats it). An agent's unconfirmed act is not, whoever's rights it carries. Sharing a
+    website login and bringing an address outside the catalog ask this."""
+    return getattr(who, "confirmed", False) or not (acting_agent(who) or getattr(who, "via", ""))
+
+
+def _tools_owner(c: Any) -> str:
+    """The Tools page's owner bot (backend/page_owners.py), "" when it has none."""
+    page_owners: Any = importlib.import_module(".page_owners", __package__)
+    return str(page_owners.owner(c, "tools", fallback=False) or "")
 
 
 def may_change_access(
@@ -165,10 +192,19 @@ def decide(
         return Decision(False, "", hidden=True)
     subject = _subject(c, subject)
     via = str(getattr(who, "via", "") or "")
-    if subject and via == "tools-owner" and subject == _acting_builtin(who):
-        return Decision(
-            False, "The Tools Owner holds none of the keys it connects: give the level to the bot that needs it"
-        )
+    acting = acting_agent(who)
+    # An agent never gives itself access with someone's rights, and the Tools Owner never at all.
+    if subject and acting and subject == acting and (via or acting == _tools_owner(c)):
+        if acting == _tools_owner(c):
+            return Decision(
+                False, "The Tools Owner holds none of the keys it connects: give the level to the bot that needs it"
+            )
+        return Decision(False, "An agent never gives itself access: a person adds it under Who can use it")
+    # A website login is shared only by a person's own act (`persons_own`): no unconfirmed agent shares one, with
+    # anyone's rights or its own, on any route (every grant of a login reaches here: the vault's `grant` as a key, All
+    # bots as an account).
+    if action == GRANT and not persons_own(who) and _login(c, resource):
+        return Decision(False, "Sharing a website login is a person's own tap in Tools")
     is_admin = admin(c, who, admins)
     if action == AUDIENCE:
         name = resource.name or (resource.row["name"] if resource.row is not None else "this tool")
@@ -185,10 +221,13 @@ def decide(
         own = bool(holder) and role in ("owner", "human") and (holder == who.actor or manages(c, who, holder, auth))
         return Decision(is_admin or own, "Ask a credential administrator or the account's holder to change this login.")
     if action == GRANT and subject and via in ("tools-owner", "assistant") and not getattr(who, "confirmed", False):
-        if not subject.startswith("bot:") and subject != "bots":
+        # One named bot at a time: a person, a team or every bot (`bots`, which takes in the built-in that acted) is
+        # the person's own tap.
+        if not subject.startswith("bot:"):
+            named = "every agent" if subject == "bots" else subject
             return Decision(
                 False,
-                f"Giving {subject} access is the person's own tap in Tools: open it and add them under Who can use it",
+                f"Giving {named} access is the person's own tap in Tools: open it and add them under Who can use it",
                 extra={"fix": "Add them under Who can use it", "link": "#/tools/keys?show=credentials"},
             )
     if action == GRANT and resource.kind in (KEY, ACCOUNT) and subject.startswith(("bot:", "human:")):
@@ -305,6 +344,28 @@ def _note(c: Any, who: Who, bot_id: str, admins: Any, auth: Any) -> Decision:
         "tools. Ask the Tools Owner in its chat (or BotOps): it makes the change for you",
         extra={"fix": "Ask the Tools Owner to add it: it acts with your rights", "link": "#/tools"},
     )
+
+
+ADDRESS_FIELDS = ("base_url", "auth_scheme", "check_path")
+
+
+def catalog_only(who: Who, service: Any = "", fields: Any = None, mcp_url: str = "") -> None:
+    """The one guard on an address an agent brings unconfirmed (not `persons_own`: BotOps, the Assistant, the Tools
+    Owner or any agent, in its own run or with a person's rights): only the catalog's (backend/tool_services.py), a known service
+    with its own address, scheme and check path, or a vendor's listed MCP server (`mcp_url`). Called before anything
+    reaches the address (a probe, a check) or stores it (a tool, a bot.yaml entry for BotOps). Any other address is a
+    person's to add."""
+    if persons_own(who):
+        return
+    services: Any = importlib.import_module(".tool_services", __package__)
+    if mcp_url:
+        ok = mcp_url.strip().rstrip("/") in {u.rstrip("/") for u in services.MCP_URLS.values()}
+    else:
+        known: Any = services.defaults(service)
+        given: Any = fields or {}
+        ok = bool(known) and all(not given.get(k) or given[k] == known[k] for k in ADDRESS_FIELDS)
+    if not ok:
+        raise Problem("catalog_only", "An agent adds tools from the catalog only: a person adds any other address", 403)
 
 
 def require(

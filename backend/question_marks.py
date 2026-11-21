@@ -753,7 +753,7 @@ def after_reply(conn: sqlite3.Connection, task_id: object, by: str, why: str = "
     row: Row = E.task(conn, tid) or {}
     snoozed: Any = row.get("snooze")
     if snoozed and H.is_bot(snoozed["by_id"]):
-        E.unsnooze(conn, tid, by, why)
+        E.unsnooze(conn, tid, by, why, consequence="reply")
     E.changed(conn, tid, by)
     pr_conflicts.after_answer(conn, tid)
 

@@ -36,7 +36,9 @@ def test_sync_bot_repos_setup_overrides_and_unreachable(api, gh):
     assert rows['Acme/product']['setup_command'] == 'make install'
     assert rows['Acme/product']['setup_source'] == 'settings'
     assert api.get('/api/v2/repositories', headers=auth('person-test')).status_code == 200
-    assert api.get('/api/v2/bots/cpo/repositories', headers=auth('person-test')).status_code == 200
+    # A teammate reads an agent's repositories; only the owner or an admin may change them, and the read says which.
+    assert api.get('/api/v2/bots/cpo/repositories', headers=auth('person-test')).json()['can_change'] is False
+    assert api.get('/api/v2/bots/cpo/repositories', headers=auth()).json()['can_change'] is True
     assert (
         api.put('/api/v2/repositories/Acme/product', json={'enabled': False}, headers=auth('person-test')).status_code
         == 403
@@ -312,6 +314,10 @@ def test_built_in_repository_grants_are_owner_only_and_hidden_bots_stay_hidden(a
     api.app_state.auth.bot_admins.add(who.email.lower())
     response = api.put('/api/v2/bots/botops/repositories', json={'mode': 'all'}, headers=auth('person-test'))
     assert response.status_code == 403 and 'Owner' in response.text
+    # The read says the same: an admin may change any other agent's, a built-in's only the Owner.
+    assert api.get('/api/v2/bots/botops/repositories', headers=auth('person-test')).json()['can_change'] is False
+    assert api.get('/api/v2/bots/cpo/repositories', headers=auth('person-test')).json()['can_change'] is True
+    assert api.get('/api/v2/bots/botops/repositories', headers=auth()).json()['can_change'] is True
     api.app_state.auth.bot_admins.remove(who.email.lower())
     with api.app_state.store.transaction() as c:
         restrict(c, 'cpo', people=[])

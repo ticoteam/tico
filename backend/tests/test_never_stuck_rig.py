@@ -58,15 +58,37 @@ def test_seed(seed: int) -> None:
 @pytest.mark.parametrize("queued", [False, True], ids=["runs-ended", "wakes-queued"])
 def test_one_pass_reads_as_many_statements_over_a_thousand_idle_tasks_as_over_a_hundred(queued: bool) -> None:
     """Cost: a pass reads what it needs for every open task together, in a fixed number of statements, not a few
-    statements a task (it read 20 a task here when the runs had ended, 13 with the wakes queued; now 48 a
-    pass). 25 tasks made through the engine, copied to 100 and to 1,000, none due
-    for a try: each bot's run ended and its next try is later, or its wake is still queued."""
+    statements a task (it read 20 a task here when the runs had ended, 13 with the wakes queued; now about 60 a
+    pass). 25 tasks made through the engine and people's requests queued behind a full stage, copied 4 and 40 times,
+    none due for a try: each bot's run ended and its next try is later, or its wake is still queued."""
     small = perf.measure(25, profile=False, copies=3, queued=queued, due=0)
     big = perf.measure(25, profile=False, copies=39, queued=queued, due=0)
-    assert (small["tasks"], big["tasks"]) == (100, 1000)
+    assert big["tasks"] == 10 * small["tasks"]
     assert small["pass"] == big["pass"] == {}
     assert big["reads"] == small["reads"], big["top_statements"]
-    assert big["reads"] < 60, big["top_statements"]
+    assert big["reads"] < 70, big["top_statements"]
+
+
+def test_the_first_pass_over_tasks_with_no_wait_spans_reads_as_many_statements_at_any_size() -> None:
+    """Cost: the pass that opens a wait span for every task already there (backend/wait_spans.py) writes them after
+    every read, so each write empties no read of the pass: as many statements over 1,000 tasks as over 100, the blocked
+    and snoozed ones (read for their spans only) growing with them."""
+    small = perf.measure(25, profile=False, copies=3, due=0, backfill=True)
+    big = perf.measure(25, profile=False, copies=39, due=0, backfill=True)
+    assert small["kinds"]["blocked"] and small["kinds"]["snoozed"]
+    assert big["reads"] == small["reads"], big["top_statements"]
+    assert big["reads"] < 70, big["top_statements"]
+
+
+@pytest.mark.parametrize("backfill", [False, True], ids=["spans-kept", "spans-new"])
+def test_a_pass_with_only_queued_requests_reads_as_many_statements_at_any_size(backfill: bool) -> None:
+    """Cost: with no task the ladder checks, the room pass still reads the queued requests together, and the spans it
+    opens for them go in one statement: as many statements for 44 requests as for 440."""
+    small = perf.measure(10, profile=False, copies=3, due=0, backfill=backfill, ladder=False)
+    big = perf.measure(10, profile=False, copies=39, due=0, backfill=backfill, ladder=False)
+    assert small["kinds"] == {"queued behind a full stage": 10}
+    assert big["reads"] == small["reads"] and big["statements"] == small["statements"], big["top_statements"]
+    assert big["reads"] < 70, big["top_statements"]
 
 
 def test_a_world_puts_the_environment_back() -> None:

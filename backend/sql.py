@@ -27,6 +27,8 @@ from fastapi import Request
 from pydantic import Field
 
 from . import outcome_stats
+from . import question_marks
+from . import run_triggers as RT
 from . import task_privacy as privacy
 from . import teammate_access as TA
 from .privacy_index import ReadIndex
@@ -67,12 +69,16 @@ HIDDEN = {"task_requesters": {"token_hash"}, "attempts": {"token_hash"}, "servic
 # Columns read as an expression over the caller's own views: a column naming a task the caller may not read gives
 # its id to nobody. A bot's claim limit (bot_control.claim_task) on such a task reads '': a limit is on, as
 # GET /api/v2/bots says with `claim_scoped` and no `claim_task`.
+# A wait span on a task it filed or waits on names that task only to a reader who may read it, as task_waits does
+# (waiting_on.unnamed).
+SPAN_TASK = "CASE WHEN source.kind = 'tasks' AND source.who NOT IN (SELECT id FROM tasks) THEN '' ELSE {who} END"
 MASKED = {
+    "task_wait_spans": {"who": SPAN_TASK.format(who="source.who")},
     "bot_control": {
         "claim_task": "CASE WHEN source.claim_task IS NULL THEN NULL "
         "WHEN source.claim_task IN (SELECT id FROM tasks) THEN source.claim_task "
         "ELSE '' END"
-    }
+    },
 }
 # changes()/total_changes()/last_insert_rowid() report a pooled connection's earlier work: another caller's visibility
 # sets, whose sizes count rows this caller may not see.
@@ -117,6 +123,10 @@ def teammate_masks(unseen, me, inner=None, names=None, bots=()):
 
         out["thread_members"] = {
             column: masked(column, member("source.thread_id"), qlist(strangers)) for column in ("actor", "added_by")
+        }
+        # A wait span names a person, group or bot the caller may not see as task_waits does: as ''.
+        out["task_wait_spans"] = {
+            "who": SPAN_TASK.format(who=f"CASE WHEN source.who IN {qlist(strangers)} THEN '' ELSE source.who END")
         }
     if people and inner is not None:
         out["tasks"] = {
@@ -238,6 +248,64 @@ def live_masks(unsettled):
     }
 
 
+# A person's own act on a task, written as the question engine takes a reply from them (question_marks.REPLY_VIA:
+# their own hand, Slack, their personal token, their Assistant on their word): a row of its history, or a message they
+# wrote on the task the server says it names (hubdb.refs_task_id: its refs' task or task_id, a list read as its first
+# string that is not blank), else the task of the message it replies to (the same way, then that one's chat), else its
+# own chat's task. BotOps or another agent acting with their rights is not theirs, and Tico's carrier copy of a message
+# is not a second touch.
+_OWN_VIA = "(" + ", ".join(f"'{via or ''}'" for via in question_marks.REPLY_VIA if via is not None) + ")"
+# What Python's str.strip() takes off (hubdb._task_ref): every Unicode space.
+_BLANKS = "char(" + ", ".join(str(n) for n in range(0x3001) if chr(n).isspace()) + ")"
+
+
+def _ref_sql(alias: str, key: str) -> str:
+    """The SQL twin of hubdb._task_ref over `alias`.refs at `key`: a string, trimmed, or the first string of a list that
+    is not blank; nothing else names a task."""
+    path = f"$.{key}"
+    return (
+        f"CASE json_type({alias}.refs, '{path}') "
+        f"WHEN 'text' THEN nullif(trim(json_extract({alias}.refs, '{path}'), {_BLANKS}), '') "
+        f"WHEN 'array' THEN (SELECT trim(value, {_BLANKS}) FROM json_each({alias}.refs, '{path}') "
+        f"WHERE type = 'text' AND trim(value, {_BLANKS}) <> '' ORDER BY key LIMIT 1) END"
+    )
+
+
+def _refs_task_sql(alias: str) -> str:
+    """hubdb.refs_task_id in SQL: `refs.task`, else `refs.task_id`."""
+    return f"coalesce({_ref_sql(alias, 'task')}, {_ref_sql(alias, 'task_id')})"
+
+
+_MESSAGE_TASK = (
+    f"coalesce({_refs_task_sql('m')}, (SELECT coalesce({_refs_task_sql('q')}, qc.task_id) "
+    "FROM {messages} q LEFT JOIN {conversations} qc ON qc.id = q.conversation_id WHERE q.id = m.in_reply_to), "
+    "cv.task_id)"
+)
+_TOUCHES = (
+    "SELECT created_at AS at, subject_id AS task_id, actor_id AS person_id, kind FROM {history_events} "
+    f"WHERE subject_type = 'task' AND actor_id LIKE 'human:%' AND coalesce(via, '') IN {_OWN_VIA} "
+    f"UNION ALL SELECT m.created_at, {_MESSAGE_TASK}, m.sender_id, 'message' FROM {{messages}} m "
+    "LEFT JOIN {conversations} cv ON cv.id = m.conversation_id WHERE m.sender_id LIKE 'human:%' "
+    f"AND coalesce(json_extract(m.refs, '$.via'), '') IN {_OWN_VIA}"
+)
+# The history kinds that are a person deciding something about a task (one row each: a move's owner and status rows are
+# its consequences, not more decisions, and so are the move back that taking an answer back makes, `undone_answer`,
+# and what an act makes by itself, `consequence`: a snooze an answer, a done, a reply or the end of what a task filed
+# ends, and the close of the tasks under one that closes).
+_DECISIONS = (
+    "('answer', 'answer_undone', 'give', 'move', 'snooze', 'unsnooze', 'reassign', 'try_again', 'requirement', "
+    "'requirement_withdrawn')"
+)
+# An agent's action: its row in the audit log, less what run_triggers.BOOKKEEPING says changes nothing anyone else sees
+# (reads, SQL, tool-call stats, refusals, its own status and run bookkeeping). The actor is a range, not a LIKE, so the
+# rows come from the actor index (events_actor_action_created) and the per-row read check runs on agents' rows only.
+_AGENT_ACTION = (
+    f"actor >= 'bot:' AND actor < 'bot;' AND action NOT IN {qlist(sorted(RT.BOOKKEEPING))} AND "
+    + " AND ".join(f"action NOT LIKE '{prefix}%'" for prefix in RT.BOOKKEEPING_PREFIXES)
+)
+_WEEK = "date({at}, '-6 days', 'weekday 1')"
+
+
 # Read-only views built over the caller's connection: name -> (base tables it reads, SELECT over `{table}`, the
 # caller's own filtered view of each, and `{all_table}`, its unfiltered inner view). A total adds up only rows the
 # caller may read: a bucket of one run would otherwise tell them that run exists, what it cost and whether it acted.
@@ -291,6 +359,41 @@ DERIVED = {
                round(100.0 * sum(coalesce(did_nothing, 0) = 1) / count(*), 1) AS did_nothing_pct
         FROM {attempts} WHERE (job_id IS NULL OR trigger IS NOT NULL)
         GROUP BY 1, 2, 3""",
+    ),
+    # Each touch a person made on a task (_TOUCHES): its time and week, the task, the person and what they did (a
+    # history kind such as answer or move, or `message`).
+    "human_touches_v": (
+        ("history_events", "messages", "conversations", "tasks"),
+        "SELECT at, " + _WEEK.format(at="at") + " AS week, task_id, person_id, kind FROM (" + _TOUCHES + ") "
+        "WHERE task_id IN (SELECT id FROM {tasks})",
+    ),
+    # Per week: people's decisions on tasks (_DECISIONS), the agents' actions (_AGENT_ACTION) and decisions per 1,000 of
+    # those actions. Both count only rows the reader may read: an agent reads its own actions alone.
+    "human_decisions_weekly": (
+        ("history_events", "events"),
+        "SELECT week, sum(decision) AS decisions, sum(1 - decision) AS agent_actions, "
+        "round(1000.0 * sum(decision) / nullif(sum(1 - decision), 0), 1) AS per_1000_actions "
+        "FROM (SELECT " + _WEEK.format(at="created_at") + " AS week, 1 AS decision FROM {history_events} "
+        f"WHERE subject_type = 'task' AND actor_id LIKE 'human:%' AND coalesce(via, '') IN {_OWN_VIA} "
+        "AND kind IN " + _DECISIONS + " AND json_extract(data, '$.undone_answer') IS NULL "
+        "AND json_extract(data, '$.consequence') IS NULL "
+        "UNION ALL SELECT " + _WEEK.format(at="created_at") + ", 0 FROM {events} WHERE " + _AGENT_ACTION + ") "
+        "GROUP BY week",
+    ),
+    # Per week: the Assistant's turns on a person's message, and the 50th and 90th percentile milliseconds from the
+    # person's send to its first words (attempts.result timings: send_to_claim_ms plus the runner's first_text mark).
+    "first_text_weekly": (
+        ("attempts",),
+        "SELECT week, count(*) AS turns, max(CASE WHEN n = (total + 1) / 2 THEN ms END) AS p50_ms, "
+        "max(CASE WHEN n = (total * 9 + 9) / 10 THEN ms END) AS p90_ms "
+        "FROM (SELECT week, ms, row_number() OVER (PARTITION BY week ORDER BY ms) AS n, "
+        "count(*) OVER (PARTITION BY week) AS total "
+        "FROM (SELECT " + _WEEK.format(at="created_at") + " AS week, "
+        "CAST(json_extract(result, '$.timings.send_to_claim_ms') + json_extract(result, '$.timings.phases.first_text') "
+        "AS INTEGER) AS ms FROM {attempts} WHERE bot_id = {assistant} AND trigger_kind = 'person_message' "
+        "AND json_extract(result, '$.timings.phases.first_text') IS NOT NULL "
+        "AND json_extract(result, '$.timings.send_to_claim_ms') IS NOT NULL)) "
+        "GROUP BY week",
     ),
 }
 # Totals over rows the reader may not read one by one, built only for the owner and a bot the owner granted them
@@ -367,6 +470,7 @@ _TABLE_DEPS: dict[str, tuple[str, ...]] = {
     "task_links": ("tasks",),
     "task_roles": ("tasks",),
     "task_relations": ("tasks",),
+    "task_wait_spans": ("tasks",),
     "goal_asks": ("tasks",),
     "message_assets": (READABLE_MESSAGES,),
     "bot_control": ("tasks",),
@@ -425,6 +529,7 @@ GUARDED_TABLES = frozenset(
         "task_links",
         "task_roles",
         "task_relations",
+        "task_wait_spans",
         "message_assets",
         "bots",
         "bot_status",
@@ -507,6 +612,7 @@ _UNSEEN_TABLES = frozenset(
         "thread_members",
         "thread_followers",
         "tasks",
+        "task_wait_spans",
         "history_events",
         "events",
         "messages",
@@ -1033,6 +1139,7 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None, private=No
         "task_roles": by_task,
         # A relation is read only when the caller may read both of its tasks.
         "task_relations": "from_task IN (SELECT id FROM tasks) AND to_task IN (SELECT id FROM tasks)",
+        "task_wait_spans": by_task,
         "message_assets": by_message,
         "bots": bots_visible("id"),
         "bot_status": bots_visible("bot"),
@@ -1543,7 +1650,9 @@ def task_waits(conn, c, private, hidden):
     conn.executemany('INSERT INTO "task_waits" VALUES(?,?,?,?,?,?,?)', rows)
 
 
-def connect(path, c, auth, who, trace=None, seconds=None, statement="", pool=None, pool_age=0):
+def connect(
+    path, c, auth, who, trace=None, seconds=None, statement="", pool=None, pool_age=0, assistant_bot="assistant"
+):
     """A read-only connection whose temp views and authorizer carry this caller's visibility.
 
     `seconds` bounds building this request's visibility sets as `run` bounds the query itself. When `statement` is
@@ -1621,7 +1730,7 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement="", pool=Non
                     masks[table] = {**masks.get(table, {}), **cols_masked}
         if "messages" in tables:
             masks["messages"] = {**masks.get("messages", {}), "refs": function("page_refs") + "(source.refs)"}
-        need_bots = "thread_members" in tables or "task_waits" in worked_out
+        need_bots = "thread_members" in tables or "task_wait_spans" in tables or "task_waits" in worked_out
         bots = TA.hidden(conn, who, "see", ("bot",), auth) if need_bots else set()
         if (unseen or bots) and (set(tables) & _UNSEEN_TABLES):
             from . import threads
@@ -1871,6 +1980,7 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement="", pool=Non
                     **{base: f'"{base}"' for base in bases},
                     **{"all_" + base: inner(base) for base in bases},
                     tool_names=qlist(sorted(outcome_stats.TOOL_NAMES)),
+                    assistant=q(assistant_bot or "assistant"),
                 )
             )
         if "task_waits" in worked_out:
@@ -2087,6 +2197,7 @@ def install_sql(app, store, auth):
                     statement=body.sql,
                     pool=pool,
                     pool_age=store.pool_age,
+                    assistant_bot=store.settings.assistant_bot,
                 )
                 try:
                     result = run(conn, body.sql, body.params, cap, seconds)

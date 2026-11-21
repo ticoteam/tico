@@ -357,13 +357,15 @@ def test_the_assistant_uses_its_persons_grants_and_never_the_assistant_bots(webs
     assert response.status_code == 403 and response.json()["error"]["code"] == "no_account"
 
 
-def test_botops_uses_the_requesters_rights_and_the_host_change_waits_for_confirmation(website, botops):
-    """4: grants follow the requester's rights; choosing a browser host still requires their tap."""
+def test_botops_never_shares_a_login_and_the_host_change_waits_for_confirmation(website, botops):
+    """4: a login is shared by a person's own tap, never BotOps' even with their rights; choosing a browser host
+    still requires their tap."""
     s = website
     aid = add(s)
     attempt = turn(s.api, botops, person="ana-test", text="Share the Acme account with ops")
     response = act(s.api, attempt, "PUT", f"website-tools/{s.tid}/accounts/{aid}/access/bot:ops", {"on": True})
-    assert response.status_code == 200
+    assert response.status_code == 403
+    share(s, aid, "bot:ops")  # Ana's own tap
     assert pick(s, "bot:ops")["account_id"] == aid
     host = runner(s.api, label="Host")
     response = act(s.api, attempt, "POST", f"computers/{host['runner_id']}/browser-host", {"on": True})

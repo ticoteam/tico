@@ -1272,3 +1272,34 @@ def test_a_drain_leases_no_new_email_once_its_budget_is_spent(inbox, monkeypatch
     assert states == ["sent", "sent", "pending"]
     assert S.drain(store, auth, budget=drains.Budget(5)) == 1
     assert S.drain(store, auth, budget=drains.Budget(5)) == 0 and len(calls) == 3  # each once, never twice
+
+
+def test_an_email_the_write_will_not_queue_is_found_before_the_rule_check_and_a_race_is_refused_for_a_retry(inbox):
+    """Rules › Links: the send route asks no rule check for an email `enqueue` would answer with a send it has or
+    refuse (`duplicate`, enqueue's own lookups, read only): the same email, another sender's copy of it, one kept under a
+    key from before keys named the case. The write decides again, and one it would queue after all is refused to retry."""
+    auth = inbox.app.state.auth
+    raw = mime(body="The signed lease.")
+    queue(inbox, raw=raw, actor="bot:ops")
+    with inbox.app.state.store.read() as c:
+        assert S.duplicate(c, auth, "bot:ops", S.Enqueue(mailbox=BOX, raw=raw))
+        assert S.duplicate(c, auth, "bot:finance", S.Enqueue(mailbox=BOX, raw=raw))  # enqueue refuses it as a duplicate
+        assert not S.duplicate(c, auth, "bot:ops", S.Enqueue(mailbox=BOX, raw=mime(body="Something else.")))
+    legacy = mime(body="Kept under an older key.")
+    queue(inbox, raw=legacy, actor="bot:ops")
+    with inbox.app.state.store.transaction() as c:
+        snap = S.snapshot(legacy, BOX)
+        old_key = S.digest(S.dump([BOX, snap["content_sha256"], snap["recipients"]]))
+        c.execute("UPDATE email_sends SET idempotency_key=? WHERE content_sha256=?", (old_key, snap["content_sha256"]))
+    with inbox.app.state.store.read() as c:
+        assert S.duplicate(c, auth, "bot:ops", S.Enqueue(mailbox=BOX, raw=legacy))
+    with pytest.raises(Problem) as raced, inbox.app.state.store.transaction() as c:
+        S.enqueue(
+            c,
+            auth,
+            "bot:ops",
+            S.Enqueue(mailbox=BOX, raw=mime(body="New words.")),
+            {"legal_or_money": False, "status": "classified"},
+            rules=S._raced,
+        )
+    assert raced.value.status == 409

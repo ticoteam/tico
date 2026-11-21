@@ -33,6 +33,7 @@ READABLE = "(SELECT *, task_id AS id, owner AS owner_id, requester AS requester_
 # Rows that only describe the task: kept with it in the trash.
 TASK_ROWS = (
     "history_events",
+    "task_wait_spans",  # closed first (task_engine.on_delete): a restore opens a new one
     "task_links",
     "task_tags",
     "task_delegations",

@@ -27,7 +27,8 @@ def mcp_tool(env="OPS_ADMIN_MCP_TOKEN", authorization="Bearer ${OPS_ADMIN_MCP_TO
         "env": env,
         **extra,
         "mcp": {
-            "url": "https://mcp.example.com/usage",
+            # a vendor MCP server the catalog lists: an agent registers no other (backend/tool_access.py catalog_only)
+            "url": "https://mcp.linear.app/mcp",
             "transport": "http",
             "headers": {"Authorization": authorization},
         },

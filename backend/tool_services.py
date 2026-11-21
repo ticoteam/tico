@@ -253,6 +253,31 @@ TEMPLATES = {
 }
 
 
+# Vendors' own MCP servers (docs/connect-tools.md): Find or connect offers a sign-in with the vendor on these.
+MCP_URLS = {
+    "linear": "https://mcp.linear.app/mcp",
+    "posthog": "https://mcp.posthog.com/mcp",
+    "sentry": "https://mcp.sentry.dev/mcp",
+}
+# The site a person signs in to where it is not the API address's domain.
+SITES = {"gemini": "aistudio.google.com", "google-ads": "ads.google.com", "hubspot": "app.hubspot.com"}
+
+
+def catalog():
+    """The known services as Find or connect offers them, by name: how a pasted key goes on a call, the site a person
+    signs in to and the vendor's MCP server, where it has one."""
+    return [
+        {
+            "id": key,
+            "name": row["name"],
+            "auth_scheme": row["auth_scheme"],
+            "site": SITES.get(key) or (_domain(row["base_url"]) if row["base_url"] else ""),
+            "mcp_url": MCP_URLS.get(key, ""),
+        }
+        for key, row in sorted(SERVICES.items(), key=lambda kv: kv[1]["name"].lower())
+    ]
+
+
 def _words(text):
     return re.findall(r"[a-z0-9]+", str(text or "").lower())
 

@@ -599,7 +599,11 @@ SECRET_KEYS = re.compile(
     re.I,
 )
 # Names that are a secret on one route only: elsewhere `key` names a setting, a field or an idempotency key.
-ROUTE_SECRETS = [(("PUT",), re.compile(API + r"providers/gateway"), ("key",))]
+ROUTE_SECRETS = [
+    (("PUT",), re.compile(API + r"providers/gateway"), ("key",)),
+    # A new tool's first key (backend/api_tools.py ToolCreate.key): a tool from the catalog goes without one.
+    (("POST",), re.compile(API + r"api-tools"), ("key",)),
+]
 
 DETAIL_SECRET = (
     "A secret does not go in a request. Ask the person for it with a credential card "

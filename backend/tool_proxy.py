@@ -29,6 +29,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import re
 import sqlite3
 import time
@@ -38,10 +39,11 @@ import httpx
 from fastapi import Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from . import egress, outbound_tls
+from . import egress, outbound_tls, rule_links
 from .auth import Identity, validate_identity
 from .store import H, Problem
 
+LOG = logging.getLogger('tico.tool_proxy')
 PREFIX = '/api/v2/tool-proxy/'
 TOKEN_PREFIX = 'tpx1.'
 TOKEN_RE = re.compile(r'tpx1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+')
@@ -65,6 +67,10 @@ MCP_READS = frozenset(
     )
 )
 READ_ONLY_TOOLS = {}  # {tool id: {MCP tool name}}: what the vendor's latest tools/list marked read-only
+# The same, learned only from a tools/list sent to exactly the tool's MCP address (backend/rule_links.mcp_endpoint), by
+# (tool id, MCP address, tool created_at): the hints the outside-write gate trusts. Read authorization keeps
+# READ_ONLY_TOOLS, as before.
+GATE_READ_ONLY = {}
 MAX_LISTING = 4 * 1024 * 1024
 MAX_NAMES = 5000
 TTL = 12 * 3600  # a watcher's or an agent's token; a run's lasts exactly as long as its attempt
@@ -275,21 +281,21 @@ def rpc_calls(body):
     return out
 
 
-def mcp_write(tool_id, calls):
+def mcp_write(tool_id, calls, known=READ_ONLY_TOOLS):
     """'' when every call only reads, else the first call that may write, named for the refusal."""
     for method, params in calls:
         if method is None or method in MCP_READS or method.startswith('notifications/'):
             continue
         if method == 'tools/call':
             name = str(params.get('name') or '')
-            if name and name in READ_ONLY_TOOLS.get(tool_id, ()):
+            if name and name in known.get(tool_id, ()):
                 continue
             return f'the MCP tool {name or "(unnamed)"}, which its server does not mark read-only'
         return f'the MCP call {method}'
     return ''
 
 
-def learn_read_only(tool_id, data):
+def learn_read_only(tool_id, data, into=READ_ONLY_TOOLS):
     """Note which tools a tools/list answer (JSON, or server-sent `data:` lines) marks `readOnlyHint`; a tool listed
     without it is taken off."""
     messages = []
@@ -302,7 +308,7 @@ def learn_read_only(tool_id, data):
                     messages.append(json.loads(line[5:]))
                 except ValueError:
                     continue
-    known = READ_ONLY_TOOLS.setdefault(tool_id, set())
+    known = into.setdefault(tool_id, set())
     for m in messages:
         tools = ((m or {}).get('result') or {}).get('tools') if isinstance(m, dict) else None
         for t in tools if isinstance(tools, list) else []:
@@ -450,7 +456,7 @@ def install(app, store):
     vault = app.state.vault
     loop = asyncio.get_running_loop
 
-    def record(tool_id, credential_id, subject, level, method, path, status, result, detail, began):
+    def record(tool_id, credential_id, subject, level, method, path, status, result, detail, began, gate=None):
         with store.transaction() as c:
             c.execute(
                 'INSERT INTO tool_calls(id,tool_id,credential_id,actor,bot,access_level,method,path,status_code,'
@@ -477,6 +483,17 @@ def install(app, store):
 
                 record_use(c, subject, 'credential.proxied_call', credential_id, {'tool': tool_id}, windowed=True)
                 reconnect_tasks.called(c, tool_id, status)  # Key rejected opens its Reconnect task, Working ends it
+            rule_links.record(c, gate)  # the write's rule check, in the same transaction as its row (in a savepoint)
+
+    def gated(subject, tool_id, name, method, body, calls):
+        try:
+            output = rule_links.proxy_output(name, method, body, calls)
+            return rule_links.check_as(
+                store, getattr(app.state, 'judge', None), subject, subject, '', 'tool:' + tool_id, 'tool_call', output
+            )
+        except Exception:  # log-only: a failure to check never stops the write
+            LOG.exception('The rule check of a proxied write failed')
+            return None
 
     def plan(request, tool_id, rest, method):
         """Everything the call needs, read once: (refusal, None) or (None, plan)."""
@@ -589,6 +606,7 @@ def install(app, store):
                 )
                 return refused(401 if again else 502, 'tool_sign_in', detail)
         secrets = secrets_of(key, credential.get('username') or '', auth['secrets'] if auth else ())
+        checked = {}  # the write's rule check, written once with the row its call leaves (`record`)
         log = lambda status, result, detail: loop().run_in_executor(
             None,
             record,
@@ -602,6 +620,7 @@ def install(app, store):
             result,
             scrub_text(detail, secrets),
             began,
+            checked.pop('found', None),
         )
         size = request.headers.get('content-length', '')
         if size.isdigit() and int(size) > MAX_BODY:
@@ -614,7 +633,11 @@ def install(app, store):
                 await log(413, 'refused', 'Request body over 25 MB')
                 return refused(413, 'too_large', 'A tool call sends at most 25 MB.')
             chunks.append(chunk)
-        calls = rpc_calls(b''.join(chunks)) if method == 'POST' else None
+        # Read authorization parses a Read caller's POST whatever its size, as before; the gate reads it only up to its
+        # 1 MB limit (`gate_calls`), and a larger one is not parsed for it at all.
+        small = total <= rule_links.MAX_JUDGED
+        calls = rpc_calls(b''.join(chunks)) if method == 'POST' and (small or ready['reads_only']) else None
+        gate_calls = calls if small else None
         if ready['reads_only'] and method == 'POST':
             # A POST passes at Read only as MCP calls that only read.
             write = mcp_write(tool_id, calls) if calls is not None else 'not MCP'
@@ -626,6 +649,12 @@ def install(app, store):
         url = tool['base_url'].rstrip('/') + '/' + rest.lstrip('/')
         query = outgoing_query(query, tool, key, auth['query'] if auth else None)
         url += ('?' + query) if query else ''
+        # The gate's MCP read exemption, and the read-only hints it trusts, need the final address (the key's own query
+        # parameters included) to be exactly the tool's MCP address.
+        mcp = rule_links.mcp_endpoint(tool, url)
+        # The gate's hints belong to this MCP address of this tool as made: a tool made again under the same id starts
+        # with none.
+        hinted = (tool_id, tool.get('mcp_url') or '', tool.get('created_at') or '')
         if urlsplit(url).hostname != urlsplit(tool['base_url']).hostname:
             await log(None, 'refused', 'Address left the tool host')
             return refused(404, 'not_found', 'Not found')
@@ -634,6 +663,19 @@ def install(app, store):
         except egress.Blocked as exc:
             await log(None, 'refused', exc.reason)
             return refused(403, 'tool_address', exc.reason)
+        if method not in SAFE and not (
+            mcp and gate_calls is not None and not mcp_write(hinted, gate_calls, GATE_READ_ONLY)
+        ):
+            # The destination checked and pinned, a write meets the org rules on its names only (the tool, the method,
+            # MCP methods and tools, a JSON body's key names: never a value) before it is forwarded with the key
+            # (backend/rule_links.py). Log-only: its one outcome event goes with the call's own row, after forwarding.
+            # Judged with or without an Idempotency-Key; one only lets a retry under it log no second event.
+            sent = b''.join(chunks) if small and not gate_calls else None
+            found = await loop().run_in_executor(
+                None, gated, got['subject'], tool_id, tool['name'] or tool_id, method, sent, gate_calls
+            )
+            idem = request.headers.get('idempotency-key', '')
+            checked['found'] = {**found, 'key': idem} if found and 0 < len(idem) <= 200 else found
         client = httpx.AsyncClient(
             transport=getattr(app.state, 'tool_proxy_transport', None),
             timeout=TIMEOUT,
@@ -724,6 +766,8 @@ def install(app, store):
                     yield tail
                 if heard:
                     learn_read_only(tool_id, b''.join(heard))
+                    if mcp:
+                        learn_read_only(hinted, b''.join(heard), GATE_READ_ONLY)
             finally:
                 await upstream.aclose()
                 await client.aclose()

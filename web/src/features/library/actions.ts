@@ -4,6 +4,7 @@ import { defineAction } from '@/actions';
 import {
   addAccount,
   addApiTool,
+  requestAccess,
   addTicoAddress,
   classifyPaste,
   connectMailbox,
@@ -656,6 +657,18 @@ export const toolsAddApi = defineAction({
   run: async ({ router }, i) => opened(router, `api:${(await addApiTool(i)).id}`),
   did: (i) => `Added ${i.name}`,
   target: () => ({ kind: 'page', id: '/library/tools' }),
+});
+
+/** A person asks for an agent's level on a tool they cannot read (`tico access request --for`): granted at once when it
+    can be, else a card to whoever can grant it. */
+export const toolsRequestAccess = defineAction({
+  id: 'tools.requestAccess',
+  title: 'Request access to a tool',
+  kind: 'change',
+  input: z.strictObject({ tool: id, agent: id, level: z.enum(['read', 'read_write'] as const), why: z.optional(text(500)) }),
+  run: (_ctx, i) => requestAccess({ resource: `tool:${i.tool}`, level: i.level, for_bot: i.agent.replace(/^bot:/, ''), why: i.why }),
+  did: (_i, out) => (out?.state === 'granted' ? 'Granted' : 'Asked'),
+  target: (i) => ({ kind: 'tool', id: `api:${i.tool}` }),
 });
 
 /** An MCP server with its own sign-in: Tico may add it; signing in is the person's (`tools.connect`). */
