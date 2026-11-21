@@ -878,13 +878,13 @@ def queue_counts(c, bots, now=None):
     return tally_queues(bots, queue_job_rows(c, bots), now, None)
 
 
-def _waiting(c, online_ids, settings=None, limits=None, loads=None):
+def _waiting(c, online_ids, settings=None, limits=None, loads=None, skip=frozenset()):
     """Active bots whose computer is offline (or that have none while work is queued), with the
     work stuck behind them, and bots whose queued work is old even though their computer is up.
     The third list is every bot with queued work that is not starting, with the computer's own
     reason (`_stuck`). An idle bot's reason is the claim's own (execution.bot_refusal); only work the
     claim has no reason to hold is "slow", a Tico bug, and only once the job the claim would take is old: an old held job
-    beside a young free one is neither."""
+    beside a young free one is neither. Work assigned to a computer in `skip` (Check health's stuck updates) is left out."""
     from .execution import prime_claimables, queued_reasons
 
     cutoff = H.shift(H.now(), minutes=-QUEUE_MINUTES)
@@ -915,6 +915,8 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
             "WHERE r.revoked_at IS NULL"
         )
     }
+    if skip:
+        queued = {bot: v for bot, v in queued.items() if assigned.get(bot, ("",))[0] not in skip}
     # A starter bot still waiting for its first setup holds its work on purpose: not slow (`unfinished_setup` warns
     # once the hold is old).
     parked = {r["bot"] for r in c.execute("SELECT bot FROM bot_config WHERE onboarding_state='needs_setup'")}
@@ -1013,6 +1015,8 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
         slug = bot["id"]
         count, oldest = queued.get(slug, (0, None))
         where = assigned.get(slug)
+        if where and where[0] in skip:
+            continue
         shown = split.get(slug, {})
         row = {
             "bot": slug,
@@ -2894,9 +2898,12 @@ def _prime_claims(c, settings=None):
     return claim_loads.read(c, settings, runners, slugs)
 
 
-def view(c, who, settings, auth, github, config, filing=False):
+def view(c, who, settings, auth, github, config, filing=False, updates_stuck=frozenset()):
     # `filing` is Check health's read (maintenance_steps/check_health.py `_page_findings`). Its two offline checks, computers and
     # waiting, then describe only the computers no silent-computer finding reports: computer_silent files the silent ones.
+    # `updates_stuck` (that read's runner_versions.stuck): computers whose update has its own finding (update_stuck). The
+    # checks it covers (computers, waiting, queue, version, cloud) read the fleet without them, counts included; the
+    # others (a full disk, say) still see them.
     if who.role != "bot":
         _person(who)
     kind = "owner" if who.role == "owner" else "admin" if auth.bot_admin(who) else who.role
@@ -2906,7 +2913,7 @@ def view(c, who, settings, auth, github, config, filing=False):
     loads = _prime_claims(c, settings)
     limits = usage_limits.company(c)  # one, so the spend of every period is summed once for all the bots
     computers = _computers(c, online, settings, limits)
-    waiting, slow, stuck_rows = _waiting(c, online_ids, settings, limits, loads)
+    waiting, slow, stuck_rows = _waiting(c, online_ids, settings, limits, loads, skip=updates_stuck)
     # A bot onboarding for a day is stuck too, unless something else already holds it (backend/setup_stuck.py).
     listed = {row["bot"] for row in stuck_rows}
     stuck_rows += [row for row in setup_stuck.stuck(c) if row["bot"] not in listed]
@@ -3375,23 +3382,28 @@ def view(c, who, settings, auth, github, config, filing=False):
     # The bots waiting behind them: offline ones (waiting) and cloud ones whose machine has the problem (stuck_rows).
     credit_bots = {row["bot"] for row in waiting + stuck_rows if row.get("runner_id") in credit}
     # A machine stopped for credit did not drop on its own: no silent-computer finding or restart advice names it.
-    silent = [x for x in silent_computers(c) if x["id"] not in credit] if waiting or filing else []
+    silent = (
+        [x for x in silent_computers(c) if x["id"] not in credit and x["id"] not in updates_stuck]
+        if waiting or filing
+        else []
+    )
     reported = {x["id"] for x in silent} if filing else set()  # the silent computers' own finding names their outage
-    counted = [x for x in computers if x["id"] not in reported]
+    counted = [x for x in computers if x["id"] not in reported and x["id"] not in updates_stuck]
+    fleet_online = [r for r in online if r["id"] not in updates_stuck]  # the computers check counts its fleet alone
     named_computers = []  # the computers this check says are offline (what a filed finding describes)
     held = [x for x in counted if not x["online"] and x["id"] in credit]
     if not computers:
         checks.append(_check("computers", "Computers", "bad", "No computer is set up. Bots need one to run.", fixes))
     elif held:
         off = [x for x in counted if not x["online"] and not x["resting"] and x["id"] not in credit]
-        named_computers = [x["id"] for x in off]
+        named_computers = [x["id"] for x in off + held]  # its text names both: a stuck one among them clears it
         down = [x["label"] for x in off]
         # Computer names are shown to everyone who reads this check, as the offline line on main always did.
         stopped_names = [x["label"] for x in held]
         summary = (
             "Stopped: out of credit."
-            if not online and not down
-            else f"{len(online)} of {len(counted)} online."
+            if not fleet_online and not down
+            else f"{len(fleet_online)} of {len(counted)} online."
             + (" Offline: " + ", ".join(down) + "." if down else "")
             + " Stopped, out of credit: "
             + ", ".join(stopped_names)
@@ -3412,7 +3424,7 @@ def view(c, who, settings, auth, github, config, filing=False):
         checks.append(_check("computers", "Computers", "bad", summary, computer_fixes + _credit_fixes(c, kind), items))
     elif not counted:
         pass  # filing only: every computer that is offline is silent, and its own finding files the outage
-    elif not online and not any(x["resting"] for x in counted) and not reported:
+    elif not fleet_online and not any(x["resting"] for x in counted) and not reported:
         named_computers = [x["id"] for x in counted]
         checks.append(
             _check(
@@ -3430,7 +3442,7 @@ def view(c, who, settings, auth, github, config, filing=False):
                 "computers",
                 "Computers",
                 "warn",
-                f"{len(online)} of {len(counted)} online. Offline: " + ", ".join(x["label"] for x in off) + ".",
+                f"{len(fleet_online)} of {len(counted)} online. Offline: " + ", ".join(x["label"] for x in off) + ".",
                 [_fix("Open Computers", "#/settings", "devices")] if full else [],
             )
         )
@@ -3442,7 +3454,7 @@ def view(c, who, settings, auth, github, config, filing=False):
                 "Computers",
                 "ok",
                 " ".join(
-                    ([f"{_plural(len(online), 'computer')} online."] if online else [])
+                    ([f"{_plural(len(fleet_online), 'computer')} online."] if fleet_online else [])
                     + ([f"{_plural(asleep, 'cloud machine')} stopped until work comes."] if asleep else [])
                 ),
             )
@@ -3814,11 +3826,11 @@ def view(c, who, settings, auth, github, config, filing=False):
     # key): each mismatch, and a check that missed a night or cannot be read, red (backend/billing_check.py).
     if kind == "owner":
         checks.extend(billing_check.health(c, settings))
-    if full and (versions := runner_versions.health_check(computers)):
+    if full and (versions := runner_versions.health_check([x for x in computers if x["id"] not in updates_stuck])):
         checks.append(versions)
     from .cloud_machines import health as cloud_health
 
-    cloud = cloud_health(c, settings) if full else None
+    cloud = cloud_health(c, settings, skip=updates_stuck) if full else None
     # Cloud bots whose machine has the problem are in stuck_rows, not waiting; a bot that is not on its own cloud
     # machine (one on the shared machine) is in waiting, so both are counted in credit_bots and left out here.
     waiting_here = [w for w in waiting if w.get("runner_id") not in reported and w.get("runner_id") not in credit]

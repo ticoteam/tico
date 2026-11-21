@@ -172,3 +172,20 @@ def test_agents_read_one_cloud_credit_item_with_the_full_text(environment):
     credit = [i for i in found if i["kind"] == "cloud_credit"]
     assert len(credit) == 1 and "Owner Mac" in credit[0]["text"] and "Builder (cloud)" in credit[0]["text"]
     assert "Add credit: " in credit[0]["fix"]
+
+
+def test_the_computers_aggregate_names_the_credit_stopped_computers_it_lists(environment):
+    """Its text lists the computers stopped for credit too, so its membership does: a stuck update on one of them then
+    clears the aggregate instead of leaving text that names it (check_health `apply`)."""
+    from backend.maintenance_steps import check_health
+
+    api = environment()
+    first = silent_computer(api, 1900)
+    second_silent(api, "Builder (cloud)", "builder")
+    stopped_for_credit(api, first)
+    freeze(api)
+    state, notes = api.app.state, {}
+    with state.store.read_transaction() as c:
+        check_health._page_findings(c, check_health.context(state.auth, state.store.settings), notes)
+    # Builder is silent: its own computer_silent names it. Owner Mac is in the text as stopped for credit, so named too.
+    assert notes["offline"]["named"]["page:computers"] == [first]

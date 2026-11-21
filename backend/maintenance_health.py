@@ -22,7 +22,16 @@ from types import SimpleNamespace
 from fastapi import Request
 from pydantic import Field
 
-from . import diagnostics, login_holds, models_preset, providers, runner_online, runner_versions, team_rules
+from . import (
+    diagnostics,
+    login_holds,
+    models_preset,
+    providers,
+    runner_online,
+    runner_versions,
+    start_places,
+    team_rules,
+)
 from . import models as M
 from .models import Contract
 from .store import H, Problem
@@ -100,6 +109,8 @@ LOG_PATTERNS = (
 # What each check means in words that hold on every install: a report says this, never a bot's, computer's or person's name.
 MEANING = {
     "runner_outdated": "A computer runs an older Tico release than its server, or failed to update.",
+    "update_stuck": "A computer has held new work for an update for 45 minutes, or its update made no progress for "
+    "15 minutes.",
     "limited_no_fallback": "A bot's turns stopped on a usage limit and it has no fallback model.",
     "runner_restarting": "A computer has been restarting for over 34 minutes since a person pressed Restart.",
     "default_login_limited": "A computer's default AI login (no subscription) keeps stopping on a usage limit that has "
@@ -181,17 +192,75 @@ def _holding_fix(label):
     )
 
 
+def _update_stuck(c, machine, found, live):
+    """The one finding for a computer whose update holds new work too long or stopped moving (runner_versions.stuck):
+    what it observed, the queued work assigned to it, and the way out for its kind of computer."""
+    label, update = machine["label"], machine["update"]
+    quiet = found["quiet"] >= runner_versions.NO_PROGRESS_MINUTES
+    quiet_words = f"{found['quiet']} min" if found["exact"] else f"at least {found['quiet']} min"
+    queued, bots = c.execute(
+        "SELECT count(j.id),group_concat(DISTINCT a.bot) FROM assignments a JOIN jobs j ON j.bot_id=a.bot "
+        "AND j.state='queued' AND j.held=0 WHERE a.runner_id=?",
+        (machine["id"],),
+    ).fetchone()
+    waits = (
+        f" {queued} queued job(s) are assigned to this computer ({bots.replace(',', ', ')})."
+        if queued
+        else " No queued work is assigned to this computer."
+    )
+    progress = runner_versions.drain_progress(c, machine["id"])
+    # What the runner says runs; the server's live count only when it does not say (an older runner).
+    running = update["running"] if update.get("running") is not None else live.get(machine["id"], 0)
+    # The way out, as a key Check health compares (a changed one is said on the same task): never its words.
+    docker = machine["update"].get("kind") == "docker"
+    action = ("wait" if not quiet else "stalled") if running else "docker" if docker else "checkout"
+    return _finding(
+        "update_stuck:" + machine["id"],
+        "update_stuck",
+        SETUP,
+        f"{label}'s update has made no progress for {quiet_words}"
+        if quiet
+        else f"{label} has held new work for {found['held']} min to update",
+        f"Computer {label} has taken no new work for {found['held']} min to update"
+        + (f" to Tico {update['target']}" if update.get("target") else "")
+        + f"; its update ({update['update_state'] or 'unknown'}) has not moved for {quiet_words}."
+        + (f" Its drain: {progress}." if progress else f" {running} turn(s) still run there." if running else "")
+        + waits,
+        f"Nothing to do by hand while turns still run on {label}: its update starts when they end. "
+        "Stopping one is a person's choice (Runs)."
+        if action == "wait"
+        else f"BotOps: turns still run on {label} but nothing has moved: look at them in Runs and ask a person to stop "
+        "a stalled one; its update starts when they end."
+        if action == "stalled"
+        else f"BotOps: read the updater beside {label}: in its install directory, `docker compose -f runner.compose.yaml "
+        "logs updater` (add `-f runner.override.yaml` when that file is there). If it lost its status, end the hold by "
+        "hand as docs/updates.md says (A Docker runner)."
+        if action == "docker"
+        else f"BotOps: read the update on {label} (`tico-computer status` and its update.log there); "
+        "`tico-computer restart` starts its runner again.",
+        subject=machine["id"],  # one BotOps task per computer
+        severity=BAD if quiet else WARN,
+    ) | {"action": action}
+
+
 # ---------------------------------------------------------------------------------------------------- the checks
-def _runner_checks(c, settings):
+def _runner_checks(c, settings, stuck=None):
     from . import health
     from .store import readiness_document
 
     out = []
+    # A computer whose update holds work too long or stopped moving is its update_stuck finding's alone: every other
+    # check here reads the fleet without it.
+    stuck = runner_versions.stuck(c) if stuck is None else stuck
     online = runner_online.online_rows(c)
     computers = health._computers(c, online, settings)
+    live = start_places.live_totals(c) if stuck else {}
+    out += [_update_stuck(c, x, stuck[x["id"]], live) for x in computers if x["id"] in stuck]
+    computers = [x for x in computers if x["id"] not in stuck]
+    online = [r for r in online if r["id"] not in stuck]
     # Work a computer holds while it waits to update or restart is said here, never as a queue_idle Tico bug.
     held, restarting = {}, {}
-    for row in health._waiting(c, {r["id"] for r in online}, settings)[2]:
+    for row in health._waiting(c, {r["id"] for r in online}, settings, skip=frozenset(stuck))[2]:
         if row["reason"] in ("updating", "restarting"):
             (held if row["reason"] == "updating" else restarting).setdefault(row["runner_id"], []).append(row)
     for machine in computers:
@@ -263,6 +332,8 @@ def _runner_checks(c, settings):
             )
         )
     for x in health.silent_computers(c):
+        if x["id"] in stuck:
+            continue  # its update_stuck finding
         out.append(
             _finding(
                 "computer_silent:" + x["id"],
@@ -895,11 +966,11 @@ def _org_rule_checks(c, settings):
     ]
 
 
-def findings(c, settings):
-    """Everything wrong right now, each once by key."""
+def findings(c, settings, stuck=None):
+    """Everything wrong right now, each once by key. `stuck`: the Health pass's runner_versions.stuck, else read here."""
     out = {}
     for part in (
-        _runner_checks(c, settings),
+        _runner_checks(c, settings, stuck),
         _login_checks(c, settings),
         _check_hold_checks(c),
         _bot_checks(c, settings),

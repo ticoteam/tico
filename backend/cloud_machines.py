@@ -3326,14 +3326,16 @@ def disk_words(c):
     return out
 
 
-def health(c, settings=None):
+def health(c, settings=None, skip=frozenset()):
     """Name active machine problems and old deletion fences, even after the bot has moved to a fresh id, and each machine
     whose disk is nearly full with no bigger size to grow to, or whose restart at a new size has waited DRAIN_WARN or
-    more for its turns."""
+    more for its turns. Machines whose computer is in `skip` (Check health's stuck updates) are left out."""
     old = c.execute(
         "SELECT d.machine_id,d.bot,b.slug,count(*) OVER() AS total FROM cloud_machine_deletions d "
-        "LEFT JOIN bots b ON b.id=d.bot WHERE d.created_at<? ORDER BY d.created_at,d.machine_id LIMIT 5",
-        (now() - DELETION_WARN,),
+        "LEFT JOIN bots b ON b.id=d.bot WHERE d.created_at<? "
+        "AND (d.runner_id IS NULL OR d.runner_id NOT IN (SELECT value FROM json_each(?))) "
+        "ORDER BY d.created_at,d.machine_id LIMIT 5",
+        (now() - DELETION_WARN, json.dumps(sorted(skip))),
     ).fetchall()
     if not offered(c, settings) and not old:
         return None
@@ -3344,7 +3346,7 @@ def health(c, settings=None):
             "WHERE b.state='active' AND coalesce(bc.draining,0)=0"
         )
     }
-    machines = homes(c)
+    machines = {bot: m for bot, m in homes(c).items() if m["runner_id"] not in skip}
     # A full disk is the machine's, said once below, not once per bot on it.
     stuck = sorted(
         bot
@@ -3355,7 +3357,7 @@ def health(c, settings=None):
         # Out of credit is one account-wide cause Health names once, with Add credit (health.view, task #423).
         and not (machine["problem"] == "out_of_credit" and cloud_access.access(c) == "frozen")
     )
-    machines_by_key = rows(c)
+    machines_by_key = {key: m for key, m in rows(c).items() if m["runner_id"] not in skip}
     shared_stuck = (machines_by_key.get(SHARED) or {}).get("problem") == "no_enroll"
     lines = []
     for key, current in sorted(machines_by_key.items()):
