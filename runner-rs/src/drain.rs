@@ -1,6 +1,8 @@
-//! A graceful drain owns only turns that already started. Unstarted claims return immediately; at the
-//! deadline a yielded completion preserves the session and queues a continuation,
-//! unless the harness cannot resume the interrupted turn: execute.rs then settles it held for review.
+//! A graceful drain owns only turns that already started. Unstarted claims return immediately; running turns finish,
+//! however long they take (an update waits for them). Only a drain with a deadline, a container stop (a fixed five
+//! minutes) or an update under the computer's own `drain_timeout_seconds`, stops a running turn at it: a yielded completion
+//! preserves the session and queues a continuation, unless the harness cannot resume the interrupted turn: execute.rs
+//! then settles it held for review.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -8,7 +10,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-pub const DEFAULT_LIMIT_S: u64 = 5 * 60;
+/// A container stop's own deadline for running turns: Docker kills the container 15 minutes after SIGTERM, so turns
+/// still running are saved and queued to continue well before that.
+pub const STOP_LIMIT_S: u64 = 5 * 60;
 pub const WAITING: &str = "Handed back before starting because the computer is updating or restarting; queued to continue";
 pub const CAPPED: &str =
     "Paused at the computer's drain time limit; work and session saved, queued to continue";
@@ -26,15 +30,19 @@ struct Inner {
     since: Option<Instant>,
     turns: HashMap<String, Turn>,
     handed_back: usize,
+    /// When a container stop began (`stop`): a drain of its own with a fixed STOP_LIMIT_S, that no update's end clears.
+    /// `drain_timeout_seconds` (`limit`) is an update drain's alone.
+    stopping: Option<Instant>,
 }
 
 pub struct Drain {
     inner: Mutex<Inner>,
-    limit: Duration,
+    /// The computer's `drain_timeout_seconds`, if it set one; otherwise running turns finish.
+    limit: Option<Duration>,
 }
 
 impl Drain {
-    pub fn new(limit: Duration) -> Self {
+    pub fn new(limit: Option<Duration>) -> Self {
         Self {
             inner: Mutex::new(Inner::default()),
             limit,
@@ -54,6 +62,11 @@ impl Drain {
         self.inner.lock().unwrap().since.get_or_insert(now);
     }
 
+    /// A container stop: no claim starts again, and running turns are stopped at STOP_LIMIT_S, inside Docker's grace.
+    pub fn stop(&self, now: Instant) {
+        self.inner.lock().unwrap().stopping.get_or_insert(now);
+    }
+
     /// Serialize the start boundary with draining: once a drain begins, a waiting claim cannot start.
     pub fn start(&self, aid: &str) -> bool {
         let mut s = self.inner.lock().unwrap();
@@ -63,7 +76,7 @@ impl Drain {
             Some(Turn::Returning(_)) => return false,
             _ => {}
         }
-        if s.since.is_some() {
+        if s.since.is_some() || s.stopping.is_some() {
             s.turns.insert(aid.into(), Turn::Returning(WAITING));
             s.handed_back += 1;
             return false;
@@ -75,7 +88,9 @@ impl Drain {
     pub fn end(&self) {
         let mut s = self.inner.lock().unwrap();
         s.since = None;
-        s.handed_back = 0;
+        if s.stopping.is_none() {
+            s.handed_back = 0;
+        }
     }
 
     pub fn finish(&self, aid: &str) {
@@ -102,10 +117,21 @@ impl Drain {
         if let Turn::Returning(line) = turn {
             return Some(line);
         }
-        let since = s.since?;
+        if s.since.is_none() && s.stopping.is_none() {
+            return None;
+        }
+        let past = |from: Option<Instant>, limit: Option<Duration>| {
+            from.zip(limit)
+                .is_some_and(|(f, l)| now.saturating_duration_since(f) >= l)
+        };
         let line = match turn {
             Turn::Waiting => WAITING,
-            Turn::Running if now.saturating_duration_since(since) >= self.limit => CAPPED,
+            Turn::Running
+                if past(s.since, self.limit)
+                    || past(s.stopping, Some(Duration::from_secs(STOP_LIMIT_S))) =>
+            {
+                CAPPED
+            }
             _ => return None,
         };
         s.turns.insert(aid.into(), Turn::Returning(line));
@@ -126,7 +152,7 @@ impl Drain {
 
     pub fn progress(&self) -> Option<Value> {
         let s = self.inner.lock().unwrap();
-        s.since.map(|_| json!({"running": s.turns.values().filter(|t| **t == Turn::Running).count(), "handed_back": s.handed_back}))
+        s.since.or(s.stopping).map(|_| json!({"running": s.turns.values().filter(|t| **t == Turn::Running).count(), "handed_back": s.handed_back}))
     }
 }
 
@@ -135,8 +161,66 @@ mod tests {
     use super::*;
 
     #[test]
+    fn running_turns_finish_unless_the_drain_has_a_deadline() {
+        let drain = Drain::new(None);
+        drain.register("running");
+        assert!(drain.start("running"));
+        let now = Instant::now();
+        drain.begin(now);
+        let hours = now + Duration::from_secs(6 * 3600);
+        assert_eq!(drain.due("running", hours), None); // an update waits for it, however long
+        drain.finish("running");
+        drain.end();
+        drain.register("next");
+        assert!(drain.start("next"));
+        drain.begin(now);
+        assert_eq!(drain.due("next", hours), None);
+    }
+
+    #[test]
+    fn a_container_stop_has_its_own_five_minutes_whatever_drain_timeout_says() {
+        let drain = Drain::new(Some(Duration::from_secs(60))); // drain_timeout_seconds: 60
+        drain.register("running");
+        assert!(drain.start("running"));
+        let now = Instant::now();
+        drain.stop(now); // a plain SIGTERM
+        assert_eq!(drain.due("running", now + Duration::from_secs(61)), None);
+        assert_eq!(
+            drain.due("running", now + Duration::from_secs(STOP_LIMIT_S)),
+            Some(CAPPED)
+        );
+        let update = Drain::new(Some(Duration::from_secs(60)));
+        update.register("running");
+        assert!(update.start("running"));
+        update.begin(now); // an update's drain takes the configured minute
+        assert_eq!(
+            update.due("running", now + Duration::from_secs(60)),
+            Some(CAPPED)
+        );
+    }
+
+    #[test]
+    fn a_container_stop_keeps_its_deadline_whatever_an_update_does() {
+        let drain = Drain::new(None);
+        drain.register("running");
+        assert!(drain.start("running"));
+        let now = Instant::now();
+        drain.stop(now); // SIGTERM: the stop's timer alone
+        assert!(drain.progress().is_some());
+        drain.begin(now); // an update's drain too
+        drain.end(); // the update failed: its drain ends, the stop's does not
+        drain.register("waiting");
+        assert!(!drain.start("waiting"));
+        let at = |s| now + Duration::from_secs(s);
+        assert_eq!(drain.due("running", at(STOP_LIMIT_S - 1)), None);
+        assert_eq!(drain.due("running", at(STOP_LIMIT_S)), Some(CAPPED));
+        assert!(drain.progress().is_some());
+    }
+
+    #[test]
     fn start_boundary_and_deadline_survive_repeat_drain_and_update_failure() {
-        let drain = Drain::new(Duration::from_secs(DEFAULT_LIMIT_S));
+        let limit = 5 * 60;
+        let drain = Drain::new(Some(Duration::from_secs(limit))); // the computer's drain_timeout_seconds
         drain.register("waiting");
         drain.register("running");
         assert!(drain.start("running"));
