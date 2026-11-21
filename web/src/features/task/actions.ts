@@ -172,13 +172,14 @@ export const subtask = defineAction({
   target: (i) => (i.subtask !== undefined ? { kind: 'task-parent', id: i.subtask } : { kind: 'task-subtasks', id: i.task }),
 });
 
-/** Its paid shots of unknown outcome, checked in Gateway usage: they leave the card's wait and are never sent again. */
+/** The paid shots of unknown outcome the person was shown (`shots`, their keys), checked in Gateway usage: they leave the
+    card's wait and are never sent again. */
 export const reconcile = defineAction({
   id: 'task.reconcileShots',
   title: 'Mark paid shots reconciled',
   kind: 'change',
-  input: z.strictObject({ task }),
-  run: (_ctx, i) => said(reconcileShots(i.task)),
+  input: z.strictObject({ task, shots: z.array(z.string().check(z.minLength(1), z.maxLength(40))).check(z.minLength(1), z.maxLength(50)) }),
+  run: (_ctx, i) => said(reconcileShots(i.task, i.shots)),
   did: () => 'Marked reconciled',
 });
 

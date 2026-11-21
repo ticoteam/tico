@@ -7873,7 +7873,6 @@
           "value": {
             "enum": [
               "own",
-              "read",
               "all"
             ]
           }
@@ -9729,10 +9728,21 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 100
+          },
+          "shots": {
+            "minItems": 1,
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
+            }
           }
         },
         "required": [
-          "task"
+          "task",
+          "shots"
         ],
         "additionalProperties": false
       }

@@ -25,8 +25,9 @@ refused the key or the request). Everything else is unknown: no answer, a timeou
 shot whose latest event is `sent` and is not in flight is unknown too: the next request finds it, and the Run
 housekeeping sweep (`sweep`) does once it is `STALE_MINUTES` old. That shot is never sent again.
 
-Its card waits on its person for it: "Reconcile 1 shot" (waiting_on.of, from `unsettled` at read time: no child task,
-no question, no table), in their Needs you and status line, until they check Gateway usage and mark it reconciled
+Its card waits on its person for it: "Reconcile 1 shot" (waiting_on.with_shots, from `unsettled` at read time: no
+child task, no question, no table), in their Needs you and status line, until they check Gateway usage and mark it
+reconciled
 (`reconcile`, POST /api/v2/tasks/{tid}/shots/reconcile, `tico gateway reconcile`): a `paid_render.reconciled` event. A
 reconciled shot is never sent again; the agent names a new shot to render it again. The refusal names every unknown
 shot of the card (key and name) in its `shots`. The events table holds the keys (its `events_action_target` index finds
@@ -55,7 +56,7 @@ SENT, STARTED, REFUSED, UNKNOWN, RECONCILED = (
 )
 ACTIONS = (SENT, STARTED, REFUSED, UNKNOWN, RECONCILED)
 ALIAS = "paid_render.alias"  # a request's Idempotency-Key -> the shot key it resolved to
-WAIT = "paid_render:"  # + the card's id: its "Reconcile N shots" wait's id (waiting_on.of)
+WAIT = "paid_render:"  # + the card's id: its "Reconcile N shots" wait's id (waiting_on.with_shots)
 NAME_WORDS = 6  # a shot with no name is named by its prompt's first words
 LINE_NAMES = 120  # how much of the shots' names the wait's line says
 STALE_MINUTES = 5  # a sent shot this old with no answer, and not in flight, is unknown (`sweep`)
@@ -186,6 +187,27 @@ def _state(c: Any, key: str, last: str | None, detail: Row) -> Row | Problem | N
     return None
 
 
+# The same shot sent from another visit of its card: same asker, card, input and name.
+_TWINS = (
+    "SELECT s.target FROM events s WHERE s.actor=? AND s.action=? AND s.target<>? "
+    "AND json_extract(s.detail, '$.task')=? AND json_extract(s.detail, '$.input')=? "
+    "AND json_extract(s.detail, '$.shot')=?"
+)
+
+
+def _twin(c: Any, actor: str, key: str, said: Row) -> Problem | None:
+    """A new key's refusal when the card has the same shot unknown or reconciled under another visit's key: a stage
+    move never makes it a new shot that may be charged again. None outside a card, or with no such shot."""
+    if not said.get("task"):
+        return None
+    for (other,) in c.execute(_TWINS, (actor, SENT, key, said["task"], said["input"], said["shot"])).fetchall():
+        last, detail = _latest(c, str(other))
+        if last in (UNKNOWN, RECONCILED):
+            found = _state(c, str(other), last, detail)
+            return found if isinstance(found, Problem) else None
+    return None
+
+
 def _settle(c: Any, who: Any, key: str) -> Row | Problem | None:
     """`_state` in a write: a stranded sent shot is marked unknown first."""
     last, detail = _latest(c, key)
@@ -200,16 +222,16 @@ def resolve(store: Any, who: Any, shot: Shot, operation: str | None = None) -> R
     mark it unknown when it was stranded and keep the request's key as its alias, so a retry after the card moved
     finds that shot again."""
     with store.read() as c:
-        key, _, alias = _shot(c, who, shot, operation)
+        key, said, alias = _shot(c, who, shot, operation)
         last, detail = _latest(c, key)
         stranded = _stranded(key, last)
-        state = None if stranded else _state(c, key, last, detail)
+        state = None if stranded else _state(c, key, last, detail) or _twin(c, who.actor, key, said)
     if stranded or (alias and state is not None):
         with store.transaction() as c:
-            key, _, alias = _shot(c, who, shot, operation)
+            key, said, alias = _shot(c, who, shot, operation)
             if alias:
                 H.event(c, who.actor, ALIAS, *alias)
-            state = _settle(c, who, key)
+            state = _settle(c, who, key) or _twin(c, who.actor, key, said)
     if isinstance(state, Problem):
         raise state
     return state
@@ -237,7 +259,9 @@ def begin(store: Any, who: Any, shot: Shot, operation: str | None = None) -> tup
     try:
         with store.transaction(durable=True) as c:
             key, said, alias = _shot(c, who, shot, operation)
-            state = _settle(c, who, key)
+            if alias:  # kept whatever it finds: a request that lost a race retries into the same shot
+                H.event(c, who.actor, ALIAS, *alias)
+            state = _settle(c, who, key) or _twin(c, who.actor, key, said)
             if state is None:
                 with _LOCK:
                     sending = key not in _IN_FLIGHT
@@ -245,8 +269,6 @@ def begin(store: Any, who: Any, shot: Shot, operation: str | None = None) -> tup
                 if not sending:
                     state = _busy()
                 else:
-                    if alias:
-                        H.event(c, who.actor, ALIAS, *alias)
                     H.event(c, who.actor, SENT, key, said)
     except BaseException:
         if sending:
@@ -306,24 +328,32 @@ def _unknown(c: Any, actor: str, key: str, detail: Row) -> None:
 
 _UNSETTLED = (
     "SELECT json_extract(s.detail, '$.task'), s.target, json_extract(s.detail, '$.shot'), s.created_at FROM events s "
-    f"WHERE s.action=? AND {_LATER} ORDER BY s.rowid"
+    f"WHERE s.action=? AND {_LATER} %s ORDER BY s.rowid"
 )
 
 
-def unsettled(c: Any) -> dict[str, list[Row]]:
-    """Every card's shots whose outcome is unknown, {task id: [{key, name, since}]}, oldest first: read once a snapshot,
-    from the unknown events alone (`events_action_ts`), which only a call with no answer writes. A sent shot left
-    unanswered joins them once it is marked unknown: by the next request for it, or by `sweep` on the next tick, so a
-    read never scans every shot ever sent."""
+def _rows(found: Iterable[Any]) -> dict[str, list[Row]]:
+    out: dict[str, list[Row]] = {}
+    for task, key, name, at in found:
+        if task:
+            out.setdefault(str(task), []).append({"key": str(key), "name": str(name or ""), "since": str(at)})
+    return out
 
-    def build() -> dict[str, list[Row]]:
-        out: dict[str, list[Row]] = {}
-        for task, key, name, at in c.execute(_UNSETTLED, (UNKNOWN, *ACTIONS)):
-            if task:
-                out.setdefault(str(task), []).append({"key": str(key), "name": str(name or ""), "since": str(at)})
-        return out
 
-    return read_cache.value(c, ("paid_renders.unsettled",), build, shared=True)
+def unsettled(c: Any, task_id: str) -> list[Row]:
+    """One card's shots whose outcome is unknown, each {key, name, since}, oldest first: from the unknown events alone
+    (`events_action_ts`), which only a call with no answer writes. A sent shot left unanswered joins them once it is
+    marked unknown: by the next request for it, or by `sweep` on the next tick, so a read never scans every shot ever
+    sent."""
+    sql = _UNSETTLED % "AND json_extract(s.detail, '$.task')=?"
+    return _rows(c.execute(sql, (UNKNOWN, *ACTIONS, task_id))).get(task_id, [])
+
+
+def cards(c: Any) -> dict[str, list[Row]]:
+    """`unsettled` for every card, {task id: shots}, read once a snapshot: for a list's reads (board rows, Needs you)."""
+    return read_cache.value(
+        c, ("paid_renders.cards",), lambda: _rows(c.execute(_UNSETTLED % "", (UNKNOWN, *ACTIONS))), shared=True
+    )
 
 
 def line(shots: list[Row]) -> str:
@@ -339,9 +369,9 @@ def reconcile(c: Any, actor: str, task_id: str, keys: Iterable[str] = ()) -> lis
     """Mark the card's unknown shots reconciled, every one or those `keys` names: a `paid_render.reconciled` each. They
     leave the card's wait and are never sent again (`_state`). Answers the shots it marked, each {key, name}."""
     wanted = set(keys)
-    shots = [s for s in unsettled(c).get(task_id, []) if not wanted or s["key"] in wanted]
+    shots = [s for s in unsettled(c, task_id) if not wanted or s["key"] in wanted]
     for s in shots:
-        H.event(c, actor, RECONCILED, s["key"], {"task": task_id, "shot": s["name"]})
+        H.event(c, actor, RECONCILED, s["key"], {**_latest(c, s["key"])[1], "task": task_id})
     if shots:
         _moved(c, task_id)
     return [{"key": s["key"], "name": s["name"]} for s in shots]
@@ -353,7 +383,7 @@ def _moved(c: Any, task_id: str) -> None:
 
     events: Any = _events
     reads: Any = _reads
-    reads.status_moved(c, (), [task_id])
+    reads.status_moved(c, (), [task_id], kind="shots")  # an open task's Details reads its waits again
     row = task_engine.task(c, task_id)
     person = waiting_on.person_for(c, row) if row else None
     if person:
@@ -363,7 +393,7 @@ def _moved(c: Any, task_id: str) -> None:
 def _shots(c: Any, key: str, detail: Row) -> list[Row]:
     """The unknown shots a refusal names, each {key, name}: this one, and every other of its card (`unsettled`)."""
     shots = {key: str(detail.get("shot") or "")}
-    for found in unsettled(c).get(str(detail.get("task") or ""), []):
+    for found in unsettled(c, str(detail.get("task") or "")) if detail.get("task") else ():
         shots.setdefault(found["key"], found["name"])
     return [{"key": k, "name": n} for k, n in shots.items()]
 

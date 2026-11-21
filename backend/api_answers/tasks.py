@@ -249,6 +249,8 @@ class TaskWait(TypedDict):
     """On a list row, on a bot's turn (state bot) only: a run is going now; false while it waits to try again"""
     share: NotRequired[list[str]]
     """A private task waits on these actors being let in (the next stage's owner and those it asks, or someone asked here, can't see it): move with to next and let_see set to exactly this list"""
+    shots: NotRequired[list[str]]
+    """Paid shots of unknown outcome it waits on its person to reconcile: their keys, for POST /api/v2/tasks/{tid}/shots/reconcile"""
 
 
 @answer
@@ -789,3 +791,15 @@ class TaskMakePageState(TypedDict):
 @answer
 class TaskMakePage(TypedDict):
     make_page: TaskMakePageState | None
+
+
+@answer
+class ReconciledShot(TypedDict):
+    key: str
+    name: str
+
+
+@answer
+class ShotsReconciled(TypedDict):
+    reconciled: list[ReconciledShot]
+    """The paid shots marked reconciled: they leave the card's wait and are never sent again"""

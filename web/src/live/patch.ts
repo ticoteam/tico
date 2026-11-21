@@ -233,7 +233,8 @@ function patchTasks(batch: TaskEvent[]): void {
   for (const e of batch) {
     const id = e.id ?? e.task_id;
     if (id) last.set(id, e);
-    if (id && e.kinds?.includes('relation')) related.add(id);
+    // A paid shot to reconcile came or went (backend/paid_renders.py): the row carries no waits, so the task reads them again.
+    if (id && (e.kinds?.includes('relation') || e.kinds?.includes('shots'))) related.add(id);
   }
   for (const [id, e] of last) {
     const detail = ['tasks', 'detail', id];

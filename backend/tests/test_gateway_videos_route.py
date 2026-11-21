@@ -464,8 +464,20 @@ def test_an_unknown_shot_waits_on_the_cards_person_until_they_mark_it_reconciled
         waits = [w for w in read["waits"] if w["line"].startswith("Reconcile")]
         return read, [i["line"] for i in needs if i.get("task_id") == task["id"]], waits
 
+    def pushed():  # the card's row, sent again for an open Details to read its waits
+        with store.read() as c:
+            sql = "SELECT count(*) FROM changes WHERE topic='tasks' AND kind='shots' AND subject_id=?"
+            return c.execute(sql, (task["id"],)).fetchone()[0]
+
+    assert pushed() == 1
     read, needs, waits = shown("ben-test")
     assert [(w["who"], w["line"], w["ask"]) for w in waits] == [("human:ben", "Reconcile 1 shot: Kettle wide", True)]
+    from backend import rules
+    from backend import waiting_on as W
+
+    with store.read() as c:  # the engine never sees it: GitHub's news still wakes the agent that has the card
+        assert not [w for w in W.waiting_on(c, task["id"]) if w.line.startswith("Reconcile")]
+        assert rules._waits_on_checks(c, H.task(c, task["id"]))
     assert (read["turn"]["who"], read["status_line"]) == ("human:ben", "needs_you")
     assert needs == ["Reconcile 1 shot: Kettle wide"]
     assert shown("ana-test")[1] == []  # in the card's person's Needs you only
@@ -473,20 +485,58 @@ def test_an_unknown_shot_waits_on_the_cards_person_until_they_mark_it_reconciled
         c.execute("UPDATE visits SET id='visit-moved' WHERE task_id=? AND left_at IS NULL", (task["id"],))
     assert shown("ben-test")[1] == ["Reconcile 1 shot: Kettle wide"]
 
-    marked = api.post(f"/api/v2/tasks/{task['id']}/shots/reconcile", json={}, headers=headers("ben-test"))
+    shots = {"shots": waits[0]["shots"]}  # the keys the person was shown
+    marked = api.post(f"/api/v2/tasks/{task['id']}/shots/reconcile", json=shots, headers=headers("ben-test"))
     assert marked.status_code == 200 and [s["name"] for s in marked.json()["reconciled"]] == ["Kettle wide"], (
         marked.text
     )
     read, needs, waits = shown("ben-test")
-    assert (waits, needs, read["turn"]["who"]) == ([], [], "bot:ops")  # the agent's turn again (its run starting)
+    assert (waits, needs, read["turn"]["who"], pushed()) == ([], [], "bot:ops", 2)  # the agent's turn again
     again = video(api, token, body, "the-request")  # its retry: never sent again
     assert (again.status_code, again.json()["error"]["code"]) == (409, "shot_reconciled"), again.text
     assert video(api, token, {**body, "shot": "Kettle wide 2"}).status_code == 202  # a new shot name is a new shot
     assert len(sent) == 2
 
 
-def test_shots_to_reconcile_hold_no_card_in_its_stage():
-    from backend import waiting_on as W
+def test_a_fresh_key_after_the_card_moved_never_sends_an_unknown_shot_again(api, monkeypatch):
+    connect(api)
+    task, token = turn(api)
+    unknown_now(api, token, "Kettle wide", monkeypatch)
+    with api.app.state.store.transaction() as c:  # the card moves to a new visit: a new key for the same shot
+        c.execute("UPDATE visits SET id='visit-moved' WHERE task_id=? AND left_at IS NULL", (task["id"],))
+    sent = []
+    monkeypatch.setattr(G, "video_submit", counting(sent, (202, {"id": JOB, "status": "queued"}, "")))
+    assert named(video(api, token, {"prompt": "a kettle", "shot": "Kettle wide"}, "fresh")) == ["Kettle wide"]
+    shown = api.get(f"/api/v2/tasks/{task['id']}", headers=headers()).json()["task"]["waits"][0]["shots"]
+    marked = api.post(f"/api/v2/tasks/{task['id']}/shots/reconcile", json={"shots": shown}, headers=headers())
+    assert len(marked.json()["reconciled"]) == 1, marked.text
+    again = video(api, token, {"prompt": "a kettle", "shot": "Kettle wide"}, "fresher")
+    assert (again.status_code, again.json()["error"]["code"]) == (409, "shot_reconciled"), again.text
+    assert not sent
 
-    shots = W.Wait(W.PERSON, "human:ben", "Reconcile 1 shot", paid_renders.WAIT + "t1", ask=True)
-    assert W.all_met([W.Wait(W.ROOM, "s2", "Moving to Review"), shots]) and not W.all_met([shots])
+
+def test_a_request_that_loses_the_race_keeps_its_key_on_the_shot_it_found(api, monkeypatch):
+    connect(api)
+    task, token = turn(api)
+    sent = []
+    monkeypatch.setattr(G, "video_submit", counting(sent, (202, {"id": JOB, "status": "queued"}, "")))
+    body = {"prompt": "a kettle", "shot": "Kettle wide"}
+    with monkeypatch.context() as stopped:  # A is in flight; B read before A was written, and finds it in `begin`
+        stopped.setattr(paid_renders, "end", lambda *a: None)
+        assert video(api, token, body, "request-a").status_code == 202
+        stopped.setattr(paid_renders, "resolve", lambda *a: None)
+        assert video(api, token, body, "request-b").status_code == 429
+    with api.app.state.store.transaction() as c:  # the card moves before B retries
+        c.execute("UPDATE visits SET id='visit-moved' WHERE task_id=? AND left_at IS NULL", (task["id"],))
+    assert video(api, token, body, "request-b").status_code == 429  # the same shot, still in flight
+    paid_renders._IN_FLIGHT.clear()
+    assert len(sent) == 1
+
+
+def test_a_replayed_reconcile_is_refused_once_access_is_gone(api):
+    task = post(api, "tasks", {"owner": "ops", "title": "Make the shots", "body": "From the storyboard."})
+    path = f"/api/v2/tasks/{task['id']}/shots/reconcile"
+    assert api.post(path, json={}, headers=headers("cara-test", "once")).status_code == 200
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET private=1, readers=NULL WHERE id=?", (task["id"],))
+    assert api.post(path, json={}, headers=headers("cara-test", "once")).status_code in (403, 404)

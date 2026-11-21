@@ -216,9 +216,11 @@ export function Details({ t, flow, adding = null, onAdding = () => undefined }: 
           <Kv k="Waiting on" target={`task-shots:${t.id}`}>
             {shots.who && <Face id={shots.who} />}
             <small>{shots.line}</small>
-            <button type="button" className="dt-act" onClick={() => void run('task.reconcileShots', { task: t.id }, { via: 'click' }).then((r) => r.ok || toast(failedToast(r)))}>
-              Mark reconciled
-            </button>
+            {t.can_comment && (
+              <button type="button" className="dt-act" onClick={() => void run('task.reconcileShots', { task: t.id, shots: shots.shots ?? [] }, { via: 'click' }).then((r) => r.ok || toast(failedToast(r)))}>
+                Mark reconciled
+              </button>
+            )}
           </Kv>
         )}
         <EditKv

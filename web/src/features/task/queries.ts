@@ -3,7 +3,7 @@ import { ApiError, api } from '@/api/client';
 import type { OkPreview, PagePublished, PageShown, PipelineSettingsResult, PublishPageBody, TaskDetail, TaskDetailChild, TaskFileList, TaskLinkView, TaskRequirement, TaskResult } from '@/api/schema';
 import { keys, meQuery, queryClient, quietRoot, write } from '@/data';
 import { flowQuery, pipelinesQuery } from '@/features/tasks/routing';
-import type { FileLibrary, FileSearch, TaskFileResult, TaskFileView } from '@/api/schema';
+import type { FileLibrary, FileSearch, ReconcileTaskShotsBody, ReconcileTaskShotsResponse, TaskFileResult, TaskFileView } from '@/api/schema';
 
 /* One open task: its detail (GET /api/v2/tasks/{tid}, kept current by the stream under keys.tasks.detail), the files
    and pages it shows (under the detail key, re-read when the stream says its files changed), the stages it can move
@@ -312,9 +312,10 @@ export async function addSubtask(id: string, title: string, owner?: string | nul
   return r;
 }
 
-/** The card's paid shots of unknown outcome marked reconciled (backend/paid_renders.py): its Reconcile wait goes. */
-export async function reconcileShots(id: string) {
-  const r = await api.post<{ reconciled: { key: string; name: string }[] }>(`${taskPath(id)}/shots/reconcile`, {});
+/** The card's paid shots the person was shown (their keys) marked reconciled (backend/paid_renders.py): they leave its
+    Reconcile wait. */
+export async function reconcileShots(id: string, shots: string[]) {
+  const r = await api.post<ReconcileTaskShotsResponse>(`${taskPath(id)}/shots/reconcile`, { shots } satisfies ReconcileTaskShotsBody);
   await reread(id);
   return r;
 }

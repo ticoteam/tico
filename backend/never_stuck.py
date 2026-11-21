@@ -1284,7 +1284,12 @@ def rules_hold(conn: "sqlite3.Connection") -> list[str]:
                     for item in items:
                         needs.setdefault(who, {}).setdefault(str(item.get("task_id")), []).append(item)
             # A ❓ is listed from its mark (backend/question_marks.py), not as one of the task's asks.
-            listed = [item for item in needs.get(person, {}).get(task_id, []) if item["kind"] != "question"]
+            # Paid shots to reconcile are listed from the card's reads (waiting_on.with_shots), not from `of`.
+            listed = [
+                item
+                for item in needs.get(person, {}).get(task_id, [])
+                if item["kind"] != "question" and not str(item.get("requirement_id") or "").startswith("paid_render:")
+            ]
             mine = [
                 wait
                 for wait in waits

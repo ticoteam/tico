@@ -13,6 +13,8 @@ from . import gateway_connection
 from . import gateway_page
 from . import gateway_tiers
 from . import paid_renders
+from .api_answers.tasks import ShotsReconciled
+from .api_contract import api_v2
 import hashlib
 import json
 from . import model_login
@@ -342,21 +344,33 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
             )
         return answer
 
-    @app.post("/api/v2/tasks/{tid}/shots/reconcile")
+    @app.post(
+        "/api/v2/tasks/{tid}/shots/reconcile",
+        **api_v2(
+            "Tasks",
+            "reconcileTaskShots",
+            "Mark a task's paid shots of unknown outcome reconciled: those `shots` names (the keys its wait showed), "
+            "or every one. They leave its Reconcile wait and are never sent again",
+            ShotsReconciled,
+        ),
+    )
     def shots_reconcile(tid: str, request: Request, body: M.ShotsReconcile):
-        """Mark the card's paid shots of unknown outcome reconciled, all of them or those `shots` names, once its person
-        checked Gateway usage (`tico_gateway_reconcile`): they leave its "Reconcile N shots" wait and are never sent
-        again (backend/paid_renders.py). Whoever may comment on the card may."""
+        """Mark the card's paid shots of unknown outcome reconciled once its person checked Gateway usage
+        (`tico_gateway_reconcile`, backend/paid_renders.py). Whoever may comment on the card may, checked again on a
+        replay of the same Idempotency-Key."""
         who = request.state.identity
 
-        def work(c):
+        def may(c):
             from . import task_reads
 
-            task_id = auth.resolve_task(c, who, tid)
-            task_reads.comment_rights(c, auth, who, task_id)
-            return {"reconciled": paid_renders.reconcile(c, who.actor, task_id, body.shots or ())}
+            task_reads.comment_rights(c, auth, who, auth.resolve_task(c, who, tid))
 
-        return mutate(request, body, work)
+        def work(c):
+            return {
+                "reconciled": paid_renders.reconcile(c, who.actor, auth.resolve_task(c, who, tid), body.shots or ())
+            }
+
+        return mutate(request, body, work, check=may)
 
     @app.get("/api/v2/gateway/videos/{job_id}")
     def gateway_video_status(job_id: str, request: Request):

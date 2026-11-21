@@ -95,6 +95,7 @@ class Wait:
     href: str | None = None
     share: tuple[str, ...] | None = None
     shared: bool = False  # an ask of one approver of a page several people approve (`of`); never leaves the server
+    shots: tuple[str, ...] | None = None  # the keys of the paid shots it asks to reconcile (`with_shots`)
 
 
 # What a reader who may not open a task this one filed is told of it (`unnamed`).
@@ -142,6 +143,10 @@ def view(wait: Wait, shown: Callable[[str], bool]) -> Row:
         del out["share"]
     else:
         out["share"] = list(out["share"])
+    if out["shots"] is None:
+        del out["shots"]
+    else:
+        out["shots"] = list(out["shots"])
     return out
 
 
@@ -696,14 +701,6 @@ def of(
         out = [wait for wait in out if not (wait.state in (BOT, PAUSED) and not wait.fix and wait.who in asking)]
     for m in marks:
         out.append(Wait(PERSON, m["person_id"], m["line"], question_marks.wait_id(m), m["created_at"], ask=True))
-    from . import paid_renders
-
-    shots = paid_renders.unsettled(conn).get(str(row["id"]))
-    if shots:
-        # A paid shot whose outcome is unknown waits on the card's person to check Gateway usage and mark it reconciled
-        # (backend/paid_renders.py). It holds nothing else up: the bot still has its work, and the card still moves.
-        wait_id = paid_renders.WAIT + str(row["id"])
-        out.append(Wait(PERSON, person_for(conn, row), paid_renders.line(shots), wait_id, shots[-1]["since"], ask=True))
     blockers = task_depends.blockers(conn, str(row["id"]))
     if blockers:
         # It depends on a task still open: that is all it waits on, nobody's turn, until the task ends (task_depends).
@@ -1061,12 +1058,27 @@ def headline(conn: "sqlite3.Connection", task_id: str) -> Wait | None:
 
 
 def all_met(waits: list[Wait]) -> bool:
-    """Whether a task's waits say it is ready to move on: nothing is missing and it only waits for a slot. Shots to
-    reconcile (backend/paid_renders.py) wait on a person without holding the card in its stage."""
+    """Whether a task's waits say it is ready to move on: nothing is missing and it only waits for a slot."""
+    return bool(waits) and all(wait.state == ROOM for wait in waits)
+
+
+def with_shots(
+    conn: "sqlite3.Connection", task_id: str, waits: Sequence[Wait], cards: Mapping[str, list[Row]] | None = None
+) -> list[Wait]:
+    """`waits` as the card's reads and Needs you show them: with its paid shots to reconcile, a wait on the card's
+    person to check Gateway usage and mark them reconciled (backend/paid_renders.py), first among people's asks. Never
+    in `of`: whose turn it is, wakes, Late and moves never see it, so it holds up no agent and no stage. `cards` is
+    paid_renders.cards for a list's reads; one card reads its own. Nothing for a task that waits on nothing (ended)."""
     from . import paid_renders
 
-    rest = [wait for wait in waits if not str(wait.requirement_id or "").startswith(paid_renders.WAIT)]
-    return bool(rest) and all(wait.state == ROOM for wait in rest)
+    shots = cards.get(str(task_id)) if cards is not None else paid_renders.unsettled(conn, str(task_id))
+    row = E.task(conn, str(task_id)) if shots and waits else None
+    if not shots or not row:
+        return list(waits)
+    keys = tuple(shot["key"] for shot in shots)
+    line, since = paid_renders.line(shots), shots[-1]["since"]
+    wait = Wait(PERSON, person_for(conn, row), line, paid_renders.WAIT + str(task_id), since, ask=True, shots=keys)
+    return sorted([wait, *waits], key=lambda found: _ORDER[found.state])
 
 
 def _visit_id(row: Row) -> str | None:
@@ -1214,7 +1226,7 @@ def candidates(conn: "sqlite3.Connection", person: str) -> list[str]:
       its pipeline, are the first person above its manager bot, are the company's person, or ask for or read it;
     - for the company's person, a cause they fix first (`Wait.fix`, Connect GitHub);
     - for the owner or the Admin who stands in (`admin_person`), a page whose approvers have all gone;
-    - a paid shot on it whose outcome is unknown waits on its person (backend/paid_renders.py).
+    - a paid shot on it whose outcome is unknown waits on its person (`with_shots`, backend/paid_renders.py).
 
     Most people own or manage no pipeline, so only their own rows are read, by index. Someone whose ladder reaches a
     pipeline reads a few columns of each of its open tasks, and works out in full only those that may fall to them."""
@@ -1332,7 +1344,7 @@ def candidates(conn: "sqlite3.Connection", person: str) -> list[str]:
     found |= _ladder_tasks(conn, person, company, pipelines, stage_asks)
     from . import paid_renders
 
-    found |= set(paid_renders.unsettled(conn))  # few, and worked out in full: `_lists` keeps this person's
+    found |= set(paid_renders.cards(conn))  # few, and worked out in full: `_lists` keeps this person's
     if stages:
         visits |= {
             str(row[0])
@@ -1575,13 +1587,16 @@ def _lists(
     fixers: dict[str, str | None] = {}
     # Every open ❓, which the people's ❓ items below read anyway: each task's waits then take theirs from it.
     question_marks.open_rows(conn)
+    from . import paid_renders
+
+    cards = paid_renders.cards(conn)
     read = prime(conn, task_ids)
     for task_id in task_ids:
         row = read[str(task_id)] if str(task_id) in read else E.task(conn, task_id)
         if row is None:  # the query lists only tasks on the engine
             raise LookupError(f"task {task_id} is not on the engine")
         standings = R.standings(conn, row) if row.get("visit") else []
-        waits = listed(of(conn, row, seen, standings), row)
+        waits = listed(with_shots(conn, task_id, of(conn, row, seen, standings), cards), row)
         held = next((s for s in standings if pr_conflicts.held(s)), None)
         asks: dict[str, Row] = {str(s.requirement["id"]): s.requirement for s in standings}
         people = sorted({str(wait.who) for wait in waits if wait.state == PERSON and wait.who and wait.who in only})
