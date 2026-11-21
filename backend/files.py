@@ -624,6 +624,37 @@ def page_refs_readable(c, auth, who, refs):
     return True
 
 
+def readable_titles(c, auth, who, pinned):
+    """{(file id, version): the file's title} of the pinned page versions in `pinned` that `who` may read, each through
+    the check page_refs_readable makes (page_ref_denials, then version_refusal), with the files, their versions and
+    what file_visible reads loaded together (prime_visible) rather than once a page."""
+    pinned = sorted({(str(f), int(v)) for f, v in pinned})
+    if not pinned:
+        return {}
+    denied = page_ref_denials(c, auth, who, [f"page:{f}@{v}" for f, v in pinned])
+    rows = {
+        r["id"]: r
+        for r in c.execute(f"SELECT * FROM bot_files WHERE id IN {ANY_OF}", (json.dumps([f for f, _ in pinned]),))
+    }
+    prime_visible(c, list(rows.values()))
+    stored = {
+        (r["file_id"], r["version"]): r
+        for r in c.execute(
+            "SELECT v.*,b.digest AS blob_digest,b.content_type FROM bot_file_versions v JOIN blobs b ON b.id=v.blob_id "
+            f"WHERE v.file_id IN {ANY_OF}",
+            (json.dumps([f for f, _ in pinned]),),
+        )
+    }
+    # What page_blob_visible reads of each version's blob: the pages it holds, and their rows.
+    held = page_identities(c, sorted({stored[k]["blob_id"] for k in pinned if k in stored}))
+    page_rows(c, sorted({fid for found in held.values() for fid in found}))
+    return {
+        (f, v): rows[f]["title"]
+        for f, v in pinned
+        if f in rows and f not in denied and version_refusal(c, auth, who, rows[f], v, stored.get((f, v))) is None
+    }
+
+
 def readable_earlier(c, auth, who, entry):
     """A `to_leave` entry with the page it shows from an earlier stage (task_calls.earlier_page) taken out unless
     `who` may read it in full (page_refs_readable): a reader who may not open it gets no reference to it, and the OK

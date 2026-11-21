@@ -38,7 +38,6 @@ import contextvars
 import hashlib
 import json
 import os
-import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, NoReturn, cast
@@ -342,9 +341,16 @@ ABOUT: dict[str, Callable[[object], str]] = {
 
 def _finance_summary(content: object) -> str:
     """What a Finance OK does, from the action it binds (finance/actions.py `_approval_payload`): its plan's text, which
-    names a payment's payee and amount first ("Pay 540.00 USD to Figma by ach; <why it needs an OK>"), without its
-    action id. Read whole: a payee's name may hold a "; ". The payload itself names a payee only by its id."""
-    return re.sub(r" \(Finance action [^)]*\)$", "", _named(content, "what"))
+    names a payment's payee and amount first ("Pay 540.00 USD to Figma by ach; <why it needs an OK>"), whole (a payee's
+    name may hold a "; "), without its own action id, then shortened. The payload names a payee only by its id."""
+    bound = cast("dict[str, object]", content) if isinstance(content, dict) else {}
+    what = bound.get("what")
+    if not isinstance(what, str):
+        return ""
+    return _clip_words(what.removesuffix(f" (Finance action {bound.get('action_id')})"), FINANCE_ABOUT_CHARS)
+
+
+FINANCE_ABOUT_CHARS = 200  # room for a full payee and amount before the reasons it needs an OK
 
 
 def _published_title(content: object) -> str:
@@ -359,13 +365,20 @@ def _published_title(content: object) -> str:
     return _named(values, "public_title")
 
 
-def about(conn: "sqlite3.Connection", requirement_id: str, line: str = "") -> str:
+# Kinds whose OK says what it is about on any task, not only one titled by its kind (`about`).
+ALWAYS_ABOUT = frozenset({"finance"})
+
+
+def about(conn: "sqlite3.Connection", requirement_id: str, line: str = "", *, titled: bool = True) -> str:
     """What one OK is about for its parties' Needs you rows: its subject's words (ABOUT); else the ask's own line when it
-    says more than a question of the kind does; else "". A Finance OK's words name its payee and amount."""
+    says more than a question of the kind does; else "". Only on a task titled by its kind (`titled`, kind_titled),
+    except for an ALWAYS_ABOUT kind, whose bound grant says what it is (a Finance OK's payee and amount)."""
     found = grant(conn, requirement_id)
     if not found:
         return ""
     kind = kind_of(found["subject"])
+    if not titled and kind not in ALWAYS_ABOUT:
+        return ""
     said = ABOUT.get(kind, lambda _c: "")(found["content"])
     if said:
         return said

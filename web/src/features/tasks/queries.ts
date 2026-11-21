@@ -671,15 +671,22 @@ export const flowQuery = queryOptions({
   queryKey: ['flow'] as const,
   // The Flow loader still needs this result if the shell unsubscribes.
   queryFn: async (): Promise<Flow> => {
-    const seen = new Set<string>();
+    // One row a task, where its oldest item is; an ask that says what it is about (`about`) names the row.
+    const seen = new Map<string, number>();
     const named = new Set<string>();
     const items: FlowItem[] = [];
     for (const it of await needsYouItems()) {
       // a paused item names its tasks in task_ids (backend/views.py), which the generated type leaves out
       for (const id of [it.task_id, it.task?.id, ...((it as { task_ids?: string[] }).task_ids ?? [])]) if (id) named.add(id);
       const t = it.task;
-      if (!t || seen.has(t.id)) continue;
-      seen.add(t.id);
+      if (!t) continue;
+      const at = seen.get(t.id);
+      if (at !== undefined) {
+        const row = items[at];
+        if (row && !row.about && it.about) items[at] = { ...row, about: it.about, ...(it.ask && { ask: { kind: it.ask.kind, by: it.ask.asked_by ?? null, shows: it.ask.shows ?? [] } }) };
+        continue;
+      }
+      seen.set(t.id, items.length);
       items.push({
         id: t.id,
         number: t.number,

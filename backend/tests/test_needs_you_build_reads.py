@@ -136,7 +136,7 @@ def build(api, person, how, **kw):
             patched.setattr(read_cache, "cache", lambda c: None)
         with store.read_transaction() as c:
             c.set_trace_callback(seen.append)
-            items = V.needs_items(c, api.app.state.auth, WHO[person], **kw)
+            items = V.needs_shown(c, api.app.state.auth, WHO[person], **kw)  # as served: page titles included
             c.set_trace_callback(None)
     if how == "rows":  # the reference read each PR's metadata on its own, never in a batch
         assert not any("FROM item_metadata" in sql and "json_each" in sql for sql in seen)

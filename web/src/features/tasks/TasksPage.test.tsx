@@ -606,9 +606,11 @@ describe('Flow @s5 @s112', () => {
     expect(asked.filter((u) => u.includes('/needs-you')).map((u) => new URL(u, 'http://x').searchParams.get('cursor'))).toEqual([null, 'v1.1', 'v2.1']);
   });
 
-  it("an ask's row says what it is about, on a desktop and a phone", async () => {
-    const pay = { id: 'n-a4', kind: 'ask', line: 'OK this in Finance?', about: 'Pay 540.00 USD to Figma by ach', since: ago(5), task: { ...item, id: 'a4', number: 10, title: 'OK a Finance action' } };
-    serve((url) => (url.includes('/needs-you') ? { status: 200, body: { actor: ME, items: [pay], next: null } } : { status: 200, body: {} }));
+  it("an ask's row says what it is about, on a desktop and a phone, whichever of its task's items comes first", async () => {
+    const task = { ...item, id: 'a4', number: 10, title: 'OK a Finance action' };
+    const mention = { id: 'n-m4', kind: 'mention', line: 'Can you look?', since: ago(9), task };
+    const pay = { id: 'n-a4', kind: 'ask', line: 'OK this in Finance?', about: 'Pay 540.00 USD to Figma by ach', since: ago(5), task };
+    serve((url) => (url.includes('/needs-you') ? { status: 200, body: { actor: ME, items: [mention, pay], next: null } } : { status: 200, body: {} }));
     queryClient.setQueryData(pipelinesQuery.queryKey, [PIPE]);
     for (const layout of ['', 'cards']) {
       if (layout) document.documentElement.dataset.layout = layout;
@@ -617,6 +619,7 @@ describe('Flow @s5 @s112', () => {
         show(<FlowPage />, '/flow');
         expect((await screen.findByTitle('Pay 540.00 USD to Figma by ach')).closest('a')?.getAttribute('href')).toBe('/flow/10');
         expect(screen.queryByTitle('OK a Finance action')).toBeNull();
+        expect(queryClient.getQueryData<{ count: number }>(['flow'])?.count).toBe(1);
         cleanup();
       } finally {
         delete document.documentElement.dataset.layout;

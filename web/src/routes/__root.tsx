@@ -681,12 +681,12 @@ function TaskList({ open }: { open: string }) {
               : g.items.map((it) => {
                   const n = String(it.number ?? it.id);
                   return (
-                    <Link key={it.id} to="/flow/$task" params={{ task: n }} className={n === open || it.id === open ? 'li is-on' : 'li'} title={it.title} data-target={`task:${n}`}>
+                    <Link key={it.id} to="/flow/$task" params={{ task: n }} className={n === open || it.id === open ? 'li is-on' : 'li'} title={it.about || it.title} data-target={`task:${n}`}>
                       <span className="li-mark">
                         <FlowMark size={10} />
                       </span>
                       <span className="li-main">
-                        <span className="li-title">{it.title}</span>
+                        <span className="li-title">{it.about || it.title}</span>
                         {it.late ? <LatePill /> : null}
                       </span>
                       <span className="li-who">

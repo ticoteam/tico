@@ -2068,11 +2068,14 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
                 if item["ask"]["kind"] == "ok":
                     item["missing"] = [item["ask"]["line"]]
                     # A task filed for the OK is titled by its kind, alone or with its matter (task_asks.kind_titled);
-                    # the row says what this one is about, to its party, beside that title (task #389).
+                    # the row says what this one is about, to its party, beside that title (task #389). A Finance OK
+                    # says so on any task: its bound grant's kind decides (task_asks.ALWAYS_ABOUT).
                     title = str((item.get("task") or {}).get("title") or "")
                     # Only to a party of the OK: one handed the ask reads its line as PRIVATE_LINE, and no more here.
-                    if task_asks.kind_titled(title) and item["line"] != task_asks.PRIVATE_LINE:
-                        said = task_asks.about(c, item["requirement_id"], item["line"])
+                    if item["line"] != task_asks.PRIVATE_LINE:
+                        said = task_asks.about(
+                            c, item["requirement_id"], item["line"], titled=task_asks.kind_titled(title)
+                        )
                         if said:
                             item["about"] = said
     return sorted(items, key=needs_key)
@@ -2086,20 +2089,17 @@ def _asked_page(item):
 
 def needs_lines(c, auth, who, items):
     """Needs-you items as a reader is served them: a page ask's row is the submitted page's title (`about` and `line`)
-    instead of its document's name ("Release report"), for a reader who may read that version
-    (files.page_refs_readable). Read with every list, so its marks and version move with the reader's access; a
-    changed item is a copy."""
-    from .files import page_refs_readable
+    instead of its document's name ("Release report"), for a reader who may read that version (files.readable_titles,
+    every page together). Read with every list, so its marks and version move with the reader's access; a changed item
+    is a copy."""
+    from .files import readable_titles
 
+    pages = [_asked_page(item) for item in items]
+    titles = readable_titles(c, auth, who, [(p["file_id"], p["version"]) for p in pages if p])
     out = []
-    for item in items:
-        page = _asked_page(item)
-        if page and page_refs_readable(c, auth, who, [page["ref"]]):
-            row = c.execute("SELECT title FROM bot_files WHERE id=?", (page["file_id"],)).fetchone()
-            title = _clip(row[0] if row else "", 120)
-            if title:
-                item = {**item, "about": title, "line": title}
-        out.append(item)
+    for item, page in zip(items, pages, strict=True):
+        title = _clip(titles.get((page["file_id"], int(page["version"])), ""), 120) if page else ""
+        out.append({**item, "about": title, "line": title} if title else item)
     return out
 
 
@@ -2110,20 +2110,16 @@ def needs_shown(c, auth, who, task_view=None, **how):
 
 def needs_still_shown(c, auth, who, items):
     """Whether items cut from a held build (backend/needs_cache.py) still show only what the caller may read: each
-    page ask's title (page_refs_readable), and what each OK is about (a Finance action's payee and amount) to its
+    page ask's title (files.readable_titles), and what each OK is about (a Finance action's payee and amount) to its
     parties alone (task_asks.parties_to_all, one statement for them all)."""
     from . import task_asks
-    from .files import page_refs_readable
+    from .files import readable_titles
 
-    oks = []
-    for item in items:
-        if not item.get("about"):
-            continue
-        page = _asked_page(item)
-        if page and not page_refs_readable(c, auth, who, [page["ref"]]):
-            return False
-        if (item.get("ask") or {}).get("kind") == "ok":
-            oks.append(str(item["requirement_id"]))
+    told = [item for item in items if item.get("about")]
+    pages = [(p["file_id"], int(p["version"])) for item in told if (p := _asked_page(item))]
+    if pages and len(readable_titles(c, auth, who, pages)) < len(set(pages)):
+        return False
+    oks = [str(item["requirement_id"]) for item in told if (item.get("ask") or {}).get("kind") == "ok"]
     return not oks or task_asks.parties_to_all(c, who.actor, oks)
 
 
@@ -2267,7 +2263,7 @@ def needs_summary(c, auth, who, task_view, limit):
                 "id": str(it["id"]),
                 "kind": it["kind"],
                 "task_id": it.get("task_id"),
-                "line": _clip(it.get("line"), 80),
+                "line": _clip(it.get("about") or it.get("line"), 80),
                 "since": created,
                 "age_days": round(age_days(created, now), 1),
             }
