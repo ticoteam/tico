@@ -1340,6 +1340,7 @@ def move(
             **({"pushed_past": pushed} if pushed else {}),
             **({"stage_rule": ruled["id"]} if ruled else {}),
             **({"undone_answer": undone} if undone else {}),
+            **({"consequence": "cascade"} if cascade else {}),  # closed with what filed it: no decision of its own
         },
     )
     if ruled:

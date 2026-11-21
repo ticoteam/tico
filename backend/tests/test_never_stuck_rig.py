@@ -80,6 +80,17 @@ def test_the_first_pass_over_tasks_with_no_wait_spans_reads_as_many_statements_a
     assert big["reads"] < 70, big["top_statements"]
 
 
+@pytest.mark.parametrize("backfill", [False, True], ids=["spans-kept", "spans-new"])
+def test_a_pass_with_only_queued_requests_reads_as_many_statements_at_any_size(backfill: bool) -> None:
+    """Cost: with no task the ladder checks, the room pass still reads the queued requests together, and the spans it
+    opens for them go in one statement: as many statements for 44 requests as for 440."""
+    small = perf.measure(10, profile=False, copies=3, due=0, backfill=backfill, ladder=False)
+    big = perf.measure(10, profile=False, copies=39, due=0, backfill=backfill, ladder=False)
+    assert small["kinds"] == {"queued behind a full stage": 10}
+    assert big["reads"] == small["reads"] and big["statements"] == small["statements"], big["top_statements"]
+    assert big["reads"] < 70, big["top_statements"]
+
+
 def test_a_world_puts_the_environment_back() -> None:
     before = {name: os.environ.get(name) for name in world.OFFLINE}
     with world.World(1):

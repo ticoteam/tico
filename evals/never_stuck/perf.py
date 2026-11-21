@@ -29,14 +29,22 @@ QUEUE_RECORD: dict[str, Any] = {
     "prefix": "Q",
     "stages": [
         {"name": "Ideas", "owner": ANA, "by_hand": True, "requests_move_on": True, "requirements": []},
-        {"name": "Next", "owner": "assignee", "task_limit": 1, "requirements": [{"kind": "owner_done"}]},
+        # By hand, so the task that fills it is no task of the ladder's.
+        {
+            "name": "Next",
+            "owner": "assignee",
+            "by_hand": True,
+            "task_limit": 1,
+            "requirements": [{"kind": "owner_done"}],
+        },
     ],
 }
 
 
-def fill(world: World, count: int, rng: random.Random, *, queued: bool = False) -> dict[str, int]:
+def fill(world: World, count: int, rng: random.Random, *, queued: bool = False, ladder: bool = True) -> dict[str, int]:
     """`count` open General tasks. Returns how many of each kind. With `queued`, each bot task's wake is still queued
-    (its bot has not taken it yet); else every wake had its run and the task waits for its next try."""
+    (its bot has not taken it yet); else every wake had its run and the task waits for its next try. Without `ladder`,
+    no General task: only `count` people's requests queued behind a full stage."""
     from backend import pipeline_settings as PS
     from backend import task_engine as E
     from backend import task_relations as TR
@@ -46,7 +54,7 @@ def fill(world: World, count: int, rng: random.Random, *, queued: bool = False) 
     first = None
     bots = (BUILDER, WRITER, REVIEWER)
     with world.tx() as c:
-        for n in range(count):
+        for n in range(count if ladder else 0):
             bot = bots[n % len(bots)]
             row = H.task_create(
                 c, ANA, f"Chore {n}", "What to do and how to tell it is done.", bot, pipeline=GENERAL, lint=False
@@ -67,7 +75,7 @@ def fill(world: World, count: int, rng: random.Random, *, queued: bool = False) 
         # People's requests in a by-hand stage that moves them on, queued behind a next stage that is full (one task
         # holds its one slot): their wait reads that stage's room (never_stuck._requests, waiting_on.of).
         PS.save(c, E.SYSTEM, dict(QUEUE_RECORD, stages=[dict(stage) for stage in QUEUE_RECORD["stages"]]))
-        for n in range(max(1, count // 5) + 1):
+        for n in range((max(1, count // 5) if ladder else count) + 1):
             row = H.task_create(c, ANA, f"Request {n}", "Please look at this.", BUILDER, pipeline=QUEUE, lint=False)
             if n == 0:
                 E.move(c, row["id"], "Next", ANA)
@@ -167,16 +175,17 @@ def measure(
     queued: bool = False,
     due: float = 0.02,
     backfill: bool = False,
+    ladder: bool = True,
 ) -> dict[str, Any]:
     """One pass over `count` tasks made through the engine, times 1 + `copies` (`clone`). `due`: the share of tasks
     whose next try is due in the pass measured. `backfill`: no task has a wait span yet, as on the first pass after
-    they came in (backend/wait_spans.py)."""
+    they came in (backend/wait_spans.py). `ladder` False: no task the ladder checks, only queued requests (`fill`)."""
     from backend import never_stuck as NS
 
     rng = random.Random(seed)
     with World(seed) as world:
         started = time.perf_counter()
-        kinds = fill(world, count, rng, queued=queued)
+        kinds = fill(world, count, rng, queued=queued, ladder=ladder)
         count = clone(world, copies) if copies else count
         made = time.perf_counter() - started
         world.shift(30)

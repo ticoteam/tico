@@ -255,7 +255,8 @@ def live_masks(unsettled):
 # own chat's task. BotOps or another agent acting with their rights is not theirs, and Tico's carrier copy of a message
 # is not a second touch.
 _OWN_VIA = "(" + ", ".join(f"'{via or ''}'" for via in question_marks.REPLY_VIA if via is not None) + ")"
-_BLANKS = "' ' || char(9, 10, 13)"
+# What Python's str.strip() takes off (hubdb._task_ref): every Unicode space.
+_BLANKS = "char(" + ", ".join(str(n) for n in range(0x3001) if chr(n).isspace()) + ")"
 
 
 def _ref_sql(alias: str, key: str) -> str:
@@ -289,7 +290,8 @@ _TOUCHES = (
 )
 # The history kinds that are a person deciding something about a task (one row each: a move's owner and status rows are
 # its consequences, not more decisions, and so are the move back that taking an answer back makes, `undone_answer`,
-# and the end of a snooze that an answer, a done or a reply makes by itself, `consequence`).
+# and what an act makes by itself, `consequence`: a snooze an answer, a done, a reply or the end of what a task filed
+# ends, and the close of the tasks under one that closes).
 _DECISIONS = (
     "('answer', 'answer_undone', 'give', 'move', 'snooze', 'unsnooze', 'reassign', 'try_again', 'requirement', "
     "'requirement_withdrawn')"
