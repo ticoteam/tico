@@ -85,7 +85,14 @@ function answer(url: string): Reply {
     return { body: { task: { ...okTask('c2'), title: 'Ruiz: two letters', relations: {}, to_leave: [two('r1', 's1'), two('r3', 's3')] } } };
   }
   if (url.endsWith('/api/v2/tasks/p1')) return { body: { task: otherTask('p1', 'Release report', ['page:file-a@2']) } };
-  if (url.endsWith('/api/v2/tasks/p1/files?all=1'))
+  // an email's OK and a file's OK both waiting on one task, the email's first
+  if (url.endsWith('/api/v2/tasks/p2')) {
+    const file = otherTask('p2', 'Release report', ['file:file-a@2']);
+    const email = { requirement_id: 'r1', kind: 'ok', line: 'Send this email?', met: false, may: ['ok', 'no'], shows: ['email:s1'], asked_by: 'bot:lo' };
+    return { body: { task: { ...file, to_leave: [email, ...file.to_leave] } } };
+  }
+  if (url.endsWith('/api/v2/tasks/m1/files?all=1')) return { body: { files: [] } };
+  if (url.endsWith('/api/v2/tasks/p1/files?all=1') || url.endsWith('/api/v2/tasks/p2/files?all=1'))
     return { body: { files: [{ id: 'file-a', name: 'release-report.md', title: 'Release report', mime: 'text/markdown', archived: false, current_version: 2, links: [], versions: [], writers: [] }, { id: 'file-b', name: 'notes.md', title: 'Notes', mime: 'text/markdown', archived: false, current_version: 1, links: [], versions: [], writers: [] }] } };
   if (url.endsWith('/api/v2/tasks/f1')) return { body: { task: otherTask('f1', 'Pay the rent', ['finance:x1']) } };
   if (url.endsWith('/api/v2/tasks/m1')) return { body: { task: theMatter, children: (theMatter as { children: unknown[] }).children } };
@@ -148,6 +155,8 @@ describe('an approval waiting, as a card in the agent’s thread @approvals', ()
     expect(card.textContent).toContain('Ruiz: reply letter, to dana@example.test');
     // its preview is read only on the Email tab: that read counts as showing the email
     expect(read.filter((u) => u.includes('/email/sends/'))).toEqual([]);
+    // a "Send:" task's card opens its matter (m1): only the matter's file list is read, once
+    expect(read.filter((u) => u.includes('/files?all=1'))).toEqual(['/api/v2/tasks/m1/files?all=1']);
     // The case's own address: it opens on the email waiting on the person.
     // the case's tab for this email, as the case's page names it
     expect(card.getAttribute('href')).toBe('/tasks/legal/7/email');
@@ -170,23 +179,30 @@ describe('an approval waiting, as a card in the agent’s thread @approvals', ()
     expect(card.textContent).toContain('Release report');
     expect(card.querySelectorAll('.file')).toHaveLength(1);
     expect(card.querySelector('.file em')?.textContent).toBe('MD');
-    expect(card.getAttribute('href')).toBe('/tasks/ops/41');
+    // it opens on the page it shows, as the task's page names its tab
+    expect(card.getAttribute('href')).toBe('/tasks/ops/41/release-report');
     expect(card.parentElement?.dataset.from).toBe('bot:lo');
   });
 
   it('a page OK on a task that also has an older question is still a card', async () => {
-    const question = { ...otherAsk('p1', 'page', null, 'bot:lo', []), id: 'p1:q1', since: '2026-11-19T08:00:00Z', ask: { requirement_id: 'q1', kind: 'question', line: 'Which week?', met: false, asked_by: 'bot:lo', shows: [], may: [] } };
-    needs = [question, otherAsk('p1', 'page', null, 'bot:lo', ['page:file-a@2'])];
+    // a ❓ as Needs you lists it: a question row of its own, with no ask
+    const page = otherAsk('p1', 'page', null, 'bot:lo', ['page:file-a@2']);
+    const question = { kind: 'question', id: 'p1:q1', task_id: 'p1', line: 'Which week?', since: '2026-11-19T08:00:00Z', task: page.task };
+    needs = [question, page];
     show({ agent: 'bot:lo' });
     const card = await screen.findByRole('link', { name: /Approve/ });
     expect(card.textContent).toContain('Release report');
+    expect(card.querySelectorAll('.file')).toHaveLength(1);
+    expect(card.getAttribute('href')).toBe('/tasks/ops/41/release-report');
   });
 
-  it('an email card reads the file list of the page it opens, once', async () => {
+  it('a file OK beside an email OK on one task is its own card: its own chip, opening its file', async () => {
+    needs = [ask('p2', 'bot:lo', 's1'), { ...otherAsk('p2', 'ok', 'bot:lo', 'bot:lo', ['file:file-a@2']), id: 'p2:r2' }];
     show({ agent: 'bot:lo' });
-    await screen.findByRole('link', { name: /Approve/ });
-    // a "Send:" task's card opens its matter (m1): only the matter's files are read, once
-    expect(read.filter((u) => u.includes('/files?all=1'))).toEqual(['/api/v2/tasks/m1/files?all=1']);
+    await waitFor(() => expect(screen.getAllByRole('link', { name: /Approve/ })).toHaveLength(2));
+    const file = screen.getAllByRole('link', { name: /Approve/ }).find((a) => a.querySelector('.file'));
+    expect(file?.querySelector('.file')?.textContent).toContain('Release report');
+    expect(file?.getAttribute('href')).toBe('/tasks/ops/41/release-report');
   });
 
   it('an OK the agent asked for by its slug, on a finance item, is a card with no chips', async () => {

@@ -71,7 +71,7 @@ export function useApprovalCards(scope: ApprovalScope, chat?: string): ChatMessa
   const files = useQueries({
     queries: asks.map((it, i) => {
       const sub = subs[i]?.data;
-      return { ...taskFilesQuery(it.id), enabled: !!sub && !emailIn(it.ask?.shows ?? []) && thingsOf(decisionOf(sub)).size > 0, retry: false };
+      return { ...taskFilesQuery(it.id), enabled: !!sub && !emailIn(it.ask?.shows ?? []) && thingsOf(decisionOf(sub, null)).size > 0, retry: false };
     }),
   });
   // An approval entry its task's cached read does not have yet (a new email's OK): that read is refreshed, once.
@@ -91,7 +91,8 @@ export function useApprovalCards(scope: ApprovalScope, chat?: string): ChatMessa
     const sub = subs[i]?.data;
     const send = emailIn(it.ask?.shows ?? []);
     // An email's card stands for that email's own open OK on the task, never another ask there.
-    if (!sub || !decisionOf(sub, send ?? undefined)) return [];
+    // Any other card, the task's own decision that is not an email's (an email's OK beside it has its own card).
+    if (!sub || !decisionOf(sub, send ?? null)) return [];
     // An email's: still to go out, as its OK task's row says (sendToGo); its preview is read only on its Email tab.
     if (send) {
       if (!sendToGo(sub, send)) return [];
@@ -124,10 +125,13 @@ function ApprovalCard({ task, send, chat }: Approval) {
 /** Any other OK (a page, a file, a finance item): the task's title, and the files it shows as chips. It opens the task's
     page, which opens on what waits on the person. */
 function ThingCard({ sub, chat }: { sub: TaskData; chat?: string }) {
-  const shown = thingsOf(decisionOf(sub));
-  const files = useQuery({ ...taskFilesQuery(sub.id), enabled: shown.size > 0, retry: false }).data ?? [];
-  const chips = files.filter((f) => shown.has(f.id)).map((f) => ({ key: f.id, name: f.title || f.name, type: typeOf(f.name, undefined) }));
-  return <Card to={tabAddress(sub, undefined, false).to} chat={chat} what={sub.title} files={chips} />;
+  // Its own decision, never an email's OK beside it on the task (that has its own card).
+  const shown = thingsOf(decisionOf(sub, null));
+  const { tabs, files } = useTabs(shown.size > 0 ? sub : undefined);
+  const chips = (files.data ?? []).filter((f) => shown.has(f.id)).map((f) => ({ key: f.id, name: f.title || f.name, type: typeOf(f.name, undefined) }));
+  // It opens on the tab of what it shows, as the task's page names it.
+  const slug = tabs.find((x) => (x.file && shown.has(x.file.id)) || (x.doc && shown.has(x.doc.file_id)))?.slug;
+  return <Card to={tabAddress(sub, slug, false).to} chat={chat} what={sub.title} files={chips} />;
 }
 
 /** An email's OK: the case it answers (else the subject) and who it goes to, from the OK task itself (its title and its
