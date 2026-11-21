@@ -151,6 +151,8 @@ def test_a_second_approver_answers_through_the_task_api(api):
         for slug in ("writer", "manager"):
             X.bot(conn, slug)
         rid = _shared(conn, ANA, BEN)
+        # An ordinary OK of Ben's with the same line, ahead of the shared page: it never takes the shared ask's place.
+        X.requirement(conn, "product-spec", "ok", person=BEN, line="Spec page", position=-1)
         row = _task(conn)
         _, version = _submitted(conn, store, row)
         # A bot's snooze heads the task's waits; each approver's turn is still their own ask.
@@ -159,13 +161,14 @@ def test_a_second_approver_answers_through_the_task_api(api):
         )
     for token, me in (("ana-test", ANA), ("ben-test", BEN)):
         read = api.get(f"/api/v2/tasks/{row['id']}", headers=headers(token))
-        assert read.json()["task"]["turn"]["who"] == me, f"{token}: the turn is theirs too"
+        turn = read.json()["task"]["turn"]
+        assert (turn["who"], turn["requirement_id"]) == (me, rid), f"{token}: the shared ask is their turn too"
         listed = api.get(f"/api/v2/tasks?turn={me}&snoozed=all", headers=headers(token)).json()["tasks"]
         assert [t["turn"]["who"] for t in listed if t["id"] == row["id"]] == [me], f"{token}: the board's mark"
         (entry,) = [e for e in read.json()["task"]["to_leave"] if e["requirement_id"] == rid]
         assert sorted(entry["may"]) == ["no", "ok"], token
         needs = api.get("/api/v2/needs-you", headers=headers(token)).json()
-        (item,) = [i for i in needs["items"] if (i.get("task") or {}).get("id") == row["id"]]
+        (item,) = [i for i in needs["items"] if i.get("requirement_id") == rid]
         assert item["task"]["turn"]["who"] == me, f"{token}: the ask's card in Needs you is theirs"
     ok = api.post(
         f"/api/v2/tasks/{row['id']}/asks/{rid}/answer",
@@ -173,7 +176,7 @@ def test_a_second_approver_answers_through_the_task_api(api):
         headers=headers("ben-test"),
     )
     assert ok.status_code == 200, ok.text
-    assert ok.json()["task"]["stage"]["name"] == "Done"
+    assert ok.json()["task"]["stage"]["name"] == "Spec", "Ben's ordinary OK still waits"
 
 
 def test_a_stage_takes_a_list_of_approvers_for_a_document_approval_only(c, company):

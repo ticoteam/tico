@@ -710,9 +710,11 @@ def of(
             for blocker, since in blockers
         ]
     # Two requirements missing for the same reason ("No PR linked" for PR open and Checks pass) are one line.
+    # A shared page's ask is kept by its requirement: an ordinary ask of the same person with the same line never
+    # takes its place (`head_for` finds it by its mark).
     once: dict[tuple[str, str | None, str], Wait] = {}
     for wait in out:
-        once.setdefault((wait.state, wait.who, wait.line), wait)
+        once.setdefault((wait.state, wait.who, f"shared:{wait.requirement_id}" if wait.shared else wait.line), wait)
     return sorted(once.values(), key=lambda wait: _ORDER[wait.state])
 
 
