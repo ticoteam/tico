@@ -381,4 +381,5 @@ def test_a_mail_decision_keeps_its_unchecked_reason_beside_a_directory_warning(r
 def test_a_large_mcp_batch_is_read_up_to_its_first_calls():
     calls = [("tools/call", {"name": f"tool_{n}"}) for n in range(L.CALLS_READ + 10)]
     read = L.proxy_output("Close CRM", "POST", None, calls).split("\n")
-    assert read[1] == f"(the first {L.CALLS_READ} of {L.CALLS_READ + 10} MCP calls)" and len(read) == L.CALLS_READ + 2
+    assert read[1] == f"(the first {L.CALLS_READ} of {L.CALLS_READ + 10} MCP calls)"
+    assert read[2:] == [f"MCP tools/call tool_{n}" for n in range(L.CALLS_READ)]  # calls 0-49, in order

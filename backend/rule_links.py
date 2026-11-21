@@ -83,10 +83,10 @@ def proxy_output(tool_name: str, method: str, body: bytes | None, calls: Any = N
     tool_proxy.rpc_calls) each call's method and tool name; for a JSON object body its top-level key names. Never a
     value, the path, the query or a header. `body` is None when it is not read (over MAX_JUDGED)."""
     lines = [f"{method} to {tool_name}"]
-    listed: list[tuple[Any, Any]] = list(calls or ())
-    if len(listed) > CALLS_READ:  # a batch of any size is classified in full; the check reads its first CALLS_READ
-        lines.append(f"(the first {CALLS_READ} of {len(listed)} MCP calls)")
-        listed = listed[:CALLS_READ]
+    every: list[tuple[Any, Any]] = calls or []
+    listed = every[:CALLS_READ]  # a batch of any size is classified in full; the check reads its first CALLS_READ
+    if len(every) > CALLS_READ:
+        lines.append(f"(the first {CALLS_READ} of {len(every)} MCP calls)")
     for called, params in listed:
         named = _name(called, METHOD)
         if named:

@@ -321,14 +321,15 @@ def test_an_mcp_read_over_a_megabyte_is_never_counted_as_a_write(api):
     assert call(api, "POST", "mcp", reader, json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).status_code == 200
     assert call(api, "POST", "mcp", reader, json=big).status_code == 200
     assert outcomes() == [] and judge.read == []
+    # The same large read sent anywhere else is a write the name-only check reads (its parse is not the gate's).
+    assert call(api, "POST", "upload", reader, json=big).status_code == 200
+    assert outcomes() == [("rules.refused", "")] and judge.read == ["POST to Close CRM"]
     writer = handed(api, finance)["value"]
     # At the MCP address, unparsed: unchecked, never judged. Anywhere else: the name-only check, which this rule refuses.
     assert call(api, "POST", "mcp", writer, json=big).status_code == 200
-    assert outcomes() == [("rules.unchecked", "too_large")] and judge.read == []
+    assert outcomes()[1:] == [("rules.unchecked", "too_large")] and len(judge.read) == 1
     assert call(api, "POST", "upload", writer, json=big).status_code == 200
-    assert outcomes() == [("rules.unchecked", "too_large"), ("rules.refused", "")] and judge.read == [
-        "POST to Close CRM"
-    ]
+    assert outcomes()[1:] == [("rules.unchecked", "too_large"), ("rules.refused", "")]
 
 
 @pytest.mark.parametrize("sse", [False, True])

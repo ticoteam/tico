@@ -649,8 +649,6 @@ def install(app, store):
         # 1 MB limit (`gate_calls`), and a larger one is not parsed for it at all.
         small = total <= rule_links.MAX_JUDGED
         calls = rpc_calls(b''.join(chunks)) if method == 'POST' and (small or ready['reads_only']) else None
-        # The gate reads Read authorization's parse whatever its size; without one, a POST over 1 MB is not parsed.
-        gate_calls = calls
         if ready['reads_only'] and method == 'POST':
             # A POST passes at Read only as MCP calls that only read.
             write = mcp_write(tool_id, calls) if calls is not None else 'not MCP'
@@ -668,6 +666,9 @@ def install(app, store):
         # The gate's hints belong to this MCP address of this tool as made: a tool made again under the same id starts
         # with none.
         hinted = (tool_id, tool.get('mcp_url') or '', tool.get('created_at') or '')
+        # The gate reads a parse up to 1 MB, and at the tool's MCP address Read authorization's parse whatever its size;
+        # a large POST anywhere else keeps the name-only check.
+        gate_calls = calls if small or mcp else None
         if urlsplit(url).hostname != urlsplit(tool['base_url']).hostname:
             await log(None, 'refused', 'Address left the tool host')
             return refused(404, 'not_found', 'Not found')
