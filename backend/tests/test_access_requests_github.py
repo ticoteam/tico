@@ -96,3 +96,26 @@ def test_write_for_a_bot_reading_every_repository_in_use_keeps_its_reads_and_wri
     assert tap(api, asked["id"], "grant")["state"] == "granted"
     assert reach(api) == {"Acme/emp-cpo": "write", "Acme/product": "write", "Acme/docs": "read"}
     assert api.get("/api/v2/bots/cpo/repositories", headers=auth()).json()["mode"] == "chosen"
+
+
+def test_a_grant_past_all_ticked_repos_at_write_keeps_every_write_and_its_workflow_flags(api, gh):
+    catalog(api, gh)
+    api.app_state.auth.owner_email = "ana@acme.example"
+    for name in ("product", "docs"):
+        put(api, "repositories/Acme/" + name, {"enabled": True})
+    put(
+        api,
+        "bots/cpo/repositories",
+        {"mode": "all", "all_access": "write", "all_repos": [{"full_name": "Acme/product", "run_workflows": True}]},
+    )
+    asked = ask(api, "Acme/bot-sales")  # a bot's repository: All ticked repos never reaches it
+    assert asked["state"] == "open"
+    assert tap(api, asked["id"], "grant")["state"] == "granted"
+    assert reach(api) == {
+        "Acme/emp-cpo": "write",
+        "Acme/product": "write",
+        "Acme/docs": "write",
+        "Acme/bot-sales": "read",
+    }
+    chosen = {r["full_name"]: r for r in api.get("/api/v2/bots/cpo/repositories", headers=auth()).json()["chosen"]}
+    assert chosen["Acme/product"].get("run_workflows") is True and not chosen["Acme/docs"].get("run_workflows")

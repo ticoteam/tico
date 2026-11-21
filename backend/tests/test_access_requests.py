@@ -263,6 +263,7 @@ def test_a_name_finds_the_tool_the_asker_may_see_and_two_it_may_see_are_offered_
     two = ask(api, "Ledger", token="cara-test", expected=409)["error"]
     assert sorted(choice["resource"] for choice in two["choices"]) == sorted(["tool:" + ledger, "tool:" + site])
     assert ask(api, "tool:" + site, token="cara-test", expected=422)["error"]["code"] == "resource"
+    assert ask(api, "api:Ledger", token="cara-test")["resource_id"] == ledger  # `api:` names the API tool
     # A website tool named Pager and an API tool whose id is `pager` are two matches for a bare "pager" too.
     pager = tool(api, "Pager", base_url="https://pager.acme.example")["id"]
     assert pager == "pager"

@@ -173,6 +173,8 @@ def resource(c: Any, who: Any, ref: Any, admins: Any = (), auth: Any = None) -> 
 
         def requestable(row: Any) -> bool:
             # Asking is for access one lacks, so an Everyone tool counts though its Tools list shows it only to holders.
+            if kind == "api" and api_tools.kind_of(row) != "api":
+                return False  # `api:<name>` names an API tool
             return row["audience"] is None or bool(api_tools.visible(c, who, row, admins, auth))
 
         named = _tools(c, name, kind != "", requestable)
@@ -436,21 +438,19 @@ def _give_repository(c: Any, row: Any, actor: Any, person: Any = False) -> Any:
     current = R.access(c, bot, org)
     if current["mode"] == "all" and has(c, row):
         return
-    # As a product repository its bot makes (github_app): from All ticked repos at Read it moves to Chosen repos, read on
-    # each repository it reaches now and this one at the asked level.
-    keep, _ = R.chosen_keeping(current, name)
+    # As a product repository its bot makes (github_app): from All ticked repos it moves to Chosen repos, each
+    # repository it reaches now kept at its level, and this one at the asked level or the one it has, if higher.
+    keep, _ = R.chosen_keeping(c, current, name, org)
     held = next(
         (
             r["access"]
-            for r in current["chosen"]
-            if current["mode"] == "chosen" and r["full_name"].lower() == name.lower()
+            for r in current["chosen" if current["mode"] == "chosen" else "effective"]
+            if r["full_name"].lower() == name.lower()
         ),
         None,
     )
     grant = R.Grant(full_name=name, access="write" if "write" in (held, want) else "read")
-    body = R.RepoAccessUpdate(
-        mode="chosen", chosen=[R.Grant(full_name=g.full_name, access=g.access) for g in keep] + [grant]
-    )
+    body = R.RepoAccessUpdate(mode="chosen", chosen=[*keep, grant])
     R.set_access(c, bot, body, org, actor, team_list=True, own_click=person, default=False)
 
 

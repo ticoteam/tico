@@ -3135,7 +3135,7 @@ def install_github_app(app, settings, store):
             if before["mode"] == "all" and before["all_access"] == "write":
                 pass  # it writes every ticked repository, this one now too
             else:
-                keep, moved = R.chosen_keeping(before, repository)
+                keep, moved = R.chosen_keeping(c, before, repository, org)
                 R.set_access(
                     c,
                     bot,
