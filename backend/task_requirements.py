@@ -386,6 +386,78 @@ def _prime_linked_done(conn: "sqlite3.Connection", tasks: list[Row]) -> None:
         read_cache.prime(
             conn, AT_HEAD_SQL, {(stage_id,): (1,) if stage_id in gated else None for stage_id in unread_gates}
         )
+    # A Review stage's gate reads each second review's check model and the commits it names (`_second_review`): read
+    # them for every gated task's filed tasks together, not two or three statements a review.
+    filed = [
+        row
+        for task in tasks
+        if task.get("visit") and str(task["visit"]["id"]) in visits and _at_head_gate(conn, task)
+        for row in values.get(("filed", str(task["visit"]["id"]))) or ()
+    ]
+    _prime_reviews(conn, values, filed)
+
+
+# A filed task's review role (`_reviews`), and a second review's requests and messages (`_named_commits`), as the
+# snapshot keeps them once `_prime_reviews` read them.
+_REVIEW_ROLE, _REVIEW_REQUESTS, _REVIEW_SAYS = "review_role", "review_requests", "review_says"
+_REVIEW_ROLE_SQL = "SELECT task_id FROM task_check_models WHERE role='review' AND task_id IN ({})"
+_REQUESTS_SQL = (
+    "SELECT data FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_model' "
+    "AND data IS NOT NULL ORDER BY created_at, id"
+)
+_REQUESTS_MANY_SQL = (
+    "SELECT subject_id, data FROM history_events WHERE subject_type='task' AND kind='check_model' "
+    "AND subject_id IN (SELECT value FROM json_each(?)) AND data IS NOT NULL ORDER BY created_at, id"
+)
+
+
+def _says_sql(many: bool) -> str:
+    """The `say` messages about a review in its own room, oldest first: one review's (`?` its room, then its id), or
+    many's (`?` a JSON list of [review id, room] pairs; each row's first column is its review)."""
+    from .hubdb import MESSAGE_TASK_SQL
+
+    # `+m.kind` keeps the kind index out: with no stats SQLite read every say in the company in date order to find the
+    # review room's few (TIDY, Nov 19: 29,134 says, 19 ms a review, 11 a Needs you build) instead of the room's index.
+    kept = "+m.kind='say' AND m.deleted_at IS NULL AND m.superseded_at IS NULL"
+    if not many:
+        return (
+            "SELECT m.body FROM messages m LEFT JOIN conversations cv ON cv.id = m.conversation_id "
+            f"WHERE m.conversation_id=? AND {kept} AND {MESSAGE_TASK_SQL}=? ORDER BY m.created_at, m.id"
+        )
+    return (
+        "SELECT json_extract(p.value, '$[0]') AS review, m.body FROM json_each(?) p "
+        "JOIN messages m ON m.conversation_id = json_extract(p.value, '$[1]') "
+        "LEFT JOIN conversations cv ON cv.id = m.conversation_id "
+        f"WHERE {kept} AND {MESSAGE_TASK_SQL} = json_extract(p.value, '$[0]') ORDER BY m.created_at, m.id"
+    )
+
+
+def _prime_reviews(conn: "sqlite3.Connection", values: dict[Any, Any], filed: list[Row]) -> None:
+    """Which of these filed tasks are second reviews, and each review's requests and messages, in three statements."""
+    ids = sorted({str(f["id"]) for f in filed if not f["deleted"] and (_REVIEW_ROLE, str(f["id"])) not in values})
+    if not ids:
+        return
+    review = {
+        str(row[0])
+        for row in conn.execute(
+            _REVIEW_ROLE_SQL.format("SELECT value FROM json_each(?)"), (json.dumps(ids),)
+        ).fetchall()
+    }
+    for task_id in ids:
+        values[(_REVIEW_ROLE, task_id)] = task_id in review
+    rooms = {str(f["id"]): f.get("conversation_id") for f in filed if str(f["id"]) in review}
+    if not rooms:
+        return
+    requests: dict[str, list[Any]] = {r: [] for r in rooms}
+    for row in conn.execute(_REQUESTS_MANY_SQL, (json.dumps(sorted(rooms)),)).fetchall():
+        requests[str(row[0])].append(row[1])
+    says: dict[str, list[Any]] = {r: [] for r in rooms}
+    pairs = json.dumps([[r, room] for r, room in sorted(rooms.items()) if room])
+    for row in conn.execute(_says_sql(True), (pairs,)).fetchall():
+        says[str(row[0])].append(row[1])
+    for r in rooms:
+        values[(_REVIEW_REQUESTS, r)] = tuple(requests[r])
+        values[(_REVIEW_SAYS, r)] = tuple(says[r])
 
 
 def _owner_done(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
@@ -490,13 +562,11 @@ def _reviews(conn: "sqlite3.Connection", filed: list[Row]) -> list[Row]:
     ids = [f["id"] for f in filed if not f["deleted"]]
     if not ids:
         return []
-    marks = ",".join("?" * len(ids))
-    review = {
-        row[0]
-        for row in conn.execute(
-            f"SELECT task_id FROM task_check_models WHERE role='review' AND task_id IN ({marks})", ids
-        ).fetchall()
-    }
+    values = read_cache.cache(conn)
+    if values is not None and all((_REVIEW_ROLE, str(i)) in values for i in ids):  # `_prime_reviews` read them
+        review = {i for i in ids if values[(_REVIEW_ROLE, str(i))]}
+    else:
+        review = {row[0] for row in conn.execute(_REVIEW_ROLE_SQL.format(",".join("?" * len(ids))), ids).fetchall()}
     return [f for f in filed if f["id"] in review]
 
 
@@ -504,27 +574,23 @@ def _named_commits(conn: "sqlite3.Connection", review: Row, refs: Iterable[str])
     """(PR ref, commit) pairs the review was asked to read: those its request named when it was filed
     (check_models.record), then those named in a message about the review, whoever wrote it. Nothing else: a review
     that names no commit reads none, and the PR's head is never taken for it."""
-    from .hubdb import MESSAGE_TASK_SQL
-
+    values = read_cache.cache(conn)
+    key = str(review["id"])
+    requests: list[Any]
+    says: list[Any]
+    if values is not None and (_REVIEW_REQUESTS, key) in values:  # `_prime_reviews` read them
+        requests, says = list(values[(_REVIEW_REQUESTS, key)]), list(values[(_REVIEW_SAYS, key)])
+    else:
+        requests = [row[0] for row in conn.execute(_REQUESTS_SQL, (review["id"],)).fetchall()]
+        # Only messages about this review: a conversation several tasks share carries other tasks' PRs and commits.
+        says = [row[0] for row in conn.execute(_says_sql(False), (review["conversation_id"], review["id"])).fetchall()]
     named: list[tuple[str, str]] = []
-    for (data,) in conn.execute(
-        "SELECT data FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_model' "
-        "AND data IS NOT NULL ORDER BY created_at, id",
-        (review["id"],),
-    ).fetchall():
+    for data in requests:
         requested = _json_object(data).get("requested")
         if isinstance(requested, dict):
             saved = cast("dict[str, object]", requested)
             named.extend((ref, str(sha).lower()) for ref, sha in saved.items() if sha)
-    # Only messages about this review: a conversation several tasks share carries other tasks' PRs and commits too.
-    # `+m.kind` keeps the kind index out: with no stats SQLite read every say in the company in date order to find the
-    # review room's few (TIDY, Nov 19: 29,134 says, 19 ms a review, 11 a Needs you build) instead of the room's index.
-    for (body,) in conn.execute(
-        "SELECT m.body FROM messages m LEFT JOIN conversations cv ON cv.id = m.conversation_id "
-        "WHERE m.conversation_id=? AND +m.kind='say' AND m.deleted_at IS NULL AND m.superseded_at IS NULL "
-        f"AND {MESSAGE_TASK_SQL}=? ORDER BY m.created_at, m.id",
-        (review["conversation_id"], review["id"]),
-    ).fetchall():
+    for body in says:
         named.extend(requested_commits(str(body or ""), refs).items())
     return named
 
