@@ -13,6 +13,7 @@ from datetime import timezone
 from clients import gateway, sessions
 
 from . import (
+    card_slot,
     start_places,
     org_turns,
     check_models,
@@ -5073,6 +5074,7 @@ class Execution:
     def start_claimed(self, c, who, body, runner, row):
         """The preparation of the job a claim hands out: its turn, attempt, inputs and hand-out. The claim runs it in a
         savepoint of its own (claim), so an error here rolls back only this job's writes."""
+        row = card_slot.carrier(c, row)  # a card's slot starts from its stage wake
         msg = H.message(c, row["message_id"])
         from . import threads
 
@@ -5477,7 +5479,7 @@ class Execution:
                 + '):\n'
                 + recovery['note'],
             }
-        if task and recovery:
+        if task and (recovery or row["slot"]):
             msg = self.fold_behind(c, row, aid, msg, task["id"], followed, lane)
         # The model's capacity stopped this job's turn after it acted: the runner continues that same thread, or holds
         # the run for review when it no longer has it (runner-rs/src/execute.rs CONTINUE_LOST).
@@ -6346,9 +6348,12 @@ class Execution:
         """A resumed run takes the work that queued behind it on its task while it was held (verdicts, subtask
         results, comments: the claim's fence, unfenced_sql, kept them back), so no separate turn waits after it to
         read them again (Dev 543). Each joins this turn as an input given in its prompt, already acknowledged, and its
-        job settles with the turn (complete); a lane's other work, a command and a redirect keep their own turns."""
+        job settles with the turn (complete); a lane's other work, a command and a redirect keep their own turns. A card
+        slot's run (backend/card_slot.py) takes its slot's queued jobs alone, at every claim, and records what it was
+        handed (`slot_rev`)."""
         from . import threads
 
+        slot = row["slot"]
         rows = c.execute(
             "SELECT m.*,j.id AS job_id FROM jobs j JOIN messages m ON m.id=j.message_id "
             "JOIN conversations cv ON cv.id=m.conversation_id "
@@ -6357,10 +6362,10 @@ class Execution:
             # A run for a thread's waiting notes carries them at its own claim, so it is never folded.
             f"AND coalesce(json_extract(m.refs,'$.wake'),'')<>'{threads.NOTE_WAKE}' "
             # Nor one waiting out its claim error, as the claim would not start it either.
-            f"AND NOT {CLAIM_WAITING_SQL} AND {queued_task_sql()}=? ORDER BY m.rowid",
-            (row["bot_id"], row["id"], H.now(), task_id),
+            f"AND NOT {CLAIM_WAITING_SQL} AND {queued_task_sql()}=? AND (? IS NULL OR j.slot=?) ORDER BY m.rowid",
+            (row["bot_id"], row["id"], H.now(), task_id, slot, slot),
         ).fetchall()
-        lines, folded = [], []
+        lines, folded, handed = [], [], [row["message_id"]]
         for queued in rows:
             if not privacy.message_readable(c, "bot:" + row["bot_id"], queued):
                 continue
@@ -6401,14 +6406,18 @@ class Execution:
                 + (text if len(text) <= FOLD_TEXT else text[:FOLD_TEXT] + "\u2026")
             )
             folded.append(queued["job_id"])
+            handed.append(queued["id"])
+        if slot:
+            card_slot.handed(c, row["id"], handed)
         if not folded:
             return msg
         H.event(c, H.TICO_ACTOR, "job.fold_behind", aid, {"job_id": row["id"], "jobs": folded})
-        return {
-            **msg,
-            "body": msg["body"] + "\n\nQueued on this task while this run was held, now part of this "
-            "turn (no separate run follows for them):\n" + "\n".join(lines),
-        }
+        lead = (
+            "Also waiting for you on this card, part of this run"
+            if slot
+            else "Queued on this task while this run was held, now part of this turn"
+        )
+        return {**msg, "body": f"{msg['body']}\n\n{lead} (no separate run follows for them):\n" + "\n".join(lines)}
 
     @staticmethod
     def record_source_thread(c, row, source):
@@ -6519,6 +6528,8 @@ class Execution:
             "SELECT m.*,j.id AS job_id FROM jobs j JOIN messages m ON m.id=j.message_id "
             "JOIN conversations cv ON cv.id=m.conversation_id "
             "WHERE j.bot_id=? AND j.state='queued' AND coalesce(json_extract(m.refs,'$.command'),0)!=1 "
+            # A card slot's work is never steered: it waits for the slot's next run (backend/card_slot.py).
+            "AND j.slot IS NULL "
             # Queued, not steered: it goes in right after the turn (backend/delivery.py).
             "AND coalesce(json_extract(m.refs,'$.delivery'),'')<>'queue' "
             # A run for a thread's waiting notes carries them at its own claim, so it is never folded.
@@ -7694,7 +7705,7 @@ class Execution:
             works = stage_wake(msg.get("refs"))
             for extra in c.execute(
                 "SELECT j.id,j.message_id FROM jobs j JOIN messages m ON m.id=j.message_id "
-                "WHERE j.bot_id=? AND j.state='queued' AND m.kind='notice' "
+                "WHERE j.bot_id=? AND j.state='queued' AND m.kind='notice' AND j.slot IS NULL "
                 "AND m.conversation_id=? AND m.created_at<=? AND j.id<>?",
                 (row["bot_id"], conv["id"], row["created_at"], row["job_id"]),
             ).fetchall():
