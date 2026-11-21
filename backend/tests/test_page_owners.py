@@ -444,3 +444,40 @@ def test_a_dm_that_changed_between_its_lookup_and_the_write_is_a_retryable_409(a
     assert u.status_code == 409 and u.json()['error']['code'] == 'dm_changed', u.text
     monkeypatch.setattr(threads, '_open_dm', real)
     assert post(api, 'threads/dm/messages', {'text': 'Hi', 'to_dm': 'bot:ops'})['conversation_id'] == dm['id']
+
+
+def test_a_dm_that_became_a_group_is_never_written_to_by_owner_and_the_next_send_finds_the_exact_one(api):
+    # #4882 S7: a real membership change. Ben joins the DM: it is a group now, so a message and a file by owner go to
+    # a new DM with exactly the agent, never to the group.
+    setup(api)
+    dm = post(api, 'threads/dm/messages', {'text': 'Hi', 'to_dm': 'bot:ops'})['conversation_id']
+    post(api, f'threads/{dm}/members', {'actor': 'human:ben'})
+    again = post(api, 'threads/dm/messages', {'text': 'Still there?', 'to_dm': 'bot:ops'})['conversation_id']
+    assert again != dm
+    r = api.post(
+        '/api/v2/uploads/threads/dm/messages',
+        data={'text': 'Look', 'to_dm': 'bot:ops'},
+        files={'files': ('a.txt', b'hello', 'text/plain')},
+        headers={**headers('ana-test'), 'Idempotency-Key': 'after-group-upload'},
+    )
+    assert r.status_code == 200 and r.json()['message']['conversation_id'] == again, r.text
+
+
+def test_a_dm_that_appears_between_the_lookup_and_the_write_is_a_retryable_409(api, monkeypatch):
+    # #4882 S9: none was found before the check (the message would start one), but one is there at write time (brought
+    # back, or its member back): its own rules were not read, so the client sends again.
+    from backend import threads
+
+    setup(api)
+    get(api, 'threads/dm?with=bot:ops&private=true')
+    real = threads._open_dm
+    calls = []
+
+    def appearing(c, actor, resolved, legacy=True):
+        calls.append(1)
+        found = real(c, actor, resolved, legacy=legacy)
+        return None if len(calls) % 2 else found  # the lookup before the check finds none; the one in the write does
+
+    monkeypatch.setattr(threads, '_open_dm', appearing)
+    r = api.post('/api/v2/threads/dm/messages', json={'text': 'Hi', 'to_dm': 'bot:ops'}, headers=headers('ana-test'))
+    assert r.status_code == 409 and r.json()['error']['code'] == 'dm_changed', r.text

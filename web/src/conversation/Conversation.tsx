@@ -23,7 +23,7 @@ import { onJump } from './Outline';
 import { ChatPlace } from './Rich';
 import { quoteFrom, quoteOf, Replying } from './Quote';
 import { SessionLine, type Session } from './Session';
-import { installConversationLive, liveQuery, liveText, markRead, rowsOf, sendMessage, timelineQuery } from './queries';
+import { installConversationLive, liveQuery, liveText, markRead, rowsOf, sendMessage, strandedQuery, timelineQuery } from './queries';
 import type { ChatMessage, LiveRun, Variant } from './types';
 
 /** Within this many pixels of the end counts as "at the bottom": what comes in is read, and the asks over the box come back. */
@@ -184,7 +184,10 @@ export function Conversation({ id, variant, title, actor, session, from, starter
   const myId = me?.id;
   const timeline = useInfiniteQuery(timelineQuery(id));
   const { data: live = [] } = useQuery(liveQuery(id));
-  const own = rowsOf(timeline.data);
+  // the Agent bar's rows that failed when its DM changed under them, kept by its agent, for Retry here
+  const { data: stranded } = useQuery({ ...strandedQuery(toDm ?? ''), enabled: !!toDm });
+  const ownRows = rowsOf(timeline.data);
+  const own = stranded?.length ? [...ownRows, ...stranded.filter((m) => !ownRows.some((r) => r.id === m.id))] : ownRows;
   const rows = withExtra(own, extra, !!timeline.hasNextPage);
   const extraIds = new Set(extra?.map((m) => m.id));
 

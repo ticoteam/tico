@@ -1,9 +1,9 @@
 import type { AnyRouter } from '@tanstack/react-router';
 import * as z from 'zod/mini';
 import { defineAction } from '@/actions';
+import { chatAddress } from '@/lib';
 import { ApiError } from '@/api/client';
 import { directoryQuery, queryClient } from '@/data';
-import { chatAddress } from '@/lib';
 import { budgetDay, lastFullMonth, monthName } from './model';
 import {
   addBudget,
@@ -554,7 +554,7 @@ export const askManager = defineAction({
         toast({ text: 'Held for a check' });
         return HELD;
       }
-      // the thread it went to opens beside the page
+      // the thread it went to, as the server answered it, opens beside the page
       const thread = sent.conversation_id || sent.thread_id;
       if (thread) chat = `thread:${thread}`;
     }

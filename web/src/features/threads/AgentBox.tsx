@@ -1,4 +1,4 @@
-import { useNavigate } from '@tanstack/react-router';
+import { useRouter } from '@tanstack/react-router';
 import { refusalFor } from '@/actions';
 import { Composer, sendToDm, type FromPage } from '@/conversation';
 import { useActor } from '@/data';
@@ -24,7 +24,9 @@ export interface AgentBoxProps {
 export function AgentBox({ agent, from, draftId }: AgentBoxProps) {
   const me = useMe();
   const who = useActor(agent);
-  const navigate = useNavigate();
+  const router = useRouter();
+  // what is open where the box is: the page, and the item its address names (the mail open in Mail)
+  const here = () => `${router.state.location.pathname}?${new URLSearchParams(router.state.location.searchStr).get('open') ?? ''}`;
   if (!me) return null;
   return (
     <Composer
@@ -36,6 +38,7 @@ export function AgentBox({ agent, from, draftId }: AgentBoxProps) {
       // a message with files cannot carry its page: the agent would not know which conversation it is about
       attach={false}
       onSend={async (text) => {
+        const at = here();
         let sent;
         try {
           sent = await sendToDm(agent, text, from);
@@ -47,8 +50,9 @@ export function AgentBox({ agent, from, draftId }: AgentBoxProps) {
           toast({ text: 'Held for a check' });
           return true;
         }
+        // the thread it went to, as the server answered it, opens beside, unless the person moved on to another item
         const thread = sent.conversation_id || sent.thread_id;
-        if (thread) void navigate({ to: '.', search: (s: Record<string, unknown>) => ({ ...s, chat: `thread:${thread}` }) } as never);
+        if (thread && here() === at) void router.navigate({ to: '.', search: (s: Record<string, unknown>) => ({ ...s, chat: `thread:${thread}` }) } as never);
         return true;
       }}
     />

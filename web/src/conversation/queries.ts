@@ -7,6 +7,7 @@ import type { Assistant, SlackMessage, SlackThread } from '@/api/schema';
 import { keys, queryClient, quietRoot, write } from '@/data';
 import { onTopic } from '@/live';
 import { newId } from '@/lib/ids';
+import { chatAddress } from '@/lib/chat';
 import type { FromPage } from '@/shell/pageOwner';
 import type { ChatMessage, LiveRun, ReplyQuote, TimelinePage, Variant } from './types';
 
@@ -189,7 +190,12 @@ const answerOf = (r: Sent): ChatMessage | null => {
 export async function sendToDm(agent: string, text: string, from: FromPage): Promise<ChatMessage | null> {
   const send = () => api.post<Sent>(`/api/v2/threads/${DM_ADDRESS}/messages`, messageBody(text, from, agent), { idempotencyKey: newId() });
   // the DM changed between the server's lookup and its write (`dm_changed`): sent again, it is looked up again
-  return answerOf(await send().catch((e: unknown) => (dmChanged(e) ? send() : Promise.reject(e))));
+  const sent = answerOf(await send().catch((e: unknown) => (dmChanged(e) ? send() : Promise.reject(e))));
+  // the chat that shows it reads again: the agent's DM as its address names it (made now, maybe), and its timeline
+  const thread = sent?.conversation_id || sent?.thread_id;
+  void queryClient.invalidateQueries({ queryKey: keys.threads.chat(chatAddress(agent, 'agent')) });
+  if (thread) void queryClient.invalidateQueries({ queryKey: timelineKey(thread) });
+  return sent;
 }
 
 const withRows = (d: Timeline | undefined, fn: (rows: ChatMessage[]) => ChatMessage[]): Timeline | undefined => {
@@ -214,9 +220,17 @@ const pageFor = (s: Send): FromPage | null => (!s.from ? null : s.variant === 't
 /** The thread a `toDm` send was written to, when it is not the one the chat shows. */
 const movedTo = (s: Send, real: ChatMessage) => !!s.toDm && !!(real.conversation_id || real.thread_id) && (real.conversation_id || real.thread_id) !== s.id;
 
+/** The Agent bar's rows that failed when its DM changed under them, by its agent: drawn in whichever DM it shows, for
+    Retry. */
+export const strandedKey = (toDm: string) => ['threads', 'dm-stranded', toDm] as const;
+export const strandedQuery = (toDm: string) =>
+  queryOptions({ queryKey: strandedKey(toDm), queryFn: (): ChatMessage[] => [], staleTime: Infinity, gcTime: Infinity });
+
 export async function sendMessage(given: Send): Promise<ChatMessage | null> {
   const s = { ...given, from: pageFor(given) };
   const tmp = s.retry ?? `tmp:${newId()}`;
+  // a stranded row sent again leaves the agent's list: it is in this thread's timeline from here on
+  if (s.toDm && s.retry) queryClient.setQueryData<ChatMessage[]>(strandedKey(s.toDm), (rows = []) => rows.filter((m) => m.id !== s.retry));
   const row: ChatMessage = {
     id: tmp,
     thread_id: s.id,
@@ -255,14 +269,22 @@ export async function sendMessage(given: Send): Promise<ChatMessage | null> {
     if (real && movedTo(s, real)) s.onMoved?.(real.conversation_id ?? real.thread_id ?? '');
     return real;
   } catch (e) {
-    // the Agent bar's DM changed under it: the row stays, marked, for Retry, and the bar reads its DM again
-    if (s.toDm && dmChanged(e)) s.onMoved?.('');
+    // The Agent bar's DM changed under it: the bar reads its DM again and may show another thread. The row, marked,
+    // goes with the agent (`strandedKey`), so it is still there for Retry, whichever thread the bar shows.
+    if (s.toDm && dmChanged(e)) {
+      dropRow(timelineKey(s.id), tmp);
+      queryClient.setQueryData<ChatMessage[]>(strandedKey(s.toDm), (rows = []) => [...rows.filter((m) => m.id !== tmp), { ...row, pending: 'failed' }]);
+      s.onMoved?.('');
+    }
     return null;
   }
 }
 
 /** Drop a failed row (the person took the words back into the box). */
-export const discardPending = (id: string, tmp: string) => dropRow(timelineKey(id), tmp);
+export const discardPending = (id: string, tmp: string) => {
+  dropRow(timelineKey(id), tmp);
+  queryClient.setQueriesData<ChatMessage[]>({ queryKey: ['threads', 'dm-stranded'] }, (rows) => rows?.filter((m) => m.id !== tmp));
+};
 
 /* ---------------------------------------------------------------- read marks */
 

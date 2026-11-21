@@ -216,8 +216,8 @@ describe('Growth on the one read @s400 @s444', () => {
     expect(within(table).getByText('no spend')).toBeTruthy();
     expect(within(table).queryByRole('link', { name: 'Unknown' })).toBeNull();
 
-    // The ask line sends the words to the reader's DM with the Growth Manager, led by the scope and month, and opens
-    // the thread they went to (#4882).
+    // The ask line sends the words to the reader's DM with the Growth Manager, led by the scope and month, and the
+    // thread they went to, as the server answered it, opens beside (#4882).
     fireEvent.change(screen.getByRole('textbox', { name: 'Ask the Growth Manager' }), { target: { value: 'Why is search over?' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
     await waitFor(() => expect(router.state.location.search).toEqual({ month: '2026-10', chat: 'thread:dm-gm1' }));

@@ -121,7 +121,7 @@ describe('Mail @s159', () => {
     });
     expect(all('POST', '/api/v2/email/sends')).toEqual([]);
     expect(all('POST', '/api/v2/mail/drafts')).toEqual([]);
-    // the thread it went to opens beside, as the server answered it
+    // the thread it went to, as the server answered it, opens beside
     await waitFor(() => expect(new URLSearchParams(router.state.location.searchStr).get('chat')).toBe('thread:d9'));
   });
 });

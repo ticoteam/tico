@@ -185,6 +185,17 @@ describe('A thread from outside @4882', () => {
     expect((screen.getByRole('textbox', { name: 'Message QA' }) as HTMLTextAreaElement).value).toBe('Second');
   });
 
+  it('opens no chat when the person moved to another thread before the send came back @4882-S8', async () => {
+    let answer!: (r: Reply) => void;
+    serve((url, method) => (method === 'POST' && url.endsWith('/threads/dm/messages') ? new Promise<Reply>((r) => (answer = r)) : undefined));
+    const router = outside();
+    await say('Slow words');
+    await waitFor(() => expect(answer).toBeTypeOf('function'));
+    await act(() => router.navigate({ to: '/threads/t1' as never }));
+    await act(async () => answer(ok({ ...msg('m6', 'human:me', 'Slow words', 'd6'), conversation_id: 'd6' })));
+    expect(new URLSearchParams(router.state.location.searchStr).get('chat')).toBeNull();
+  });
+
   it('says a held message was held, clears the box and opens no chat @4882-S2', async () => {
     serve((url, method) => (method === 'POST' && url.endsWith('/threads/dm/messages') ? ok({ hold: { id: 'h1' } }) : undefined));
     const router = outside();

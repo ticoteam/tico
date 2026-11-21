@@ -214,16 +214,29 @@ describe('Conversation', () => {
     expect(screen.queryByText('Ship it')).toBeNull();
   });
 
-  it("reads the Agent bar's DM again when the server says it changed, and keeps the words for Retry @4882-S1", async () => {
+  it("keeps a row that failed when the bar's DM changed, for Retry in the DM the bar switches to @4882-S1", async () => {
     seed([]);
-    serve(() => ({ status: 409, body: { error: { code: 'dm_changed', detail: 'Your chat with bot:qa changed; send it again', retryable: true } } }));
+    let changed = true;
+    serve(() =>
+      changed
+        ? { status: 409, body: { error: { code: 'dm_changed', detail: 'Your chat with bot:qa changed; send it again', retryable: true } } }
+        : { status: 200, body: { ...msg(3, ME, 'Ship it'), conversation_id: 'T2', thread_id: 'T2' } },
+    );
     const onMoved = vi.fn();
-    render(<Conversation id={T} variant="side" title="Ana" actor="bot:qa" from={FROM} toDm="bot:qa" onMoved={onMoved} />, {
-      wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
-    });
+    const bar = (id: string) => <Conversation id={id} variant="side" title="Ana" actor="bot:qa" from={FROM} toDm="bot:qa" onMoved={onMoved} />;
+    const view = render(bar(T), { wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider> });
     type('Ship it');
     await waitFor(() => expect(onMoved).toHaveBeenCalledWith(''));
+    // the bar reads its DM again and shows another thread: the row is still there
+    queryClient.setQueryData(['thread', 'T2', 'timeline'], { pages: [{ messages: [], next_cursor: null, read_marks: {} }], pageParams: [null] });
+    view.rerender(bar('T2'));
     expect(await screen.findByText('Not sent')).toBeTruthy();
+    changed = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(sends()).toHaveLength(2));
+    expect(sends()[1]).toMatchObject({ url: '/api/v2/threads/dm/messages', body: { text: 'Ship it', to_dm: 'bot:qa' } });
+    await waitFor(() => expect(screen.queryByText('Not sent')).toBeNull());
+    expect(screen.getByText('Ship it')).toBeTruthy();
   });
 
   it('sends a retry with the page it was first written on, not the one shown now @4857-S15', async () => {
