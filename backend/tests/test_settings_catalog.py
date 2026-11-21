@@ -9,13 +9,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend import botops_act, settings_catalog, team_rules
+from backend import agent_ops_act, settings_catalog, team_rules
 from backend.assistant import valid_operation
 from backend.settings_entries import ENTRIES
 from backend.store import H, Problem
 from backend.tests.helpers.api import get, post  # noqa: F401  (fixture)
 from backend.tests.helpers.mcp import call as mcp
-from backend.tests.helpers.member_bots import botops, finish, turn  # noqa: F401  (fixtures)
+from backend.tests.helpers.member_bots import agent_ops, finish, turn  # noqa: F401  (fixtures)
 
 
 def test_every_team_rule_has_an_entry_and_every_entry_is_well_formed():
@@ -28,18 +28,18 @@ def test_every_team_rule_has_an_entry_and_every_entry_is_well_formed():
         assert e.kind in settings_catalog.CLASSES and e.who in settings_catalog.WHO, e.key
         assert e.card.startswith("#/"), e.key
         assert e.kind != "person" or e.why, e.key
-        # A Confirm card can only carry a route a person may confirm from BotOps.
+        # A Confirm card can only carry a route a person may confirm from Agent Ops.
         if e.kind == "confirm":
             path = settings_catalog.probe(e)
             assert valid_operation(e.method, path, None, "botops"), e.key
-    assert botops_act  # the classifier the confirm check leans on stays importable
+    assert agent_ops_act  # the classifier the confirm check leans on stays importable
 
 
 def _owner(via="botops"):
     return SimpleNamespace(role="owner", via=via, actor="human:ana-test")
 
 
-def test_botops_never_runs_a_confirm_setting_when_no_card_can_be_made():
+def test_agent_ops_never_runs_a_confirm_setting_when_no_card_can_be_made():
     e = ENTRY("team.rules.admin_sql")
     with pytest.raises(Problem) as refused:
         settings_catalog.plan(None, None, _owner(), e, "off", propose=None)
@@ -90,25 +90,25 @@ def test_a_cloud_machine_size_is_found_by_its_words_and_named_for_a_bot_opens_th
     )
 
 
-def test_a_member_changes_a_direct_setting_through_botops_and_the_reply_names_the_value(api, botops):
-    ana = turn(api, botops, person="ana-test", text="Set the release to 09:30")
+def test_a_member_changes_a_direct_setting_through_agent_ops_and_the_reply_names_the_value(api, agent_ops):
+    ana = turn(api, agent_ops, person="ana-test", text="Set the release to 09:30")
     err, done = mcp(api, "tico_settings_set", {"key": "release.times", "value": "09:30"}, ana["token"])
     assert not err and done["value"] == ["09:30"], done
     err, shown = mcp(api, "tico_settings_show", {"key": "release.times"}, ana["token"])
     assert not err and shown["value"] == ["09:30"] and shown["you_may"] is True, shown
-    finish(api, botops, ana)
+    finish(api, agent_ops, ana)
 
 
-def test_a_confirm_setting_from_botops_is_a_card_and_nothing_changes(api, botops):
-    ana = turn(api, botops, person="ana-test", text="Stop admins seeing SQL")
+def test_a_confirm_setting_from_agent_ops_is_a_card_and_nothing_changes(api, agent_ops):
+    ana = turn(api, agent_ops, person="ana-test", text="Stop admins seeing SQL")
     err, card = mcp(api, "tico_settings_set", {"key": "team.rules.admin_sql", "value": "off"}, ana["token"])
     assert not err and card["needs_confirm"] is True, card
     assert get(api, "access")["rules"]["admin_sql"] is True
-    finish(api, botops, ana)
+    finish(api, agent_ops, ana)
 
 
-def test_mail_access_through_botops_waits_for_the_persons_confirmation(api, botops):
-    ana = turn(api, botops, person="ana-test", text="Let Ops read our physical mail")
+def test_mail_access_through_agent_ops_waits_for_the_persons_confirmation(api, agent_ops):
+    ana = turn(api, agent_ops, person="ana-test", text="Let Ops read our physical mail")
     err, missing = mcp(
         api, "tico_settings_set", {"key": "mail.access.bot", "bot": "ops", "value": "read"}, ana["token"]
     )
@@ -119,35 +119,35 @@ def test_mail_access_through_botops_waits_for_the_persons_confirmation(api, boto
     assert not err and card["needs_confirm"] is True, card
     assert card["action"]["path"] == "/api/v2/postal/addresses/all/grants/bot/ops"
     assert get(api, "postal/addresses/all/grants")["grants"] == []
-    finish(api, botops, ana)
+    finish(api, agent_ops, ana)
     post(api, f"assistant/actions/{card['action']['id']}/confirm", {}, "ana-test")
     grant = get(api, "postal/addresses/all/grants")["grants"][0]
     assert (grant["grantee_id"], grant["granted_by_id"]) == ("ops", "human:ana")
 
 
-def test_a_person_only_setting_gets_the_reason_and_the_cards_link(api, botops):
+def test_a_person_only_setting_gets_the_reason_and_the_cards_link(api, agent_ops):
     person_only = next(e for e in ENTRIES if e.kind == "person" and not e.target)
-    ana = turn(api, botops, person="ana-test", text="Change it for me")
+    ana = turn(api, agent_ops, person="ana-test", text="Change it for me")
     err, refused = mcp(api, "tico_settings_set", {"key": person_only.key, "value": "x"}, ana["token"])
     assert err and person_only.card in str(refused), refused
-    finish(api, botops, ana)
+    finish(api, agent_ops, ana)
 
 
-def test_someone_without_the_rights_is_told_who_can(api, botops):
-    cara = turn(api, botops, person="cara-test", text="Set the release to 09:30")
+def test_someone_without_the_rights_is_told_who_can(api, agent_ops):
+    cara = turn(api, agent_ops, person="cara-test", text="Set the release to 09:30")
     err, refused = mcp(api, "tico_settings_set", {"key": "release.times", "value": "09:30"}, cara["token"])
     assert err and "owner or an admin" in str(refused), refused
     err, shown = mcp(api, "tico_settings_show", {"key": "release.times"}, cara["token"])
     assert not err and shown["you_may"] is False and "admin" in shown["setting"]["who_may"], shown
 
 
-def test_show_a_bots_spend_limit_and_who_may_change_it_and_a_member_changes_a_direct_setting(api, botops):
-    ana = turn(api, botops, person="ana-test", text="What are BotOps' spend limits?")
+def test_show_a_bots_spend_limit_and_who_may_change_it_and_a_member_changes_a_direct_setting(api, agent_ops):
+    ana = turn(api, agent_ops, person="ana-test", text="What are Agent Ops' spend limits?")
     err, shown = mcp(api, "tico_settings_show", {"key": "bot.limit.usd", "bot": "botops"}, ana["token"])
     assert not err and "value_error" not in shown and isinstance(shown["value"], dict), shown
     assert shown["setting"]["who_may"].startswith("The bot's owners") and shown["you_may"] is True, shown
-    finish(api, botops, ana)
-    cara = turn(api, botops, person="cara-test", text="Make me an incoming trigger called Orders")
+    finish(api, agent_ops, ana)
+    cara = turn(api, agent_ops, person="cara-test", text="Make me an incoming trigger called Orders")
     err, done = mcp(
         api, "tico_settings_set", {"key": "webhooks.incoming.create", "value": {"name": "Orders"}}, cara["token"]
     )
@@ -156,14 +156,14 @@ def test_show_a_bots_spend_limit_and_who_may_change_it_and_a_member_changes_a_di
         assert c.execute("SELECT created_by FROM triggers WHERE name='Orders'").fetchone()[0] == "human:cara"
 
 
-def test_catalogue_checks_a_bot_setting_against_the_bot_it_names(api, botops):
+def test_catalogue_checks_a_bot_setting_against_the_bot_it_names(api, agent_ops):
     from backend.tests.helpers.api import as_member
     from backend.tests.helpers.member_bots import register
 
-    ana = turn(api, botops, person="cara-test", text="Make me a bot")
+    ana = turn(api, agent_ops, person="cara-test", text="Make me a bot")
     made = register(api, ana, "routine-owner")
     assert made.status_code == 200, made.text
-    finish(api, botops, ana)
+    finish(api, agent_ops, ana)
 
     # Cara manages the bot she made: the bot it names decides, including the read-only permission answer.
     with api.app.state.store.read() as c:
@@ -179,14 +179,14 @@ def test_catalogue_checks_a_bot_setting_against_the_bot_it_names(api, botops):
     assert not err and unrelated["you_may"] is False, unrelated
 
 
-def test_an_admin_asking_botops_to_raise_a_group_pool_limit_gets_a_card_the_tap_runs(api, botops):
+def test_an_admin_asking_agent_ops_to_raise_a_group_pool_limit_gets_a_card_the_tap_runs(api, agent_ops):
     """Settings stage 3, acceptance 13: a group's pool is `groups/<id>`, two segments of its route, so the card names
     the route Settings uses and the admin's tap sets it. Before, the id was one escaped segment and no card could be
-    made, so BotOps sent the admin to Settings."""
+    made, so Agent Ops sent the admin to Settings."""
     from backend.tests.helpers.usage_limits import groups
 
     groups(api, "product")
-    ben = turn(api, botops, person="ben-test", text="Raise the Engineering pool to $50 a day")
+    ben = turn(api, agent_ops, person="ben-test", text="Raise the Engineering pool to $50 a day")
     err, card = mcp(
         api,
         "tico_settings_set",
@@ -196,7 +196,7 @@ def test_an_admin_asking_botops_to_raise_a_group_pool_limit_gets_a_card_the_tap_
     assert not err and card["needs_confirm"] is True, card
     assert card["action"]["path"] == "/api/v2/usage/pools/groups/eng", card["action"]
     assert "$50" in card["action"]["description"], card["action"]
-    finish(api, botops, ben)
+    finish(api, agent_ops, ben)
     assert get(api, "usage/limits")["pools"]["groups"]["eng"]["daily_usd"] is None  # nothing until the tap
     post(api, f"assistant/actions/{card['action']['id']}/confirm", {}, "ben-test")
     assert get(api, "usage/limits")["pools"]["groups"]["eng"]["daily_usd"] == 50

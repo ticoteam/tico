@@ -5,7 +5,7 @@
  "about": "Every department Tico runs, each with its head: the reference chart the other models are cut from.",
  "picks_when": [],
  "reason": "Part of the Everything model.",
- "core": [{"template": "assistant"}, {"template": "botops"}],
+ "core": [{"template": "assistant"}, {"template": "agent-ops"}],
  "seats": [
   {"team": "leadership", "template": "chief-of-staff"},
   {"team": "leadership", "template": "strategy-analyst"},

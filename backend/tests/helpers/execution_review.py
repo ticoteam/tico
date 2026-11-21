@@ -230,7 +230,7 @@ def add_recovery_reviewer(api):
 
     with api.app.state.store.transaction() as c:
         c.execute(
-            "INSERT OR IGNORE INTO bots(id,slug,display_name,state) VALUES(?, ?, 'BotOps', 'active')",
+            "INSERT OR IGNORE INTO bots(id,slug,display_name,state) VALUES(?, ?, 'Agent Ops', 'active')",
             (H.FLEET_MAINTAINER, H.FLEET_MAINTAINER),
         )
 

@@ -109,6 +109,7 @@ def write_registry(settings):
         employees.append(
             {
                 "name": slug,
+                "slug": H.AGENT_OPS_SLUG if slug == H.FLEET_MAINTAINER else slug,  # Agent Ops keeps its first id
                 "display_name": settings.assistant_name
                 if slug == "assistant"
                 else D.BOT_NAMES.get(slug) or card.get("name", slug),

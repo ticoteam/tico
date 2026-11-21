@@ -1,4 +1,4 @@
-"""The Assistant changes settings with the same catalogue and classes as BotOps (backend/settings_catalog.py,
+"""The Assistant changes settings with the same catalogue and classes as Agent Ops (backend/settings_catalog.py,
 backend/assistant.py): a direct one on the person's words in their own chat, a confirm one as a Confirm card there, a
 person-only one never; the owner's "Assistant acts without asking" off makes every change a card.
 
@@ -16,8 +16,8 @@ from backend.settings_entries import ENTRIES
 from backend.store import Problem
 from backend.tests.helpers.api import as_member, get, headers, post, put  # noqa: F401  (fixture)
 from backend.tests.helpers.assistant import assistant_turn
-from backend.tests.helpers.botops_repositories import FLAG, effective, repos  # noqa: F401  (fixture)
-from backend.tests.helpers.member_bots import botops  # noqa: F401  (fixture)
+from backend.tests.helpers.agent_ops_repositories import FLAG, effective, repos  # noqa: F401  (fixture)
+from backend.tests.helpers.member_bots import agent_ops  # noqa: F401  (fixture)
 from clients import hubtools
 from backend.tests.helpers.settings_assistant import mcp
 
@@ -74,7 +74,7 @@ def test_a_confirm_setting_is_a_card_in_the_assistant_chat_and_the_tap_changes_i
         row = c.execute("SELECT proposer,conversation_id FROM assistant_actions WHERE id=?", (action["id"],)).fetchone()
         assert row["proposer"] == "assistant"
         room = c.execute("SELECT owner_id FROM conversations WHERE id=?", (row["conversation_id"],)).fetchone()
-        assert room["owner_id"] == "human:ana"  # the person's own chat, not BotOps'
+        assert room["owner_id"] == "human:ana"  # the person's own chat, not Agent Ops'
     # The Assistant can't tap it; the person's own tap runs it, as them.
     post(api, f"assistant/actions/{action['id']}/confirm", {}, token=attempt["token"], expected=403)
     done = post(api, f"assistant/actions/{action['id']}/confirm", {}, token="ana-test")["action"]
@@ -231,7 +231,7 @@ def test_with_the_rule_off_a_repository_setting_is_a_card_the_tap_runs(api):
         assert c.execute("SELECT enabled FROM repositories WHERE full_name='Acme/product'").fetchone()[0] == 0
 
 
-def test_run_workflows_is_a_card_in_the_assistant_chat_and_a_cited_write_never_skips_it(api, botops, repos):
+def test_run_workflows_is_a_card_in_the_assistant_chat_and_a_cited_write_never_skips_it(api, agent_ops, repos):
     """Criterion 10, and the route's own rule at the Assistant gate: a kept Run workflows tick coming back as
     `{"mode": "chosen"}`, or taking access away, holds no tick in the body but is still the person's card."""
     r, attempt = assistant_turn(api, "ana-test", "Let ops run workflows in product")
@@ -270,7 +270,7 @@ def test_run_workflows_is_a_card_in_the_assistant_chat_and_a_cited_write_never_s
     assert raw.status_code == 200 and effective(api) == [FLAG], raw.text
 
 
-# ------------------------------------------------------------------ the same request to BotOps and to the Assistant
+# ------------------------------------------------------------------ the same request to Agent Ops and to the Assistant
 SAMPLE = {"bool": "on", "int": "3", "number": "1", "list": "a", "text": "x", "json": {"name": "x"}, "upload": "x"}
 
 
@@ -298,7 +298,7 @@ def outcome(c, auth, who, e, card_direct=False):
     return "run" if "run" in made else "card"
 
 
-# Direct entries that must still come back as a card when the owner's rule is off (botops_act.DO), never refused.
+# Direct entries that must still come back as a card when the owner's rule is off (agent_ops_act.DO), never refused.
 CARDED = {"computer.label", "computer.turns_at_once"}
 
 
@@ -306,9 +306,9 @@ ASSISTANT_REFUSED = {"mail.intake"}
 
 
 @pytest.mark.parametrize("role", ["owner", "admin", "member"])
-def test_every_setting_does_for_the_assistant_what_it_does_for_botops(api, role):
+def test_every_setting_does_for_the_assistant_what_it_does_for_agent_ops(api, role):
     """Stage 1's sweep (test_settings_parity) asked of the person's Assistant on their cited words: every entry ran, was
-    a card or was refused exactly as for BotOps, gaps included."""
+    a card or was refused exactly as for Agent Ops, gaps included."""
     from backend.tests.helpers import settings_parity as parity
     from backend.tests.helpers.api import runner
 
@@ -323,7 +323,7 @@ def test_every_setting_does_for_the_assistant_what_it_does_for_botops(api, role)
         got = parity.ask(api, attempt, e, objects, person, token)
         if e.key in ASSISTANT_REFUSED:
             # Assistant-only divergence: postal intake is a NEVER route (it takes mail from outside, backend/assistant.py),
-            # so no card can carry it on a cited turn and the planner refuses it as forbidden (403). BotOps runs it
+            # so no card can carry it on a cited turn and the planner refuses it as forbidden (403). Agent Ops runs it
             # directly as an admin.
             assert got == "refused" and parity.LAST[e.key].startswith("403") and '"forbidden"' in parity.LAST[e.key], (
                 e.key,
@@ -333,10 +333,10 @@ def test_every_setting_does_for_the_assistant_what_it_does_for_botops(api, role)
             continue
         if got in ("ran", "card", "refused", "card, then refused"):
             # On the person's own cited turn the Assistant applies a confirm-class setting at once (the person's rights are
-            # the ceiling; BotOps still cards it): the one divergence the Assistant is meant to have.
+            # the ceiling; Agent Ops still cards it): the one divergence the Assistant is meant to have.
             if got != want and not (got == "ran" and want == "card" and e.kind == "confirm"):
                 wrong.append(
-                    f"{e.key}: BotOps {want} for the {role} ({e.kind}, {e.who}), the Assistant {got}"
+                    f"{e.key}: Agent Ops {want} for the {role} ({e.kind}, {e.who}), the Assistant {got}"
                     f" [{parity.LAST.get(e.key, '')}]"
                 )
         else:

@@ -635,13 +635,13 @@ def install(app, settings, store, auth):
         **api_v2(
             "Sleep when idle",
             "setSleepWhenIdle",
-            "Turn Sleep when idle on (hours 1-24) or off (0) and choose whether bot computers stop with the server; an owner or an admin (and BotOps for one); on needs a server Tico hosts",
+            "Turn Sleep when idle on (hours 1-24) or off (0) and choose whether bot computers stop with the server; an owner or an admin (and Agent Ops for one); on needs a server Tico hosts",
             "SleepWhenIdle",
         ),
     )
     def sleep_set(request: Request, body: SleepSet):
         """Change Sleep when idle: `hours` 1-24 turns it on, 0 turns it off; `runners` says whether bot computers stop and
-        start with the server. An owner or an admin (BotOps for one) only; turning it on needs a server Tico hosts."""
+        start with the server. An owner or an admin (Agent Ops for one) only; turning it on needs a server Tico hosts."""
         who = request.state.identity
         auth.domain(who)
         if not auth.bot_admin(who):

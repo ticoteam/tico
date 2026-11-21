@@ -67,8 +67,8 @@ def register(
             task_id = auth.resolve_task(c, who, tid)
             auth.task(c, who, task_id)
             if who.via == "botops" and not who.confirmed:
-                # BotOps acting for a person unlinks only on that person's own tap (a Confirm card).
-                return app.state.botops_propose(
+                # Agent Ops acting for a person unlinks only on that person's own tap (a Confirm card).
+                return app.state.agent_ops_propose(
                     c,
                     who,
                     "DELETE",
@@ -90,7 +90,7 @@ def register(
             raise Problem("not_found", "No such comment on this task", 404)
         if not msg.get("deleted_at"):
             privacy.require_message(c, who, msg)
-        # The Assistant and BotOps act with a person's rights, but the words are the person's own.
+        # The Assistant and Agent Ops act with a person's rights, but the words are the person's own.
         if who.via:
             raise Problem("forbidden", "Only a comment's author edits or deletes it, signed in as themselves", 403)
         if not H.is_comment(msg):

@@ -175,12 +175,12 @@ def test_too_large_under_warn_rules_only_is_delivered_with_its_line_and_counted_
     assert events(api, "rules.warned") == [] and get(api, "rules/stats")["unchecked_today"] == 1
 
 
-def test_a_persons_writes_and_their_botops_and_assistant_writes_are_checked_as_that_person(ruled):
+def test_a_persons_writes_and_their_agent_ops_and_assistant_writes_are_checked_as_that_person(ruled):
     api, judge = ruled
     rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}})
     store = api.app.state.store
-    as_botops = Identity("human:ana", "owner", "ana@acme.example", via="botops", task_actor="bot:botops")
-    verdict = K.preflight(store, judge, as_botops, "message", "Acme's favorite color is green", ["human:ben"])
+    as_agent_ops = Identity("human:ana", "owner", "ana@acme.example", via="botops", task_actor="bot:botops")
+    verdict = K.preflight(store, judge, as_agent_ops, "message", "Acme's favorite color is green", ["human:ben"])
     assert verdict["author"] == "human:ana" and verdict["sender"] == "bot:botops" and verdict["via"] == "botops"
     assert verdict["outcome"] == "broken" and K.holds(verdict)
     # Her own write, and her Assistant's, are held as her too: the same text is one check, the Assistant's the same
@@ -1335,30 +1335,30 @@ def test_a_mail_approval_is_spent_once(ruled):
     assert sorted(outcomes) == ["held", "held", "pass"]
 
 
-def test_botops_mail_for_a_person_finds_its_own_hold_and_spends_its_approval_once(ruled):
+def test_agent_ops_mail_for_a_person_finds_its_own_hold_and_spends_its_approval_once(ruled):
     api, _ = ruled
     rule(
         api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}, "if_broken": "escalate", "reviewer": "ben"}
     )
     with api.app.state.store.transaction() as c:
         c.execute(
-            "INSERT OR IGNORE INTO bots(id, slug, display_name, state) VALUES('botops', 'botops', 'BotOps', 'active')"
+            "INSERT OR IGNORE INTO bots(id, slug, display_name, state) VALUES('botops', 'botops', 'Agent Ops', 'active')"
         )
-    as_bot(api, "botops", "botops-test")
-    api.app.state.auth.settings.test_identities["ana-botops"] = Identity(
+    as_bot(api, "botops", "agent-ops-test")
+    api.app.state.auth.settings.test_identities["ana-agent-ops"] = Identity(
         "human:ana", "owner", "ana@acme.example", via="botops", task_actor="bot:botops", agent="test"
     )
     mail = {"to": ["vendor@outside.example"], "subject": "Hi", "body": "Our favorite color is gold."}
-    first = post(api, "bots/botops/mail-check", mail, token="ana-botops")
-    again = post(api, "bots/botops/mail-check", mail, token="ana-botops")
+    first = post(api, "bots/botops/mail-check", mail, token="ana-agent-ops")
+    again = post(api, "bots/botops/mail-check", mail, token="ana-agent-ops")
     assert first["outcome"] == again["outcome"] == "held" and first["held"]["id"] == again["held"]["id"]
     [hold] = sql(api, "SELECT id, author FROM org_rule_holds WHERE operation='mail'")
     assert hold["author"] == "human:ana"
     view = get(api, f"rule-holds/{hold['id']}", token="ben-test")
     post(api, f"rule-holds/{hold['id']}/send", {"nonce": view["nonce"]}, token="ben-test")
-    sent = post(api, "bots/botops/mail-check", mail, token="ana-botops")
+    sent = post(api, "bots/botops/mail-check", mail, token="ana-agent-ops")
     assert sent["outcome"] == "pass" and sent["approved"] == hold["id"]
-    assert post(api, "bots/botops/mail-check", mail, token="ana-botops")["outcome"] == "held"
+    assert post(api, "bots/botops/mail-check", mail, token="ana-agent-ops")["outcome"] == "held"
 
 
 def test_a_mail_check_for_another_bot_is_refused_and_counts_nothing(ruled):

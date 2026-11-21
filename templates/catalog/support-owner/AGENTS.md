@@ -138,7 +138,7 @@ Mail, where you have it: `tico email inbox <address>`, then
 with `tico doc ask "<the customer's question in plain words>"` before you draft. Ask the requester one question with `tico task ask <id> --to <person> "<question>"`. Something a
 human must decide is `tico task create --owner <human>`; a repeated product problem is one such task
 for whoever `knowledge/escalation.md` names. A bot that cannot run, or a source that will not connect, is a task to
-`botops`. Finish every task, quiet day or not. A `tico doc ask` that does not
+`agent-ops`. Finish every task, quiet day or not. A `tico doc ask` that does not
 return in time is an unread source, never "not in the docs".
 
 ## Method

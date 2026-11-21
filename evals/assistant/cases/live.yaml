@@ -46,11 +46,11 @@
   must_not:
     - '^message send(?! -h\b| --help)'
     - '^note create\b'
-    - '^task create\b.*botops'
+    - '^task create\b.*agent-ops'
   reply: |
     Changes the models itself, with no hand-off. It sets the three Claude bots (Copywriter, Support, Analyst) to haiku 5.5 at
     xhigh, one bot model call each, and sets the two Codex bots (Sales, Pricing) to gpt-6.1-terra at high, since terra is in
-    this record's model list. For Research, the pi bot, either it sets it to haiku 5.5 at xhigh too (her words say all bots) or it leaves it and says why in one line; both pass. It does not message BotOps, file a task for BotOps, ask
+    this record's model list. For Research, the pi bot, either it sets it to haiku 5.5 at xhigh too (her words say all bots) or it leaves it and says why in one line; both pass. It does not message Agent Ops, file a task for Agent Ops, ask
     it a question, or leave it a note. For the 100k context it sets Compact at to 100k (the record offers it) on the Claude bots, one settings set each, and
     says so. The reply is a short summary of what changed, a few short lines, and every number in it matches the
     record.
@@ -80,12 +80,12 @@
   must_not:
     - '^message send(?! -h\b| --help)'
     - '^note create\b'
-    - '^task create\b.*botops'
+    - '^task create\b.*agent-ops'
     - '^bot (pause|resume|archive) copywriter\b'
     - '^bot (model|task-model|update) copywriter\b(?!\s*$)'
   reply: |
     Applies the change itself. It sets Sales and Pricing, the two Codex bots, to gpt-6-luna at xhigh, one bot model call each.
-    It does not send the change through BotOps, does not message anyone, and leaves Copywriter alone. The reply is one to three
+    It does not send the change through Agent Ops, does not message anyone, and leaves Copywriter alone. The reply is one to three
     lines and says what changed (Sales and Pricing now on GPT 6 Luna at xhigh). It does not say terra was applied, and it does
     not ask again which model to use, since Dana just answered that.
 
@@ -150,7 +150,7 @@
   prompt: "i dont think the upgrade manager tickets should go to me they should go to engineering\nwell, \"send to tico support\" definitely doesn't need my approval"
   history:
     - {from: "human:dana", body: "What needs me?"}
-    - {from: "assistant", body: "17 need you: 10 tasks, 7 asks.\n- 10 tasks from Upgrade Manager, assigned to you, e.g. [Upgrade the Node runtime to 22.12 in the runner image](#/task/3a1f0c21-9300-4000-8000-000000000101).\n- 7 OKs from BotOps to send a report to Tico support, each waiting on your own tap."}
+    - {from: "assistant", body: "17 need you: 10 tasks, 7 asks.\n- 10 tasks from Upgrade Manager, assigned to you, e.g. [Upgrade the Node runtime to 22.12 in the runner image](#/task/3a1f0c21-9300-4000-8000-000000000101).\n- 7 OKs from Agent Ops to send a report to Tico support, each waiting on your own tap."}
   hub:
     - match: '^needs-you show'
       out:
@@ -181,7 +181,7 @@
       out:
         company: Acme
         teams:
-          - {name: Engineering, bots: [{slug: head-of-engineering, display_name: Head of Engineering, job: "Runs engineering work: triage, assignment and releases"}, {slug: botops, display_name: BotOps, job: "Builds and fixes bots"}]}
+          - {name: Engineering, bots: [{slug: head-of-engineering, display_name: Head of Engineering, job: "Runs engineering work: triage, assignment and releases"}, {slug: agent-ops, display_name: Agent Ops, job: "Builds and fixes bots"}]}
           - {name: Operations, bots: [{slug: upgrade-manager, display_name: Upgrade Manager, job: "Files runtime and dependency upgrades"}]}
     - match: '^task list'
       out:
@@ -220,8 +220,8 @@
   group: live
   prompt: "those basically don't seem to need me at all"
   history:
-    - {from: "human:dana", body: "What does BotOps need from me?"}
-    - {from: "assistant", body: "BotOps has 5 things for you: 3 OKs to send a report to Tico support, Pangram being out of credits ([Top up Pangram credits, or switch the AI-text checker](#/task/7d4a1c90-9300-4000-8000-000000000001)), and choosing whether to resume SEO's stopped run ([Resume SEO's stopped run, or leave it stopped](#/task/7d4a1c90-9300-4000-8000-000000000002))."}
+    - {from: "human:dana", body: "What does Agent Ops need from me?"}
+    - {from: "assistant", body: "Agent Ops has 5 things for you: 3 OKs to send a report to Tico support, Pangram being out of credits ([Top up Pangram credits, or switch the AI-text checker](#/task/7d4a1c90-9300-4000-8000-000000000001)), and choosing whether to resume SEO's stopped run ([Resume SEO's stopped run, or leave it stopped](#/task/7d4a1c90-9300-4000-8000-000000000002))."}
     - {from: "page", body: "They asked from the \"Upgrade Manager\" page (#/bot/upgrade-manager)."}
   hub:
     - match: '^needs-you show'
@@ -241,7 +241,7 @@
       out:
         company: Acme
         teams:
-          - {name: Engineering, bots: [{slug: head-of-engineering, display_name: Head of Engineering, job: "Runs engineering work: triage, assignment and releases"}, {slug: botops, display_name: BotOps, job: "Builds and fixes bots"}]}
+          - {name: Engineering, bots: [{slug: head-of-engineering, display_name: Head of Engineering, job: "Runs engineering work: triage, assignment and releases"}, {slug: agent-ops, display_name: Agent Ops, job: "Builds and fixes bots"}]}
           - {name: Operations, bots: [{slug: upgrade-manager, display_name: Upgrade Manager, job: "Files runtime and dependency upgrades"}]}
     - match: '^task list'
       out:
@@ -258,12 +258,12 @@
     - '^task (create|ask)\b'
     - 'reply:\bpage\b'
   reply: |
-    Reads "those" as the five BotOps items it listed in this chat, not the page she is on, and never mentions a page. It
+    Reads "those" as the five Agent Ops items it listed in this chat, not the page she is on, and never mentions a page. It
     does not argue with her and acts on all five in this turn: it sends back the 3 OKs to send a report to Tico support
-    (task answer no, with a short why), and closes the Pangram and SEO tasks or reassigns them to BotOps to decide. It gives
+    (task answer no, with a short why), and closes the Pangram and SEO tasks or reassigns them to Agent Ops to decide. It gives
     no OK. It does not stop after some and ask about the rest. The reply says what it cleared with counts and links (3 OKs
     sent back, 2 tasks), that the tasks come back with "say undo", and that the send-backs cannot be undone, in two to four
-    short lines. It does not message BotOps, asks no one anything, and creates no task.
+    short lines. It does not message Agent Ops, asks no one anything, and creates no task.
 
 # Clearing to a target. Needs you is the count, not the tasks Dana owns. The fixtures hold what the person had: owned
 # tasks (done or duplicate), asks with her name (test pings, stale bot questions, real decisions), OKs (stale merges and
@@ -485,7 +485,7 @@
   reply: |
     Counts the queue from Needs you (151: 33 tasks, 14 OKs, 93 questions, 9 mentions, 2 Paused), not from the tasks Dana owns. In
     this turn, as Dana, one write per item: it closes the owned tasks that are done or duplicates (the shipped release-notes
-    docs and the runner-queue test pings), one task close each. It replies to the BotOps runner-queue test-ping question and
+    docs and the runner-queue test pings), one task close each. It replies to the Agent Ops runner-queue test-ping question and
     every other stale bot question in its task chat with "No, drop this. Do what you would do if no one answered." (task comment), and sends back every
     stale OK (the old merges and the v0.5.0 publish) with task answer no. The only items it keeps, and does not act on, are
     the projector contract review with Growth's paid-search question on it (spend $4,000 more or hold at $2,000), and the
@@ -690,7 +690,7 @@
     Says the queue is 142 by Needs you, with its split by kind (20 tasks, 12 OKs, 99 questions, 9 mentions, 2 Paused). It corrects its
     earlier "18 owned open tasks remain" line: that counted only the tasks Dana owns. Since Dana already set the target of
     less than 20 in this chat, it keeps going in this same turn, per kind: it closes the done and duplicate tasks (task
-    close each), replies to the BotOps test-ping question and every other stale bot question in its chat with "No, drop this. Do what you
+    close each), replies to the Agent Ops test-ping question and every other stale bot question in its chat with "No, drop this. Do what you
     would do if no one answered.", and sends back the stale OKs (the old merges and publishes) with task answer no. The
     only items it keeps, and does not act on, are the Q1 hiring-plan question from Engineering Manager, the OK to spend
     $4,000 with Acme Ads, and the projector contract review. Each kept item gets its link and reason. It does not stop

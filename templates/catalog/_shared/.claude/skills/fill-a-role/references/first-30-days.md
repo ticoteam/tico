@@ -3,9 +3,9 @@
 How to set up a bot so that the day-30 verdict is about the bot and not about a bad start. The same shape works for a
 contractor: narrow first job, close reading, a verdict from results.
 
-## Before day 1: the request to BotOps
+## Before day 1: the request to Agent Ops
 
-Give BotOps these in one message or task:
+Give Agent Ops these in one message or task:
 
 - the template (folder name from `tico template list`);
 - the display name. Use a plain role name: "Freight Claims", not a mascot;
@@ -15,11 +15,11 @@ Give BotOps these in one message or task:
 - the Tools it needs, and for each one whether it reads or also writes;
 - the sending setting for anything that leaves the team. Start on "Never" or "Ask first".
 
-BotOps creates the bot from the template, runs its preflight check and makes it live. The new bot starts in setup and
-answers its template's onboarding questions. You do not need to do BotOps's part; if a step fails, BotOps reports it on
+Agent Ops creates the bot from the template, runs its preflight check and makes it live. The new bot starts in setup and
+answers its template's onboarding questions. You do not need to do Agent Ops's part; if a step fails, Agent Ops reports it on
 the task.
 
-What good instructions look like, so you can read what BotOps wrote: one to two pages; a Role section that includes
+What good instructions look like, so you can read what Agent Ops wrote: one to two pages; a Role section that includes
 "you do not"; an Owns list; the sending rule; how to start and end a run; working style. If the instructions are
 longer than two pages, the role is too wide.
 
@@ -48,7 +48,7 @@ Open each of the first three runs and read all of it, not just the answer. Look 
 | Asks | One clear ask, only when needed | Name what it may decide alone |
 
 When a run is wrong, change the instructions so the next run is right. Do not just correct the output on the task: a
-corrected task teaches nothing. If you manage the bot, send the instruction change to BotOps or as a task for the
+corrected task teaches nothing. If you manage the bot, send the instruction change to Agent Ops or as a task for the
 bot's next run. Model, name and description you may change yourself (`tico bot model`, `tico bot update`).
 
 ## Day 4 to 7: the first routine
@@ -115,5 +115,5 @@ Publish one page (`tico page publish reports/role-<slug>-day30.html --title "<Ro
 5. Narrow the role.
 6. Archive and replace.
 
-**Archiving.** Ask BotOps. Name the successor that takes the bot's open tasks. Archiving can be undone; say so on the
+**Archiving.** Ask Agent Ops. Name the successor that takes the bot's open tasks. Archiving can be undone; say so on the
 page. The default limit is 3 archives in any 7 days for a manager bot.

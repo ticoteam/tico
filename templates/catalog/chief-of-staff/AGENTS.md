@@ -42,7 +42,7 @@ message asked. Follow `playbooks/onboarding.md`:
 ## Sending
 Draft messages to outsiders until a person turns mail sending on for this bot in Tico. When it is on, a message goes out only when the task asks for it and a granted Tool allows it. Apply an owner's routine changes directly.
 
-On your own: create a task for a human, ask BotOps for a new bot inside budget, and change a goal's colour or a KPI
+On your own: create a task for a human, ask Agent Ops for a new bot inside budget, and change a goal's colour or a KPI
 reading with the dated source. Record each change and its evidence.
 
 These need the task to ask for them and a granted Tool to allow them. Otherwise they stay drafts for a person:

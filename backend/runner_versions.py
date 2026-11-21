@@ -13,11 +13,16 @@ room for the self-update that normally follows a server release within minutes, 
 stuck gets a nudge.
 """
 
+from typing import Any
+
 from . import releases
 from .store import H
 from . import sources as SRC
 
 MIN_RUNNER_RELEASE = "0.6.0-rc.1"
+# Templates sent to runners under an older name, {template: old name}: a runner's catalog is its own copy
+# (runner_support/catalog_job.py), an older one knows Agent Ops' only as `botops`, and a newer one reads either (#4863).
+OLD_TEMPLATE_NAMES = {H.AGENT_OPS_SLUG: "botops"}
 NUDGE_AFTER_S = 3600
 KINDS = ("mac", "linux", "docker")
 LABELS = {
@@ -390,3 +395,14 @@ def health_check(computers, server=None):
         if online
         else "No computer is online to compare.",
     }
+
+
+def wire_template(config: dict[str, Any]) -> dict[str, Any]:
+    """A bot's config as every runner reads it: a renamed template under its old name, which all of them know."""
+    old = OLD_TEMPLATE_NAMES.get(str((config or {}).get("template") or ""))
+    return {**config, "template": old} if old else config
+
+
+def reported_template(name: str) -> str:
+    """The template a runner names, under this release's name for it."""
+    return next((new for new, old in OLD_TEMPLATE_NAMES.items() if old == name), name)

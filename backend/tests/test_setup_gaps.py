@@ -12,7 +12,7 @@ from backend.tests.helpers.api import get, headers
 BUILT_INS = (
     ("librarian", "Librarian"),
     ("strategy-owner", "Strategy Owner"),
-    ("botops", "BotOps"),
+    ("botops", "Agent Ops"),
     ("tools-owner", "Tools Owner"),
 )
 NOW = "2026-11-16T00:00:00Z"

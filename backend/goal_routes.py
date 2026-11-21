@@ -43,7 +43,7 @@ DECISION_SAYS = (("title", "New task"), ("body", "Task"), ("note", "Note"))
 def company_editor(who, tap=False):
     """The owner, on their own click: never an admin or a member, never a bot (the Strategy Owner proposes), never someone
     acting for the owner. The Strategy Owner's level, its regular checks, the vision and the strategy are theirs. `tap`:
-    the owner's tap on a Confirm card BotOps or their Assistant made counts as their click (backend/assistant.py confirm)."""
+    the owner's tap on a Confirm card Agent Ops or their Assistant made counts as their click (backend/assistant.py confirm)."""
     return who.role == "owner" and (not who.via or (tap and who.confirmed))
 
 

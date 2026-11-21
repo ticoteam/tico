@@ -53,7 +53,14 @@ def register(app, admin_only, auth, mutate, onboarding, owner_only, recruiter, s
             admin_only(who, "changes " + ", ".join(sorted(sent)))
         else:
             owner_only(who, "changes the team's rules")
-        result = mutate(request, body, lambda c: team_rules.save(c, who.actor, body.model_dump()))
+        # A retry of a request made before the rename hashed the rules' old names (team_rules.OLD_NAMES).
+        legacy = {new: old for old, new in team_rules.OLD_NAMES.items()}
+        result = mutate(
+            request,
+            body,
+            lambda c: team_rules.save(c, who.actor, body.model_dump()),
+            retry_body=lambda _c, _result: {legacy.get(k, k): v for k, v in body.model_dump().items()},
+        )
         with store.read() as c:
             auth.sync_access(c)  # who is a credential administrator follows the rule
         return result
@@ -164,7 +171,7 @@ def register(app, admin_only, auth, mutate, onboarding, owner_only, recruiter, s
     @app.post("/api/v2/access/owner/email")
     def access_owner_email(request: Request, body: M.OwnerEmailChange):
         """The owner changes their own sign-in address in place: the same person, every copy of the address at once.
-        Signed in as themselves only: not through an API token, BotOps or the Assistant. From this commit on, the old
+        Signed in as themselves only: not through an API token, Agent Ops or the Assistant. From this commit on, the old
         address no longer signs in (docs/people.md, Change the owner's sign-in email)."""
         who = request.state.identity
         owner_only(who, "changes the owner's sign-in email")
@@ -200,7 +207,7 @@ def register_people(admin_only, app, auth, delegated_identity, mutate, propose_c
     @app.post("/api/v2/access/humans")
     def access_person_add(request: Request, body: M.AccessPersonAdd):
         """Add a person to the roster and the sign-in allow list. An owner or admin may add anyone; a member only
-        a coworker in the company's email domain (and only if `add_people` is on for them). BotOps adds a coworker in the
+        a coworker in the company's email domain (and only if `add_people` is on for them). Agent Ops adds a coworker in the
         Team's domain at once; an owner or admin may also add someone outside it."""
         caller = request.state.identity
         auth.domain(caller)
@@ -271,7 +278,7 @@ def register_people(admin_only, app, auth, delegated_identity, mutate, propose_c
     @app.post("/api/v2/access/people/{pid}", deprecated=True)  # rc.1 playbooks and mail setup text
     def access_person_edit(request: Request, pid: str, body: M.AccessPersonEdit):
         """Owners and admins edit a person, including what a member may do (create bots, add people). Only an
-        owner makes or removes an admin. Through BotOps, a role or add_people change is a Confirm card."""
+        owner makes or removes an admin. Through Agent Ops, a role or add_people change is a Confirm card."""
         caller = request.state.identity
         auth.domain(caller)
 
@@ -290,7 +297,7 @@ def register_people(admin_only, app, auth, delegated_identity, mutate, propose_c
                 if who.role != "owner" and str(target.get("email") or "").lower() in auth.bot_admins:
                     raise Problem("forbidden", "Only an owner turns an admin's sign-in on or off", 403)
             # A role, add_people, sign-in or a message bot (it opens a mailbox) is authority; an email rewrites who is an Admin, and a team is an access
-            # audience: each needs the requester's own click through BotOps.
+            # audience: each needs the requester's own click through Agent Ops.
             if (
                 roles
                 or any(

@@ -19,7 +19,7 @@ def fake_client(monkeypatch):
 
     class Client:
         def __init__(self, *args, **kwargs):
-            self.__dict__["_tico_is_botops"] = False  # the caller uses its own rights: no `me` lookup
+            self.__dict__["_tico_is_agent_ops"] = False  # the caller uses its own rights: no `me` lookup
 
         def features(self):
             return {}
@@ -74,7 +74,7 @@ def test_the_mcp_publish_sends_page_and_as_in_the_body():
 
     class Api:
         def __init__(self):
-            self._tico_is_botops = False
+            self._tico_is_agent_ops = False
 
         def post(self, path, body, key=None):
             sent.append((path, body))
@@ -93,7 +93,7 @@ def test_an_ambiguous_task_role_names_the_pages_and_says_to_pass_page(monkeypatc
 
     class Api:
         def __init__(self, *args, **kwargs):
-            self._tico_is_botops = False
+            self._tico_is_agent_ops = False
 
         def features(self):
             return {}
@@ -206,7 +206,7 @@ def test_the_mcp_link_defaults_the_role_to_related():
 
     class Api:
         def __init__(self):
-            self._tico_is_botops = False
+            self._tico_is_agent_ops = False
 
         def post(self, path, body, key=None):
             sent.append((path, body))

@@ -5,7 +5,7 @@
  "about": "A consultancy, agency or studio that sells hours and projects: sales and delivery, no product or engineering team.",
  "picks_when": ["sells_services"],
  "reason": "Part of the Services firm model.",
- "core": [{"template": "assistant"}, {"template": "botops"}],
+ "core": [{"template": "assistant"}, {"template": "agent-ops"}],
  "seats": [
   {"team": "leadership", "template": "chief-of-staff"},
   {"team": "sales", "template": "inbound-sales-owner"},

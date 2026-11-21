@@ -29,6 +29,7 @@ backend/__init__.py
 backend/access.py
 backend/access_routes.py
 backend/account_routes.py
+backend/agent_ops_act.py
 backend/agents.py
 backend/api_tools.py
 backend/app.py
@@ -74,7 +75,6 @@ backend/bot_task_tabs.py
 backend/bot_to_bot.py
 backend/bot_tools.py
 backend/botkpis.py
-backend/botops_act.py
 backend/brand.py
 backend/browser_exit.py
 backend/built_on.py

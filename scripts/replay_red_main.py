@@ -17,6 +17,10 @@ else:
     import pr_checks as checks
 
 
+# Paths a later rename moved, as (old, new) text in a recorded path (#4863: the agent's new name).
+RENAMES = (("templates/catalog/botops/", "templates/catalog/agent-ops/"), ("botops", "agent_ops"))
+
+
 class Replay:
     def __init__(self, root=checks.ROOT, graph=None):
         self.root = root
@@ -39,9 +43,13 @@ class Replay:
                         self.counts[path] += 1
 
     def resolve(self, path):
-        """Preserve live paths; follow script suffix conversions and unambiguous file moves."""
+        """Preserve live paths; follow script suffix conversions, renames and unambiguous file moves."""
         if (self.root / path).is_file():
             return path
+        for old, new in RENAMES:
+            moved = path.replace(old, new)
+            if moved != path and (self.root / moved).is_file():
+                return moved
         for old, new in ((".cjs", ".cts"), (".js", ".ts")):
             if path.endswith(old) and (self.root / (path[: -len(old)] + new)).is_file():
                 return path[: -len(old)] + new

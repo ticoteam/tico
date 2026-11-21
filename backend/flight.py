@@ -432,10 +432,10 @@ def register_timing(app):
 
     @app.get("/api/v2/operations/timing")
     def request_timings(request: Request):
-        """Where requests spend their time (`Timing`): the owner, or BotOps."""
+        """Where requests spend their time (`Timing`): the owner, or Agent Ops."""
         who = request.state.identity
         if who.role != "owner" and who.actor != "bot:botops":
-            raise Problem("forbidden", "Request timings are for the owner and BotOps", 403)
+            raise Problem("forbidden", "Request timings are for the owner and Agent Ops", 403)
         return app.state.timing.summary()
 
 

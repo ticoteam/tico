@@ -12,7 +12,7 @@ It writes the database and, beside it, `company-<release>.json`: what the person
 
 It makes the company the way a hosted one is made and then used for a day: the starting chart HQ hands a new company
 (fixtures/hq_starting_charts.json, the 0.6 line) applied at the first start, setup completed, one shared cloud
-computer enrolled, BotOps taking every seat bot live and closing its "Set up" task, a restart, then a person's own
+computer enrolled, Agent Ops taking every seat bot live and closing its "Set up" task, a restart, then a person's own
 changes (two reporting lines set by hand) and work in flight: tasks at different stages of Product and Engineering,
 one snoozed, one waiting on a person's sign-off, a routine and an automation.
 
@@ -39,7 +39,7 @@ def build(out):
     from backend import cloud_access
     from backend.app import create_app
     from backend.company_file import starter
-    from backend.tests.helpers.botops_parity import act
+    from backend.tests.helpers.agent_ops_parity import act
     from backend.tests.helpers.cloud_access import signals
     from backend.tests.helpers.cloud_machines import FakeHQ
 
@@ -121,7 +121,7 @@ def build(out):
             )
         }
         assert len(seats) >= 10, seats
-        # BotOps builds each seat bot's repository in its own workspace, and the build records that computer
+        # Agent Ops builds each seat bot's repository in its own workspace, and the build records that computer
         # (backend/built_on.py): the Builder, whose machine would be its own, is first placed there.
         from backend import built_on
 
@@ -130,11 +130,11 @@ def build(out):
                 built_on.remember(c, bot, computer["runner_id"])
         every = {row["bot"] for row in rows(api, "SELECT bot FROM assignments")}
         report(api, computer, every - set(seats))
-        # BotOps' own turn: every seat bot goes live, then its "Set up" task is done.
+        # Agent Ops' own turn: every seat bot goes live, then its "Set up" task is done.
         attempt = call(api, "POST", "jobs/claim", {"bot": "botops", "start_places": True}, token=computer["token"])[
             "attempt"
         ]
-        assert attempt, "BotOps claims its setup work"
+        assert attempt, "Agent Ops claims its setup work"
         for slug, _ in seats.values():
             live = act(api, attempt, "POST", f"bots/{slug}/go-live", {})
             assert live.status_code in (200, 202), (slug, live.text)

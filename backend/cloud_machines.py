@@ -147,7 +147,7 @@ HEARTBEAT = 60
 # An own machine HQ still runs whose runner has been silent this long while claimable work waits is stopped, and the
 # work's wake starts it again (HQ's start leaves a live machine as it is). At most one per OFFLINE_RESTART_GAP, and none
 # again until its runner has checked in since the last. A restart its runner has not checked in from this long after the
-# stop (OFFLINE_RESTART_DELAY again) has failed: it stops saying Restarting and BotOps gets a task (`restart_failed`).
+# stop (OFFLINE_RESTART_DELAY again) has failed: it stops saying Restarting and Agent Ops gets a task (`restart_failed`).
 OFFLINE_RESTART_DELAY = 15 * 60
 OFFLINE_RESTART_GAP = 60 * 60
 OFFLINE_RESTARTING = "offline_restarting"
@@ -804,7 +804,7 @@ def start_state(r):
 def first_home(c, bot):
     """The computer (`runners_with_state` row) a cloud-mode bot with no computer goes on first (place_now), or None:
     its own machine's when that has enrolled, else the shared machine's. A bot set to its own machine has none until
-    it has work, and it has no work until it is live; BotOps builds its repository on the shared machine, so it
+    it has work, and it has no work until it is live; Agent Ops builds its repository on the shared machine, so it
     starts there, and its want to move (`bot_want`) makes its own machine and moves it once its history is on GitHub."""
     current = row(c, bot)
     if not current or current["mode"] != "cloud":
@@ -2240,7 +2240,7 @@ class Manager:
 
     def restart_failed(self, key, current, at):
         """An offline restart its runner has not checked in from OFFLINE_RESTART_DELAY after the stop has failed: the
-        machine stops saying Restarting, and when HQ was asked to start it BotOps gets one task (one open per bot). No
+        machine stops saying Restarting, and when HQ was asked to start it Agent Ops gets one task (one open per bot). No
         second restart until its runner checks in (`offline_restart_ready`). Returns the row as it is now."""
         from .cloud_machine_health import file_card as file_health_card
 

@@ -436,7 +436,7 @@ def ask(conn: "sqlite3.Connection", task: Row, requirement: Row | None, who: str
 # before it wakes anyone, and `waiting_on` shows the task as Paused with the cause. Every cause is a read of saved state:
 # nothing here asks a computer. The three in COMPANY_WIDE stop every bot they touch and are whole sentences.
 STATE_CAUSES = {"paused": "is paused", "quarantined": "is quarantined", "planned": "has not started yet"}
-# A planned bot BotOps is still setting up (its setup task is open, or its go-live waits for the repository): its
+# A planned bot Agent Ops is still setting up (its setup task is open, or its go-live waits for the repository): its
 # tasks start by themselves once it is live (backend/setup_live.py).
 BEING_SET_UP = "is still being set up"
 # An active bot whose onboarding a person has not marked complete takes no task (backend/lifecycle.py).
@@ -642,20 +642,20 @@ WORKTREE_WAITING = "is waiting for a free worktree"
 WORKTREE_RESERVED = "is waiting for its worktree to be set up"
 # Or a run of it on the task stopped partway after it may have acted (its job is `uncertain`), and Tico holds the task's
 # work until someone runs it again or leaves it (`POST jobs/{id}/reconcile`; execution.auto_reconcile resumes a safe one
-# by itself, and hands the rest to BotOps with `job.held`). From the moment it stops the bot claims nothing more on the
+# by itself, and hands the rest to Agent Ops with `job.held`). From the moment it stops the bot claims nothing more on the
 # task (execution.unfenced_sql), so it is Paused, not the bot's turn: never a silent hold (Nov 12: a Codex reviewer
 # stopped partway and its task still said it was the reviewer's turn for the 15 minutes before `job.held`).
 RUN_HELD = "stopped partway: waiting on a person to run it again"
 # Or its computer handed back its runs on the task before starting them, run_diagnostics.SAME times for the same reason,
-# and BotOps has a task to find why (bot_stops.cant_start). Paused until BotOps closes it: never a silent "Queued" loop.
-CANT_START = "can't start its runs here: BotOps is checking why"
+# and Agent Ops has a task to find why (bot_stops.cant_start). Paused until Agent Ops closes it: never a silent "Queued" loop.
+CANT_START = "can't start its runs here: Agent Ops is checking why"
 # Or a refusal-count quarantine holds it on this task alone (backend/task_quarantine.py): it lifts after the cooldown,
 # or when a person clears the quarantine.
 TASK_QUARANTINED = "is quarantined on this task"
 # Or its claim could not start its run on the task and holds that run for a wait (bot_stops.hold_job): Tico tries it
 # again by itself, and the operator already has the item about it.
 CLAIM_HELD = "couldn't start its run here: Tico tries it again"
-# Each hold on the bot's work on one task (backend/holds.py ON_TASK) as its cause. None asks a person: BotOps has the
+# Each hold on the bot's work on one task (backend/holds.py ON_TASK) as its cause. None asks a person: Agent Ops has the
 # first, and the other two lift by themselves (`ENDS_BY_ITSELF`, which Needs you leaves out).
 TASK_HOLD_CAUSES = {"cant_start": CANT_START, "task_quarantine": TASK_QUARANTINED, "claim_held": CLAIM_HELD}
 ENDS_BY_ITSELF = tuple(TASK_HOLD_CAUSES.values())
@@ -934,7 +934,7 @@ def may_start(conn: "sqlite3.Connection", message: str | Row, attempt: str | Non
     changed, the leases about to start included. An engine wake must also be about the task's open visit. When the
     run is held its queued job is canceled, here. True for a person's own message (their words always get an answer)
     and anything about no task on the engine. A message in a person's name they did not type themselves (the
-    Assistant, BotOps, a token: hubdb.delegated) gets past a snooze, a closed task and the turns, as theirs would,
+    Assistant, Agent Ops, a token: hubdb.delegated) gets past a snooze, a closed task and the turns, as theirs would,
     but not a person's level or the 7 runs: lifting those is the person's own act. A quiet message is held like any other once it has a job."""
     from . import task_engine as E
 

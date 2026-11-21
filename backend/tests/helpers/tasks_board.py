@@ -21,8 +21,8 @@ def api(tmp_path, monkeypatch):
                 "ana-test": Identity("human:ana", "owner", "ana@acme.example"),
                 "ben-test": Identity("human:ben", "human", "ben@acme.example"),
                 "priya-test": Identity("human:priya", "human", "priya@acme.example"),
-                # BotOps acting for Ben (backend/botops_act.py): his rights, not Ben signed in.
-                "ben-via-botops": Identity("human:ben", "human", "ben@acme.example", via="botops", confirmed=True),
+                # Agent Ops acting for Ben (backend/agent_ops_act.py): his rights, not Ben signed in.
+                "ben-via-agent-ops": Identity("human:ben", "human", "ben@acme.example", via="botops", confirmed=True),
             },
         )
     )

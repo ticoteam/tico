@@ -255,7 +255,7 @@ def register(app, auth, mover, mutate, store, task_filters, task_idents, task_vi
                     str(a).startswith("bot:") and H.actor_id(a) in hidden
                     for a in (row["owner_id"], row["requester_id"])
                 ):
-                    raise Problem("forbidden", "This task involves a bot whose activity BotOps may not read", 403)
+                    raise Problem("forbidden", "This task involves a bot whose activity Agent Ops may not read", 403)
             else:
                 row = auth.task(c, who, task_id)
                 if (
@@ -265,7 +265,7 @@ def register(app, auth, mover, mutate, store, task_filters, task_idents, task_vi
                 ):
                     raise Problem(
                         "forbidden",
-                        "Only a person, the task's requester, a party's manager or BotOps starts it early",
+                        "Only a person, the task's requester, a party's manager or Agent Ops starts it early",
                         403,
                     )
                 # Running it wakes the bot: that is a request to it.

@@ -6,7 +6,7 @@ import json
 import pytest
 
 from backend.tests.helpers.api import get
-from backend.tests.helpers.member_bots import botops, finish, turn  # noqa: F401  (fixtures)
+from backend.tests.helpers.member_bots import agent_ops, finish, turn  # noqa: F401  (fixtures)
 from backend.tests.helpers.automation_api import NOTE_STEP, as_bot
 from clients import remotecli, hubtools
 from backend.tests.helpers.automation_cli import Client, cli
@@ -59,20 +59,20 @@ def test_the_inbox_send_switch_from_the_cli(api):
         cli(api, "ben-test", "inbox", "ana@acme.example", "--send", "off")
 
 
-def test_botops_acts_with_the_askers_rights(api, botops):
-    """BotOps over MCP: the owner's ask lets it save; a member's ask is refused what she may not change."""
+def test_agent_ops_acts_with_the_askers_rights(api, agent_ops):
+    """Agent Ops over MCP: the owner's ask lets it save; a member's ask is refused what she may not change."""
     from backend.tests.helpers.mcp import call as mcp
 
     flow = {"name": "Ops", "owner": "bot:ops", "trigger": {"type": "event", "name": "x.y"}, "steps": []}
-    attempt = turn(api, botops, person="ana-test", text="Make ops an automation")
+    attempt = turn(api, agent_ops, person="ana-test", text="Make ops an automation")
     err, made = mcp(api, "tico_automation_create", flow, attempt["token"])
     assert not err and made["can_edit"], made
     err, listed = mcp(api, "tico_automation_list", {}, attempt["token"])
-    # BotOps' own daily "Sweep stuck tasks" (routines.ensure_task_sweep) is listed beside it.
+    # Agent Ops' own daily "Sweep stuck tasks" (routines.ensure_task_sweep) is listed beside it.
     mine = [a["id"] for a in listed["automations"] if not a["builtin"] and a["name"] != "Sweep stuck tasks"]
     assert not err and mine == [made["id"]]
-    finish(api, botops, attempt)
-    member = turn(api, botops, person="cara-test", text="Pause the ops automation")
+    finish(api, agent_ops, attempt)
+    member = turn(api, agent_ops, person="cara-test", text="Pause the ops automation")
     err, refused = mcp(api, "tico_automation_update", {"id": made["id"], "enabled": False}, member["token"])
     assert err, refused
 
@@ -94,17 +94,17 @@ def test_the_cli_discards_a_proposal_and_lists_the_question_sets_and_the_guide(a
     assert "tico automation create --file -" in guide and "`send_reply`" in guide and "{{" not in guide
 
 
-def test_botops_sets_an_email_inboxs_send_switch_for_its_owner_only(api, botops):
+def test_agent_ops_sets_an_email_inboxs_send_switch_for_its_owner_only(api, agent_ops):
     from backend.tests.helpers.mcp import call as mcp
 
-    ana = turn(api, botops, person="ana-test", text="Turn off replies from my inbox")
+    ana = turn(api, agent_ops, person="ana-test", text="Turn off replies from my inbox")
     err, out = mcp(api, "tico_inbox_send", {"inbox": "ana@acme.example", "send": False}, ana["token"])
     assert not err and out["send"] is False, out
-    finish(api, botops, ana)
-    cara = turn(api, botops, person="cara-test", text="Turn on Ana's replies")
+    finish(api, agent_ops, ana)
+    cara = turn(api, agent_ops, person="cara-test", text="Turn on Ana's replies")
     err, refused = mcp(api, "tico_inbox_send", {"inbox": "ana@acme.example", "send": True}, cara["token"])
     assert err, refused
-    finish(api, botops, cara)
+    finish(api, agent_ops, cara)
 
 
 def test_the_cli_releases_a_hold_and_a_peer_bot_cannot(api, flow_file):

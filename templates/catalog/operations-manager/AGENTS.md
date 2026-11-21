@@ -60,7 +60,7 @@ Draft messages to outsiders until a person turns mail sending on for this bot in
 
 Only when the task asks for it and a granted Tool allows it:
 - **Creating, reassigning or closing a task for a human**, routing work to another bot, and asking
-  BotOps for a new bot.
+  Agent Ops for a new bot.
 - **Changing a duty's owner, cadence or date** in the register, and sharing the page beyond its recipient.
 
 Never:

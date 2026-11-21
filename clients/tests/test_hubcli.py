@@ -48,7 +48,7 @@ def test_wake_url_commands_reach_the_tools_that_put_the_owners_address(monkeypat
 
     class Api:
         def __init__(self, *args, **kw):
-            self.__dict__["_tico_is_botops"] = False
+            self.__dict__["_tico_is_agent_ops"] = False
 
         def get(self, path, **query):
             calls.append(("GET", path))
@@ -77,7 +77,7 @@ def test_page_link_queries_reach_the_api_through_cli_and_mcp(monkeypatch):
 
     class Api:
         def __init__(self, *args, **kw):
-            self.__dict__["_tico_is_botops"] = False
+            self.__dict__["_tico_is_agent_ops"] = False
 
         def get(self, path, **query):
             calls.append((path, {k: v for k, v in query.items() if v is not None}))
@@ -106,7 +106,7 @@ def test_health_findings_and_report_reach_their_routes(monkeypatch):
 
     class Api:
         def __init__(self, *args, **kw):
-            self.__dict__["_tico_is_botops"] = False
+            self.__dict__["_tico_is_agent_ops"] = False
 
         def get(self, path, **query):
             if path == "me":
@@ -138,7 +138,7 @@ def test_health_report_without_a_key_is_a_refusal_that_says_where_the_key_is(mon
 
     class Api:
         def __init__(self, *args, **kw):
-            self.__dict__["_tico_is_botops"] = False
+            self.__dict__["_tico_is_agent_ops"] = False
 
         def get(self, path, **query):
             return {"actor": "bot:acme"} if path == "me" else {}
@@ -173,7 +173,7 @@ def test_thread_commands_reach_their_routes_with_their_flags(monkeypatch):
 
     class Api:
         def __init__(self, *args, **kw):
-            self.__dict__["_tico_is_botops"] = False
+            self.__dict__["_tico_is_agent_ops"] = False
 
         def get(self, path, **query):
             if path == "me":
@@ -845,7 +845,7 @@ ONBOARDING = {
 
 
 class BotSetup(unittest.TestCase):
-    """`tico template list` and `tico bot create|check`: the three commands BotOps needs in a turn.
+    """`tico template list` and `tico bot create|check`: the three commands Agent Ops needs in a turn.
 
     The parsing is the real parser and the work is the real `clients/catalog.py`; only the API is
     a fake, so what these assert is which endpoints a command reads and what it writes to disk.
@@ -870,7 +870,7 @@ class BotSetup(unittest.TestCase):
             self.seen.append(path)
             if path == "config":
                 return dict(NAMES)
-            if path == "me":  # BotOps; a person's turn seeds the template's automations as that person
+            if path == "me":  # Agent Ops; a person's turn seeds the template's automations as that person
                 return {"actor": "bot:botops", "kind": "botops"}
             if path == "setup":
                 return json.loads(json.dumps(self.record))
@@ -1595,7 +1595,7 @@ class _Recorder:
     calls = []
 
     def __init__(self, *args, **kw):
-        self.__dict__["_tico_is_botops"] = True
+        self.__dict__["_tico_is_agent_ops"] = True
 
     def get(self, path, **query):
         return {"actor": "bot:botops", "kind": "botops", "jobs": []}
@@ -1612,9 +1612,9 @@ class _Recorder:
         return self.call("PATCH", path, body, key)
 
 
-def test_botops_settings_commands_run_as_the_person_who_asked(monkeypatch):
+def test_agent_ops_settings_commands_run_as_the_person_who_asked(monkeypatch):
     """Each of these changes a setting the route checks against a person (an owner, an admin, a mover, whoever manages
-    the trigger): BotOps sends them as its requester, never with its own rights."""
+    the trigger): Agent Ops sends them as its requester, never with its own rights."""
     from clients import remotecli
 
     monkeypatch.setattr(remotecli, "Client", _Recorder)
@@ -1654,7 +1654,7 @@ def test_settings_cli_passes_an_id_addressed_routine_as_the_requester(monkeypatc
 
     class Api:
         def __init__(self, *args, **kwargs):
-            self.__dict__["_tico_is_botops"] = True
+            self.__dict__["_tico_is_agent_ops"] = True
 
         def call(self, method, path, body=None, key=None, query=None, delegate=False):
             calls.append((method, path, body, delegate))
@@ -1714,7 +1714,7 @@ def test_settings_set_passes_on_the_routes_note_for_a_size_tico_does_not_recomme
 
 
 def test_a_plain_webhook_header_sends_no_secret_key():
-    """BotOps' requests refuse any key named like a secret (backend/botops_act.py), so a plain header leaves it out."""
+    """Agent Ops' requests refuse any key named like a secret (backend/agent_ops_act.py), so a plain header leaves it out."""
     args = hubcli.parser().parse_args(
         ["webhook", "update", "ep_1", "--header", "X-Team: acme", "--secret-header", "X-Key: k"]
     )
@@ -1760,7 +1760,7 @@ def test_growth_cli_flags_become_the_api_bodies_the_playbooks_rely_on(monkeypatc
 
     class Client:
         def __init__(self, *args, **kwargs):
-            self.__dict__["_tico_is_botops"] = False
+            self.__dict__["_tico_is_agent_ops"] = False
 
         def get(self, path, **query):
             if path.startswith("growth/"):
@@ -2011,7 +2011,7 @@ def test_strategy_show_section_how_prints_the_section_or_says_there_is_no_strate
 
     class Client:
         def __init__(self, *args, **kwargs):
-            self.__dict__["_tico_is_botops"] = False
+            self.__dict__["_tico_is_agent_ops"] = False
 
         def get(self, path, **query):
             return {"actor": "bot:growth", "kind": "bot"} if path == "me" else published
@@ -2054,7 +2054,7 @@ def test_call_commands_run_the_call_tools_on_their_routes(monkeypatch):
 
     class Api:
         def __init__(self, *args, **kw):
-            self.__dict__["_tico_is_botops"] = False
+            self.__dict__["_tico_is_agent_ops"] = False
 
         def get(self, path, **query):
             sent.append(("GET", path, query))
@@ -2377,7 +2377,7 @@ def test_maintenance_status_reads_the_one_maintenance_tool(monkeypatch):
 
     class Api:
         def __init__(self, *args, **kw):
-            self.__dict__["_tico_is_botops"] = False
+            self.__dict__["_tico_is_agent_ops"] = False
 
         def get(self, path, **query):
             reads.append((path, query))
@@ -2737,7 +2737,7 @@ def test_bot_commands_with_their_own_tool_reach_it_not_bot_create(monkeypatch):
 
     class Api:
         def __init__(self, *args, **kw):
-            self.__dict__["_tico_is_botops"] = False
+            self.__dict__["_tico_is_agent_ops"] = False
 
     monkeypatch.setattr(remotecli, "Client", Api)
     monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")

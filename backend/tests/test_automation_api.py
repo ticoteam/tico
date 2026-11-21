@@ -269,8 +269,8 @@ def test_the_librarian_gets_the_market_briefing_which_stands_down_for_the_teams_
 
 
 def test_a_bot_may_not_make_an_automation_it_may_not_change(api):
-    """A bot's own call to make an automation it may not change is refused (only BotOps, acting for it, saves a draft:
-    test_botops_automations). One it may make (its own) is saved as asked."""
+    """A bot's own call to make an automation it may not change is refused (only Agent Ops, acting for it, saves a draft:
+    test_agent_ops_automations). One it may make (its own) is saved as asked."""
     bot = as_bot(api, "finance")
     post(api, "automations", flow(), bot, expected=403)
     post(api, "automations", flow(builtin=True), bot, expected=403)
@@ -278,7 +278,7 @@ def test_a_bot_may_not_make_an_automation_it_may_not_change(api):
         a["id"] for a in get(api, "automations")["automations"] if a["owner_id"] == "person:ana" and not a["builtin"]
     ] == []
     own = post(api, "automations", flow(owner="bot:finance"), bot)
-    assert own["enabled"] is True and own["can_edit"] is True  # a bot's own: no BotOps, so on
+    assert own["enabled"] is True and own["can_edit"] is True  # a bot's own: no Agent Ops, so on
 
 
 SUBPOENA = {

@@ -800,7 +800,7 @@ class Auth:
                     or str(row["running_since"] or "") < H.shift(H.now(), seconds=-120)
                 ):
                     raise Problem("assistant_action", "That assistant action is not being confirmed", 403)
-                # Recorded via whoever proposed it (the Assistant, BotOps for what a person asked it for, or a page's
+                # Recorded via whoever proposed it (the Assistant, Agent Ops for what a person asked it for, or a page's
                 # owner bot for a page chat's card: backend/page_chat_cards.py).
                 who = replace(
                     who,
@@ -850,7 +850,7 @@ class Auth:
     FULL = {"see": True, "read": True, "write": True}
 
     def system_bot(self, slug):
-        """The built-in bots (the Assistant, BotOps, the Librarian, the Strategy Owner, the Health Monitor, the General
+        """The built-in bots (the Assistant, Agent Ops, the Librarian, the Strategy Owner, the Health Monitor, the General
         Manager, the Finance Owner, the Rules Owner, the Design Owner, the Updates Owner, the Automations Owner, the Tools Owner): they act for the whole company, so only the company owner changes them. Admins
         manage every other bot."""
         return slug in (
@@ -906,29 +906,29 @@ class Auth:
             parent = parents.get(parent, "")
         return False
 
-    def botops_manages(self, c, who, slug):
-        """BotOps in its own run (the daily update, or a routine only the owner wrote: `botops_act.own_run`) manages
+    def agent_ops_manages(self, c, who, slug):
+        """Agent Ops in its own run (the daily update, or a routine only the owner wrote: `agent_ops_act.own_run`) manages
         every bot that is not built in: its tools, repositories, contact and Instructions, not its people, status,
         credentials or deletion (`SettingsAdmin.update_bot` keeps the definition to its contact). A run a person or
-        a bot asked for keeps that requester's rights, so BotOps never lends this to anyone. The team rule
-        `botops_manages_bots` turns it off."""
+        a bot asked for keeps that requester's rights, so Agent Ops never lends this to anyone. The team rule
+        `agent_ops_manages_bots` turns it off."""
         if (
             who.actor != "bot:botops"
             or who.role != "bot"
             or who.via
             or self.system_bot(slug)
-            or not team_rules.load(c)["botops_manages_bots"]
+            or not team_rules.load(c)["agent_ops_manages_bots"]
         ):
             return False
-        from . import botops_act
+        from . import agent_ops_act
 
-        return botops_act.own_run(c, self, who.attempt_id)
+        return agent_ops_act.own_run(c, self, who.attempt_id)
 
     def report_manager(self, c, who, slug, scope):
         """Whether this bot's own run manages `slug` for `scope` as its manager: `slug` is a direct report (its raw
         `reports_to` names the caller, so a report's report does not count), the caller is not `slug` itself, and it is
         not a built-in bot. `scope` is one of report_managers.SCOPES. Both switches must be on (report_managers.manages).
-        Never true for a person, for BotOps acting for one, or for any delegated identity: the change is the bot's own."""
+        Never true for a person, for Agent Ops acting for one, or for any delegated identity: the change is the bot's own."""
         if (
             scope not in report_managers.SCOPES
             or who.role != "bot"
@@ -950,9 +950,9 @@ class Auth:
         return parent == me and report_managers.manages(c, me)
 
     def report_lifecycle(self, c, who, slug, op, parent=""):
-        """Whether BotOps, acting for a manager bot on its own ask, may `op` (create, archive or restore) `slug` as that
+        """Whether Agent Ops, acting for a manager bot on its own ask, may `op` (create, archive or restore) `slug` as that
         manager's direct report. `who` is that acting identity: the manager's actor with `via` "botops", which only
-        BotOps' ask makes (app.py `manager_asker`). The manager's own token has no `via` and never passes. For a create,
+        Agent Ops' ask makes (app.py `manager_asker`). The manager's own token has no `via` and never passes. For a create,
         `parent` is the new bot's `reports_to`, which must be the manager; for the others, `slug` must report to it now.
         Both switches must be on (report_managers.manages). Never for a person, for a built-in bot, or for a support session."""
         if (
@@ -1195,7 +1195,7 @@ class Auth:
         one of its tickets. A task is a thing to do and it is dispatched without a reply; a
         message is a conversation, and a conversation between bots is a run spent on somebody
         else's business. Bots file work on each other and walk away. Its manager (`reports_to`)
-        and BotOps still leave it notes, comments and messages: the one directs it, the other
+        and Agent Ops still leave it notes, comments and messages: the one directs it, the other
         keeps it running.
 
         A bot set to `bot_contact: replies` does not take chats, questions or tasks from other
@@ -1279,7 +1279,7 @@ class Auth:
             raise Problem(
                 "bot_contact",
                 f"{slug} takes work as a task and nothing else (notes only from its manager "
-                "and BotOps). File one "
+                "and Agent Ops). File one "
                 f"with `tico task create --owner {slug}`, say what you want "
                 "done in the body, and do not wait for it.",
                 403,

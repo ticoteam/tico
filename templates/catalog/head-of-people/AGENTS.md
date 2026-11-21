@@ -58,7 +58,7 @@ only when the task asks for it and a granted Tool allows it. Apply an owner's ro
 
 These need the task to ask for them and a granted Tool to allow them. Otherwise they stay drafts for a person:
 - **Creating or reassigning a task** for a human or a bot.
-- **Asking BotOps to set up a bot** (see Hiring).
+- **Asking Agent Ops to set up a bot** (see Hiring).
 - **Sharing the summary or the headcount plan** beyond the readers named in `knowledge/routing.md`.
 
 Always:

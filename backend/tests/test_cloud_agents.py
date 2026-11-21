@@ -94,7 +94,7 @@ def plant_stale_filing(api, seat_id, actor="dead-process", key=None, request_has
 
 def onboarding_artifacts(api, bot):
     """What Onboarding leaves on a bot a seat is filled with: its state, its template, whether its computer builds its
-    repository, and the BotOps setup task that builds it when the template is not a starter."""
+    repository, and the Agent Ops setup task that builds it when the template is not a starter."""
     with api.app.state.store.read() as c:
         bot = H.resolve_bot(c, bot)["id"]  # the bot's id or its slug: config is keyed by the id
         state, config_json = c.execute(

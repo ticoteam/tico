@@ -3,8 +3,8 @@
 A draft is the object the tico.team/setup page keeps (setup.js `blankDraft()`): step, company, people, bots, goals,
 rules, tools and seq, and `strategy` once the Strategy step has drafted one (optional: a draft without it is still
 valid). The server adds four fields the page passes back untouched and the company file never holds:
-`undo` (the draft before BotOps's last change), `chat` (the conversation so far), `removed` (bots taken off the chart,
-so they are not added back unasked) and `pending` (teams BotOps has suggested removing). Anything else is refused.
+`undo` (the draft before Agent Ops's last change), `chat` (the conversation so far), `removed` (bots taken off the chart,
+so they are not added back unasked) and `pending` (teams Agent Ops has suggested removing). Anything else is refused.
 """
 
 import copy
@@ -133,7 +133,12 @@ RENAMED = {
     # Nov 14: one Product pipeline, and each feature owned from spec to production by one bot: the Product Owner is the
     # Feature Owner (templates/catalog/feature-owner, the Product Owner and Builder templates in one).
     "segment-product-owner": "feature-owner",
+    # Nov 21 (#4863): slugs match names, and the bot engineer is Agent Ops (its bot keeps the id `botops`).
+    "botops": "agent-ops",
 }
+# The default title a renamed template's card had: a file that kept it reads the card's new name (a title a person chose
+# stays).
+RENAMED_TITLES = {"botops": "BotOps"}
 # Each team's Manager: the bot that leads the team and manages its pipelines. {team: (template, department, title)}.
 TEAM_MANAGERS = {
     "product": ("product-manager", "product", "Product Manager"),
@@ -159,6 +164,19 @@ _PIPELINE_TEAMS = {
 def current(template):
     """The template a file's slug names in this release: its new slug when a release renamed it, else itself."""
     return RENAMED.get(template, template) if isinstance(template, str) else template
+
+
+def renamed(row):
+    """A file's role under this release's template (a copy when it changes). A title that is the renamed card's exact
+    old default takes the card's new name; any other title, a missing one included, stays as it was."""
+    old = row.get("template")
+    new = current(old)
+    if new == old:
+        return row
+    out = {**row, "template": new}
+    if old in RENAMED_TITLES and row.get("title") == RENAMED_TITLES[old]:
+        out["title"] = next((r["name"] for r in ROLES if r["slug"] == new), row["title"])
+    return out
 
 
 # The company models a chart starts from (model_<key>.json), in the order the setup chat tries them: the first whose
@@ -328,7 +346,7 @@ def chart_ids(draft):
 
 
 def manager_of(draft, bot):
-    """setup.js `managerOf()`, with a reports-to the visitor or BotOps set taking precedence while it still exists."""
+    """setup.js `managerOf()`, with a reports-to the visitor or Agent Ops set taking precedence while it still exists."""
     chosen = bot.get("reports_to")
     if chosen and chosen != bot["id"] and chosen in chart_ids(draft):
         return chosen
@@ -942,8 +960,7 @@ def _current_bots(rows):
         if isinstance(b, dict) and not b.get("existing") and isinstance(b.get("template"), str):
             if b["template"] in RETIRED:
                 continue
-            if current(b.get("template")) != b.get("template"):
-                b = {**b, "template": current(b["template"])}
+            b = renamed(b)
         out.append(b)
     return out
 

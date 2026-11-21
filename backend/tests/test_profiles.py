@@ -293,7 +293,7 @@ def test_the_cli_and_mcp_tool_read_the_choices_and_send_the_revision():
     class Stub:
         def __init__(self):
             self.posts = []
-            self.__dict__["_tico_is_botops"] = False
+            self.__dict__["_tico_is_agent_ops"] = False
 
         def get(self, path):
             return {"profiles": [{"name": "doer"}]} if path == "profiles" else {"bot": "ops", "revision": 4}

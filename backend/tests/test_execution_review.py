@@ -24,8 +24,8 @@ from backend.tests.helpers.execution_review import (
 )
 
 
-def botops_words(c, where="owner_id='bot:botops'", args=()):
-    """What Tico gave BotOps on each task matching `where` (tasks have no description: its instructions)."""
+def agent_ops_words(c, where="owner_id='bot:botops'", args=()):
+    """What Tico gave Agent Ops on each task matching `where` (tasks have no description: its instructions)."""
     from backend.store import H
 
     return [
@@ -528,8 +528,8 @@ def test_a_sparse_failure_billed_only_for_its_prompt_still_goes_back_in_the_queu
 
 
 def test_a_stopped_run_that_used_tools_is_held_until_reviewed(api):
-    """A run that may have acted is not run again on its own: it waits, named, for its operator or BotOps.
-    Their resume runs it once more; a second stop is dismissed and BotOps finds out why."""
+    """A run that may have acted is not run again on its own: it waits, named, for its operator or Agent Ops.
+    Their resume runs it once more; a second stop is dismissed and Agent Ops finds out why."""
     from backend.store import H
 
     machine, message, attempt = setup_attempt(api)
@@ -569,7 +569,7 @@ def test_a_stopped_run_that_used_tools_is_held_until_reviewed(api):
     with api.app.state.store.transaction() as c:
         if not H.bot(c, H.FLEET_MAINTAINER):
             c.execute(
-                "INSERT INTO bots(id, slug, display_name, state) VALUES(?, ?, 'BotOps', 'active')",
+                "INSERT INTO bots(id, slug, display_name, state) VALUES(?, ?, 'Agent Ops', 'active')",
                 (H.FLEET_MAINTAINER, H.FLEET_MAINTAINER),
             )
     post(api, f"attempts/{again['id']}/started", {'thread_id': 'stopped-again'}, machine['token'])
@@ -584,7 +584,7 @@ def test_a_stopped_run_that_used_tools_is_held_until_reviewed(api):
     aged(api, again['id'])
     assert [d['state'] for d in sweep(api)] == ['canceled']
     with api.app.state.store.read() as c:
-        task = next(iter(botops_words(c, "title=?", ("Find why ops's runs keep stopping",))), None)
+        task = next(iter(agent_ops_words(c, "title=?", ("Find why ops's runs keep stopping",))), None)
     assert task and task['owner_id'] == H.bot_actor(H.FLEET_MAINTAINER) and message['body'] not in task['body']
     assert get(api, 'bots/ops/execution-review')['jobs'] == []
 
@@ -705,7 +705,7 @@ def run_line(api):
 
 
 def no_one_asked(api):
-    """Nothing about the run reaches a person or BotOps: no Needs you or Settings line, no review task."""
+    """Nothing about the run reaches a person or Agent Ops: no Needs you or Settings line, no review task."""
     from backend.store import H
 
     assert not [i for i in get(api, 'operations')['issues'] if i['kind'] == 'uncertain_work']
@@ -869,7 +869,7 @@ def test_a_request_cut_by_updates_resumes_three_times_then_ends_quietly(api):
 
 @pytest.mark.parametrize('stale', [False, True])
 def test_a_run_held_before_this_release_for_an_update_settles_on_the_next_sweep(api, stale):
-    """Runs held before Tico resumed update cuts, already handed to BotOps, settle with no choice: a recent one
+    """Runs held before Tico resumed update cuts, already handed to Agent Ops, settle with no choice: a recent one
     resumes, one stopped more than a day ago is dismissed as stale work."""
     from backend.store import H
 
@@ -1018,13 +1018,13 @@ def test_a_run_that_used_a_tool_that_writes_waits_and_its_review_lists_the_calls
     with api.app.state.store.transaction() as c:
         if not H.bot(c, H.FLEET_MAINTAINER):
             c.execute(
-                "INSERT INTO bots(id, slug, display_name, state) VALUES(?, ?, 'BotOps', 'active')",
+                "INSERT INTO bots(id, slug, display_name, state) VALUES(?, ?, 'Agent Ops', 'active')",
                 (H.FLEET_MAINTAINER, H.FLEET_MAINTAINER),
             )
     aged(api, attempt['id'])
     assert sweep(api) == [] and sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
     with api.app.state.store.read() as c:
-        handed = botops_words(c, "title=?", ("Review ops's stopped runs held for a check",))
+        handed = agent_ops_words(c, "title=?", ("Review ops's stopped runs held for a check",))
         holds = c.execute(
             "SELECT count(*) FROM events WHERE action='job.held' AND target=?", (attempt['id'],)
         ).fetchone()[0]
@@ -1104,14 +1104,14 @@ def test_a_held_run_names_its_task_and_owner_only_to_who_may_read_it(api):
     assert all('Archive the old bots' not in i['detail'] for i in held)
 
 
-def test_a_held_run_on_a_private_task_is_not_handed_to_botops(api):
-    """BotOps cannot read private work: neither hand-off is filed; the operator still reviews it."""
+def test_a_held_run_on_a_private_task_is_not_handed_to_agent_ops(api):
+    """Agent Ops cannot read private work: neither hand-off is filed; the operator still reviews it."""
     from backend.store import H
 
     with api.app.state.store.transaction() as c:
         if not H.bot(c, H.FLEET_MAINTAINER):
             c.execute(
-                "INSERT INTO bots(id, slug, display_name, state) VALUES(?, ?, 'BotOps', 'active')",
+                "INSERT INTO bots(id, slug, display_name, state) VALUES(?, ?, 'Agent Ops', 'active')",
                 (H.FLEET_MAINTAINER, H.FLEET_MAINTAINER),
             )
     machine = runner(api, 'ana')
@@ -1916,7 +1916,7 @@ def test_a_late_result_that_did_not_finish_after_a_dismissal_is_only_filed(api):
     assert filed['filed'] is True and settled(api, attempt) == ('expired', 'canceled')
 
 
-def test_a_stopped_run_that_holds_queued_work_is_botops_and_says_what_waits(api):
+def test_a_stopped_run_that_holds_queued_work_is_agent_ops_and_says_what_waits(api):
     """Oct 19, launch: five unreviewed stopped runs fenced 14 queued Builder wakes, but each was 'review later' and the
     Review stopped runs button rendered nowhere. A run that holds nothing may still wait for a later look."""
     machine = runner(api, 'ana')
@@ -2236,9 +2236,9 @@ def test_held_work_is_counted_and_named_only_for_who_may_read_it(api):
     assert seen['ana-test'][:2] == (1, 1) and seen['ben-test'][:2] == (0, 0), seen
 
 
-def test_a_run_carried_on_a_stopped_run_the_tico_settled_is_left_for_botops(api):
+def test_a_run_carried_on_a_stopped_run_the_tico_settled_is_left_for_agent_ops(api):
     """Tico dismissed only the request a stopped run was for ('stopped partway twice'); the message folded into
-    the same run stayed held with nobody asked. BotOps reviews it, whether or not anything waits behind it."""
+    the same run stayed held with nobody asked. Agent Ops reviews it, whether or not anything waits behind it."""
     from backend.store import H
 
     machine, message, first = setup_attempt(api)
@@ -2596,7 +2596,7 @@ def test_restart_with_named_merge_is_held_immediately_and_review_names_it(api):
     assert 'merge pull request' in review['reason'] and review['stopped'] == 'changed'
     assert 'private-marker-42' not in review['reason'] and '--squash' not in review['reason']
     with api.app.state.store.read() as c:
-        tasks = botops_words(c)
+        tasks = agent_ops_words(c)
     assert len(tasks) == 1 and 'merge pull request' in tasks[0]['body']
     assert 'private-marker-42' not in tasks[0]['body'] and '--squash' not in tasks[0]['body']
 
@@ -2751,7 +2751,7 @@ def test_restart_shell_actions_use_real_runner_events(api, case, host):
         review = get(api, 'bots/ops/execution-review')['jobs'][0]
         assert all(label in review['reason'] for label in payload['outside_actions'])
         with api.app.state.store.read() as c:
-            body = botops_words(c)[0]['body']
+            body = agent_ops_words(c)[0]['body']
         assert all(label in body for label in payload['outside_actions'])
         assert 'synthetic-private-marker' not in body + review['reason']
     else:

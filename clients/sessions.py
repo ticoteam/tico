@@ -5,7 +5,7 @@ runner (runner_support/state.py, which keys its sessions), so the two never disa
 """
 
 # The thread a turn with no task continues. Every task is its own session by default; `session: bot`
-# keeps everything on this one thread, and `session: task` (BotOps's default) also keys chat with no
+# keeps everything on this one thread, and `session: task` (Agent Ops's default) also keys chat with no
 # task on its conversation.
 BOT_THREAD = "bot"
 
@@ -46,7 +46,7 @@ def session_key(config, bot, task_id, conversation_id, root_id=None, audience_cl
     A turn from a server with native threads names its thread's root and audience class: a turn with no task
     continues that thread tree's session (`root_key`), and `session: bot` keeps one public thread (`public`) while
     each private thread keeps its own. From an older server (no root): other turns share the bot's one thread, and
-    `session: task`, BotOps's default, keys a wake with no task on its conversation.
+    `session: task`, Agent Ops's default, keys a wake with no task on its conversation.
 
     On `session: bot` a private task (`task_private`), or a task turn in a private thread, keeps its own session
     (`task:<id>`): the shared thread serves Home and public turns, so private work never enters it."""

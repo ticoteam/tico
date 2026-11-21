@@ -7,7 +7,7 @@ from datetime import timedelta
 from backend import hubdb as H
 from backend import repositories as R
 from backend.execution import runner_repository
-from backend.tests.helpers.github_app import api, auth, botops_turn, connect, gh, runner_token, turn_token  # noqa: F401
+from backend.tests.helpers.github_app import api, auth, agent_ops_turn, connect, gh, runner_token, turn_token  # noqa: F401
 
 
 def _sync(api, gh, **extra):
@@ -20,11 +20,11 @@ def _ready(api, gh, selection="all"):
     connect(api, administration="true")
     gh.permissions = {"administration": "write", "contents": "write", "metadata": "read"}
     gh.selection = selection
-    botops_turn(api)
+    agent_ops_turn(api)
 
 
 def _create(api, slug="newbie"):
-    return api.post("/api/v2/github/repos", json={"slug": slug, "empty": True}, headers=auth("botops-test"))
+    return api.post("/api/v2/github/repos", json={"slug": slug, "empty": True}, headers=auth("agent-ops-test"))
 
 
 def _history_checks(api):

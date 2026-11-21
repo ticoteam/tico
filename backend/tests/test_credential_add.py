@@ -9,7 +9,7 @@ import pytest
 
 from backend.tests.helpers.api import assign, claim, get, headers, post, put, ready, runner
 from backend.tests.helpers.api_tools import tool
-from backend.tests.helpers.botops_parity import everything
+from backend.tests.helpers.agent_ops_parity import everything
 from backend.tests.helpers.credentials import setup as vault
 from backend.tests.helpers.mcp import call
 from clients import hubtools
@@ -104,14 +104,14 @@ def test_the_tools_owner_stores_a_key_from_a_file_for_a_bot_as_the_person_and_th
 def test_a_bot_without_the_right_gets_the_routes_refusal_naming_who_can_and_no_value_is_echoed(api, monkeypatch):
     vault(api)
     tid = tool(api)["id"]
-    _, attempt = turn(api)  # ops is an ordinary bot here: not BotOps, not the Tools Owner
+    _, attempt = turn(api)  # ops is an ordinary bot here: not Agent Ops, not the Tools Owner
     monkeypatch.setenv("NEW_CLOSE_KEY", SECRET)
     # Storing a key for another bot needs a person's rights, which an ordinary bot does not have.
     args = {"name": "Close", "env": "CLOSE_API_KEY", "from_env": "NEW_CLOSE_KEY", "for_bot": "cpo"}
     with pytest.raises(APIError) as refused:
         run(api, attempt["token"], "tico_credential_add", args)
     assert refused.value.status == 403 and SECRET not in str(refused.value)
-    assert "BotOps" in str(refused.value) or "Ask" in str(refused.value), str(refused.value)
+    assert "Agent Ops" in str(refused.value) or "Ask" in str(refused.value), str(refused.value)
     assert get(api, f"api-tools/{tid}")["keys"] == [] and SECRET not in everything(api)
 
 

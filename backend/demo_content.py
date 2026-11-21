@@ -121,7 +121,7 @@ READY_BUILT_INS = ("librarian", "strategy-owner", "tools-owner")
 # and the Assistant (assistant) hangs under Ana.
 BOTS = [
     ("assistant", "assistant", None),
-    ("botops", "botops", "assistant"),
+    ("botops", "agent-ops", "assistant"),  # Agent Ops: its first id, its template
     # Operations and supply chain
     ("operations-manager", "operations-manager", "human:ben"),
     ("procurement-manager", "procurement-manager", "operations-manager"),

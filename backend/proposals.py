@@ -10,14 +10,14 @@ backend/assistant.py `admits_on_turn`); the owner and group leads make it themse
                              the bot's ask: {task_id, requirement_id, approval, status}
   ok_given(c, grant, ctx)    the person OK'd it from its preview (task_asks.ON_OK): the hub applies it in the same
                              transaction, as that person, audited with via `approval:<requirement id>`; the OK is used
-                             and BotOps gets a notice
+                             and Agent Ops gets a notice
 
 Payloads: task_cap `{sender, receiver, per_day}`; spend_limit `{bot}` or `{pool: "company"|"group:<id>"}` with
 `per_30m_usd, daily_usd, weekly_usd, monthly_usd`.
 
-The note to BotOps is a hub notice (from the engine, kind `notice`, refs `{approval}`), as every hub notice reaches a
-bot: BotOps reads it in its inbox, the owner in BotOps's conversations. Nothing waits in a bot's queue: only work
-outside the hub becomes a BotOps task.
+The note to Agent Ops is a hub notice (from the engine, kind `notice`, refs `{approval}`), as every hub notice reaches a
+bot: Agent Ops reads it in its inbox, the owner in Agent Ops's conversations. Nothing waits in a bot's queue: only work
+outside the hub becomes an Agent Ops task.
 """
 
 from pydantic import ValidationError
@@ -167,7 +167,7 @@ APPLY = {"task_cap": _apply_cap, "spend_limit": _apply_spend}
 
 def ok_given(c, grant, ctx):
     """The person OK'd a proposal from its preview (task_asks.ON_OK), in that transaction: the change is applied as
-    them (their rights checked as if they made it), the OK is used, and BotOps hears once."""
+    them (their rights checked as if they made it), the OK is used, and Agent Ops hears once."""
     who = getattr(ctx, "who", None)
     auth = getattr(ctx, "auth", None)
     if who is None or auth is None or who.actor != grant["ok_by_id"]:
@@ -184,6 +184,6 @@ def ok_given(c, grant, ctx):
 
 
 def note(c, rid, words):
-    """BotOps's notice of a change the hub applied: no task, nothing for it to do unless it sees work outside the hub."""
+    """Agent Ops's notice of a change the hub applied: no task, nothing for it to do unless it sees work outside the hub."""
     if H.bot(c, "botops"):
         H.say(c, H.TICO_ACTOR, H.bot_actor("botops"), words, kind="notice", refs={"approval": rid})

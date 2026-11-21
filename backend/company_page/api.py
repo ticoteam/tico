@@ -1,5 +1,5 @@
 """The /api/v2 routes for the switch, audiences, disclosure and the stats board. Owners and admins read and write, because
-every one of these shows what a company keeps back. A bot is refused; BotOps comes through as the person it acts for, so
+every one of these shows what a company keeps back. A bot is refused; Agent Ops comes through as the person it acts for, so
 it can do what they can and no more."""
 
 import asyncio
@@ -243,7 +243,7 @@ def register(app, store, auth, mutate, settings):
         **api_v2(
             "Company page",
             "updateCompanyPage",
-            "Change the page's transparency, address or accent; the owner's own tap when BotOps asks",
+            "Change the page's transparency, address or accent; the owner's own tap when Agent Ops asks",
         ),
     )
     def company_page_patch(request: Request, body: PageSettings):
@@ -396,7 +396,7 @@ def register(app, store, auth, mutate, settings):
         **api_v2(
             "Company page",
             "deleteAudience",
-            "Delete an audience and what it reaches; the owner's own tap when BotOps asks",
+            "Delete an audience and what it reaches; the owner's own tap when Agent Ops asks",
         ),
     )
     def audiences_delete(request: Request, audience_id: str):
@@ -442,7 +442,7 @@ def register(app, store, auth, mutate, settings):
         **api_v2(
             "Company page",
             "setAudienceDisclosure",
-            "Replace the disclosure rules for one audience; the owner's own tap when BotOps asks",
+            "Replace the disclosure rules for one audience; the owner's own tap when Agent Ops asks",
         ),
     )
     def disclosure_put(request: Request, audience_id: str, body: Rules):

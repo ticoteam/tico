@@ -1,6 +1,6 @@
 """Which Slack channels bots may read and post in: a list kept in the database and managed in the app.
 
-Settings > Tools > Slack (an owner or an admin), `tico slack channel`, the MCP tools and BotOps all change this one
+Settings > Tools > Slack (an owner or an admin), `tico slack channel`, the MCP tools and Agent Ops all change this one
 list. An entry names the channel (its name, its id, or both), whether bots may post there (on by default, like every
 internal channel) and a note. Its readers are the bots that follow the channel's linked thread at `digest`: adding a
 reader links a channel that has no link yet to a read-only thread (`slack_threads.add_readers`), and the hourly bot

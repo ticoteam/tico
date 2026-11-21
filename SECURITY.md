@@ -181,22 +181,22 @@ seeing it, and a private bot was hidden from lists but not from every route that
 Access is about what humans and bots may ask of a bot and read from it. It is not a boundary between bots that
 share a computer (see above).
 
-### Roles, members' bots and BotOps
+### Roles, members' bots and Agent Ops
 
 Team roles are Owner, Admin and Member ([docs/permissions.md](docs/permissions.md)). Members may create bots (up to a limit),
-own them and add coworkers in the team's email domain; admins manage every bot except the built-in ones (the Assistant, BotOps,
+own them and add coworkers in the team's email domain; admins manage every bot except the built-in ones (the Assistant, Agent Ops,
 the Librarian and the Strategy Owner are the owner's alone), humans and computers; only owners make admins. Admins are credential administrators by default, so a team gets going without the owner:
 the shared credential vault belongs to the owner and the Admins, or to the owner and `TICO_CREDENTIAL_ADMINS` when the server names them, and
 the owner can turn "Admins store credentials" off. Because bots on one computer are not isolated from
 each other (above), a bot a member created goes only on its member's own computer or one an admin has opened to members' bots (never
 another member's), and setup never places one elsewhere. Credential delivery follows each bot's grants; an admin's placement
-of a member's bot on a closed computer through BotOps still needs their own click. SQL shows a member the
+of a member's bot on a closed computer through Agent Ops still needs their own click. SQL shows a member the
 `events` that are their own or concern what they may read, no roster or sign-in records, and no goals of bots they may not read.
 
-BotOps builds bots for humans by acting as the human whose own chat message started its run: checked with their rights,
-recorded "via BotOps", and never for a message a bot or the Assistant wrote, a message routed from Slack, words inside a task or
+Agent Ops builds bots for humans by acting as the human whose own chat message started its run: checked with their rights,
+recorded "via Agent Ops", and never for a message a bot or the Assistant wrote, a message routed from Slack, words inside a task or
 document, or a message over a week old, since any of those can carry injected instructions. A message cited by id must be the
-requester's own, in their own room with BotOps, within a day. BotOps holds no authority of its own over other bots: routines and
+requester's own, in their own room with Agent Ops, within a day. Agent Ops holds no authority of its own over other bots: routines and
 quarantine follow the requester's management of the bot too. Adding humans (outside the domain needs an owner or admin), deleting
 bots and their repositories, updating Tico, and the owner's changes to Team rules run directly when asked. Credential administrators
 and holders delegating to bots they own or run grant credentials directly. Making an admin, granting add_people, changing a human's

@@ -7,7 +7,7 @@
   hold on the job), from a minute doubling to 50 minutes; the bot's other runs go on. A bot-wide claim check that
   raises passes the bot over for a back-off instead (`check_failed`, the hold on the bot), and holds none of its runs.
 - can't start (`cant_start`): a computer that hands back, or drops in silence, run_diagnostics.SAME of a job's runs in a
-  row: the job fails, BotOps gets one task per bot, and the task waits on it (a `cant_start` hold on the task).
+  row: the job fails, Agent Ops gets one task per bot, and the task waits on it (a `cant_start` hold on the task).
 
 A hold keeps the bot's queued work and starts none of it until a person releases the bot (one action, all three
 holds) or, for a failed-runs hold, until Tico's own try completes. A claim hold keeps only its run. What every page
@@ -56,7 +56,7 @@ def raise_item(c, settings, bot, title, body):
             H.human_actor(person["id"]),
             question=f"Can you get {H.actor_name(c, H.bot_actor(bot))} running again?",
             why=person_asks.first_sentence(body),
-            asker=person_asks.botops(),
+            asker=person_asks.agent_ops(),
         )["id"]
     except H.Refused:
         log.warning("Could not file the Needs-you task for the stopped bot %s", bot)
@@ -254,9 +254,9 @@ def claim_holds(c):
 
 
 def cant_start(c, row, why, computer, lapses=0):
-    """Give BotOps the bot's runs that cannot start: one open task per bot, a comment on it naming each further task,
-    and a `cant_start` hold on this run's task, kept until BotOps's task closes. Answers BotOps's task id, or None when
-    there is no BotOps to give it to (the bot is BotOps, or the company has none): then the job still fails, and the
+    """Give Agent Ops the bot's runs that cannot start: one open task per bot, a comment on it naming each further task,
+    and a `cant_start` hold on this run's task, kept until Agent Ops's task closes. Answers Agent Ops's task id, or None when
+    there is no Agent Ops to give it to (the bot is Agent Ops, or the company has none): then the job still fails, and the
     task is not held. `lapses` is how many runs in a row its computer took and went silent on (execution.expire), when
     that, not run_diagnostics.SAME hand-backs, is why."""
     maintainer = H.FLEET_MAINTAINER

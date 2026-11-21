@@ -12,7 +12,7 @@ from backend import oauth_refresh
 from backend.auth import Identity
 from backend.tests.helpers.api import headers, setup_attempt  # noqa: F401
 from backend.tests.helpers.media import import_meeting
-from backend.tests.helpers.member_bots import botops  # noqa: F401
+from backend.tests.helpers.member_bots import agent_ops  # noqa: F401
 from backend.tests.helpers.granola_mcp import BASE, Provider
 
 
@@ -121,13 +121,13 @@ def test_structured_and_xml_notes_exclude_private_fields_and_keep_provider_id():
     )
 
 
-def test_botops_mcp_uses_the_human_requester(api, botops):
+def test_agent_ops_mcp_uses_the_human_requester(api, agent_ops):
     from backend.tests.helpers.member_bots import turn
     from backend.tests.helpers.mcp import call
 
     provider = Provider(api)
     provider.connect("cara-test")
-    attempt = turn(api, botops, person="cara-test", text="Sync my Granola notes")
+    attempt = turn(api, agent_ops, person="cara-test", text="Sync my Granola notes")
     error, result = call(api, "tico_meeting_granola_status", token=attempt["token"])
     assert not error and result["connected"] and result["email"] is None
     error, result = call(api, "tico_meeting_granola_sync", token=attempt["token"])

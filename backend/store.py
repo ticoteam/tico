@@ -1340,7 +1340,10 @@ class Store:
                     from .repositories import note_named
 
                     # The registry names it: chosen, unless it is the name Tico would give the bot anyway.
-                    note_named(c, entry["repo"], ("emp-" + slug, "bot-" + slug), self.settings.github_owner)
+                    named = str(entry.get("slug") or slug)  # Agent Ops' repository is named for its slug
+                    note_named(
+                        c, entry["repo"], ("emp-" + slug, "bot-" + slug, "bot-" + named), self.settings.github_owner
+                    )
                 declared = json.loads(encode(entry))
                 if "repo_access_mode" not in declared:
                     from .repositories import NEW_BOT_ACCESS, new_bot_default

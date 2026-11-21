@@ -1,5 +1,5 @@
 """When the never-stuck ladder stops and the Quiet bot tasks rule cannot reach a manager, a person who can read the
-task gets a ❓ on it from the bot that stalled (or BotOps for it), in their Needs you (backend/never_stuck.py
+task gets a ❓ on it from the bot that stalled (or Agent Ops for it), in their Needs you (backend/never_stuck.py
 `ask_person`). Each case is one the review
 of the change that took stopped tasks out of Needs you reproduced: nobody heard of the task before.
 
@@ -127,8 +127,8 @@ def test_a_bot_that_finishes_after_all_takes_tico_s_question_with_it(c, time_mac
     assert E.task(c, task_id)["status"] == "done" and not _asked(c, ANA, task_id)
 
 
-def test_botops_asks_for_a_stalled_bot_that_cannot_run(c):
-    """A stopped task whose bot was paused since (the Quiet rule finds no manager for it): BotOps asks for it."""
+def test_agent_ops_asks_for_a_stalled_bot_that_cannot_run(c):
+    """A stopped task whose bot was paused since (the Quiet rule finds no manager for it): Agent Ops asks for it."""
     X.bot(c, "botops")
     X.pipeline(c)
     task_id = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")["id"]

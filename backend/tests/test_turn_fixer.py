@@ -10,7 +10,7 @@ from backend.tests.helpers.org_turns import one_person
 from backend.tests.helpers.start_places import waiters
 
 
-def botops(api):
+def agent_ops(api):
     with api.app.state.store.transaction() as c:
         H.sync_registry(c, {"botops": {"name": "botops", "status": "active"}}, None)
 
@@ -56,14 +56,14 @@ def notes(api, task_id):
 
 def test_frees_only_proven_dead_starts_and_never_blindly_retries_a_turn_that_acted(api):
     """Spec 7/8: lease lost and process gone, or stopped, is freed with a task note; a slow or healthy turn is not,
-    nor is a lost lease whose computer still runs the bot; a dead turn that used a writing tool is held for BotOps."""
-    botops(api)
+    nor is a lost lease whose computer still runs the bot; a dead turn that used a writing tool is held for Agent Ops."""
+    agent_ops(api)
     machine = waiters(api, n=3, running=2)
     past = H.shift(H.now(), seconds=-5)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE attempts SET lease_until=? WHERE id IN ('attempt-0','attempt-4')", (past,))
         c.execute("UPDATE attempts SET stop_requested_at='human:ana' WHERE id='attempt-1'")
-        c.execute("UPDATE tasks SET private=0 WHERE id='task-4'")  # a company task BotOps may read
+        c.execute("UPDATE tasks SET private=0 WHERE id='task-4'")  # a company task Agent Ops may read
         # attempt-3 runs with a live lease but has made no progress for an hour: slow, not dead.
         c.execute(
             "UPDATE attempts SET started_at=? WHERE id IN ('attempt-3','attempt-4')", (H.shift(H.now(), hours=-1),)
@@ -92,9 +92,9 @@ def test_frees_only_proven_dead_starts_and_never_blindly_retries_a_turn_that_act
         assert c.execute("SELECT count(*) FROM tasks WHERE owner_id='bot:botops'").fetchone()[0] == 1
 
 
-def test_dead_turn_on_a_private_task_botops_cannot_read_is_held_without_a_botops_task(api):
-    """The BotOps review task is company-wide: a private task's title and owner never reach it."""
-    botops(api)
+def test_dead_turn_on_a_private_task_agent_ops_cannot_read_is_held_without_a_agent_ops_task(api):
+    """The Agent Ops review task is company-wide: a private task's title and owner never reach it."""
+    agent_ops(api)
     machine = waiters(api, n=0, running=1)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET private=1,visibility='private' WHERE id='task-0'")

@@ -965,7 +965,7 @@ def kept_by(before, items):
 
 
 def pending_change(c, who, hook_id, body, vault=None):
-    """For BotOps' Confirm card (backend/app.py `person_card`): (endpoint, destination change or None, kept secret
+    """For Agent Ops' Confirm card (backend/app.py `person_card`): (endpoint, destination change or None, kept secret
     header names) that `body`, an update asked for `who`, would make, without saving. Refused at once when `who` may not
     change the endpoint, as the tap would be. A secret listed without a value keeps its saved one, as the save does."""
     hook = _row(c, hook_id)

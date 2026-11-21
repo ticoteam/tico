@@ -94,7 +94,7 @@ def test_capture_splits_opening_state_from_outcome_and_needs_a_signature():
 
     assert case["id"] == "fix-the-login-page-t1"  # the task id keeps two tasks with one title apart
     assert case["conversation"] == [{"from": "person", "text": "Only the login page."}]
-    # The cut is this bot's first run, not BotOps' earlier one, and the title is the one the bot started with.
+    # The cut is this bot's first run, not Agent Ops' earlier one, and the title is the one the bot started with.
     assert case["task"]["title"] == "Login page 500s"
     assert case["files"] == [{"name": "trace.txt", "text": "Traceback"}]
     assert case["original"] | {"transcript": None} == {

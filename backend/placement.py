@@ -1,6 +1,6 @@
 """Every active bot has a computer.
 
-A bot that becomes active (added, built by BotOps, activated, resumed) with no computer is placed here, so it never
+A bot that becomes active (added, built by Agent Ops, activated, resumed) with no computer is placed here, so it never
 sits active and silent: on the company's only computer, or the least busy one that takes it. A member's bot goes
 on that member's own computer or one that takes members' bots, the same rule a person placing it meets
 (`Execution.assign`). With no computer that takes it the bot stays as it is and Health says so; the sweep
@@ -47,7 +47,7 @@ def candidates(c, auth, bot):
         for r in c.execute("SELECT * FROM runners_with_state WHERE revoked_at IS NULL")
         if takes(r) and r["id"] not in others
     ]
-    # A bot BotOps builds has its repository on BotOps's computer, so it goes there when that computer takes it; a starter
+    # A bot Agent Ops builds has its repository on Agent Ops's computer, so it goes there when that computer takes it; a starter
     # the runner sets up itself goes anywhere.
     declared = H._json((c.execute(BS.ONE_SQL, (bot,)).fetchone() or {"config": "{}"})["config"], {}) or {}
     home = c.execute("SELECT runner_id FROM assignments WHERE bot='botops'").fetchone()

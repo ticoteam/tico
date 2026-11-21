@@ -68,7 +68,7 @@ The OK covers the head they saw. Merge only that head; after a new commit, ask a
   that checkout before the next one. Use a separate worktree for a PR branch, or return the runner
   checkout to an up-to-date `main` before ending the turn. Do not clone another bot's repository
   into your own. Ask its owner to improve it with a Hub task (`policies/handoffs.md`).
-- Creating a bot repository (BotOps, or the owner): `tico bot repo-create <slug>` from a
+- Creating a bot repository (Agent Ops, or the owner): `tico bot repo-create <slug>` from a
   template, or `--empty` for a bot whose repository already exists on a computer
   (`docs/github-app.md`). It needs the app's administration permission, and the name is always
   `bot-<slug>` in the connected organization, private.

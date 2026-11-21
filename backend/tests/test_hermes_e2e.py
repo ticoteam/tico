@@ -21,8 +21,8 @@ from unittest import mock
 import pytest
 
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner  # noqa: F401
-from backend.tests.helpers.botops_parity import act
-from backend.tests.helpers.member_bots import botops, turn  # noqa: F401
+from backend.tests.helpers.agent_ops_parity import act
+from backend.tests.helpers.member_bots import agent_ops, turn  # noqa: F401
 from backend.tests.live import live  # noqa: F401
 from clients import hermes_agent as H
 
@@ -162,7 +162,7 @@ def archived_seen(api, bot_id):
 
 
 @pytest.mark.slow
-def test_a_hermes_bot_pairs_works_is_archived_restored_and_pairs_again(api, botops, connector):
+def test_a_hermes_bot_pairs_works_is_archived_restored_and_pairs_again(api, agent_ops, connector):
     # An owner makes a Hermes bot and turns it on; a Hermes bot has no computer to be placed on.
     made = api.post(
         "/api/v2/bots/register",
@@ -174,17 +174,17 @@ def test_a_hermes_bot_pairs_works_is_archived_restored_and_pairs_again(api, boto
     scout = bot(api)["id"]  # a bot made now has a UUIDv7 id; `scout` is its slug
     assert scout != "scout"
 
-    # Pair: the connector prints a code and waits; BotOps approves it as the owner who read it out.
-    def approve_as_botops(printed):
+    # Pair: the connector prints a code and waits; Agent Ops approves it as the owner who read it out.
+    def approve_as_agent_ops(printed):
         code = CODE.search(printed).group(1)
-        ana = turn(api, botops, person="ana-test", text=f"Connect my Hermes profile scout, code {code}")
+        ana = turn(api, agent_ops, person="ana-test", text=f"Connect my Hermes profile scout, code {code}")
         done = act(api, ana, "POST", "agents/pairings/approve", {"code": code, "bot": "scout"})
         assert done.status_code == 200 and done.json()["profile"] == "scout", done.text
         REAL_SLEEP(0.02)
 
-    code, out, err = connector.pair(approve_as_botops)
+    code, out, err = connector.pair(approve_as_agent_ops)
     assert code == 0, err
-    assert "Tell BotOps" in out and "Approved for bot 'scout'" in out and "Tico sees it: 0 message(s)" in out
+    assert "Tell Agent Ops" in out and "Approved for bot 'scout'" in out and "Tico sees it: 0 message(s)" in out
     token = connector.token()
     assert token.startswith("tico-agent-")
     # The profile is wired: config entry, .env and credential file (the last two private), and a timer.
@@ -242,7 +242,7 @@ def test_a_hermes_bot_pairs_works_is_archived_restored_and_pairs_again(api, boto
     archived = post(api, "bots/scout/archive", {"expected_revision": revision(api), "revoke_agent": False})
     assert archived["agent"]["credential_revoked"] is False
     code, out, err = connector.run("heartbeat", "--profile", "scout")
-    assert code == 1 and err == "Bot scout is archived in Tico: restore it (ask BotOps) or run uninstall\n"
+    assert code == 1 and err == "Bot scout is archived in Tico: restore it (ask Agent Ops) or run uninstall\n"
     assert connector.status()["backoff"]["reason"] == "bot_archived"
     seen = archived_seen(api, scout)
     assert connector.run("heartbeat", "--profile", "scout")[0] == 0

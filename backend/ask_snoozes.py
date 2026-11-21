@@ -41,7 +41,7 @@ NOT_YOURS = "Only a person this ask waits on snoozes it, for themselves"
 
 def person(who: Any) -> str:
     """The person a snooze is for: the caller, signed in as themselves (a browser, their own API token) or their own
-    Assistant acting with their rights. A bot, BotOps or a page chat acting for them, support and a bot's read-only view
+    Assistant acting with their rights. A bot, Agent Ops or a page chat acting for them, support and a bot's read-only view
     are refused."""
     via = getattr(who, "via", "") or ""
     if (

@@ -11,10 +11,10 @@ and one primary button each:
 3. **What your bots run on.** Two rows: the computer, and **Add a Claude or ChatGPT subscription** (recommended). Both
    are optional, except on Tico Cloud, where **Done** waits for a plan or key; **Done** lands on Tasks. The model plan is a default, chosen in Settings > Models, not a step.
 
-Every team gets the assistant, BotOps, the Librarian and the Strategy Owner, and none of them can be archived.
+Every team gets the assistant, Agent Ops, the Librarian and the Strategy Owner, and none of them can be archived.
 **Setup picks the chart, not the bots:** the built-ins and any seat marked `live` are the bots on day one, and they work
 at once. Every other role is laid out as a **Recruiting** seat with its job description and reporting line: no bot,
-repository, computer slot or BotOps task until someone picks a bot for it ([A bot's stages](#a-bots-stages)). To choose a
+repository, computer slot or Agent Ops task until someone picks a bot for it ([A bot's stages](#a-bots-stages)). To choose a
 first team and get the most from it, read the [setup guide](onboarding-guide.md).
 
 Nobody else sees setup. Only the owner may write it, and the sidebar entry **Finish setup** appears only while it is
@@ -125,7 +125,7 @@ keys**, commands appear only for enabled providers. Each tool must support sign-
 | `software_product` | `yes`, `no`, or empty: whether software is the product |
 | `team_size` | Free text, a choice from the wizard's list. Shown to a human; nothing reads it |
 | `departments` | The team builder's groups, in order: any of `sales`, `marketing`, `support`, `finance`, `operations`, `legal`, `hr`, `product`, `engineering`. A skipped one is left out |
-| `briefings` | The one-line answer for each group, at most 500 characters, keyed by group. BotOps's setup tasks carry them as "`<department>` today: …" |
+| `briefings` | The one-line answer for each group, at most 500 characters, keyed by group. Agent Ops's setup tasks carry them as "`<department>` today: …" |
 | `work_arrives`, `repetitive_work`, `pains`, `pains_text`, `tools` | Earlier questions. The wizard no longer asks them: "What hurts, and what you use" is gone, so there are no pain chips, no "in your own words" box and no tool checkboxes. An older record keeps them and a custom client may still send them; Tico accepts them and reads none |
 
 <a id="the-org-builder"></a>
@@ -203,7 +203,7 @@ bets, `bet` is null and the answer is as before.
 **Create my team** (`POST /api/v2/setup/complete`) writes to the server only, in one request (a chart of 25 bots takes a fraction of a
 second). It reaches no computer.
 
-- BotOps, the assistant, the Librarian and the Strategy Owner, so they exist before anything is addressed to them, each `planned`
+- Agent Ops, the assistant, the Librarian and the Strategy Owner, so they exist before anything is addressed to them, each `planned`
   with the card's summary as its description, `bot-<slug>` as its repository, the card's runtime, model and reasoning effort, the human
   it reports to, and the owner as its owner. A model a deployment does not offer falls back to the product default. They are
   Active on day one.
@@ -213,7 +213,7 @@ second). It reaches no computer.
   gives a company that picked nothing, so it starts with the same live bots and seats.
 - **Everything else picked is a Recruiting seat** (`seats` on the record: `{pick: seat id}`), with the reviewed name as its
   title, a job description from the card and the reviewed instructions, the reporting line picked (a pick under another pick
-  reports to that seat) and the pick's group. No bot, repository, computer slot or BotOps task exists for it. The bullets
+  reports to that seat) and the pick's group. No bot, repository, computer slot or Agent Ops task exists for it. The bullets
   below about starters and other templates describe a bot made from a template: from a seat once someone picks a bot for
   it.
 - **No AI provider and no computer are needed.** The team is created first. With no provider chosen a bot names no runtime or model and
@@ -229,7 +229,7 @@ second). It reaches no computer.
 - A **starter** template (a card with a `first_routine` and an `onboarding` thread) is created whole and parked:
   - `onboarding_state: needs_setup`, exposed on `/api/v2/bots`, `/api/v2/bots/{bot}` and `/api/v2/org`;
   - its routines are seeded off (the template declares `enabled: false`) and go on when its setup starts (**Set up**, a first message from someone who manages it, or go-live), so nobody approves them separately; one a person turned off or changed stays as it is. A seat bot's go on when it goes live, and the go-live answer and `GET /api/v2/bots/{bot}` say which are on (`routines`);
-  - **no task is filed for BotOps**: the computer materializes its repository from its template as soon as the bot is placed on it
+  - **no task is filed for Agent Ops**: the computer materializes its repository from its template as soon as the bot is placed on it
     (`materialize: true` in its config, which only the wizard writes), and the bot is activated as soon as it is placed;
   - the scheduler skips it, and only a human's message is claimed for it (a task message, a Slack route, a bot's request or a routine
     waits), so nothing runs until it is set up;
@@ -241,7 +241,7 @@ second). It reaches no computer.
   the bot may ask them. The bots under a manager get none, so the owner is not asked by every bot at once, and nothing
   pings a bot automatically again ([Tasks](tasks.md#needs-you)).
   The built-ins and every other template are not parked.
-- Any other template is created `planned` and gets one task for BotOps, as before. Title: `Set up <Display> from the <template> template`.
+- Any other template is created `planned` and gets one task for Agent Ops, as before. Title: `Set up <Display> from the <template> template`.
   Body: the slug, the template, the display name, the reviewed instructions in a fenced block, and the answers.
 - Every bot from a template that no computer holds is assigned to the owner's most recently enrolled computer. If none is enrolled yet,
   enrolling the owner's computer afterwards does the same, so the order the two are done in does not matter. A bot someone placed by hand is
@@ -279,7 +279,7 @@ Every bot goes **Recruiting -> Onboarding -> Active** (`backend/lifecycle.py`).
 - **Claude Code and Codex** are added, not requested: `POST /api/v2/cloud-agents/{claude|codex}/add` with `{seat_id}`
   fills the seat with a bot on that harness, owned by the person. Its role is the template Recruit ranks first for the
   seat, so it lands exactly as a hire of that template does: in Onboarding, in the seat's place on the chart, with its
-  repository built by its computer (a starter) or by BotOps (any other template). It joins the seat's team and runs under
+  repository built by its computer (a starter) or by Agent Ops (any other template). It joins the seat's team and runs under
   its own bot identity, with no personal token issued. An add with `{team, reports_to}` and no seat first opens a
   *Software engineer* seat there and names the bot for the agent. A seat under a seat that is still open is filled the same
   way, the agent reporting to the person or bot above until that seat is filled. A seat no template fits is refused (`409`) and leaves
@@ -341,7 +341,7 @@ from the account menu with **Take the tour**. That it was seen is kept per human
 There is no checklist, no card above any page and no card in the sidebar. While there are no bots of your own (the Create your
 first bot step is not done), one line of muted text sits under the team list: "Ask to add or edit your bots",
 with **Ask** opening the Assistant panel over the page. It shows only to humans who may add bots (the owner and bot administrators,
-`can_build`), and has nothing to close. Asking the Assistant (it hands the request to BotOps) is how a bot is added (`playbooks/build-me-a-bot.md`); connecting
+`can_build`), and has nothing to close. Asking the Assistant (it hands the request to Agent Ops) is how a bot is added (`playbooks/build-me-a-bot.md`); connecting
 an external agent you already have is the **Connect an external agent** button in the sidebar footer.
 
 ### Setup in Flow
@@ -355,9 +355,9 @@ that asks for it:
 | Market | no active market entity, no page past the seed, no open "Set up the market map" task | the Librarian |
 | Strategy | no strategy summary, or no brand (draft or published) | the Strategy page's owner (Strategy Owner) |
 | Goals | no goal | the Goals page's owner (Strategy Owner) |
-| Org | no bot besides the built-ins | BotOps |
+| Org | no bot besides the built-ins | Agent Ops |
 | Tools | no tool | the Tools page's owner (Tools Owner) |
-| Budget | no company spending limit | BotOps |
+| Budget | no company spending limit | Agent Ops |
 
 Each open area carries Flow's mark: on its Strategy tab (Market, Strategy, Org, Goals, Budget), beside the Tools title, and
 beside the Market setup question and the **Set up brand** button. A tap on a mark opens Flow on that bot alone and pings it
@@ -398,7 +398,7 @@ the caller's own choices. Runners and bots get `403`.
 
 | Endpoint | Who |
 |---|---|
-| `GET /api/v2/setup/getting-started` | Any human (the BotOps line and the tour read it) |
+| `GET /api/v2/setup/getting-started` | Any human (the Agent Ops line and the tour read it) |
 | `POST /api/v2/setup/getting-started/state` | Any human, for themselves |
 | `POST /api/v2/setup/getting-started/market` | Owner |
 
@@ -414,12 +414,12 @@ computer does the rest.
 The runner materializes the bootstrap bots and the starters the wizard created during readiness, once per bot, when the
 repository is missing and this computer is the one the bot is assigned to. That is a few seconds after Create, so a bot's page
 shows *setting up* until its repository exists (about 70 ms a bot; 25 bots take under two seconds). Everything else stays missing
-until BotOps has built it.
+until Agent Ops has built it.
 
 1. Read the cards from this checkout's `templates/catalog/`.
 2. Take the template from the bot's server-side config, and use it only if its card says
    `bootstrap: true` or the bot's config says `materialize: true` (only the wizard writes that). A registration made before templates existed carries no template, so a bot
-   named `assistant` falls back to the assistant template and one named `botops` to the botops template.
+   named `assistant` falls back to the assistant template and one named `agent-ops` to the agent-ops template.
 3. Read the names from `GET /api/v2/config` and the answers from `GET /api/v2/setup` with
    this computer's own credential. Both are read fresh, because the wizard is answered after the
    computer is enrolled.
@@ -430,14 +430,14 @@ until BotOps has built it.
 An existing directory is never touched. A failure is a readiness problem on that bot rather than an
 exception, so the computer keeps reporting the others.
 
-## What BotOps does
+## What Agent Ops does
 
-BotOps works one setup task at a time, following `playbooks/set-up-a-bot.md` in its own repository:
+Agent Ops works one setup task at a time, following `playbooks/set-up-a-bot.md` in its own repository:
 read the task's chat, `tico bot create --template <template> --name "<Display>"` (Tico picks the slug from the name), put the reviewed
 instructions into `AGENTS.md` (or tailor the template's to the answers), run `tico bot check <slug>`
 and fix every failure, then commit the result.
 
-For a human's authorized request, BotOps finishes the work: it places the bot on a computer,
+For a human's authorized request, Agent Ops finishes the work: it places the bot on a computer,
 turns it on, starts Setup, opens [Credential cards](credential-vault.md#credentials-asked-for-in-the-chat)
 for missing values, runs one small test and reports the result in the thread. It stores and grants
 Credentials with the requester's rights; values stay out of messages.
@@ -446,15 +446,15 @@ An unattended setup task prepares and checks the repository, then reports readin
 path and any missing Tool or Credential to the owner. It leaves activation to the owner in that case.
 An existing repository is checked and updated for the requested work, rather than overwritten.
 
-## The assistant, BotOps, the Librarian and the Strategy Owner are built in
+## The assistant, Agent Ops, the Librarian and the Strategy Owner are built in
 
 Every team gets all four, and none is a choice: their cards are `required: true` in the wizard, so the wizard
 builds them whatever else is ticked, and they become active once a computer is enrolled ([Activating](#activating)).
 The assistant is every human's private [Assistant](assistant.md) (its own page, **Assistant** in the left rail); it also works in the
 background: it routes Slack messages to the bot that owns them, takes meetings and tasks nobody was named for, reviews
-BotOps' refused writes, and runs its own routines.
+Agent Ops' refused writes, and runs its own routines.
 
-None can be archived or deleted by anyone, the owner included, through Settings, the API, `tico` or BotOps itself:
+None can be archived or deleted by anyone, the owner included, through Settings, the API, `tico` or Agent Ops itself:
 the archive route answers `409 system_bot`. Pausing, renaming and editing their instructions stay allowed. Settings >
 Bots lists them as **Built-in**, with no Archive or Delete control. Like every bot they start open to everyone; their
 **Access** can be narrowed in Settings > Bots ([permissions](permissions.md)), and the owner keeps full access to them
@@ -477,25 +477,25 @@ and a computer is enrolled) and sits outside the chart like the others. Its mont
 A team that set the assistant aside before it was built in (v0.2.1 to v0.2.9 let the wizard skip it) keeps it archived
 on update: nothing restores it automatically. Its owner sees "The Assistant is off" on the Assistant page and at the top of
 Settings > General, and one click on **Turn on** brings the same bot back with its history (or adds it from its
-template if it is missing), places it on BotOps' computer and activates it. From then on it cannot be archived again.
-While an assistant is off, or paused, what used to fall back to it goes to BotOps or to a human:
+template if it is missing), places it on Agent Ops' computer and activates it. From then on it cannot be archived again.
+While an assistant is off, or paused, what used to fall back to it goes to Agent Ops or to a human:
 
 | what | with no assistant |
 |---|---|
-| Slack, nobody at threshold, or every chosen bot refused | BotOps gets the message with the top three candidates and asks which bot; with no BotOps running either, the message is recorded and nobody is woken |
-| Slack, no decisions key | the same fallback bot (BotOps) |
-| Meetings and notes sent in **Auto**, for a human with no bot of their own | BotOps, which takes work from anyone the way the assistant does |
-| A human handing work to "whoever takes it" | BotOps accepts it from anyone, as the assistant does |
-| Review of BotOps' refused writes (rule 8) | a task for the owner, which shows in Needs you |
+| Slack, nobody at threshold, or every chosen bot refused | Agent Ops gets the message with the top three candidates and asks which bot; with no Agent Ops running either, the message is recorded and nobody is woken |
+| Slack, no decisions key | the same fallback bot (Agent Ops) |
+| Meetings and notes sent in **Auto**, for a human with no bot of their own | Agent Ops, which takes work from anyone the way the assistant does |
+| A human handing work to "whoever takes it" | Agent Ops accepts it from anyone, as the assistant does |
+| Review of Agent Ops' refused writes (rule 8) | a task for the owner, which shows in Needs you |
 | A bot whose `reports_to` names a bot that is not there | shown under the owner in the team chart, not hidden |
 
 ## Activating
 
-Only an active bot is given work. Finishing setup activates the assistant and BotOps as soon
-as a computer hosts them (and again when a computer is enrolled later), because BotOps cannot be
+Only an active bot is given work. Finishing setup activates the assistant and Agent Ops as soon
+as a computer hosts them (and again when a computer is enrolled later), because Agent Ops cannot be
 handed setup tasks while it is planned. A starter is activated the same way once placed, and is still parked: it answers a human and
 nothing else until it is set up. A ready bot has an **Activate** action when its repository is
-reported present. BotOps can activate it for an authorized human request; an unattended
+reported present. Agent Ops can activate it for an authorized human request; an unattended
 setup task reports readiness for the owner to act.
 
 Automatic placement when a Computer enrolls skips only archived teammates. Paused or draining teammates
@@ -534,7 +534,7 @@ Open a seat from its row on the team chart (`#/seat/<id>`) or right after Post a
   the template's name shares a word of the work with the title (not "Engineer" alone), `good` when it fits at all, else empty; strong ones come
   first. Each carries a one-line summary, tags, what it owns and never does, its onboarding questions, what it needs (each
   `connected`, `on_hire` or `not_set`) and the model it suggests among the providers the team has turned on, with the list
-  of those models to choose another. Built-in bots (BotOps, the Strategy Owner, the message bot) are never applicants. A
+  of those models to choose another. Built-in bots (Agent Ops, the Strategy Owner, the message bot) are never applicants. A
   seat placed with a template (`seats.template`) has that template as its one, strong applicant; hiring it with a
   different template is refused, and retitling the seat clears the pin. Each
   applicant has its own page (`#/seat/<id>/<template>`) with a **Hire** box: name, reports to, computer and model.
@@ -548,7 +548,7 @@ Open a seat from its row on the team chart (`#/seat/<id>`) or right after Post a
   `reports_now` on the seat says who and until which seat is hired. The seat is then filled and leaves the chart; open
   seats that reported to it move under the new bot, and so do bots hired under it that still report where they were
   placed. A bot someone moved by hand keeps that manager. Only then is its
-  repository made: a starter template's by the computer (`materialize`), any other's by a BotOps "Set up" task. A filled
+  repository made: a starter template's by the computer (`materialize`), any other's by an Agent Ops "Set up" task. A filled
   seat, a template that is not an applicant, a name already taken or a model the team has not turned on is refused and
   nothing is made.
 - Who may post and hire: the owner for any seat; a person for a seat under themselves or someone below them. Bots read
@@ -560,8 +560,8 @@ create a bot automatically. Sign in, review the role and explicitly choose Creat
 session on that site grants no access to your Tico. Older installs can select the named template manually.
 
 - **Settings → Bots → Add from template.** The same cards, minus the bots that already exist. A starter is created parked, exactly as Create
-  makes it; any other template is created `planned` with the same BotOps task the wizard would have filed.
-- **From a BotOps task**, inside a run: `tico bot create --template <template> --name
+  makes it; any other template is created `planned` with the same Agent Ops task the wizard would have filed.
+- **From an Agent Ops task**, inside a run: `tico bot create --template <template> --name
   "<Display>"`, then `tico bot check <slug>` with the slug it printed. Both need `HUB_WORKSPACE`, which the runner puts in
   every run's environment.
 - **An agent you already run elsewhere**: a [Hermes](hermes-agents.md) or [OpenClaw](openclaw-agents.md) profile
@@ -576,7 +576,7 @@ the same template is one of the two command line routes; Tico gives it a slug of
 
 ## Adding a template
 
-Tico ships 108 role templates, by group, each with a card. `templates/catalog/` holds 120 folders in all: those 108, four built-in bots (`assistant`, `botops`, `strategy-owner`, `librarian`) and eight helper bots (`finance-owner`, `design-owner`, `inbox-manager`, `general-manager`, `rules-owner`, `updates-owner`, `automations-owner`, `tools-owner`). [Starter bots](starter-bots.md) lists the 108.
+Tico ships 108 role templates, by group, each with a card. `templates/catalog/` holds 120 folders in all: those 108, four built-in bots (`assistant`, `agent-ops`, `strategy-owner`, `librarian`) and eight helper bots (`finance-owner`, `design-owner`, `inbox-manager`, `general-manager`, `rules-owner`, `updates-owner`, `automations-owner`, `tools-owner`). [Starter bots](starter-bots.md) lists the 108.
 
 `templates/catalog/<template>/` is one template. The folder name is what `--template` takes.
 
@@ -593,8 +593,8 @@ Tico ships 108 role templates, by group, each with a card. `templates/catalog/` 
 - `{{company_name}}`, `{{app_name}}`, `{{assistant_name}}` and `{{bot_name}}` are filled in every
   text file before the first commit, and in the card's own words wherever a human reads it.
 - `required: true` means the wizard always includes it. `bootstrap: true` means the computer
-  materializes it itself and no BotOps task is filed for it. Both are true for all four Built-in bots:
-  Assistant, BotOps, Librarian and Strategy Owner.
+  materializes it itself and no Agent Ops task is filed for it. Both are true for all four Built-in bots:
+  Assistant, Agent Ops, Librarian and Strategy Owner.
 - `recommend_when` says who a card is for. The team builder reads only `sells_to_businesses` and `sells_to_consumers` (a business-only card is suggested last to a team that sells only to consumers); the rest
   (`publishes_content`, `has_pipeline`, `uses_github`, ...) are descriptive and harmless. The `inbox-manager` card (the message bot) needs a
   human's mailbox chosen whenever it is switched on.
@@ -622,12 +622,12 @@ not the owner is sent to Tasks, and a bot administrator can read the record but 
 Everyone else gets `403` on `GET /api/v2/setup`. To see the finished record again, open
 `#/welcome` directly; it opens on its last step.
 
-**Bots stay "Missing bot repository or AGENTS.md".** For the assistant or BotOps it means no computer
+**Bots stay "Missing bot repository or AGENTS.md".** For the assistant or Agent Ops it means no computer
 is enrolled, or the bot sits on a computer that is not running, because a computer only materializes
 its own assignments. Check **Settings → Bots** for the computer column and **Settings → Computers**
 for the last heartbeat. A starter bot needs the same: the computer it is placed on sets it up, and until that computer
-is online its row says *setting up*. For any other bot it means BotOps has not built it yet:
-check that BotOps is `active`, that its repository exists, and read its setup task.
+is online its row says *setting up*. For any other bot it means Agent Ops has not built it yet:
+check that Agent Ops is `active`, that its repository exists, and read its setup task.
 
 A bot placed on, or moved to, a computer that has never held it gets its repository by cloning it from GitHub
 with its own token (the assignment names it). If that cannot happen the row says why instead of the generic

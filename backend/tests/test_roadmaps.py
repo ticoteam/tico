@@ -199,7 +199,7 @@ def test_a_bot_files_no_public_text_without_an_approved_publication(api):
 
     _settings(api)
     token = bot_token(api, 'cpo')
-    for identity in (token, 'ben-via-botops'):
+    for identity in (token, 'ben-via-agent-ops'):
         task_body = {'owner': 'cpo', 'title': 'Research requested exports', 'body': 'customer@acme.example'}
         # Public text from a bot is refused, not silently dropped: it goes through an approved publication.
         for extra in ({'visibility': 'public'}, {'public_title': 'Exports'}, {'public_summary': 'Soon'}):

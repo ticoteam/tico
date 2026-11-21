@@ -6,7 +6,7 @@ or Ask first). There are no forward targets any more: a forward is a send, decid
 bot's bot.yaml asks for nothing (its `outbound_send` and `forward_to` keys are ignored).
 
 Only a person sets the value: the owner, or a human who manages the bot (`Auth.bot_manager`), signed in or with their
-own personal token. A bot, BotOps (in its own run or acting for a person) and the Assistant are refused.
+own personal token. A bot, Agent Ops (in its own run or acting for a person) and the Assistant are refused.
 """
 
 import re
@@ -37,9 +37,9 @@ def view(c, bot):
 
 
 def require_person(who, bot=""):
-    """A person acting as themselves: never a bot or a computer, never BotOps or the Assistant acting for them."""
+    """A person acting as themselves: never a bot or a computer, never Agent Ops or the Assistant acting for them."""
     if who.role not in ("owner", "human") or who.via or who.task_actor:
-        from .botops_act import mail_settings_hint
+        from .agent_ops_act import mail_settings_hint
 
         raise Problem(
             "forbidden",

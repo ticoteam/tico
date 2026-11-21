@@ -22,7 +22,7 @@ Rules:
   Do not list them. Access to another bot's or a product repository still needs a declaration.
 - Messages to outsiders (`send`, `post`, `publish`) follow the bot's sending policy in Tico (Settings > Bots > <bot> > Email sending: On their own, Ask first or Never), never a line in `bot.yaml`. Every email goes through Tico's send queue, which decides it; under Ask first a person approves it in Tico. Act within the requested work and the declared Tools. Spending follows the requested budget and Tools; it does not depend on the sending policy.
 - The secret named in `env` lives in `~/tico-work/secrets/<slug>.env` on the machine that runs
-  the team. If it is missing, the app shows "not connected" and the bot files it for BotOps
+  the team. If it is missing, the app shows "not connected" and the bot files it for Agent Ops
   (`tico task file --parent <id> --owner botops "<title>"`), which asks the person who can fix it, rather than
   improvise. Never ask people about your own setup yourself.
 - A value in that file may be a 1Password reference instead of the secret itself:
@@ -66,5 +66,5 @@ Rules:
   channel in this list still needs to be on the Slack channel list (Settings > Tools > Slack channels) and Tico must
   be a member. Set `dms: false` when the role must not read the shared app's DM inbox; `inbox`
   enforces it from `--as <slug>` or `HUB_BOT`.
-- Changing `tools:` is a Tico-level decision: file it for BotOps rather than editing your own
+- Changing `tools:` is a Tico-level decision: file it for Agent Ops rather than editing your own
   manifest.

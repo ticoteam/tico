@@ -8,8 +8,8 @@ from backend import hubdb as H, letters as L, task_asks
 from backend.tests.helpers.api import get, post, put, headers  # noqa: F401
 from backend.tests.helpers.agents import hermes_bot, credential, bot_id
 from backend.tests.helpers.mcp import call
-from backend.tests.helpers.botops_parity import act
-from backend.tests.helpers.member_bots import botops, turn  # noqa: F401 (fixture)
+from backend.tests.helpers.agent_ops_parity import act
+from backend.tests.helpers.member_bots import agent_ops, turn  # noqa: F401 (fixture)
 from clients import gateway as G
 from backend.tests.helpers.letters import HQ, RECIPIENT, fetch, grant, hq, quote, send
 
@@ -38,8 +38,8 @@ def bot(api):
     return bot_id(api), credential(api)["token"]
 
 
-def test_botops_policy_and_access_changes_wait_for_the_persons_tap(api, botops):
-    ana = turn(api, botops, person="ana-test", text="Let Ops send letters and set a cap")
+def test_agent_ops_policy_and_access_changes_wait_for_the_persons_tap(api, agent_ops):
+    ana = turn(api, agent_ops, person="ana-test", text="Let Ops send letters and set a cap")
     path = "letters/outboxes/company/grants/bot/ops"
     card = act(api, ana, "PUT", path, {"level": "send"}).json()
     assert card["needs_confirm"] and get(api, "letters/outboxes/company/grants")["grants"] == []

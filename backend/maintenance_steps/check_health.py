@@ -9,21 +9,21 @@ Three readers feed it, each one read in the run's snapshot:
 
 Lifecycle, per finding (its local key) and per signature (what it is, never where):
   - an urgent check files on the first run that finds it; a noisy check files on the second run (`pending` holds the first);
-  - a setup finding files one BotOps task per signature. A repeat adds to the task's count (a comment once a day), a new
-    computer with the same problem comments once, and a problem that clears gets a "cleared" comment BotOps closes the task
-    on. A task BotOps has closed is opened again the next time the problem shows. A task a person was given since is not
-    BotOps's any more: nothing is written to it, and a new BotOps task opens when the problem shows;
-  - BotOps is woken once per run, not once per task: a new task, a back, or a cleared one adds to the run's wake, and the
+  - a setup finding files one Agent Ops task per signature. A repeat adds to the task's count (a comment once a day), a new
+    computer with the same problem comments once, and a problem that clears gets a "cleared" comment Agent Ops closes the task
+    on. A task Agent Ops has closed is opened again the next time the problem shows. A task a person was given since is not
+    Agent Ops's any more: nothing is written to it, and a new Agent Ops task opens when the problem shows;
+  - Agent Ops is woken once per run, not once per task: a new task, a back, or a cleared one adds to the run's wake, and the
     wake is one comment, on one of those tasks, that lists them (`_wake`). The gate `_wake_allowed` may refuse it, or
     only a task at its daily cap: refused tasks wait in the marker `health-wake:pending` for the next allowed run. Every other comment is quiet;
   - a Tico bug is not a task: it goes through the report path (backend/maintenance_health.py `report`). `run` calls it after
     its write transaction, for the signatures in `details.reports_due`, and the answers go to `details.reports`;
-  - with no active BotOps bot nothing is written: the findings are listed in `details.unrouted` on the step's row.
+  - with no active Agent Ops bot nothing is written: the findings are listed in `details.unrouted` on the step's row.
 
 Check health never writes to a person. The one exception is the Tico bug report path, which the team rule
 `health_monitor_reports` decides: a support approval a person reads first when that rule is off.
 
-The step result is {status, reason, checked, found, woke, cost_usd, details}; `woke` is 1 when the run's BotOps wake went
+The step result is {status, reason, checked, found, woke, cost_usd, details}; `woke` is 1 when the run's Agent Ops wake went
 out, else 0.
 """
 
@@ -39,12 +39,12 @@ from ..store import H
 
 log = logging.getLogger("tico.maintenance.check_health")
 
-BOTOPS = MH.BOTOPS
+AGENT_OPS = MH.AGENT_OPS
 REGISTRY_PREFIX = "health-task:"  # registry_metadata key per signature: {task, keys, count, last_comment, cleared}
 BUSY_FRESH_HOURS = 2  # a busy process not posted this long clears: its computer stopped sampling
 REREPORT_HOURS = 24  # a Tico bug already reported is reported again (a comment) at most this often
-COMMENT_HOURS = 24  # a repeat adds to a BotOps task's count at most this often
-WAKE_KEY = "health-wake:pending"  # registry_metadata: the task ids whose BotOps wake waits (the gate refused it, or a comment failed)
+COMMENT_HOURS = 24  # a repeat adds to an Agent Ops task's count at most this often
+WAKE_KEY = "health-wake:pending"  # registry_metadata: the task ids whose Agent Ops wake waits (the gate refused it, or a comment failed)
 WAKE_LIST = 20  # the wake comment names this many tasks; the rest are counted
 
 # How fast a check files. "urgent": on the first run that finds it. Any check not listed is "noisy": it files on the second
@@ -108,11 +108,11 @@ TAGS = {
 # production checks, which the invariant reader files as `inv:<id>`.
 PAGE_LEFT_OUT = {"invariant"}
 FIX_PAGE = (
-    "BotOps: open the check on Settings > Health for the detail, fix the cause it names, and the check clears on the "
+    "Agent Ops: open the check on Settings > Health for the detail, fix the cause it names, and the check clears on the "
     "next run. A fix only a person can make: one ❓ on this task to the person who can make it, with the link to the "
     "check or the page where they fix it."
 )
-FIX_RUN = "BotOps: nothing to do by hand; the check clears when the next run no longer finds it."
+FIX_RUN = "Agent Ops: nothing to do by hand; the check clears when the next run no longer finds it."
 
 
 def tag_of(check_id):
@@ -128,7 +128,7 @@ def tag_of(check_id):
 
 
 def task_of(c, signature):
-    """The BotOps task open for a signature, or None (a closed one is not open)."""
+    """The Agent Ops task open for a signature, or None (a closed one is not open)."""
     task = _open(c, _reg_get(c, _reg_key(signature)).get("task"))
     return task["id"] if task else None
 
@@ -300,10 +300,10 @@ def _page_findings(c, ctx, notes, stuck=frozenset()):
             continue
         summary = str(check.get("summary", ""))
         if base == "models" and not providers.configured(providers.load(c, ctx["settings"])):
-            continue  # no AI provider chosen: setup asks the owner, and BotOps itself cannot run until there is one
+            continue  # no AI provider chosen: setup asks the owner, and Agent Ops itself cannot run until there is one
         if base == "never_stuck":
             # Its `no_one` count (private tasks no one who reads them can move) is the owner's and Admins' on Health
-            # only: a BotOps task is read more widely, and no bot can move such a task. Only a rule break files, in
+            # only: an Agent Ops task is read more widely, and no bot can move such a task. Only a rule break files, in
             # words without that count.
             breaks = int((check.get("counts") or {}).get("broken") or 0)
             if not breaks:
@@ -367,10 +367,10 @@ def _row_item(row):
 def apply(c, ctx, checked, found, notes):
     """Records what the readers found, files it as the tags say, and writes the tasks and comments. Returns the
     step result."""
-    now, botops = _now(ctx), _botops_active(c)
+    now, agent_ops = _now(ctx), _agent_ops_active(c)
     details = {
         "notes": notes,
-        "botops": botops,
+        "botops": agent_ops,
         "filed": [],
         "pending": [],
         "cleared": [],
@@ -379,7 +379,7 @@ def apply(c, ctx, checked, found, notes):
         "reports_due": [],
     }
     seen = {item["key"]: item for item in found}
-    wakes = []  # BotOps tasks whose change wakes BotOps this run: new, back, cleared
+    wakes = []  # Agent Ops tasks whose change wakes Agent Ops this run: new, back, cleared
 
     # 1. A finding no reader saw now is gone. A filed one clears (its signature may get a comment below); a pending one just drops.
     # An offline aggregate (OFFLINE_KEYS) is held instead while the computers it last named are silent: computer_silent files
@@ -451,9 +451,9 @@ def apply(c, ctx, checked, found, notes):
         state.update({key: offline["named"][key] for key in OFFLINE_KEYS if key in seen})
         _reg_set(c, OFFLINE_STATE, state)
 
-    # 3. Setup findings: one BotOps task per signature. Tico bugs are reported (returned for the caller to file). A task
+    # 3. Setup findings: one Agent Ops task per signature. Tico bugs are reported (returned for the caller to file). A task
     # registered for a signature with nothing filed left (a task seeded by the Health Monitor's retirement, or one whose
-    # rows were lost) clears too, so BotOps is never left a task that nothing will ever close. Skipped on a run where a
+    # rows were lost) clears too, so Agent Ops is never left a task that nothing will ever close. Skipped on a run where a
     # reader failed: its rows are unread, not gone.
     registered = set() if unread else _registered_signatures(c)
     for sig in sorted(filed_sigs | gone_sigs | registered):
@@ -467,7 +467,7 @@ def apply(c, ctx, checked, found, notes):
             if _report_due(c, sig, now):
                 details["reports_due"].append(sig)
             continue
-        if not botops:
+        if not agent_ops:
             details["unrouted"].append({"signature": sig, "titles": [r["title"] for r in rows]})
             continue
         _task_for(c, sig, rows, now, details, wakes, seen)
@@ -491,8 +491,8 @@ def _action(seen, rows):
 
 
 def _task_for(c, sig, rows, now, details, wakes, seen):
-    """Opens or updates the BotOps task of a setup signature with its filed rows. A task that is new, comes back, or clears
-    is added to `wakes` (one BotOps wake per run, `_wake`). A comment moves its marker only when it is written: a comment
+    """Opens or updates the Agent Ops task of a setup signature with its filed rows. A task that is new, comes back, or clears
+    is added to `wakes` (one Agent Ops wake per run, `_wake`). A comment moves its marker only when it is written: a comment
     that fails is tried again on the next run."""
     reg = _reg_get(c, _reg_key(sig))
     task = _open(c, reg.get("task"))
@@ -512,7 +512,7 @@ def _task_for(c, sig, rows, now, details, wakes, seen):
         wakes.append(made["id"])
         return
     # A finding whose way out changed (a stuck update's turns stopped moving, say): the same task hears the new fix,
-    # then the marker moves, and BotOps wakes. A finding that comes back says its current fix too.
+    # then the marker moves, and Agent Ops wakes. A finding that comes back says its current fix too.
     action, row = _action(seen, rows), rows[0]
     if action and not reg.get("cleared") and reg.get("action", action) != action:
         if _comment(c, task["id"], f"Now: {row['title']}\n{row['detail']}\n\nFix:\n{row['fix']}", wake=False):
@@ -551,8 +551,8 @@ def _task_for(c, sig, rows, now, details, wakes, seen):
 
 
 def _cleared_comment(c, sig, now, wakes):
-    """A setup signature with no filed finding left: its open task gets a cleared comment, and BotOps is woken for it. A task
-    that is gone for BotOps (closed, or given to a person) is only marked cleared. The marker moves only with the comment."""
+    """A setup signature with no filed finding left: its open task gets a cleared comment, and Agent Ops is woken for it. A task
+    that is gone for Agent Ops (closed, or given to a person) is only marked cleared. The marker moves only with the comment."""
     reg = _reg_get(c, _reg_key(sig))
     if not reg or reg.get("cleared"):
         return
@@ -564,7 +564,7 @@ def _cleared_comment(c, sig, now, wakes):
     if not _comment(
         c,
         task["id"],
-        f"Cleared at {now[:16]} UTC: the check passes now, so this problem is gone. BotOps: close this task.",
+        f"Cleared at {now[:16]} UTC: the check passes now, so this problem is gone. Agent Ops: close this task.",
         wake=False,
     ):
         return
@@ -607,22 +607,22 @@ def _task_body(sig, rows, total, now):
 
 
 def _task_create(c, title, body):
-    """The BotOps task for a setup signature. Filing it wakes BotOps once, as any task for a bot does."""
+    """The Agent Ops task for a setup signature. Filing it wakes Agent Ops once, as any task for a bot does."""
     try:
         c.execute("SAVEPOINT check_health_task")
         with SRC.writing_as("check-health"):  # the task shows it came from the Health check (sources.filers)
-            made = H.task_create(c, H.TICO_ACTOR, f"Health: {title}"[:200], body, H.bot_actor(BOTOPS), lint=False)
+            made = H.task_create(c, H.TICO_ACTOR, f"Health: {title}"[:200], body, H.bot_actor(AGENT_OPS), lint=False)
         c.execute("RELEASE check_health_task")
         return made
     except Exception:  # noqa: BLE001 - a refusal to file one task must not undo the check's record
         c.execute("ROLLBACK TO check_health_task")
         c.execute("RELEASE check_health_task")
-        log.warning("Check health: could not file the BotOps task for %s", title, exc_info=True)
+        log.warning("Check health: could not file the Agent Ops task for %s", title, exc_info=True)
         return None
 
 
 def _comment(c, task_id, text, wake):
-    """A comment as Tico. True when written (and, for a wake, queued for BotOps); otherwise the caller keeps its
+    """A comment as Tico. True when written (and, for a wake, queued for Agent Ops); otherwise the caller keeps its
     marker as it was and the next run tries again."""
     try:
         c.execute("SAVEPOINT check_health_comment")
@@ -631,7 +631,7 @@ def _comment(c, task_id, text, wake):
         message = H.task_comment(c, H.TICO_ACTOR, task_id, text, wake=wake, extra_refs=refs)
         queued = (
             not wake
-            or c.execute("SELECT 1 FROM jobs WHERE message_id=? AND bot_id=?", (message["id"], BOTOPS)).fetchone()
+            or c.execute("SELECT 1 FROM jobs WHERE message_id=? AND bot_id=?", (message["id"], AGENT_OPS)).fetchone()
             is not None
         )
         c.execute("RELEASE check_health_comment")
@@ -644,7 +644,7 @@ def _comment(c, task_id, text, wake):
 
 
 def _wake(c, wakes, details):
-    """BotOps is woken once per run, however many of its tasks changed: one comment, on one of those tasks, that lists them.
+    """Agent Ops is woken once per run, however many of its tasks changed: one comment, on one of those tasks, that lists them.
     The tasks the gate refused (or whose comment failed) wait in the marker for the next run. Returns 1 when the wake went
     out, else 0."""
     waiting = _wake_waiting(c)
@@ -659,7 +659,7 @@ def _wake(c, wakes, details):
     allowed = _wake_allowed(c, ids)
     held = [task_id for task_id in ids if task_id not in allowed]
     if allowed and _comment(c, allowed[0], _wake_text(c, allowed), wake=True):
-        maintenance_limits.record(c, BOTOPS, allowed)
+        maintenance_limits.record(c, AGENT_OPS, allowed)
         if held:
             _reg_set(c, WAKE_KEY, held)
             details["wake_waiting"] = held
@@ -673,9 +673,9 @@ def _wake(c, wakes, details):
 
 
 def _wake_allowed(c, ids):
-    """The tasks this run may wake BotOps for: the bot and fleet caps gate the whole wake, each task's daily cap only
+    """The tasks this run may wake Agent Ops for: the bot and fleet caps gate the whole wake, each task's daily cap only
     itself, so one capped task waits alone and never holds the rest of the group."""
-    return [task_id for task_id in ids if maintenance_limits.allow(c, BOTOPS, task_id)]
+    return [task_id for task_id in ids if maintenance_limits.allow(c, AGENT_OPS, task_id)]
 
 
 def _wake_waiting(c):
@@ -691,7 +691,7 @@ def _wake_text(c, ids):
     ]
     more = f" and {len(ids) - WAKE_LIST} more" if len(ids) > WAKE_LIST else ""
     return (
-        "Health wake: these BotOps tasks changed since BotOps last looked: "
+        "Health wake: these Agent Ops tasks changed since Agent Ops last looked: "
         + "; ".join(parts)
         + more
         + ". Each task says what changed; close the ones marked cleared."
@@ -700,16 +700,16 @@ def _wake_text(c, ids):
 
 # ------------------------------------------------------------------------------------------------------------- helpers
 def _open(c, task_id):
-    """The task, when BotOps still owns it and it is open (not done, closed or declined), else None. A task given to a person
-    since is not BotOps's to comment on: nothing is written to it, and a new BotOps task opens when the problem shows."""
+    """The task, when Agent Ops still owns it and it is open (not done, closed or declined), else None. A task given to a person
+    since is not Agent Ops's to comment on: nothing is written to it, and a new Agent Ops task opens when the problem shows."""
     row = H.task(c, task_id) if task_id else None
-    if row is None or row["owner_id"] != "bot:" + BOTOPS:
+    if row is None or row["owner_id"] != "bot:" + AGENT_OPS:
         return None
     return row if row["status"] == "open" else None
 
 
-def _botops_active(c):
-    return (H.bot(c, BOTOPS) or {}).get("state") == "active"
+def _agent_ops_active(c):
+    return (H.bot(c, AGENT_OPS) or {}).get("state") == "active"
 
 
 def _reg_key(sig):
@@ -717,7 +717,7 @@ def _reg_key(sig):
 
 
 def _registered_signatures(c):
-    """Every signature with a BotOps task registered (open or not): the step's registry, one row per signature."""
+    """Every signature with an Agent Ops task registered (open or not): the step's registry, one row per signature."""
     return {
         row["key"][len(REGISTRY_PREFIX) :]
         for row in c.execute("SELECT key FROM registry_metadata WHERE key LIKE ?", (REGISTRY_PREFIX + "%",)).fetchall()

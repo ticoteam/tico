@@ -143,15 +143,15 @@ class SettingsAdmin:
             (actor, excluding),
         ).fetchone()[0]
 
-    def _manager(self, c, who, bot, botops=False, report=None):
+    def _manager(self, c, who, bot, agent_ops=False, report=None):
         """The one "may manage this bot" check (`Auth.bot_manager`): the owner, an Admin, one of the bot's
         owners, or a person it reports up to. They are also the people who always have full access to it.
-        `botops`: BotOps in its own run may also make this change (`Auth.botops_manages`). `report`: the scope a
+        `agent_ops`: Agent Ops in its own run may also make this change (`Auth.agent_ops_manages`). `report`: the scope a
         manager bot changes on its direct report (`Auth.report_manager`), else None."""
         if (
             who.role == "owner"
             or self.auth.bot_manager(c, who, bot)
-            or (botops and self.auth.botops_manages(c, who, bot))
+            or (agent_ops and self.auth.agent_ops_manages(c, who, bot))
             or (report and self.auth.report_manager(c, who, bot, report))
         ):
             return
@@ -423,7 +423,9 @@ class SettingsAdmin:
         """A free slug from the bot's name: never one in use, archived or reserved for the company's own bots."""
         return free_slug(
             name,
-            lambda slug: bool(H.resolve_bot(c, slug)) or self.auth.system_bot(slug) or slug == "assistant",
+            lambda slug: (
+                bool(H.resolve_bot(c, slug)) or self.auth.system_bot(slug) or slug in ("assistant", H.AGENT_OPS_SLUG)
+            ),
             fallback,
         )
 
@@ -433,13 +435,15 @@ class SettingsAdmin:
         return next((card["name"] for card in read_cards(self.settings) if card["template"] == template), template)
 
     def create_report(self, c, who, body):
-        """A manager bot's new report, made by BotOps on the manager's ask (`Auth.report_lifecycle`). It is made as a
+        """A manager bot's new report, made by Agent Ops on the manager's ask (`Auth.report_lifecycle`). It is made as a
         member's bot under the person above the manager, so the same rules hold as for a member: that person's limit,
         the computers that take members' bots, and their credentials. It reports to the manager and nothing else."""
         manager = H.actor_id(who.actor)
         label = (H.bot(c, manager) or {}).get("slug", manager)
         if body.template:
-            raise Problem("template", "A manager bot's new report starts without a template; ask BotOps for one", 422)
+            raise Problem(
+                "template", "A manager bot's new report starts without a template; ask Agent Ops for one", 422
+            )
         reports_to = (H.resolve_bot(c, body.reports_to) or {}).get("id", body.reports_to)
         if reports_to not in (None, "", manager):
             raise Problem("forbidden", f"{label} makes only its own reports: this one must report to {label}", 403)
@@ -447,7 +451,9 @@ class SettingsAdmin:
             body = body.model_copy(update={"slug": self.pick_slug(c, body.display_name)})
         if not self.auth.report_lifecycle(c, who, body.slug, "create", parent=manager):
             raise Problem(
-                "forbidden", "A manager bot adds a report only by asking BotOps, and only while its managing is on", 403
+                "forbidden",
+                "A manager bot adds a report only by asking Agent Ops, and only while its managing is on",
+                403,
             )
         self._report_cap(c, who, "create", f"add a report, {body.display_name},")
         person = report_managers.person_above(c, manager)
@@ -466,7 +472,7 @@ class SettingsAdmin:
 
     def _report_cap(self, c, who, op, what):
         """Refuse a manager bot's create, archive or restore once this week's team limit is used up (report_managers.CAPS).
-        The refusal is a Needs you task for the person above the manager, so BotOps relays it and does not retry."""
+        The refusal is a Needs you task for the person above the manager, so Agent Ops relays it and does not retry."""
         manager = H.actor_id(who.actor)
         used, limit = report_managers.cap_used(c, manager, op, H.now()), report_managers.cap_limit(c, op)
         if used < limit:
@@ -480,11 +486,11 @@ class SettingsAdmin:
         body = (
             f"{name} has made {used} of its {limit} report changes this week. Decide this yourself in Settings, or raise "
             "the limit in the team rules.\n\n"
-            f"It asked BotOps to {what}. The count covers the last seven days."
+            f"It asked Agent Ops to {what}. The count covers the last seven days."
         )
         refusal = Problem(
             "report_cap",
-            f"{name} has made its {limit} of these changes this week, so BotOps asked "
+            f"{name} has made its {limit} of these changes this week, so Agent Ops asked "
             f"{H.person_name(c, H.actor_id(person)) or 'the person above it'} to decide. Do not ask again this week.",
             429,
         )
@@ -500,7 +506,7 @@ class SettingsAdmin:
 
     def _report_act(self, c, who, bot, op, do):
         """Run `do()` for a manager bot's change to its report: recorded as a `lifecycle` change on the report with via
-        `report_manager`, and an event naming the manager. The change is the person's own when BotOps is the one asked."""
+        `report_manager`, and an event naming the manager. The change is the person's own when Agent Ops is the one asked."""
         before = _lifecycle_state(c, bot)
         token = H.VIA.set(report_managers.VIA)
         try:
@@ -529,6 +535,10 @@ class SettingsAdmin:
     def create_bot(self, c, who, body):
         CA.gate(c, who.actor, "bots", "add a bot")
         self.validate_template(body.template)
+        if body.template == H.AGENT_OPS_SLUG:  # one Agent Ops: never a second under -2
+            body = body.model_copy(update={"slug": H.agent_ops_slug(c)})
+        elif body.slug == H.AGENT_OPS_SLUG:
+            raise Problem("duplicate", "That slug is Agent Ops'", 409)  # held for the built-in, made or not
         if not body.slug:
             body = body.model_copy(update={"slug": self.pick_slug(c, body.display_name)})
         if body.template and "shared" not in body.model_fields_set:
@@ -543,11 +553,13 @@ class SettingsAdmin:
         if existing and existing["state"] == "archived" and body.slug == self.settings.assistant_bot:
             # First run set the assistant aside; adding it later brings the same bot back.
             return self._restore(c, who, body)
-        if existing:
-            raise Problem("duplicate", "That bot slug already exists", 409)
         bot_id = H.new_bot_id(body.slug)
-        if not privileged and (self.auth.system_bot(body.slug) or body.slug == "assistant"):
-            # The company's own bots (the Assistant, BotOps, the Librarian, the COO) are added by an owner or an Admin.
+        if existing or (bot_id != body.slug and H.bot(c, bot_id)):  # Agent Ops' slug names its first id
+            raise Problem("duplicate", "That bot slug already exists", 409)
+        if not privileged and (
+            self.auth.system_bot(body.slug) or body.slug == "assistant" or body.template == H.AGENT_OPS_SLUG
+        ):
+            # The company's own bots (the Assistant, Agent Ops, the Librarian, the COO) are added by an owner or an Admin.
             raise Problem(
                 "forbidden", "That name is reserved for the company's own bots; ask an owner or an admin", 403
             )
@@ -772,13 +784,19 @@ class SettingsAdmin:
         }
 
     def register(self, c, who, body):
-        """Register a bot with the server, planned, as `who`: the record BotOps then builds the repository for.
+        """Register a bot with the server, planned, as `who`: the record Agent Ops then builds the repository for.
         Idempotent for the bot's own owners; a slug someone else holds is a 409. The model is the company's
         default until the bot's owner picks one."""
         CA.gate(c, who.actor, "bots", "add a bot")
         self.validate_template(body.template)
+        if body.template == H.AGENT_OPS_SLUG:  # one Agent Ops, under its slug: never a second under -2
+            if H.bot(c, H.FLEET_MAINTAINER):
+                raise Problem("duplicate", "This company has its Agent Ops already", 409)
+            body = body.model_copy(update={"slug": H.agent_ops_slug(c)})
+        elif body.slug == H.AGENT_OPS_SLUG:
+            raise Problem("duplicate", "That slug is Agent Ops'", 409)  # held for the built-in, made or not
         if not body.slug and (asked := self._bot_being_set_up(c, body.template)):
-            # BotOps left the slug out while working a bot's own "Set up" task: that bot is the one asked for, so it
+            # Agent Ops left the slug out while working a bot's own "Set up" task: that bot is the one asked for, so it
             # answers (`created: false`, below) and no second one is made under a -2 slug.
             body = body.model_copy(update={"slug": asked})
         if not body.slug:
@@ -836,7 +854,7 @@ class SettingsAdmin:
             template=body.template,
         )
         result = self.create_bot(c, who, payload)
-        bot_id = H.resolve_bot(c, body.slug)["id"]
+        bot_id = str(result["id"])  # the bot it made, under the slug it took
         if body.template:
             row = self._config(c, bot_id)
             declared = _json(row["config"], {}) or {}
@@ -848,13 +866,13 @@ class SettingsAdmin:
             if card.get("session"):
                 declared["session"] = card["session"]
             BS.write(c, bot_id, declared)
-            MessageBots.link(c, who.actor, bot_id, who.actor)  # BotOps built it for them: it is their message bot
+            MessageBots.link(c, who.actor, bot_id, who.actor)  # Agent Ops built it for them: it is their message bot
         self._note_making_task(c, bot_id)
         return {**result, **self.definition(c, bot_id), "created": True}
 
     @staticmethod
     def _note_making_task(c, bot_id):
-        """BotOps registering a bot while it works an open task (the one it cites, H.DELEGATION) is making the bot on
+        """Agent Ops registering a bot while it works an open task (the one it cites, H.DELEGATION) is making the bot on
         that task: say so in the bot's settings (setup_live.MADE_ON), so the bot counts as being set up and its page
         names the task and any ask on it until it goes live."""
         from .setup_live import MADE_ON
@@ -869,7 +887,7 @@ class SettingsAdmin:
 
     @staticmethod
     def _bot_being_set_up(c, template):
-        """The slug of the bot whose setup task this call is made for (the task BotOps cites, H.DELEGATION), when it is
+        """The slug of the bot whose setup task this call is made for (the task Agent Ops cites, H.DELEGATION), when it is
         still open, the bot is not archived and it is from this template; else None."""
         from .setup_live import bot_of
 
@@ -937,7 +955,7 @@ class SettingsAdmin:
 
     def archive(self, c, who, bot, body):
         CA.gate(c, who.actor, "bots", f"remove {(H.bot(c, bot) or {}).get('slug', bot)}")
-        # The assistant, BotOps, the Librarian, the Strategy Owner, the General Manager, the Finance Owner, the Design Owner, the Updates
+        # The assistant, Agent Ops, the Librarian, the Strategy Owner, the General Manager, the Finance Owner, the Design Owner, the Updates
         # Owner, the Automations Owner and the Tools Owner are built in: nobody archives them, the owner included.
         if bot in (
             self.settings.assistant_bot,
@@ -956,7 +974,7 @@ class SettingsAdmin:
                 (
                     self.settings.assistant_name
                     if bot == self.settings.assistant_bot
-                    else "BotOps"
+                    else "Agent Ops"
                     if bot == "botops"
                     else "The Librarian"
                     if bot == "librarian"
@@ -1014,7 +1032,7 @@ class SettingsAdmin:
         status = (_json(previous["detail"], {}) or {}).get("previous") if previous else None
         status = status if status in ("active", "paused", "planned") else "planned"
         if lifecycle:
-            # The person above the manager brings it back, as their own change: BotOps' ask only chose the report.
+            # The person above the manager brings it back, as their own change: Agent Ops' ask only chose the report.
             self._report_cap(c, who, "archive", f"restore {(H.bot(c, bot) or {}).get('slug', bot)}")
             person = report_managers.person_above(c, H.actor_id(who.actor))
             if not person:
@@ -1063,12 +1081,12 @@ class SettingsAdmin:
         # Branches clone an existing original repository; they never build a separate one.
         branch = shared_bots.source_of(shared_bots.declared(c, bot))
         if not branch and not repository_present(c, bot) and not self.computer_builds_repository(c, bot):
-            raise Problem("repository_missing", "Its repository is not built yet. Ask BotOps to build it", 409)
+            raise Problem("repository_missing", "Its repository is not built yet. Ask Agent Ops to build it", 409)
 
-    # What BotOps' own run changes in another bot's definition (docs/permissions.md): its contact. Who it reports to,
+    # What Agent Ops' own run changes in another bot's definition (docs/permissions.md): its contact. Who it reports to,
     # its repository, its status and its template stay with the people who manage it: `reports_to` makes a person its
     # manager, and `repo` decides what the bot's token writes.
-    BOTOPS_OWN_DEFINITION = {"bot_contact"}
+    AGENT_OPS_OWN_DEFINITION = {"bot_contact"}
 
     def update_bot(self, c, who, bot, body):
         asked = body.model_dump(exclude_unset=True, exclude={"expected_revision", "on_behalf_of"})
@@ -1083,12 +1101,12 @@ class SettingsAdmin:
         report = self.report_change(c, who, bot, changed)
         own_run = not (who.role == "owner" or self.auth.bot_manager(c, who, bot)) and not report
         if not report:
-            self._manager(c, who, bot, botops=True)
-        if own_run and changed - self.BOTOPS_OWN_DEFINITION:
+            self._manager(c, who, bot, agent_ops=True)
+        if own_run and changed - self.AGENT_OPS_OWN_DEFINITION:
             raise Problem(
                 "forbidden",
-                "BotOps' own run changes only another bot's contact; "
-                + ", ".join(sorted(changed - self.BOTOPS_OWN_DEFINITION))
+                "Agent Ops' own run changes only another bot's contact; "
+                + ", ".join(sorted(changed - self.AGENT_OPS_OWN_DEFINITION))
                 + " is for the people who manage it",
                 403,
             )
@@ -1256,6 +1274,8 @@ class SettingsAdmin:
         bot keeps its slug (code names it by that), and no bot takes a slug or an id another bot answers to."""
         if bot in H.PRODUCT_BOT_SLUGS or bot == self.settings.assistant_bot or self.auth.system_bot(bot):
             raise Problem("slug", "A built-in bot keeps its slug", 422)
+        if slug == H.AGENT_OPS_SLUG:
+            raise Problem("duplicate", "That slug is Agent Ops'", 409)  # the built-in's, held for it
         other = H.resolve_bot(c, slug)
         if other and other["id"] != bot:
             raise Problem("duplicate", "That bot slug already exists", 409)
@@ -1326,7 +1346,7 @@ class SettingsAdmin:
         if before == after:
             return None
         change_id = H.new_id()
-        # `via` says who really made the change for `actor`: BotOps, on their request, or the Assistant.
+        # `via` says who really made the change for `actor`: Agent Ops, on their request, or the Assistant.
         c.execute(
             "INSERT INTO settings_changes(id,bot,field,before,after,actor,transition_id,created_at,via) "
             "VALUES(?,?,?,?,?,?,?,?,?)",

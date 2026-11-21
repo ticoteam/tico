@@ -1,10 +1,10 @@
 """A new company's seat bots go live with no person step (backend/setup_live.py; Acme on rc.3, bugs 1 and 2).
 
-Staff create seeds the default org: every live seat gets a bot, `planned`, and a "Set up" task for BotOps. BotOps builds
+Staff create seeds the default org: every live seat gets a bot, `planned`, and a "Set up" task for Agent Ops. Agent Ops builds
 each repository on the computer and takes the bot live. On Acme the computer had not reported the Builder's repository
-yet when BotOps asked, so go-live answered "building" with nothing left to finish it (bug 1), and re-attaching the
+yet when Agent Ops asked, so go-live answered "building" with nothing left to finish it (bug 1), and re-attaching the
 template parked the Builder in Onboarding until a person marked it complete (bug 2). Here the whole setup runs with the
-doubles the suite has: BotOps' turn token, the computer's heartbeat readiness report and its claim.
+doubles the suite has: Agent Ops' turn token, the computer's heartbeat readiness report and its claim.
 """
 
 import json
@@ -15,7 +15,7 @@ import pytest
 
 from backend import never_stuck
 from backend.store import H
-from backend.tests.helpers.botops_parity import act
+from backend.tests.helpers.agent_ops_parity import act
 from backend.tests.helpers.fresh_install import booted, environment, machine, rows, signed_in  # noqa: F401  (fixtures)
 
 
@@ -28,7 +28,7 @@ def _post(api, path, body, token):
 
 
 def _report(api, computer, present=()):
-    """The computer's heartbeat: every bot assigned to it, BotOps' repository and those in `present` there, the rest
+    """The computer's heartbeat: every bot assigned to it, Agent Ops' repository and those in `present` there, the rest
     not cloned yet."""
     have = {"botops", *present}
     readiness = {
@@ -70,7 +70,7 @@ def _company(environment):
     )
     seats = {row["id"]: (row["slug"], row["task"]) for row in found}
     assert {"feature-owner", "product-manager", "success-manager"} <= {slug for slug, _ in seats.values()}
-    assert all(task for _, task in seats.values())  # each one is BotOps' "Set up" task
+    assert all(task for _, task in seats.values())  # each one is Agent Ops' "Set up" task
     _report(api, computer)
     return api, computer, seats
 
@@ -90,7 +90,7 @@ def _turn(api, task_id):
 
 
 def test_every_seat_bot_goes_live_by_itself_once_its_computer_has_the_repository_and_takes_work(environment):
-    """Bugs 1 and 2: BotOps takes each seat bot live before the computer has reported its repository. Each go-live
+    """Bugs 1 and 2: Agent Ops takes each seat bot live before the computer has reported its repository. Each go-live
     waits (202) and the computer's report finishes it: every seat bot ends active, not onboarding, and the Engineering
     task waiting on the Builder starts by itself, with nobody calling go-live again or marking onboarding complete."""
     api, computer, seats = _company(environment)
@@ -101,7 +101,7 @@ def test_every_seat_bot_goes_live_by_itself_once_its_computer_has_the_repository
             c, "human:owner", "Add negate", "negate(x) returns -x.", "bot:" + builder, allow_planned=True
         )
     attempt = _claim(api, computer, "botops")
-    assert attempt, "BotOps claims its setup work"
+    assert attempt, "Agent Ops claims its setup work"
     for bot, (slug, _) in seats.items():
         live = act(api, attempt, "POST", f"bots/{slug}/go-live", {})
         assert live.status_code == 202, (slug, live.text)
@@ -125,11 +125,11 @@ def _words(api, task_id):
         return H.task_words(c, task_id)
 
 
-def test_botops_building_a_seat_bot_without_its_slug_gets_that_bot_and_hires_no_second_one(environment):
-    """Tico Team on rc.7: BotOps ran `tico bot create --template growth-manager --name "Growth Manager"` on the Growth
+def test_agent_ops_building_a_seat_bot_without_its_slug_gets_that_bot_and_hires_no_second_one(environment):
+    """Tico Team on rc.7: Agent Ops ran `tico bot create --template growth-manager --name "Growth Manager"` on the Growth
     Manager's own "Set up" task, without the slug. The server picked `growth-manager-2`, made a second bot with the
-    template's three routines, and BotOps archived it 14 seconds later. The bot the task is for answers instead; the
-    task says its slug is registered; and filing the tasks while BotOps had not started recorded no refusal."""
+    template's three routines, and Agent Ops archived it 14 seconds later. The bot the task is for answers instead; the
+    task says its slug is registered; and filing the tasks while Agent Ops had not started recorded no refusal."""
     api, computer, seats = _company(environment)
     assert not rows(api, "SELECT 1 FROM events WHERE action='refused'") and not rows(api, "SELECT 1 FROM refusals")
     attempt = _claim(api, computer, "botops")
@@ -168,8 +168,8 @@ def test_archiving_a_bot_removes_the_routines_it_owns(environment):
     assert all(aid in listed for aid, bot in seeded.items() if bot != release)
 
 
-def test_botops_cannot_close_a_seat_bots_setup_task_until_the_bot_is_live(environment):
-    """Acme case 1, bug 1: BotOps marked the Builder's setup done while it was still planned. Done is refused, naming
+def test_agent_ops_cannot_close_a_seat_bots_setup_task_until_the_bot_is_live(environment):
+    """Acme case 1, bug 1: Agent Ops marked the Builder's setup done while it was still planned. Done is refused, naming
     the step, before go-live and while it waits for the repository, and taken once the bot is active."""
     api, computer, seats = _company(environment)
     attempt = _claim(api, computer, "botops")
@@ -203,9 +203,9 @@ def _open_snoozes(api, task_id):
     return rows(api, "SELECT id FROM snoozes WHERE task_id=? AND ended_at IS NULL", (task_id,))
 
 
-def test_going_live_ends_the_wait_botops_set_on_the_setup_task_and_wakes_it_to_say_done(environment):
-    """BotOps snoozes a seat's setup task while the bot waits for its repository ("waiting to go live"). When the bot
-    goes live the wait ends at once, BotOps is woken on that task, and its done closes it."""
+def test_going_live_ends_the_wait_agent_ops_set_on_the_setup_task_and_wakes_it_to_say_done(environment):
+    """Agent Ops snoozes a seat's setup task while the bot waits for its repository ("waiting to go live"). When the bot
+    goes live the wait ends at once, Agent Ops is woken on that task, and its done closes it."""
     api, computer, seats = _company(environment)
     attempt = _claim(api, computer, "botops")
     builder, task = _seat(seats, "feature-owner")
@@ -233,9 +233,9 @@ def test_going_live_ends_the_wait_botops_set_on_the_setup_task_and_wakes_it_to_s
     assert rows(api, "SELECT status FROM tasks WHERE id=?", (task,))[0]["status"] == "done"
 
 
-def test_botops_cannot_snooze_a_setup_task_once_its_bot_is_live(environment):
-    """BotOps read the Builder before it went live and snoozed its setup task afterwards. Nothing would end that wait,
-    so the snooze is refused, and BotOps marks the task done."""
+def test_agent_ops_cannot_snooze_a_setup_task_once_its_bot_is_live(environment):
+    """Agent Ops read the Builder before it went live and snoozed its setup task afterwards. Nothing would end that wait,
+    so the snooze is refused, and Agent Ops marks the task done."""
     api, computer, seats = _company(environment)
     attempt = _claim(api, computer, "botops")
     builder, task = _seat(seats, "feature-owner")
@@ -371,7 +371,7 @@ CATALOG = Path(__file__).resolve().parents[2] / "templates" / "catalog"
 
 
 class _Turn:
-    """BotOps' `tico` client in its setup turn, answered as the person it works for (`_as_person`)."""
+    """Agent Ops' `tico` client in its setup turn, answered as the person it works for (`_as_person`)."""
 
     def __init__(self, api, attempt):
         self.api, self.attempt = api, attempt
@@ -401,8 +401,8 @@ def _on(api, ids):
 
 
 def test_going_live_turns_on_every_routine_its_template_seeded_and_says_which(environment):
-    """Globex on rc.4, bug 1: BotOps' `tico bot create` seeds a seat's routines off, straight into automations, and going
-    live looked for them in the old schedules table, so none was ever turned on, and BotOps told the owner one was.
+    """Globex on rc.4, bug 1: Agent Ops' `tico bot create` seeds a seat's routines off, straight into automations, and going
+    live looked for them in the old schedules table, so none was ever turned on, and Agent Ops told the owner one was.
     Going live now turns on every routine the template seeded, says which on the go-live, and leaves alone one a person
     turned off before it went live."""
     api, computer, seats = _company(environment)
@@ -450,7 +450,7 @@ def test_going_live_turns_on_every_routine_its_template_seeded_and_says_which(en
 
 def test_a_seat_that_went_live_with_its_routines_off_gets_them_on_at_start_once(environment, monkeypatch):
     """Companies that went live on rc.4 have every seat routine off. The next start turns on the ones nobody has
-    touched since BotOps made them, once, and leaves off one a person turned off."""
+    touched since Agent Ops made them, once, and leaves off one a person turned off."""
     from backend.onboarding import Onboarding
 
     api, computer, seats = _company(environment)
@@ -487,7 +487,7 @@ def test_a_seat_that_went_live_with_its_routines_off_gets_them_on_at_start_once(
 def test_each_seat_bot_runs_its_template_setup_by_itself_with_no_person_once_live(environment):
     """Acme bug 12: a seat bot went live without its template's setup ever running (a person's first message starts it,
     and nobody chats with a seat bot), so the Product Owner wrote its first spec with no knowledge files. Going live
-    now gives each seat bot its own setup task, first in its queue, from BotOps: it names the files the template's setup
+    now gives each seat bot its own setup task, first in its queue, from Agent Ops: it names the files the template's setup
     writes, says to take the defaults and ask nothing now, and raises no onboarding prompt or person ask. Once only."""
     api, computer, seats = _company(environment)
     builder, _ = _seat(seats, "feature-owner")
@@ -590,7 +590,7 @@ def test_the_one_bot_a_first_job_makes_runs_its_own_setup_first_with_every_other
     environment, job, slug
 ):
     """Setup's first job (#610, criterion 6): a company created with a first job has one bot that is not a built-in, and
-    that bot's setup starts alone. BotOps takes it live, it gets its own setup task first in its queue, and nothing waits
+    that bot's setup starts alone. Agent Ops takes it live, it gets its own setup task first in its queue, and nothing waits
     on a seat still Recruiting: it reports to a person or a live bot, its setup tasks depend on no task, and both are its
     turn."""
     api = environment()
@@ -613,7 +613,7 @@ def test_the_one_bot_a_first_job_makes_runs_its_own_setup_first_with_every_other
     _report(api, computer)
 
     attempt = _claim(api, computer, "botops")
-    assert attempt, "BotOps claims the bot's Set up task"
+    assert attempt, "Agent Ops claims the bot's Set up task"
     assert act(api, attempt, "POST", f"bots/{slug}/go-live", {}).status_code == 202
     _report(api, computer, present=[seat_bot["id"]])
     state = _state(api, seat_bot["id"])

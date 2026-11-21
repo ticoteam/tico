@@ -118,7 +118,7 @@ def install(app, store, auth, mutate, execution, settings):
             "person",
             "ScreenSession",
             description="Only the computer's operator or an admin, signed in to the app themselves: the Assistant, "
-            "BotOps, bots and personal API tokens are refused. `control` asks to drive the computer, which its "
+            "Agent Ops, bots and personal API tokens are refused. `control` asks to drive the computer, which its "
             "Screen setting must allow. Connect a WebSocket (subprotocol `binary`, RFB bytes both ways) to `ws_path` on "
             "this server's own origin at once: its ticket opens one connection, within a minute, from this "
             "app's origin, and is never logged or kept; a used, late or unknown ticket, or another site's page, is "
@@ -142,7 +142,7 @@ def install(app, store, auth, mutate, execution, settings):
     )
     def open_screen(request: Request, rid: str, body: M.ScreenSessionStart):
         """Open the computer's screen: a single-use ticket for the browser's websocket at `ws_path`, good for a
-        minute. The computer's operator or an admin, in person: not the Assistant, BotOps or a personal token."""
+        minute. The computer's operator or an admin, in person: not the Assistant, Agent Ops or a personal token."""
         who = request.state.identity
         human_only(who)
         if who.via or who.via_token:

@@ -202,7 +202,7 @@ def test_go_live_for_a_repository_github_does_not_have_names_the_fix(api, monkey
             Problem(
                 "github_repo_missing",
                 "The repository acme/bot-cpo does not exist yet on GitHub. "
-                "Create it with BotOps: `tico bot repo-create cpo`.",
+                "Create it with Agent Ops: `tico bot repo-create cpo`.",
                 409,
             ),
         ),

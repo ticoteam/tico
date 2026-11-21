@@ -5,10 +5,10 @@ Triggered from the weekly summary, or by a task, when recurring people work has 
 Inputs: the unowned requests of one kind from the last 30 days (`tico task list`, the routing log); `tico template list`;
 `tico team show`; and the card of the candidate template.
 
-Outcome: one specific proposal the owner can say yes or no to. When the work requests it, one task for BotOps as well.
+Outcome: one specific proposal the owner can say yes or no to. When the work requests it, one task for Agent Ops as well.
 
 Done when: the proposal is on the task with its evidence, the decision (yes or no) is in `memory/decisions.md`, and, on a yes,
-the bot is added to `knowledge/team.md` and `knowledge/routing.md` once BotOps confirms it exists.
+the bot is added to `knowledge/team.md` and `knowledge/routing.md` once Agent Ops confirms it exists.
 
 ---
 
@@ -28,7 +28,7 @@ Read its card: its summary, its first routine and what it needs to start.
 ## 3. Propose
 
 On the task, in five lines: the recurring work and how often; the evidence; the template and its name; its first routine as
-the card states it; and that it reports to you and starts parked until its own setup. For requested hires, create the BotOps
+the card states it; and that it reports to you and starts parked until its own setup. For requested hires, create the Agent Ops
 task below directly. Ask only if the role or scope is missing.
 
 ## 4. Carry out the requested hire

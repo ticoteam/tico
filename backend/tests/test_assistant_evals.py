@@ -23,7 +23,7 @@ import pytest
 from clients import hubcli, hubtools
 
 EVALS = Path(__file__).resolve().parents[2] / "evals" / "assistant"
-# Loaded by file path under a unique name: test_botops_evals.py has its own `run` module.
+# Loaded by file path under a unique name: test_agent_ops_evals.py has its own `run` module.
 _spec = importlib.util.spec_from_file_location("assistant_evals_run", EVALS / "run.py")
 live = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(live)
@@ -49,7 +49,7 @@ REQUIRED = {
     "background-daily-sweep",
     "jobs-launch-status",
     "jobs-route-paid-trials",
-    "jobs-new-bot-botops",
+    "jobs-new-bot-agent-ops",
     "jobs-discount-to-cfo",
     "jobs-change-bot-routine",
     "jobs-what-did-bot-do",

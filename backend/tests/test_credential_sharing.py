@@ -1,4 +1,4 @@
-"""Credentials shared between bots work by default (docs/credential-vault.md): the vault needs no KMS key, BotOps grants and
+"""Credentials shared between bots work by default (docs/credential-vault.md): the vault needs no KMS key, Agent Ops grants and
 revokes as the administrator who asked, a bot's own secrets file can be moved into the vault by its computer, and a granted
 credential reaches the grantee's runs as its variable, and only the grantee's.
 
@@ -12,9 +12,9 @@ import pytest
 
 from backend.credentials import CredentialCipher
 from backend.tests.helpers.api import assign, claim, get, post, ready, runner  # noqa: F401  (fixture)
-from backend.tests.helpers.botops_parity import act, everything
+from backend.tests.helpers.agent_ops_parity import act, everything
 from backend.tests.helpers.mcp import call as mcp
-from backend.tests.helpers.member_bots import botops, finish, turn  # noqa: F401  (fixture)
+from backend.tests.helpers.member_bots import agent_ops, finish, turn  # noqa: F401  (fixture)
 from backend.tests.helpers.credential_sharing import JIRA, KMSWithEncrypt, jira, local
 
 
@@ -124,11 +124,11 @@ def test_setting_a_kms_key_later_keeps_what_was_stored_and_a_kms_install_is_unto
     )
 
 
-# ------------------------------------------------------------------ BotOps grants and revokes as the requester
-def test_botops_grants_a_bot_at_once_for_an_admin_and_refuses_a_member_without_a_card(api, botops):
+# ------------------------------------------------------------------ Agent Ops grants and revokes as the requester
+def test_agent_ops_grants_a_bot_at_once_for_an_admin_and_refuses_a_member_without_a_card(api, agent_ops):
     local(api)
     row = jira(api)
-    ana = turn(api, botops, person="ana-test", text="Grant ops the Jira credential")
+    ana = turn(api, agent_ops, person="ana-test", text="Grant ops the Jira credential")
     done = act(api, ana, "POST", f"credentials/{row['id']}/grants", {"subject": "bot:ops"})
     assert done.status_code == 200, done.text
     assert (
@@ -138,7 +138,7 @@ def test_botops_grants_a_bot_at_once_for_an_admin_and_refuses_a_member_without_a
     )
     with api.app.state.store.read() as c:
         event = c.execute("SELECT actor,detail FROM events WHERE action='credential.granted'").fetchone()
-        assert event["actor"] == "human:ana" and '"via": "botops"' in event["detail"]  # hers, via BotOps
+        assert event["actor"] == "human:ana" and '"via": "botops"' in event["detail"]  # hers, via Agent Ops
         assert c.execute("SELECT count(*) FROM assistant_actions").fetchone()[0] == 0
     assert (
         act(api, ana, "POST", f"credentials/{row['id']}/grants", {"subject": "bot:ops"}).json()["id"]
@@ -164,9 +164,9 @@ def test_botops_grants_a_bot_at_once_for_an_admin_and_refuses_a_member_without_a
             ).fetchone()[0]
             == 1
         )
-    finish(api, botops, ana)
+    finish(api, agent_ops, ana)
     # A member is refused, in words that say who to ask, and no card is left behind.
-    cara = turn(api, botops, person="cara-test", text="Grant ops the Jira credential")
+    cara = turn(api, agent_ops, person="cara-test", text="Grant ops the Jira credential")
     refused = act(api, cara, "POST", f"credentials/{row['id']}/grants", {"subject": "bot:finance"})
     assert refused.status_code == 403 and "credential administrator" in refused.json()["error"]["detail"]
     assert "Ana" in refused.json()["error"]["detail"] or "ana@acme.example" in refused.json()["error"]["detail"]
@@ -174,9 +174,9 @@ def test_botops_grants_a_bot_at_once_for_an_admin_and_refuses_a_member_without_a
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM credential_grants WHERE subject='bot:finance'").fetchone()[0] == 0
         assert c.execute("SELECT count(*) FROM assistant_actions WHERE summary LIKE '%finance%'").fetchone()[0] == 0
-    finish(api, botops, cara)
+    finish(api, agent_ops, cara)
     # The revoke is direct for an admin.
-    ben = turn(api, botops, person="ben-test", text="Take Jira away from ops")
+    ben = turn(api, agent_ops, person="ben-test", text="Take Jira away from ops")
     assert act(api, ben, "POST", f"credentials/{row['id']}/grants/{done.json()['id']}/revoke", {}).status_code == 200
     with api.app.state.store.read() as c:
         assert (
@@ -185,14 +185,14 @@ def test_botops_grants_a_bot_at_once_for_an_admin_and_refuses_a_member_without_a
             ).fetchone()[0]
             == 0
         )
-    finish(api, botops, ben)
-    # A member who stored a credential for their bot shares it with their other bot through BotOps, at once, and nobody else's.
+    finish(api, agent_ops, ben)
+    # A member who stored a credential for their bot shares it with their other bot through Agent Ops, at once, and nobody else's.
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot IN ('finance','cpo')")
     mine = post(
         api, "credential-set", {"env": "SENTRY_TOKEN", "for_bot": "cpo", "value": JIRA, "name": "Sentry"}, "cara-test"
     )["id"]
-    cara = turn(api, botops, person="cara-test", text="Give finance my Sentry token")
+    cara = turn(api, agent_ops, person="cara-test", text="Give finance my Sentry token")
     given = act(api, cara, "POST", f"credentials/{mine}/grants", {"subject": "bot:finance"})
     assert given.status_code == 200 and "needs_confirm" not in given.json(), given.text
     assert act(api, cara, "POST", f"credentials/{mine}/grants", {"subject": "bot:ops"}).status_code == 403
@@ -217,7 +217,7 @@ def computer_reads(api, machine, values):
 
 
 def test_a_bots_own_secret_moves_into_the_vault_over_its_computer_and_is_then_shared_and_reaches_only_the_grantee(
-    api, botops
+    api, agent_ops
 ):
     local(api)
     machine = runner(api, label="Jira Mac")
@@ -262,13 +262,13 @@ def test_a_bots_own_secret_moves_into_the_vault_over_its_computer_and_is_then_sh
     computer_reads(api, machine, {})
     failed = get(api, f"credential-imports/{missing['id']}", "ana-test")
     assert failed["state"] == "failed" and "secrets file" in failed["message"], failed
-    # Now BotOps, as Ana, gives it to ops; ops's run gets it as its variable.
-    ana = turn(api, botops, person="ana-test", text="Grant ops the Jira credential finance has")
+    # Now Agent Ops, as Ana, gives it to ops; ops's run gets it as its variable.
+    ana = turn(api, agent_ops, person="ana-test", text="Grant ops the Jira credential finance has")
     err, granted = mcp(
         api, "tico_credential_grant", {"credential": "JIRA_BASIC_AUTH", "to_bot": "ops"}, token=ana["token"]
     )
     assert not err, granted
-    finish(api, botops, ana)
+    finish(api, agent_ops, ana)
     post(api, "chat/ops", {"text": "Check Jira"})
     ops_run = claim(api, machine, "ops")
     assert ops_run["credential_vault"] is True
@@ -277,12 +277,12 @@ def test_a_bots_own_secret_moves_into_the_vault_over_its_computer_and_is_then_sh
 
 
 @pytest.mark.slow
-def test_the_import_tool_asks_as_the_requester_and_waits_for_the_computer(api, botops):
+def test_the_import_tool_asks_as_the_requester_and_waits_for_the_computer(api, agent_ops):
     local(api)
     machine = runner(api, label="Jira Mac")
     assign(api, machine, "finance")
     ready(api, machine, ["finance"])
-    ana = turn(api, botops, person="ana-test", text="Move finance's Jira credential into Credentials")
+    ana = turn(api, agent_ops, person="ana-test", text="Move finance's Jira credential into Credentials")
     err, waiting = mcp(
         api, "tico_credential_import", {"env": "JIRA_BASIC_AUTH", "from_bot": "finance", "wait": 0}, token=ana["token"]
     )

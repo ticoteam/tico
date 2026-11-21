@@ -1,8 +1,8 @@
 """The settings catalogue's entries (backend/settings_catalog.py): one per control in Settings that writes.
 
-Classes follow the settings owner's table (Appendix A of the BotOps-changes-settings spec): `direct` for what is
+Classes follow the settings owner's table (Appendix A of the Agent Ops-changes-settings spec): `direct` for what is
 reversible, inside the team and spends nothing new; `confirm` for spending more, people and access, sending or
-publishing outside, anything destructive, team rules and ownership (BotOps acting for a person puts them to the person
+publishing outside, anything destructive, team rules and ownership (Agent Ops acting for a person puts them to the person
 as a Confirm card, which only their own tap runs); `person` for a sign-in, a secret value, an upload, or the person's
 own approvals and sending (only the person, in Settings).
 """
@@ -42,8 +42,8 @@ MODELS = "Settings > Models"
 _RULE_NAMES = {
     "assistant_direct": ("Assistant acts without asking", "confirm", ""),
     "assistant_approvals": ("People may let their Assistant decide their approvals", "confirm", ""),
-    "botops_direct": ("BotOps changes providers and limits without asking", "confirm", ""),
-    "botops_manages_bots": ("BotOps manages every bot", "confirm", ""),
+    "agent_ops_direct": ("Agent Ops changes providers and limits without asking", "confirm", ""),
+    "agent_ops_manages_bots": ("Agent Ops manages every bot", "confirm", ""),
     "managers_manage_reports": ("Managers change their reports' model, tasks, name and description", "confirm", ""),
     "admin_credentials": ("Admins store credentials", "confirm", ""),
     "members_store_credentials": ("Members store credentials for their bots", "confirm", ""),
@@ -1100,7 +1100,7 @@ ENTRIES = TEAM_RULES + [
         words="replace shared cloud machine delete disk fresh broken stuck failed",
     ),
     # Letting a bot run workflows or edit workflow files, or turning Create product repositories back on (the Owner
-    # only), is the person's own click: from BotOps, a Confirm card (backend/repositories.py bot_set).
+    # only), is the person's own click: from Agent Ops, a Confirm card (backend/repositories.py bot_set).
     S(
         "bot.repositories",
         "Bot repositories",
@@ -1700,10 +1700,10 @@ ENTRIES = TEAM_RULES + [
     ),
 ]
 
-# Confirm entries whose route BotOps can't yet put on a Confirm card (backend/assistant.py valid_operation): a person
-# changes them in Settings until it can, rather than BotOps changing them at once.
+# Confirm entries whose route Agent Ops can't yet put on a Confirm card (backend/assistant.py valid_operation): a person
+# changes them in Settings until it can, rather than Agent Ops changing them at once.
 NO_CARD_YET = ("team.queue.purge",)
-_NO_CARD_WHY = " needs a person's yes, and BotOps can't ask for it on a Confirm card yet"
+_NO_CARD_WHY = " needs a person's yes, and Agent Ops can't ask for it on a Confirm card yet"
 ENTRIES = [
     (
         replace(e, when_held="person", why=e.name + " that sends outside" + _NO_CARD_WHY)

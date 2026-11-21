@@ -23,7 +23,7 @@ owns:
   - "The weekly ops checklist and the team summary of what is due, overdue and blocked"
   - "The follow-up for every vendor thread that has gone quiet, ready to send when a person has turned mail sending on in Tico"
   - "The routing proposals for the Operations team: what each bot should pick up next, as tasks for the owner to review"
-  - "Hiring proposals: which Operations role to add when recurring work has no owner, sent to BotOps within the requested work"
+  - "Hiring proposals: which Operations role to add when recurring work has no owner, sent to Agent Ops within the requested work"
 never:
   - "Send, reply to or post anything to a vendor, customer or anyone outside the team unless the task asks for it, a granted Tool allows it and mail sending is on in Tico"
   - "Sign, renew, cancel, order or pay for anything"

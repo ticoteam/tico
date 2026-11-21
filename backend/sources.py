@@ -225,7 +225,7 @@ def attach(c, rows):
 
 
 def filers(c, ids):
-    """{task id: who really filed it} where that is not who the task says asked: BotOps working on a person's rights
+    """{task id: who really filed it} where that is not who the task says asked: Agent Ops working on a person's rights
     (the task.create event's `via`, a bot id) or the built-in that made a task the server filed (its `source`, a BUILTINS
     key: Health check, Postal mail). Tasks with neither are left out. What people see only: the task's requester still
     decides who reads it, who is told and whose rights it carries."""

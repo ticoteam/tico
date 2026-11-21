@@ -122,7 +122,7 @@ def test_bot_show_reads_the_bot_detail_through_its_tool(monkeypatch):
 
     class Api:
         def __init__(self, *args, **kw):
-            self.__dict__["_tico_is_botops"] = False  # a person's own rights: no BotOps lookup
+            self.__dict__["_tico_is_agent_ops"] = False  # a person's own rights: no Agent Ops lookup
 
         def get(self, path, **query):
             calls.append(("GET", path))

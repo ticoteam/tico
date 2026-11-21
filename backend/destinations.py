@@ -1,5 +1,5 @@
 """Where a saved credential is sent, and whether an edit moves it: the one rule the Gateway connection
-(backend/gateway_connection.py), outgoing webhooks with secret headers (backend/webhooks.py) and BotOps' Confirm card for a
+(backend/gateway_connection.py), outgoing webhooks with secret headers (backend/webhooks.py) and Agent Ops' Confirm card for a
 person (backend/app.py `person_card`) all use.
 
 A service is its scheme, host (lowercase, punycode) and effective port (443 for https and 80 for http when none is
@@ -148,7 +148,7 @@ def held(integration, moved, labels, revision, name=""):
 
 
 def require_tap(who, moved):
-    """A destination change asked for a person (BotOps or the Assistant acting for them) runs only from that person's
+    """A destination change asked for a person (Agent Ops or the Assistant acting for them) runs only from that person's
     own tap on its Confirm card, whatever the request says about the credentials: the card is made before the route
     runs (backend/app.py `person_card`), and this holds even where it was not."""
     if moved and getattr(who, "via", "") and not getattr(who, "confirmed", False):

@@ -334,7 +334,7 @@ def note_text(item, running):
         f"Summary (quoted): {q(item['summary'])}",
         f"Action may be needed: {'yes' if item['action'] else 'no'}. Reason: {reason}.",
         "To adopt a change, use the usual way to change your Instructions or settings, with its approvals "
-        "(Edit Instructions, Ask BotOps to change). Nothing applies on its own.",
+        "(Edit Instructions, Ask Agent Ops to change). Nothing applies on its own.",
         f"Update id (quoted): {q(item['id'], 400)}",
     ]
     return "\n".join(lines)

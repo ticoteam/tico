@@ -2,7 +2,7 @@
 
 The file holds the plan only: never `undo`, `chat`, `removed` or `pending`, and never a credential. Format 0.2 differs
 from the page's 0.1 in its goals (a measure, unit, direction and numbers in place of free-text target and due date),
-a bot's `reports_to` set by the visitor or BotOps, the one `first_job`, and an existing agent's department and reason.
+a bot's `reports_to` set by the visitor or Agent Ops, the one `first_job`, and an existing agent's department and reason.
 Format 0.3 adds the `strategy` block (after `goals:`) and a goal's `bet`. The strategy's optional `channels`, and a bet's
 optional `name` and `segment`, are written only when present. A plan without a strategy is still written as 0.2, byte
 for byte, so its file imports on an app from before 0.3; the reader takes both.
@@ -405,7 +405,8 @@ def from_yaml(text):
     for at, b in enumerate(employees):
         if isinstance(b.get("template"), str) and b["template"] in D.RETIRED:
             continue  # its built-in comes with every install, as draft.check lets it go
-        template = D.current(b.get("template"))  # an older release's slug reads as the template that has it now
+        b = D.renamed(b)  # an older release's slug reads as the template that has it now, its old default title too
+        template = b.get("template")
         role = (
             next((r for r in D.ROLES if r["slug"] == template), None)
             or next((r for r in D.HELPERS if r["slug"] == template), None)

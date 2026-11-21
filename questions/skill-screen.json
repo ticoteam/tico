@@ -1,7 +1,7 @@
 {
   "id": "skill-screen",
   "version": 1,
-  "owner": "botops",
+  "owner": "agent-ops",
   "evidence": true,
   "summary": "One proposed skill (a new one or an update), before an admin can approve it for the company's directory: is it safe to install for bots and people, how risky, and which concerns it shows. The server's skill screening job (`backend/skill_screening.py`) asks it at Decide High only, with evidence (a summary and findings by file and line); a screen is never made without its answer, and the admin's approval is still the gate.",
   "state": ["name", "description", "files", "diff", "patterns"],

@@ -2,7 +2,7 @@
 
 Two callers share it. The runner (`runner-rs/src/declared_access.rs`) reads a bot's entries and reports the
 fields listed here. The server (`backend/bot_tools.py`) checks an entry a person registers for a bot
-before it asks BotOps to write it into the bot's repository, so a request can only name what the
+before it asks Agent Ops to write it into the bot's repository, so a request can only name what the
 runner would report back. An entry holds names and verbs, never a credential: `env` is the variable's
 name, and text that looks like a key, a token or a password is refused (`secret_in`).
 

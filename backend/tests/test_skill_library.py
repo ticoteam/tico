@@ -15,7 +15,7 @@ from backend import skill_library as SL
 from backend.store import H
 from backend.tests.helpers.api import get, post  # noqa: F401  (fixture)
 from backend.tests.helpers.automation_cli import Client
-from backend.tests.helpers.botops_parity import bot_id
+from backend.tests.helpers.agent_ops_parity import bot_id
 from backend.tests.helpers.skills import publish
 from clients import hubcli, remotecli
 

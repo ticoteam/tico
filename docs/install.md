@@ -107,7 +107,7 @@ Open the link in your browser: the app opens on **Finish setup**. Then:
    below, pick **Marketing** and keep **Content Owner** (`content-owner`) checked; untick the other suggestions if you want only it.
 3. **Add computer**: choose *A Linux or cloud server (Docker)*, press **Add computer**, and run the line it shows on this computer.
    It joins the server's own Docker network, so it needs no domain, and the computer shows online in a few seconds.
-4. **Create my team.** Eleven built-in bots are created automatically: Assistant, BotOps, Librarian, Strategy Owner, General Manager,
+4. **Create my team.** Eleven built-in bots are created automatically: Assistant, Agent Ops, Librarian, Strategy Owner, General Manager,
    Finance Owner, Rules Owner, Design Owner, Updates Owner, Automations Owner and Tools Owner. Each other role you picked waits as a Recruiting seat;
    recruiting one creates a bot in **Needs setup** until you talk to it. A switched-on Inbox Manager is the exception: it is made as a bot linked to its mailbox.
 5. **Sign in to your models.** For either Claude and ChatGPT subscription choice, sign in to each model subscription you chose:
@@ -646,7 +646,7 @@ Only that model credential comes this way: a bot's own credentials stay with tha
 
 A subscription login (a ChatGPT or Claude plan) cannot be copied. If that is how your team signs in, Settings > General > Health > Details shows
 "*computer name*: sign in to Codex" (or Claude Code) for each new computer that needs it. Sign it in from Settings > Computers, or ask
-BotOps to start it, then finish the sign-in in your browser.
+Agent Ops to start it, then finish the sign-in in your browser.
 
 To change the account a computer uses, open it in Settings > Computers and choose **Switch account** on its connection: the new account is
 signed in on the side, and the old one keeps working until that finishes (or if you cancel). **Sign out** names the bots

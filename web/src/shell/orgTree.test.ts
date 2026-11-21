@@ -48,10 +48,10 @@ describe('orgTree', () => {
       agent('triage', 'Bug Triage', { teamId: 'product', reportsTo: 'bot:pm' }),
       agent('ux', 'UX Owner', { teamId: 'experience', reportsTo: 'bot:pm' }),
       agent('finance', 'Finance Owner', { teamId: 'corporate', reportsTo: ME }),
-      agent('ops', 'BotOps Owner', { reportsTo: ME }),
+      agent('ops', 'Agent Ops Owner', { reportsTo: ME }),
     ];
     const tree = orgTree({ actors, teams: TEAMS }, ME);
-    expect(shape(tree)).toEqual([['Product Manager (2)', ['Bug Triage', 'UX Owner · Experience']], 'Finance Owner · Corporate', 'BotOps Owner']);
+    expect(shape(tree)).toEqual([['Product Manager (2)', ['Bug Triage', 'UX Owner · Experience']], 'Finance Owner · Corporate', 'Agent Ops Owner']);
     const [pm, finance, ops] = tree as Extract<OrgNode, { kind: 'mate' }>[];
     expect(pm!.team).toEqual({ id: 'product', name: 'Product' });
     expect(pm!.label).toBeUndefined();

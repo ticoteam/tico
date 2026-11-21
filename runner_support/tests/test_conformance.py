@@ -1205,14 +1205,14 @@ def test_two_bots_on_an_api_key_codex_login_run_at_once(api, computer, tmp_path)
 
 
 @pytest.mark.parametrize("harness", ["claude"])
-@pytest.mark.parametrize("setup", [{"bot": {"template": "botops"}, "git": True}])
+@pytest.mark.parametrize("setup", [{"bot": {"template": "agent-ops"}, "git": True}])
 def test_a_built_in_bots_product_files_follow_the_release_before_its_turn(api, computer, tmp_path):
     computer.start()
     first = post(api, "chat/ops", {"text": "Please answer locally"})
     until(lambda: reply_to(api, first["conversation_id"]), "the bot's reply")
     repo = tmp_path / "projects" / "bot-ops"
     stamp = json.loads((repo / ".tico-template.json").read_text())
-    assert stamp["template"] == "botops" and "AGENTS.md" in stamp["files"]
+    assert stamp["template"] == "agent-ops" and "AGENTS.md" in stamp["files"]
     agent = (repo / "AGENTS.md").read_text()
     assert agent != "# Ops\n\nAnswer the Acme team.\n" and "{{" not in agent.splitlines()[0]
     # Committed in the checkout (the turn's own push carries it; this fixture's file remote takes no push).
@@ -1222,7 +1222,7 @@ def test_a_built_in_bots_product_files_follow_the_release_before_its_turn(api, c
     # The refresh comes first; the runner then adds Tico's standing section to AGENTS.md in its own commit.
     newest, refresh = log.splitlines()[:2]
     assert newest.startswith("Instructions: AGENTS.md") and "<!-- tico:standing" in agent, log
-    assert refresh.startswith("Refresh ") and "from the botops template" in refresh, log
+    assert refresh.startswith("Refresh ") and "from the agent-ops template" in refresh, log
 
 
 def git(cwd, *args):

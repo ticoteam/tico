@@ -691,9 +691,12 @@ def last_stop(c, bot, status):
             ),
         }
     if attempt and not attempt["started_at"] and attempt["state"] == "failed":
-        if str(attempt["final_text"] or "").endswith(RD.BOTOPS_HAS_IT):
+        said = str(attempt["final_text"] or "")
+        if said.endswith(RD.OLD_HAS_IT):  # saved before the rename: read under the current name
+            said = said[: -len(RD.OLD_HAS_IT)] + RD.AGENT_OPS_HAS_IT
+        if said.endswith(RD.AGENT_OPS_HAS_IT):
             # Handed back for the same reason RD.SAME times, or taken and dropped in silence that many times
-            # in a row: BotOps has it, so it is no person's to fix.
+            # in a row: Agent Ops has it, so it is no person's to fix.
             return {
                 "kind": "never_started",
                 "tone": "soft",
@@ -708,7 +711,7 @@ def last_stop(c, bot, status):
                     if RD.MISSED_WHY in str(attempt["final_text"])
                     else f"Its computer handed this run back {RD.SAME} times for the same reason."
                 ),
-                "text": attempt["final_text"],
+                "text": said,
             }
         # RD.SAME silent lapses in a row (LAPSED_WHY in its text), or PRE_START_TRIES missed starts: the
         # text names the computer and what to do about it (expire()).
@@ -3902,12 +3905,20 @@ class Execution:
             )
             if row['owner_id'] != runner['owner_id'] and runner['owner_id'] != owner and not takes:
                 continue
-            config = providers.fill(company, follow(c, row['bot'], json.loads(row['config']), configs.get))
-            # Runner wire (backend/runner_wire.py): the stored text under its old name, beside the decoded `config`.
+            stored = json.loads(row['config'])
+            config = runner_versions.wire_template(
+                providers.fill(company, follow(c, row['bot'], dict(stored), configs.get))
+            )
+            # Runner wire (backend/runner_wire.py): the stored text under its old name, beside the decoded `config`, with
+            # the same template name.
+            wired = runner_wire.assignment(row)
+            sent = runner_versions.wire_template(stored)
+            if sent is not stored:
+                wired["config_json"] = json.dumps(sent)
             result.append(
                 {
                     **dict(row),
-                    **runner_wire.assignment(row),
+                    **wired,
                     'computer_label': runner['label'],
                     'computer_logins_v1': True,
                     'config': config,
@@ -4219,7 +4230,7 @@ class Execution:
 
                 stamp_attempt(c, row["id"], row["runner_id"], "end")
                 gateway_connection.forget(c, row["id"])
-                botops = False
+                agent_ops = False
                 lapsed = row["state"] == "leased" and state == "queued" and not benched
                 # Pausing the bot ends its leases itself (bot_settings_routes): Tico took the run, not the computer.
                 paused = c.execute("SELECT 1 FROM bots WHERE id=? AND state='paused'", (row["bot_id"],)).fetchone()
@@ -4263,10 +4274,10 @@ class Execution:
                         if silence:
                             reason = f"Your {name} couldn't start on {label}: {why}; {remedy}"
                         # Its last tries never started: no wait clears that, and the next wake would loop again.
-                        # BotOps gets it and the task waits on it, as for hand-backs (bot_stops.cant_start).
-                        botops = bool(bot_stops.cant_start(c, row, why, label, lapses=lapses if silence else tries))
-                        if botops:
-                            reason = f"Your {name} couldn't start on {label}: {why}. {RD.BOTOPS_HAS_IT}"
+                        # Agent Ops gets it and the task waits on it, as for hand-backs (bot_stops.cant_start).
+                        agent_ops = bool(bot_stops.cant_start(c, row, why, label, lapses=lapses if silence else tries))
+                        if agent_ops:
+                            reason = f"Your {name} couldn't start on {label}: {why}. {RD.AGENT_OPS_HAS_IT}"
                         state = "failed"
                         c.execute("UPDATE attempts SET state='failed',final_text=? WHERE id=?", (reason, row["id"]))
                         job = c.execute(
@@ -4351,7 +4362,7 @@ class Execution:
                     settle_status(
                         c,
                         row["bot_id"],
-                        "idle" if botops else "crashed",
+                        "idle" if agent_ops else "crashed",
                         reason if state == "failed" else "One run stopped; saved for later",
                         claimed=row["created_at"],
                         stop=row["id"],
@@ -4413,9 +4424,9 @@ class Execution:
         such runs within PRE_START_WINDOW_HOURS the job fails instead, with a reason that names the computer, told
         to the person who asked. Hub cuts and planned pauses do not count; the window survives server restarts.
         A computer that hands the job back RD.SAME times in a row for the same reason fails it at once, and
-        BotOps gets it (bot_stops.cant_start): no wait clears that. A job that goes back in the queue waits first
+        Agent Ops gets it (bot_stops.cant_start): no wait clears that. A job that goes back in the queue waits first
         (wait_unstarted)."""
-        state, reason, botops = "queued", "", False
+        state, reason, agent_ops = "queued", "", False
         tries = failed_starts(c, row["job_id"])
         bot = H.bot(c, row["bot_id"])
         stuck = RD.stuck(c, row) if event == "attempt.returned" else ""
@@ -4434,9 +4445,9 @@ class Execution:
                 else "check that Computer"
             )
             reason = f"Your {name} couldn't start on {label}; {remedy}"
-            botops = bool(stuck) and bool(bot_stops.cant_start(c, row, stuck, label))
-            if botops:
-                reason = f"Your {name} couldn't start on {label}: {stuck}. {RD.BOTOPS_HAS_IT}"
+            agent_ops = bool(stuck) and bool(bot_stops.cant_start(c, row, stuck, label))
+            if agent_ops:
+                reason = f"Your {name} couldn't start on {label}: {stuck}. {RD.AGENT_OPS_HAS_IT}"
             state = "failed"
             c.execute("UPDATE attempts SET state='failed',final_text=? WHERE id=?", (reason, row["id"]))
             job = c.execute(
@@ -4472,7 +4483,7 @@ class Execution:
             settle_status(
                 c,
                 row["bot_id"],
-                "crashed" if state == "failed" and not botops else "idle",
+                "crashed" if state == "failed" and not agent_ops else "idle",
                 reason if state == "failed" else "Last run didn't start; it is back in the queue",
                 claimed=row["created_at"],
                 stop=row["id"],
@@ -4485,8 +4496,8 @@ class Execution:
 
     def hand_back(self, c, row, body):
         """A run its computer gave up on before starting it (it could not set the run up or reach Tico, or a person
-        stopped it first) comes back now, not 90 seconds later when its lease lapses: on Oct 22 BotOps's runner lost
-        Tico for half a minute before a start, its report was refused as not started, and the lapse showed BotOps as
+        stopped it first) comes back now, not 90 seconds later when its lease lapses: on Oct 22 Agent Ops's runner lost
+        Tico for half a minute before a start, its report was refused as not started, and the lapse showed Agent Ops as
         crashed though nothing had run."""
         self.release_undelivered(c, row["id"], body.undelivered)
         now = H.now()
@@ -5684,7 +5695,7 @@ class Execution:
                     # (backend/updates_chat.py). None for every other turn.
                     "updates": updates_chat.for_turn(c, self.auth, self.store.settings, conv, row["bot_id"], msg, aid),
                     # The owner's earlier Strategy Owner chat is a session of its own (backend/rooms.py).
-                    "config": rooms.session_config(conv, row["bot_id"], config),
+                    "config": runner_versions.wire_template(rooms.session_config(conv, row["bot_id"], config)),
                     # Bumped by a session clear or reset (views.py clear_session, app.py reset_bot_sessions):
                     # a runner that sees it change starts a fresh provider thread (runner-rs/src/execute.rs).
                     "session_epoch": session_epoch["epoch"] if session_epoch else 0,
@@ -8366,8 +8377,8 @@ class Execution:
         return {"job_id": job_id, "state": "queued"}
 
     def reviewer(self, c, who, bot):
-        """The bot's operator, or BotOps. A stopped run is recovered by BotOps,
-        not by a person filling in a review form; BotOps' note and decision are audited like theirs."""
+        """The bot's operator, or Agent Ops. A stopped run is recovered by Agent Ops,
+        not by a person filling in a review form; Agent Ops' note and decision are audited like theirs."""
         return who.actor == "bot:botops" or self.auth.operator(c, who, bot)
 
     def review_jobs(self, c, who, bot):
@@ -8384,7 +8395,7 @@ class Execution:
             message = H.message(c, row['message_id'])
             # A deleted source message still lists its run, without words, rather than failing the whole review list.
             conv = H.conversation(c, message['conversation_id']) if message else None
-            # The operator and BotOps (reviewer) must be able to list and unblock the bot whatever it was doing. That is
+            # The operator and Agent Ops (reviewer) must be able to list and unblock the bot whatever it was doing. That is
             # not a way into a person's conversation: a run they may not read is reconcilable but arrives without its
             # words (readable false; no request, output, tool calls or task), as reconcile_job already allows.
             readable = bool(
@@ -8418,7 +8429,7 @@ class Execution:
             # sweep retries by: only a run `auto_reconcile` would call safe, on its first start, is 'read'.
             if facts['fallback_unknown']:
                 stopped = 'unknown'
-                reason = 'BotOps must review this interrupted fallback: its output or effects cannot be ruled out.'
+                reason = 'Agent Ops must review this interrupted fallback: its output or effects cannot be ruled out.'
             elif facts['timeout']:
                 named = ', '.join(
                     [
@@ -8500,7 +8511,7 @@ class Execution:
                 (row['attempt_id'],),
             ).fetchone()
             if wait:
-                owner = 'BotOps' if wait['action'] == 'job.held' else 'Tico'
+                owner = 'Agent Ops' if wait['action'] == 'job.held' else 'Tico'
                 reason += ' ' + owner + ' owns recovery. ' + json.loads(wait['detail']).get('reason', '')
             if readable and (limit := login_holds.fallback_reset_notice(c, row['attempt_id'])):
                 reason += f" Provider limit: {limit['notice']}. Quota reset ~{limit['reset'][11:16]} UTC"
@@ -8542,7 +8553,7 @@ class Execution:
     def reconcile_job(self, c, who, job_id, body):
         row = c.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
         if not row or not self.reviewer(c, who, row['bot_id']):
-            raise Problem("forbidden", "Only this bot's operator or BotOps can review interrupted work", 403)
+            raise Problem("forbidden", "Only this bot's operator or Agent Ops can review interrupted work", 403)
         if not body.acknowledge_uncertain_effects or row['state'] != 'uncertain' or row['attempt_id'] != body.run_id:
             raise Problem("uncertain", "This run changed or its external effects have not been reviewed", 409)
         # A deferred choice keeps the job uncertain; state alone cannot fence another open dialog. Tico's own saved
@@ -8567,7 +8578,7 @@ class Execution:
 
     def run_now_held(self, c, who, task):
         """Run now on a bot's task whose run stopped partway and waits for a choice: pressing it is the choice. The
-        operator or BotOps who pressed it runs that run again, accepting it may repeat what it already did, so the task's
+        operator or Agent Ops who pressed it runs that run again, accepting it may repeat what it already did, so the task's
         work is not left fenced behind it (unfenced_sql) while Run now answers that a run is already waiting. A choice a
         person already saved stands. How many runs it resumed; a Problem that says who decides when the caller may not."""
         bot = H.actor_id(task['owner_id'])
@@ -8583,7 +8594,7 @@ class Execution:
             return 0
         if not self.reviewer(c, who, bot):
             raise Problem(
-                "held", "Its last run stopped partway. Its operator or BotOps decides whether to run it again.", 409
+                "held", "Its last run stopped partway. Its operator or Agent Ops decides whether to run it again.", 409
             )
         by = owner_name(c, who.actor) or who.actor
         for row in rows:
@@ -8859,7 +8870,7 @@ class Execution:
         A run whose harness process died under it (killed, crashed or out of memory: harness_died) was not cut off by
         the bot's choice: it resumes at once, once, whatever it used, with a note that asks it to check what is already
         done (branch, PR, comments) and names any outside action or used OK. A second cut-off in a row is held for its
-        operator or BotOps. Run now on its task resumes it too, as the operator's or BotOps's choice (run_now_held).
+        operator or Agent Ops. Run now on its task resumes it too, as the operator's or Agent Ops's choice (run_now_held).
 
         A run a quarantine stopped is judged the same way (quarantine_stops.requeues): it resumes once the quarantine
         lifts, unless a used OK, a fallback's unknown work or a named outside action holds it. Its note says it
@@ -8868,11 +8879,11 @@ class Execution:
 
         A run Tico's update or a hub restart cut (cut_by_update) resumes on the next sweep whatever it used, a named
         outside action or a used OK included (its note names those to verify first): nobody is asked, and
-        BotOps gets no review. A stale cut or a request cut UPDATE_RESUMES times already ends quietly (_update_choice).
+        Agent Ops gets no review. A stale cut or a request cut UPDATE_RESUMES times already ends quietly (_update_choice).
 
         Any other run, one that used a tool that can change things or whose host cannot say what it
-        did, stays held for its operator or BotOps to review (`review_jobs`), because the hub cannot
-        see what a tool did on the Mac and running it again could repeat an outside action. BotOps is
+        did, stays held for its operator or Agent Ops to review (`review_jobs`), because the hub cannot
+        see what a tool did on the Mac and running it again could repeat an outside action. Agent Ops is
         given the review once per hold (`_hand_to_maintainer`), so a held run never waits unseen; the
         hold is recorded (`job.held`) and the run is not re-judged on later ticks, only checked for a
         task that has since finished. A held run is never held for good: once HELD_REVIEW_HOURS (4) have passed since its
@@ -8880,7 +8891,7 @@ class Execution:
         interruption time, the check-first instruction, and any named outside action or used OK). If that
         resumed try is also held and still unreviewed after the same wait, it ends quietly, with a note on its task.
         Its task being done or closed dismisses it at once, as before. Every review decision (`_decide`)
-        closes BotOps's review task once no held job remains (`_finish_recovery_review`). The runner's own `restore` gets the first STALL_MAX to reclaim
+        closes Agent Ops's review task once no held job remains (`_finish_recovery_review`). The runner's own `restore` gets the first STALL_MAX to reclaim
         a run that is still alive; this sweep only looks after that. A run its runner reported
         interrupted (it restarted) is not alive, so a run that is safe to repeat resumes at once; when
         the same computer picks the job up again it continues the same provider session.
@@ -9060,7 +9071,7 @@ class Execution:
                     c, row['attempt_id'], json.loads(row['result'] or '{}'), row['started_at'], row['finished_at']
                 ):
                     # Stopped on a usage limit before it did anything (held before Tico read such a turn as the limit's):
-                    # never BotOps' to review. All of them go back together, oldest first in the queue: the claim holds
+                    # never Agent Ops' to review. All of them go back together, oldest first in the queue: the claim holds
                     # a task's queued work while any run on it is still held (unfenced_sql).
                     said = limit_said.setdefault(row['bot_id'], {'resume': 0, 'dismiss': 0})
                     if self._covered(c, row, task_id):
@@ -9095,7 +9106,7 @@ class Execution:
                     continue
                 if facts['update']:
                     # Cut by Tico's update or a hub restart: resumed like a computer-reported restart, never held for a
-                    # person or BotOps, whatever it used (_update_choice).
+                    # person or Agent Ops, whatever it used (_update_choice).
                     decided.append(
                         self._decide(
                             c,
@@ -9153,10 +9164,10 @@ class Execution:
                     )
                     continue
                 if started > 1 and not facts['timeout'] and not facts['died'] and not resumed_held:
-                    # Stopped twice the same way: not bad luck. Let it go and hand the cause to BotOps.
+                    # Stopped twice the same way: not bad luck. Let it go and hand the cause to Agent Ops.
                     note = (
                         "Dismissed automatically: this request stopped partway twice, so it is not retried "
-                        "again. BotOps is looking into why."
+                        "again. Agent Ops is looking into why."
                     )
                     decision = self._decide(
                         c, row, row['attempt_id'], 'dismiss', note, H.TICO_ACTOR, action='job.auto_reconcile'
@@ -9226,7 +9237,7 @@ class Execution:
                                 pass
                         continue
                     # Held: running it again could repeat an outside action. While it stays held with no decision,
-                    # BotOps has an open task for it: one closed or done is reopened on a later sweep.
+                    # Agent Ops has an open task for it: one closed or done is reopened on a later sweep.
                     if not held and row['attempt_id']:
                         H.event(
                             c,
@@ -9458,7 +9469,7 @@ class Execution:
         H.event(c, H.TICO_ACTOR, "limit.held_settled", bot, dict(said))
 
     def _hand_to_maintainer(self, c, row, msg, task, acted, again=False, *, reason=None):
-        """One open BotOps task per bot to review its held runs: BotOps, not a person, recovers a stopped run.
+        """One open Agent Ops task per bot to review its held runs: Agent Ops, not a person, recovers a stopped run.
         `again`: the run was held on an earlier sweep. Reopen its review if it was closed while work remained."""
         maintainer = H.FLEET_MAINTAINER
         if row['bot_id'] == maintainer or not H.bot(c, maintainer):
@@ -9540,7 +9551,7 @@ class Execution:
             pass
 
     def _hand_to_operator(self, c, row, msg, again=False):
-        """BotOps cannot read every held request. Keep an open review task with its authorized operator when the
+        """Agent Ops cannot read every held request. Keep an open review task with its authorized operator when the
         request or attempt is private to them; an access failure is not a recovery decision (Dev 543)."""
         bot = H.bot(c, row['bot_id']) or {}
         config = c.execute("SELECT owner_id FROM bot_config WHERE bot=?", (row['bot_id'],)).fetchone()
@@ -9552,8 +9563,8 @@ class Execution:
         title = H.HELD_OPERATOR_REVIEW_TITLE.format(display_name=display_name)
         tasks = [t for t in H.bot_review_tasks(c, row['bot_id'], owner, title) if t['status'] == 'open']
         boundary = (
-            "Tico cannot show BotOps this interrupted run because only the bot's owner or operator can inspect "
-            "interrupted-run details. BotOps has made no recovery decision. Review the run through the bot's "
+            "Tico cannot show Agent Ops this interrupted run because only the bot's owner or operator can inspect "
+            "interrupted-run details. Agent Ops has made no recovery decision. Review the run through the bot's "
             "interrupted-run review and choose only after checking what already happened."
         )
         named = H.HELD_OPERATOR_REVIEW_BOT.format(slug=bot.get('slug') or row['bot_id'])
@@ -9590,7 +9601,7 @@ class Execution:
             pass
 
     def _tell_maintainer(self, c, row, msg):
-        """One task for BotOps per bot and day when a request keeps stopping."""
+        """One task for Agent Ops per bot and day when a request keeps stopping."""
         maintainer = H.FLEET_MAINTAINER
         if row['bot_id'] == maintainer or not H.bot(c, maintainer):
             return

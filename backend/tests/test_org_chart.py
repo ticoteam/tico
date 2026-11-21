@@ -68,7 +68,7 @@ def test_people_and_bots_move_under_people_and_bots_and_only_managers_move_them(
     )
 
 
-def test_botops_applies_a_persons_bot_change_as_that_person(api):
+def test_agent_ops_applies_a_persons_bot_change_as_that_person(api):
     # Ana, 2026-09-25: "i told you to set scribe's reports to to ben and move it there".
     from backend.store import H
     from backend.tests.helpers.api import setup_attempt
@@ -82,18 +82,18 @@ def test_botops_applies_a_persons_bot_change_as_that_person(api):
         ],
     )
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
+        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','botops','Agent Ops','active')")
         c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('botops','ana')")
         BS.write(c, 'botops', {'name': 'botops', 'runtime': 'fake', 'status': 'active'})
-    _, _, botops = setup_attempt(api, "botops")
+    _, _, agent_ops = setup_attempt(api, "botops")
     _, _, ops = setup_attempt(api, "ops")
     ask = post(api, "chat/botops", {"text": "Move ops under Ben"})
     mid = ask.get("message", ask)["id"]
     body = lambda bot, **kw: {"reports_to": "human:ben", "expected_revision": revision(api, bot), **kw}
     # The default requester applies without opt-in; another bot may not cite a human request.
-    post(api, "bots/ops/definition", body("ops"), token=botops["token"])
+    post(api, "bots/ops/definition", body("ops"), token=agent_ops["token"])
     post(api, "bots/ops/definition", body("ops", on_behalf_of=mid), token=ops["token"], expected=403)
-    post(api, "bots/ops/definition", body("ops", on_behalf_of=mid), token=botops["token"])
+    post(api, "bots/ops/definition", body("ops", on_behalf_of=mid), token=agent_ops["token"])
     _, bots = tree(api)
     assert bots["ops"] == "p:ben"
     with api.app.state.store.read() as c:
@@ -108,16 +108,16 @@ def test_botops_applies_a_persons_bot_change_as_that_person(api):
         api,
         "bots/ops/definition",
         body("ops", reports_to="human:cara", on_behalf_of=theirs),
-        token=botops["token"],
+        token=agent_ops["token"],
         expected=403,
     )
-    # A message to another bot, or one older than a week, is not a request to BotOps.
+    # A message to another bot, or one older than a week, is not a request to Agent Ops.
     other = post(api, "chat/cpo", {"text": "Move ops under Cara"})
     post(
         api,
         "bots/ops/definition",
         body("ops", on_behalf_of=other.get("message", other)["id"]),
-        token=botops["token"],
+        token=agent_ops["token"],
         expected=403,
     )
     with api.app.state.store.transaction() as c:
@@ -126,6 +126,6 @@ def test_botops_applies_a_persons_bot_change_as_that_person(api):
         api,
         "bots/ops/definition",
         body("ops", reports_to="assistant", on_behalf_of=mid),
-        token=botops["token"],
+        token=agent_ops["token"],
         expected=403,
     )

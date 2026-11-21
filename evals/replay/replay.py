@@ -5,7 +5,7 @@ first run, and the bot's prompt version) and its original outcome (final status,
 attached, runs and minutes). capture.py writes a draft case from a finished task; a person reads it, cuts anything
 private and signs it with `reviewed_by`. run.py replays signed cases on a scratch team and writes the report.
 
-Both sides are scored by the same code: the BotOps scorers (evals/botops/score.py) for jargon, duplicates and settings
+Both sides are scored by the same code: the Agent Ops scorers (evals/agent_ops/score.py) for jargon, duplicates and settings
 detours, and the case's `done` checks. So an edit the reviewing person makes to the original transcript applies to the
 baseline too. Pure and stdlib-only apart from yaml, so the scripted test (backend/tests/test_replay_evals.py) and the
 live runner score the same way.
@@ -24,8 +24,8 @@ from pathlib import Path
 import yaml
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parent / "botops"))
-import score  # (the BotOps scorers)
+sys.path.insert(0, str(HERE.parent / "agent_ops"))
+import score  # (the Agent Ops scorers)
 
 # A task is finished in one of these. A replayed task has also settled when its turn is a person's (the bot asked
 # someone and stopped), once its bot is not running.

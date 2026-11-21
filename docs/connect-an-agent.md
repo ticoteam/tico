@@ -35,21 +35,21 @@ tokens and revoke any of them.
 | Instructions | The server's `initialize` reply carries the "who needs me" skill (`skills/who-needs-me/SKILL.md`), so nothing else needs pasting |
 
 A personal token can use `tico_api` on v2 routes and `tico_bot_update` with the human's own rights. It never sends
-`on_behalf_of`; BotOps alone uses that to act for the human who asked it. Friendly tools also archive bots, docs and files,
+`on_behalf_of`; Agent Ops alone uses that to act for the human who asked it. Friendly tools also archive bots, docs and files,
 delete meetings, and run Routines now.
 
 `tico_api` supports bodyless writes, including DELETE. A file read returns its content type and
 either `text` or `base64`, with `bytes` and `truncated`; at most 1 MiB is returned. A human may close
-any task they can edit with `tico_task_close`; `wake: false` closes without waking a bot. BotOps uses
+any task they can edit with `tico_task_close`; `wake: false` closes without waking a bot. Agent Ops uses
 the requester's rights for that tool. `tico_bot_model` accepts a `harness` from the model's list.
-For a correction to your active BotOps request, send `tico_message_send` with `in_reply_to` set to
+For a correction to your active Agent Ops request, send `tico_message_send` with `in_reply_to` set to
 the original message id, or `steer: true` in the same thread. The message stays queued until
 the Computer delivers it into the active run; thread status shows when the follow-up is added.
 
 The token cannot create tokens, make other credentials (a bot's agent credential, a pairing approval) or click
 Confirm cards. Those need the human signed in to Tico. It can list its human's own tokens and revoke them
 (`tico token list`, `tico token revoke <id>`, or `tico_token_list` / `tico_token_revoke`), itself included.
-Ask BotOps to collect Credential values through your thread card. The API pass-through retains the
+Ask Agent Ops to collect Credential values through your thread card. The API pass-through retains the
 human's existing Credential permissions, including storing or revealing values when authorized. A Credential administrator can import a bot's existing Credential with
 `tico_credential_import`, grant or revoke access, and delete it with `tico_credential_delete`; values never pass through the
 agent during import. Bot deletion, outside-domain invites by an owner or admin, Team rule changes by the Owner, and Tico
@@ -60,7 +60,7 @@ for `tico_message_send`. These always use your own DM; another human's Assistant
 
 Tools that need a local repository or make a local network call are available only on a Computer: `tico_bot_copy`,
 `tico_bot_update_from_original`, `tico_bot_suggest_to_original`, `tico_skill_copy`, `tico_skill_submit` (docs/skills.md) and `tico_doc_fetch`. Run them on the Computer
-holding the repository, or ask BotOps. The server explains this when one is called.
+holding the repository, or ask Agent Ops. The server explains this when one is called.
 
 For a complete Needs you walkthrough, see [Needs you batches](needs-you-batches.md).
 

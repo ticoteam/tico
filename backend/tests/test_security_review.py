@@ -67,23 +67,23 @@ def test_a_verified_assertion_without_an_email_is_not_a_person(api):
     assert api.get("/api/v2/me").status_code == 401
 
 
-def test_botops_borrows_only_the_rights_of_the_request_it_is_working_on(api):
+def test_agent_ops_borrows_only_the_rights_of_the_request_it_is_working_on(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
+        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','botops','Agent Ops','active')")
         c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('botops','ana')")
         BS.write(c, 'botops', {'name': 'botops', 'runtime': 'fake', 'status': 'active'})
     # The run is handling the owner's room; the owner's request in another thread is not its to cite.
-    _, _, botops = setup_attempt(api, "botops")
+    _, _, agent_ops = setup_attempt(api, "botops")
     from backend.store import H
 
     with api.app.state.store.transaction() as c:
         elsewhere = H.open_conversation(c, "human:ana", ["human:ana", "bot:botops"], kind="chat", subject="x")
         other = H.say(c, "human:ana", "bot:botops", "Rename Ops", conversation_id=elsewhere["id"])
     body = {"display_name": "Operations", "expected_revision": 1}
-    post(api, "bots/ops/definition", {**body, "on_behalf_of": other["id"]}, botops["token"], expected=403)
+    post(api, "bots/ops/definition", {**body, "on_behalf_of": other["id"]}, agent_ops["token"], expected=403)
     here = post(api, "chat/botops", {"text": "Rename Ops"})
     # The request in the current conversation is its to cite with the Owner’s management rights.
-    post(api, "bots/ops/definition", {**body, "on_behalf_of": here["id"]}, botops["token"])
+    post(api, "bots/ops/definition", {**body, "on_behalf_of": here["id"]}, agent_ops["token"])
 
 
 def test_a_server_runner_credential_does_not_read_as_its_operator(api):

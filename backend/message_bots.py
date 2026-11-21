@@ -3,14 +3,14 @@
 The Inbox Manager template only writes `Mailbox: <email>` into the bot's instructions. What lets a run ask its
 computer for a token is the roster: the person's `inbox_bot` names the bot, and the bot's `gmail` tool names the
 address (routines.token_mailboxes). `link` writes both wherever a message bot is made (Settings' add from template,
-the team builder, BotOps registering one for the person who asked), and `backfill` does it once at start for the
+the team builder, Agent Ops registering one for the person who asked), and `backfill` does it once at start for the
 bots made before that, when there is no doubt whose they are. Either gives the bot a grant on the mailbox
 (backend/mailbox_access.py), so only for a mailbox the asker may grant: their own email, or any for an owner or admin.
 
 Where the mailbox is written varies: a `Mailbox:` line, the `gmail` tool in the stored config, the same tool as the
-bot's computer reports it from bot.yaml (BotOps writes it there), or plain words in the instructions ("for my mailbox
+bot's computer reports it from bot.yaml (Agent Ops writes it there), or plain words in the instructions ("for my mailbox
 x@y"). The person is the roster entry with that email when there is one, else the bot's own owner (whoever made it or
-asked BotOps for it): a mailbox on the company's Workspace domain is often not the address a person signs in with.
+asked Agent Ops for it): a mailbox on the company's Workspace domain is often not the address a person signs in with.
 """
 
 import json

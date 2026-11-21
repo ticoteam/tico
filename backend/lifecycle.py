@@ -27,7 +27,7 @@ RECRUITING, ONBOARDING, ACTIVE = "recruiting", "onboarding", "active"
 SEAT_PREFIX = "seat:"
 TITLE_MAX, DESCRIPTION_MAX, SUMMARY_MAX = 120, 8000, 2000
 
-# `description_by` for a job description written before authorship was recorded. Only people and BotOps acting for them
+# `description_by` for a job description written before authorship was recorded. Only people and Agent Ops acting for them
 # wrote seats then, so it reads as a person's words.
 EARLIER = "earlier"
 FILING_STALE_SECONDS = 120
@@ -306,7 +306,7 @@ def _may_place(auth, c, who, reports_to):
     if who.role == "owner":
         return
     reports_to = _anchor(c, reports_to)
-    # BotOps acting on the person's own request counts as them (its lent identity is never confirmed: only their tap
+    # Agent Ops acting on the person's own request counts as them (its lent identity is never confirmed: only their tap
     # on a card is); the Assistant's own turn does not.
     if who.role == "human" and (not who.via or who.confirmed or who.via == "botops"):
         if reports_to == who.actor:
@@ -361,7 +361,7 @@ def _insert(c, actor, title, description, reports_to, team, description_by=None,
 
 def lay_out(c, actor, roles):
     """Setup's chart, laid out exactly (docs/onboarding.md, "Setup picks the chart"): every role a Recruiting seat with
-    its reporting line, and no bot, repository, computer slot or BotOps task for any of them. Only setup calls this, as
+    its reporting line, and no bot, repository, computer slot or Agent Ops task for any of them. Only setup calls this, as
     the owner, so no placement rule applies.
 
     `roles` is {key: {title, description, reports_to, team, template?}}; a `reports_to` naming another key reports to that seat,

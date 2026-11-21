@@ -1,5 +1,5 @@
 """The Automations overview (CONTRACT §2): every run across the automations a caller may see, and their counts over a
-time range, for the page's list, its Runs tab and BotOps.
+time range, for the page's list, its Runs tab and Agent Ops.
 
 Seeing a run follows seeing its automation (`automations.may_see`), so a peer's mail subject never reaches a run row.
 Run rows are kept 30 days (`automations.prune` drops only their step detail), so the 7-day range reads

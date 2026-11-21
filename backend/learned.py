@@ -40,7 +40,7 @@ LAYERS = ("personal", "company")
 
 def _person(who, settings):
     """The person whose layers these are: a person, on their own or through a turn of their own Assistant (backend/auth.py
-    assistant_principal). Never a bot, nor a bot that borrows the person's rights for other work: BotOps doing what they
+    assistant_principal). Never a bot, nor a bot that borrows the person's rights for other work: Agent Ops doing what they
     asked is not their chat."""
     own_turn = (
         who.via == "assistant"
@@ -59,7 +59,7 @@ def _person(who, settings):
 
 def company_reader(c, who, settings):
     """The owner, once the company has its Strategy Owner: on their own, or in their own Assistant chat. Nobody else's
-    Assistant, and no borrowed rights (BotOps acting for the owner)."""
+    Assistant, and no borrowed rights (Agent Ops acting for the owner)."""
     if who.role != "owner" or not H.is_human(who.actor):
         return False
     row = H.bot(c, strategy_bot.SLUG)

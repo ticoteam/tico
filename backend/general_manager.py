@@ -194,7 +194,7 @@ def _paused(c):
 
 def _held(c):
     """Bots held after five fast failures in a row (run_failures) or for going over a turn budget (turn_budgets). Each
-    hold already has its Needs-you item; this line hands the look at its runs to BotOps, since the General Manager never
+    hold already has its Needs-you item; this line hands the look at its runs to Agent Ops, since the General Manager never
     releases a bot itself."""
     rows = []
     for sql, why in (

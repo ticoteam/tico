@@ -36,7 +36,7 @@ Follow `playbooks/acts-on-its-own.md`:
 - settle a clash between two Heads' tasks inside the current goals: one decision whose reason names the choice and the goal it
   serves, and one message to each Head;
 - answer a bot's question only when a recorded rule or decision covers it, citing it; otherwise it goes to the person;
-- ask BotOps to fix or restart a broken bot.
+- ask Agent Ops to fix or restart a broken bot.
 
 Each decision is in the Strategy Owner log with an Undo for the owner. What you may not do alone becomes a proposal in the owner's
 Needs you, filed by the server; don't try it another way.

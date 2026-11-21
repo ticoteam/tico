@@ -76,9 +76,9 @@ def test_bookkeeper_rehearsal_setup_and_guards(environment):
 # ----------------------------------------------------------------------------- check 3 and 6: triggers, quiet runs and visible failures
 
 
-def _c6_a_failed_sync_reaches_the_owner_without_botops(api, token):
+def _c6_a_failed_sync_reaches_the_owner_without_agent_ops(api, token):
     """A bank connection whose sync fails tells its owner what failed, once for the failure run: one finance.sync.failed
-    event and one Tico notice to the owner. A retry that still fails says nothing more. No BotOps task is involved."""
+    event and one Tico notice to the owner. A retry that still fails says nothing more. No Agent Ops task is involved."""
     from backend.finance import sync
 
     store = api.app.state.store
@@ -106,7 +106,7 @@ def test_bookkeeper_rehearsal_quiet_check_and_visible_failures(environment):
     api = built(environment)
     ensure(api)
     token = _token(api)
-    _c6_a_failed_sync_reaches_the_owner_without_botops(api, token)
+    _c6_a_failed_sync_reaches_the_owner_without_agent_ops(api, token)
 
 
 # ----------------------------------------------------------------------------- check 2 and 4: the instructions match the code

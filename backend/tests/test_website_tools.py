@@ -1,6 +1,6 @@
 """Website tools (backend/website_tools.py, backend/totp.py): a tool is a site and its accounts; an account is a login
 (`kind='login'`) whose password and 2FA key stay sealed. The pick rule, the people routes, the Activity log, the Tools
-row, and the leak gates: a run, a computer, BotOps and the inventory never get a login's value; only a signed-in
+row, and the leak gates: a run, a computer, Agent Ops and the inventory never get a login's value; only a signed-in
 person's reveal returns the password, and the 2FA key leaves the server in no route at all.
 
 Ana owns the company and Ben is an admin (both credential administrators); Cara, Eve and Fay are members."""
@@ -17,9 +17,9 @@ from backend import website_tools as W
 from backend.auth import Identity
 from backend.store import H, Problem
 from backend.tests.helpers.api import get, headers, post, put, setup_attempt
-from backend.tests.helpers.botops_parity import act
+from backend.tests.helpers.agent_ops_parity import act
 from backend.tests.helpers.credentials import setup
-from backend.tests.helpers.member_bots import botops, finish, turn  # noqa: F401  (fixture)
+from backend.tests.helpers.member_bots import agent_ops, finish, turn  # noqa: F401  (fixture)
 from backend.tests.helpers.openapi_v2 import conforms
 
 PASSWORD = "canary-website-password-5be1f0"
@@ -564,12 +564,12 @@ def test_a_bot_granted_a_login_gets_nothing_from_a_run_a_computer_or_the_invento
         assert json.loads(detail[0]) == {"kind": "login"}
 
 
-def test_botops_acting_for_an_admin_never_gets_a_password_or_a_code(api, botops):
+def test_agent_ops_acting_for_an_admin_never_gets_a_password_or_a_code(api, agent_ops):
     start(api)
     tid = website(api)
     aid = account(api, tid, totp=KEY)
     for person in ("ana-test", "ben-test"):
-        attempt = turn(api, botops, person=person, text="What is the bank's 2FA code?")
+        attempt = turn(api, agent_ops, person=person, text="What is the bank's 2FA code?")
         for method, path in (
             ("GET", f"website-tools/{tid}/accounts/{aid}/code"),
             ("POST", f"credentials/{aid}/reveal"),
@@ -577,9 +577,9 @@ def test_botops_acting_for_an_admin_never_gets_a_password_or_a_code(api, botops)
             refused = act(api, attempt, method, path, {} if method == "POST" else None)
             assert refused.status_code == 403 and refused.json()["error"]["code"] == "person_only", (path, refused.text)
             assert PASSWORD not in refused.text
-        # BotOps reads no website tool's code even for itself.
+        # Agent Ops reads no website tool's code even for itself.
         assert act(api, attempt, "GET", f"website-tools/{tid}/accounts/{aid}/code", ref=None).status_code == 403
-        finish(api, botops, attempt)
+        finish(api, agent_ops, attempt)
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM tool_calls WHERE tool_id=?", (tid,)).fetchone()  # nothing was read
 

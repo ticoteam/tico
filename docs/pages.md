@@ -253,5 +253,5 @@ with the same paging.
 
 **Who acts.** A bot publishes during its turn. Your Assistant makes task pages as you, recording its authenticated
 attempt alongside your authorship. People publish, link and archive pages too; until pages leave their bots, a person's
-page is stored under their Assistant, which nothing shows as the owner. BotOps archives for a person with that
+page is stored under their Assistant, which nothing shows as the owner. Agent Ops archives for a person with that
 person's rights, and asks before a hard delete, which only the owner may do.

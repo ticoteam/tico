@@ -261,7 +261,7 @@ def card_list(api, args):
 @tool(
     "tico_card_add",
     "Add one of Tico's built-in cards, pinned at a place you may arrange. A bot pins to its own "
-    "sidebar or its task; the Dashboard and team pages are a person's (BotOps: the person who asked). Growth cards go "
+    "sidebar or its task; the Dashboard and team pages are a person's (Agent Ops: the person who asked). Growth cards go "
     "on the Growth page only, which the owner, admins and bots arrange.",
     {
         "template": _s("The card", enum=list(CARD_TEMPLATES)),

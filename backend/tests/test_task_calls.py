@@ -633,7 +633,7 @@ def test_a_bot_never_answers_its_own_ask_and_an_ok_is_asked_only_of_a_person(c):
 
 def test_a_persons_own_ask_is_okd_only_by_their_own_click(c):
     """A person who asked for an OK may give it to themself: their own signed-in click is what an OK is. The
-    Assistant or BotOps acting for them, or a token (no own click), never gives it; a bot never answers an OK."""
+    Assistant or Agent Ops acting for them, or a token (no own click), never gives it; a bot never answers an OK."""
     row = _new(c, by=BEN, owner=BUILDER)
     asked = H.task_ask(c, ANA, row["id"], BEN, "Ship it on Monday?", kind="ok")["requirement_id"]
     H.task_give(c, ANA, row["id"], asked, ANA)  # given back to the one who asked it

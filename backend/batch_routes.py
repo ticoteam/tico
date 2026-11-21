@@ -99,7 +99,7 @@ def register(app, auth, mutate, send, store, task_view):
     @app.get("/api/v2/live/stats")
     def live_stats(request: Request, days: int = 7, via: str = ""):
         """How an outside assistant's tool calls perform (backend/mcp.py record_call), per tool:
-        calls, median and p90 server time, typical answer size, errors. People and BotOps read all callers;
+        calls, median and p90 server time, typical answer size, errors. People and Agent Ops read all callers;
         a bot granted outcome stats reads only bot calls. Delegated turns are refused."""
         who = request.state.identity
         with store.read() as c:
@@ -110,7 +110,7 @@ def register(app, auth, mutate, send, store, task_view):
             or (who.role not in ("human", "owner") and who.actor != H.bot_actor(H.FLEET_MAINTAINER) and not granted)
         ):
             raise Problem(
-                "forbidden", "Tool-call stats are for people, BotOps and a bot the owner granted outcome stats", 403
+                "forbidden", "Tool-call stats are for people, Agent Ops and a bot the owner granted outcome stats", 403
             )
         if granted and via:
             raise Problem("forbidden", "A bot granted outcome stats reads the totals, not one assistant's calls", 403)

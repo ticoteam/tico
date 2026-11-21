@@ -34,7 +34,7 @@ class Api:
 
     def __init__(self, url, token, timeout=15, retries=3):
         self.url, self.token = url.rstrip("/"), token
-        self.__dict__["_tico_is_botops"] = False
+        self.__dict__["_tico_is_agent_ops"] = False
 
     def get(self, path, /, **query):
         Api.calls.append(("GET", path, self.url, self.token))

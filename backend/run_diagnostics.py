@@ -29,11 +29,12 @@ UNSTARTED_CATEGORIES = {HANDED_BACK: 'handed_back', LAPSED: 'lapsed_unstarted'}
 LAPSED_NAMED = '{computer} took it and never started it'
 
 # One job's runs its computer could not start, SAME in a row: handed back for one reason (its `runner_error`), or taken
-# and dropped in silence on one computer. No wait clears that, so the job fails and BotOps gets it (bot_stops.cant_start).
+# and dropped in silence on one computer. No wait clears that, so the job fails and Agent Ops gets it (bot_stops.cant_start).
 # On Acme (Nov 11) a computer handed back every run of a task for one reason and the task read "Queued"; on Tico Team
 # (Nov 12) one took ~344 runs in a day and never started them, and nobody was told.
 SAME = 3
-BOTOPS_HAS_IT = 'BotOps is checking why.'  # ends the failed run's text: no person is asked (execution.last_stop)
+AGENT_OPS_HAS_IT = 'Agent Ops is checking why.'  # ends the failed run's text: no person is asked (execution.last_stop)
+OLD_HAS_IT = 'BotOps is checking why.'  # the same, in a run saved before the rename (#4863)
 # The reason a job's runs that only lapsed are filed with: the computer said nothing, so this is all that is known.
 LAPSED_WHY = 'it took each run and never started it, renewed its lease or handed it back'
 # The reason when the day's budget of missed starts (execution.PRE_START_TRIES) runs out with fewer than SAME silent
@@ -501,7 +502,7 @@ def stuck(c, row):
 def lapsed_in_a_row(c, job_id):
     """How many of the job's latest runs in a row (up to SAME) its computer took and went silent on before starting
     them (execution.expire saves LAPSED on each). A run that started, a hand-back, a lapse Tico excused (its own cut,
-    a planned yield: no LAPSED) or a lapse on another computer ends the row: BotOps is told one computer took them."""
+    a planned yield: no LAPSED) or a lapse on another computer ends the row: Agent Ops is told one computer took them."""
     count, computer = 0, None
     for row in c.execute(
         "SELECT state,started_at,final_text,runner_id FROM attempts WHERE job_id=? "

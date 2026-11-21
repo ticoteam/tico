@@ -11,8 +11,8 @@ from backend.auth import Identity
 from backend.store import H, Problem, encode
 from backend.tests.helpers.api import assign, get, headers, post, runner
 from backend.tests.helpers.live_meetings import attach, chunk, live, ready  # noqa: F401
-from backend.tests.helpers.botops_parity import act
-from backend.tests.helpers.member_bots import botops, turn as botops_turn  # noqa: F401
+from backend.tests.helpers.agent_ops_parity import act
+from backend.tests.helpers.member_bots import agent_ops, turn as agent_ops_turn  # noqa: F401
 from backend.tests.helpers.org_rule_check import Judge, color_rule
 from backend.tests.helpers.sql import query
 from backend.tests.helpers.statement_scope import belongs, measuring
@@ -539,11 +539,11 @@ def delegated_connect(api, attempt, body, key):
     )
 
 
-def test_delegated_meeting_access_requires_human_and_source_bot_membership(live, botops, monkeypatch):
+def test_delegated_meeting_access_requires_human_and_source_bot_membership(live, agent_ops, monkeypatch):
     mid = private(live)
     chunk(live, mid, 1, 0, 1000, "Synthetic private audience context")
     post(live, f"live-meetings/{mid}/access", {"add": ["ben"]})
-    attempt = botops_turn(live, botops, person="ben-test", text="Inspect this synthetic meeting")
+    attempt = agent_ops_turn(live, agent_ops, person="ben-test", text="Inspect this synthetic meeting")
 
     async def disconnected(_request):
         return True
@@ -597,14 +597,14 @@ def test_delegated_meeting_access_requires_human_and_source_bot_membership(live,
 
 
 @pytest.mark.parametrize("client_id", ["synthetic-connect-replay", None])
-def test_delegated_connect_replays_recheck_current_private_audience(live, botops, client_id):
+def test_delegated_connect_replays_recheck_current_private_audience(live, agent_ops, client_id):
     body = {"title": "Synthetic private connection", "visibility": "private" if client_id else "team"}
     if client_id:
         body["client_id"] = client_id
     mid = post(live, "live-meetings", body, token="ben-test", key="direct-connect-key")["id"]
     if not client_id:
         post(live, f"live-meetings/{mid}/access", {"visibility": "private"}, token="ben-test")
-    attempt = botops_turn(live, botops, person="ben-test", text="Inspect this synthetic connection")
+    attempt = agent_ops_turn(live, agent_ops, person="ben-test", text="Inspect this synthetic connection")
     assert delegated_connect(live, attempt, body, "direct-connect-key").status_code == 404
     if client_id:
         assert act(live, attempt, "POST", "live-meetings", body).status_code == 404
@@ -619,8 +619,8 @@ def test_delegated_connect_replays_recheck_current_private_audience(live, botops
     assert post(live, "live-meetings", body, token="ben-test", key="direct-connect-key")["id"] == mid
 
 
-def test_delegated_private_creation_requires_direct_connection_and_team_stays_open(live, botops):
-    attempt = botops_turn(live, botops, person="ben-test", text="Connect this synthetic meeting")
+def test_delegated_private_creation_requires_direct_connection_and_team_stays_open(live, agent_ops):
+    attempt = agent_ops_turn(live, agent_ops, person="ben-test", text="Connect this synthetic meeting")
     created = act(
         live, attempt, "POST", "live-meetings", {"title": "Synthetic private connect", "visibility": "private"}
     )

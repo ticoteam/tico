@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from backend import routines
 from backend.app import create_app
-from backend.tests.helpers.onboarding import ASSISTANT_AGENT, ASSISTANT_CARD, BOTOPS_CARD, environment  # noqa: F401  (the fixture)
+from backend.tests.helpers.onboarding import ASSISTANT_AGENT, ASSISTANT_CARD, AGENT_OPS_CARD, environment  # noqa: F401  (the fixture)
 from backend.tests.helpers.builtin_routines import COO, SWEEP, _ensure, _row, _write_assistant_routines
 
 BOOKKEEPER = {"bk": {"name": "Bk", "status": "active", "template": "finance-owner"}}
@@ -115,7 +115,7 @@ def test_at_startup_only_the_assistant_gets_a_routine_a_bootstrap_bot_with_routi
     """The backfill is the Assistant's daily sweep alone. The bookkeeper's monthly report (enabled in its template) is
     set up with the bot, so an install whose bookkeeper has none keeps none: the startup path does not switch it on."""
     api = environment(
-        cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, ""), (BOOKKEEPER_CARD, BOOKKEEPER_AGENT)],
+        cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (AGENT_OPS_CARD, ""), (BOOKKEEPER_CARD, BOOKKEEPER_AGENT)],
         seed={**COO, **BOOKKEEPER},
     )
     _write_assistant_routines(api)

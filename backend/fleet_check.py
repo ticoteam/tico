@@ -2,7 +2,7 @@
 
 Read from the records the server already holds, per bot: not on a computer, its computer offline, failing runs, a
 credential it declares but does not have, setup that never finished, paused (and paused over a limit), quarantined.
-Each issue says in a plain sentence what is wrong and the one command that fixes it, so BotOps can fix what it may and
+Each issue says in a plain sentence what is wrong and the one command that fixes it, so Agent Ops can fix what it may and
 report the rest.
 """
 

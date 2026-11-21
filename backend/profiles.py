@@ -448,7 +448,7 @@ def set_profile(admin, c, who, bot, body, undo_change_id=None):
 
     label = (H.bot(c, bot) or {}).get("slug") or bot
     CA.gate(c, who.actor, "cost", f"change how {label} wakes and what tasks it takes")
-    admin._manager(c, who, bot, botops=True)
+    admin._manager(c, who, bot, agent_ops=True)
     config = admin._config(c, bot)
     if config["revision"] != body.expected_revision:
         raise Problem("version_conflict", "Bot configuration changed; refresh before saving", 409)

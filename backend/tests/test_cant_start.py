@@ -1,5 +1,5 @@
 """A computer that hands back a bot's runs on a task before starting them, each time for the same reason, does not loop
-silently: BotOps gets it and the task says what it waits on (Acme, Nov 11: Reviewer 2's computer handed back every run
+silently: Agent Ops gets it and the task says what it waits on (Acme, Nov 11: Reviewer 2's computer handed back every run
 on its Review 2 task with "the bot's checkout's upstream could not be read", two minutes apart, and the task read
 "Queued")."""
 
@@ -51,15 +51,15 @@ def job_state(api, job_id):
         return c.execute("SELECT state FROM jobs WHERE id=?", (job_id,)).fetchone()[0]
 
 
-def botops_tasks(api):
+def agent_ops_tasks(api):
     with api.app.state.store.read() as c:
         return [
-            {**dict(r), "body": H.task_words(c, r["id"])}  # what Tico gave BotOps: its instructions
+            {**dict(r), "body": H.task_words(c, r["id"])}  # what Tico gave Agent Ops: its instructions
             for r in c.execute("SELECT id,title,status FROM tasks WHERE owner_id='bot:botops'")
         ]
 
 
-def test_three_hand_backs_for_the_same_reason_go_to_botops_and_pause_the_task(api):
+def test_three_hand_backs_for_the_same_reason_go_to_agent_ops_and_pause_the_task(api):
     machine, task_id, attempt = start(api)
     job_id = attempt["job_id"]
     reason = UPSTREAM.format(task=task_id)
@@ -76,13 +76,13 @@ def test_three_hand_backs_for_the_same_reason_go_to_botops_and_pause_the_task(ap
         assert detail["cause"] == "handed_back"  # the category the server logs it with
         if n < RD.SAME - 1:
             assert job_state(api, job_id) == "queued"
-            assert not botops_tasks(api)
+            assert not agent_ops_tasks(api)
             attempt = claim(api, machine)
     # The third in a row stops the retries, long before PRE_START_TRIES.
     assert RD.SAME < execution.PRE_START_TRIES
     assert job_state(api, job_id) == "failed"
     assert claim(api, machine) is None
-    [review] = botops_tasks(api)
+    [review] = agent_ops_tasks(api)
     assert review["title"] == "Find why ops's runs can't start" and review["status"] == "open"
     assert "upstream could not be read" in review["body"] and task_id in review["body"]
     assert "Review the negate PR" in review["body"] and H.BOT_REVIEW_ID.format(id="ops") in review["body"]
@@ -90,7 +90,15 @@ def test_three_hand_backs_for_the_same_reason_go_to_botops_and_pause_the_task(ap
     turn = next(t for t in get(api, "bots/ops/turns") if t["id"] == attempt["id"])
     assert "upstream could not be read" in turn["end_reason"]
     stop = get(api, "status?bot=ops")["status"]["last_stop"]
-    assert stop["needs_person"] is False and stop["text"].endswith(RD.BOTOPS_HAS_IT)
+    assert stop["needs_person"] is False and stop["text"].endswith(RD.AGENT_OPS_HAS_IT)
+    # A run saved before the rename (#4863) reads the same, under the current name.
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE attempts SET final_text=replace(final_text, ?, ?) WHERE id=?",
+            (RD.AGENT_OPS_HAS_IT, RD.OLD_HAS_IT, attempt["id"]),
+        )
+    stop = get(api, "status?bot=ops")["status"]["last_stop"]
+    assert stop["needs_person"] is False and stop["text"].endswith(RD.AGENT_OPS_HAS_IT)
     # The task waits on the bot, Paused with the cause: not "Queued", not a person's.
     with api.app.state.store.read() as c:
         assert task_wakes.task_cause(c, task_id, "bot:ops") == task_wakes.CANT_START
@@ -102,7 +110,7 @@ def test_three_hand_backs_for_the_same_reason_go_to_botops_and_pause_the_task(ap
             for row in rows
             if task_id in (row.get("tasks") or [row.get("task_id")])
         ]
-    # BotOps fixed it and closed its task: the hold lifts, and the never-stuck check may wake the bot again.
+    # Agent Ops fixed it and closed its task: the hold lifts, and the never-stuck check may wake the bot again.
     post(api, f"tasks/{review['id']}/done", {"note": "Unset the upstream it could not fetch."})
     with api.app.state.store.read() as c:
         assert task_wakes.task_cause(c, task_id, "bot:ops") is None
@@ -115,10 +123,10 @@ def test_hand_backs_for_different_reasons_or_none_keep_retrying(api):
         hand_back(api, machine, attempt, reason)
         assert job_state(api, job_id) == "queued"
         attempt = claim(api, machine)
-    assert not botops_tasks(api)
+    assert not agent_ops_tasks(api)
 
 
-def test_a_second_task_of_the_same_bot_is_named_on_the_open_botops_task(api):
+def test_a_second_task_of_the_same_bot_is_named_on_the_open_agent_ops_task(api):
     machine, first, attempt = start(api)
     for _ in range(RD.SAME):
         hand_back(api, machine, attempt, UPSTREAM.format(task=first))
@@ -131,7 +139,7 @@ def test_a_second_task_of_the_same_bot_is_named_on_the_open_botops_task(api):
         assert attempt
         hand_back(api, machine, attempt, UPSTREAM.format(task=second))
         attempt = claim(api, machine)
-    [review] = botops_tasks(api)  # one open task per bot
+    [review] = agent_ops_tasks(api)  # one open task per bot
     with api.app.state.store.read() as c:
         said = [r[0] for r in c.execute("SELECT body FROM messages WHERE refs LIKE ?", (f"%{review['id']}%",))]
         assert task_wakes.task_cause(c, second, "bot:ops") == task_wakes.CANT_START

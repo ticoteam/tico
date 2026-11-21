@@ -22,9 +22,9 @@ def close_computer(api, machine):
 
 
 @pytest.fixture
-def botops(api):
+def agent_ops(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
+        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','botops','Agent Ops','active')")
         c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('botops','ana')")
         BS.write(c, 'botops', {'name': 'botops', 'runtime': 'fake', 'status': 'active'})
     machine = runner(api)
@@ -34,7 +34,7 @@ def botops(api):
 
 
 def turn(api, machine, person="cara-test", text="Build me a bot"):
-    """A person chats with BotOps; its runner claims that message: the attempt whose token BotOps acts with."""
+    """A person chats with Agent Ops; its runner claims that message: the attempt whose token Agent Ops acts with."""
     post(api, "chat/botops", {"text": text}, token=person)
     return claim(api, machine, "botops")
 

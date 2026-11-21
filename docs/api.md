@@ -246,7 +246,7 @@ the comment with `edited_at`, or a tombstone with an empty body and `deleted_at`
 the task's comments as the task lists them. Neither wakes anyone or sends anything.
 
 - `404 not_found`: the comment is not on this task, or was already deleted.
-- `403`: the caller did not write it, or is acting for its author (BotOps, or the Assistant, which gets
+- `403`: the caller did not write it, or is acting for its author (Agent Ops, or the Assistant, which gets
   `confirm_required`); or the message is a question, an answer, a notice or a message in a bot's thread
   rather than a comment.
 - An edit's text gets the checks a new comment's text gets (`422` when empty; a path it names is kept as

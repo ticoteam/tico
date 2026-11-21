@@ -19,7 +19,7 @@ REVIEW = "strategy-owner:goals-review"
 
 
 def via_assistant(api, confirmed=False, via="assistant"):
-    """The owner as the Assistant (or BotOps) acting for them; `confirmed`: their own tap on a Confirm card it made."""
+    """The owner as the Assistant (or Agent Ops) acting for them; `confirmed`: their own tap on a Confirm card it made."""
     token = f"ana-via-{via}" + ("-tap" if confirmed else "")
     api.app.state.store.settings.test_identities[token] = Identity(
         OWNER, "owner", "ana@acme.example", via=via, confirmed=confirmed
@@ -99,7 +99,7 @@ def test_only_the_owner_changes_the_level_and_each_change_is_logged(api):
 
 
 def test_the_owners_tap_on_a_confirm_card_sets_the_level_and_the_checks(api):
-    """Settings stage 3: BotOps or the owner's Assistant puts the level and the regular checks on a Confirm card; the
+    """Settings stage 3: Agent Ops or the owner's Assistant puts the level and the regular checks on a Confirm card; the
     owner's tap on it is their own click. Acting for them without the tap still changes neither."""
     with_strategy_bot(api)
     for via in ("assistant", "botops"):

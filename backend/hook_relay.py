@@ -977,7 +977,7 @@ def install(app, settings, store, auth):
         **api_v2(
             "Webhook relay",
             "createWebhookRelay",
-            "Give a trigger an address through Tico Gateway; the answer carries the secret once (people who manage the trigger, and BotOps)",
+            "Give a trigger an address through Tico Gateway; the answer carries the secret once (people who manage the trigger, and Agent Ops)",
             "WebhookRelayAddress",
         ),
     )
@@ -1003,7 +1003,7 @@ def install(app, settings, store, auth):
         **api_v2(
             "Webhook relay",
             "setWebhookRelayWake",
-            "Say whether a delivery to the Gateway address starts a sleeping server (people who manage the trigger, and BotOps)",
+            "Say whether a delivery to the Gateway address starts a sleeping server (people who manage the trigger, and Agent Ops)",
             "WebhookRelayWake",
         ),
     )

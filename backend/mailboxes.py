@@ -6,7 +6,7 @@ and how its last sync went (`synced_at`, `sync`: '' or why it is failing, `sync_
 routines (message automations whose trigger inbox is this address; they are switched on and off with the automation
 routes). Who holds what, and who may grant, revoke, share and stop, is backend/mailbox_access.py's rule, which also
 writes those changes' events; this module reads it and calls it. Every write is a person acting as themselves: never a
-bot, BotOps or the Assistant (backend/assistant.py NEVER)."""
+bot, Agent Ops or the Assistant (backend/assistant.py NEVER)."""
 
 import json
 import re

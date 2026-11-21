@@ -1,9 +1,9 @@
 ---
 name: fill-a-role
-description: Fill a role with a bot first. Proves from the record that the work exists, writes a role scorecard (mission, 3 to 5 measurable outcomes, owns, never does), tries the cheaper answers first (stop the work, a routine, a skill for a bot the team already has), picks a Tico role template, gets the bot created through BotOps, sets it up over a first week and judges it at day 7 and day 30 by results. Goes to a contractor or a human hire only when a bot truly cannot do the work, with the reason written down and an OK. On that path it writes the job post, a structured interview kit with one four-level scale, evidence summaries of applicants, scorecards and a debrief pack, and a person decides. Use when a task says hire, hiring, recruit, headcount, open a role, job description, job post, interview, candidate, contractor, freelancer, "we need someone to", "who should own this", add a bot, new bot, staff this, or when the same work keeps landing on nobody.
+description: Fill a role with a bot first. Proves from the record that the work exists, writes a role scorecard (mission, 3 to 5 measurable outcomes, owns, never does), tries the cheaper answers first (stop the work, a routine, a skill for a bot the team already has), picks a Tico role template, gets the bot created through Agent Ops, sets it up over a first week and judges it at day 7 and day 30 by results. Goes to a contractor or a human hire only when a bot truly cannot do the work, with the reason written down and an OK. On that path it writes the job post, a structured interview kit with one four-level scale, evidence summaries of applicants, scorecards and a debrief pack, and a person decides. Use when a task says hire, hiring, recruit, headcount, open a role, job description, job post, interview, candidate, contractor, freelancer, "we need someone to", "who should own this", add a bot, new bot, staff this, or when the same work keeps landing on nobody.
 metadata:
   function: people
-  roles: [head-of-people, recruiter, recruiting-coordinator, sourcer, hr-generalist, botops, chief-of-staff, operations-manager, general-manager]
+  roles: [head-of-people, recruiter, recruiting-coordinator, sourcer, hr-generalist, agent-ops, chief-of-staff, operations-manager, general-manager]
   actions: [read, draft, send, spend, change-records]
   review: professional
 ---
@@ -16,7 +16,7 @@ role has to be filled again.
 Words used here: a **team** is the company in Tico. A **teammate** is anyone on it: a **person** or a **bot** (an AI
 employee that picks up tasks, uses skills and works through Tools). A **role** is a named set of outcomes one teammate
 owns. A **role template** is one of Tico's ready-made bot roles in `templates/catalog/<template>/`, each with a
-`card.yaml` saying what the bot owns and never does. **BotOps** is the built-in bot that creates, checks and archives
+`card.yaml` saying what the bot owns and never does. **Agent Ops** is the built-in bot that creates, checks and archives
 bots. **The person above** is the nearest person up your reporting line. A **routine** is an automation that runs on a
 schedule. A **role scorecard** is the one-page definition of the role this skill writes.
 
@@ -84,18 +84,18 @@ numbered message, save the answers there with the date, and work on the defaults
 
 4. **Pick the template.** Run `tico template list`. Read the `card.yaml` of each likely template: `summary`, `owns`,
    `never`, `onboarding`, `first_routine`. Match on what it owns and never does, not on its title. If two fit, take
-   the narrower. If none fits, take the nearest and write the differences as three lists for BotOps: add to Owns,
+   the narrower. If none fits, take the nearest and write the differences as three lists for Agent Ops: add to Owns,
    remove from Owns, add to "you do not".
 5. **Run the bot-or-person test.** Go line by line through the scorecard's outcomes with `references/bot-or-person.md`.
    Mark each line "bot", "bot with a Tool we must connect" or "person, because <one of the accepted reasons>". Then
    split: the bot takes every line it can, and only the remainder goes to step 10. Most roles split.
 6. **Get the bot created.** Bots do not create bots directly. Use the route that fits you:
-   - *You are a manager bot and the new bot reports to you.* Ask BotOps in a message
+   - *You are a manager bot and the new bot reports to you.* Ask Agent Ops in a message
      (`tico message send botops "<request>" --needs-action`) with the template, the display name, who it reports to
      and a link to the scorecard. Tico allows this by default up to 3 creates in any 7 days.
    - *Anyone else.* File `tico task create --owner botops --title "Build a bot: <name>"` with the same four things. If
      a person asked for the role, cite their request.
-   - *Refused.* If BotOps answers `report_cap` or any other refusal, Tico has already put a task in front of the
+   - *Refused.* If Agent Ops answers `report_cap` or any other refusal, Tico has already put a task in front of the
      person above. Wait for it. Never try another route around a refusal.
 7. **Run the first week.** Follow `references/first-30-days.md`. In short: one narrow task whose result a person could
    check in two minutes; read the first three runs end to end; when a run is wrong, fix the bot's instructions, not
@@ -112,7 +112,7 @@ numbered message, save the answers there with the date, and work on the defaults
    - **Fix.** An outcome missed and the cause is in the instructions, a Tool, the reasoning effort or the model. Change
      one thing, in that order, and review again in 14 days. One fix round only.
    - **Narrow.** It does part of the role well. Cut "Owns" to that part and take the rest back to step 3.
-   - **Replace.** It missed after a fix round. Ask BotOps to archive it with a named successor for its open tasks, and
+   - **Replace.** It missed after a fix round. Ask Agent Ops to archive it with a named successor for its open tasks, and
      either try a different template or go to step 10 with the trial as the written evidence.
    A reading that is missing is "not read". It is never a pass and never a zero.
 
@@ -161,9 +161,9 @@ numbered message, save the answers there with the date, and work on the defaults
 ## Autonomy
 
 Do on your own: read the record, write the scorecard, propose dropping work, write routines, add a skill or a wider
-"Owns" to a bot you manage, ask BotOps for a new direct report inside the weekly limit and the cost ceiling, run the
+"Owns" to a bot you manage, ask Agent Ops for a new direct report inside the weekly limit and the cost ceiling, run the
 first week, create and link KPIs, change a report's model or reasoning effort, publish the day-7 and day-30 pages, give
-a Keep, Fix or Narrow verdict, and ask BotOps to archive a bot you manage when a successor is named. On the human
+a Keep, Fix or Narrow verdict, and ask Agent Ops to archive a bot you manage when a successor is named. On the human
 path, do all the preparation: drafts, evidence summaries, kits, scheduling, chasing scorecards, the debrief pack.
 
 Ask for an OK, once, with the page attached:
@@ -213,7 +213,7 @@ deadline: in 30 days, 11 damaged deliveries (tasks 412 to 447), 5 claims filed l
 - **Bot-or-person test.** Filing, chasing and matching invoices: bot. Photographing the damaged pallet at the dock:
   person, because it needs physical presence. Split: the warehouse lead, already on the team, uploads photos to the
   task. No hire.
-- **Created.** The bot asks BotOps in chat: template `logistics-coordinator`, name "Freight Claims", reports to
+- **Created.** The bot asks Agent Ops in chat: template `logistics-coordinator`, name "Freight Claims", reports to
   Operations Manager, scorecard linked. First task: file the claim for task 447 only.
 - **Day 30.** 14 damaged deliveries, 14 claims filed in time, 9 paid. Cost inside the ceiling. One run missed a
   photo and the instructions were fixed on day 4. Verdict: **Keep**. Next review in 90 days.

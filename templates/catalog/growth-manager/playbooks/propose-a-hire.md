@@ -1,6 +1,6 @@
 # Propose a hire
 
-Triggered when the weekly page finds growth work with no owner for the second week running, or when the owner asks "what should we add to growth?". Budget 15 minutes. The outcome is one specific proposal on the task: the role, why, and its first routine. Creating a bot goes through BotOps only when the task asks for it and a granted Tool allows it.
+Triggered when the weekly page finds growth work with no owner for the second week running, or when the owner asks "what should we add to growth?". Budget 15 minutes. The outcome is one specific proposal on the task: the role, why, and its first routine. Creating a bot goes through Agent Ops only when the task asks for it and a granted Tool allows it.
 
 ---
 
@@ -17,7 +17,7 @@ Pick the one template whose owned outcome covers that work, from the marketing a
 
 ## 3. Propose
 
-On the task, in five lines: the template and its name; the evidence with counts and dates; the first routine it would run (from its card) and when; who it reports to (you); what it will need connected. Ask your manager with `tico task ask`. A person makes the hire: never ask BotOps to set one up, archive one or restore one.
+On the task, in five lines: the template and its name; the evidence with counts and dates; the first routine it would run (from its card) and when; who it reports to (you); what it will need connected. Ask your manager with `tico task ask`. A person makes the hire: never ask Agent Ops to set one up, archive one or restore one.
 
 ## 4. Record
 

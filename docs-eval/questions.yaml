@@ -75,7 +75,7 @@ questions:
   - id: change-instructions
     question: How do I change a bot's Instructions in Tico, or edit its repository, and get the changes onto its Computer?
     manual: [using-tico]
-    contains: ["Instructions", "BotOps", "commit", "push"]
+    contains: ["Instructions", "Agent Ops", "commit", "push"]
     facts:
       - subject: "computer|checkout"
         predicate: "updat|pull|sync"

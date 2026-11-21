@@ -236,11 +236,11 @@ SCHEMAS.update(
             url={"type": "string", "description": "Where the tool opens, when it has an address (the repository)"},
             pending={
                 "enum": ["add", "remove", "update"],
-                "description": "A request BotOps has not finished: `add` on a tool that is "
+                "description": "A request Agent Ops has not finished: `add` on a tool that is "
                 "not on the bot yet (status `pending`), `remove` on a declared one being taken out, `update` on "
                 "one whose can, scope or note is being changed",
             },
-            task_id={"type": "string", "description": "The BotOps task carrying the request"},
+            task_id={"type": "string", "description": "The Agent Ops task carrying the request"},
             granted={
                 "type": "object",
                 "description": "The bot can use this tool through a grant in Tools: `level` (read or read_write), `kind` "

@@ -5,18 +5,18 @@ from backend.tests.helpers.api import assign, claim, post, ready, runner
 from backend.tests.helpers.execution_review import aged, job_state, restarted_mid_turn, stop_partway, sweep
 
 
-def botops(api):
+def agent_ops(api):
     with api.app.state.store.transaction() as c:
         c.execute(
-            "INSERT OR IGNORE INTO bots(id, slug, display_name, state) VALUES(?, ?, 'BotOps', 'active')",
+            "INSERT OR IGNORE INTO bots(id, slug, display_name, state) VALUES(?, ?, 'Agent Ops', 'active')",
             (H.FLEET_MAINTAINER, H.FLEET_MAINTAINER),
         )
 
 
 def held(api):
-    """One run of ops that merged a pull request from a shell and was cut off by a restart: held for BotOps, with its
+    """One run of ops that merged a pull request from a shell and was cut off by a restart: held for Agent Ops, with its
     review task filed. A shell alone resumes after a restart; a named outside action is what holds it."""
-    botops(api)
+    agent_ops(api)
     machine, message, attempt = restarted_mid_turn(api, [('Read', None), ('Bash', None)])
     with api.app.state.store.transaction() as c:
         c.execute(

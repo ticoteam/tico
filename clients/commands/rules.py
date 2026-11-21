@@ -153,8 +153,8 @@ def rules_list(api, args):
             "limit": args.get("limit"),
         }
     )
-    # `mine` is the caller's own bot: BotOps reads its own rules and settings, not its requester's. Anything else reads
-    # as the person (BotOps's requester), like the rest of the rules.
+    # `mine` is the caller's own bot: Agent Ops reads its own rules and settings, not its requester's. Anything else reads
+    # as the person (Agent Ops's requester), like the rest of the rules.
     return (api if args.get("mine") else _as_person(api)).get("rules", **query)
 
 

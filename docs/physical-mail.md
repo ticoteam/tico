@@ -66,7 +66,7 @@ covers all addresses or one Gateway assignment. Only an owner or admin may grant
 who granted it and when, and both actions leave audit events. A grant covers letter content and its scan, without
 opening the private task. Revocation removes this access immediately; task-party rights and other grants still apply.
 
-When the Assistant or BotOps reads for a person, both the person and the actual bot must independently qualify by
+When the Assistant or Agent Ops reads for a person, both the person and the actual bot must independently qualify by
 a mail grant or the letter's existing access policy. A person's grant alone never grants the Assistant access.
 This applies to letters, hub/MCP reads, raw scan downloads and exact file-version downloads.
 
@@ -94,7 +94,7 @@ the provider's price plus 25%. An unconfigured Gateway shows Coming soon and doe
 
 An owner or admin grants sending with `PUT /api/v2/letters/outboxes/company/grants/bot/{bot_id}` and
 `{"level":"send"}`. `DELETE` on the same address revokes it; both are audited. The grants list is
-`GET /api/v2/letters/outboxes/company/grants` (`limit` up to 100, `after` from `next`, 64 KiB cap); people may also receive a `person/{person_id}` grant. BotOps or an
+`GET /api/v2/letters/outboxes/company/grants` (`limit` up to 100, `after` from `next`, 64 KiB cap); people may also receive a `person/{person_id}` grant. Agent Ops or an
 Assistant changing grants or company policy must use the person's Confirm flow.
 
 Set `PUT /api/v2/letters/settings` with `return_address` (`name`, `line1`, optional `line2`, `city`, two-letter US
@@ -186,7 +186,7 @@ Bots and people read letters with `tico mail list` and `tico mail read <id>` (MC
 
 In **Settings → General → Notifications**, a person can verify their own US or Canadian phone and opt into texts, with
 separate consent for calls. Only that person, including through their personal API token, can read or change the
-number; bots, BotOps and the Assistant cannot do it for them. Verification is free. Each accepted alert, including
+number; bots, Agent Ops and the Assistant cannot do it for them. Verification is free. Each accepted alert, including
 a test, costs the company **$1**, covering its text or call. A test explicitly accepts that charge.
 
 The available choices map to existing Tico state: an overdue active task owned by or waiting on you; newly filed
@@ -210,6 +210,6 @@ spend are visible in Alerts settings. Tests bypass quiet hours but still require
 These controls use `/api/v2/alerts/me` and `/api/v2/alerts/company`, with `/me/phone`, `/me/phone/confirm` and `/me/test`
 subroutes (see [the v2 contract](api.md#the-contract)). The same actions are `tico alerts show|set|verify|confirm|remove|test|company`
 and MCP's `tico_alerts_*`, offered only to people. `tico alerts test --accept-charge --operation-id <stable-id>` keeps
-retries to one paid test. They are personal settings, including in the Tauri app; Slack/BotOps directs you to them.
+retries to one paid test. They are personal settings, including in the Tauri app; Slack/Agent Ops directs you to them.
 HQ must deploy the person-scoped paging API and configure its signed Twilio opt-out webhook before personal
 verification/sending works. Demo and rehearsal mode send nothing.

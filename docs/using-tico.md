@@ -13,8 +13,8 @@ On **Tasks**, press **+** (New task, or the C key) and pick who it is for — an
 it through Tico's MCP. Each task shows who added it: you, another human, or a bot.
 
 **Where are the built-in bots?**
-**Assistant** and **BotOps** have no rail entry. **Tico Assistant**, at the bottom of the sidebar (⌘J), opens your private
-Assistant DM from any page except the Assistant page and setup, even while the signed-out banner shows, and the Assistant hands BotOps what needs BotOps. At the top of that chat, **Tracking** counts the open tasks you asked for that someone else holds; open it for Needs you, Open and Back (what finished since you last opened it, up to 7 days). The Strategy Owner proposes **Strategy** and is at the top of **Goals**: its routines, its last
+**Assistant** and **Agent Ops** have no rail entry. **Tico Assistant**, at the bottom of the sidebar (⌘J), opens your private
+Assistant DM from any page except the Assistant page and setup, even while the signed-out banner shows, and the Assistant hands Agent Ops what needs Agent Ops. At the top of that chat, **Tracking** counts the open tasks you asked for that someone else holds; open it for Needs you, Open and Back (what finished since you last opened it, up to 7 days). The Strategy Owner proposes **Strategy** and is at the top of **Goals**: its routines, its last
 run and a box to ask it to change a goal. **Docs** and **Strategy**'s Market tab have **Ask the Librarian** on the right (a button on a
 phone). All four are managed in **Settings > Bots**; they stay out of the team chart and the goal owner list.
 
@@ -175,7 +175,7 @@ its own with `tico automation create`. Details: [Routines](routines.md).
 
 **How do I change what a bot does?**
 Open **Bot → Instructions**, describe the change in **Request instruction changes**, and choose
-**Send changes to BotOps**. BotOps updates the Instructions, commits and pushes the result; the
+**Send changes to Agent Ops**. Agent Ops updates the Instructions, commits and pushes the result; the
 bot reads it at its next run once its computer's checkout has the update. An older app may show
 the **Instructions** tab. See [Creating bots](creating-bots.md#edit-instructions).
 
@@ -343,7 +343,7 @@ channel history is owner-only in this view.
 **How do I add a human or a bot?**
 A human: **Settings → People → Add manually** (an owner or admin), or sync them from the team's
 directory there; behind Cloudflare Access, also allow the address in its policy ([People](people.md)). A
-bot: **Settings > Bots > Add from template**, or ask BotOps to build it. Open the bot and press **Set up** to finish its
+bot: **Settings > Bots > Add from template**, or ask Agent Ops to build it. Open the bot and press **Set up** to finish its
 first thread. See [Creating bots](creating-bots.md) for custom Instructions and manual setup.
 
 **How do I use my own branch of a bot?**
@@ -351,7 +351,7 @@ Its owner enables **Allow branches**. Choose **Make my branch** on its page and 
 If all your computers already run the original or a branch of it, choose **Create planned branch**.
 It starts when you add another computer in **Settings → Computers**. Without a GitHub App, the
 computer clones the original repository using your own git access; a local checkout can be reused.
-Health names the repository and clone command if that fails. You can also ask BotOps to fix it.
+Health names the repository and clone command if that fails. You can also ask Agent Ops to fix it.
 The branch picker opens the original or a person's branch. New tasks and messages to the original go to your active branch.
 Branches share instructions and repository lessons; `tico bot copy` creates an independent bot. See [Branches](creating-bots.md#branches).
 

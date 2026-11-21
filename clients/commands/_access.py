@@ -7,7 +7,7 @@ from clients.commands import org as hubtools_org
 
 from clients.commands._registry import TOOLS, tool
 from clients.commands._requester import (
-    BOTOPS,
+    AGENT_OPS,
     BOTS,
     COUNSEL,
     HUMANS_AND_ASSISTANT,
@@ -21,7 +21,7 @@ from clients.commands.mail import EMAIL_ORGANIZE
 
 
 # `hub` commands with no tool: they write the Mac's own workspace (`clients/catalog.py`), which
-# the hub cannot reach, so BotOps runs them in a shell. Everything else is in both doors.
+# the hub cannot reach, so Agent Ops runs them in a shell. Everything else is in both doors.
 # `tico_db` runs where the database credential is, on the runner; the server's MCP endpoint
 # has neither the credential nor any business connecting to a team database. A person makes and
 # revokes service keys in their own shell: a new key is shown to them, never to an agent's context.
@@ -46,7 +46,7 @@ SHELL_ONLY = {
 
 
 # ----------------------------------------------------------------------------- calls (Tico Meet: docs/meet.md)
-# A call belongs to a thread. Starting, joining, ending and attaching bots are people's acts; BotOps acts as the person it
+# A call belongs to a thread. Starting, joining, ending and attaching bots are people's acts; Agent Ops acts as the person it
 # works for, and the server refuses a bot on each of them. Every read checks the caller's access to the thread.
 CALL_TOOLS = (
     "tico_call_list",
@@ -138,14 +138,14 @@ AUDIENCE = {
     "tico_task_caps": REQUESTER_READ,
     "tico_task_cap_set": PEOPLE + BOTS,
     **{name: REQUESTER for name in ("tico_repo_list", "tico_repo_update", "tico_bot_repos_get", "tico_bot_repos_set")},
-    # Humans use their own rights; BotOps acts through `on_behalf_of`, which the server allows for no other bot.
+    # Humans use their own rights; Agent Ops acts through `on_behalf_of`, which the server allows for no other bot.
     "tico_bot_branch": REQUESTER,
     # A bot or agent that manages the bot changes its name and description, its model and its task model
     # (report_managers); the server refuses any other bot.
     "tico_bot_update": REQUESTER + ("bot", "agent"),
     "tico_bot_model": REQUESTER + ("bot", "agent"),
     "tico_bot_task_model": REQUESTER + ("bot", "agent"),
-    # A bot asks for its own credential in the chat or task its turn is on (backend/credential_cards.py); BotOps for any.
+    # A bot asks for its own credential in the chat or task its turn is on (backend/credential_cards.py); Agent Ops for any.
     "tico_api": REQUESTER,
     "tico_credential_request": ("bot", "botops"),
     # The Tools page's owner bot proposes key grants in its own chat (backend/key_grants.py refuses any other caller); a
@@ -161,9 +161,9 @@ AUDIENCE = {
     "tico_maintenance_runs": REQUESTER_READ,
     "tico_maintenance_set": REQUESTER,
     "tico_maintenance_run": REQUESTER,
-    "tico_credential_set": BOTOPS,
-    "tico_message_redact": BOTOPS,
-    "tico_support_file": BOTOPS,
+    "tico_credential_set": AGENT_OPS,
+    "tico_message_redact": AGENT_OPS,
+    "tico_support_file": AGENT_OPS,
     "tico_bot_repo_create": ("owner", "botops"),
     # Finish setup (backend/onboarding.py): the owner finishes it, and an admin reads it. A person's own agent, handed over
     # from setup (docs/connect-an-agent.md), uses these with their personal token.
@@ -229,7 +229,7 @@ AUDIENCE = {
             "tico_meeting_restore",
         )
     },
-    **{name: REQUESTER for name in CALL_TOOLS},  # a person's act; BotOps acts as the person it works for
+    **{name: REQUESTER for name in CALL_TOOLS},  # a person's act; Agent Ops acts as the person it works for
     "tico_call_notes": NOT_ASSISTANT,
     "tico_call_note": BOTS,
     # The Assistant only.
@@ -250,7 +250,7 @@ AUDIENCE = {
     # Whoever suggested a rule asks its OK: a bot (a person adds a rule directly).
     "tico_rules_ok": BOTS,
     # "Make this a rule" is a normal task its caller files as itself: a person, or an agent on its own run. The Assistant
-    # and BotOps file as someone else, which the task route refuses here: they are not offered it.
+    # and Agent Ops file as someone else, which the task route refuses here: they are not offered it.
     "tico_rules_make": PEOPLE + ("bot", "agent"),
     "tico_rules_withdraw": PEOPLE + BOTS,
     # A bot does not unsnooze (docs/dev/pipelines-v3-cutover.md, Bot commands): a person brings a task back.
@@ -296,7 +296,7 @@ AUDIENCE = {
     **{name: BOTS for name in ("tico_file_publish", "tico_file_link", "tico_file_touch", "tico_file_import")},
     "tico_email_attachment_file": BOTS,  # an email's attachment saved as a file is a bot's file, as a publish is
     "tico_page_publish": KINDS,  # people publish too; until wave 2 a person's page is stored under their Assistant bot
-    # A hard delete is the owner's alone; BotOps asks the owner who asked for it to confirm (backend/botops_act.py).
+    # A hard delete is the owner's alone; Agent Ops asks the owner who asked for it to confirm (backend/agent_ops_act.py).
     "tico_file_delete": ("owner", "botops"),
     "tico_page_card": BOTS,  # only the page's owner bot, for a person who just wrote to it there (the route checks)
     "tico_page_archive": PEOPLE + BOTS,

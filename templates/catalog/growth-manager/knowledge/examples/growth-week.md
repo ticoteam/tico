@@ -41,7 +41,7 @@ Dropped: the awareness test, closed as Inconclusive last week.
 ## Stopped tasks (read 2026-09-25 13:30 PT)
 - Per stage: Growth Experiments has 6 in Ideas and 2 running; Growth Monitoring has 5 in Watching; Lead has 12 open, 1 Late.
 - Stopped: "Pricing page headline test", Growth Experiments, the owner couldn't move it three times: `cro-owner` could
-  not read the analytics source. Filed the access fix for BotOps.
+  not read the analytics source. Filed the access fix for Agent Ops.
 - Stopped: "Northside Yoga demo request", Lead, no owner. Reassigned to `inbound-sales-owner`: an inbound lead.
 - On ice: "Partner webinar follow-up", snoozed with no end date by a bot. Snoozed again to 2026-10-06, the webinar date.
 - Waiting on a person: the launch email OK, since 2026-09-22.

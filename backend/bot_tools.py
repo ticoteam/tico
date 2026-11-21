@@ -11,12 +11,12 @@ the runner reads from the bot's checkout and reports on every heartbeat with whe
 service are one row, the entry's notes on the grant. No value ever passes through here: env is a variable's name.
 
 Registering, changing or removing an entry (backend/tool_access.py NOTE) errs on getting the work done, since an entry
-holds no secret: the bot itself (its own entries), BotOps, the Tools page's owner, a credential admin, and anyone who
+holds no secret: the bot itself (its own entries), Agent Ops, the Tools page's owner, a credential admin, and anyone who
 may manage the bot (`Auth.bot_manager`), as themselves or through the Assistant or a built-in acting for them. An entry
 that only names a tool the bot already holds (no identity, scope, note or MCP server) needs no line in bot.yaml: it is
 answered with the grant, and no task is filed (`covered`). Otherwise the server, which holds no bot repository, checks
 the entry against the schema bot.yaml uses (clients/access_entry.py, which also refuses anything that looks like a
-credential), keeps it as a pending request, and opens a task for BotOps with the exact YAML. The Tools row shows the
+credential), keeps it as a pending request, and opens a task for Agent Ops with the exact YAML. The Tools row shows the
 request as "pending" until the runner's report lists the entry (or, for a removal, stops listing it, and for a change,
 lists it as changed). A change keeps the entry where it is: one task with the whole changed entry, never a removal
 followed by an add.
@@ -491,7 +491,7 @@ def _pending_tool(request):
         "status": "pending",
         "pending": "add",
         "task_id": request["task_id"],
-        "detail": "Waiting for BotOps to add it to the bot's bot.yaml; it shows as ready once the computer reports it",
+        "detail": "Waiting for Agent Ops to add it to the bot's bot.yaml; it shows as ready once the computer reports it",
         **({"kind": "mcp", "mcp": _mcp_view(entry["mcp"])} if _mcp_view(entry.get("mcp")) else {}),
     }
 
@@ -519,9 +519,9 @@ def listing(c, settings, bot, reads=None):
                         tool["detail"] = "Waiting for this external profile to report the changed tool list"
                         continue
                     tool["detail"] = (
-                        "Removal requested; waiting for BotOps to take it out of bot.yaml"
+                        "Removal requested; waiting for Agent Ops to take it out of bot.yaml"
                         if request["kind"] == "remove"
-                        else "A change is requested; waiting for BotOps to update it in bot.yaml"
+                        else "A change is requested; waiting for Agent Ops to update it in bot.yaml"
                     )
     # The computer holds the Google key and gives a token, but only to a message bot the server has named
     # (routines.token_mailboxes): for any other bot "present" would be a promise its runs cannot keep.
@@ -844,7 +844,7 @@ def _request_task(c, auth, who, verb, bot, name, entry, computer, taken, repo=No
 
     external = resolve_harness(H._json(c.execute(BS.ONE_SQL, (bot,)).fetchone()[0], {})) in EXTERNAL_HARNESSES
     if not external:
-        G._botops(c)
+        G._agent_ops(c)
     slug = (H.bot(c, bot) or {}).get("slug") or bot
     title = f"{VERBS[verb][0]} {name} access {VERBS[verb][1]} {slug}"
     if title_prefix:
@@ -862,13 +862,13 @@ def _request_task(c, auth, who, verb, bot, name, entry, computer, taken, repo=No
             "Use an empty list when the last tool was removed. Then finish this task."
         )
         return G._task(c, auth, who, bot, title, text)
-    return G._task(c, auth, who, G.BOTOPS, title, _task_text(verb, slug, name, entry, computer, repo))
+    return G._task(c, auth, who, G.AGENT_OPS, title, _task_text(verb, slug, name, entry, computer, repo))
 
 
 def covered(c, bot, entry):
     """The bot's grant row (`_granted_tools`) that already gives what `entry` names, by its service or its variable,
     when the entry adds no note (identity, scope, note or an MCP server): such an entry needs no bot.yaml line, and so no
-    task for BotOps. None otherwise."""
+    task for Agent Ops. None otherwise."""
     if entry.get("identity") or entry.get("note") or entry.get("mcp") or access_entry.scope_of(entry):
         return None
     service, env = str(entry.get("service") or "").strip().lower(), str(entry.get("env") or "")
@@ -894,7 +894,7 @@ def register(c, auth, settings, who, bot, body, admins=()):
     mcp = entry.get("mcp")
     url = str(mcp.get("url") or "") if isinstance(mcp, dict) else ""
     if url:
-        TA.catalog_only(who, mcp_url=url)  # an agent's MCP servers are the catalog's, before BotOps hears
+        TA.catalog_only(who, mcp_url=url)  # an agent's MCP servers are the catalog's, before Agent Ops hears
     if body.dry_run:
         return {"ok": True, "yaml": access_entry.to_yaml(entry), "credentials": CREDENTIALS_NOTE}
     grant = covered(c, bot, entry)
@@ -912,7 +912,7 @@ def register(c, auth, settings, who, bot, body, admins=()):
     if any(_same(entry, declared) for declared in state["raw"]) or any(
         r["kind"] == "add" and _same(entry, r["entry"]) for r in _requests(c, bot)
     ):
-        raise Problem("duplicate", "This bot already has that tool, or a request for it is waiting for BotOps", 409)
+        raise Problem("duplicate", "This bot already has that tool, or a request for it is waiting for Agent Ops", 409)
     taken = c.execute(
         "SELECT count(*) FROM bot_tool_requests WHERE bot=? AND service=? AND kind='add' AND state='pending'",
         (bot, entry["service"]),
@@ -963,7 +963,7 @@ def unregister(c, auth, settings, who, bot, tool_id, admins=()):
         return {
             "canceled": True,
             "task_id": found["task_id"],
-            "detail": "The request is withdrawn. If BotOps already added the entry it stays until you remove it.",
+            "detail": "The request is withdrawn. If Agent Ops already added the entry it stays until you remove it.",
         }
     if tool_id in ("model", "repo"):
         raise Problem(
@@ -978,9 +978,9 @@ def unregister(c, auth, settings, who, bot, tool_id, admins=()):
         raise Problem("not_found", "This bot does not declare that tool", 404)
     entry = _entry_of(state["raw"][index])
     if any(r["kind"] == "remove" and _same(entry, r["entry"]) for r in requests):
-        raise Problem("duplicate", "Its removal is already waiting for BotOps", 409)
+        raise Problem("duplicate", "Its removal is already waiting for Agent Ops", 409)
     if any(r["kind"] == "update" and _same(entry, r["entry"]) for r in requests):
-        raise Problem("duplicate", "A change to it is already waiting for BotOps; remove it once that is done", 409)
+        raise Problem("duplicate", "A change to it is already waiting for Agent Ops; remove it once that is done", 409)
     flat = {
         "service": entry["service"],
         **({"identity": entry["identity"]} if entry.get("identity") else {}),
@@ -1052,7 +1052,7 @@ def _changed(entry, reported):
 
 def update(c, auth, settings, who, bot, tool_id, body, admins=()):
     """Change a declared tool in place: only `can`, `scope`, `note` and an MCP server's `mcp` block. The server holds no bot repository, so this is
-    the add path's way: a pending request and one task for BotOps with the whole changed entry. Nothing is removed."""
+    the add path's way: a pending request and one task for Agent Ops with the whole changed entry. Nothing is removed."""
     auth.domain(who)
     bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
     if not H.bot(c, bot):
@@ -1094,7 +1094,7 @@ def update(c, auth, settings, who, bot, tool_id, body, admins=()):
         raise Problem("unchanged", "The tool already says that", 409)
     requests = _requests(c, bot)
     if any(r["kind"] in ("update", "remove") and _same(old, r["entry"]) for r in requests):
-        raise Problem("duplicate", "A change or removal of this tool is already waiting for BotOps", 409)
+        raise Problem("duplicate", "A change or removal of this tool is already waiting for Agent Ops", 409)
     taken = c.execute(
         "SELECT count(*) FROM bot_tool_requests WHERE bot=? AND service=? AND kind='update' AND state='pending'",
         (bot, entry["service"]),
@@ -1161,8 +1161,8 @@ def reconcile(c, reported, complete=False):
 
 
 def install(app, store, auth, mutate, settings_admin, requester=None):
-    """`requester(c, who)` is the person BotOps is acting for when `who` is BotOps in a turn a person's chat message
-    started, else `who`: a tool is a bot's owner's to add, and BotOps is nobody's bot but the requester's to manage."""
+    """`requester(c, who)` is the person Agent Ops is acting for when `who` is Agent Ops in a turn a person's chat message
+    started, else `who`: a tool is a bot's owner's to add, and Agent Ops is nobody's bot but the requester's to manage."""
     acting = requester or (lambda c, who: who)
 
     def admins():
@@ -1241,12 +1241,12 @@ def install(app, store, auth, mutate, settings_admin, requester=None):
         **api_v2(
             "Bots",
             "registerBotTool",
-            "Add a note entry for a bot you manage: validated, kept as a pending request and handed to BotOps as a task with the exact `tools:` entry. One that only names a tool the bot already holds through a grant opens no task. Never a credential: `env` is a variable's name",
+            "Add a note entry for a bot you manage: validated, kept as a pending request and handed to Agent Ops as a task with the exact `tools:` entry. One that only names a tool the bot already holds through a grant opens no task. Never a credential: `env` is a variable's name",
             "BotToolRegistered",
         ),
     )
     def register_tool(request: Request, bot: str, body: M.ToolRegister):
-        """Register a tool for a bot: checked, kept as a pending request, and handed to BotOps as a task
+        """Register a tool for a bot: checked, kept as a pending request, and handed to Agent Ops as a task
         with the exact `tools:` entry. A credential is never accepted; `env` is a variable's name."""
         who = request.state.identity
         return mutate(
@@ -1268,13 +1268,13 @@ def install(app, store, auth, mutate, settings_admin, requester=None):
         **api_v2(
             "Bots",
             "updateBotTool",
-            "Change a declared tool's `can`, `scope` or `note` in place (bot managers): one BotOps task with the changed entry; the tool shows `pending: update` until the computer reports it",
+            "Change a declared tool's `can`, `scope` or `note` in place (bot managers): one Agent Ops task with the changed entry; the tool shows `pending: update` until the computer reports it",
             "BotToolUpdated",
         ),
     )
     def update_tool(request: Request, bot: str, tool_id: str, body: M.ToolUpdate):
-        """Change a declared tool's `can`, `scope` or `note` in place: one task for BotOps with the changed entry,
-        the tool shown as pending its change. BotOps acts for the person who asked it, like `register_tool`."""
+        """Change a declared tool's `can`, `scope` or `note` in place: one task for Agent Ops with the changed entry,
+        the tool shown as pending its change. Agent Ops acts for the person who asked it, like `register_tool`."""
         who = request.state.identity
         return mutate(
             request,
@@ -1287,12 +1287,12 @@ def install(app, store, auth, mutate, settings_admin, requester=None):
         **api_v2(
             "Bots",
             "removeBotTool",
-            "Ask BotOps to remove a declared tool, or withdraw a pending request (bot managers)",
+            "Ask Agent Ops to remove a declared tool, or withdraw a pending request (bot managers)",
             "BotToolRemoval",
         ),
     )
     def delete_tool(request: Request, bot: str, tool_id: str):
-        """Ask BotOps to remove a declared tool (or withdraw a pending request)."""
+        """Ask Agent Ops to remove a declared tool (or withdraw a pending request)."""
         return remove(request, bot, tool_id)
 
     @app.post(

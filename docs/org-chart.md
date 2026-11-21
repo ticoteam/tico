@@ -7,8 +7,8 @@ The chart in the app is the **Team** sidebar: each group is a section that opens
 and bots, with the groups inside it below them. A group's name opens its team page ([Company](overview.md)). A human or bot with no group sits at the top. The top of the chart is not drawn as
 one more level: the owner, when nobody is above them and they are in no group (else the only human nobody is above), is a
 row of its own, and the groups, then the humans and bots, that report to them sit beside it rather than under it. Any other
-human nobody is above follows as an ordinary row with their reports under them. With no such top person it nests as before. The built-in bots (BotOps, the
-Librarian, the Strategy Owner and the others) are the General Manager's team: the General group comes last on the chart, folded until someone opens it, with the General Manager as its first row and its reports under it. The Assistant reports to its person and sits beside the top person's other reports. The built-ins stay out of the Goals tree. **Tico Assistant** opens the Assistant from any page except its own and setup, even while the signed-out banner shows, and the Assistant hands BotOps what needs it;
+human nobody is above follows as an ordinary row with their reports under them. With no such top person it nests as before. The built-in bots (Agent Ops, the
+Librarian, the Strategy Owner and the others) are the General Manager's team: the General group comes last on the chart, folded until someone opens it, with the General Manager as its first row and its reports under it. The Assistant reports to its person and sits beside the top person's other reports. The built-ins stay out of the Goals tree. **Tico Assistant** opens the Assistant from any page except its own and setup, even while the signed-out banner shows, and the Assistant hands Agent Ops what needs it;
 the Librarian is reached from Docs and Market, the Strategy Owner from its panel beside the Strategy tabs. Settings > Bots lists all four.
 
 Your unread messages in a one-to-one DM with a teammate show as a count on that teammate's row, for people as well as bots.
@@ -116,7 +116,7 @@ Owners and admins change groups; everyone else reads them.
 - **With the tools**: `tico group list`, `tico group update [<group>] [--name] [--parent] [--lead] [--add-human] [--add-bot] [--remove-human]
   [--remove-bot]` and `tico group delete <group>` (`tico_group_list`, `tico_group_update`, `tico_group_delete`); with no group given, `update`
   creates one from `--name`. `tico org reports-to <bot:slug|human:id> <manager>` (`tico_org_reports_to`) changes who a teammate reports to.
-  BotOps does the same as the person who asked it, with their own rights: a member is refused, an owner or an admin is not.
+  Agent Ops does the same as the person who asked it, with their own rights: a member is refused, an owner or an admin is not.
 - **With the Strategy Owner**: it suggests org changes in plain words in its chat and changes nothing on its own. When the person tells it
   to make one, it runs the tools above citing their message (`--on-behalf-of turn`), with exactly that person's rights.
 
@@ -180,7 +180,7 @@ bot to someone without giving them the whole group, put that bot's slug in their
 ## Where notes go
 
 A human's `bot` is where Tico sends a meeting sent with `bot_id: "auto"` (Pending's **Send to** choice, or the API). If they
-have no bot, Auto uses the default bot (Assistant when active, otherwise BotOps). There is no separate routing model call. Pick a
+have no bot, Auto uses the default bot (Assistant when active, otherwise Agent Ops). There is no separate routing model call. Pick a
 named bot under the meeting's **Share** menu when the work belongs elsewhere. See [Meetings](meetings.md) for the resulting task and `backend/media.py` for the API.
 
 ## Adding a human

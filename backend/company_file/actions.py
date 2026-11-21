@@ -35,7 +35,7 @@ SEAT_ROLES = [
 ]
 BY_SLUG = {role["slug"]: role for role in D.ROLES + SEAT_ROLES}
 BY_NAME = {role["name"].lower(): role for role in D.ROLES + SEAT_ROLES}
-NEVER_REMOVED = ("botops",)
+NEVER_REMOVED = ("agent-ops",)
 
 
 class Refusal(Exception):
@@ -144,7 +144,8 @@ ALIASES = {
     "strategy bot": "strategy-owner",
     "librarian": "librarian",
     "assistant": "assistant",
-    "botops": "botops",
+    "agent ops": "agent-ops",
+    "botops": "agent-ops",  # its old name
     "cfo": "finance-owner",
     "cmo": "growth-manager",
     "cto": "engineering-manager",
@@ -449,7 +450,7 @@ def _take_off(draft, gone):
     draft["removed"] = removed[-D.LIMITS["removed"] :]
 
 
-# What a model's name reads as in BotOps's line about it.
+# What a model's name reads as in Agent Ops's line about it.
 MODEL_WORDS = {
     "everything": "everything Tico runs",
     "software": "a software company",
@@ -501,7 +502,7 @@ def seed(draft):
     """Start an empty chart from the model closest to the company's signals, then add more ("close to their answers,
     but err on the side of showing more"): the head of every department Everything has and the model lacks (Product
     and Engineering only for a company that sells software), and every role whose `recommend_when` names one of the
-    company's own signals. Nothing the model has is dropped for a missing signal. Returns BotOps's one line about it."""
+    company's own signals. Nothing the model has is dropped for a missing signal. Returns Agent Ops's one line about it."""
     signals = set(draft["company"]["signals"])
     key = pick_model(signals)
     model = D.MODELS[key]
@@ -568,7 +569,7 @@ def bot_add(draft, args, today, notes):
             "Tico has no \"%s\" template.%s"
             % (str(args["template"])[:80], " The closest is %s (%s)." % (near["name"], near["slug"]) if near else "")
         )
-    if role["slug"] in ("botops", "assistant") and any(b["template"] == role["slug"] for b in draft["bots"]):
+    if role["slug"] in ("agent-ops", "assistant") and any(b["template"] == role["slug"] for b in draft["bots"]):
         raise Refusal("%s is already on the chart; there is only one." % role["name"])
     title = _text(args, "title", D.LIMITS["title"], needed=False) or role["name"]
     if _title_taken(draft, title):
@@ -585,7 +586,7 @@ def bot_add(draft, args, today, notes):
 def bot_remove(draft, args, today, notes):
     bot = find_bot(draft, args["bot"])
     if bot["template"] in NEVER_REMOVED:
-        raise Refusal("BotOps stays: it sets up and fixes the other bots.")
+        raise Refusal("Agent Ops stays: it sets up and fixes the other bots.")
     _take_off(draft, [bot])
     return "Removed %s." % bot["title"]
 
@@ -1039,7 +1040,7 @@ class Turn:
         turn.finish()                                          # the draft to send back
 
     `keys_removed` says a key-shaped string was cut from the draft or an action's input this turn; `seeded` says the
-    empty chart was started from a company model, and `started_at` is BotOps's one line on which model and what it added.
+    empty chart was started from a company model, and `started_at` is Agent Ops's one line on which model and what it added.
     `changed` lists the parts the turn's actions changed (`touched`), in order; `market_note` is what the visitor said
     when they asked for the market to be sized again (`resize_market`), else None.
     """
@@ -1117,5 +1118,5 @@ def apply_action(draft, name, args, today=None):
 
 
 def undo(draft, today=None):
-    """The draft as it was before BotOps's last change (unchanged, with a refusal, when there is none)."""
+    """The draft as it was before Agent Ops's last change (unchanged, with a refusal, when there is none)."""
     return apply_action(draft, "undo", {}, today)

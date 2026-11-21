@@ -426,7 +426,7 @@ HEALTH = {
 BOTS = [
     {"slug": "builder", "display_name": "Builder", "state": "planned", "onboarding_state": "needs_setup"},
     {"slug": "reviewer-1", "display_name": "Reviewer 1", "state": "active", "onboarding_state": "onboarded"},
-    {"slug": "botops", "display_name": "BotOps", "state": "active", "status": {"state": "quarantined"}},
+    {"slug": "botops", "display_name": "Agent Ops", "state": "active", "status": {"state": "quarantined"}},
     {"slug": "writer", "display_name": "Writer", "state": "paused"},
     {"slug": "old", "state": "archived"},
 ]

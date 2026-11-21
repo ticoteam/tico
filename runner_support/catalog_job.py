@@ -29,15 +29,22 @@ DEFAULT_NAMES = {
     "assistant_bot": "assistant",
 }
 # The two bots the runner sets up from the catalog itself, and the template each one comes from.
-# Everybody else is BotOps's to create in a turn (`tico bot create`); BotOps cannot create itself,
+# Everybody else is Agent Ops's to create in a turn (`tico bot create`); Agent Ops cannot create itself,
 # and the assistant is who the person talks to, so neither can wait for a bot that does not exist.
 BOOTSTRAP_TEMPLATES = {
     "assistant": "assistant",
-    "botops": "botops",
+    "botops": "agent-ops",  # Agent Ops keeps its first id
     "librarian": "librarian",
     "strategy-owner": "strategy-owner",
 }
+PUBLIC_SLUGS = {"botops": "agent-ops"}  # a built-in whose id is not its slug: Agent Ops keeps its first id
+OLD_NAMES = {"botops": "agent-ops"}  # the server names it so to a computer it cannot tell is new (#4863)
 FETCH_RETRY_S = 120  # how long a repository that could not be cloned is left before the next try
+
+
+def _current(named, cards):
+    """A template this release's catalog has under another name, by that name."""
+    return OLD_NAMES.get(named, named) if named not in cards else named
 
 
 class BotSetup:
@@ -88,9 +95,9 @@ class BotSetup:
         a card that says `bootstrap: true`, and a starter bot that first run created (its config says
         `materialize: true`, which only onboarding writes): those are set up the moment they are
         placed, not on first use. A registration made before the catalog existed carries no template,
-        so the assistant and BotOps are recognized by their own slugs as well.
+        so the assistant and Agent Ops are recognized by their own slugs as well.
         """
-        named = str((config or {}).get("template") or "")
+        named = _current(str((config or {}).get("template") or ""), cards)
         if named:
             card = cards.get(named) or {}
             return named if card.get("bootstrap") or (card and (config or {}).get("materialize") is True) else ""
@@ -151,7 +158,7 @@ class BotSetup:
         """Set a bootstrap bot, or a starter bot first run created, up from the catalog. Returns (note, problem).
 
         Called from readiness, so a fresh installation is a working assistant and a working
-        BotOps without anyone copying a folder. An existing repository is never touched, and a
+        Agent Ops without anyone copying a folder. An existing repository is never touched, and a
         failure is a problem string on the readiness row rather than an exception: a bot that
         cannot be set up must show as not ready, not stop the machine reporting the others.
         """
@@ -176,7 +183,7 @@ class BotSetup:
             chosen = (record.get("selected") or {}).get(bot) or {}
             catalog.materialize(
                 template,
-                bot,
+                PUBLIC_SLUGS.get(bot, bot),  # the manifest names the bot by its slug; the folder stays its id's
                 Path(self.config["projects_dir"]),
                 self.names(),
                 record.get("answers") or {},
@@ -196,7 +203,7 @@ class BotSetup:
     def refresh_template(self, bot, config, cards):
         """(the template a bot follows, the template its config names that the catalog no longer has). A registration
         made before the catalog existed carries no template: the built-in bots are recognized by their own slugs."""
-        named = str((config or {}).get("template") or "")
+        named = _current(str((config or {}).get("template") or ""), cards)
         if named:
             return (named, "") if named in cards else ("", named)
         template = BOOTSTRAP_TEMPLATES.get(bot, "")

@@ -5,7 +5,7 @@ that nothing works on is the never-stuck check's (backend/never_stuck.py, `rules
 The scheduler runs `sweep` every 15 minutes (backend/scheduler.py). Plain code only: no model runs. A check that fires
 shows on Health with its count and example ids (`health_checks`). The sweep keeps that state and nothing else: it raises
 and closes no task. Check health (backend/maintenance_steps/check_health.py) reads these checks as `inv:<id>` findings and
-files each firing one as a single BotOps task, closed when the check passes. Nothing is fixed automatically.
+files each firing one as a single Agent Ops task, closed when the check passes. Nothing is fixed automatically.
 
 Each check reads indexed rows only (partial indexes here and in backend/store.py's index list; EXPLAIN QUERY PLAN
 checked in backend/tests/test_invariants.py). A rehearsal or demo copy checks nothing: its data is a copy of a live install's and its runners
@@ -50,7 +50,7 @@ class Check:
     label: str  # the name on Health and in the alert's title
     says: str  # one plain line: what is wrong
     look: str  # where to look, in the alert
-    owner: str  # "botops": BotOps (if active, else the owner); "owner": the owner
+    owner: str  # "botops": Agent Ops (if active, else the owner); "owner": the owner
     read: Callable  # (c, ctx) -> list of ids (strings), at most LIMIT
 
 
@@ -328,7 +328,7 @@ def sweep(store, auth, settings, at, record=None):
 
 
 def health_checks(c):
-    """Health's rows for the checks that fire now: count and example ids. The fix links the check's BotOps task while Check
+    """Health's rows for the checks that fire now: count and example ids. The fix links the check's Agent Ops task while Check
     health's task for it is open (`task_of`, a read)."""
     from . import maintenance_health as MH
     from .maintenance_steps import check_health

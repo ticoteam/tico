@@ -397,15 +397,15 @@ def claim(c, org, actor, bots=None):
     return {'claimed': claimed, 'left': left}
 
 
-def _botops():
-    from .github_app import BOTOPS
+def _agent_ops():
+    from .github_app import AGENT_OPS
 
-    return BOTOPS
+    return AGENT_OPS
 
 
 def can_create_repositories(c, bot):
     # Keep this grant outside editable bot definitions; bots cannot grant it to themselves.
-    return bot == _botops() or metadata(c, 'repository-creation-grants').get(bot) is True
+    return bot == _agent_ops() or metadata(c, 'repository-creation-grants').get(bot) is True
 
 
 PRODUCT_GRANTS = 'product-repository-creation-grants'
@@ -570,7 +570,7 @@ def access(c, bot, org, reads=None):
         'all_repos': [ticked[k] for k in sorted(ticked)],
         'all_ticked': covered,
         'effective': effective,
-        'create_repositories': bot == _botops() or reads.creation.get(bot) is True,
+        'create_repositories': bot == _agent_ops() or reads.creation.get(bot) is True,
         'create_product_repositories': product_creation(reads.product_creation, bot),
     }
 
@@ -583,12 +583,12 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
 
     before = access(c, bot, org)
     if body.create_repositories is not None:
-        from .github_app import BOTOPS
+        from .github_app import AGENT_OPS
 
         if not team_list or not H.is_human(actor):
             raise Problem('forbidden', 'Only an Owner or admin grants repository creation', 403)
-        if bot == BOTOPS and not body.create_repositories:
-            raise Problem('forbidden', 'BotOps retains its built-in repository creation access', 403)
+        if bot == AGENT_OPS and not body.create_repositories:
+            raise Problem('forbidden', 'Agent Ops retains its built-in repository creation access', 403)
     product = body.create_product_repositories
     if product is not None and product != before['create_product_repositories']:
         # On by default. Switching it back on after an off widens a bot, so it is the Owner's own click, as the Owner
@@ -804,7 +804,7 @@ def card_access(catalog_dir, template):
 
 def untouched(c, bot):
     """Whether nobody has chosen the bot's repository access: it has no chosen grant, and every change to it (each is a
-    `bot.repos_changed` event) was a default Tico gave (`default`), never a person's, BotOps' or a bot's for one. A
+    `bot.repos_changed` event) was a default Tico gave (`default`), never a person's, Agent Ops' or a bot's for one. A
     choice stands, an off included, as a routine's does (routines.untouched)."""
     if c.execute('SELECT 1 FROM bot_repo_access WHERE bot=? LIMIT 1', (bot,)).fetchone():
         return False
@@ -879,7 +879,7 @@ def started(before, after):
     """What a change gives that only a person's own click may: `workflows_started`, the repositories the bot may now run
     workflows in (a tick, or a kept tick coming back into effect) or may once its grant applies (a tick kept on a grant
     not in effect yet), `workflow_edits_started` the same for editing workflow files, and `product_creation_started`
-    when Create product repositories turns back on. BotOps acting for a person puts these on a Confirm card
+    when Create product repositories turns back on. Agent Ops acting for a person puts these on a Confirm card
     (`bot_set`)."""
     out = {}
     for flag, *_ in FLAGS:
@@ -937,7 +937,7 @@ def preview_change(c, settings, actor, bot, body):
 
 
 def needs_card(result):
-    """Whether a change BotOps makes for a person goes on their Confirm card (`bot_set`, and the settings catalogue's
+    """Whether a change Agent Ops makes for a person goes on their Confirm card (`bot_set`, and the settings catalogue's
     class for it): it gives what only their own click may (`started_at`), or takes something away."""
     return bool(
         result.get('workflows_started')
@@ -970,7 +970,7 @@ def tried(c, bot, update, org, actor, name, owner=False):
 
 
 def card_words(c, settings, auth, who, bot, body):
-    """For the settings catalogue (settings_catalog.plan), the change BotOps would make for a person tried as that
+    """For the settings catalogue (settings_catalog.plan), the change Agent Ops would make for a person tried as that
     person's own click: (whether it needs their Confirm card, the card's plain words). It needs one exactly when
     `bot_set` would make one, a kept Run workflows or Edit workflow files tick coming back included. A change that
     click could not make (no write access for either tick, an admin turning Create product repositories on) is refused
@@ -1575,12 +1575,12 @@ def install(app, store, service):
                 access_requests.settled(c, who, resource_type='repository', resource_id=after['full_name'])
         return after
 
-    def botops(request, bot):
-        """BotOps in its own run manages every bot's repositories (`Auth.botops_manages`); None for anyone else."""
+    def agent_ops(request, bot):
+        """Agent Ops in its own run manages every bot's repositories (`Auth.agent_ops_manages`); None for anyone else."""
         who = request.state.identity
         with store.read() as c:
             validate_identity(c, who)
-            return who if app.state.auth.botops_manages(c, who, bot) else None
+            return who if app.state.auth.agent_ops_manages(c, who, bot) else None
 
     def itself(request, bot):
         """A bot reading its own repository access (`tico bot repos <itself>`): which repositories it can use."""
@@ -1590,14 +1590,14 @@ def install(app, store, service):
         return who if who.role == 'bot' and who.actor == 'bot:' + bot else None
 
     def may_change(request, bot):
-        """(who, may change `bot`'s repositories, why not): BotOps in its own run, the owner, or an admin, and a
+        """(who, may change `bot`'s repositories, why not): Agent Ops in its own run, the owner, or an admin, and a
         built-in agent's only by the Owner. The PUT and the read's `can_change` both ask this."""
-        by_botops = botops(request, bot)
-        who = by_botops or itself(request, bot) or human(request)
+        by_agent_ops = agent_ops(request, bot)
+        who = by_agent_ops or itself(request, bot) or human(request)
         if app.state.auth.system_bot(bot) and who.role != 'owner':
             return who, False, 'Only the Owner changes Built-in bots'
         ok = (
-            by_botops is not None
+            by_agent_ops is not None
             or who.role == 'owner'
             or (who.role == 'human' and bool(app.state.auth.bot_admin(who)))
         )
@@ -1645,10 +1645,10 @@ def install(app, store, service):
                     own_click=not who.task_actor,
                     owner=who.role == 'owner',
                 )
-            # A bot's turn acting for a person (BotOps, the Assistant) may give another bot access with their rights, but
-            # taking any away is the person's own call: BotOps once set two bots to own, and their product repositories
+            # A bot's turn acting for a person (Agent Ops, the Assistant) may give another bot access with their rights, but
+            # taking any away is the person's own call: Agent Ops once set two bots to own, and their product repositories
             # stopped applying with nobody asked. Letting a bot run workflows or edit workflow files, or turning Create
-            # product repositories back on, is the person's own click too: BotOps puts it on a Confirm card, which runs
+            # product repositories back on, is the person's own click too: Agent Ops puts it on a Confirm card, which runs
             # as their own session.
             # The change is tried as that click would make it first, so what their click could not do (no write
             # access, an admin turning product repositories on) is refused now rather than put on a card.
@@ -1675,7 +1675,7 @@ def install(app, store, service):
             c.execute('RELEASE repo_narrowing')
             found = H.bot(c, bot) or {}
             name = found.get('display_name') or found.get('slug') or bot
-            propose = getattr(app.state, 'botops_propose', None)
+            propose = getattr(app.state, 'agent_ops_propose', None)
             if who.via == 'botops' and propose:
                 plain = plain_change(name, before, result)
                 return propose(
@@ -1722,7 +1722,7 @@ def install(app, store, service):
     @app.get('/api/v2/runners/me/repositories')
     def computer_get(request: Request):
         who = request.state.identity
-        # A bot's turn acting for a person (BotOps, the Assistant) is still that bot's turn: its own repositories.
+        # A bot's turn acting for a person (Agent Ops, the Assistant) is still that bot's turn: its own repositories.
         actor = who.actor if who.role == 'bot' else who.task_actor if str(who.task_actor).startswith('bot:') else ''
         if not actor:
             return computer(request)

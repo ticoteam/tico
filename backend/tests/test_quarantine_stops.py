@@ -6,7 +6,7 @@ from backend import run_diagnostics
 from backend.store import H
 from backend.tests.helpers.api import claim, expire, get, post, ready, setup_attempt  # noqa: F401 (api: the fixture)
 from backend.tests.helpers.execution_review import aged, job_state, sweep
-from backend.tests.helpers.held_runs import botops
+from backend.tests.helpers.held_runs import agent_ops
 
 LOST = "Computer lost or heartbeat stopped"
 HELD = "held for review instead of running again"
@@ -16,7 +16,7 @@ REVIEW = H.HELD_REVIEW_TITLE.format(bot='ops')
 def working(api, *, start=True, safe=False):
     """ops mid-turn: started, and it has used a shell (the kind of run the sweep holds when it is cut off), or, `safe`,
     only read on a host that reports each call (the kind it runs again by itself)."""
-    botops(api)
+    agent_ops(api)
     machine, message, attempt = setup_attempt(api)
     if start:
         post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'quarantined'}, machine['token'])
@@ -40,7 +40,7 @@ def working(api, *, start=True, safe=False):
 
 
 def review(api):
-    """BotOps's open review of ops's held runs: its body, and the comments naming runs held after it was filed."""
+    """Agent Ops's open review of ops's held runs: its body, and the comments naming runs held after it was filed."""
     with api.app.state.store.read() as c:
         task = c.execute("SELECT id,body FROM tasks WHERE title=? AND status='open'", (REVIEW,)).fetchone()
         if not task:
@@ -119,7 +119,7 @@ def test_a_quarantine_stops_a_turn_that_used_a_shell_and_requeues_it_with_a_note
 
 def test_a_quarantine_stopped_turn_with_a_named_merge_is_held_for_review(api, time_machine):
     """A merge may already have happened, so lifting the quarantine must not run it a second time: its job is held, and
-    BotOps's review names the merge."""
+    Agent Ops's review names the merge."""
     time_machine.move_to("2026-10-26T12:00:00Z", tick=False)
     machine, message, attempt = working(api)
     quarantine(api)
@@ -152,7 +152,7 @@ def test_a_quarantine_stopped_turn_with_a_named_merge_is_held_for_review(api, ti
 
 def test_a_quarantine_stopped_shell_run_held_before_this_rule_is_resumed_by_the_sweep(api, time_machine):
     """A run a quarantine held before requeues judged it this way is resumed by the sweep, once it is old enough, with
-    the same note, so it does not wait for BotOps."""
+    the same note, so it does not wait for Agent Ops."""
     time_machine.move_to("2026-10-26T12:00:00Z", tick=False)
     machine, message, attempt = working(api)
     quarantine(api)
@@ -253,7 +253,7 @@ def test_a_quarantine_only_a_person_lifts_says_so_and_names_no_refused_words(api
 
 def test_an_answer_finished_after_opening_a_pull_request_is_kept_on_the_run_and_held_for_review(api):
     """A finished answer from a quarantine-stopped run is never posted (a quarantined bot posts nothing). The run that
-    merged a pull request (a named outside action) is held, not run again: the review shows the kept answer, so BotOps
+    merged a pull request (a named outside action) is held, not run again: the review shows the kept answer, so Agent Ops
     can see the work was done and dismiss it rather than merge a second time."""
     machine, message, attempt = working(api)
     quarantine(api)

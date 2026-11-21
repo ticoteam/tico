@@ -3,7 +3,7 @@ the one it was.
 
 The database is a hosted company a day old, made by v0.6.0's own code (scripts/make_company_upgrade_fixture.py):
 HQ's starting chart applied at the first start, setup complete, one shared cloud computer, 21 bots (the 11 seat bots
-taken live by BotOps), two reporting lines a person set by hand, tasks at different stages of Product and Engineering,
+taken live by Agent Ops), two reporting lines a person set by hand, tasks at different stages of Product and Engineering,
 one snoozed, one waiting on a person's sign-off, a routine and an automation.
 
 Each test starts the real app (create_app and its lifespan, start jobs included) on a copy of that file, the way a
@@ -36,6 +36,7 @@ from clients.environments import seed_registry
 
 RELEASES = ["v0.6.0"]
 HAND_SET = {"botops": "general-manager", "design-owner": "growth-manager"}
+RENAMED = {"botops": "agent-ops"}  # a slug the update changes (backend/migrations/20261121173732_agent_ops_name.sql)
 BUILD_STAGES = ("product-build", "product-fixes-1", "product-fixes-2")  # stage_rules.OWNER_ON_TEAM_ON, Product
 
 
@@ -176,9 +177,33 @@ def pitch_removed(reading):
     return after
 
 
+def agent_ops_renamed(reading):
+    """The reading as migration agent_ops_name leaves it (a copy): the bot whose id is `botops` goes by its new slug and
+    name, wherever the reading names it."""
+
+    def renamed(value):
+        if isinstance(value, str):
+            return RENAMED.get(value, value)
+        if isinstance(value, dict):
+            return {renamed(key): renamed(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [renamed(item) for item in value]
+        if isinstance(value, tuple):
+            return tuple(renamed(item) for item in value)
+        return value
+
+    after = renamed(reading)
+    for key in ("automations", "schedules", "seats", "placed", "cloud"):  # the readings seen() sorts
+        if key in after:
+            after[key] = sorted(after[key])
+    if "agent-ops" in after.get("bots", {}):
+        after["bots"]["agent-ops"]["name"] = "Agent Ops"
+    return after
+
+
 def migrated(reading):
     """The reading with every pending migration's one intended change (a copy)."""
-    return pitch_removed(reading)
+    return agent_ops_renamed(pitch_removed(reading))
 
 
 def changes(before, after, path=""):
@@ -239,7 +264,7 @@ def updated(before):
         if task["status"] == "open" and task["stage"] in BUILD_STAGES and team not in (None, "product"):
             task["owner"] = ""
     # onboarding.ensure_tools_owner: a company from before the Tools Owner was built in gets it once, under the General
-    # Manager, on BotOps' computer and the shared cloud machine like the other built-ins, with its weekly review.
+    # Manager, on Agent Ops' computer and the shared cloud machine like the other built-ins, with its weekly review.
     if "tools-owner" not in after["bots"]:
         after["bots"]["tools-owner"] = {
             "name": "Tools Owner",
@@ -249,8 +274,8 @@ def updated(before):
             "setup": None,
         }
         after["automations"] = sorted([*after["automations"], ("Review the tools", "tools-owner", "schedule", 1)])
-        botops = next(runner for bot, runner in after["placed"] if bot == "botops")
-        after["placed"] = sorted([*after["placed"], ("tools-owner", botops)])
+        agent_ops = next(runner for bot, runner in after["placed"] if bot == "agent-ops")
+        after["placed"] = sorted([*after["placed"], ("tools-owner", agent_ops)])
         after["cloud"] = sorted([*after["cloud"], ("tools-owner", "cloud", "shared", None, None)])
     # onboarding.ensure_builtin_routines: the Tools Owner's daily learn-from-use reaches one from before it, once, on.
     learn = ("Learn from how tools are used", "tools-owner", "schedule", 1)
@@ -371,14 +396,14 @@ def test_every_bot_has_one_manager_and_the_lines_a_person_set_stay(company):
     company.start()
     after = company.after()["bots"]
     assert [slug for slug, bot in after.items() if not bot["manager"]] == []
-    assert {slug: after[slug]["manager"] for slug in HAND_SET} == HAND_SET
+    assert {slug: after[RENAMED.get(slug, slug)]["manager"] for slug in HAND_SET} == HAND_SET
     # One of each built-in: an update that cannot find the one a company has makes a second under a `-2` slug.
     names = [bot["name"] for bot in after.values() if bot["state"] != "archived"]
     assert sorted(names) == sorted(set(names)), sorted(n for n in names if names.count(n) > 1)
 
 
 def test_no_bot_is_set_up_or_interviewed_again(company):
-    """A bot's "Set yourself up" and BotOps' "Set up ..." tasks are filed once, when the bot is made."""
+    """A bot's "Set yourself up" and Agent Ops' "Set up ..." tasks are filed once, when the bot is made."""
     before = sorted(t["title"] for t in company.before["tasks"].values() if t["title"].startswith("Set "))
     company.start()
     company.start()

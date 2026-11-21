@@ -154,6 +154,22 @@
    "default": false
   },
   {
+   "slug": "agent-ops",
+   "template": "agent-ops",
+   "name": "Agent Ops",
+   "department": "core",
+   "lead": false,
+   "core": true,
+   "summary": "The engineer that sets up every other bot from the templates and keeps their repositories, instructions and readiness working.",
+   "when": "",
+   "tags": [],
+   "pains": [],
+   "recommend_when": [],
+   "first_routine": "",
+   "tools": [],
+   "default": false
+  },
+  {
    "slug": "app-store-owner",
    "template": "app-store-owner",
    "name": "App Store Owner",
@@ -273,22 +289,6 @@
     "crm",
     "docs"
    ],
-   "default": false
-  },
-  {
-   "slug": "botops",
-   "template": "botops",
-   "name": "BotOps",
-   "department": "core",
-   "lead": false,
-   "core": true,
-   "summary": "The engineer that sets up every other bot from the templates and keeps their repositories, instructions and readiness working.",
-   "when": "",
-   "tags": [],
-   "pains": [],
-   "recommend_when": [],
-   "first_routine": "",
-   "tools": [],
    "default": false
   },
   {

@@ -33,7 +33,7 @@ STEPS = {
     "model": "a model signed in",
     "subscription": "a Claude or ChatGPT subscription",
     "github": "GitHub",
-    "botops": "BotOps active",
+    "botops": "Agent Ops active",
     "first_bot": "a first bot",
     "next_bot": "a bot waiting in Needs setup",
     "first_output": "a first approved output",
@@ -168,7 +168,7 @@ def answer_feedback(store, support, who, body):
             who,
             SupportTicket(message=message, kind="feedback", include_ids=False, diagnostics=""),
             "feedback:" + body.moment,
-            asker=rule_links.agent_of(store, who),  # a person's Assistant or BotOps answering: checked on the link
+            asker=rule_links.agent_of(store, who),  # a person's Assistant or Agent Ops answering: checked on the link
         )
     with store.transaction() as c:
         record = _load(c, who)

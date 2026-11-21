@@ -1,5 +1,5 @@
 """A new company that makes no software starts with none of the software work: no Product or Engineering seats, bots or
-setup tasks, no Daily release with no Release Owner to ask, no two automations of one name, no BotOps task for GitHub
+setup tasks, no Daily release with no Release Owner to ask, no two automations of one name, no Agent Ops task for GitHub
 or for the AI provider it has not chosen, and a new database's start says nothing about moving routines."""
 
 import pytest
@@ -107,7 +107,7 @@ def _health_titles(api):
     return [row["title"] for row in rows(api, "SELECT title FROM tasks WHERE owner_id='bot:botops'")]
 
 
-def test_a_new_company_files_no_botops_task_for_github_or_for_the_provider_it_has_not_chosen(environment):
+def test_a_new_company_files_no_agent_ops_task_for_github_or_for_the_provider_it_has_not_chosen(environment):
     api = environment()
     _set_up(api, provider=False)
     titles = _health_titles(api)

@@ -723,8 +723,8 @@ def parser():
     s.add_argument(
         "--request-id",
         dest="request_id",
-        help="the person's message this carries: handing BotOps something a person asked you for, their "
-        "message id or `turn` (BotOps acts with their rights, or puts it to them as a Confirm card)",
+        help="the person's message this carries: handing Agent Ops something a person asked you for, their "
+        "message id or `turn` (Agent Ops acts with their rights, or puts it to them as a Confirm card)",
     )
     s.add_argument("--number", type=int, help="keep an imported task's number")
     s.add_argument(
@@ -1158,7 +1158,7 @@ def parser():
     s.add_argument("--days", type=int, help="how many days back from now (1-31, 7 by default)")
     s.set_defaults(fn="decision readout")
 
-    # A new bot: BotOps builds the chosen template in the workspace (`tico bot create`) or only registers it (--record-only).
+    # A new bot: Agent Ops builds the chosen template in the workspace (`tico bot create`) or only registers it (--record-only).
     # The Librarian (docs/librarian.md): ask a question, and read a linked doc on this computer.
     sub.add_parser("template", help="the bot templates this company can pick from").add_subparsers(
         dest="sub"
@@ -1202,7 +1202,7 @@ def parser():
     s.add_argument("--full", action="store_true", default=argparse.SUPPRESS)
     s.set_defaults(fn="bot app-shot")
     s = bot.add_parser(
-        "model", help="list the models, or change this bot's model, where it compacts or its output style (BotOps)"
+        "model", help="list the models, or change this bot's model, where it compacts or its output style (Agent Ops)"
     )
     s.add_argument("bot")
     s.add_argument("model", nargs="?", help="a model id or name; leave out to list")
@@ -1226,7 +1226,7 @@ def parser():
     )
     s.add_argument("--on-behalf-of", help="the open task a person asked you for, when something else started this run")
     s.set_defaults(fn="bot model")
-    s = bot.add_parser("copy", help="copy a bot into a new one the requester owns (BotOps)")
+    s = bot.add_parser("copy", help="copy a bot into a new one the requester owns (Agent Ops)")
     s.add_argument("bot", help="the bot to copy")
     s.add_argument("--slug", help="the copy's slug; the original's with the next free number (builder-2) by default")
     s.add_argument("--name", help="what people call the copy")
@@ -1239,7 +1239,8 @@ def parser():
     s.add_argument("--computer", help="a computer's label or id to put the copy on")
     s.set_defaults(fn="bot copy")
     s = bot.add_parser(
-        "update-from-original", help="bring a copy's instructions up to date with the bot it was copied from (BotOps)"
+        "update-from-original",
+        help="bring a copy's instructions up to date with the bot it was copied from (Agent Ops)",
     )
     s.add_argument("bot", help="the copy")
     s.add_argument(
@@ -1247,7 +1248,7 @@ def parser():
     )
     s.set_defaults(fn="bot update-from-original")
     s = bot.add_parser(
-        "suggest-to-original", help="suggest a copy's instruction changes to the bot it was copied from (BotOps)"
+        "suggest-to-original", help="suggest a copy's instruction changes to the bot it was copied from (Agent Ops)"
     )
     s.add_argument("bot", help="the copy")
     s.add_argument(
@@ -1284,7 +1285,7 @@ def parser():
     s.add_argument("q", nargs="*", metavar="WORD", help="words to match in the name, description or function")
     s.add_argument("--function", metavar="F", help="one job function, like legal or finance; other for the rest")
     s.set_defaults(fn="skill list")
-    s = skill.add_parser("copy", help="copy skills/<skill>/ from one bot into others, a commit in each (BotOps)")
+    s = skill.add_parser("copy", help="copy skills/<skill>/ from one bot into others, a commit in each (Agent Ops)")
     s.add_argument("skill", help="the skill's folder name under skills/")
     s.add_argument("--from", dest="bot", required=True, metavar="BOT", help="the bot that has the skill")
     s.add_argument("--to", nargs="+", required=True, metavar="BOT", help="the bots to copy it to")
@@ -1312,7 +1313,7 @@ def parser():
     s.add_argument("person_key", help="their id in the company file (tico setup show: company_import.people[].id)")
     s.add_argument("--email", help="their email; leave out to use the one they were added with")
     s.set_defaults(fn="setup invite")
-    s = sub.add_parser("api", help="BotOps: any v2 route, as the person who asked")
+    s = sub.add_parser("api", help="Agent Ops: any v2 route, as the person who asked")
     s.add_argument("method", type=str.upper, choices=["GET", "POST", "PUT", "PATCH", "DELETE"])
     s.add_argument("path", help="/api/v2/... or the part after it")
     s.add_argument("body", nargs="?", help="a JSON body for a write; - reads it from standard input")

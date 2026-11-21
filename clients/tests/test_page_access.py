@@ -6,7 +6,7 @@ from clients import hubcli, hubtools
 def test_page_access_reads_without_writing_and_clears_with_everyone():
     class Api:
         def __init__(self):
-            self._tico_is_botops = False
+            self._tico_is_agent_ops = False
             self.writes = []
 
         def get(self, path):
@@ -38,7 +38,7 @@ def test_page_card_sends_the_rows_to_the_card_route_and_only_bots_are_offered_it
     from clients.commands.content import pages_card
 
     class Api:
-        _tico_is_botops = False
+        _tico_is_agent_ops = False
 
         def __init__(self):
             self.sent = []

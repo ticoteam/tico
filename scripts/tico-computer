@@ -552,7 +552,7 @@ case "${1:-help}" in
     [ ! -e "$workspace/emp-$slug" ] || { echo "$workspace/emp-$slug already exists" >&2; exit 1; }
     mkdir -p "$workspace"
     if [ -d "$HUB/templates/catalog/$template" ]; then
-      # The same materialization BotOps runs in a turn, with this environment's names and no
+      # The same materialization Agent Ops runs in a turn, with this environment's names and no
       # onboarding answers: `tico bot create` is the one that has them.
       (cd "$HUB" && "$PYTHON" - "$workspace" "$slug" "$template" "${name:-}" "$ENV_DIR/environment.json" <<'PY'
 import json, sys

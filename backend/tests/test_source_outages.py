@@ -206,7 +206,7 @@ def test_twenty_minutes_of_busy_server_renewals_keep_the_running_lease_and_threa
     )
 
 
-def test_a_safe_lost_lease_resumes_once_then_waits_without_a_botops_task(api, monkeypatch):
+def test_a_safe_lost_lease_resumes_once_then_waits_without_a_agent_ops_task(api, monkeypatch):
     from backend.tests.helpers.api import setup_attempt
     from backend.execution import STALL_MAX
 

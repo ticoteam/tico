@@ -333,7 +333,7 @@
     - '^assistant propose'
   reply: |
     Gives the exact count from Needs you's own numbers: 193 items need Dana, split as 130 tasks, 62 asks and 1 question, and the split
-    by bot (BotOps 26, the Technical Writer 20, Growth 20 and so on, with the numbers the tool returned). These numbers
+    by bot (Agent Ops 26, the Technical Writer 20, Growth 20 and so on, with the numbers the tool returned). These numbers
     match the tool output exactly, not the owner's round figure. It gives the cause in one line first: most of the 193 are
     leftover bot-made tasks, repeat test pings, per-release docs tasks and old questions, not decisions. Then it names the
     few real decisions from the record, each with its task's link: the OK to publish v0.5.0, the OK to merge PR 2041, the
@@ -513,7 +513,7 @@
     - '^task (close|done|move|update|reassign) (?!6f1c9a02)'
     - '^message send(?! -h\b| --help)'
   reply: |
-    Says no to the BotOps runner queue test ping question for Dana, once, on its task (6f1c9a02): a reply in the task's
-    chat in her words ("No", "No, drop it") or a close of that task are both right, and either way BotOps hears it once.
-    It touches nothing else: not the install keys question, no OK, and no message to BotOps. A reply gets no undo line (a
+    Says no to the Agent Ops runner queue test ping question for Dana, once, on its task (6f1c9a02): a reply in the task's
+    chat in her words ("No", "No, drop it") or a close of that task are both right, and either way Agent Ops hears it once.
+    It touches nothing else: not the install keys question, no OK, and no message to Agent Ops. A reply gets no undo line (a
     close may get "say undo to reopen it"). Two or three plain lines, with the task's link.

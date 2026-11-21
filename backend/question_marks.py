@@ -44,7 +44,7 @@ PREFIX = "qmark:"  # a ❓'s wait and Needs-you item id: "qmark:<mark id>"
 SNOOZE_VISIT = "qmark"  # ask_snoozes.visit_id of a snoozed ❓; its requirement_id is the mark's id
 LINE_MAX = 160
 # Who may clear a ❓ by writing in a person's name: their own hand (Slack included, refs.via "slack"), their personal
-# token, and their Assistant on their word. BotOps and an automation writing as them do not answer for them.
+# token, and their Assistant on their word. Agent Ops and an automation writing as them do not answer for them.
 REPLY_VIA = (None, "", "slack", "token", "assistant")
 
 _OPEN = "SELECT * FROM question_marks WHERE cleared_at IS NULL ORDER BY created_at, id"
@@ -640,7 +640,7 @@ def ask(
 ) -> Row:
     """`bot` asks `person` on a task's chat: its message there, then the ❓ on it, in the caller's transaction. Returns
     the mark. `checked` False: Tico's own feature words the question and picks the person for the bot (person_asks, a
-    rule, the ladder, BotOps's setup notices), so neither the bot's reach, its reading the task, nor the words' shape is
+    rule, the ladder, Agent Ops's setup notices), so neither the bot's reach, its reading the task, nor the words' shape is
     the bot's to answer for. `let_in` (default: not `checked`): a person who may not read a private task is made a
     reader first, as an OK filed for a person is (task_asks.ask_ok); else they are refused. `refs`: more marks on the
     message (`shows`: a website's live browser the person takes over). Wakes nobody and notifies nobody: the ❓ is how
@@ -682,7 +682,7 @@ def give(conn: sqlite3.Connection, mid: str, to: str, by: str) -> Row:
 
 def replied(conn: sqlite3.Connection, message: Mapping[str, Any], conv: Mapping[str, Any], refs: object) -> list[str]:
     """A person's message just written: it clears each open ❓ for them in that chat. Their own hand, their token or
-    their Assistant on their word (`REPLY_VIA`); BotOps or an automation writing as them do not. A reply counts as
+    their Assistant on their word (`REPLY_VIA`); Agent Ops or an automation writing as them do not. A reply counts as
     progress on the task (task_engine.progress_mark). Returns the tasks of the marks it cleared, each once ('' for a
     direct chat's): a shared chat can hold marks for several tasks, and the reply itself need not name any."""
     sender = str(message.get("sender_id") or "")

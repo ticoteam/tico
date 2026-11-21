@@ -18,7 +18,7 @@ Which session a turn continues depends on the bot's `session` setting:
 | `session` | A task's turn | A turn in a public thread | A turn in a private thread |
 |---|---|---|---|
 | unset (default) | the task's session | that thread's session | that thread's session |
-| `task` (BotOps) | the task's session | that thread's session | that thread's session |
+| `task` (Agent Ops) | the task's session | that thread's session | that thread's session |
 | `bot` | the bot's shared session; a private task's own session | the bot's one public session | that thread's session |
 
 On `session: bot`, a private task, or a task worked from a private thread, never enters the shared session: that

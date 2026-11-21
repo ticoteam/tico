@@ -6,7 +6,7 @@ Run now are part of Maintenance; the separate Health scan system routine is remo
 
 Settings > General > Health > Details lists what it found.
 
-For a runner update blocked by changed files, Health and BotOps say when only flattened Tico links remain.
+For a runner update blocked by changed files, Health and Agent Ops say when only flattened Tico links remain.
 The runner checks their bytes and targets: these links are repaired on the next update, with no decision about
 local work. Other changes still need a commit or stash. See [Updates](updates.md#a-mac-or-linux-checkout).
 
@@ -57,7 +57,7 @@ work, mail asks, bot history, computers offline, and the rest. Each check is tag
 - **Noisy** checks file only if the problem is still there on the next run, so a blip that clears first files nothing:
   `runner_outdated`, `slow` and `quota`.
 
-Setup checks (each problem is one BotOps task): `runner_outdated`, `update_stuck`, `runner_restarting`, `computer_silent`,
+Setup checks (each problem is one Agent Ops task): `runner_outdated`, `update_stuck`, `runner_restarting`, `computer_silent`,
 `limited_no_fallback`, `default_login_limited`, `check_limited`, `run_hold`, `claim_failed`, `claim_check`,
 `new_sessions`, `turn_budget`, `reviewer_holds_tasks`, `responder_has_tasks`, `doer_idle`, `stuck_setup`,
 `worktree_error`, `push_stuck`, `cannot_fetch`. While a computer is silent with work queued, its `computer_silent` task is the
@@ -82,15 +82,15 @@ that run turns are left out.
 
 ## Findings and tasks
 
-- Each problem is one BotOps task. A repeat adds to the task's count and moves its last-seen time; it does not open a
+- Each problem is one Agent Ops task. A repeat adds to the task's count and moves its last-seen time; it does not open a
   second task.
-- When the problem clears, the task gets a "cleared" comment, and BotOps closes it.
-- A finding with no BotOps bot is logged on the step result. No person gets a task from a health check.
-- BotOps gets one grouped wake for changed health tasks, subject to Maintenance's shared wake limits. A refused wake
+- When the problem clears, the task gets a "cleared" comment, and Agent Ops closes it.
+- A finding with no Agent Ops bot is logged on the step result. No person gets a task from a health check.
+- Agent Ops gets one grouped wake for changed health tasks, subject to Maintenance's shared wake limits. A refused wake
   waits for the next allowed run.
 - A fix only a person can make (OKing mail alerts, restarting their own computer) reaches them only as an ask that
-  BotOps adds to its task, in their Needs you. Check health never writes to a person.
-- A mail ask (the mail alerts setting, `mail_settings.alerts`) becomes a BotOps task. BotOps asks the owner for an OK
+  Agent Ops adds to its task, in their Needs you. Check health never writes to a person.
+- A mail ask (the mail alerts setting, `mail_settings.alerts`) becomes an Agent Ops task. Agent Ops asks the owner for an OK
   on it.
 
 Each finding has a **key** (what and where, on this install) and a **signature** (`hm-` and 12 hex digits: what, without

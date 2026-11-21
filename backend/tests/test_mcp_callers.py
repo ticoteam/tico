@@ -2,11 +2,11 @@
 
 from backend.tests.helpers.agents import credential, hermes_bot
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner, setup_attempt  # noqa: F401
-from backend.tests.helpers.member_bots import botops, turn  # noqa: F401
+from backend.tests.helpers.member_bots import agent_ops, turn  # noqa: F401
 from backend.tests.helpers.mcp import call, rpc
 from clients import hubtools
 
-BOTOPS_ONLY = {"tico_credential_set", "tico_message_redact", "tico_support_file"}
+AGENT_OPS_ONLY = {"tico_credential_set", "tico_message_redact", "tico_support_file"}
 HUMANS_ONLY = {
     "tico_brief",
     "tico_bot_recent",
@@ -26,14 +26,14 @@ def offered(api, token):
     return {t["name"] for t in rpc(api, "tools/list", token=token)["result"]["tools"]}
 
 
-def test_each_caller_is_offered_only_the_tools_it_can_use(api, botops):
+def test_each_caller_is_offered_only_the_tools_it_can_use(api, agent_ops):
     hermes_bot(api)
     lists = {
         "owner": offered(api, "ana-test"),
         "admin": offered(api, "ben-test"),
         "member": offered(api, "cara-test"),
         "bot": offered(api, setup_attempt(api, "ops")[2]["token"]),
-        "botops": offered(api, turn(api, botops, person="ana-test")["token"]),
+        "botops": offered(api, turn(api, agent_ops, person="ana-test")["token"]),
         "agent": offered(api, credential(api)["token"]),
     }
     me = get(api, "me", token="cara-test")
@@ -46,9 +46,9 @@ def test_each_caller_is_offered_only_the_tools_it_can_use(api, botops):
         assert not {"tico_assistant_propose", "tico_assistant_morning"} & names or who == "bot", who
         assert {"tico_whoami", "tico_task_list", "tico_message_send", "tico_doc_search", "tico_sql"} <= names, who
     for who in ("owner", "admin", "member"):
-        assert HUMANS_ONLY <= lists[who] and not BOTS_ONLY & lists[who] and not BOTOPS_ONLY & lists[who], who
+        assert HUMANS_ONLY <= lists[who] and not BOTS_ONLY & lists[who] and not AGENT_OPS_ONLY & lists[who], who
     for who in ("bot", "agent"):
-        assert BOTS_ONLY <= lists[who] and not HUMANS_ONLY & lists[who] and not BOTOPS_ONLY & lists[who], who
+        assert BOTS_ONLY <= lists[who] and not HUMANS_ONLY & lists[who] and not AGENT_OPS_ONLY & lists[who], who
     assert all("tico_external_sync" in lists[role] for role in ("owner", "admin", "member"))
     # Bots are offered it; the server lets only one with Create product repositories use it (test_bot_product_repos).
     assert all("tico_repo_product_create" in lists[who] for who in ("owner", "bot", "botops"))
@@ -57,11 +57,11 @@ def test_each_caller_is_offered_only_the_tools_it_can_use(api, botops):
     # A bot asks for its own credential (a card in its chat or task thread); people store one in Credentials.
     assert all("tico_credential_request" in lists[who] for who in ("bot", "botops"))
     assert all("tico_credential_request" not in lists[who] for who in ("owner", "admin", "member", "agent"))
-    assert BOTOPS_ONLY <= lists["botops"] and BOTS_ONLY <= lists["botops"] and not HUMANS_ONLY & lists["botops"]
+    assert AGENT_OPS_ONLY <= lists["botops"] and BOTS_ONLY <= lists["botops"] and not HUMANS_ONLY & lists["botops"]
     assert lists["bot"] < lists["owner"] | lists["bot"] and len(lists["bot"]) < len(lists["botops"])
 
 
-def test_a_tool_that_is_not_offered_is_refused_when_it_is_called(api, botops):
+def test_a_tool_that_is_not_offered_is_refused_when_it_is_called(api, agent_ops):
     token = setup_attempt(api, "ops")[2]["token"]
     err, out = call(api, "tico_api", {"method": "GET", "path": "me"}, token=token)
     assert err and out["error"] == "forbidden" and "not available" in out["detail"]

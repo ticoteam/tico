@@ -53,7 +53,7 @@ case whose recorded result this touches is `background-daily-sweep`, which still
 | jobs-discount-to-cfo | 0/2 | 2/2 | 2/2 |
 | jobs-find-doc | 0/2 | 2/2 | 2/2 |
 | jobs-launch-status | 2/2 | 1/2 | 1/2 |
-| jobs-new-bot-botops | 1/2 | 2/2 | 2/2 |
+| jobs-new-bot-agent-ops | 1/2 | 2/2 | 2/2 |
 | jobs-route-paid-trials | 0/2 | 1/2 | 1/2 |
 | jobs-task-for-person | 1/2 | 2/2 | 2/2 |
 | jobs-what-did-bot-do | 0/2 | 2/2 | 1/2 |
@@ -100,13 +100,13 @@ on both, main from a fresh origin/main worktree:
 | approvals-vendor-text-task | 2/4 | 1/4 |
 | followups-no-only-old-ones | 4/4 | 4/4 |
 | followups-yes-after-readback | 4/4 | 4/4 |
-| jobs-new-bot-botops | 1/4 | 1/4 |
+| jobs-new-bot-agent-ops | 1/4 | 1/4 |
 | jobs2-answer-bot-yes | 4/4 | 4/4 |
 | jobs2-ask-bot | 4/4 | 4/4 |
 | queue-needs-you-breakdown | 3/4 | 3/4 |
 
 No case is worse at n=4. Two case fixes came out of this, scored on both sides above:
-- `jobs2-answer-bot-yes` had two open BotOps questions, and the template (and its docs) say to ask which one then; main went
+- `jobs2-answer-bot-yes` had two open Agent Ops questions, and the template (and its docs) say to ask which one then; main went
   0/4. The second question is now Health Monitor's.
 - `jobs2-ask-bot` matched only the CLI form; the MCP call is logged as `question ask --bots analytics`, which the canned row
   missed. The regex now takes both.

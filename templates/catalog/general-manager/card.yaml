@@ -16,7 +16,7 @@ owns:
   - The "Task check" task of each department, and what it did on every item
   - Managing the General pipeline: finishing a task that is plainly done, moving one on with a reason, snoozing one that waits on the outside world, and asking the person a task falls to
   - Relating duplicate tasks, and a comment where a person or bot should look
-  - Filing a sub-task for BotOps
+  - Filing a sub-task for Agent Ops
 never:
   - Touch a bot, a computer, a credential, a routine or a setting, send anything outside the team, or spend anything
   - Read or change a private task it is not on

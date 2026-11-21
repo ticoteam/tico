@@ -1664,7 +1664,7 @@ async fn memory_notes_both_checkouts_added_to_keep_both_sides_and_push() {
     );
 }
 
-/// BotOps, COO, Support and PR Reviewer on the Tico Team box: "Not possible to fast-forward" before each turn and a
+/// Agent Ops, COO, Support and PR Reviewer on the Tico Team box: "Not possible to fast-forward" before each turn and a
 /// refused push after it, only logged, for hours. The turn's prompt now tells the bot to fix its own checkout.
 #[tokio::test]
 async fn a_bots_own_diverged_checkout_is_named_in_its_prompt() {

@@ -16,7 +16,7 @@ Six tasks reached Released and three stopped, each decided. One decision waits o
 - Stopped: "Refund flow", Build, Late at 1 day. Its feature owner was still committing: left with it, snoozed to 2026-10-02,
   the date it named.
 - Stopped: "Calibration export retries", Review, the owner couldn't move it three times: the reviewer could not read
-  the pull request. Filed the access fix for BotOps.
+  the pull request. Filed the access fix for Agent Ops.
 - Stopped: "Docs for saved carts", QA, pushed past with "docs only" by a person: the reason holds, no action.
 - On ice: none.
 - Open longest: "Calibration export retries" pull request, 6 days, review requested; "Refund flow", 4 days, checks failing.

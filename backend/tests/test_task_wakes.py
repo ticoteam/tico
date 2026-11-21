@@ -154,7 +154,7 @@ def test_every_automatic_start_about_a_task_is_held_by_its_turn_and_its_seven_ru
 
 @pytest.mark.parametrize("via", ["assistant", "botops", "token"])
 def test_only_words_a_person_typed_themselves_start_a_run_past_the_seven(c, general, via):
-    """The 7 runs hold "until a person acts": a message the Assistant or BotOps writes in a person's name, or one sent
+    """The 7 runs hold "until a person acts": a message the Assistant or Agent Ops writes in a person's name, or one sent
     with a personal token, is no person's act, and neither is Tico's carrier of one. A message typed in Slack is
     the person's own."""
     from backend import threads

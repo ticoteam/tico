@@ -297,7 +297,7 @@ and `/api/v2/messages/{id}`, and are described in the [API guide](api.md). The t
   copies the message and a link back, and the task stays private unless the thread is company-wide
   (`tico thread task <message-id> --title T --owner O`).
 
-BotOps acting for a person runs the thread writes above as that person, the same as the CLI: edits, deletes, reactions, DMs,
+Agent Ops acting for a person runs the thread writes above as that person, the same as the CLI: edits, deletes, reactions, DMs,
 uploads, Slack links and call steps (start, end, leave, bots, retry). It does not join a call or take a call's token; the
 person joins in the app or with `tico call join`.
 

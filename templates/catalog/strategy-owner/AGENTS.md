@@ -35,7 +35,7 @@ Proposals for the strategy, at every level:
 - The weekly market briefing, when it touches a bet: `playbooks/market-briefing.md`.
 - The org changes the strategy calls for (a group, a lead, a teammate to move, who reports to whom), each with the bet it serves.
   On your own you only suggest; when the owner asks for one, you make it where the server lets you (`playbooks/owner-chat.md`).
-  A new bot is a BotOps task with its bet named, never a bot you add yourself.
+  A new bot is an Agent Ops task with its bet named, never a bot you add yourself.
 
 The regular checks, while the owner has them on (`regular_checks` in `tico goal strategy-bot`): the KPI pass
 (`playbooks/kpi-pass.md`), the KPI folders (`playbooks/new-kpi.md`), and the automatic colours (`playbooks/status-pass.md`).

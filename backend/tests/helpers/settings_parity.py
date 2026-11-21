@@ -6,7 +6,7 @@ from contextlib import closing
 from backend import cloud_access, page_owners, providers, settings_catalog
 from backend.store import H
 from backend.tests.helpers.api import get, post, runner
-from backend.tests.helpers.botops_parity import act
+from backend.tests.helpers.agent_ops_parity import act
 from backend.tests.helpers.cloud_access import signals
 from backend.tests.helpers.cloud_machines import FakeHQ
 
@@ -272,7 +272,7 @@ LAST = {}
 
 
 def ask(api, attempt, e, objects, person, token):
-    """`tico settings set` as BotOps does it for the person: the plan, then the request the plan says to make. A card,
+    """`tico settings set` as Agent Ops does it for the person: the plan, then the request the plan says to make. A card,
     from the plan or from the route, is tapped as the person (`tapped`): a catalogue card never reaches the route
     until then, so this is where the route says whether that person may."""
     if e.route.startswith("model-subscriptions/") or e.route == "computer-subscriptions":

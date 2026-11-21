@@ -1,9 +1,9 @@
 """Check health (backend/maintenance_steps/check_health.py) and the Tico bug path (backend/maintenance_health.py).
 
 Each run reads the code checks, the production checks, the Health page's warn and bad checks, and files
-what they find as the tags say: an urgent problem at once, a noisy one on its second run. One BotOps task per problem however
-many computers have it: a repeat adds to its count, a problem that clears gets a cleared comment that wakes BotOps, and a task
-BotOps closed is opened again when the problem returns. A Tico bug goes to the Tico team once (a comment when it comes back worse), or as a support approval a person reads
+what they find as the tags say: an urgent problem at once, a noisy one on its second run. One Agent Ops task per problem however
+many computers have it: a repeat adds to its count, a problem that clears gets a cleared comment that wakes Agent Ops, and a task
+Agent Ops closed is opened again when the problem returns. A Tico bug goes to the Tico team once (a comment when it comes back worse), or as a support approval a person reads
 first while the team rule is off. Check health never writes to a person.
 """
 
@@ -73,7 +73,7 @@ def code_findings(monkeypatch, readers):
 
 
 def built(environment):
-    """A signed-in install with one computer. BotOps is active: the test environment seeds it."""
+    """A signed-in install with one computer. Agent Ops is active: the test environment seeds it."""
     api = environment(seed={}, cards=BASE)
     runner = machine(api, label=CANARY)
     draft(api)
@@ -89,7 +89,7 @@ def item(check_id, key=None, title=None, kind=MH.SETUP, severity=MH.WARN, subjec
         kind,
         title or f"{check_id} finding",
         f"{check_id} detail.",
-        "BotOps: fix it.",
+        "Agent Ops: fix it.",
         subject=subject,
         severity=severity,
     )
@@ -126,8 +126,8 @@ def keys(api, settings=None, check=None):
     return sorted(i["key"] for i in found if check is None or i["check_id"] == check)
 
 
-def botops_tasks(api):
-    """The tasks Check health opened: one per problem, owned by BotOps."""
+def agent_ops_tasks(api):
+    """The tasks Check health opened: one per problem, owned by Agent Ops."""
     with api.app.state.store.read() as c:
         return [
             dict(r)
@@ -187,7 +187,7 @@ def set_rule(api, reports):
     api.put("/api/v2/access/rules", json={"health_monitor_reports": reports}, headers=signed_in())
 
 
-def set_botops(api, state):
+def set_agent_ops(api, state):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state=? WHERE id='botops'", (state,))
 
@@ -353,13 +353,13 @@ def set_last_seen(api, runner, minutes_ago):
         )
 
 
-def test_a_silent_computer_with_queued_work_is_one_botops_task(environment):
+def test_a_silent_computer_with_queued_work_is_one_agent_ops_task(environment):
     # Health's "Bots waiting" and "Computers" checks say the same outage as computer_silent. Each filed its own task.
     api, runner = built(environment)
     queued_for_helper(api, runner, 15)
     run(api)
     run(api)  # a noisy check files on its second run
-    titles = [t["title"] for t in botops_tasks(api)]
+    titles = [t["title"] for t in agent_ops_tasks(api)]
     assert [t for t in titles if "not checked in" in t] == [f"Health: {CANARY} has not checked in for 15 minutes"]
     assert "Health: Bots waiting" not in titles and "Health: Computers" not in titles
 
@@ -370,7 +370,7 @@ def test_an_offline_computer_that_is_not_silent_yet_still_files_bots_waiting(env
     queued_for_helper(api, runner, 5)
     run(api)
     run(api)
-    titles = [t["title"] for t in botops_tasks(api)]
+    titles = [t["title"] for t in agent_ops_tasks(api)]
     assert "Health: Bots waiting" in titles
     assert not [t for t in titles if "not checked in" in t]
 
@@ -387,7 +387,7 @@ def test_an_offline_computer_still_files_when_another_computer_is_silent(environ
     assert "scout" in finding(api, "page:waiting")["detail"] and "helper" not in finding(api, "page:waiting")["detail"]
     assert "Second Mac" in finding(api, "page:computers")["detail"]
     assert CANARY not in finding(api, "page:computers")["detail"]
-    tasks = botops_tasks(api)
+    tasks = agent_ops_tasks(api)
     titles = [t["title"] for t in tasks]
     assert "Health: Bots waiting" in titles and "Health: Computers" in titles
     assert [t for t in titles if "not checked in" in t] == [f"Health: {CANARY} has not checked in for 15 minutes"]
@@ -404,14 +404,14 @@ def test_an_offline_computer_that_goes_silent_holds_its_checks_then_they_clear_w
     run(api)
     run(api)
     tasks = {
-        t["title"]: t["id"] for t in botops_tasks(api) if t["title"] in ("Health: Bots waiting", "Health: Computers")
+        t["title"]: t["id"] for t in agent_ops_tasks(api) if t["title"] in ("Health: Bots waiting", "Health: Computers")
     }
     assert set(tasks) == {"Health: Bots waiting", "Health: Computers"}
     set_last_seen(api, runner, 15)
     run(api)
     run(api)
     assert finding(api, "page:waiting")["present"] == 1 and finding(api, "page:computers")["present"] == 1
-    assert f"Health: {CANARY} has not checked in for 15 minutes" in [t["title"] for t in botops_tasks(api)]
+    assert f"Health: {CANARY} has not checked in for 15 minutes" in [t["title"] for t in agent_ops_tasks(api)]
     for task_id in tasks.values():
         assert said(api, task_id, "Cleared at") == []
     set_last_seen(api, runner, 0)
@@ -474,7 +474,7 @@ def test_a_paused_bots_routines_are_not_a_finding(environment):
 
 def test_private_tasks_no_one_can_move_stay_on_owner_health_and_file_nothing(readers, monkeypatch):
     """Health's `no_one` count (private tasks nobody who reads them can move) is for the company's owner and Admins on
-    Health only: it never becomes a finding, so no BotOps task carries it and no bot is started for it. A rule break
+    Health only: it never becomes a finding, so no Agent Ops task carries it and no bot is started for it. A rule break
     still files, its words without that count."""
 
     def tasks(status, **counts):
@@ -493,9 +493,9 @@ def test_private_tasks_no_one_can_move_stay_on_owner_health_and_file_nothing(rea
     assert len(found) == 1 and "private" not in json.dumps(found, default=str)
 
 
-def test_the_monitor_files_for_botops_and_a_task_for_a_person_is_refused(api):
-    # The Health Monitor gives its fixes to BotOps only (docs/health-monitor.md): a task for a person, and a hand-off to
-    # one, are refused with where to file it and nothing is written; the same task for BotOps is accepted.
+def test_the_monitor_files_for_agent_ops_and_a_task_for_a_person_is_refused(api):
+    # The Health Monitor gives its fixes to Agent Ops only (docs/health-monitor.md): a task for a person, and a hand-off to
+    # one, are refused with where to file it and nothing is written; the same task for Agent Ops is accepted.
     with api.app.state.store.transaction() as c:
         for slug in ("health-monitor", "botops"):
             c.execute(
@@ -507,13 +507,13 @@ def test_the_monitor_files_for_botops_and_a_task_for_a_person_is_refused(api):
         title, body = "Wake Support Agent (cloud) and check it reports in", "Its last check-in was 40 minutes ago."
         with pytest.raises(H.Refused) as refused:
             H.task_create(c, "bot:" + HM_SLUG, title, body, "human:ana", lint=False)
-        assert refused.value.rule == "botops-only" and "--owner botops" in str(refused.value)
+        assert refused.value.rule == "agent-ops-only" and "--owner botops" in str(refused.value)
         assert c.execute("SELECT count(*) FROM tasks WHERE title=?", (title,)).fetchone()[0] == 0
         fix = H.task_create(c, "bot:" + HM_SLUG, title, body, "botops", lint=False)
         assert H.task(c, fix["id"])["owner_id"] == "bot:botops"
         with pytest.raises(H.Refused) as handed:
             H.task_update(c, "bot:" + HM_SLUG, fix["id"], owner="human:ana")
-        assert handed.value.rule == "botops-only"
+        assert handed.value.rule == "agent-ops-only"
         assert H.task(c, fix["id"])["owner_id"] == "bot:botops"
 
 
@@ -688,7 +688,7 @@ def _part_urgent(api, runner, monkeypatch, hq=None, comments=None, clock=None):
     code_findings[:] = [item("event_stream", key=key, title="The event stream drops")]
     result = run(api)
     assert result["details"]["filed"] == [key] and result["woke"] == 1
-    (task,) = botops_tasks(api)
+    (task,) = agent_ops_tasks(api)
     assert task["title"] == "Health: The event stream drops" and task["owner_id"] == "bot:botops"
     assert [job["task"] for job in wake_jobs(api)] == [task["id"]]
     assert finding(api, key)["pending"] == 0
@@ -698,9 +698,9 @@ def _part_noisy(api, runner, monkeypatch, hq=None, comments=None, clock=None):
     code_findings = _code_findings(monkeypatch)
     code_findings[:] = [item("runner_outdated", key="runner_outdated:R1", title="Computer R1 is outdated")]
     first = run(api)
-    assert first["details"]["pending"] == ["runner_outdated:R1"] and botops_tasks(api) == []
+    assert first["details"]["pending"] == ["runner_outdated:R1"] and agent_ops_tasks(api) == []
     second = run(api)
-    assert second["details"]["filed"] == ["runner_outdated:R1"] and len(botops_tasks(api)) == 1
+    assert second["details"]["filed"] == ["runner_outdated:R1"] and len(agent_ops_tasks(api)) == 1
     assert finding(api, "runner_outdated:R1")["pending"] == 0
 
 
@@ -710,7 +710,7 @@ def _part_noisy_passes(api, runner, monkeypatch, hq=None, comments=None, clock=N
     run(api)
     code_findings[:] = []
     result = run(api)
-    assert result["details"]["cleared"] == [] and botops_tasks(api) == []
+    assert result["details"]["cleared"] == [] and agent_ops_tasks(api) == []
     assert finding(api, "runner_outdated:R1")["present"] == 0
 
 
@@ -719,14 +719,14 @@ def _part_repeat(api, runner, monkeypatch, hq=None, comments=None, clock=None):
     now = datetime.now(timezone.utc)
     code_findings[:] = [item("event_stream", key="event_stream:R1", title="The event stream drops")]
     run(api, now)
-    (task,) = botops_tasks(api)
+    (task,) = agent_ops_tasks(api)
     run(api, now + timedelta(minutes=1))
     assert finding(api, "event_stream:R1")["occurrences"] == 2 and registry(api, "event_stream")["count"] == 2
     assert said(api, task["id"], "Still there") == []  # a repeat within the day adds to the count only
     run(api, now + timedelta(hours=25))
     (comment,) = said(api, task["id"], "Still there")  # a day on: one comment, and no wake
     assert "seen 3 times" in comment and registry(api, "event_stream")["count"] == 3
-    assert len(botops_tasks(api)) == 1
+    assert len(agent_ops_tasks(api)) == 1
 
 
 def _part_two_computers(api, runner, monkeypatch, hq=None, comments=None, clock=None):
@@ -738,7 +738,7 @@ def _part_two_computers(api, runner, monkeypatch, hq=None, comments=None, clock=
         item("event_stream", key="event_stream:B", title="The event stream drops"),
     ]
     result = run(api)
-    (task,) = botops_tasks(api)
+    (task,) = agent_ops_tasks(api)
     assert result["woke"] == 0 and len(said(api, task["id"], "Also on 2 places")) == 1
     assert finding(api, "event_stream:B")["present"] == 1
 
@@ -747,30 +747,30 @@ def _part_clears(api, runner, monkeypatch, hq=None, comments=None, clock=None):
     code_findings = _code_findings(monkeypatch)
     code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
     run(api)
-    (task,) = botops_tasks(api)
+    (task,) = agent_ops_tasks(api)
     code_findings[:] = []
     cleared = run(api)
     assert cleared["details"]["cleared"] == ["push_stuck:A"] and cleared["woke"] == 1
     (cleared_note,) = said(api, task["id"], "Cleared at")
-    assert "BotOps: close this task." in cleared_note
+    assert "Agent Ops: close this task." in cleared_note
     code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
     back = run(api)
     assert back["woke"] == 1 and said(api, task["id"], "Back: Pushes are stuck")
-    assert [t["id"] for t in botops_tasks(api)] == [task["id"]]
+    assert [t["id"] for t in agent_ops_tasks(api)] == [task["id"]]
 
 
 def _part_reopens(api, runner, monkeypatch, hq=None, comments=None, clock=None):
     code_findings = _code_findings(monkeypatch)
     code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
     run(api)
-    (first,) = botops_tasks(api)
+    (first,) = agent_ops_tasks(api)
     code_findings[:] = []
     run(api)
     with api.app.state.store.transaction() as c:
         TE.move(c, first["id"], TE.DONE, H.TICO_ACTOR, "fixed")
     code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
     run(api)
-    tasks = botops_tasks(api)
+    tasks = agent_ops_tasks(api)
     assert len(tasks) == 2 and tasks[0]["id"] == first["id"]
     assert tasks[1]["status"] not in ("done", "closed", "declined")
 
@@ -779,7 +779,7 @@ def _part_rows_gone(api, runner, monkeypatch, hq=None, comments=None, clock=None
     code_findings = _code_findings(monkeypatch)
     code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
     run(api)
-    (task,) = botops_tasks(api)
+    (task,) = agent_ops_tasks(api)
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM health_findings")  # rows lost (a restore): nothing says the problem is there
     code_findings.clear()
@@ -791,7 +791,7 @@ def _part_clear_fails(api, runner, monkeypatch, hq=None, comments=None, clock=No
     code_findings = _code_findings(monkeypatch)
     code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
     run(api)
-    (task,) = botops_tasks(api)
+    (task,) = agent_ops_tasks(api)
     real = H.task_comment
     failures = []
 
@@ -811,12 +811,12 @@ def _part_clear_fails(api, runner, monkeypatch, hq=None, comments=None, clock=No
     assert registry(api, "push_stuck")["cleared"] is True
 
 
-def _part_no_botops(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+def _part_no_agent_ops(api, runner, monkeypatch, hq=None, comments=None, clock=None):
     code_findings = _code_findings(monkeypatch)
-    set_botops(api, "paused")
+    set_agent_ops(api, "paused")
     code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
     result = run(api)
-    assert botops_tasks(api) == [] and result["woke"] == 0
+    assert agent_ops_tasks(api) == [] and result["woke"] == 0
     assert result["details"]["unrouted"] == [{"signature": MH.signature("push_stuck"), "titles": ["Pushes are stuck"]}]
     assert finding(api, "push_stuck:A")["present"] == 1
 
@@ -826,7 +826,7 @@ def _part_no_person(api, runner, monkeypatch, hq=None, comments=None, clock=None
     code_findings[:] = [item("push_stuck", key="push_stuck:A"), item("runner_outdated", key="runner_outdated:A")]
     run(api)
     run(api)
-    tasks = botops_tasks(api)
+    tasks = agent_ops_tasks(api)
     assert len(tasks) == 2 and {t["owner_id"] for t in tasks} == {"bot:botops"}
 
 
@@ -835,7 +835,7 @@ def _part_person_owned(api, runner, monkeypatch, hq=None, comments=None, clock=N
     store = api.app.state.store
     code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
     run(api)
-    (first,) = botops_tasks(api)
+    (first,) = agent_ops_tasks(api)
     with store.read() as c:
         person = api.app.state.auth.owner_identity(c).actor
     with store.transaction() as c:
@@ -847,7 +847,7 @@ def _part_person_owned(api, runner, monkeypatch, hq=None, comments=None, clock=N
     code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
     back = run(api)
     assert back["woke"] == 1 and said(api, first["id"], "Back:") == []
-    (new,) = [t for t in botops_tasks(api) if t["id"] != first["id"]]
+    (new,) = [t for t in agent_ops_tasks(api) if t["id"] != first["id"]]
     assert new["owner_id"] == "bot:botops" and new["status"] not in ("done", "closed", "declined")
 
 
@@ -860,7 +860,7 @@ def _part_one_ticket(api, runner, monkeypatch, hq=None, comments=None, clock=Non
     assert first["ticket"] and len(hq.tickets) == 1
     again = file_due(api, run(api, now + timedelta(hours=25)))  # seen a third time, a day on: a comment, not a ticket
     assert again[sig]["comment"] is True and len(hq.tickets) == 1
-    # BotOps's report is checked on the support link at its one delivery (Rules › Links); the comment is no delivery.
+    # Agent Ops's report is checked on the support link at its one delivery (Rules › Links); the comment is no delivery.
     with api.app.state.store.read() as c:
         rows = c.execute("SELECT actor, action FROM events WHERE target='link:support'").fetchall()
     assert [tuple(r) for r in rows] == [("bot:botops", "rules.passed")]
@@ -1140,7 +1140,7 @@ def _part_read_only(api, runner, monkeypatch, hq=None, comments=None, clock=None
             r.execute("PRAGMA query_only=0")
         assert readers == [(r, True)] and at_write == [0]  # Maintenance's connection was the only one read
     assert result["woke"] == 1 and result["details"]["filed"] == ["push_stuck:A"]
-    assert [t["owner_id"] for t in botops_tasks(api)] == ["bot:botops"]
+    assert [t["owner_id"] for t in agent_ops_tasks(api)] == ["bot:botops"]
 
 
 def _part_readers_write_nothing(api, runner, monkeypatch, hq=None, comments=None, clock=None):
@@ -1185,16 +1185,16 @@ def _part_wake_once(api, runner, monkeypatch, hq=None, comments=None, clock=None
     code_findings = _code_findings(monkeypatch)
     three_new_problems(code_findings)
     result = run(api)
-    assert result["woke"] == 1 and len(botops_tasks(api)) == 3
+    assert result["woke"] == 1 and len(agent_ops_tasks(api)) == 3
     ((task_id, wake, text),) = [row for row in comments if row[1]]
     assert wake is True and text.startswith("Health wake: ")
-    assert task_id in [t["id"] for t in botops_tasks(api)]
-    assert all(f"(task {t['id']})" in text for t in botops_tasks(api))
+    assert task_id in [t["id"] for t in agent_ops_tasks(api)]
+    assert all(f"(task {t['id']})" in text for t in agent_ops_tasks(api))
     assert [job["task"] for job in wake_jobs(api)] == [task_id]
-    ids = {t["id"] for t in botops_tasks(api)}
+    ids = {t["id"] for t in agent_ops_tasks(api)}
     with api.app.state.store.read() as c:
         (wake,) = c.execute("SELECT target,detail FROM events WHERE action=?", (L.BOT_ACTION,)).fetchall()
-        assert wake["target"] == MH.BOTOPS
+        assert wake["target"] == MH.AGENT_OPS
         assert set(json.loads(wake["detail"])["task_ids"]) == ids
         assert {r[0] for r in c.execute("SELECT target FROM events WHERE action=?", (L.TASK_ACTION,))} == ids
 
@@ -1263,7 +1263,7 @@ def _part_other_wake(api, runner, monkeypatch, hq=None, comments=None, clock=Non
     three_new_problems(code_findings)
     with store.transaction() as c:
         run_id = M._insert(c, "run_now:" + H.new_id(), "run_now", None, H.now())
-        L.record(c, MH.BOTOPS)
+        L.record(c, MH.AGENT_OPS)
     with store.read() as c:
         result = check_health.run(c, {"store": store, "auth": auth, "now": H.now(), "run_id": run_id})
     assert result["woke"] == 0 and len(wake_marker(api)) == 3 and wake_jobs(api) == []
@@ -1307,7 +1307,7 @@ def _part_one_hit(api, runner, monkeypatch, hq=None, comments=None, clock=None):
     _readers(monkeypatch)
     monkeypatch.setattr(invariants, "CHECKS", [fake_check("lease_overdue", ["r1", "r2"])])
     result = run(api)
-    assert [t["title"] for t in botops_tasks(api)] == ["Health: Production check: Runs past their lease"]
+    assert [t["title"] for t in agent_ops_tasks(api)] == ["Health: Production check: Runs past their lease"]
     assert result["woke"] == 1 and result["details"]["filed"] == ["inv:lease_overdue"]
     with api.app.state.store.read() as c:
         person = c.execute(
@@ -1353,7 +1353,7 @@ def _part_links(api, runner, monkeypatch, hq=None, comments=None, clock=None):
     with store.read() as c:
         assert invariants.health_checks(c)[0]["fixes"] == [], "the sweep raised no task to link"
     run(api)
-    (task,) = botops_tasks(api)
+    (task,) = agent_ops_tasks(api)
     with store.read() as c:
         (row,) = invariants.health_checks(c)
     assert row["id"] == "invariant:lease_overdue"
@@ -1376,7 +1376,7 @@ def _part_warning(api, runner, monkeypatch, hq=None, comments=None, clock=None):
     monkeypatch.setattr(health, "view", lambda c, *a, **k: {"checks": page})
     run(api)
     run(api)
-    (task,) = botops_tasks(api)
+    (task,) = agent_ops_tasks(api)
     with api.app.state.store.read() as c:
         assert task["title"] == "Health: Disk space" and "Free space" in H.task_words(c, task["id"])
         rows = c.execute(
@@ -1391,7 +1391,7 @@ def _part_lists(api, runner, monkeypatch, hq=None, comments=None, clock=None):
     run(api)
     body = api.get("/api/v2/health/findings", headers=signed_in()).json()
     (row,) = body["findings"]
-    assert row["key"] == "push_stuck:A" and row["tag"] == "urgent" and row["task_id"] == botops_tasks(api)[0]["id"]
+    assert row["key"] == "push_stuck:A" and row["tag"] == "urgent" and row["task_id"] == agent_ops_tasks(api)[0]["id"]
     assert body["botops"] is True and body["reports_without_asking"] is True
 
 
@@ -1510,7 +1510,7 @@ def _part_own_key(api, runner, monkeypatch, hq=None, comments=None, clock=None):
 # ------------------------------------------------------------------------------------- the stories
 def _fresh(api, hq=None, comments=None):
     """What a section of a story leaves behind, wiped: findings, reports, OKs, wakes and Health tasks (kept, renamed
-    and closed), so the next section starts as on a new install. BotOps is active again, the team rule back to its default."""
+    and closed), so the next section starts as on a new install. Agent Ops is active again, the team rule back to its default."""
     with api.app.state.store.transaction() as c:
         for (tid,) in c.execute("SELECT id FROM tasks WHERE title LIKE 'Health:%' AND status='open'").fetchall():
             H.task_close(c, H.TICO_ACTOR, tid, "A new section of the story.")
@@ -1543,7 +1543,7 @@ def _story(environment, monkeypatch, parts, **fixtures):
     return api
 
 
-def test_a_findings_botops_task_lifecycle_file_repeat_clear_return_reopen(environment, monkeypatch):
+def test_a_findings_agent_ops_task_lifecycle_file_repeat_clear_return_reopen(environment, monkeypatch):
     _story(
         environment,
         monkeypatch,
@@ -1561,8 +1561,8 @@ def test_a_findings_botops_task_lifecycle_file_repeat_clear_return_reopen(enviro
     )
 
 
-def test_with_no_botops_or_a_person_owned_task_nothing_is_filed_to_a_person(environment, monkeypatch, comments):
-    _story(environment, monkeypatch, [_part_no_botops, _part_no_person, _part_person_owned], comments=comments)
+def test_with_no_agent_ops_or_a_person_owned_task_nothing_is_filed_to_a_person(environment, monkeypatch, comments):
+    _story(environment, monkeypatch, [_part_no_agent_ops, _part_no_person, _part_person_owned], comments=comments)
 
 
 def test_a_tico_bug_reaches_hq_ticket_repeat_comment_support_off_and_daily_caps(environment, monkeypatch, hq, clock):
@@ -1589,7 +1589,7 @@ def test_a_copy_run_from_source_files_no_automatic_report_until_it_names_an_hq(
         assert c.execute("SELECT count(*) FROM health_reports").fetchone()[0] == 0
         (why,) = c.execute("SELECT target, detail FROM events WHERE action='health_monitor.not_reported'").fetchall()
     assert why["target"] == "source_copy" and json.loads(why["detail"])["signatures"] == [sig]
-    # BotOps asking for the report directly is refused the same way; the owner's own click still reports.
+    # Agent Ops asking for the report directly is refused the same way; the owner's own click still reports.
     with pytest.raises(Problem) as refused:
         MH.report(store, app.state.support, app.state.auth, store.settings, SimpleNamespace(actor="bot:botops"), sig)
     assert refused.value.code == "source_copy" and hq.seen == []
@@ -1719,7 +1719,7 @@ def test_a_grouped_wake_hides_a_private_title(environment, monkeypatch, clock):
     _story(environment, monkeypatch, [_part_private_title], clock=clock)
 
 
-def test_a_production_check_is_one_botops_task_and_the_health_page_links_it(environment, monkeypatch):
+def test_a_production_check_is_one_agent_ops_task_and_the_health_page_links_it(environment, monkeypatch):
     _story(environment, monkeypatch, [_part_one_hit, _part_on_page, _part_sweep, _part_links])
 
 
@@ -1879,7 +1879,7 @@ def test_a_computer_on_a_release_the_server_cannot_work_with_is_bad(environment,
         assert found["runner_outdated"]["severity"] == severity
 
 
-def test_branch_blocks_give_botops_the_branch_and_its_recovery_or_refusal(environment, monkeypatch):
+def test_branch_blocks_give_agent_ops_the_branch_and_its_recovery_or_refusal(environment, monkeypatch):
     monkeypatch.setenv("TICO_VERSION", "0.4.45")
     api, runner = built(environment)
     for reason in [

@@ -13,7 +13,7 @@ time. Who reports to whom (`reports_to`) is a separate thing and is never touche
   migrate(c, settings)     once, for a team that had `teams`, org groups or derived departments: every one becomes a
                            group and every bot its group's member (idempotent; `groups_migrated` in the roster)
 
-Built-in bots (BotOps, the Librarian, the Strategy Owner) and helpers are not made members by hand: they are the General
+Built-in bots (Agent Ops, the Librarian, the Strategy Owner) and helpers are not made members by hand: they are the General
 Manager's team, the General group (`BUILT_IN`), which Tico keeps (it cannot be renamed, moved or deleted). The Assistant
 reports to its person and is in no group. The company file puts the Finance Owner in its own team's group (`move_bot`).
 """

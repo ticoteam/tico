@@ -6,9 +6,9 @@ next turn."""
 
 from backend.tests.helpers.api import assign, get, headers, post, ready, runner  # noqa: F401
 from backend.tests.helpers.assistant import say
-from backend.tests.helpers.botops_parity import act
+from backend.tests.helpers.agent_ops_parity import act
 from backend.tests.helpers.strategy_bot_chat import strategy_bot, personal
-from backend.tests.helpers.member_bots import botops, turn  # noqa: F401  (fixture)
+from backend.tests.helpers.member_bots import agent_ops, turn  # noqa: F401  (fixture)
 from backend.tests.helpers.learned import learn
 
 
@@ -94,11 +94,11 @@ def test_a_personal_layer_is_its_persons_alone(api):
     learn(api, "Bots first", token=ops["token"], expected=403)
 
 
-def test_botops_working_for_a_person_never_reaches_their_layer(api, botops):
-    # BotOps doing what she asked borrows her rights, but it is not her chat: it neither reads her layer (asked as her
+def test_agent_ops_working_for_a_person_never_reaches_their_layer(api, agent_ops):
+    # Agent Ops doing what she asked borrows her rights, but it is not her chat: it neither reads her layer (asked as her
     # by default or explicitly) nor adds to it.
     learn(api, "Cara's secret ranking", token="cara-test")
-    attempt = turn(api, botops, person="cara-test", text="Fix the deploy")
+    attempt = turn(api, agent_ops, person="cara-test", text="Fix the deploy")
     for ref in (None, "turn"):
         r = act(api, attempt, "GET", "assistant/learned", ref=ref)
         assert r.status_code == 403 and "secret ranking" not in r.text, r.text

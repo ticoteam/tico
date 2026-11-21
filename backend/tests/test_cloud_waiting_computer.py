@@ -28,7 +28,7 @@ def _cloud_company(environment, monkeypatch):
 
 
 def _waits(api, bot="bot:botops"):
-    """BotOps' cause, its line, its page, and every Needs you row that names it."""
+    """Agent Ops' cause, its line, its page, and every Needs you row that names it."""
     with api.app.state.store.read() as c:
         cause = task_wakes.cannot_run(c, bot)
         line = task_wakes.cause_line(c, bot, cause) if cause else None
@@ -37,7 +37,7 @@ def _waits(api, bot="bot:botops"):
 
 
 def _issue(api):
-    """BotOps' line on Settings > Computers."""
+    """Agent Ops' line on Settings > Computers."""
     found = api.get("/api/v2/operations", headers=signed_in()).json()["issues"]
     return next((issue for issue in found if issue.get("bot") == "botops" and issue["kind"] == "machine"), None)
 
@@ -46,7 +46,7 @@ def test_a_bot_waiting_for_its_cloud_machine_names_it_links_to_computers_and_ask
     api, _, _ = _cloud_company(environment, monkeypatch)
     cause, line, href, needs = _waits(api)
     assert cause == task_wakes.CLOUD_STARTING
-    assert line == "BotOps is waiting for Shared cloud machine to start"
+    assert line == "Agent Ops is waiting for Shared cloud machine to start"
     assert href == "#/settings/computers"
     assert not needs, "a machine on its way is nobody's to fix"
     issue = _issue(api)
@@ -62,7 +62,7 @@ def test_a_failed_cloud_machine_or_no_credit_is_the_persons_with_where_to_fix_it
         c.execute("UPDATE cloud_machines SET problem='no_enroll' WHERE bot='_shared'")
     cause, line, href, needs = _waits(api)
     assert cause == task_wakes.CLOUD_FAILED and href == "#/settings/computers"
-    assert line == "BotOps can't run: Shared cloud machine didn't start"
+    assert line == "Agent Ops can't run: Shared cloud machine didn't start"
     assert [row["href"] for row in needs] == ["#/settings/computers"]
     assert _issue(api)["needs_person"]
     coming = api.get("/api/v2/operations", headers=signed_in()).json()["cloud_coming"]
@@ -83,7 +83,7 @@ def test_a_self_hosted_bot_with_no_computer_keeps_add_a_computer(environment):
         c.execute("UPDATE bots SET state='active' WHERE id='botops'")
     cause, line, href, _ = _waits(api)
     assert cause == task_wakes.NO_COMPUTER and href == "#/settings/computers"
-    assert cause and line == "BotOps has no computer"
+    assert cause and line == "Agent Ops has no computer"
     assert "registered computer" in _issue(api)["action"]
     assert "cloud_coming" in api.get("/api/v2/operations", headers=signed_in()).json()
     seat = rows(api, "SELECT slug FROM bots WHERE state='planned' LIMIT 1")[0]["slug"]

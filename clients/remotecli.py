@@ -338,7 +338,7 @@ def run(args, who=None):
     if fn == "audit":
         return via_tool(client, args)
     if args.cmd in ("api", "credential") or fn == "message redact":
-        return botops_tools(client, args)
+        return agent_ops_tools(client, args)
     if args.cmd == "classify":
         from clients import hubtools
 
@@ -601,7 +601,7 @@ def run(args, who=None):
     raise APIError("unsupported", "This command is not supported by the remote API")
 
 
-def botops_tools(client, args):
+def agent_ops_tools(client, args):
     """`tico api`, `tico credential ...`, `tico message redact`: the tool of the same name. A secret is read from standard input, never from the command line."""
     from clients import hubtools
 
@@ -652,7 +652,7 @@ def botops_tools(client, args):
 
 # ----------------------------------------------------------------------------- bots
 def bots(client, args):
-    """`tico template list`, `tico bot create|check` and `tico bot model`: how BotOps sets the chosen bots up. The other
+    """`tico template list`, `tico bot create|check` and `tico bot model`: how Agent Ops sets the chosen bots up. The other
     `tico bot` commands are specs (BOT in clients/commands/bots.py).
 
     The materialization is `clients/catalog.py`, which needs no network. What comes from the
@@ -682,17 +682,24 @@ def bots(client, args):
         fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
         return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
     if args.fn == "bot check":
-        from clients.botcopy import folder_of
         from clients.manifest import folder_dir
 
-        problems = catalog.check(folder_dir(workspace, folder_of(client, args.slug), args.slug), args.slug)
+        try:
+            found = client.get(f"bots/{args.slug}")
+        except (APIError, AttributeError):
+            found = None
+        found = found if isinstance(found, dict) else {}
+        # The server's record of this bot: its id and slug, either of which its checkout's manifest may name.
+        also = [str(found[key]) for key in ("id", "slug") if found.get(key)]
+        path = folder_dir(workspace, found.get("folder"), args.slug)  # the folder the server recorded, as before
+        problems = catalog.check(path, args.slug, also)
         return {"ready": not problems, "problems": problems}
     if not args.template:
         raise APIError("usage", "tico bot create --template T builds the bot; --record-only only registers it")
     record = onboarding(client)
     chosen = (record.get("selected") or {}).get(args.slug) or {} if args.slug else {}
     registered = register_for_requester(client, args, chosen)
-    slug = args.slug or (registered or {}).get("slug") or local_slug(client, args, workspace)
+    slug = (registered or {}).get("slug") or args.slug or local_slug(client, args, workspace)  # the server's word wins
     path = catalog.materialize(
         args.template,
         slug,
@@ -728,7 +735,7 @@ def local_slug(client, args, workspace):
         known = {b.get("slug") or b.get("name") for b in client.get("bots", include_archived="1", fields="slug,name")}
     except (APIError, AttributeError, TypeError):
         known = set()
-    reserved = ("assistant", "botops", "librarian", "strategy-owner", "general-manager", "finance-owner")
+    reserved = ("assistant", "botops", "agent-ops", "librarian", "strategy-owner", "general-manager", "finance-owner")
     return catalog.free_slug(
         args.name or card.get("name") or args.template,
         lambda slug: (

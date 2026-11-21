@@ -171,7 +171,7 @@ def test_teams_org_groups_and_person_teams_become_groups_and_no_bot_changes_grou
 # ----------------------------------------------------------------------------- the General group
 def test_the_built_in_group_is_kept_by_tico_and_setup_puts_built_in_bots_in_it(api):
     with api.app.state.store.transaction() as c:
-        add_bots(c, botops=({"template": "botops"}, None))
+        add_bots(c, **{"botops": ({"template": "agent-ops"}, None)})
         Groups.place(c, api.app.state.store.settings, ["botops"])
     assert group(api, "built-in")["name"] == "General"
     assert teams_now(api)["botops"] == "built-in"
@@ -186,7 +186,7 @@ def test_migration_puts_the_built_in_bots_in_the_built_in_group_and_no_one_else(
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM bot_config")
         c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(doc),))
-        add_bots(c, botops=({"template": "botops"}, None), cmo=({}, None))
+        add_bots(c, **{"botops": ({"template": "agent-ops"}, None)}, cmo=({}, None))
         assert Groups.migrate(c, api.app.state.store.settings) is True
     assert teams_now(api) == {"botops": "built-in", "cmo": None}
     assert group(api, "built-in")["name"] == "General"

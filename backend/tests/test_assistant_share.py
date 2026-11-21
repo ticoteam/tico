@@ -170,7 +170,7 @@ def test_removing_the_last_bot_turns_learned_sharing_back_off(api):
 
 
 def test_nobody_acting_for_a_person_or_a_bot_chooses_or_reads(api):
-    """BotOps acting for a person, or for a bot, borrows rights (`via`); neither is the person's own choice nor the
+    """Agent Ops acting for a person, or for a bot, borrows rights (`via`); neither is the person's own choice nor the
     chosen bot reading in its own run."""
     from backend import assistant_share
     from backend.auth import Identity

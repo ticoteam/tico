@@ -21,7 +21,7 @@ routines:
     labels: [priority:p2]
     enabled: false
 
-# What this bot may touch. BotOps replaces {{mailbox}} from the Mailbox: line in the reviewed instructions.
+# What this bot may touch. Agent Ops replaces {{mailbox}} from the Mailbox: line in the reviewed instructions.
 # Only the assigned mailbox is read, through the grant this bot gets as its person's message bot (Tools); another
 # mailbox is that mailbox's person's to share.
 tools:

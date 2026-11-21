@@ -19,7 +19,7 @@ TOOLS = []  # each {"name", "description", "properties", "required", "writes", "
 AUDIENCE = {}  # tool name -> the kinds of caller it is offered to (hubtools.AUDIENCE takes these)
 
 PEOPLE = ("owner", "admin", "member")
-REQUESTER = PEOPLE + ("botops",)  # a person's own rights, or BotOps's as the person who asked it
+REQUESTER = PEOPLE + ("botops",)  # a person's own rights, or Agent Ops's as the person who asked it
 
 
 def _s(description, **extra):
@@ -244,7 +244,7 @@ def bot_go_live_all(api, args):
 @tool(
     "tico_bot_quarantine_clear",
     "Lift a bot's quarantine (a refused or stopped run held its work) so it is active and takes work again. Read why it "
-    "was quarantined first (tico_health_check, the bot's page). Run by a person who manages the bot, or BotOps as the "
+    "was quarantined first (tico_health_check, the bot's page). Run by a person who manages the bot, or Agent Ops as the "
     "person who asked it. Refused with 409 when the bot is not quarantined.",
     {"bot": _s("The bot's slug"), "note": _s("Why it is safe to resume; kept with the change")},
     required=("bot",),

@@ -15,7 +15,7 @@ menu's Post a job, which creates the seat first:
 3. **Pick.** `hire` fills the seat: the bot is created in Onboarding, in the seat's place on the chart with its
      reporting line, under the same rules as any bot the person adds (backend/settings_admin.py `create_bot`). Its
      repository comes only after that: a starter's computer builds it from the bot's definition, any other template's
-     BotOps does on the "Set up" task it gets now. The seat is then closed, filled by that bot."""
+     Agent Ops does on the "Set up" task it gets now. The seat is then closed, filled by that bot."""
 
 import json
 import re
@@ -843,8 +843,8 @@ def candidates(auth, onboarding, c, who, seat_id):
     candidate, strong. A coding job in Engineering still lists the cloud agents after it. Deterministic and local: the
     same seat gives the same list, and nothing leaves this server."""
     row = lifecycle.seat(c, seat_id)
-    # Listing candidates changes nothing: BotOps lists them with the rights of the person it acts for, and the pick is
-    # their own tap on a card (botops_act.CONFIRM).
+    # Listing candidates changes nothing: Agent Ops lists them with the rights of the person it acts for, and the pick is
+    # their own tap on a card (agent_ops_act.CONFIRM).
     _may_hire(auth, c, replace(who, confirmed=True) if who.via == "botops" else who, row)
     value, cards = _recruitable(onboarding)
     departments = {d["id"]: d["name"] for d in value["departments"]}
@@ -947,7 +947,7 @@ def candidates(auth, onboarding, c, who, seat_id):
 # ------------------------------------------------------------------ 3. the pick
 def _may_hire(auth, c, who, row):
     """Whoever may change the seat picks for it: the owner, or a person it reports up to, in person or on a request
-    they confirmed. A bot never picks, and BotOps acting for someone does so only on their confirmed request."""
+    they confirmed. A bot never picks, and Agent Ops acting for someone does so only on their confirmed request."""
     if who.role not in ("owner", "human") or (who.via and not who.confirmed):
         raise Problem(
             "forbidden", "Only a person picks a candidate for a seat: the owner, or someone the seat reports up to", 403
@@ -1011,7 +1011,7 @@ def _follow_filled(c, who, seat_id, bot, now):
 
 def onboard(c, who, onboarding, row, card, slug, *, name, description, instructions, rendered, answers, model):
     """Put the bot that fills a seat into Onboarding, in the seat's place, and only then give it its repository: a starter's
-    computer builds it from this definition (`materialize`), any other template's BotOps does on its "Set up" task. A hire
+    computer builds it from this definition (`materialize`), any other template's Agent Ops does on its "Set up" task. A hire
     and a cloud agent's add to a seat both land here, so they land the same way. Returns the setup task's id, if any."""
     from . import message_bots
 
@@ -1069,7 +1069,7 @@ def onboard(c, who, onboarding, row, card, slug, *, name, description, instructi
 
 def hire(auth, onboarding, c, who, seat_id, body):
     """Fill the seat with the picked candidate: the bot in Onboarding, in the seat's place, and only then its repo."""
-    from .onboarding import BOTOPS
+    from .onboarding import AGENT_OPS
 
     row = c.execute("SELECT * FROM seats WHERE id=?", (seat_id,)).fetchone()
     if row and row["filled_by"]:
@@ -1086,8 +1086,10 @@ def hire(auth, onboarding, c, who, seat_id, body):
     pinned = _pinned(cards, row)
     if pinned and pinned["template"] != body.template:
         raise Problem("template", "Pick the template this seat was set up with", 422)
-    if not card["starter"] and not H.bot(c, BOTOPS):
-        raise Problem("botops", "BotOps builds this bot, and this team has no BotOps; add it from Templates first", 409)
+    if not card["starter"] and not H.bot(c, AGENT_OPS):
+        raise Problem(
+            "botops", "Agent Ops builds this bot, and this team has no Agent Ops; add it from Templates first", 409
+        )
     if body.model:
         if body.model not in {m["id"] for m in _models(c, onboarding)}:
             raise Problem("model", "Choose one of your team's current models", 422)

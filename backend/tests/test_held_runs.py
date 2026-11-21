@@ -1,5 +1,5 @@
 """A held run always has someone on it, shows on Health after two hours, and its task's queued work joins its resumed
-turn (Dev 543: on Oct 23 the stall check closed BotOps's review of two held DevOps runs and nobody looked for 2.5 days,
+turn (Dev 543: on Oct 23 the stall check closed Agent Ops's review of two held DevOps runs and nobody looked for 2.5 days,
 while Review 1 verdicts queued behind held runs on their tasks). A held run is not held for good: after HELD_REVIEW_HOURS
 unreviewed it resumes once, and a resumed try held again ends quietly."""
 
@@ -32,7 +32,7 @@ from backend.tests.helpers.execution_review import (
     stop_partway,
     sweep,
 )
-from backend.tests.helpers.held_runs import botops, held, task_held
+from backend.tests.helpers.held_runs import agent_ops, held, task_held
 
 TITLE = "Review ops's stopped runs held for a check"
 
@@ -40,7 +40,7 @@ TITLE = "Review ops's stopped runs held for a check"
 def reviews(api):
     with api.app.state.store.read() as c:
         return [
-            {**dict(r), "body": H.task_words(c, r["id"])}  # what Tico gave BotOps: its instructions
+            {**dict(r), "body": H.task_words(c, r["id"])}  # what Tico gave Agent Ops: its instructions
             for r in c.execute("SELECT id,status,created_at FROM tasks WHERE title=? ORDER BY rowid", (TITLE,))
         ]
 
@@ -60,7 +60,7 @@ def test_a_held_run_whose_review_task_was_closed_reopens_it_on_the_next_sweep(ap
     backdate(api, first['id'], 60)
     with api.app.state.store.transaction() as c:
         if how == 'closed':
-            H.task_close(c, H.TICO_ACTOR, first['id'], 'Closed by the stall check: BotOps cannot diagnose itself.')
+            H.task_close(c, H.TICO_ACTOR, first['id'], 'Closed by the stall check: Agent Ops cannot diagnose itself.')
         else:
             H.task_done(c, H.bot_actor(H.FLEET_MAINTAINER), first['id'], 'Looked.', H.task(c, first['id'])['version'])
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
@@ -136,7 +136,7 @@ def test_a_review_closed_while_its_runs_are_held_is_opened_again_naming_each_of_
     second = held_again(api, machine)
     [review] = reviews(api)
     with api.app.state.store.transaction() as c:
-        H.task_close(c, H.TICO_ACTOR, review['id'], 'Closed by the stall check: BotOps cannot diagnose itself.')
+        H.task_close(c, H.TICO_ACTOR, review['id'], 'Closed by the stall check: Agent Ops cannot diagnose itself.')
     backdate(api, review['id'], 60)
     sweep(api)
     [again] = [r for r in reviews(api) if r['status'] == 'open']
@@ -148,7 +148,7 @@ def test_a_review_closed_while_its_runs_are_held_is_opened_again_naming_each_of_
 
 
 def test_a_bot_renamed_while_its_review_is_open_gets_no_second_review(api):
-    """The title carries the slug, so a lookup by title missed after a rename and BotOps got a second task for the bot."""
+    """The title carries the slug, so a lookup by title missed after a rename and Agent Ops got a second task for the bot."""
     machine, message, first = held(api)
     [review] = reviews(api)
     with api.app.state.store.transaction() as c:
@@ -186,13 +186,13 @@ def test_the_next_bot_to_take_a_renamed_bots_slug_gets_a_review_of_its_own(api):
     assert len(rows) == 2 and 'job-old' in rows[0]['body'] and 'job-new' in rows[1]['body']
 
 
-def test_a_held_private_run_has_an_open_operator_review_when_botops_cannot_read_it(api):
+def test_a_held_private_run_has_an_open_operator_review_when_agent_ops_cannot_read_it(api):
     """Criterion 12. Access failure names the boundary and goes to the authorized operator, not a guessed retry."""
     machine, attempt, task_id, other_id = task_held(api, private=True)
     with api.app.state.store.read() as c:
-        botops_identity = privacy.actor(Identity('bot:' + H.FLEET_MAINTAINER, 'bot'))
+        agent_ops_identity = privacy.actor(Identity('bot:' + H.FLEET_MAINTAINER, 'bot'))
         message = H.message(c, attempt['message']['id'])
-        assert not privacy.message_readable(c, botops_identity, message)
+        assert not privacy.message_readable(c, agent_ops_identity, message)
         operator = c.execute("SELECT owner_id FROM bot_config WHERE bot='ops'").fetchone()[0]
         display_name = H.bot(c, 'ops')['display_name']
         title = H.HELD_OPERATOR_REVIEW_TITLE.format(display_name=display_name)
@@ -213,14 +213,14 @@ def test_a_held_private_run_has_an_open_operator_review_when_botops_cannot_read_
             {**dict(r), "body": H.task_words(c, r["id"])}
             for r in c.execute("SELECT id,status FROM tasks WHERE title=? AND owner_id=?", (title, 'human:' + operator))
         ]
-        botops_reviews = c.execute(
+        agent_ops_reviews = c.execute(
             "SELECT count(*) FROM tasks WHERE title=? AND status IN ('open','doing','waiting','review','ready')",
             (TITLE,),
         ).fetchone()[0]
     assert len(reviews) == 1 and reviews[0]['id'] == existing['id'] and reviews[0]['status'] == 'open'
     assert "only the bot's owner or operator" in reviews[0]['body']
-    assert 'BotOps has made no recovery decision' in reviews[0]['body']
-    assert botops_reviews == 0
+    assert 'Agent Ops has made no recovery decision' in reviews[0]['body']
+    assert agent_ops_reviews == 0
     assert 'Bot: ops.' in reviews[0]['body']
 
 
@@ -241,7 +241,7 @@ def test_a_held_run_left_two_hours_without_a_decision_is_on_health_not_in_the_st
     assert 'saved 1 stopped run for later' in early['title'] and early['needs_person'] is False
     assert not [ch for ch in get(api, 'health')['checks'] if ch['id'] == 'stopped_runs']
     stopped_two_hours(api, attempt['id'])
-    issue = uncertain_issue(api)  # Ana operates ops: Health shows it, BotOps reviews it
+    issue = uncertain_issue(api)  # Ana operates ops: Health shows it, Agent Ops reviews it
     assert issue['title'] == 'ops has 1 stopped run waiting 2 h'
     assert issue['needs_person'] is False and issue['action'] == 'review' and issue['severity'] == 'error'
     assert issue['detail'].startswith('Nobody has decided it yet.')
@@ -540,7 +540,7 @@ def restart_mid_merge(api, machine, attempt):
 
 def held_on_task(api, title='Ship the export'):
     """The same held run, on a task of ops rather than in a chat."""
-    botops(api)
+    agent_ops(api)
     machine = runner(api, 'ana')
     assign(api, machine, 'ops')
     ready(api, machine, ['ops'])
@@ -562,7 +562,7 @@ def decision_of(api, job_id):
 
 def test_a_held_bash_run_resumes_after_four_hours_with_the_check_first_note(api):
     """Part 2. Unreviewed for HELD_REVIEW_HOURS, the held run resumes on its own, the way an update cut does, and its
-    BotOps review closes because nothing is held any more."""
+    Agent Ops review closes because nothing is held any more."""
     machine, message, attempt = held(api)
     [review] = reviews(api)
     assert review['status'] == 'open'
@@ -596,7 +596,7 @@ def test_a_held_run_on_a_finished_task_is_dismissed(api):
 
 def test_a_resumed_try_held_again_ends_quietly_with_a_note_on_its_task(api):
     """Resuming is offered once. The resumed try ends uncertain too: it waits out the four hours like any held run,
-    then ends quietly, with a note on the task and no BotOps task about the stopped runs."""
+    then ends quietly, with a note on the task and no Agent Ops task about the stopped runs."""
     machine, attempt, task_id = held_on_task(api)
     stopped_two_hours(api, attempt['id'], minutes=241)
     assert [d['state'] for d in sweep(api)] == ['queued']
@@ -614,10 +614,10 @@ def test_a_resumed_try_held_again_ends_quietly_with_a_note_on_its_task(api):
         assert c.execute("SELECT count(*) FROM tasks WHERE title LIKE 'Find why %'").fetchone()[0] == 0
 
 
-def test_botops_lists_and_reconciles_a_held_run_on_a_private_task_without_its_words(api):
-    """Part 1. BotOps, as itself, lists another bot's held run and clears it, though the task is private to Ana. The run
+def test_agent_ops_lists_and_reconciles_a_held_run_on_a_private_task_without_its_words(api):
+    """Part 1. Agent Ops, as itself, lists another bot's held run and clears it, though the task is private to Ana. The run
     arrives without its words: no task, request, output or tool calls, as reconcile_job has always allowed."""
-    botops(api)
+    agent_ops(api)
     machine = runner(api, 'ana')
     assign(api, machine, 'ops')
     ready(api, machine, ['ops'])
@@ -629,12 +629,12 @@ def test_botops_lists_and_reconciles_a_held_run_on_a_private_task_without_its_wo
     with api.app.state.store.transaction() as c:
         BS.write(c, 'botops', {'name': 'botops', 'runtime': 'fake', 'status': 'active'})
         c.execute("INSERT OR IGNORE INTO bot_config(bot,owner_id) VALUES('botops','ana')")
-    botops_machine = runner(api, 'ana', label='BotOps Mac')
-    assign(api, botops_machine, 'botops')
-    ready(api, botops_machine, ['botops'])
+    agent_ops_machine = runner(api, 'ana', label='Agent Ops Mac')
+    assign(api, agent_ops_machine, 'botops')
+    ready(api, agent_ops_machine, ['botops'])
     post(api, 'chat/botops', {'text': 'Review the held runs.'}, token='ana-test')
-    botops_turn = claim(api, botops_machine, 'botops')
-    [review] = get(api, 'bots/ops/execution-review', token=botops_turn['token'])['jobs']
+    agent_ops_turn = claim(api, agent_ops_machine, 'botops')
+    [review] = get(api, 'bots/ops/execution-review', token=agent_ops_turn['token'])['jobs']
     assert review['id'] == attempt['job_id'] and review['readable'] is False
     assert review['task'] is None and review['request'] == '' and review['output'] == [] and review['tools'] == []
     assert review['acted'] == ['Bash']
@@ -647,7 +647,7 @@ def test_botops_lists_and_reconciles_a_held_run_on_a_private_task_without_its_wo
             'note': 'The shell step already ran; do not repeat it.',
             'acknowledge_uncertain_effects': True,
         },
-        token=botops_turn['token'],
+        token=agent_ops_turn['token'],
     )
     assert job_state(api, attempt['job_id']) == 'canceled'
 
@@ -695,7 +695,7 @@ def test_a_resumed_try_that_loses_its_lease_again_ends_quietly_after_four_hours(
 def test_an_ordinary_lease_expiry_resumes_with_the_outside_action_it_held_on_named(api):
     """Codex P2. A run whose lease simply lapsed (no restart, no lease-loss continuation) that ran `gh pr merge` is held,
     and its resume after four hours names that merge to check first, not 'nothing was recorded'."""
-    botops(api)
+    agent_ops(api)
     machine, message, attempt = restarted_mid_turn(api, [('Read', None), ('Bash', None)], reported=False)
     with api.app.state.store.transaction() as c:
         c.execute(
@@ -750,7 +750,7 @@ def harness_dies(api, machine, attempt, thread):
 def test_a_run_whose_harness_was_killed_resumes_once_and_a_second_cut_off_holds_for_a_person(api):
     """Drill C1: killing Builder's codex mid-Build left the run 'interrupted / Process exited (exit code 0)', held and
     silent. Not the bot's choice: it runs again at once, told to check what is already done; a second in a row holds."""
-    botops(api)
+    agent_ops(api)
     machine, message, attempt = setup_attempt(api)
     harness_dies(api, machine, attempt, 'killed')
     assert [d['state'] for d in sweep(api)] == ['queued']  # at once, no usual wait
@@ -801,5 +801,5 @@ def test_run_now_by_someone_who_may_not_decide_says_why_instead_of_queued_false(
     """A caller who may start the task but not decide on the held run gets the reason, not a silent queued:false."""
     machine, attempt, task_id, other_id = task_held(api)
     r = api.post(f"/api/v2/tasks/{task_id}/run-now", json={}, headers=headers('ben-test'))
-    assert r.status_code == 409 and 'stopped partway' in r.text and 'operator or BotOps' in r.text
+    assert r.status_code == 409 and 'stopped partway' in r.text and 'operator or Agent Ops' in r.text
     assert job_state(api, attempt['job_id']) == 'uncertain'

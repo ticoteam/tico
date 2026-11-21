@@ -22,7 +22,7 @@ DELIVERY_MAX = 10
 ID = re.compile(r"sg_[0-9a-f]{32}\Z")
 FINGERPRINT = re.compile(r"sha256:[0-9a-f]{64}\Z")
 ROLES = {
-    "botops": ("botops",),
+    "botops": ("agent-ops",),  # the Gateway's role name, and the template it counts
     "goal_manager": ("strategy-owner",),
     "engineering_lead": ("engineering-manager", "engineering-manager"),
 }

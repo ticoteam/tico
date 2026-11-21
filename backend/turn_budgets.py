@@ -1,7 +1,7 @@
 """Turn budgets: a bot that starts too many runs is held (quiet task flow, section 8).
 
 Every bot has a budget of runs per hour and per day, `turns_per_hour` (default 300) and `turns_per_day` (default 2500).
-The team sets the defaults (Settings API, owner and admins); a bot's owner, operator or BotOps may override either on
+The team sets the defaults (Settings API, owner and admins); a bot's owner, operator or Agent Ops may override either on
 the bot, and a bot with no override of its own follows the team. 0 is no limit for that window; `null`/"default" on a
 bot clears its override.
 
@@ -200,7 +200,7 @@ def _hold(c, settings, bot, window, runs, budget, now):
         H.TICO_ACTOR,
         revision=now,
     )
-    # One notice each to BotOps and Health when the guard trips (CONTRACT §1 run guard); the hold itself is the same.
+    # One notice each to Agent Ops and Health when the guard trips (CONTRACT §1 run guard); the hold itself is the same.
     words = (
         f"{name} is held: {runs} runs in the last {window} against a budget of {budget}. It takes no new turns "
         "until a person releases it."
@@ -224,7 +224,7 @@ def words(c, bot):
 
 def release(c, actor, bot, how=None):
     """Lift the hold; the count starts over from now. `how` is "raised" for a budget raised above the count, else a
-    person's (or a bot's, BotOps') release. Answers whether the bot was held."""
+    person's (or a bot's, Agent Ops') release. Answers whether the bot was held."""
     ended = holds.release(
         c,
         holds.RUNAWAY,
@@ -288,7 +288,7 @@ def view(c, bot, config):
 
 def set_bot(admin, c, who, bot, body, undo_change_id=None):
     """Set the bot's own budget (SettingsAdmin's pattern: manager check, revision check, audit row, undo)."""
-    admin._manager(c, who, bot, botops=True)
+    admin._manager(c, who, bot, agent_ops=True)
     config = admin._config(c, bot)
     if config["revision"] != body.expected_revision:
         raise Problem("version_conflict", "Bot configuration changed; refresh before saving", 409)
@@ -378,7 +378,7 @@ def install(app, store, auth, mutate, settings_admin):
         with store.read() as c:
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             seeing(c, who, bot)
-            settings_admin._manager(c, who, bot, botops=True)
+            settings_admin._manager(c, who, bot, agent_ops=True)
             return view(c, bot, settings_admin._config(c, bot))
 
     @app.post(
@@ -420,7 +420,7 @@ def install(app, store, auth, mutate, settings_admin):
             nonlocal bot
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             seeing(c, who, bot)
-            settings_admin._manager(c, who, bot, botops=True)
+            settings_admin._manager(c, who, bot, agent_ops=True)
             from . import bot_stops
 
             return {"bot": bot, "released": bot_stops.release(c, who.actor, bot)}

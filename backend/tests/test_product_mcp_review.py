@@ -21,7 +21,7 @@ def test_non_owner_cannot_invoke_hidden_product_tool_or_contact_github(api, gh):
     gh.permissions = {"administration": "write", "metadata": "read"}
     before = len(gh.calls)
     args = {"name": "tico-recorder", "operation_id": "review-non-owner", "confirm_repository": "Acme/tico-recorder"}
-    for token in ("person-test", "bot-test", "botops-test", "runner-test"):
+    for token in ("person-test", "bot-test", "agent-ops-test", "runner-test"):
         response = mcp(api, args, token)
         if response.status_code == 200:
             result = response.json()["result"]

@@ -217,7 +217,7 @@ task stays with its bot, nobody more is woken for it, and the built-in Quiet bot
 manager once it has been quiet 6 hours (one batched wake per manager). When no manager can hear of it (none, the
 manager owns it or may not read it, it was Late already, a person owns it, or it waits only on a release a person
 cuts), the bot that stalled asks a person who reads it, in its own words, once ("I'm stuck on Build: ... Can you help
-or tell me what to do?"), and BotOps asks for it when it cannot run; the question goes when the task moves on. Any change to the task starts the count again. See
+or tell me what to do?"), and Agent Ops asks for it when it cannot run; the question goes when the task moves on. Any change to the task starts the count again. See
 [The never-stuck check](dev/pipelines-v3.md#the-never-stuck-check).
 
 A person hands a task back to its owner with **Try again** (`POST /api/v2/tasks/{id}/try-again`).
@@ -234,8 +234,8 @@ and an agent's @ only marks the task unread. No chat, email or push goes to a pe
 So whatever needs a person to act asks them, and only bots write questions, never Tico. A bot that files a task for a
 person (`tico task create --owner <person>`) files its own task, with the title as its question to them; Tico's own
 notices to a person (an automation on hold, legal mail, a held webhook, a rule that asks for a person, a stopped bot)
-are the person's task with BotOps' question on it; the Strategy Owner's asks are its own tasks with its question, which
-BotOps asks for it while it cannot run. The question goes when the task moves on.
+are the person's task with Agent Ops' question on it; the Strategy Owner's asks are its own tasks with its question, which
+Agent Ops asks for it while it cannot run. The question goes when the task moves on.
 
 `GET /api/v2/needs-you` returns the list; `?count=true` returns its one number (beside Flow in the Tasks header; the sidebar shows Flow's mark while it is above 0, and a phone's Flow tab turns jade).
 
@@ -260,7 +260,7 @@ updates what it owns first, in the section the answer belongs to (the Strategy O
 remembers it (`memory/decisions.md` or its learnings), and closes the question's task. A setup-made bot that reports to
 the owner ends its own "Set yourself up" task with the skill, once, for them ([Onboarding](onboarding.md)); no ping is
 ever automatic after that. `POST /api/v2/flow/ping` takes `scope` (`reports`, `bot` or `group`) and `id`, and
-reaches only bots you may read, never BotOps or the Assistant; a bot you pinged in the last 10 minutes is listed as
+reaches only bots you may read, never Agent Ops or the Assistant; a bot you pinged in the last 10 minutes is listed as
 `recent` and not messaged again. There is no CLI or MCP command for it yet.
 
 ## Sub-tasks

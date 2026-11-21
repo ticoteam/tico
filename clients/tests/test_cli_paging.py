@@ -13,7 +13,7 @@ def calls(monkeypatch):
 
     class Api:
         def __init__(self, *args, **kw):
-            self.__dict__["_tico_is_botops"] = False
+            self.__dict__["_tico_is_agent_ops"] = False
 
         def get(self, path, /, **query):
             if path == "me":

@@ -104,7 +104,7 @@ def view(c, settings, blobs):
 
 
 def require_owner(who, tap=False):
-    """The owner, as themselves: never a bot, BotOps or the Assistant acting for them. `tap`: their own tap on a Confirm
+    """The owner, as themselves: never a bot, Agent Ops or the Assistant acting for them. `tap`: their own tap on a Confirm
     card counts too (a change with no secret in it; backend/assistant.py confirm)."""
     if who.role != "owner" or (who.via and not (tap and who.confirmed)) or who.task_actor:
         raise Problem("forbidden", "Only the owner sets where the company's files are stored, signed in to Tico", 403)

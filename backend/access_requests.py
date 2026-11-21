@@ -2,7 +2,7 @@
 """Access requests: a bot asks for a level on something that already exists, a Tools tool or a GitHub repository, and
 the request reaches a person only when a person must decide.
 
-A bot asks for itself (`tico access request <resource> --level read|read_write --why ...`); BotOps, the Tools page's
+A bot asks for itself (`tico access request <resource> --level read|read_write --why ...`); Agent Ops, the Tools page's
 owner and any person or their agent ask for a bot (`--for <bot>`). The answer, in order:
 - The bot already has that level (a grant, Everyone can read, a repository it reaches): answered at once, nothing kept.
 - An open request for the same bot, resource and level: the repeat counts on it and notifies nobody again. A task that
@@ -14,7 +14,7 @@ owner and any person or their agent ask for a bot (`--for <bot>`). The answer, i
   URLs, SSH keys, files on computers) and bot repositories always ask.
 - Otherwise one card per person who can unblock it (`tool_access.may_change_access` for a tool; the Owner and the
   admins for a repository, the Owner alone for a built-in bot), the resource's connector first, each in their chat
-  with the Tools page's owner (BotOps when there is none). The first to Grant or Decline resolves it; every other copy
+  with the Tools page's owner (Agent Ops when there is none). The first to Grant or Decline resolves it; every other copy
   of the card shows it resolved and asks nothing.
 
 A request closes itself the moment the access exists, however it was given: its card, the Tools page, the Tools Owner,
@@ -300,7 +300,7 @@ def approvers(c: Any, row: Any, vault: Any, auth: Any) -> Any:
 
 # ---------------------------------------------------------------------------------------------------- cards
 def _poster(c: Any) -> Any:
-    """The bot whose chat carries the cards: the Tools page's own owner, else BotOps."""
+    """The bot whose chat carries the cards: the Tools page's own owner, else Agent Ops."""
     page_owners = _mod("page_owners")
 
     owner = page_owners.owner(c, "tools", fallback=False)
@@ -492,7 +492,7 @@ def _subject(c: Any, who: Any, for_bot: Any, auth: Any) -> Any:
     if asker_bot and subject != asker_bot and asker_bot not in ("bot:" + H.FLEET_MAINTAINER, tools_owner):
         raise Problem(
             "forbidden",
-            "A bot asks for its own access; BotOps and the Tools Owner ask for any bot's. Ask the Tools Owner",
+            "A bot asks for its own access; Agent Ops and the Tools Owner ask for any bot's. Ask the Tools Owner",
             403,
         )
     if who.role in ("owner", "human") and not auth.bot_access(c, who, str(bot["id"]))["see"]:
@@ -1056,7 +1056,7 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> Any:
 
     @app.post("/api/v2/access-requests")
     def access_request_create(request: Request, body: AccessRequestBody):
-        """A bot asks for a level on a tool or a repository (a person or BotOps for a bot, `for_bot`): granted at once
+        """A bot asks for a level on a tool or a repository (a person or Agent Ops for a bot, `for_bot`): granted at once
         when it can be, else one card to each person who can grant it. Repeats count on the open request."""
         who = request.state.identity
         return mutate(request, body, lambda c: create(c, who, body))  # pyright: ignore[reportUnknownLambdaType]

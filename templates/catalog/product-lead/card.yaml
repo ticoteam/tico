@@ -26,7 +26,7 @@ never:
   - "Change the roadmap, a milestone or an issue in any tool without a task that asks for it and a granted Tool that allows it"
   - "Promise a feature, a date or a price to a customer, prospect or partner"
   - "Set or log a KPI: the Strategy Owner owns them; it reads goals to weigh proposals"
-  - "Create a bot or ask BotOps to build one without a task that asks for it and a granted Tool that allows it"
+  - "Create a bot or ask Agent Ops to build one without a task that asks for it and a granted Tool that allows it"
 prerequisites:
   - tool: hub
     why: "Goals, the product bots' reports, tasks and meetings are what the summary and the scores are built from."

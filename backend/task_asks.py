@@ -19,7 +19,7 @@ this cap, send this report) waits on an OK from a named person. The OK is a requ
 
 What an OK has to be, every check the old approval objects made (hubdb.approval_* before the cut-over):
 - asked of a person by name, never "anyone", and given by that person (the one it was given to, after a give);
-- given by the person's own click in their own session: not a token, an Assistant, BotOps, a run, Tico support;
+- given by the person's own click in their own session: not a token, an Assistant, Agent Ops, a run, Tico support;
 - for exactly the content they were shown: the preview they opened (`show`, recorded by the server) has the hash of
   the content asked about, and that is the hash they send back;
 - used only by whoever asked, for the same subject and exactly the same content, once. A push past is never an OK, a
@@ -457,7 +457,7 @@ def kind_of(subject: str) -> str:
 
 def own_click(who: object) -> bool:
     """Whether a request is a person's own click in their own session: a signed-in person, with no personal token, no
-    Assistant or BotOps acting for them (confirmed or not), no bot run, external agent, service key, computer or Tico
+    Assistant or Agent Ops acting for them (confirmed or not), no bot run, external agent, service key, computer or Tico
     support session."""
     role = getattr(who, "role", "")
     if role not in ("owner", "human") or not is_human(getattr(who, "actor", "")):
@@ -611,7 +611,7 @@ def assistant_reads_own_ok(conn: "sqlite3.Connection", person: object, carried: 
 
 
 def acting_for_people(by: str) -> bool:
-    """Whether this write is the Assistant's or BotOps': as itself, or acting for a person in this request (H.VIA,
+    """Whether this write is the Assistant's or Agent Ops': as itself, or acting for a person in this request (H.VIA,
     set by backend/app.py for the whole request). The engine's answer refuses them an OK (backend/answers.py)."""
     H = _h()
     return by in ACTS_FOR_PEOPLE or str(H.VIA.get() or "") in ("assistant", "botops")
@@ -634,9 +634,9 @@ def given_by_another_allowed(conn: "sqlite3.Connection", requirement_id: str, va
     return bool(found) and kind_of(found["subject"]) in ANY_ALLOWED
 
 
-# The bots that act for a person (backend/assistant.py, backend/botops_act.py): they never give an OK of any kind.
+# The bots that act for a person (backend/assistant.py, backend/agent_ops_act.py): they never give an OK of any kind.
 ACTS_FOR_PEOPLE = ("bot:assistant", "bot:botops")
-NOT_YOURS = "An OK is the person's own: the Assistant and BotOps never give one. Send back is fine."
+NOT_YOURS = "An OK is the person's own: the Assistant and Agent Ops never give one. Send back is fine."
 OWN_IN_TICO = "An OK is the person's own, in Tico. Send back is yours to say"
 SHARED_OWN = "A page several people approve is answered only by your own click in Tico"
 SHARED_NOT_HELD = "A page several people approve takes its answer now, never sent later from a hold"
@@ -645,7 +645,7 @@ SHARED_NOT_HELD = "A page several people approve takes its answer now, never sen
 def refuses_ok_by(conn: "sqlite3.Connection", who: object, requirement_id: str, value: object) -> str | None:
     """For every answer path before the engine (the answer route, a batch decision): the refusal's words when `ok` to
     an OK requirement, bound or plain, on anyone's ask, does not come from the person's own session: the Assistant or
-    BotOps (acting for a person, confirmed or not, or as itself), a personal token, or anything else acting for them.
+    Agent Ops (acting for a person, confirmed or not, or as itself), a personal token, or anything else acting for them.
     Else None. A send back stays theirs to give, except on a page several people approve: its first answer, OK or send
     back, settles it for all of them, so either is only an approver's own click."""
     said = str(value or "").strip().casefold()

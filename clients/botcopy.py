@@ -1,6 +1,6 @@
 """Copying a bot, and copying a skill, on the computer that holds the bot repositories.
 
-The server holds no bot repository (backend/bot_tools.py), so the files are BotOps's to move, in the workspace,
+The server holds no bot repository (backend/bot_tools.py), so the files are Agent Ops's to move, in the workspace,
 once the server has said the requester may (backend/bot_copy.py): it checks the rights, registers the new bot and
 grants credentials; this module makes the repository and the commits.
 
@@ -519,8 +519,8 @@ def copy_skill(workspace, skill, from_bot, to_bots, replace=False, path=None):
 
 
 # ----------------------------------------------------------------------------- the commands
-# Each takes `person`, the api acting as the requester (BotOps: the person whose chat started the run), for what the server
-# checks with their rights, and `api`, this computer's own (BotOps's), for the one call that is BotOps's: the GitHub repository.
+# Each takes `person`, the api acting as the requester (Agent Ops: the person whose chat started the run), for what the server
+# checks with their rights, and `api`, this computer's own (Agent Ops's), for the one call that is Agent Ops's: the GitHub repository.
 def workspace_of(env=None):
     root = (env if env is not None else os.environ).get("HUB_WORKSPACE") or ""
     if not root:

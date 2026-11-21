@@ -6,7 +6,7 @@ from clients import hubcli, hubtools, remotecli
 class Api:
     def __init__(self, *args, **kwargs):
         self.calls = []
-        self._tico_is_botops = False
+        self._tico_is_agent_ops = False
 
     def get(self, path, **query):
         if path == 'me':

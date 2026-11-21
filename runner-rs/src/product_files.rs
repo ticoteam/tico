@@ -1,6 +1,6 @@
 //! Bots made from a template follow the catalog the release ships. This binary carries no templates: the Python
 //! helper does the work, as `python -m runner_support --config <path> catalog` (runner_support/catalog_job.py), the
-//! way side jobs run (crate::sidejobs). A built-in bot (the assistant, BotOps, Librarian, Strategy Owner and the
+//! way side jobs run (crate::sidejobs). A built-in bot (the assistant, Agent Ops, Librarian, Strategy Owner and the
 //! starters onboarding made) assigned here without a repository is set up from its template before its repository is
 //! fetched; once per start of this runner, before any templated bot's turn, the files its template changed are brought
 //! up, committed and reported to the server (clients/catalog.py refresh). A failure is a log line, never a failed turn.

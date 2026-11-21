@@ -5,8 +5,8 @@ Re-run real past tasks on a candidate build or prompt, and see which got better 
 A **case** is one finished task: what the bot had when it started (title, body, the people's opening messages, the
 files on the task, and a hash of the bot's instructions) and what happened (final status, what the bot said, the files
 it attached, its runs and minutes). The replay recreates the opening state on a scratch team, hands the task to the
-same bot there, and scores the new outcome with the same code as the old one: the BotOps scorers
-(`evals/botops/score.py`: jargon, repeated messages, sending the person to a settings page) plus the case's `done`
+same bot there, and scores the new outcome with the same code as the old one: the Agent Ops scorers
+(`evals/agent_ops/score.py`: jargon, repeated messages, sending the person to a settings page) plus the case's `done`
 checks and `limits`.
 
 Each case gets a verdict:

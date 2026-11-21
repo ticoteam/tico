@@ -297,13 +297,13 @@ CLI: `tico market define`, `segment add|tree`, `size add|accept|reject|params|li
 
 ## Built-in
 
-Like the assistant, BotOps and the Design Owner, the Librarian is required in setup (`required: true`, `bootstrap: true`): every new team gets
+Like the assistant, Agent Ops and the Design Owner, the Librarian is required in setup (`required: true`, `bootstrap: true`): every new team gets
 it and it becomes active once a computer is enrolled. It cannot be archived or deleted by anyone (`409 system_bot`); pausing and
 renaming stay allowed, and Settings > Bots shows it as **Built-in**.
 
 **A team from before it existed gets it on update, without a click**, as soon as it can run it: the owner is on the roster,
 a model is chosen and a computer is enrolled. It is checked when the server starts and when a computer enrolls, so the order
-in which a team does things does not matter. It goes on the computer BotOps runs on, its daily routine is created once (a
+in which a team does things does not matter. It goes on the computer Agent Ops runs on, its daily routine is created once (a
 routine a human deletes is never put back), and an owner who paused it keeps it paused. Where one of those is missing (no
 model yet, no computer), Ask the Librarian says the Librarian is not set up, and the owner gets **Turn on the Librarian** there (the same
 steps, `POST /api/v2/librarian/turn-on`), as the Assistant has **Turn on Assistant**.

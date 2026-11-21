@@ -92,7 +92,7 @@
     "POST",
     "support/tickets",
     {
-     "message": "[BotOps] message-1",
+     "message": "[Agent Ops] message-1",
      "include_ids": true,
      "source": "botops"
     }

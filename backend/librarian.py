@@ -151,12 +151,12 @@ def research(c, auth, who, body):
 
 
 def person(request):
-    """A person, or BotOps acting with one's delegated rights (it then has their role)."""
+    """A person, or Agent Ops acting with one's delegated rights (it then has their role)."""
     who = request.state.identity
     if who.actor == "bot:botops":
         raise Problem(
             "forbidden",
-            "BotOps does this only for the person who asked it to; the " + NAME + " turns on for the owner",
+            "Agent Ops does this only for the person who asked it to; the " + NAME + " turns on for the owner",
             403,
         )
     if who.role not in ("owner", "human"):

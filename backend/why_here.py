@@ -211,10 +211,10 @@ def stops_for(c, cause, task):
         return [
             {"how": "Pause the bot until its source is fixed", "command": f"tico bot pause {shlex.quote(slug)}"},
             {
-                "how": "Have BotOps fix the bot's source",
+                "how": "Have Agent Ops fix the bot's source",
                 "command": "tico task create --owner botops --title "
                 + shlex.quote(f"Stop {slug} filing: {title[:60]}"),
-                "note": "BotOps reads the cause and files the fix in the bot's code",
+                "note": "Agent Ops reads the cause and files the fix in the bot's code",
             },
         ]
     if kind == "parent_task" and cause.get("id"):

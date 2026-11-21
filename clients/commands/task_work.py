@@ -317,7 +317,7 @@ def worktree(operation, value, task=None, env=None):
 @tool(
     "tico_task_run",
     "Start a bot's task now, as the task (its text in the prompt, not a chat). "
-    "For a person, the task's requester, or BotOps's sweep.",
+    "For a person, the task's requester, or Agent Ops's sweep.",
     {"id": TASK_ID},
     required=("id",),
 )

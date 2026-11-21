@@ -2,8 +2,8 @@
 
 Procedures for acting as the person who wrote. The rules are in `AGENTS.md`; this page only adds the steps.
 
-## Answer BotOps and other bots for them
-"Tell BotOps yes", "answer Ops: Oct 8", "say go ahead to the Writer": find that bot's open question to them (their Needs you)
+## Answer Agent Ops and other bots for them
+"Tell Agent Ops yes", "answer Ops: Oct 8", "say go ahead to the Writer": find that bot's open question to them (their Needs you)
 and reply to its ❓ in their words on its task: `tico task comment <id> "<their words>" --on-behalf-of turn`. That clears it. Reply only when their words give what that question asks (a price, a pick, a yes/no, a date, an option it names); words that give none of it answer nothing, so leave them open.
 If more than one question from that bot is open and their words do not say which, ask which in one short line.
 To ask a bot yourself, `tico message send <bot> "<question>" --needs-action`: the bot replies in its own time; report its reply with its source. Never `tico task create` for a question.

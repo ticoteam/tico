@@ -57,7 +57,7 @@ A message to an outsider is a draft on the task. It goes out only when a person 
 These need the task to ask for them and a granted Tool to allow them. Otherwise they wait for a person:
 - **Signing, accepting, filing or letting a deadline pass.** Record the date and what the work calls for.
 - **Adopting or publishing a policy.** Record the adopted text on the task, then ask the Librarian to publish it.
-- **Creating or reassigning a task** for a human or a bot, and **asking BotOps to set up a bot.**
+- **Creating or reassigning a task** for a human or a bot, and **asking Agent Ops to set up a bot.**
 
 Never put a person's health, disciplinary or immigration details, a home address or an id number in a file.
 

@@ -39,7 +39,7 @@ notice window opened on 2026-09-25 and needs your decision.**
 2. Ask the Head of Finance (`finance-owner`) to check two new software subscriptions on the September
    card statement.
 
-## Hiring proposal (ready for BotOps when requested)
+## Hiring proposal (ready for Agent Ops when requested)
 Visitor badges, desk moves and supply orders came up 5 times in September with no owner (tasks
 T-311, T-318, T-322, T-327, T-340). Proposed: an Office Manager (`office-manager`), first routine a
 weekly office requests and supplies page on Mondays, reporting to me.

@@ -133,8 +133,8 @@ Trigger. NOT NULL, default `queued`. One job per message a bot must answer.
 - `failed`: the attempt failed.
 - `uncertain`: the outcome cannot be known (the runner was lost, or the hub restarted mid-run). Looked at before any retry.
   A run whose harness process was killed or crashed resumes once by itself; a second in a row waits for its operator
-  or BotOps. Until someone chooses, its task's wait line, Needs you and Health say it waits on a person, and **Run
-  now** on the task (by its operator or BotOps) runs it again.
+  or Agent Ops. Until someone chooses, its task's wait line, Needs you and Health say it waits on a person, and **Run
+  now** on the task (by its operator or Agent Ops) runs it again.
 - `canceled`: stopped before it finished (a person stopped it, the task closed, a duplicate wake
   replaced it, or the owner's rule dropped it).
 
@@ -266,7 +266,7 @@ Transitions:
 - `planned` to `active`: setup finishes (`backend/agents.py`, `shared_bots.py`, `settings_admin.py`).
 - `active` and `paused`: `app.py` pause and resume actions.
 - `active` to `quarantined`: `hubdb.py` `quarantine`.
-- `quarantined` to `active`: `hubdb.py` `status_set(state="active")` by a person, or by Tico's own upkeep or BotOps
+- `quarantined` to `active`: `hubdb.py` `status_set(state="active")` by a person, or by Tico's own upkeep or Agent Ops
   under its rule.
 - `active` or `paused` to `archived`: `shared_bots.py`, `settings_admin.py`.
 - `archived` to the previous state: restore (`shared_bots.py`, `settings_admin.py`).

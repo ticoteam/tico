@@ -375,13 +375,13 @@ def test_a_drain_behind_a_turn_that_stopped_moving_points_at_the_turn(api):
 
 
 def test_a_stuck_updates_way_out_changing_wakes_its_task_once(api):
-    """Its drain waits on a turn that still works (wait), then the turn stops moving (look at it): the same BotOps
+    """Its drain waits on a turn that still works (wait), then the turn stops moving (look at it): the same Agent Ops
     task hears the new way out, once, and is woken through the batched wake."""
     from backend import bot_settings as BS
     from backend.store import H
 
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
+        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','botops','Agent Ops','active')")
         c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('botops','ana')")
         BS.write(c, "botops", {"name": "botops", "runtime": "fake", "status": "active"})
     r = queue_work(api)
@@ -418,11 +418,11 @@ def test_a_stuck_updates_way_out_changing_wakes_its_task_once(api):
     (task,) = first["details"]["tasks"].values()
     wrote(16)
     worse, stored = check_health(api)
-    assert stored[key]["fix"].startswith("BotOps: turns still run")
+    assert stored[key]["fix"].startswith("Agent Ops: turns still run")
     # Its wake goes through the batched wake: out now, or waiting for the wake cap to allow it.
     assert task in worse["details"].get("woke_tasks", []) + worse["details"].get("wake_waiting", [])
     (note,) = said(task)
-    assert "Fix:\nBotOps: turns still run on Test Mac but nothing has moved" in note
+    assert "Fix:\nAgent Ops: turns still run on Test Mac but nothing has moved" in note
     check_health(api)
     assert len(said(task)) == 1  # said once
     report(api, r, "0.3.0")  # it updated: the finding clears

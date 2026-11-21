@@ -121,10 +121,10 @@ class Rule4Unsolicited(HubCase):
 class Rule8Counting(HubCase):
     def setUp(self):
         super().setUp()
-        # Rule 8's review tasks go to BotOps; without it every review is refused and none is ever counted.
+        # Rule 8's review tasks go to Agent Ops; without it every review is refused and none is ever counted.
         self.conn.execute(
             "INSERT INTO bots(id, slug, display_name, state) VALUES(?,?,?, 'active')",
-            (H.FLEET_MAINTAINER, H.FLEET_MAINTAINER, "BotOps"),
+            (H.FLEET_MAINTAINER, H.FLEET_MAINTAINER, "Agent Ops"),
         )
 
     def refuse_reach(self, n, actor=CMO):
@@ -165,7 +165,7 @@ class Rule8Counting(HubCase):
         self.assertEqual(H.lift_cooled_quarantines(self.conn), ["cmo"])
 
     def reviewed(self, slug):
-        """Review tasks opened today for `slug`'s refusals. BotOps receives them, so it must exist."""
+        """Review tasks opened today for `slug`'s refusals. Agent Ops receives them, so it must exist."""
         self.assertTrue(H.bot(self.conn, H.FLEET_MAINTAINER), "no reviewer: a review count would be vacuous")
         name = H.bot(self.conn, slug)["display_name"]  # the title names the bot as people know it, not by its id
         return self.conn.execute(
@@ -268,18 +268,18 @@ class Rule8Counting(HubCase):
         self.refuse_reach(1)
         self.assertEqual(H.bot(self.conn, "cmo")["state"], "active", "the count started over")
 
-    def test_botops_lifts_a_refusal_quarantine_but_an_escape_waits_for_a_person(self):
-        botops = H.bot_actor(H.FLEET_MAINTAINER)
+    def test_agent_ops_lifts_a_refusal_quarantine_but_an_escape_waits_for_a_person(self):
+        agent_ops = H.bot_actor(H.FLEET_MAINTAINER)
         if not H.bot(self.conn, H.FLEET_MAINTAINER):
             self.conn.execute(
                 "INSERT INTO bots(id, slug, display_name, state) VALUES(?,?,?, 'active')",
-                (H.FLEET_MAINTAINER, H.FLEET_MAINTAINER, "BotOps"),
+                (H.FLEET_MAINTAINER, H.FLEET_MAINTAINER, "Agent Ops"),
             )
         self.refuse_reach(10)
-        H.status_set(self.conn, botops, "cmo", state="active", reason="reviewed")
+        H.status_set(self.conn, agent_ops, "cmo", state="active", reason="reviewed")
         self.assertEqual(H.bot(self.conn, "cmo")["state"], "active")
         H.quarantine(self.conn, "cmo", "escape: a secrets path")
-        self.refused("quarantined", H.status_set, self.conn, botops, "cmo", state="active")
+        self.refused("quarantined", H.status_set, self.conn, agent_ops, "cmo", state="active")
         self.conn.execute("UPDATE holds SET created_at=? WHERE kind='quarantine'", (H.shift(H.now(), seconds=-8000),))
         self.assertEqual(H.lift_cooled_quarantines(self.conn), [], "an escape never cools off")
         how = self.conn.execute("SELECT released_how FROM holds WHERE kind='quarantine' ORDER BY created_at")

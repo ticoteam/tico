@@ -36,13 +36,13 @@ def bot_archive(api, args):
 @tool(
     "tico_bot_update",
     "Change a bot's settings (reports to, name, description, status) with your own rights. "
-    "BotOps acts as the person who asked, citing their message. "
+    "Agent Ops acts as the person who asked, citing their message. "
     "A manager bot changes only its direct reports: their model, task model, name and description. Creating, archiving "
-    "or restoring a report goes through BotOps the same way, within the weekly limit.",
+    "or restoring a report goes through Agent Ops the same way, within the weekly limit.",
     {
         "slug": _s("The bot to change (its slug or id)"),
         "on_behalf_of": _s(
-            "Id of the person's message to BotOps asking for it (default: the message that started this turn)"
+            "Id of the person's message to Agent Ops asking for it (default: the message that started this turn)"
         ),
         "new_slug": _s("Rename its slug (a label: its id, history and folder stay); not a built-in bot's"),
         "reports_to": _s("A bot slug, or human:<id>"),
@@ -87,7 +87,7 @@ def bot_archive(api, args):
 def bot_set(api, args):
     delegated = _for_person(api)
     on_behalf = args.get("on_behalf_of") or "turn" if delegated else None
-    # The bot's own revision, read as the person: BotOps may not see a bot they own but it does not.
+    # The bot's own revision, read as the person: Agent Ops may not see a bot they own but it does not.
     row = next(
         (
             b
@@ -130,18 +130,18 @@ def bot_set(api, args):
 
 @tool(
     "tico_bot_create",
-    "Register a new bot with the server, planned, as the person who asked you (BotOps): the "
+    "Register a new bot with the server, planned, as the person who asked you (Agent Ops): the "
     "record its repository is then built for. They become its owner. Needs their create_bots (on by default) and "
     "stays within their limit of active bots. Safe to repeat for a bot they already own. `tico bot create --template T` "
     "also builds its repository on this computer. Starters build on their assigned Computer; custom templates get "
-    "a BotOps setup_task_id to watch with tico_task_show. Set build false for only the record; BotOps defaults to only the record.",
+    "an Agent Ops setup_task_id to watch with tico_task_show. Set build false for only the record; Agent Ops defaults to only the record.",
     {
         "slug": _s("Leave out: Tico picks it from the name. Only to keep a slug already chosen"),
         "name": _s("What people call it; the template's name by default"),
         "description": _s("What it does"),
         "reports_to": _s("A bot slug, or human:<id>; the requester by default"),
         "template": _s("A template from tico_template_list, if it is built from one"),
-        "build": {"type": "boolean", "description": "Build from the template (human default: true; BotOps: false)"},
+        "build": {"type": "boolean", "description": "Build from the template (human default: true; Agent Ops: false)"},
         "instructions": _s(
             "Reviewed Instructions overriding the template; requested description and limits still apply"
         ),
@@ -303,7 +303,7 @@ def bot_restore(api, args):
     "tico_bot_branch",
     "Make your branch of a bot that allows branches, on your own computer. "
     "It follows the original's instructions and model with personal tasks and chats. Asking again returns your branch. "
-    "BotOps acts as the person who asked.",
+    "Agent Ops acts as the person who asked.",
     {"bot": _s("The original bot"), "runner_id": _s("Your computer's id; omit to create a planned branch")},
     required=("bot",),
     writes=True,
@@ -1163,7 +1163,7 @@ def bot_repos_set(api, args):
 
 @tool(
     "tico_bot_repo_create",
-    "Owner or the BotOps bot: create the private repository bot-<slug> in the "
+    "Owner or the Agent Ops bot: create the private repository bot-<slug> in the "
     "connected GitHub account or organization from a template (default ticoteam/botops), or empty when the bot's "
     "repository already exists on a computer. Answers with how to create it by hand when the team's "
     "GitHub App was not given permission to.",
@@ -1252,7 +1252,7 @@ def _subscriptions(text):
 # the tool's, or they work on this computer.
 _ON_OFF = lambda v: {"on": True, "off": False}[v]  # a lambda, as the hand parser had: its errors name <lambda>
 BOT = (
-    Group("bot", "build a bot from a template (BotOps), change it, place it, its status", aliases=("bots",)),
+    Group("bot", "build a bot from a template (Agent Ops), change it, place it, its status", aliases=("bots",)),
     Command(
         "bot show",
         "one bot: its profile, and for one you may read also its status, machine, queue, goals and routines",
@@ -1260,7 +1260,7 @@ BOT = (
     ),
     Command(
         "bot update",
-        "change a bot's settings with your rights, or the requester's (BotOps)",
+        "change a bot's settings with your rights, or the requester's (Agent Ops)",
         args=(
             Arg("on_behalf_of", metavar="MESSAGE_ID"),
             Arg("shared", action=argparse.BooleanOptionalAction),
@@ -1310,17 +1310,17 @@ BOT = (
     ),
     Command(
         "bot place",
-        "put a bot on a computer, as the person who asked (BotOps)",
+        "put a bot on a computer, as the person who asked (Agent Ops)",
         example="tico bot place builder --computer studio",
     ),
     Command(
         "bot go-live",
-        "place it if needed, turn it on and start its setup (BotOps)",
+        "place it if needed, turn it on and start its setup (Agent Ops)",
         args=(Arg("setup", "--no-setup", action="store_const", const=False),),
         example="tico bot go-live builder --computer studio",
     ),
     Command(
-        "bot restore", "bring an archived bot back, as the person who asked (BotOps)", example="tico bot restore ana"
+        "bot restore", "bring an archived bot back, as the person who asked (Agent Ops)", example="tico bot restore ana"
     ),
     Command("bot archive", "archive a bot you manage", example="tico bot archive ana --successor builder"),
     Command(
@@ -1381,11 +1381,11 @@ BOT = (
         args=(Arg("model", positional=True, nargs="?"),),
         example="tico bot task-model builder gpt-6.2-sol --effort high",
     ),
-    Command("bot pause", "pause a bot (BotOps)", example="tico bot pause builder"),
-    Command("bot resume", "resume a bot (BotOps)", example="tico bot resume builder"),
+    Command("bot pause", "pause a bot (Agent Ops)", example="tico bot pause builder"),
+    Command("bot resume", "resume a bot (Agent Ops)", example="tico bot resume builder"),
     Command(
         "bot scope",
-        "limit a bot's claims to one task and its subtasks, or lift that (BotOps)",
+        "limit a bot's claims to one task and its subtasks, or lift that (Agent Ops)",
         args=(Arg("task", positional=True, nargs="?"),),
         example="tico bot scope builder T1",
     ),
@@ -1399,7 +1399,7 @@ BOT = (
     ),
     Command(
         "bot repo-create",
-        "owner or BotOps: create <org>/bot-<slug> from a template, or empty",
+        "owner or Agent Ops: create <org>/bot-<slug> from a template, or empty",
         args=(Arg("template", default="ticoteam/botops", metavar="OWNER/REPO"),),
         example="tico bot repo-create inbound-sales-owner",
     ),
@@ -1527,7 +1527,7 @@ AGENT = (
     ),
     Command(
         "agent pair approve",
-        "connect the profile that printed this code to a bot (BotOps, or its owner or an admin)",
+        "connect the profile that printed this code to a bot (Agent Ops, or its owner or an admin)",
         args=(Arg("bot", flag="--bot"),),
         example="tico agent pair approve K7QM-4F2P --bot hermes-1",
     ),

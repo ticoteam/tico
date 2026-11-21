@@ -16,7 +16,7 @@ Read this when a person asks why something is on their queue, or how to make it 
 - **Technical Writer**: one "Docs for vX" task per release, from an automation. Releases can go out several times a day, so these
   pile up. The fix is the automation, not the tasks.
 - **Health Monitor**: findings about bots and computers, including test pings. Repeated test pings are a source to stop.
-- **BotOps**: support and health tasks, and questions about bot setup.
+- **Agent Ops**: support and health tasks, and questions about bot setup.
 - **Tools Owner**: a task for each tool whose key is rejected, expiring or stored twice, and cards to type or grant a key.
 - **PR Reviewer**: a review task per pull request.
 - **General Manager**: tasks it created while routing work.
@@ -33,4 +33,4 @@ what bots may put on a person: the people and bots near them by default. `tico t
 
 ## Close the pile, then stop the source
 The queue's size is the total of `tico needs-you show`: asks, paused bots and mentions count too, not only tasks. Clearing the existing items does not stop new ones. Find the source with `tico origin show`, then stop it: pause or edit its
-automation, add a rule, or give BotOps a task when it is a bot's own code. Report counts before and after.
+automation, add a rule, or give Agent Ops a task when it is a bot's own code. Report counts before and after.

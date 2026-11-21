@@ -147,7 +147,7 @@ not ready (`worktree_waits`, for that task only). Each stops the tries and shows
 | `POST /api/v2/tasks/{id}/owner` | `owner, why?, version` | reassign |
 | `POST /api/v2/tasks/{id}/snooze` | `until?, why?, version` | |
 | `POST /api/v2/tasks/{id}/unsnooze` | `why?` | |
-| `POST /api/v2/tasks/{id}/try-again` | `why?` | a person hands a task back to its owner, in their own session: the Assistant, BotOps and tokens get `task_needs_person` |
+| `POST /api/v2/tasks/{id}/try-again` | `why?` | a person hands a task back to its owner, in their own session: the Assistant, Agent Ops and tokens get `task_needs_person` |
 | `POST /api/v2/tasks/{id}/asks` | `to, line, kind?, show?, version` | ask a person (C19) |
 | `DELETE /api/v2/tasks/{id}/asks/{requirement_id}` | `why?` | withdraw |
 | `POST /api/v2/tasks/{id}/asks/{requirement_id}/answer` | `value, note?, version` | OK or send back (`no` with a note) |
@@ -378,7 +378,7 @@ Later phases: the other requirement kinds; Product and Engineering.
 | upkeep | `scheduler.py`, `heartbeat.py`, `health.py`, `maintenance_health.py`, `store.py` (after core's part), `execution.py`, `enqueue.py`, `run_view.py`, `run_triggers.py`, `wake_rules.py`, `delivery.py`, `github.py`, `invariants.py`, `maintenance_steps/`, `system_routines.py`, `sleep_idle.py`, `worktrees.py`, `worktree_waits.py`, `reconnects.py`, `profiles.py`, `bot_rows.py`, `assigned_start.py`, `completion_notes.py`, `chat_goals.py`, and the deletion of every module under "What is deleted" |
 | asks | `task_asks.py`, `email_sending.py`, `letters.py`, `company_page/`, `task_caps.py`, `webhooks.py`, `support.py`, `file_reviews.py`, `proposals.py`, `batch.py`, `media.py`, `bot_task_tabs.py`, `live_blocks.py`, `personal_alerts.py`, `reach.py`, `slack_gateway.py`, `strategy_merge.py`, `goal_asks.py`, `assistant.py`, `assistant_changes.py` |
 | callers | every other backend module, in five groups (rules and automations; strategy, goals, market and roadmaps; task management and settings; demo data; the rest), each with its tests |
-| bot tools | `clients/` but `agent_skill.py`, `backend/mcp.py`, `e2e/cli/`, `e2e/mcp/`, `test_botops_parity.py` |
+| bot tools | `clients/` but `agent_skill.py`, `backend/mcp.py`, `e2e/cli/`, `e2e/mcp/`, `test_agent_ops_parity.py` |
 | bot words | `templates/`, `skills/`, `clients/agent_skill.py`, `backend/dream.py` |
 | screens | the old web app (`ui/` and its build, since removed) |
 | last | `e2e/goldens`, `e2e/tests`, `docs/`, `evals/`, `scripts/` (a script that inserts tasks by hand makes them through `task_create`; one that builds an old release's database keeps that release's shape) |

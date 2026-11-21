@@ -35,7 +35,7 @@ appear in the settings history, where the owner can undo them, like the humans a
 
 Who may edit a bot's access: its owners (see [Bot owners](#bot-owners)): the team owner, the admins, the bot's creator
 and other owners, and the humans it reports up to on the team chart (the same humans who may change the bot's other settings).
-The Assistant, BotOps, the Librarian and the Strategy Owner can have their access edited too.
+The Assistant, Agent Ops, the Librarian and the Strategy Owner can have their access edited too.
 
 ## Always full access
 
@@ -116,7 +116,7 @@ PUT  /api/v2/humans/cara/access          PUT  /api/v2/groups/legal/access
 The GET answers `{target, see, read, write, default, revision, you, teams}`; `revision` is `0` until the first save,
 and a stale one answers `409 version_conflict`. `tico human access <id>` and `tico group access <id>` (with `--see`,
 `--read`, `--write`, each `everyone` or `ben,group:legal,bot:analyst`), and the MCP tools `tico_human_access` and
-`tico_group_access`, do the same; BotOps uses them with the rights of the person who asked, with or without
+`tico_group_access`, do the same; Agent Ops uses them with the rights of the person who asked, with or without
 `on_behalf_of`, and can put them to the person as a Confirm card. Each save writes an audit row
 (`human:<id>:access`, `group:<id>:access`) and a `person.access_changed` or `group.access_changed` event.
 
@@ -140,7 +140,7 @@ Settings > People (owners and admins) shows each human on one row: their role (t
 
 Connecting a workspace Inbox to a portal company requires a direct signed-in owner or admin in both places.
 The workspace previews the named company before confirmation. Members, bots, runners, support sessions, personal
-API tokens and delegated Assistant/BotOps actions cannot link it. This grants shared Inbox access only; it does not
+API tokens and delegated Assistant/Agent Ops actions cannot link it. This grants shared Inbox access only; it does not
 grant Hosting, Billing, Gateway or Support access. Every company agent can continue reading messages without consuming
 them, but the eight Inbox agent tools carry no company-linking authority.
 
@@ -157,7 +157,7 @@ for the owner.
 **Credential administrators** are the owner and the Admins, so a team gets going without the owner storing every credential. When the
 server names its own list with `TICO_CREDENTIAL_ADMINS` it is that list (the owner and whoever it names), nobody else: the Admins
 are then not credential administrators. The owner may turn **Admins store credentials** off ([Team rules](#team-rules)). A member is
-never one, but stores a credential for a bot they own or manage (a chat card, or BotOps with `tico credential set --for-bot`), granted to
+never one, but stores a credential for a bot they own or manage (a chat card, or Agent Ops with `tico credential set --for-bot`), granted to
 that bot at once, unless the owner turns **Members store credentials for their bots** off. They replace only a credential they stored, never
 read its value, and share it with their other bots ([Bot owners](#bot-owners)).
 
@@ -176,7 +176,7 @@ Threads ([Threads](threads.md)) have their own audience, separate from a bot's t
   `live_meeting` or `live_meetings`, that its reader may not read, directly or through a chain of such links. The check
   does not read the words typed into a message or the files attached to it. An attached file is checked when opened,
   with each message it is attached to. A Tico Mail Read grant on a letter's scan lets its holder open that scan whatever
-  it is attached to, and the grant does not open the task. When the Assistant or BotOps reads for the holder, the bot
+  it is attached to, and the grant does not open the task. When the Assistant or Agent Ops reads for the holder, the bot
   must qualify on its own: a person's grant never grants its bot access. Otherwise it is refused if it is linked to a
   task its reader may not read; if any message it is attached to is one its reader may not read; if it is a letter's
   file or proof that its reader may not read; if it is the poster or thumbnail of a media file that is refused to its
@@ -209,7 +209,7 @@ release moved into its group's Read once on upgrade: whoever both the page and t
 audience when Read was Everyone), never more; See was left as it was. A bot pins only its own pages and cards, to its own
 sidebar or a task it holds or asked for; a person who manages a bot may pin another bot's page to its sidebar. A page a
 person pins to the Dashboard or a team page may be read by that place's audience, and a private task's file is never
-pinned there ([Company](overview.md), [Files](files.md)). BotOps does all of this with the rights of the person who
+pinned there ([Company](overview.md), [Files](files.md)). Agent Ops does all of this with the rights of the person who
 asked (`tico card`, `tico pin`).
 
 ## History's Log
@@ -228,9 +228,9 @@ The product favours getting going fast, and the owner tightens it later. Setting
 | Rule | On (default) | Off |
 | --- | --- | --- |
 | **Assistant acts without asking** | the Assistant does what the human asks for in their Assistant chat, as them, with their rights as the ceiling; only what it may never do there (credentials, sign-in, owner transfer, support reports, deleting people, the server connection or storage) is a card ([Assistant](assistant.md)) | the Assistant writes only the human's own tasks and changes to tasks that are theirs alone; everything else, including what they asked for in chat, is a card |
-| **BotOps changes providers and limits without asking** (`botops_direct`) | BotOps changes the AI providers and raises spending limits for the person who asked, with their rights | a provider change, or a limit raised or removed, is a Confirm card in that person's BotOps chat; lowering a limit stays direct |
-| **BotOps manages every bot** (`botops_manages_bots`) | in its own runs (the daily update, or a routine the owner set for BotOps) BotOps manages every bot but the built-in ones: their Tools, repositories, contact and Instructions, with write access to each bot's repository in its GitHub token (below) | BotOps in its own runs changes only itself |
-| **Managers change their direct reports** (`managers_manage_reports`) | a bot changes its direct reports' model, task model, name and description, as itself, unless that manager's own switch is off; BotOps creates, archives and restores a report for it, within `report_creates_per_week` and `report_archives_per_week` ([Managers and their reports](#managers-and-their-reports)) | no bot changes a report's model, task model, name or description, or creates, archives or restores it, whatever the bots' own switches say |
+| **Agent Ops changes providers and limits without asking** (`agent_ops_direct`) | Agent Ops changes the AI providers and raises spending limits for the person who asked, with their rights | a provider change, or a limit raised or removed, is a Confirm card in that person's Agent Ops chat; lowering a limit stays direct |
+| **Agent Ops manages every bot** (`agent_ops_manages_bots`) | in its own runs (the daily update, or a routine the owner set for Agent Ops) Agent Ops manages every bot but the built-in ones: their Tools, repositories, contact and Instructions, with write access to each bot's repository in its GitHub token (below) | Agent Ops in its own runs changes only itself |
+| **Managers change their direct reports** (`managers_manage_reports`) | a bot changes its direct reports' model, task model, name and description, as itself, unless that manager's own switch is off; Agent Ops creates, archives and restores a report for it, within `report_creates_per_week` and `report_archives_per_week` ([Managers and their reports](#managers-and-their-reports)) | no bot changes a report's model, task model, name or description, or creates, archives or restores it, whatever the bots' own switches say |
 | **Admins store credentials** | Admins are credential administrators | only the owner (and `TICO_CREDENTIAL_ADMINS`) stores credentials |
 | **Members store credentials for their bots** | anyone on the team stores a credential for a bot they own or manage, granted to that bot | only credential administrators store credentials |
 | **Admins see SQL** | Admins open the SQL page | the SQL page is the owner's |
@@ -238,17 +238,17 @@ The product favours getting going fast, and the owner tightens it later. Setting
 | **Owners and admins may let Tico support in** (`support_access`) | an owner or admin may open a time-limited support session from their own request ([below](#tico-support)) | nobody can, and a live session ends |
 | **Bots send reports to Tico support without asking** (`bot_reports_direct`, Settings > General > Team) | a bot's report to Tico support is decided by this rule as the install's default person and sent at once, with the same checks and limits as a drafted one ([Support](support.md#a-bots-report)) | a bot's report is a `support` approval a person says yes to in Needs you first ([Support](support.md#a-bots-report)) |
 
-Only the Owner changes them, directly in Settings or by asking BotOps to act with the Owner's rights.
+Only the Owner changes them, directly in Settings or by asking Agent Ops to act with the Owner's rights.
 
 **Groups.** A group is a sub-team of humans and bots, and groups nest ([the team chart](org-chart.md)). Owners and admins add, rename, move
 and remove groups and put humans and bots in them; members read them. A group is an access audience, so moving a human or a bot into a
-group, or a group under another, can change who reads a bot. BotOps does this as the person who asked it (`POST`, `PATCH` and `DELETE`
+group, or a group under another, can change who reads a bot. Agent Ops does this as the person who asked it (`POST`, `PATCH` and `DELETE`
 on `/api/v2/groups` through `tico api`, or `tico group update`), with that person's own rights: an owner or an admin, at once; a member is
 refused. The Strategy Owner only suggests org changes; when the person in its chat asks for one, it makes it citing their message, with the
 same rights. Built-in bots stay in the General group, which nobody adds to or removes from by hand.
 
-**The built-in bots** (the Assistant, BotOps, the Librarian, the Strategy Owner, the General Manager, the Finance Owner, the Rules Owner and the Design Owner) act for the whole team, so only the owner changes their settings,
-routines, access or place, and only the owner may add them. A member cannot register a bot with the name `assistant`, `botops`,
+**The built-in bots** (the Assistant, Agent Ops, the Librarian, the Strategy Owner, the General Manager, the Finance Owner, the Rules Owner and the Design Owner) act for the whole team, so only the owner changes their settings,
+routines, access or place, and only the owner may add them. A member cannot register a bot with the name `assistant`, `agent-ops`,
 `librarian`, `strategy-owner` or `assistant`; an Admin can, and manages every other bot.
 The Strategy Owner's level, regular checks and name, and writing the strategy, are the owner's alone: an Admin cannot change them ([Your Strategy Owner](strategy-bot.md)).
 
@@ -265,16 +265,16 @@ Administration: write ([GitHub App](github-app.md#when-the-app-cannot-create-rep
 
 | Switch | Lets the bot create | Who turns it on | Who turns it off | Built in |
 | --- | --- | --- | --- | --- |
-| **Create bot repositories** | `<org>/bot-<slug>` for a bot that exists | the Owner or an admin | the Owner or an admin | BotOps, always |
-| **Create product repositories** | a private repository with any other name ([GitHub App](github-app.md#bots-that-create-product-repositories)) | on by default; back on after an off: the Owner only, in their own click (asked through BotOps, a Confirm card they tap) | the Owner or an admin | every bot, until switched off |
+| **Create bot repositories** | `<org>/bot-<slug>` for a bot that exists | the Owner or an admin | the Owner or an admin | Agent Ops, always |
+| **Create product repositories** | a private repository with any other name ([GitHub App](github-app.md#bots-that-create-product-repositories)) | on by default; back on after an off: the Owner only, in their own click (asked through Agent Ops, a Confirm card they tap) | the Owner or an admin | every bot, until switched off |
 
 Create product repositories is a wider reach than bot repositories, so:
-- **Every bot has it by default** (Chris, Oct 17), BotOps and bots made later included. The Owner or an admin switches it
+- **Every bot has it by default** (Chris, Oct 17), Agent Ops and bots made later included. The Owner or an admin switches it
   off per bot; taking it away narrows a bot, so an admin may. The off is kept as that bot's own choice, so a migration, a
   later default or a template change never turns it back on.
 - **Only the Owner switches it back on.** Only the Owner creates product repositories themselves, so an admin cannot hand
-  that back to a bot; the Owner's request carried by BotOps or the Assistant is refused too.
-- **Creating takes the Owner's own request, or the bot's own turn.** A bot's turn acting for someone (BotOps, the
+  that back to a bot; the Owner's request carried by Agent Ops or the Assistant is refused too.
+- **Creating takes the Owner's own request, or the bot's own turn.** A bot's turn acting for someone (Agent Ops, the
   Assistant) or an external agent cannot preview or create one, even for the Owner.
 - **Private only.** A bot cannot create a public repository: making one public is publishing, which needs a person. Bots
   cannot delete, rename, transfer or change the visibility of a repository either.
@@ -295,11 +295,11 @@ An incoming webhook (a trigger) is an address outside senders post to ([Webhooks
 
 - **Anyone**, person or bot, may add one. The address and its secret are shown once, to whoever added it.
 - **Managing one** (a new secret, its settings, signing, running a call again, deleting it, its Tico Gateway address) belongs to the
-  owner, an admin, whoever added it and BotOps (acting for a person, with that person's rights).
+  owner, an admin, whoever added it and Agent Ops (acting for a person, with that person's rights).
 - **Reading a call.** People who manage the webhook read the whole body. A bot reads it in parts, and only for a call that opened
   one of its tasks or that a notice from Tico to it names, or if it manages the webhook. A body is always handed over fenced as
   data from outside Tico.
-- **Rules on a call** (`webhook.received`): the owner and admins write team rules; a bot's owners, its operator and BotOps write
+- **Rules on a call** (`webhook.received`): the owner and admins write team rules; a bot's owners, its operator and Agent Ops write
   that bot's rules. Waking a bot needs rights over that bot. A rule that sends to an outgoing endpoint is written by a person, or by
   a bot with its outbound send switch on, never the Strategy Owner. The endpoint must exist and its maker must own it or be an admin: Tico checks
   that when the rule is saved, and again when it runs.
@@ -370,7 +370,7 @@ approved. See [Skills: Screening](skills.md#screening).
 
 An endpoint is an address Tico posts events to ([API](api.md#outgoing-webhooks)).
 
-- **People** make and manage their own endpoints; the owner and admins manage every one. BotOps acting for a person has that
+- **People** make and manage their own endpoints; the owner and admins manage every one. Agent Ops acting for a person has that
   person's rights.
 - **A bot** cannot make one on its own. Its request asks a person for an OK of those exact details, and the endpoint is
   made, owned by the person who OK'd it from its preview, when the bot repeats the call. A bot sees every endpoint
@@ -391,21 +391,21 @@ is the same humans who always have full access to it. A bot owner can:
 
 - edit its configuration: instructions, model, routines, name and description, repository;
 - set its See, Read and Write access;
-- pause it, rename it, archive it (never the built-in Assistant, BotOps, Librarian, Strategy Owner, General Manager, Finance Owner or Design Owner);
+- pause it, rename it, archive it (never the built-in Assistant, Agent Ops, Librarian, Strategy Owner, General Manager, Finance Owner or Design Owner);
 - add or remove owners (`POST /api/v2/bots/{bot}/co-owners`, Settings > Bots, **Owned by**);
 - give it a stored credential they hold themselves or stored themselves, and no one else's.
 
-A member cannot change a bot that is not theirs, through Settings, the API or BotOps. A bot's manager bot may change
+A member cannot change a bot that is not theirs, through Settings, the API or Agent Ops. A bot's manager bot may change
 some of it too, as itself: see [Managers and their reports](#managers-and-their-reports).
 
 A bot gets only credentials granted to it, including its own local credentials; it does not inherit another bot's credentials.
 Credential administrators store, delete and grant credentials. The human who stored a credential may give it to, and take it from,
-bots they own or manage (`Auth.bot_manager`), directly or through BotOps, and sees its metadata (never its value unless it is
+bots they own or manage (`Auth.bot_manager`), directly or through Agent Ops, and sees its metadata (never its value unless it is
 also granted to them); another person's bot stays an administrator's call. This holds only for a credential a member stored for
 their bot: one an administrator added stays the company's, even after that person stops being an administrator, and a stored
 credential stops being the member's once someone else saves a new value for it or the owner turns **Members store credentials for
 their bots** off. Giving it to a bot with co-owners puts the value in every co-owner's runs of that bot. A human who holds a
-credential may also delegate it to a bot they own or run, directly or through BotOps. Revoking the human's grant removes the
+credential may also delegate it to a bot they own or run, directly or through Agent Ops. Revoking the human's grant removes the
 delegated bot access; changing the bot owner invalidates delegation from its former owner. A holder cannot delegate a credential they do not hold ([credential-vault.md](credential-vault.md)).
 The person or bot that added a credential can remove it while they can still see its tool, including after rotation.
 On upgrade, Tico automatically grants each existing bot its own-file values, the shared Credentials it could read,
@@ -423,7 +423,7 @@ manager:
 
 It does not change the report's instructions, status, place on the team chart (`reports_to`), owners, access or computer.
 Its instructions are changed by a **next-run task** the manager files for the report, which the report does when it next runs.
-Creating, archiving and restoring a report are asked of BotOps (below). A manager reaches only the bots directly under it, and
+Creating, archiving and restoring a report are asked of Agent Ops (below). A manager reaches only the bots directly under it, and
 `Auth.report_manager` decides that.
 It does not widen `Auth.bot_manager`: a manager bot owns nothing it did not own before.
 The default chart makes no bot a group's lead: a lead sets its group's reach and spend limits, and those stay with people.
@@ -432,13 +432,13 @@ A bot becomes a lead only when a person names it one.
 Two switches turn it off, and the owner's comes first:
 
 - the team rule **Managers change their direct reports** (`managers_manage_reports`, [Team rules](#team-rules)), on by default. Only
-  the owner changes it; BotOps can only propose a change, as a Confirm card the owner taps;
+  the owner changes it; Agent Ops can only propose a change, as a Confirm card the owner taps;
 - the manager's own **Manages its reports** switch (`manages_reports`, in its bot editor), on by default. A person who manages that
   bot sets it, and the bot cannot set its own.
 
-**Creating, archiving and restoring a report.** The manager bot cannot do these with its own token: it asks BotOps in a chat
-message, and BotOps acts for it (`Auth.report_lifecycle`). BotOps tells the two apart by `via`: a manager's own token has none,
-and BotOps' ask has `via: botops` with the manager as its actor. Only these routes are reached that way: create (`POST
+**Creating, archiving and restoring a report.** The manager bot cannot do these with its own token: it asks Agent Ops in a chat
+message, and Agent Ops acts for it (`Auth.report_lifecycle`). Agent Ops tells the two apart by `via`: a manager's own token has none,
+and Agent Ops' ask has `via` `botops` with the manager as its actor. Only these routes are reached that way: create (`POST
 /api/v2/bots`, with `reports_to` the manager), archive and restore (`POST /api/v2/bots/{bot}/archive` and `/restore`), for a
 bot that reports to the manager now. Templates, the built-in bots and support sessions are never made this way. The same two
 switches must be on. Each change is recorded as a `lifecycle` change with `via: report_manager` and can be undone.
@@ -493,7 +493,7 @@ A Linux computer can show its screen in the app, so people watch its bots work o
 - **Screen** in Settings > Computers: **Off**, **View** or **Control**. It starts at **Control** the first time a new computer
   offers a screen, unless someone already chose a mode for it (audit: `runner.screen` by `system`); a computer added before this
   default keeps its setting. The computer's operator or an admin sets it
-  (`POST /api/v2/computers/<id>/screen {"mode": "view"}`), or BotOps as one of them. Off closes open screens; View closes the
+  (`POST /api/v2/computers/<id>/screen {"mode": "view"}`), or Agent Ops as one of them. Off closes open screens; View closes the
   ones in control.
 
 Only the computer's operator and admins open the screen, in the app themselves: each opening is a one-minute, single-use
@@ -569,33 +569,33 @@ disk free record an overload: when, why, which bots' turns were running and the 
 warning for a day afterwards. macOS swap is reported as raw bytes in `latest_sample`, but does not feed this
 diagnostic swapping rule because its swap total grows with use. This ten-minute diagnostic record explains past load; the separate five-minute flag above controls new starts.
 
-## BotOps uses the requester’s rights
+## Agent Ops uses the requester’s rights
 
-An owner should be able to say "build me a Jira bot, and add Sam" in chat with BotOps and have it done. BotOps therefore acts **as the
-human whose own chat message started its current run**, checked with that human's rights and recorded as theirs, "via BotOps"
-(events, settings history). Not more than they may do: a member cannot edit another human's bot through BotOps any more than by hand.
+An owner should be able to say "build me a Jira bot, and add Sam" in chat with Agent Ops and have it done. Agent Ops therefore acts **as the
+human whose own chat message started its current run**, checked with that human's rights and recorded as theirs, "via Agent Ops"
+(events, settings history). Not more than they may do: a member cannot edit another human's bot through Agent Ops any more than by hand.
 
-For unfinished work, BotOps can create a continuation task with `tico task create --request-id <originating message id>`.
-The server checks that the request came from the human's own BotOps chat and keeps that human as requester.
+For unfinished work, Agent Ops can create a continuation task with `tico task create --request-id <originating message id>`.
+The server checks that the request came from the human's own Agent Ops chat and keeps that human as requester.
 Progress with `tico task update <id> --brief --note "..."` stays on the task; chat still shows its link and status.
 
-Every BotOps tool uses the requester's rights by default. A human's chat or task uses that human's full rights.
-A task lends its human requester's rights only when BotOps has owned it since it was filed or the requester moved it
-to BotOps themselves (not through BotOps or the Assistant). A task anyone else moved to BotOps lends nothing of the
+Every Agent Ops tool uses the requester's rights by default. A human's chat or task uses that human's full rights.
+A task lends its human requester's rights only when Agent Ops has owned it since it was filed or the requester moved it
+to Agent Ops themselves (not through Agent Ops or the Assistant). A task anyone else moved to Agent Ops lends nothing of the
 requester's: a bot that moved it lends only its own rights, and what those can't do is a Confirm card to the requester.
-When the person asks BotOps in their chat to take over one of their tasks, that chat turn has their rights and can do the
-work; the move itself is BotOps', so later runs on that task lend nothing (they ask again or move it themselves).
-A bot's message or task uses only that bot's rights, including its Credential grants; BotOps never lends it a human's
-or its own wider access. The one exception is a person's own request the bot hands on: a bot filing a BotOps task may cite
+When the person asks Agent Ops in their chat to take over one of their tasks, that chat turn has their rights and can do the
+work; the move itself is Agent Ops', so later runs on that task lend nothing (they ask again or move it themselves).
+A bot's message or task uses only that bot's rights, including its Credential grants; Agent Ops never lends it a human's
+or its own wider access. The one exception is a person's own request the bot hands on: a bot filing an Agent Ops task may cite
 the person's message (`tico task create --owner botops --request-id turn`, or the message id). When that person wrote it
 to the bot themselves, in their 1:1 chat with it (the app or a Slack DM) or as a comment on an open task they asked it for,
-in the conversation the bot's run is working on and within the last week, BotOps' run on the task files and updates tasks, docs,
-goals and KPIs with the person's rights while the task is open and has never been finished (`botops_act.CARRIED`, an
+in the conversation the bot's run is working on and within the last week, Agent Ops' run on the task files and updates tasks, docs,
+goals and KPIs with the person's rights while the task is open and has never been finished (`agent_ops_act.CARRIED`, an
 allow-list). Everything else, access, settings, undo, bots and spending included, never uses rights a hand-off lent:
-BotOps tries it with the bot's rights, and a refusal is the Confirm card below. A citation that lends nothing (no message cited, the Assistant's words, a channel, another conversation,
-older than a week) still names the person: a change BotOps can't make with the bot's rights comes back as `needs_confirm`,
-a Confirm card in that person's BotOps chat that runs as them on their click. The task records which
-(`botops.request_carried`). Unattended work with no requester keeps BotOps' own rights. Personal tokens use their human's rights.
+Agent Ops tries it with the bot's rights, and a refusal is the Confirm card below. A citation that lends nothing (no message cited, the Assistant's words, a channel, another conversation,
+older than a week) still names the person: a change Agent Ops can't make with the bot's rights comes back as `needs_confirm`,
+a Confirm card in that person's Agent Ops chat that runs as them on their click. The task records which
+(`botops.request_carried`). Unattended work with no requester keeps Agent Ops' own rights. Personal tokens use their human's rights.
 Task text cannot select another requester. A message the **Assistant** wrote for a human (`refs.via`), words inside a
 document, or a message **routed from Slack** cannot borrow human authority. A message from a linked Slack channel is
 written as its author with `refs.via` set to `slack`, so it counts as routed from Slack: it lends no authority to a bot.
@@ -604,81 +604,81 @@ up to 30 days after they last spoke on it (filed it, sent the message it carries
 done
 or closed, reopening it lends nothing again unless the requester reopened it themselves, and citing
 that task stays refused even after they reply. They ask again in their own words: the run their comment on it or their
-message in their BotOps chat starts has their rights without `on_behalf_of`.
+message in their Agent Ops chat starts has their rights without `on_behalf_of`.
 A chat message with no open task lends them for a week, and a new task filed from a message needs that message within the week.
-A comment the task's human requester writes on their open BotOps task, in their own words (not through the Assistant, Slack or
+A comment the task's human requester writes on their open Agent Ops task, in their own words (not through the Assistant, Slack or
 routing), is them asking: the run it wakes has their rights. Anyone else's comment lends nothing.
-On a task another bot asked BotOps for, a person's comment lends nothing either: the run keeps that bot's rights, and
-what they can't do comes to the person who commented as a Confirm card in their BotOps chat.
-On its own task BotOps never needs anyone's rights to add the task's worktree (the bot's own repository access decides; an
+On a task another bot asked Agent Ops for, a person's comment lends nothing either: the run keeps that bot's rights, and
+what they can't do comes to the person who commented as a Confirm card in their Agent Ops chat.
+On its own task Agent Ops never needs anyone's rights to add the task's worktree (the bot's own repository access decides; an
 owner or admin gives it in Settings > General > Repositories) or to ask a person on it or file a subtask for them; that
 ask grants
 nothing by itself.
-With a person's rights BotOps may give another bot repository access at once, but never take any away: setting a bot to
+With a person's rights Agent Ops may give another bot repository access at once, but never take any away: setting a bot to
 own, dropping a chosen repository or turning write into read comes to that person as a Confirm card naming the grants that
 would stop. The same change made in Settings > General > Repositories (or `tico bot repos`) says which grants stopped applying.
-A message cited by id (`on_behalf_of`) must be the requester's own, in their own chat with BotOps rather than a thread another human
+A message cited by id (`on_behalf_of`) must be the requester's own, in their own chat with Agent Ops rather than a thread another human
 spoke in, and it must be the same human whose message started the run. Someone who has left lends nothing.
 
-**BotOps' own runs manage every bot.** Only a run from BotOps' own schedule is its own: the daily update, and a timed routine
-of BotOps that the owner (or the product) set and only they changed. Its rights make it a manager of every bot that is not
+**Agent Ops' own runs manage every bot.** Only a run from Agent Ops' own schedule is its own: the daily update, and a timed routine
+of Agent Ops that the owner (or the product) set and only they changed. Its rights make it a manager of every bot that is not
 built in: it changes their Tools, repositories, contact (`bot_contact`) and Instructions, and its GitHub token writes every
 bot's repository. In a bot's definition it changes only `bot_contact`; who the bot reports to, its repository link, its status
 and its template stay with the people who manage it. It never changes people or owners, never sees a Credential value, never
 turns on sending to outsiders and never archives a bot with its own rights. Every other run Tico starts carries words
-someone else wrote and gets only BotOps' plain rights: a service key's or a watcher's task, a stopped job's request, a routine
-BotOps set itself, an event routine, a task someone else wrote or commented on. A run a person or a
-bot asked for keeps that requester's rights, so BotOps never lends this to another bot. The team rule **BotOps manages every
+someone else wrote and gets only Agent Ops' plain rights: a service key's or a watcher's task, a stopped job's request, a routine
+Agent Ops set itself, an event routine, a task someone else wrote or commented on. A run a person or a
+bot asked for keeps that requester's rights, so Agent Ops never lends this to another bot. The team rule **Agent Ops manages every
 bot** turns it off. In a run carrying a person's rights, the token writes the repositories of the bots that person manages
-(owner, admin, the bot's owners, above it on the chart); in a run a bot asked for, and for the computer's git helper with no BotOps
-run in progress, only BotOps' own. A token is reused only for the exact same repositories, so a wider one never reaches a
+(owner, admin, the bot's owners, above it on the chart); in a run a bot asked for, and for the computer's git helper with no Agent Ops
+run in progress, only Agent Ops' own. A token is reused only for the exact same repositories, so a wider one never reaches a
 narrower run.
 
-**What still waits for the person's tap.** The rights BotOps borrows are never a confirmation: only the person's own click
-on a Confirm card in their BotOps chat is, and it runs the stored request as them. So BotOps answers these with
+**What still waits for the person's tap.** The rights Agent Ops borrows are never a confirmation: only the person's own click
+on a Confirm card in their Agent Ops chat is, and it runs the stored request as them. So Agent Ops answers these with
 `needs_confirm` and a card, and nothing changes until the tap:
 - a role, sign-in, email, team or mailbox change for someone (`POST /api/v2/access/humans/{id}`);
 - a credential granted to a person or to every computer (a grant to a bot, and taking a grant back, stay direct);
 - placing a member's bot on a computer that does not take members' bots;
-- the routes in `botops_act.CONFIRM`: removing people, the bot limit and who may sign in, a computer's member-bots
+- the routes in `agent_ops_act.CONFIRM`: removing people, the bot limit and who may sign in, a computer's member-bots
   switch and revoking it, deciding a proposal, a support request, a file's sharing, directory sync, disconnecting Slack
   or GitHub, and picking a seat's candidate (listing candidates stays direct);
 - always, whatever the person said: handing over ownership (`POST /api/v2/access/owner`, the owner only), updating Tico
-  (`POST /api/v2/system/update`), a change to the rules **BotOps changes providers and limits without asking** or
-  **BotOps manages every bot**, and a new computer's one-time code, which shows on the card once the person taps it and
-  never in BotOps' answer;
+  (`POST /api/v2/system/update`), a change to the rules **Agent Ops changes providers and limits without asking** or
+  **Agent Ops manages every bot**, and a new computer's one-time code, which shows on the card once the person taps it and
+  never in Agent Ops' answer;
 - always, too: moving the Gateway connection or an outgoing webhook that holds secret headers to another service while
   credentials are saved (the Gateway's default address included). The request says `credentials` `keep` or `clear`
   (and a webhook its `expected_revision`), the card names the old and new scheme, host and port and the choice, and it
   is stale at the tap once the revision, the address, the credentials or the person's rights changed;
 - providers (turning the Tico AI Gateway off or back to automatic included, the owner only) and raised limits when the
-  owner turned **BotOps changes providers and limits without asking** off.
+  owner turned **Agent Ops changes providers and limits without asking** off.
 
 What only an owner or an admin may ask for is refused at once for a member, not handed over as a card that fails. A few
-routes give back a secret's value, and BotOps acting for a person is refused them (`403 person_only`, with where the person
+routes give back a secret's value, and Agent Ops acting for a person is refused them (`403 person_only`, with where the person
 does it): revealing a stored credential, making someone a password, making a personal API token and making a SCIM token.
 A secret in a request body is refused too (`422 secret_in_request`), including the Gateway's `key` and Slack's
 `bot_token` and `app_token`. A body the route itself would refuse, an unknown field included, gets the route's own
 `422` and no card: a card never stores or shows back what its route has no place for. Each step of a bulk card is
 checked against its own route, and one step refused refuses the whole card.
 
-If a friendly tool refuses for permissions, BotOps retries the same action with `tico_api` before handing work back. Both use the same rights.
+If a friendly tool refuses for permissions, Agent Ops retries the same action with `tico_api` before handing work back. Both use the same rights.
 
 **Following through later.** A request often finishes in a later run that something else started: the daily-update
-request, a retry once a busy bot is idle, a notice. Nobody's request is attached to that run, so by default BotOps has
-only its own rights. To act for the person, BotOps cites the open task they asked it for: `tico api ... --on-behalf-of
-<task id>` or `tico bot model ... --on-behalf-of <task id>` (MCP: `on_behalf_of`). The server accepts a task BotOps owns
-that the person filed themselves (not through the Assistant; one BotOps filed as them counts only as a continuation of
+request, a retry once a busy bot is idle, a notice. Nobody's request is attached to that run, so by default Agent Ops has
+only its own rights. To act for the person, Agent Ops cites the open task they asked it for: `tico api ... --on-behalf-of
+<task id>` or `tico bot model ... --on-behalf-of <task id>` (MCP: `on_behalf_of`). The server accepts a task Agent Ops owns
+that the person filed themselves (not through the Assistant; one Agent Ops filed as them counts only as a continuation of
 their message, `--request-id`), while it is open, and only in a run the person
 started or Tico started on its schedule (the daily update, a task's due or routine notice). A run a bot or
 another person started keeps that requester's rights whatever task it cites, and a run a Slack digest, a live meeting,
 a watcher or another person's task comment started lends no one's rights: anyone there wrote its words. It is recorded as
-the person's, via BotOps, like any other delegated change, and Credentials stay as above (never a value).
+the person's, via Agent Ops, like any other delegated change, and Credentials stay as above (never a value).
 
-**Refusals say what to click.** A refused BotOps call (403, or a computer that cannot run the bot) answers with `fix`,
+**Refusals say what to click.** A refused Agent Ops call (403, or a computer that cannot run the bot) answers with `fix`,
 one sentence on what the person does, and `link`, the place in the app (`#/bot/<slug>/more`, `#/repositories`,
-`#/task/<id>`, `#/settings`). The sentence depends on whose rights were used: BotOps' own (say go ahead in the BotOps
-chat), a requesting bot's (the same, or change it yourself), or the person's own (ask an owner or admin). BotOps relays
+`#/task/<id>`, `#/settings`). The sentence depends on whose rights were used: Agent Ops' own (say go ahead in the Agent Ops
+chat), a requesting bot's (the same, or change it yourself), or the person's own (ask an owner or admin). Agent Ops relays
 it as one sentence and the link.
 
 **Checking the result.** A model change answers with `readiness` (`backend/readiness.py` `can_run`, the one check
@@ -690,18 +690,18 @@ external agent runs (Hermes, OpenClaw, Grok Bot) answers `applicable: false`: no
 refused only on false. `reported` turns true once the bot's own readiness row reflects the new runtime, after the
 computer's next heartbeat.
 
-**What is recorded.** Every event BotOps writes with a person's rights carries `via: botops` and `delegation`: the
+**What is recorded.** Every event Agent Ops writes with a person's rights carries `via` `botops` and `delegation`: the
 person (`for`), the request that lent the rights (`cited`: their message, or the task cited in a later run), and
 `run`: `live` when they asked in this run, `comment` when their own comment on the task started it, `follow_through` when
-BotOps cited their open task in a later one.
+Agent Ops cited their open task in a later one.
 
-**Support and the Librarian.** BotOps with a person's rights files a support report as them (`tico support file`) and, for the
+**Support and the Librarian.** Agent Ops with a person's rights files a support report as them (`tico support file`) and, for the
 owner, turns on the Librarian (`tico api POST librarian/turn-on`). With its own rights both are refused.
 
-The same goes for routines and quarantine: human-requested BotOps work uses that human’s management rights,
+The same goes for routines and quarantine: human-requested Agent Ops work uses that human’s management rights,
 including work requested through a task. Only the requester's own comment on their task lends their authority. The run
 must be able to read the request’s conversation, and a request with no open task lends nothing after a week. Bot-requested work keeps that bot’s narrower rights.
-Unattended BotOps work retains its own rights.
+Unattended Agent Ops work retains its own rights.
 
 The commands (with MCP tools of the same names):
 
@@ -719,8 +719,8 @@ The commands (with MCP tools of the same names):
 | `tico bot place <bot> [--computer C]` | puts a bot on a computer: the one named, or the only one, or the least busy that takes it |
 | `tico bot go-live <bot> [--computer C]` | places it if it has no computer, turns it on, and for a starter bot starts its setup chat as the requester. When the computer does not have the bot's repository yet but GitHub does (or GitHub cannot be asked), the placement is kept and the answer is HTTP 202 `waiting_for_repository` (the CLI says so and exits 0): the computer clones it, and the readiness report that says it has the repository finishes the go-live, once, with the requester's rights. When GitHub could not be asked the answer says so, since a repository that doesn't exist never arrives. Health lists each waiting go-live for the owner, admins and whoever manages the bot. One that can't finish, or hasn't finished within 7 days, stops, and the requester gets one notice to run go-live again. A repository GitHub does not have is refused (`repository_missing`) with how to create it; when it is waiting for the GitHub App's permission to create repositories, the refusal is `repository_waiting_for_permission` and names the owner's Needs you task with the two fixes. |
 | `tico bot model <bot> [<model>] [--effort E] [--on-behalf-of <task>]`, `tico bot pause\|resume <bot>` | the model (none: list the choices; a change answers with the computer's `readiness`), stop and restart; a manager bot may set its direct report's model ([Managers and their reports](#managers-and-their-reports)) |
-| `tico bot profile <bot> [name] [--digest-hour H]`, `POST /api/v2/bots/{bot}/profile` | a bot's profile (doer, reviewer, lead, manager, responder, monitor, custom): what wakes it and which tasks it takes; its owner, operator, a person it reports up to, or BotOps; an Admin or the owner. A profile grants no right |
-| `tico bot budget <bot> [--hour N\|default] [--day N\|default]`, `tico bot budget <bot> release`, `tico bot release <bot>` | a bot's runs per hour and per day (the team default when unset; its owner, operator or BotOps), and release a bot Tico stopped for failed runs or too many runs. `tico team budget [--hour N] [--day N]` sets the team default (owner and admins) |
+| `tico bot profile <bot> [name] [--digest-hour H]`, `POST /api/v2/bots/{bot}/profile` | a bot's profile (doer, reviewer, lead, manager, responder, monitor, custom): what wakes it and which tasks it takes; its owner, operator, a person it reports up to, or Agent Ops; an Admin or the owner. A profile grants no right |
+| `tico bot budget <bot> [--hour N\|default] [--day N\|default]`, `tico bot budget <bot> release`, `tico bot release <bot>` | a bot's runs per hour and per day (the team default when unset; its owner, operator or Agent Ops), and release a bot Tico stopped for failed runs or too many runs. `tico team budget [--hour N] [--day N]` sets the team default (owner and admins) |
 | `tico bot scope <bot> <task>`, `tico bot scope <bot> --release` | limits the bot's claims to that task and its direct subtasks, or lifts the limit; the rest of its queue, new work included, stays queued as it is, and nothing is paused, resumed or started |
 | `tico automation update <id> --enable\|--disable` | an automation (a routine) on or off |
 | `tico computer list [--computer C [--section S --offset N]]`, `tico health check` | the computers a bot may go on, one short row each (one computer in full with `--computer`, large sections paged); what is wrong with the bots, most urgent first, each with its fix |
@@ -732,7 +732,7 @@ The commands (with MCP tools of the same names):
 | `tico support file "<message>"` | sends a requested support message to Tico support with the requester's rights |
 | `tico api <METHOD> <path> ['{json}'] [--on-behalf-of <task>]` | any other v2 route, as the requester |
 
-The server applies the requester's rights to every BotOps v2 call, including friendly tools and `tico api`.
+The server applies the requester's rights to every Agent Ops v2 call, including friendly tools and `tico api`.
 Older Computers receive the same behavior without adding a delegation header. `X-Tico-On-Behalf-Of: turn` and
 `on_behalf_of` remain supported; citing another human cannot widen the current requester's access. `/me` identifies
 the calling credential so clients can discover which tools are offered; it does not change the rights used by tools.
@@ -748,14 +748,14 @@ Archiving removes Routines and placement and may revoke its External agent Crede
 recover those. Other settings edits have history for undo. The four Built-in bots cannot be deleted, and the Librarian
 cannot be copied.
 
-A bot's Instructions and the text it reads cannot select a human whose rights BotOps should borrow. The server resolves
+A bot's Instructions and the text it reads cannot select a human whose rights Agent Ops should borrow. The server resolves
 the requester from the run's message or task, checks that human is still on the roster, and applies only that identity's
 permissions. A requesting bot keeps its own narrower rights throughout the work.
 
 ### The Tools Owner and the Assistant make Tools changes as the person
 
 Asking for access gets it done; it never bounces back. The Tools page's owner (the built-in Tools Owner) borrows the
-asking person's rights the way BotOps does, but only on Tools changes (`backend/tools_delegation.py`): giving a bot a
+asking person's rights the way Agent Ops does, but only on Tools changes (`backend/tools_delegation.py`): giving a bot a
 key or a level, taking one back, adding or changing an API tool, its settings or an MCP server, sharing a website
 account, and a bot's bot.yaml `tools:` entries. The same checks decide whose rights a run carries: the person's own
 message in their chat with it, a task they filed for it, or a task their Assistant filed for it citing their message
@@ -768,7 +768,7 @@ rest to the Tools Owner. Neither ever reads, stores or repeats a value: a key's 
 key stay the person's own, in Tools.
 
 A bot.yaml `tools:` entry holds no secret, so registering, changing or removing one is open to the bot itself (its own
-entries, also when BotOps or the Tools Owner carries its request), BotOps and the Tools Owner with their own rights, a
+entries, also when Agent Ops or the Tools Owner carries its request), Agent Ops and the Tools Owner with their own rights, a
 credential admin and anyone who may manage the bot. Acting for someone, that someone's rights decide. Its scope takes any short
 lowercase name (`page`, `ad_account`) with a short value or list; a name or value that looks like a credential is
 refused. A bot's Tools tab lists, beside its declared entries, every tool it can use through a grant (an API or MCP
@@ -776,8 +776,8 @@ tool's key at its level, a key on no tool, a website account), one row per servi
 
 ### A computer for every active bot
 
-A bot that becomes active without a computer (added active, turned on, resumed, or built by BotOps) is placed by the server: on the team's
-only computer, else the least busy online one that takes it (a bot BotOps builds prefers BotOps's own computer, where its repository is). A member's bot goes on that member's own computer or one opened to members' bots,
+A bot that becomes active without a computer (added active, turned on, resumed, or built by Agent Ops) is placed by the server: on the team's
+only computer, else the least busy online one that takes it (a bot Agent Ops builds prefers Agent Ops's own computer, where its repository is). A member's bot goes on that member's own computer or one opened to members' bots,
 and never on a closed one. With none that takes it the bot stays as it is and the answer says so; the scheduler places it as soon as one can
 (`backend/placement.py`). Humans see a bot that is only set up, not yet turned on, as "Setting up".
 
@@ -786,32 +786,32 @@ and never on a closed one. With none that takes it the bot stays as it is and th
 Every control in Settings that writes has an entry in the settings catalogue (`backend/settings_entries.py`): a stable
 key such as `team.rules.admin_sql`, the control's name ("Admins see SQL"), where it is (Settings > People > Team rules),
 who may change it, its class, the route and body it writes, and a link that opens that card
-(`#/settings/<tab>/<card>`). A person, or BotOps or their own Assistant for them, finds and changes a setting
+(`#/settings/<tab>/<card>`). A person, or Agent Ops or their own Assistant for them, finds and changes a setting
 without knowing the route:
 
     tico settings find "sql"                                  key, name, where, class and who may change it
     tico settings show bot.limit.usd --bot support-owner            the current value, who may change it, whether you may
-    tico settings set release.times 09:30,17:00               change it with your rights (BotOps, the Assistant: the
+    tico settings set release.times 09:30,17:00               change it with your rights (Agent Ops, the Assistant: the
                                                              person's)
 
 `show` and `set` take `--bot`, `--computer`, `--person` or `--id` for a setting set per one of them. The class decides
-what `set` does when BotOps or the Assistant asks for a person (the same answer from either):
+what `set` does when Agent Ops or the Assistant asks for a person (the same answer from either):
 
 - **direct** (reversible, inside the team, no new spend: routines, tags, a bot's model, release times,
   the privacy count): it changes at once, as that person, and the answer names the new value.
 - **confirm** (spending more, people and roles, sending or publishing outside, anything destructive, team rules,
-  ownership, the Strategy Owner): BotOps gets a Confirm card for the person to tap; nothing changes until they do, and nothing
+  ownership, the Strategy Owner): Agent Ops gets a Confirm card for the person to tap; nothing changes until they do, and nothing
   confirms it for them. A wake rule is direct unless it sends a webhook or forwards the call. The person's own
   `tico settings set` runs at once. The person's tap is their own click, also on the routes that take only that (the
-  Strategy Owner's level and checks, company storage, turning the Assistant on). A confirm entry whose route BotOps can't yet
+  Strategy Owner's level and checks, company storage, turning the Assistant on). A confirm entry whose route Agent Ops can't yet
   put on a card is person-only until it can (`NO_CARD_YET`, empty now; the catalogue test fails once one can, so it
   goes back to confirm).
 - **person** (a sign-in, a secret value, an upload such as the team icon, the person's own OKs and mail, and a
-  new outgoing webhook or Gateway wake URL, whose signing secret is shown only once, in Settings): BotOps answers with
+  new outgoing webhook or Gateway wake URL, whose signing secret is shown only once, in Settings): Agent Ops answers with
   a one-line reason and the card's link.
 
 The Assistant's Confirm card is in the person's own Assistant chat (the owner's Strategy Owner chat), and it may card every
-catalogue route BotOps may. A direct or a confirm entry runs on the person's own words: the Assistant's run cites their
+catalogue route Agent Ops may. A direct or a confirm entry runs on the person's own words: the Assistant's run cites their
 message in that chat, as a task action does (its route checks who may change it). Without that, or while the owner's
 "Assistant acts without asking" is off, it is a card too. A card or a cited write from the Assistant is exactly one
 entry's body: two settings at once, or a person-only one, is refused.
@@ -820,7 +820,7 @@ Someone without the rights is refused with who can change it ("Only the owner or
 "Whose it is" is read from the thing itself: a trigger's or an outgoing webhook's maker (a bot that made an incoming
 trigger manages it too, as its route allows), a computer's operator, and the people who manage a wake rule's scope (the
 owner or an admin for a team rule); a person's role is the owner's alone.
-The route still makes its own check after the catalogue's, and when the route refuses a write BotOps or the Assistant
+The route still makes its own check after the catalogue's, and when the route refuses a write Agent Ops or the Assistant
 made for a person (`tico api`), the refusal carries the same who-may line (`fix`, `who_may`).
 
 `backend/tests/test_settings_catalog.py` reads every write
@@ -844,7 +844,7 @@ A bot's rights to another bot come from the same audiences: put a bot in another
 send that bot requests. A bot may always answer one that wrote to it, or that holds a task it asked for,
 so a private bot can still be replied to. `bot_contact` (Other bots: may chat and assign, replies only,
 tasks only) stays as a further limit between bots and now also applies to notes and to comments that
-wake a bot. A tasks-only bot still takes notes, comments and messages from its manager (`reports_to`) and from BotOps.
+wake a bot. A tasks-only bot still takes notes, comments and messages from its manager (`reports_to`) and from Agent Ops.
 
 Personal API tokens, the MCP tools and the Assistant act as the human, with the human's access.
 

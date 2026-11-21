@@ -18,7 +18,7 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Stop a hosted server when idle | Settings → Computers → Sleep when idle ([Account](account.md#sleep-when-idle)) |
 | See or change what wakes a bot | Automations → What wakes bots, or What wakes <bot> |
 | Add, assign or set up a bot | Settings → Bots → Add from template; then the bot → Set up |
-| Change Instructions | Bot → More → Instructions → Edit Instructions → Ask BotOps to change |
+| Change Instructions | Bot → More → Instructions → Edit Instructions → Ask Agent Ops to change |
 | Change model, effort, owners or status | Settings → Bots |
 | Register or remove a Computer | Settings → Computers → Add computer; open a computer → Revoke computer |
 | Add a subscription (Connect or paste) and give it to computers | Settings → Models → Add subscription; then Settings → Computers ([Subscriptions](computers.md#subscriptions)) |
@@ -50,9 +50,9 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Change the Company page: editions, disclosure, stats, audiences, accent, logo | Company → ⋯ → Share → Manage (`#/company-page`) |
 | Message Tico support | **?** beside Search (phone: More drawer, beside Search), or any `#/support` link |
 
-All four system bots appear as **Built-in** in Settings > Bots. Neither Assistant nor BotOps has a rail entry: **Tico Assistant**
+All four system bots appear as **Built-in** in Settings > Bots. Neither Assistant nor Agent Ops has a rail entry: **Tico Assistant**
 (the sidebar's bottom row, ⌘J; **Assistant**, the phone's middle tab) opens your Assistant over any page except the Assistant page and setup, even while the signed-out banner shows, `#/assistant`
-opens it full page, and the Assistant hands BotOps what needs BotOps;
+opens it full page, and the Assistant hands Agent Ops what needs Agent Ops;
 the Strategy Owner is on Goals and proposes Strategy, and Ask the Librarian is on Docs and on Strategy's Market tab. The Strategy Owner is at the top of the team chart; the other three stay out of it.
 Inbox Manager and other repeating message work appear under **Message bots**.
 An older app may show Instructions under the bot's Docs tab; the action is still **Edit Instructions**.

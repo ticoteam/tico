@@ -259,7 +259,7 @@ def register(app, auth, settings, settings_admin, store):
         if cause == W.STATE_CAUSES["planned"]:
             # Nothing is making it: the Info tab has no step that finishes it, so say what does, with no button.
             line = W.cause_line(c, "bot:" + bot, cause)
-            taker = "ask BotOps to take it live" if H.bot(c, H.FLEET_MAINTAINER) else "nobody is taking it live"
+            taker = "ask Agent Ops to take it live" if H.bot(c, H.FLEET_MAINTAINER) else "nobody is taking it live"
             return {"cause": f"{line}: {taker}", "fix": None}
         fixes = {
             W.STATE_CAUSES["paused"]: "resume",

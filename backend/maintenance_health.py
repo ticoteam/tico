@@ -1,13 +1,13 @@
 """Check health: what is wrong with this install right now, found by plain code (no bot, no model).
 
 The Maintenance run's step (backend/maintenance_steps/check_health.py) reads these checks, plus the production invariants
-and the Health page's own checks, and files each problem as a finding: one BotOps task per problem, a count on repeats,
+and the Health page's own checks, and files each problem as a finding: one Agent Ops task per problem, a count on repeats,
 and a cleared comment when it passes (docs/health-monitor.md). This module holds the checks themselves, the record of
 busy processes a runner reports, and the Tico bug report path: `health_findings` -> `health_reports` dedupe -> a support
 ticket to the Tico team, or a support approval a person reads first when the team rule `health_monitor_reports` is off.
 
 Each finding has a key (what and where, on this install: one per computer for a computer's problem) and a signature (what,
-without where: the same on every install for the same problem). The signature groups the BotOps task and the ticket.
+without where: the same on every install for the same problem). The signature groups the Agent Ops task and the ticket.
 """
 
 import calendar
@@ -40,7 +40,7 @@ from .api_contract import api_v2
 
 log = logging.getLogger("tico.maintenance_health")
 
-BOTOPS = "botops"  # the bot that takes every setup finding (a task per signature), and marks a ❓ for a person on it
+AGENT_OPS = "botops"  # the bot that takes every setup finding (a task per signature), and marks a ❓ for a person on it
 RULE = "health_monitor_reports"
 SETUP, BUG = "setup", "tico-bug"
 # A finding's severity, lowest first. `bad` where the Health page says bad for the same thing; a rise wakes the bot.
@@ -76,7 +76,7 @@ LOG_PATTERNS = (
         re.compile(r"unpushed commits and push failed", re.I),
         1,
         "A bot's checkout has commits it cannot push (the branch has diverged)",
-        "BotOps: the runner's own rebase already kept both sides of memory notes, so a real conflict is left (the "
+        "Agent Ops: the runner's own rebase already kept both sides of memory notes, so a real conflict is left (the "
         "error names its files). On that computer, fetch the bot's repository, rebase its unpushed commits onto the "
         "remote branch keeping both sides' facts (or save them on a new branch) and push, so the runner can pull again.",
     ),
@@ -86,7 +86,7 @@ LOG_PATTERNS = (
         re.compile(r"cannot fetch \S+ onto this computer", re.I),
         REPEATED,
         "A computer keeps failing to fetch a bot's repository",
-        "BotOps: check the bot's repository exists and the GitHub App or credential that computer uses can read it.",
+        "Agent Ops: check the bot's repository exists and the GitHub App or credential that computer uses can read it.",
     ),
     # One drop logs "lost" and then, once per runner process, "unavailable" as the reconnect fails: count the drops.
     (
@@ -229,16 +229,16 @@ def _update_stuck(c, machine, found, live):
         f"Nothing to do by hand while turns still run on {label}: its update starts when they end. "
         "Stopping one is a person's choice (Runs)."
         if action == "wait"
-        else f"BotOps: turns still run on {label} but nothing has moved: look at them in Runs and ask a person to stop "
+        else f"Agent Ops: turns still run on {label} but nothing has moved: look at them in Runs and ask a person to stop "
         "a stalled one; its update starts when they end."
         if action == "stalled"
-        else f"BotOps: read the updater beside {label}: in its install directory, `docker compose -f runner.compose.yaml "
+        else f"Agent Ops: read the updater beside {label}: in its install directory, `docker compose -f runner.compose.yaml "
         "logs updater` (add `-f runner.override.yaml` when that file is there). If it lost its status, end the hold by "
         "hand as docs/updates.md says (A Docker runner)."
         if action == "docker"
-        else f"BotOps: read the update on {label} (`tico-computer status` and its update.log there); "
+        else f"Agent Ops: read the update on {label} (`tico-computer status` and its update.log there); "
         "`tico-computer restart` starts its runner again.",
-        subject=machine["id"],  # one BotOps task per computer
+        subject=machine["id"],  # one Agent Ops task per computer
         severity=BAD if quiet else WARN,
     ) | {"action": action}
 
@@ -295,7 +295,7 @@ def _runner_checks(c, settings, stuck=None):
                     if runner_versions.only_flattened_links(update)
                     else _holding_fix(machine["label"])
                     if rows and rows[0]["running"] and update["state"] != "incompatible" and not update["error"]
-                    else f"BotOps: update the runner on {machine['label']} (Settings > Computers, or "
+                    else f"Agent Ops: update the runner on {machine['label']} (Settings > Computers, or "
                     "`scripts/tico-computer install` once on that computer so it updates itself).",
                     # Its bots are paused until it updates: bad, as Health says (runner_versions.health_check).
                     severity=BAD if update["state"] == "incompatible" else WARN,
@@ -327,7 +327,7 @@ def _runner_checks(c, settings, stuck=None):
                 f"{r['label']} has been restarting since {since}",
                 f"Computer {r['label']} has said since {since} UTC that it is restarting, which takes at most "
                 f"{health.RESTART_STUCK_MINUTES} minutes; {running} turn(s) still run there{holds}.",
-                f"BotOps: look at the turns still running on {r['label']} (Runs); stopping one is a person's "
+                f"Agent Ops: look at the turns still running on {r['label']} (Runs); stopping one is a person's "
                 f"choice. If none runs, restart Tico on {r['label']} by hand (`tico-computer restart`).",
             )
         )
@@ -508,7 +508,7 @@ def _login_checks(c, settings):
                 f"{x['since'][:16].replace('T', ' ')} UTC stopped on a usage limit and none has completed "
                 f"since{reset}. Bots on {label} "
                 f"without a subscription that run on {name}, or fall back to it, will fail there.",
-                f"BotOps: on {label}, sign the default {name} login in to an account with quota, or top up "
+                f"Agent Ops: on {label}, sign the default {name} login in to an account with quota, or top up "
                 "its plan or billing; or give the bots there a subscription with quota (Settings > AI "
                 "providers > Subscriptions).",
             )
@@ -565,7 +565,7 @@ def _check_hold_checks(c):
                 f"{name}'s check on {model} has been held by its usage limit for {hours} h (since "
                 f"{since[:16].replace('T', ' ')} UTC); {title}. Every turn on it since then ({tries}) "
                 "stopped on the limit, and Tico retries it after every reset.",
-                f"BotOps: wait for {model}'s limit to reset; or switch the check model: {name} declines "
+                f"Agent Ops: wait for {model}'s limit to reset; or switch the check model: {name} declines "
                 "this check and files it again on another model (tico task child --check-model); or drop "
                 f"the check: {name} declines it. A declined check's queued turn is let go.",
             )
@@ -669,7 +669,7 @@ def _bot_checks(c, settings=None):
                     f"{label} stopped on a usage limit and has no fallback model",
                     f"{n} turn(s) of {label} stopped on a subscription or spend limit in the last 24 hours, "
                     "and the bot has no fallback model to finish them on.",
-                    f"BotOps: give {label} a fallback model on another provider (Settings > Bots > {label} > "
+                    f"Agent Ops: give {label} a fallback model on another provider (Settings > Bots > {label} > "
                     "Fallback), or raise its limit if the team chose one.",
                 )
             )
@@ -681,7 +681,7 @@ def _bot_checks(c, settings=None):
                 SETUP,
                 f"{name} has been stuck in setup since {oldest[:16]}",
                 f"{name} is still in setup and holds {count} {what}(s), the oldest from {oldest[:16]} UTC.",
-                f"BotOps: finish {name}'s setup with the person it serves, or pause it so its work is not held.",
+                f"Agent Ops: finish {name}'s setup with the person it serves, or pause it so its work is not held.",
             )
         )
     online_ids = {r["id"] for r in runner_online.online_rows(c)}
@@ -693,7 +693,7 @@ def _bot_checks(c, settings=None):
                 SETUP,
                 f"{row['name']}'s oldest queued job has been refused for over 12 hours",
                 f"Queued since {row['oldest'][:16]} UTC; refusal reason: {row['reason']}.",
-                'BotOps: inspect the refusal in Health and resolve its execution gate.',
+                'Agent Ops: inspect the refusal in Health and resolve its execution gate.',
             )
         )
     for row in health._waiting(c, online_ids, settings)[2]:
@@ -740,7 +740,7 @@ def _bot_checks(c, settings=None):
                         f"Run `tico task worktree add {r['repo']} --task {r['task_id']}` on the owner's current computer. "
                         "Unpushed work stayed on the retired computer."
                         if r['state'] == 'retired'
-                        else "BotOps: save any unique work in that worktree on a branch, then remove its link so "
+                        else "Agent Ops: save any unique work in that worktree on a branch, then remove its link so "
                         "the computer can make it again (docs/worktrees.md)."
                     ),
                 )
@@ -761,21 +761,21 @@ def _profile_checks(c):
                 f"{name} is a Reviewer but owns {n} open task{'s' if n != 1 else ''} that {'are' if n != 1 else 'is'} not review or QA requests",
                 "A Reviewer takes review and QA requests only and does not pull other open tasks by itself, so "
                 "these wait for a person to start them.",
-                f"BotOps: give those tasks to a bot that does the work, or change {name}'s profile to Doer.",
+                f"Agent Ops: give those tasks to a bot that does the work, or change {name}'s profile to Doer.",
             )
         ),
         "responder_has_tasks": (
             lambda name, n: (
                 f"{name} is a Responder but has {n} open task{'s' if n != 1 else ''}",
                 "A Responder wakes for people in chat only and never starts a task, so these sit untouched.",
-                f"BotOps: give those tasks to a bot that does the work, or change {name}'s profile to Doer.",
+                f"Agent Ops: give those tasks to a bot that does the work, or change {name}'s profile to Doer.",
             )
         ),
         "doer_idle": (
             lambda name, n: (
                 f"{name} did nothing in all {n} of its runs this week",
                 f"Every run {name} had in the last week ended without writing anything to Tico.",
-                f"BotOps: ask {name}'s owner what it should be doing; a Responder, Monitor or Lead profile may fit better.",
+                f"Agent Ops: ask {name}'s owner what it should be doing; a Responder, Monitor or Lead profile may fit better.",
             )
         ),
     }
@@ -812,7 +812,7 @@ def _stop_checks(c):
                 f"{name}'s last {hold['streak']} runs each failed within a minute of starting, with "
                 f"{words.get(kind, words[run_failures.OTHER])}. Held "
                 f"since {str(details.get('held_at'))[:16]} UTC. Last error: {details.get('error') or 'none reported'}.",
-                f"BotOps: read {name}'s last runs, fix the cause, then release it (tico bot release {row.get('slug', bot)}). "
+                f"Agent Ops: read {name}'s last runs, fix the cause, then release it (tico bot release {row.get('slug', bot)}). "
                 "Tico also tries one run on its own at growing intervals and releases it when one completes. "
                 "Its queued work is kept.",
                 subject=kind,
@@ -832,7 +832,7 @@ def _stop_checks(c):
                 f"{name} started {hold['runs']} runs in the last {hold['window']}, over its budget of "
                 f"{hold['budget']}. Held since {str(hold['held_at'])[:16]} UTC. This looks like a runaway "
                 "loop, not normal work.",
-                f"BotOps: read {name}'s last runs for what keeps waking it, then release it "
+                f"Agent Ops: read {name}'s last runs for what keeps waking it, then release it "
                 f"(tico bot release {row.get('slug', bot)}) or raise its budget (tico bot budget {row.get('slug', bot)} --{hold['window']} N).",
                 subject=hold["window"],
                 severity=BAD,
@@ -854,7 +854,7 @@ def _stop_checks(c):
                 "one to start. "
                 "Each waits, then Tico tries it again on its own; the wait doubles with each failed try, "
                 "up to an hour. The server log has the traceback.",
-                f"BotOps: read the server log for the traceback and fix its cause. To retry the held runs "
+                f"Agent Ops: read the server log for the traceback and fix its cause. To retry the held runs "
                 f"now, release {name} (tico bot release {row.get('slug', bot)}); one that fails again is held with a longer "
                 "wait.",
                 severity=BAD,
@@ -911,7 +911,7 @@ def _session_checks(c):
                 f"{name} keeps losing its session: {r['n']} new ones in a day",
                 f"{name} started {r['n']} new sessions in the last 24 hours because its old one could not be "
                 f"continued ({r['why']}), so each run began without the last one's context.",
-                f"BotOps: read {name}'s last runs for why its session is lost (the computer it runs on may have "
+                f"Agent Ops: read {name}'s last runs for why its session is lost (the computer it runs on may have "
                 "changed, its session files may be cleared, or its runs may be cut short).",
             )
         )
@@ -1102,10 +1102,10 @@ def report(c_factory, support, auth, settings, who, key):
             raise Problem("not_found", "No such finding", 404)
         row = dict(row)
         if row["kind"] != BUG:
-            # A setup finding is this install's to fix (BotOps), and its text names local bots and computers: it never
+            # A setup finding is this install's to fix (Agent Ops), and its text names local bots and computers: it never
             # goes to HQ, not even as an approval a person could send.
             raise Problem(
-                "not_a_tico_bug", "Only a Tico bug is reported to Tico support; BotOps fixes a setup finding.", 409
+                "not_a_tico_bug", "Only a Tico bug is reported to Tico support; Agent Ops fixes a setup finding.", 409
             )
         filed = c.execute("SELECT * FROM health_reports WHERE signature=?", (row["signature"],)).fetchone()
         filed = dict(filed) if filed else None
@@ -1185,7 +1185,7 @@ def report(c_factory, support, auth, settings, who, key):
         SupportTicket(message=message, include_ids=True, diagnostics=attachment),
         "health:" + row["signature"],
         source="health_monitor",
-        asker=rule_links.agent_of(store, who),  # BotOps's own report: checked on the support link at its delivery
+        asker=rule_links.agent_of(store, who),  # Agent Ops's own report: checked on the support link at its delivery
     )
     now = H.now()
     with store.transaction() as c:
@@ -1208,7 +1208,7 @@ def _reports_today(c):
 
 
 def file_reports(store, auth, settings, support, signatures):
-    """HQ calls for the Tico bugs the step found, outside any transaction, as BotOps: the OKs it asks are BotOps's. The
+    """HQ calls for the Tico bugs the step found, outside any transaction, as Agent Ops: the OKs it asks are Agent Ops's. The
     same report path as the route (`report`): a ticket once, a comment when it comes back worse, an OK asked of the owner
     when the team rule is off, and at most REPORTS_PER_DAY new tickets a day (the rest wait for the next run). First the reports a person
     approved since the last run are sent (`_send_approved`). With support off (TICO_SUPPORT, a demo or a rehearsal copy)
@@ -1228,7 +1228,7 @@ def file_reports(store, auth, settings, support, signatures):
             with store.transaction() as c:
                 H.event(
                     c,
-                    "bot:" + BOTOPS,
+                    "bot:" + AGENT_OPS,
                     "health_monitor.not_reported",
                     SOURCE_COPY,
                     {"reason": SOURCE_COPY, "signatures": list(signatures)[:20]},
@@ -1240,7 +1240,7 @@ def file_reports(store, auth, settings, support, signatures):
             continue
         try:
             answers[signature] = report(
-                store, support, auth, settings, SimpleNamespace(actor="bot:" + BOTOPS), signature
+                store, support, auth, settings, SimpleNamespace(actor="bot:" + AGENT_OPS), signature
             )
         except Problem as exc:
             answers[signature] = {"signature": signature, "deferred": exc.code if hasattr(exc, "code") else str(exc)}
@@ -1329,8 +1329,8 @@ def findings_view(c):
     for row in rows:
         row["tag"] = check_health.tag_of(row["check_id"])
         row["task_id"] = check_health.task_of(c, row["signature"])
-    botops = (H.bot(c, BOTOPS) or {}).get("state") == "active"
-    return {"findings": rows, "botops": botops, "reports_without_asking": team_rules.load(c)[RULE]}
+    agent_ops = (H.bot(c, AGENT_OPS) or {}).get("state") == "active"
+    return {"findings": rows, "botops": agent_ops, "reports_without_asking": team_rules.load(c)[RULE]}
 
 
 def install(app, store, auth, mutate, settings):
@@ -1339,13 +1339,13 @@ def install(app, store, auth, mutate, settings):
         **api_v2(
             "Health",
             "getHealthFindings",
-            "What Check health found on this install: each open problem with its count, last seen time and Tico-bug report, plus botops (whether BotOps is there to take findings) and reports_without_asking (the team rule)",
+            "What Check health found on this install: each open problem with its count, last seen time and Tico-bug report, plus `botops` (whether Agent Ops is there to take findings) and reports_without_asking (the team rule)",
         ),
     )
     def health_findings(request: Request):
         who = request.state.identity
-        if who.role not in ("owner", "human") and who.actor != "bot:" + BOTOPS:
-            raise Problem("forbidden", "People and BotOps read the health findings", 403)
+        if who.role not in ("owner", "human") and who.actor != "bot:" + AGENT_OPS:
+            raise Problem("forbidden", "People and Agent Ops read the health findings", 403)
         with store.read() as c:
             if who.role == "human" and not auth.bot_admin(who):
                 raise Problem("forbidden", "Owners and admins read the health findings", 403)
@@ -1356,13 +1356,13 @@ def install(app, store, auth, mutate, settings):
         **api_v2(
             "Health",
             "reportHealthFinding",
-            "People and BotOps: report a finding (key or signature) as a Tico bug: one ticket per problem with the redacted diagnostics, a message on it when it comes back, or a support approval when the team rule is off",
+            "People and Agent Ops: report a finding (key or signature) as a Tico bug: one ticket per problem with the redacted diagnostics, a message on it when it comes back, or a support approval when the team rule is off",
         ),
     )
     def report_finding(request: Request, key: str, body: M.Empty):
         who = request.state.identity
-        if who.actor != "bot:" + BOTOPS and who.role != "owner":
-            raise Problem("forbidden", "Only BotOps or the owner reports a finding", 403)
+        if who.actor != "bot:" + AGENT_OPS and who.role != "owner":
+            raise Problem("forbidden", "Only Agent Ops or the owner reports a finding", 403)
         support = getattr(app.state, "support", None)
         if support is None:
             raise Problem("support_off", "Contact support is not available here.", 409)

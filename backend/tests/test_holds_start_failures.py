@@ -1,7 +1,7 @@
 """Migration 20261117104652_holds_start_failures, on a database an older server left: a run a claim held moves into an
 open claim_error hold on the job, a run held for its login's quota reset is let go, each task a task.cant_start event
-holds while BotOps's task is open gets an open cant_start hold, and the jobs columns go. Running it again changes
-nothing, and its triggers end a run's holds with the run and a task's with BotOps's task."""
+holds while Agent Ops's task is open gets an open cant_start hold, and the jobs columns go. Running it again changes
+nothing, and its triggers end a run's holds with the run and a task's with Agent Ops's task."""
 
 import importlib
 import json
@@ -72,7 +72,7 @@ def test_start_failures_move_into_holds_and_running_it_again_changes_nothing(api
         # Two for one task and bot: the later one (same instant, later row) names the job.
         _event(c, "e3", "task.cant_start", held_task, {"bot": "ops", "review": review, "reason": "a", "job": "j1"})
         _event(c, "e4", "task.cant_start", held_task, {"bot": "ops", "review": review, "reason": "b", "job": "j2"})
-        # BotOps's task about it closed already: nothing holds the task.
+        # Agent Ops's task about it closed already: nothing holds the task.
         _event(c, "e5", "task.cant_start", other_task, {"bot": "ops", "review": closed_review, "reason": "c"})
 
         MIGRATION.up(c)
@@ -105,7 +105,7 @@ def test_start_failures_move_into_holds_and_running_it_again_changes_nothing(api
         held = dict(c.execute("SELECT id,held FROM jobs WHERE id IN (?,?,?)", (claimed, quota, preset)).fetchall())
         assert held == {claimed: 0, quota: 0, preset: 1}  # a wake preset's hold stays
 
-        # The run ends: its hold ends with it. BotOps's task closes: the task's hold ends, as BotOps's doing.
+        # The run ends: its hold ends with it. Agent Ops's task closes: the task's hold ends, as Agent Ops's doing.
         c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (claimed,))
         H.task_close(c, H.TICO_ACTOR, review, "Fixed.")
         after = _rows(c)

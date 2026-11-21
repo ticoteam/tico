@@ -588,7 +588,7 @@
 
 - id: jobs2-answer-bot-yes
   group: jobs2
-  prompt: "Tell BotOps yes, go ahead."
+  prompt: "Tell Agent Ops yes, go ahead."
   hub:
     - match: '^needs-you show'
       out:
@@ -645,9 +645,9 @@
     - '^message send(?! -h\b| --help)'
     - '^task (create|close|done|move)(?! -h\b| --help)'
   reply: |
-    Replies to BotOps's question about the support inbox bot as Dana, in her exact words ("yes, go ahead", not a shortened
+    Replies to Agent Ops's question about the support inbox bot as Dana, in her exact words ("yes, go ahead", not a shortened
     yes), in its task chat, and says in one line that it is answered, with the task's link. It does not reply to Health Monitor's
-    question about the runner ping, which Dana did not mention, and does not message BotOps separately. (Only one BotOps
+    question about the runner ping, which Dana did not mention, and does not message Agent Ops separately. (Only one Agent Ops
     question is open; with two, asking which would be right.)
 
 - id: jobs2-ask-bot
@@ -951,7 +951,7 @@
   must_not:
     - '^support (file|report|send)(?! -h\b| --help)'
     - '^message send(?! -h\b| --help)'
-    - '^task create .*--owner (bot:)?botops'
+    - '^task create .*--owner (bot:)?agent-ops'
   reply: |
     Points Dana to the Tico team for this bug: a link [Message the Tico team](#/support). It does not file a support report
     itself, does not promise a fix or a date, and does not claim it can fix the panel. One or two short lines, perhaps asking

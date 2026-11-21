@@ -892,7 +892,7 @@ def _ask_without_task(conn, decision, actor, body, target, conv):
     H.event(conn, H.TICO_ACTOR, ASKED, made["id"], {"rule": decision.rule, "about": about})
 
 
-# Only bots write questions (backend/question_marks.py): a rule's ❓ is the Rules Owner's, or BotOps' when it is not
+# Only bots write questions (backend/question_marks.py): a rule's ❓ is the Rules Owner's, or Agent Ops' when it is not
 # here (person_asks.author).
 def _rules_asker():
     return f"bot:{H.RULES_OWNER}"

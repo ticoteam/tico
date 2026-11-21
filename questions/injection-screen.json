@@ -1,7 +1,7 @@
 {
   "id": "injection-screen",
   "version": 1,
-  "owner": "botops",
+  "owner": "agent-ops",
   "summary": "One piece of text from outside Tico, before a bot reads it: is it a prompt injection addressed to an AI, and of which kind. The server asks it at the doors outside text comes in by (a webhook call that opens a task, inbound mail a bot reads, the public idea form, a watcher's new task), through `backend/screening.py`; at or over `hold` the item goes to a person, held (mail is only marked), at or over `warn` the bot's copy starts with a warning line. Nothing is deleted, and any failure lets the text through as before.",
   "state": ["source", "text"],
   "questions": {

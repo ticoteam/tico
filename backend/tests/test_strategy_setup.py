@@ -19,7 +19,7 @@ from backend.tests.helpers.api import get, post, put  # noqa: F401
 from backend.tests.helpers.onboarding import (
     ASSISTANT_AGENT,
     ASSISTANT_CARD,
-    BOTOPS_CARD,
+    AGENT_OPS_CARD,
     LIBRARIAN_CARD,
     environment,
     signed_in,
@@ -323,7 +323,9 @@ def test_a_run_cut_off_or_left_with_nothing_to_read_stops_and_never_writes(envir
 
 
 def test_the_org_builder_names_the_bet_a_group_serves_and_setup_stores_it(environment):
-    api = environment(cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, "")] + [(row, "") for row in CARDS[:-1]])
+    api = environment(
+        cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (AGENT_OPS_CARD, "")] + [(row, "") for row in CARDS[:-1]]
+    )
     (Path(api.app.state.store.settings.catalog_dir).parent / "groups.yaml").write_text(yaml.safe_dump(DEPARTMENTS))
     ask = lambda: api.post(
         "/api/v2/setup/recruit",
@@ -362,7 +364,9 @@ def test_the_org_builder_names_the_bet_a_group_serves_and_setup_stores_it(enviro
 
 
 def test_finishing_setup_with_a_website_files_the_librarians_market_task_once(environment):
-    api = environment(seed={}, cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, ""), (LIBRARIAN_CARD, "# L\n")])
+    api = environment(
+        seed={}, cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (AGENT_OPS_CARD, ""), (LIBRARIAN_CARD, "# L\n")]
+    )
     api.put(
         "/api/v2/setup",
         headers=signed_in(),
@@ -384,7 +388,9 @@ def test_finishing_setup_with_a_website_files_the_librarians_market_task_once(en
 
 
 def test_finishing_setup_without_a_website_files_no_market_task(environment):
-    api = environment(seed={}, cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, ""), (LIBRARIAN_CARD, "# L\n")])
+    api = environment(
+        seed={}, cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (AGENT_OPS_CARD, ""), (LIBRARIAN_CARD, "# L\n")]
+    )
     api.put("/api/v2/setup", headers=signed_in(), json={"answers": {"building": "A new idea"}, "selected": {}})
     assert api.post("/api/v2/setup/complete", json={}, headers=signed_in()).status_code == 200
     with api.app.state.store.read() as c:

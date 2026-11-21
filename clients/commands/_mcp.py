@@ -217,7 +217,7 @@ class Protocol:
                 rid,
                 {
                     "error": "local_only",
-                    "detail": f"{name} runs on the Computer holding the bot repository. Run it there, or ask BotOps.",
+                    "detail": f"{name} runs on the Computer holding the bot repository. Run it there, or ask Agent Ops.",
                     "retryable": False,
                 },
             )

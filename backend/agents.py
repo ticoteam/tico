@@ -28,7 +28,7 @@ from . import bot_settings as BS
 # 60 s because its heartbeat is every 15 s and a lease depends on it; nothing here does.
 PRESENCE_GAP = 180
 
-# Pairing: a profile with no credential asks to be connected, and a person (or BotOps for them) approves
+# Pairing: a profile with no credential asks to be connected, and a person (or Agent Ops for them) approves
 # the code it prints. Only hashes of the code and the secret are kept; the minted credential waits in the
 # row from approval until the first authenticated heartbeat, sealed so that only the profile's secret opens it
 # (`seal_held_token`).

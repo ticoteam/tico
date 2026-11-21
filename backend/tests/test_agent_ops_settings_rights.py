@@ -1,0 +1,75 @@
+"""Agent Ops changes a team setting with the rights of the person who asked, never its own (docs/permissions.md): the
+release schedule, the General Manager, stalled task check, the team's run budget, task types, tags and incoming triggers.
+
+Ana owns the company, Ben is an admin, Cara is a member (the base fixture).
+"""
+
+from backend.tests.helpers.api import post  # noqa: F401  (fixture)
+from backend.tests.helpers.agent_ops_parity import act
+from backend.tests.helpers.mcp import call as mcp, rpc
+from backend.tests.helpers.member_bots import agent_ops, finish, turn  # noqa: F401  (fixtures)
+
+
+def test_an_owner_changes_team_settings_through_agent_ops_and_a_member_is_refused(api, agent_ops):
+    ana = turn(api, agent_ops, person="ana-test", text="Turn the daily release off and set the team budget")
+    for name, args in (
+        ("tico_release_schedule", {"on": False}),
+        ("tico_team_budget", {"hour": 5}),
+        ("tico_maintenance_set", {"paused": True}),
+        ("tico_general_manager_set", {"on": True}),
+    ):
+        err, result = mcp(api, name, args, ana["token"])
+        assert not err, (name, result)
+    # Pipelines v3: a pipeline's settings are a person's, on its page; no bot makes one, even for an owner.
+    made = rpc(api, "tools/call", {"name": "tico_task_type_create", "arguments": {"name": "Ops"}}, token=ana["token"])
+    assert made["error"]["message"] == "Unknown tool: tico_task_type_create", made
+    finish(api, agent_ops, ana)
+
+    cara = turn(api, agent_ops, person="cara-test", text="Turn the daily release on")
+    for name, args in (
+        ("tico_release_schedule", {"on": True}),
+        ("tico_team_budget", {"hour": 9}),
+        ("tico_maintenance_set", {"paused": False}),
+    ):
+        err, result = mcp(api, name, args, cara["token"])
+        assert err, (name, result)
+    # The same through a plain `tico api` call with no on_behalf_of: the route still checks Cara, not Agent Ops.
+    assert act(api, cara, "PATCH", "release-schedule", {"on": True}, ref=None).status_code == 403
+
+
+def test_a_member_cannot_change_another_persons_trigger_through_agent_ops(api, agent_ops):
+    post(api, "triggers", {"name": "Shop"}, token="ben-test")
+    cara = turn(api, agent_ops, person="cara-test", text="Rename the shop trigger")
+    err, result = mcp(api, "tico_trigger_update", {"id": "shop", "name": "Cara's"}, cara["token"])
+    assert err, result
+    for path, body in (
+        ("triggers/shop", {"name": "Cara's"}),
+        ("triggers/shop/delete", {}),
+        ("triggers/shop/relay/wake", {"wake": True}),
+    ):
+        assert act(api, cara, "POST", path, body, ref=None).status_code == 403, path
+    # Her own trigger, made through Agent Ops, is hers.
+    err, mine = mcp(api, "tico_trigger_create", {"name": "Cara orders"}, cara["token"])
+    assert not err, mine
+    err, tag = mcp(api, "tico_tag_create", {"key": "cara-launch", "label": "Launch"}, cara["token"])
+    assert not err and tag["tag"]["owner"] == "human:cara", tag
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT created_by FROM triggers WHERE id=?", (mine["id"],)).fetchone()[0] == "human:cara"
+        assert c.execute("SELECT name FROM triggers WHERE id='shop'").fetchone()[0] == "Shop"
+    finish(api, agent_ops, cara)
+    ana = turn(api, agent_ops, person="ana-test", text="Rename the shop trigger")
+    err, result = mcp(api, "tico_trigger_update", {"id": "shop", "name": "Store"}, ana["token"])
+    assert not err and result["name"] == "Store", result
+
+
+def test_an_owner_changes_a_triggers_signing_through_agent_ops_but_never_hands_it_a_secret(api, agent_ops):
+    post(api, "triggers", {"name": "Hook"}, token="ana-test")
+    ana = turn(api, agent_ops, person="ana-test", text="Check GitHub's signature on the hook trigger, then stop")
+    err, signed = mcp(api, "tico_trigger_sign", {"id": "hook", "preset": "github"}, ana["token"])
+    assert not err and signed["preset"] == "github", signed
+    err, off = mcp(api, "tico_trigger_sign", {"id": "hook", "off": True}, ana["token"])
+    assert not err and off["signed"] is False, off
+    # A secret typed into a chat with Agent Ops is refused before the route runs: the person sets it in Settings.
+    err, refused = mcp(api, "tico_trigger_sign", {"id": "hook", "secret": "s" * 24}, ana["token"])
+    assert err, refused
+    finish(api, agent_ops, ana)

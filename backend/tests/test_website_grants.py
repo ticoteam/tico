@@ -14,10 +14,10 @@ from backend.auth import Identity
 from backend.store import H, Problem
 from backend.tests.helpers.api import assign, claim, get, headers, post, put, ready, runner
 from backend.tests.helpers.assistant import assistant_turn
-from backend.tests.helpers.botops_parity import act
-from backend.tests.helpers.botops_confirm_cards import confirm
+from backend.tests.helpers.agent_ops_parity import act
+from backend.tests.helpers.agent_ops_confirm_cards import confirm
 from backend.tests.helpers.credentials import setup
-from backend.tests.helpers.member_bots import botops, turn  # noqa: F401 (fixture)
+from backend.tests.helpers.member_bots import agent_ops, turn  # noqa: F401 (fixture)
 
 SITE = "accounts.acme.example"
 
@@ -357,12 +357,12 @@ def test_the_assistant_uses_its_persons_grants_and_never_the_assistant_bots(webs
     assert response.status_code == 403 and response.json()["error"]["code"] == "no_account"
 
 
-def test_botops_never_shares_a_login_and_the_host_change_waits_for_confirmation(website, botops):
-    """4: a login is shared by a person's own tap, never BotOps' even with their rights; choosing a browser host
+def test_agent_ops_never_shares_a_login_and_the_host_change_waits_for_confirmation(website, agent_ops):
+    """4: a login is shared by a person's own tap, never Agent Ops' even with their rights; choosing a browser host
     still requires their tap."""
     s = website
     aid = add(s)
-    attempt = turn(s.api, botops, person="ana-test", text="Share the Acme account with ops")
+    attempt = turn(s.api, agent_ops, person="ana-test", text="Share the Acme account with ops")
     response = act(s.api, attempt, "PUT", f"website-tools/{s.tid}/accounts/{aid}/access/bot:ops", {"on": True})
     assert response.status_code == 403
     share(s, aid, "bot:ops")  # Ana's own tap

@@ -12,12 +12,12 @@ model subscriptions and sends the results back. The in-app Help page (**?** in t
   Instructions and memory, on one computer.
 - **Team**: humans and bots are teammates on one team chart, in groups.
 - **Built-in**: four bots every team gets. The [Assistant](assistant.md) is each human's own helper and their one DM,
-  the owner's too; the other three are helpers it hands work to. BotOps sets up and
+  the owner's too; the other three are helpers it hands work to. Agent Ops sets up and
   fixes bots, computers, Tools and Credentials; the [Librarian](librarian.md) answers from the team's docs and the Tico
   manual; the [Strategy Owner](goals-and-kpis.md#the-strategy-bot) keeps KPIs and goal status current. The [General Manager](general-manager.md)
   is a built-in helper outside the chart: it manages the General pipeline, and once an hour it looks for tasks that say
   Paused, held bots and duplicates, and wakes only when it finds something. [Check health](health-monitor.md) is a
-  plain-code step that runs hourly and opens one BotOps task
+  plain-code step that runs hourly and opens one Agent Ops task
   per install problem.
 - **Message bots** work a human's email or a Slack channel. **External agents** (Hermes, OpenClaw, Codex, Claude) connect
   over MCP with a token ([Connect an external agent](connect-an-agent.md)).
@@ -29,7 +29,7 @@ model subscriptions and sends the results back. The in-app Help page (**?** in t
 | Teammate | For | Find it | Ask |
 |---|---|---|---|
 | Assistant (built-in) | Your own helper: finds things, makes tasks, drafts the rest for your click | Sidebar, or ⌘K | “What needs me today?” |
-| BotOps (built-in) | Sets up and fixes bots, computers, Tools and Credentials | Sidebar | “Add a bot that answers #support” |
+| Agent Ops (built-in) | Sets up and fixes bots, computers, Tools and Credentials | Sidebar | “Add a bot that answers #support” |
 | Librarian (built-in) | Answers from your docs and the Tico manual, with sources | Ask the Librarian on Docs and on Strategy's Market tab | “What is our refund limit?” |
 | Strategy Owner (built-in) | Keeps KPIs and goal colours current | Top of Goals; ask your Assistant | “Why is this goal yellow?” |
 | General Manager (built-in) | Manages General; tidies tasks hourly on weekdays: Paused tasks, held bots, duplicates | Its “Task check” tasks; its bot page → Settings | `tico general-manager status` |
@@ -112,7 +112,7 @@ quarantined bot, its manager bot (the bot it reports to on the org chart). A new
 quarantined or planned bot is refused as `target_inactive`, with when the bot is back, and so is any other bot's note.
 That refusal is the target's state, not the sender reaching too far: it opens no review and never counts as a repeat,
 so one bot's quarantine does not spread to the bots that work with it. It does count toward the 30 a day, so a bot
-retrying it in a loop still stops. When a quarantine lifts, by the cooldown or by a person or BotOps clearing it, Tico
+retrying it in a loop still stops. When a quarantine lifts, by the cooldown or by a person or Agent Ops clearing it, Tico
 leaves the bot a quiet note that its next run carries ahead of any older notes: the refusal that stopped it, and "Do
 not retry this action; leave a note for a person if you still need it."
 
@@ -136,11 +136,11 @@ and, for the owner and admins, **SQL**. Tasks has You and a view of each pipelin
 and Closed behind
 the archive button; Routines and wake rules are **Automations**.
 Credentials are under the **Keys** filter in **Tools**. See [Navigation](navigation.md). A bot's page has **Chat**,
-**Tasks**, **Docs** and **More**. The assistant (Tico, `assistant`), BotOps, the Librarian, the Strategy Owner, the General Manager, the Finance Owner and the Design Owner are built in and cannot be archived or deleted (`409 system_bot`); the assistant
+**Tasks**, **Docs** and **More**. The assistant (Tico, `assistant`), Agent Ops, the Librarian, the Strategy Owner, the General Manager, the Finance Owner and the Design Owner are built in and cannot be archived or deleted (`409 system_bot`); the assistant
 and the Librarian work in the background and are not listed for humans. Each human has one private **Assistant** DM, opened by **Tico Assistant** (or a page's **Ask**) from any page except its own and setup, even while the signed-out banner shows
 (`#/assistant`, also the first tab on their own page, is the same chat in full): it looks things up at once, does low-risk things as that human, and
 proposes anything with a side effect for their own click ([The Assistant](assistant.md)). The owner's DM is the
-Assistant too: it hands strategy and goal work to the Strategy Owner, research to the Librarian and bot work to BotOps. There is no shared
+Assistant too: it hands strategy and goal work to the Strategy Owner, research to the Librarian and bot work to Agent Ops. There is no shared
 Tico chat page and no Tico Live; humans can also act across Tico through their own external agent over Tico's
 MCP ([Connect an external agent](connect-an-agent.md)).
 The database itself is readable with plain SQL (`tico sql`, the SQL page, `POST /api/v2/sql`):
@@ -302,14 +302,14 @@ run that answered a person's message is held instead, that person gets one notic
 it will pick up again. A busy bot's runs are settled too: the scheduler waits only
 while a live run of the bot is on the same task (or the same thread, or the same task session). An operator can choose
 **Try again** or **Don’t retry** in Stopped runs; while such a run is still live, Tico saves the choice and applies it
-when that lane frees. BotOps’s review is done as soon as all its recovery choices are saved. Tico records the live-work dependency
+when that lane frees. Agent Ops’s review is done as soon as all its recovery choices are saved. Tico records the live-work dependency
 in the recovery history and shows its ownership in Stopped runs. Within five minutes of that work ending, the
 scheduler re-evaluates the stopped job and records who owns recovery and why.
 When the computer reports a restart or a clean stop, a run resumes on the next scheduler sweep, including one that used a shell or
 edited files. A clean stop is the computer's own note that it stopped the turn. Its recovery note gives the interruption time and tells it to check what already happened first;
 the same computer continues the same provider session. A consumed approval or a named irreversible outside action
-(merge, publish, send or payment) holds it for BotOps instead, and the review names the action. A second interruption
-is dismissed and BotOps is told. A stopped run is counted once however many requests were folded into it.
+(merge, publish, send or payment) holds it for Agent Ops instead, and the review names the action. A second interruption
+is dismissed and Agent Ops is told. A stopped run is counted once however many requests were folded into it.
 The computer records fixed operation labels alongside shell events without exposing
 command arguments. Older program-only events from action-capable tools (such as `gh` or `npm`) go to review with a
 command-details-unavailable reason; they cannot prove that no merge or publish happened.
@@ -320,11 +320,11 @@ minutes of the server coming back (the snapshot and health check take minutes) w
 after the update and ended in that window. It resumes on the next sweep on the same computer and provider session,
 whatever it used, with the same note: the interruption time and to check what already happened first; a recorded
 named outside action or consumed approval is named in it, to verify before doing it again. There is no Needs you
-item, BotOps review or question for it; the decision is in the job's recovery record (`job.auto_reconcile`, Stopped
+item, Agent Ops review or question for it; the decision is in the job's recovery record (`job.auto_reconcile`, Stopped
 runs history). One waiting for live work in its lane has that choice saved, and is judged again when the lane frees
 (a Stop, a finished task or a day's wait since then counts; a person's own choice replaces Tico's). A request is
 resumed from three such cuts; the fourth, or a cut more than a day old, ends it quietly.
-A lost lease without a restart report resumes once after fifteen minutes when no consumed approval or named outside action was recorded. A second lost lease holds the job quietly for its computer and says Resuming; it does not dismiss the work or create a BotOps task. A server silence of up to thirty minutes extends existing leases once, so a twenty-minute renewal outage keeps the running session. **Unreleased:** safe runs held after a usage limit also recover automatically, as described below.
+A lost lease without a restart report resumes once after fifteen minutes when no consumed approval or named outside action was recorded. A second lost lease holds the job quietly for its computer and says Resuming; it does not dismiss the work or create an Agent Ops task. A server silence of up to thirty minutes extends existing leases once, so a twenty-minute renewal outage keeps the running session. **Unreleased:** safe runs held after a usage limit also recover automatically, as described below.
 A known primary login reset keeps runnable jobs queued until that reset when no eligible fallback is ready;
 a new message does not start another attempt on the spent login. An interrupted fallback returns to this queue
 only when its host acknowledged the end, reported its tools completely, and recorded no output, tools or consumed
@@ -343,7 +343,7 @@ Two or more distinct tasks/chats in the remaining count, or any refusal with no 
 quarantine the whole bot. A run's source takes precedence over the task its refused write names. Escape quarantines
 always stop the whole bot and require a person to clear them. The cooldown resets only the held source's count;
 `tico api POST /api/v2/bots/<bot>/quarantine/clear` also clears its task/chat holds, with the same management permission.
-The hold leaves the task's status, snooze and dependencies intact, and BotOps still receives the refused-write review.
+The hold leaves the task's status, snooze and dependencies intact, and Agent Ops still receives the refused-write review.
 
 A quarantine stops each affected running turn through the runner's normal Stop response, carrying
 `stop_reason`. Its end reason says *Quarantined: <reason>, resumes about HH:MM UTC*
@@ -354,17 +354,17 @@ An answer the run finished as the quarantine began is kept on the run,
 never posted. A real lease loss still says the computer stopped answering. Later held runs are named on the bot's existing review task, and
 closing that task while runs remain held reopens it on the next sweep.
 Runs held this way stay *owner review needed*, because Tico cannot see what a
-tool did on the Mac: BotOps is given the review unless the task is private, Settings names the held task and its owner to those
+tool did on the Mac: Agent Ops is given the review unless the task is private, Settings names the held task and its owner to those
 who may read that task, the review lists each tool call the run made, and the bot's operator or
-BotOps resumes or dismisses it after checking what already happened. Nothing is lost or re-sent.
+Agent Ops resumes or dismisses it after checking what already happened. Nothing is lost or re-sent.
 While such a review is owed the bot's tasks and routines wait, but a human's own
 messages still run: nothing about them is uncertain.
 
 **Needs you.** Every issue Tico derives says whether a human has to act. Those that do reach a person only in Needs you,
-from the task BotOps holds for it. The status dot left of your name shows only two states: "Can't reach Tico", and "Tico
+from the task Agent Ops holds for it. The status dot left of your name shows only two states: "Can't reach Tico", and "Tico
 stopped / bots aren't running" (which includes no computer online). Health checks are not in the account menu or on the
 dot; they are listed on **Settings → General → Health → Details**, one line per problem, each with its fix (a computer
-with a Tico update waiting gets *Restart* on its line). Stopped runs and quarantined bots are BotOps's to review, so
+with a Tico update waiting gets *Restart* on its line). Stopped runs and quarantined bots are Agent Ops's to review, so
 they stay off the dot; **Settings → General → Health → Details** lists them as notes, with *Review stopped runs* for a
 bot's stopped runs. Issues Tico resolves itself (a computer that
 just dropped off, a usage limit that is retrying) stay out of the way as *resolves on its own* in
@@ -424,7 +424,7 @@ limit that decides anything: the bot shows *limited* exactly while a hold keeps 
 with no fallback ready, or the Gateway's for a Tico model), and the scheduler clears that the moment none does. **Try now** explicitly ends a hold (and also works while
 only the bot's own login is held and its work goes on on a fallback); a run that
 hits the limit again goes back to the hold. **Try now**, beside the warning on the bot's page and in its Chat line for anyone who
-manages the bot (`POST /api/v2/bots/{bot}/limit/retry`, BotOps as the person who asked), ends the
+manages the bot (`POST /api/v2/bots/{bot}/limit/retry`, Agent Ops as the person who asked), ends the
 hold for that bot and every bot limited on the same runtime on the same computer, which share
 the subscription (`limit.cleared` in the event log). As when a hold runs out, one queued run goes first and the rest
 wait for its result: a success resumes them all, and another limit puts the hold back with the end it had, so a plan
@@ -479,7 +479,7 @@ The bot's activity describes automatic recovery in plain words, without naming p
 It also reports when a later run already covered dismissed work.
 
 A run that used an approval, or may have taken an action, still needs review before resuming.
-The bot's operator or BotOps checks what happened before choosing to resume or dismiss it.
+The bot's operator or Agent Ops checks what happened before choosing to resume or dismiss it.
 
 **A provider limit inside another error.** Tico reads the text of every failed run itself, so an older computer that did not flag the
 limit is treated the same as a current one: a provider limit named anywhere in an error (*Prompt is too long · automatic compaction
@@ -491,7 +491,7 @@ thread compact its session first; if that run fails the same way, the next one s
 **Run time limits.** A run cut by its configured time limit continues on the same task and provider session.
 The task says “Reached its 60-minute run limit; continuing” with its actual limit, and the continuation receives
 any hand-off note left on the task. Local edits, shell commands and branch pushes do not require review.
-A named merge, publish, send, payment or consumed approval still holds the run for BotOps to check.
+A named merge, publish, send, payment or consumed approval still holds the run for Agent Ops to check.
 Like restart recovery, a time-limit continuation also permits a harness that does not report tool calls
 when no named outside action or consumed approval was recorded; it must check previous work before continuing.
 Two consecutive time-limit cuts hold the job with an open review task; a run that finishes inside its limit
@@ -531,7 +531,7 @@ fails again is held again. A held run whose task finished meanwhile is canceled 
 ended.
 
 **Run budgets.** Each bot has `turns_per_hour` (default 300) and `turns_per_day` (default 2500); the owner and administrators set the
-team defaults (`GET/POST /api/v2/settings/turn-budgets`, `tico team budget [--hour N] [--day N]`), and a bot's owner, operator or BotOps
+team defaults (`GET/POST /api/v2/settings/turn-budgets`, `tico team budget [--hour N] [--day N]`), and a bot's owner, operator or Agent Ops
 sets its own (`GET/POST /api/v2/bots/{bot}/budget` with `expected_revision`, `tico bot budget <bot> [--hour N|default] [--day N|default]`,
 MCP `tico_bot_budget`). 0 is no limit. Runs are counted when Tico hands them out. A run that would pass the budget is not started and
 the bot is held with: "Tico stopped <bot>: <n> runs in the last hour. This looks like a runaway loop, not normal work. Check its last
@@ -561,7 +561,7 @@ the author's own provider and the task's history says so. Another provider is pr
 runtime alone follows its provider's current model. `check_order` in the same view is the order in effect.
 
 **A bot's session is its own** ([Sessions](sessions.md)). By default every task is its own provider thread, and the bot's
-Home and other turns share one more. BotOps (and any bot set to `session: task`) also gives each
+Home and other turns share one more. Agent Ops (and any bot set to `session: task`) also gives each
 thread its own provider thread, so unrelated requesters stay separate; `session: bot` keeps
 everything on one thread. A subtask someone else filed continues its parent task's thread when the bot owns both; one
 the bot filed for itself gets its own (`subtask_session: own` gives every subtask its own). Each bot task has its own
@@ -607,7 +607,7 @@ in Done can be reopened with a note ([Done, closed and reopen](tasks.md#done-clo
 listed under **Settings → History → Runs** and on the bot's **More** tab.
 
 **You change a bot's Instructions.** Open **Bot → More → Instructions → Edit Instructions**
-and ask BotOps to make the change. It commits and pushes the update for the next run. For a manual edit, change `AGENTS.md` (or a playbook, `memory/`, `knowledge/`) in
+and ask Agent Ops to make the change. It commits and pushes the update for the next run. For a manual edit, change `AGENTS.md` (or a playbook, `memory/`, `knowledge/`) in
 `bot-<slug>` and commit. The runner reads the checkout on its Mac at the start of every run, so
 the change is live on the next run once that checkout has it: push, and pull on the runner Mac
 if you edited elsewhere. Do not edit while the bot is running there.
@@ -649,12 +649,12 @@ times. Doers pull open tasks themselves; the others start a task only when it is
 **Custom** copies the profile's rows into the Rules table, marked as the profile's, to edit there; choosing a named profile
 again deletes them after a confirm. Set a profile in **Settings → Bots → Edit**, with `tico bot profile <bot> [name]`, MCP
 `tico_bot_profile`, or `POST /api/v2/bots/{bot}/profile` with `expected_revision` (`GET /api/v2/profiles` lists the choices
-with a line each); the bot's owner, operator, a person it reports up to, or BotOps may. The profile also shows on every bot read.
+with a line each); the bot's owner, operator, a person it reports up to, or Agent Ops may. The profile also shows on every bot read.
 
 Starting the server gives each bot without a profile one by its name once: `*-monitor`, `*-watch`, `social-media-manager` and
 `sentry-triage` are Monitors; `*reviewer*`, `qa-*`, `security*` and `reviewer-*` Reviewers (a bot named `reviewer` that
 owns Dev tickets stays a Doer); the leads, the C-level Heads and `*-manager` Leads; the Assistant and bots synced from
-another platform Responders; BotOps, the General Manager and the Librarian Custom; everything else a Doer.
+another platform Responders; Agent Ops, the General Manager and the Librarian Custom; everything else a Doer.
 Each owner gets one notice naming their bots and profiles. The wake presets (Token saver, Performance) are gone, and
 profiles have no wake numbers: news about a bot's own task (checks, reviews, a finished request) wakes it at once, on
 its turn; only a notice a rule batches waits 5 minutes, one wake per conversation (a Lead's waits for its digest
@@ -755,7 +755,7 @@ share this gate. Other tools and bot Git commands may bypass it, so it cannot pr
 
 A lock at least 30 minutes old stays in place and the failed command is not retried. Health, the
 worktree link detail or the runner error names its full path, including the repository, and its age.
-It gives one command, `rm -- '<full lock path>'`, for BotOps or a person to run on that Computer
+It gives one command, `rm -- '<full lock path>'`, for Agent Ops or a person to run on that Computer
 **after checking no Git is running for that repository**. A recent lock also stays in place; retry
 when Git has finished. Config and mirror repair stop at any Git lock. Tico does not scan processes
 or keep moved lock files.

@@ -10,8 +10,8 @@ from backend import never_stuck
 from backend import wake_presets as W
 from backend.store import H
 from backend.tests.helpers.api import claim, get, headers, post, ready, setup_attempt  # noqa: F401  (api is a fixture)
-from backend.tests.helpers.botops_parity import act
-from backend.tests.helpers.member_bots import botops, turn  # noqa: F401  (botops is a fixture)
+from backend.tests.helpers.agent_ops_parity import act
+from backend.tests.helpers.member_bots import agent_ops, turn  # noqa: F401  (agent-ops is a fixture)
 from backend.tests.helpers.task_lanes import new_task, task_bot
 from backend import bot_settings as BS
 
@@ -392,12 +392,12 @@ def test_a_persons_message_is_not_delayed_by_a_held_batch(api):
     assert [(j["state"], j["held"], j["hold_until"]) for j in jobs(api, since=since)[1:]] == [("queued", 0, None)] * 2
 
 
-def test_a_persons_done_through_botops_wakes_no_bot_about_the_done_task(api, botops):
-    """BotOps marking done, for the person, a task a bot asked them for: the person's act, as the same act from the app
+def test_a_persons_done_through_agent_ops_wakes_no_bot_about_the_done_task(api, agent_ops):
+    """Agent Ops marking done, for the person, a task a bot asked them for: the person's act, as the same act from the app
     is. Pipelines v3 wakes no bot about a Done task (docs/dev/pipelines-v3.md, check rule 7), so nothing is queued or held."""
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, "bot:ops", "Approve the vendor list", "Please check it.", "human:ana")
-    attempt = turn(api, botops, person="ana-test", text="Mark the vendor list done")
+    attempt = turn(api, agent_ops, person="ana-test", text="Mark the vendor list done")
     since = H.now()
     version = get(api, "tasks/" + task["id"])["task"]["version"]
     done = act(api, attempt, "POST", f"tasks/{task['id']}/done", {"version": version})

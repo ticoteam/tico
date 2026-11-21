@@ -1,4 +1,4 @@
-# Everyday jobs: read the record, route a request to the bot that owns it, hand a new bot to BotOps as the owner, put a
+# Everyday jobs: read the record, route a request to the bot that owns it, hand a new bot to Agent Ops as the owner, put a
 # decision to the person who signs it off, change a bot's routine, find a doc, and file a task for a person.
 
 - id: jobs-launch-status
@@ -73,7 +73,7 @@
   must_not:
     - '^message send(?! -h\b| --help)'
     - '^task (close|update|move|comment)(?! -h\b| --help)'
-    - '^task create .*--owner (botops|human:)'
+    - '^task create .*--owner (agent-ops|human:)'
   reply: |
     Files one task on Analytics, the bot that pulls numbers from the exports and keeps the sheet. The title is the ask in one line
     (last quarter, paid trials, the Acme sheet). The body quotes Dana's words, gives the why (the board deck on Friday), and marks
@@ -81,7 +81,7 @@
     quarter (Q3), so it is not reopened or commented on. The reply is one sentence on what was filed and on whom, and says the
     numbers arrive when Analytics runs, not that they are in. Priya is not messaged.
 
-- id: jobs-new-bot-botops
+- id: jobs-new-bot-agent-ops
   group: jobs
   prompt: "I want a bot that reads our support inbox every morning and drafts replies for me to approve. Can you get it set up and live this week?"
   hub:
@@ -100,17 +100,17 @@
     - match: '^task list'
       out: {tasks: [], next: null}
   must:
-    - '^task create .*--owner (bot:)?botops'
+    - '^task create .*--owner (bot:)?agent-ops'
     - '^task create .*--request-id turn'
   must_not:
     - '^bot (create|update|go-live|archive)(?! -h\b| --help)'
     - '^settings set(?! -h\b| --help)'
     - '^message send(?! -h\b| --help)'
   reply: |
-    Hands the ask to BotOps as one task with --request-id turn, so BotOps acts with Dana's rights. The title is the ask in one line.
+    Hands the ask to Agent Ops as one task with --request-id turn, so Agent Ops acts with Dana's rights. The title is the ask in one line.
     The body quotes Dana's words (every morning, drafts she reviews before anything is sent, live this week) and names the gaps: which inbox and how it is
     reached are not decided, and any mailbox access or credential is Dana's call, not promised here. It does not create, change,
-    activate or place the bot itself, and does not change any setting. It tells Dana in a sentence or two what happens next: BotOps
+    activate or place the bot itself, and does not change any setting. It tells Dana in a sentence or two what happens next: Agent Ops
     builds it and takes it live when she asks, and she sees the result in this chat. It does not say the bot is live.
 
 - id: jobs-discount-to-cfo
@@ -172,7 +172,7 @@
     - match: '^rules add'
       out: {ok: true, id: rule_1190, status: active}
   must:
-    - '^(automation update|rules add|task create .*--owner (bot:)?botops)\b'
+    - '^(automation update|rules add|task create .*--owner (bot:)?agent-ops)\b'
   must_not:
     - '^message send(?! -h\b| --help)'
     - '^task answer(?! -h\b| --help)'
@@ -180,7 +180,7 @@
   reply: |
     Changes the source the owner named: it turns the Check health runner-queue ping automation off (or narrows it), using
     `tico automation update auto_health_pings`, or adds a rule, and says so in one line with how to undo it. It leaves the
-    release docs automation alone, since the owner did not ask about it. It does not message Check health or BotOps, and it
+    release docs automation alone, since the owner did not ask about it. It does not message Check health or Agent Ops, and it
     does not refuse because the automation belongs to a bot. Plain and short.
 
 - id: jobs-what-did-bot-do
@@ -245,7 +245,7 @@
     - '^task create .*--owner (human:)?priya'
   must_not:
     - '^message send(?! -h\b| --help)'
-    - '^task create .*--owner (bot:)?botops'
+    - '^task create .*--owner (bot:)?agent-ops'
   reply: |
     Files one task owned by Priya, titled as the ask (review the Q4 budget draft), with a body that quotes Dana's words and the
     Friday deadline as Dana gave it. It does not message Priya directly, and does not invent a date it was not given. One sentence

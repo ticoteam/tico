@@ -1,5 +1,5 @@
 """Company, the `person:<id>` place (backend/cards.py): its person alone reads and arranges it, an admin has no way in,
-BotOps arranges it only for its person, and its cards widen nothing: each shows its reader only what they may already
+Agent Ops arranges it only for its person, and its cards widen nothing: each shows its reader only what they may already
 read. The Floor is its first card, once, on this place only, and a page saved before the Floor was a card gets it once.
 
 Ana owns the company, Ben is an admin, Cara is a member (the base fixture)."""
@@ -9,9 +9,9 @@ import importlib
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.store import H
 from backend.tests.helpers.api import get, post, put  # noqa: F401  (fixture)
-from backend.tests.helpers.botops_parity import act
+from backend.tests.helpers.agent_ops_parity import act
 from backend.tests.helpers.cards import delete, page, patch, place, task
-from backend.tests.helpers.member_bots import botops, turn  # noqa: F401  (fixture)
+from backend.tests.helpers.member_bots import agent_ops, turn  # noqa: F401  (fixture)
 
 
 def templates(view):
@@ -135,8 +135,8 @@ def test_its_cards_show_each_reader_only_their_own(api):
     assert "Cara's report" not in [t["title"] for t in ana["my_tasks"]["data"]["tasks"]]
 
 
-def test_botops_arranges_it_for_its_person_only(api, botops):
-    cara = turn(api, botops, person="cara-test", text="Put my tasks first on my dashboard")
+def test_agent_ops_arranges_it_for_its_person_only(api, agent_ops):
+    cara = turn(api, agent_ops, person="cara-test", text="Put my tasks first on my dashboard")
     view = act(api, cara, "GET", "places/person:me")
     assert view.status_code == 200 and view.json()["place"] == "person:cara"
     made = act(api, cara, "POST", "cards", {"template": "updates", "settings": {"count": 2}, "place": "person:me"})

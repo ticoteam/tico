@@ -124,7 +124,7 @@ def register(
     words goes through it (`checked`), and Send anyway replays the same write (`replays`)."""
 
     def acting(c: Any, caller: Any, body: Any) -> Any:
-        """Who the change is made as: the caller, or the person whose request BotOps carries (`on_behalf_of`)."""
+        """Who the change is made as: the caller, or the person whose request Agent Ops carries (`on_behalf_of`)."""
         ref = getattr(body, "on_behalf_of", None)
         return delegated_identity(c, caller, ref) if ref else caller
 
@@ -363,7 +363,7 @@ def register(
             if str(body.to).strip().lower() != "next":
                 raise Problem("bad_request", "Letting someone see a task moves it to the next stage: to is next", 422)
             if who.via == "botops" and not who.confirmed:
-                # As the readers route: BotOps acting for a person changes who sees a task only on their own tap.
+                # As the readers route: Agent Ops acting for a person changes who sees a task only on their own tap.
                 raise Problem("confirm_required", "Letting someone see a private task needs the person's own tap", 403)
 
             def check(added: list[str]) -> None:
@@ -1216,7 +1216,7 @@ def register(
                 raise Problem("not_found", "No such answer", 404)
             auth.task(c, who, found[0])
             # An undo that touches a bound OK (the OK or its send back) is the person's own click: never the
-            # Assistant's, BotOps' or a token's.
+            # Assistant's, Agent Ops' or a token's.
             bound = c.execute(
                 "SELECT 1 FROM answers a JOIN ok_grants g ON g.requirement_id=a.requirement_id WHERE a.id=?",
                 (answer_id,),

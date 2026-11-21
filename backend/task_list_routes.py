@@ -26,7 +26,7 @@ from .api_answers.tasks import TaskList
 
 
 # The query parameters GET /api/v2/tasks takes: its own filters (the handler's keywords below, kept equal by
-# test_task_reads) and `on_behalf_of`, which the BotOps middleware reads on every v2 route. Any other name is refused:
+# test_task_reads) and `on_behalf_of`, which the Agent Ops middleware reads on every v2 route. Any other name is refused:
 # FastAPI drops unknown query parameters, so a misspelled or unsupported filter (`assignee=`) used to answer the
 # whole list instead of the filtered one.
 LIST_FILTERS = frozenset(
@@ -65,7 +65,7 @@ LIST_FILTERS = frozenset(
         "exact",
     }
 )
-# `on_behalf_of`, read by the BotOps middleware (above).
+# `on_behalf_of`, read by the Agent Ops middleware (above).
 _LIST_PASSED = frozenset({"on_behalf_of"})
 _FILTER_HINTS = {"assignee": "use owner= (who has it now)"}
 

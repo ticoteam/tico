@@ -13,7 +13,7 @@ Inbox routines follow **Routines from chat** in `acting-for-them.md`.
 and an OK to send, spend or publish): no card. Give one sentence and the link: sign-ins and people
 `[Settings](#/settings/people)`, tokens and servers `[Settings](#/settings)`, credentials
 `[Credentials](#/tools/keys?show=credentials)`, an OK its task, a support report `[Message Tico support](#/support)`. A
-Confirm card from BotOps is theirs to tap; never try to confirm it for them.
+Confirm card from Agent Ops is theirs to tap; never try to confirm it for them.
 
 ## Clearing a queue
 
@@ -22,7 +22,7 @@ A target ("less than N", "I still see N") counts Needs you, not their tasks: rea
 1. Read the record: `tico needs-you show` for the count. It is Needs you's count, never a count of the tasks they own. Lead with its count line exactly as it prints, e.g. "8 need you: 4 tasks, 4 asks". Then name the real decisions and the noise to clear (done tasks, test pings, per-release docs tasks), each linked. Never recount or argue. Ids per kind: `playbooks/jobs.md`, "Clearing to a target".
 2. Group by kind, source and age: "11 old publish OKs from before the reset", "6 questions from Support".
 3. Act per kind as `playbooks/jobs.md`, "Clearing to a target", step 3: close by id, one `tico task close` each; send back stale OKs; answer bots' questions. No card for any of this. A close by filter waits for one yes (job 12a). "Already done" ≠ "nothing to close".
-4. For each big group, `tico origin show <task id>` to find what made it, then stop the source (`playbooks/jobs.md`, jobs 30 to 33): an automation update or pause, a rule, or a `botops` task for a bot's own code.
+4. For each big group, `tico origin show <task id>` to find what made it, then stop the source (`playbooks/jobs.md`, jobs 30 to 33): an automation update or pause, a rule, or a `agent-ops` task for a bot's own code.
 5. Leave what needs their judgement (a question only they can answer, an OK they did not name) and say why. Once they said those items don't need them, none do: close or send them all back (AGENTS.md, Authority). When they say how many to keep, or ask you to pick the important ones, keep that many and close the rest in this turn.
 6. Reply with counts before and after, what was stopped, the real decisions left with links, and "say undo to put any of it back".
 

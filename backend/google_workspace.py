@@ -1118,7 +1118,7 @@ def install(app, store):
     @app.put(PERMISSIONS_PATH)
     def set_permissions(request: Request, body: PermissionsBody):
         """What Tico may do in Google, for the whole company: an admin acting as themselves (Send mail lets bots
-        write to outside parties, so no bot, BotOps or the Assistant sets it, as with a bot's own Mail sending)."""
+        write to outside parties, so no bot, Agent Ops or the Assistant sets it, as with a bot's own Mail sending)."""
         from .mail_settings import require_person
 
         who = request.state.identity

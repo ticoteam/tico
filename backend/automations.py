@@ -95,7 +95,7 @@ MAIL_TRIES = 3  # claims a mail action gets before it fails
 # goes back to the queue for these. The rest may already have run there (a sent draft, a sent unsubscribe request).
 REPEATABLE_MAIL = ("archive", "label", "leave")
 SERVER_MAIL = "server:workspace-mail"
-BOTOPS = "bot:botops"  # builds automations for whoever asks it, with that asker's rights (backend/botops_act.py)
+AGENT_OPS = "bot:botops"  # builds automations for whoever asks it, with that asker's rights (backend/agent_ops_act.py)
 VERSIONED = ("trigger", "steps", "batch", "destinations")  # what the automation does; a change here is a new version
 # The automations a write in this context comes from: their own actions never start them again.
 CHAIN = contextvars.ContextVar("automation_chain", default=())
@@ -479,7 +479,7 @@ def _seen_if_builtin(c, who, flow):
 
 
 def deletable(c, who, aid):
-    """The row `who` may delete, else the refusal the delete route answers (404, 403, a built-in 409). BotOps checks
+    """The row `who` may delete, else the refusal the delete route answers (404, 403, a built-in 409). Agent Ops checks
     it before it hands a person a Confirm card for a delete, so no card fails on the tap."""
     row = _row(c, aid)
     if not row:
@@ -522,14 +522,14 @@ def _stamp_blocked(c, auth, who, flow, before=None):
     return None
 
 
-def _by_botops(who):
-    """Whether BotOps makes this call: for a person or a bot it acts for (the dispatcher lends their identity, via
-    botops), or with its own rights."""
-    return who.via == "botops" or who.actor == BOTOPS
+def _by_agent_ops(who):
+    """Whether Agent Ops makes this call: for a person or a bot it acts for (the dispatcher lends their identity, via
+    `botops`), or with its own rights."""
+    return who.via == "botops" or who.actor == AGENT_OPS
 
 
 def _bot_draft(c, who, flow):
-    """A new automation saved off, with version 1 pending, for a person with the change rule to turn on: what BotOps
+    """A new automation saved off, with version 1 pending, for a person with the change rule to turn on: what Agent Ops
     makes for a bot that may not make it, and what anyone makes that sets a model its tasks run on which they may not
     set (a bot's own call is refused, as before). Like a bot's other proposals it writes no audit row until then."""
     aid = "auto_" + H.new_id()
@@ -1065,7 +1065,7 @@ def _health_mirror(owner, bot):
         "health",
         {"on": bot.get("state") == "active", "bot": H.HEALTH_MONITOR},
         {"kind": "bot", "id": H.HEALTH_MONITOR},
-        "Finds install problems and files them for BotOps.",
+        "Finds install problems and files them for Agent Ops.",
     )
 
 
@@ -1359,7 +1359,7 @@ def _hold_told(c, row, rule, counted, held):
             "human:" + person,
             question=f"Release or drop the runs automation {flow['name']} is holding?",
             why=f"It is on hold because {why}, which is most often a loop.",
-            asker=person_asks.botops(),
+            asker=person_asks.agent_ops(),
             deduplicate=False,
             wake_refs=refs,
         )
@@ -2617,7 +2617,7 @@ class HubServices:
                     person,
                     question=screening.HELD_ASK,
                     why=screening.HELD_WHY,
-                    asker=person_asks.botops(),  # never the automation's lead: screening is Tico's own notice
+                    asker=person_asks.agent_ops(),  # never the automation's lead: screening is Tico's own notice
                     deduplicate=False,
                 )
                 screening.note(c, found, "webhook", task["id"], bot=bot, to=person)
@@ -3909,12 +3909,12 @@ def install(app, store, auth, mutate):
         **api_v2(
             "Automations",
             "getAutomationGuide",
-            "How BotOps builds and edits automations, with the flow format generated from the hub's code",
+            "How Agent Ops builds and edits automations, with the flow format generated from the hub's code",
             "AutomationGuide",
         ),
     )
     def automations_guide(request: Request):
-        """How BotOps builds and edits automations, with the flow format generated from the code."""
+        """How Agent Ops builds and edits automations, with the flow format generated from the code."""
         auth.domain(request.state.identity)
         return {"text": F.guide_text()}
 
@@ -3963,13 +3963,13 @@ def install(app, store, auth, mutate):
         **api_v2(
             "Automations",
             "createAutomation",
-            "Save a new automation as version 1; a flow that fails its checks is refused with where and why. BotOps saves it off unless `enabled` is sent; a bot without rights to it saves a proposal (off, version 1 pending). An Assistant Message routine saves off with action, message_id and needs_confirm; only its person's card click enables it. A chooser without a mode defaults to Draft",
+            "Save a new automation as version 1; a flow that fails its checks is refused with where and why. Agent Ops saves it off unless `enabled` is sent; a bot without rights to it saves a proposal (off, version 1 pending). An Assistant Message routine saves off with action, message_id and needs_confirm; only its person's card click enables it. A chooser without a mode defaults to Draft",
             "Automation",
         ),
     )
     def automations_create(request: Request, body: AutomationIn):
         """Save a new automation as version 1. The caller must be allowed to change an automation of that owner; a bot
-        that may not proposes it instead (off, version 1 pending). What BotOps builds is saved off unless `enabled` is
+        that may not proposes it instead (off, version 1 pending). What Agent Ops builds is saved off unless `enabled` is
         sent."""
         who = request.state.identity
 
@@ -3981,14 +3981,14 @@ def install(app, store, auth, mutate):
             chat_draft = who.via == "assistant" and not who.confirmed and assistant_routines.message(fields)
             if chat_draft:
                 fields = {**assistant_routines.defaults(fields), "enabled": False}
-            if _by_botops(who) and "enabled" not in body.model_fields_set:
-                fields["enabled"] = False  # what BotOps builds waits for a Turn on, unless the request said on
+            if _by_agent_ops(who) and "enabled" not in body.model_fields_set:
+                fields["enabled"] = False  # what Agent Ops builds waits for a Turn on, unless the request said on
             flow = _checked(c, fields, store.settings)
             if flow["builtin"]:
                 raise Problem("forbidden", "Built-in automations come with Tico; the hub makes them", 403)
             # A step that sets its task's model is saved as a draft for a person who may set that model, as a bot's is.
             blocked = _stamp_blocked(c, auth, who, flow)
-            if (who.role == "bot" and _by_botops(who) and not may_change(c, who, flow)) or (
+            if (who.role == "bot" and _by_agent_ops(who) and not may_change(c, who, flow)) or (
                 blocked and may_change(c, who, flow)
             ):
                 return _bot_draft(c, who, flow)
@@ -4045,7 +4045,7 @@ def install(app, store, auth, mutate):
     )
     def automations_update(request: Request, aid: str, body: AutomationPatch):
         """Change an automation. A change to its trigger, steps or batch times is a new version. A bot that may not
-        change it proposes instead: a pending version a person restores. BotOps acting for a person changes it as that
+        change it proposes instead: a pending version a person restores. Agent Ops acting for a person changes it as that
         person could. Pausing a built-in one is the top of the org's alone."""
         who = request.state.identity
 

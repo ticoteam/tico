@@ -80,14 +80,14 @@ def register(app, auth, mover, mutate, person_only, settings, store, task_view):
             task_id = auth.resolve_task(c, who, tid)
             auth.task(c, who, task_id)
             if who.via == "botops" and not who.confirmed and (body.remove or body.url):
-                # BotOps acting for a person adds or removes a link only on that person's own tap (a Confirm card).
+                # Agent Ops acting for a person adds or removes a link only on that person's own tap (a Confirm card).
                 what = (
                     ("Remove a link from " if body.remove else "Add a link to ")
                     + "“"
                     + H.task(c, task_id)["title"]
                     + "”"
                 )
-                return app.state.botops_propose(
+                return app.state.agent_ops_propose(
                     c, who, "POST", f"/api/v2/tasks/{tid}/links", body.model_dump(exclude_none=True), what
                 )
             if body.remove:

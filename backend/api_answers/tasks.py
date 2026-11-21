@@ -164,7 +164,7 @@ class TaskFields(TypedDict):
     requester_name: NotRequired[str]
     """Display name of requester"""
     filer: NotRequired[str]
-    """Who really filed it, when not its requester: a bot id (BotOps on a person's rights) or a built-in source key (check-health, postal-mail). Display only; absent otherwise"""
+    """Who really filed it, when not its requester: a bot id (Agent Ops on a person's rights) or a built-in source key (check-health, postal-mail). Display only; absent otherwise"""
     snoozed: NotRequired[bool]
     """On a list row: whether the task is set aside. A blocked task is not (see blocked_by), and snoozed=only leaves it out"""
     pipeline: NotRequired[TaskIdName | None]

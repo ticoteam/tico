@@ -156,7 +156,7 @@ def register(app, store, auth, mutate):
         **api_v2(
             "Company page",
             "requestEditionApproval",
-            "Ask the approver to approve an edition; a person's ask, never BotOps' own",
+            "Ask the approver to approve an edition; a person's ask, never Agent Ops' own",
         ),
     )
     def edition_approval(request: Request, edition_id: str, body: Empty):
@@ -175,7 +175,7 @@ def register(app, store, auth, mutate):
         **api_v2(
             "Company page",
             "publishEdition",
-            "Publish an approved edition: the person's own click in Tico, never a token, the Assistant or BotOps",
+            "Publish an approved edition: the person's own click in Tico, never a token, the Assistant or Agent Ops",
         ),
     )
     def edition_publish(request: Request, edition_id: str, body: Publish):
@@ -188,7 +188,7 @@ def register(app, store, auth, mutate):
         **api_v2(
             "Company page",
             "retractEdition",
-            "Take a published edition back, with a note; a person in the app, never BotOps",
+            "Take a published edition back, with a note; a person in the app, never Agent Ops",
         ),
     )
     def edition_retract(request: Request, edition_id: str, body: Note):
@@ -234,7 +234,7 @@ def register(app, store, auth, mutate):
         **api_v2(
             "Company page",
             "requestBoardApproval",
-            "Ask the approver to approve which stats one audience sees; a person's ask, never BotOps' own",
+            "Ask the approver to approve which stats one audience sees; a person's ask, never Agent Ops' own",
         ),
     )
     def board_approval_request(request: Request, audience_id: str, body: Empty):

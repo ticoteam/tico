@@ -1,4 +1,4 @@
-"""Org rules check people's writes (docs/dev/rules-plan.md): a person's message, and what their Assistant or BotOps writes
+"""Org rules check people's writes (docs/dev/rules-plan.md): a person's message, and what their Assistant or Agent Ops writes
 for them, is checked as that person and held as theirs. Acme is test_org_rules' fictional company: Ana owns it, Ben is
 above Ops, Cara is on Support, and Eve is on no team."""
 

@@ -841,7 +841,7 @@ def _to_person(conn: "sqlite3.Connection", row: Row, level: str, done: dict[str,
 
 # The question a stopped task's bot asks a person when no manager hears of it, in its own voice (only bots write
 # questions): a first line that says what is asked, then why, no paths (backend/ask_shape.py). `{who}` is "I" from the
-# stalled bot, or the bot's name when BotOps asks for it.
+# stalled bot, or the bot's name when Agent Ops asks for it.
 STUCK_ASK = "{who} stuck on {stage}: {line}. Can you help or tell me what to do?"
 STUCK_LINES = {
     "stopped": "{me} stopped 3 times without finishing",
@@ -872,7 +872,7 @@ def manager_hears(conn: "sqlite3.Connection", row: Row) -> bool:
 def ask_person(conn: "sqlite3.Connection", row: Row) -> str | None:
     """The stopped task's bot asks a person who reads it what to do: its owner when a person owns it, else the person it
     falls to (`_person`). The bot that stalled asks, in its own words, with a ❓ on the task's chat
-    (backend/question_marks.py); when it cannot run, BotOps asks for it. Once per stop: a task with an open ❓ is not
+    (backend/question_marks.py); when it cannot run, Agent Ops asks for it. Once per stop: a task with an open ❓ is not
     asked again. The ❓ keeps the ladder stopped; the person's reply is a change, which starts it again. Returns the
     ❓'s wait id (`qmark:<id>`), or None when nobody can ask or be asked."""
     visit = row["visit"]
@@ -893,7 +893,7 @@ def ask_person(conn: "sqlite3.Connection", row: Row) -> str | None:
         if _next_release_only(conn, waits)
         else "other"
     )
-    author = bot if bot and _usable(conn, bot, {}) else _botops(conn) or bot
+    author = bot if bot and _usable(conn, bot, {}) else _agent_ops(conn) or bot
     if not author:
         return None
     me = "I" if author == bot else str(_name(conn, bot)) if bot else "This task"
@@ -911,8 +911,8 @@ def ask_person(conn: "sqlite3.Connection", row: Row) -> str | None:
     return question_marks.wait_id(asked)
 
 
-def _botops(conn: "sqlite3.Connection") -> str | None:
-    """BotOps, when the company has it and it can run: it asks for a stalled bot that cannot."""
+def _agent_ops(conn: "sqlite3.Connection") -> str | None:
+    """Agent Ops, when the company has it and it can run: it asks for a stalled bot that cannot."""
     bot = "bot:" + str(_h().FLEET_MAINTAINER)
     return bot if _usable(conn, bot, {}) else None
 

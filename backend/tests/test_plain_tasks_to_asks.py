@@ -64,16 +64,18 @@ def test_a_person_asked_on_a_bots_task_finds_it_in_needs_you_and_the_bot_holds_i
     assert made["owner_id"] == "bot:builder" and len(asked(c, ANA, made["id"], by="bot:builder")) == 1
 
 
-def test_with_no_such_bot_the_task_is_the_persons_and_botops_asks(c):
+def test_with_no_such_bot_the_task_is_the_persons_and_agent_ops_asks(c):
     made = PA.ask(
         c, H.TICO_ACTOR, ANA, "Check the lease", "x", "Can you check the lease?", "It ends soon.", bot="bot:ghost"
     )
     assert made["owner_id"] == ANA and len(asked(c, ANA, made["id"])) == 1
 
 
-def test_a_review_of_botops_refused_writes_asks_a_person(c):
-    H._review_task(c, ANA, "Review BotOps's refused writes", "12 writes from BotOps were turned down today. More.")
-    task_id = c.execute("SELECT id FROM tasks WHERE title=?", ("Review BotOps's refused writes",)).fetchone()[0]
+def test_a_review_of_agent_ops_refused_writes_asks_a_person(c):
+    H._review_task(
+        c, ANA, "Review Agent Ops's refused writes", "12 writes from Agent Ops were turned down today. More."
+    )
+    task_id = c.execute("SELECT id FROM tasks WHERE title=?", ("Review Agent Ops's refused writes",)).fetchone()[0]
     assert len(asked(c, ANA, task_id)) == 1
 
 
@@ -131,7 +133,7 @@ def test_a_question_on_the_persons_own_task_ends_when_they_finish_it(c):
     assert H.task(c, made["id"])["status"] == "done" and not asked(c, ANA, made["id"])
 
 
-def test_a_bot_that_cannot_run_has_botops_ask_for_it_and_with_no_bot_nobody_asks(c):
+def test_a_bot_that_cannot_run_has_agent_ops_ask_for_it_and_with_no_bot_nobody_asks(c):
     X.bot(c, "curator", computer=False)  # here, with nowhere to run
     made = PA.ask(
         c, "bot:curator", ANA, "Pick a vendor", "x", "Which vendor should we use?", "It is due.", bot="bot:curator"
@@ -156,7 +158,7 @@ def test_a_question_that_would_fail_the_ask_checks_is_asked_in_plain_words(c):
     assert item["line"] == PA.PLAIN_ASK
 
 
-def test_a_held_item_is_asked_by_botops_never_its_sender(c):
+def test_a_held_item_is_asked_by_agent_ops_never_its_sender(c):
     from backend import screening
 
     row = {"source": "message", "actor": "bot:builder", "bot": "builder"}

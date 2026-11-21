@@ -663,7 +663,7 @@ class Docs:
 
     def locker(self, who):
         """Who locks a doc, or changes or restores a locked one: an owner or bot administrator by their own hand. Their
-        Assistant or BotOps acting for them unconfirmed is an agent, and a locked doc (the constitution) is people's."""
+        Assistant or Agent Ops acting for them unconfirmed is an agent, and a locked doc (the constitution) is people's."""
         acting = who.via in ("assistant", "botops") and not who.confirmed
         return self.admin(who) and not acting
 

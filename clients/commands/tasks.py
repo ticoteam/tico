@@ -82,9 +82,9 @@ def task_context(api, args):
             "Set once, never changed"
         ),
         "request_id": _s(
-            "A person's message this task carries: BotOps continuing its own chat, or another bot "
-            "handing BotOps a person's request (their message id, or `turn` for the one that "
-            "started this run). BotOps then acts with that person's rights, or puts it to them as "
+            "A person's message this task carries: Agent Ops continuing its own chat, or another bot "
+            "handing Agent Ops a person's request (their message id, or `turn` for the one that "
+            "started this run). Agent Ops then acts with that person's rights, or puts it to them as "
             "a Confirm card"
         ),
         "number": {
@@ -441,7 +441,7 @@ def task_move(api, args):
     "tico_task_close",
     "Close a task, with why: it is never refused for what is missing, and its open sub-tasks "
     "close with it. A bot cannot close a task a person asked for: it asks that person instead "
-    "(tico_task_ask). BotOps closes with the rights of the person who asked it.",
+    "(tico_task_ask). Agent Ops closes with the rights of the person who asked it.",
     {"id": TASK_ID, "why": WHY, "version": VERSION, "on_behalf_of": ASKED},
     required=("id",),
     writes=True,
@@ -459,7 +459,7 @@ def task_close(api, args):
         except Exception as exc:
             if getattr(exc, "code", None) != "on_behalf_of":
                 raise
-            # Fleet work has no person's request behind it: BotOps closes with its own rights.
+            # Fleet work has no person's request behind it: Agent Ops closes with its own rights.
     return s3links.annotate(api.post(path, body, key=_key(args)), links)
 
 

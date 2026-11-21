@@ -351,7 +351,7 @@ class Pair(Base):
         ):  # double: the pause between polls; the fake hub answers now
             code, out, err = self.run_cli("pair", "--profile", "scout", "--url", self.hub.url)
         self.assertEqual(code, 0, err)
-        self.assertIn("Tell BotOps", out)
+        self.assertIn("Tell Agent Ops", out)
         self.assertIn("connect my Hermes profile scout, code " + CODE, out)
         self.assertNotIn(PAIR_SECRET, out + err)
         # The pairing call is unauthenticated and carries the connector's own User-Agent.
@@ -519,7 +519,7 @@ class Backoff(Base):
         before = self.hub.count("/api/v2/agents/heartbeat")
         code, out, err = self.beat()
         self.assertEqual(code, 1)
-        self.assertEqual(err.strip(), "Bot scout is archived in Tico: restore it (ask BotOps) or run uninstall")
+        self.assertEqual(err.strip(), "Bot scout is archived in Tico: restore it (ask Agent Ops) or run uninstall")
         self.assertEqual(self.hub.count("/api/v2/agents/heartbeat"), before + 1)
         # The next minute is skipped without calling the hub.
         now = H._now()

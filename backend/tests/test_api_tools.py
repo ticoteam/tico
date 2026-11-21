@@ -319,11 +319,11 @@ def test_a_tool_and_its_first_key_are_one_write_taken_once(api, monkeypatch):
 
 
 def test_an_agent_never_brings_a_tools_first_key(api):
-    """A key is a person's own paste: refused on an agent's add, with a person's rights or not, and BotOps' body
+    """A key is a person's own paste: refused on an agent's add, with a person's rights or not, and Agent Ops' body
     check names it as a secret on this route; the catalog's tool without one still goes."""
     from dataclasses import replace
 
-    from backend import botops_act
+    from backend import agent_ops_act
     from backend.auth import Identity
 
     setup(api)
@@ -333,5 +333,5 @@ def test_an_agent_never_brings_a_tools_first_key(api):
     with api.app.state.store.transaction() as c, pytest.raises(Problem) as refused:
         api_tools.create_tool(c, lent, body, vault.admins, vault)
     assert refused.value.code == "secret_in_request" and SECRET_RW not in str(refused.value.detail)
-    assert botops_act.secret_in_request("POST", "api-tools", {"name": "Stripe", "key": "x"}) == "key"
-    assert botops_act.secret_in_request("POST", "api-tools", {"name": "Stripe", "service": "stripe"}) is None
+    assert agent_ops_act.secret_in_request("POST", "api-tools", {"name": "Stripe", "key": "x"}) == "key"
+    assert agent_ops_act.secret_in_request("POST", "api-tools", {"name": "Stripe", "service": "stripe"}) is None

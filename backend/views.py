@@ -488,11 +488,11 @@ def clear_chat_session(c, settings, actor, bot, conversation_id, detail=None):
     run_triggers.new_session(c, task_id, reason, actor)
 
 
-def default_bot(c, settings, botops="botops"):
+def default_bot(c, settings, agent_ops="botops"):
     """Where work nobody was named for goes: the assistant when the company has set one up,
-    else BotOps. The assistant is optional (the wizard's "Pick your bots"), and a planned or
+    else Agent Ops. The assistant is optional (the wizard's "Pick your bots"), and a planned or
     archived one cannot take work, so it must not be the answer then."""
-    for slug in (settings.assistant_bot, botops):
+    for slug in (settings.assistant_bot, agent_ops):
         row = H.bot(c, slug)
         if row and row.get("state") not in ("planned", "archived"):
             return slug
@@ -693,7 +693,7 @@ def operation_issues(c, who, auth):
     """Human-facing failures derived from durable state; no external alarm service.
 
     Every issue says whether a person has to act (`needs_person`); only those light the account's status dot.
-    Stopped runs and quarantined bots are BotOps's to review, so they say no, and Settings > Health lists them.
+    Stopped runs and quarantined bots are Agent Ops's to review, so they say no, and Settings > Health lists them.
     """
     from . import cloud_machines
     from .agents import still_reporting
@@ -790,7 +790,7 @@ def operation_issues(c, who, auth):
         location = machine(c, slug)
         mac_offline = bool(location.get("machine") and not location.get("online") and not location.get("agent"))
         status = privacy.status(c, who, H.status(c, slug), **status_inputs[slug]) or {}
-        # A quarantine is repeated refusals (backend/hubdb.py rule 8); BotOps gets the refused-writes review for it.
+        # A quarantine is repeated refusals (backend/hubdb.py rule 8); Agent Ops gets the refused-writes review for it.
         if bot["state"] == "quarantined" or status.get("state") == "quarantined":
             add(
                 "bot",
@@ -963,14 +963,14 @@ def operation_issues(c, who, auth):
                 )
             elif waiting or left:
                 # Work is stuck behind it (the claim's own fence), or Tico settled the rest of its run and left
-                # it: only a review lets it go. BotOps holds that review (its held-run task), so the person's status
+                # it: only a review lets it go. Agent Ops holds that review (its held-run task), so the person's status
                 # dot stays out of it and Health lists it. One short line per run, with its own Try again / Don't
                 # retry: the detail says only why they stopped and what waits; the rows name them.
                 rows, run_count = stopped_rows(c, who, auth, slug)
                 count = run_count or uncertain
                 can_review = who.actor == "bot:botops" or auth.operator(c, who, slug)
                 if not can_review:
-                    # Only the operator or BotOps may decide (reconcile_job): nobody else is handed the handles.
+                    # Only the operator or Agent Ops may decide (reconcile_job): nobody else is handed the handles.
                     rows = [{k: v for k, v in row.items() if k != "jobs"} for row in rows]
                 noun = "run" if count == 1 else "runs"
                 behind = (
@@ -1013,7 +1013,7 @@ def operation_issues(c, who, auth):
                     can_review=can_review,
                 )
             elif (late := unreviewed(c, who, slug))[0]:
-                # Two hours with no decision: Health lists it for whoever may read the bot, and BotOps's held-run review
+                # Two hours with no decision: Health lists it for whoever may read the bot, and Agent Ops's held-run review
                 # decides it. Nobody is interrupted for it, so only the operator's severity differs.
                 count, hours = late
                 them = "it" if count == 1 else "them"

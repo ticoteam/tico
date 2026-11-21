@@ -31,7 +31,7 @@ def event_types(api, args):
 
 
 # Automations (backend/automations.py). One permission rule for every
-# surface: the owner, anyone above the owner, the group's lead; BotOps acts with the requester's rights. A bot that may
+# surface: the owner, anyone above the owner, the group's lead; Agent Ops acts with the requester's rights. A bot that may
 # not change one proposes: its edit comes back as a pending version for a person to restore.
 _AUTO_FIELDS = {
     "name": _s("What it is called"),
@@ -112,7 +112,7 @@ def automation_question_sets(api, args):
 
 @tool(
     "tico_automation_guide",
-    "How BotOps builds and edits automations: the rules and the flow format (triggers, "
+    "How Agent Ops builds and edits automations: the rules and the flow format (triggers, "
     "steps, actions and their args), generated from the hub's code. Read it before creating or updating one.",
     {},
 )
@@ -152,7 +152,7 @@ def automation_template(api, args):
     "Save a new automation (version 1); a bad flow is refused on save, with why. In Assistant "
     "chat a Message routine saves off and returns an approval card; only the person's click turns "
     "it on, so omit `enabled` or set it false. Choose defaults to Draft; use Reply only when the "
-    "person explicitly asks for replies and the inbox permits sending. BotOps saves it off unless "
+    "person explicitly asks for replies and the inbox permits sending. Agent Ops saves it off unless "
     "`enabled` is sent. A bot without rights saves a proposal for a person to turn on.",
     {k: v for k, v in _AUTO_FIELDS.items()},
     required=("name", "owner", "trigger"),
@@ -394,7 +394,7 @@ AUTOMATION = (
     ),
     Command(
         "automation guide",
-        "how BotOps builds automations, with the flow format",
+        "how Agent Ops builds automations, with the flow format",
         example="tico automation guide",
     ),
     Command(

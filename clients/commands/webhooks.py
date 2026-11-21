@@ -84,7 +84,7 @@ def trigger_show(api, args):
 
 @tool(
     "tico_trigger_update",
-    "Change a trigger's name or settings. The owner, whoever made it, and BotOps for one of them.",
+    "Change a trigger's name or settings. The owner, whoever made it, and Agent Ops for one of them.",
     {
         **TRIGGER,
         "name": _s("New name"),
@@ -137,7 +137,7 @@ def trigger_rotate(api, args):
     "tico_trigger_sign",
     "Verify every call to a trigger. `secret` is the one the sender gave you; empty makes a new one, returned once. "
     "`off` stops checking. "
-    "BotOps asked by a person can't pass a secret on: they type it in Automations › Incoming webhooks.",
+    "Agent Ops asked by a person can't pass a secret on: they type it in Automations › Incoming webhooks.",
     {
         **TRIGGER,
         "preset": {
@@ -153,7 +153,7 @@ def trigger_rotate(api, args):
     writes=True,
 )
 def trigger_sign(api, args):
-    # Only the keys given: BotOps acting for a person is refused any body with a secret key in it, even an empty one.
+    # Only the keys given: Agent Ops acting for a person is refused any body with a secret key in it, even an empty one.
     body = {k: args[k] for k in ("secret", "preset") if args.get(k)} | ({"off": True} if args.get("off") else {})
     return _as_person(api).post(f"triggers/{args['id']}/signing", body, key=_key(args))["trigger"]
 
@@ -333,7 +333,7 @@ CLI = (
 @tool(
     "tico_relay_set",
     "Say whether a delivery to a trigger's Tico Gateway address starts a sleeping server (Sleep when idle). "
-    "The switch lives at the Gateway; a trigger's `relay.wake` shows it. People who manage the trigger, and BotOps for one of them.",
+    "The switch lives at the Gateway; a trigger's `relay.wake` shows it. People who manage the trigger, and Agent Ops for one of them.",
     {"trigger": TRIGGER, "wake": {"type": "boolean", "description": "Start the server on a delivery"}},
     required=("trigger", "wake"),
     writes=True,
@@ -372,7 +372,7 @@ def relay_wake_url_show(api, args):
     "Set the address Tico Gateway posts a signed `tico.wake` to when a webhook has waited for "
     "this server over a minute (at most every 10 minutes): something you run that starts the server. Needs the Tico "
     "Gateway connected. The answer's `secret` (whsec_...) verifies the call as a Standard Webhooks signature and is "
-    "shown only now. The owner only (BotOps for them).",
+    "shown only now. The owner only (Agent Ops for them).",
     {"url": _s("An https address with a host and no user or password")},
     required=("url",),
     writes=True,
@@ -404,7 +404,7 @@ def sleep_status(api, args):
     "tico_sleep_set",
     "Change Sleep when idle: `hours` 1-24 stops the server after that many quiet hours, 0 turns it off; "
     "`runners` says whether the bot computers stop and start with it. Needs a server Tico hosts. An owner or an admin only "
-    "(BotOps for one).",
+    "(Agent Ops for one).",
     {
         "hours": {
             "type": "integer",
@@ -531,7 +531,7 @@ def webhook_filter(fields):
 
 def _header(secret):
     """`--header "Name: value"` (or `--secret-header`, whose "Name" alone keeps the value it has) as one of `headers`.
-    A plain header sends no `secret` key: BotOps' requests refuse any key named like a secret."""
+    A plain header sends no `secret` key: Agent Ops' requests refuse any key named like a secret."""
 
     def parse(text):
         name, colon, value = text.partition(":")

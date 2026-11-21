@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 import pytest
 
-from backend import botops_act, maintenance, releases, routines, scheduler, sleep_idle
+from backend import agent_ops_act, maintenance, releases, routines, scheduler, sleep_idle
 from backend import hubdb as H
 from backend.tests.helpers.api import assign, claim, get, post, ready, runner, setup_attempt  # noqa: F401
 
@@ -267,7 +267,7 @@ def test_only_an_owner_or_an_admin_changes_it_and_anyone_signed_in_reads_it(api,
     _, _, attempt = setup_attempt(api, "ops")
     post(api, "sleep", {"hours": 2}, token=attempt["token"], expected=403)  # a bot
     assert get(api, "sleep", token=attempt["token"])["sleep"]["hours"] == 4
-    assert botops_act.classify("POST", "sleep") == "do"  # BotOps for a person
+    assert agent_ops_act.classify("POST", "sleep") == "do"  # Agent Ops for a person
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM events WHERE action='server.sleep_set'").fetchone()[0] == 2
 

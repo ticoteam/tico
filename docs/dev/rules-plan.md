@@ -41,7 +41,7 @@ opens a task before it is optional.
   | Sentence | Source | Who edits |
   |---|---|---|
   | "Only Marketing and Chris can message Marketing Bot" (the write audience; see/read stay in Settings) | `bot_access.py` | the bot's managers |
-  | "Marketing Bot can't send outside Tico" / "…can send mail" | the bot's Email sending policy; `email_sending.py` | a person who manages the bot (never a bot, BotOps or the Assistant, for mail) |
+  | "Marketing Bot can't send outside Tico" / "…can send mail" | the bot's Email sending policy; `email_sending.py` | a person who manages the bot (never a bot, Agent Ops or the Assistant, for mail) |
   | "Spends up to $X a month" or "Follows the company limit" | `usage_limits.py` (may be a company or group pool) | as today |
   | "Up to N turns a day" or "Team default: N" | `turn_budgets.py` | as today |
   | "Up to N tasks a day to Chris" (one per cap row) | `task_caps.py` | as today |
@@ -149,7 +149,7 @@ rule_due_status(due_date_id, due_on, satisfied_by, via routine|person, task_id?,
 - **Constitution:** a locked doc (five articles and the order of law), made once at a completed company's start
   (onboarding.complete_company, whoever owns Rules; every deploy restarts). It is recorded by id (`rules.constitution`) and read by it; its path,
   `rules/constitution.md`, is reserved. Only people lock, change or restore a locked doc, or the
-  recorded constitution locked or not: not a bot, not an Assistant or BotOps acting for a person unconfirmed.
+  recorded constitution locked or not: not a bot, not an Assistant or Agent Ops acting for a person unconfirmed.
 - **Make this a rule** is a normal private task (`POST /api/v2/tasks`, every filing check) for the Rules page's owner,
   labelled `make-rule` and naming the constitution's doc, the one doc outside its task the Rules Owner may read. Its
   clerk skill (`templates/catalog/_shared/.claude/skills/clerk-a-rule`) suggests one rule in its run on that task, which
@@ -210,7 +210,7 @@ ahead of time so it doesn't try.
 - **One gate helper** judges every bot-authored string a teammate or the public will read. The HTTP routes, the hubdb
   writers and the automation writers all call it. A write is a bot's when the actor is a bot, or when `task_actor` is
   a bot or `via` is `botops`. A person's writes are checked too, as that person: their own typed writes, the
-  Assistant's writes as them (`via: assistant`), and BotOps's writes for them (`via: botops`). `check_as(principal,
+  Assistant's writes as them (`via: assistant`), and Agent Ops's writes for them (`via` `botops`). `check_as(principal,
   sender, via)` judges each against the rules that cover the person (Who), and a hold is the person's, with its
   sender and route kept (`provenance`).
 - **Where it hooks (phase 1):**
@@ -253,8 +253,8 @@ ahead of time so it doesn't try.
     check or the report, claims the id and counts it; a report it doesn't count isn't kept. The connector makes an id
     reportable only in the commit that records Gmail's confirmed send. It counts only when a rule
     in force names the bot with With empty (an id can't say where the mail went), up to 200 a bot a UTC day. The
-    connector forgets the ids after its 2xx; a release without the route (404/405) leaves them queued. BotOps writing
-    mail for a person finds its holds and approvals under BotOps, the author they were held as.
+    connector forgets the ids after its 2xx; a release without the route (404/405) leaves them queued. Agent Ops writing
+    mail for a person finds its holds and approvals under Agent Ops, the author they were held as.
 
   Not phase 1: public roadmap comments (Later #16). Send/publish approvals aren't check points:
   they're optional, so they'd only catch sends a bot chose to ask about.
@@ -267,9 +267,9 @@ ahead of time so it doesn't try.
   - Mail: To and Cc addresses that match roster people are recipients for With; other addresses match only rules
     with With empty.
   - No matching rule means no Decide call, which is most outputs.
-  - A person's writes are checked as that person, including what their Assistant or BotOps writes for them.
+  - A person's writes are checked as that person, including what their Assistant or Agent Ops writes for them.
     A person's hold is read by the person who wrote it, on any token, and by the editors of its rule and the Admins
-    (`_person_reviewer`); a bot's Assistant or BotOps reads nothing of it. Send anyway replays it as the person.
+    (`_person_reviewer`); a bot's Assistant or Agent Ops reads nothing of it. Send anyway replays it as the person.
     Edit and resend withdraws the hold (`POST /api/v2/rule-holds/{id}/withdraw`) and sends it again as a new check.
   - Where a person's chat message lands: the chat route names no conversation, so the check uses the open direct chat
     with that bot as the thread (`chat_place`). A held message is listed by its thread
@@ -398,7 +398,7 @@ legal rules are one user of it.
 
 ### 5. General Counsel
 
-- The Rules Owner is a hidden helper next to BotOps, the Strategy Owner and the Librarian (`backend/assistant.py`
+- The Rules Owner is a hidden helper next to Agent Ops, the Strategy Owner and the Librarian (`backend/assistant.py`
   `HELPERS`), because of One Assistant (Oct 29): people have one chat.
 - What people see:
   - "Can I text this list?" or "We signed Gusto, contract's in Files" goes to the Ask panel, and the Assistant hands
@@ -466,7 +466,7 @@ tico rules add|edit ... --exact '<json>'                                        
 
 ### 7. Links: agents' writes that leave the company (log-only)
 
-An agent's write on a link (a bot's own, or a person's Assistant or BotOps acting for them; never a person's own) meets
+An agent's write on a link (a bot's own, or a person's Assistant or Agent Ops acting for them; never a person's own) meets
 the org rules and leaves exactly one event on `link:<id>` (backend/rule_links.py): `rules.passed`, `rules.refused` (a
 Block rule broken), `rules.held` (an Escalate rule broken) or `rules.unchecked` (not judged, or the judge out, with the
 reason), the rules in its detail, written in a savepoint so a failure never changes the write. Nothing is stopped yet:
@@ -492,8 +492,8 @@ reason), the rules in its detail, written in a savepoint so a failure never chan
   never counted as a write; other large POSTs keep the name-only check, and a batch is read up to its first 50 calls. A
   webhook send that became eligible after its preflight is recorded unchecked. A report to Tico support is checked at
   its first delivery to HQ (the route's and Maintenance's alike), as the agent that asked (an OK'd report: the bot that asked for the OK, else the person's
-  Assistant or BotOps sending it); its event goes with the ticket it makes, so one ticket is one event. A message on a
-  ticket and a feedback answer sent by a person's Assistant or BotOps are checked too. The check never runs while the
+  Assistant or Agent Ops sending it); its event goes with the ticket it makes, so one ticket is one event. A message on a
+  ticket and a feedback answer sent by a person's Assistant or Agent Ops are checked too. The check never runs while the
   support send lock is held. A retry before the ticket is kept may be
   judged again (log-only).
 - **Rules › Links** (`/company/rules/links`, from the Rules page's "⋯"; the owner and Admins in person) lists each link
@@ -555,7 +555,7 @@ government rules with citations into the same Suggested tab. Tico works fully wi
   - The completion check makes no Decide call under the write lock; a held reply's text isn't in the live stream,
     `final_text`, the run log or the session.
   - A clean task then a forbidden body edit / close note is held and the task is unchanged; a note to a bot and an
-    automation `_wake_bot` text are checked; a BotOps write as a person is checked.
+    automation `_wake_bot` text are checked; an Agent Ops write as a person is checked.
   - An output over 120k is held; Send anyway with the nonce delivers once without a second Decide call.
   - Rule checks spend from Decide's one monthly cap; once it is spent they go through unchecked (`budget`).
   - An all-bots rule covers a bot created later; a Warn rule with a named reviewer round-trips.
@@ -598,7 +598,7 @@ completion preflight goes before `mutate` (write lock); live reply text withheld
 own monthly budget and a per-bot draft-check cap; one gate helper over every bot-authored string (task update
 fields, owner's ask, bulk note, notes, automation `_note` / `_wake_bot` / `_post_update`, Slack replies); mail With
 via roster addresses; too-large is held; Send anyway nonce, `why` stays on the hold, cache hits count toward
-repeats; BotOps writes are checked; Everyone wording, Later #3, `with.anyone` dropped. Not taken: a person must
+repeats; Agent Ops writes are checked; Everyone wording, Later #3, `with.anyone` dropped. Not taken: a person must
 satisfy a bot-owned due date (Chris chose no proof, and it would ping him for every Finance Owner filing; the Due tab
 shows who marked it); quotes on Suggested rows (Chris asked for sentence, Who and Skip/Add only).
 

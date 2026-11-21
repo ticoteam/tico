@@ -297,8 +297,8 @@ class TaskUpdate(Contract):
     roles: dict[str, list[str]] | None = None
     # The task's Human (hubdb.task_human), a person; "" takes them off.
     human: str | None = Field(default=None, max_length=200)
-    # BotOps applying a person's own request to a task they own or requested (backend/app.py
-    # delegated_identity): checked as that person, never as BotOps.
+    # Agent Ops applying a person's own request to a task they own or requested (backend/app.py
+    # delegated_identity): checked as that person, never as Agent Ops.
     on_behalf_of: ID | None = None
 
     @model_validator(mode="before")
@@ -1109,7 +1109,7 @@ class StatusUpdate(Contract):
 
 class QuarantineClear(Contract):
     note: str = Field(default="", max_length=2000)  # optional
-    # BotOps lifting it because a person asked in chat: checked as that person (backend/app.py).
+    # Agent Ops lifting it because a person asked in chat: checked as that person (backend/app.py).
     on_behalf_of: ID | None = None
 
 
@@ -1816,7 +1816,7 @@ class BotAccess(Contract):
     read: AccessAudience
     write: AccessAudience
     revision: int = Field(ge=1)
-    # BotOps making the change the requester asked for in chat ("turn", or their message's id).
+    # Agent Ops making the change the requester asked for in chat ("turn", or their message's id).
     on_behalf_of: ID | None = None
 
 
@@ -1838,7 +1838,7 @@ INSTRUCTIONS_MAX = 50_000
 
 
 class BotRegister(Contract):
-    """Register a bot with the server, planned, before BotOps builds its repository. Left out, the slug is
+    """Register a bot with the server, planned, before Agent Ops builds its repository. Left out, the slug is
     picked from the name (or the template's name)."""
 
     slug: Slug | None = None
@@ -2089,7 +2089,7 @@ class BotArchive(Contract):
     # A Hermes bot's agent keeps its credential after the bot is archived and keeps reporting in to a bot that
     # no longer answers; revoking it with the archive is the default (backend/agents.py).
     revoke_agent: bool = True
-    # BotOps applying a person's own request, as for a definition change (backend/app.py).
+    # Agent Ops applying a person's own request, as for a definition change (backend/app.py).
     on_behalf_of: ID | None = None
 
 
@@ -2121,8 +2121,8 @@ class BotDefinitionUpdate(Contract):
     # Subscribe to updates: which feeds it hears about as quiet notes (backend/update_feeds.py); empty is none.
     update_subscriptions: list[Literal["templates", "tico"]] | None = Field(default=None, max_length=2)
     expected_revision: int = Field(ge=1)
-    # BotOps applying a person's own request: the id of that person's message to BotOps. The
-    # change is checked as that person, never as BotOps (backend/bot_status_routes.py update_bot).
+    # Agent Ops applying a person's own request: the id of that person's message to Agent Ops. The
+    # change is checked as that person, never as Agent Ops (backend/bot_status_routes.py update_bot).
     on_behalf_of: ID | None = None
 
     @model_validator(mode="after")
@@ -2184,7 +2184,7 @@ class PersonUpdate(Contract):
     # Someone who no longer works here is removed from the org chart. The
     # owner takes someone off the org chart; their history stays, they drop out of every list.
     left: bool | None = None
-    # BotOps making the change a person asked for in chat, as that person (app.delegated_identity).
+    # Agent Ops making the change a person asked for in chat, as that person (app.delegated_identity).
     on_behalf_of: ID | None = None
 
     @model_validator(mode="after")
@@ -2352,7 +2352,7 @@ class BotTransitionCreate(Contract):
     runner_id: ID | None = None
     expected_revision: int = Field(ge=1)
     expected_generation: int = Field(default=0, ge=0)
-    # BotOps applying a person's own request, as for a definition change (backend/app.py).
+    # Agent Ops applying a person's own request, as for a definition change (backend/app.py).
     on_behalf_of: ID | None = None
 
     @model_validator(mode="after")
@@ -2512,7 +2512,7 @@ class AccessPersonAdd(Contract):
     title: str = Field(default="", max_length=120)
     team: str = Field(default="", max_length=80)
     reports_to: str = Field(default="", max_length=80)
-    # BotOps adding the person the requester asked for: "turn" or the id of their message to it. A
+    # Agent Ops adding the person the requester asked for: "turn" or the id of their message to it. A
     # Confirm card comes back instead of a person until the requester clicks it.
     on_behalf_of: ID | None = None
 
@@ -2536,7 +2536,7 @@ class AccessPersonEdit(Contract):
     # runs ask their computer for a mail token: only owners and admins set them (docs/mail.md).
     inbox_bot: str | None = Field(default=None, max_length=80)
     mailbox: str | None = Field(default=None, max_length=320)
-    # BotOps making the change a person asked for in chat (a Confirm card for the risky ones).
+    # Agent Ops making the change a person asked for in chat (a Confirm card for the risky ones).
     on_behalf_of: ID | None = None
 
 
@@ -2604,8 +2604,13 @@ class AccessRules(Contract):
 
     assistant_direct: bool | None = None
     assistant_approvals: bool | None = None
-    botops_direct: bool | None = None
-    botops_manages_bots: bool | None = None
+    # A Confirm card saved before the rename (#4863) still sends the rules' old names.
+    agent_ops_direct: bool | None = Field(
+        default=None, validation_alias=AliasChoices("agent_ops_direct", "botops_direct")
+    )
+    agent_ops_manages_bots: bool | None = Field(
+        default=None, validation_alias=AliasChoices("agent_ops_manages_bots", "botops_manages_bots")
+    )
     admin_credentials: bool | None = None
     members_store_credentials: bool | None = None
     admin_sql: bool | None = None

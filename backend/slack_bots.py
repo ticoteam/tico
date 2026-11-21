@@ -190,7 +190,7 @@ def may_read(c: Any, settings: Any, bot: str, allowed: set[str], ref: str, every
         raise Problem(
             "slack_scope",
             f"{bot_name(c, bot)} may not read {ref}. Its Slack channels are: {names}. An owner or admin can add it as a "
-            "reader (Settings > Tools > Slack, or ask BotOps).",
+            "reader (Settings > Tools > Slack, or ask Agent Ops).",
             403,
         )
     return target

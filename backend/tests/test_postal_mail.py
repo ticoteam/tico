@@ -173,8 +173,8 @@ def task(api, task_id):
 
 
 def test_a_letter_is_kept_once_and_legal_mail_asks_the_owner_with_its_deadline(api, hq, mail):
-    with api.app.state.store.transaction() as c:  # BotOps writes Tico's notices to a person
-        c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES('botops', 'botops', 'BotOps', 'active')")
+    with api.app.state.store.transaction() as c:  # Agent Ops writes Tico's notices to a person
+        c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES('botops', 'botops', 'Agent Ops', 'active')")
     letter(api, "101", "legal", deadline="2026-11-20", summary="A summons from the county court")
     deliver(hq, "101")
     deliver(hq, "101")  # HQ serving the same letter again
@@ -193,7 +193,7 @@ def test_a_letter_is_kept_once_and_legal_mail_asks_the_owner_with_its_deadline(a
     assert made["owner_id"] == "human:ana" and made["due_at"] == "2026-11-20"
     assert "A summons from the county court" in made["body"] and "2026-11-20" in made["body"]
     assert "/api/v2/files/" + row["blob_id"] in made["body"]
-    # A ❓ to her from BotOps on her task, with its deadline: in her Needs you (and paged).
+    # A ❓ to her from Agent Ops on her task, with its deadline: in her Needs you (and paged).
     [ask] = [i for i in get(api, "needs-you", "ana-test")["items"] if (i.get("task") or {}).get("id") == row["task_id"]]
     assert ask["kind"] == "question"
     with api.app.state.store.read() as c:

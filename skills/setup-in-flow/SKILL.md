@@ -36,7 +36,7 @@ empty) and the bot it is for. Work only on open areas that name you, in that ord
 
 ## Never
 
-- Ask about your own setup or access (keys, sign-ins, computers, models, tools you lack). BotOps raises those, once per
+- Ask about your own setup or access (keys, sign-ins, computers, models, tools you lack). Agent Ops raises those, once per
   cause.
 - Have more than one ❓ open with them, or file setup questions as tasks with asks.
 - Ask for a key or password in words. A key comes through a key card (`tico credential request`).
@@ -48,8 +48,8 @@ empty) and the bot it is for. Work only on open areas that name you, in that ord
 | Market | Librarian | What you sell and who buys it; then rivals, then what to watch | Build the market from the answers, as your market-setup playbook does |
 | Strategy | Strategy Owner | What the company does, for whom, and why it wins; then how it should sound | `tico proposal create`, kind `strategy_draft` (summary and sections), and kind `brand_draft` for the brand: the person confirms each in Flow |
 | Goals | Strategy Owner | The one result that matters most this quarter, as a number | Read the goal back and save it on their yes (`tico goal create`) |
-| Org | BotOps | What work the team wants bots to take first | Hire the bots for it, on their word |
+| Org | Agent Ops | What work the team wants bots to take first | Hire the bots for it, on their word |
 | Tools | Tools Owner | Which tools the team works in | Add each one (`tico tool create`); its key comes through a key card (`tico credential request`), never in words |
-| Budget | BotOps | How much the bots may spend in a month | The company's monthly limit (`tico settings set pool.limit.usd`), on their word |
+| Budget | Agent Ops | How much the bots may spend in a month | The company's monthly limit (`tico settings set pool.limit.usd`), on their word |
 
 Whatever you fill in, also note it, dated, with who said it, in `memory/decisions.md`.

@@ -22,8 +22,11 @@ PEOPLE = {
         {"id": "helper", "name": "Helper Person", "email": "helper@sample.example", "primary_for": []},
     ],
 }
-# What a fresh environment seeds (templates/environment-registry/employees.yaml): the assistant and BotOps, planned.
-SEED = {"assistant": {"name": "assistant", "status": "planned"}, "botops": {"name": "botops", "status": "planned"}}
+# What a fresh environment seeds (templates/environment-registry/employees.yaml): the assistant and Agent Ops, planned.
+SEED = {
+    "assistant": {"name": "assistant", "status": "planned"},
+    "botops": {"name": "botops", "slug": "agent-ops", "status": "planned"},
+}
 TOKEN = "local-owner-secret-token-0123456789"
 
 
@@ -65,7 +68,8 @@ def _seed(client):
         H.sync_registry(c, SEED, PEOPLE)
         c.execute("INSERT INTO registry_metadata VALUES('people',?) ON CONFLICT(key) DO NOTHING", (encode(PEOPLE),))
         for slug, config in SEED.items():
-            c.execute('INSERT INTO bot_config(bot,owner_id,repo) VALUES(?,?,?)', (slug, 'owner', 'bot-' + slug))
+            repo = 'bot-' + config.get('slug', slug)  # the registry's repo: bot-<slug>
+            c.execute('INSERT INTO bot_config(bot,owner_id,repo) VALUES(?,?,?)', (slug, 'owner', repo))
             BS.write(c, slug, config)
 
 

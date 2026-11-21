@@ -23,7 +23,7 @@ from clients.commands._schemas import _key, _s
 _FIRST = len(TOOLS)  # the tools below are TOOLS[_FIRST:]
 
 REDIRECTS = (301, 302, 303, 307, 308)
-# Owners and admins act; BotOps acts as the person who asked it. Not offered to the Assistant (its listing is near its
+# Owners and admins act; Agent Ops acts as the person who asked it. Not offered to the Assistant (its listing is near its
 # size cliff) nor to ordinary bots: connecting the company is an admin's job.
 ADMINS = REQUESTER
 OWNER_ONLY = PEOPLE  # the server admits only the Owner; a member or admin is told so by the route
@@ -225,7 +225,7 @@ def manifest_page(action, manifest):
         "name": _s("The App's name; default '<company> Tico'"),
         "administration": {
             "type": "boolean",
-            "description": "Let BotOps create bot repositories (Administration: write). Default true",
+            "description": "Let Agent Ops create bot repositories (Administration: write). Default true",
         },
     },
 )
@@ -402,7 +402,7 @@ GRANT_FLAGS = {
 
 @tool(
     "tico_repo_grant",
-    "Let one bot read or write one repository (the Owner or an admin; BotOps as the person who asked), keeping the "
+    "Let one bot read or write one repository (the Owner or an admin; Agent Ops as the person who asked), keeping the "
     "bot's other chosen repositories: a bot on its own repository only switches to chosen with this one, and one on All "
     "ticked repos at read switches to chosen, keeping read on what it reaches. One on All ticked repos at write is "
     "refused unless that already covers it (choose its repositories with tico bot repos). `tick` "
@@ -584,7 +584,7 @@ def _bot_line(bot):
 
 @tool(
     "tico_health_ready",
-    "Is this company able to work right now (a person, or BotOps for them): ready true or false, each blocker with its "
+    "Is this company able to work right now (a person, or Agent Ops for them): ready true or false, each blocker with its "
     "fix, then warnings. Blockers: no computer online; GitHub not connected or not installed (unless github false); a "
     "bot still planned or waiting on setup (fix: tico bot go-live); a quarantined bot; any Health check that is bad. "
     "`bots` limits the bot checks to those bots (the others' problems become warnings). The CLI exits 1 when not "
@@ -670,7 +670,7 @@ def health_ready(api, args):
                     "check": "bot_quarantined",
                     "bot": slug,
                     "detail": f"{bot.get('display_name') or slug} is quarantined: its queued work waits",
-                    "fix": "tico health check (BotOps reviews it); it resumes after the cooldown",
+                    "fix": "tico health check (Agent Ops reviews it); it resumes after the cooldown",
                 }
             )
         if bot.get("state") == "paused":
@@ -875,7 +875,7 @@ def add_commands(sub):
         dest="administration",
         action="store_false",
         default=None,
-        help="do not let BotOps create bot repositories",
+        help="do not let Agent Ops create bot repositories",
     )
     s.add_argument("--html", dest="html_file", metavar="PATH", help="write the page to open in a browser here")
     cli_spec.add(sub, GITHUB_AFTER_CONNECT, parents={("github",): github})

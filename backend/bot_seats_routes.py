@@ -21,10 +21,10 @@ def register(app, auth, mutate, onboarding, report_mutate, settings, settings_ad
 
         def work(c):
             if who.role == "bot" and who.via == "botops":
-                return settings_admin.create_report(c, who, body)  # a manager bot's report, asked of BotOps
+                return settings_admin.create_report(c, who, body)  # a manager bot's report, asked of Agent Ops
             created = settings_admin.create_bot(c, who, body)
             if body.template:
-                # Adding from the catalog after onboarding is the same handoff to BotOps.
+                # Adding from the catalog after onboarding is the same handoff to Agent Ops.
                 created.update(
                     onboarding.attach_template(
                         c, who, H.resolve_bot(c, created["slug"])["id"], body.template, body.instructions
@@ -218,7 +218,7 @@ def register(app, auth, mutate, onboarding, report_mutate, settings, settings_ad
     )
     def seat_hire(request: Request, seat_id: str, body: M.SeatHire):
         """Pick a candidate: the bot is created in Onboarding in the seat's place with its reporting line, and only
-        then its repository (by its computer for a starter, else BotOps)."""
+        then its repository (by its computer for a starter, else Agent Ops)."""
         who = request.state.identity
         auth.domain(who)
         _recover_seat(seat_id)
@@ -272,7 +272,7 @@ def register_lifecycle(app, auth, delegated_identity, mutate, onboarding, settin
         def work(c):
             nonlocal bot
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
-            # A manager bot's ask is already BotOps acting as that bot (act_for_requester), not a person's request to find.
+            # A manager bot's ask is already Agent Ops acting as that bot (act_for_requester), not a person's request to find.
             acting = (
                 who
                 if who.role == "bot" and who.via == "botops"

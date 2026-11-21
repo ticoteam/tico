@@ -1,6 +1,6 @@
 """Proposals (redesign/CONTRACT.md §5, backend/proposals.py): a bot's change to a spend limit or a task cap is an OK the
 top of the org gives from its preview (backend/task_asks.py); on that OK the hub applies it as that person, audited
-with via approval:<id>, uses the OK and sends BotOps one notice. An org change is no proposal (test_org_by_request.py).
+with via approval:<id>, uses the OK and sends Agent Ops one notice. An org change is no proposal (test_org_by_request.py).
 On a store with no app."""
 
 import pytest
