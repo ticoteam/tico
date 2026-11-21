@@ -60,8 +60,12 @@ def constitution_id(c):
 
 
 def reserved(c, path, doc_id, actor):
-    """Refuse a doc other than the constitution at the constitution's path, unless Tico puts it there."""
-    if actor != H.TICO_ACTOR and str(path).casefold() == CONSTITUTION_PATH and doc_id != constitution_id(c):
+    """Refuse a doc at the constitution's path unless Tico puts it there or it is the recorded constitution itself;
+    before one is recorded, the path is kept for it all the same."""
+    if actor == H.TICO_ACTOR or str(path).casefold() != CONSTITUTION_PATH:
+        return
+    recorded = constitution_id(c)
+    if recorded is None or doc_id != recorded:
         raise Problem("path_taken", "That path is kept for the constitution", 409)
 
 

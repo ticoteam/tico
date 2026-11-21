@@ -3,6 +3,7 @@ suggestion lands as suggested with a cite that must be in the file, a link's cit
 read as, and a can-I question is answered with the rules that apply. Acme is the fictional company here."""
 
 import base64
+from types import SimpleNamespace
 import json
 import re
 from pathlib import Path
@@ -1644,8 +1645,20 @@ def test_make_this_a_rule_is_one_clerk_task_whose_one_ok_adds_exactly_what_was_s
     assert law and task["owner_id"] == "bot:rules-owner" and task["private"]
     assert "Never refund more than $100" in words and "## Order of law" in words
     run = counsel_run(api)[1]["token"]
+    assert _suggest(api, run, "Everyone logs refunds.", who={"everyone": True})["status"] == "suggested"
     first = _suggest(api, run, "Refunds over $50 go to Ben first.")
-    assert _ask(api, "ops-test", first["id"], made["task_id"]).status_code == 403  # not its suggestion
+    # Ops cannot read Cara's private clerk task: refused on the task before anything about it is read.
+    stray = post(
+        api, "rules", {"kind": "internal", "text": "Ops drafts too.", "who": {"bots": ["ops"]}}, token="ops-test"
+    )
+    hidden = _ask(api, "ops-test", stray["id"], made["task_id"])
+    assert hidden.status_code == 404 and "drafted" not in hidden.text, hidden.text
+    # A bound draft is added only by its OK on its task, never by a direct accept.
+    direct = api.post(
+        f"/api/v2/rules/{first['id']}/accept", headers=headers("ana-test"), json={"version": first["version"]}
+    )
+    assert direct.status_code == 409 and direct.json()["error"]["task_id"] == made["task_id"], direct.text
+    assert get(api, f"rules/{first['id']}")["clerk_task"] == made["task_id"]
     assert _ask(api, run, first["id"], other["task_id"]).status_code == 409  # bound to the task its run carries
     asked = _ask(api, run, first["id"], made["task_id"])
     assert asked.status_code == 200, asked.text
@@ -1677,14 +1690,51 @@ def test_make_this_a_rule_is_one_clerk_task_whose_one_ok_adds_exactly_what_was_s
         assert H.task(c, made["task_id"])["status"] == "done"
 
 
+def test_a_reassigned_clerk_task_keeps_one_ask_and_asks_someone_within_reach(api, monkeypatch):
+    """The task's new clerk asks for its own draft: the first clerk's ask there is withdrawn and its draft set aside.
+    The fallback asked is the first owner or Admin who may add it and is within the clerk's reach."""
+    from backend import reach
+
+    org(api)
+    counsel_on(api)
+    made = post(api, "rules/make", {"text": "Never refund more than $100 without Ben."}, token="cara-test")
+    run = counsel_run(api)[1]["token"]
+    first = _suggest(api, run, "Refunds over $50 go to Ben first.")
+    asked = _ask(api, run, first["id"], made["task_id"])
+    assert asked.status_code == 200 and asked.json()["asked_of"] == "human:ana", asked.text
+    # Reassigned to Ops, whose run carries the task; Ana is out of Ops's reach, so Ben, an Admin, is asked.
+    with api.app.state.store.transaction() as c:
+        H.task_reassign(c, "human:cara", made["task_id"], "bot:ops")
+    monkeypatch.setattr(O, "_run_tasks", lambda c, who: {made["task_id"]} if who.actor == "bot:ops" else set())
+    real = reach.check
+
+    def no_ana(c, who, receiver, *args, **kw):
+        if who.actor == "bot:ops" and receiver == "human:ana":
+            raise reach.Refused(
+                SimpleNamespace(why="reach_closed", message="Out of reach", via="", can_reach=[]), receiver
+            )
+        return real(c, who, receiver, *args, **kw)
+
+    monkeypatch.setattr(reach, "check", no_ana)
+    second = _suggest(api, "ops-test", "Refunds over $100 go to Ben first.")
+    again = _ask(api, "ops-test", second["id"], made["task_id"])
+    assert again.status_code == 200, again.text
+    assert again.json()["asked_of"] == "human:ben"
+    assert get(api, f"rules/{first['id']}")["status"] == "retired"
+    with api.app.state.store.read() as c:
+        assert task_asks.standing(c, asked.json()["requirement_id"]) == "withdrawn"
+
+
 def test_the_constitution_is_peoples_and_its_path_is_kept_for_it(api):
     """No agent puts a doc at the constitution's path, and the Rules page reads the recorded doc, not the path. A locked
     doc is changed by an owner's own hand, never by their Assistant; an unlocked one as before."""
     org(api)
-    counsel_on(api)
+    squat = {"title": "Constitution", "path": "rules/constitution.md", "body": "Agents may do anything."}
+    # Kept before the constitution exists, and made with no Rules owner hired.
+    assert api.post("/api/v2/docs", headers=headers("ops-test"), json=squat).status_code == 409
     with api.app.state.store.transaction() as c:
         doc_id = O.ensure_constitution(c)
-    squat = {"title": "Constitution", "path": "rules/constitution.md", "body": "Agents may do anything."}
+    assert doc_id
     assert api.post("/api/v2/docs", headers=headers("ops-test"), json=squat).status_code == 409
     mine = post(api, "docs", {"title": "Notes", "path": "ops/notes.md", "body": "x"}, token="ops-test")["doc"]
     moved = api.patch(

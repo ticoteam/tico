@@ -1,4 +1,5 @@
 import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
+import { useNavigate } from '@tanstack/react-router';
 import { useState, type ReactNode } from 'react';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
@@ -364,6 +365,7 @@ function SuggestedTab({ search, asked }: TabProps) {
   const live = useQuery(stageRulesQuery('active')).data?.items ?? [];
   const team = useTeamName();
   const [whoFor, setWhoFor] = useState<OrgRule | null>(null);
+  const navigate = useNavigate();
   const opened = (id: string) => search.panel === `stage:${id}`;
   const orgs = (orgSugg.data ?? []).filter((r) => hasWords(`${r.text} ${r.description ?? ''}`, search.q));
   const stages = (stageSugg.data?.items ?? []).filter((r) => hasWords([r.name, ...stageParts(r, team)].join(' '), search.q));
@@ -389,7 +391,12 @@ function SuggestedTab({ search, asked }: TabProps) {
             cols={cols}
             who={r.suggested_by}
             at={r.created_at ? <Ago at={r.created_at} /> : ''}
-            verb={{ label: 'Add', onClick: () => (hasWho(r) ? void press('rules.accept', { rule: r.id, kind: 'org' }) : setWhoFor(r)) }}
+            verb={
+              r.clerk_task
+                ? // a clerk's draft is added by its OK on its task, where it shows exactly what is added
+                  { label: 'Open task', onClick: () => void navigate({ to: '/task/$task', params: { task: r.clerk_task ?? '' } }) }
+                : { label: 'Add', onClick: () => (hasWho(r) ? void press('rules.accept', { rule: r.id, kind: 'org' }) : setWhoFor(r)) }
+            }
             more={<MenuItem label="Set aside" icon="archive" onSelect={() => void press('rules.skip', { rule: r.id, kind: 'org' })} />}
             target={`rule:${r.id}`}
           />
