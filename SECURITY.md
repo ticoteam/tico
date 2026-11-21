@@ -120,7 +120,12 @@ work of any bot assigned to that computer, so code a bot runs must not be able t
   - Harnesses that keep owner-only sign-in state shared across turns: Claude Code (`~/.claude/.credentials.json`,
     `~/.claude.json`), Codex (`~/.codex/auth.json`), Gemini CLI, Cursor, Grok, Muse Code and Antigravity. Their
     sign-in files are 0600 and rewritten by the CLI, so another user could not sign in. Their turns run as `bot`,
-    which owns every checkout and can enter any of them.
+    which owns every checkout and can enter any of them. So during a person's own Assistant chat, which works in a
+    copy of its own, such a harness can still write the shared Assistant checkout by absolute path, and a later
+    push of that checkout could publish it. Pi turns run as their own user and cannot; a Mac runner is one trust
+    group anyway. The checkout cannot be made read-only to these turns today: the runner starts harnesses in its
+    own container with no per-turn mounts and no CAP_SYS_ADMIN, and an owner-only sign-in file cannot be read by
+    another user.
   - The runner's own git (publishing, refreshing checkouts) runs as `bot` or the supervisor and honours the
     repository's config.
   - Shared base clones (`workspace/repos/<base>`), which every computer task worktree of that base uses.
