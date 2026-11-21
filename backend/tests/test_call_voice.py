@@ -2313,7 +2313,7 @@ def test_a_gap_of_exactly_the_turns_end_starts_a_new_turn(meet, monkeypatch):
 
 def test_a_clip_from_before_the_recorder_reconnected_still_comes_first(meet, monkeypatch):
     call, voice, now, path, token = _resident_dm(meet, monkeypatch)
-    calls, release = meet.app.state.calls, threading.Event()
+    hub, release = meet.app.state.calls, threading.Event()
 
     def transcribe(base, key, audio, **kw):
         if len(audio) // 32 > 1500:  # the older, longer clip: its text is slow to come
@@ -2323,11 +2323,13 @@ def test_a_clip_from_before_the_recorder_reconnected_still_comes_first(meet, mon
 
     monkeypatch.setattr(call_media, "transcribe", transcribe)
     now[0] = 52.0
-    calls.ingest(call["id"], "human:ana", PCM_ONE_SECOND + PCM_ONE_SECOND[: 32 * 500] + bytes(32 * 600), 50_000)
-    now[0] = 60.0  # the recorder reconnects: its timeline starts again at 0
-    calls.ingest(call["id"], "human:ana", PCM_ONE_SECOND + bytes(32 * 1300), 0)
+    hub.ingest(call["id"], "human:ana", PCM_ONE_SECOND + PCM_ONE_SECOND[: 32 * 500] + bytes(32 * 600), 50_000)
+    # The recorder reconnects: its timeline starts again at 0. Within CLIP_ORDER_WAIT_SECONDS of the older clip, so the
+    # newer one's text waits for it whichever transcription finishes first (later, the older would be dropped as late).
+    now[0] = 52.0 + calls.CLIP_ORDER_WAIT_SECONDS - 2
+    hub.ingest(call["id"], "human:ana", PCM_ONE_SECOND + bytes(32 * 1300), 0)
     release.set()
-    assert calls.settle()
+    assert hub.settle()
     now[0] += call_voice.TURN_END_MS / 1000  # quiet since the newer piece arrived
     voice.tick()
     # In the order said, two turns: the older asked first, the newer waiting behind it.
