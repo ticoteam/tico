@@ -39,11 +39,13 @@ const currentOf = (f: TaskFileView): FileVersion | undefined => f.versions.find(
 
 /** A tab's content: a page from its page read (its own address, its live parts), or, when the server answers that it
     is no page, `file` (the same file from its file read, in the file viewer). */
-function PageOrFile({ task, id, title, page, file }: { task: string; id: string; title: string; page: boolean; file: ReactNode }) {
+function PageOrFile({ task, id, title, page, file, pin }: { task: string; id: string; title: string; page: boolean; file: ReactNode; pin?: number }) {
   const shown = useQuery({ ...pageShownQuery(task, id), enabled: page });
   // No address (an install without page hosting: `src` null): the page's own text at its version, framed as an older
-  // version is, so the tab never waits on an address that will not come.
-  const p = shown.data?.page;
+  // version is, so the tab never waits on an address that will not come. A version an ask pinned (`pin`) is shown live
+  // only while the live page is that version; else that version's own text.
+  const live = shown.data?.page;
+  const p = live && pin && live.version !== pin ? { ...live, src: null, version: pin } : live;
   const text = useQuery({ ...pageVersionQuery(id, p?.version ?? 0), enabled: !!p && !p.src && !!p.version });
   if (!page || shown.isError) return <div className="frame fv">{file}</div>;
   if (text.isError) return <Empty icon="alert" title={`${title} did not load`} />;
@@ -62,8 +64,8 @@ function PageOrFile({ task, id, title, page, file }: { task: string; id: string;
 }
 
 /** A document's tab: a page, or a Markdown file. */
-export function DocFrame({ task, doc }: { task: string; doc: TaskDocument }) {
-  return <PageOrFile task={task} id={doc.file_id} title={doc.title || doc.name} page={isPage(doc)} file={<FilePreview file={doc.file_id} version={doc.version} />} />;
+export function DocFrame({ task, doc, pin }: { task: string; doc: TaskDocument; pin?: number }) {
+  return <PageOrFile task={task} id={doc.file_id} title={doc.title || doc.name} page={isPage(doc)} pin={pin} file={<FilePreview file={doc.file_id} version={doc.version} />} />;
 }
 
 /** One of the task's other files as a tab, at its current version or the one an ask pinned (`version`): an HTML file
@@ -71,7 +73,9 @@ export function DocFrame({ task, doc }: { task: string; doc: TaskDocument }) {
 export function FileTab({ task, f, version }: { task: string; f: TaskFileView; version?: number }) {
   const isPerson = useIsPerson();
   const now = currentOf(f);
-  const v = (version !== undefined && f.versions.find((x) => x.n === version)) || now;
+  const listed = version !== undefined ? f.versions.find((x) => x.n === version) : now;
+  // A version the listing no longer reaches (it keeps the newest): read by its number from the file's id, as the file it is.
+  const v = listed ?? (now && { ...now, n: version as number, url: `/api/v2/files/${encodeURIComponent(f.id)}?v=${version}`, name: '', size: null });
   if (!v) return null;
   const name = f.title || f.name;
   // A Word file is drawn as its words on paper, with Download beside it.

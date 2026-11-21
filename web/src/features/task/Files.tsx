@@ -78,7 +78,7 @@ export function PageMenu({ task, vs }: { task: string; vs: Versions }) {
                 label={`v${x.n}`}
                 meta={when(x.at)}
                 on={x.n === vs.shown}
-                onSelect={() => void run('task.showVersion', { task, version: x.n === vs.doc.version ? null : x.n }, { via: 'click' })}
+                onSelect={() => void run('task.showVersion', { task, version: x.n === vs.doc.version && vs.pin === undefined ? null : x.n }, { via: 'click' })}
               />
             ))}
           </MenuSub>

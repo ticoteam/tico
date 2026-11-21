@@ -83,6 +83,8 @@ export interface TaskRow {
   stage_id?: string | null;
   owner_id?: string | null;
   requester_id?: string | null;
+  /** The task above it, where the reader may read that one (backend task_views). */
+  parent_id?: string | null;
   lane?: string;
   snoozed?: boolean;
 }
@@ -203,9 +205,6 @@ export function patchTaskList<T extends TaskRow>(
   return { list: tasks === list.tasks ? list : { ...list, tasks }, unsure };
 }
 
-/** Tasks whose children are being read again after a relation's event (a sub-task filed or taken off). */
-const rereading = new Set<string>();
-
 function patchTasks(batch: TaskEvent[]): void {
   if (batch.some((e) => e.bulk)) {
     void queryClient.invalidateQueries({ queryKey: ['tasks'] }, { cancelRefetch: false });
@@ -235,10 +234,8 @@ function patchTasks(batch: TaskEvent[]): void {
     }
     const held = queryClient.getQueryData<TaskRow>(detail);
     // A sub-task filed under it or taken off (a relation): its children are read again (a second review's pill).
-    if (held && related.has(id)) {
-      rereading.add(id);
-      void queryClient.invalidateQueries({ queryKey: detail, exact: true }, { cancelRefetch: false });
-    }
+    // A read already in flight is from before the change: it starts again.
+    if (held && related.has(id)) void queryClient.invalidateQueries({ queryKey: detail, exact: true }, { cancelRefetch: true });
     const task = e.task;
     if (!task) continue;
     // Writing the same data still counts as a write (and a redraw): only a real change is set.
@@ -250,23 +247,19 @@ function patchTasks(batch: TaskEvent[]): void {
         { cancelRefetch: false },
       );
   }
-  // A sub-task's status shows on the task above it (the ask card's review pill): it lands in that task's children.
-  const statusOf = (id: string) => last.get(id)?.task?.status;
-  const details = queryClient.getQueriesData<{ children?: { id: string; status: string }[] }>({ queryKey: ['tasks', 'detail'] }).filter(([key]) => key.length === 3);
-  const known = new Set(details.flatMap(([key, held]) => [String(key[2]), ...(held?.children ?? []).map((c) => c.id)]));
-  for (const [key, held] of details) {
-    const kids = held?.children;
-    if (!kids?.some((c) => statusOf(c.id) && statusOf(c.id) !== c.status)) continue;
-    queryClient.setQueryData(key, { ...held, children: kids.map((c) => ({ ...c, status: statusOf(c.id) ?? c.status })) });
-  }
-  // A task no held read knows yet (a sub-task just filed, which may already have ended): a task whose children are being
-  // read again is read once more, so that read sees the change rather than the one in flight before it.
-  if (!rereading.size || ![...last.keys()].some((id) => !known.has(id))) return;
-  for (const id of rereading) {
-    const key = ['tasks', 'detail', id];
-    const state = queryClient.getQueryState(key);
-    if (state?.isInvalidated || state?.fetchStatus === 'fetching') void queryClient.invalidateQueries({ queryKey: key, exact: true }, { cancelRefetch: true });
-    else rereading.delete(id);
+  // A sub-task's change shows on the task above it (the ask card's review pill), found by the row's parent_id: its status
+  // lands in that task's children. One those children do not hold yet (just filed), or a read of them in flight from
+  // before the change, reads them again.
+  for (const [id, e] of last) {
+    const above = e.task?.parent_id;
+    const key = ['tasks', 'detail', above ?? ''];
+    const held = above ? queryClient.getQueryData<{ children?: { id: string; status: string }[] }>(key) : undefined;
+    if (!held) continue;
+    const kids = held.children ?? [];
+    const kid = kids.find((c) => c.id === id);
+    const status = e.task?.status;
+    if (kid && status && kid.status !== status) queryClient.setQueryData(key, { ...held, children: kids.map((c) => (c.id === id ? { ...c, status } : c)) });
+    if (!kid || queryClient.getQueryState(key)?.fetchStatus === 'fetching') void queryClient.invalidateQueries({ queryKey: key, exact: true }, { cancelRefetch: true });
   }
 }
 

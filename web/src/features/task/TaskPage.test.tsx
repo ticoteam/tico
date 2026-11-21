@@ -492,6 +492,33 @@ describe('a page’s versions, a new page and a picture', () => {
     expect((await frame('Spec, v1')).getAttribute('srcdoc')).toContain('Sign in with your email.');
   });
 
+  const pinnedAt = (n: number, live: Record<string, unknown>) => {
+    const t = withVersions();
+    t.to_leave = [{ requirement_id: 'r1', line: 'Spec approved', met: false, may: ['ok', 'no'], approval: { document: 'Spec', file_id: 'f1', version: n } } as never];
+    serve((url) =>
+      url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1')
+        ? { status: 200, body: detail(t) }
+        : url.endsWith('/api/v2/pages/f1')
+          ? { status: 200, body: { page: live } }
+          : (html(url) ?? base(url)),
+    );
+  };
+
+  it('shows the live page only while it is the version pinned; else that version’s own text @approvals', async () => {
+    pinnedAt(2, { src: 'about:blank', version: 3 });
+    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    expect((await frame('Spec')).getAttribute('srcdoc')).toContain('Sign in with your email or phone.');
+  });
+
+  it('with a version pinned, picking the newest names it, so it does not snap back to the pin @approvals', async () => {
+    pinnedAt(1, { src: 'about:blank', version: 2 });
+    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    fireEvent.click(await screen.findByRole('button', { name: 'Version 1' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /v2/ }));
+    expect(await screen.findByRole('button', { name: 'Version 2' })).toBeTruthy();
+    expect((await frame('Spec')).getAttribute('src')).toBe('about:blank');
+  });
+
   it('opens an older version and marks what changed since the one before @s55', async () => {
     serve((url) => (url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1') ? { status: 200, body: detail(withVersions()) } : (html(url) ?? base(url))));
     show(<TaskPage task="12" pipeline="p1" tab="spec" />, '/tasks/p1/12/spec');
