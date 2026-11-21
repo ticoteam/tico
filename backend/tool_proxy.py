@@ -637,8 +637,11 @@ def install(app, store):
                 await log(413, 'refused', 'Request body over 25 MB')
                 return refused(413, 'too_large', 'A tool call sends at most 25 MB.')
             chunks.append(chunk)
-        # A body over what the gate reads is never parsed as JSON-RPC: not an MCP call (its check is too_large).
-        calls = rpc_calls(b''.join(chunks)) if method == 'POST' and total <= rule_links.MAX_JUDGED else None
+        # Read authorization parses a Read caller's POST whatever its size, as before; the gate reads it only up to its
+        # 1 MB limit (`gate_calls`), and a larger one is not parsed for it at all (its check is too_large).
+        small = total <= rule_links.MAX_JUDGED
+        calls = rpc_calls(b''.join(chunks)) if method == 'POST' and (small or ready['reads_only']) else None
+        gate_calls = calls if small else None
         if ready['reads_only'] and method == 'POST':
             # A POST passes at Read only as MCP calls that only read.
             write = mcp_write(tool_id, calls) if calls is not None else 'not MCP'
@@ -662,7 +665,9 @@ def install(app, store):
         except egress.Blocked as exc:
             await log(None, 'refused', exc.reason)
             return refused(403, 'tool_address', exc.reason)
-        if method not in SAFE and not (mcp and calls is not None and not mcp_write(tool_id, calls, GATE_READ_ONLY)):
+        if method not in SAFE and not (
+            mcp and gate_calls is not None and not mcp_write(tool_id, gate_calls, GATE_READ_ONLY)
+        ):
             # The destination checked and pinned, a write meets the org rules on what the caller sent, scrubbed, before
             # it is forwarded with the key (backend/rule_links.py). Log-only: its one outcome event on the tool's link
             # goes with the call's own row, after it is forwarded.
