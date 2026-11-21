@@ -1168,10 +1168,11 @@ describe('an email’s OK reads with the matter it answers', () => {
 
   it('shows the matter’s open key dates in one line above the email @approvals', async () => {
     shown = task({ title: 'Send: Re: Notice of claim → dana@example.test' });
-    // In the API's order (by date, as the matter's list gives them): the strip keeps it.
+    // In the API's order: a timed deadline (03:00 UTC Dec 8, the evening of Dec 7 in the company's zone) before an all-day
+    // Dec 8. A string sort would put the all-day date first, so the test fails if the strip sorts.
     const dates = [
-      { id: 'd2', label: 'Earliest send', starts_at: '2026-12-08', due_at: null, done_at: null },
-      { id: 'd1', label: 'Reply due', starts_at: null, due_at: '2026-12-15', done_at: null },
+      { id: 'd1', label: 'Hearing', starts_at: null, due_at: '2026-12-08T03:00:00Z', done_at: null },
+      { id: 'd2', label: 'Reply due', starts_at: null, due_at: '2026-12-08', done_at: null },
       { id: 'd3', label: 'Old date', starts_at: null, due_at: '2026-10-01', done_at: '2026-10-02' },
     ];
     const matter = task({ id: 't5', number: 40, title: 'Late-delivery claim: Dana Ruiz', pipeline_id: 'p9', to_leave: [], matter: { dates } as unknown as TaskData['matter'] });
@@ -1183,7 +1184,7 @@ describe('an email’s OK reads with the matter it answers', () => {
     };
     show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
     // Date then label, one line; the expected dates come from the same formatter, so no clock is pinned.
-    const line = `${matterWhen('2026-12-08')} Earliest send · ${matterWhen('2026-12-15')} Reply due`;
+    const line = `${matterWhen('2026-12-08T03:00:00Z')} Hearing · ${matterWhen('2026-12-08')} Reply due`;
     const strip = await screen.findByText(line);
     expect(screen.queryByText(/Old date/)).toBeNull();
     const body = await screen.findByText('Dear Ms. Ruiz, our response is attached.');

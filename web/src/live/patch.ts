@@ -251,6 +251,9 @@ function patchTasks(batch: TaskEvent[]): void {
     // waits again on any change: the row carries only their summary, and who they wait on may have moved.
     const shots = !!held?.waits?.some((w) => w.requirement_id?.startsWith('paid_render:'));
     if (held && (related.has(id) || shots)) void queryClient.invalidateQueries({ queryKey: detail, exact: true }, { cancelRefetch: true });
+    // A matter's key date changed or was marked done (an `obligations` change on its task): the stream's row leaves out
+    // the matter, so the task's read, with its dates, starts again.
+    if (e.kinds?.includes('obligations')) void queryClient.invalidateQueries({ queryKey: detail, exact: true }, { cancelRefetch: true });
     const task = e.task;
     if (!task) continue;
     // Writing the same data still counts as a write (and a redraw): only a real change is set.
