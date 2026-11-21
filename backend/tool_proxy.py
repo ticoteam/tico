@@ -480,9 +480,9 @@ def install(app, store):
                 record_use(c, subject, 'credential.proxied_call', credential_id, {'tool': tool_id}, windowed=True)
                 reconnect_tasks.called(c, tool_id, status)  # Key rejected opens its Reconnect task, Working ends it
 
-    def gated(subject, tool_id, method, rest, query, body, params):
+    def gated(subject, tool_id, method, rest, query, body, params, content_type):
         try:
-            output = rule_links.proxy_output(method, rest, query, body, params)
+            output = rule_links.proxy_output(method, rest, query, body, params, content_type)
             found = rule_links.check_as(
                 store, getattr(app.state, 'judge', None), subject, subject, '', 'tool:' + tool_id, 'tool_call', output
             )
@@ -638,12 +638,14 @@ def install(app, store):
                 detail = read_only_detail(ready['who'], ready['name'], '' if calls is None else write)
                 await log(403, 'refused', detail)
                 return refused(403, 'forbidden', detail)
-        if method not in SAFE and (calls is None or mcp_write(tool_id, calls)):
-            # A write meets the org rules before the key goes in (backend/rule_links.py): one outcome event on the
-            # tool's link, before it is forwarded. Log-only: nothing is stopped here yet.
-            sent = b''.join(chunks)
+        # A write meets the org rules before the key goes in (backend/rule_links.py): one outcome event on the tool's
+        # link, before it is forwarded. Log-only: nothing is stopped here yet. Only an MCP call to the tool's own MCP
+        # server that only reads is not a write.
+        mcp_read = calls is not None and rule_links.mcp_endpoint(tool, rest) and not mcp_write(tool_id, calls)
+        if method not in SAFE and not mcp_read:
+            sent, kind = b''.join(chunks), request.headers.get('content-type', '')
             await loop().run_in_executor(
-                None, gated, got['subject'], tool_id, method, rest, query, sent, got['auth_params']
+                None, gated, got['subject'], tool_id, method, rest, query, sent, got['auth_params'], kind
             )
         listing = bool(calls) and any(m == 'tools/list' for m, _ in calls)
         url = tool['base_url'].rstrip('/') + '/' + rest.lstrip('/')

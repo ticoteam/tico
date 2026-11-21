@@ -441,16 +441,21 @@ tico rules ask "<question>"                                                     
 ### 7. Links: agents' writes that leave the company (log-only)
 
 An agent's write on a link (a bot's own, or a person's Assistant or BotOps acting for them; never a person's own) meets
-the same org rule check as a task write, one call at most, outside any transaction, and leaves exactly one event on
-`link:<id>`: `rules.passed`, `rules.refused` (a Block rule broken) or `rules.held` (an Escalate rule broken), with the
-rules in its detail (backend/rule_links.py). The links: each proxied tool (`tool:<id>`, checked before the proxy puts
-the key in; reads never counted), outgoing webhook sends, reports to Tico support, Release now, and email. Nothing is
-stopped yet: `would` in the detail marks an outcome that did not happen. Email's own held path is older and does stop a
-mail. What the check reads of a proxied call is scrubbed: no header, the tool's auth query parameters blanked, and every
-proxy token (plain or in base64) taken out. Each link's mode (Enforced or Informed only) lives in registry_metadata
-(`rule-link-modes`); every link is Informed only except email. Rules › Links (`/company/rules/links`, owner and Admins)
-lists them with 30-day counts, then the Not covered paths: tools whose keys go to computers, website tools, and calls a
-computer makes straight out. Refusals, appeals and Allow once come next.
+the same org rule check as a task write, outside any transaction, on a budget of one call with no part call, and leaves
+exactly one event on `link:<id>`: `rules.passed`, `rules.refused` (a Block rule broken) or `rules.held` (an Escalate rule
+broken), with the rules in its detail (backend/rule_links.py), written in a savepoint so a failure never changes the
+write. The links: each proxied tool (`tool:<id>`, checked before the proxy puts the key in; reads, and MCP calls that
+only read sent to the tool's own MCP server, are never counted), outgoing webhook sends, reports to Tico support (at
+their first delivery), Release now, and email. A write that would not be made (no right, an Idempotency-Key replay, a
+release already open) is not checked. Nothing is stopped yet: `would` in the detail marks an outcome that did not
+happen. Email's own held path is older and does stop a mail, so email is the one Enforced link and its event carries the
+rules the mail's decision applied; every other link is Informed only. What the check reads of a proxied call is
+decoded and scrubbed: no header, the path, query and a JSON, form or plain text body with every proxy token (plain,
+percent-encoded, JSON-escaped or in base64) taken out and the tool's auth query parameters blanked; any other body, or
+one whose scrubbing cannot be verified, is not read. Rules › Links (`/company/rules/links`, from the Rules page's "⋯";
+the owner and Admins in person) lists them with 30-day counts, then the Not covered paths: tools whose keys go to
+computers, website tools, and calls a computer makes straight out, each tool only to a reader who may see it.
+Refusals, appeals and Allow once come next.
 
 ### 8. laws.sh (optional, later)
 

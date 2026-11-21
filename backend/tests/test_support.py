@@ -1241,3 +1241,29 @@ def test_a_retry_across_the_upgrade_finds_the_ticket_filed_under_the_bare_key(en
     assert len(hq.seen) == sent  # nothing new reached HQ
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM support_tickets").fetchone()[0] == 1
+
+
+def test_an_agents_report_is_logged_once_on_the_support_link_at_its_first_delivery(environment, hq):  # noqa: F811
+    """Rules › Links (backend/rule_links.py): a bot's report meets the org rules where it is delivered, under the team
+    rule or from a person's OK, as the bot's, and leaves one event with the ticket it makes. A draft waiting for its OK
+    and a retry that finds its ticket leave none."""
+
+    def logged():
+        with api.app.state.store.read() as c:
+            return [
+                tuple(r)
+                for r in c.execute("SELECT actor, action FROM events WHERE target='link:support' ORDER BY rowid")
+            ]
+
+    api = environment()
+    bot = as_bot(api)
+    assert draft(api, bot).json()["sent"] is True  # under the team rule, filed as the default person
+    assert draft(api, bot).status_code == 200  # the same report again: its ticket back
+    assert logged() == [("bot:assistant", "rules.passed")]
+    drafts_only(api)
+    approval = draft(api, bot, message="Another report, with other words").json()
+    assert approval["status"] == "pending" and len(logged()) == 1
+    decide(api, approval["id"])
+    assert send(api, bot, approval["id"]).status_code == 200
+    assert send(api, bot, approval["id"]).json()["again"]
+    assert logged() == [("bot:assistant", "rules.passed")] * 2 and len(hq.seen) == 2

@@ -682,6 +682,8 @@ def check_as(
     attempt_id="",
     origin=None,
     late=False,
+    most_calls=None,
+    parts=True,
 ):
     """Check one output held as `principal` (a person or a bot). `sender` is who made it and `via` the route
     (`checked_as` reads both from an identity). `place`: the write's place, or a function of (c, principal,
@@ -692,7 +694,9 @@ def check_as(
     decided (Send anyway asks only the rules changed or added since its hold); the verdict's `matched` is every pair that matched, to check again inside the write. `origin`:
     where an outside message came from (`inbound`), kept on the verdict and its hold. `late`: the write may be saved
     before its check (`deferred`): when every rule it meets only warns and the verdict is not cached, nothing is asked
-    now, and the verdict says so (`late`), for `apply` to queue the one check to run right after the write."""
+    now, and the verdict says so (`late`), for `apply` to queue the one check to run right after the write.
+    `most_calls`: the calls this check may make; needing more is unchecked (`too_many_calls`), asking nothing. `parts`
+    False: never mark a holding verdict for its part call (backend/rule_links.py, whose checks hold nothing)."""
     author = principal
     if not author:
         return None
@@ -773,6 +777,8 @@ def check_as(
             )
             if batches is None:
                 return {**verdict, "outcome": "too_large", "broken": [r["id"] for r in rules]}
+            if most_calls is not None and len(batches) > most_calls:
+                return {**verdict, "outcome": "unchecked", "error": "too_many_calls"}
             engine = B.server_engine(store, c, primary)
             if engine is None:
                 capped = B.over_spend_cap(c, store.settings)
@@ -805,10 +811,9 @@ def check_as(
                 "error": errors[0],
                 "unchecked_rules": failed,
             }
-            return _later_parts(store, engine, partial, output)
-        done = _later_parts(
-            store, engine, {**verdict, "broken": broken, "outcome": "broken" if broken else "pass"}, output
-        )
+            return _later_parts(store, engine, partial, output) if parts else partial
+        found = {**verdict, "broken": broken, "outcome": "broken" if broken else "pass"}
+        done = _later_parts(store, engine, found, output) if parts else found
         # A complete verdict is cached as a plain list of the rules it broke; its hold's part call, after the write,
         # adds the parts it finds beside them (`_fill_parts`).
         with store.transaction() as c:

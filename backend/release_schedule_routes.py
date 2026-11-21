@@ -178,6 +178,21 @@ def view(c: Any, who: Any, auth: Any) -> dict[str, Any]:
     }
 
 
+def open_release(c: Any, owner: str) -> Any:
+    """The Release Owner's unfinished Release task (its id first), or None."""
+    return c.execute(
+        "SELECT id FROM tasks WHERE owner_id=? AND status='open' AND substr(title, 1, ?)=? "
+        "ORDER BY created_at DESC LIMIT 1",
+        (owner, len(TITLE), TITLE),
+    ).fetchone()
+
+
+def would_file(c: Any, who: Any) -> bool:
+    """Whether Release now by `who` would file a task now: theirs to ask, a Release Owner named, none open."""
+    manager = release_manager(c)
+    return may_release(c, who) and bool(manager) and not open_release(c, H.bot_actor(manager))
+
+
 def request_now(c: Any, actor: str, note: str = "", visible_sql: str | None = None) -> dict[str, Any]:
     """ONE task for the Release Owner, or its unfinished Release task. Anyone may read that task, so it says who
     asked and their note, never which tasks wait or how many: the Release Owner finds what waits itself, and closes
@@ -190,11 +205,7 @@ def request_now(c: Any, actor: str, note: str = "", visible_sql: str | None = No
     if not manager:
         return {"sent": False, "reason": "no_release_manager", "task": None, "tasks": seen}
     owner = H.bot_actor(manager)
-    found = c.execute(
-        "SELECT id FROM tasks WHERE owner_id=? AND status='open' AND substr(title, 1, ?)=? "
-        "ORDER BY created_at DESC LIMIT 1",
-        (owner, len(TITLE), TITLE),
-    ).fetchone()
+    found = open_release(c, owner)
     if found:
         mine = (
             not visible_sql or c.execute(f"SELECT 1 FROM tasks WHERE id=? AND ({visible_sql})", (found[0],)).fetchone()
@@ -272,8 +283,16 @@ def register(app: FastAPI, auth: Any, mutate: Callable[..., Any], store: Any) ->
         from . import rule_links as _rule_links
 
         links: Any = _rule_links
-        # An agent's ask meets the org rules first (backend/rule_links.py), its one event in the ask's write. Log-only.
-        found = links.check(store, request.app.state.judge, who, "release", "release", body.note or "")
+
+        # An agent's ask meets the org rules first (backend/rule_links.py), its one event in the ask's write; only an
+        # ask that would file a task is checked. Log-only.
+        def filing_now(c: Any) -> bool:
+            return would_file(c, who)
+
+        filing = links.would_write(store, who, request, filing_now)
+        found = (
+            links.check(store, request.app.state.judge, who, "release", "release", body.note or "") if filing else None
+        )
 
         def write(c: Any) -> dict[str, Any]:
             out = request_now(c, who.actor, body.note or "", auth.task_sql(c, who))
