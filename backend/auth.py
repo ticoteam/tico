@@ -1102,6 +1102,15 @@ class Auth:
                 f"OR {reader_sql(c, who.task_actor)} OR ({participant_access_sql(c, actor)}) "
                 f"OR {call_follow_ups.reader_sql(c, who.task_actor)}{own_oks})"
             )
+        if who.attempt_id and not who.task_actor and who.actor == H.assistant_actor(c):
+            # One Assistant serves everyone: its run reads a private task only for the person it works for, its requester
+            # (hubdb.task_private_readable, rooms.run_person).
+            person = rooms.run_person(c, who.attempt_id)
+            audience += (
+                f" AND (coalesce(private,1)=0 OR requester_id={A.q(person)})"
+                if person
+                else " AND coalesce(private,1)=0"
+            )
         from . import counsel
 
         denied = counsel.denied_page_copies(c, who, self)

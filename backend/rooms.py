@@ -43,6 +43,37 @@ def personal_run(c, assistant_bot, bot, conversation, task):
     return bot == assistant_bot and (personal_root(c, conversation) or bool(task and H.task_private(c, task)))
 
 
+def run_person(c, attempt_id):
+    """The person a run works for, or "": the person its private task was filed for (its requester: a message routine's
+    turn), else the owner of the person's own room, or of the room a sub-thread hangs off, it runs in. Kept for the
+    read (read_cache)."""
+    return read_cache.value(c, ("run_person", attempt_id), lambda: _run_person(c, attempt_id), True)
+
+
+def _run_person(c, attempt_id):
+    row = c.execute(
+        "SELECT a.task_id,m.conversation_id,json_extract(m.refs,'$.live_meeting.meeting_id') AS meeting "
+        "FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id WHERE a.id=?",
+        (attempt_id,),
+    ).fetchone()
+    if not row:
+        return ""
+    task = H.task(c, row["task_id"]) if row["task_id"] else None
+    if task and H.task_private(c, task) and H.is_human(task["requester_id"]):
+        return task["requester_id"]
+    if row["meeting"]:
+        # A call in a person's own room: its turns work for them (call_follow_ups._personal_for).
+        call = c.execute("SELECT thread_id FROM calls WHERE live_meeting_id=?", (row["meeting"],)).fetchone()
+        if call:
+            from .calls import room_owner
+
+            return str(room_owner(c, call["thread_id"]) or "")
+    room = H.conversation(c, row["conversation_id"]) or {}
+    if room.get("scope") != PERSONAL and room.get("root_id") and room["root_id"] != room.get("id"):
+        room = H.conversation(c, room["root_id"]) or {}
+    return str(room.get("owner_id") or "") if room.get("scope") == PERSONAL else ""
+
+
 def personal_attempt(c, assistant_bot, attempt_id):
     """`personal_run` for a run by its id (backend/github_app.py token)."""
     row = c.execute(

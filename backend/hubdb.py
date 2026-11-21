@@ -2392,6 +2392,12 @@ def task_private_readable(conn, actor, row):
         row = task(conn, row["id"])
         if not row:
             return False
+    if actor == assistant_actor(conn) and RUN.get():
+        # One Assistant serves everyone: its run reads a private task only when it works for that task's person (its
+        # requester): a person's own message routine's turn, or a run in their own room (rooms.run_person).
+        from .rooms import run_person
+
+        return actor in (row["owner_id"], row["requester_id"]) and row["requester_id"] == run_person(conn, RUN.get())
     if actor in (row["owner_id"], row["requester_id"]):
         return True
     from .task_rights import private_subjects
@@ -4850,6 +4856,9 @@ def task_create(
             (routine or requester == routine_for) and is_human(routine_for) and target == assistant_actor(conn)
         )
         refuse_shared_assistant(conn, actor, *(() if routine_turn else (target, requester)), *(readers or ()))
+        if routine_turn:
+            # The person's own: they read it as its requester, and the Assistant's runs only when for them.
+            requester = routine_for
     from contextlib import ExitStack
 
     from . import task_trigger_rules

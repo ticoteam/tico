@@ -128,7 +128,8 @@ One Assistant serves everyone, so nothing a turn in your DM writes in the Assist
 a throwaway copy it cannot push from (on Pi, its session goes with the copy, so each turn starts anew), and the server
 records none of its memory/ or knowledge/ in the Assistant's learnings. A private task it hands off for you is filed as you. No private task is ever the Assistant's: not as owner, requester,
 assignee or reader, and a group it is in or a bot that reports to it lends it no read of one; an OK it asks you for is
-filed on a task you hold.
+filed on a task you hold. The one exception is a turn of your own inbox's message routine: it is yours (you are its
+requester), and only the Assistant's runs for you read it, never one for someone else, nor its manager.
 
 You may let bots you choose view it, read only. On **What it has learned** (your Assistant's settings), the line
 **Bots that can view this chat** says None until you add one: **Add a bot**, type part of its name, pick it. Nobody is

@@ -387,6 +387,46 @@ def test_a_persons_message_routine_turn_stays_the_assistants_and_runs_as_a_perso
     assert attempt["task"]["id"] == task["id"] and attempt["personal"] is True
 
 
+def test_an_assistant_run_reads_a_routine_turn_only_for_the_person_it_works_for(api):
+    """One Assistant serves everyone: Ana's routine turn task is hers (its requester) and her routine's run reads it;
+    the Assistant's run for Ben, and its manager, read none of it."""
+    from backend.tests.helpers.api import assign, claim, ready, runner
+
+    set_templates(api, STAFF)
+    turns = {}
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='cpo' WHERE bot='assistant'")
+    for person, inbox in (("ana", "ana@acme.example"), ("ben", "ben@acme.example")):
+        flow = bot_flow(api, "assistant", inbox)
+        prompt = run_to_turn(flow, MAIL)["prompt"]
+        with api.app.state.store.transaction() as c:
+            started = AA.start_turn(
+                c, {"id": "auto_" + person, "flow": flow}, "run_" + person, "draft", "bot:assistant", prompt, None
+            )
+            turns[person] = H.task(c, started["ref"])
+    assert turns["ana"]["requester_id"] == "human:ana" and turns["ben"]["requester_id"] == "human:ben"
+    machine = runner(api)
+    with api.app.state.store.read() as c:
+        held = c.execute(
+            "SELECT generation FROM assignments WHERE bot=?", (H.resolve_bot(c, "assistant")["id"],)
+        ).fetchone()
+        assert not H.task_private_readable(c, "bot:cpo", turns["ana"])  # the Assistant's manager
+    assign(api, machine, "assistant", held["generation"] if held else 0)
+    ready(api, machine, ["assistant"])
+    runs = {}
+    for _ in turns:
+        attempt = claim(api, machine)
+        assert attempt and attempt["personal"] is True, attempt
+        runs[next(p for p, t in turns.items() if t["id"] == attempt["task"]["id"])] = attempt["token"]
+    for person, token in runs.items():
+        other = "ben" if person == "ana" else "ana"
+        assert api.get("/api/v2/tasks/" + turns[person]["id"], headers=headers(token)).status_code == 200
+        assert api.get("/api/v2/tasks/" + turns[other]["id"], headers=headers(token)).status_code == 404
+        listed = api.get("/api/v2/tasks", headers=headers(token)).text
+        assert turns[other]["id"] not in listed
+    assert api.get("/api/v2/tasks/" + turns["ana"]["id"], headers=headers("ana-test")).status_code == 200
+
+
 def test_a_mail_turn_title_names_the_sender_when_the_subject_is_empty():
     about = E._turn_about({"message": {"source": "mail", "from": "jo@acme.example", "from_name": "", "subject": "Re:"}})
     assert about == "jo@acme.example"
