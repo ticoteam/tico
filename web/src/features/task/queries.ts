@@ -733,16 +733,9 @@ function answerRequest<T>(item: string, send: (idem: string) => Promise<T>, take
     wait: true,
     optimistic: (cur: unknown) => cur,
     // Only an answer that settled it takes the row out: a grant that is still open keeps its card.
-    settle: (cur: { count: number; requests?: { id: string }[]; toolRequests?: { id: string }[] } | undefined, out: T) => {
-      if (!taken(out) || !cur) return cur;
-      // Flow counts its own requests; a tool's (drawn on Tools) never were in its count.
-      const flows = !!cur.requests?.some((r) => r.id === item);
-      return {
-        ...cur,
-        count: flows ? cur.count - 1 : cur.count,
-        requests: cur.requests?.filter((r) => r.id !== item),
-        toolRequests: cur.toolRequests?.filter((r) => r.id !== item),
-      };
+    settle: (cur: { count: number; requests?: { id: string }[] } | undefined, out: T) => {
+      if (!taken(out) || !cur?.requests?.some((r) => r.id === item)) return cur;
+      return { ...cur, count: cur.count - 1, requests: cur.requests.filter((r) => r.id !== item) };
     },
     send,
   }).finally(again);

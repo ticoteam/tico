@@ -80,7 +80,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 function Requests() {
   const { data } = useQuery(flowQuery);
-  return [...(data?.requests ?? []), ...(data?.toolRequests ?? [])].map((it) => <RequestCard key={it.id} it={it} />);
+  return (data?.requests ?? []).map((it) => <RequestCard key={it.id} it={it} />);
 }
 
 function show() {
@@ -166,16 +166,6 @@ describe('an access request in Needs you', () => {
 });
 
 describe('Flow’s count', () => {
-  it('holds a repository’s request; a tool’s request, a key card and a key proposal go to Tools, out of the count', async () => {
-    const REPO: FlowRequest = { ...ACCESS, id: 'access:r9', access: { ...ACCESS.access!, id: 'r9', resource_type: 'repository', resource_name: 'acme/site' } };
-    waiting = [ACCESS, KEY, DROP, REPO];
-    queryClient.clear();
-    const flow = await queryClient.fetchQuery(flowQuery);
-    expect(flow.count).toBe(1);
-    expect(flow.requests?.map((r) => r.id)).toEqual(['access:r9']);
-    expect(flow.toolRequests?.map((r) => r.id)).toEqual(['access:r1', 'key:k1', DROP.id]);
-  });
-
   it('keeps the requests when a task’s ask is answered', async () => {
     queryClient.setQueryData(flowQuery.queryKey, { count: 2, items: [{ id: 't1' } as FlowItem], requests: [ACCESS], task_ids: ['t1'] });
     const answered = answerAsk('t1', 'q1', 'ok');

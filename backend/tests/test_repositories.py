@@ -314,6 +314,10 @@ def test_built_in_repository_grants_are_owner_only_and_hidden_bots_stay_hidden(a
     api.app_state.auth.bot_admins.add(who.email.lower())
     response = api.put('/api/v2/bots/botops/repositories', json={'mode': 'all'}, headers=auth('person-test'))
     assert response.status_code == 403 and 'Owner' in response.text
+    # The read says the same: an admin may change any other agent's, a built-in's only the Owner.
+    assert api.get('/api/v2/bots/botops/repositories', headers=auth('person-test')).json()['can_change'] is False
+    assert api.get('/api/v2/bots/cpo/repositories', headers=auth('person-test')).json()['can_change'] is True
+    assert api.get('/api/v2/bots/botops/repositories', headers=auth()).json()['can_change'] is True
     api.app_state.auth.bot_admins.remove(who.email.lower())
     with api.app_state.store.transaction() as c:
         restrict(c, 'cpo', people=[])

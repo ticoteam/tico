@@ -126,8 +126,8 @@ export function ToolsPage({ search }: { search: ToolsSearch }) {
   const open = search.tool;
   const [adding, setAdding] = useState<Adding | null>(null);
   const [finding, setFinding] = useState(false);
-  // A key card, a key proposal and an agent's access request for a tool: Flow leaves them to Tools.
-  const requests = useQuery(flowQuery).data?.toolRequests ?? NO_REQUESTS;
+  // Needs you, the one queue, filtered to tools: a key card, a key proposal, an agent's access request for a tool.
+  const requests = toolRequests(useQuery(flowQuery).data?.requests);
   const kinds = [...new Set([...all.map((r) => r.kind as string), ...(loose.length ? ['key'] : [])])].sort((a, b) => (KIND[a] ?? a).localeCompare(KIND[b] ?? b));
   const filter = (change: { kind?: string; needs?: boolean }) => void press('tools.filter', change);
   const filterWho = (next?: string) => void press('tools.filterWho', next ? { who: next } : {});
@@ -267,7 +267,8 @@ export function ToolsPage({ search }: { search: ToolsSearch }) {
   );
 }
 
-const NO_REQUESTS: FlowRequest[] = [];
+/** The requests Tools answers: a key card, a key proposal, and an agent's access request for a tool (not a repository). */
+const toolRequests = (items: readonly FlowRequest[] = []) => items.filter((it) => it.kind !== 'access' || it.access?.resource_type === 'tool');
 
 /** What waits on you about tools, each answered in its card (the Needs you request cards); the first card's button is the
     page's one filled button. */

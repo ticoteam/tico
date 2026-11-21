@@ -11,7 +11,7 @@ from backend.tests.helpers.api_tools import key, level, tool
 from backend.tests.helpers.assistant import assistant_turn
 from backend.tests.helpers.bot_tools import configure, report
 from backend.tests.helpers.credentials import explicit_only, setup as vault
-from backend.tests.helpers.member_bots import botops  # noqa: F401  (fixture)
+from backend.tests.helpers.member_bots import botops, turn as botops_turn  # noqa: F401  (fixture)
 
 SECRET = "acme-crm-synthetic-0123456789"
 PAGE_ENTRY = {
@@ -176,6 +176,24 @@ def test_the_tools_owner_in_its_own_run_adds_or_moves_an_mcp_server_only_from_th
     assert moved.status_code == 403 and moved.json()["error"]["code"] == "catalog_only", moved.text
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM bot_tool_requests").fetchone()[0] == 0
+
+
+def test_botops_with_a_persons_rights_never_shares_a_login_with_every_agent_nor_gives_itself_a_tool(api, botops):
+    vault(api)
+    site = post(api, "website-tools", {"sites": ["app.acme.example"]})["id"]
+    account = post(api, f"website-tools/{site}/accounts", {"password": "acme-synthetic-pass-02"})["id"]
+    tid = tool(api)["id"]
+    key(api, tid, SECRET)
+    put(api, "page-owners/tools", {"bot": "botops"})  # BotOps owns Tools here
+    run = botops_turn(api, botops, person="ana-test", text="Tidy our logins and tools")["token"]  # with Ana's rights
+    lent = "?on_behalf_of=turn"
+    access = f"website-tools/{site}/accounts/{account}/access/"
+    assert put(api, access + "bots" + lent, {"on": True}, run, expected=403)["error"]["code"] == "forbidden"
+    refused = put(api, f"api-tools/{tid}/access/bot:botops{lent}", {"level": "read"}, run, expected=403)
+    assert "holds none" in refused["error"]["detail"]
+    acme = {"name": "Acme CRM", "base_url": "https://crm.acme.example"}
+    assert post(api, "api-tools" + lent, acme, run, expected=403)["error"]["code"] == "catalog_only"
+    assert put(api, f"api-tools/{tid}/access/bot:cpo{lent}", {"level": "read"}, run)["level"] == "read"  # Ana's rights
 
 
 def test_a_tools_owner_run_a_bot_started_keeps_that_bots_rights(api):

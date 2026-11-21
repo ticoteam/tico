@@ -1246,6 +1246,8 @@ class ToolCreate(Contract):
     base_url: str = Field(default="", max_length=300)
     auth_scheme: str = Field(default="", max_length=80)
     check_path: str = Field(default="", max_length=300)
+    # Its first key (Read and write), stored with the tool in one write: a refused key makes no tool.
+    key: SecretStr | None = Field(default=None, min_length=1, max_length=100_000)
 
 
 class ToolUpdate(Contract):
@@ -1347,11 +1349,11 @@ def _clean(fields):
     return out
 
 
-def create_tool(c, who, body, admins):
+def create_tool(c, who, body, admins, vault=None):
     TA.require(c, who, TA.tool(), action=TA.CREATE, admins=admins)
-    fields = _clean(body.model_dump())
+    fields = _clean(body.model_dump(exclude={"key"}))
     service = TS.match(service=fields["service"], name=fields["name"])
-    TA.catalog_only(who, service, fields)
+    TA.catalog_only(c, who, service, fields)
     known = TS.defaults(service)
     # A known service's check path belongs to its own address: a tool given another address gets none by default.
     own = not fields["base_url"] or fields["base_url"] == known.get("base_url")
@@ -1373,6 +1375,8 @@ def create_tool(c, who, body, admins):
         tool,
     )
     H.event(c, who.actor, "tool.created", tool["id"], {"service": tool["service"], "delivery": tool["delivery"]})
+    if body.key is not None:
+        add_key(c, who, vault, tool["id"], KeyCreate(name="Key", value=body.key))
     return _tool_view(tool_row(c, tool["id"]))
 
 
@@ -1404,7 +1408,7 @@ def update_tool(c, who, tool_id, body, admins, auth=None):
     merged = tool | fields
     moved = {k: merged[k] for k in TA.ADDRESS_FIELDS if merged[k] != tool[k]}
     if moved:
-        TA.catalog_only(who, merged["service"], moved)
+        TA.catalog_only(c, who, merged["service"], moved)
     if merged["delivery"] == "proxy" and not merged["base_url"]:
         raise Problem("delivery", f"Set {tool['name']}'s address before moving it to the proxy", 422)
     if merged["delivery"] == "computer" and _field(tool, "mcp_oauth"):
@@ -2279,7 +2283,12 @@ def install(app, store, auth, settings):
 
     @app.post("/api/v2/api-tools")
     def create_api_tool(request: Request, body: ToolCreate):
-        return change(request, body, manager, lambda c: create_tool(c, request.state.identity, body, vault().admins))
+        return change(
+            request,
+            _Receipt(body),
+            manager,
+            lambda c: create_tool(c, request.state.identity, body, vault().admins, vault()),
+        )
 
     def setter(c, w):
         if w.role != "owner":  # the owner may change Who can see it (update_tool says what else)

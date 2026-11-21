@@ -1866,20 +1866,21 @@ describe('the Tools page: requests, connections by vendor, find or connect', () 
     from_id: 'bot:b1',
     access: { id, state: 'open', subject: 'bot:b1', subject_name: 'Clerk', resource_type: type, resource_name: name, level: 'read', why: '' },
   });
-  const waiting = (toolRequests: FlowRequest[]) => queryClient.setQueryData(flowQuery.queryKey, { count: 0, items: [], requests: [], toolRequests, task_ids: [] });
+  const waiting = (requests: FlowRequest[]) => queryClient.setQueryData(flowQuery.queryKey, { count: requests.length, items: [], requests, task_ids: [] });
   const raygun = [
     indexRow({ id: 'api:rg', name: 'Raygun API', vendor: 'raygun', vendor_name: 'Raygun', delivery: 'proxy', who_total: 1 }),
     indexRow({ id: 'api:rg-dev', name: 'Raygun dev', vendor: 'raygun', vendor_name: 'Raygun', delivery: 'computer' }),
     indexRow({ id: 'website:rg-site', kind: 'website', name: 'raygun.com', vendor: 'raygun', vendor_name: 'Raygun' }),
   ];
 
-  it('answers the tool requests that wait on you beside the list', async () => {
+  it('answers the tool requests that wait on you beside the list, and leaves a repository request to Flow', async () => {
     serve();
     tools([indexRow({ id: 'api:t1', name: 'Sample API' })]);
-    waiting([accessFor('r1', 'tool', 'Meta Ads')]);
+    waiting([accessFor('r1', 'tool', 'Meta Ads'), accessFor('r2', 'repository', 'acme/site')]);
     open('');
     const requests = await screen.findByRole('region', { name: /^Requests/ });
     expect(within(requests).getByText('Clerk asks for Meta Ads')).toBeTruthy();
+    expect(within(requests).queryByText(/acme\/site/)).toBeNull();
     cleanup();
     // A phone shows the list first: the requests lead it.
     document.documentElement.dataset.layout = 'cards';
@@ -1946,9 +1947,9 @@ describe('the Tools page: requests, connections by vendor, find or connect', () 
     fireEvent.change(within(paste).getByLabelText('Key'), { target: { value: 'lin_api_made_up_0001' } });
     fireEvent.click(within(paste).getByRole('button', { name: 'Save' }));
     await waitFor(() =>
+      // the connection and its key in one write: a refused key makes no connection
       expect(writes(sent)).toEqual([
-        { url: '/api/v2/api-tools', method: 'POST', body: { name: 'Linear', service: 'linear', auth_scheme: 'header:Authorization' } },
-        { url: '/api/v2/api-tools/linear/keys', method: 'POST', body: expect.objectContaining({ value: 'lin_api_made_up_0001' }) },
+        { url: '/api/v2/api-tools', method: 'POST', body: { name: 'Linear', service: 'linear', auth_scheme: 'header:Authorization', key: 'lin_api_made_up_0001' } },
       ]),
     );
     cleanup();

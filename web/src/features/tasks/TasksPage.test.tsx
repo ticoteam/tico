@@ -116,7 +116,7 @@ it('finishes the route’s Flow read when the shell unsubscribes', async () => {
   const stop = new QueryObserver(queryClient, flowQuery).subscribe(() => {});
   stop();
   respond({ status: 200, body: { items: [] } });
-  await expect(loaded).resolves.toEqual({ count: 0, items: [], requests: [], toolRequests: [], task_ids: [], approvals: [] });
+  await expect(loaded).resolves.toEqual({ count: 0, items: [], requests: [], task_ids: [], approvals: [] });
 });
 
 it('keeps the Reconcile summary on a Flow row that folds several items of one task', async () => {

@@ -281,3 +281,26 @@ def test_a_key_a_computer_migrates_from_its_files_stays_on_computers(api):
             "WHERE k.env = 'STRIPE_API_KEY'"
         ).fetchone()
     assert (service, delivery) == ("stripe", "computer")
+
+
+def test_a_tool_and_its_first_key_are_one_write_taken_once(api, monkeypatch):
+    setup(api)
+    body = {"name": "Stripe", "service": "stripe", "key": SECRET_RW}
+    send = lambda: api.post("/api/v2/api-tools", json=body, headers=headers() | {"Idempotency-Key": "paste-1"})  # noqa: E731
+    first, again = send(), send()
+    assert first.status_code == again.status_code == 200 and first.json()["id"] == again.json()["id"]
+    page = get(api, f"api-tools/{first.json()['id']}")
+    assert [k["access_level"] for k in page["keys"]] == ["read_write"] and SECRET_RW not in json.dumps(page)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM tools WHERE service='stripe'").fetchone()[0] == 1
+
+    def refused(*_args, **_kw):
+        raise Problem("secret", "Made-up refusal", 422)
+
+    monkeypatch.setattr(api_tools, "add_key", refused)
+    r = api.post(
+        "/api/v2/api-tools", json={**body, "name": "Stripe two"}, headers=headers() | {"Idempotency-Key": "paste-2"}
+    )
+    assert r.status_code == 422
+    with api.app.state.store.read() as c:  # a refused key makes no tool
+        assert c.execute("SELECT count(*) FROM tools WHERE service='stripe'").fetchone()[0] == 1

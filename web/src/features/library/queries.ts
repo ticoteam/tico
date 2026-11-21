@@ -785,8 +785,11 @@ export interface ApiAdd {
   base_url?: string;
   auth_scheme: string;
   check_path?: string;
+  /** Its first key, stored with it in one write: a refused key makes no tool. */
+  key?: string;
 }
-export const addApiTool = (body: ApiAdd) => made(api.post<{ id: string }>('/api/v2/api-tools', body));
+/** `idempotencyKey`: one per attempt the person makes, so sending again never makes a second tool. */
+export const addApiTool = (body: ApiAdd, idempotencyKey?: string) => made(api.post<{ id: string }>('/api/v2/api-tools', body, { idempotencyKey }));
 
 /** A login: a shared one for every agent, or one person's or agent's own (`holder`). No password: signed in by hand. */
 export interface LoginAdd {

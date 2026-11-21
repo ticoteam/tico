@@ -19,7 +19,7 @@ A check is `initialize` and `tools/list` (every page, to LIST_PAGES): Working, K
 tool's, and the names it found with the ones marked `readOnlyHint` (`tools.mcp_tools`).
 
 A granted MCP tool reaches a run with no bot.yaml entry: `credential-runtime` adds `mcp_servers` (`runtime_servers`),
-one per held key whose tool has an MCP address, {name, tool, url, transport, headers, env, proxied}. On the proxy the
+one per held key whose tool has an MCP address, {name, tool, url, transport, headers, env, proxied, upstream}. On the proxy the
 url is the tool's proxy address with the server's path and the header carries the run's proxy token as `${ENV}`; the
 proxy puts the current access token (refreshed when needed) or the stored token in its place. On computers the url is
 the server's own and the header's `${ENV}` is the key itself. The runner merges these with bot.yaml's servers, bot.yaml
@@ -702,6 +702,8 @@ def runtime_servers(c: Any, values: list[Json]) -> list[Json]:
                 "headers": header,
                 "env": item["env"],
                 "proxied": proxied,
+                # The server's own address, whatever `url` the run reaches it by: what the runner tells connections by.
+                "upstream": row["mcp_url"],
             }
         )
     return out
@@ -923,7 +925,8 @@ def install(app: Any, store: Any) -> None:
         receipt: Any = _api()._Receipt
 
         who = admin(request)
-        TA.catalog_only(who, mcp_url=body.url)  # before the probe reaches the address
+        with store.read() as c:
+            TA.catalog_only(c, who, mcp_url=body.url)  # before the probe reaches the address
         found, meta = probe(body.url)
         if body.auth == "token" and body.token is None:
             raise Problem("token", "Paste the token", 422)
