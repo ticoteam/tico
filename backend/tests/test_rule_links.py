@@ -207,10 +207,6 @@ def test_a_link_check_asks_one_provider_and_never_falls_back(ruled):
 
     def up(state, questions, label=None):
         asked.append("second")
-        if str(label or "").startswith("rule-part@"):  # the held mail's part call: point at the part with the needle
-            hit = next(p["id"] for p in state["parts"] if "favorite color is" in p["text"].lower())
-            answers = {qid: {"type": "choice", "choice": hit, "confidence": 0.9} for qid in questions}
-            return {"model": "jev-1.14", "usage": {"input_tokens": 10, "output_tokens": 0}, "ms": 1, "answers": answers}
         return Judge()(state, questions, label)
 
     two = type("Two", (), {"steps": [down, up]})()
