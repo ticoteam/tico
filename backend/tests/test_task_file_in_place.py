@@ -169,6 +169,23 @@ def test_replaces_refuses_a_page_another_type_and_an_attachment_other_tasks_shar
     body = {"name": "exhibit-2.txt", "text": "Exhibit A, marked", "replaces": shared}
     refused = post(api, f"tasks/{tid}/files", body, token, expected=422)
     assert "more than one task" in refused["error"]["detail"]
+    # Adopted by an archive on its one task, it is refused again once another task links it.
+    adopted = legacy_attachment(api, tid, "receipt.txt", b"Mailed")
+    assert api.patch(f"/api/v2/files/{adopted}", json={"archived": True}, headers=headers()).status_code == 200
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO task_assets VALUES(?,?)", (other, adopted))
+    body = {"name": "receipt-2.txt", "text": "Mailed, signed", "replaces": adopted}
+    assert "more than one task" in post(api, f"tasks/{tid}/files", body, token, expected=422)["error"]["detail"]
+
+    # A bot-wide file on the task and a link are their own files, never a task file's next version.
+    publish = hubtools.BY_NAME["tico_file_publish"]["fn"]
+    agent = Agent(api, token)
+    wide = publish(agent, {"name": "rules.md", "text": "v1", "task": tid, "scope": "bot"})["file"]["id"]
+    link = hubtools.BY_NAME["tico_file_link"]["fn"](agent, {"url": "https://docs.acme.example/d/1", "task": tid})
+    for target in (wide, link["file"]["id"]):
+        body = {"name": "rules-2.md", "text": "v2", "replaces": target}
+        refused = post(api, f"tasks/{tid}/files", body, token, expected=422)
+        assert "Only a file kept on this task" in refused["error"]["detail"]
 
 
 def test_a_file_published_for_a_task_and_a_version_by_its_blob_id_archive_and_restore_on_the_task(api):
@@ -181,6 +198,10 @@ def test_a_file_published_for_a_task_and_a_version_by_its_blob_id_archive_and_re
     restored = api.patch(f"/api/v2/files/{published}", json={"archived": False}, headers=headers(token))
     assert restored.json() == {"file": {"id": published, "archived": False}}, restored.text
     assert not listed(api, tid)[published]["archived"]
+
+    # Archive goes on its own, never beside another change.
+    both = api.patch(f"/api/v2/files/{published}", json={"archived": True, "title": "Scans"}, headers=headers())
+    assert both.status_code == 422 and "on its own" in both.text
 
     # A version's blob id archives its own file, never a second copy of it.
     fid = post(api, f"tasks/{tid}/files", {"name": "log.md", "text": "Day 1"})["file_id"]
@@ -226,8 +247,15 @@ def test_who_may_not_read_a_file_or_may_not_manage_its_file_neither_archives_nor
         )
     r = api.patch(f"/api/v2/files/{brief}", json={"archived": True}, headers=headers("cara-test"))
     assert r.status_code == 403, r.text
-    # Archived as a page, it is restored as one, by whoever may manage the page.
+    # Archived as a page, it is restored as one, by whoever may manage the page; the task's open views hear of it.
+    with api.app.state.store.read() as c:
+        seen = c.execute("SELECT max(seq) FROM changes").fetchone()[0] or 0
     assert api.patch(f"/api/v2/pages/{secret}", json={"archived": True}, headers=headers()).status_code == 200
+    with api.app.state.store.read() as c:
+        heard = c.execute(
+            "SELECT subject_id FROM changes WHERE seq>? AND topic='tasks' AND kind='files'", (seen,)
+        ).fetchall()
+    assert (tid,) in [tuple(r) for r in heard]
     page = listed(api, tid)[secret]
     assert page["archived"] and page["page_archived"] and page["can_restore"]
 

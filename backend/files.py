@@ -112,10 +112,9 @@ def same_type(mime):
 
 
 def task_scoped(row):
-    """A file kept on its task: attached to it, or published for it."""
-    return bool(row["task_id"]) and (
-        str(row["identity"]).startswith("task-file:") or row["scope"] == "task:" + row["task_id"]
-    )
+    """A stored file kept on its task, attached to it or published for it; never a link, a bot-wide file, or one
+    promoted to bot-wide."""
+    return bool(row["task_id"]) and row["scope"] == "task:" + row["task_id"] and row["locator"] == "tico_blob"
 
 
 def removed_event(c, task_id, actor, fid, title, *, back=False):
@@ -1227,15 +1226,14 @@ TASK_UPLOAD_SERIES_SQL = (
 # The file on this task an upload names as the one it replaces.
 TASK_REPLACE_SQL = (
     "SELECT f.*,p.file_id IS NOT NULL AS is_page FROM bot_files f LEFT JOIN pages p ON p.file_id=f.id "
-    "WHERE f.id=? AND f.task_id=? AND f.locator='tico_blob' AND f.state<>'deleted' AND f.current_version>0"
+    "WHERE f.id=? AND f.task_id=? AND f.state<>'deleted'"
 )
 
-# A file kept on its task (attached, or published for it), by its id or the blob id of one of its versions: what a
-# task participant archives and restores.
+# A stored file kept on its task (task_scoped below), by its id or the blob id of one of its versions: what a task
+# participant archives and restores.
 TASK_SCOPED_SQL = (
-    "SELECT * FROM bot_files WHERE task_id IS NOT NULL AND state<>'deleted' "
-    "AND (identity LIKE 'task-file:%' OR scope='task:'||task_id) "
-    "AND (id=? OR id IN (SELECT file_id FROM bot_file_versions WHERE blob_id=?)) "
+    "SELECT * FROM bot_files WHERE task_id IS NOT NULL AND state<>'deleted' AND locator='tico_blob' "
+    "AND scope='task:'||task_id AND (id=? OR id IN (SELECT file_id FROM bot_file_versions WHERE blob_id=?)) "
     "ORDER BY id=? DESC,last_activity_at DESC LIMIT 1"
 )
 
@@ -1713,8 +1711,9 @@ class Files:
         return row["id"], number
 
     def replaced(self, c, who, task_id, fid, mime):
-        """The task file an upload replaces, or the attachment from before versioned files it adopts. A page takes its
-        versions from page publish, a replacement keeps the file's type, and an attachment several tasks share stays."""
+        """The stored file kept on this task an upload replaces, or the attachment from before versioned files it
+        adopts. A page takes its versions from page publish, a bot-wide file or a link is its own, a replacement keeps
+        the file's type, and an attachment another task links stays as it is."""
         row = c.execute(TASK_REPLACE_SQL, (fid, task_id)).fetchone()
         legacy = None
         if row is None:
@@ -1722,15 +1721,20 @@ class Files:
         elif not self.visible(c, who, row, {}):
             row = None
         if legacy is not None:
-            if c.execute("SELECT count(*) FROM task_assets WHERE blob_id=?", (fid,)).fetchone()[0] > 1:
-                raise Problem("validation", "This attachment is on more than one task; attach the new one by name", 422)
             current = same_type(legacy["content_type"])
         elif row is not None:
             if row["is_page"]:
                 raise Problem("validation", "A page takes its new version from tico page publish, not replaces", 422)
+            if not task_scoped(row) or not row["current_version"]:
+                raise Problem(
+                    "validation", "Only a file kept on this task is replaced; attach the new one by name", 422
+                )
             current = same_type(row["mime"])
         else:
             raise Problem("not_found", "No file on this task to replace by that id", 404)
+        # An attachment from before versioned files keeps its blob id, adopted or not: another task may still link it.
+        if c.execute("SELECT 1 FROM task_assets WHERE blob_id=? AND task_id<>?", (fid, task_id)).fetchone():
+            raise Problem("validation", "This attachment is on more than one task; attach the new one by name", 422)
         if current != same_type(mime):
             raise Problem(
                 "validation", f"A replacement keeps the file's type ({current}); attach a {mime} by name", 422
@@ -1850,7 +1854,6 @@ class Files:
             )
         else:
             self.relink(c, task_id, fid)
-        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), task_id))  # the task's stream and ETag move
         self.activity(c, fid, who.actor, "archived" if archived else "restored", task=task_id)
         removed_event(c, task_id, who.actor, fid, stored["title"], back=not archived)
         task_pages.submit_linked(c, fid, None, who.actor)
@@ -2432,6 +2435,8 @@ class Files:
             nonlocal fid
             stored = c.execute(TASK_SCOPED_SQL, (fid, fid, fid)).fetchone()
             asked = body.model_dump(exclude_none=True)
+            if "archived" in asked and len(asked) > 1:
+                raise Problem("validation", "Change archived on its own", 422)
             if stored and set(asked) == {"archived"}:
                 return self.archive_task_file(c, who, stored, body.archived)
             legacy = not is_file_id(fid) and not stored

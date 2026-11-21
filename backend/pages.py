@@ -647,6 +647,16 @@ class Pages:
                     from . import task_pages
 
                     task_pages.submit_linked(c, fid, None, who.actor)
+                    # Each task it is on lists it again, as a change to its file flag would (backend/events.py).
+                    for (task,) in c.execute(
+                        "SELECT substr(target,6) FROM page_links WHERE page_id=? AND target LIKE 'task:%' "
+                        "UNION SELECT task_id FROM bot_files WHERE id=? AND task_id IS NOT NULL",
+                        (fid, fid),
+                    ).fetchall():
+                        c.execute(
+                            "INSERT INTO changes(topic,kind,subject_id,created_at) VALUES('tasks','files',?,?)",
+                            (task, now),
+                        )
             r = self.rows(c, [fid])[fid]
             return {"page": self.view(c, who, r, self.page_of(r), {}, include_audience=True)}
 
