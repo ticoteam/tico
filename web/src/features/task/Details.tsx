@@ -16,7 +16,7 @@ import { toast } from '@/kit/Toast';
 import { PageBody, Section } from '@/pagekinds';
 import { ActorItems, OwnerMenu, tagsOf } from './Head';
 import { EditKv, Inline, Kv, saved } from './Fact';
-import { Meetings, MoreFacts, PublicFacts, SizeFact } from './Facts';
+import { Meetings, MoreFacts, PublicFacts, SizeFact, WaitFact } from './Facts';
 import { DETAILS, failedToast, tabAddress } from './model';
 import { NewPage } from './NewPage';
 import { Face, Mark, NameOf, Go } from './parts';
@@ -388,6 +388,7 @@ export function Details({ t, flow, adding = null, onAdding = () => undefined }: 
             by <NameOf id={t.requester_id} />
           </small>
         </Kv>
+        <WaitFact t={t} />
         <EditKv
           k="Part of"
           label="Part of"
