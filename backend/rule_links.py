@@ -208,7 +208,7 @@ def check_as(
     call at most and no part call (`CALLS`). A fault of the check itself is recorded as unchecked; the write goes on."""
     try:
         verdict: Any = ORC.check_as(
-            store, primary, principal, sender, via, operation, output, most_calls=CALLS, parts=False
+            store, primary, principal, sender, via, operation, output, most_calls=CALLS, parts=False, first_only=True
         )
     except Problem:
         verdict = {"outcome": "unchecked", "error": "check_failed", "rules": []}

@@ -1714,8 +1714,6 @@ def rule_gate(app, store, who, snap):
             snap["subject"],
             snap["body"],
             contacts=addresses,
-            most_calls=rule_links.CALLS,  # a link's budget, first send and approved recheck alike: one call, no part call
-            parts=False,
         )
     except Exception as exc:  # noqa: BLE001  (the judged check fails open, as every judged check does)
         LOG.warning("The org rule check of an email failed: %s", type(exc).__name__)

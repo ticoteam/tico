@@ -355,17 +355,31 @@ def test_rules_links_lists_each_link_with_its_mode_and_30_day_counts(ruled, monk
     assert api.get("/api/v2/rule-links", headers=headers("support-app")).status_code == 403
 
 
-def test_both_email_paths_take_a_links_budget(ruled, monkeypatch):
-    api, judge = ruled
-    rule(api, {"kind": "internal", "text": COLOR, "who": {"bots": ["ops"]}, "if_broken": "block"})
-    seen = []
-    real_check, real_recheck = K.check_as, K.recheck
-    monkeypatch.setattr(K, "check_as", lambda *a, **kw: seen.append(("first", kw)) or real_check(*a, **kw))
-    snap = {"recipient_headers": {"to": ["v@outside.example"], "cc": [], "bcc": []}, "subject": "Hi", "body": "Hello."}
-    who = Identity("bot:ops", "bot", agent="test")
-    S.rule_gate(api.app, api.app.state.store, who, snap)
-    monkeypatch.setattr(K, "mail_approved", lambda c, author, key, operation="mail": {"id": "h1"})
-    monkeypatch.setattr(K, "recheck", lambda *a, **kw: seen.append(("approved", kw)) or ([], None))
-    S.rule_gate(api.app, api.app.state.store, who, snap)
-    assert [(path, kw["most_calls"], kw["parts"]) for path, kw in seen] == [("first", 1, False), ("approved", 1, False)]
-    assert real_recheck is not K.recheck
+def test_email_keeps_its_own_judge_and_falls_back_to_a_second_provider(ruled):
+    """Email is the one Enforced link: its check is not a link check's (no one-call budget, no first provider only). A
+    first provider down, the second answers, and the mail is held as before."""
+    from clients import judge as J
+
+    api, _ = ruled
+    blocked = rule(api, {"kind": "internal", "text": COLOR, "who": {"bots": ["ops"]}, "if_broken": "block"})
+    asked = []
+
+    def down(state, questions, label=None):
+        asked.append("first")
+        raise J.JudgeError("unavailable", "down")
+
+    def up(state, questions, label=None):
+        asked.append("second")
+        return Judge()(state, questions, label)
+
+    api.app.state.judge = type("Two", (), {"steps": [down, up]})()
+    snap = {
+        "recipient_headers": {"to": ["vendor@outside.example"], "cc": [], "bcc": []},
+        "subject": "Hi",
+        "body": "Our favorite color is gold.",
+    }
+    gate = S.rule_gate(api.app, api.app.state.store, Identity("bot:ops", "bot", agent="test"), snap)
+    with api.app.state.store.transaction() as c:
+        assert gate(c)["outcome"] == "held"
+    assert asked == ["first", "second"]
+    assert link_events(api, "email")[0][2]["rules"] == [blocked["id"]]

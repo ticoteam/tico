@@ -684,6 +684,7 @@ def check_as(
     late=False,
     most_calls=None,
     parts=True,
+    first_only=False,
 ):
     """Check one output held as `principal` (a person or a bot). `sender` is who made it and `via` the route
     (`checked_as` reads both from an identity). `place`: the write's place, or a function of (c, principal,
@@ -697,7 +698,8 @@ def check_as(
     now, and the verdict says so (`late`), for `apply` to queue the one check to run right after the write.
     `most_calls`: the calls this check may make (preflight, recheck and mail_prepare pass it on); needing more is
     unchecked (`too_many_calls`), asking nothing. `parts` False: never mark a holding verdict for its part call (the
-    link checks of backend/rule_links.py, email's included)."""
+    link checks of backend/rule_links.py). `first_only`: ask one provider, never a second after it fails (unchecked
+    instead): the Informed only link checks; email keeps its fallback."""
     author = principal
     if not author:
         return None
@@ -780,8 +782,7 @@ def check_as(
                 return {**verdict, "outcome": "too_large", "broken": [r["id"] for r in rules]}
             if most_calls is not None and len(batches) > most_calls:
                 return {**verdict, "outcome": "unchecked", "error": "too_many_calls"}
-            # A call budget is one provider: no fallback to a second after the first fails (unchecked instead).
-            engine = B.server_engine(store, c, primary, first_only=most_calls is not None)
+            engine = B.server_engine(store, c, primary, first_only=first_only)
             if engine is None:
                 capped = B.over_spend_cap(c, store.settings)
                 return {**verdict, "outcome": "unchecked", "error": "budget" if capped else "no_engine"}
