@@ -1138,11 +1138,17 @@ def _check_tool(store, vault, tool_id):
         together = tool_templates.check_auth(c, vault, tool, spec) if spec and spec.get("ways") else None
         held = [k for k in _keys(c, tool_id) if k["ciphertext"] is not None]
         # An id stored as a key (TWILIO_ACCOUNT_SID, POSTHOG_PROJECT_ID) is no key to the vendor, whatever its value
-        # looks like: sent as one it would read Key rejected. It is never decrypted for a check.
+        # looks like: sent as one it would read Key rejected. It is never decrypted for a check. The write-key policy
+        # comes first: an ads, payments or CRM tool's write key is a key, whatever its name.
+        protected = proxy_policy(tool) == "proxy"
         stored = (
             []
             if mcp or together
-            else [(k, vault.cipher.decrypt(c, k)) for k in held if not tool_settings.known_name(k["env"])]
+            else [
+                (k, vault.cipher.decrypt(c, k))
+                for k in held
+                if (protected and k["access_level"] == "read_write") or not tool_settings.known_name(k["env"])
+            ]
         )
         # The revision each value was checked at, read after decrypt (which may reseal it): an end date is kept only
         # while the key still holds that value (`_keep_end_date`), never on a value saved while the check was out.
@@ -1210,11 +1216,16 @@ def due(c, now=None):
     ):
         if not (tool["mcp_url"] or check_path_of(tool)):
             continue
-        envs = [
-            r[0]
-            for r in c.execute("SELECT env FROM credentials WHERE tool_id=? AND ciphertext IS NOT NULL", (tool["id"],))
-        ]
-        if not tool["mcp_url"] and envs and all(tool_settings.known_name(e) for e in envs):
+        keys = c.execute(
+            "SELECT env, access_level FROM credentials WHERE tool_id=? AND ciphertext IS NOT NULL", (tool["id"],)
+        ).fetchall()
+        # The write-key policy first: an ads, payments or CRM tool's write key is checked whatever its name says.
+        protected = proxy_policy(tool) == "proxy"
+        if (
+            not tool["mcp_url"]
+            and keys
+            and all(tool_settings.known_name(k[0]) and not (protected and k[1] == "read_write") for k in keys)
+        ):
             continue
         out.append(tool["id"])
     return out
@@ -1386,10 +1397,12 @@ def create_tool(c, who, body, admins, vault=None):
         # A value is a person's own to paste (plan P4): never an agent's, with anyone's rights or its own.
         raise Problem("secret_in_request", "A key goes in through a person's own paste in Tools, never an agent", 422)
     fields = _clean(body.model_dump(exclude={"key"}))
-    # A service given is kept as given (a "stripe-adapter" is no Stripe); only none given is matched from the name.
+    # A service given is kept as given (a "stripe-adapter" is no Stripe); only none given is matched from the name. An
+    # alias given (`close`) is stored as given, its catalog service (Close CRM) reading the catalog's address and check.
     service = fields["service"].strip().lower() if fields["service"] else TS.match(name=fields["name"])
-    TA.catalog_only(who, service, fields)
-    known = TS.defaults(service)
+    canonical = TS.canonical(service or "")
+    TA.catalog_only(who, canonical, fields)
+    known = TS.defaults(canonical)
     # A known service's check path belongs to its own address: a tool given another address gets none by default.
     own = not fields["base_url"] or fields["base_url"] == known.get("base_url")
     tool = {
@@ -1453,6 +1466,8 @@ def update_tool(c, who, tool_id, body, admins, auth=None):
             access_requests.settled(c, who, resource_type="tool", resource_id=tool_id, via="everyone-reads")
     fields = {k: v for k, v in _clean(asked).items()}
     merged = tool | fields
+    if any(merged[k] != tool[k] for k in ("service", "base_url", "auth_scheme", "check_path", "delivery")):
+        TA.person_only(c, who, TA.tool(merged))  # Rule P on what it would be too (moved onto Stripe's API)
     # What the tool reaches after the change, whole: an agent's change of any part leaves only the catalog's.
     if any(merged[k] != tool[k] for k in (*TA.ADDRESS_FIELDS, "service")):
         TA.catalog_only(who, merged["service"], {k: merged[k] for k in TA.ADDRESS_FIELDS})

@@ -20,6 +20,7 @@ stored key is a tool's and how its tool is made, shared by the data migration (o
 """
 
 import base64
+import functools
 import re
 
 from .slugs import slugify
@@ -282,6 +283,7 @@ GATED = {
 DIRECT = frozenset({"google-ads"})
 
 
+@functools.lru_cache(maxsize=1)
 def _gated_names():
     """{a GATED vendor's id or one of its explicit aliases (SERVICES `aliases`, VENDOR_ALIASES): its id}."""
     names = {key: key for key in GATED}
@@ -294,15 +296,18 @@ def _gated_names():
     return names
 
 
+@functools.lru_cache(maxsize=1)
 def _gated_hosts():
-    """{the exact hostname of a GATED vendor's API (api.stripe.com, graph.facebook.com): its id}."""
+    """{the exact hostname of a GATED vendor's API (api.stripe.com, graph.facebook.com): its id}. Google Ads has no
+    catalog address (its calls are signed on the computer), so its API's host is named here."""
     from urllib.parse import urlsplit
 
-    return {
+    hosts = {
         urlsplit((SERVICES.get(key) or {}).get("base_url") or "").hostname: key
         for key in GATED
         if (SERVICES.get(key) or {}).get("base_url")
     }
+    return {**hosts, "googleads.googleapis.com": "google-ads"}
 
 
 def gated_vendor(service="", host=""):
@@ -316,6 +321,18 @@ def gated_vendor(service="", host=""):
         return found
     hostname = urlsplit(host if "//" in str(host) else "//" + str(host or "")).hostname if host else None
     return _gated_hosts().get(hostname, "") if hostname else ""
+
+
+def canonical(service=""):
+    """The catalog's service for a service as given: itself when known, else the one it is an explicit alias of
+    (SERVICES `aliases`, VENDOR_ALIASES: `close` is Close CRM's), else itself."""
+    service = str(service or "").strip().lower()
+    if service in SERVICES:
+        return service
+    for key, row in SERVICES.items():
+        if service and service in row["aliases"]:
+            return key
+    return VENDOR_ALIASES.get(service, service) if VENDOR_ALIASES.get(service) in SERVICES else service
 
 
 def protected(service=""):

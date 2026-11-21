@@ -880,10 +880,79 @@ def test_a_protected_tools_keys_and_reach_change_only_by_a_person_and_intake_kee
         {"name": "Stripe Adapter", "service": "stripe-adapter", "base_url": "https://dashboard.stripe.com"},
     )
     assert made["service"] == "stripe-adapter"
-    # A Read key under an id-like name: only its value says whether it goes as an id or a key.
+    # A Read key under an id-like name: on a proxied tool only its value says whether it goes as an id (as it is) or
+    # through the proxy (`unknown`); on a computer tool it goes as it is either way (`direct`).
     give(api, key(api, "billing", "acct_synthetic0012", level="read", env="STRIPE_ACCOUNT_ID"), "bot:ops", "read")
+    give(api, key(api, home["id"], "98765432", level="read", env="HUBSPOT_PORTAL"), "bot:ops", "read")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE credentials SET env='HUBSPOT_ACCOUNT_ID' WHERE env='HUBSPOT_PORTAL'")
     with api.app.state.store.read() as c:
         adapter = c.execute("SELECT * FROM tools WHERE id=?", (made["id"],)).fetchone()
         assert api_tools.proxy_policy(adapter) is None  # its own delivery decides; an agent may change it
         listed = proxy_keys.report(c)
-    assert [(d["tool"], d["env"], d["level"]) for d in listed["unknown"]] == [("billing", "STRIPE_ACCOUNT_ID", "read")]
+    assert [(d["tool"], d["env"], d["level"]) for d in listed["unknown"]] == [
+        (home["id"], "HUBSPOT_ACCOUNT_ID", "read")
+    ]
+    assert ("billing", "STRIPE_ACCOUNT_ID", "read") in [(d["tool"], d["env"], d["level"]) for d in listed["direct"]]
+
+
+def test_rule_p_holds_on_every_key_change_and_a_read_holder_never_gets_or_sees_a_write_key(api):
+    """Round five of #4892. Rule P holds on the key itself: the vault's own write and delete, and the Tools chat card
+    moving a key onto or off a protected tool, refuse anyone but a person signed in (an admin's token in a script too);
+    and on the tool an agent would move onto Stripe's API. A bot held at Read neither gets nor reveals a protected write
+    key, Google Ads' included. An alias given at create reads its catalog address, and a write key under an id-like name
+    is still checked."""
+    from dataclasses import replace
+
+    from backend import key_grants
+    from backend.auth import Identity
+    from backend.credentials import CredentialWrite
+    from backend.store import Problem
+    from backend.tests.helpers.api import headers
+
+    setup(api)
+    vault = api.app.state.vault
+    tool(api, "billing", "Billing", "bearer", delivery="computer", base="https://api.stripe.com", service="stripe")
+    tool(api, "ledger", "Ledger", "bearer", delivery="computer", base="https://api.ledger.example", service="ledger")
+    write = key(api, "billing", "sk_synthetic_billing_0013", env="STRIPE_ACCOUNT_ID")  # a write key, id-like name
+    agent = replace(Identity("human:ana", "owner"), via="assistant", confirmed=True)
+    token = post(api, "me/tokens", {"label": "a script"}, "ben-test")["token"]
+    gone = api.delete(f"/api/v2/credentials/{write}", headers={"Authorization": "Bearer " + token})
+    assert gone.status_code == 403 and gone.json()["error"]["code"] == "forbidden", gone.text
+    loose = post(api, "credentials", {"name": "Loose", "env": "LOOSE_KEY", "secret": "loose-synthetic-0014"})
+    for change in (
+        lambda c: vault.write(c, agent, CredentialWrite(name="Billing", secret="sk_synthetic_new_0015"), cid=write),
+        lambda c: key_grants._attach(
+            c, agent, vault, {"credential_id": loose["id"], "tool_id": "billing", "level": "read_write", "username": ""}
+        ),
+        lambda c: api_tools.update_tool(
+            c,
+            agent,
+            "ledger",
+            api_tools.ToolUpdate(base_url="https://api.stripe.com"),
+            vault.admins,
+            api.app.state.auth,
+        ),
+    ):
+        with api.app.state.store.transaction() as c, pytest.raises(Problem) as refused:
+            change(c)
+        assert refused.value.status == 403
+    # A bot at Read with a Read key: its runs get that key, and it may not reveal the write key.
+    read = key(api, "billing", "rk_synthetic_billing_0016", level="read", env="BILLING_READ_KEY")
+    give(api, write, "bot:ops", "read")
+    give(api, read, "bot:ops", "read")
+    _, ops = run(api)
+    assert [i["env"] for i in get(api, "credential-runtime", ops["token"])["credentials"]] == ["BILLING_READ_KEY"]
+    seen = api.post(f"/api/v2/credentials/{write}/reveal", json={}, headers=headers(ops["token"]))
+    assert seen.status_code == 403 and seen.json()["error"]["code"] == "proxied_key"
+    # Google Ads: a bot at Read with only its write key gets nothing, never the raw write key.
+    tool(
+        api, "ads", "Ads", "bearer", delivery="computer", base="https://googleads.googleapis.com", service="google-ads"
+    )
+    give(api, key(api, "ads", "ads-synthetic-write-0017", env="GOOGLE_ADS_KEY"), "bot:ops", "read")
+    assert "ads-synthetic-write-0017" not in json.dumps(get(api, "credential-runtime", ops["token"]))
+    # An alias given is kept, its catalog address read; a write key under an id-like name is still checked.
+    made = post(api, "api-tools", {"name": "Close CRM", "service": "close"})
+    assert made["service"] == "close" and made["base_url"] == "https://api.close.com"
+    with api.app.state.store.read() as c:
+        assert "billing" in api_tools.due(c)
