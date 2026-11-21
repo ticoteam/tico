@@ -1170,6 +1170,8 @@ class Store:
         c.row_cache = self.row_cache
         c.write_transaction = False
         c.after_commit = []
+        # Relays owed before this write commits (backend/assistant_relay.py).
+        c.relay_pending = []  # pyright: ignore[reportAttributeAccessIssue]
         c.automation_bell = self.automation_bell
         c.provenance_changes = c.total_changes
         c.provenance_start = None
@@ -1178,6 +1180,9 @@ class Store:
 
     def _give(self, c):
         c.read_cache.clear()
+        getattr(
+            c, "relay_pending", []
+        ).clear()  # no relay a rolled-back write owed outlives it on the pooled connection
         # Only a connection left as it was handed out goes back: no open transaction, nothing per-caller installed.
         try:
             if c.in_transaction:
@@ -1241,6 +1246,9 @@ class Store:
                 yield c
                 message_links.refresh_dirty(c)
                 H.owed_sync(c)
+                from . import assistant_relay
+
+                assistant_relay.flush(c)  # on each reply as it will commit (its attachments are on it by now)
                 if notify:
                     logged = events.claim(c, since, None)
                 c.commit()
@@ -1260,6 +1268,7 @@ class Store:
             except BaseException:
                 c.rollback()
                 c.after_commit.clear()
+                c.relay_pending.clear()  # pyright: ignore[reportAttributeAccessIssue]
                 raise
             finally:
                 done()

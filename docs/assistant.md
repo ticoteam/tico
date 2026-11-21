@@ -253,6 +253,12 @@ is reported again. Nothing is sent when you (or your Assistant for you) closed i
 done or moved it there yourself, or for a call's follow-up, which reports in its call. If you can no longer read the
 task, the message names it only by the title it was filed with.
 
+## An agent's answer comes back
+
+When your Assistant asks another agent something for you, the agent's first message after it in that thread (or one of
+its sub-threads) comes back to your Assistant chat once: "<agent> replied", with a link to that chat. A reply you cannot
+read is not told at all. Known gap: an agent synced from outside Tico (its transcript imported) is not relayed.
+
 ## Undo
 
 Every change your Assistant makes for you is listed with the words it acted on: `tico assistant change list [--days N]`

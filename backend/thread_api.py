@@ -23,7 +23,6 @@ from .store import encode
 from . import updates_routes
 from .api_contract import ASK_REFUSED, QUESTION_REFUSED
 from .api_answers.conversations import ChatResult, Message
-
 import asyncio
 import json
 from typing import Annotated, Literal
@@ -45,6 +44,18 @@ from . import (
 )
 from .store import H, Problem
 from .api_contract import api_v2
+
+
+def require_message_read(c, auth, who, row):
+    """The read check of one stored message, as GET /api/v2/messages/{id} makes it: refused (a Problem) unless `who`
+    reads it. Task privacy first; then a native thread's readers decide (a bot removed from it loses its addressed
+    messages too), while a legacy conversation keeps the sender/addressee shortcut for a bot."""
+    privacy.require_message(c, who, row)
+    native = bool((H.conversation(c, row["conversation_id"]) or {}).get("audience"))
+    party = row.get("recipient_id") == who.actor or row.get("sender_id") == who.actor
+    if not (who.role == "bot" and party and not native):
+        auth.conversation(c, who, row["conversation_id"])
+
 
 # How a person's message reaches the bot across a bot's Home or a DM with it (backend/delivery.py). Optional: with none
 # a post goes as it always has, into the bot's running turn.
@@ -1926,13 +1937,7 @@ def register_messages(
             if not row or row.get("deleted_at"):
                 raise Problem("not_found", "Message not found", 404)
             who = request.state.identity
-            privacy.require_message(c, who, row)
-            # A native thread's readers decide first: a bot removed from it loses its addressed messages too. A legacy
-            # conversation keeps the sender/addressee shortcut as it was.
-            native = bool((H.conversation(c, row["conversation_id"]) or {}).get("audience"))
-            party = row.get("recipient_id") == who.actor or row.get("sender_id") == who.actor
-            if not (who.role == "bot" and party and not native):
-                auth.conversation(c, who, row["conversation_id"])
+            require_message_read(c, auth, who, row)
             from .mail_settings import message_sender_can_approve_send
 
             row["sender_can_approve_send"] = message_sender_can_approve_send(c, auth, row)

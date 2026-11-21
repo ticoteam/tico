@@ -2257,6 +2257,12 @@ def _write_message(
         ":restricted, :legacy_audience)",
         row,
     )
+    if VIA.get() == "assistant" and kind in ("say", "steer") and is_human(actor) and is_bot(target):
+        # The Assistant asked an agent for the person: the agent's first message in this thread (or one under it) comes
+        # back to their Assistant chat (backend/assistant_relay.py). Kept on the server only, never in the message.
+        from . import assistant_relay
+
+        assistant_relay.asked(conn, row["id"], actor, target, conv)
     if is_human(actor):
         from . import question_marks
 
@@ -2281,6 +2287,11 @@ def _write_message(
     if held:
         wake_rules.hold(conn, message(conn, row["id"]), held, rule_id=decision.rule)
     written = message(conn, row["id"])
+    if kind in ("say", "steer") and is_bot(actor):
+        # An agent's answer to what a person's Assistant asked it for them goes back to their Assistant chat.
+        from . import assistant_relay
+
+        assistant_relay.replied(conn, written, conv)
     return {**written, "warnings": mention_warnings} if mention_warnings else written
 
 
