@@ -112,7 +112,8 @@ def _stage(stage, actors):
                 "kind": r.get("kind"),
                 "line": requirement_line(r),
                 "who_oks": r.get("who_oks"),
-                "person": actors.get(r.get("person_id") or "") or r.get("person_id"),
+                "person": ", ".join(actors.get(p) or p for p in r.get("person_ids") or [r.get("person_id") or ""])
+                or None,
                 "can_push_past": r.get("can_push_past"),
             }
             for r in stage.get("requirements") or []
@@ -773,9 +774,17 @@ def stage_remove(api, args):
 REQUIREMENT_FIELDS = {
     "line": _s("What people read: Spec page, Checked in production"),
     "who_oks": WHO_OKS,
-    "person": _s("Who gives the OK (an OK or a page): human:<id>, a bot slug, or `me`"),
+    "person": _s(
+        "Who gives the OK (an OK or a page): human:<id>, a bot slug, or `me`; a document approval takes several "
+        "people, comma separated, and the first answer settles it for all"
+    ),
+    "unshare": {
+        "type": "boolean",
+        "description": "With one --person: a document approval that names a list goes back to that one approver",
+    },
     "can_push_past": {"type": "boolean", "description": "Whether a task may be moved on without it"},
     "rubric": _s("A page: what the decision model checks it against"),
+    "document": _s("A page: the task document it approves (Spec, QA report); only that can name several people"),
 }
 
 
@@ -784,8 +793,20 @@ def _requirement_fields(api, args, req):
         req["line"] = args["line"]
     if args.get("who_oks"):
         req["who_oks"] = args["who_oks"]
+    if args.get("document") is not None:
+        req["settings"] = {**(req.get("settings") or {}), "document": args["document"]}
     if args.get("person"):
-        req["person_id"] = _actor(api, args["person"])
+        people = [_actor(api, each) for each in str(args["person"]).split(",") if each.strip()]
+        if not people:
+            raise ValueError("--person names someone: human:<id>, a bot slug or `me`, comma separated for a page")
+        # A page that already names a list stays a list, of one too; else one person is the older single approver.
+        if args.get("unshare") and len(people) > 1:
+            raise ValueError("--unshare takes one --person: the approver the page goes back to")
+        shared = (req.get("person_ids") is not None and not args.get("unshare")) or len(people) > 1
+        document = req.get("kind") == "page" and (req.get("settings") or {}).get("document")
+        if shared and not document:
+            raise ValueError("Only a document approval names a list of people who approve it: give one --person")
+        req["person_id"], req["person_ids"] = people[0], people if shared else None
     if args.get("can_push_past") is not None:
         req["can_push_past"] = bool(args["can_push_past"])
     if args.get("rubric") is not None:

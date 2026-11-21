@@ -346,6 +346,95 @@ def _turn(
     return Wait(BOT, who, line, requirement_id, since, ask=ask, about=about)
 
 
+def asked_of(conn: "sqlite3.Connection", row: Row, standing: R.Standing) -> list[str]:
+    """Everyone a waiting OK or answer is asked of now: who it waits on. A page that names several approvers
+    (`R.approvers`) is asked of every one of them who can still act, and the first answer settles it for all; with
+    none left, of the company's owner or an Admin (`admin_person`), and Health says so (`unanswerable_pages`). Empty when it
+    names nobody: the task's person has it (`person_for`). Read again when an answer is written, so an approver taken
+    off the list since they looked can no longer answer."""
+    requirement = standing.requirement
+    if not R.shared(requirement):
+        return [standing.on] if standing.on else []
+    visit: Row = row.get("visit") or {}
+    eligible = R.people_of(conn, requirement, str(visit.get("id") or ""))
+    if standing.on is None:
+        fallback = admin_person(conn)
+        return [fallback] if fallback else []
+    return eligible if standing.on in eligible else [standing.on]
+
+
+def admin_person(conn: "sqlite3.Connection") -> str | None:
+    """Who answers a page whose approvers have all gone: the company's owner while they can act, else the first Admin
+    who can (access.owner_and_admin_emails, in its order), never an ordinary member. None when nobody can."""
+    return read_cache.value(conn, ("admin_person",), lambda: _admin_person(conn), shared=True)
+
+
+def _admin_person(conn: "sqlite3.Connection") -> str | None:
+    from . import access
+
+    for email in access.owner_and_admin_emails(conn):
+        found = conn.execute("SELECT id FROM humans WHERE lower(email)=? ORDER BY id LIMIT 1", (email,)).fetchone()
+        if found and R.active_person(conn, human_actor(found[0])):
+            return human_actor(found[0])
+    return None
+
+
+def tell(conn: "sqlite3.Connection", people: Iterable[object]) -> None:
+    """Move these people's Needs you: one `needs` change each, as the change log's triggers write (backend/events.py),
+    for what a trigger cannot see: a stage's approvers edited, or the owner or Admin standing in for them."""
+    from . import hubdb
+
+    for who in sorted({str(p) for p in people if is_human(p)}):
+        conn.execute(
+            "INSERT INTO changes(topic,kind,subject_id,created_at) VALUES('needs','ask',?,?)", (who, hubdb.now())
+        )
+
+
+def tell_asked(conn: "sqlite3.Connection", visit: Row | None) -> None:
+    """What a visit's shared page asks changed (an answer, a page attached or judged, the visit left): each of its
+    approvers is told, and the owner or Admin standing in when none of them can act (`asked_of`). Called from the
+    writes that change it: task_engine.changed, _open_visit and _close_visit."""
+    if not visit or not visit.get("id"):
+        return
+    found = _dicts(
+        conn.execute(
+            "SELECT * FROM requirements WHERE person_ids IS NOT NULL AND withdrawn_at IS NULL "
+            "AND (stage_id=? OR visit_id=?)",
+            (visit.get("stage_id"), visit["id"]),
+        )
+    )
+    told: list[object] = [who for r in found for who in R.approvers(r)]
+    if any(not R.people_of(conn, r, str(visit["id"])) for r in found):
+        told.append(admin_person(conn))
+    tell(conn, told)
+
+
+def unanswerable_pages(conn: "sqlite3.Connection") -> list[Row]:
+    """The page approvals on a stage, or an open visit, whose approvers (`R.approvers`) are all gone: each is asked of
+    the company's person instead (`asked_of`). For Health."""
+    listed = _dicts(conn.execute(_SHARED_PAGES_SQL))
+    return [r for r in listed if not any(not is_human(who) or R.active_person(conn, who) for who in R.approvers(r))]
+
+
+# The page approvals that name a list of approvers, on a live stage of a live pipeline or on an open visit of an open
+# task.
+_SHARED_PAGES_SQL = (
+    "SELECT r.* FROM requirements r LEFT JOIN stages s ON s.id = r.stage_id "
+    "LEFT JOIN pipelines p ON p.id = s.pipeline_id LEFT JOIN visits v ON v.id = r.visit_id "
+    "LEFT JOIN tasks t ON t.id = v.task_id WHERE r.person_ids IS NOT NULL AND r.withdrawn_at IS NULL "
+    "AND ((s.id IS NOT NULL AND s.retired_at IS NULL AND p.retired_at IS NULL) "
+    "OR (v.id IS NOT NULL AND v.left_at IS NULL AND t.status = 'open')) ORDER BY r.created_at, r.id"
+)
+
+
+def locked_out(conn: "sqlite3.Connection", row: Row, standing: R.Standing) -> list[str]:
+    """Everyone a shared page is asked of (`asked_of`) when not one of them may open this private task, else []: the
+    one check behind both the sharing card (`of`) and the ladder handing the task to whoever can share it
+    (`unreadable`)."""
+    everyone = asked_of(conn, row, standing)
+    return everyone if everyone and all(E.not_shared(conn, row, who) for who in everyone) else []
+
+
 def unreadable(conn: "sqlite3.Connection", row: Row, standings: Iterable[R.Standing]) -> str | None:
     """Who an OK or an answer this private task waits on names, when they may not open it: a stage edited to ask them,
     or the task's readers narrowed since. Nobody is made a reader, and they are told nothing: the ask falls to the
@@ -357,6 +446,12 @@ def unreadable(conn: "sqlite3.Connection", row: Row, standings: Iterable[R.Stand
         return None
     for standing in standings:
         named = standing.on if standing.state == R.WAITING and not standing.met else None
+        if R.shared(standing.requirement):
+            # Its approvers are asked one by one: it is shared with them only when none can open it (`of`).
+            locked = locked_out(conn, row, standing) if standing.state == R.WAITING and not R.outside(named) else []
+            if locked:
+                return locked[0]
+            continue
         if (
             named
             and not R.outside(named)
@@ -506,7 +601,25 @@ def of(
             out.append(Wait(SOURCE, standing.on, line, requirement["id"], since))  # who: the source, e.g. github
         elif standing.state == R.WAITING:
             # An OK or an answer waits on whoever it names: a person, or a bot that was named to approve. One that names
-            # nobody, or a person who left (`person_of` skips them), is the task's person's.
+            # nobody, or a person who left (`person_of` skips them), is the task's person's. A page naming several
+            # approvers is asked of each of them (`asked_of`).
+            everyone = asked_of(conn, row, standing)
+            if R.shared(requirement):
+                # Asked of each approver who can open the task; only when none can, of whoever shares it with them.
+                # With nobody at all who can act, it waits on nobody, and Health says so.
+                if not requirement.get("visit_id") and not any(map(is_bot, everyone)):
+                    if on_filed(requirement["id"], since):
+                        continue
+                if locked_out(conn, row, standing):
+                    shared = _share_line(conn, tuple(everyone))
+                    out.append(
+                        Wait(PERSON, person_for(conn, row), shared, requirement["id"], since, share=tuple(everyone))
+                    )
+                    continue
+                readable = [who for who in everyone if not E.not_shared(conn, row, who)]
+                for who in readable or [None]:
+                    out.append(_turn(conn, row, who, line, requirement["id"], since, True, seen))
+                continue
             named = standing.on or person_for(conn, row)
             if not requirement.get("visit_id") and not is_bot(named) and on_filed(requirement["id"], since):
                 # The stage's own OK or answer waits on a task its bot filed this visit (a review of what the person
@@ -1049,14 +1162,16 @@ def candidates(conn: "sqlite3.Connection", person: str) -> list[str]:
     `needs_by_person`):
 
     - it is theirs (its owner), they are its Human (first on its ladder, `person_for`), the ladder already brought it
-      to them (its visit's person), or a requirement on its stage or visit names them, or was given to them;
+      to them (its visit's person), or a requirement on its stage or visit names them (one of a page's approvers
+      too), or was given to them;
     - a page on it that names nobody asks again whoever sent it back or whose OK lapsed (an answer of theirs);
     - a bot they fix cannot run (`_fixer`) and the task is that bot's turn: its owner, its pipeline's manager, a
       requirement naming or given to it, a page's reviewer, a conflicting PR's builder;
     - a bot of it is held on the task itself (task_wakes.task_cause);
     - nobody it names can act, so it falls to its person (`person_for`), and they are on its ladder: they own or manage
       its pipeline, are the first person above its manager bot, are the company's person, or ask for or read it;
-    - for the company's person, a cause they fix first (`Wait.fix`, Connect GitHub).
+    - for the company's person, a cause they fix first (`Wait.fix`, Connect GitHub);
+    - for the owner or the Admin who stands in (`admin_person`), a page whose approvers have all gone.
 
     Most people own or manage no pipeline, so only their own rows are read, by index. Someone whose ladder reaches a
     pipeline reads a few columns of each of its open tasks, and works out in full only those that may fall to them."""
@@ -1081,14 +1196,23 @@ def candidates(conn: "sqlite3.Connection", person: str) -> list[str]:
         for row in conn.execute("SELECT id FROM visits WHERE person_id=? AND left_at IS NULL", (person,)).fetchall()
     }
     for stage_id, visit_id in conn.execute(
-        "SELECT stage_id, visit_id FROM requirements WHERE person_id IN (SELECT value FROM json_each(?)) "
-        "AND withdrawn_at IS NULL",
+        "SELECT stage_id, visit_id FROM requirements WHERE person_id IN (SELECT value FROM json_each(?1)) "
+        "AND withdrawn_at IS NULL UNION SELECT stage_id, visit_id FROM requirements r WHERE person_ids IS NOT NULL "
+        "AND withdrawn_at IS NULL AND EXISTS (SELECT 1 FROM json_each(r.person_ids) j WHERE j.value IN "
+        "(SELECT value FROM json_each(?1)))",
         _listed(named),
     ).fetchall():
         if stage_id:
             stages.add(str(stage_id))
         if visit_id:
             visits.add(str(visit_id))
+    if admin_person(conn) == person:
+        # A page whose approvers have all gone is the owner's, or an Admin's (`asked_of`).
+        for page in unanswerable_pages(conn):
+            if page["stage_id"]:
+                stages.add(str(page["stage_id"]))
+            if page["visit_id"]:
+                visits.add(str(page["visit_id"]))
     visits |= {
         str(row[0])
         for row in conn.execute(

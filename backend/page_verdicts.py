@@ -335,7 +335,7 @@ def _nudge(conn: "sqlite3.Connection", verdict: Row, pages: list[Row]) -> None:
         task_id = str(page["task_id"])
         requirement = R.get(conn, page["requirement_id"]) or {"kind": "page"}
         # On a page a person OKs, the task page shows Jev's line only when a part is missing (task #351).
-        quiet = said != "not_met" and bool(requirement.get("person_id") or R.people_only(requirement))
+        quiet = said != "not_met" and bool(R.named(requirement) or R.people_only(requirement))
         E._event(  # pyright: ignore[reportPrivateUsage]
             conn,
             task_id,

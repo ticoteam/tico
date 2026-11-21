@@ -75,6 +75,7 @@ REQUIREMENT_FIELDS = (
     "can_push_past",
     "who_oks",
     "person_id",
+    "person_ids",
     "line",
 )
 WHO_OKS = ("none", "people_only", "people_with_exceptions")
@@ -670,6 +671,7 @@ def _requirement_out(row: Row) -> Row:
         "who_oks": row.get("who_oks") or "none",
         "person_id": row.get("person_id"),
         "line": row.get("line") or "",
+        **({"person_ids": list(R.approvers(row))} if R.shared(row) else {}),
     }
 
 
@@ -794,10 +796,39 @@ def _requirement_in(raw: object, stage_name: str, problems: list[str]) -> Row:
         "settings": _dict(item.get("settings"), f"A requirement's settings on {stage_name} are not a set.", problems),
         "can_push_past": push,
         "who_oks": who,
-        "person_id": _ref(item.get("person_id"), f"The person on a requirement on {stage_name}", problems),
+        **_people_in(item, stage_name, problems),
         "line": _text(item.get("line"), f"A requirement's line on {stage_name}", problems),
         **{key: True for key in NOT_YET if item.get(key) is not None},
     }
+
+
+def _people_in(item: Row, stage_name: str, problems: list[str]) -> Row:
+    """Who answers a requirement: `person_ids`, the people who may each approve a page (the first answer settles it),
+    kept as given, one person or none included (`_check` reads each one), with `person_id` the first of them; else
+    `person_id` alone, one person or bot (the older input). An empty list names nobody: the page goes to the owner or
+    an Admin (waiting_on.asked_of)."""
+    person = _ref(item.get("person_id"), f"The person on a requirement on {stage_name}", problems)
+    raw = item.get("person_ids")
+    if raw is None:
+        return {"person_id": person, "person_ids": None}
+    listed = _list(raw, f"{BAD_PEOPLE}, in a list (on {stage_name}).", problems)
+    if any(not isinstance(found, str) or not found.strip() for found in listed):
+        problems.append(f"{BAD_PEOPLE}: none is empty (on {stage_name}).")
+    people = list(dict.fromkeys(str(found).strip() for found in listed if isinstance(found, str) and found.strip()))
+    return {"person_id": people[0] if people else None, "person_ids": people}
+
+
+# The start of the problem a `person_ids` entry that is not a person's id makes: a malformed request (422), not a
+# pipeline that can't be saved as it is.
+BAD_PEOPLE = "Each person who approves a page is a person here, human:<id>"
+# Only a stage's document approval (task_requirements.document_of) takes a list of approvers: also a 422.
+DOCUMENT_ONLY = "Only a document approval names a list of people who approve it"
+
+
+def _stored_people(req: Row) -> str | None:
+    """What `requirements.person_ids` holds: the list as given, or NULL when there is none."""
+    people = req.get("person_ids")
+    return None if people is None else _h()._dump(people)
 
 
 def _stage_in(raw: object, position: int, problems: list[str]) -> Row:
@@ -935,6 +966,12 @@ def _check_requirement(conn: "sqlite3.Connection", stage: Row, req: Row, problem
     elif req["who_oks"] != "none" and kind not in OK_KINDS:
         problems.append(f"Who OKs is only for an OK or a page, not {name} (on {label}).")
     person = req["person_id"]
+    people: list[str] | None = req.get("person_ids")
+    if people is not None and not R.document_of(req):
+        problems.append(f"{DOCUMENT_ONLY}, not {name} (on {label}).")
+    for found in people or []:
+        if not is_human(found) or not R.active_person(conn, found):
+            problems.append(f"{BAD_PEOPLE}: {found} is not (on {label}).")
     if person and kind not in NAMES_PERSON:
         problems.append(
             f"Only a requirement a person can meet with a button can name a person (C29): not {name}, on {label}."
@@ -1286,8 +1323,10 @@ def _write_pipeline(conn: "sqlite3.Connection", record: Row, existing: Row | Non
 
 
 def _write_requirements(conn: "sqlite3.Connection", by: str, stage_id: str, reqs: list[Row], ts: str) -> bool:
-    """Write a stage's requirements in order. Returns True when one was withdrawn."""
+    """Write a stage's requirements in order. Returns True when one was withdrawn. Everyone a page's approvers were
+    or are now is told (waiting_on.tell): a change log trigger sees only an ask added to one visit."""
     H = _h()
+    before = _approvers_on(conn, stage_id)
     kept: list[str] = []
     for position, req in enumerate(reqs):
         values = (
@@ -1298,6 +1337,7 @@ def _write_requirements(conn: "sqlite3.Connection", by: str, stage_id: str, reqs
             1 if req["can_push_past"] else 0,
             req["who_oks"],
             req["person_id"],
+            _stored_people(req),
             req["line"],
             position,
         )
@@ -1305,7 +1345,7 @@ def _write_requirements(conn: "sqlite3.Connection", by: str, stage_id: str, reqs
         if found:
             conn.execute(
                 "UPDATE requirements SET kind=?, source=?, condition=?, settings=?, can_push_past=?, who_oks=?, "
-                "person_id=?, line=?, "
+                "person_id=?, person_ids=?, line=?, "
                 "position=?, withdrawn_at=NULL WHERE id=?",
                 (*values, req["id"]),
             )
@@ -1313,8 +1353,9 @@ def _write_requirements(conn: "sqlite3.Connection", by: str, stage_id: str, reqs
             continue
         rid = req["id"] or H.new_id()
         conn.execute(
-            "INSERT INTO requirements (kind, source, condition, settings, can_push_past, who_oks, person_id, line, "
-            "position, id, stage_id, added_by_id, by_bot, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO requirements (kind, source, condition, settings, can_push_past, who_oks, person_id, "
+            "person_ids, line, position, id, stage_id, added_by_id, by_bot, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (*values, rid, stage_id, str(by), 1 if is_bot(by) else 0, ts),
         )
         kept.append(rid)
@@ -1324,7 +1365,36 @@ def _write_requirements(conn: "sqlite3.Connection", by: str, stage_id: str, reqs
         + (f" AND id NOT IN ({marks})" if kept else ""),
         (ts, stage_id, *kept),
     ).rowcount
+    after = _approvers_on(conn, stage_id)
+    # Only a list of approvers needs this: one person's ask is told by the change log's own triggers, as before.
+    moved = {
+        rid
+        for rid in before.keys() | after.keys()
+        if before.get(rid) != after.get(rid) and any(found and found[0] for found in (before.get(rid), after.get(rid)))
+    }
+    if moved:
+        from . import waiting_on
+
+        told: list[str | None] = [
+            who for rid in moved for found in (before.get(rid), after.get(rid)) if found for who in found[1]
+        ]
+        told.append(waiting_on.admin_person(conn))  # stands in when none of a list can act
+        waiting_on.tell(conn, told)
     return gone > 0
+
+
+def _approvers_on(conn: "sqlite3.Connection", stage_id: str) -> dict[str, tuple[bool, tuple[str, ...]]]:
+    """{page requirement id: (whether it names a list, who it names)} for a stage's live requirements."""
+    rows = conn.execute(
+        "SELECT id, kind, person_id, person_ids FROM requirements WHERE stage_id=? AND kind='page' "
+        "AND withdrawn_at IS NULL",
+        (stage_id,),
+    ).fetchall()
+    out: dict[str, tuple[bool, tuple[str, ...]]] = {}
+    for found in rows:
+        req = {"kind": found[1], "person_id": found[2], "person_ids": found[3]}
+        out[str(found[0])] = (R.shared(req), R.approvers(req))
+    return out
 
 
 def _write_stages(conn: "sqlite3.Connection", by: str, pid: str, record: Row, ts: str) -> bool:
@@ -1566,6 +1636,11 @@ def save(
         if gone:
             _move_out(conn, by, str(existing["id"]), gone, move_tasks_to)
     problems += _problems(conn, parsed)
+    malformed = next((p for p in problems if p.startswith((BAD_PEOPLE, DOCUMENT_ONLY))), None)
+    if malformed:
+        from .store import Problem
+
+        raise Problem("invalid_request", malformed, 422)
     if problems:
         _refuse(conn, by, "task_settings", problems[0])
     if is_bot(by):

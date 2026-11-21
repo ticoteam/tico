@@ -507,6 +507,35 @@ describe('the decision', () => {
     expect(sent.filter((x) => x.url.endsWith('/ok'))).toHaveLength(2);
   });
 
+  it('a page’s Request changes sends the version the card showed when it opened @approvals', async () => {
+    reply = (url, method) => {
+      if (url.endsWith('/oks/r1')) return { status: 404, body: { error: { code: 'not_found' } } };
+      if (method === 'POST' && url.endsWith('/asks/r1/answer')) return { body: { task: task({ to_leave: [req({ kind: 'page', met: true, may: [] })] }) } };
+      return null;
+    };
+    const page = { file_id: 'f9', version: 2, ref: 'page:f9@2' };
+    shown = task({ visit_id: 'v4', to_leave: [req({ kind: 'page', shows: [], line: 'Go live page', page } as Partial<TaskRequirement>)] } as Partial<TaskData>);
+    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    const box = await decision();
+    fireEvent.click(within(box).getByRole('button', { name: 'Request changes' }));
+    fireEvent.change(within(box).getByRole('textbox', { name: 'What should change?' }), { target: { value: 'Shorter' } });
+    fireEvent.click(within(box).getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(sent.at(-1)?.body).toEqual({ value: 'no', note: 'Shorter', page_version: 'f9@2', visit_id: 'v4' }));
+  });
+
+  it('a page’s Approve sends the version the card shows @approvals', async () => {
+    reply = (url, method) => {
+      if (url.endsWith('/oks/r1')) return { status: 404, body: { error: { code: 'not_found' } } };
+      if (method === 'POST' && url.endsWith('/asks/r1/answer')) return { body: { task: task({ to_leave: [req({ kind: 'page', met: true, may: [] })] }) } };
+      return null;
+    };
+    const page = { file_id: 'f9', version: 2, ref: 'page:f9@2' };
+    shown = task({ visit_id: 'v4', to_leave: [req({ kind: 'page', shows: [], line: 'Go live page', page } as Partial<TaskRequirement>)] } as Partial<TaskData>);
+    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    fireEvent.click(await ready(await decision()));
+    await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/tasks/t1/asks/r1/answer', body: { value: 'ok', page_version: 'f9@2', visit_id: 'v4' } }));
+  });
+
   it('in Flow, opens the next item once approved @approvals', async () => {
     reply = (url, method) => (method === 'POST' && url.endsWith('/asks/r1/ok') ? { body: { task: task({ to_leave: [req({ met: true, may: [] })] }) } } : null);
     const router = show(<TaskPage task="12" flow />, '/flow/12');

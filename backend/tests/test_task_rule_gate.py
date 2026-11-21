@@ -650,3 +650,122 @@ def test_a_warned_bulk_why_carries_the_line_on_each_task(ruled):
     assert got["changed"] == 2 and got["rule_warning"], got
     for t in tasks:
         assert str(get(api, f"tasks/{t['id']}")).count("Warning:") >= 1, t["id"]
+
+
+def test_a_shared_page_answer_by_an_approvers_own_click_is_never_held_and_a_held_one_is_never_replayed(ruled):
+    """A page several people approve is settled by its first answer, in that write (requirements.person_ids): an
+    approver's own click is a direct human action no rule holds, and Send anyway of an answer held before the page was
+    shared writes nothing."""
+    from backend import task_engine as E
+    from backend import task_pages as P
+    from backend.blobs import Blobs
+    from backend.tests.helpers.page_requirement import _page, _pipeline, _say, _task
+
+    api, _ = ruled
+    store = api.app.state.store
+    store.blobs = store.blobs or Blobs(store.settings)
+    with store.transaction() as c:
+        for slug in ("writer", "manager"):
+            if not c.execute("SELECT 1 FROM bots WHERE id=?", (slug,)).fetchone():
+                X.bot(c, slug)
+        rid = _pipeline(c, person=X.ANA)
+        task = _task(c)
+        fid, _ = _page(c, store)
+        seen = E.task(c, task["id"])["version"]
+        _say(c, P.attach(c, task["id"], rid, "page:" + fid, "bot:writer", seen_version=seen), "met")
+    rule(
+        api,
+        {
+            "kind": "internal",
+            "text": COLOR,
+            "who": {"everyone": True},
+            "with": {"bots": ["writer"]},
+            "if_broken": "escalate",
+            "reviewer": "ben",
+        },
+    )
+    path = f"/api/v2/tasks/{task['id']}/asks/{rid}/answer"
+    said = {
+        "value": "no",
+        "note": "Our favorite color is red.",
+        "page_version": f"{fid}@1",
+        "visit_id": task["visit"]["id"],
+    }
+    held = api.post(path, json=said, headers=headers("ana-test"))
+    assert held.status_code == 200 and held.json()["held"], held.text
+    with store.transaction() as c:
+        c.execute("UPDATE requirements SET person_ids=? WHERE id=?", (json.dumps([X.ANA, "human:ben"]), rid))
+    view = get(api, f"rule-holds/{held.json()['held']['id']}", token="ben-test")
+    api.post(f"/api/v2/rule-holds/{view['id']}/send", json={"nonce": view["nonce"]}, headers=headers("ben-test"))
+    assert sql(api, "SELECT 1 FROM answers WHERE requirement_id=?", (rid,)) == []
+    holds = len(sql(api, "SELECT 1 FROM org_rule_holds"))
+    settled = api.post(path, json=said, headers=headers("ana-test"))
+    assert settled.status_code == 200 and not settled.json().get("held"), settled.text
+    assert len(sql(api, "SELECT 1 FROM org_rule_holds")) == holds
+    assert [r["answer"] for r in sql(api, "SELECT answer FROM answers WHERE requirement_id=?", (rid,))] == ["no"]
+
+
+def test_an_agents_review_of_new_commits_on_a_shared_page_is_held_and_sent_anyway(ruled):
+    """An agent's read of new commits a shared page asks for (requirements.person_ids) goes the rule path like any
+    agent write: a rule holds it, and Send anyway writes it."""
+    from backend import item_metadata as IM
+    from backend import page_verdicts as V
+    from backend import task_engine as E
+    from backend import task_pages as P
+    from backend import task_requirements as R
+    from backend.blobs import Blobs
+    from backend.tests.helpers.page_requirement import _page, _say
+
+    api, _ = ruled
+    store = api.app.state.store
+    store.blobs = store.blobs or Blobs(store.settings)
+    stages = (
+        {
+            "name": "Review",
+            "owner": "bot:ops",
+            "requirements": [{"kind": "page", "line": "Review", "settings": {"at_head": True}}],
+        },
+        {
+            "name": "QA",
+            "owner": "bot:finance",
+            "requirements": [{"kind": "page", "line": "Pre-release", "who_oks": "people_only", "person": X.ANA}],
+        },
+    )
+
+    def push(c, head):
+        IM.save(c, "github", "pr", "acme/app#45", {"state": "open", "head_sha": head, "merged_sha": None}, 1)
+
+    with store.transaction() as c:
+        if not c.execute("SELECT 1 FROM bots WHERE id='writer'").fetchone():
+            X.bot(c, "writer")  # whose files the pages are (helpers/page_requirement._page)
+        made = X.pipeline(c, "eng", "Engineering", stages)
+        rid = made["requirements"]["QA"][0]
+        c.execute("UPDATE requirements SET person_ids=? WHERE id=?", (json.dumps([X.ANA, "human:ben"]), rid))
+        task = X.new_task(c, X.ANA, "Absolute value", "eng", assignee="bot:ops")
+        c.execute(
+            "INSERT INTO task_links (id, task_id, kind, url, repo, number, source, item_type, item_key, created_at) "
+            "VALUES (?,?,'pr','https://github.com/acme/app/pull/45','acme/app',45,'github','pr','acme/app#45',?)",
+            (H.new_id(), task["id"], H.now()),
+        )
+        push(c, "62de57f623fc")
+        review, _ = _page(c, store, "<p>Reviewed 62de57f</p>")
+        seen = E.task(c, task["id"])["version"]
+        _say(c, P.attach(c, task["id"], "Review", "page:" + review, "bot:ops", seen_version=seen), "met")
+        assert E.advance(c, task["id"])["stage"]["name"] == "QA"
+        push(c, "dce5a62aa000")
+        built, _ = _page(c, store, "<p>Built and checked</p>")
+        seen = E.task(c, task["id"])["version"]
+        said = _say(c, P.attach(c, task["id"], rid, "page:" + built, "bot:finance", seen_version=seen), "unsure")
+        V._nudge(c, said, V._waiting(c, said))
+        now = E.task(c, task["id"])
+        (standing,) = [s for s in R.standings(c, now) if s.name == "Pre-release"]
+        assert (standing.state, standing.on) == (R.WAITING, "bot:ops"), "the reviewer reads the new commits first"
+    color_rule(api, if_broken="escalate", reviewer="ben")
+    note = "No blockers\nRead dce5a62: our favorite color is red."
+    held = ops(api, f"tasks/{task['id']}/asks/{rid}/answer", {"value": "ok", "note": note, "version": now["version"]})
+    assert held["held"], held
+    assert sql(api, "SELECT 1 FROM answers WHERE requirement_id=?", (rid,)) == []
+    view = get(api, f"rule-holds/{held['held']['id']}", token="ben-test")
+    sent = post(api, f"rule-holds/{held['held']['id']}/send", {"nonce": view["nonce"]}, token="ben-test")
+    assert sent["hold"]["state"] == "sent", sent
+    assert [r["by_id"] for r in sql(api, "SELECT by_id FROM answers WHERE requirement_id=?", (rid,))] == ["bot:ops"]

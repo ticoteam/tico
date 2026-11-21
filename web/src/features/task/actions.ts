@@ -201,15 +201,23 @@ export const removeLink = defineAction({
   target: (i) => ({ kind: 'task-links', id: i.task }),
 });
 
+/* The page version an answer is given on, as the card drew it (queries.answerKey). */
+const answerKeyInput = z.strictObject({ page_version: z.string().check(z.minLength(1), z.maxLength(8192)), visit_id: z.optional(z.string().check(z.maxLength(100))) });
+
 /* An approval is the person's own: Tico never presses it for them. Approve carries the hash of what was shown
    (`shown`, from decisionShownQuery; null for a stage's own OK, which has no grant). */
 export const approve = defineAction({
   id: 'task.approve',
   title: 'Approve',
   kind: 'change',
-  input: z.strictObject({ task, requirement: z.string().check(z.minLength(1), z.maxLength(100)), shown: z.nullable(z.string().check(z.minLength(1), z.maxLength(200))) }),
+  input: z.strictObject({
+    task,
+    requirement: z.string().check(z.minLength(1), z.maxLength(100)),
+    shown: z.nullable(z.string().check(z.minLength(1), z.maxLength(200))),
+    key: z.optional(answerKeyInput),
+  }),
   tico: false,
-  run: (_ctx, i) => said(answerAsk(i.task, i.requirement, 'ok', undefined, i.shown)),
+  run: (_ctx, i) => said(answerAsk(i.task, i.requirement, 'ok', undefined, i.shown, i.key)),
   did: () => 'Approved',
   target: (i) => ({ kind: 'task-answer', id: i.task }),
 });
@@ -219,9 +227,15 @@ export const askChanges = defineAction({
   id: 'task.requestChanges',
   title: 'Request changes',
   kind: 'change',
-  input: z.strictObject({ task, requirement: z.string().check(z.minLength(1), z.maxLength(100)), note: z.string().check(z.minLength(1), z.maxLength(4000)) }),
+  input: z.strictObject({
+    task,
+    requirement: z.string().check(z.minLength(1), z.maxLength(100)),
+    note: z.string().check(z.minLength(1), z.maxLength(4000)),
+    // The page version the person saw when they opened the form: an answer to it never settles a newer one.
+    key: z.optional(answerKeyInput),
+  }),
   tico: false,
-  run: (_ctx, i) => said(requestChanges(i.task, i.requirement, i.note.trim())),
+  run: (_ctx, i) => said(requestChanges(i.task, i.requirement, i.note.trim(), i.key)),
   did: () => 'Asked for changes',
   target: (i) => ({ kind: 'task-answer', id: i.task }),
 });

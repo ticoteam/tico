@@ -1,6 +1,6 @@
 import { keepPreviousData, queryOptions, type QueryKey } from '@tanstack/react-query';
 import { ApiError, api } from '@/api/client';
-import type { OkPreview, PagePublished, PageShown, PipelineSettingsResult, PublishPageBody, TaskDetail, TaskDetailChild, TaskFileList, TaskLinkView, TaskResult } from '@/api/schema';
+import type { OkPreview, PagePublished, PageShown, PipelineSettingsResult, PublishPageBody, TaskDetail, TaskDetailChild, TaskFileList, TaskLinkView, TaskRequirement, TaskResult } from '@/api/schema';
 import { keys, meQuery, queryClient, quietRoot, write } from '@/data';
 import { flowQuery, pipelinesQuery } from '@/features/tasks/routing';
 import type { FileLibrary, FileSearch, TaskFileResult, TaskFileView } from '@/api/schema';
@@ -186,7 +186,7 @@ export const snoozeTask = (id: string, until: string | null) =>
 /** The id an answer shows under while it is sent: the server's own takes its place (answeringOf). */
 export const PENDING_ANSWER = 'pending';
 
-export function answerAsk(id: string, rid: string, value: 'ok' | 'no', note?: string, shown?: string | null): Promise<TaskResult> {
+export function answerAsk(id: string, rid: string, value: 'ok' | 'no', note?: string, shown?: string | null, key?: AnswerKey): Promise<TaskResult> {
   const me = queryClient.getQueryData(meQuery.queryKey)?.id ?? '';
   const answered = (t: TaskData): Fields => ({
     to_leave: (t.to_leave ?? []).map((r) =>
@@ -205,21 +205,29 @@ export function answerAsk(id: string, rid: string, value: 'ok' | 'no', note?: st
   return write<TaskResult>({
     key: [...shownIn(id), ...flows],
     optimistic: (cur) => (Array.isArray(cur) || (cur as { items?: unknown } | undefined)?.items ? gone(cur) : patch(id, answered)(cur)),
-    send: (idem) => (value === 'ok' && shown ? post(`${taskPath(id)}/asks/${enc(rid)}/ok`, { shown_hash: shown }, idem) : sendAnswer(id, rid, value, note, idem)),
+    send: (idem) => (value === 'ok' && shown ? post(`${taskPath(id)}/asks/${enc(rid)}/ok`, { shown_hash: shown }, idem) : sendAnswer(id, rid, value, note, idem, key)),
     settle: (cur, answer) => (Array.isArray(cur) || (cur as { items?: unknown } | undefined)?.items ? cur : settled(id)(cur, answer)),
   });
 }
 
-/* A plain answer: a stage's own OK (no grant) with the page version it was asked on, or changes asked with a note. */
-function sendAnswer(id: string, rid: string, value: 'ok' | 'no', note: string | undefined, idem: string): Promise<TaskResult> {
+/** The version an answer on a page is given on, as the person sees it: `page_version` (`<file id>@<version>`, the whole
+    submission's key for several pages) and the visit it is asked on (a document approval's, else the task's `visit`).
+    Undefined for a requirement with no page. */
+export type AnswerKey = { page_version: string; visit_id?: string };
+export function answerKey(req: TaskRequirement | undefined, visit?: string | null): AnswerKey | undefined {
+  const one = req?.approval?.file_id ?? req?.page?.file_id;
+  const page = req?.approval?.page_version ?? req?.page?.page_version ?? (one ? `${one}@${req?.approval?.version ?? req?.page?.version}` : undefined);
+  const on = req?.approval?.visit_id ?? visit;
+  return page ? { page_version: page, ...(on && { visit_id: on }) } : undefined;
+}
+
+/* A plain answer: a stage's own OK (no grant) with the page version it was asked on, or changes asked with a note. A page
+ * several people approve settles on its first answer, so a send back names the version the person saw (`key`, kept
+ * when its form opened). */
+function sendAnswer(id: string, rid: string, value: 'ok' | 'no', note: string | undefined, idem: string, key?: AnswerKey): Promise<TaskResult> {
   const held = queryClient.getQueryData<TaskData>(keys.tasks.detail(id));
-  const req = held?.to_leave?.find((r) => r.requirement_id === rid);
-  const page = req?.approval?.page_version ?? req?.page?.page_version;
-  return post(
-    `${taskPath(id)}/asks/${enc(rid)}/answer`,
-    { value, ...(note && { note }), ...(page && { page_version: page }), ...(req?.approval?.visit_id && { visit_id: req.approval.visit_id }) },
-    idem,
-  );
+  const on = key ?? answerKey(held?.to_leave?.find((r) => r.requirement_id === rid), held?.visit_id);
+  return post(`${taskPath(id)}/asks/${enc(rid)}/answer`, { value, ...(note && { note }), ...on }, idem);
 }
 
 /** What the decision binds Approve to (plan/approvals.html): the hash of exactly what was shown. An OK's own preview
@@ -251,7 +259,7 @@ export const decisionShownQuery = (task: string, rid: string, version: number, s
 /** Request changes (plan/approvals.html): the request is answered `no` with the person's words, which marks it Changes
     asked and takes it out of Flow until a new version. The server posts the words in the task's chat ("<Name> sent
     this back: <note>"), so the agent hears them once. */
-export const requestChanges = (id: string, rid: string, note: string): Promise<TaskResult> => answerAsk(id, rid, 'no', note);
+export const requestChanges = (id: string, rid: string, note: string, key?: AnswerKey): Promise<TaskResult> => answerAsk(id, rid, 'no', note, undefined, key);
 
 /** Take an answer back (POST /api/v2/answers/{aid}/undo): the task is read again, and Flow with it. */
 export async function undoAnswer(id: string, answer: string): Promise<TaskResult> {

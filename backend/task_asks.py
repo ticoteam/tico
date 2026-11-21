@@ -634,14 +634,18 @@ def given_by_another_allowed(conn: "sqlite3.Connection", requirement_id: str, va
 ACTS_FOR_PEOPLE = ("bot:assistant", "bot:botops")
 NOT_YOURS = "An OK is the person's own: the Assistant and BotOps never give one. Send back is fine."
 OWN_IN_TICO = "An OK is the person's own, in Tico. Send back is yours to say"
+SHARED_OWN = "A page several people approve is answered only by your own click in Tico"
+SHARED_NOT_HELD = "A page several people approve takes its answer now, never sent later from a hold"
 
 
 def refuses_ok_by(conn: "sqlite3.Connection", who: object, requirement_id: str, value: object) -> str | None:
     """For every answer path before the engine (the answer route, a batch decision): the refusal's words when `ok` to
     an OK requirement, bound or plain, on anyone's ask, does not come from the person's own session: the Assistant or
     BotOps (acting for a person, confirmed or not, or as itself), a personal token, or anything else acting for them.
-    Else None. A send back stays theirs to give."""
-    if str(value or "").strip().casefold() != "ok":
+    Else None. A send back stays theirs to give, except on a page several people approve: its first answer, OK or send
+    back, settles it for all of them, so either is only an approver's own click."""
+    said = str(value or "").strip().casefold()
+    if said not in ("ok", "no"):
         return None
     via = str(getattr(who, "via", "") or "")
     actors = {str(getattr(who, name, "") or "") for name in ("actor", "task_actor")}
@@ -651,8 +655,18 @@ def refuses_ok_by(conn: "sqlite3.Connection", who: object, requirement_id: str, 
         words = OWN_IN_TICO
     else:
         return None
+    if shared_page(conn, requirement_id):
+        return SHARED_OWN
     found = conn.execute("SELECT kind FROM requirements WHERE id=?", (requirement_id,)).fetchone()
-    return words if found and found[0] == "ok" else None
+    return words if found and found[0] == "ok" and said == "ok" else None
+
+
+def shared_page(conn: "sqlite3.Connection", requirement_id: str) -> bool:
+    """Whether a requirement is a page several people approve (task_requirements.shared)."""
+    from . import task_requirements as R
+
+    found = conn.execute("SELECT kind, person_ids FROM requirements WHERE id=?", (requirement_id,)).fetchone()
+    return bool(found) and R.shared({"kind": found[0], "person_ids": found[1]})
 
 
 # ----------------------------------------------------------------------------- asking

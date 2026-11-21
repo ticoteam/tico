@@ -14,7 +14,7 @@ import { answered } from './answered';
 import { AskCard, Docked, useAnswering } from './AskCard';
 import { HeldDecision, isRuleReview } from './Held';
 import { followSend } from './sending';
-import { addressesOf, decisionShownQuery, emailSendQuery, type TaskData } from './queries';
+import { addressesOf, answerKey, decisionShownQuery, emailSendQuery, type AnswerKey, type TaskData } from './queries';
 
 /* The decision (plan/approvals.html): one box wherever a request waits on the person. It names the thing, who asks and
    what Approve does; Request changes opens one line in it; Approve is the one filled button, bound to exactly what was
@@ -109,6 +109,7 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
   const { name, effect, send, recipients, files } = useNamed(t, r);
   const [asking, setAsking] = useState(false);
   const [note, setNote] = useState('');
+  const [askedOn, setAskedOn] = useState<AnswerKey | undefined>(undefined);
   const may = (v: 'ok' | 'no') => r.may.includes(v);
   const busy = approve.pending || request.pending;
 
@@ -133,7 +134,8 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
     setSeen(key);
     const next = nextUp();
     hold?.(r, true);
-    const res = await approve.run({ task: t.id, requirement: r.requirement_id, shown: preview?.hash ?? null });
+    const drawn = answerKey(r, t.visit_id); // the version and visit this card shows, never newer ones read since
+    const res = await approve.run({ task: t.id, requirement: r.requirement_id, shown: preview?.hash ?? null, ...(drawn && { key: drawn }) });
     hold?.(res.ok ? null : r);
     if (!res.ok) {
       // It moved under the person: read it again, say Changed, and wait for a new press.
@@ -162,7 +164,7 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
   const onSend = async () => {
     setError('');
     hold?.(r, true);
-    const res = await request.run({ task: t.id, requirement: r.requirement_id, note });
+    const res = await request.run({ task: t.id, requirement: r.requirement_id, note, ...(askedOn && { key: askedOn }) });
     hold?.(res.ok ? null : r);
     if (!res.ok) return refused(res);
     setAsking(false);
@@ -191,7 +193,13 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
         ) : (
           <>
             {may('no') && (
-              <Button disabled={busy} onClick={() => setAsking(true)}>
+              <Button
+                disabled={busy}
+                onClick={() => {
+                  setAskedOn(answerKey(r, t.visit_id));
+                  setAsking(true);
+                }}
+              >
                 Request changes
               </Button>
             )}
