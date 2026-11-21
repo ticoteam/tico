@@ -580,6 +580,11 @@ def _calendar_changed(c: Any, who: Any, task_id: str) -> None:
         "INSERT INTO changes(topic, kind, subject_id, ref, actor, created_at) VALUES('calendar','due',?,?,?,?)",
         ("matter:" + task_id, owner[0] if owner else None, who.actor, H.now()),
     )
+    from . import email_sending
+
+    # A send of the case held for these dates reads its day again on the case's row.
+    mail: Any = email_sending
+    mail.held_changed(c, task_id)
 
 
 def _when(row: Row) -> datetime:

@@ -678,9 +678,10 @@ def for_tasks(c, ids):
     fields = ",".join(TASK_FIELDS)
     # An open send's matter dates come in the same read (DATES_SQL): its not before, on its own case's row.
     rows = c.execute(
-        f"SELECT task_id,approval_task_id,{fields},created_at,s.rowid AS n,{DATES_SQL} AS dates FROM email_sends s "
+        f"SELECT task_id,approval_task_id,{fields},created_at,s.rowid AS n,{DATES_SQL} AS dates,mailbox,bot "
+        "FROM email_sends s "
         f"WHERE state IN ({','.join('?' * len(OPEN_STATES))}) AND {mine} "
-        f"UNION ALL SELECT task_id,approval_task_id,{fields},created_at,rowid AS n,NULL FROM email_sends "
+        f"UNION ALL SELECT task_id,approval_task_id,{fields},created_at,rowid AS n,NULL,mailbox,bot FROM email_sends "
         f"WHERE state IN ({','.join('?' * len(ENDED_STATES))}) AND send_after>=? AND finished_at>=? AND {mine}",
         (
             *OPEN_STATES,
@@ -701,11 +702,30 @@ def for_tasks(c, ids):
                 newest[task] = row
     out = {}
     for task, row in newest.items():
-        held = latest_bound((row["dates"] or "").split(",")) if task == row["task_id"] else ""
-        # `not_before`: the day a send past its undo window still waits for (its matter's not before), said only on its
-        # own case's row (whose readers read the matter), else null.
-        out[task] = {**{key: row[key] for key in TASK_FIELDS}, "not_before": held if held > now else None}
+        out[task] = {key: row[key] for key in TASK_FIELDS}
+        if task != row["task_id"]:
+            continue  # a row the send's OK sits on alone: no matter of its own, so no `not_before` that would wipe it
+        # `not_before`: the day a send still waits for past its undo deadline (its matter's not before, in the company's
+        # time), as the preview says it; else null. Only on its own case's row, whose readers read the matter.
+        held = latest_bound((row["dates"] or "").split(","))
+        if held and row["state"] == "waiting_approval":
+            # Its undo deadline is what an OK given now would set.
+            due = H.shift(now, seconds=effective(c, row["mailbox"], row["bot"])["undo_seconds"])
+        else:
+            due = row["send_after"]
+        out[task]["not_before"] = in_company_zone(held) if held and held > max(due, now) else None
     return out
+
+
+def held_changed(c, task_id):
+    """A matter's dates changed (backend/risk.py): when a send of its case is still to go, the case's row is sent again
+    (a `tasks` change, kind email_send), so the day it is held for reads right everywhere."""
+    if c.execute(
+        "SELECT 1 FROM email_sends WHERE task_id=? AND state IN ('waiting_approval','pending') LIMIT 1", (task_id,)
+    ).fetchone():
+        c.execute(
+            "INSERT INTO changes(topic,kind,subject_id,created_at) VALUES('tasks','email_send',?,?)", (task_id, H.now())
+        )
 
 
 def moved(c, sid):

@@ -559,12 +559,40 @@ def test_a_held_send_is_on_its_cases_row_with_its_day_until_it_is_sent_and_after
     held = queue(inbox, raw=mime(body="Later."), actor="bot:ops", task_id=case)
     with inbox.app.state.store.read() as c:
         row = S.for_tasks(c, [case])[case]
-        assert (row["id"], row["state"], row["not_before"]) == (held["id"], "pending", S.not_before(c, case))
+        assert (row["id"], row["state"]) == (held["id"], "pending")
+        assert row["not_before"] == S.in_company_zone(S.not_before(c, case))  # the company's day, as the preview says
     monkeypatch.setattr(H, "now", lambda: day + "T23:00:00.000000Z")
     assert len(dispatch(inbox)) == 1
     with inbox.app.state.store.read() as c:
         row = S.for_tasks(c, [case])[case]
         assert (row["id"], row["state"], row["not_before"]) == (held["id"], "sent", None)
+
+
+def test_a_cases_row_names_a_hold_only_past_the_undo_deadline_and_a_date_change_sends_it_again(inbox):
+    """The case's row named a matter date that ends inside the undo window (the send goes at its undo deadline, not
+    then), and a date edited later left open pages on the old day. It names the day only past the undo deadline an OK
+    would set, as the preview does, and a change to the matter's dates sends the case's row again."""
+    policy(inbox, undo_seconds=600, pacing_seconds=0)
+    case = _case(inbox)
+    risk = post(inbox, "risks", {"label": "Records requests"})
+    key = risk.get("risk", risk).get("key") or "risk:records-requests"
+    post(inbox, f"tasks/{case}", {"labels": [key if key.startswith("risk:") else "risk:" + key]})
+    post(inbox, f"tasks/{case}/matter", {"kind": "request"})
+    soon = H.shift(H.now(), minutes=5)[:19] + "Z"
+    post(inbox, f"tasks/{case}/matter/dates", {"label": "Records produced", "starts_at": soon})
+    queued = queue(inbox, raw=mime(body="The records."), actor="bot:ops", task_id=case)
+    assert queued["state"] == "waiting_approval"
+    with inbox.app.state.store.read() as c:
+        assert S.for_tasks(c, [case])[case]["not_before"] is None  # within the 10 minutes an OK would start
+        before = c.execute("SELECT max(rowid) FROM changes").fetchone()[0]
+    later = H.shift(H.now(), days=3)[:10]
+    post(inbox, f"tasks/{case}/matter/dates", {"label": "Hearing", "starts_at": later})
+    with inbox.app.state.store.read() as c:
+        assert S.for_tasks(c, [case])[case]["not_before"][:10] == later
+        assert c.execute(
+            "SELECT 1 FROM changes WHERE rowid>? AND topic='tasks' AND kind='email_send' AND subject_id=?",
+            (before, case),
+        ).fetchone()
 
 
 def test_the_drain_writes_nothing_for_an_inbox_that_only_holds_sends_for_later(inbox, monkeypatch):

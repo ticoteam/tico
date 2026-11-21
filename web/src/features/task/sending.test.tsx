@@ -144,9 +144,10 @@ describe("a task row's send", () => {
 
   it('held past its undo window for its matter’s day, it says that day, never Sending', () => {
     const held = { ...row, state: 'pending' as const, finished_at: null, not_before: '2026-12-08T00:00:00-08:00' };
-    const w = rowWhere(held, NOW);
-    expect(w).toEqual({ kind: 'held', on: '2026-12-08T00:00:00-08:00' });
-    expect(markLine(w as SendWhere, NOW)).toBe('Sends Dec 8');
+    const w = rowWhere(held, NOW) as SendWhere;
+    expect(w).toEqual({ kind: 'sending', until: Date.parse(row.send_after), on: '2026-12-08T00:00:00-08:00' });
+    expect(markLine(w, NOW)).toBe('Sends Dec 8'); // its undo window over
+    expect(markLine(w, Date.parse(row.send_after) - 90_000)).toBe('Sends Dec 8 · 1:30'); // still in it: Undo stays
   });
 
   it('says nothing once canceled, and Not sent only when it failed, was blocked, or is unsure', () => {

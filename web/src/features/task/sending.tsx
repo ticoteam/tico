@@ -17,11 +17,10 @@ import { sendStateQuery } from './queries';
 
 type Send = Pick<EmailSend, 'state' | 'send_after' | 'finished_at' | 'detail'> & { not_before?: string | null };
 
-/** Where an approved send is: in its window (`until`, when it goes), held for a later day (`on`, its matter's not
-    before), gone, or not gone and why. */
+/** Where an approved send is: in its window (`until`, when it may still be taken back) and, held for a later day, the
+    day it goes (`on`, its matter's not before); gone, or not gone and why. */
 export type SendWhere =
-  | { kind: 'sending'; until: number | null }
-  | { kind: 'held'; on: string }
+  | { kind: 'sending'; until: number | null; on?: string }
   | { kind: 'sent'; at: string | null }
   | { kind: 'not_sent' | 'unsure'; detail: string };
 
@@ -32,9 +31,8 @@ export function whereOf(s: Send, approved: boolean): SendWhere | null {
     case 'sent':
       return { kind: 'sent', at: s.finished_at };
     case 'pending': {
-      if (s.not_before) return { kind: 'held', on: s.not_before };
       const until = Date.parse(s.send_after);
-      return { kind: 'sending', until: Number.isFinite(until) ? until : null };
+      return { kind: 'sending', until: Number.isFinite(until) ? until : null, ...(s.not_before && { on: s.not_before }) };
     }
     case 'dispatching':
       return { kind: 'sending', until: null };
@@ -75,25 +73,25 @@ export function toLine(to: readonly string[]): string {
 /** The toast's words for where the send is. */
 export function toastLine(w: SendWhere, to: string, now: number): string {
   if (w.kind === 'sent') return `Sent to ${to}`;
-  if (w.kind === 'held') return `${heldUntil(w.on) ?? 'Sends later'} to ${to}`;
   if (w.kind !== 'sending') {
     const head = w.kind === 'unsure' ? 'Not confirmed' : 'Not sent';
     return w.detail ? `${head}: ${w.detail}` : head;
   }
   const left = countdown(w.until, now);
+  const day = w.on && heldUntil(w.on);
+  if (day) return left ? `${day} to ${to} · undo ${left}` : `${day} to ${to}`;
   return left ? `Sending to ${to} in ${left}` : `Sending to ${to}`;
 }
 
 /** The quiet line's words: "Sending · 1:40", "Sent 5:23 AM" (a day's date before the time on another day). */
 export function markLine(w: SendWhere, now: number): string {
-  if (w.kind === 'held') return heldUntil(w.on) ?? 'Sends later';
   if (w.kind === 'sent') {
     if (!w.at) return 'Sent';
     return `Sent ${dayKey(w.at) === dayKey(new Date(now).toISOString()) ? clock(w.at) : stamp(w.at)}`;
   }
   if (w.kind !== 'sending') return w.kind === 'unsure' ? 'Not confirmed' : 'Not sent';
   const left = countdown(w.until, now);
-  return left ? ['Sending', left].join(' · ') : 'Sending';
+  return [(w.on && heldUntil(w.on)) || 'Sending', left].filter(Boolean).join(' · ');
 }
 
 /** How long a card keeps saying how a send ended: a day. */
@@ -188,7 +186,7 @@ export function followSend({ send, to, task, answer }: { send: string; to: reado
     w = next;
     if (w.kind === 'sending') return show(r.data);
     stop();
-    if (w.kind === 'sent' || w.kind === 'held') updateToast(id, { text: toastLine(w, who, Date.now()), kind: 'done', timeout: 5000 });
+    if (w.kind === 'sent') updateToast(id, { text: toastLine(w, who, Date.now()), kind: 'done', timeout: 5000 });
     else updateToast(id, { text: toastLine(w, who, Date.now()), kind: 'failed', timeout: 0, dismiss: true });
   });
   function stop() {

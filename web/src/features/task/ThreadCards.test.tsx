@@ -193,6 +193,13 @@ describe('an approval waiting, as a card in the agent’s thread @approvals', ()
     expect(card.getAttribute('href')).toBe('/task/c1');
   });
 
+  it('a case with no "Send:" task shows the card of the email OK on itself in its own chat', async () => {
+    needs = [ask('c1', 'bot:lo', 's1')];
+    const own = { id: 'c1', title: 'Ruiz: reply letter', children: [], relations: {}, to_leave: [{ requirement_id: 'r1', kind: 'ok', met: false, may: ['ok', 'no'], shows: ['email:s1'] }] };
+    show({ task: own as unknown as TaskData });
+    expect((await screen.findByRole('link', { name: /Approve/ })).textContent).toContain('Ruiz: reply letter');
+  });
+
   it('an email already sent or canceled shows no card', async () => {
     state = 'canceled';
     show({ agent: 'bot:lo' });

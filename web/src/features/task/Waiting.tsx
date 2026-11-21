@@ -97,7 +97,10 @@ export function Brief({ note, title, to }: { note: string | null | undefined; ti
 /** On an email's OK: the matter it answers, by name, and its brief, above the email; nothing when it has no note. */
 export function MatterBrief({ t, send }: { t: TaskData; send: string }) {
   const matter = useMatterOf(t, send);
-  const read = useQuery({ ...taskDetailQuery(matter?.id), retry: false });
+  const self = matter?.id === t.id;
+  const read = useQuery({ ...taskDetailQuery(self ? undefined : matter?.id), retry: false });
+  // An OK on the case itself: the case's own brief, with no link to the page it is on.
+  if (self) return <Brief note={t.note} />;
   const m = read.data?.id === matter?.id ? read.data : undefined;
   if (!matter || !m) return null;
   return <Brief note={m.note} title={m.title} to={tabAddress(m, undefined, false).to} />;

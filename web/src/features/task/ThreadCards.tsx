@@ -5,7 +5,7 @@ import { Icon } from '@/kit/Icon';
 import { besideThread } from '@/lib';
 import { flowQuery, type FlowItem } from '@/features/tasks/routing';
 import { AskCard } from './AskCard';
-import { decisionOf, personOf, sendTitle, tabAddress, thingsOf } from './model';
+import { decisionOf, emailOf, personOf, sendTitle, tabAddress, thingsOf } from './model';
 import { taskDetailQuery, taskFilesQuery, type TaskData } from './queries';
 import { matterOf } from './Waiting';
 import { sendTasksOf, sendToGo } from './waits';
@@ -43,7 +43,9 @@ export function useApprovalCards(scope: ApprovalScope, chat?: string): ChatMessa
   const named = 'agent' in scope ? scope.agent : undefined;
   const agent = useActor(named)?.id ?? named;
   const task = 'task' in scope ? scope.task : undefined;
-  const hung = task ? new Set(sendTasksOf(task)) : null;
+  // A case's chat: its "Send:" OKs, and the email OKs on the case itself (no "Send:" task of their own).
+  const own = !!task && !!task.to_leave?.some((r) => !!emailOf(r) && !r.met);
+  const hung = task ? new Set([...sendTasksOf(task), ...(own ? [task.id] : [])]) : null;
   const on = !!agent?.startsWith('bot:') || !!hung?.size;
   const { data } = useQuery({ ...flowQuery, enabled: on });
   // An ask names its agent by id or by slug (`bot:finance-owner`): both read as the agent's id here.
@@ -54,7 +56,9 @@ export function useApprovalCards(scope: ApprovalScope, chat?: string): ChatMessa
     return by?.startsWith('bot:') ? (byId?.[by]?.id ?? by) : null;
   };
   const asks = (on ? (data?.items ?? []) : []).filter((it) =>
-    hung ? it.ask?.kind === 'ok' && !!whose(it) && hung.has(it.id) : (it.ask?.kind === 'ok' || it.ask?.kind === 'page') && !!agent && whose(it) === agent,
+    hung
+      ? it.ask?.kind === 'ok' && !!whose(it) && hung.has(it.id) && (it.id !== task?.id || !!emailIn(it.ask?.shows ?? []))
+      : (it.ask?.kind === 'ok' || it.ask?.kind === 'page') && !!agent && whose(it) === agent,
   );
   const subs = useQueries({ queries: asks.map((it) => ({ ...taskDetailQuery(it.id), retry: false })) });
   // The files any other OK shows (its chips, ThingCard), read before the card draws.
@@ -66,8 +70,9 @@ export function useApprovalCards(scope: ApprovalScope, chat?: string): ChatMessa
   });
   return asks.flatMap((it, i) => {
     const sub = subs[i]?.data;
-    if (!sub || !decisionOf(sub)) return [];
     const send = emailIn(it.ask?.shows ?? []);
+    // An email's card stands for that email's own open OK on the task, never another ask there.
+    if (!sub || !decisionOf(sub, send ?? undefined)) return [];
     // An email's: still to go out, as its OK task's row says (sendToGo); its preview is read only on its Email tab.
     if (send) {
       if (!sendToGo(sub, send)) return [];
