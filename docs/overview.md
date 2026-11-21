@@ -11,7 +11,7 @@ teammate on Rules › Company.
 ## Your Company page
 
 Company is yours alone: the place `person:<id>` (`person:me` in the API, CLI and tools). Only you read and arrange it;
-BotOps and the Assistant arrange it for you when you ask. Nobody else, an admin included, can open it or learn what is
+Agent Ops and the Assistant arrange it for you when you ask. Nobody else, an admin included, can open it or learn what is
 pinned there. A pin there widens nothing: every card and page on it is read with your own rights, so it never shows you
 something you could not already read. You pin only cards you made and pages you may read.
 
@@ -33,7 +33,7 @@ pinned cards and pages for one group, arranged the same way as Company. Each is 
 | `team:<group>` | Whoever may Read the group: **Seen by** opens the group's Access (permissions.md, People and groups) | The owner, admins, and a person who leads the group or a group above it |
 | `bot:<slug>` | Whoever may Read the bot | The bot itself, or a person who manages it |
 | `task:<id>` | Whoever may read the task | The owner, requester, a person who can move tasks, or the org owner; a bot only tasks it owns or requested, acting as itself |
-| `person:<id>` | That person only (Company) | That person, or BotOps and the Assistant acting for them |
+| `person:<id>` | That person only (Company) | That person, or Agent Ops and the Assistant acting for them |
 
 A team page nobody arranged shows Tasks by status, Done per week and Needs you for its team; the Growth page shows its
 default growth cards (see [growth.md](growth.md)). The first change saves them as real pins. Arranging: drag a card by its grip, and its
@@ -80,7 +80,7 @@ Unlinking is for whoever linked it, the task's owner or requester, or the org ow
 A bot's sidebar pins are its sidebar widgets: `page:<file id>` and `card:<id>` beside Tasks, Updates and Files, any
 number, and the built-ins may be hidden so the sidebar is only pages. The Assistant's sidebar keeps its own widgets.
 
-People change cards from the ⋯ menu; bots and BotOps (with the rights of the person who asked) use `tico card
+People change cards from the ⋯ menu; bots and Agent Ops (with the rights of the person who asked) use `tico card
 list|add|update|remove` and `tico pin add|update|remove`, the `tico_card_*` and `tico_pin_*` tools, or the API:
 `GET|PUT /api/v2/places/{place}`, `POST /api/v2/places/{place}/order`, `POST /api/v2/pins`,
 `PATCH|DELETE /api/v2/pins/{id}`, `GET|POST /api/v2/cards`, `PATCH|DELETE /api/v2/cards/{id}` and

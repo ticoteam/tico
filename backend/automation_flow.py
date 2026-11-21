@@ -853,7 +853,7 @@ def judge_state(values, fields):
 
 
 # ---------------------------------------------------------------------------------------------------- what the bot is told
-# The args each action reads (backend/automation_actions.py). Named once here: the hub tools, BotOps' automation
+# The args each action reads (backend/automation_actions.py). Named once here: the hub tools, Agent Ops' automation
 # guide and CONTRACT §2 all read it, and a test keeps it equal to the executor's action names.
 ACTION_ARGS = {
     "archive": {},
@@ -937,7 +937,7 @@ STEP_WORDS = {
 
 
 def shape_text():
-    """The flow's shape as BotOps reads it (guide_text), from the constants above: a change to any of them changes this
+    """The flow's shape as Agent Ops reads it (guide_text), from the constants above: a change to any of them changes this
     text, so the instructions cannot drift from what a save accepts."""
     lines = [
         "A flow is `{\"name\", \"owner\", \"trigger\", \"steps\", \"batch\", \"destinations\"}`. `owner` is a `person:`, `bot:` or `group:` ref; "
@@ -1008,7 +1008,7 @@ Do not ask about anything a sensible default answers.
   `tico automation recent-runs [--range 1h] [--status failed]` and `tico automation stats [--range 24h]` (which fail or
   cost the most). A message from the Automations page may carry its filters (`automations_filter` in its refs).
 - New: `tico automation create --file -` (the flow as JSON on stdin). Its owner is the asker unless they named another.
-  It is saved on unless the flow sends `"enabled": false` (what BotOps builds is saved off when it leaves `enabled`
+  It is saved on unless the flow sends `"enabled": false` (what Agent Ops builds is saved off when it leaves `enabled`
   out); send `"enabled": false` unless the request said to turn it on; then send `"enabled": true`.
 - Use a template: `tico automation templates` lists the inbox templates (founder, support, sales, blank) with their
   destinations. `tico automation template <id> --owner <ref> --inbox <address>` returns one filled in for that owner: the
@@ -1050,6 +1050,6 @@ sentence. Do not paste the flow JSON into the chat.
 
 
 def guide_text():
-    """BotOps' automation instructions (GET /api/v2/automations/guide, `tico automation guide`), with the flow format
+    """Agent Ops' automation instructions (GET /api/v2/automations/guide, `tico automation guide`), with the flow format
     generated from the code."""
     return GUIDE.replace("{{flow_shape}}", shape_text())

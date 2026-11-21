@@ -12,9 +12,9 @@ from backend import report_managers
 from backend.auth import Identity
 from backend.store import encode
 from backend.tests.helpers.api import claim, get, headers, post, put  # noqa: F401  (api is a fixture)
-from backend.tests.helpers.botops_parity import act
+from backend.tests.helpers.agent_ops_parity import act
 from backend.tests.helpers.mcp import call
-from backend.tests.helpers.member_bots import botops, finish  # noqa: F401  (botops is a fixture)
+from backend.tests.helpers.member_bots import agent_ops, finish  # noqa: F401  (agent-ops is a fixture)
 from backend.tests.helpers.statement_scope import measuring, recorder
 
 HAIKU = {"harness": "claude", "model": "claude-haiku-5-5", "effort": "low"}
@@ -467,16 +467,16 @@ NEW_BOT = {
 }
 
 
-def ask_botops(api, botops, manager, text=None):
-    """A manager bot asks BotOps with its own token, flagged needs-action so it wakes BotOps now (bot_to_bot.py);
-    the attempt is BotOps' run for that message. Each ask has its own text: the wake preset (wake_presets.py) cancels a
+def ask_agent_ops(api, agent_ops, manager, text=None):
+    """A manager bot asks Agent Ops with its own token, flagged needs-action so it wakes Agent Ops now (bot_to_bot.py);
+    the attempt is Agent Ops' run for that message. Each ask has its own text: the wake preset (wake_presets.py) cancels a
     job whose message repeats the room's last one soon after that run finished."""
     text = text or f"Add a report {uuid.uuid4().hex}"
     sent = api.post(
         "/api/v2/messages", json={"to": "botops", "text": text, "needs_action": True}, headers=headers(manager)
     )
     assert sent.status_code == 200, sent.text
-    return claim(api, botops, "botops")
+    return claim(api, agent_ops, "botops")
 
 
 def lifecycle_changes(api, bot_slug):
@@ -492,12 +492,12 @@ def test_a_manager_bot_with_its_own_token_cannot_add_or_archive_a_report(api):
     assert get(api, "bots/counsel")["state"] != "archived"
 
 
-def test_botops_adds_a_report_for_the_manager_as_a_members_bot_under_the_person_above(api, botops):
+def test_agent_ops_adds_a_report_for_the_manager_as_a_members_bot_under_the_person_above(api, agent_ops):
     lead = bot(api, "lead", reports_to="human:cara")
-    attempt = ask_botops(api, botops, lead)
+    attempt = ask_agent_ops(api, agent_ops, lead)
     made = act(api, attempt, "POST", "bots", {**NEW_BOT, "slug": "junior", "reports_to": "lead"})
     assert made.status_code == 200, made.text
-    finish(api, botops, attempt)
+    finish(api, agent_ops, attempt)
     jid, lid = bot_id(api, "junior"), bot_id(api, "lead")
     row = get(api, "bots/junior")
     assert row["reports_to"] == lid
@@ -516,11 +516,11 @@ def test_botops_adds_a_report_for_the_manager_as_a_members_bot_under_the_person_
     assert change["after"] == {"state": "planned"}
 
 
-def test_botops_refuses_a_report_that_is_not_the_managers(api, botops):
+def test_agent_ops_refuses_a_report_that_is_not_the_managers(api, agent_ops):
     lead = bot(api, "lead", reports_to="human:cara")
     bot(api, "stranger", reports_to="human:cara")
     bot(api, "counsel", reports_to="lead")
-    attempt = ask_botops(api, botops, lead)
+    attempt = ask_agent_ops(api, agent_ops, lead)
     # Not under the manager: a new bot placed under someone else, or an existing report of another manager.
     assert act(api, attempt, "POST", "bots", {**NEW_BOT, "slug": "junior", "reports_to": "stranger"}).status_code == 403
     assert (
@@ -531,51 +531,51 @@ def test_botops_refuses_a_report_that_is_not_the_managers(api, botops):
         act(api, attempt, "POST", "bots/counsel/archive", {"expected_revision": revision(api, "counsel")}).status_code
         == 200
     )
-    finish(api, botops, attempt)
+    finish(api, agent_ops, attempt)
     assert get(api, "bots/stranger")["state"] != "archived"
 
 
-def test_the_switches_refuse_botops_for_the_manager(api, botops):
+def test_the_switches_refuse_agent_ops_for_the_manager(api, agent_ops):
     lead = bot(api, "lead", reports_to="human:cara")
     bot(api, "counsel", reports_to="lead")
     post(api, "bots/lead/manages-reports", {"manages_reports": False, "expected_revision": revision(api, "lead")})
-    attempt = ask_botops(api, botops, lead)
+    attempt = ask_agent_ops(api, agent_ops, lead)
     assert act(api, attempt, "POST", "bots", {**NEW_BOT, "slug": "junior", "reports_to": "lead"}).status_code == 403
     assert (
         act(api, attempt, "POST", "bots/counsel/archive", {"expected_revision": revision(api, "counsel")}).status_code
         == 403
     )
-    finish(api, botops, attempt)
+    finish(api, agent_ops, attempt)
     post(api, "bots/lead/manages-reports", {"manages_reports": True, "expected_revision": revision(api, "lead")})
     put(api, "access/rules", {"managers_manage_reports": False})
-    attempt = ask_botops(api, botops, lead)
+    attempt = ask_agent_ops(api, agent_ops, lead)
     assert (
         act(api, attempt, "POST", "bots/counsel/archive", {"expected_revision": revision(api, "counsel")}).status_code
         == 403
     )
-    finish(api, botops, attempt)
+    finish(api, agent_ops, attempt)
 
 
-def test_the_weekly_cap_refuses_and_asks_the_person_above_the_manager(api, botops):
+def test_the_weekly_cap_refuses_and_asks_the_person_above_the_manager(api, agent_ops):
     lead = bot(api, "lead", reports_to="human:cara")
     for n in range(3):
         bot(api, f"junior{n}", reports_to="lead")
     for n in range(3):
-        attempt = ask_botops(api, botops, lead)
+        attempt = ask_agent_ops(api, agent_ops, lead)
         assert (
             act(
                 api, attempt, "POST", "bots/junior%d/archive" % n, {"expected_revision": revision(api, f"junior{n}")}
             ).status_code
             == 200
         )
-        finish(api, botops, attempt)
+        finish(api, agent_ops, attempt)
     bot(api, "junior3", reports_to="lead")
-    attempt = ask_botops(api, botops, lead)
+    attempt = ask_agent_ops(api, agent_ops, lead)
     over = act(api, attempt, "POST", "bots/junior3/archive", {"expected_revision": revision(api, "junior3")})
     assert over.status_code == 429 and over.json()["error"]["code"] == "report_cap"
     assert "Do not ask again" in over.json()["error"]["detail"]
     assert get(api, "bots/junior3")["state"] != "archived"
-    finish(api, botops, attempt)
+    finish(api, agent_ops, attempt)
     with api.app.state.store.read() as c:
         # The lead's own task, with its ❓ to Cara (backend/person_asks.py): in her Needs you.
         asks = c.execute(
@@ -587,23 +587,23 @@ def test_the_weekly_cap_refuses_and_asks_the_person_above_the_manager(api, botop
     assert [tuple(a) for a in asks] == [(lead_bot, lead_bot, "human:cara", lead_bot)]
 
 
-def test_botops_archives_a_report_and_the_change_is_recorded_and_restorable(api, botops):
+def test_agent_ops_archives_a_report_and_the_change_is_recorded_and_restorable(api, agent_ops):
     lead = bot(api, "lead", reports_to="human:cara")
     # Restoring an archived bot takes its owner or operator, or a person above it who is one of them: the org chart
     # leaves an archived bot out (Auth.manages), so the person above alone cannot bring it back.
     bot(api, "counsel", reports_to="lead", operator="cara")
-    attempt = ask_botops(api, botops, lead)
+    attempt = ask_agent_ops(api, agent_ops, lead)
     archived = act(api, attempt, "POST", "bots/counsel/archive", {"expected_revision": revision(api, "counsel")})
     assert archived.status_code == 200, archived.text
-    finish(api, botops, attempt)
+    finish(api, agent_ops, attempt)
     [change] = lifecycle_changes(api, "counsel")
     assert change["via"] == "report_manager" and change["after"] == {"state": "archived"}
     assert change["before"] == {"state": "active"}
     # The manager's ask can bring it back; the person above can undo the archive as well.
-    attempt = ask_botops(api, botops, lead)
+    attempt = ask_agent_ops(api, agent_ops, lead)
     back = act(api, attempt, "POST", "bots/counsel/restore", {})
     assert back.status_code == 200, back.text
-    finish(api, botops, attempt)
+    finish(api, agent_ops, attempt)
     assert get(api, "bots/counsel")["state"] != "archived"
     # The restore is the newest change, so it is the one the person above can undo: back to archived.
     [restore_row] = [r for r in lifecycle_changes(api, "counsel") if r["after"] != {"state": "archived"}][:1]

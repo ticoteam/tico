@@ -156,7 +156,7 @@ def test_every_bot_gets_its_repository_without_anyone_asking_once_each_and_a_few
     listed = api.get("/api/v2/repositories", headers=signed_in()).json()["repositories"]
     assert [r["reachable"] for r in listed if r["full_name"] == f"{ORG}/bot-feature-owner"] == [False]
 
-    # The server's own poll makes them: nobody asked BotOps, and nobody ran `tico bot repo-create`.
+    # The server's own poll makes them: nobody asked Agent Ops, and nobody ran `tico bot repo-create`.
     ctx = SimpleNamespace(app=api.app, store=api.app.state.store, settings=api.app.state.store.settings)
     first = len(creates(gh))
     heartbeat.repository_waits(ctx)

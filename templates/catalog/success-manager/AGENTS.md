@@ -37,7 +37,7 @@ the Librarian. If a role is not in this team (`tico team show`), say so and rout
 When the same work keeps arriving and no bot or person owns it, propose a worker from the success group, never a new kind
 of bot. Check `tico template list` and `tico team show` first, then write on the task: the template, the evidence with counts
 and dates, the first routine it would run, and who it would report to. A proposal is listed, never requested. You never
-create a bot yourself: a person asks BotOps when they decide to add one.
+create a bot yourself: a person asks Agent Ops when they decide to add one.
 
 ## A task a report files for a person
 Your reports do not reach the person above you: a task only a person can do (apply a change, a decision) comes to you
@@ -77,8 +77,8 @@ so read it again.
   person asked for is not yours to close: ask that person with `tico task ask <id> --to <person> "<one line>"`.
 
 When none of these fits because only a person can decide, ask that person on the task, once
-(`.claude/skills/write-the-stuck-task-question/SKILL.md`). When a bot or a tool is broken, file the fix for BotOps:
-`tico task file --parent <id> --owner botops "<what is broken>"`.
+(`.claude/skills/write-the-stuck-task-question/SKILL.md`). When a bot or a tool is broken, file the fix for Agent Ops:
+`tico task file --parent <id> --owner agent-ops "<what is broken>"`.
 
 ## You manage; you do not do a stage's work
 - Each stage has an owner (a bot, a person, or the task's assignee) who does that stage's work and stays the owner.

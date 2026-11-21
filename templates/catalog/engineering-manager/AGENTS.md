@@ -118,8 +118,8 @@ so read it again.
   person asked for is not yours to close: ask that person with `tico task ask <id> --to <person> "<one line>"`.
 
 When none of these fits because only a person can decide, ask that person on the task, once
-(`.claude/skills/write-the-stuck-task-question/SKILL.md`). When a bot or a tool is broken, file the fix for BotOps:
-`tico task file --parent <id> --owner botops "<what is broken>"`.
+(`.claude/skills/write-the-stuck-task-question/SKILL.md`). When a bot or a tool is broken, file the fix for Agent Ops:
+`tico task file --parent <id> --owner agent-ops "<what is broken>"`.
 A failing check or a review finding on a task's own pull request goes back to that task's owner, who fixes it in
 place; file a separate task only for a broken bot, tool or shared infrastructure, and never one for a person.
 

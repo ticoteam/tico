@@ -1,6 +1,6 @@
 """Saved credentials stay with the service they were saved for (backend/destinations.py): the Gateway connection and
 outgoing webhooks with secret headers hold a save that would send them elsewhere until the editor keeps or clears them,
-BotOps acting for a person turns that into the person's own Confirm card, and every such change leaves one audit event
+Agent Ops acting for a person turns that into the person's own Confirm card, and every such change leaves one audit event
 that shows scheme, host and port only. Ana owns the team, Ben is an admin, Cara is a member (test_api's fixture)."""
 
 import json
@@ -13,10 +13,10 @@ from backend import webhook_delivery as D
 from backend import webhooks as W
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, headers, post, put, ready, runner  # noqa: F401  (fixture)
-from backend.tests.helpers.botops_confirm_cards import confirm
-from backend.tests.helpers.botops_parity import act
+from backend.tests.helpers.agent_ops_confirm_cards import confirm
+from backend.tests.helpers.agent_ops_parity import act
 from backend.tests.helpers.gateway_connection import KEY, OTHER, fake_gateway, save, setup
-from backend.tests.helpers.member_bots import botops, finish, turn  # noqa: F401  (fixtures)
+from backend.tests.helpers.member_bots import agent_ops, finish, turn  # noqa: F401  (fixtures)
 from backend.tests.helpers.webhooks import net, run  # noqa: F401  (fixture)
 
 SECRET = "hdr-synthetic-secret-value-7781"
@@ -477,12 +477,12 @@ def test_only_the_creator_an_admin_or_the_owner_moves_a_webhook(api, net):
     assert events(api) == []
 
 
-# --------------------------------------------------------------------------------------- BotOps acting for a person
-def test_botops_moving_a_webhook_for_a_person_waits_for_their_tap(api, net, botops):
+# --------------------------------------------------------------------------------------- Agent Ops acting for a person
+def test_agent_ops_moving_a_webhook_for_a_person_waits_for_their_tap(api, net, agent_ops):
     """Test 8: unanswered it is refused with what the person must decide; answered it is a Confirm card; nothing
     changes until the person taps; the tap runs as them and leaves the one event."""
     made = hook(api)
-    ana = turn(api, botops, person="ana-test", text="Point my webhook at the new receiver")
+    ana = turn(api, agent_ops, person="ana-test", text="Point my webhook at the new receiver")
     new = "https://other.acme.example/tico"
     path = f"webhooks/{made['id']}/update"
     unsaid = act(api, ana, "POST", path, {"url": new, "expected_revision": made["revision"]})
@@ -501,7 +501,7 @@ def test_botops_moving_a_webhook_for_a_person_waits_for_their_tap(api, net, boto
     assert {"field": "credentials", "new": "keep: x-api-key"} in diff
     assert "team-a" not in json.dumps(diff) + card["action"]["description"]
     assert shown(api, made["id"])["url"] == HOOK and events(api) == []
-    # BotOps can't tap it for her.
+    # Agent Ops can't tap it for her.
     assert act(api, ana, "POST", f"assistant/actions/{card['action']['id']}/confirm", {}).status_code == 403
     assert confirm(api, card, "ana-test")["action"]["status"] == "done"
     assert shown(api, made["id"])["url"] == new
@@ -511,13 +511,13 @@ def test_botops_moving_a_webhook_for_a_person_waits_for_their_tap(api, net, boto
     # A same-destination edit for her is not carded (cards stay as they are).
     same = act(api, ana, "POST", path, {"name": "Renamed", "expected_revision": shown(api, made["id"])["revision"]})
     assert same.status_code == 200 and "needs_confirm" not in same.json(), same.text
-    finish(api, botops, ana)
+    finish(api, agent_ops, ana)
 
 
-def test_botops_never_resends_a_secret_header_with_a_move(api, net, botops):
+def test_agent_ops_never_resends_a_secret_header_with_a_move(api, net, agent_ops):
     """A secret listed without a value would keep its saved one; a request for a person can't name one at all."""
     made = hook(api)
-    ana = turn(api, botops, person="ana-test", text="Point my webhook at the new receiver and keep its headers")
+    ana = turn(api, agent_ops, person="ana-test", text="Point my webhook at the new receiver and keep its headers")
     body = {
         "url": "https://other.acme.example/tico",
         "expected_revision": made["revision"],
@@ -527,7 +527,7 @@ def test_botops_never_resends_a_secret_header_with_a_move(api, net, botops):
     refused = act(api, ana, "POST", f"webhooks/{made['id']}/update", body)
     assert refused.status_code == 422 and refused.json()["error"]["code"] == "secret_in_request", refused.text
     assert shown(api, made["id"])["url"] == HOOK and events(api) == []
-    finish(api, botops, ana)
+    finish(api, agent_ops, ana)
 
 
 def test_kept_secret_headers_read_the_same_before_the_save_as_after_it():
@@ -598,9 +598,9 @@ def test_a_gateway_move_for_a_person_without_their_tap_is_refused_by_the_save_it
         assert gateway(api)["url"] == before["url"] and gateway(api).get("key") and events(api) == []
 
 
-def test_botops_clearing_for_a_person_also_waits_for_their_tap(api, net, botops):
+def test_agent_ops_clearing_for_a_person_also_waits_for_their_tap(api, net, agent_ops):
     made = hook(api)
-    ana = turn(api, botops, person="ana-test", text="Move my webhook and drop its key")
+    ana = turn(api, agent_ops, person="ana-test", text="Move my webhook and drop its key")
     card = act(
         api,
         ana,
@@ -620,18 +620,18 @@ def test_botops_clearing_for_a_person_also_waits_for_their_tap(api, net, botops)
     assert shown(api, made["id"])["enabled"] is True and shown(api, made["id"])["url"] == HOOK
     assert confirm(api, card.json(), "ana-test")["action"]["status"] == "done"
     assert shown(api, made["id"])["enabled"] is False and shown(api, made["id"])["name"] == "Moved"
-    finish(api, botops, ana)
+    finish(api, agent_ops, ana)
 
 
-def test_botops_resetting_the_gateway_to_its_default_address_waits_for_the_owners_tap(api, monkeypatch, botops):
+def test_agent_ops_resetting_the_gateway_to_its_default_address_waits_for_the_owners_tap(api, monkeypatch, agent_ops):
     """Test 8, Gateway: an empty URL (Tico's own address) is a destination change too, so it is carded."""
     setup(api, monkeypatch)
     monkeypatch.setattr(gateway_connection, "check_later", lambda *args, **kwargs: None)
     with fake_gateway() as fake:
         fake.active(KEY, 0.1)
         save(api, fake)
-        put(api, "access/rules", {"botops_direct": True})
-        ana = turn(api, botops, person="ana-test", text="Put the Gateway back to Tico's address")
+        put(api, "access/rules", {"agent_ops_direct": True})
+        ana = turn(api, agent_ops, person="ana-test", text="Put the Gateway back to Tico's address")
         revision = gateway(api)["revision"]
         held(act(api, ana, "PUT", "providers/gateway", {"url": "", "expected_revision": revision}))
         card = act(
@@ -647,15 +647,15 @@ def test_botops_resetting_the_gateway_to_its_default_address_waits_for_the_owner
         assert confirm(api, card.json(), "ana-test")["action"]["status"] == "done"
         after = gateway(api)
         assert after["url"] == "" and "key" not in after and after["auto"]["off"] is True
-        finish(api, botops, ana)
+        finish(api, agent_ops, ana)
 
 
 @pytest.mark.parametrize("stale", ["revision", "destination", "credentials", "rights", "expired"])
-def test_a_confirm_card_is_refused_at_the_tap_once_anything_it_was_bound_to_changed(api, net, botops, stale):
+def test_a_confirm_card_is_refused_at_the_tap_once_anything_it_was_bound_to_changed(api, net, agent_ops, stale):
     """Test 9: the card is bound to the endpoint's revision (so its destination and which secrets it holds), the
     person's rights and 24 hours. Ben is an admin who may manage Ana's endpoint until he is not."""
     made = hook(api)
-    ben = turn(api, botops, person="ben-test", text="Point Ana's webhook at the new receiver")
+    ben = turn(api, agent_ops, person="ben-test", text="Point Ana's webhook at the new receiver")
     card = act(
         api,
         ben,
@@ -699,7 +699,7 @@ def test_a_confirm_card_is_refused_at_the_tap_once_anything_it_was_bound_to_chan
     status = r.json().get("action", {}).get("status") if r.status_code == 200 else None
     assert r.status_code != 200 or status == "failed", r.text
     assert shown(api, made["id"])["url"] == url_before != "https://other.acme.example/tico"
-    finish(api, botops, ben)
+    finish(api, agent_ops, ben)
 
 
 # ------------------------------------------------------------------------------- what a send reads (test 12, race)
@@ -818,7 +818,7 @@ def test_an_automatic_rotation_never_sends_the_key_to_an_address_saved_while_it_
         assert sent == [(fake.url, KEY)]
 
 
-def test_a_card_for_a_same_service_gateway_path_shows_only_scheme_host_and_port(api, monkeypatch, botops):
+def test_a_card_for_a_same_service_gateway_path_shows_only_scheme_host_and_port(api, monkeypatch, agent_ops):
     """Tests 4 and 10 on the forced card: a path on the same origin needs no keep-or-clear, but the card the saved key
     still forces shows the destination by scheme, host and port, never the path; the tap runs the real address."""
     setup(api, monkeypatch)
@@ -827,7 +827,7 @@ def test_a_card_for_a_same_service_gateway_path_shows_only_scheme_host_and_port(
         fake.active(KEY, 0.1)
         save(api, fake)
         private = fake.url.replace("/v1/gateway", "/private-tenant-q7/v2")
-        ana = turn(api, botops, person="ana-test", text="Point the Gateway at our tenant path")
+        ana = turn(api, agent_ops, person="ana-test", text="Point the Gateway at our tenant path")
         card = act(
             api, ana, "PUT", "providers/gateway", {"url": private, "expected_revision": gateway(api)["revision"]}
         )
@@ -848,4 +848,4 @@ def test_a_card_for_a_same_service_gateway_path_shows_only_scheme_host_and_port(
         assert gateway(api)["url"] == fake.url
         assert confirm(api, card.json(), "ana-test")["action"]["status"] == "done"
         assert gateway(api)["url"] == private and gateway(api).get("key")
-        finish(api, botops, ana)
+        finish(api, agent_ops, ana)

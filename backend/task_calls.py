@@ -390,7 +390,7 @@ def task_reassign(
     row = _open(conn, actor, task_id, mover)
     target: str | None = None
     if owner:
-        H._botops_only(conn, actor, H.resolve_actor(conn, owner))
+        H._agent_ops_only(conn, actor, H.resolve_actor(conn, owner))
         target = H._reach(conn, actor, owner)
     if target != row.get("owner_id"):
         H.refuse_stage_reader(conn, actor, row)  # a bot that reads it only while it holds the stage gives it to nobody
@@ -972,7 +972,7 @@ def standing_line(standing: "R.Standing", hidden: list[str]) -> str:
 
 
 def _answer_view(conn: "sqlite3.Connection", task_id: str, answer: Row, private: bool) -> Row:
-    """One answer as the task shows it. `via` is who gave it for the person, when that was the Assistant or BotOps
+    """One answer as the task shows it. `via` is who gave it for the person, when that was the Assistant or Agent Ops
     acting with the person's rights (H.VIA, kept on the answer's history row): "assistant" or "botops", else None."""
     found = conn.execute(
         "SELECT via FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='answer' "

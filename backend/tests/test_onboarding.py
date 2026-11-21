@@ -1,4 +1,4 @@
-"""First-run onboarding: pick templates, name things, and hand BotOps the setup backlog.
+"""First-run onboarding: pick templates, name things, and hand Agent Ops the setup backlog.
 
 The catalog is written per test, so these assertions never depend on the cards a release
 happens to ship. The company is Acme, its app is Atlas, its assistant Morgan.
@@ -17,7 +17,7 @@ from backend import bot_settings as BS
 from backend.tests.helpers.onboarding import (
     ASSISTANT_AGENT,
     ASSISTANT_CARD,
-    BOTOPS_CARD,
+    AGENT_OPS_CARD,
     LIBRARIAN_CARD,
     OWNER_EMAIL,
     SEED,
@@ -41,7 +41,7 @@ def seats(api):
 
 def test_setup_lays_out_each_picked_role_once_as_a_recruiting_seat_and_creates_no_bot_for_it(environment):
     """bot-lifecycle-spec.md acceptance tests 1 and 20: a picked role is a Recruiting seat with its job description and
-    reporting line; no bot, repository, computer slot or BotOps setup task. Completing twice changes nothing."""
+    reporting line; no bot, repository, computer slot or Agent Ops setup task. Completing twice changes nothing."""
     api = environment()
     machine(api)
     # The owner's edits to the instructions are the duties and limits recruiting must see; the template's text is not.
@@ -52,7 +52,7 @@ def test_setup_lays_out_each_picked_role_once_as_a_recruiting_seat_and_creates_n
     assert again.status_code == 200, again.text
     record = again.json()
     assert record["completed"] == first["completed"] and record["seats"] == first["seats"]
-    assert sorted(row["slug"] for row in record["bots"]) == ["assistant", "botops"]
+    assert sorted(row["slug"] for row in record["bots"]) == ["agent-ops", "assistant"]
     (seat,) = seats(api)
     assert record["seats"] == {"support": seat["id"]}
     assert seat["title"] == "Help" and seat["reports_to"] == "human:morgan"
@@ -66,7 +66,7 @@ def test_setup_lays_out_each_picked_role_once_as_a_recruiting_seat_and_creates_n
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM bots WHERE slug='support'").fetchone()
         assert not c.execute("SELECT 1 FROM assignments WHERE bot NOT IN ('assistant','botops')").fetchone()
-    assert _states(api)["botops"] == _states(api)["assistant"] == "active"  # the built-ins work from day one
+    assert _states(api)["agent-ops"] == _states(api)["assistant"] == "active"  # the built-ins work from day one
 
 
 def test_the_default_marketing_chart_hires_the_writer_first_and_moves_it_under_the_head_when_the_head_is_hired(
@@ -141,7 +141,7 @@ def test_the_inbox_manager_turned_on_in_setup_is_a_message_bot_linked_to_the_own
     api = environment(
         cards=[
             (ASSISTANT_CARD, ASSISTANT_AGENT),
-            (BOTOPS_CARD, ""),
+            (AGENT_OPS_CARD, ""),
             (SUPPORT_CARD, SUPPORT_AGENT),
             (inbox, "# {{bot_name}}\n\nYou run one human's mailbox.\n"),
         ]
@@ -157,7 +157,7 @@ def test_the_inbox_manager_turned_on_in_setup_is_a_message_bot_linked_to_the_own
     )
     done = api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text
-    assert sorted(row["slug"] for row in done.json()["bots"]) == ["assistant", "botops", "inbox"]
+    assert sorted(row["slug"] for row in done.json()["bots"]) == ["agent-ops", "assistant", "inbox"]
     assert set(done.json()["seats"]) == {"support"}
     with api.app.state.store.read() as c:
         assert (
@@ -181,10 +181,10 @@ def test_direct_signup_with_no_chosen_chart_is_the_built_ins_and_an_empty_chart(
     done = api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text
     assert done.json()["completed"] and done.json()["company_import_failed"] is None
-    assert sorted(row["slug"] for row in done.json()["bots"]) == ["assistant", "botops"]
+    assert sorted(row["slug"] for row in done.json()["bots"]) == ["agent-ops", "assistant"]
     # Nothing picked is the default chart (company_import.default_chart): its seats whose template this catalog has.
     assert sorted(seat["title"] for seat in seats(api)) == ["Inbound Sales Owner", "Support Owner"]
-    assert _states(api)["botops"] == _states(api)["assistant"] == "active"
+    assert _states(api)["agent-ops"] == _states(api)["assistant"] == "active"
     added = api.post("/api/v2/seats", json={"title": "Head of Support"}, headers=signed_in())
     assert added.status_code == 200 and added.json()["stage"] == "recruiting"
 
@@ -274,13 +274,13 @@ def test_the_owner_saves_a_revisioned_choice_and_a_stale_editor_is_refused(envir
 
 def test_every_shipped_template_saves_as_the_wizard_sends_it(environment):
     """The wizard sends each picked bot's instructions back as the catalog rendered them (ui/app/welcome.ts). A shipped
-    AGENTS.md longer than the setup save accepts stopped every owner on the team chart (BotOps, 24,048 characters,
+    AGENTS.md longer than the setup save accepts stopped every owner on the team chart (Agent Ops, 24,048 characters,
     against 20,000). The limit is the API's own: the save itself, and the model "Add from catalog" posts."""
     from backend.models import BotDefinitionCreate
 
     api = environment(catalog_dir=Settings.catalog_dir)
     cards = api.get("/api/v2/templates", headers=signed_in()).json()["cards"]
-    assert any(card["template"] == "botops" for card in cards)
+    assert any(card["template"] == "agent-ops" for card in cards)
     saved = api.put(
         "/api/v2/setup",
         headers=signed_in(),
@@ -310,14 +310,14 @@ def test_the_team_is_created_with_no_provider_and_no_computer_and_starts_once_th
         selected={"support-owner": {"template": "support-owner", "display_name": "Support Owner", "instructions": ""}},
     )
     done = build_team(api)
-    assert {"botops", "support-owner"} <= {row["slug"] for row in done["bots"]}
+    assert {"agent-ops", "support-owner"} <= {row["slug"] for row in done["bots"]}
     with api.app.state.store.read() as c:
         config = BS.read(c, 'support-owner')
         assert not c.execute("SELECT 1 FROM assignments").fetchone()
     assert not {"model", "runtime"} & set(config)  # it follows the company default, once there is one
-    assert _states(api)["botops"] == "planned"  # nothing is placed or running yet
+    assert _states(api)["agent-ops"] == "planned"  # nothing is placed or running yet
     machine(api)  # a computer appears: the bots are placed
-    assert _states(api)["botops"] == "active"
+    assert _states(api)["agent-ops"] == "active"
     with api.app.state.store.read() as c:
         assert c.execute("SELECT 1 FROM assignments WHERE bot='support-owner'").fetchone()
     api.put("/api/v2/providers", headers=signed_in(), json={"enabled": ["openai"], "expected_revision": 0})
@@ -342,8 +342,8 @@ def test_completing_onboarding_activates_the_bootstrap_bots_once_a_machine_hosts
     )
     build_team(api)
     states = _states(api)
-    assert states["botops"] == "active" and states["assistant"] == "active"
-    assert states["support"] == "planned"  # activating what BotOps builds stays a person's call
+    assert states["agent-ops"] == "active" and states["assistant"] == "active"
+    assert states["support"] == "planned"  # activating what Agent Ops builds stays a person's call
     task = api.post(
         "/api/v2/tasks", json={"owner": "botops", "title": "Look at this", "body": "x"}, headers=signed_in()
     )
@@ -372,7 +372,9 @@ def _routines(api):
 
 
 def test_the_librarian_is_always_built_with_its_daily_routine_seeded_once(environment):
-    api = environment(seed={}, cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, ""), (LIBRARIAN_CARD, "# L\n")])
+    api = environment(
+        seed={}, cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (AGENT_OPS_CARD, ""), (LIBRARIAN_CARD, "# L\n")]
+    )
     machine(api)
     folder = Path(api.app.state.store.settings.catalog_dir) / "librarian"
     (folder / "playbooks").mkdir()
@@ -380,8 +382,8 @@ def test_the_librarian_is_always_built_with_its_daily_routine_seeded_once(enviro
     (folder / "playbooks/refresh-the-map.md").write_text("Refresh {{company_name}}'s map of the docs.\n")
     draft(api)
     record = api.post("/api/v2/setup/complete", json={}, headers=signed_in()).json()
-    assert sorted(row["slug"] for row in record["bots"]) == ["assistant", "botops", "librarian"]
-    assert all(row["setup_task_id"] is None for row in record["bots"])  # the runner sets it up, not BotOps
+    assert sorted(row["slug"] for row in record["bots"]) == ["agent-ops", "assistant", "librarian"]
+    assert all(row["setup_task_id"] is None for row in record["bots"])  # the runner sets it up, not Agent Ops
     assert _states(api)["librarian"] == "active"
     (routine,) = _routines(api)
     assert routine["id"] == "librarian:refresh-the-map" and routine["cron"] == "30 3 * * *"
@@ -394,18 +396,18 @@ def test_the_librarian_is_always_built_with_its_daily_routine_seeded_once(enviro
     assert [r["deleted_at"] is not None for r in _routines(api)] == [True]  # and it stays deleted
 
 
-def _botops_goals(api):
+def _agent_ops_goals(api):
     with api.app.state.store.read() as c:
         return [dict(row) for row in c.execute("SELECT * FROM goals WHERE owner_id='bot:botops'")]
 
 
 def test_existing_builtin_goals_survive_upgrade(environment):
     api = environment()
-    assert _botops_goals(api) == []
+    assert _agent_ops_goals(api) == []
     made = api.post("/api/v2/goals", json={"title": "Own goal", "owner": "botops"}, headers=signed_in())
     assert made.status_code == 200, made.text
     api.app.state.store.initialize(seed_market=False)
-    assert [g["title"] for g in _botops_goals(api)] == ["Own goal"]
+    assert [g["title"] for g in _agent_ops_goals(api)] == ["Own goal"]
 
 
 @pytest.mark.parametrize("state,draining", [("paused", 1)])
@@ -461,7 +463,7 @@ def test_a_companys_own_bot_named_counsel_is_never_taken_for_the_built_in_counse
     own = {"name": "counsel", "status": "planned", "display_name": "Legal Desk"}
     api = environment(
         seed={**SEED, "counsel": own},
-        cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, ""), (COUNSEL_CARD, "# Counsel\n")],
+        cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (AGENT_OPS_CARD, ""), (COUNSEL_CARD, "# Counsel\n")],
     )
 
     def theirs():

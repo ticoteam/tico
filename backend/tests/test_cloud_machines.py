@@ -22,7 +22,7 @@ from backend.tests.helpers.api import assign, get, headers, post, ready, runner 
 from backend.tests.helpers.cloud_access import signals
 from backend.tests.helpers.credentials import setup
 from backend.tests.helpers.model_subscriptions import OTHER, TOKEN, add, codex_file, company, give, on
-from backend.tests.helpers.member_bots import botops  # noqa: F401 - fixture for settings confirmation
+from backend.tests.helpers.member_bots import agent_ops  # noqa: F401 - fixture for settings confirmation
 from backend import model_subscriptions as MS
 from backend.auth import Identity
 from backend.names import SUPPORT_ACTOR
@@ -931,22 +931,22 @@ def test_an_offline_own_machine_is_restarted_and_recorded_without_a_person_card(
         assert not c.execute("SELECT 1 FROM tasks WHERE title LIKE 'Health: Check %cloud machine' LIMIT 1").fetchone()
 
 
-def with_botops(cloud):
+def with_agent_ops(cloud):
     with cloud.store.transaction() as c:
-        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
+        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','botops','Agent Ops','active')")
 
 
 def machine_cards(cloud):
     with cloud.store.read() as c:
         return [
-            {**dict(r), "body": H.task_words(c, r["id"])}  # what Tico gave BotOps: its instructions
+            {**dict(r), "body": H.task_words(c, r["id"])}  # what Tico gave Agent Ops: its instructions
             for r in c.execute("SELECT id,title,owner_id,status FROM tasks WHERE title LIKE 'Check %cloud machine'")
         ]
 
 
 @pytest.mark.parametrize(("code", "status"), [("starts_full", 429), ("cpu_cap", 409)])
-def test_a_refused_offline_restart_files_one_botops_task_and_keeps_the_existing_retry(cloud, code, status):
-    with_botops(cloud)
+def test_a_refused_offline_restart_files_one_agent_ops_task_and_keeps_the_existing_retry(cloud, code, status):
+    with_agent_ops(cloud)
     silent_with_waiting_work(cloud)
     cloud.hq.fail["start"] = [CM.Refused(code, status), CM.Refused(code, status)]
     assert cloud.tick(CM.OFFLINE_RESTART_DELAY + 1) == ["stop"]
@@ -970,12 +970,12 @@ def test_a_refused_offline_restart_files_one_botops_task_and_keeps_the_existing_
     assert len(machine_cards(cloud)) == 1
 
 
-def test_the_refused_restart_task_is_one_open_per_bot_and_only_with_botops(cloud):
+def test_the_refused_restart_task_is_one_open_per_bot_and_only_with_agent_ops(cloud):
     adopt(cloud)
     with cloud.store.transaction() as c:
-        assert file_health_card(c, "ops", "starts_full", cloud.at[0]) is None  # no BotOps: nothing filed
+        assert file_health_card(c, "ops", "starts_full", cloud.at[0]) is None  # no Agent Ops: nothing filed
     assert machine_cards(cloud) == []
-    with_botops(cloud)
+    with_agent_ops(cloud)
     with cloud.store.transaction() as c:
         first = file_health_card(c, "ops", "starts_full", cloud.at[0])
         assert first and file_health_card(c, "ops", "cpu_cap", cloud.at[0]) is None
@@ -1002,8 +1002,8 @@ def person_reach(cloud):
         )
 
 
-def test_a_restart_that_never_checks_in_fails_once_to_botops_and_does_not_loop(cloud):
-    with_botops(cloud)
+def test_a_restart_that_never_checks_in_fails_once_to_agent_ops_and_does_not_loop(cloud):
+    with_agent_ops(cloud)
     restarted(cloud)
     before = person_reach(cloud)
     for _ in range(CM.OFFLINE_RESTART_DELAY // 60 - 1):  # past the 5-minute pause these tests set: not idle yet
@@ -1028,7 +1028,7 @@ def test_a_restart_that_never_checks_in_fails_once_to_botops_and_does_not_loop(c
 
 
 def test_a_restart_checked_in_before_its_deadline_files_nothing(cloud):
-    with_botops(cloud)
+    with_agent_ops(cloud)
     computer = restarted(cloud)
     cloud.tick(CM.OFFLINE_RESTART_DELAY - 2)
     reported(cloud, computer)
@@ -1038,7 +1038,7 @@ def test_a_restart_checked_in_before_its_deadline_files_nothing(cloud):
 
 
 def test_a_failed_restart_that_checks_in_later_can_be_restarted_again_after_the_hour(cloud):
-    with_botops(cloud)
+    with_agent_ops(cloud)
     computer = restarted(cloud)
     cloud.tick(CM.OFFLINE_RESTART_DELAY)
     assert len(machine_cards(cloud)) == 1
@@ -2261,12 +2261,12 @@ def test_a_bot_manager_can_replace_without_losing_the_admins_plan_placement(clou
     assert given(cloud, new["runner_id"]) == {"claude": sid}
 
 
-def test_replace_through_botops_waits_for_the_persons_confirmation(cloud, botops):
+def test_replace_through_agent_ops_waits_for_the_persons_confirmation(cloud, agent_ops):
     from backend.tests.helpers.member_bots import turn
     from backend.tests.helpers.settings_assistant import mcp
 
     enrolled(cloud)
-    attempt = turn(cloud.api, botops, "ana-test", "Replace ops's cloud machine")
+    attempt = turn(cloud.api, agent_ops, "ana-test", "Replace ops's cloud machine")
     failed, card = mcp(
         cloud.api,
         "tico_settings_set",

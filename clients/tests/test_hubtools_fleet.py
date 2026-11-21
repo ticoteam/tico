@@ -17,7 +17,7 @@ class _Api:
 
 
 class _Groups:
-    """The group tools: a person's own token writes to the routes itself; a bot (BotOps) is the requester."""
+    """The group tools: a person's own token writes to the routes itself; a bot (Agent Ops) is the requester."""
 
     def __init__(self, actor="human:ana"):
         self.actor, self.calls = actor, []
@@ -43,7 +43,7 @@ class _Groups:
         return {"id": "seo"}
 
 
-def test_group_tools_list_create_and_update_and_botops_acts_as_the_requester():
+def test_group_tools_list_create_and_update_and_agent_ops_acts_as_the_requester():
     fn = hubtools.BY_NAME
     api = _Groups()
     assert fn["tico_group_list"]["fn"](api, {}) == [{"id": "seo"}]
@@ -57,9 +57,9 @@ def test_group_tools_list_create_and_update_and_botops_acts_as_the_requester():
             {"add": {"people": [], "bots": []}, "remove": {"people": ["cara"], "bots": []}, "parent": ""},
         ),
     ]
-    botops = _Groups("bot:botops")
-    fn["tico_group_update"]["fn"](botops, {"group": "seo", "name": "Search"})
-    assert botops.calls[-1][:2] == ("PATCH", "groups/seo") and botops.calls[-1][3] is True
+    agent_ops = _Groups("bot:botops")
+    fn["tico_group_update"]["fn"](agent_ops, {"group": "seo", "name": "Search"})
+    assert agent_ops.calls[-1][:2] == ("PATCH", "groups/seo") and agent_ops.calls[-1][3] is True
     try:
         fn["tico_group_update"]["fn"](api, {})
     except ValueError as exc:
@@ -103,7 +103,7 @@ def test_reports_to_for_a_bot_sends_its_revision():
         raise AssertionError("an unprefixed teammate is refused")
 
 
-def test_org_order_reads_and_sets_and_botops_sets_as_the_requester():
+def test_org_order_reads_and_sets_and_agent_ops_sets_as_the_requester():
     fn = hubtools.BY_NAME["tico_org_order"]["fn"]
     api = _Groups()
     fn(api, {"manager": "engineering-manager"})
@@ -112,24 +112,24 @@ def test_org_order_reads_and_sets_and_botops_sets_as_the_requester():
         ("GET", "org/order/engineering-manager", None),
         ("PUT", "org/order/human:ana", {"reports": ["bot:cmo", "ben"]}, False),
     ]
-    botops = _Groups("bot:botops")
-    fn(botops, {"manager": "cmo", "set": ["writer"]})
-    assert botops.calls[-1][:2] == ("PUT", "org/order/cmo") and botops.calls[-1][3] is True
+    agent_ops = _Groups("bot:botops")
+    fn(agent_ops, {"manager": "cmo", "set": ["writer"]})
+    assert agent_ops.calls[-1][:2] == ("PUT", "org/order/cmo") and agent_ops.calls[-1][3] is True
 
 
-def test_tool_add_and_remove_are_the_requesters_when_botops_calls_them():
+def test_tool_add_and_remove_are_the_requesters_when_agent_ops_calls_them():
     fn = hubtools.BY_NAME
     entry = {"bot": "inbox-manager", "service": "gmail", "can": "read,draft,send", "identity": "a@acme.example"}
-    person, botops = _Groups(), _Groups("bot:botops")
+    person, agent_ops = _Groups(), _Groups("bot:botops")
     fn["tico_tool_add"]["fn"](person, entry)
     fn["tico_tool_remove"]["fn"](person, {"bot": "inbox-manager", "id": "gmail"})
     assert [c[:2] for c in person.calls if c[1] != "me"] == [
         ("POST", "bots/inbox-manager/tools"),
         ("POST", "bots/inbox-manager/tools/gmail/delete"),
     ]
-    fn["tico_tool_add"]["fn"](botops, entry)
-    fn["tico_tool_remove"]["fn"](botops, {"bot": "inbox-manager", "id": "gmail"})
-    assert [c[:2] + (c[3],) for c in botops.calls if c[1] != "me"] == [
+    fn["tico_tool_add"]["fn"](agent_ops, entry)
+    fn["tico_tool_remove"]["fn"](agent_ops, {"bot": "inbox-manager", "id": "gmail"})
+    assert [c[:2] + (c[3],) for c in agent_ops.calls if c[1] != "me"] == [
         ("POST", "bots/inbox-manager/tools", True),
         ("POST", "bots/inbox-manager/tools/gmail/delete", True),
     ]
@@ -137,9 +137,9 @@ def test_tool_add_and_remove_are_the_requesters_when_botops_calls_them():
     assert {"botops", "bot"} <= set(hubtools.offered_to(fn["tico_tool_add"]))
 
 
-def test_tool_update_changes_only_what_is_sent_and_is_the_requesters_when_botops_calls_it():
+def test_tool_update_changes_only_what_is_sent_and_is_the_requesters_when_agent_ops_calls_it():
     fn = hubtools.BY_NAME
-    person, botops = _Groups(), _Groups("bot:botops")
+    person, agent_ops = _Groups(), _Groups("bot:botops")
     args = {
         "bot": "inbox-manager",
         "id": "gmail",
@@ -155,8 +155,8 @@ def test_tool_update_changes_only_what_is_sent_and_is_the_requesters_when_botops
             {"can": ["read", "draft", "send"], "scope": {"mailbox": "a@acme.example", "sites": ""}, "note": ""},
         )
     ]
-    fn["tico_tool_update"]["fn"](botops, {"bot": "inbox-manager", "id": "gmail", "note": "sends on Fridays"})
-    assert [c for c in botops.calls if c[1] != "me"] == [
+    fn["tico_tool_update"]["fn"](agent_ops, {"bot": "inbox-manager", "id": "gmail", "note": "sends on Fridays"})
+    assert [c for c in agent_ops.calls if c[1] != "me"] == [
         ("POST", "bots/inbox-manager/tools/gmail/update", {"note": "sends on Fridays"}, True)
     ]
     try:

@@ -32,13 +32,13 @@ ROLE_STAGES = ("product-review-1", "product-qa", "product-merge")
 
 
 def _no_roles(environment):
-    """A new company whose company file lists only the Assistant and BotOps, then a computer."""
+    """A new company whose company file lists only the Assistant and Agent Ops, then a computer."""
     api = environment()
     draft = C.blank()
     draft["company"]["signals"] = ["sells_services"]
     draft = C.Turn(draft).finish()
     draft["company"].update(name="Kiln & Co", about="We make pottery.")
-    draft["bots"] = [b for b in draft["bots"] if b["template"] in ("assistant", "botops")]
+    draft["bots"] = [b for b in draft["bots"] if b["template"] in ("assistant", "agent-ops")]
     body = {"company_yaml": C.to_yaml(draft)}
     preview = api.post("/api/v2/setup/company/preview", json=body, headers=signed_in())
     assert preview.status_code == 200, preview.text
@@ -121,7 +121,7 @@ def test_a_role_bot_that_appears_later_takes_its_stages_from_the_stand_in(enviro
 
 
 def test_a_new_company_on_the_default_chart_is_staffed_while_its_release_manager_is_planned(environment):
-    """The default chart's live seats start planned until BotOps sets them up; the Release Owner is found then too."""
+    """The default chart's live seats start planned until Agent Ops sets them up; the Release Owner is found then too."""
     api = environment()
     done = api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text

@@ -5,16 +5,16 @@ Moved from clients/hubtools.py; clients/commands/__init__.py says how the table 
 from clients.commands._schemas import _s
 
 
-# ----------------------------------------------------------------------------- bots and people, for BotOps
-# The server applies the requester's rights to all BotOps calls (docs/permissions.md).
+# ----------------------------------------------------------------------------- bots and people, for Agent Ops
+# The server applies the requester's rights to all Agent Ops calls (docs/permissions.md).
 def _for_person(api):
-    """`{"on_behalf_of": "turn"}` when a bot (BotOps) is calling: the requester's rights, not the bot's."""
+    """`{"on_behalf_of": "turn"}` when a bot (Agent Ops) is calling: the requester's rights, not the bot's."""
     return {"on_behalf_of": "turn"} if kind_of(api.get("me")) == "botops" else {}
 
 
-# ----------------------------------------------------------------------------- BotOps: what the app can do, as the requester
+# ----------------------------------------------------------------------------- Agent Ops: what the app can do, as the requester
 class _Requester:
-    """The same `api`, using the requester's rights, recorded via BotOps."""
+    """The same `api`, using the requester's rights, recorded via Agent Ops."""
 
     def __init__(self, api, ref=None):
         self.api, self.ref = api, ref
@@ -33,13 +33,13 @@ class _Requester:
 
 
 def _as_person(api, ref=None):
-    """BotOps uses the requester; other callers keep their own rights. `ref` names the request BotOps follows
+    """Agent Ops uses the requester; other callers keep their own rights. `ref` names the request Agent Ops follows
     through on when something else started this run: the open task the person asked for, or their message id."""
     if isinstance(api, _Requester):
         return _Requester(api.api, ref) if ref else api
-    if "_tico_is_botops" not in api.__dict__:
-        api.__dict__["_tico_is_botops"] = kind_of(api.get("me")) == "botops"
-    return _Requester(api, ref) if api.__dict__["_tico_is_botops"] else api
+    if "_tico_is_agent_ops" not in api.__dict__:
+        api.__dict__["_tico_is_agent_ops"] = kind_of(api.get("me")) == "botops"
+    return _Requester(api, ref) if api.__dict__["_tico_is_agent_ops"] else api
 
 
 def _asked(api, args):
@@ -51,13 +51,13 @@ def _asked(api, args):
 
 
 ON_BEHALF_OF = _s(
-    "BotOps, following a person's request in a run something else started: the open task id they "
+    "Agent Ops, following a person's request in a run something else started: the open task id they "
     "asked for. Default: this run's request."
 )
 
 
 # ----------------------------------------------------------------------------- who sees which tool
-# `tools/list` offers a caller the tools it can use, so a bot does not carry BotOps's or the Assistant's tools in its
+# `tools/list` offers a caller the tools it can use, so a bot does not carry Agent Ops's or the Assistant's tools in its
 # context. Every line below repeats a check the server already makes; hiding a tool is only for reading, and
 # `tools/call` refuses a tool that is not offered to the caller. Rules the server enforces on the routes stay where they are.
 PEOPLE = ("owner", "admin", "member")  # a human, however it connects (a personal token is that human)
@@ -72,11 +72,11 @@ KINDS = PEOPLE + BOTS + ("assistant",)  # the Assistant: a human's private room,
 NOT_ASSISTANT = PEOPLE + BOTS
 
 
-BOTOPS = ("botops",)
+AGENT_OPS = ("botops",)
 
 
-# `_as_person` tools: a human's own rights, or BotOps's as the human who asked it (the server refuses any other bot).
-REQUESTER = PEOPLE + BOTOPS
+# `_as_person` tools: a human's own rights, or Agent Ops's as the human who asked it (the server refuses any other bot).
+REQUESTER = PEOPLE + AGENT_OPS
 
 
 REQUESTER_READ = REQUESTER + ("assistant",)

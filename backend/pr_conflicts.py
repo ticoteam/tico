@@ -13,7 +13,7 @@ conflict went to Reviewer 2 and nothing moved for 40 minutes).
   (a person owns Build), it is the task's owner's, as before.
 - `tell`: that bot's one wake per PR and conflicting commit, saying what to do; a bot that holds the stage (a
   reviewer) gets one quiet line that it is not its to fix. Nothing else is new: the never-stuck ladder tries the bot
-  again and then the manager bot like any bot's turn, and a bot that cannot run is Paused (its fixer, BotOps).
+  again and then the manager bot like any bot's turn, and a bot that cannot run is Paused (its fixer, Agent Ops).
 - While the stage waits on a person's answer (an OK, a page a person OKs, a question), the conflict is held for them
   (`held`): still not met, but nobody's turn and nobody is woken, so a task parked on a person is not rebased after
   every merge to the default branch. The person's ask says so in one line (`ASK_LINE`). Their answer hands it to the

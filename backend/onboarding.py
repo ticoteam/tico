@@ -2,12 +2,12 @@
 
 A company starts with four built-in bots: the assistant, which is each person's private Assistant
 chat (backend/assistant.py) and works in the background (Slack routing, meetings' Auto delivery),
-BotOps, which builds every other bot, the Librarian, which answers questions from the company's
+Agent Ops, which builds every other bot, the Librarian, which answers questions from the company's
 docs (backend/librarian.py), and the Strategy Owner, which keeps the KPIs (docs/goals-and-kpis.md). Onboarding
 names the company, asks the first-run questions, and records the org chart the owner builds department by
 department (the suggestions are backend/recruit.py), and on completion defines the chosen bots. A starter is
 created at once, `needs_setup`, and its repository is materialized by the computer; every other template is
-still a task for BotOps. Nothing here reaches a machine: it writes definitions and tasks.
+still a task for Agent Ops. Nothing here reaches a machine: it writes definitions and tasks.
 """
 
 import difflib
@@ -33,7 +33,7 @@ from .store import H, Problem, encode, readiness_document
 from . import bot_settings as BS
 
 KEY = "onboarding"
-BOTOPS = "botops"
+AGENT_OPS = "botops"
 LIBRARIAN = "librarian"
 STRATEGY_OWNER = G.STRATEGY_OWNER  # keeps the KPIs and sets goals' automatic colours (docs/goals-and-kpis.md)
 ASSISTANT_TEMPLATE_SLUG = "assistant"
@@ -205,7 +205,7 @@ def _card(document, instructions):
         "reasoning_effort": str(document.get("reasoning_effort") or ""),
         "recommend_when": _strings(document.get("recommend_when")),
         # A card with a first routine and an onboarding conversation is a starter (docs/starter-bots.md);
-        # the others are built by BotOps.
+        # the others are built by Agent Ops.
         "pack": str(document.get("pack") or ""),
         "pains": _strings(document.get("pains")),
         "prerequisites": _prerequisites(document.get("prerequisites")),
@@ -486,7 +486,7 @@ def _answer_lines(answers):
 
 
 def setup_body(slug, choice, answers):
-    """What BotOps needs to build one bot without asking: the names, the reviewed
+    """What Agent Ops needs to build one bot without asking: the names, the reviewed
     instructions verbatim, and what the team said about itself."""
     return "\n".join(
         [
@@ -791,9 +791,9 @@ class Onboarding:
             raise Problem("hierarchy", "A bot cannot report to itself", 422)
 
     def complete(self, c, who, seats=True, finish=True):
-        """Deploy the chart setup picked (docs/onboarding.md, "Setup picks the chart"): the built-ins (BotOps, the
+        """Deploy the chart setup picked (docs/onboarding.md, "Setup picks the chart"): the built-ins (Agent Ops, the
         Librarian, the Strategy Owner and the Assistant) are created as bots, Active from day one, and every other role is
-        laid out as a Recruiting seat with its reporting line: no bot, repository, computer slot or BotOps task until
+        laid out as a Recruiting seat with its reporting line: no bot, repository, computer slot or Agent Ops task until
         someone recruits it. `seats` False creates every pick as a bot (tests that need the bots themselves).
 
         A new company's first completion ends with the finish every setup path shares (company_import.finish_new_company:
@@ -836,7 +836,7 @@ class Onboarding:
             if reports_to and not found and not reports_to.startswith("human:"):
                 parents[bot_id] = reports_to  # it reports to a bot that is created later in this plan
             if starter:
-                # A starter is created whole, now: parked until its first conversation, no BotOps task.
+                # A starter is created whole, now: parked until its first conversation, no Agent Ops task.
                 self._make_starter(c, who, bot_id, choice["template"], rank)
                 rank += 1
             else:
@@ -1111,7 +1111,7 @@ class Onboarding:
         return next((card for card in read_cards(self.settings) if card["template"] == template), None)
 
     def attach_template(self, c, who, slug, template, instructions, *, queue_build=False, title_prefix=""):
-        """Starters are built by their Computer; custom bots get a BotOps task."""
+        """Starters are built by their Computer; custom bots get an Agent Ops task."""
         slug = (H.resolve_bot(c, slug) or {}).get("id", slug)
         record = load(c)
         row = H.bot(c, slug) or {}
@@ -1133,8 +1133,8 @@ class Onboarding:
             self._make_starter(c, who, slug, template)
             MessageBots.link(c, who.actor, slug, who.actor)
             return {"template": template, "setup_task_id": None, "onboarding_state": NEEDS_SETUP}
-        if queue_build and not card.get("bootstrap") and not H.bot(c, BOTOPS):
-            raise Problem("not_found", "Add BotOps from Templates to build this bot", 409)
+        if queue_build and not card.get("bootstrap") and not H.bot(c, AGENT_OPS):
+            raise Problem("not_found", "Add Agent Ops from Templates to build this bot", 409)
         declared["template_version"] = releases.version()
         self._write_config(c, slug, declared)
         MessageBots.link(c, who.actor, slug, who.actor)  # a message bot is its person's from the start
@@ -1175,7 +1175,7 @@ class Onboarding:
 
     def turn_on_assistant(self, c, who):
         """The owner's one click on the Assistant tab: bring the company's assistant back (the v0.2.1
-        restore of an archived one) or add it from the catalog, put it on the computer BotOps runs
+        restore of an archived one) or add it from the catalog, put it on the computer Agent Ops runs
         on and activate it. With no computer yet it is left planned, and the answer says so."""
         return self._turn_on(
             c, who, self.settings.assistant_bot, "assistant", self.settings.assistant_name, "assistant.turned_on"
@@ -1209,7 +1209,7 @@ class Onboarding:
         Librarian, the Strategy Owner, the General Manager, the Rules Owner, the Design Owner, the Tools Owner, and the Finance Owner
         once Finance is set up), the constitution at the root of Rules (org_rules.ensure_constitution), the Assistant's
         routines it never had, General's manager once the General Manager exists
-        (pipeline_settings.ensure_presets), BotOps' daily "Sweep stuck tasks" once BotOps is active, and the models of
+        (pipeline_settings.ensure_presets), Agent Ops' daily "Sweep stuck tasks" once Agent Ops is active, and the models of
         the bots that follow the company's plans (plan_models.follow). Every start
         runs it (start_jobs), and so do the end of every first run (complete(), a company file's import) and a
         computer's enrollment, so none of it waits for the next start. Each step is idempotent and leaves
@@ -1293,7 +1293,7 @@ class Onboarding:
         """Every built-in has one manager: the General Manager's team (Groups.GENERAL_TEAM) reports to it, and it, the
         Assistant and the Finance Owner report to the owner. Only a line nobody set is filled, so a built-in added in a later release
         gets its manager on the next start and a line a person changed stays. `laid` names the built-ins a new company's
-        setup lays out now (complete()): theirs replaces the line the seed roster gave (BotOps is seeded under the
+        setup lays out now (complete()): theirs replaces the line the seed roster gave (Agent Ops is seeded under the
         Assistant, before the General Manager exists), which nobody chose. The General group gets no lead: a
         lead sets its group's reach and limits (backend/reach.py, backend/usage.py), which stay with people."""
         manager, owner = H.bot(c, Groups.GENERAL_MANAGER), self.auth.owner_id(c)
@@ -1379,15 +1379,15 @@ class Onboarding:
         elif not row:
             self._define(c, who, slug, choice, card)
         if not c.execute("SELECT 1 FROM assignments WHERE bot=?", (slug,)).fetchone():
-            # BotOps' computer first, then the oldest; one an inbox bot keeps to itself, or one that may not
+            # Agent Ops' computer first, then the oldest; one an inbox bot keeps to itself, or one that may not
             # host this bot (another member's), is skipped.
-            botops = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (BOTOPS,)).fetchone()
+            agent_ops = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (AGENT_OPS,)).fetchone()
             machines = [
                 r["id"] for r in c.execute("SELECT id FROM runners WHERE revoked_at IS NULL ORDER BY created_at")
             ]
-            if botops and botops["runner_id"] in machines:
-                machines.remove(botops["runner_id"])
-                machines.insert(0, botops["runner_id"])
+            if agent_ops and agent_ops["runner_id"] in machines:
+                machines.remove(agent_ops["runner_id"])
+                machines.insert(0, agent_ops["runner_id"])
             refusal = None
             for runner_id in machines:
                 try:
@@ -1447,7 +1447,7 @@ class Onboarding:
         """The template's `routines:` (older: `schedules:`) become the bot's first routines, once. A routine a person
         changed or deleted is never put back: only a key the bot has never had is created. The bot's config names every
         key it has had (`routines_seeded`), so a key stays seeded even if its schedule row is gone; a key whose row
-        exists (deleted, moved to an automation or changed) counts as seeded too. (A bot BotOps builds gets these from
+        exists (deleted, moved to an automation or changed) counts as seeded too. (A bot Agent Ops builds gets these from
         `tico bot create`; a built-in one is made here.) Returns the keys it created."""
         row = c.execute("SELECT 1 FROM bot_config WHERE bot=?", (slug,)).fetchone()
         declared = BS.read(c, slug)
@@ -1522,7 +1522,7 @@ class Onboarding:
     def arm_live_seats(self, c):
         """At startup (an update): a seat bot that went live while going live armed none of its routines (0.6 rc.4 and
         before looked for them where only built-ins keep them) gets them on now, as `arm_routines` turns them on, once:
-        it records that, so the next start does nothing. Only a routine nobody changed since BotOps made it goes on
+        it records that, so the next start does nothing. Only a routine nobody changed since Agent Ops made it goes on
         (routines.untouched: every switch or edit is on the automation's audit trail), so one a person turned off stays
         off. A paused or archived bot is a person's stop and is left alone. Returns the (bot, key) pairs it turned on."""
         from .setup_live import GOES_LIVE
@@ -1696,8 +1696,8 @@ class Onboarding:
             self._adopt_cloud(c, H.TICO_ACTOR)
 
     def _activate_bootstrap(self, c, actor):
-        """Activate the bootstrap bots (the assistant, BotOps) and the starters once a machine hosts
-        them. Every other bot is set up by BotOps, and BotOps cannot be handed a task while it is
+        """Activate the bootstrap bots (the assistant, Agent Ops) and the starters once a machine hosts
+        them. Every other bot is set up by Agent Ops, and Agent Ops cannot be handed a task while it is
         planned, so leaving these to a separate click strands the whole setup."""
         cards = {card["template"]: card for card in read_cards(self.settings)}
         who = self.auth.owner_identity(c)
@@ -1729,7 +1729,7 @@ class Onboarding:
         return record
 
     def _plan(self, record, cards, names):
-        """What onboarding builds: the templates the product requires first (BotOps), so it exists
+        """What onboarding builds: the templates the product requires first (Agent Ops), so it exists
         before anything asks it for work, then everything the person picked. The assistant is a
         pick like any other; its card slug is the environment's assistant bot."""
         plan = {}
@@ -1747,6 +1747,9 @@ class Onboarding:
         return plan
 
     def _bot_slug(self, card_slug):
+        """The id of the bot a card makes: the install's Assistant, Agent Ops by its first id, else the card's slug."""
+        if card_slug == H.AGENT_OPS_SLUG:
+            return AGENT_OPS
         return self.settings.assistant_bot if card_slug == ASSISTANT_TEMPLATE_SLUG else card_slug
 
     @staticmethod
@@ -1791,6 +1794,7 @@ class Onboarding:
         bot_id = (found or {}).get("id", slug)
         existing = c.execute("SELECT revision FROM bot_config WHERE bot=?", (bot_id,)).fetchone()
         if not existing:
+            slug = H.AGENT_OPS_SLUG if slug == AGENT_OPS else slug  # made under its slug; new_bot_id keeps its first id
             picked = self._runtime(c, card)
             # No provider yet: a stand-in model satisfies the definition, then the bot is left to follow the company default.
             model, effort = picked or next(
@@ -1849,9 +1853,9 @@ class Onboarding:
         c.execute("UPDATE bots SET effort='' WHERE id=?", (slug,))
 
     def _setup_task(self, c, who, slug, choice, card, answers):
-        """BotOps builds every bot people picked. A bootstrap template (the assistant, BotOps
+        """Agent Ops builds every bot people picked. A bootstrap template (the assistant, Agent Ops
         itself) is materialized by the machine at first run, so it gets no task."""
-        if card.get("bootstrap") or not H.bot(c, BOTOPS) or slug == BOTOPS:
+        if card.get("bootstrap") or not H.bot(c, AGENT_OPS) or slug == AGENT_OPS:
             return None
         declared = self._declared(c, slug)
         if declared.get("setup_task_id"):
@@ -1859,9 +1863,9 @@ class Onboarding:
         title = "Set up " + choice["display_name"] + " from the " + choice["template"] + " template"
         if choice.get("title_prefix"):
             title = choice["title_prefix"].strip() + " " + title
-        from .botops_act import request_task
+        from .agent_ops_act import request_task
 
-        # The setup's steps are BotOps' working instructions: they reach it through its run, not the task's chat.
+        # The setup's steps are Agent Ops' working instructions: they reach it through its run, not the task's chat.
         task = request_task(
             c,
             self.auth,

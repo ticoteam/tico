@@ -173,8 +173,8 @@ The question shows the old and new scheme, host and port, and the name of the sa
   automatically** turn off, and Tico sends no check. Paste a key for the new address to turn them back on.
 - **Cancel**: nothing is saved. The old address and key stay.
 
-Only the owner can change the Gateway, so the owner decides. If BotOps makes the change for you, it asks in a Confirm card
-in your BotOps chat, and only you can tap it.
+Only the owner can change the Gateway, so the owner decides. If Agent Ops makes the change for you, it asks in a Confirm card
+in your Agent Ops chat, and only you can tap it.
 
 Each move is recorded once in Tico's audit log as `integration.destination_changed`: who made it and when, the old and
 new scheme, host and port, and whether the key was kept or cleared. The key never appears in it. Settings > History does

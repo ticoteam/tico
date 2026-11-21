@@ -338,7 +338,7 @@ def run(args, who=None):
     if fn == "audit":
         return via_tool(client, args)
     if args.cmd in ("api", "credential") or fn == "message redact":
-        return botops_tools(client, args)
+        return agent_ops_tools(client, args)
     if args.cmd == "classify":
         from clients import hubtools
 
@@ -601,7 +601,7 @@ def run(args, who=None):
     raise APIError("unsupported", "This command is not supported by the remote API")
 
 
-def botops_tools(client, args):
+def agent_ops_tools(client, args):
     """`tico api`, `tico credential ...`, `tico message redact`: the tool of the same name. A secret is read from standard input, never from the command line."""
     from clients import hubtools
 
@@ -652,7 +652,7 @@ def botops_tools(client, args):
 
 # ----------------------------------------------------------------------------- bots
 def bots(client, args):
-    """`tico template list`, `tico bot create|check` and `tico bot model`: how BotOps sets the chosen bots up. The other
+    """`tico template list`, `tico bot create|check` and `tico bot model`: how Agent Ops sets the chosen bots up. The other
     `tico bot` commands are specs (BOT in clients/commands/bots.py).
 
     The materialization is `clients/catalog.py`, which needs no network. What comes from the
@@ -728,7 +728,7 @@ def local_slug(client, args, workspace):
         known = {b.get("slug") or b.get("name") for b in client.get("bots", include_archived="1", fields="slug,name")}
     except (APIError, AttributeError, TypeError):
         known = set()
-    reserved = ("assistant", "botops", "librarian", "strategy-owner", "general-manager", "finance-owner")
+    reserved = ("assistant", "botops", "agent-ops", "librarian", "strategy-owner", "general-manager", "finance-owner")
     return catalog.free_slug(
         args.name or card.get("name") or args.template,
         lambda slug: (

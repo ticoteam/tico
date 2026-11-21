@@ -11,9 +11,9 @@ to repeat on every `setup` event (backend/events.py: a change that may open or c
             the Librarian, which builds the market (backend/librarian_setup.py)
   strategy  no strategy summary (draft or published) or no brand (draft or published): the Strategy page's owner
   goals     no goal: the Goals page's owner
-  org       no bot of the company's own (only the built-ins): BotOps, which hires
+  org       no bot of the company's own (only the built-ins): Agent Ops, which hires
   tools     no tool: the Tools page's owner (the Tools Owner)
-  budget    no company spending limit (a pool or the default for each bot): BotOps, which sets limits for a person
+  budget    no company spending limit (a pool or the default for each bot): Agent Ops, which sets limits for a person
 
 A page's owner is the one Settings > Page owners names (backend/page_owners.py), so a company that chose another bot
 for Strategy is asked by that bot. Nothing here writes, calls a model or keeps a table: the gaps are the data itself,

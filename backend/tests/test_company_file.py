@@ -37,7 +37,7 @@ def titles(draft):
 
 
 def first_chart(about, signals):
-    """The chart the first turn lays out for a company with these signals, and BotOps's line about it."""
+    """The chart the first turn lays out for a company with these signals, and Agent Ops's line about it."""
     draft = C.blank()
     draft["company"].update(about=about, signals=signals)
     turn = C.Turn(draft, TODAY)
@@ -66,7 +66,7 @@ def test_1_each_model_has_its_spec_seat_count_and_every_seat_names_a_template_or
     assert not open_seats & real, "a seat to build that has a template is a real seat"
     for key, count in SPEC_COUNTS.items():
         model = C.MODELS[key]
-        assert model["model"] == key and [row["template"] for row in model["core"]] == ["assistant", "botops"]
+        assert model["model"] == key and [row["template"] for row in model["core"]] == ["assistant", "agent-ops"]
         seats = len(model["core"]) + len(model["seats"])
         assert abs(seats - count) <= 2, (key, seats)
         for row in model["seats"]:
@@ -189,7 +189,7 @@ def test_6_a_person_fills_a_seat_with_no_bot_yet():
     assert results[0]["ok"] and [b["title"] for b in moved["bots"] if b.get("person")] == ["Fundraising Manager"]
     gone = D.check({**after, "people": [p for p in after["people"] if p["name"] != "Ana"]})
     assert not any(b.get("person") for b in gone["bots"])
-    _, results = run(after, ("seat_fill", {"seat": "BotOps", "name": "Ana"}))
+    _, results = run(after, ("seat_fill", {"seat": "Agent Ops", "name": "Ana"}))
     assert not results[0]["ok"]
     # "cap table" names the Equity Manager role for bot_add.
     assert A.find_role("cap table")["slug"] == "equity-manager"
@@ -760,7 +760,7 @@ BAD = [
     ("bot_add", {"template": "billing-specialist", "reason": ""}),
     ("bot_add", {"template": "billing-specialist", "reason": "x", "colour": "red"}),
     ("bot_add", {"template": "billing-specialist", "reason": "x", "title": "Feature Owner"}),
-    ("bot_add", {"template": "botops", "reason": "a second one"}),
+    ("bot_add", {"template": "agent-ops", "reason": "a second one"}),
     ("bot_add", {"template": "billing-specialist", "reason": "x" * 301}),
     ("bot_add", {"template": 7, "reason": "x"}),
     ("bot_remove", {"bot": "botops"}),

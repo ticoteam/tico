@@ -67,8 +67,8 @@ fake clock and breaks things on purpose; `backend/tests/test_never_stuck_rig.py`
 whole-product checks before a tag (docs/releasing.md). There is no budget on how many tests the suite has: write as many as a change needs, as long as each one
 guards a real failure (a privacy or permission boundary, migrations and data safety, a core task/run flow, a
 regression, an edge case that would lose or duplicate work). No tests of wording, copy or docs, trivial getters or
-exhaustive parametrizations of one path. Real git, Docker, servers or long timers go behind `@pytest.mark.slow`. `evals/botops/run.py` scores a real BotOps
-against a dev install with a real model, on demand only; `backend/tests/test_botops_evals.py` is its scripted layer.
+exhaustive parametrizations of one path. Real git, Docker, servers or long timers go behind `@pytest.mark.slow`. `evals/agent_ops/run.py` scores a real Agent Ops
+against a dev install with a real model, on demand only; `backend/tests/test_agent_ops_evals.py` is its scripted layer.
 `evals/replay/run.py` replays signed real tasks on a candidate at release preparation (docs/releasing.md); its cases
 hold customer text and never enter this repository.
 
@@ -112,7 +112,7 @@ calling a change done, walk this list and say in the PR which entries applied:
 - **Runners**: the Rust runner, on a Mac and in the Docker image.
 - **Harnesses**: every harness, through the capabilities in its `runner-rs/harnesses/*.toml`, never by comparing names.
   A capability is on only when the harness really does it; unknown is reported as unknown.
-- **Who acts**: a human, a bot, BotOps acting for a human, and an external agent over MCP.
+- **Who acts**: a human, a bot, Agent Ops acting for a human, and an external agent over MCP.
 - **Reverse states**: a way in needs a way out and a way to see it. Snooze needs unsnooze, close needs reopen,
   grant needs revoke.
 - **Docs**: change the page the change makes wrong; do not add a page per feature.

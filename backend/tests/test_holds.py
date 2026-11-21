@@ -135,7 +135,7 @@ CASES = [
     ),
     # Before: a bot at its usage limit with no fallback showed its tasks as its turn, not Paused.
     Case(holds.USAGE_LIMIT, _usage_limit, health="cooling_off", card=task_wakes.USAGE_LIMIT),
-    # A task BotOps has because its runs can't start: the claim still takes a person's new run on it.
+    # A task Agent Ops has because its runs can't start: the claim still takes a person's new run on it.
     Case(holds.CANT_START, _cant_start, card=task_wakes.CANT_START, claimed=True),
     # Before: a quarantine on one task showed that task as the bot's turn.
     Case(holds.TASK_QUARANTINE, _task_quarantine, health="task_quarantine", card=task_wakes.TASK_QUARANTINED),

@@ -5,7 +5,7 @@
  "about": "Home services, trades and clinics with hourly staff and on-site jobs: operations is the biggest team, no product or engineering.",
  "picks_when": ["onsite_jobs"],
  "reason": "Part of the Local service business model.",
- "core": [{"template": "assistant"}, {"template": "botops"}],
+ "core": [{"template": "assistant"}, {"template": "agent-ops"}],
  "seats": [
   {"team": "operations", "template": "operations-manager"},
   {"team": "operations", "template": "dispatcher"},

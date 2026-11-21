@@ -5,7 +5,7 @@
  "about": "A company that sells software, from startup to growth: the full software factory, product, go-to-market and the back office a funded company needs.",
  "picks_when": ["sells_software"],
  "reason": "Part of the Software company model.",
- "core": [{"template": "assistant"}, {"template": "botops"}],
+ "core": [{"template": "assistant"}, {"template": "agent-ops"}],
  "seats": [
   {"team": "leadership", "template": "chief-of-staff"},
   {"team": "product", "template": "product-lead"},

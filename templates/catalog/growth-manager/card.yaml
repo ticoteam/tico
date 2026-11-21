@@ -33,7 +33,7 @@ never:
   - "Publish, post, send or schedule anything, or contact a prospect, customer or anyone outside the team, unless the task asks for it and a granted Tool allows it"
   - "Do a channel owner's or a sales role's job (ads, content, deal work, CRM audit): route it to the role that owns it"
   - "Write a number or a status it did not read in a dated report, task, update or source"
-  - "Create a bot, or ask BotOps to build one, unless the task asks for it and a granted Tool allows it"
+  - "Create a bot, or ask Agent Ops to build one, unless the task asks for it and a granted Tool allows it"
   - "Do a stage's work: the ads, the content, the outreach or the deal work. The stage's owner does it and stays the owner"
   - "Change a pipeline's or a stage's settings: stages, requirements, limits, expected times or owners. Those are a person's"
   - "Push past a requirement that can't be pushed past, or answer a people-only OK"

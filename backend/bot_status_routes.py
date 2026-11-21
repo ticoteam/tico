@@ -91,14 +91,14 @@ def register(app, auth, delegated_identity, mutate, settings_admin, store, reset
             nonlocal bot
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             # A person's request in chat ("why is my content not unblocked?") is
-            # enough; BotOps lifts it as that person, so an escape still needs a person's say-so.
-            # BotOps never clears one on its own authority: it acts as the person who asked, and that person must
+            # enough; Agent Ops lifts it as that person, so an escape still needs a person's say-so.
+            # Agent Ops never clears one on its own authority: it acts as the person who asked, and that person must
             # manage the bot.
-            botops = caller.actor == H.bot_actor(H.FLEET_MAINTAINER)
-            if botops and not body.on_behalf_of:
+            agent_ops = caller.actor == H.bot_actor(H.FLEET_MAINTAINER)
+            if agent_ops and not body.on_behalf_of:
                 raise Problem(
                     "on_behalf_of",
-                    "BotOps clears a quarantine only as the person who asked it: cite their message",
+                    "Agent Ops clears a quarantine only as the person who asked it: cite their message",
                     403,
                 )
             who = delegated_identity(c, caller, body.on_behalf_of) if body.on_behalf_of else caller

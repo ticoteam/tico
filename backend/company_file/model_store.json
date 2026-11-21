@@ -5,7 +5,7 @@
  "about": "An online store or consumer brand that sells products to consumers: marketing is the biggest team, no product or engineering.",
  "picks_when": ["sells_products"],
  "reason": "Part of the Online store model.",
- "core": [{"template": "assistant"}, {"template": "botops"}],
+ "core": [{"template": "assistant"}, {"template": "agent-ops"}],
  "seats": [
   {"team": "marketing", "template": "growth-manager"},
   {"team": "marketing", "template": "search-ads-owner"},

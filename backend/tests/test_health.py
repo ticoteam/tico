@@ -1191,7 +1191,7 @@ def test_refusal_quarantine_explains_the_claim_hold_and_matches_bot_status(envir
     assert "rule 8; 10 repeated refusals today" in held["why"]
     assert "2030-10-27 00:55 UTC" in held["why"] and "resumes by itself" in held["why"]
     assert "Refused write (identity): " + words in held["why"]
-    assert "BotOps must review" not in held["why"]
+    assert "Agent Ops must review" not in held["why"]
     assert "a person who manages it can clear it sooner" in held["why"]
     # Both the summary report and its diagnostic items must exclude manager-only refused words. The quarantine is its
     # own Health check, not part of the queue check.
@@ -1199,7 +1199,7 @@ def test_refusal_quarantine_explains_the_claim_hold_and_matches_bot_status(envir
     assert words not in json.dumps(checks["quarantine"])
     assert "Refused write" not in json.dumps(checks["quarantine"])
     assert "Quarantined" not in json.dumps(checks["queue"])
-    # BotOps reviews a quarantine, so it stays on Health and never turns the person's status dot red.
+    # Agent Ops reviews a quarantine, so it stays on Health and never turns the person's status dot red.
     issue = next(
         row
         for row in api.get("/api/v2/operations", headers=signed_in()).json()["issues"]
@@ -1225,7 +1225,7 @@ def test_manual_quarantine_has_no_lift_promise_and_other_holds_keep_their_explan
     body, checks = health_of(api)
     [paused] = body["stuck"]
     assert paused["reason"] == "paused"
-    assert paused["why"] == "Paused: its owner or BotOps must resume it"
+    assert paused["why"] == "Paused: its owner or Agent Ops must resume it"
     assert paused["why"] in checks["queue"]["items"][0]["text"]
 
 
@@ -1434,15 +1434,15 @@ def test_work_a_computer_holds_while_it_waits_to_update_is_the_update_not_a_tico
         f"Team box is holding new work to update to Tico 0.6.0-rc.2: it starts once dev's turn (running since {since} "
         "UTC) ends; it holds 1 queued job(s) for ops."
     ) in held["detail"]
-    # Nothing to update by hand, and nothing to watch: BotOps is told not to hold its own computer watching this one.
-    assert "BotOps: update the runner" not in held["fix"] and "record the wait" in held["fix"]
+    # Nothing to update by hand, and nothing to watch: Agent Ops is told not to hold its own computer watching this one.
+    assert "Agent Ops: update the runner" not in held["fix"] and "record the wait" in held["fix"]
     assert "person's choice" in held["fix"]
     body, checks = health_of(api)
     [stuck] = body["stuck"]
     assert stuck["reason"] == "updating" and stuck["why"].startswith("Team box is holding new work to update")
     assert stuck["why"].endswith(health.OUTSIDE_WAIT)
     assert checks["queue"]["status"] == "warn"
-    # Anything else wrong with the update still asks BotOps to update it: an error, an incompatible release, or an
+    # Anything else wrong with the update still asks Agent Ops to update it: an error, an incompatible release, or an
     # update under way with no running turn to wait for (the updater itself may be stuck).
     store = api.app.state.store
 
@@ -1459,22 +1459,24 @@ def test_work_a_computer_holds_while_it_waits_to_update_is_the_update_not_a_tico
             )
         return found
 
-    assert fix(update_error="could not start the update: OSError").startswith("BotOps: update the runner on Team box")
+    assert fix(update_error="could not start the update: OSError").startswith(
+        "Agent Ops: update the runner on Team box"
+    )
     assert "No local work needs a decision" in fix(
         update_state="blocked",
         update_error="only flattened Tico links: AGENTS.md; repaired automatically on the next update",
     )
     assert fix(update_state="blocked", update_error="the checkout has 1 changed file: AGENTS.md").startswith(
-        "BotOps: update"
+        "Agent Ops: update"
     )
-    assert fix(release="0.0.1").startswith("BotOps: update the runner on Team box")
+    assert fix(release="0.0.1").startswith("Agent Ops: update the runner on Team box")
     with store.transaction() as c:
         c.execute("UPDATE attempts SET state='completed' WHERE id='a-dev'")
-    assert fix(update_state="updating").startswith("BotOps: update the runner on Team box")
+    assert fix(update_state="updating").startswith("Agent Ops: update the runner on Team box")
 
 
 def test_the_update_hold_names_each_turn_by_bot_task_and_start_but_never_a_private_task(environment):
-    """TK-SHNKOY4E: a Mac held its update ~28 min behind one BotOps turn that watched another computer's update.
+    """TK-SHNKOY4E: a Mac held its update ~28 min behind one Agent Ops turn that watched another computer's update.
     Health names the bot, its task and when it started, so a person can tell that turn from real work."""
     from backend import health
 
@@ -1485,7 +1487,7 @@ def test_the_update_hold_names_each_turn_by_bot_task_and_start_but_never_a_priva
         add_bot(api, bot)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE runners SET label='Mac' WHERE id=?", (runner,))
-        c.execute("UPDATE bots SET display_name='BotOps' WHERE slug='botops'")
+        c.execute("UPDATE bots SET display_name='Agent Ops' WHERE slug='botops'")
         for bot in ("ops", "botops", "audit"):
             c.execute(
                 "INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,1,?,'t')",
@@ -1496,7 +1498,7 @@ def test_the_update_hold_names_each_turn_by_bot_task_and_start_but_never_a_priva
             chat = H.open_conversation(c, owner, [owner, "bot:" + bot], kind="chat")
             H._write_message(c, owner, "bot:" + bot, "hello?", chat, "say", {}, None, None)
         started = {"audit": H.shift(H.now(), minutes=-5), "botops": H.shift(H.now(), minutes=-28)}  # newest first
-        run = {"audit": "a-audit", "botops": "b-botops"}  # ids and slugs sort newest first too: only `since` orders
+        run = {"audit": "a-audit", "botops": "b-agent-ops"}  # ids and slugs sort newest first too: only `since` orders
         for bot, since in started.items():
             job = c.execute("SELECT id FROM jobs WHERE bot_id=?", (bot,)).fetchone()["id"]
             c.execute("UPDATE jobs SET state='leased' WHERE id=?", (job,))
@@ -1507,7 +1509,7 @@ def test_the_update_hold_names_each_turn_by_bot_task_and_start_but_never_a_priva
             )
         watch = H.task_create(c, "bot:botops", "Watch HotMic's update to 0.3.48", "x", "bot:botops", lint=False)
         secret = H.task_create(c, "bot:audit", "Private release gate", "x", "bot:audit", lint=False, private=True)
-        c.execute("UPDATE attempts SET task_id=? WHERE id='b-botops'", (watch["id"],))
+        c.execute("UPDATE attempts SET task_id=? WHERE id='b-agent-ops'", (watch["id"],))
         c.execute("UPDATE attempts SET task_id=? WHERE id='a-audit'", (secret["id"],))
         c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops'", (H.shift(H.now(), minutes=-30),))
         c.execute(
@@ -1518,10 +1520,10 @@ def test_the_update_hold_names_each_turn_by_bot_task_and_start_but_never_a_priva
         online = {r["id"] for r in runner_online.online_rows(c)}
         [row] = health._waiting(c, online)[2]
         assert row["reason"] == "updating" and row["running"] == 2
-        botops, qa = row["turns"]  # oldest first
-        assert (botops["bot"], botops["run"], botops["task"], botops["task_title"]) == (
+        agent_ops, qa = row["turns"]  # oldest first
+        assert (agent_ops["bot"], agent_ops["run"], agent_ops["task"], agent_ops["task_title"]) == (
             "botops",
-            "b-botops",
+            "b-agent-ops",
             watch["id"],
             "Watch HotMic's update to 0.3.48",
         )
@@ -1529,12 +1531,12 @@ def test_the_update_hold_names_each_turn_by_bot_task_and_start_but_never_a_priva
         words = health.updating_words(row)
         assert words.startswith(
             "Mac is holding new work to update to Tico 0.3.48: it starts once 2 running turns "
-            f"end: BotOps's turn (running since {started['botops'][11:16]} UTC); audit's turn"
+            f"end: Agent Ops's turn (running since {started['botops'][11:16]} UTC); audit's turn"
         )
         assert "Private release gate" not in words and words.endswith(health.OUTSIDE_WAIT)
         one = {**row, "turns": row["turns"][:1], "running": 1}
         assert (
-            f"it starts once BotOps's turn on \u201cWatch HotMic's update to 0.3.48\u201d (running since "
+            f"it starts once Agent Ops's turn on \u201cWatch HotMic's update to 0.3.48\u201d (running since "
             f"{started['botops'][11:16]} UTC) ends. {health.OUTSIDE_WAIT}"
         ) in health.updating_words(one)
 
@@ -1555,9 +1557,9 @@ def test_the_update_hold_names_each_turn_by_bot_task_and_start_but_never_a_priva
             return out["why"]
 
         since = started["botops"][11:16]
-        assert f"BotOps's turn on \u201cWatch HotMic" in why(Access(set(), "1"))
+        assert f"Agent Ops's turn on \u201cWatch HotMic" in why(Access(set(), "1"))
         assert f"once another bot's turn (running since {since} UTC) ends" in why(Access({"botops"}, "1"))
-        assert f"once BotOps's turn (running since {since} UTC) ends" in why(Access(set(), "0"))
+        assert f"once Agent Ops's turn (running since {since} UTC) ends" in why(Access(set(), "0"))
         assert f"once another bot's turn (running since {since} UTC) ends" in why(None)
         assert "Watch HotMic" not in why(Access({"botops"}, "1")) + why(Access(set(), "0")) + why(None)
 

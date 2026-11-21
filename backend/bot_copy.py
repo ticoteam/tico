@@ -4,12 +4,12 @@
 A copy is an ordinary bot that belongs to whoever asked. Nothing ties it to the original but `copied_from: {bot, sha}` on its
 record, which two explicit requests read: update my copy from the original, and suggest this to the original.
 
-The server holds no bot repository (backend/bot_tools.py), so these routes decide and record, and BotOps's computer moves the
+The server holds no bot repository (backend/bot_tools.py), so these routes decide and record, and Agent Ops's computer moves the
 files in the workspace (clients/botcopy.py): the route checks the requester's rights, registers the new bot within their
 limit, copies the model settings, grants the credentials the requester may grant and answers with what is left to do. A
 suggestion to the original is the exception that needs no repository here: the requester's files come in the request and the
 GitHub App opens a pull request with them, or, when the requester may not write to the original, a task carries the diff to its
-owner. Every route is one BotOps may call as the requester (backend/botops_act.py): the server's own checks are the gate.
+owner. Every route is one Agent Ops may call as the requester (backend/agent_ops_act.py): the server's own checks are the gate.
 """
 
 import base64
@@ -94,7 +94,7 @@ def model_settings(c, settings_admin, settings, bot, config):
 
 def credentials_for(c, vault, who, original, slug, tools, needed):
     """What the original's tools need, as `{granted, needs}`: a credential the original holds from the vault is granted to the copy when
-    the requester is a credential administrator; anything else is reported as "needs credential X" for BotOps to ask for."""
+    the requester is a credential administrator; anything else is reported as "needs credential X" for Agent Ops to ask for."""
     wanted = {}
     for entry in [*tools, *needed]:
         if entry.get("env"):
@@ -144,7 +144,7 @@ def install(app, store, auth, mutate, settings_admin, place_now):
         who = request.state.identity
         auth.domain(who)
         if who.role not in ("owner", "human"):
-            raise Problem("forbidden", "Only people copy bots; BotOps does it as the person who asked", 403)
+            raise Problem("forbidden", "Only people copy bots; Agent Ops does it as the person who asked", 403)
         return who
 
     def origin(c, who, bot):
@@ -213,14 +213,14 @@ def install(app, store, auth, mutate, settings_admin, place_now):
             credentials = credentials_for(
                 c, app.state.vault, who, bot, copy_id, [t.model_dump() for t in body.tools], _declared(c, bot)
             )
-            # The copy's history is made after this, in BotOps's workspace, so only the computer BotOps's turn runs on (its
+            # The copy's history is made after this, in Agent Ops's workspace, so only the computer Agent Ops's turn runs on (its
             # assignment, for a card the person clicked) holds it until GitHub does: recorded, its first placement goes there
             # and another computer is refused, with GitHub or without (backend/built_on.py).
             if who.via == "botops":
-                botops = c.execute("SELECT runner_id FROM assignments WHERE bot='botops'").fetchone()
-                built_on.remember(c, copy_id, who.runner_id or (botops["runner_id"] if botops else ""))
+                agent_ops = c.execute("SELECT runner_id FROM assignments WHERE bot='botops'").fetchone()
+                built_on.remember(c, copy_id, who.runner_id or (agent_ops["runner_id"] if agent_ops else ""))
             placed = None
-            if body.computer:  # an older BotOps; today's `tico bot copy` places after the build
+            if body.computer:  # an older Agent Ops; today's `tico bot copy` places after the build
                 c.execute("SAVEPOINT copy_place")
                 try:
                     placed = place_now(c, who, copy_id, body.computer, False)
@@ -255,13 +255,13 @@ def install(app, store, auth, mutate, settings_admin, place_now):
 
     @app.post("/api/v2/bots/{bot}/repository-read-token")
     def repository_read_token(request: Request, bot: str, body: M.Empty):
-        """A short-lived, read-only GitHub token for one bot's repository, for BotOps to clone it when that bot runs on another
-        computer (a copy, an update or a skill is made from its files). Only BotOps acting for a person who may read the bot gets one."""
+        """A short-lived, read-only GitHub token for one bot's repository, for Agent Ops to clone it when that bot runs on another
+        computer (a copy, an update or a skill is made from its files). Only Agent Ops acting for a person who may read the bot gets one."""
         who = person(request)
         if who.via != "botops":
             raise Problem(
                 "forbidden",
-                "Only BotOps, acting for the person who asked, is given a token to read a bot's repository",
+                "Only Agent Ops, acting for the person who asked, is given a token to read a bot's repository",
                 403,
             )
         with store.read() as c:
@@ -440,7 +440,7 @@ def install(app, store, auth, mutate, settings_admin, place_now):
                 text
                 + "\n\nTo take it, apply these changes to "
                 + names["original_slug"]
-                + "'s instructions (BotOps can do it).",
+                + "'s instructions (Agent Ops can do it).",
                 "human:" + owner if owner else "bot:" + original,
                 question=f"Apply a suggested change to {names['original']}'s instructions?",
                 why=f"It was made in {names['copy']}, a copy of {names['original']}.",

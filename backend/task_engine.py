@@ -99,7 +99,7 @@ def _refuse(
 
 
 def _runs_commands(by: str) -> bool:
-    """Whether the caller acts through `hub` commands: a bot, or a bot acting for a person (the Assistant, BotOps).
+    """Whether the caller acts through `hub` commands: a bot, or a bot acting for a person (the Assistant, Agent Ops).
     A person in the app is told what is missing, never a `tico task ...` line."""
     H = _h()
     return bool(is_bot(by) or H.VIA.get())
@@ -2102,7 +2102,7 @@ def person_spoke(conn: "sqlite3.Connection", task_id: str, by: str) -> None:
     again, as when an answer comes. The run the comment starts is the first of the new count, so if it stops before
     the task is finished the bot is woken again after the first gap: never left for the hour a third try waits, and
     never handed straight to the manager for runs spent before the person spoke. A person's own words or their token
-    count; the Assistant or BotOps acting for them do not (`hubdb.VIA`), since a bot that could restart the ladder could
+    count; the Assistant or Agent Ops acting for them do not (`hubdb.VIA`), since a bot that could restart the ladder could
     keep a task going round it for ever. A task a person or the manager bot has keeps its level: Try again is the way
     back from a person."""
     H = _h()
@@ -2119,7 +2119,7 @@ def person_spoke(conn: "sqlite3.Connection", task_id: str, by: str) -> None:
 def try_again(conn: "sqlite3.Connection", task_id: str, by: str, why: str | None = None) -> Row:
     """Try again: hand a task the ladder or Late brought to a person back to its owner, with the count at zero. The
     owner is woken once. Only a person tries again, in their own session (H.by_own_hand): a bot, or the Assistant or
-    BotOps acting for a person, that could restart the ladder could keep a task going round it for ever."""
+    Agent Ops acting for a person, that could restart the ladder could keep a task going round it for ever."""
     H = _h()
     row = task(conn, task_id)
     if not row:
@@ -2137,7 +2137,7 @@ def try_again(conn: "sqlite3.Connection", task_id: str, by: str, why: str | None
             conn,
             by,
             "task_needs_person",
-            "Try again is the person's own, in Tico: the Assistant, BotOps and tokens can't. Ask them to press it.",
+            "Try again is the person's own, in Tico: the Assistant, Agent Ops and tokens can't. Ask them to press it.",
             task_id,
         )
     if row["status"] != "open":

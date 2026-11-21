@@ -6,7 +6,7 @@ Keys: one VAPID P-256 key pair per install (RFC 8292), made on first need. The p
 applicationServerKey a browser subscribes with (`GET /api/v2/push/key`).
 
 Subscriptions: one `push_subscriptions` row per browser, keyed by the endpoint its push service gave it. Only the
-person, signed in as themselves, adds or removes their own: never a bot, BotOps or the Assistant acting for them.
+person, signed in as themselves, adds or removes their own: never a bot, Agent Ops or the Assistant acting for them.
 
 Sending: each message is encrypted for the one browser (RFC 8291, aes128gcm) and signed with a VAPID JWT for the
 endpoint's origin, then posted off the request path through backend/egress.py, which sends only to a public https
@@ -208,7 +208,7 @@ class EndpointBody(M.Contract):
 
 def person(who: "Identity") -> str:
     """The person signed in to this browser as themselves: a browser's push subscription is theirs alone, never a bot's,
-    a computer's, BotOps' or the Assistant's acting for them, or a personal token's (an agent outside the browser)."""
+    a computer's, Agent Ops' or the Assistant's acting for them, or a personal token's (an agent outside the browser)."""
     if who.role not in ("owner", "human") or who.via or who.task_actor or who.via_token:
         raise Problem("forbidden", "Only a person, signed in as themselves, turns on push for their browser", 403)
     return "human:" + H.actor_id(who.actor)

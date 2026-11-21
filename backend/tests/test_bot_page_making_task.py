@@ -1,4 +1,4 @@
-"""A bot BotOps makes on an ordinary task ("Add Builder 3", not its own Set up task) says on its page what it waits on
+"""A bot Agent Ops makes on an ordinary task ("Add Builder 3", not its own Set up task) says on its page what it waits on
 until it is live (#411): the ask on that task, opened by the one button for the person it is addressed to, whose it is
 for anyone else, else who is still making it. Never a Finish setup button that only opens the Info tab."""
 
@@ -6,16 +6,16 @@ from backend import openapi_v2, question_marks
 from backend.store import H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import claim, get
-from backend.tests.helpers.member_bots import botops, call  # noqa: F401  (fixture)
+from backend.tests.helpers.member_bots import agent_ops, call  # noqa: F401  (fixture)
 
 ASK = "OK to start Builder 3's own Large cloud machine, about 9 cents an hour while it runs?"
 
 
-def made_on_a_task(api, botops):  # noqa: F811
-    """Ana asks BotOps, on a General task, for a bot; BotOps registers it in that task's turn."""
+def made_on_a_task(api, agent_ops):  # noqa: F811
+    """Ana asks Agent Ops, on a General task, for a bot; Agent Ops registers it in that task's turn."""
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, "human:ana", "Add Builder 3", "A third builder like Builder 2.", "bot:botops")
-    attempt = claim(api, botops, "botops")
+    attempt = claim(api, agent_ops, "botops")
     made = call(
         api,
         "post",
@@ -31,16 +31,16 @@ def top_line(api, token="ana-test"):
     return get(api, "bots/builder-3", token)["cant_run"]
 
 
-def test_a_bot_made_on_a_general_task_names_the_task_not_finish_setup(api, botops):  # noqa: F811
-    task_id = made_on_a_task(api, botops)
+def test_a_bot_made_on_a_general_task_names_the_task_not_finish_setup(api, agent_ops):  # noqa: F811
+    task_id = made_on_a_task(api, agent_ops)
     line = top_line(api)
-    assert line["cause"] == "BotOps is still setting up Builder 3"
+    assert line["cause"] == "Agent Ops is still setting up Builder 3"
     assert line["fix"] is None  # nothing is Ana's to do: no button
     assert line["task"] == {"id": task_id, "title": "Add Builder 3"}
 
 
-def test_the_start_ok_is_the_button_for_the_person_asked_and_named_for_anyone_else(api, botops):  # noqa: F811
-    task_id = made_on_a_task(api, botops)
+def test_the_start_ok_is_the_button_for_the_person_asked_and_named_for_anyone_else(api, agent_ops):  # noqa: F811
+    task_id = made_on_a_task(api, agent_ops)
     with api.app.state.store.transaction() as c:
         question_marks.ask(c, "bot:botops", task_id, "human:ana", ASK)
     mine = top_line(api)
@@ -57,20 +57,20 @@ def test_the_start_ok_is_the_button_for_the_person_asked_and_named_for_anyone_el
     with api.app.state.store.transaction() as c:
         H.task_comment(c, "human:ana", task_id, "Yes, start it.")  # her reply clears the ❓
     after = top_line(api)  # answered: it no longer waits on her
-    assert after["cause"] == "BotOps is still setting up Builder 3" and after["fix"] is None
+    assert after["cause"] == "Agent Ops is still setting up Builder 3" and after["fix"] is None
 
 
-def test_a_planned_bot_nothing_is_making_says_what_finishes_it_with_no_info_button(api, botops):  # noqa: F811
-    task_id = made_on_a_task(api, botops)
+def test_a_planned_bot_nothing_is_making_says_what_finishes_it_with_no_info_button(api, agent_ops):  # noqa: F811
+    task_id = made_on_a_task(api, agent_ops)
     with api.app.state.store.transaction() as c:
         H.task_close(c, "human:ana", task_id, "Not needed after all.")
     line = top_line(api)
-    assert line["cause"] == "Builder 3 has not started yet: ask BotOps to take it live"
+    assert line["cause"] == "Builder 3 has not started yet: ask Agent Ops to take it live"
     assert line["fix"] is None and "task" not in line
 
 
-def test_a_start_ok_reads_as_an_ok_with_its_button(api, botops):  # noqa: F811
-    task_id = made_on_a_task(api, botops)
+def test_a_start_ok_reads_as_an_ok_with_its_button(api, agent_ops):  # noqa: F811
+    task_id = made_on_a_task(api, agent_ops)
     with api.app.state.store.transaction() as c:
         H.task_ask(
             c,
@@ -87,10 +87,10 @@ def test_a_start_ok_reads_as_an_ok_with_its_button(api, botops):  # noqa: F811
     assert line["fix"] == "open_ask" and line["ask"]["kind"] == "ok"
 
 
-def test_a_viewer_who_may_not_read_the_making_task_gets_no_link_words_or_button(api, botops):  # noqa: F811
+def test_a_viewer_who_may_not_read_the_making_task_gets_no_link_words_or_button(api, agent_ops):  # noqa: F811
     """The making task turned private after the bot was made: a reader of the bot who is no party to it learns only
     that the bot waits, never the task's title, the ask's words or a button into it."""
-    task_id = made_on_a_task(api, botops)
+    task_id = made_on_a_task(api, agent_ops)
     with api.app.state.store.transaction() as c:
         question_marks.ask(c, "bot:botops", task_id, "human:ana", ASK)
         c.execute("UPDATE tasks SET private=1 WHERE id=?", (task_id,))

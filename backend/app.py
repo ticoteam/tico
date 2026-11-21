@@ -52,7 +52,7 @@ from .execution import (
     flag_cut,
     reset_bot_sessions,
 )
-from .onboarding import BOTOPS, Onboarding
+from .onboarding import AGENT_OPS, Onboarding
 from .recruit import Recruiter
 from . import names as actor_names
 from . import settings_catalog
@@ -161,13 +161,13 @@ def create_app(settings=None):
 def _configure_app(
     app, settings, store, auth, execution, settings_admin, onboarding, recruiter, telemetry, census, recorder, flight
 ):
-    assistant_direct, assistant_instruction, assistant_mod, assistant_valid, botops_act, create_proposal = (
+    assistant_direct, assistant_instruction, assistant_mod, assistant_valid, agent_ops_act, create_proposal = (
         _install_request_guard(
             lambda: MAX_REPORT_BYTES,
             lambda *args, **kwargs: act_for_requester(*args, **kwargs),
             app,
             auth,
-            lambda *args, **kwargs: botops_owns_task(*args, **kwargs),
+            lambda *args, **kwargs: agent_ops_owns_task(*args, **kwargs),
             census,
             lambda *args, **kwargs: confirm_for_carried(*args, **kwargs),
             recorder,
@@ -336,19 +336,19 @@ def _configure_app(
 
     (
         act_for_requester,
-        botops_owns_task,
+        agent_ops_owns_task,
         carried_request,
         confirm_for_carried,
         delegated_identity,
         propose_card,
         risky,
-    ) = botops_act.configure(app, assistant_valid, auth, create_proposal, settings, store)
+    ) = agent_ops_act.configure(app, assistant_valid, auth, create_proposal, settings, store)
 
     # The task-write rule check, also for task writes outside the v3 routes (backend/goal_routes.py).
     task_rules = app.state.task_rules = task_rule_gate.TaskRules(
         auth, rule_check, rule_task_audience, rule_target, store
     )
-    # After delegated_identity: a change BotOps makes for a person is made as them.
+    # After delegated_identity: a change Agent Ops makes for a person is made as them.
     task_moves_routes.register(
         app,
         auth,
@@ -800,7 +800,7 @@ def _install_request_guard(
     act_for_requester,
     app,
     auth,
-    botops_owns_task,
+    agent_ops_owns_task,
     census,
     confirm_for_carried,
     recorder,
@@ -828,7 +828,7 @@ def _install_request_guard(
             acting,
             request.method,
             request.url.path,
-            botops_act.parse_body(getattr(request, "_body", b"")),
+            agent_ops_act.parse_body(getattr(request, "_body", b"")),
             settings.public_url,
         )
 
@@ -841,18 +841,18 @@ def _install_request_guard(
             telemetry.capture("request", exc, exc.status, route=error_route(request))
             request.state.telemetry_captured = True
         caller = getattr(request.state, "privacy_source", None)
-        if caller is not None and caller.actor == "bot:" + BOTOPS and exc.status == 403:
-            # A bot handed BotOps a person's request that lends nothing: the person gets a Confirm card, not a refusal.
+        if caller is not None and caller.actor == "bot:" + AGENT_OPS and exc.status == 403:
+            # A bot handed Agent Ops a person's request that lends nothing: the person gets a Confirm card, not a refusal.
             card = await asyncio.get_running_loop().run_in_executor(None, confirm_for_carried, request, exc)
             if card:
                 return JSONResponse(card)
         if (
             caller is not None
-            and caller.actor == "bot:" + BOTOPS
+            and caller.actor == "bot:" + AGENT_OPS
             and exc.status in (403, 409)
             and "fix" not in getattr(exc, "extra", {})
         ):
-            # BotOps relays a refusal to a person: what to click, and where (botops_act.fix).
+            # Agent Ops relays a refusal to a person: what to click, and where (agent_ops_act.fix).
             acting = getattr(request.state, "identity", None) or caller
 
             def hint():
@@ -867,10 +867,10 @@ def _install_request_guard(
                             else []
                         ),
                     )
-                hint = botops_act.fix(request.url.path, exc.code, exc.status, acting, names, settings.public_url)
+                hint = agent_ops_act.fix(request.url.path, exc.code, exc.status, acting, names, settings.public_url)
                 if (
                     hint
-                    and hint["fix"].startswith(botops_act.ROLE_FIX)
+                    and hint["fix"].startswith(agent_ops_act.ROLE_FIX)
                     and exc.code == "forbidden"
                     and H.is_human(acting.actor)
                 ):
@@ -966,7 +966,7 @@ def _install_request_guard(
     from .assistant import instruction as assistant_instruction
     from . import goal_read_back
     from . import assistant as assistant_mod
-    from . import botops_act
+    from . import agent_ops_act
 
     def assistant_owns(task_id, actor, shared=False):
         """The task is the person's alone: theirs, no bot on it and none delegated. With `shared`, bots may be on it
@@ -1334,7 +1334,7 @@ def _install_request_guard(
                     # A write the person's own Assistant run makes (backend/assistant.py): the run cites the message that
                     # started it (its turn), unless the request names another (`X-Tico-On-Behalf-Of`), and the write runs as
                     # the person, recorded via assistant for that message. Their rights are the ceiling: the route checks them.
-                    header = request.headers.get(botops_act.HEADER)
+                    header = request.headers.get(agent_ops_act.HEADER)
                     asked = header or "turn"
                     raw = getattr(request, "_body", b"")
                     # A setting from the catalogue is refused here only when only the person may change it (class `person`,
@@ -1438,23 +1438,23 @@ def _install_request_guard(
                         privacy.guard_write(c, caller, request.url.path, auth)
 
                 await asyncio.to_thread(guard)
-            # The Assistant's citation was checked above; only BotOps borrows a requester's identity here.
-            on_behalf = None if getattr(caller, "via", "") == "assistant" else request.headers.get(botops_act.HEADER)
+            # The Assistant's citation was checked above; only Agent Ops borrows a requester's identity here.
+            on_behalf = None if getattr(caller, "via", "") == "assistant" else request.headers.get(agent_ops_act.HEADER)
             if (
                 not on_behalf
                 and getattr(request.state, "identity", None) is not None
-                and request.state.identity.actor == "bot:" + BOTOPS
+                and request.state.identity.actor == "bot:" + AGENT_OPS
                 and request.url.path.startswith("/api/v2/")
                 and request.url.path not in ("/api/v2/me", "/api/v2/mcp")
             ):
-                body = botops_act.parse_body(getattr(request, "_body", b""))
+                body = agent_ops_act.parse_body(getattr(request, "_body", b""))
                 on_behalf = (body.get("on_behalf_of") if isinstance(body, dict) else None) or request.query_params.get(
                     "on_behalf_of"
                 )
-                # The default applies only to what BotOps does for a person (the delegable routes). Its own run's
-                # plumbing (credentials, attempts, jobs, its status) and its own messages stay BotOps': a run's
+                # The default applies only to what Agent Ops does for a person (the delegable routes). Its own run's
+                # plumbing (credentials, attempts, jobs, its status) and its own messages stay Agent Ops': a run's
                 # credential fetch as the person was refused, and every human-requested turn failed to start.
-                if not on_behalf and botops_act.default_delegable(
+                if not on_behalf and agent_ops_act.default_delegable(
                     request.method, request.url.path, body, request.query_params
                 ):
                     on_behalf = "default"
@@ -1467,7 +1467,7 @@ def _install_request_guard(
             ):
                 # A Tools change by a bot: the Tools Owner makes it with the rights of the person who asked it
                 # (backend/tools_delegation.py); any other bot keeps its own (`act_for_requester`).
-                body = botops_act.parse_body(getattr(request, "_body", b""))
+                body = agent_ops_act.parse_body(getattr(request, "_body", b""))
                 on_behalf = (
                     (body.get("on_behalf_of") if isinstance(body, dict) else None)
                     or request.query_params.get("on_behalf_of")
@@ -1476,12 +1476,12 @@ def _install_request_guard(
             if (
                 on_behalf
                 and getattr(request.state, "identity", None) is not None
-                and request.state.identity.actor == "bot:" + BOTOPS
-                and botops_owns_task(request.url.path, botops_act.parse_body(getattr(request, "_body", b"")))
+                and request.state.identity.actor == "bot:" + AGENT_OPS
+                and agent_ops_owns_task(request.url.path, agent_ops_act.parse_body(getattr(request, "_body", b"")))
             ):
-                on_behalf = None  # BotOps' own task: its own words, with its own rights
+                on_behalf = None  # Agent Ops' own task: its own words, with its own rights
             if on_behalf and getattr(request.state, "identity", None) is not None:
-                # BotOps doing what the person who asked it could do in the app (backend/botops_act.py).
+                # Agent Ops doing what the person who asked it could do in the app (backend/agent_ops_act.py).
                 early, acted = await asyncio.get_running_loop().run_in_executor(
                     None, act_for_requester, request, on_behalf
                 )
@@ -1493,7 +1493,7 @@ def _install_request_guard(
                         delegation_reset = H.DELEGATION.set(request.state.delegation)
                     lent = (getattr(request.state, "delegation", None) or {}).get("for")
                     if H.is_human(lent) and cause_reset is not None:
-                        # What BotOps does with a person's rights is that person's act: its notices wake as the same
+                        # What Agent Ops does with a person's rights is that person's act: its notices wake as the same
                         # act from the app would (backend/wake_rules.py ALWAYS_WAKE "person", wake presets).
                         wake_rules.CAUSE.set(lent)
             response = early or await call_next(request)
@@ -1622,14 +1622,14 @@ def _install_request_guard(
             if cause_reset is not None:
                 wake_rules.CAUSE.reset(cause_reset)
 
-    return assistant_direct, assistant_instruction, assistant_mod, assistant_valid, botops_act, create_proposal
+    return assistant_direct, assistant_instruction, assistant_mod, assistant_valid, agent_ops_act, create_proposal
 
 
 def _routine_permissions(auth, delegated_identity):
     def may_edit_routines(c, who, bot):
         """The bot itself, or a person who manages it (its owners, its operator, an Admin, whoever it reports up
         to). A routine is the bot's standing work: the people who direct the bot set it, and the bot may set up
-        its own. BotOps does it as the person whose chat message started its turn, checked with their rights;
+        its own. Agent Ops does it as the person whose chat message started its turn, checked with their rights;
         with no such person (a bot built during setup) only for a bot still being built from its template."""
         auth.domain(who)
         row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
@@ -1637,7 +1637,7 @@ def _routine_permissions(auth, delegated_identity):
             raise Problem("not_found", "Unknown bot", 404)
         if who.actor == "bot:" + bot:
             return
-        if who.actor == "bot:" + BOTOPS:
+        if who.actor == "bot:" + AGENT_OPS:
             try:
                 person = delegated_identity(c, who, "turn")
             except Problem:
@@ -1645,7 +1645,7 @@ def _routine_permissions(auth, delegated_identity):
             if person is not None and person.actor != who.actor:
                 if auth.bot_manager(c, person, bot) or auth.operator(c, person, bot):
                     return
-                raise Problem("forbidden", "The person BotOps is acting for may not change this bot's routines", 403)
+                raise Problem("forbidden", "The person Agent Ops is acting for may not change this bot's routines", 403)
             declared = H._json(row["config"], {}) if row else {}
             if (
                 (H.bot(c, bot) or {}).get("state") == "planned"
@@ -1654,7 +1654,7 @@ def _routine_permissions(auth, delegated_identity):
             ):
                 return
             raise Problem(
-                "forbidden", "BotOps sets routines only as the person who asked it, or on a bot it is building", 403
+                "forbidden", "Agent Ops sets routines only as the person who asked it, or on a bot it is building", 403
             )
         if auth.bot_manager(c, who, bot) or auth.operator(c, who, bot):
             return
@@ -2342,7 +2342,7 @@ def _install_features(
     from .mailboxes import install as install_mailboxes
 
     install_mailboxes(app, store)
-    install_credential_cards(app, store, app.state.vault, auth, BOTOPS, delegated_identity, settings_admin._manager)
+    install_credential_cards(app, store, app.state.vault, auth, AGENT_OPS, delegated_identity, settings_admin._manager)
     from . import company_storage
 
     company_storage.install(app, store, auth)
@@ -2561,9 +2561,9 @@ def _install_features(
     from .bot_tools import install as install_bot_tools
 
     def as_requester(c, who):
-        """BotOps with no `X-Tico-On-Behalf-Of` header is still doing a person's errand in a turn their chat message
-        started (an older client, a route's plain tool): check the person, never BotOps, who manages no one's bot."""
-        if who.actor != "bot:" + BOTOPS:
+        """Agent Ops with no `X-Tico-On-Behalf-Of` header is still doing a person's errand in a turn their chat message
+        started (an older client, a route's plain tool): check the person, never Agent Ops, who manages no one's bot."""
+        if who.actor != "bot:" + AGENT_OPS:
             return who
         try:
             return delegated_identity(c, who, "turn")

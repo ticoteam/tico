@@ -1,7 +1,7 @@
 """Every core template, end to end: a company made from it on a temporary database. Its repository is written and passes
 the preflight checks a fresh repository can answer for itself, its bot is created through the API from that template,
 and the first task the bot is given queues a job for it. The core set is the templates the onboarding suggests by
-default, plus BotOps, which every company gets."""
+default, plus Agent Ops, which every company gets."""
 
 import pytest
 
@@ -9,7 +9,7 @@ from clients import catalog
 from backend.tests.live import block_outside_network
 from backend.tests.helpers.api import get, post  # noqa: F401
 
-CORE = sorted({row["template"] for row in catalog.cards() if row.get("suggest") == "default"} | {"botops"})
+CORE = sorted({row["template"] for row in catalog.cards() if row.get("suggest") == "default"} | {"agent-ops"})
 NAMES = {"company_name": "Acme", "app_name": "Tico", "assistant_name": "Tico"}
 
 

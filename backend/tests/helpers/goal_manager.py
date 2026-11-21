@@ -2,13 +2,13 @@
 
 import shutil
 from pathlib import Path
-from backend.tests.helpers.onboarding import ASSISTANT_AGENT, ASSISTANT_CARD, BOTOPS_CARD
+from backend.tests.helpers.onboarding import ASSISTANT_AGENT, ASSISTANT_CARD, AGENT_OPS_CARD
 
 
 TEMPLATE = Path(__file__).resolve().parents[3] / "templates" / "catalog" / "strategy-owner"
 
 
-BASE = [(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, "")]
+BASE = [(ASSISTANT_CARD, ASSISTANT_AGENT), (AGENT_OPS_CARD, "")]
 
 
 def with_goal_manager(api):

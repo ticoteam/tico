@@ -956,7 +956,7 @@ def test_no_bot_loosens_a_sign_off_in_settings_but_a_person_may_and_bots_change_
     for what, change in LOOSENING.items():
         for bot in bots:
             if not PS.may_change(c, bot, E.pipeline(c, pipeline)):
-                continue  # BotOps: it may not change the pipeline at all
+                continue  # Agent Ops: it may not change the pipeline at all
             with pytest.raises(
                 H.Refused, match=f"This change loosens the person's OK on {name}. A person must make it."
             ):

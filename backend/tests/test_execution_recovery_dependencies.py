@@ -57,7 +57,7 @@ def test_overlap_wait_is_visible_and_reviewed_within_five_minutes_of_freeing(api
         )
         assert held['owner'] == 'bot:botops' and held['reason']
         assert c.execute("SELECT 1 FROM tasks WHERE owner_id='bot:botops' AND status='open'").fetchone()
-    assert 'BotOps owns recovery' in get(api, 'bots/ops/execution-review')['jobs'][0]['reason']
+    assert 'Agent Ops owns recovery' in get(api, 'bots/ops/execution-review')['jobs'][0]['reason']
 
 
 @pytest.mark.parametrize('ready_fallback', [False, True])

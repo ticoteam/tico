@@ -24,7 +24,7 @@ FILE_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 def require_person(c, actor):
     """Every write on this surface: a person on the roster. A bot never changes what leaves the install, whatever its
-    other rights; BotOps arrives here as the person it acts for, so it follows them."""
+    other rights; Agent Ops arrives here as the person it acts for, so it follows them."""
     if not H.is_human(actor):
         raise Problem("forbidden", "Only a person changes the Company page", 403)
     H._writer(c, actor)

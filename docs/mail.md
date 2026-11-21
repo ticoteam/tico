@@ -473,7 +473,7 @@ name, so step 2 below authorizes the read-only scopes too, and Check records whi
 authorized before them keeps minting its write scopes (Tico still holds each box off) and shows **Redo step 2 to narrow
 Google access.**; redo step 2, then click Check. A box turned on that a person's grant lacks shows **Connect Google again** on their card. Both agent
 prompts say what Tico will ask Google for. Only an admin acting as themselves changes these settings: never a bot,
-BotOps or the Assistant.
+Agent Ops or the Assistant.
 
 **What these settings enforce.** Where Google allows it, Tico narrows the token itself: Organize mail and Send mail both
 off gives read-only mail, and Change calendar off gives a read-only calendar. Otherwise the server enforces them on
@@ -507,7 +507,7 @@ Choose the audience in step 1:
 ### Which mailbox a message bot uses
 
 For each message bot (the bot named as someone's `inbox_bot`), the mailbox is the address the bot declares: the
-identity of its `gmail` entry in `bot.yaml`, which BotOps fills from the `Mailbox: <email>` line in the bot's instructions
+identity of its `gmail` entry in `bot.yaml`, which Agent Ops fills from the `Mailbox: <email>` line in the bot's instructions
 (`{{mailbox}}` in the template). Only when a bot declares none is its person's email from the roster used. A person
 who left, and an archived bot, are skipped.
 
@@ -622,17 +622,17 @@ people act through the server's routes at their own level.
 
 A bot is a message bot to the server when it is its person's `inbox_bot`, which is what the server checks before it
 gives the bot its grant on a mailbox. Making a bot from the `inbox-manager` template does that itself: adding it in
-Settings, in the team builder, or through BotOps records the bot as the `inbox_bot` of the person the `Mailbox:` line
-names (by their roster email; for a bot BotOps registers in a DM, the person who asked), and writes that address as its
+Settings, in the team builder, or through Agent Ops records the bot as the `inbox_bot` of the person the `Mailbox:` line
+names (by their roster email; for a bot Agent Ops registers in a DM, the person who asked), and writes that address as its
 `gmail` identity, or the person's own email when there is no line. A bot made before this is linked when the server
 starts, if it is unambiguous: a message-bot template, a mailbox in its instructions or its `gmail` identity, and the
 person whose email it is (or the only person on the roster). Changing it later is an owner's or admin's call, or
-BotOps's as the requester (an ask for their OK):
+Agent Ops's as the requester (an ask for their OK):
 `tico api POST access/humans/<person> '{"inbox_bot": "<bot>", "mailbox": "ana@acme.example"}'`. Without the link the
 bot has no mailbox, and its Tools list shows a problem.
 
 A team may still keep a computer for message bots alone: `POST /api/v2/computers/<id>/inbox-only {"enabled": true}`,
-by an owner, an admin, the computer's operator, or BotOps as one of them. The server then places no other bot there
+by an owner, an admin, the computer's operator, or Agent Ops as one of them. The server then places no other bot there
 (409 `inbox_isolation`); `{"enabled": false}` stops keeping it.
 
 Older computers kept a Google key (`google-sa.json`), connected-account grants (`google-oauth.json`) and a mail copy
@@ -667,7 +667,7 @@ New senders start at **Ask first**, **Replies only**. **On their own** is an exp
 level; the effective rule names the level that set it. Replies only keeps new messages behind a per-message OK.
 **Never** at company, inbox or bot level blocks every send, including sends already OK'd. A bot override cannot
 relax company recipient restrictions, message type, approver requirements, always-ask rules, caps, pacing or the undo window. Recipient and approver rules at different levels intersect; the explicit Ask first → On their own opt-in is the exception. Only a person acting as themselves changes sending
-policy: company admins, an inbox's person/admin, or a bot's manager for that bot. BotOps and the Assistant cannot
+policy: company admins, an inbox's person/admin, or a bot's manager for that bot. Agent Ops and the Assistant cannot
 change these settings for them.
 
 The default always-ask rules cover a new correspondent, attachments, more than ten recipients, and legal or money

@@ -172,7 +172,7 @@ ENTRY = {
 }
 
 
-def botops(api, state="active"):
+def agent_ops(api, state="active"):
     with api.app.state.store.transaction() as c:
         H.sync_registry(c, {"botops": {"name": "botops", "status": state}}, None)
 
@@ -183,22 +183,22 @@ def register(api, bot="ops", who="ana-test", entry=None, expected=200):
     return r.json()
 
 
-def botops_tasks(api):
+def agent_ops_tasks(api):
     return api.get("/api/v2/tasks", params={"owner": "botops"}, headers=headers()).json()["tasks"]
 
 
-def test_a_manager_registers_a_tool_and_botops_gets_the_exact_entry(api):
-    botops(api)
+def test_a_manager_registers_a_tool_and_agent_ops_gets_the_exact_entry(api):
+    agent_ops(api)
     register(api, who="cara-test", expected=403)  # a member who does not manage ops
     checked = register(api, entry={**ENTRY, "can": ["qa-custom-verb"], "dry_run": True})
-    assert checked["ok"] and "qa-custom-verb" in checked["yaml"] and botops_tasks(api) == []
+    assert checked["ok"] and "qa-custom-verb" in checked["yaml"] and agent_ops_tasks(api) == []
     made = register(api, entry={**ENTRY, "title_prefix": "QA "})
     assert made["tool"]["status"] == "pending" and made["tool"]["pending"] == "add"
     assert made["tool"]["service"] == "posthog" and made["tool"]["logo_key"] == "posthog"
     assert "Credentials or its chat card" in made["credentials"] and "grant it to this bot" in made["credentials"]
-    task = botops_tasks(api)[0]
+    task = agent_ops_tasks(api)[0]
     assert task["id"] == made["task_id"] and task["title"] == "QA Add PostHog access to ops"
-    with api.app.state.store.read() as c:  # what Tico gave BotOps: its instructions (a task has no description)
+    with api.app.state.store.read() as c:  # what Tico gave Agent Ops: its instructions (a task has no description)
         body = H.task_words(c, task["id"])
     assert made["yaml"] in body and "- service: posthog" in body and "env: POSTHOG_KEY" in body
     assert "can: [read]" in body and "project: '340585'" in body
@@ -226,7 +226,7 @@ def test_a_manager_registers_a_tool_and_botops_gets_the_exact_entry(api):
 
 
 def test_a_credential_value_is_refused_and_nothing_is_kept(api):
-    botops(api)
+    agent_ops(api)
     secrets = [
         {"env": "sk-proj-1234567890abcdef"},
         {"identity": "postgresql://reader:hunter2@db.internal/app"},
@@ -238,7 +238,7 @@ def test_a_credential_value_is_refused_and_nothing_is_kept(api):
         assert "never" in answer["error"]["detail"].lower() or "not accepted" in answer["error"]["detail"], answer
     for bad in ({"env": "HUB_TOKEN"}, {"scope": {"token": "x"}}):
         register(api, entry={**ENTRY, **bad}, expected=422)
-    assert botops_tasks(api) == []
+    assert agent_ops_tasks(api) == []
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM bot_tool_requests").fetchone()[0] == 0
     assert register(api, entry={**ENTRY, "identity": "Acme workspace, marketing@acme.example", "env": "SLACK_TOKEN"})[

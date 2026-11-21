@@ -36,7 +36,10 @@ PEOPLE = {
 
 # What a fresh environment seeds: the assistant people talk to, and the bot that builds the
 # rest. Both start planned, exactly as templates/environment-registry/employees.yaml does.
-SEED = {"assistant": {"name": "assistant", "status": "planned"}, "botops": {"name": "botops", "status": "planned"}}
+SEED = {
+    "assistant": {"name": "assistant", "status": "planned"},
+    "botops": {"name": "botops", "slug": "agent-ops", "status": "planned"},
+}
 
 
 TOKEN = "local-owner-secret-token-0123456789"
@@ -57,10 +60,10 @@ ASSISTANT_CARD = {
 }
 
 
-BOTOPS_CARD = {
-    "template": "botops",
-    "slug": "botops",
-    "name": "BotOps",
+AGENT_OPS_CARD = {
+    "template": "agent-ops",
+    "slug": "agent-ops",
+    "name": "Agent Ops",
     "required": True,
     "bootstrap": True,
     "summary": "Sets every other bot up.",
@@ -135,7 +138,7 @@ def environment(tmp_path):
             if cards is None:
                 cards = [
                     (ASSISTANT_CARD, ASSISTANT_AGENT),
-                    (BOTOPS_CARD, ""),
+                    (AGENT_OPS_CARD, ""),
                     (SUPPORT_CARD, SUPPORT_AGENT),
                     (SALES_CARD, ""),
                 ]

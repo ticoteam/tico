@@ -159,7 +159,7 @@ def _only_its_author_edits_or_deletes_a_comment_signed_in_as_themselves(api):
     task = post(api, "tasks", {"owner": "ops", "title": "Draft the press note", "body": "x"})
     said = post(api, f"tasks/{task['id']}/comments", {"text": "Use the September numbers."}, token="ben-test")
     path = f"tasks/{task['id']}/comments/{said['comment']['id']}"
-    for token in ("ana-test", "priya-test", "ben-via-botops"):  # Tico's owner, a teammate, BotOps acting for Ben
+    for token in ("ana-test", "priya-test", "ben-via-agent-ops"):  # Tico's owner, a teammate, Agent Ops acting for Ben
         post(api, path, {"text": "Use the October numbers."}, token=token, expected=403)
         post(api, path + "/delete", {}, token=token, expected=403)
     assert [m["body"] for m in get(api, "tasks/" + task["id"])["comments"]] == ["x", "Use the September numbers."]

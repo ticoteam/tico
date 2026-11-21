@@ -10,7 +10,7 @@ import pytest
 from backend import rule_due as D
 from backend.tests.helpers.api import headers, post  # noqa: F401  (the api fixture)
 from backend.tests.helpers.assistant import assistant_turn
-from backend.tests.helpers.member_bots import botops, turn as botops_turn  # noqa: F401  (the botops fixture)
+from backend.tests.helpers.member_bots import agent_ops, turn as agent_ops_turn  # noqa: F401  (the agent-ops fixture)
 from backend.tests.helpers.org_rules import org, rule as post_rule
 from clients import hubcli, hubtools, remotecli
 from clients.tico import APIError
@@ -203,15 +203,15 @@ def test_the_assistant_refuses_an_everyone_rule_for_a_plain_member_and_suggests_
     assert suggested["status"] == "suggested"
 
 
-def test_botops_mine_is_its_own_rules_and_settings_not_its_requesters(api, botops):
+def test_agent_ops_mine_is_its_own_rules_and_settings_not_its_requesters(api, agent_ops):
     builtin_off(api)
     org(api)
-    post_rule(api, {"kind": "internal", "text": "BotOps answers in its own channel.", "who": {"bots": ["botops"]}})
+    post_rule(api, {"kind": "internal", "text": "Agent Ops answers in its own channel.", "who": {"bots": ["botops"]}})
     post_rule(api, {"kind": "internal", "text": "Cara's own rule.", "who": {"people": ["cara"]}})
-    attempt = botops_turn(api, botops, person="cara-test", text="What rules apply to me?")
+    attempt = agent_ops_turn(api, agent_ops, person="cara-test", text="What rules apply to me?")
     err, result = mcp(api, "tico_rules_list", {"mine": True}, token=attempt["token"])
     assert not err, result
-    assert [item["text"] for item in result["rules"]] == ["BotOps answers in its own channel."]
+    assert [item["text"] for item in result["rules"]] == ["Agent Ops answers in its own channel."]
     assert result["settings"] and all("text" in s for s in result["settings"])
 
 

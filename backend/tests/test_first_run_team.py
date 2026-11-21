@@ -13,7 +13,7 @@ from backend.tests.helpers.api import claim, headers, post, ready
 from backend.tests.helpers.onboarding import (
     ASSISTANT_AGENT,
     ASSISTANT_CARD,
-    BOTOPS_CARD,
+    AGENT_OPS_CARD,
     as_person,
     build_team,
     draft,
@@ -46,7 +46,7 @@ def enabled(api):
 def test_a_starter_is_created_onboarding_and_leaves_it_only_when_a_person_above_marks_it_complete(environment):
     """Create, parked, woken only by a person, ready by the bot itself and completed by a person above it; and the member
     limit ignores parked bots."""
-    api = environment(cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, "")])
+    api = environment(cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (AGENT_OPS_CARD, "")])
     real_starters(api, "support-owner", "chief-of-staff", "qa-owner")
     computer = machine(api)
     who = signed_in()
@@ -83,7 +83,7 @@ def test_a_starter_is_created_onboarding_and_leaves_it_only_when_a_person_above_
         releases.version(),
         "active",
     )
-    assert api.get("/api/v2/tasks", params={"owner": "botops"}, headers=who).json()["tasks"] == []  # no BotOps task
+    assert api.get("/api/v2/tasks", params={"owner": "botops"}, headers=who).json()["tasks"] == []  # no Agent Ops task
     assert support_routine(api)["automation"] and enabled(api) == 0
     with api.app.state.store.read() as c:
         assert BS.read(c, "support-owner")["materialize"] is True
@@ -177,7 +177,7 @@ def test_a_starter_is_created_onboarding_and_leaves_it_only_when_a_person_above_
 def test_finishing_setup_with_defaults_turns_the_first_routine_on_as_starting_it_would(environment):
     """Health's "Finish with defaults" on a bot nobody started: its template's first routine is on, as Start setup
     would have left it, and only once."""
-    api = environment(cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, "")])
+    api = environment(cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (AGENT_OPS_CARD, "")])
     real_starters(api, "support-owner")
     machine(api)
     selected = {"support-owner": {"template": "support-owner", "display_name": "Help desk", "instructions": ""}}
@@ -195,7 +195,7 @@ def test_finishing_setup_with_defaults_turns_the_first_routine_on_as_starting_it
 
 
 def test_go_live_turns_the_first_routine_on_once_and_a_strangers_message_does_not(environment):
-    api = environment(cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, "")])
+    api = environment(cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (AGENT_OPS_CARD, "")])
     real_starters(api, "support-owner")
     machine(api)
     selected = {"support-owner": {"template": "support-owner", "display_name": "Help desk", "instructions": ""}}

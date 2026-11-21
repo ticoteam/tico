@@ -233,7 +233,7 @@ def problem(payload, status, key):
 
 def caller_kind(auth, who):
     """What kind of caller this is, for the tools it is offered (`hubtools.KINDS`): a human as owner, admin or member,
-    a bot, BotOps, an external agent run by a bot (a Hermes profile), or the Assistant working in a human's private room.
+    a bot, Agent Ops, an external agent run by a bot (a Hermes profile), or the Assistant working in a human's private room.
     The Rules Owner is `counsel`: its own tool list (`hubtools.COUNSEL_TOOLS`). The checks are the server's own: `auth.bot_admin`,
     `Identity.agent`, `Identity.via`."""
     from . import hubdb as H

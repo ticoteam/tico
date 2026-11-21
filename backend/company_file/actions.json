@@ -400,7 +400,7 @@
   },
   {
    "name": "bot_remove",
-   "description": "Remove one bot from the chart. BotOps itself stays.",
+   "description": "Remove one bot from the chart. Agent Ops itself stays.",
    "input_schema": {
     "type": "object",
     "properties": {
@@ -1070,7 +1070,7 @@
   },
   {
    "name": "undo",
-   "description": "Undo BotOps's last change.",
+   "description": "Undo Agent Ops's last change.",
    "input_schema": {
     "type": "object",
     "properties": {},

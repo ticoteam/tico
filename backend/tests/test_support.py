@@ -867,24 +867,24 @@ def test_the_feedback_question_waits_for_a_first_result_and_an_answer_arrives_as
 
 def test_each_filing_says_its_source_and_an_older_hq_still_gets_the_ticket(environment, hq):
     """Spec ticket-source.md criteria 1, 3 and 8: the person's own app sends `person` (it never names one), a person's
-    claim of `botops` is filed as theirs (BotOps' own request is tested in test_botops_parity.py), nothing else may be
+    claim of `botops` is filed as theirs (Agent Ops' own request is tested in test_agent_ops_parity.py), nothing else may be
     claimed, and an HQ that refuses `source` as an unknown field gets the ticket again without it, its message
-    unchanged (BotOps' name stays at its start, which such an HQ reads)."""
+    unchanged (Agent Ops' name stays at its start, which such an HQ reads)."""
     api = environment()
     file(api)
     assert json.loads(hq.seen[-1].content)["source"] == "person"
     assert "source" not in file(api).json()["sent"]  # HQ's sorting, not something the person sent
-    file(api, message="[BotOps] Sync fails", source="botops")
+    file(api, message="[Agent Ops] Sync fails", source="botops")
     assert json.loads(hq.seen[-1].content)["source"] == "person"
     for claimed in ("bot_report", "health_monitor", "hq_alert", "website", "unknown"):
         assert file(api, source=claimed).status_code == 422
     filed = len(hq.tickets)
 
     hq.fields = {"message", "email", "install_id", "version", "app_version", "kind"}
-    r = file(api, message="[BotOps] Sync fails")
+    r = file(api, message="[Agent Ops] Sync fails")
     assert r.status_code == 200, r.text
     first, again = (json.loads(x.content) for x in hq.seen[-2:])
-    assert first["source"] == "person" and "source" not in again and again["message"] == "[BotOps] Sync fails"
+    assert first["source"] == "person" and "source" not in again and again["message"] == "[Agent Ops] Sync fails"
     assert len(hq.tickets) == filed + 1
     # Today's HQ knows kind but not source: only source is dropped, so a setup request keeps its kind.
     r = file(api, message="Stuck on the computer step", kind="setup")
@@ -902,8 +902,8 @@ def test_each_filing_says_its_source_and_an_older_hq_still_gets_the_ticket(envir
     assert 400 <= file(api).status_code < 500 and len(hq.seen) == before + 1
 
 
-def test_the_botops_tool_says_botops_and_keeps_its_name_in_the_message(monkeypatch):
-    """Criterion 3: `tico support file` sends `source: botops` beside the `[BotOps] ` prefix older HQs read."""
+def test_the_agent_ops_tool_says_agent_ops_and_keeps_its_name_in_the_message(monkeypatch):
+    """Criterion 3: `tico support file` sends `source: botops` beside the `[Agent Ops] ` prefix older HQs read."""
     from clients import hubtools
 
     calls = []
@@ -915,7 +915,9 @@ def test_the_botops_tool_says_botops_and_keeps_its_name_in_the_message(monkeypat
 
     monkeypatch.setitem(hubtools.support_file.__globals__, '_as_person', lambda api, ref=None: api)
     hubtools.support_file(Api(), {"message": "Sync fails"})
-    assert calls == [("support/tickets", {"message": "[BotOps] Sync fails", "include_ids": True, "source": "botops"})]
+    assert calls == [
+        ("support/tickets", {"message": "[Agent Ops] Sync fails", "include_ids": True, "source": "botops"})
+    ]
 
 
 def grants(api):

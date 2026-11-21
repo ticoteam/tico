@@ -9,7 +9,7 @@ write is (`org_rule_check.check_as`, outside any transaction, on a budget of one
 leaves exactly one outcome event on `link:<id>`: `rules.passed`, `rules.refused` (a Block rule broken), `rules.held`
 (an Escalate rule broken) or `rules.unchecked` (not judged, or the judge out: the reason in its detail), with the rules
 in its detail. An agent's write is one whose sender is a bot: a bot's own, or
-a person's Assistant or BotOps acting for them (`org_rule_check.checked_as`). A person's own write is never gated, and
+a person's Assistant or Agent Ops acting for them (`org_rule_check.checked_as`). A person's own write is never gated, and
 a read is never counted. A caller checks first, reading only, that the write would be made (its rights, not a replay),
 so no call is spent on a write that will not happen; the write's own checks still run inside it.
 
@@ -171,7 +171,7 @@ def check_as(
 
 def agent_of(store: Any, who: Any) -> tuple[str, str, str] | None:
     """(principal, sender, via) of a write made by `who` when it is an agent's (its sender a bot), else None. `who` may
-    be any object with an `actor` (Maintenance's BotOps is one)."""
+    be any object with an `actor` (Maintenance's Agent Ops is one)."""
     seen = SimpleNamespace(
         actor=str(who.actor), task_actor=str(getattr(who, "task_actor", "") or ""), via=getattr(who, "via", "") or ""
     )

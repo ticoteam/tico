@@ -153,13 +153,13 @@ cost. It frees only turns that are proven dead: a start a person stopped, or a t
 computer no longer runs its bot (the computer was removed, or its latest claim does not list the bot). A slow reply or
 a healthy wait keeps its place. The task and its history stay, and the task gets a note: **Tico freed a dead start,
 will retry.** A dead turn that may have pushed, sent or paid is not retried blindly: one that only read runs again,
-and any other is held for BotOps with the tools it used.
+and any other is held for Agent Ops with the tools it used.
 
 When the company reaches its warning level, **Settings → General → Health → Details** shows one **Company turns** finding for the
 incident: the counts by wait reason, the oldest waits, the last progress of each running turn, each computer's CPU
 and memory, and the likely bottleneck in one sentence. Later runs update the same finding, and when the count drops
-below the warning level it says when the incident resolved. If the incident is still open after 5 minutes, BotOps
-gets exactly one task with the finding (the Support bot where there is no BotOps). The owner gets one notice, only when
+below the warning level it says when the incident resolved. If the incident is still open after 5 minutes, Agent Ops
+gets exactly one task with the finding (the Support bot where there is no Agent Ops). The owner gets one notice, only when
 the incident is still open after an hour or its main wait needs a person: a login, quota or money.
 
 ## Company turn levels
@@ -423,7 +423,7 @@ key**: they stay on the line, greyed, and say "Computer is offline" on hover; no
 Every member sees every working computer, its connections, their sign-in state, and the bots on it they may see. Only an admin or the computer's operator also sees the signed-in accounts, the usage of the
 computer's own login and key previews (others see which kind of key it is, not the preview), sees revoked computers, and
 gets the change controls: sign in and out, Add connection, screen, tools, performance,
-inbox-only and Revoke computer. The API refuses anyone else ([Permissions](permissions.md)). BotOps cannot sign a login
+inbox-only and Revoke computer. The API refuses anyone else ([Permissions](permissions.md)). Agent Ops cannot sign a login
 out, because that stops bots.
 
 ## Share internet with bots
@@ -651,7 +651,7 @@ None of this restarts the runner. `POST /api/v2/computers/{runner_id}/logouts` w
 `"profile"` for a named subscription left from an earlier release) signs out; `GET /api/v2/computers/{runner_id}/logouts/bots?runtime=codex` lists the
 bots it stops; `POST /api/v2/computers/{runner_id}/logins` with `"switch": true` switches; `POST
 /api/v2/computers/{runner_id}/shared-key` with `{"runtime":"codex"}` lets the key the computer is given back. Each is followed like a
-sign-in, with `GET /api/v2/computers/{runner_id}/logins/{id}` (`kind` says which; a sign-out ends `signed_out`). BotOps
+sign-in, with `GET /api/v2/computers/{runner_id}/logins/{id}` (`kind` says which; a sign-out ends `signed_out`). Agent Ops
 cannot sign a login out, because it stops bots. A turn already running when the account changes is not stopped and
 may finish on the old account. On a Mac, Claude Code keeps its login in the Keychain rather than in files, so there is
 no side to sign in on: Switch account isn't offered for it there (the server and the runner refuse it too); sign out,

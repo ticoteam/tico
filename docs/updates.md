@@ -241,7 +241,7 @@ files that would be overwritten still block the update. It saves the current com
 `refs/tico/recovered/<UTC timestamp>-<branch>`, keeps the original branch ref, then does the normal detached
 release update and health check. Rollback still returns to the previous checkout. The recovery ref stays
 after success or rollback; `git show <ref>` reads the saved commit. The update log and `update-status.json`
-record “moved the install off bot branch … (kept at …)”. Health and BotOps name the branch and say whether
+record “moved the install off bot branch … (kept at …)”. Health and Agent Ops name the branch and say whether
 it will be recovered on the next update or what blocks it. An older updater still needs a person to switch
 the install to `main` once before it can receive this fix.
 
@@ -262,7 +262,7 @@ The target must still be unchanged, and nothing may be staged. A different file,
 or any staged change blocks the whole repair. The blocked message marks any matching flattened links by name.
 A refused repair uses the same blocked-checkout status as other local changes. Busy work and locks still use
 the update's usual retry delays.
-Health and BotOps say when only flattened Tico links remain: they are repaired on the next update and need no
+Health and Agent Ops say when only flattened Tico links remain: they are repaired on the next update and need no
 decision about local work. The same check applies on Mac and Linux, including `core.symlinks=false`; the repair
 uses real links without changing that Git setting.
 Both runners use the same repair: move each original into the checkout's Git directory under
@@ -513,7 +513,7 @@ overwritten. A new template file is added. A file the template dropped is remove
 seat bot's `AGENTS.md` keeps its `## Job description`. The repository's `.tico-template.json` records what the bot was
 given; a bot made before that record counts its first commit ("Set up ... from the ... template") as what it was given.
 
-The Assistant, BotOps, the Librarian and the Strategy Owner are the exception for `AGENTS.md`, `playbooks/` and
+The Assistant, Agent Ops, the Librarian and the Strategy Owner are the exception for `AGENTS.md`, `playbooks/` and
 skills: the release's text wins over their edits, which stay in the repository's history.
 
 Each refresh is a `bot.template_refreshed` event naming the bot, the release its files came from and the one they come

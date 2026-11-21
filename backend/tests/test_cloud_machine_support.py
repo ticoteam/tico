@@ -17,7 +17,7 @@ from backend.tests.helpers.api import headers, setup_attempt
 from backend.tests.helpers.openapi_v2 import conforms
 from backend.tests.helpers.assistant import assistant_turn
 from backend.tests.helpers.mcp import call as mcp
-from backend.tests.helpers.member_bots import botops, finish, turn
+from backend.tests.helpers.member_bots import agent_ops, finish, turn
 from backend.tests.helpers.settings_assistant import mcp as assistant_mcp
 
 PATH = "/api/v2/cloud-machines/support"
@@ -437,10 +437,10 @@ def test_cloud_support_catalogue_is_owner_only_and_reads_hq_through_mcp(api, hq)
 
 
 @pytest.mark.parametrize("via", ["botops", "assistant"])
-def test_cloud_support_catalogue_waits_for_the_owners_confirmation(api, hq, botops, via):
+def test_cloud_support_catalogue_waits_for_the_owners_confirmation(api, hq, agent_ops, via):
     args = {"key": "team.rules.cloud_machine_support", "value": "off"}
     if via == "botops":
-        attempt = turn(api, botops, person="ana-test", text="Turn cloud machine support off")
+        attempt = turn(api, agent_ops, person="ana-test", text="Turn cloud machine support off")
         err, card = mcp(api, "tico_settings_set", args, attempt["token"])
     else:
         _, attempt = assistant_turn(api, "ana-test", "Turn cloud machine support off")
@@ -452,7 +452,7 @@ def test_cloud_support_catalogue_waits_for_the_owners_confirmation(api, hq, boto
     confirm = f"/api/v2/assistant/actions/{action['id']}/confirm"
     assert api.post(confirm, json={}, headers=headers(attempt["token"])).status_code == 403
     if via == "botops":
-        finish(api, botops, attempt)
+        finish(api, agent_ops, attempt)
     response = api.post(confirm, json={}, headers=headers())
     assert response.status_code == 200 and response.json()["action"]["status"] == "done", response.text
     assert hq.on is False and hq.calls == [("PUT", {"on": False, "revision": 1})]

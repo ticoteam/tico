@@ -6,7 +6,7 @@ from backend import hubdb as H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import claim, get, headers, post, ready, settled  # noqa: F401 (fixture)
 from backend.tests.helpers.execution_review import job_state
-from backend.tests.helpers.held_runs import botops
+from backend.tests.helpers.held_runs import agent_ops
 from backend.tests.helpers.task_lanes import new_task, task_bot
 from backend.tests.helpers.task_quarantine import OPEN_SQL, refusals, started
 
@@ -468,7 +468,7 @@ def test_external_comment_changes_check_the_stored_native_thread(api, external_w
 
 
 def test_one_tasks_refusals_stop_only_its_turn_and_other_work_claims_and_runs(api):
-    botops(api)
+    agent_ops(api)
     machine = task_bot(api, lanes=True)
     task = new_task(api, "Check the export")
     bad = started(api, machine)
@@ -539,7 +539,7 @@ def test_task_hold_lifts_and_its_count_restarts(api, time_machine, lift):
         post(api, "bots/ops/quarantine/clear", {})
     else:
         time_machine.shift(1)
-        botops(api)
+        agent_ops(api)
         with api.app.state.store.transaction() as c:
             actor = H.bot_actor(H.FLEET_MAINTAINER) if lift == "botops" else "human:ana"
             H.status_set(c, actor, "ops", state="active", reason="Reviewed")

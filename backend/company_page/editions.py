@@ -10,7 +10,7 @@ The life of one:
   check, holds for one exact fingerprint (text, version, disclosure revision and rules).
 - `request_approval` asks the audience's approver or the owner, by name, for an OK bound to the whole text
   (backend/task_asks.py, subject `edition:<id>`, content `approval_payload`). The OK is that person's own click on its
-  preview (task_asks.give_ok): never a token, the Assistant or BotOps.
+  preview (task_asks.give_ok): never a token, the Assistant or Agent Ops.
 - `publish` uses the OK and marks the edition published in one transaction, and only if what publishing would send now
   is exactly what was OK'd. The route then calls `release_published`, after the commit: a rebuild inside a transaction
   that rolled back would leave published files up. `correct` makes the next version through the same steps. `retract`
@@ -78,7 +78,7 @@ def is_person(who):
 
 
 def require_writer(who):
-    """A person, or someone acting with a person's rights (their Assistant, BotOps for them). Never a bot on its own, and
+    """A person, or someone acting with a person's rights (their Assistant, Agent Ops for them). Never a bot on its own, and
     never Tico support."""
     if not is_person(who) or who.support:
         raise Problem("forbidden", "Only the company's people write editions", 403)
@@ -91,7 +91,7 @@ def require_person(who):
 
 
 def require_own_click(who):
-    """A person at their own browser: no token, no Assistant (on a card or on their words), no BotOps, no Tico support."""
+    """A person at their own browser: no token, no Assistant (on a card or on their words), no Agent Ops, no Tico support."""
     if not is_person(who) or who.via or who.via_token or who.support or who.attempt_id or who.agent:
         raise Problem("forbidden", "Only the person's own click in Tico does this", 403)
 

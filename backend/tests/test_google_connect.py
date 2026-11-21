@@ -74,10 +74,10 @@ def test_nobody_acting_for_the_person_connects_or_disconnects(app):
     settings = app.app.state.store.settings
     settings.test_identities["cara-assistant"] = Identity("human:cara", "human", BOX, via="assistant")
     machine, _, attempt = setup_attempt(app, "ops")
-    settings.test_identities["cara-botops"] = Identity(
+    settings.test_identities["cara-agent-ops"] = Identity(
         "human:cara", "human", BOX, task_actor="bot:ops", runner_id=machine["runner_id"], attempt_id=attempt["id"]
     )
-    for token in ("cara-assistant", "cara-botops"):
+    for token in ("cara-assistant", "cara-agent-ops"):
         for path in ("connect", "disconnect"):
             r = app.post("/api/v2/mail/google/" + path, json={}, headers=headers(token))
             assert r.status_code == 403, (token, path, r.text)

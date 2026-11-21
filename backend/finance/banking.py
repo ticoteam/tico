@@ -71,7 +71,7 @@ def _review_match(ctx: Ctx, fid: str, t: F.FeedTxn, found: str) -> None:
 
 
 def sync_failed(ctx: Ctx, cid: str, prior: str, why: str) -> None:
-    """A bank sync that failed tells the owner what failed (spec 11: no BotOps in the way). `prior` is the connection's
+    """A bank sync that failed tells the owner what failed (spec 11: no Agent Ops in the way). `prior` is the connection's
     status before this run: only the first failure of a run is told (one finance.sync.failed event and one Tico
     notice, as budget warnings send theirs). A retry that still fails says nothing more; a run after a clean sync is
     a new run."""

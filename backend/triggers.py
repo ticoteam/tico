@@ -159,7 +159,7 @@ def _admin(who):
 
 
 def manages(who, trigger):
-    """Whether `who` manages this trigger: the owner, an admin, BotOps, or whoever made it (a person or a bot)."""
+    """Whether `who` manages this trigger: the owner, an admin, Agent Ops, or whoever made it (a person or a bot)."""
     return (
         who.role == "owner"
         or who.actor == "bot:botops"
@@ -170,7 +170,7 @@ def manages(who, trigger):
 
 def may_manage(c, who, trigger=None):
     """People and bots make triggers (one listens only when a routine they may edit says so, so a bot's reach is its
-    own tasks); the owner, an admin, whoever made one and BotOps replace its secret, change it or delete it."""
+    own tasks); the owner, an admin, whoever made one and Agent Ops replace its secret, change it or delete it."""
     if who.role == "owner" or who.actor == "bot:botops" or _admin(who):
         return
     if who.role not in ("human", "bot"):

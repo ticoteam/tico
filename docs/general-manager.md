@@ -1,7 +1,7 @@
 # General Manager
 
 The General Manager is a built-in bot that keeps tasks moving without anyone having to look. It reports to the
-owner, and the other built-ins (BotOps, the [Librarian](librarian.md), the Strategy Owner and the Rules, Design,
+owner, and the other built-ins (Agent Ops, the [Librarian](librarian.md), the Strategy Owner and the Rules, Design,
 Updates, Automations and Tools Owners) are its team, the General group on the chart. It runs on Haiku 5.5 at low
 effort. Every team has it: it is added when a team is set up, and an existing team gets it on upgrade. It is **on by
 default**. The owner can pause it (`POST /api/v2/general-manager/turn-off`, `tico general-manager bot off`); pausing keeps its
@@ -30,7 +30,7 @@ Once an hour on weekdays, 08:00 to 18:00 in the team's time zone, the server loo
 A task in a pipeline whose manager is another active bot is that manager's, so it is left out.
 
 A task belongs to its owner's department, one of the nine on the org chart (a group inside it counts as it). A task
-whose owner is in none, such as BotOps or the Assistant, is listed under **Company**. Each department lists at most 30
+whose owner is in none, such as Agent Ops or the Assistant, is listed under **Company**. Each department lists at most 30
 items, and each report body is capped at 12,000 bytes. If either cap leaves items out, the report says how many are in
 the next report. Only items included in the report are left out for a day unless their task changes, so items omitted by
 either cap remain eligible for the next report.
@@ -59,7 +59,7 @@ Narrow rights on tasks only, through the ordinary permission system:
 - move and close a task, with a note;
 - relate and unrelate tasks, and comment;
 - reassign a task within the owner's department (anywhere else is refused);
-- file a subtask for BotOps when the fix is in the setup.
+- file a subtask for Agent Ops when the fix is in the setup.
 
 It cannot change a task's number or labels, and it is never a task mover.
 

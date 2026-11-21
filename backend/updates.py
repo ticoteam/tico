@@ -629,7 +629,7 @@ def request_text(
             "Learnings for you:",
             "Read memory/learnings.md and its working rules first. Keep durable statements and corrections; "
             "merge related entries and skip what is already known. Quote the source, keep personal preferences "
-            "out of shared memory, and send instruction or settings changes to BotOps. Commit and push changes.",
+            "out of shared memory, and send instruction or settings changes to Agent Ops. Commit and push changes.",
             *["- " + str(item) for item in slots["learnings"][:LEARNINGS_MAX]],
             "Report learnings_saved: n (including zero) in your final reply. When posting an update, "
             "also pass learnings_saved and delivery_batch_id=" + str(batch_id or "the request id") + ".",
@@ -1995,7 +1995,7 @@ def count_unread(c, actor, readable, kind=None, meetings=False):
 
 
 def off_tree():
-    """The built-in bots the Updates tree leaves out: the Assistant's helpers (BotOps, the Strategy Owner, the
+    """The built-in bots the Updates tree leaves out: the Assistant's helpers (Agent Ops, the Strategy Owner, the
     Librarian), the General Manager and the Finance Owner. Nobody talks to them and they are not on the org chart."""
     from . import assistant, bookkeeper, general_manager
 

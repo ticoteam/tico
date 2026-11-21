@@ -136,7 +136,7 @@ A server with a Gateway key also gets targeted notices (`kind` info, security or
 waiting for the 6-hour check: a built-in webhook `_tico` ("Tico Team", no address of its own, never deleted; only its `keep_days` changes)
 receives them, the server pulls every minute for them (every 15 seconds when it has relay addresses of its own), and each shows once in the
 same banner as the message from `/v1/latest`. Rules see one as the event `tico.notice` with `type` set to its kind. Built-in team rules
-wake BotOps and ask the owner for a security notice, leave BotOps a note for an info notice, and ask the owner for a billing notice;
+wake Agent Ops and ask the owner for a security notice, leave Agent Ops a note for an info notice, and ask the owner for a billing notice;
 they are built in. `tico notice list` (`GET /api/v2/notices`) lists them.
 The webhooks page covers this from the user's side ([Webhooks](webhooks.md#notices-from-tico-team)).
 

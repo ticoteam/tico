@@ -69,7 +69,7 @@ SCHEMAS.update(
                 **TALLIES,
             }
         ),
-        # A person's write answers so; BotOps acting for a person answers its proposal card instead, without these.
+        # A person's write answers so; Agent Ops acting for a person answers its proposal card instead, without these.
         "TaskRequesterAdded": obj(
             {"id": "s", "requester_token": {"type": "string", "description": "Removes this request; shown once"}},
             required=[],

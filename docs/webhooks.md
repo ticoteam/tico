@@ -153,8 +153,8 @@ person titled `Held: ...`, and handing it to the bot releases it. Settings → S
 
 ### Who may do what
 
-Anyone, person or bot, can add a webhook. The owner, an admin, whoever added it and BotOps can replace its secret, change its settings,
-set or stop signing, run a call again and delete it. BotOps manages every webhook only in its own runs: asked by a person, it has that
+Anyone, person or bot, can add a webhook. The owner, an admin, whoever added it and Agent Ops can replace its secret, change its settings,
+set or stop signing, run a call again and delete it. Agent Ops manages every webhook only in its own runs: asked by a person, it has that
 person's rights, so a member can't change someone else's webhook through it. Deleting one removes its kept calls. See [Permissions](permissions.md#incoming-webhooks).
 
 ### Starting work from a call
@@ -228,7 +228,7 @@ started. A bot that is still *planned* is not reached; a paused or quarantined b
 **Nothing matches, nothing happens.** There is no catch-all. If no rule matches or one fails, the call is still logged, a routine
 on the webhook still runs, and the failure is in History as `rule.event_error`.
 
-**Who may write them.** The owner and admins write team rules; a bot's owners, its operator and BotOps write that bot's rules.
+**Who may write them.** The owner and admins write team rules; a bot's owners, its operator and Agent Ops write that bot's rules.
 `wake_bot` needs rights over the bot it wakes. `send_webhook` is written by a person, or by a bot with its outbound send switch on.
 The Strategy Owner never writes one. Tico checks this when the rule is saved: the endpoint must exist and its maker must be allowed to send
 to it (they own it, or are an admin), or the save is refused with the reason. When the rule runs, the same test is made again, and a
@@ -257,7 +257,7 @@ working beside it. It needs the Tico Gateway connected in Settings → Models ([
   back. A sender that waits for an answer gets HQ's, not your server's.
 - On a server Tico hosts, a call through the Gateway also wakes a server that is [asleep](#sleep-when-idle), if the address's
   **wake** switch is on. HQ keeps the switch and Tico shows it on the address (`wake`). Change it with
-  `tico relay set github --wake off`. The owner, an admin and whoever made the webhook can; BotOps can for them.
+  `tico relay set github --wake off`. The owner, an admin and whoever made the webhook can; Agent Ops can for them.
 - A server you run yourself can ask Tico to knock on an address of yours when a call has waited over a minute, so something you
   run can turn it on: `tico relay wake-url set <https address>`. See [Wake on webhook](install.md#wake-on-webhook).
 - `tico relay status` shows the key, the addresses, the last collection and what waits. Health speaks when collecting has failed for
@@ -431,7 +431,7 @@ is refused (`tico webhook example` too); turn the endpoint back on first.
 
 ### Rights
 
-- People make and manage their own endpoints. The owner and admins manage all of them. BotOps asked by a person has that person's
+- People make and manage their own endpoints. The owner and admins manage all of them. Agent Ops asked by a person has that person's
   rights.
 - A bot cannot make an endpoint itself. Its request asks a person for an OK of those exact details, on a task
   ([Asks and OKs](tasks.md#asks-and-oks)). Once the person OKs it from its preview, the bot repeats the call and the
@@ -467,8 +467,8 @@ The same choice is on the command line. Changing the address needs the revision 
 tico webhook update acme --url https://hooks.example.org/tico --expected-revision 4 --credentials clear
 ```
 
-Whoever may edit the endpoint decides: its creator, an admin or the owner. If BotOps makes the change for someone, it asks
-in a Confirm card in that person's BotOps chat, and only that person can tap it.
+Whoever may edit the endpoint decides: its creator, an admin or the owner. If Agent Ops makes the change for someone, it asks
+in a Confirm card in that person's Agent Ops chat, and only that person can tap it.
 
 Each move is recorded once in Tico's audit log as `integration.destination_changed`: who made it and when, the old and
 new scheme, host and port, whether the path is the same, and which secret headers were kept or cleared. Values never
@@ -496,8 +496,8 @@ arrive on a built-in webhook named **Tico Team**. It has no address, cannot be d
 
 Rules see each as the event `tico.notice`, with `type` set to `info`, `security` or `billing`. Three built-in team rules act on them:
 
-- **security**: wake BotOps and ask the owner.
-- **info**: leave BotOps a note.
+- **security**: wake Agent Ops and ask the owner.
+- **info**: leave Agent Ops a note.
 - **billing**: ask the owner.
 
 They are built in. `tico notice list` shows the notices. See also

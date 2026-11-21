@@ -1,4 +1,4 @@
-"""A bot's last run that ended without finishing is said plainly, never as a bare "Crashed" (Oct 22: BotOps showed a
+"""A bot's last run that ended without finishing is said plainly, never as a bare "Crashed" (Oct 22: Agent Ops showed a
 red Crashed for a run its computer took and never started, with nothing lost and nothing to do)."""
 
 import pytest

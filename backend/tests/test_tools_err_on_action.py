@@ -11,7 +11,7 @@ from backend.tests.helpers.api_tools import key, level, tool
 from backend.tests.helpers.assistant import assistant_turn
 from backend.tests.helpers.bot_tools import configure, report
 from backend.tests.helpers.credentials import explicit_only, setup as vault
-from backend.tests.helpers.member_bots import botops, turn as botops_turn  # noqa: F401  (fixture)
+from backend.tests.helpers.member_bots import agent_ops, turn as agent_ops_turn  # noqa: F401  (fixture)
 
 SECRET = "acme-crm-synthetic-0123456789"
 PAGE_ENTRY = {
@@ -23,7 +23,7 @@ PAGE_ENTRY = {
 }
 
 
-def active_botops(api):
+def active_agent_ops(api):
     with api.app.state.store.transaction() as c:
         H.sync_registry(c, {"botops": {"name": "botops", "status": "active"}}, None)
 
@@ -53,7 +53,7 @@ def events(api, action):
 
 
 def test_a_bot_registers_its_own_tool_entry_with_a_page_scope_and_another_bot_is_told_who_can(api):
-    active_botops(api)
+    active_agent_ops(api)
     own = turn_of(api, "ops", requester="bot:cpo")
     made = register(api, "ops", own)
     assert made["tool"]["scope"] == {"page": "Acme Page", "ad_account": "act_1001"}
@@ -64,17 +64,17 @@ def test_a_bot_registers_its_own_tool_entry_with_a_page_scope_and_another_bot_is
     register(api, "ops", own, {**PAGE_ENTRY, "service": "meta", "scope": {"page_token": "x"}}, expected=422)
 
 
-def test_botops_and_the_tools_owner_register_any_bots_entry(api, botops):
-    machine = botops
+def test_agent_ops_and_the_tools_owner_register_any_bots_entry(api, agent_ops):
+    machine = agent_ops
     put(api, "page-owners/tools", {"bot": "ops"})
     owner_run = turn_of(api, "ops", requester="bot:cpo")  # no person behind it: its own rights
     assert register(api, "cpo", owner_run)["task_id"]
     with api.app.state.store.transaction() as c:
         H.task_create(c, "bot:cpo", "Add Meta to cpo", "Its ad account.", "bot:botops")
-    botops_run = claim(api, machine, "botops")["token"]
-    # Carrying cpo's request, BotOps registers cpo's own entry; another bot's stays closed to cpo's rights.
-    assert register(api, "cpo", botops_run, {**PAGE_ENTRY, "identity": "Cpo ads"})["task_id"]
-    register(api, "inbox", botops_run, {**PAGE_ENTRY, "identity": "Inbox ads"}, expected=403)
+    agent_ops_run = claim(api, machine, "botops")["token"]
+    # Carrying cpo's request, Agent Ops registers cpo's own entry; another bot's stays closed to cpo's rights.
+    assert register(api, "cpo", agent_ops_run, {**PAGE_ENTRY, "identity": "Cpo ads"})["task_id"]
+    register(api, "inbox", agent_ops_run, {**PAGE_ENTRY, "identity": "Inbox ads"}, expected=403)
 
 
 def test_the_tools_owner_sets_a_level_with_the_rights_of_the_person_who_asked_and_says_so(api):
@@ -152,9 +152,9 @@ def test_no_agent_shares_a_website_login_only_a_persons_own_tap_does(api):
     assert put(api, access + "bots", {"on": True})["on"] is True
 
 
-def test_the_tools_owner_registers_an_agents_mcp_server_only_from_the_catalog_before_botops_hears(api):
+def test_the_tools_owner_registers_an_agents_mcp_server_only_from_the_catalog_before_agent_ops_hears(api):
     vault(api)
-    active_botops(api)
+    active_agent_ops(api)
     put(api, "page-owners/tools", {"bot": "ops"})
     run = turn_of(api, "ops")
     entry = {"service": "acme", "can": ["read"], "env": "ACME_TOKEN", "mcp": {"url": "https://mcp.acme.example/mcp"}}
@@ -171,7 +171,7 @@ def test_the_tools_owner_registers_an_agents_mcp_server_only_from_the_catalog_be
 
 
 def test_the_tools_owner_in_its_own_run_adds_or_moves_an_mcp_server_only_from_the_catalog(api):
-    active_botops(api)
+    active_agent_ops(api)
     configure(api, "cpo")
     put(api, "page-owners/tools", {"bot": "ops"})
     own = turn_of(api, "ops", requester="bot:ops")  # its own task: no one's rights but its own
@@ -201,14 +201,16 @@ def test_the_tools_owner_in_its_own_run_adds_or_moves_an_mcp_server_only_from_th
         assert c.execute("SELECT count(*) FROM bot_tool_requests").fetchone()[0] == 0
 
 
-def test_botops_with_a_persons_rights_never_shares_a_login_with_every_agent_nor_gives_itself_a_tool(api, botops):
+def test_agent_ops_with_a_persons_rights_never_shares_a_login_with_every_agent_nor_gives_itself_a_tool(api, agent_ops):
     vault(api)
     site = post(api, "website-tools", {"sites": ["app.acme.example"]})["id"]
     account = post(api, f"website-tools/{site}/accounts", {"password": "acme-synthetic-pass-02"})["id"]
     tid = tool(api)["id"]
     key(api, tid, SECRET)
-    put(api, "page-owners/tools", {"bot": "botops"})  # BotOps owns Tools here
-    run = botops_turn(api, botops, person="ana-test", text="Tidy our logins and tools")["token"]  # with Ana's rights
+    put(api, "page-owners/tools", {"bot": "botops"})  # Agent Ops owns Tools here
+    run = agent_ops_turn(api, agent_ops, person="ana-test", text="Tidy our logins and tools")[
+        "token"
+    ]  # with Ana's rights
     lent = "?on_behalf_of=turn"
     access = f"website-tools/{site}/accounts/{account}/access/"
     assert put(api, access + "bots" + lent, {"on": True}, run, expected=403)["error"]["code"] == "forbidden"

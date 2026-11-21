@@ -1112,7 +1112,7 @@ def install(app, store, auth):
             "files back keeps every file. It answers while a Tico Cloud company is locked, too.",
             responses={
                 "403": error(
-                    "forbidden: only the owner, signed in to Tico (not the Assistant or BotOps acting for them, nor a "
+                    "forbidden: only the owner, signed in to Tico (not the Assistant or Agent Ops acting for them, nor a "
                     "bot); identity: a computer"
                 )
             },

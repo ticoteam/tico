@@ -35,7 +35,7 @@ def run(store, onboarding, telemetry, vault=None):
     # A company from before the Librarian was built in gets it on update, once it can run it. Only an update
     # adds them; until this runs, a page shows the company as it was before the update.
     try:
-        # What completes a company (the built-ins it can run, the Assistant's routines, General's manager, BotOps'
+        # What completes a company (the built-ins it can run, the Assistant's routines, General's manager, Agent Ops'
         # sweep): the same function the end of a first run calls. A failed step is captured and the next one runs.
         with _transaction(store) as c:
             onboarding.complete_company(c, failed=telemetry.capture)

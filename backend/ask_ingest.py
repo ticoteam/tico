@@ -156,8 +156,8 @@ def save(c, actor, person, body):
 
 
 def gated(who, assistant_bot=""):
-    """Gate a bot writing as itself or through BotOps. A person, their Assistant acting for them
-    (`via`), BotOps acting for a person and Tico are not."""
+    """Gate a bot writing as itself or through Agent Ops. A person, their Assistant acting for them
+    (`via`), Agent Ops acting for a person and Tico are not."""
     return (
         who.role == "bot"
         and who.via in (None, "", "botops")

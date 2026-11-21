@@ -9,19 +9,19 @@
     - match: '^group list'
       out:
         groups:
-          - {id: engineering, name: Engineering, parent: null, humans: [], bots: [head-of-engineering, botops]}
+          - {id: engineering, name: Engineering, parent: null, humans: [], bots: [head-of-engineering, agent-ops]}
           - {id: operations, name: Operations, parent: null, humans: [priya], bots: [upgrade-manager, performance-monitor]}
           - {id: security, name: Security, parent: operations, humans: [], bots: [security-scanner]}
     - match: '^team show'
       out:
         company: Acme
         teams:
-          - {name: Engineering, bots: [head-of-engineering, botops]}
+          - {name: Engineering, bots: [head-of-engineering, agent-ops]}
           - {name: Operations, bots: [upgrade-manager, performance-monitor], groups: [Security]}
     - match: '^group update security\b'
       out: {group: {id: security, name: Security, parent: engineering, bots: [security-scanner]}}
     - match: '^group update engineering\b'
-      out: {group: {id: engineering, name: Engineering, parent: null, bots: [head-of-engineering, botops, upgrade-manager, performance-monitor]}}
+      out: {group: {id: engineering, name: Engineering, parent: null, bots: [head-of-engineering, agent-ops, upgrade-manager, performance-monitor]}}
   must:
     - '^group update security\b.*--parent\s+engineering'
     - '^group update engineering\b.*--add-bots?\b.*\bupgrade-manager\b'
@@ -44,13 +44,13 @@
     - match: '^group list'
       out:
         groups:
-          - {id: engineering, name: Engineering, parent: null, humans: [], bots: [head-of-engineering, botops]}
+          - {id: engineering, name: Engineering, parent: null, humans: [], bots: [head-of-engineering, agent-ops]}
           - {id: growth, name: Growth, parent: null, humans: [dana], bots: [growth, copywriter, pricing]}
       after:
         - when: '^group update growth\b'
           out:
             groups:
-              - {id: engineering, name: Engineering, parent: null, humans: [], bots: [head-of-engineering, botops]}
+              - {id: engineering, name: Engineering, parent: null, humans: [], bots: [head-of-engineering, agent-ops]}
               - {id: growth, name: Marketing, parent: null, humans: [dana], bots: [growth, copywriter, pricing]}
     - match: '^group update growth\b'
       out: {group: {id: growth, name: Marketing, parent: null, humans: [dana], bots: [growth, copywriter, pricing]}}
@@ -131,9 +131,9 @@
     - match: '^group list'
       out:
         groups:
-          - {id: engineering, name: Engineering, parent: null, humans: [], bots: [head-of-engineering, botops]}
+          - {id: engineering, name: Engineering, parent: null, humans: [], bots: [head-of-engineering, agent-ops]}
     - match: '^group update engineering\b'
-      out: {group: {id: engineering, name: Engineering, humans: [priya], bots: [head-of-engineering, botops]}}
+      out: {group: {id: engineering, name: Engineering, humans: [priya], bots: [head-of-engineering, agent-ops]}}
   must:
     - '^group update engineering\b.*--add-humans?\b.*\bpriya\b'
   must_not:
@@ -268,7 +268,7 @@
     - match: '^group list'
       out:
         groups:
-          - {id: engineering, name: Engineering, parent: null, humans: [], bots: [head-of-engineering, botops]}
+          - {id: engineering, name: Engineering, parent: null, humans: [], bots: [head-of-engineering, agent-ops]}
           - {id: finance, name: Finance, parent: null, humans: [priya], bots: [billing]}
     - match: '^inbound audience ibx_billing\b'
       out: {ok: true, inbox: ibx_billing, address: "billing@acme.example", audience: team, group: finance}

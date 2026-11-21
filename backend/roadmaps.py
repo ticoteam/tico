@@ -416,8 +416,8 @@ def install_internal(app, store, auth, mutate, mover):
                 if not actor or not (H.is_human(actor) or H.is_bot(actor)) or not H._actor_exists(c, actor):
                     raise Problem('identity', 'Teammate not found', 422)
             if (actor != who.actor or not actor) and who.via == 'botops' and not who.confirmed:
-                # BotOps acting for a person adds a teammate or an outside contact only on that person's own tap.
-                made = getattr(request.app.state, 'botops_propose', None)
+                # Agent Ops acting for a person adds a teammate or an outside contact only on that person's own tap.
+                made = getattr(request.app.state, 'agent_ops_propose', None)
                 if made:
                     name = H.human(c, H.actor_id(actor)) or {} if actor else {}
                     who_is = name.get('name') or actor or body.name or body.email or 'a contact'
@@ -447,7 +447,7 @@ def install_internal(app, store, auth, mutate, mover):
                 'SELECT 1 FROM task_requesters WHERE task_id=? AND id=? AND actor=?', (row['id'], rid, who.actor)
             ).fetchone()
             if not own and who.via == 'botops' and not who.confirmed:
-                return request.app.state.botops_propose(
+                return request.app.state.agent_ops_propose(
                     c,
                     who,
                     'POST',
@@ -470,7 +470,7 @@ def install_internal(app, store, auth, mutate, mover):
             who = request.state.identity
             row = task(c, who, tid, True)
             if who.via == 'botops' and not who.confirmed:
-                return request.app.state.botops_propose(
+                return request.app.state.agent_ops_propose(
                     c,
                     who,
                     'POST',

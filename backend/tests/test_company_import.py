@@ -32,7 +32,7 @@ from backend import bot_settings as BS
 def company_text(
     reverse_builtins=False,
     through_new_parent=False,
-    keep=("assistant", "botops", "controller", "accounts-payable-specialist"),
+    keep=("assistant", "agent-ops", "controller", "accounts-payable-specialist"),
 ):
     draft = C.blank()
     draft["company"]["signals"] = ["sells_services"]
@@ -45,15 +45,15 @@ def company_text(
             bot["title"] = "Acme Payables"
             bot["routine"] = "Review the books each week"
         if reverse_builtins and bot["template"] == "assistant":
-            bot["reports_to"] = "botops"
+            bot["reports_to"] = "agent-ops"
         if through_new_parent and bot["template"] in ("assistant", "controller"):
-            bot["reports_to"] = "controller" if bot["template"] == "assistant" else "botops"
+            bot["reports_to"] = "controller" if bot["template"] == "assistant" else "agent-ops"
     return C.to_yaml(draft) + "models:\n  source: gateway\n  by_department:\n    finance: mid\n"
 
 
 BUILTINS = {
     "assistant",
-    "botops",
+    "agent-ops",
     "librarian",
     "strategy-owner",
     "general-manager",
@@ -84,7 +84,7 @@ def twelve_role_text():
     """A chosen chart of 12 roles under the built-ins: seats under seats three deep (the finance specialists under the
     Controller, under the Operations Manager), a role reporting to the Assistant (Ops), and the rest on the model's own
     lines."""
-    draft = C.from_yaml(company_text(keep=("assistant", "botops", *TWELVE)))
+    draft = C.from_yaml(company_text(keep=("assistant", "agent-ops", *TWELVE)))
     next(b for b in draft["bots"] if b["id"] == "operations-manager")["reports_to"] = "assistant"
     next(b for b in draft["bots"] if b["id"] == "controller")["reports_to"] = "operations-manager"
     return C.to_yaml(draft)
@@ -101,7 +101,7 @@ def seat_lines(api):
 
 def test_a_chosen_chart_of_12_roles_lays_out_12_recruiting_seats_and_only_the_builtins_are_bots(environment):
     """Spec acceptance 1 and 20: every role a Recruiting seat with exactly its line; only the built-ins are bots, Active;
-    no repository, computer slot or BotOps setup task for any other role."""
+    no repository, computer slot or Agent Ops setup task for any other role."""
     api = environment()
     text = twelve_role_text()
     draft = C.from_yaml(text)
@@ -140,7 +140,7 @@ def test_a_chosen_chart_of_12_roles_lays_out_12_recruiting_seats_and_only_the_bu
         not r["onboarding_state"] or r["onboarding_state"] == "onboarded"
         for r in rows(api, "SELECT onboarding_state FROM bot_config")
     )
-    # No BotOps setup task, repository or computer slot for any role.
+    # No Agent Ops setup task, repository or computer slot for any role.
     assert not rows(api, "SELECT id FROM tasks WHERE title LIKE 'Set up %'")
     assert not rows(
         api,
@@ -151,8 +151,8 @@ def test_a_chosen_chart_of_12_roles_lays_out_12_recruiting_seats_and_only_the_bu
         "SELECT bot FROM assignments WHERE bot NOT IN ('assistant','botops','librarian','strategy-owner','general-manager','finance-owner','rules-owner','design-owner','updates-owner','automations-owner','tools-owner')",
     )
     machine(api)
-    assert {r["bot"] for r in rows(api, "SELECT bot FROM assignments")} <= BUILTINS
-    assert {r["slug"]: r["state"] for r in rows(api, "SELECT slug,state FROM bots")}["botops"] == "active"
+    assert {r["slug"] for r in rows(api, "SELECT b.slug FROM assignments a JOIN bots b ON b.id=a.bot")} <= BUILTINS
+    assert {r["slug"]: r["state"] for r in rows(api, "SELECT slug,state FROM bots")}["agent-ops"] == "active"
     # The org chart shows the 12 roles, each Recruiting, with those lines.
     org = api.get("/api/v2/org", headers=signed_in()).json()
     seats = {s["id"]: s for s in org["seats"]}
@@ -178,8 +178,8 @@ def test_a_chosen_chart_of_12_roles_lays_out_12_recruiting_seats_and_only_the_bu
 
 
 @pytest.mark.parametrize("named,line", [(None, "general-manager"), ("assistant", "assistant")])
-def test_a_file_that_names_no_manager_for_botops_leaves_it_under_the_general_manager(environment, named, line):
-    """Tico Team on rc.7: a company file's BotOps went on the owner's line (the import staged it there) or kept the
+def test_a_file_that_names_no_manager_for_agent_ops_leaves_it_under_the_general_manager(environment, named, line):
+    """Tico Team on rc.7: a company file's Agent Ops went on the owner's line (the import staged it there) or kept the
     seed's line to the Assistant. It is the General Manager's, like a company with no file, unless the file names its
     manager. The seat count is the preview's: a built-in's own seat is counted with the built-ins."""
     api = environment()
@@ -187,7 +187,7 @@ def test_a_file_that_names_no_manager_for_botops_leaves_it_under_the_general_man
         c.execute("UPDATE bot_config SET reports_to='assistant' WHERE bot='botops'")  # as the seed roster has it
     draft = C.from_yaml(company_text())
     if named:
-        next(b for b in draft["bots"] if b["template"] == "botops")["reports_to"] = named
+        next(b for b in draft["bots"] if b["template"] == "agent-ops")["reports_to"] = named
     text = C.to_yaml(draft)
     preview = api.post("/api/v2/setup/company/preview", json={"company_yaml": text}, headers=signed_in())
     assert preview.status_code == 200, preview.text
@@ -222,7 +222,7 @@ def test_a_file_that_names_no_manager_for_botops_leaves_it_under_the_general_man
 def test_a_seat_with_no_template_yet_is_a_recruiting_seat_like_any_other_role(environment, monkeypatch):
     monkeypatch.setattr(C.draft, "OPEN_SEATS", {"controller"})  # every model seat has a template now
     api = environment()
-    text = company_text(keep=("assistant", "botops", "controller", "accounts-payable-specialist"))
+    text = company_text(keep=("assistant", "agent-ops", "controller", "accounts-payable-specialist"))
     assert "no_bot_yet: true" in text
     preview = api.post("/api/v2/setup/company/preview", json={"company_yaml": text}, headers=signed_in())
     assert preview.status_code == 200, preview.text
@@ -239,7 +239,7 @@ def test_people_who_hold_roles_are_kept_to_invite_and_the_seats_under_them_wait_
     draft = C.blank()
     draft["company"]["signals"] = ["sells_services"]
     draft = C.Turn(draft).finish()
-    keep = ("assistant", "botops", "payroll-specialist", "accounts-payable-specialist", "controller")
+    keep = ("assistant", "agent-ops", "payroll-specialist", "accounts-payable-specialist", "controller")
     draft["bots"] = [b for b in draft["bots"] if b["template"] in keep]
     seat = {b["template"]: b["title"] for b in draft["bots"]}
     turn = C.Turn(draft)
@@ -262,7 +262,7 @@ def test_people_who_hold_roles_are_kept_to_invite_and_the_seats_under_them_wait_
     summary = preview.json()
     # Ana and Ben hold their roles: no seat and no bot for those. The Payroll Specialist is a seat under Ana, who is no one in
     # Tico until the owner invites her: it reports to the owner meanwhile.
-    assert {e["template"] for e in summary["employees"]} == {"assistant", "botops"}
+    assert {e["template"] for e in summary["employees"]} == {"assistant", "agent-ops"}
     assert [(s["id"], s["reports_to"], s.get("waits_on")) for s in summary["seats"]] == [
         ("payroll-specialist", "human:owner", "ana")
     ]
@@ -432,7 +432,7 @@ def test_import_lays_out_the_chart_once_across_retry_and_runner_enrollment(envir
     assert seat_lines(api) == {"Controller": "human:owner", "Acme Payables": "Controller"}
     templates = rows(api, f"SELECT s.template AS template FROM bot_config bc {BS.JOIN}")
     assert sum(r["template"] == "assistant" for r in templates) == 1
-    assert sum(r["template"] == "botops" for r in templates) == 1
+    assert sum(r["template"] == "agent-ops" for r in templates) == 1
     assert "model_choices" in done.json()["company_import"]["deferred"]
     assert "routines" in done.json()["company_import"]["deferred"]
     # A seat's job description is its role's text from the template.
@@ -905,7 +905,7 @@ def test_reserved_alias_cannot_replace_a_custom_named_assistant_now_or_later(env
     api = environment(seed_roster=False, assistant_bot="ace")
     seed = {
         "ace": {"name": "ace", "status": "planned", "template": "assistant"},
-        "botops": {"name": "botops", "status": "planned", "template": "botops"},
+        "botops": {"name": "botops", "status": "planned", "template": "agent-ops"},
     }
     with api.app.state.store.transaction() as c:
         H.sync_registry(c, seed, PEOPLE)
@@ -1154,7 +1154,7 @@ def test_a_renamed_assistants_goals_import_as_company_goals_and_an_untitled_unme
         api = environment(seed_roster=False, assistant_bot="ace")
         seed = {
             "ace": {"name": "ace", "status": "planned", "template": "assistant"},
-            "botops": {"name": "botops", "status": "planned", "template": "botops"},
+            "botops": {"name": "botops", "status": "planned", "template": "agent-ops"},
         }
         with api.app.state.store.transaction() as c:
             H.sync_registry(c, seed, PEOPLE)
@@ -1229,7 +1229,7 @@ def test_a_full_plan_too_big_for_the_env_starts_the_server_from_its_file(tmp_pat
 
 # ------------------------------------------------------------------------- every goal setup's /goals writes (Dev 449)
 def starter_chart():
-    """The setup page's starter chart: the Assistant and BotOps, six department heads and 16 roles under them."""
+    """The setup page's starter chart: the Assistant and Agent Ops, six department heads and 16 roles under them."""
     from backend.tests.helpers.company_file import started
 
     draft = started()
@@ -1503,7 +1503,7 @@ def team_text():
         name="Acme Build", about="We sell lab data to biopharma accounts.", signals=["sells_services"]
     )
     draft = C.Turn(draft).finish()
-    draft["bots"] = [b for b in draft["bots"] if b["template"] in ("assistant", "botops")]
+    draft["bots"] = [b for b in draft["bots"] if b["template"] in ("assistant", "agent-ops")]
     turn = C.Turn(draft)
     for title, template, _ in TEAM_SEATS:
         assert turn.apply("bot_add", {"template": template, "title": title, "reason": "Sells lab data."})["ok"], title
@@ -1538,7 +1538,7 @@ def test_two_teams_in_one_department_import_as_two_groups_each_holding_its_own_s
     assert names.count("Lab network") == names.count("Biopharma accounts") == names.count("Sales") == 1
     assert {"lab-network", "biopharma-accounts"} <= set(by_id)
     assert names.index("Lab network") < names.index("Biopharma accounts")
-    # The Assistant and BotOps are built-ins: whatever team the file gives them, BotOps sits in the General group and
+    # The Assistant and Agent Ops are built-ins: whatever team the file gives them, Agent Ops sits in the General group and
     # the Assistant, which reports to its person, in none.
     teams = {r["bot"]: r["team"] for r in rows(api, "SELECT bot, team FROM bot_config")}
     assert teams["botops"] == "built-in" and not teams["assistant"]
@@ -1612,7 +1612,7 @@ def live_text():
         lead=False,
         core=True,
     )
-    draft["bots"] = [b for b in draft["bots"] if b["template"] in ("assistant", "botops")] + [bookkeeper]
+    draft["bots"] = [b for b in draft["bots"] if b["template"] in ("assistant", "agent-ops")] + [bookkeeper]
     turn = C.Turn(draft)
     for title, template, _, _, _ in LIVE_SEATS:
         assert turn.apply("bot_add", {"template": template, "title": title, "reason": "Does the work."})["ok"], title
@@ -1644,7 +1644,7 @@ def stored_line(api, slug):
 def test_a_live_seat_is_made_as_a_bot_that_fills_its_seat_and_reports_where_its_line_ends(environment):
     """Spec 8.6: a live seat is created as a bot and fills its seat. A bot cannot report to a seat, so a bot under a seat
     reports to the person or bot that seat answers to, and a live seat under a live seat reports to the bot that fills it.
-    Each gets its setup task from BotOps, as any picked role does."""
+    Each gets its setup task from Agent Ops, as any picked role does."""
     api = environment()
     preview_and_import(api, live_text())
     ids = bot_ids(api)
@@ -1671,12 +1671,12 @@ def test_live_bots_and_the_finance_owner_sit_in_their_teams_and_the_built_ins_in
     teams = {slugs[r["bot"]]: names.get(r["team"], "") for r in rows(api, "SELECT bot,team FROM bot_config")}
     assert teams["lead-builder"] == teams["code-reviewer"] == teams["qa-owner"] == "Engineering"
     assert teams["finance-owner"] == "Corporate"  # the Finance Owner is on the chart, not in the General group
-    assert (teams["assistant"], teams["botops"]) == ("", "General")
+    assert (teams["assistant"], teams["agent-ops"]) == ("", "General")
     assert names["built-in"] == "General"
     # The chart's General group lists its members' ids (the UI draws the group from this row).
     built_in = next(g for g in api.get("/api/v2/groups", headers=signed_in()).json() if g["id"] == "built-in")
     ids = bot_ids(api)
-    assert ids["botops"] in built_in["bots"]
+    assert ids["agent-ops"] in built_in["bots"]
     assert ids["finance-owner"] not in built_in["bots"] and ids["assistant"] not in built_in["bots"]
 
 
@@ -1711,7 +1711,7 @@ LIVE_DEFAULT = (
 
 def default_chart_text():
     """The company file the site writes for a company that picked no segment or bet: the chart formula's default output
-    (backend/company_file/chart_formula.py) under the Assistant and BotOps. The Finance Owner row is the Bookkeeper."""
+    (backend/company_file/chart_formula.py) under the Assistant and Agent Ops. The Finance Owner row is the Bookkeeper."""
     from backend.company_file import chart_formula as F
     from backend.company_file import draft as D
 
@@ -1719,7 +1719,7 @@ def default_chart_text():
     draft["company"].update(name="Acme Default", about="We build things.", signals=["sells_services"])
     draft = C.Turn(draft).finish()
     owner = D.owner_id(draft)
-    draft["bots"] = [b for b in draft["bots"] if b["template"] in ("assistant", "botops")]
+    draft["bots"] = [b for b in draft["bots"] if b["template"] in ("assistant", "agent-ops")]
     for row in F.build({})["employees"]:
         draft["bots"].append(
             {
@@ -2002,7 +2002,7 @@ def test_a_new_company_set_up_with_the_default_chart_on_a_fresh_database_has_its
             "success-monitoring",
         ]
         bots = {r[0] for r in c.execute("SELECT slug FROM bots")}
-        assert {"assistant", "botops", "general-manager", *LIVE_DEFAULT} <= bots
+        assert {"assistant", "agent-ops", "general-manager", *LIVE_DEFAULT} <= bots
         assert c.execute("SELECT count(*) FROM seats WHERE closed_at IS NULL").fetchone()[0] > 0
         assert not c.execute("SELECT action FROM events WHERE action LIKE '%failed%'").fetchall()
 

@@ -64,7 +64,7 @@ confirmed or not, nor a person's token in a script. A key stored or brought
 from a computer under such a vendor's variable stays a key on a tool with the vendor's address, never an id's
 addressless tool nor a setting, and no one-time move makes it one. A service given at create is kept as given. Every Read and write grant on
 one of them reaches the run as a proxy token, even where the tool's keys go to computers, so every write meets the
-Rules gate and shows on Rules › Links; no agent reveals such a key (a bot, or the Assistant or BotOps with a person's
+Rules gate and shows on Rules › Links; no agent reveals such a key (a bot, or the Assistant or Agent Ops with a person's
 rights): only a person signed in themselves does. Google Ads, whose calls are signed on the computer, and a tool the
 proxy cannot call keep their keys, and are Not covered. A run that had a key before may still hold it:
 `python -m backend.proxy_keys <database>` lists, read only, the bots' grants on these tools (`proxied`: to rotate at the
@@ -88,7 +88,7 @@ ends the count as a 2xx would. A status counts only the checks that would run to
 with no address or check path reads from its real calls alone, so an old check row never keeps it Key rejected.
 
 **Reconnect tasks.** A tool that turns Key rejected (its check, or its proxied calls; never Works (limited)) gives the
-Tools page's owner (the Tools Owner, else BotOps) one task, **Reconnect <vendor>**, whose thread holds a key card for
+Tools page's owner (the Tools Owner, else Agent Ops) one task, **Reconnect <vendor>**, whose thread holds a key card for
 the person who connected the tool, or a credential administrator when they may not change it. A run whose failed command
 got a 401 with a key no check reaches (a tool with no check path) opens it too. The value typed into the card replaces
 that key in place, every grant kept. A repeat adds nothing to the open task and tells nobody; the task closes itself
@@ -240,7 +240,7 @@ What leaves the vault, and to whom:
 - A bot never sees a password or a 2FA key: no environment variable, no file, no list, no event. Login Credentials
   never go to `credential-runtime` or a computer's secrets.
 - A person who can use the account sees the current code (**Show code**) and may reveal the password (**Reveal
-  password**, logged). A bot, an agent token, BotOps and the Assistant cannot reveal it.
+  password**, logged). A bot, an agent token, Agent Ops and the Assistant cannot reveal it.
 - Every open, fill, copy, code, download, upload and ask is a row on the tool's Activity: who, the page (no query
   string), own or central. Never a value.
 
@@ -294,18 +294,18 @@ If saving fails, check the container's AWS credentials, region and key permissio
 Open **Tools → Add → Key**. Set the type, value and **Bot variable name**
 (the exact variable its Tool needs), then save. In the Credential's **Access** dialog, choose
 the bot under **Grant access to** and press **Grant access**. Storing alone does not grant it.
-BotOps can instead request a Credential card in a thread and store and grant it with your rights; the Tools Owner
+Agent Ops can instead request a Credential card in a thread and store and grant it with your rights; the Tools Owner
 opens the same card for the bot that needs it, and you save it.
 Use file import only to migrate a value already in an older install; never set up a new bot by
 writing `secrets/<bot>.env` or `_shared.env`.
 
 ## Give a bot a credential another bot has
 
-Say it in the DM with BotOps: "Give Engineering Monitor the Jira access Jira Manager has." BotOps acts as you. A credential administrator may grant it; the person who stored it may give it to a bot they own or manage; a holder may delegate a stored credential to a bot they own or run.
+Say it in the DM with Agent Ops: "Give Engineering Monitor the Jira access Jira Manager has." Agent Ops acts as you. A credential administrator may grant it; the person who stored it may give it to a bot they own or manage; a holder may delegate a stored credential to a bot they own or run.
 Importing from another bot's file still needs a credential administrator. File import is only for migration of an existing value. It runs at once, with no Confirm card,
 and then tries the connection as the bot:
 
-1. If the credential is only in the first bot's own file (`secrets/<bot>.env` on its computer), BotOps moves it into Credentials first
+1. If the credential is only in the first bot's own file (`secrets/<bot>.env` on its computer), Agent Ops moves it into Credentials first
    (`tico credential import JIRA_BASIC_AUTH --from-bot jira-manager`). The computer that runs that bot reads the variable from
    that one file and sends it to the server itself, over its own signed-in channel. The value is not printed, logged or put in a
    message, and the file is not changed, so the first bot keeps working. Only a credential administrator can ask, and only for a
@@ -315,7 +315,7 @@ and then tries the connection as the bot:
 3. To take it away: `tico credential revoke "JIRA_BASIC_AUTH" --from engineering-monitor`.
 
 The same three steps are the tools `tico_credential_import`, `tico_credential_grant` and `tico_credential_revoke`, and a key opened under the Keys filter in Tools
-does the grant and revoke by hand. A grant to a person still asks for the person's own click when it comes through BotOps.
+does the grant and revoke by hand. A grant to a person still asks for the person's own click when it comes through Agent Ops.
 
 ## The local credential key and backups
 
@@ -362,7 +362,7 @@ Settings > Models ([Computers](computers.md#company-subscriptions)) is sealed th
 bound to the subscription), saved through the vault's keyed request fingerprint, and never returned by a list. **Connect**
 gets the same value from a sign-in on a computer, which sends it once in its own request, outside the sign-in relay and
 any request receipt; the browser never holds it. Bots, the
-Assistant or BotOps acting for a person, and support sessions cannot save one. Only a run its claim handed the
+Assistant or Agent Ops acting for a person, and support sessions cannot save one. Only a run its claim handed the
 subscription (its computer's, recorded in `attempt_subscriptions`) reads the value, from `credential-runtime` with its
 run token, while that run is live; each read is recorded (`subscription.sent_to_computer`).
 
@@ -387,8 +387,8 @@ else sees who to ask.
 A bot asking from a task (its turn works on one) puts the card in the task's thread instead, for the person who wrote to it
 there, else the first of its operator and the company owner who can read the task (none: the ask is refused), and the
 task is Paused on the card until it is saved (the person sees it in [Needs you](tasks.md#needs-you)):
-saving it wakes the task once with "<label> is saved. Continue." in place of the "Saved" message. BotOps asking on its own
-task does the same, for the person it acts for. A bot asks for its own credential; BotOps and the Tools page's owner (the
+saving it wakes the task once with "<label> is saved. Continue." in place of the "Saved" message. Agent Ops asking on its own
+task does the same, for the person it acts for. A bot asks for its own credential; Agent Ops and the Tools page's owner (the
 Tools Owner) may ask for any bot's (`--for-bot`), the Tools owner never for itself: it holds none of the keys it connects. Asking again on the same task returns the open card; another task's open
 card for the same variable stays (saving either saves both); canceling the card ends the pause and tells the bot.
 When the task finishes, changes hands, or is made private from the card's person, its card says Not needed and its
@@ -408,7 +408,7 @@ another key is refused (one value per variable). The run is scrubbed of the valu
 `credential.created`, `credential.granted` and `credential.set_for_bot` as the bot, never the value. The Tools Owner keeps
 no key of its own. The rule is `_itself` in `backend/tool_access.py`.
 
-If a human pastes a credential into a thread instead, BotOps stores it with `tico credential set <VARIABLE> --for-bot <bot>` (the value on standard input,
+If a human pastes a credential into a thread instead, Agent Ops stores it with `tico credential set <VARIABLE> --for-bot <bot>` (the value on standard input,
 never on the command line) as that human, and the server takes the pasted words out of their messages, the run's recorded events and the answers kept
 for retries, replacing them with `•••• saved as <VARIABLE>`; later events of the same run are scrubbed as they arrive. The runner masks granted values in
 what it posts and logs. `tico message redact <id>` does the same for one message.
@@ -416,7 +416,7 @@ what it posts and logs. `tico message redact <id>` does the same for one message
 ## Access asked for on a tool or a repository
 
 A bot that needs a level on something that exists (a tool in Tools, a GitHub repository) asks for it with
-`tico access request <tool or owner/repo> --level read|read_write --why "..."` (MCP `tico_access_request`; BotOps, the
+`tico access request <tool or owner/repo> --level read|read_write --why "..."` (MCP `tico_access_request`; Agent Ops, the
 Tools Owner and people name the bot with `--for`). It never files a task for it.
 - It already has that level (a grant, Everyone can read, a repository it reaches): the answer says so.
 - Read on a tool every bot could read by default (a Read key, or the proxy's read filter, and Everyone can read on), or on
@@ -495,7 +495,7 @@ breaks the `op://` form; reference it by its item id.
 ## Rules for bots
 
 - Credentials never go in tasks, git, logs, updates or prompts. A key-shaped string in a
-  draft fails lint for this reason. A bot that needs one opens a card in the thread; BotOps stores what a human
+  draft fails lint for this reason. A bot that needs one opens a card in the thread; Agent Ops stores what a human
   pastes and removes it from the thread.
 - A missing credential is not yours to work around: open the card (`tico credential request`); on a task it goes in the
   task's thread and the task is Paused until it is saved, so stop there. Access to a tool or a repository that exists is

@@ -2,7 +2,7 @@
 
 A card (`templates/catalog/<template>/card.yaml`) says what a bot is for, what it owns, what it
 never does, and whether the runner may set it up itself (`bootstrap: true`, which is the
-assistant and BotOps, because BotOps cannot create itself). Everything else in the folder is the
+assistant and Agent Ops, because Agent Ops cannot create itself). Everything else in the folder is the
 repository a new bot starts from — AGENTS.md, bot.yaml, playbooks, knowledge, memory — with
 `{{company_name}}`, `{{app_name}}`, `{{assistant_name}}` and `{{bot_name}}` standing in for what
 this installation calls itself and this bot. A template holds only what is its own: the files every
@@ -11,7 +11,7 @@ bot starts with live once in the catalog's `_base/`, and files several templates
 each layer over the one before, so a template's own file wins.
 
 Pure: no HTTP, no database, no launchd. The runner materializes the two bootstrap bots before
-their first turn (runner_support/catalog_job.py); BotOps materializes every other chosen bot inside a turn
+their first turn (runner_support/catalog_job.py); Agent Ops materializes every other chosen bot inside a turn
 with `tico bot create` (clients/hubcli.py), and an operator can do it by hand with
 `scripts/tico-computer -e <env> bot create <slug> --template <template>`. `TICO_CATALOG_DIR` overrides
 where the cards are read from, so a test or a second checkout can hold its own.
@@ -63,7 +63,7 @@ SLUG_MAX = 40  # short enough for `bot-<slug>` on GitHub and readable in a path
 # What a template's text is filled with before the first commit.
 PLACEHOLDERS = ("company_name", "app_name", "assistant_name", "bot_name")
 MAX_FILL = 1_000_000  # a file worth filling; anything larger is copied as it is
-# Inbox bots: the UI appends `Mailbox: <email>` so BotOps (and materialize) can fill {{mailbox}}.
+# Inbox bots: the UI appends `Mailbox: <email>` so Agent Ops (and materialize) can fill {{mailbox}}.
 MAILBOX_RE = re.compile(r"^Mailbox:\s*(\S+@\S+)\s*$", re.M)
 # The onboarding answers, in the order `knowledge/company.md` says them. A missing answer is a
 # line the page does not have rather than an empty one.
@@ -892,7 +892,7 @@ def check(path, slug):
 
     `clients/preflight.py` is the authority and stays the operator's full check (registry entry,
     secrets, runtime, mail). This is the part a freshly materialized repository can answer for
-    itself — its manifest, its instructions, its routines and stale references — so BotOps can
+    itself — its manifest, its instructions, its routines and stale references — so Agent Ops can
     tell whether what it just wrote is worth handing over, before the bot is on the roster.
     """
     from clients import preflight  # imported here: the rest of this module is standalone

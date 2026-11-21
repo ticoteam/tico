@@ -44,7 +44,7 @@ roadmap only when a task asks for it and a granted Tool allows it.
 When recurring product work has no owner, propose a hire; never create one yourself. The one hire this team proposes is a
 segment's Feature Owner (`feature-owner`) for a segment with no owner. A proposal names the segment, the recurring work
 it would own, and the decision it frees for a person. The proposal is a task to your manager; a person makes the
-hire. Never ask BotOps to set one up, archive one or restore one.
+hire. Never ask Agent Ops to set one up, archive one or restore one.
 Record each hire and each no in `knowledge/team.md` and `memory/decisions.md`, with the reason.
 
 ## A task a report files for a person
@@ -85,8 +85,8 @@ so read it again.
   person asked for is not yours to close: ask that person with `tico task ask <id> --to <person> "<one line>"`.
 
 When none of these fits because only a person can decide, ask that person on the task, once
-(`.claude/skills/write-the-stuck-task-question/SKILL.md`). When a bot or a tool is broken, file the fix for BotOps:
-`tico task file --parent <id> --owner botops "<what is broken>"`.
+(`.claude/skills/write-the-stuck-task-question/SKILL.md`). When a bot or a tool is broken, file the fix for Agent Ops:
+`tico task file --parent <id> --owner agent-ops "<what is broken>"`.
 
 ## You manage; you do not do a stage's work
 - Each stage has an owner (a bot, a person, or the task's assignee) who does that stage's work and stays the owner.

@@ -1,12 +1,12 @@
 """Credentials asked for in chat, and set for a bot (docs/credential-vault.md).
 
 A bot that needs a secret opens a card in the conversation where it asked (`POST /api/v2/credential-requests`): what it is
-for, the format it takes and where to get one. BotOps and the Tools page's owner (the Tools Owner) may open one for
+for, the format it takes and where to get one. Agent Ops and the Tools page's owner (the Tools Owner) may open one for
 another bot (`for_bot`); the Tools owner never for itself. The person types the value into the card. It goes from their browser to
 `POST /api/v2/credential-requests/{id}/save`, is checked here, stored in the vault under the variable's name and
 granted to that one bot. The bot is told it is saved; the value never enters a message, an event, a log or the model.
 
-`tico credential set` takes a value a person gave BotOps in chat instead: the same store, as the person, and the
+`tico credential set` takes a value a person gave Agent Ops in chat instead: the same store, as the person, and the
 words they pasted are taken out of the conversation (`redact_value`). What the vault allows is unchanged: only a
 credential administrator, or (team rule "Members store credentials") a person who manages the bot, stores a credential, and
 only for a bot they may manage.
@@ -14,7 +14,7 @@ only for a bot they may manage.
 `tico credential import` moves a secret a bot already has in its own file on its computer (`secrets/<bot>.env`) into the vault,
 granted to that bot (`POST /api/v2/credential-imports`): the computer reads the one variable and hands it over its own
 authenticated channel (`runner-credential-imports`). Only a credential administrator asks, and the value is in no request
-the person or BotOps makes, no message, event, receipt or log.
+the person or Agent Ops makes, no message, event, receipt or log.
 """
 
 import json
@@ -358,15 +358,15 @@ def pending_for(c, vault, viewer):
     return out
 
 
-def install_credential_cards(app, store, vault, auth, botops, delegate, manager):
-    """`botops` is the built-in bot's slug, `delegate(c, who, ref)` BotOps' acting-as-the-requester check, and
+def install_credential_cards(app, store, vault, auth, agent_ops, delegate, manager):
+    """`agent_ops` is the built-in bot's id, `delegate(c, who, ref)` Agent Ops' acting-as-the-requester check, and
     `manager(c, person, bot)` the rule for who may manage a bot."""
 
     def view(c, row, viewer):
         return card_view(c, vault, row, viewer)
 
     def tools_page_owner(c):
-        """The Tools page's own owner (never the General Manager standing in): it asks for any bot's credential, as BotOps
+        """The Tools page's own owner (never the General Manager standing in): it asks for any bot's credential, as Agent Ops
         does, and holds none itself. The person still types the value, and saving it checks they manage that bot."""
         from . import page_owners
 
@@ -399,14 +399,14 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             if not turn or turn["sender_id"] != who.actor:
                 raise Problem("no_person", "A credential card needs the person's own chat message to answer", 409)
             return who, turn, None
-        if who.actor == "bot:" + botops or who.via == "botops":
+        if who.actor == "bot:" + agent_ops or who.via == "botops":
             person = delegate(c, who, ref or "turn")
             if person.role not in ("owner", "human"):
                 raise Problem("no_person", "A credential card needs a human requester", 409)
             msg = H.message(c, ref) if ref and ref not in ("turn", "default") else turn
-            # On a task BotOps works, the card goes in that task's thread and the task waits on it, as any bot's does;
+            # On a task Agent Ops works, the card goes in that task's thread and the task waits on it, as any bot's does;
             # a person who cannot read the task gets it where they asked, as before.
-            task = task_of(c, "bot:" + botops, turn, strict=False)
+            task = task_of(c, "bot:" + agent_ops, turn, strict=False)
             if task and msg and H.task_private_readable(c, person.actor, task):
                 return person, {**msg, "conversation_id": task["conversation_id"]}, task
             return person, msg, None
@@ -471,23 +471,23 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             validate_identity(c, who)
             person, msg, task = requester(c, who, body.on_behalf_of or "turn")
             asker = (
-                botops
+                agent_ops
                 if who.via == "botops" and who.role in ("owner", "human")
                 else H.actor_id(who.task_actor)
                 if who.via == "assistant"
                 else H.actor_id(who.actor)
             )
             target = (H.resolve_bot(c, body.for_bot) or {}).get("id", body.for_bot) if body.for_bot else asker
-            # BotOps, the Tools page's owner and a person's own Assistant ask for any bot's key; a bot for its own.
-            for_anyone = asker == botops or who.via == "assistant" or tools_page_owner(c) == "bot:" + asker
+            # Agent Ops, the Tools page's owner and a person's own Assistant ask for any bot's key; a bot for its own.
+            for_anyone = asker == agent_ops or who.via == "assistant" or tools_page_owner(c) == "bot:" + asker
             if target != asker and not for_anyone:
                 raise Problem(
                     "forbidden",
-                    "A bot asks for its own credential; BotOps, the Tools Owner and your Assistant ask for any bot's. "
+                    "A bot asks for its own credential; Agent Ops, the Tools Owner and your Assistant ask for any bot's. "
                     "Ask the Tools Owner to open the card for that bot",
                     403,
                 )
-            if for_anyone and asker != botops and target == asker:
+            if for_anyone and asker != agent_ops and target == asker:
                 raise Problem(
                     "forbidden",
                     "Name the bot that needs the key (`--for-bot`): the Tools Owner and the Assistant hold none themselves",
@@ -653,11 +653,11 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             return view(c, c.execute("SELECT * FROM credential_requests WHERE id=?", (rid,)).fetchone(), who)
 
     def acting(c, who, ref, metadata_only=False):
-        """The person: the caller, or the one BotOps works for."""
+        """The person: the caller, or the one Agent Ops works for."""
         if ref:
             return delegate(c, who, ref)
         if who.role not in ("owner", "human") or who.via not in ("", "botops"):
-            raise Problem("forbidden", "A person stores a credential, or BotOps for the person who asked it", 403)
+            raise Problem("forbidden", "A person stores a credential, or Agent Ops for the person who asked it", 403)
         return who
 
     @app.post("/api/v2/credential-set")

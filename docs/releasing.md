@@ -664,7 +664,7 @@ at the same time, each with its own Docker names; the journey proceeds once thos
 - `runner_support/tests/test_isolation_docker.py`: Docker isolation against the candidate runner, with
   `TICO_RUNNER_TEST_IMAGE=tico-rc-runner:local` and the same Python worker cap;
 - `scripts/journey-test.sh --release`: install the previous release from its checksummed bundle and seed it like a
-  real team (older releases' rows, a computer on the previous runner, a team `HUB_` variable granted to BotOps, a bot
+  real team (older releases' rows, a computer on the previous runner, a team `HUB_` variable granted to Agent Ops, a bot
   turn that opens a session and adds a task worktree), upgrade to the candidate with "Update now" (the updater
   applies the candidate's bundle and replaces itself), take a turn and add a worktree on the previous runner against
   the candidate server, move the computer to the candidate runner and check the variable, the session, the worktree

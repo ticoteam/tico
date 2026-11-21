@@ -633,7 +633,9 @@ def test_a_check_its_limit_held_twelve_hours_is_one_setup_finding_until_a_turn_g
         f"{name}'s check on Grok Build (grok-4.6) has been held by its usage limit for "
         f"13 h (since {since[:16].replace('T', ' ')} UTC); Review PR 701 on Grok."
     )
-    assert found["fix"].startswith("BotOps: wait for Grok Build (grok-4.6)'s limit to reset; or switch the check model")
+    assert found["fix"].startswith(
+        "Agent Ops: wait for Grok Build (grok-4.6)'s limit to reset; or switch the check model"
+    )
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET private=1 WHERE id=?", (sub["id"],))
     assert "; a private task." in check_held(api, check)[0]["detail"]

@@ -739,7 +739,7 @@ def repository_fix(c, bot, label, github_owner="", why=""):
             f"An up-to-date runner clones it again by itself at its next check and keeps the old copy beside it; "
             f"if this stays, update the runner on {label}, or run `{aside}` then `{command}` there (nothing is deleted)"
         )
-    return repository, f"Run `{command}` on {label}, or ask BotOps"
+    return repository, f"Run `{command}` on {label}, or ask Agent Ops"
 
 
 def _rejected(computers):
@@ -754,7 +754,7 @@ def _rejected(computers):
 
 
 def _needs_sign_in(computers):
-    """(computer, model CLI) for online computers that have to be signed in to a model they run, by hand or BotOps.
+    """(computer, model CLI) for online computers that have to be signed in to a model they run, by hand or Agent Ops.
     A model whose bots the Tico AI Gateway runs meanwhile (`gateway_covered`) is not one of them."""
     return [
         (x["label"], providers.RUNTIME_LABELS.get(r["name"], r["name"]))
@@ -1304,7 +1304,7 @@ HELD = {
     "task_wait": ("Its task is snoozed: its work starts when the snooze ends", RUNS),
     # The task was given to this bot while another bot's turn on it was out (execution.turn_moved_on).
     "task_turn_out": ("Its task was handed to it mid-turn: it starts when the earlier owner's turn ends", RUNS),
-    "paused": ("Paused: its owner or BotOps must resume it", BOT_SETTINGS),
+    "paused": ("Paused: its owner or Agent Ops must resume it", BOT_SETTINGS),
     "company_paused": ("All bots on Tico Team are paused: its work starts when someone resumes", BOT_SETTINGS),
     "no_slot": ("No slot on {computer}: queued behind running turns", RUNS),
     "busy": ("Queued behind this bot's running turn", RUNS),
@@ -1711,7 +1711,7 @@ def token_failure(c):
 def _github(c, github, settings):
     """Not connected is "info" while the team has no bot of its own (getting_started.own_bots) at work, and "warn" once
     it has one: the built-in bots come with every install, so the warning waits for a bot someone made, and a planned
-    one (a new company's live seats, until BotOps sets them up) keeps nothing yet."""
+    one (a new company's live seats, until Agent Ops sets them up) keeps nothing yet."""
     from .github_app import account_word
 
     row = github.row(c) if github else None
@@ -1767,8 +1767,8 @@ def _github_repo_create(c, github):
 
     word = "account" if account_kind(row) == PERSONAL else "organisation"
     summary = (
-        "Bots BotOps builds cannot get a GitHub repository: the GitHub App lacks Administration (write). "
-        f"Let BotOps create repositories (turn on Administration for the app, then accept it for the {word}), "
+        "Bots Agent Ops builds cannot get a GitHub repository: the GitHub App lacks Administration (write). "
+        f"Let Agent Ops create repositories (turn on Administration for the app, then accept it for the {word}), "
         "or create each bot's repository yourself as an empty private repository."
     )
     create_url = "https://github.com/new?" + urlencode({"owner": row["org"], "visibility": "private"})
@@ -1778,7 +1778,7 @@ def _github_repo_create(c, github):
         "warn",
         summary,
         [
-            _fix("Let BotOps create repositories", links(row)["permissions_url"]),
+            _fix("Let Agent Ops create repositories", links(row)["permissions_url"]),
             _fix("Create a repository", create_url),
             _fix("Open GitHub settings", "#/tools/github"),
         ],
@@ -2627,7 +2627,7 @@ def _aged_pr_checks(c, who, auth, full, kind):
 
 def _unreviewed_runs(c, who, auth):
     """Bots with a stopped run held two hours or more with no decision (execution.unreviewed), as `who` may read them:
-    BotOps's review of it did not happen, so a person sees it here and in the operator's Needs you (Dev 543)."""
+    Agent Ops's review of it did not happen, so a person sees it here and in the operator's Needs you (Dev 543)."""
     from . import task_privacy as privacy
     from .execution import HELD_UNREVIEWED
 
@@ -3744,7 +3744,7 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
                 "warn",
                 "; ".join(f"{label}: sign in to {model}" for label, model in unsigned[:5])
                 + ("." if len(unsigned) <= 5 else f"; and {len(unsigned) - 5} more.")
-                + " Sign in from Settings > Computers (BotOps can start it). To have new computers sign in by "
+                + " Sign in from Settings > Computers (Agent Ops can start it). To have new computers sign in by "
                 "themselves, store the company's model key in Tools > Keys and give it to every computer.",
                 [_fix("Open Computers", "#/settings", "devices"), _fix("Open Keys", "#/tools/keys?show=credentials")],
             )
@@ -3869,7 +3869,7 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
     )
     # An offline computer (or none) is "Bots waiting"; this check is everything else, so one cause is one item.
     held = {w["bot"] for w in waiting}
-    # A bot stuck in onboarding has its own check below ("Onboarding not finished"). A quarantined bot is BotOps's to
+    # A bot stuck in onboarding has its own check below ("Onboarding not finished"). A quarantined bot is Agent Ops's to
     # review, so it has its own check (after this one): Settings > Health lists it, the person's status dot does not.
     quarantined = [s for s in blocked if s["bot"] not in held and s["reason"] == "quarantined"]
     blocking = [s for s in blocked if s["bot"] not in held and s["reason"] not in ("setup", "quarantined")]

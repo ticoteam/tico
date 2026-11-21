@@ -144,7 +144,7 @@ ACTIONS = {
         ("turn", "start", "dead", "stuck", "free", "busy"),
     ),
     "turns_finding": (
-        "keep one Health finding per busy-turns incident and hand what it cannot fix to BotOps",
+        "keep one Health finding per busy-turns incident and hand what it cannot fix to Agent Ops",
         ("health", "turns", "incident", "botops", "busy"),
     ),
     "wake_digest_bots": (
@@ -499,7 +499,7 @@ JOBS = [
         "invariant_checks",
         "Production checks",
         "Reads a few production invariants in plain code and shows each failing one on Health. Check health files each "
-        "one as a BotOps task, closed when the check passes.",
+        "one as an Agent Ops task, closed when the check passes.",
         HOUSEKEEPING,
         "Every 15 minutes",
         900,

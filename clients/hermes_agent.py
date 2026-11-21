@@ -18,8 +18,8 @@ What it does:
            that makes the agent look at what is waiting (`--sync 15m|1h|daily|'<cron>'|off`, default 1h).
            For OpenClaw no MCP entry is added: the skill calls Tico through this file (`call`).
     python3 hermes_agent.py pair --profile scout --url https://tico.example.com
-        the same steps with no token to copy: it prints a code and what to tell BotOps,
-        waits for a person (or BotOps) to approve it for a bot, and receives the credential itself.
+        the same steps with no token to copy: it prints a code and what to tell Agent Ops,
+        waits for a person (or Agent Ops) to approve it for a bot, and receives the credential itself.
     python3 hermes_agent.py update --profile scout       # newest connector from Tico, then install again
     python3 hermes_agent.py doctor --profile scout       # what works, what does not, old tool names
     python3 hermes_agent.py heartbeat --profile scout    # what the timer runs
@@ -1040,7 +1040,7 @@ def blocked_message(failure, bot):
     """The one line for a heartbeat Tico refuses for good reasons, or ''. The timer keeps
     trying, but once an hour, so a forgotten profile does not hammer Tico every minute."""
     if failure.status == 409 and (failure.code == "bot_archived" or "archived" in failure.detail.lower()):
-        return f"Bot {bot} is archived in Tico: restore it (ask BotOps) or run uninstall"
+        return f"Bot {bot} is archived in Tico: restore it (ask Agent Ops) or run uninstall"
     if failure.status == 401:
         return f"Bot {bot}: credential revoked: run pair again"
     return ""
@@ -1225,7 +1225,7 @@ def cmd_pair(args):
     wait = max(1, int(created.get("expires_in") or 600))
     every = min(30, max(1, int(created.get("poll_every") or 3)))
     print(
-        f"Tell BotOps (or press Pair on the bot in Settings → Bots): {pair_code_sentence(args.harness, args.profile, code)}"
+        f"Tell Agent Ops (or press Pair on the bot in Settings → Bots): {pair_code_sentence(args.harness, args.profile, code)}"
     )
     print(f"Waiting for approval (the code works for {wait // 60 or 1} minute(s); Ctrl-C to stop)...", flush=True)
     deadline = time.monotonic() + wait

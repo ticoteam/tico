@@ -370,7 +370,7 @@ def health_metrics(api, args):
 
 @tool(
     "tico_support_file",
-    "Tell the Tico team about something the product cannot do, or a fault you cannot fix. BotOps files it as the "
+    "Tell the Tico team about something the product cannot do, or a fault you cannot fix. Agent Ops files it as the "
     "person who asked, with their rights; with its own rights it is refused. The person reads it on a Confirm card before "
     "it is sent, so start with one short plain sentence anyone can follow: what is broken. Then say what they asked "
     "for, what you tried, what the product answered, the bot and the version. No secrets, no other people's details, "
@@ -382,7 +382,7 @@ def health_metrics(api, args):
 def support_file(api, args):
     return _as_person(api).post(
         "support/tickets",
-        {"message": "[BotOps] " + args["message"], "include_ids": True, "source": "botops"},
+        {"message": "[Agent Ops] " + args["message"], "include_ids": True, "source": "botops"},
         key=_key(args),
     )
 
@@ -458,7 +458,7 @@ def support_send(api, args):
 @tool(
     "tico_health_findings",
     "What Check health found on this install: each open problem with its count, last seen time and "
-    "Tico-bug report, whether BotOps is there to take findings, and whether bug reports go without asking.",
+    "Tico-bug report, whether Agent Ops is there to take findings, and whether bug reports go without asking.",
     {},
 )
 def health_findings(api, args):
@@ -483,7 +483,7 @@ def health_report(api, args):
     key = str(args.get("key") or "").strip()
     if not key:
         # A refusal, not a success: the CLI exits 1 and MCP answers isError. The key is on the finding's task, which a
-        # bot can read even though `tico health findings` is for people and BotOps.
+        # bot can read even though `tico health findings` is for people and Agent Ops.
         raise APIError("validation", HEALTH_KEY_HELP)
     return api.post("health/findings/" + quote(key, safe="") + "/report", {}, key=_key(args))
 

@@ -128,7 +128,7 @@ def test_runs_held_after_a_limit_resume_together_oldest_first_once_it_resets(api
             "SELECT id FROM jobs WHERE bot_id='ops' AND state='queued' ORDER BY created_at DESC"
         ).fetchone()[0]
         c.execute("UPDATE jobs SET state='uncertain',attempt_id=? WHERE id=?", (first["id"], second))
-    # Before the reset the limit names, nothing is resumed, and BotOps is not asked to review a run that did nothing.
+    # Before the reset the limit names, nothing is resumed, and Agent Ops is not asked to review a run that did nothing.
     at(monkeypatch, "2026-10-21T20:30:00.000000Z", api)
     assert sweep(api) == []
     assert job_state(api, first["job_id"]) == job_state(api, second) == "uncertain"

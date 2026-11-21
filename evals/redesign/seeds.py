@@ -174,7 +174,7 @@ def automations(world):
 @seed("bot_proposal")
 def bot_proposal(world):
     """A bot's proposal on Inbox triage (after `automations`): a pending version that archives receipts first, written
-    as BotOps writes it when Builder Claude asks (Builder Claude's rights, which do not reach Dana's automation, so the
+    as Agent Ops writes it when Builder Claude asks (Builder Claude's rights, which do not reach Dana's automation, so the
     PATCH is a proposal). No model runs."""
     from .harness import CLAUDE, DANA, rows
 

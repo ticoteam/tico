@@ -296,7 +296,7 @@ def propose(c, who, sender, receiver, per_day):
 
 def apply_approved(c, actor_, rid, change):
     """A person OK'd a bot's cap change: the hub applies it, audited with the OK as `via` (backend/proposals.py uses
-    the OK and tells BotOps). The receiver must still be a manager above the sender."""
+    the OK and tells Agent Ops). The receiver must still be a manager above the sender."""
     sender, receiver = _teammate(c, change.sender), _teammate(c, change.receiver)
     if receiver not in above(c, sender):
         raise Problem("validation", "The receiver is no longer a manager above the sender", 422)

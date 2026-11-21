@@ -3,7 +3,7 @@
 A bot owns its tools and its skills. To give one a service such as Jira or Linear, prefer the vendor's own
 MCP server to anything we write: the vendor keeps it current, and Tico passes it to the bot's harness. Ask
 the Tools Owner in the Tools page's chat ("connect Linear to Atlas") and it does the steps below, with a card for the key and
-a person's click for each grant; BotOps writes the bot's `bot.yaml`. This page says what the steps are.
+a person's click for each grant; Agent Ops writes the bot's `bot.yaml`. This page says what the steps are.
 
 **An MCP server added in Tools → Add → MCP server by OAuth sign-in is renewed by Tico.** Tico keeps the sign-in's tokens
 and refreshes the access token on the server before it ends, one refresh at a time; when the vendor will not refresh it,
@@ -22,7 +22,7 @@ Tico: use a supported API credential there, or a REST skill.
 
 **Tools → Add** finds a known service in the catalog and offers its ways in: **Sign in with** the vendor (its MCP
 server), **Paste a key**, or **Sign in on the website**. Anything else is added by its kind there (API, MCP server,
-website, webhook, mail). An agent (the Tools Owner, BotOps, the Assistant, with a person's rights or its own) adds a
+website, webhook, mail). An agent (the Tools Owner, Agent Ops, the Assistant, with a person's rights or its own) adds a
 tool or an MCP server from the catalog only and probes no other address; a key is pasted and a website login shared
 only by a person in Tools.
 
@@ -310,7 +310,7 @@ The Listening row shows its worst source's state. Bots named are only those you 
 
 `GET /api/v2/tool-index?limit=&cursor=` answers `{rows: [{id, kind, name, detail, way, status: {tone, text}, who,
 who_total, needs_you, href, vendor, vendor_name}], counts, next}` (an API tool's row adds `service` and `delivery`), at most
-500 rows and 192 KB a page; follow `next` with `cursor`. CLI: `tico tool index`; MCP: `tico_tool_index` (BotOps reads
+500 rows and 192 KB a page; follow `next` with `cursor`. CLI: `tico tool index`; MCP: `tico_tool_index` (Agent Ops reads
 it with the rights of the person who asked; the Tools page's owner bot reads every tool the company sees, with who holds
 which level, never a key).
 
@@ -354,7 +354,7 @@ to `:id`) and who added the tool's keys. The Tools Owner reads it daily to learn
 
 Nothing on the Tools page needs the page: each change is a `tico` command and a Tico MCP tool of the same name
 (`tico tool setting add` is `tico_tool_setting_add`) that calls the route the page calls, with the caller's rights.
-BotOps acts as the person who asked it, the Tools Owner as that person on the changes `backend/tools_delegation.py`
+Agent Ops acts as the person who asked it, the Tools Owner as that person on the changes `backend/tools_delegation.py`
 lends it, and everyone else as themselves; `backend/tool_access.py` (`may_change_access`) decides every write, and a
 refusal names who can. A value is never an argument: `--from-env VAR` names a variable and `--from-file PATH` a file on
 the computer that runs the command, read there (those MCP tools run only in a bot's own `tico` MCP server, never the

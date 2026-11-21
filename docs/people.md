@@ -89,12 +89,12 @@ login method, to the Access application's policy. Then check it, one of two ways
   address.
 
 For the same reason, don't add the new address on this page or to the allow list first. If a second person did join
-with the new address, first give that person another email nobody uses: ask BotOps (you confirm its card), or call
+with the new address, first give that person another email nobody uses: ask Agent Ops (you confirm its card), or call
 `POST /api/v2/access/humans/<their id>` with `{"email": ...}`. Then mark them as left and make the change below.
 
 **Then change it.** Signed in with your current address, open **Settings > People**, open the ⋯ menu on your own row
 and pick **Change my sign-in email**. Type the new address twice and confirm. Only the owner sees this, signed in as
-themselves: not through an API token, BotOps or the Assistant. Behind Cloudflare Access you are signed out at once;
+themselves: not through an API token, Agent Ops or the Assistant. Behind Cloudflare Access you are signed out at once;
 sign in again with the new address.
 
 One transaction changes every copy of the address, or none of them if any step fails:

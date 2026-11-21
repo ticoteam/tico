@@ -13,7 +13,7 @@ kind at a time, written by `put` and ended by `release`:
 | `run_hold`        | bot     | `holds`, kind `failing`, held: no until_at             | a try completes, or a release      |
 | `budget`          | bot     | `holds`, kind `runaway` (runaway runs)                 | a release, or a raised budget      |
 | `cooling_off`     | login   | `holds`, kind `usage_limit` (login_holds)              | the reset, then one probe; Try now |
-| `cant_start`      | task    | `holds`, kind `cant_start` on the task, BotOps's task  | BotOps closes its task             |
+| `cant_start`      | task    | `holds`, kind `cant_start` on the task, Agent Ops's task  | Agent Ops closes its task             |
 | `task_quarantine` | task    | `holds`, kind `quarantine`, on the task                | the cooldown, or a person          |
 | `claim_held`      | job     | `holds`, kind `claim_error` on the job, while it waits | its wait, a start, or a release    |
 | `handed_back`     | job     | `holds`, kind `cant_start` on the job, while it waits  | its wait                           |
@@ -96,7 +96,7 @@ LOGIN_LIMIT = "usage_limit"  # a login over its provider's usage limit (login_ho
 # check_failed): CLAIM_HELD to the pages while the run waits; the check's hold only passes the bot over.
 CLAIM_ERROR = "claim_error"
 # CANT_START is a kind too: on a job its computer handed back, or took and went silent on, before starting it
-# (execution.wait_unstarted): HANDED_BACK while it waits; on a task once SAME in a row could not start (BotOps's task).
+# (execution.wait_unstarted): HANDED_BACK while it waits; on a task once SAME in a row could not start (Agent Ops's task).
 # PAUSED is a kind too: a bot's own pause (on the bot) and the company's (holdable_id '') (company_pause).
 # A bot-wide hold of these kinds is also bots.state, the switch every reader of a bot checks: its open hold sets it (not
 # on an archived or planned bot, and a pause never over a quarantine). Its release sets the state of the first kind here
@@ -331,7 +331,7 @@ def claim_held_sql(many: bool = False) -> str:
 
 
 def cant_start_sql(many: bool = False) -> str:
-    """The bots (comma-joined) whose runs on one task cannot start while BotOps's task about it is open (a `cant_start`
+    """The bots (comma-joined) whose runs on one task cannot start while Agent Ops's task about it is open (a `cant_start`
     hold on the task, bot_stops.cant_start). With `many`, (task, bots) for every such task. Few rows: only the
     open cant_start holds are read."""
     return (

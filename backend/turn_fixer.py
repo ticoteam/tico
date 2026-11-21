@@ -1,7 +1,7 @@
 """The turn fixer: a built-in system routine over every computer, plain code with no model and no cost.
 
 Each scheduler pass it frees only starts that are proven dead, keeps one Health finding per company-turns incident
-(backend/org_turns.py), and hands what it cannot fix to BotOps.
+(backend/org_turns.py), and hands what it cannot fix to Agent Ops.
 
 Proven dead is one of two things. A person stopped a turn that had not started: a stopped start can never be
 granted a place again (start_places.reserve), so its place is freed now rather than when its lease runs out. Or the
@@ -10,12 +10,12 @@ no longer names the bot. A live lease is a slow reply or a healthy wait, and a c
 proves nothing, so neither is touched. The task and its history stay; the task gets one quiet note.
 
 A dead turn that may have pushed, sent or paid is never retried blindly. A turn that only read on a host that reports
-every call runs again through auto_reconcile; any other is held for BotOps at once with the tools it used.
+every call runs again through auto_reconcile; any other is held for Agent Ops at once with the tools it used.
 
 While an incident is open its finding names the counts by wait reason, the oldest waits, the last progress of each
 running turn, each computer's CPU and memory and the likely bottleneck in one sentence. Later passes rewrite the same
 finding; when the incident clears Health says it resolved and when. An incident still open after FIX_WINDOW_S gets
-exactly one task for BotOps (the Support bot where there is no BotOps) with the finding. The owner gets one notice
+exactly one task for Agent Ops (the Support bot where there is no Agent Ops) with the finding. The owner gets one notice
 per incident, only when it is still open after NOTICE_AFTER_S or its main wait needs a person (a login, quota or
 money)."""
 
@@ -23,7 +23,7 @@ from . import org_turns, start_places
 from . import task_privacy as privacy
 from .store import H
 
-FIX_WINDOW_S = 300  # an incident the fixer has had this long to clear is handed to BotOps
+FIX_WINDOW_S = 300  # an incident the fixer has had this long to clear is handed to Agent Ops
 NOTICE_AFTER_S = 3600  # an unfixed incident reaches the owner after this long
 FINDING_EVERY_S = 60  # the finding is rewritten at most this often while nothing was freed
 STALE_PROGRESS_S = 300  # a running turn with no event or heartbeat this long has stopped making progress
@@ -135,11 +135,11 @@ def free(c, execution):
                 c,
                 task,
                 f"Tico freed a dead turn that {did}, so it may have pushed, sent or paid. It is not "
-                "retried: BotOps checks what already happened first.",
+                "retried: Agent Ops checks what already happened first.",
             )
             if not c.execute("SELECT 1 FROM events WHERE action='job.held' AND target=?", (row['id'],)).fetchone():
                 H.event(c, H.TICO_ACTOR, 'job.held', row['id'], {'job_id': job['id'], 'tools': acted})
-                # The BotOps task is company-wide: it names the task only when BotOps may read the request.
+                # The Agent Ops task is company-wide: it names the task only when Agent Ops may read the request.
                 if privacy.message_readable(c, 'bot:' + H.FLEET_MAINTAINER, msg):
                     execution._hand_to_maintainer(c, job, msg, task, acted)
     return freed
@@ -260,7 +260,7 @@ def draft_finding(c, settings, *, force=False):
 
 
 def tend(c, settings, owner_id='', freed=0, draft=None):
-    """Update the open incident's finding, hand what the fixer cannot fix to BotOps once, and tell the owner when due.
+    """Update the open incident's finding, hand what the fixer cannot fix to Agent Ops once, and tell the owner when due.
     Returns the incident.
 
     `draft` is an optional finding built outside the writer (`draft_finding`). It is installed only when the same

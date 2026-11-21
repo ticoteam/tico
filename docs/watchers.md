@@ -65,7 +65,7 @@ log). Settings > General > Health > Details shows a **Watchers** line only when 
 
 ## Write one
 
-BotOps sets one up with `playbooks/set-up-a-watcher.md`. The rules: standard library only, prints nothing when nothing is new, a
+Agent Ops sets one up with `playbooks/set-up-a-watcher.md`. The rules: standard library only, prints nothing when nothing is new, a
 stable `key`, a `ref` on every `comment`, its cursor in `TICO_WATCHER_STATE`, and its settings from the environment.
 Run it by hand twice to test it: the second run must print nothing.
 

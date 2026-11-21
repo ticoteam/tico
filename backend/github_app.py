@@ -161,7 +161,7 @@ SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,60}$")
 REPO_PART = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
 PRODUCT_REPO_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 DEFAULT_TEMPLATE = "ticoteam/botops"
-BOTOPS = "botops"
+AGENT_OPS = "botops"
 EXTRA_KEY = "github-extra-repos"  # registry_metadata: {bot: ["owner/name", ...]}
 MAX_EXTRA_REPOS = 20
 # A refusal about one bot's repository (not on GitHub yet, or not shared with the app), or a rehearsal that never calls GitHub. The bot's own readiness
@@ -260,7 +260,7 @@ def create_url(org, name=""):
 
 def fixes(c, row, slug=""):
     """The two ways out when Tico may not create a bot's repository, as links: create the repository (prefilled), or
-    let BotOps create repositories. In a personal account the second is authorizing Tico to create empty repositories
+    let Agent Ops create repositories. In a personal account the second is authorizing Tico to create empty repositories
     there."""
     name = H.bot_repository_name(c, slug) if slug else ""  # named for the bot, id or slug in
     return {
@@ -1506,7 +1506,7 @@ class GitHubApp:
         )  # a bot's repository may be either
         if self.can_create_repos():
             create = (
-                f"Create it with BotOps: `tico bot repo-create {slugs.split(', ')[0]}` "
+                f"Create it with Agent Ops: `tico bot repo-create {slugs.split(', ')[0]}` "
                 "(add `--empty` for a bot built locally, whose history its runner then pushes)"
             )
         elif (row := self.row()) and account_kind(row) == PERSONAL:
@@ -1616,7 +1616,7 @@ class GitHubApp:
                 detail = (
                     f"A person must act: the GitHub App was set up without permission to create repositories in the "
                     f"{word}, so {row['org']}/{name} was not created. Create it {how} ({found['create_url']}), or let "
-                    f"BotOps create repositories by turning on Administration for the app ({found['permissions_url']}) "
+                    f"Agent Ops create repositories by turning on Administration for the app ({found['permissions_url']}) "
                     f"and accepting it for the {word}."
                 )
             raise Problem("github_permission_missing", detail, 409, extra=found)
@@ -2043,7 +2043,7 @@ def install_github_app(app, settings, store):
         """The Owner, or a bot's own run with Create product repositories (`can_create_product_repositories`: every
         bot unless switched off for it).
         Connecting or disconnecting the App stays the Owner's (`owner`). Never a carried identity: a bot's turn acting
-        for the Owner (BotOps' on-behalf-of, the Assistant) or an external agent would create without any bot's right,
+        for the Owner (Agent Ops' on-behalf-of, the Assistant) or an external agent would create without any bot's right,
         name rule, grant or notice."""
         who = request.state.identity
         if who.task_actor or who.agent:
@@ -2094,20 +2094,20 @@ def install_github_app(app, settings, store):
         who = request.state.identity
         if who.role != "owner":
             with store.read() as c:
-                if not (app.state.auth.bot_manager(c, who, bot) or app.state.auth.botops_manages(c, who, bot)):
+                if not (app.state.auth.bot_manager(c, who, bot) or app.state.auth.agent_ops_manages(c, who, bot)):
                     raise Problem(
                         "forbidden", "Only the owner, or someone who manages this bot, sets its repositories", 403
                     )
         return who
 
     def run_scope(c, attempt_id):
-        """The other bots whose repositories one BotOps run writes, and whose rights decided it (for the audit): every
-        bot but the built-in ones in its own run (team rule `botops_manages_bots`), the bots the person manages in a
+        """The other bots whose repositories one Agent Ops run writes, and whose rights decided it (for the audit): every
+        bot but the built-in ones in its own run (team rule `agent_ops_manages_bots`), the bots the person manages in a
         run carrying their rights, none in a run a bot asked for or one that lends nobody's rights."""
-        from . import botops_act, team_rules
+        from . import agent_ops_act, team_rules
 
         auth = app.state.auth
-        acting = app.state.botops_run_identity(c, attempt_id)
+        acting = app.state.agent_ops_run_identity(c, attempt_id)
         run = {"attempt": attempt_id, "rights": acting.actor if acting else None}
         if acting is None:
             return set(), run
@@ -2115,28 +2115,30 @@ def install_github_app(app, settings, store):
             r[0]
             for r in c.execute(
                 "SELECT bc.bot FROM bot_config bc JOIN bots b ON b.id=bc.bot WHERE b.state<>'archived' AND bc.bot<>?",
-                (BOTOPS,),
+                (AGENT_OPS,),
             )
         ]
-        if acting.actor == "bot:" + BOTOPS:
-            run["own_run"] = bool(team_rules.load(c)["botops_manages_bots"] and botops_act.own_run(c, auth, attempt_id))
+        if acting.actor == "bot:" + AGENT_OPS:
+            run["own_run"] = bool(
+                team_rules.load(c)["agent_ops_manages_bots"] and agent_ops_act.own_run(c, auth, attempt_id)
+            )
             return ({bot for bot in bots if not auth.system_bot(bot)} if run["own_run"] else set()), run
         if H.is_human(acting.actor):
             return {bot for bot in bots if auth.bot_manager(c, acting, bot)}, run
         return set(), run
 
-    def botops_extra_repos(c, who):
-        """The bots whose repositories BotOps' token also writes, and the runs that decided it. A turn asks for its own
-        run; the computer's git helper gets only what every BotOps run in progress on it may have, and nothing extra
+    def agent_ops_extra_repos(c, who):
+        """The bots whose repositories Agent Ops' token also writes, and the runs that decided it. A turn asks for its own
+        run; the computer's git helper gets only what every Agent Ops run in progress on it may have, and nothing extra
         when none is."""
         if who.role == "bot":
-            attempts = [who.attempt_id] if who.actor == "bot:" + BOTOPS and not who.via and who.attempt_id else []
+            attempts = [who.attempt_id] if who.actor == "bot:" + AGENT_OPS and not who.via and who.attempt_id else []
         elif who.role == "runner":
             attempts = [
                 r["id"]
                 for r in c.execute(
                     "SELECT id FROM attempts WHERE bot_id=? AND runner_id=? AND state IN ('leased','running')",
-                    (BOTOPS, who.runner_id),
+                    (AGENT_OPS, who.runner_id),
                 )
             ]
         else:
@@ -2691,7 +2693,7 @@ def install_github_app(app, settings, store):
             own_unused = homes.why(source, repo)
             if own_unused:
                 grants = [g for g in grants if g['full_name'].lower() != repo.lower()]
-            extra, runs = botops_extra_repos(c, who) if body.bot == BOTOPS else (set(), [])
+            extra, runs = agent_ops_extra_repos(c, who) if body.bot == AGENT_OPS else (set(), [])
             if extra:
                 # The server's token cache is keyed on the exact repository set, so a narrower run never gets this one.
                 have = {g['full_name'].lower() for g in grants}
@@ -2716,7 +2718,7 @@ def install_github_app(app, settings, store):
                     "repository": "",
                     "repositories": [],
                     "tokens": [],
-                    "hold": body.bot != BOTOPS,
+                    "hold": body.bot != AGENT_OPS,
                     "history": R.HOME_WORDS[own_unused],
                 }
         issuer = reviewer.for_bot(body.bot)
@@ -2928,7 +2930,7 @@ def install_github_app(app, settings, store):
             # (sealed) so a restart hands them out again instead of minting. A token from the cache writes nothing.
             with store.transaction() as c:
                 for item in audited:
-                    # Whose rights shaped a BotOps token: its own run's, a person's, or none beyond its own.
+                    # Whose rights shaped an Agent Ops token: its own run's, a person's, or none beyond its own.
                     H.event(
                         c,
                         who.actor,
@@ -2939,12 +2941,12 @@ def install_github_app(app, settings, store):
                             "repositories": item["repositories"],
                             "attempt": who.attempt_id or None,
                             **({"identity": "reviewer"} if issuer is reviewer else {}),
-                            **({"runs": runs} if body.bot == BOTOPS else {}),
+                            **({"runs": runs} if body.bot == AGENT_OPS else {}),
                         },
                     )
                 issuer.keep_tokens(c, [item["token"] for item in newly_minted])
         response_tokens = [{key: value for key, value in item.items() if key != "cached"} for item in tokens]
-        # A BotOps answer is shaped by the runs live right now (botops_extra_repos): a runner must not hand it
+        # An Agent Ops answer is shaped by the runs live right now (agent_ops_extra_repos): a runner must not hand it
         # to a later run, which may be allowed less.
         return {
             "configured": True,
@@ -2955,7 +2957,7 @@ def install_github_app(app, settings, store):
             "repositories": repos,
             **({"history": R.HOME_WORDS[own_unused]} if own_unused else {}),
             "tokens": response_tokens,
-            "hold": body.bot != BOTOPS,
+            "hold": body.bot != AGENT_OPS,
             **{raised.answer: withheld[raised] for raised in RAISES if raised in withheld},
         }
 
@@ -3053,8 +3055,8 @@ def install_github_app(app, settings, store):
                 if who.role != "bot" or not can_create_repositories(c, H.actor_id(who.actor)):
                     raise Problem(
                         "forbidden",
-                        "Only the owner, BotOps or a bot granted repository creation may "
-                        "create bot repositories. Ask BotOps, or ask an Owner or admin to enable "
+                        "Only the owner, Agent Ops or a bot granted repository creation may "
+                        "create bot repositories. Ask Agent Ops, or ask an Owner or admin to enable "
                         "Create bot repositories in this bot's settings.",
                         403,
                     )
@@ -3086,9 +3088,9 @@ def install_github_app(app, settings, store):
             )
         from . import built_on
 
-        # BotOps builds in its turn's workspace: the bot's first placement goes there (backend/built_on.py). Only
-        # BotOps's own build is recorded, and only once GitHub made the repository or waits on the permission.
-        builder = who.runner_id if who.role == "bot" and H.actor_id(who.actor) == BOTOPS else ""
+        # Agent Ops builds in its turn's workspace: the bot's first placement goes there (backend/built_on.py). Only
+        # Agent Ops's own build is recorded, and only once GitHub made the repository or waits on the permission.
+        builder = who.runner_id if who.role == "bot" and H.actor_id(who.actor) == AGENT_OPS else ""
         try:
             result = service.create_repo(slug, template, empty=body.empty)
         except Problem as problem:
@@ -3099,7 +3101,7 @@ def install_github_app(app, settings, store):
                 "github_repo_taken",
             ):
                 raise
-            # A person must act: the refusal names both fixes. The bot keeps its local build; BotOps asks again
+            # A person must act: the refusal names both fixes. The bot keeps its local build; Agent Ops asks again
             # once either is done. With the App on chosen repositories, or the name another company's, nobody need
             # act: the bot keeps its local build, and its first placement is still where it was built.
             if builder:

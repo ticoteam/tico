@@ -311,7 +311,7 @@ One tree, built like the team chart: the team on top, then each group and every 
 A group sits under whoever runs it, and each person or bot under whoever they report to, whether or not they have a goal. Each is one line: the avatar and name, then the goal's
 colour dot and its title (cut short; the whole title is in the tooltip) and its KPIs as small chips, a dot and the latest
 value each (a count when there is no room). More goals follow on lines of their own under the first. The built-in bots (the
-Assistant, BotOps and the Librarian) stay out of this tree and its goal owner choices; the Strategy Owner is in the tree, under the owner.
+Assistant, Agent Ops and the Librarian) stay out of this tree and its goal owner choices; the Strategy Owner is in the tree, under the owner.
 New teams get no default goals for built-in bots. Existing built-in goals are hidden here and kept in storage.
 Message bots such as Inbox Manager stay off the tree, as on the Org tab; one with goals shows at the end.
 

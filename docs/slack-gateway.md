@@ -55,13 +55,13 @@ The decision model reading the previous routing and the open ask in its state, n
 
 | the decision model says | The gateway does |
 |---|---|
-| asks-for-anything below `TICO_SLACK_ASK_THRESHOLD` (0.5) | routes to the assistant (or BotOps): the decision model picks who gets a person's message, never whether anyone does. With neither active, the message is recorded on the thread's conversations and nobody is woken |
+| asks-for-anything below `TICO_SLACK_ASK_THRESHOLD` (0.5) | routes to the assistant (or Agent Ops): the decision model picks who gets a person's message, never whether anyone does. With neither active, the message is recorded on the thread's conversations and nobody is woken |
 | one or more bots at or above `TICO_SLACK_ROUTE_THRESHOLD` (0.6) | routes to each, best `TICO_SLACK_MAX_RECIPIENTS` (3) by confidence, ties by slug |
-| no bot at threshold | routes to the assistant (`TICO_ASSISTANT_BOT`) with the top three candidates on the message, so it can ask the one clarifying question the write layer allows. A team that chose no assistant (it is optional) gets BotOps instead; with neither active, the message is recorded and nobody is woken |
+| no bot at threshold | routes to the assistant (`TICO_ASSISTANT_BOT`) with the top three candidates on the message, so it can ask the one clarifying question the write layer allows. A team that chose no assistant (it is optional) gets Agent Ops instead; with neither active, the message is recorded and nobody is woken |
 | a chosen bot paused or quarantined since the roster was read | keeps the message for it (it runs when the bot is back) and tells the person in the thread that it waits |
-| a chosen bot the write layer refuses (archived, planned or gone since the roster was read) | drops it with the reason; the assistant (or BotOps) if that empties the set |
+| a chosen bot the write layer refuses (archived, planned or gone since the roster was read) | drops it with the reason; the assistant (or Agent Ops) if that empties the set |
 
-Without a decision model (no gateway key and no TypeSafe key of your own) every message goes to the assistant (or BotOps) and the message says so
+Without a decision model (no gateway key and no TypeSafe key of your own) every message goes to the assistant (or Agent Ops) and the message says so
 (`routed_by: default`). When the decision model is unreachable, the message stays pending and retries after a minute, for up to
 ten minutes. A refused call, or one still failing after that, ends the message as `failed` with the
 reason on it, and Tico tells the human in the thread; nothing retries a failed message. Each try asks the providers in
@@ -73,11 +73,11 @@ Routing a message is a decision call on the server's key, so it counts against t
 (`TICO_DECISIONS_DAILY_CALLS_OWNER` / `_HUMAN`, the same cap as `POST /api/v2/decisions`) and is audited as one
 `judge.call` event by the sender (`via: slack`, the label, the question count, the provider and model that answered, usage and latency; never the
 text, and a failed call keeps only its error code, never the provider's error text). A message counts once, when it is routed or finally fails, however many tries it took. Over the cap the decision
-model is not asked: the message goes to the assistant (or BotOps) with `routed_by: budget` and the reason on it, and when
+model is not asked: the message goes to the assistant (or Agent Ops) with `routed_by: budget` and the reason on it, and when
 neither is running it is recorded and Tico tells the human in the thread.
 
 When the team's decision spend for the month has reached its cap (`TICO_DECISIONS_MONTHLY_USD`, backend/judge.py), the
-decision model is not asked either: the message goes to the assistant (or BotOps) with `routed_by: spend_cap`, as it would
+decision model is not asked either: the message goes to the assistant (or Agent Ops) with `routed_by: spend_cap`, as it would
 with no decisions key. A big fleet is asked in several calls, and the cap is checked before each: one whose most (its
 input and the longest answer, at the price of the model that answers) would not fit under the cap stops the message
 there and it goes to the assistant the same way. Each call's cost is written down as it returns
@@ -156,7 +156,7 @@ realtime: `@Tico` for a faster response, otherwise within the hour, if there are
   waits until it is back.
 
 Readers are named per channel in the Slack channel list, which lives in the database and is managed
-in the app (Tools > Slack channels, `tico slack channel add '#name' --reader cto`, or BotOps
+in the app (Tools > Slack channels, `tico slack channel add '#name' --reader cto`, or Agent Ops
 as the person who asked). Only an owner or an admin changes it, like turning posting off. Adding a reader to a
 channel with no link makes the read-only link; a channel already linked both ways keeps its link, and the reader
 follows that thread. Taking the last reader off, or the channel off the list, ends a read-only link. A channel may be

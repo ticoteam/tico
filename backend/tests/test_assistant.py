@@ -219,11 +219,11 @@ def test_a_proposal_cannot_smuggle_a_route_and_never_stores_an_answer(api):
     assert "Draft the launch plan" not in str(get(api, f"assistant/actions/{action['id']}")["action"]["result"])
 
 
-def test_an_assistant_message_never_lends_the_persons_authority_to_botops(api):
+def test_an_assistant_message_never_lends_the_persons_authority_to_agent_ops(api):
     with api.app.state.store.transaction() as c:
         c.execute(
             "INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
-            "VALUES('botops','botops','BotOps','','active',?)",
+            "VALUES('botops','botops','Agent Ops','','active',?)",
             (H.now(),),
         )
         c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES('botops',NULL,'ana')")
@@ -283,7 +283,7 @@ def test_direct_writes_stay_inside_the_team(api):
     made = post(api, "tasks", {"owner": "ops", "title": "Draft the launch post", "body": "For Oct 1."}, token=token)
     assert made["owner_id"] == "bot:ops" and made["requester_id"] == "human:ben"
     with api.app.state.store.read() as c:
-        # What it wrote is marked, so BotOps ignores it.
+        # What it wrote is marked, so Agent Ops ignores it.
         assert (
             c.execute(
                 "SELECT count(*) FROM messages WHERE recipient_id='bot:ops' AND refs LIKE '%\"via\": \"assistant\"%'"

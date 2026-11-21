@@ -7,9 +7,9 @@
    onboarding and takes no task until a person above it on the org chart says so), and read back.
 3. The first task given to the bot queues a job for it.
 
-The core set is the templates whose card has `suggest: default` in `templates/catalog/*/card.yaml`, plus `botops`, which
-every company gets. The slug is the template's name. `test_the_core_set_is_the_default_suggestions_and_botops` fails if
-the set shrinks below 19 or loses BotOps, so a card renamed in a cleanup shows up here.
+The core set is the templates whose card has `suggest: default` in `templates/catalog/*/card.yaml`, plus `agent-ops`, which
+every company gets. The slug is the template's name. `test_the_core_set_is_the_default_suggestions_and_agent_ops` fails if
+the set shrinks below 19 or loses Agent Ops, so a card renamed in a cleanup shows up here.
 
 ## Run
 

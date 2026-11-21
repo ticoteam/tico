@@ -756,7 +756,7 @@ def head_for(waits: Sequence[Wait], viewer: object = None) -> Wait | None:
 
 def turn_viewer(who: object) -> str | None:
     """Whom a read's `turn` is said to: the caller's person (`who.actor`), also when an agent acts for them
-    (`who.task_actor`, the Assistant or BotOps), so their read shows that person's turn. Access is decided apart."""
+    (`who.task_actor`, the Assistant or Agent Ops), so their read shows that person's turn. Access is decided apart."""
     found = getattr(who, "actor", None)
     return str(found) if found else None
 
@@ -1700,12 +1700,12 @@ def _lists(
         for wait in waits:
             if wait.state != PAUSED or not wait.who:
                 continue
-            if wait.line.endswith(task_wakes.BEING_SET_UP) and _botops_reviews(conn, wait.who):
-                continue  # BotOps is setting it up, and its task starts when the bot is live: no person row
-            if wait.line.endswith(task_wakes.RUN_HELD) and _botops_reviews(conn, wait.who):
-                continue  # BotOps has the held run's review task (execution._hand_to_maintainer): no person row
+            if wait.line.endswith(task_wakes.BEING_SET_UP) and _agent_ops_reviews(conn, wait.who):
+                continue  # Agent Ops is setting it up, and its task starts when the bot is live: no person row
+            if wait.line.endswith(task_wakes.RUN_HELD) and _agent_ops_reviews(conn, wait.who):
+                continue  # Agent Ops has the held run's review task (execution._hand_to_maintainer): no person row
             if wait.line.endswith(task_wakes.ENDS_BY_ITSELF):
-                # BotOps has the task to find why its runs can't start (bot_stops.cant_start), or the hold on its run or
+                # Agent Ops has the task to find why its runs can't start (bot_stops.cant_start), or the hold on its run or
                 # on this task lifts by itself (a claim hold's wait, a quarantine's cooldown): no person row
                 continue
             if task_wakes.cannot_run(conn, wait.who, seen) in task_wakes.STARTS_BY_ITSELF:
@@ -1751,8 +1751,8 @@ def listed(waits: list[Wait], row: Row) -> list[Wait]:
     return [wait for wait in waits if (wait.state == PERSON and wait.ask) or wait.fix]
 
 
-def _botops_reviews(conn: "sqlite3.Connection", bot: str) -> bool:
-    """Whether BotOps reviews this bot's held runs: it is in the company and the bot is not BotOps itself."""
+def _agent_ops_reviews(conn: "sqlite3.Connection", bot: str) -> bool:
+    """Whether Agent Ops reviews this bot's held runs: it is in the company and the bot is not Agent Ops itself."""
     from . import hubdb
 
     maintainer = str(hubdb.FLEET_MAINTAINER)

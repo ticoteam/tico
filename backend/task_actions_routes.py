@@ -18,7 +18,7 @@ from . import task_roles as TRo
 from . import turns as turn_work
 from . import goals as G
 from .auth import Identity
-from .onboarding import BOTOPS
+from .onboarding import AGENT_OPS
 from . import rooms
 from .store import H, Problem, encode
 from . import bot_settings as BS
@@ -486,7 +486,7 @@ def register_core(
             # What a run on private work files is private unless it asks for company-visible (`private: false`).
             body = body.model_copy(update={"private": True})
         request_id = body.request_id
-        handoff = who.role == "bot" and who.actor != "bot:" + BOTOPS and not who.via
+        handoff = who.role == "bot" and who.actor != "bot:" + AGENT_OPS and not who.via
         if request_id and handoff:
             request_id = None  # a bot cites the person it is handing on; it never acts as them itself
         elif request_id and who.via == "assistant":
@@ -523,16 +523,16 @@ def register_core(
         task_caps.check(c, who.actor, owner)  # the first hub check on a send (CONTRACT §1): nothing is written
         # A bot's task for a teammate out of its reach, or its question to one (docs/reach.md), is refused next.
         reach.check(c, who, owner, "task", task_id=parent_id)
-        asked_botops = None
+        asked_agent_ops = None
         if request_id and who.via == "assistant":
-            # The Assistant handing a helper (BotOps, the Strategy Owner, the Librarian; assistant.HELPERS) what the
+            # The Assistant handing a helper (Agent Ops, the Strategy Owner, the Librarian; assistant.HELPERS) what the
             # person asked for in their own Assistant chat, citing that message (`--request-id turn`), only while the
-            # owner lets the Assistant act without asking. BotOps then acts with the person's rights
+            # owner lets the Assistant act without asking. Agent Ops then acts with the person's rights
             # (delegated_identity, `assistant`); the Strategy Owner and the Librarian work it with their own rights, so
             # what only the owner may change (strategy, goals) still reaches the owner as a proposal or a card.
             # Any other owner is handed the task as the person files it, and the citation lends it nothing.
             if H.actor_id(owner) in assistant_mod.HELPERS and H.is_bot(owner):
-                asked_botops = assistant_instruction(c, who, request_id) if assistant_direct() else None
+                asked_agent_ops = assistant_instruction(c, who, request_id) if assistant_direct() else None
             request_id = None
         # A subtask for a person under a private task with no person on it, filed by the bot that owns it, makes them
         # its reader.
@@ -723,12 +723,12 @@ def register_core(
             check_models.record(c, owner, row["id"], check, parent_id, f"{body.title}\n{body.body or ''}")
         elif body.check_model is None and body.check_role is None and unchecked:
             H._task_event(c, row["id"], who.actor, "check_model", None, None, unchecked)
-        if handoff and owner == "bot:" + BOTOPS:
+        if handoff and owner == "bot:" + AGENT_OPS:
             carried = carried_request(c, who, body.request_id)
             if carried:
                 H.event(c, who.actor, "botops.request_carried", row["id"], carried)
                 if carried["lends"]:
-                    # The person's own words on the task, so BotOps does what they asked, not what the bot read into it.
+                    # The person's own words on the task, so Agent Ops does what they asked, not what the bot read into it.
                     words = (H.message(c, carried["message_id"]) or {}).get("body") or ""
                     name = (H.human(c, H.actor_id(carried["person"])) or {}).get("name") or H.actor_id(
                         carried["person"]
@@ -753,15 +753,15 @@ def register_core(
                         None,
                     )
         elif handoff and body.request_id:
-            raise Problem("request_id", "Only a task for BotOps carries a person's request", 422)
-        if asked_botops:
-            request_id = asked_botops["cited"]
-            # BotOps' lending reads `botops.asked_via_assistant` (delegated_identity); the other helpers' record says
+            raise Problem("request_id", "Only a task for Agent Ops carries a person's request", 422)
+        if asked_agent_ops:
+            request_id = asked_agent_ops["cited"]
+            # Agent Ops' lending reads `botops.asked_via_assistant` (delegated_identity); the other helpers' record says
             # which helper, and lends nothing, except to the Tools Owner on a Tools change (delegated_identity).
-            if owner == "bot:" + BOTOPS:
-                H.event(c, who.actor, "botops.asked_via_assistant", row["id"], asked_botops)
+            if owner == "bot:" + AGENT_OPS:
+                H.event(c, who.actor, "botops.asked_via_assistant", row["id"], asked_agent_ops)
             else:
-                H.event(c, who.actor, "assistant.asked_helper", row["id"], {**asked_botops, "helper": owner})
+                H.event(c, who.actor, "assistant.asked_helper", row["id"], {**asked_agent_ops, "helper": owner})
             words = (H.message(c, request_id) or {}).get("body") or ""
             name = (H.human(c, H.actor_id(who.actor)) or {}).get("name") or H.actor_id(who.actor)
             H._write_message(
@@ -877,7 +877,7 @@ def register_core(
     def create_task(request: Request, body: M.TaskCreate):
         who = request.state.identity
         if who.via == "botops" and who.role == "bot" and H.is_bot(who.task_actor) and who.task_actor != who.actor:
-            # BotOps filing for a bot that asked it: a bot's request lends nothing, so BotOps files the task as itself,
+            # Agent Ops filing for a bot that asked it: a bot's request lends nothing, so Agent Ops files the task as itself,
             # with its own rights, and is its requester (who filed it).
             who = Identity(who.task_actor, "bot", runner_id=who.runner_id, attempt_id=who.attempt_id, agent=who.agent)
             request.state.identity = who
@@ -936,7 +936,7 @@ def register_core(
     def task_update_one(c, caller, tid, body, rule=None):
         """`POST /api/v2/tasks/{tid}`: field edits only (H.task_update). Where the task is and who has it change by
         its own routes (task_moves_routes)."""
-        # A person's request to BotOps can change a task they own or asked for, as that person.
+        # A person's request to Agent Ops can change a task they own or asked for, as that person.
         who = delegated_identity(c, caller, body.on_behalf_of) if body.on_behalf_of else caller
         task_id = auth.resolve_task(c, who, tid)
         row = auth.task(c, who, task_id)

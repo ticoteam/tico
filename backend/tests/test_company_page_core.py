@@ -1046,8 +1046,10 @@ def call(api, method, path, body=None, token="ana-test", expected=200, key=None)
 def test_routes_owners_and_admins_write_bots_and_members_dont(api, monkeypatch, rebuilds):  # noqa: F811
     identities = api.app.state.store.settings.test_identities
     identities["bot-test"] = Identity("bot:ops", "bot", agent="hermes")
-    identities["botops-for-ana"] = Identity("human:ana", "owner", "ana@acme.example", via="botops", confirmed=True)
-    identities["botops-for-cara"] = Identity("human:cara", "human", "cara@acme.example", via="botops", confirmed=True)
+    identities["agent-ops-for-ana"] = Identity("human:ana", "owner", "ana@acme.example", via="botops", confirmed=True)
+    identities["agent-ops-for-cara"] = Identity(
+        "human:cara", "human", "cara@acme.example", via="botops", confirmed=True
+    )
     identities["manager-bot"] = Identity("bot:ops", "bot", agent="hermes", via="botops", confirmed=True)
     with api.app.state.store.transaction() as c:
         c.execute(
@@ -1070,7 +1072,7 @@ def test_routes_owners_and_admins_write_bots_and_members_dont(api, monkeypatch, 
         ("POST", "audiences/public/sources", {"author": "company"}),
         ("POST", "company-page/stats", {"source_kind": "finance_metric", "ref_id": "revenue"}),
     ]
-    for token in ("bot-test", "manager-bot", "cara-test", "botops-for-cara"):
+    for token in ("bot-test", "manager-bot", "cara-test", "agent-ops-for-cara"):
         for method, path, body in writes:
             call(api, method, path, body, token=token, expected=403)
         for path in (
@@ -1094,12 +1096,12 @@ def test_routes_owners_and_admins_write_bots_and_members_dont(api, monkeypatch, 
     monkeypatch.setattr(api.app.state.store.settings, "page_domain", "pages.example")
     assert call(api, "GET", "company-page")["address"] == "https://acme.pages.example"
     assert call(api, "PATCH", "company-page", {"slug": ""})["address"] is None
-    # An admin may, and BotOps for the owner may, and a retry replays rather than writes twice.
+    # An admin may, and Agent Ops for the owner may, and a retry replays rather than writes twice.
     key = "same-key"
     made = call(api, "POST", "audiences", {"name": "Advisors"}, token="ben-test", key=key)
     again = call(api, "POST", "audiences", {"name": "Advisors"}, token="ben-test", key=key)
     assert made["id"] == again["id"]
-    assert call(api, "PATCH", "company-page", {"slug": "acme"}, token="botops-for-ana")["slug"] == "acme"
+    assert call(api, "PATCH", "company-page", {"slug": "acme"}, token="agent-ops-for-ana")["slug"] == "acme"
     assert call(api, "PATCH", "company-page", {"transparency": "open"})["transparency"] == "open"
     assert [state for _, state in rebuilds] == ["open"]
     call(api, "PATCH", "company-page", {"slug": ""}, expected=422)  # the live page keeps its address

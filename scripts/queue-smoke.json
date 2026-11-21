@@ -33,7 +33,7 @@
     {
       "file": "backend/tests/test_permission_attacks.py",
       "seconds": 9.392,
-      "reason": "What members, BotOps and untrusted people cannot do"
+      "reason": "What members, Agent Ops and untrusted people cannot do"
     }
   ]
 }

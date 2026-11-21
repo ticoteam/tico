@@ -10,7 +10,7 @@ import threading
 import httpx
 import pytest
 
-from backend import bot_settings as BS, botops_act, credentials, gateway_connection, suggestions, updates
+from backend import bot_settings as BS, agent_ops_act, credentials, gateway_connection, suggestions, updates
 from backend import maintenance as M
 from backend import usage_facts, usage_limits
 from backend.maintenance_steps import suggest as step
@@ -77,7 +77,7 @@ def install(api, monkeypatch):
     monkeypatch.setattr(store.settings, "gateway_key", "install-test-key")
     monkeypatch.setattr(store.settings, "gateway_url", "https://gateway.acme.example")
     with store.transaction() as c:
-        BS.update(c, "ops", {"template": "botops"})
+        BS.update(c, "ops", {"template": "agent-ops"})
         suggestions.save_privacy(c, store.settings, "human:ana", {"share_stats_for_suggestions": True})
     return store
 
@@ -189,8 +189,8 @@ def test_privacy_api_enforces_owner_and_open_source_gate(api):
     get(api, "system/suggestions", token="ben-test", expected=403)
     put(api, "system/suggestions", {"report_suggestion_outcomes": False}, token="ben-test", expected=403)
     assert put(api, "system/suggestions", {"report_suggestion_outcomes": False})["report_suggestion_outcomes"] is False
-    assert botops_act.classify("PUT", "system/suggestions", {"share_stats_for_suggestions": True}) is None
-    assert botops_act.classify("PUT", "system/suggestions", {"report_suggestion_outcomes": False}) == "do"
+    assert agent_ops_act.classify("PUT", "system/suggestions", {"share_stats_for_suggestions": True}) is None
+    assert agent_ops_act.classify("PUT", "system/suggestions", {"report_suggestion_outcomes": False}) == "do"
 
 
 def test_demo_and_rehearsal_send_nothing(install, http, monkeypatch):
@@ -452,7 +452,7 @@ def test_bound_retry_unbinds_a_role_that_moved_to_another_bot(install, http):
         batch = queue(c)
         updates.send_request(c, batch)
         BS.update(c, "ops", {"template": "strategy-owner"})
-        BS.update(c, "finance", {"template": "botops"})
+        BS.update(c, "finance", {"template": "agent-ops"})
         assert suggestions.pending(c, "ops", batch["id"]) == []
         assert [r["id"] for r in suggestions.pending(c, "finance")] == [item()["id"]]
     row = receipt(install)

@@ -445,7 +445,7 @@ def _builtins(c, done, me):
             "health",
             {"on": health.get("state") == "active", "bot": "health-monitor"},
             {"kind": "bot", "id": "health-monitor"},
-            "Finds install problems and files them for BotOps.",
+            "Finds install problems and files them for Agent Ops.",
         )
         out.append(
             {

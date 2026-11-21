@@ -3,7 +3,7 @@
 from backend import meetings
 from backend.tests.helpers.api import as_member, get, headers, post, restrict, runner, setup_attempt  # noqa: F401
 from backend.tests.helpers.mcp import call
-from backend.tests.helpers.member_bots import botops, turn  # noqa: F401
+from backend.tests.helpers.member_bots import agent_ops, turn  # noqa: F401
 from backend.tests.helpers.lifecycle import debrief
 from backend.tests.helpers.media import import_meeting
 from backend.tests.helpers.new_bot_flows import create_bot
@@ -117,10 +117,10 @@ def test_dismiss_survives_sync_restore_and_batch_selection_is_atomic(api):
     assert post(api, f"meetings/{other['id']}/review", {'action': 'approve'}, 'cara-test', expected=409)
 
 
-def test_botops_can_review_only_the_requesting_persons_queue(api, botops):
+def test_agent_ops_can_review_only_the_requesting_persons_queue(api, agent_ops):
     mine = imported(api, token='cara-test')
     other = imported(api)
-    attempt = turn(api, botops, 'cara-test', 'Share my pending meetings')
+    attempt = turn(api, agent_ops, 'cara-test', 'Share my pending meetings')
     err, pending = call(api, 'tico_meeting_pending', {}, token=attempt['token'])
     assert not err and [r['id'] for r in pending['meetings']] == [mine['id']]
     assert call(api, 'tico_meeting_approve', {'id': other['id']}, token=attempt['token'])[0]

@@ -153,7 +153,7 @@ JOB_WORDS = {
 
 
 def decided_by(actor):
-    """Who made a recovery decision: Tico's own auto-reconcile, BotOps, a person, or another bot (an operator)."""
+    """Who made a recovery decision: Tico's own auto-reconcile, Agent Ops, a person, or another bot (an operator)."""
     return (
         "tico"
         if actor == H.TICO_ACTOR
@@ -194,9 +194,9 @@ def recovery(c, job_ids):
 
 
 def decision_label(decided, name):
-    """ "Canceled: dismissed by BotOps at 09:50Z, <note>": the job's state, the decision, who, when (UTC) and the
+    """ "Canceled: dismissed by Agent Ops at 09:50Z, <note>": the job's state, the decision, who, when (UTC) and the
     note, as one line. Once the job has moved to a later try the state is not this decision's, so the line says only
-    what was decided: "Resumed by BotOps at 09:50Z, <note>". `name` turns the decider's actor into a person's name."""
+    what was decided: "Resumed by Agent Ops at 09:50Z, <note>". `name` turns the decider's actor into a person's name."""
     who = "Tico's auto-reconcile" if decided["by_kind"] == "tico" else name(decided["by"])
     at = H.parse_ts(decided["at"])
     at = at and at.astimezone(timezone.utc)

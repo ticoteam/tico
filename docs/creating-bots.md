@@ -8,10 +8,10 @@ writing a bot's `AGENTS.md`. Installation of the server, the runner and the mode
 [How it works](how-it-works.md), [Using Tico](using-tico.md), [Routines](routines.md) and
 [Shared credentials](credential-vault.md).
 
-BotOps takes a bot all the way to working when a human asks in a DM: it builds it, opens a card for any credential it needs, puts it on a computer,
-turns it on, starts its setup and runs one small test, then reports in one message ([permissions](permissions.md#botops-uses-the-requesters-rights)).
+Agent Ops takes a bot all the way to working when a human asks in a DM: it builds it, opens a card for any credential it needs, puts it on a computer,
+turns it on, starts its setup and runs one small test, then reports in one message ([permissions](permissions.md#agent-ops-uses-the-requesters-rights)).
 
-## Start from a template, and let BotOps build it
+## Start from a template, and let Agent Ops build it
 
 Very little of this has to be done by hand. `templates/catalog/<template>/` holds the bot templates
 this product ships: a card saying what the bot owns and what it never does, and the repository the
@@ -19,15 +19,15 @@ bot is created from, with your team's names filled in and the setup answers writ
 `knowledge/company.md`. **Settings → Bots → Add from template** is how a bot is added after
 Finish setup, and the wizard uses the same templates. A starter is created parked in **Needs setup**; its assigned computer
 materializes the repository, and **Set up** opens its first conversation. Answer its questions and review its first draft.
-For another template, a task goes to BotOps to build the repository, apply the reviewed Instructions and check readiness.
-You can also ask BotOps for a custom bot in a DM; it takes the bot through placement and setup as you.
-Assistant, BotOps, Librarian, Strategy Owner, General Manager, Finance Owner and Design Owner are Built-in bots; they cannot be archived or deleted.
+For another template, a task goes to Agent Ops to build the repository, apply the reviewed Instructions and check readiness.
+You can also ask Agent Ops for a custom bot in a DM; it takes the bot through placement and setup as you.
+Assistant, Agent Ops, Librarian, Strategy Owner, General Manager, Finance Owner and Design Owner are Built-in bots; they cannot be archived or deleted.
 
 The 108 role templates, in eleven groups with a Leadership extra, are described in
 [Starter bots](starter-bots.md), with the card fields and the quality bar this page's advice is
 measured against.
 
-Read this page when you are writing those instructions, tailoring what BotOps produced, or standing
+Read this page when you are writing those instructions, tailoring what Agent Ops produced, or standing
 a bot up outside that flow. The wizard, the template folder format and the ways to add a bot later
 are in [Finish setup](onboarding.md).
 
@@ -77,9 +77,9 @@ If a control fails, the row keeps the current state, shows the reason and offers
 ## Edit Instructions
 
 Open the bot’s **Instructions** tab and use the inline **Request instruction changes** form.
-Describe the change and choose **Send changes to BotOps**. BotOps receives your request in its DM and updates
+Describe the change and choose **Send changes to Agent Ops**. Agent Ops receives your request in its DM and updates
 `AGENTS.md` on the bot's computer. Description is separate: it summarizes the bot on the roster.
-The app displays the Instructions from the latest repository snapshot; refresh after BotOps finishes.
+The app displays the Instructions from the latest repository snapshot; refresh after Agent Ops finishes.
 New repositories default to `bot-<slug>`.
 
 New bots start with their own repository unless the team set **New bots get** to **All repos in use** in Settings → General → Repositories. An Owner or admin can choose own only, all ticked or chosen repositories, with read or write access. Existing extra repositories keep write access automatically. See [Repositories](repositories.md).
@@ -118,9 +118,9 @@ sends nothing). From the command line: `tico bot update <slug> --subscribe-updat
 A branch is your own bot for work with an original's instructions and repository. Its DMs and tasks are personal,
 and it runs on your computer and AI subscription. Lessons committed to the repository reach every branch on its next turn.
 
-The original's owner turns on **Allow branches** in the bot editor, or asks BotOps to do it. It is off by default;
+The original's owner turns on **Allow branches** in the bot editor, or asks Agent Ops to do it. It is off by default;
 new Software Architect and PR Reviewer templates allow branches. Existing bots keep their settings.
-BotOps uses `tico_bot_update(slug, shared=true)`, or `tico bot update <bot> --shared`.
+Agent Ops uses `tico_bot_update(slug, shared=true)`, or `tico bot update <bot> --shared`.
 `--no-shared` turns it off. This is separate from a **shared thread**, which is a thread everyone in it can read.
 
 On the original's page, choose **Make my branch** and one of your computers. Or use
@@ -132,7 +132,7 @@ The bot is named `<bot>-<person>`, reports to that person and shares the origina
 Asking again returns the same branch. Choose a different computer from the one running the original or another branch of it.
 The computer clones the original repository with the bot's GitHub App token when available, otherwise with your own
 `gh` or git credentials. A matching local checkout is reused when no repository address is available. If cloning
-fails, Health gives the repository and command to run on that computer, or you can ask BotOps to fix it.
+fails, Health gives the repository and command to run on that computer, or you can ask Agent Ops to fix it.
 
 The page's branch picker opens the **Original** or each person's branch. A branch links back to its original.
 New tasks and DMs addressed to the original go to your active branch while branches are allowed.
@@ -154,7 +154,7 @@ use a copy when the new bot should change independently.
 
 ## Copy a bot
 
-Ask BotOps to copy a bot ("make me a copy of the support bot"), or run `tico bot copy <bot> [--name "..."] [--with-memory]`
+Ask Agent Ops to copy a bot ("make me a copy of the support bot"), or run `tico bot copy <bot> [--name "..."] [--with-memory]`
 on the computer that holds its repository. Anyone who may read the bot can ask. The Librarian cannot be copied. The copy is an ordinary, independent bot: it belongs
 to the person who asked, reports to them, counts toward their limit of bots like any bot they add, and starts `planned`. It has the
 original's model where the person may use it (else the team's default), and a new repository `bot-<slug>` made from the original's
@@ -164,25 +164,25 @@ from <original> at <commit>`), without the history. The original's memory, notes
 
 When a Credential administrator (the Owner or an Admin) copies a bot, the copy automatically receives
 the grants for every Credential the original holds. Secret files and Routines are never copied.
-For anyone else, missing grants come back as "needs credential X" for BotOps to ask for with a card. Nothing else is shared:
+For anyone else, missing grants come back as "needs credential X" for Agent Ops to ask for with a card. Nothing else is shared:
 after the copy the two bots change on their own, and the server keeps only `copied_from: {bot, sha}`, for two requests you make
 explicitly:
 
 - **Update my copy from the original** (`tico bot update-from-original <copy>`): the original's `AGENTS.md`, `skills/` and `playbooks/`
   since the copy was made are merged file by file with git into one commit on the copy; if a file changed on both sides nothing is
-  changed and BotOps settles each conflict with you.
+  changed and Agent Ops settles each conflict with you.
 - **Suggest this to the original** (`tico bot suggest-to-original <copy> [--paths ...]`): the copy's changed instructions become a pull
   request on the original's repository when you may write to it and GitHub is connected, else a task for the original's owner
   with the diff.
 
 The server holds no bot repositories, so it decides and records (your rights, the limit, the credentials, `POST
-/api/v2/bots/<bot>/copy`, `update-from-original` and `suggest-to-original`) and BotOps's computer makes the commits in its
+/api/v2/bots/<bot>/copy`, `update-from-original` and `suggest-to-original`) and Agent Ops's computer makes the commits in its
 workspace. The original's files come from that workspace or, when the bot runs on another computer, from a read-only clone of its GitHub
-repository (BotOps gets a short-lived token for it only as a person who may read the bot); with neither, its owner has to publish it. The steps BotOps follows are in `playbooks/copy-a-bot.md`.
+repository (Agent Ops gets a short-lived token for it only as a person who may read the bot); with neither, its owner has to publish it. The steps Agent Ops follows are in `playbooks/copy-a-bot.md`.
 
 ## Copy a skill
 
-A skill is a folder, `skills/<name>/`, in a bot's repository, and each bot owns its own. BotOps copies one to other bots when you ask
+A skill is a folder, `skills/<name>/`, in a bot's repository, and each bot owns its own. Agent Ops copies one to other bots when you ask
 ("give the support bot the triage skill the scribe has"), or run `tico skill copy <skill> --from <bot> --to <bot> [<bot> ...]`: a commit in
 each target's repository, for bots whose source you may read and whose repositories you manage. To offer a skill to the whole company,
 `tico skill submit <skill>` proposes it to the Skills directory, where an admin approves it and installs say who has it ([Skills directory](skills.md)); `tico skill list --function legal` finds one by job function. A target that already has a different
@@ -192,7 +192,7 @@ skill of that name is left alone unless you say to replace it. Nothing stays lin
 
 A message bot is assigned to one human on the roster. **Settings → Bots → Add from template** (and
 the Finish setup cards) show a human picker when the template is `inbox-manager`. The chosen address is
-appended to the instructions as `Mailbox: <email>`, and BotOps fills `{{mailbox}}` in
+appended to the instructions as `Mailbox: <email>`, and Agent Ops fills `{{mailbox}}` in
 `bot.yaml` from that line. The bot is created `planned`, with its gmail Tool at `read` and `draft`, one
 routine, the weekday 07:30 email brief in America/Los_Angeles (change its time zone on its automation in Automations),
 declared off and switched on when its setup starts, and gmail `read`/`draft` plus calendar `read` on that mailbox. It reads only that mailbox,
@@ -281,7 +281,7 @@ The runner checks these before it will run the bot, and the preflight script
 
 `tico bot check <slug>` runs the repository half of those preflight rules from inside a run: the
 manifest, the instructions, the routines and stale references, reported as `{"ready": ...,
-"problems": [...]}`. It is what BotOps runs before it hands a new bot over, and it needs no registry
+"problems": [...]}`. It is what Agent Ops runs before it hands a new bot over, and it needs no registry
 entry, so it works on a repository the server has never seen. `clients/preflight.py` is still the
 full check, including credentials, runtime and mail, and is what to run before flipping a bot to
 `active`. `tico bot check-names <slug>` lists the old column, field and command names a checkout still
@@ -546,7 +546,7 @@ tools:
 
 **Changing what a bot declares.** Optional entries stay commented out until the service is connected. Changing an
 entry is the owner's decision, not an edit the bot makes to its own file: a bot or a person who needs one asks through
-Tools (below), and BotOps writes it into `bot.yaml`, commits and pushes.
+Tools (below), and Agent Ops writes it into `bot.yaml`, commits and pushes.
 
 **Where the values live.** Store the value in Credentials or its thread card and grant it to the bot.
 Tico delivers it for one run as an environment variable or a mode-0600 temporary file removed afterwards.
@@ -562,7 +562,7 @@ the value to the bot; preflight then reports whether every declared Credential a
 resolves. Two things need no entry: Tico itself (`hub` and the `tico_*` MCP tools come with
 every run) and the decision model behind `tico_decision_ask` (`skills/decisions/SKILL.md`), whose credential
 Tico holds. A bot that needs a service it holds no grant for stops and says so on the task; it never
-borrows another bot's credential. To let it use one, the owner grants it (Tools, under the Keys filter), or asks BotOps in a DM, which moves the value
+borrows another bot's credential. To let it use one, the owner grants it (Tools, under the Keys filter), or asks Agent Ops in a DM, which moves the value
 into the vault if needed and grants it as them ([credential-vault.md](credential-vault.md)).
 
 A run's MCP servers are `hub`, its granted MCP tools, the `mcp:` tools above and the repository's `.mcp.json`; never the computer operator's own.
@@ -612,7 +612,7 @@ team's own frontend.
 
 **Adding an entry.** A tool granted in Tools needs none: an entry that only names a tool the bot already holds (no
 identity, scope, note or MCP server) is answered with the grant, and no task is opened. For an entry with notes, the bot
-itself (its own entries), BotOps, the Tools Owner, a credential admin, or someone who
+itself (its own entries), Agent Ops, the Tools Owner, a credential admin, or someone who
 manages the bot (the owner, a bot administrator who owns it, or a human above it on the team chart) can add or remove a
 tool without opening its repository (one rule decides every Tools change: `backend/tool_access.py`); the Assistant and the Tools Owner do it for a person who asks them:
 `POST /api/v2/bots/{bot}/tools`, `DELETE /api/v2/bots/{bot}/tools/{id}`, or the MCP tools
@@ -620,8 +620,8 @@ tool without opening its repository (one rule decides every Tools change: `backe
 --identity "PostHog project 340585 (US)" --scope project=340585 --env POSTHOG_KEY`; a remote MCP server adds
 `--mcp-url https://... --transport http --header 'Authorization: Bearer ${VAR}'`, and `tico tool update` takes the same flags). Tico holds no
 bot repository, so it cannot write `bot.yaml` itself. It checks the entry against the same
-fields this section describes, keeps it as a pending request, and opens a task for BotOps titled
-"Add PostHog access to <bot>" with the exact YAML. BotOps adds it to `bot.yaml`, commits and
+fields this section describes, keeps it as a pending request, and opens a task for Agent Ops titled
+"Add PostHog access to <bot>" with the exact YAML. Agent Ops adds it to `bot.yaml`, commits and
 pushes, runs preflight and says what it found. If a tool report is rejected, the computer logs the validation
 error and Tools shows it for that bot; other bots' valid tool reports continue to arrive. Until the bot's computer reports the entry the tool
 shows as **pending** in the row; then it is **ready**, or names its problem. Removing works the same
@@ -652,7 +652,7 @@ Levers set in **Settings → Bots**, not in the repository:
   Claude Opus 5.5, Claude Fable 5.2). While the [Tico AI Gateway](ai-gateway.md) is connected, the harness list
   also offers **Tico AI Gateway**: instead of a model list it shows Level, Fast and Version,
   with the model underneath and its price on one line. Search the picker: `grok` shows `grok/grok 4.6` at every
-  effort; `sol` shows `openai/gpt 5.6 sol`. The same levers set the built-in BotOps bot: it may
+  effort; `sol` shows `openai/gpt 5.6 sol`. The same levers set the built-in Agent Ops bot: it may
   run on any harness and model here, limited in practice to the providers the company enabled
   and what its computer is signed in to.
 - **Reasoning effort**: how hard it thinks. The main cost control, and the one to reach for first.
@@ -810,20 +810,20 @@ Two consequences when you run more than one environment:
   a Credential grant in one environment means nothing in another. Legacy files are migration sources only.
 
 Custom `can` verbs describe intent; they do not add enforcement. Standard verbs use each Tool's supported permission checks.
-Use `tico tool add <bot> <service> --can <verbs> --dry-run` to validate an entry without opening a BotOps task.
+Use `tico tool add <bot> <service> --can <verbs> --dry-run` to validate an entry without opening an Agent Ops task.
 `--title-prefix "<prefix>"` preserves the requested prefix on generated access tasks.
 
 ### Templates over MCP
 
 `tico_bot_create` with `template` uses the Team default model. Starter templates build directly on
-their assigned Computer, like Add from template in the app; other templates queue BotOps and return
+their assigned Computer, like Add from template in the app; other templates queue Agent Ops and return
 `setup_task_id` to watch with `tico_task_show`. Generated tasks carry the human requester's rights.
 `description` preserves the requested scope and limits; `instructions` overrides the template Instructions,
 and `title_prefix` prefixes a generated setup task. New bots report to their requester unless `reports_to`
 is supplied. Leave `slug` out: Tico picks a free one from `name` (else the template's name), skipping archived and
 reserved slugs, and returns it. Restore an archived bot only when asked.
 Use `build: false` to register only the record,
-for example when building it yourself on a Computer. BotOps defaults to record-only registration.
+for example when building it yourself on a Computer. Agent Ops defaults to record-only registration.
 An empty model in Add from template also inherits the Team default; choose one in Settings > Models
 if none is saved. `tico_template_list` includes Setup questions, first-routine output and draft-only status,
 and the example result. Unknown templates are refused before creating a record. To correct an existing
@@ -839,7 +839,7 @@ Use the runner's configured workspace on that Computer. Keep the directory name 
 repository field specifies. Credentials are granted separately and do not belong in the repository.
 Alternatively, push the bot's history to its configured GitHub repository so the destination can clone it.
 Once the repository is available, change the Computer in bot settings. Computers and Health show the
-destination's repository readiness; if it is missing, transfer the repository or ask BotOps to build it.
+destination's repository readiness; if it is missing, transfer the repository or ask Agent Ops to build it.
 Go live reports a pending build instead of saying an unbuilt bot is working. Resume, Restore and activation in
 bot settings check the repository too. Built-in bots and starters being built by their computer keep their
 pending build; an External agent does not need a local repository.

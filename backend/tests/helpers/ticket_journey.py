@@ -252,21 +252,21 @@ class Company:
             self.report()
 
     def go_live(self):
-        """BotOps takes every seat bot live in its first run, with `tico bot go-live`, once the computer has their
+        """Agent Ops takes every seat bot live in its first run, with `tico bot go-live`, once the computer has their
         repositories: what the "Set up" tasks of a new company ask of it."""
         self.report()
-        botops = self.turn("botops")
-        assert botops, "BotOps has no run queued on a new company: nobody would take the seat bots live"
+        agent_ops = self.turn("agent-ops")
+        assert agent_ops, "Agent Ops has no run queued on a new company: nobody would take the seat bots live"
         seats = self.rows(
             "SELECT b.slug FROM bots b JOIN bot_settings s ON s.bot_id=b.id "
             "WHERE json_extract(s.extra,'$.goes_live_on_setup')"
         )
         for row in seats:
-            botops.cli("bot", "go-live", row["slug"])
-        botops.end()
+            agent_ops.cli("bot", "go-live", row["slug"])
+        agent_ops.end()
         self.report()
         asleep = self.rows("SELECT slug FROM bots WHERE state NOT IN ('active','archived')")
-        assert not asleep, f"bots that are not live after BotOps took them live: {[r['slug'] for r in asleep]}"
+        assert not asleep, f"bots that are not live after Agent Ops took them live: {[r['slug'] for r in asleep]}"
         # First-run setup reaches no bot that has not started: a company once began with 11 such refused writes.
         refused = self.rows("SELECT actor, rule, detail FROM refusals")
         assert not refused, (

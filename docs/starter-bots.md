@@ -43,19 +43,19 @@ Chief of Staff is no longer a default.
 Every group has a head, the template its row names (`lead: true`): it writes the group's weekly summary from what its bots and humans
 produced, proposes who should take a stuck or misrouted request, and **hires**: when repeated work in the group is not
 covered, it proposes a specific worker template from its `team_templates` with the reason and that template's first routine,
-and only after the owner confirms asks BotOps to set it up (`tico task create --owner botops`). Heads never create bots
+and only after the owner confirms asks Agent Ops to set it up (`tico task create --owner agent-ops`). Heads never create bots
 themselves and never do their team's work.
 
 Five Managers (Product, Engineering, Growth, Success and Corporate) are also `lead: true`. Each has its team's bots under it, runs its team's week, routes the team's work to its owners and manages its team's pipelines: when a task stops, the Manager decides what happens to it. Product and Growth take no group's head seat.
 
-Roles are real job titles on the team chart; built-in bots (Assistant, BotOps, Librarian, Strategy Owner, General Manager, Finance Owner, Rules Owner, Design Owner, Updates Owner, Automations Owner and Tools Owner) and message bots (Inbox Manager) have plain
+Roles are real job titles on the team chart; built-in bots (Assistant, Agent Ops, Librarian, Strategy Owner, General Manager, Finance Owner, Rules Owner, Design Owner, Updates Owner, Automations Owner and Tools Owner) and message bots (Inbox Manager) have plain
 function names and live outside it.
 
 The built-ins are not in any group and no template duplicates them: the Librarian owns the docs, the FAQ and the answers
 built from them (Support Agent asks it with `tico doc ask` and reports a missing or wrong doc to it as a task; HR Generalist and
 Benefits Administrator do the same for policy and plan questions; Technical Writer covers only READMEs and API docs in the
 product repositories); the Design Owner keeps the brand book and the Brand card, which marketing bots check their drafts
-against, owns all design, and answers each growth bet's brand check (the Video Owner reports to it); BotOps creates and maintains bots; the Assistant is each human's own; the Strategy Owner (`strategy-owner`) keeps
+against, owns all design, and answers each growth bet's brand check (the Video Owner reports to it); Agent Ops creates and maintains bots; the Assistant is each human's own; the Strategy Owner (`strategy-owner`) keeps
 the KPIs and computes their readings; the Finance Owner (`finance-owner`) keeps the books, the Usage page and the weekly cash
 summary; the Rules Owner (`rules-owner`) reads the documents added to Rules and answers can-I questions; the Updates Owner
 (`updates-owner`) drafts each period's company update; the Automations Owner (`automations-owner`) reviews the team's
@@ -416,7 +416,7 @@ metadata:
 A role's skills take its card's `group` (engineering, finance, legal, marketing, operations, product and sales as
 named; `hr` is people; `leadership` is operations; `corporate` is legal; `success` and `support` are customers), with a
 few roles set by hand: the security roles are security, the Product Analyst is data, the Growth Manager and Pricing
-Analyst are growth, the Partnerships Owner is sales. Skills about running Tico itself (BotOps, the Assistant, the
+Analyst are growth, the Partnerships Owner is sales. Skills about running Tico itself (Agent Ops, the Assistant, the
 Librarian, the Tools, Rules, Automations, Updates and Inbox helpers, and shared helpers such as `build-the-page`) are
 `tico`. Keep `metadata` after `name` and `description`: the frontmatter readers (`clients/skills.py`,
 `runner-rs/src/goals.rs`) read top-level `key: value` lines and skip the indented ones. A skill folder stays under 100
@@ -468,7 +468,7 @@ sends nothing. The full samples live in each template's `knowledge/examples/`.
 
 The methods are standard practice, not proprietary. Public sources consulted while writing them, by group. The heads'
 hiring rule is the same everywhere: propose a role only from repeated, evidenced work, name the template and its first
-routine, and ask BotOps to set it up only after the owner says yes.
+routine, and ask Agent Ops to set it up only after the owner says yes.
 
 ### Sales
 

@@ -572,7 +572,7 @@ def test_a_bot_is_never_handed_a_visual_address_the_visual_route_refuses(api):
 
 
 def test_a_reader_acting_for_someone_else_gets_a_working_address(api):
-    """A bot acting for its requester, or a person through BotOps, reads as two actors (task_privacy.actor). Their
+    """A bot acting for its requester, or a person through Agent Ops, reads as two actors (task_privacy.actor). Their
     visual address names one reader: the tuple once crashed the task page with a 500 and could not be signed."""
     from backend.auth import Identity
     from backend.store import H

@@ -34,7 +34,7 @@ def may_read(c, who):
 
 
 def require_owner(who):
-    """The owner, as themselves: never a bot, BotOps or the Assistant acting for them."""
+    """The owner, as themselves: never a bot, Agent Ops or the Assistant acting for them."""
     if who.role != "owner" or who.via_token or who.via or who.task_actor:
         raise Problem("forbidden", "Only the owner chooses which bots read outcome stats, signed in to Tico", 403)
 

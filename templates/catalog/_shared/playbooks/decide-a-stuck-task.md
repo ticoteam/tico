@@ -18,7 +18,7 @@ ice, or it was pushed past. Budget 10 minutes. The outcome is one decision on th
    - It is no longer wanted, or duplicates another task: **close** it: `tico task close <id> -m "<why>" --version N`.
      If a person asked for it, ask them instead.
    - Only a person can decide: **ask** them once, with `.claude/skills/write-the-stuck-task-question/SKILL.md`.
-   - A bot or a tool is broken: **file** the fix for BotOps: `tico task file --parent <id> --owner botops "<what is broken>"`.
+   - A bot or a tool is broken: **file** the fix for Agent Ops: `tico task file --parent <id> --owner agent-ops "<what is broken>"`.
 4. Late with the owner still working (new commits, new page versions): the task is slow, not stuck. Leave the owner on
    it, and say so in one line: `tico task comment <id> "<what changed, why it stays>"`. That alone is not a decision, so
    pair it with a snooze to the date the owner named, or ask the owner's manager.

@@ -85,7 +85,7 @@ stderr. A bot's turn cannot follow the stream; people and their tokens can.
 
 A bot drives a website tool's browser a verb at a time and signs in without seeing the password
 ([integrations/website.md](../integrations/website.md), [Website logins](credential-vault.md#website-logins)). These
-are bot commands: a bot's turn (and BotOps) runs them; a person uses the tool's page.
+are bot commands: a bot's turn (and Agent Ops) runs them; a person uses the tool's page.
 
 ```
 tico browser open <site> [url]          # opens a page on the tool's sites, signed in as your account

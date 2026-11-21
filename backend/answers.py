@@ -118,7 +118,7 @@ def _may_answer(
 ) -> None:
     """Refuses an answer that does not fit the requirement or comes from someone it is not asked of. Writes nothing.
     An OK added to one task is a person's: a bot never answers one, and the one who asked it OKs it only as a person,
-    by their own click in their own session (`own_click`), never through the Assistant, BotOps or a token."""
+    by their own click in their own session (`own_click`), never through the Assistant, Agent Ops or a token."""
     task_id = row["id"]
     kind = requirement["kind"]
     if value == PUSHED_PAST:
@@ -150,7 +150,7 @@ def _may_answer(
             _refuse(conn, by, "task_requirement", "Your own ask is OK'd only by your own click in Tico", task_id)
     from . import task_asks
 
-    # The Assistant and BotOps never answer OK to an OK, bound or plain, whichever caller brings it here: the value is
+    # The Assistant and Agent Ops never answer OK to an OK, bound or plain, whichever caller brings it here: the value is
     # already stripped (answer), so " ok " is "ok".
     if value == OK and task_asks.acting_for_people(by):
         _refuse(conn, by, "task_requirement", task_asks.NOT_YOURS, task_id)
@@ -355,7 +355,7 @@ def _write(
             if page:
                 pages = P.current_pages(conn, str(page["visit_id"]), requirement_id)
         data["pages"] = [{"file_id": p["file_id"], "version": p["version"]} for p in pages]
-    # Through the task's history writer: an answer the Assistant or BotOps gave with the person's rights says so (via).
+    # Through the task's history writer: an answer the Assistant or Agent Ops gave with the person's rights says so (via).
     H._task_event(conn, row["id"], by, "answer", None, value, notes, data=data)
     return answer_id
 

@@ -1,5 +1,5 @@
 """Rules › Links (backend/rule_links.py): an agent's write that leaves the company meets the org rules and leaves one
-outcome event on its link, the Assistant's and BotOps's for a person included; a person's own write is never gated;
+outcome event on its link, the Assistant's and Agent Ops's for a person included; a person's own write is never gated;
 nothing is stopped yet, except mail, whose held path is older; Rules › Links reads each link's mode and 30-day counts.
 The proxy's case (checked before the key goes in, no credential read) is in test_tool_proxy.py."""
 
@@ -64,7 +64,7 @@ def test_an_agents_outside_write_logs_one_would_be_outcome_and_a_persons_own_is_
     assert post(api, "release/now", {"note": "Again"}, token="ops-test")["sent"] is False
     assert len(judge.read) == 1 and len(link_events(api, "release")) == 1
     store = api.app.state.store
-    # A person's own write is never checked; BotOps acting for them is, as the person, with one event.
+    # A person's own write is never checked; Agent Ops acting for them is, as the person, with one event.
     assert L.check(store, judge, Identity("human:ana", "human"), "webhook", "webhook", "favorite color is") is None
     assert len(judge.read) == 1
     found = L.check(store, judge, Identity("human:ana", "human", via="botops"), "webhook", "webhook", "Hello")

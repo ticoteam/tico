@@ -9,7 +9,7 @@ from backend.tests.helpers.onboarding import (
     PEOPLE,
     ASSISTANT_AGENT,
     ASSISTANT_CARD,
-    BOTOPS_CARD,
+    AGENT_OPS_CARD,
     LIBRARIAN_CARD,
     environment,
     machine,
@@ -90,7 +90,7 @@ def test_an_older_install_keeps_its_inbox_only_computer(environment):
 
 
 def test_turning_on_a_helper_skips_the_computer_an_inbox_bot_keeps(environment):
-    api = environment(cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, ""), (LIBRARIAN_CARD, "# L\n")])
+    api = environment(cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (AGENT_OPS_CARD, ""), (LIBRARIAN_CARD, "# L\n")])
     first = setup(api)
     assert place(api, "mail", first).status_code == 200 and keep(api, first).status_code == 200
     turn_on = lambda: api.post(

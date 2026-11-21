@@ -205,8 +205,8 @@ def register(
                 raise Problem("not_found", "Bot not found", 404)
             issued = agents.issue_credential(c, who, bot)
             if who.via == "botops":
-                # A token never reaches BotOps's model. The old one has stopped; the profile pairs again and the
-                # person's approval (BotOps can give it) hands the new one to the profile.
+                # A token never reaches Agent Ops's model. The old one has stopped; the profile pairs again and the
+                # person's approval (Agent Ops can give it) hands the new one to the profile.
                 return {
                     "bot": bot,
                     "harness": issued["harness"],
@@ -279,7 +279,7 @@ def register(
         return ip_bucket(client_ip(request, settings))
 
     # Pairing (docs/hermes-agents.md): the first two calls need no sign-in; approving and declining are a person's,
-    # or BotOps's as the person who asked it.
+    # or Agent Ops's as the person who asked it.
     @app.post("/api/v2/agents/pairings", status_code=201)
     def agent_pairing_create(request: Request, body: M.AgentPairingCreate):
         execution.refuse_in_rehearsal("Agent pairings")
@@ -388,7 +388,7 @@ def register(
 
     # A person's and a group's See, Read and Write, the bots' shape (backend/teammate_access.py, docs/permissions.md).
     # Whoever manages them reads and changes it: the person themselves and whoever they report up to, a group's leads,
-    # the admins and the owner. BotOps does it as the person who asked.
+    # the admins and the owner. Agent Ops does it as the person who asked.
     def teammate_access_read(request, target, on_behalf_of=""):
         who = request.state.identity
         auth.domain(who)
@@ -468,7 +468,7 @@ def register(
 
     @app.post("/api/v2/bots/register")
     def bot_register(request: Request, body: M.BotRegister):
-        """Register a bot with the server (planned), as the person asking: the record BotOps then builds the
+        """Register a bot with the server (planned), as the person asking: the record Agent Ops then builds the
         repository for. They become its owner. Needs `create_bots` (or Admin), and stays within the limit of
         active bots each member may have. Registering a slug you already own answers with it (`created: false`)."""
         caller = request.state.identity
@@ -729,7 +729,7 @@ def register_placement(
 ):
     def closed_computer(c, who, bot, runner_id):
         """An admin placing a member's bot on a computer that is neither the member's own nor open to members'
-        bots: allowed, but through BotOps only with the admin's own click."""
+        bots: allowed, but through Agent Ops only with the admin's own click."""
         runner = c.execute(
             "SELECT owner_id,accepts_member_bots FROM runners WHERE id=? AND revoked_at IS NULL", (runner_id,)
         ).fetchone()

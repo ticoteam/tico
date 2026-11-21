@@ -14,7 +14,7 @@ path, query and validators, is computed at most once per READ_RATE_SECONDS (TICO
 - Never across callers: the key holds the caller's whole identity (actor, role, token, scope, view, ...).
 - Each request gets its own copy of the answer, then its own validators and wire encoding (backend/json_response.py).
   An answer that streams, sets a cookie or runs work after it is sent is never shared; each such request computes.
-- A caller who is not a person (a bot, a computer, BotOps, the Assistant acting for someone), a support or view
+- A caller who is not a person (a bot, a computer, Agent Ops, the Assistant acting for someone), a support or view
   session, and UNSHARED routes read as before."""
 
 import asyncio

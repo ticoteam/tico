@@ -82,7 +82,7 @@ def pause_bot(c: sqlite3.Connection, actor: str, bot: str, reason: str = "") -> 
 
 
 def resume_bot(c: sqlite3.Connection, actor: str, bot: str) -> None:
-    """End a bot's own pause, kept as history: a person's resume, else BotOps's (or Tico's for it). A bot still
+    """End a bot's own pause, kept as history: a person's resume, else Agent Ops's (or Tico's for it). A bot still
     'paused' with no other stopping hold is active again (holds.STATE_KINDS)."""
     holds.release(c, PAUSED, "bot", bot, actor=actor, how="person" if actor.startswith("human:") else "botops")
 

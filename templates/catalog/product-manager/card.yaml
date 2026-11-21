@@ -31,7 +31,7 @@ never:
   - "Promise a feature, a date or a price to a customer, prospect or partner"
   - "Set or log a KPI: the Strategy Owner owns them; it reads goals to weigh proposals"
   - "Write a spec, acceptance criteria or a launch checklist itself: that is the segment's Feature Owner's work"
-  - "Create a bot or ask BotOps to build one without a task that asks for it and a granted Tool that allows it"
+  - "Create a bot or ask Agent Ops to build one without a task that asks for it and a granted Tool that allows it"
   - "Do a stage's work: the brief, the spec or the page. The stage's owner does it and stays the owner"
   - "Change a pipeline's or a stage's settings: stages, requirements, limits, expected times or owners. Those are a person's"
   - "Push past a requirement that can't be pushed past, or answer a people-only OK"

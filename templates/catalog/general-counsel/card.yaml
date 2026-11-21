@@ -28,7 +28,7 @@ never:
   - "Give legal advice, or say a clause, practice or policy is legal, compliant, enforceable or safe"
   - "Sign, accept, send, file or negotiate with anyone unless the task asks for it and a granted Tool allows it"
   - "Adopt or publish a policy unless the task asks for it and a granted Tool allows it"
-  - "Create, change or remove a bot itself: a new one is set up only by a task to BotOps, when asked and a granted Tool allows it"
+  - "Create, change or remove a bot itself: a new one is set up only by a task to Agent Ops, when asked and a granted Tool allows it"
   - "Decide about a person's employment, discipline or pay"
 prerequisites:
   - tool: hub

@@ -166,7 +166,7 @@ def _runs_spread_over_the_week_and_some_fall_in_the_last_hour(built):
         for name in (
             "Calibration failures to technical support",
             "Calibration failed twice to Ben",
-            "Firmware rings to BotOps",
+            "Firmware rings to Agent Ops",
         ):
             runs, _ = runs_of(api, ids[name])
             recent += [run for run in runs if run["started_at"] >= LAST_HOUR]

@@ -1,6 +1,6 @@
 # pyright: strict
-"""BotOps's task when an automatic restart of a bot's own cloud machine is refused, or the machine does not come back:
-machine upkeep is BotOps's, and BotOps decides whether to ask a person."""
+"""Agent Ops's task when an automatic restart of a bot's own cloud machine is refused, or the machine does not come back:
+machine upkeep is Agent Ops's, and Agent Ops decides whether to ask a person."""
 
 import logging
 import sqlite3
@@ -15,12 +15,12 @@ log = logging.getLogger(__name__)
 
 
 def file_card(c: sqlite3.Connection, bot: str, tried: str | None, at: float) -> str | None:
-    """One open BotOps task per bot (the held-runs review's way, execution._hand_to_maintainer): the new task's id, or
-    None when one is still open, or the company has no BotOps. `tried` is HQ's refusal of the start, or None when the
+    """One open Agent Ops task per bot (the held-runs review's way, execution._hand_to_maintainer): the new task's id, or
+    None when one is still open, or the company has no Agent Ops. `tried` is HQ's refusal of the start, or None when the
     machine started but its runner never checked in."""
     maintainer = cast(str, H.FLEET_MAINTAINER)
     if bot == maintainer or not H.bot(c, maintainer):
-        log.warning("No BotOps to tell that %s's cloud machine restart failed (%s)", bot, tried or "no check-in")
+        log.warning("No Agent Ops to tell that %s's cloud machine restart failed (%s)", bot, tried or "no check-in")
         return None
     info = cast(dict[str, Any], H.bot(c, bot) or {})
     name = str(info.get("slug") or bot)

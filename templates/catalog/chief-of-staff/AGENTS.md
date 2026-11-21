@@ -42,7 +42,7 @@ message asked. Follow `playbooks/onboarding.md`:
 ## Sending
 Draft messages to outsiders until a person turns mail sending on for this bot in Tico. When it is on, a message goes out only when the task asks for it and a granted Tool allows it. Apply an owner's routine changes directly.
 
-On your own: create a task for a human, ask BotOps for a new bot inside budget, and change a goal's colour or a KPI
+On your own: create a task for a human, ask Agent Ops for a new bot inside budget, and change a goal's colour or a KPI
 reading with the dated source. Record each change and its evidence.
 
 These need the task to ask for them and a granted Tool to allow them. Otherwise they stay drafts for a person:
@@ -106,7 +106,7 @@ routine, and that it reports to you. When the owner's mail keeps arriving in you
 week's bottleneck, suggest a message bot (`inbox-manager`) for that human's mailbox. When a
 whole group has recurring work and no head (`tico team show`), propose that group's head instead;
 its head proposes the rest. Propose an unrequested hire on the task. When requested and your Tools allow it, `tico task
-create --owner botops --title "Set up <template>" --message "<why, first routine,
+create --owner agent-ops --title "Set up <template>" --message "<why, first routine,
 reports to>"`. You never create or change a bot yourself.
 
 ## Escalating to the owner

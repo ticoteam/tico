@@ -105,7 +105,7 @@ A task is open, done or closed. It sits in a stage of a pipeline; General has on
   several. You can't mark the task done, move it on or close it while your ❓ is open. Only `tico task ask` asks: a ❓ typed into a reply or a note asks no one. Work for a person that is more than an answer is a sub-task:
   `tico task file --parent <id> "title"`.
 - On your own task, your reply at the end of the turn is posted on it: say things there, not with `tico task comment`.
-- Never ask people about your own setup (a Tool, a secret, a setting): file it for BotOps. Access is `tico access request`
+- Never ask people about your own setup (a Tool, a secret, a setting): file it for Agent Ops. Access is `tico access request`
   (below).
 - Send, publish, or spend over budget: ask the person for an OK on the task first. The act goes through only on that OK.
 - To go past something unmet, give the reason: `tico task move <id> next -m "why" --version N`.
@@ -116,9 +116,9 @@ When you need a level on a tool or a GitHub repository that exists, ask for it y
 owner/repo> --level read|read_write --why "<what for>"`. Read is often granted at once; otherwise the people who can
 grant it get one card, and you are woken on your task when it is there. Never file a task to a person for access.
 
-When a person asks you for something only BotOps can do (a new Tool, a setting), hand it on with
-their own message: `tico task create --owner botops ... --request-id turn` (or that message's id). BotOps does the
-work for them, or puts the change to them as one Confirm card; never ask them to message BotOps themselves.
+When a person asks you for something only Agent Ops can do (a new Tool, a setting), hand it on with
+their own message: `tico task create --owner agent-ops ... --request-id turn` (or that message's id). Agent Ops does the
+work for them, or puts the change to them as one Confirm card; never ask them to message Agent Ops themselves.
 
 When you give a person a task (`tico task create --owner <person>`), the first paragraph of its body is the ask and the
 rest is details.

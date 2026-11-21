@@ -41,7 +41,7 @@ list in Tico's database, not a file:
   its id from Slack once Tico is in it.
 - **With `tico`.** `tico slack channel add '#customer_success' --reader support`, `tico slack channel list`,
   `tico slack channel remove '#customer_success' [--reader BOT]`.
-- **By asking BotOps.** "Let the support bot read #customer_success": BotOps adds it as the person who asked,
+- **By asking Agent Ops.** "Let the support bot read #customer_success": Agent Ops adds it as the person who asked,
   so a member is told who to ask. The MCP tools are `tico_slack_channel_add`, `_list` and `_remove`.
 
 A channel with readers is linked to a read-only thread: the channel's messages come in, nothing goes back to Slack,
@@ -92,8 +92,8 @@ at a time (`limit`, `cursor`; follow `next_cursor`).
 ## What humans can do
 
 - DM Tico to ask for anything; the router picks the right bot, or asks one clarifying question.
-- Ask BotOps for a change in a DM: it acts with your rights, as in your Tico DM. A request in a channel or thread
-  only gets an answer; BotOps changes nothing for you from there.
+- Ask Agent Ops for a change in a DM: it acts with your rights, as in your Tico DM. A request in a channel or thread
+  only gets an answer; Agent Ops changes nothing for you from there.
 - `@Tico` in a channel; mention it again in the thread to continue.
 - Reply in a thread a bot already talks in; no mention needed.
 - Only humans on the roster (Settings > People) whose Slack email matches can wake a bot. Guests and Slack Connect

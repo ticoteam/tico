@@ -647,7 +647,7 @@ With many PRs the first unmet one, in link order, gives the line.
 - **Room in Spec (C10)** wakes nobody. A person's request in Ideas takes the room by itself (G5, Nov 10); a bot's
   own idea waits for a person (Nov 12: the "has room" wake was removed).
 - **The two sign-offs are people only** (Spec page, QA page). A bot that may change a pipeline (its
-  manager or owner; BotOps may not) is refused, "This change loosens the person's OK on Spec. A person must make it.",
+  manager or owner; Agent Ops may not) is refused, "This change loosens the person's OK on Spec. A person must make it.",
   when its save would remove a people-only OK or its stage, move it to another stage, change its kind, open it to
   bots, name a bot on it, put a later stage before it, add or change an on-enter action at or before it, or replace
   the stages wholesale (`pipeline_settings._loosens_people_only`); and when it retires a pipeline that has one. A

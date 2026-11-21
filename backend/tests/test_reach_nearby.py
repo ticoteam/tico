@@ -210,7 +210,7 @@ def test_a_stage_hand_off_a_helper_and_a_person_are_never_refused(api):
     assert r.status_code == 200, r.text
     with api.app.state.store.read() as c:
         assert (H.task(c, copy["id"])["stage_id"], H.task(c, copy["id"])["owner_id"]) == ("copy-edit", "bot:scout")
-    # The Assistant (assistant) and BotOps are off the chart: anyone reaches them.
+    # The Assistant (assistant) and Agent Ops are off the chart: anyone reaches them.
     task(api, "pd-test", "bot:assistant", title="For the Assistant")
     assert reach.decide(ctx(api), "bot:product-design", "bot:botops").why == "helper"
     # A person is never limited, even writing to a bot nowhere near them.

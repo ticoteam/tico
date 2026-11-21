@@ -663,11 +663,11 @@ class StarterBots(unittest.TestCase):
                 self.assertFalse({"send", "write", "modify", "delete"} & set(access.get("can", [])), where)
 
 
-class BotOpsStopsOnARefusal(unittest.TestCase):
-    """Building a bot for a company whose GitHub App may not create repositories: BotOps asks once for the exact fix
+class AgentOpsStopsOnARefusal(unittest.TestCase):
+    """Building a bot for a company whose GitHub App may not create repositories: Agent Ops asks once for the exact fix
     and ends the run. No retry loop, no `sleep`, no repository copied onto a computer by hand; a Tico fault is reported."""
 
-    folder = catalog.ROOT / "templates/catalog/botops"
+    folder = catalog.ROOT / "templates/catalog/agent-ops"
 
     def text(self, name):
         return " ".join((self.folder / name).read_text().split())

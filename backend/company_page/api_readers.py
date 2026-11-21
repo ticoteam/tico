@@ -78,7 +78,7 @@ def register(app, store, auth, mutate):
         **api_v2(
             "Company page",
             "addReader",
-            "Give one person outside the company access to the audiences named; the owner's own tap when BotOps asks",
+            "Give one person outside the company access to the audiences named; the owner's own tap when Agent Ops asks",
         ),
     )
     def readers_add(request: Request, body: ReaderInput):
@@ -91,7 +91,7 @@ def register(app, store, auth, mutate):
         **api_v2(
             "Company page",
             "updateReader",
-            "Change which audiences a reader may read, or their name; the owner's own tap when BotOps asks",
+            "Change which audiences a reader may read, or their name; the owner's own tap when Agent Ops asks",
         ),
     )
     def readers_change(request: Request, reader_id: str, body: ReaderChange):
@@ -109,7 +109,9 @@ def register(app, store, auth, mutate):
     @app.post(
         "/api/v2/readers/import",
         **api_v2(
-            "Company page", "importReaders", "Add readers from a CSV of addresses; the owner's own tap when BotOps asks"
+            "Company page",
+            "importReaders",
+            "Add readers from a CSV of addresses; the owner's own tap when Agent Ops asks",
         ),
     )
     def readers_import(request: Request, body: ReaderImport):
@@ -133,7 +135,7 @@ def register(app, store, auth, mutate):
         **api_v2(
             "Company page",
             "createInvite",
-            "A single-use link into one audience; the link is shown to a person in the app, never to BotOps",
+            "A single-use link into one audience; the link is shown to a person in the app, never to Agent Ops",
         ),
     )
     def invites_create(request: Request, audience_id: str, body: InviteInput | None = None):

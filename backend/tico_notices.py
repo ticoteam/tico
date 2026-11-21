@@ -7,7 +7,7 @@ delivery. Three things come of one:
 - the notice is kept here (`tico_notices`) and shows in the notices banner next to what `GET /v1/latest` carries,
   once per notice id (`banner`, used by hosted_updates.notice);
 - rules see it as the event `tico.notice` with `type` = its kind (`security`, `billing`, `info`), through
-  `rules.judge_event`; the built-in team rows below wake BotOps or ask the owner, and the owner edits or switches
+  `rules.judge_event`; the built-in team rows below wake Agent Ops or ask the owner, and the owner edits or switches
   them off but cannot delete them;
 - `webhook.received` is not judged for it: that event is for senders outside Tico and this one is judged once, as
   `tico.notice`.
@@ -31,7 +31,7 @@ EVENT = "tico.notice"
 KINDS = ("info", "security", "billing")
 RULE_PREFIX = "tico-notice-"  # the built-in rows; rules.delete keeps them
 RULE_POSITION = 90_000  # after any owner rule: a new team rule goes after the last position below this
-BOTOPS = "botops"
+AGENT_OPS = "botops"
 SHOWN_DAYS = 14  # a relayed notice stays in the banner this long
 SHOWN = 5
 KEEP_DAYS = 90
@@ -106,10 +106,10 @@ RULES = (
         "action",
         {
             "action": "wake_bot",
-            "bot": BOTOPS,
+            "bot": AGENT_OPS,
             "text": "Tico Team sent a security notice: {{payload.body}} Check whether this server is affected and what to do.",
         },
-        "A security notice from Tico Team wakes BotOps",
+        "A security notice from Tico Team wakes Agent Ops",
         0,
     ),
     _row(
@@ -124,8 +124,8 @@ RULES = (
         "info-note",
         {"type": "info"},
         "note",
-        {"bot": BOTOPS, "text": "Tico Team sent a notice: {{payload.body}}"},
-        "An info notice from Tico Team goes to BotOps as a note",
+        {"bot": AGENT_OPS, "text": "Tico Team sent a notice: {{payload.body}}"},
+        "An info notice from Tico Team goes to Agent Ops as a note",
         2,
     ),
     _row(

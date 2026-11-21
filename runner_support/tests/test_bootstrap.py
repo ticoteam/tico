@@ -42,7 +42,7 @@ def card(template, slug, bootstrap):
 
 
 def catalog(root):
-    """A catalog with one bootstrap template and one the runner must leave to BotOps."""
+    """A catalog with one bootstrap template and one the runner must leave to Agent Ops."""
     for template, slug, bootstrap in (
         ("assistant", "assistant", True),
         ("botops", "botops", True),
@@ -100,7 +100,7 @@ def test_the_catalog_job_sets_a_bot_up_and_answers_on_stdout(tmp_path, monkeypat
             {
                 "bot": "botops",
                 "entry": entry("botops", "botops"),
-                "path": str(projects / "bot-botops"),
+                "path": str(projects / "bot-agent-ops"),
                 "action": "refresh",
             },
         ]

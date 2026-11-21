@@ -108,7 +108,7 @@ def test_a_reply_ends_the_bots_snooze_of_the_task(c, general):
     assert not E.task(c, task_id).get("snooze")
 
 
-def test_botops_writing_as_the_person_does_not_clear_it(c, general):
+def test_agent_ops_writing_as_the_person_does_not_clear_it(c, general):
     task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
     _ask(c, task_id)
     token = H.VIA.set("botops")

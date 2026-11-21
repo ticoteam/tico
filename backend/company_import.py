@@ -66,7 +66,7 @@ FIRST_JOB_SEATS = {key: seat for key, _label, seat in FIRST_JOBS}
 def plan(onboarding, c, who, text):
     """Validate and translate without changing the company or trusting file owner IDs.
 
-    The chart is laid out exactly (docs/onboarding.md, "Setup picks the chart"): a built-in role (the Assistant, BotOps)
+    The chart is laid out exactly (docs/onboarding.md, "Setup picks the chart"): a built-in role (the Assistant, Agent Ops)
     is a bot; every other role is a Recruiting seat with the file's reporting line, a seat under a seat included; a role
     a person holds is that person's, kept for the owner to invite (`people`). A line to someone not in Tico yet (a
     person the owner hasn't invited) goes to the owner until they are invited."""
@@ -138,7 +138,7 @@ def plan(onboarding, c, who, text):
             parent = ids.get(parent) or home
             if parent == slug:
                 parent = home
-            # A file that names no manager for one of the General Manager's built-ins (BotOps) leaves it on the
+            # A file that names no manager for one of the General Manager's built-ins (Agent Ops) leaves it on the
             # built-ins' own line, as a company with no file has it (onboarding.ensure_general_team), not the owner's.
             named = bot.get("reports_to")
             if (
@@ -709,7 +709,7 @@ def _depth(key, seats):
 
 def _go_live(onboarding, c, who, seats, made, teams):
     """Each live seat of the chart gets a bot that fills it, parents first. A bot reports to a bot or a person, never to a
-    seat (lifecycle.bot_parent), so it is defined under the line its seat answers to. BotOps sets it up like any picked
+    seat (lifecycle.bot_parent), so it is defined under the line its seat answers to. Agent Ops sets it up like any picked
     role, it goes in its team's group, and it fills its seat (lifecycle.fill_seat moves the seats under it onto the bot).
     `placed_under` is the line it was defined on: a bot that is later hired above it follows the seat (recruiting)."""
     record = O.load(c)
@@ -739,7 +739,7 @@ def _go_live(onboarding, c, who, seats, made, teams):
         bot_id = onboarding._define(c, who, key, choice, card, reports_to=under)
         declared = onboarding._declared(c, bot_id)
         declared["placed_under"] = under
-        # Its setup ends with it live and taking work, with no person step (backend/setup_live.py): BotOps takes it
+        # Its setup ends with it live and taking work, with no person step (backend/setup_live.py): Agent Ops takes it
         # live on its "Set up" task, and nothing parks it in Onboarding.
         declared[setup_live.GOES_LIVE] = True
         onboarding._write_config(c, bot_id, declared)
@@ -939,7 +939,10 @@ def general_team(onboarding):
     from . import groups as G
 
     cards = {card["template"]: card for card in O.read_cards(onboarding.settings)}
-    names = [(slug, (cards.get(slug) or {}).get("name")) for slug in (G.GENERAL_MANAGER, *G.GENERAL_TEAM)]
+    template = {H.FLEET_MAINTAINER: H.AGENT_OPS_SLUG}  # a built-in's id is its template's name, but for Agent Ops
+    names = [
+        (slug, (cards.get(template.get(slug, slug)) or {}).get("name")) for slug in (G.GENERAL_MANAGER, *G.GENERAL_TEAM)
+    ]
     roles = [
         {
             "id": slug,

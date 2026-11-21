@@ -8,10 +8,10 @@ message's `refs.add_to_flow` is the record, and a bot the same person pinged in 
 so a double press asks once.
 
 Scopes: `reports` (the bots whose manager is the caller), `bot` (one bot) or `group` (a team's bots, the teams under it
-included). Only bots the caller may read, never BotOps or the Assistant, never an archived bot.
+included). Only bots the caller may read, never Agent Ops or the Assistant, never an archived bot.
 
 `setup` (id: one area, or none for every open one) pings the bot that fills each open area of the company's setup
-(backend/setup_gaps.py), BotOps included, with the setup message instead: the bot asks one ❓ at a time until the area
+(backend/setup_gaps.py), Agent Ops included, with the setup message instead: the bot asks one ❓ at a time until the area
 is filled (skills/setup-in-flow). Only for someone a setup gap waits on (the owner or an admin). A `reports` ping
 carries the same setup message to those bots too, so "Ping your bots" picks setup up where it was left.
 """
@@ -73,12 +73,12 @@ def setup_targets(c: Any, auth: Any, who: Any, area: str | None = None) -> list[
 
 
 def _skipped(bot: Row) -> bool:
-    # BotOps fixes bots and the Assistant is the person's own: neither has questions of the company's work to ask. A
+    # Agent Ops fixes bots and the Assistant is the person's own: neither has questions of the company's work to ask. A
     # bot that cannot take a message (planned, archived: H.say refuses it) is no target either, so it never stops the
     # ping to the rest.
     assistant = R.helpers()[-1]
     takes = bot.get("state") in ("active", *H.HELD_STATES)
-    return not takes or str(bot.get("slug") or bot["id"]) in ("botops", assistant)
+    return not takes or bool({str(bot.get("slug") or ""), str(bot["id"])} & {H.FLEET_MAINTAINER, assistant})
 
 
 def targets(c: Any, person: str, hidden: set[str], scope: str = "reports", ident: str | None = None) -> list[Row]:
@@ -171,7 +171,7 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
         **api_v2(
             "Needs you",
             "pingFlowBots",
-            "Ask bots for the questions they have for you (people only): `scope` `reports` (default: the bots you manage), `bot` (`id`: one bot) or `group` (`id`: a team's bots, the teams under it included). Only bots you may read; never BotOps or the Assistant. Each gets one message from you pointing at the add-to-flow skill; its questions come back as tasks of its own, each with one ask to you, in your Needs you. `setup` (`id`: one area of `GET /api/v2/setup/gaps`, or none for every open one; the owner or an admin) pings the bot that fills each open setup area, BotOps included, which asks you one ❓ at a time and fills it in; `reports` pings those bots too. A bot you pinged in the last 10 minutes is listed in `recent` and not messaged again. Calls no model",
+            "Ask bots for the questions they have for you (people only): `scope` `reports` (default: the bots you manage), `bot` (`id`: one bot) or `group` (`id`: a team's bots, the teams under it included). Only bots you may read; never Agent Ops or the Assistant. Each gets one message from you pointing at the add-to-flow skill; its questions come back as tasks of its own, each with one ask to you, in your Needs you. `setup` (`id`: one area of `GET /api/v2/setup/gaps`, or none for every open one; the owner or an admin) pings the bot that fills each open setup area, Agent Ops included, which asks you one ❓ at a time and fills it in; `reports` pings those bots too. A bot you pinged in the last 10 minutes is listed in `recent` and not messaged again. Calls no model",
             "FlowPinged",
         ),
     )

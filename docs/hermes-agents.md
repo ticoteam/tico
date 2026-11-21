@@ -22,7 +22,7 @@ A separate runner hostname is needed only if an external sign-in proxy intercept
    ```
 
    It prints a code like `K7QM-4F2P` and waits up to 10 minutes. No token to copy.
-2. In Tico, tell BotOps: **"Connect my Hermes profile `<name>`, code K7QM-4F2P."** BotOps adds
+2. In Tico, tell Agent Ops: **"Connect my Hermes profile `<name>`, code K7QM-4F2P."** Agent Ops adds
    the bot if it does not exist yet, checks the profile and host, then approves the code as you. Pairing activates a planned bot. You can also approve it
    yourself: in **Settings → Bots**, press **Pair** in the bot's Computer column (also on the bot's page, More → Setup),
    and type the code. Only a bot's owner or an admin can approve.
@@ -142,7 +142,7 @@ downloaded `hermes_agent.py` in your current folder works the same while it is t
 - **Move to another computer.** Run `pair` on the new computer with the same profile name and
   approve it. Approving replaces the credential, so the old computer stops with a 401. On the old
   computer run `python3 hermes_agent.py uninstall --profile <name>`.
-- **Rotate or revoke.** Settings → Bots → the bot's Computer column, or ask BotOps. Rotating
+- **Rotate or revoke.** Settings → Bots → the bot's Computer column, or ask Agent Ops. Rotating
   replaces the credential at once; pair again, or install the new one. Revoking stops it for
   good. Revoke if the computer is lost. When you remove (archive) a Hermes bot in Settings → Bots, the
   dialog has a **Revoke its credential** box, on by default.
@@ -158,7 +158,7 @@ downloaded `hermes_agent.py` in your current folder works the same while it is t
 
 | You see | What it means | Do this |
 |---|---|---|
-| Heartbeat or tool says **409**, "bot is archived" | The bot was archived. The agent stops and retries only once an hour. | Restore the bot (**Settings → Bots → Archived → Restore**, `tico bot restore <slug>`, or ask BotOps). `hermes_agent.py` tries again within the hour and reconnects by itself. |
+| Heartbeat or tool says **409**, "bot is archived" | The bot was archived. The agent stops and retries only once an hour. | Restore the bot (**Settings → Bots → Archived → Restore**, `tico bot restore <slug>`, or ask Agent Ops). `hermes_agent.py` tries again within the hour and reconnects by itself. |
 | **401** | The credential was revoked or replaced (archiving with the revoke box on does this). | Restore the bot if it is archived, then pair again (`pair`) and approve it. |
 | A login page instead of JSON, or `curl` gets HTML | An external sign-in proxy is intercepting API requests. | Configure a bypass or a separate API hostname, then use the address Tico shows. See [proxy troubleshooting](connect-an-agent.md#behind-cloudflare-access-or-another-sign-in-proxy). Built-in sign-in and local installs need neither. |
 | Two heartbeats a minute, or double answers | A duplicate heartbeat job from an older install. | Run `update`. It removes older jobs. `doctor` lists what it found. |

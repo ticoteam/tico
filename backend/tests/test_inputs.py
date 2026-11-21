@@ -3,7 +3,7 @@ import json
 import pytest
 
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner, setup_attempt, expire
-from backend.tests.helpers.member_bots import botops, turn, finish
+from backend.tests.helpers.member_bots import agent_ops, turn, finish
 from backend.tests.helpers.task_lanes import RUNNER_CAPABILITIES
 from backend import bot_settings as BS
 
@@ -46,10 +46,10 @@ def test_plain_message_from_another_conversation_does_not_interrupt_running_turn
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (update["id"],)).fetchone()[0] == "queued"
 
 
-def test_botops_continuation_keeps_the_requester_and_quiet_progress_stays_on_the_task(api, botops):
-    from backend.tests.helpers.botops_parity import act
+def test_agent_ops_continuation_keeps_the_requester_and_quiet_progress_stays_on_the_task(api, agent_ops):
+    from backend.tests.helpers.agent_ops_parity import act
 
-    active = turn(api, botops, person="ana-test", text="Review ops and keep working until done")
+    active = turn(api, agent_ops, person="ana-test", text="Review ops and keep working until done")
     with api.app.state.store.read() as c:
         origin = c.execute(
             "SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?", (active["id"],)
@@ -70,8 +70,8 @@ def test_botops_continuation_keeps_the_requester_and_quiet_progress_stays_on_the
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM messages WHERE body='QA detailed progress'").fetchone()
         assert c.execute("SELECT note FROM tasks WHERE id=?", (task["id"],)).fetchone()[0] == "QA detailed progress"
-    finish(api, botops, active)
-    continuation = claim(api, botops, "botops")
+    finish(api, agent_ops, active)
+    continuation = claim(api, agent_ops, "botops")
     changed = act(api, continuation, "GET", "bots/ops/access")
     assert changed.status_code == 200, changed.text
 
@@ -363,12 +363,12 @@ def test_a_comment_in_the_room_a_task_moved_to_steers_the_turn_still_running_fro
     ]
 
 
-def test_a_task_botops_files_from_a_persons_chat_lends_their_rights_to_its_own_run(api, botops):
-    """HotMic, Oct 15: BotOps filed "Build a bot" citing `turn`; the task stored the literal and its own run, which starts
+def test_a_task_agent_ops_files_from_a_persons_chat_lends_their_rights_to_its_own_run(api, agent_ops):
+    """HotMic, Oct 15: Agent Ops filed "Build a bot" citing `turn`; the task stored the literal and its own run, which starts
     from the task notice, was refused bot registration."""
     from backend.tests.helpers.member_bots import register
 
-    active = turn(api, botops, person="ana-test", text="Add a Software Engineer bot in engineering")
+    active = turn(api, agent_ops, person="ana-test", text="Add a Software Engineer bot in engineering")
     task = post(
         api,
         "tasks",
@@ -380,19 +380,19 @@ def test_a_task_botops_files_from_a_persons_chat_lends_their_rights_to_its_own_r
             "SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?", (active["id"],)
         ).fetchone()[0]
         assert c.execute("SELECT request_id FROM tasks WHERE id=?", (task["id"],)).fetchone()[0] == origin
-    finish(api, botops, active)
-    made = register(api, claim(api, botops, "botops"), "software-engineer")
+    finish(api, agent_ops, active)
+    made = register(api, claim(api, agent_ops, "botops"), "software-engineer")
     assert made.status_code == 200, made.text
 
 
-def test_a_persons_follow_up_in_their_botops_chat_joins_the_running_reply(api, botops):
-    active = turn(api, botops, person="ana-test", text="Add a Software Engineer bot")
-    post(api, f"attempts/{active['id']}/started", {"thread_id": "thread"}, botops["token"])
+def test_a_persons_follow_up_in_their_agent_ops_chat_joins_the_running_reply(api, agent_ops):
+    active = turn(api, agent_ops, person="ana-test", text="Add a Software Engineer bot")
+    post(api, f"attempts/{active['id']}/started", {"thread_id": "thread"}, agent_ops["token"])
     with api.app.state.store.transaction() as c:
         BS.update(c, 'botops', {'harness': 'claude'})
     follow = post(api, "chat/botops", {"text": "Use Claude Opus 5.5, medium effort"}, token="ana-test")
     snapshot = get(api, f"conversations/{follow['conversation_id']}/snapshot", "ana-test")
-    assert [m["id"] for m in post(api, f"attempts/{active['id']}/inputs", {}, botops["token"])["messages"]] == [
+    assert [m["id"] for m in post(api, f"attempts/{active['id']}/inputs", {}, agent_ops["token"])["messages"]] == [
         follow["id"]
     ]
     # Until the run takes it, it says so, never "waiting for a free turn" on a computer with turns free.
@@ -610,8 +610,8 @@ def _a_turn_started_by_a_comment(api, bot="ops", r=None):
 def test_a_turn_whose_own_comment_was_taken_back_keeps_polling_and_posts_no_reply_under_it(api, request, bot):
     # #879/#880: the steering poll read the turn's own comment the way a room does, which leaves a deleted one
     # out, so every poll after the author took it back raised a TypeError (a 500) until the turn ended.
-    # BotOps reads it a second time for each follow-up it weighs.
-    machine = request.getfixturevalue("botops") if bot == "botops" else None
+    # Agent Ops reads it a second time for each follow-up it weighs.
+    machine = request.getfixturevalue("agent_ops") if bot == "botops" else None
     r, path, said, attempt = _a_turn_started_by_a_comment(api, bot, machine)
     post(api, f"{path}/{said['id']}/delete", {})
     later = post(api, path, {"text": "Also the appendix"})["comment"]

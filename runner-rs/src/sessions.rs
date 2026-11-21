@@ -2107,8 +2107,8 @@ impl Runner {
         }
     }
 
-    /// Best-effort push; a push refused as behind is caught up and pushed again. One that still fails is BotOps'
-    /// job: the line said once an hour per checkout is what the health check files for BotOps (service.py push).
+    /// Best-effort push; a push refused as behind is caught up and pushed again. One that still fails is Agent Ops'
+    /// job: the line said once an hour per checkout is what the health check files for Agent Ops (service.py push).
     pub async fn push_checkout(&self, path: &Path, env: &Env) -> bool {
         self.push_checkout_as(path, env, true).await
     }
@@ -2121,7 +2121,7 @@ impl Runner {
             let (ahead, mut error) = crate::execute::push_repo(path, env).await;
             let mut ahead = ahead;
             if error == "non-fast-forward" && !catch_up_remote {
-                // Not stuck: the bot's next turn rebases and pushes. Only a catch-up that fails is BotOps' to fix.
+                // Not stuck: the bot's next turn rebases and pushes. Only a catch-up that fails is Agent Ops' to fix.
                 log(&format!(
                     "Tico runner: {} has {ahead} unpushed commits behind its remote; they are rebased and pushed after the bot's next turn",
                     path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
@@ -2150,7 +2150,7 @@ impl Runner {
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
-            log(&format!("Tico runner: {name} has {ahead} unpushed commits and push failed ({error}); left for BotOps"));
+            log(&format!("Tico runner: {name} has {ahead} unpushed commits and push failed ({error}); left for Agent Ops"));
         }
         false
     }

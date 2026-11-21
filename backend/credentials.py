@@ -369,7 +369,7 @@ class CredentialWrite(Contract):
     secret: SecretStr | None = Field(default=None, max_length=100_000)
     source: str = Field(default='', max_length=500)
     expected_revision: int | None = Field(default=None, ge=1)
-    # BotOps adding a credential a person asked for in chat, as that person (backend/app.py
+    # Agent Ops adding a credential a person asked for in chat, as that person (backend/app.py
     # delegated_identity). Only create and grant take it; reveal, update and revoke never do.
     on_behalf_of: ID | None = None
 
@@ -1044,7 +1044,7 @@ class Vault:
 
     def reveal_login(self, c, who, row):
         """A website account's password, to a signed-in person who uses it (its holder or a grant) or a credential
-        administrator: never a bot, a run, an agent or personal token, BotOps or the Assistant. Never the 2FA key."""
+        administrator: never a bot, a run, an agent or personal token, Agent Ops or the Assistant. Never the 2FA key."""
         cid = row['id']
         if not signed_in_person(who):
             raise Problem(
@@ -1088,7 +1088,7 @@ class Vault:
             raise Problem('forbidden', 'You do not have access to this credential', 403)
         if not delivered and found is not None and found['tool_id'] and not signed_in_person(who):
             # A key whose tool is reached through the proxy stays here: a run has a proxy token for it, and an agent
-            # (a bot, or the Assistant or BotOps with a person's rights, confirmed or not) never sees the value; only
+            # (a bot, or the Assistant or Agent Ops with a person's rights, confirmed or not) never sees the value; only
             # a person signed in themselves does.
             tool = c.execute('SELECT * FROM tools WHERE id=?', (found['tool_id'],)).fetchone()
             proxied = {tool['id']: tool} if tool is not None and tool['delivery'] == 'proxy' else {}
@@ -1402,7 +1402,7 @@ def install_credentials(app, store, delegate=None, propose=None):
 
     def acting(request, body, message_id=None):
         """For "Add to credentials" / "Do this for me": the caller, or the person
-        whose message to BotOps asked for this, checked with that person's own rights."""
+        whose message to Agent Ops asked for this, checked with that person's own rights."""
         who = request.state.identity
         message_id = message_id or getattr(body, 'on_behalf_of', None)
         if not message_id:
@@ -1422,7 +1422,7 @@ def install_credentials(app, store, delegate=None, propose=None):
 
     @app.get('/api/v2/credentials')
     def inventory(request: Request, on_behalf_of: str = ''):
-        # Metadata only (names, bot key names, grants; never a secret), so BotOps can find the
+        # Metadata only (names, bot key names, grants; never a secret), so Agent Ops can find the
         # credential a person asked it to grant (no manual steps).
         who = acting(request, None, on_behalf_of) if on_behalf_of else request.state.identity
         with store.read() as c:
@@ -1569,7 +1569,7 @@ def install_credentials(app, store, delegate=None, propose=None):
             # A model key for computers is a subscription now (backend/model_subscriptions.py), given in Settings > Models.
             raise Problem('subject', MODELS_FOR_COMPUTERS, 422)
         if who.via in DELEGATE_VIAS and not who.confirmed and propose:
-            # BotOps giving a bot a stored credential for a credential administrator who asked in chat runs at once, as
+            # Agent Ops giving a bot a stored credential for a credential administrator who asked in chat runs at once, as
             # them: their own rights allow it, and a bot only ever gets what is explicitly granted to it. Anyone else is
             # refused here in plain words (backend/tool_access.py); a click stays for a person's access, every computer's,
             # and a holder passing on what they were granted.

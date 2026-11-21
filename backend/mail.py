@@ -729,7 +729,7 @@ def _verdict(review):
 
 def install_mail(app, store, auth):
     def writing_bot(who):
-        """The bot whose writing a draft is, or "" for a person's own: a bot's turn, or a person's Assistant (or BotOps)
+        """The bot whose writing a draft is, or "" for a person's own: a bot's turn, or a person's Assistant (or Agent Ops)
         acting for them, which arrives as its person but is checked as the bot that wrote it (org_rule_check)."""
         from . import org_rule_check
 

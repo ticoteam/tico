@@ -1,7 +1,7 @@
 """Bot hours against human hours, for the Overview card (`GET /api/v2/overview/bot-hours`).
 
 Nothing new is recorded. Bot hours are read from the runs Tico already keeps (`turns`, one row per run of every bot,
-BotOps and the Assistant included, failed or not) and their output events (`attempt_events`, keyed by the same id):
+Agent Ops and the Assistant included, failed or not) and their output events (`attempt_events`, keyed by the same id):
 
 - A run counts from its start to its finish (to now while it is still going).
 - A silence longer than GAP inside it is left out: between the start, each event and the finish. A run with no event

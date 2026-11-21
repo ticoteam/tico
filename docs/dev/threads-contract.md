@@ -874,7 +874,7 @@ only to that reader; a pin for everyone (`conversations.pinned_for_everyone_at`,
 
 CLI and MCP: `tico thread pin|unpin <thread>` (`tico_thread_pin`, `tico_thread_unpin`), `tico thread catch-up`
 (`tico_thread_catch_up`), `tico thread update --pin-for-everyone|--unpin-for-everyone` (`pinned_for_everyone` on
-`tico_thread_update`), `tico thread create --pin-for-members`, `tico thread dm-group --title`. BotOps runs the pin routes
+`tico_thread_update`), `tico thread create --pin-for-members`, `tico thread dm-group --title`. Agent Ops runs the pin routes
 as the person who asked.
 
 ## 11. Outside tracks' hooks

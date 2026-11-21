@@ -27,7 +27,7 @@ In the run that finds it (the KPI pass's status pass, a task or message about th
    - `tico kpi show <kpi>` for each KPI on it: the last readings and whether one is stale or missing;
    - the Heads' reports: for each Head with tasks on the goal (`tico team show`, a bot that reports to you on the
      chart), its newest report (`tico file list --bot <head>`) and its notes on the goal's tasks (`tico task show`);
-   - Health: `tico health check`. A bot the goal waits on that is broken is a BotOps ask (below), not a new task.
+   - Health: `tico health check`. A bot the goal waits on that is broken is an Agent Ops ask (below), not a new task.
 2. Decide what gets the goal moving, using bot tasks only: create at least one task for the bot that owns that work,
    or move its most useful open task to the top of its queue. Reassign or close only where a bot's task is plainly in
    the wrong queue or no longer serves a current goal. A person's task is theirs: leave it out.
@@ -74,12 +74,12 @@ thing, merge them (`playbooks/recoveries.md`).
 
 ## A broken bot
 `tico health check` lists what is wrong with the bots, most urgent first, each with its fix. When one a current goal
-waits on is broken (failing runs, stuck, offline, out of credit), ask BotOps to fix or restart it: one task,
-`tico task create --owner botops --title "Fix <bot>: <the problem in a few words>" --message "<what Health says, the goal
-waiting on it, and what you need back>"`, after `tico task list --owner botops` shows there is not one open already.
+waits on is broken (failing runs, stuck, offline, out of credit), ask Agent Ops to fix or restart it: one task,
+`tico task create --owner agent-ops --title "Fix <bot>: <the problem in a few words>" --message "<what Health says, the goal
+waiting on it, and what you need back>"`, after `tico task list --owner agent-ops` shows there is not one open already.
 Don't pause, resume, change or restart a bot yourself. Anything the fix needs that costs more (a model, a routine,
 waking more often) or changes a bot's instructions stays the owner's: the server turns it into a proposal, and
-BotOps says so on the task.
+Agent Ops says so on the task.
 
 ## What stays the owner's
 At every level: anything that raises cost, publishing, the strategy (except the owner's own words, naming the task they

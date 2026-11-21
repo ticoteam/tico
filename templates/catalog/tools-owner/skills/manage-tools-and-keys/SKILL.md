@@ -24,7 +24,7 @@ you will do instead.
 | Grant keys a person dropped in your chat, by tool, level and bots | the person, on your card | MCP `tico_tools_propose_grant` |
 | Give a bot a key, set its level, take it back | you, as the person who asked | `tico tool level <tool> <bot> <read, read_write or none>`; `tico credential grant <key> --to <bot>` and `tico credential revoke <key> --from <bot>` for a key on no tool |
 | Add or change an API tool, its settings, an MCP server (sign-in), share a website account with a bot | you, as the person who asked | the commands below; the person's own rights decide |
-| Notes on a bot's tool (a `bot.yaml` `tools:` entry: identity, scope, note), never needed for access | you (any bot), or the bot itself | `tico tool add <bot> ...` / `tico tool update`; BotOps commits it |
+| Notes on a bot's tool (a `bot.yaml` `tools:` entry: identity, scope, note), never needed for access | you (any bot), or the bot itself | `tico tool add <bot> ...` / `tico tool update`; Agent Ops commits it |
 | A person's key's value, a reveal, deleting a tool or key, a person's own access | the person | a card for the value; for the rest, link the exact page and say what to click |
 
 The person's rights are the ceiling: a member who may not manage that bot is refused, and the refusal names who can.
@@ -98,7 +98,7 @@ today is in `docs/auth-types.md` (the manual: `tico doc read manual:auth-types`)
    emailed code, a passkey) means a person signs in through the live view (`tico browser needs-you`).
 3. **The vendor's own remote MCP server** → an MCP tool: Tools → Add → MCP server (its address, then a pasted token or
    its sign-in), and a level for each bot that uses it. Prefer the vendor's server to a script.
-4. Otherwise a small REST skill in the bot's own repository that reads the key from its variable (BotOps writes it).
+4. Otherwise a small REST skill in the bot's own repository that reads the key from its variable (Agent Ops writes it).
 
 ## 2b. A vendor account with several values: one tool
 Twilio's SID and secret, Google Ads' five values, AWS's key pair and region, PostHog's key, host and project id are one
@@ -129,7 +129,7 @@ a website sign-in, not an API key. You get one task per pair ("Make <PREFIX> a w
    account with that username and password; they reveal and type the values, you never see them), granted to the bots
    that use it. Tico then types it in the browser, with 2FA, and no bot sees the password.
 3. For each bot that read the variables, have its code or skill moved to `tico browser open <site>` and
-   `tico login fill <site> username|password|code` (BotOps commits it).
+   `tico login fill <site> username|password|code` (Agent Ops commits it).
 4. Keep both variables delivered until step 3 is done for every bot and you have confirmed no bot reads them; only then
    ask a credential admin to delete the two keys. Say on the task what you checked.
 
@@ -169,7 +169,7 @@ a website sign-in, not an API key. You get one task per pair ("Make <PREFIX> a w
   (`href` in `tico tool index`) and name the bot and level in one line.
 
 ## 4b. Access requests
-A bot (or you, or BotOps, for a bot) asks with `tico access request <tool or owner/repo> --level read|read_write
+A bot (or you, or Agent Ops, for a bot) asks with `tico access request <tool or owner/repo> --level read|read_write
 --for <bot> --why "<what for>"`. Never file a task to a person for a level or repository access, and close one you
 find by asking this way instead.
 - Read where Tico can hold it to reads (a tool every bot could read by default; a ticked repository that is no bot's
@@ -186,7 +186,7 @@ find by asking this way instead.
   it. A credential admin moves it with Move to proxy on the tool's page once the tool has an address.
 - **MCP server**: an MCP tool in Tools. A bot with a level on it gets its server in each run (through the proxy when
   Tico holds its key) with no bot.yaml entry. Only a server Tools does not hold (an older `sse` one) is a `bot.yaml`
-  entry with an `mcp:` block, which you register (`tico tool add`) and BotOps commits:
+  entry with an `mcp:` block, which you register (`tico tool add`) and Agent Ops commits:
 
       tools:
         - service: linear
@@ -198,7 +198,7 @@ find by asking this way instead.
   Raygun, for example: `url: "https://api.raygun.com/v3/mcp"`, `transport: http`, `headers: {Authorization: "Bearer
   ${RAYGUN_PAT}"}` with a Raygun personal access token; it answers as an SSE stream, which streamable HTTP (`http`) carries.
   `url` is https; `transport` is `http` or `sse`; a header may use `${VAR}` for the entry's own `env` and nothing else,
-  never a value. The command BotOps runs: `tico tool add <bot> linear --can read --env LINEAR_API_KEY --mcp-url <url>
+  never a value. The command Agent Ops runs: `tico tool add <bot> linear --can read --env LINEAR_API_KEY --mcp-url <url>
   --transport http --header 'Authorization: Bearer ${LINEAR_API_KEY}'` (`tico tool update <tool-id> --bot <bot>` to
   change one; never remove and add). Claude Code, Codex, Gemini CLI, Grok Build and Muse Code take MCP servers (Codex
   and Muse Code http only); Cursor, Antigravity and pi do not.
@@ -207,7 +207,7 @@ find by asking this way instead.
 ## 6. Merge duplicates
 Two keys with the same value (often one per bot from older imports, `RAYGUN_API_KEY (Ops)` and `RAYGUN_API_KEY (Support)`)
 are one key. Keys with different values stay separate even with one variable (production and staging). To merge, for
-a credential admin or BotOps as them: keep one key on the tool; for each other bot, take the copy away first (a run
+a credential admin or Agent Ops as them: keep one key on the tool; for each other bot, take the copy away first (a run
 takes one value per variable, so granting before revoking is refused), set the bot's level on the kept key, then delete
 the copy. You cannot compare values: you find candidates by service, variable and name, and the person confirms they
 are the same key.
@@ -241,10 +241,10 @@ a key: put it under Settings.
   MCP tool (or grant the variable). **"<tool>: MCP server not passed, its key did not reach this turn"**: the grant's
   key is not stored or not delivered: check the tool. **"MCP server not passed. <harness> cannot use it"**: the bot's
   harness takes no MCP servers (or not that transport): move the bot or use the REST route.
-- **The bot's tool shows "pending"**: BotOps has not committed the bot.yaml entry yet, or the computer has not reported it.
+- **The bot's tool shows "pending"**: Agent Ops has not committed the bot.yaml entry yet, or the computer has not reported it.
 - **422 `looks_like_key`** on a message to you: the person's text still held a key. Tell them to drop it in your chat
   so the page saves it first.
-- **A card refused, 403**: only BotOps, the Tools page's owner and a person's own Assistant may ask for another bot's key,
+- **A card refused, 403**: only Agent Ops, the Tools page's owner and a person's own Assistant may ask for another bot's key,
   and never for themselves. **409 `no_person`**: nobody who can store it can read the task; ask in a person's chat instead.
 - **A `tools:` entry's scope**: any short lowercase name (`page`, `ad_account`, `database`) with a short value or a list.
   A value or name that looks like a credential is refused: store it as a key and grant it.

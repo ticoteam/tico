@@ -224,7 +224,7 @@ def test_go_live_all_dry_run_changes_nothing():
     assert api.writes() == []
 
 
-def test_go_live_all_as_botops_uses_the_requesters_rights():
+def test_go_live_all_as_agent_ops_uses_the_requesters_rights():
     api = FakeAPI(company(), kind="botops")
     tool("tico_bot_go_live_all", api)
     assert {c[5] for c in api.calls if c[1] != "me"} == {True}
@@ -383,7 +383,7 @@ def test_human_remove_without_confirm_is_a_usage_error():
         hubcli.parser().parse_args(["human", "remove", "u2"])
 
 
-def test_new_tools_are_offered_to_people_and_botops_not_the_assistant_or_bots():
+def test_new_tools_are_offered_to_people_and_agent_ops_not_the_assistant_or_bots():
     for name in (t["name"] for t in hubtools_org.TOOLS):
         kinds = hubtools.offered_to(hubtools.BY_NAME[name])
         assert "assistant" not in kinds and "bot" not in kinds, name

@@ -31,14 +31,14 @@ def manages(c, slug):
 
 
 # ---- creating, archiving and restoring a direct report ----------------------------------------------------------
-# A manager bot's own token may not do any of these. BotOps does them on the manager's ask, as that bot
+# A manager bot's own token may not do any of these. Agent Ops does them on the manager's ask, as that bot
 # (`Auth.report_lifecycle`), and only for its direct reports. The change is recorded on the report as a `lifecycle`
 # change with via `report_manager`, and every one leaves an event naming the manager.
 LIFECYCLE_OPS = ("create", "archive", "restore")
 LIFECYCLE = "lifecycle"
 EVENT = "bot.report_lifecycle"
 WINDOW_DAYS = 7
-# Each cap counts the operations it covers, through BotOps, in the rolling window; the team rule holds the limit.
+# Each cap counts the operations it covers, through Agent Ops, in the rolling window; the team rule holds the limit.
 CAPS = {
     "create": ("report_creates_per_week", ("create",)),
     "archive": ("report_archives_per_week", ("archive", "restore")),
@@ -46,7 +46,7 @@ CAPS = {
 
 
 def cap_used(c, manager, op, now):
-    """How many operations under cap `op` this manager bot made through BotOps in the last WINDOW_DAYS."""
+    """How many operations under cap `op` this manager bot made through Agent Ops in the last WINDOW_DAYS."""
     from .store import H
 
     ops = CAPS[op][1]

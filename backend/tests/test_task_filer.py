@@ -1,4 +1,4 @@
-"""A task filed on a person's rights by someone else shows who really filed it (`filer`, backend/sources.py): BotOps
+"""A task filed on a person's rights by someone else shows who really filed it (`filer`, backend/sources.py): Agent Ops
 working as the person, or a built-in such as Health check. The requester, whose rights the task carries, stays the
 person."""
 
@@ -6,11 +6,11 @@ from backend import sources as SRC
 from backend.maintenance_steps import check_health
 from backend.store import H
 from backend.tests.helpers.api import get, headers  # noqa: F401
-from backend.tests.helpers.member_bots import botops  # noqa: F401  (fixture)
+from backend.tests.helpers.member_bots import agent_ops  # noqa: F401  (fixture)
 
 
 def _file(api, actor, title, owner="bot:ops", via=""):
-    """`actor` files a task, as BotOps or the Assistant does when it works with that person's rights (H.VIA)."""
+    """`actor` files a task, as Agent Ops or the Assistant does when it works with that person's rights (H.VIA)."""
     token = H.VIA.set(via)
     try:
         with api.app.state.store.transaction() as c:
@@ -25,7 +25,7 @@ def _views(api, tid):
     return one, listed
 
 
-def test_a_task_botops_files_on_a_persons_rights_shows_botops(api):
+def test_a_task_agent_ops_files_on_a_persons_rights_shows_agent_ops(api):
     tid = _file(api, "human:ana", "Check the shared access", via="botops")
     for view in _views(api, tid):
         assert (view["requester_id"], view["filer"]) == ("human:ana", "bot:botops")
@@ -38,7 +38,7 @@ def test_a_task_a_person_or_their_assistant_files_shows_no_other_source(api):
             assert view["requester_id"] == "human:ana" and "filer" not in view, (via, view)
 
 
-def test_a_health_check_task_shows_health_check(api, botops):
+def test_a_health_check_task_shows_health_check(api, agent_ops):
     with api.app.state.store.transaction() as c:
         made = check_health._task_create(c, "Watchers", "Fix the watcher.")
     assert made["requester_id"] == H.TICO_ACTOR

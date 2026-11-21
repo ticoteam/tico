@@ -20,7 +20,7 @@ from backend.store import H, encode
 from backend.tests.helpers.onboarding import (
     ASSISTANT_AGENT,
     ASSISTANT_CARD,
-    BOTOPS_CARD,
+    AGENT_OPS_CARD,
     COMPANY,
     OWNER_EMAIL,
     PEOPLE,
@@ -38,7 +38,7 @@ from backend import bot_settings as BS
 
 NEW = "morgan@new.example"
 
-CARDS = [(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, ""), (SUPPORT_CARD, SUPPORT_AGENT), (SALES_CARD, "")]
+CARDS = [(ASSISTANT_CARD, ASSISTANT_AGENT), (AGENT_OPS_CARD, ""), (SUPPORT_CARD, SUPPORT_AGENT), (SALES_CARD, "")]
 
 
 def _settings(root: Path) -> Settings:
@@ -251,18 +251,18 @@ def test_only_the_signed_in_owner_changes_it_and_only_typed_twice(environment):
     # An address that belongs to someone else is refused and nothing changes.
     r = change(api, "Riley@acme.example", expected=409)
     assert "already belongs to someone else" in r["error"]["detail"]
-    # BotOps and the Assistant acting as the owner are refused, even after a click.
+    # Agent Ops and the Assistant acting as the owner are refused, even after a click.
     for token, via, confirmed in (
-        ("as-botops", "botops", False),
+        ("as-agent-ops", "botops", False),
         ("as-assistant", "assistant", False),
         ("as-click", "assistant", True),
-        ("as-botops-click", "botops", True),
+        ("as-agent-ops-click", "botops", True),
     ):
         api.app.state.store.settings.test_identities[token] = Identity(
             "human:morgan", "owner", email=OWNER_EMAIL, via=via, confirmed=confirmed
         )
         refused = change(api, NEW, signed_in(token), expected=403, revision=revision)
-        # Unconfirmed BotOps is stopped before the route; a confirmed click reaches it and is refused there.
+        # Unconfirmed Agent Ops is stopped before the route; a confirmed click reaches it and is refused there.
         assert confirmed is False or "signed-in browser" in refused["error"]["detail"], (token, refused)
     assert state(api) == before
 

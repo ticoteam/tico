@@ -294,7 +294,7 @@ def test_a_shared_answer_is_taken_back_only_by_the_approvers_own_click(c, compan
     _, version = _submitted(c, company, row)
     given = _answer(c, row, rid, ANA, "no", version, "Fix the headline")["answer_id"]
     with pytest.raises(H.Refused, match="own click"):
-        A.undo(c, given, ANA)  # the Assistant, BotOps or a token acting for Ana
+        A.undo(c, given, ANA)  # the Assistant, Agent Ops or a token acting for Ana
     A.undo(c, given, ANA, own_click=True)
     assert c.execute("SELECT undone_at FROM answers WHERE id=?", (given,)).fetchone()[0]
 

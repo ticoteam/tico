@@ -1,7 +1,7 @@
 {
   "id": "rule-check",
   "version": 1,
-  "owner": "botops",
+  "owner": "agent-ops",
   "summary": "One bot output (a message, comment, task change, completion reply, note, automation write or mail) against the org rules that apply to it: does it break each one. The server asks it before the write (`backend/org_rule_check.py`), one call per output, one noul per matched rule built from `rule`; at or over `broken` the rule's If broken applies (Block, Escalate or Warn). Any failure lets the output through, marked unchecked; an output too large to send is held.",
   "state": ["rules", "operation", "output", "from", "to", "context"],
   "questions": {

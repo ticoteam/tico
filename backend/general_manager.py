@@ -194,7 +194,7 @@ def _paused(c):
 
 def _held(c):
     """Bots held after five fast failures in a row (run_failures) or for going over a turn budget (turn_budgets). Each
-    hold already has its Needs-you item; this line hands the look at its runs to BotOps, since the General Manager never
+    hold already has its Needs-you item; this line hands the look at its runs to Agent Ops, since the General Manager never
     releases a bot itself."""
     rows = []
     for sql, why in (
@@ -226,7 +226,7 @@ def _held(c):
                 "held",
                 None,
                 f"{bot['slug']} is {why}" + (f" ({detail[:120]})" if detail else ""),
-                f"tico task create --owner botops --title \"Look at the held bot {bot['slug']}\" "
+                f"tico task create --owner agent-ops --title \"Look at the held bot {bot['slug']}\" "
                 f"--body \"It is held; check its last runs, then release it (tico bot release) or raise its budget.\"",
                 owner="bot:" + row["bot"],
                 stamp=str(row["held_at"]),
@@ -255,7 +255,7 @@ def _owner_review(c, at):
             None,
             f"{r['n']} interrupted run{'s' if r['n'] != 1 else ''} of {r['slug']} "
             f"waiting for its owner's review since {str(r['since'])[:16]} UTC; its tasks and routines wait meanwhile",
-            f"tico task create --owner botops --title \"Review the interrupted runs of {r['slug']}\" "
+            f"tico task create --owner agent-ops --title \"Review the interrupted runs of {r['slug']}\" "
             f"--body \"Resume or dismiss them after checking what already happened.\"",
             owner="bot:" + r["bot_id"],
             stamp=f"{r['n']}",

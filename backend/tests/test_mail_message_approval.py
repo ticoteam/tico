@@ -2,7 +2,7 @@
 
 from backend.store import H, encode
 from backend.tests.helpers.api import as_member, claim, get, headers, post, setup_attempt  # noqa: F401
-from backend.tests.helpers.member_bots import botops  # noqa: F401
+from backend.tests.helpers.member_bots import agent_ops  # noqa: F401
 
 
 def test_a_bot_reads_whether_the_messages_sender_may_manage_its_mail_sending(api):
@@ -45,10 +45,10 @@ def test_message_authority_follows_bot_management_and_revocation(api):
     assert get(api, path, token=attempt["token"])["sender_can_approve_send"] is False
 
 
-def test_builtin_bots_keep_the_owner_only_mail_management_rule(api, botops):
-    # BotOps is a built-in bot; an admin who may chat it still cannot change its sending.
+def test_builtin_bots_keep_the_owner_only_mail_management_rule(api, agent_ops):
+    # Agent Ops is a built-in bot; an admin who may chat it still cannot change its sending.
     owner = post(api, "chat/botops", {"text": "Please send the draft."})
-    attempt = claim(api, botops, "botops")
+    attempt = claim(api, agent_ops, "botops")
     admin = post(api, "chat/botops", {"text": "Please send the draft."}, token="ben-test")
     assert get(api, f"messages/{owner['id']}", token=attempt["token"])["sender_can_approve_send"] is True
     assert get(api, f"messages/{admin['id']}", token=attempt["token"])["sender_can_approve_send"] is False

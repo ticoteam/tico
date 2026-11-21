@@ -471,7 +471,7 @@ def setting_a_message_bot_grants_it_and_moving_it_takes_the_old_grant(c):
 
 
 def making_a_message_bot_links_only_a_mailbox_its_maker_may_grant(c):
-    """Settings' add from template, a hire, BotOps (backend/message_bots.py link): the link gives the bot a grant, so a
+    """Settings' add from template, a hire, Agent Ops (backend/message_bots.py link): the link gives the bot a grant, so a
     member gets it only on their own email, and an admin on any."""
     from backend import bot_settings as BS
     from backend import message_bots

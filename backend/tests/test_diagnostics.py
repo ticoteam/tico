@@ -22,7 +22,7 @@ def own_server_log():
 def redactor():
     return D.Redactor(
         ["acme.example"],
-        [("assistant", ["Morgan the assistant"]), ("botops", ["BotOps"])],
+        [("assistant", ["Morgan the assistant"]), ("botops", ["Agent Ops"])],
         [("morgan", ["Morgan Reed", "morgan@acme.example"]), ("riley", ["Riley Quinn", "riley@acme.example"])],
     )
 
@@ -51,10 +51,10 @@ def test_the_redactor_leaves_what_is_not_a_secret(raw):
 def test_names_become_labels_that_are_the_same_all_through_a_bundle():
     r = redactor()
     out = r.text(
-        "Morgan Reed (morgan@acme.example, morgan) asked bot:assistant; BotOps and botops; Riley Quinn later; morgan again"
+        "Morgan Reed (morgan@acme.example, morgan) asked bot:assistant; Agent Ops and botops; Riley Quinn later; morgan again"
     )
     assert out == "person-1 (person-1, person-1) asked bot-1; bot-2 and bot-2; person-2 later; person-1 again"
-    assert r.label("BOTOPS") == "bot-2" and r.label("Zed") is None
+    assert r.label("AGENT OPS") == "bot-2" and r.label("Zed") is None
     # Whole words only, and every string, however nested, goes through it.
     assert r.text("coordinator") == "coordinator"
     assert r.clean({"a": ["riley failed", {"b": "Morgan Reed"}], "n": 3, "ok": True, "x": None}) == {
@@ -173,7 +173,7 @@ def test_the_bundle_lists_failed_setup_steps_with_labels_and_no_secret(environme
     # A bot refused on a bot's route: both are labels, as in the rest of the bundle, never a slug (a slug is a name).
     with api.app.state.store.transaction() as c:
         step = "POST /api/v2/bots/{bot}/github-repos"
-        other = next(b["slug"] for b in D.H.bots(c) if b["slug"] != "botops")
+        other = next(b["slug"] for b in D.H.bots(c) if b["id"] != "botops")
         detail = {"category": "forbidden", "step": step, "status": 403, "bot": other, "ref": "sf-00000000"}
         D.H.event(c, "bot:botops", "setup.failed", step, detail)
     answer, bundle = bundle_of(api)

@@ -19,7 +19,7 @@ changes; bots keep using whatever git access their computer already has.
 | Merge queues | read | GitHub requires it before an App may receive the Merge group event, which Tico answers with `tico/merge-ok` on a merge queue group's commit. No token Tico mints carries it |
 | Commit statuses | read | a bot reads a pull request's commit statuses. It cannot create or change them |
 | Deployments | read | a bot reads deployments, such as a pull request's preview link, in any repository it can read. It cannot create or change them |
-| Administration | write, on by default | lets the app create and delete repositories and change their settings. Only the server uses it: Tico mints a token with it just to create a bot's repository or delete one the Owner requests, and bots' run tokens never carry it. Untick **Let BotOps create bot repositories** to leave it out; a person then creates every new bot's repository |
+| Administration | write, on by default | lets the app create and delete repositories and change their settings. Only the server uses it: Tico mints a token with it just to create a bot's repository or delete one the Owner requests, and bots' run tokens never carry it. Untick **Let Agent Ops create bot repositories** to leave it out; a person then creates every new bot's repository |
 
 The app is private, receives installation change webhooks to refresh the repository list when its webhook is active, and requests no
 Workflows permission, so a bot cannot change `.github/workflows` files. Adding Workflows on the App's GitHub settings page
@@ -123,7 +123,7 @@ same terms.
    - **An organization**: type the organization's name. Tico checks it with GitHub first; a name that turns out to
      be a person's account is connected as a personal account.
 
-   **Let BotOps create bot repositories** is ticked; leave it ticked unless a person should
+   **Let Agent Ops create bot repositories** is ticked; leave it ticked unless a person should
    create every bot's repository by hand. Select Connect GitHub. The line under the button says the name GitHub
    will propose, "<team name> Tico".
 2. GitHub shows the app to create, with the account it is for and its name, which you can change there (for
@@ -395,18 +395,18 @@ by the system, and each bot's computer publishes its history on its next run. A 
 again on the next try, never made twice and never taken for someone else's (GitHub made it after Tico first asked).
 When GitHub fails or limits requests, Tico waits a minute, then two, up to an hour, and Tools, GitHub says why. A
 refused permission stops it until the permission is back. A name someone else already has is left alone, as below.
-Nobody needs to ask BotOps; the commands below are the by-hand path.
+Nobody needs to ask Agent Ops; the commands below are the by-hand path.
 
 With administration allowed, the owner can create `<org>/bot-<slug>` privately from a template:
 
-    tico bot repo-create botops            # from ticoteam/botops
+    tico bot repo-create agent-ops            # from ticoteam/botops
     tico bot repo-create sales --template <org>/bot-template
 
-The BotOps bot (`bot:botops`) may make the same call when the connected app permits repository creation.
+The Agent Ops bot (`bot:botops`) may make the same call when the connected app permits repository creation.
 To delegate this to an engineering bot or another selected bot, an Owner or admin enables
 **Create bot repositories** in that bot’s **Settings → Repositories**. Other bots default to off;
-BotOps keeps its built-in access. The grant can be revoked there and does not grant deletion or
-broaden the bot’s normal repository access. A bot without it should ask BotOps to create the
+Agent Ops keeps its built-in access. The grant can be revoked there and does not grant deletion or
+broaden the bot’s normal repository access. A bot without it should ask Agent Ops to create the
 repository, rather than changing its own permissions. It is limited to the name `bot-<slug>` for a bot that exists (planned or
 active, not archived), always private, in the connected organization, from the default template or
 one in that organization. Every creation is audited (`github.repo_created`) with the acting bot.
@@ -444,7 +444,7 @@ An app connected without Administration cannot create repositories, so a new bot
 Health shows **GitHub can't create bot repositories** to the owner and admins, and Tools, GitHub shows the
 one-step fix:
 
-1. Select **Let BotOps create repositories**. It opens the app's permissions page on GitHub
+1. Select **Let Agent Ops create repositories**. It opens the app's permissions page on GitHub
    (`https://github.com/organizations/<org>/settings/apps/<app>/permissions`; for an app a user owns,
    `https://github.com/settings/apps/<app>/permissions`).
 2. Set **Administration** to **Read and write** and save. GitHub asks the organization to accept the new
@@ -452,7 +452,7 @@ one-step fix:
 3. Back in Tico, select **Check again** (`POST /api/v2/github/app/check-permissions`). Tico also notices on
    its own: through the installation webhook, or within a few minutes.
 
-When BotOps builds a bot without that permission, `tico bot create` (and `tico bot repo-create`) stops with
+When Agent Ops builds a bot without that permission, `tico bot create` (and `tico bot repo-create`) stops with
 `github_permission_missing` and a non-zero exit: a person must act. The bot stays planned with its files on
 the computer that built it, and the owner gets one Needs-you task for that bot (repeating the command never
 adds a second) with two fixes: create `<org>/bot-<slug>` as an empty private repository (the link opens
@@ -523,14 +523,14 @@ Repositories**. Tico never changes the installation's repository selection or bo
 ### Bots that create product repositories
 
 A bot creates a product repository the same way, with the same preview, exact confirmation, request key and
-name rules. Every bot has **Create product repositories** by default, BotOps and bots made later included. The
+name rules. Every bot has **Create product repositories** by default, Agent Ops and bots made later included. The
 Owner or an admin switches it off in that bot's **Settings → Repositories**
 (`PUT /api/v2/bots/<bot>/repositories {"create_product_repositories": false}`), and only the Owner's own request
 switches it back on (`true`). An off is kept as that bot's choice, so a later default, migration or template never
 turns it back on. A bot switched off is refused `403` on the preview and the create, naming the right: *Creating a
 product repository needs the Owner, or a bot with the Create product repositories right. Every bot has it unless
 the Owner or an admin switched it off; only the Owner switches it back on, in the bot's settings under
-Repositories.* A bot's turn acting for someone (BotOps' on-behalf-of, the Assistant) or an external
+Repositories.* A bot's turn acting for someone (Agent Ops' on-behalf-of, the Assistant) or an external
 agent gets `403` on both, even for the Owner. The rules are in [Permissions](permissions.md#bots-that-create-repositories).
 
 - **Private and empty only.** `visibility` must be `private`; a public repository is publishing and stays a
@@ -553,12 +553,12 @@ Administration: write, so it cannot create repositories. The Owner changes this 
 Administration to Read and write on `<the app's permissions page>`, then accept the new permission for the
 organization when GitHub asks.* That is the same one-time change as
 [When the app cannot create repositories](#when-the-app-cannot-create-repositories): the app's permissions page,
-**Administration: Read and write**, save, accept for the organization. After it, bots with the right (and BotOps for
+**Administration: Read and write**, save, accept for the organization. After it, bots with the right (and Agent Ops for
 bot repositories) create repositories without anyone's help.
 
 ### A bot whose repository already exists on a computer
 
-A bot BotOps built locally (no GitHub yet) has history to keep, so it needs an empty repository, not
+A bot Agent Ops built locally (no GitHub yet) has history to keep, so it needs an empty repository, not
 a template copy. `--empty` (API `{"slug": ..., "empty": true}`, no template) creates a private
 `<org>/bot-<slug>` with nothing in it (`POST /orgs/<org>/repos`, `auto_init` false). Then, from the
 bot's checkout:
@@ -567,7 +567,7 @@ bot's checkout:
 
 Then set the bot's repository (Settings, Bots) to `<org>/bot-<slug>`; a bare `bot-<slug>` there also
 works and means the connected organization (an existing `emp-<slug>` repository keeps its name). Nobody pushes by hand: a run's token
-(`POST /api/v2/github/token {"bot": "<slug>"}`) is scoped to that bot's own repository, so BotOps
+(`POST /api/v2/github/token {"bot": "<slug>"}`) is scoped to that bot's own repository, so Agent Ops
 cannot push another bot's history. Instead the runner does it in the bot's own run, at the start
 and again after a completed run: when the checkout has commits but no upstream, it sets `origin` to
 the resolved https URL and runs `git push -u origin <branch>` with that bot's token. It never forces.
@@ -578,7 +578,7 @@ Settings, Bots says the same); fix the cause and the next run publishes.
 ## Where the key lives
 
 The Team Owner can delete a repository in the connected organization or personal account with
-`tico api DELETE github/repos/<owner>/<repo>`, or ask BotOps to do it with the Owner's rights.
+`tico api DELETE github/repos/<owner>/<repo>`, or ask Agent Ops to do it with the Owner's rights.
 This runs directly and uses a repository-scoped GitHub App token with Administration (write).
 The App must have access to that repository and the installation must accept Administration permission.
 Tico records the exact repository in its history. Success returns `deleted: true`; a 404 under a

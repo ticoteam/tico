@@ -23,8 +23,8 @@ owed line in one wake (`deliver`, or folded into the next wake H._wake sends it)
   (`auth_rejected` on a run, backend/execution.py; `_default` is the computer's own login, named apart from every
   profile); fixed when that computer reports that profile's login ready, or a run on that profile completes. A
   runtime-wide ready says nothing of a named profile, nor one profile's of another's.
-- `secret:<bot>:<ENV>`: a credential the task's bot asked for (BotOps may ask for another bot's: the card's `bot` is the
-  one it is for, the task's `owner` is BotOps) (backend/credential_cards.py); fixed when that variable is stored for
+- `secret:<bot>:<ENV>`: a credential the task's bot asked for (Agent Ops may ask for another bot's: the card's `bot` is the
+  one it is for, the task's `owner` is Agent Ops) (backend/credential_cards.py); fixed when that variable is stored for
   or granted to that bot (backend/credentials.py). Canceling its credential card ends the wait with a wake that
   says so (`dropped`).
 - `tool:<id>`: a tool's key was rejected; the Tools page's owner's Reconnect task waits on its key card
@@ -46,7 +46,7 @@ OWED = "fixed_at IS NOT NULL AND woke_at IS NULL AND ended IN ('fixed','canceled
 
 
 def secret_key(bot, env):
-    """A credential's card key: per bot, since the grant is the bot's (BotOps may ask for two bots' on one task)."""
+    """A credential's card key: per bot, since the grant is the bot's (Agent Ops may ask for two bots' on one task)."""
     return f"secret:{bot}:{env}"
 
 
@@ -131,7 +131,7 @@ def view(row):
 def open(c, task_id, bot, key, service, label, person, fix, message_id=None, owner=None):
     """Card the task for `person` to fix, once per task and key: a second failure finds the
     live card and changes nothing. `bot` is the bot the account is for; `owner` the task's owner (that bot, unless
-    BotOps asks for another bot's credential). `message_id` is a card already posted (a credential card); otherwise
+    Agent Ops asks for another bot's credential). `message_id` is a card already posted (a credential card); otherwise
     one is written to `person` in the task's thread. Only a live task with that owner, and a person who can read it.
     Returns the row, or None."""
     H = _H()
@@ -525,7 +525,7 @@ def moved(c, task_id, field, old, new):
 
 def bot_gone(c, bot):
     """The bot was archived (settings_admin.archive_bot): the cards for its accounts ask nothing now. A task another
-    bot owns that was paused only on one (BotOps asking for its credential) carries on."""
+    bot owns that was paused only on one (Agent Ops asking for its credential) carries on."""
     if not _present(c):
         return
     for wait in _H()._rows(c.execute("SELECT * FROM task_reconnects WHERE bot=? AND fixed_at IS NULL", (bot,))):

@@ -1,11 +1,11 @@
 # pyright: strict
-"""A seat bot's setup ends with the bot live (company_import._go_live): BotOps builds it on its "Set up" task and takes it
+"""A seat bot's setup ends with the bot live (company_import._go_live): Agent Ops builds it on its "Set up" task and takes it
 live, and the task is done only once the bot is active and takes work. Saying done earlier would leave the bot `planned`
 with nobody left to finish it, while its pipeline's tasks wait on it.
 
 `GOES_LIVE` is the declaration key that marks such a bot; its `setup_task_id` names the task. A go-live waiting for the
-computer to get the repository (backend/go_live.py) finishes by itself, so BotOps waits for it; one that failed was
-already said to the person who asked, once, so the task may close with BotOps' note.
+computer to get the repository (backend/go_live.py) finishes by itself, so Agent Ops waits for it; one that failed was
+already said to the person who asked, once, so the task may close with Agent Ops' note.
 
 Once live, the seat bot runs its template's own setup (`playbooks/onboarding.md`, the setup a person's first message
 starts for a hired bot) with no person: `start_setup` gives it a task, first in its queue, that says to take each
@@ -25,7 +25,7 @@ GOES_LIVE = "goes_live_on_setup"
 # When the seat bot was given its own setup task, so it is given once. A time, not the task's id: the declaration goes
 # to its computer, which may not read the task.
 SELF_SETUP = "self_setup_given_at"
-# The task BotOps registered a bot from when it is not the bot's own setup task (settings_admin.register): an ordinary
+# The task Agent Ops registered a bot from when it is not the bot's own setup task (settings_admin.register): an ordinary
 # task such as "Add Builder 3". The bot page names it, and any ask on it, while the bot is planned (org_routes.cant_run).
 MADE_ON = "made_on_task_id"
 
@@ -64,7 +64,7 @@ def require_live(c: sqlite3.Connection, task_id: str) -> str | None:
     if not row or row["state"] == "archived":
         return None
     if row["state"] == "active":
-        return bot  # live; an onboarding hold is a person's step, not one BotOps can finish
+        return bot  # live; an onboarding hold is a person's step, not one Agent Ops can finish
     name, slug = row.get("display_name") or row["slug"], row["slug"]
     waiting = pending(c, bot)
     if waiting and waiting.get("failed"):
@@ -87,7 +87,7 @@ def require_live(c: sqlite3.Connection, task_id: str) -> str | None:
 
 def refuse_snooze_once_live(c: sqlite3.Connection, task_id: str) -> None:
     """Refuse snoozing a seat bot's setup task once the bot is live: a snooze there waits for a go-live that has already
-    happened, and nothing would end it before its date. BotOps reads a bot before it goes live, so it can ask for this
+    happened, and nothing would end it before its date. Agent Ops reads a bot before it goes live, so it can ask for this
     after the bot is already live; the task is then marked done instead."""
     from . import task_engine as E
 
@@ -102,10 +102,10 @@ def refuse_snooze_once_live(c: sqlite3.Connection, task_id: str) -> None:
     raise Problem("bot_live", f"{name} is already live, so there is nothing to wait for. Mark this task done.", 409)
 
 
-def go_live_ends_botops_wait(c: sqlite3.Connection, bot: str, by: str) -> None:
-    """A go-live ends the wait BotOps set on the bot's setup task while the bot waited for its repository
-    ("waiting to go live"): the snooze ends as the bot goes live, and BotOps is woken to say done, as a done ends the
-    owner's own snooze (backend/answers.py). Only a snooze BotOps set: a person's snooze is theirs to end."""
+def go_live_ends_agent_ops_wait(c: sqlite3.Connection, bot: str, by: str) -> None:
+    """A go-live ends the wait Agent Ops set on the bot's setup task while the bot waited for its repository
+    ("waiting to go live"): the snooze ends as the bot goes live, and Agent Ops is woken to say done, as a done ends the
+    owner's own snooze (backend/answers.py). Only a snooze Agent Ops set: a person's snooze is theirs to end."""
     from . import task_engine as E
 
     found = c.execute(
@@ -115,7 +115,7 @@ def go_live_ends_botops_wait(c: sqlite3.Connection, bot: str, by: str) -> None:
     task = E.task(c, task_id) if task_id else None
     if not task or task.get("status") != "open" or not task.get("snooze"):
         return
-    # BotOps acts for the person it works for: the snooze row names that person, the history row names BotOps.
+    # Agent Ops acts for the person it works for: the snooze row names that person, the history row names Agent Ops.
     last = c.execute(
         "SELECT via FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='snooze' "
         "ORDER BY created_at DESC LIMIT 1",
@@ -126,7 +126,7 @@ def go_live_ends_botops_wait(c: sqlite3.Connection, bot: str, by: str) -> None:
 
 
 def making_task(c: sqlite3.Connection, bot: str) -> str | None:
-    """The open task a planned bot is being made on: its setup task, or the task BotOps registered it from (`MADE_ON`,
+    """The open task a planned bot is being made on: its setup task, or the task Agent Ops registered it from (`MADE_ON`,
     an ordinary task such as "Add Builder 3"), or None."""
     found = c.execute(
         "SELECT json_extract(extra,'$.setup_task_id'), json_extract(extra,'$." + MADE_ON + "') FROM bot_settings "
@@ -214,7 +214,7 @@ def setup_brief(company: str, files: list[str], pipelines: list[str]) -> str:
 
 def start_setup(c: sqlite3.Connection, onboarding: Any, bot: str) -> str | None:
     """Give a seat bot that just went live its own setup task, once, first in its queue (see the module note). The
-    requester is BotOps, which set it up, so no person is asked or told. Returns the task id, or None when there is
+    requester is Agent Ops, which set it up, so no person is asked or told. Returns the task id, or None when there is
     nothing to give: not a seat bot, given before, or a template with no setup."""
     from . import onboarding as O
 

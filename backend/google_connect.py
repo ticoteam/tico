@@ -14,7 +14,7 @@ an event or `tico sql` (google_connects is not readable there). A reconnect that
 the old one at Google: one client and one person share one grant there, so that would end the new grant too.
 
 Only the person connects or disconnects their own mailbox: the mailbox their message bot reads, else their email.
-Not a bot, not BotOps or the Assistant acting for them, not an admin for someone else. Disconnect forgets the grant at
+Not a bot, not Agent Ops or the Assistant acting for them, not an admin for someone else. Disconnect forgets the grant at
 once and revokes it at Google from the server; when Google cannot be reached the person is told to remove Tico at
 myaccount.google.com/permissions.
 
@@ -347,7 +347,7 @@ def new_operation():
 
 
 def require_self(who):
-    """The person acting as themselves: never a bot, a computer, or BotOps or the Assistant acting for them."""
+    """The person acting as themselves: never a bot, a computer, or Agent Ops or the Assistant acting for them."""
     if who.role not in ("owner", "human") or who.via or who.task_actor:
         raise Problem(
             "forbidden",

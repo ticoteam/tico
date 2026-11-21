@@ -423,9 +423,9 @@ def settings_route_unmatched(method, path, body=None):
 
 def admits_on_turn(method, path, body=None):
     """Whether a person's own Assistant turn may make this write as them, on their cited words. Every write is admitted
-    except what `NEVER` names, a body that carries a secret (a secret never goes through a chat: BotOps' rule, which
-    botops_act checks the same way), and the team's rules for the Assistant itself."""
-    from . import botops_act, team_rules
+    except what `NEVER` names, a body that carries a secret (a secret never goes through a chat: Agent Ops' rule, which
+    agent_ops_act checks the same way), and the team's rules for the Assistant itself."""
+    from . import agent_ops_act, team_rules
 
     path = canonical(path)
     if not path or method not in ("POST", "PUT", "PATCH", "DELETE"):
@@ -451,8 +451,8 @@ def admits_on_turn(method, path, body=None):
     # `secret_in_request` is the one decision for a body: on a tool route it admits a `${VAR}` placeholder that
     # `secret_in` alone would reject, and on every other route it is `secret_in`.
     if isinstance(parsed, dict):
-        return not botops_act.secret_in_request(method, path, parsed)
-    return botops_act.secret_in(parsed) is None
+        return not agent_ops_act.secret_in_request(method, path, parsed)
+    return agent_ops_act.secret_in(parsed) is None
 
 
 def _json(body):
@@ -642,9 +642,9 @@ _PROPOSABLE = [
         ("PATCH", r"/api/v2/files/[^/]+"),
     )
 ]
-# What only BotOps may propose, for a person who asked it in chat (backend/botops_act.py lists the routes it
+# What only Agent Ops may propose, for a person who asked it in chat (backend/agent_ops_act.py lists the routes it
 # answers with a card): the same click, on more routes.
-_PROPOSABLE_BOTOPS = [
+_PROPOSABLE_AGENT_OPS = [
     (m, re.compile(p))
     for m, p in (
         ("PUT", r"/api/v2/access/(limits|allow)"),
@@ -720,7 +720,7 @@ def normalize_path(path):
 
 def catalogue_card(method, path):
     """Whether the Assistant may put this route on a card as a setting: a catalogue entry that is not person-only writes
-    it, and BotOps may card it (the Assistant changes settings with the same rules as BotOps)."""
+    it, and Agent Ops may card it (the Assistant changes settings with the same rules as Agent Ops)."""
     from . import settings_catalog
 
     return any(e.kind != "person" for e, _ in settings_catalog.routed(method, path)) and valid_operation(
@@ -729,7 +729,7 @@ def catalogue_card(method, path):
 
 
 # Routes whose handler accepts only the person's own tap (`owner(request, tap=True)`, backend/tico_storage.py): an
-# Assistant or BotOps run of them is refused, so on a turn they are a Confirm card, never a direct run.
+# Assistant or Agent Ops run of them is refused, so on a turn they are a Confirm card, never a direct run.
 TAP_ONLY_ROUTES = [
     (m, re.compile(p))
     for m, p in (
@@ -748,16 +748,18 @@ def valid_operation(method, path, settings=None, proposer="assistant"):
     path = normalize_path(path)
     if not path or (settings is not None and path == "/api/v2/chat/" + settings.assistant_bot):
         return False
-    routes = _PROPOSABLE + (_PROPOSABLE_BOTOPS if proposer == "botops" else [])
+    routes = _PROPOSABLE + (_PROPOSABLE_AGENT_OPS if proposer == "botops" else [])
     if any(m == method and p.fullmatch(path) for m, p in routes):
         return True
     if proposer == "assistant" and catalogue_card(method, path):
         return True
-    # BotOps also puts to a person, as a card, any change it makes for a person directly (a bot's hand-off that
+    # Agent Ops also puts to a person, as a card, any change it makes for a person directly (a bot's hand-off that
     # lends nothing: app.py `confirm_for_carried`). It runs only on their click, as them.
-    from . import botops_act
+    from . import agent_ops_act
 
-    return proposer == "botops" and method != "GET" and any(m == method and p.fullmatch(path) for m, p in botops_act.DO)
+    return (
+        proposer == "botops" and method != "GET" and any(m == method and p.fullmatch(path) for m, p in agent_ops_act.DO)
+    )
 
 
 PREVIEW = 160
@@ -1493,7 +1495,7 @@ def create_proposal(
 ):
     """One pending action for `who` to confirm, and its card in `room`, written by the bot that proposed it.
 
-    The Assistant proposes what its turn may not do on its own; BotOps proposes what a person asked it for
+    The Assistant proposes what its turn may not do on its own; Agent Ops proposes what a person asked it for
     that always needs their own click (adding people, roles, shared credentials, a computer that does not
     take members' bots). Either way only the person's own confirm runs it, as them. `shown`: the card's lines, when the
     route that asks says what changes in safer words than the body (a destination by scheme, host and port only)."""
@@ -1590,7 +1592,7 @@ def create_proposal(
     what = what or said  # a route that tried the change first says what it does (backend/repositories.py)
     if why:
         # Server facts after the title, in view before Confirm: the work the proposer was doing and why it needs this
-        # person (backend/botops_act.py card_why).
+        # person (backend/agent_ops_act.py card_why).
         what = what.rstrip(". ") + ". " + why
     if path == BATCH_PATH:
         # One line per step: what it does to which task, and the fields it changes.
@@ -1666,7 +1668,7 @@ def create_proposal(
 # ------------------------------------------------------------------ the room
 def speaker(c, settings, room, proposer):
     """The bot that says a card and its result in `room`: the room's bot for the Assistant, the page's owner in the
-    person's chat with it for a page card (`page:<page>`), else the proposer itself (BotOps)."""
+    person's chat with it for a page card (`page:<page>`), else the proposer itself (Agent Ops)."""
     from . import page_chat_cards
 
     if not proposer or proposer == "assistant":
@@ -1725,7 +1727,7 @@ def ensure_room(c, actor, bot, allow_held=False):
 
 
 # ------------------------------------------------------------------ one Assistant for everyone (docs/assistant.md)
-# Every person, the owner included, has one chat: their Assistant. The Strategy Owner, the Librarian and BotOps are
+# Every person, the owner included, has one chat: their Assistant. The Strategy Owner, the Librarian and Agent Ops are
 # helpers it hands work to (`HELPERS`, backend/app.py task_create). The owner's earlier chat with the Strategy Owner
 # (`rooms.STRATEGY_ROOM`, one per company, belonging to the owner seat) is history: readable by the owner under
 # "Earlier chats", never written to again. A transfer of ownership still moves it to the new owner
@@ -2464,7 +2466,7 @@ def install(app, store, auth, mutate, onboarding):
 
     def propose_setting(c, who, method, path, data, summary, asked=None, what=None):
         """A setting the person asked their Assistant for that needs their own click: a Confirm card in their chat
-        (backend/settings_catalog.py plan), and what the Assistant tells them. `what`: the card's title, as BotOps'."""
+        (backend/settings_catalog.py plan), and what the Assistant tells them. `what`: the card's title, as Agent Ops'."""
         card = create_proposal(
             c,
             settings,
@@ -2637,7 +2639,7 @@ def install(app, store, auth, mutate, onboarding):
         if not teammate(who):
             raise Problem("forbidden", "Only people and bots of the company can list proposals", 403)
         # A card the Assistant made in someone's private Assistant chat is listed to that person only: its words came
-        # from a private conversation. Cards bots propose (BotOps) are team work, listed to every teammate.
+        # from a private conversation. Cards bots propose (Agent Ops) are team work, listed to every teammate.
         sql, args = (
             "SELECT * FROM assistant_actions WHERE status='pending' AND (owner=? OR coalesce(proposer,'assistant')!='assistant')",
             [who.actor],

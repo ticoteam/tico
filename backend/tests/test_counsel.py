@@ -2010,6 +2010,6 @@ def test_the_cli_makes_a_rule_asks_its_ok_reads_its_history_and_sends_a_typed_ch
         ("POST", "rules/r1", {"version": 2, "exact_check": {}}),
     ]
     assert {"tico_rules_ok", "tico_doc_read"} <= hubtools.COUNSEL_TOOLS
-    # Filed as the caller through the normal task route: people and agents on their own runs, not the Assistant or BotOps.
+    # Filed as the caller through the normal task route: people and agents on their own runs, not the Assistant or Agent Ops.
     for kind, offered in (("member", True), ("bot", True), ("assistant", False), ("botops", False)):
         assert ("tico_rules_make" in {t["name"] for t in hubtools.listing(kind=kind)}) is offered, kind

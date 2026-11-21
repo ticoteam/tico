@@ -12,7 +12,7 @@ from backend import github_app as G, hubdb as H
 from backend.auth import Identity
 from backend.repositories import PRODUCT_GRANTS, metadata
 from backend.store import encode
-from backend.tests.helpers.github_app import api, gh, auth, botops_turn, product_repo_request
+from backend.tests.helpers.github_app import api, gh, auth, agent_ops_turn, product_repo_request
 from backend import bot_settings as BS
 from backend.tests.helpers.bot_product_repos import ready
 
@@ -190,7 +190,7 @@ def test_a_read_only_all_repos_creator_gets_write_to_the_new_repo_and_keeps_read
 
 
 def _a_bot_switched_off_is_refused_and_told_which_right(api, gh):
-    # Every bot has it by default, BotOps too; the Owner switches it off for both.
+    # Every bot has it by default, Agent Ops too; the Owner switches it off for both.
     for bot in ("cmo", "botops"):
         path = f"/api/v2/bots/{bot}/repositories"
         assert api.get(path, headers=auth()).json()["create_product_repositories"] is True, bot
@@ -200,7 +200,7 @@ def _a_bot_switched_off_is_refused_and_told_which_right(api, gh):
             headers=auth(),
         )
         assert off.status_code == 200 and off.json()["create_product_repositories"] is False, off.text
-    for actor in ("bot-test", "botops-test", "person-test", "runner-test"):
+    for actor in ("bot-test", "agent-ops-test", "person-test", "runner-test"):
         refused = product_repo_request(api, BODY, actor=actor, key="no-right-" + actor)
         assert refused.status_code == 403, (actor, refused.text)
         assert RIGHT in refused.json()["error"]["detail"]
@@ -222,10 +222,10 @@ def test_an_admin_switches_it_off_the_off_sticks_and_only_the_owner_switches_it_
         c.execute(
             "INSERT OR REPLACE INTO registry_metadata VALUES('access',?)", (encode({"admins": ["riley@acme.example"]}),)
         )
-    botops_turn(api)
+    agent_ops_turn(api)
     # A save that leaves the right as it is still works, for anyone who may save the bot's repositories.
     assert grant(api, who="person-test").status_code == 200
-    for actor in ("bot-test", "botops-test", "runner-test"):
+    for actor in ("bot-test", "agent-ops-test", "runner-test"):
         assert grant(api, on=False, who=actor).status_code == 403, actor
     off = grant(api, on=False, who="person-test")
     assert off.status_code == 200 and off.json()["create_product_repositories"] is False
@@ -242,7 +242,7 @@ def test_an_admin_switches_it_off_the_off_sticks_and_only_the_owner_switches_it_
     assert product_repo_request(api, BODY, actor="bot-test", key="after-migrations").status_code == 403
     assert not creates(gh)
     # Switching it back on widens the bot again: the Owner's own click only, not an admin's or a bot's.
-    for actor in ("person-test", "bot-test", "botops-test", "runner-test"):
+    for actor in ("person-test", "bot-test", "agent-ops-test", "runner-test"):
         refused = grant(api, who=actor)
         assert refused.status_code == 403, (actor, refused.text)
     assert api.get(ACCESS, headers=auth()).json()["create_product_repositories"] is False
@@ -298,13 +298,13 @@ def _a_bot_cannot_create_a_public_repo_a_bot_repository_name_or_through_an_exter
     assert not creates(gh)
 
 
-def _the_owners_identity_carried_by_a_bot_or_botops_turn_cannot_turn_the_right_on_preview_or_create(api, gh):
+def _the_owners_identity_carried_by_a_bot_or_agent_ops_turn_cannot_turn_the_right_on_preview_or_create(api, gh):
     from backend import rooms
 
     # The right is off: the Owner's request carried by a bot turn cannot turn it on.
     assert grant(api, on=False).status_code == 200  # the Owner switched cmo off
     carried = {
-        "via-botops": Identity(
+        "via-agent-ops": Identity(
             "human:ana",
             "owner",
             "ana@acme.example",
@@ -325,16 +325,16 @@ def _the_owners_identity_carried_by_a_bot_or_botops_turn_cannot_turn_the_right_o
         ),
     }
     api.app_state.store.settings.test_identities.update(carried)
-    # The bot's own turn is refused; BotOps acting for her puts it on a Confirm card that only her own tap runs.
+    # The bot's own turn is refused; Agent Ops acting for her puts it on a Confirm card that only her own tap runs.
     refused = grant(api, who="via-self")
     assert refused.status_code == 403 and "Only the Owner turns on" in refused.text, refused.text
-    card = grant(api, who="via-botops")
+    card = grant(api, who="via-agent-ops")
     assert card.status_code == 200 and card.json()["needs_confirm"] is True, card.text
     assert api.get(ACCESS, headers=auth()).json()["create_product_repositories"] is False
     # The right is on (the Owner's own switch): carried as the Owner it still can't preview or create.
     assert grant(api).status_code == 200
     carried = {
-        "owner-via-botops": Identity(
+        "owner-via-agent-ops": Identity(
             "human:ana",
             "owner",
             "ana@acme.example",
@@ -362,19 +362,19 @@ def _the_owners_identity_carried_by_a_bot_or_botops_turn_cannot_turn_the_right_o
         made = product_repo_request(api, BODY, actor=token, key="carried-" + token)
         assert made.status_code == 403 and CARRIED in made.text, (token, made.text)
     nothing_made(api, gh)
-    # An owner-origin BotOps turn (the Owner's message in her room) cannot preview or create either.
+    # An owner-origin Agent Ops turn (the Owner's message in her room) cannot preview or create either.
     with api.app_state.store.transaction() as c:
         conversation = rooms.personal_room(c, "human:ana", "botops")
         c.execute(
             "UPDATE messages SET sender_id='human:ana',conversation_id=?,kind='say',"
-            "body='Make the tico-services repository' WHERE id='m-botops'",
+            "body='Make the tico-services repository' WHERE id='m-agent-ops'",
             (conversation["id"],),
         )
         c.execute("INSERT INTO attempt_conversations VALUES('a2',?)", (conversation["id"],))
-    turn = {**auth("botops-test"), "X-Tico-On-Behalf-Of": "turn"}
+    turn = {**auth("agent-ops-test"), "X-Tico-On-Behalf-Of": "turn"}
     preview = api.get(PREVIEW, params={"name": "tico-services"}, headers=turn)
     assert preview.status_code == 403 and CARRIED in preview.json()["error"]["detail"], preview.text
-    made = api.post("/api/v2/github/product-repos", json=BODY, headers={**turn, "Idempotency-Key": "botops-turn"})
+    made = api.post("/api/v2/github/product-repos", json=BODY, headers={**turn, "Idempotency-Key": "agent-ops-turn"})
     assert made.status_code == 403 and CARRIED in made.json()["error"]["detail"], made.text
     nothing_made(api, gh)
     # The Owner's own click still previews and creates, and so does the granted bot in its own turn.
@@ -404,14 +404,14 @@ def _connecting_and_disconnecting_github_stay_the_owners(api, gh):
 def test_refusals_for_bots_and_the_owners_identity_tell_the_story(api, gh, subtests):
     """One app for the refusals: the right off for a bot, a bot's and an owner-carried turn's refusals, GitHub
     connecting staying the Owner's. Each check keeps its own assertions. (An admin's switch-off stays its own test: in a
-    shared app BotOps's save becomes a Confirm proposal instead of a refusal.)"""
+    shared app Agent Ops's save becomes a Confirm proposal instead of a refusal.)"""
     ready(api, gh)
-    botops_turn(api)
+    agent_ops_turn(api)
     for check in (
         _a_bot_switched_off_is_refused_and_told_which_right,
         _a_bot_cannot_create_a_public_repo_a_bot_repository_name_or_through_an_external_agent,
         _connecting_and_disconnecting_github_stay_the_owners,
-        _the_owners_identity_carried_by_a_bot_or_botops_turn_cannot_turn_the_right_on_preview_or_create,
+        _the_owners_identity_carried_by_a_bot_or_agent_ops_turn_cannot_turn_the_right_on_preview_or_create,
     ):
         with subtests.test(check.__name__):
             check(api, gh)

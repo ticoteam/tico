@@ -32,7 +32,7 @@ CLAIM_TRIES = 60  # polls a computer makes for a bot's job before it gives up
 # still its first one after now.
 SETTLE = timedelta(hours=1)
 
-# Routines whose summaries are not in D.ROUTINES: the Strategy, Librarian, Tools Owner and BotOps bots.
+# Routines whose summaries are not in D.ROUTINES: the Strategy, Librarian, Tools Owner and Agent Ops bots.
 EXTRA_SUMMARIES = {
     "strategy-owner:kpi-pass": (
         "Checked forty goals; the Q4 bookings goal moved to amber.",
@@ -69,7 +69,7 @@ SUMMARIES = {f"{bot}:{key}": quiet for bot, key, _title, _cron, _text, quiet in 
 
 
 def seed(b):
-    """Sweep stuck tasks is set up as BotOps' fleet maintainer sets it up at boot (routines.ensure_task_sweep). Then
+    """Sweep stuck tasks is set up as Agent Ops' fleet maintainer sets it up at boot (routines.ensure_task_sweep). Then
     each enabled schedule with no run in the window plays its occurrences in order."""
     start = b.now - WINDOW
     b.clock.at = start

@@ -488,10 +488,10 @@ def _joins(c, row, placed):
 def _add_bot(c, auth, onboarding, settings_admin, who, agent, body):
     """Add the agent as a Tico bot that fills the seat it names, on the harness the agent runs on, under the line the seat
     names. Its role is the template Recruit ranks first for the seat, and it lands exactly where that template's hire does:
-    in Onboarding, with its repository built by its computer or by BotOps (recruiting.onboard). An add with no seat opens
+    in Onboarding, with its repository built by its computer or by Agent Ops (recruiting.onboard). An add with no seat opens
     one first, a software engineer's in `team` under `reports_to`, named for the agent; it is in the same transaction, so a
     refusal below leaves no seat behind."""
-    from .onboarding import BOTOPS
+    from .onboarding import AGENT_OPS
 
     seat_id, name = body.seat_id, ""
     if not seat_id:
@@ -516,8 +516,10 @@ def _add_bot(c, auth, onboarding, settings_admin, who, agent, body):
             "from Recruit instead.",
             409,
         )
-    if not card["starter"] and not H.bot(c, BOTOPS):
-        raise Problem("botops", "BotOps builds this bot, and this team has no BotOps; add it from Templates first", 409)
+    if not card["starter"] and not H.bot(c, AGENT_OPS):
+        raise Problem(
+            "botops", "Agent Ops builds this bot, and this team has no Agent Ops; add it from Templates first", 409
+        )
     model = _model_for(agent["connect_id"])
     name = (name or row["title"])[:100]
     slug = onboarding.admin.pick_slug(c, name)

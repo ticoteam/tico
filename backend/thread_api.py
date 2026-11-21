@@ -1515,11 +1515,11 @@ def message_sender(app, auth, may_reference, routed_message, visual_view):
                 if not isinstance(values, str) or not updates.one(c, values):
                     raise Problem("reference", "Unknown update", 422)
             elif kind == "automation":
-                # A chat about one automation (BotOps edits the one a person has open): the caller must be able to see it.
+                # A chat about one automation (Agent Ops edits the one a person has open): the caller must be able to see it.
                 if not may_reference(c, who, values):
                     raise Problem("reference", "Unknown automation", 422)
             elif kind == "automations_filter":
-                # What the Automations page shows (range, tab, filters), so BotOps answers about that view; only words
+                # What the Automations page shows (range, tab, filters), so Agent Ops answers about that view; only words
                 # the asker typed or picked, never another person's data.
                 if not isinstance(values, dict) or len(json.dumps(values)) > 2000:
                     raise Problem("reference", "automations_filter is a small object", 422)

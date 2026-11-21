@@ -16,7 +16,7 @@ from .store import H, Problem, encode, readiness_document
 from . import bot_settings as BS
 
 PREFERENCE = "onboarding.progress"
-BOTOPS = "botops"
+AGENT_OPS = "botops"
 LIBRARIAN = "librarian"
 MARKET_TASK = "Set up the market map"
 # The checklist items a person may skip. GitHub is not one: without it a bot's repository cannot be made.
@@ -147,7 +147,7 @@ def built_in(settings):
     bots (own_bots)."""
     return {
         settings.assistant_bot,
-        BOTOPS,
+        AGENT_OPS,
         LIBRARIAN,
         "strategy-owner",
         "general-manager",
@@ -217,12 +217,12 @@ def checklist(c, who, settings, github):
     wanted = _wanted_runtimes(record)
     signed = _signed_in_runtime(runners, wanted, c)
     login = (providers.PROVIDER_BY_RUNTIME.get(next(iter(sorted(wanted)), ""), {}) or {}).get("login", "")
-    botops = H.bot(c, BOTOPS)
+    agent_ops = H.bot(c, AGENT_OPS)
     mine = own_bots(c, settings)
     building = c.execute(
         "SELECT id FROM tasks WHERE owner_id=? AND title LIKE 'Build a bot:%' "
         "AND status='open' ORDER BY created_at DESC LIMIT 1",
-        ("bot:" + BOTOPS,),
+        ("bot:" + AGENT_OPS,),
     ).fetchone()
     installed = bool(github and github["installation_id"])
     waiting = _next_bot(c, settings)
@@ -271,16 +271,16 @@ def checklist(c, who, settings, github):
         ),
         _item(
             "botops",
-            "BotOps is active",
-            botops and botops["state"] == "active",
-            "BotOps builds your other bots. It starts once a computer hosts it.",
-            "#/bot/" + BOTOPS,
+            "Agent Ops is active",
+            agent_ops and agent_ops["state"] == "active",
+            "Agent Ops builds your other bots. It starts once a computer hosts it.",
+            "#/bot/" + AGENT_OPS,
         ),
         _item(
             "first_bot",
             "Create your first bot",
             mine,
-            "BotOps is building it." if building else "Say what it should do and BotOps builds it.",
+            "Agent Ops is building it." if building else "Say what it should do and Agent Ops builds it.",
             "#/task/" + building["id"] if building else "",
             action="" if building else "create-bot",
         ),
@@ -361,8 +361,8 @@ def _task(c, auth, who, owner, title, instructions):
     reach the bot through its run, never the task's chat (a task is a title and a chat)."""
     from . import rooms
 
-    if owner == BOTOPS:
-        from .botops_act import request_task
+    if owner == AGENT_OPS:
+        from .agent_ops_act import request_task
 
         return request_task(c, auth, who, title, instructions=instructions)
     return H.task_create(
@@ -382,9 +382,9 @@ def _active(c, slug):
     return bot if bot and bot["state"] == "active" else None
 
 
-def _botops(c):
-    if not _active(c, BOTOPS):
-        raise Problem("botops", "BotOps is not active yet. It starts once a computer hosts it.", 409)
+def _agent_ops(c):
+    if not _active(c, AGENT_OPS):
+        raise Problem("botops", "Agent Ops is not active yet. It starts once a computer hosts it.", 409)
 
 
 def _market_title(c, owner, actor):

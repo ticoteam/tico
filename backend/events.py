@@ -3687,7 +3687,7 @@ class SignIn:
                 return
             fresh = self.auth.authenticate(self.headers)
             # A changed role ends the stream at once rather than at its lifetime: reads use the role it opened with.
-            # (Another actor is BotOps acting for its requester, whose identity the headers alone do not give.)
+            # (Another actor is Agent Ops acting for its requester, whose identity the headers alone do not give.)
             if fresh.actor == self.who.actor and fresh.role != self.who.role:
                 raise Problem("unauthenticated", "Sign in again", 401)
             self.checked_at = now

@@ -235,7 +235,7 @@ def test_a_snoozed_task_takes_the_answer_and_wakes_nobody(c, general):
 
 
 def test_done_on_a_task_its_owner_snoozed_ends_the_snooze_and_moves_it_at_once(c, general):
-    # BotOps snoozed its setup task to wait for a repository, then said done in the same turn: the task was left open
+    # Agent Ops snoozed its setup task to wait for a repository, then said done in the same turn: the task was left open
     # until the snooze ran out.
     row = X.new_task(c, ANA, "Set up the Release Owner", assignee="bot:builder")
     E.snooze(c, row["id"], "bot:builder", "waiting to go live", "2099-01-01T00:00:00Z", seen_version=row["version"])

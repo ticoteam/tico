@@ -6,7 +6,7 @@ should be re-read at the primary source before use.
 ## Tico
 
 - `docs/creating-bots.md`, `docs/starter-bots.md`, `docs/org-chart.md`, `docs/permissions.md`: how bots are created
-  through BotOps, the weekly create and archive limits, the first-week routine, and the bar for a good bot.
+  through Agent Ops, the weekly create and archive limits, the first-week routine, and the bar for a good bot.
 - `docs/goals-and-kpis.md`: KPI fields, readings, the automatic per-bot KPIs.
 - Catalog skills folded in or kept as sub-steps: see `../../MERGES.md`.
 

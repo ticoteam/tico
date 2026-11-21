@@ -35,17 +35,17 @@ def send(hq, n="n1", relay=TICO, system=True, **more):
     )
 
 
-def botops_messages(api):
+def agent_ops_messages(api):
     with api.app.state.store.read() as c:
         return [dict(r) for r in c.execute("SELECT * FROM messages WHERE recipient_id='bot:botops' ORDER BY rowid")]
 
 
 @pytest.fixture(autouse=True)
-def botops(api):
+def agent_ops(api):
     with api.app.state.store.transaction() as c:
         c.execute(
             "INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
-            "VALUES('botops','botops','BotOps','','active',?)",
+            "VALUES('botops','botops','Agent Ops','','active',?)",
             (H.now(),),
         )
         c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES('botops',NULL,'ana')")
@@ -82,7 +82,7 @@ def test_a_relayed_notice_reaches_the_rules_once_and_shows_once_beside_latest(ap
     assert len(judged) == 1
     assert judged[0]["notice_id"] == "n1" and judged[0]["kind"] == "info" and judged[0]["type"] == "info"
     assert judged[0]["trigger"] == "_tico" and judged[0]["via"] == "gateway"
-    assert [m["refs"] for m in botops_messages(api) if '"wake": "tico.notice"' in m["refs"]]  # the info note
+    assert [m["refs"] for m in agent_ops_messages(api) if '"wake": "tico.notice"' in m["refs"]]  # the info note
 
     from backend import releases
 
@@ -101,11 +101,11 @@ def test_a_relayed_notice_reaches_the_rules_once_and_shows_once_beside_latest(ap
     assert [(n["id"], n["source"], n["kind"]) for n in shown] == [("n1", "relay", "info")]
 
 
-def test_a_security_notice_wakes_botops_and_asks_the_owner(api, hq, judged):
+def test_a_security_notice_wakes_agent_ops_and_asks_the_owner(api, hq, judged):
     relay_for(api, hq)
     send(hq, "s1", kind="security", body="Rotate your Acme keys today.")
     service(api).tick()
-    wakes = [m for m in botops_messages(api) if '"wake": "tico.notice"' in m["refs"]]
+    wakes = [m for m in agent_ops_messages(api) if '"wake": "tico.notice"' in m["refs"]]
     assert (
         len(wakes) == 1 and "Rotate your Acme keys today." in wakes[0]["body"] and wakes[0]["sender_id"] == H.TICO_ACTOR
     )
@@ -148,7 +148,7 @@ def test_a_delivery_naming_the_tico_trigger_from_a_relay_hq_does_not_list_as_sys
     relay_for(api, hq)
     send(hq, "x1", relay="hr_00000000000000c3", system=False, kind="security")
     service(api).tick()
-    assert judged == [] and hq.acks[-1] == 1 and botops_messages(api) == []
+    assert judged == [] and hq.acks[-1] == 1 and agent_ops_messages(api) == []
     with api.app.state.store.read() as c:
         from backend import tico_notices
 

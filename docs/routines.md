@@ -30,7 +30,7 @@ An install that had routines moved them once, on the upgrade to Automations; see
 
   For an event, the trigger is `{"type": "event", "name": "meeting.ready"}`; for a webhook,
   `{"type": "webhook", "id": "<trigger id>"}` (`tico trigger list` shows the ids). A new automation is saved on
-  unless the flow sends `"enabled": false`. What BotOps or Assistant drafts is saved off and waits for a person to
+  unless the flow sends `"enabled": false`. What Agent Ops or Assistant drafts is saved off and waits for a person to
   turn it on.
 
 ## Before a due date
@@ -119,7 +119,7 @@ An automation that keeps starting runs for 20 minutes (more than 120, spread ove
 starts more than 500 in 10 minutes, is put **on hold**. That is most often a loop, but a slow catch-up after an outage looks the
 same, so nothing is lost: its queued runs, any run whose wait ends meanwhile, and up to 500 new ones wait as **Held**
 instead of running (past that a trigger is counted as dropped, and the hold shows how many). A run mid-step finishes
-that step first. **Run now** is refused while it is on hold, and manual runs never count toward the guard. Its owner gets one Needs-you task, and BotOps
+that step first. **Run now** is refused while it is on hold, and manual runs never count toward the guard. Its owner gets one Needs-you task, and Agent Ops
 one notice. The automation's page shows **On hold · N held**: fix what starts it, then **Release** (the held runs
 queue, oldest first) or **Drop** (they are skipped). Turning it off or deleting it skips them too.
 

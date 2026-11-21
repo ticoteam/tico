@@ -342,7 +342,7 @@ def api(tmp_path, gh):
         "other-test": Identity("human:ben", "owner", "ben@acme.example"),
         "runner-test": Identity("runner:r1", "runner", runner_id="r1"),
         "bot-test": Identity("bot:cmo", "bot", runner_id="r1", attempt_id="a1"),
-        "botops-test": Identity("bot:botops", "bot", runner_id="r1", attempt_id="a2"),
+        "agent-ops-test": Identity("bot:botops", "bot", runner_id="r1", attempt_id="a2"),
         "person-test": Identity("human:riley", "human", "riley@acme.example"),
     }
     app = create_app(
@@ -373,7 +373,7 @@ def api(tmp_path, gh):
                 },
             )
             repos = {
-                "botops": "emp-botops",
+                "botops": "emp-agent-ops",
                 "newbie": "emp-newbie",
                 "oldie": "emp-oldie",
                 "cpo": "emp-cpo",
@@ -446,15 +446,15 @@ def turn_token(api, bot="cpo", purpose="turn"):
     return api.post("/api/v2/github/token", json=body, headers=auth("runner-test"))
 
 
-def botops_turn(api):
-    """An unattended BotOps turn: the runner, its assignment, and a leased attempt for `botops-test`."""
+def agent_ops_turn(api):
+    """An unattended Agent Ops turn: the runner, its assignment, and a leased attempt for `agent-ops-test`."""
     runner_token(api, "botops")
     with api.app_state.store.transaction() as c:
         c.execute(
-            "INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES('m-botops','keeper','bot:botops','request','hi',?)",
+            "INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES('m-agent-ops','keeper','bot:botops','request','hi',?)",
             (H.now(),),
         )
-        enqueue_stored(c, 'm-botops')
+        enqueue_stored(c, 'm-agent-ops')
         job = c.execute("SELECT id FROM jobs WHERE bot_id='botops'").fetchone()["id"]
         c.execute(
             "INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "

@@ -507,7 +507,7 @@ def remove_line(c, auth, who, line_id, via=None, checked=True):
 
 # ----------------------------------------------------------------------------------------------- the chart around a bot
 # The built-in helpers that work for the whole company from off the chart: what they send is never limited, and anyone
-# may reach them (a bot that needs a fix asks BotOps). The Assistant's slug is the install's own (TICO_ASSISTANT_BOT).
+# may reach them (a bot that needs a fix asks Agent Ops). The Assistant's slug is the install's own (TICO_ASSISTANT_BOT).
 # The built-in bots of Auth.system_bot plus the support helper, except the Health Monitor: its tasks to people far from
 # it are what nearby reach is for, so it is checked like any bot.
 HELPERS = (
@@ -1159,7 +1159,7 @@ REPLAY_AGENT = "org-rule-hold"  # org_rule_check.replay_identity: a held write a
 
 
 def _sender(who):
-    """The bot a write is checked for, or None: a person, Tico and a person's BotOps or Assistant are never. Nor
+    """The bot a write is checked for, or None: a person, Tico and a person's Agent Ops or Assistant are never. Nor
     is a held write a person sent anyway: it passed reach before it was held, and a person approved it since."""
     if getattr(who, "role", "") != "bot" or not H.is_bot(getattr(who, "actor", "")):
         return None

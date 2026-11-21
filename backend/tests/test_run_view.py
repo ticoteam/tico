@@ -7,7 +7,7 @@ from backend.store import H
 from backend.tests.helpers.api import assign, claim, expire, get, post, put, ready, runner  # noqa: F401
 from backend.tests.helpers.execution_review import aged, sweep
 from backend.enqueue import enqueue_stored
-from backend.tests.helpers.run_view import DEV_563_NOTE, botops_decides, events, task_attempt
+from backend.tests.helpers.run_view import DEV_563_NOTE, agent_ops_decides, events, task_attempt
 from backend.tests.helpers.task_lanes import RUNNER_CAPABILITIES
 
 
@@ -514,7 +514,7 @@ def test_a_held_runs_decision_shows_beside_its_state_with_who_when_and_the_note(
     # No recovery decision yet: no decision label.
     assert (run["job_state"], run["decision"]) == ("uncertain", None)
 
-    botops_decides(api, attempt["job_id"], attempt["id"], "dismiss", DEV_563_NOTE, "2026-10-26T09:50:45.103088Z")
+    agent_ops_decides(api, attempt["job_id"], attempt["id"], "dismiss", DEV_563_NOTE, "2026-10-26T09:50:45.103088Z")
     [run] = get(api, f"tasks/{tid}/run-view")["runs"]
     assert run["job_state"] == "canceled"
     assert run["decision"] == {
@@ -529,8 +529,8 @@ def test_a_held_runs_decision_shows_beside_its_state_with_who_when_and_the_note(
     }
     from backend.run_view import decision_label
 
-    assert decision_label(run["decision"], lambda a: "BotOps") == (
-        "Canceled: dismissed by BotOps at 09:50Z, " + DEV_563_NOTE
+    assert decision_label(run["decision"], lambda a: "Agent Ops") == (
+        "Canceled: dismissed by Agent Ops at 09:50Z, " + DEV_563_NOTE
     )
 
     # The label is read from the decision record each time, never copied onto the job: a later decision shows.

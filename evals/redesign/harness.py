@@ -75,7 +75,9 @@ class Scenario:
     about: str
     steps: Callable
     checks: list = field(default_factory=list)
-    bots: dict = field(default_factory=dict)  # extra org bots ({slug: (role, harness)}), e.g. BotOps or the Librarian
+    bots: dict = field(
+        default_factory=dict
+    )  # extra org bots ({slug: (role, harness)}), e.g. Agent Ops or the Librarian
 
 
 @dataclass
@@ -154,7 +156,7 @@ class Org(World):
     under the lead; and the Release Owner under Dana. Emails are @acme.example."""
 
     def __init__(self, extra_bots=None):
-        """`extra_bots` adds bots to the org (BotOps, Health, the Librarian...), as {slug: (role, harness)} in the
+        """`extra_bots` adds bots to the org (Agent Ops, Health, the Librarian...), as {slug: (role, harness)} in the
         World's format."""
         bots = {
             LEAD_ID: ("lead", "claude"),
@@ -430,7 +432,7 @@ def give_ok(org, requirement_id, who=DANA):
 
 
 def hub_notices(org, slug, who=DANA):
-    """The hub's notices to a bot (CONTRACT §5 BotOps note, §1 run guard): messages the hub itself sends, of kind
+    """The hub's notices to a bot (CONTRACT §5 Agent Ops note, §1 run guard): messages the hub itself sends, of kind
     `notice`, read as the owner reads a bot's rooms: GET /api/v2/conversations?bot=<slug>, then each room's messages."""
     from backend.task_asks import SYSTEM  # the hub's own sender id
 

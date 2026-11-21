@@ -57,7 +57,7 @@ A message to an outsider is a draft on the task. It goes out only when a person 
 These need the task to ask for them and a granted Tool to allow them. Otherwise they wait for a person:
 - **Signing, accepting, filing or letting a deadline pass.** Record the date and what the work calls for.
 - **Adopting or publishing a policy.** Record the adopted text on the task, then ask the Librarian to publish it.
-- **Creating or reassigning a task** for a human or a bot, and **asking BotOps to set up a bot.**
+- **Creating or reassigning a task** for a human or a bot, and **asking Agent Ops to set up a bot.**
 
 Never put a person's health, disciplinary or immigration details, a home address or an id number in a file.
 
@@ -69,7 +69,7 @@ already has.
    owner"), and what it cost or risked.
 2. Name the template and its first routine as the template card states it (`paralegal`: "Weekday NDA desk").
 3. Ask the owner on the task, once: "Add <name> from the templates? It would <first routine>. It reports to me."
-4. When requested and your Tools allow it: `tico task create --owner botops --title "Set up <template> from the
+4. When requested and your Tools allow it: `tico task create --owner agent-ops --title "Set up <template> from the
    templates" --message "<why, the first routine, reports to general-counsel>"`. Log it in `memory/decisions.md`.
 Never create, change or remove a bot yourself, and never propose one for work that happened once.
 

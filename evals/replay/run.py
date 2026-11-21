@@ -36,11 +36,11 @@ def _sleep(seconds):
     time.sleep(seconds)
 
 
-# The BotOps runner's HTTP client; loaded by path because that file is also named run.py.
-_spec = importlib.util.spec_from_file_location("botops_run", HERE.parent / "botops" / "run.py")
-botops_run = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(botops_run)
-Live = botops_run.Live
+# The Agent Ops runner's HTTP client; loaded by path because that file is also named run.py.
+_spec = importlib.util.spec_from_file_location("agent_ops_run", HERE.parent / "agent_ops" / "run.py")
+agent_ops_run = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(agent_ops_run)
+Live = agent_ops_run.Live
 
 
 def ok(server, method, path, body=None, token=None):

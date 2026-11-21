@@ -21,7 +21,7 @@ from backend import recruit_rank as R
 from backend.tests.helpers.onboarding import (
     ASSISTANT_AGENT,
     ASSISTANT_CARD,
-    BOTOPS_CARD,
+    AGENT_OPS_CARD,
     as_person,
     environment,
     signed_in,
@@ -221,7 +221,9 @@ def hq(monkeypatch):
 
 
 def org(environment):
-    api = environment(cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, "")] + [(row, "") for row in CARDS[:-1]])
+    api = environment(
+        cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (AGENT_OPS_CARD, "")] + [(row, "") for row in CARDS[:-1]]
+    )
     # The older file name is still read (backend/recruit.py).
     (Path(api.app.state.store.settings.catalog_dir).parent / "departments.yaml").write_text(yaml.safe_dump(DEPARTMENTS))
     api.put(

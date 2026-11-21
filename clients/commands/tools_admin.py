@@ -1,6 +1,6 @@
 """Every Tools change from the `tico` CLI and the Tico MCP, so no bot (and no person's own agent) needs the Tools page.
 
-Each tool calls the route the Tools page calls, with the caller's rights: BotOps as the person who asked it
+Each tool calls the route the Tools page calls, with the caller's rights: Agent Ops as the person who asked it
 (`_as_person`), the Tools Owner as that person on the Tools changes the server lends it (backend/tools_delegation.py),
 everyone else as themselves. Whether a change is allowed is backend/tool_access.py `may_change_access`, the one rule;
 a caller without the right gets the route's refusal, which names who can. Nothing here decides a permission.
@@ -104,7 +104,7 @@ def _a_bot(api):
 
 
 def _own_key(api, args):
-    """The caller's bot id when it stores a key for itself: a bot (not BotOps, which stores for the person who asked it)
+    """The caller's bot id when it stores a key for itself: a bot (not Agent Ops, which stores for the person who asked it)
     naming no other bot in `for_bot`. None otherwise."""
     me = api.get("me")
     if kind_of(me) not in ("bot", "agent"):
@@ -463,7 +463,7 @@ def tool_website_delete(api, args):
     "Store a key you already hold (one you made through a vendor's API) without it entering your conversation: name "
     "the variable (from_env) or file (from_file) on this computer that holds it. A bot stores it as its own key: "
     "given to it alone and back in its next run under `env` (default: the from_env name), on a tool of its own under "
-    "`tool`'s vendor. A person (or BotOps for one): with `tool`, it becomes that tool's key at `level` (with `for_bot`, "
+    "`tool`'s vendor. A person (or Agent Ops for one): with `tool`, it becomes that tool's key at `level` (with `for_bot`, "
     "that bot gets the level); with `for_bot` alone, it is granted to that bot; else it is stored for its vendor's "
     "tool. A person's own key comes through tico_credential_request instead.",
     {
@@ -687,7 +687,7 @@ def credential_login_share(api, args):
 
 
 # ----------------------------------------------------------------------------- who is offered them
-# People, BotOps (as the person who asked) and bots: the Tools Owner is a bot, and any other bot is refused by the
+# People, Agent Ops (as the person who asked) and bots: the Tools Owner is a bot, and any other bot is refused by the
 # route with who can. Never the Assistant (it hands Tools changes to the Tools Owner; its listing is near its cap).
 AUDIENCE = {
     name: REQUESTER + ("bot",)

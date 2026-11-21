@@ -85,7 +85,7 @@ The variable name is `DB_<NAME>_URL` for a database you will call `<name>` (`war
 `DB_WAREHOUSE_URL`; a `-` becomes `_`). In **Tools → Add → Key**, choose
 **connection**, set **Bot variable name** to `DB_WAREHOUSE_URL`, and paste the read-only connection
 string into **Value**. Save, then use **Access → Grant access to** to grant it to each bot that needs it.
-BotOps can open the Credential card and grant it for you. Never paste the value into ordinary chat,
+Agent Ops can open the Credential card and grant it for you. Never paste the value into ordinary chat,
 a task or a repository.
 
 Formats: `postgresql://user:pass@host:5432/db?sslmode=require`, `mysql://user:pass@host:3306/db`

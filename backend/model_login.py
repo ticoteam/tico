@@ -227,15 +227,15 @@ def _operator(c, who, rid, auth=None):
 
 
 def _person_only(who, what):
-    """Switching accounts and signing out stop the bots on that login, so only a person does them, never BotOps: not
+    """Switching accounts and signing out stop the bots on that login, so only a person does them, never Agent Ops: not
     as itself, and not with the rights of the person it works for (its delegated identity keeps `via` "botops", even
     on a person's click on a card it proposed). Checked before anything is queued, marked or recorded."""
-    from .onboarding import BOTOPS
+    from .onboarding import AGENT_OPS
 
-    if "bot:" + BOTOPS in (who.actor, who.task_actor) or who.via == "botops":
+    if "bot:" + AGENT_OPS in (who.actor, who.task_actor) or who.via == "botops":
         raise Problem(
             "forbidden",
-            f"BotOps cannot {what}: it stops the bots on that login. Ask the person to do it in Settings > Computers",
+            f"Agent Ops cannot {what}: it stops the bots on that login. Ask the person to do it in Settings > Computers",
             403,
         )
 

@@ -73,7 +73,7 @@ def hub_token(client, body):
         if isinstance(granted, dict) and granted.get("token")
         else 0
     )
-    # BotOps' answer depends on the runs live when it was asked; the hub says so with hold=false (older hubs: by name).
+    # Agent Ops' answer depends on the runs live when it was asked; the hub says so with hold=false (older hubs: by name).
     holdable = isinstance(granted, dict) and granted.get("hold", body.get("bot") != "botops") is not False
     if holdable and until - margin > time.time():
         with _flights_lock:

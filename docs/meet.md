@@ -370,7 +370,7 @@ Not done: repeating scheduled calls and replies to the invitation in Tico.
 | Read a bot's brief | People who can read the thread and see the bot, and the attached bot itself |
 | Add to a bot's brief | The attached bot, including during a private task |
 
-BotOps acts as the person it works for when using call controls.
+Agent Ops acts as the person it works for when using call controls.
 
 Errors: `meet_unavailable` (503) when no call provider is available to the caller, Google will not make the space,
 Tico Meet is not set up, the LiveKit package is missing, or the recorder cannot join. `not_tico_meet` (409) for a token

@@ -11,7 +11,7 @@ When it opens:
   checked tool's own check decides, every CHECK_EVERY, and a bot that misuses a working key opens nothing.
 
 Who gets what:
-- The task goes to the Tools page's own owner (backend/page_owners.py, the Tools Owner), else BotOps; with neither,
+- The task goes to the Tools page's own owner (backend/page_owners.py, the Tools Owner), else Agent Ops; with neither,
   nothing is filed. It is public (`private` False), so the stage bots that read it are never stranded.
 - The key card (backend/credential_cards.py, a request whose `credential_id` names the key it replaces) goes to the
   person who connected the tool (`tools.created_by`) when they may change it, else a credential administrator who may
@@ -148,7 +148,7 @@ def title_of(tool: Row, renew: bool = False) -> str:
 
 # ---------------------------------------------------------------------------------------------------- who
 def _owner(c: Any) -> str | None:
-    """The bot the task goes to: the Tools page's own owner, else BotOps, as an actor; None with neither."""
+    """The bot the task goes to: the Tools page's own owner, else Agent Ops, as an actor; None with neither."""
     from . import page_owners
 
     found = page_owners.owner(c, "tools", fallback=False)
@@ -325,7 +325,7 @@ def start(c: Any, tool_id: str, why: str, renew: bool = False) -> Row:
         return None
     owner = _owner(c)
     if not owner:
-        log.warning("No Tools Owner or BotOps to reconnect tool %s", tool_id)
+        log.warning("No Tools Owner or Agent Ops to reconnect tool %s", tool_id)
         return None
     person = person_for(c, tool)
     key = (_ending_key(c, tool_id) if renew else None) or _rejected_key(c, tool_id)

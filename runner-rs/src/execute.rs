@@ -4739,8 +4739,8 @@ mod tests {
             session_key(&a(json!({"session": "task"}), Value::Null)),
             "conversation:c1"
         );
-        let botops = json!({"bot": "botops", "config": {}, "conversation": {"id": "c2"}});
-        assert_eq!(session_key(&botops), "conversation:c2");
+        let agent_ops = json!({"bot": "botops", "config": {}, "conversation": {"id": "c2"}});
+        assert_eq!(session_key(&agent_ops), "conversation:c2");
         // A Strategy Owner on `session: bot`: its goals work keeps the bot thread, while the owner's chat, handed
         // `session: task` by the server (backend/rooms.py session_config), keys every follow-up on that chat alone.
         let strategy_turn = |config: Value, conversation: &str| json!({"bot": "strategy-owner", "config": config, "task": null, "conversation": {"id": conversation}});

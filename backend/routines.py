@@ -251,7 +251,7 @@ def seeded(c, bot, entry):
     """Where one routine of the bot's template (`entry`, as clients/routines.py validates it) is now: (its schedule id or
     None, its row as `row` reads it), or None when the bot does not have it. A built-in's or a starter's was made here
     (`create`, the schedule row moved to an automation); a bot `tico bot create` built got it straight as an automation
-    owned by the bot, with the routine's title and time, made by BotOps."""
+    owned by the bot, with the routine's title and time, made by Agent Ops."""
     sid = c.execute("SELECT id FROM schedules WHERE bot=? AND routine_key=?", (bot, entry["id"])).fetchone()
     if sid:
         found = row(c, sid["id"])
@@ -267,7 +267,7 @@ def seeded(c, bot, entry):
         value = trigger.get({"schedule": "cron", "event": "name", "webhook": "id"}.get(trigger["type"], "")) or ""
         made = c.execute(
             "SELECT 1 FROM audit_log WHERE object=? AND before IS NULL AND (via='botops' OR actor=?)",
-            ("automation:" + auto["id"], automations.BOTOPS),
+            ("automation:" + auto["id"], automations.AGENT_OPS),
         ).fetchone()
         if (trigger["type"], value) == want and made:
             return None, {**dict(auto), "automation": auto["id"]}
@@ -277,7 +277,7 @@ def seeded(c, bot, entry):
 def untouched(c, sid, found):
     """Whether nobody has changed a seeded routine since it was made: never switched on or off, never edited, not a
     draft waiting for a person's OK. Every change to an automation is on its audit trail (backend/audit_log.py) and every
-    change to a routine before it moved is a `routine.updated` event, so one of either means a person (or BotOps or a bot
+    change to a routine before it moved is a `routine.updated` event, so one of either means a person (or Agent Ops or a bot
     for one) decided about it, and that decision stands."""
     if sid and c.execute("SELECT 1 FROM events WHERE action='routine.updated' AND target=? LIMIT 1", (sid,)).fetchone():
         return False
@@ -357,7 +357,7 @@ MAILBOX = re.compile(r"^[^\s@{}<>]+@[^\s@{}<>]+\.[^\s@{}<>]+$")
 
 
 def declared_mailbox(config):
-    """The address a bot declares: the identity of its `gmail` tool in bot.yaml (BotOps fills it from the
+    """The address a bot declares: the identity of its `gmail` tool in bot.yaml (Agent Ops fills it from the
     `Mailbox:` line in the instructions). Empty when there is none, or when `{{mailbox}}` was never filled."""
     for entry in tools_of(config) or []:
         if isinstance(entry, dict) and str(entry.get("service", "")).lower() == "gmail":

@@ -6,9 +6,9 @@ gave the assistant); its header has the dot, the name and the page it sees. The 
 page of its own (`#/assistant`): the assistant's name, then the same thread and composer as a bot's Home, with a
 few things to ask while it is empty. The **Assistant** tab, first on your own page (`#/person/<you>`), opens the same
 page. Attach files or
-pictures there, or in the Ask panel, with the clip, a drop or a paste, like any bot chat. There is no BotOps, Strategy Owner, Librarian or Assistant row in
-the rail: you ask the Assistant, and it hands its helpers what needs them (below). BotOps' own Home is still at
-`#/bot/botops`. These built-ins stay out of the team chart and Goals tree; Settings > Bots still manages all four.
+pictures there, or in the Ask panel, with the clip, a drop or a paste, like any bot chat. There is no Agent Ops, Strategy Owner, Librarian or Assistant row in
+the rail: you ask the Assistant, and it hands its helpers what needs them (below). Agent Ops' own Home is still at
+`#/bot/agent-ops`. These built-ins stay out of the team chart and Goals tree; Settings > Bots still manages all four.
 It works on a phone too.
 
 In the thread the Assistant's turns are plain text; yours are dark bubbles on the right. The live dot stays in the
@@ -32,10 +32,10 @@ Opening and closing change no `hidden` attribute anywhere and add nothing to the
 a real hub either restyles the whole page (30-50 ms before the flight could start). So the closed panel keeps its box
 but draws nothing (a class, not `hidden`), and the dot's flying copy is made once, in a layer of its own, and reused.
 
-A Confirm card BotOps (or another bot) left in its own Home comes into the DM with its Confirm and Cancel. Bots' asks
-to you are never added to the chat: they wait in Needs you. You can answer one by telling the Assistant: "tell BotOps yes" answers BotOps' open ask in your words, and the Assistant
+A Confirm card Agent Ops (or another bot) left in its own Home comes into the DM with its Confirm and Cancel. Bots' asks
+to you are never added to the chat: they wait in Needs you. You can answer one by telling the Assistant: "tell Agent Ops yes" answers Agent Ops' open ask in your words, and the Assistant
 records it as your answer. It answers only when your words give what the ask needs, such as a price, a pick, a yes or
-no, or a date. Words that give none of that, such as "just add it like the others" when BotOps asked for a price, answer
+no, or a date. Words that give none of that, such as "just add it like the others" when Agent Ops asked for a price, answer
 nothing: the ask stays open, and the Assistant may comment on the task, or ask you one short question if it cannot tell
 which one you meant. A Confirm card needs your own tap. A goal suggestion can also be confirmed by a yes in your chat
 ([below](#goals-agreed-in-words)).
@@ -45,7 +45,7 @@ which one you meant. A Confirm card needs your own tap. A goal suggestion can al
 Everyone, the owner included, has one DM: their Assistant. Three built-in helpers work behind it, and nobody messages
 them directly:
 
-- **BotOps** creates, changes, debugs, tests, deploys and maintains bots.
+- **Agent Ops** creates, changes, debugs, tests, deploys and maintains bots.
 - **The [Strategy Owner](strategy-bot.md)** gives strategy advice and proposes goal changes (goal and KPI colours and reasons, the
   vision).
 - **The [Librarian](librarian.md)** does research and sets up Market, Docs and the library.
@@ -54,7 +54,7 @@ The Assistant files a helper a task with `--request-id turn`. The same citation 
 wrote in your own Assistant DM in the last 30 minutes, and the owner's rule "Assistant acts without asking" on.
 The task opens with your words quoted.
 For the Strategy Owner and the Librarian the event `assistant.asked_helper` records it (with `helper`, `for` and
-`cited`). Each helper runs its own turn with its own rights, and only BotOps borrows yours (below). So a strategy change
+`cited`). Each helper runs its own turn with its own rights, and only Agent Ops borrows yours (below). So a strategy change
 stays the owner's: the Strategy Owner proposes it on a Confirm card, and only the owner can confirm. The Strategy Owner's goal
 suggestions are agreed the way your own goal changes are: a yes in your chat confirms one ([below](#goals-agreed-in-words)).
 A task for any other bot is filed as you, with your words in its body; a citation on it lends nothing and is dropped.
@@ -104,17 +104,17 @@ with "no" but means yes, such as "No problem", is not a no and turns nothing dow
 skip it, not or don't: "No problem, just leave it" is a no. "No problem, save it" agrees to a read-back. A "no" to a Why line stays a click on its card. Only the owner's Assistant agrees goal changes
 in chat, so nobody else's yes or no in chat counts.
 
-### BotOps
+### Agent Ops
 
-When you ask for something only BotOps can do (a new bot, a change to one, a credential), the Assistant files BotOps a
-task with `--request-id turn`, citing your own message. BotOps then acts with your rights, exactly as if you had asked
+When you ask for something only Agent Ops can do (a new bot, a change to one, a credential), the Assistant files Agent Ops a
+task with `--request-id turn`, citing your own message. Agent Ops then acts with your rights, exactly as if you had asked
 it in its own Home, and the task opens with your words quoted. The citation holds only for a message you wrote in your
-own Assistant DM in the last 30 minutes, only for a task owned by BotOps, and only while that message is under a week
-old; otherwise BotOps works with its own rights and asks you on a card. The owner's rule "Assistant acts without
+own Assistant DM in the last 30 minutes, only for a task owned by Agent Ops, and only while that message is under a week
+old; otherwise Agent Ops works with its own rights and asks you on a card. The owner's rule "Assistant acts without
 asking" must be on; with it off the task is filed without your rights. The event `botops.asked_via_assistant` records it.
 
 Ask it to find a meeting, a doc, a file or a task; to tell you what needs you; to make a task; to hand work to the
-right bot; to ask BotOps for a new bot; or how something works. It answers briefly and links what it names (tasks,
+right bot; to ask Agent Ops for a new bot; or how something works. It answers briefly and links what it names (tasks,
 meetings, docs, files, bots, humans), and the links open inside the app.
 
 ## Private to you
@@ -134,7 +134,7 @@ private task, and no run for someone else, nor its manager, reads it.
 
 You may let bots you choose view it, read only. On **What it has learned** (your Assistant's settings), the line
 **Bots that can view this chat** says None until you add one: **Add a bot**, type part of its name, pick it. Nobody is
-on it at first, and only you change it, on your own click in Tico: not your Assistant, not BotOps acting for you, not a
+on it at first, and only you change it, on your own click in Tico: not your Assistant, not Agent Ops acting for you, not a
 personal API token, not the owner or an admin (`GET`/`POST /api/v2/assistant/viewers`, `DELETE /api/v2/assistant/viewers/{bot}`). A bot on your list
 reads your messages, the Assistant's replies and its cards (what each proposed and what became of it, never its
 request or result) with `tico assistant shared` and `tico assistant shared-read <person>` (`GET
@@ -143,13 +143,13 @@ request or result) with `tico assistant shared` and `tico assistant shared-read 
 it has learned about me** (`PUT /api/v2/assistant/viewers/learned`), which goes back to off when you remove the last
 bot; the company layer is never shared. If you leave the team or your sign-in is turned off, every read is refused. Each bot's
 last read shows beside it, and every read is in the audit log (`assistant.shared_read`, naming the bot and you). The
-list is never shared with people or another team, and no team-wide switch shares everyone's chat. Every new team gets the assistant, BotOps, the [Librarian](librarian.md) and the [Strategy Owner](goals-and-kpis.md#the-strategy-bot) built in (all required in setup, active once a computer is enrolled),
-and none can be archived or deleted by anyone: the owner included, through Settings, the API, `tico` or BotOps
+list is never shared with people or another team, and no team-wide switch shares everyone's chat. Every new team gets the assistant, Agent Ops, the [Librarian](librarian.md) and the [Strategy Owner](goals-and-kpis.md#the-strategy-bot) built in (all required in setup, active once a computer is enrolled),
+and none can be archived or deleted by anyone: the owner included, through Settings, the API, `tico` or Agent Ops
 (`409 system_bot`); pausing and renaming stay allowed, and Settings > Bots shows them as **Built-in**. A team
 that set the assistant aside before it was built in keeps it archived on update, and the Assistant page says the Assistant is off
 instead of failing. The owner gets **Turn on** there and in **Settings > General**: one click restores the
 archived assistant (same bot, same history, renamed to the team's assistant name) or, if there is none, adds it from
-the template, puts it on the computer BotOps runs on and activates it, and every human's Assistant page starts working
+the template, puts it on the computer Agent Ops runs on and activates it, and every human's Assistant page starts working
 (`POST /api/v2/assistant/turn-on`). With no computer enrolled yet it is left planned and the button says so; enroll one
 and press it again. Once on, it cannot be archived again. Anyone else is told to ask the owner.
 
@@ -272,7 +272,7 @@ The ref is a task id (or its first eight characters) or a message id. The answer
 cause (the automation that opened it, the org rule that asked for it, the parent task it came from, or the bot that filed
 it), how many items that cause made in the last seven days and how many are still open, and up to three commands that
 would stop the source: turn an automation off, retire a rule, close what a bot filed, pause the bot, or file a task for
-BotOps to fix the bot's source. Each command is a `tico` line you can run as it is. A ref you cannot read is `404`.
+Agent Ops to fix the bot's source. Each command is a `tico` line you can run as it is. A ref you cannot read is `404`.
 
 `tico needs-you show [--kind task|ask|paused|question]` (`GET /api/v2/needs-you/summary`) gives the same count as
 Needs you, split by kind and by the bot that put each item there, with this week's and older counts. Use it first when
@@ -285,7 +285,7 @@ whom, never the bot's words), e.g. "Security Engineer: read-only on tico (was wr
 and tico-docs."; a route with no sentence of its own still gets plain words ("Make a change to bot Ops"), never the method
 and path, and a setting's raw value ("all", "own") is never read out as a word: a field that holds a name (a model, a
 title) shows it, any other only names the field. An automation, task, bot or key is named as the app names it
-("Delete the automation “Receipts” of Cara (already switched off)"). A card BotOps makes while acting for you adds,
+("Delete the automation “Receipts” of Cara (already switched off)"). A card Agent Ops makes while acting for you adds,
 after the title, the work it was on (the task and who asked for it, or your chat with it; a task you may not read is
 named only by who asked; a task that is gone, by its id) and why it waits for you, from the rule that made it a card (deleting an automation, who holds a key, a bot's repositories, spending limits). A repository card made before this wording is titled from the request
 it sends, with its old line under Details. Under a closed **Details** are the method, path and the request body as a key: value list (a long value is folded
@@ -352,7 +352,7 @@ Tell it how you like things ranked and summarised ("launches matter more than hi
 saves that as one short line in your own words and says so in its reply. **What it has learned** at the top of your DM
 (`#/assistant/learned`) lists everything it saved about you, under **About you**; edit a line or delete it there (delete
 asks once more). Only you see this layer: not the owner, not administrators, not SQL, not another person's
-Assistant, and not a bot doing other work for you, BotOps included; a bot you let view your chat reads it only if you
+Assistant, and not a bot doing other work for you, Agent Ops included; a bot you let view your chat reads it only if you
 tick **Include what it has learned about me** ([Private to you](#private-to-you)). The audit log names an entry by id, never by its words. It goes with you: it stays yours if you become the owner, and back again.
 
 Each turn in your DM is handed the layer as it is when the turn starts, so a line you delete is not used from the
@@ -405,4 +405,4 @@ before each turn: `jobs.md` (the command per job), `assistant-chat.md` (cards, c
 `acting-for-them.md` (bots' questions, inbox routines, email), `tico-map.md` (how Tico is organised) and
 `daily-sweep.md` (the morning message). Its MCP tool list is the short set those files name (`ASSISTANT_TOOLS` in
 `clients/commands/_access.py`); the `tico` CLI reaches the rest. They live in the bot's repository; edit them there or
-through BotOps.
+through Agent Ops.

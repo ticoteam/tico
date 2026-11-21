@@ -1274,7 +1274,7 @@ class Gateway:
         decision["candidates"] = [{"bot": slug, "confidence": p} for slug, p in ranked[:3]]
         if decision["asks"] < self.settings.slack_ask_threshold:
             # Decide picks who gets a person's message, never whether anyone does: one it reads as asking for
-            # nothing goes to the assistant (or BotOps), and is only recorded when neither is running.
+            # nothing goes to the assistant (or Agent Ops), and is only recorded when neither is running.
             asker = self.fallback_bot([bot["id"] for bot in fleet])
             decision["fallback"] = bool(asker)
             if asker:
@@ -1286,7 +1286,7 @@ class Gateway:
                 decision["recipients"] = [{"bot": asker, "confidence": scores.get(asker, 0.0)}]
             else:
                 decision["reason"] = (
-                    "asks for nothing, and no assistant or BotOps to hand it to; recorded, nobody woken"
+                    "asks for nothing, and no assistant or Agent Ops to hand it to; recorded, nobody woken"
                 )
             return decision
         chosen = [(slug, p) for slug, p in ranked if p >= self.settings.slack_route_threshold]
@@ -1307,12 +1307,12 @@ class Gateway:
                 )
                 chosen = [(asker, scores.get(asker, 0.0))]
             else:
-                decision["reason"] = "no bot at threshold, and no assistant or BotOps to ask; recorded, nobody woken"
+                decision["reason"] = "no bot at threshold, and no assistant or Agent Ops to ask; recorded, nobody woken"
         decision["recipients"] = [{"bot": slug, "confidence": p} for slug, p in chosen]
         return decision
 
     def fallback_bot(self, active):
-        """Who asks "which bot?" when nobody scored: the assistant, or BotOps in a company that
+        """Who asks "which bot?" when nobody scored: the assistant, or Agent Ops in a company that
         chose not to have one (the assistant is optional). None when neither is running."""
         if self.settings.assistant_bot in active:
             return self.settings.assistant_bot
@@ -1340,7 +1340,7 @@ class Gateway:
             "candidates": [],
             "fallback": True,
             "dropped": [],
-            "reason": why + "; routed to " + (asker or "nobody (no assistant or BotOps is running)"),
+            "reason": why + "; routed to " + (asker or "nobody (no assistant or Agent Ops is running)"),
         }
 
     # ------------------------------------------------------------------ writing into the hub
@@ -1403,7 +1403,7 @@ class Gateway:
         return say_to_bot(c, actor, bot, event, text, refs, self.clock()), None
 
     def fallback_to(self, decision, asker):
-        """The assistant (or BotOps) takes a message that every recipient dropped; the reasons stay on it."""
+        """The assistant (or Agent Ops) takes a message that every recipient dropped; the reasons stay on it."""
         decision["fallback"] = True
         decision["reason"] = (
             "every recipient was dropped; "
@@ -1437,7 +1437,7 @@ class Gateway:
 
     def write(self, c, event, person, channel, decision, thread, gates):
         """Each recipient gets the message in its own thread conversation. Returns the decision. A recipient the org rules
-        hold, or the bot cannot take, is dropped with its reason. When none can take it, the assistant (or BotOps) asks:
+        hold, or the bot cannot take, is dropped with its reason. When none can take it, the assistant (or Agent Ops) asks:
         `_Fallback` rolls this write back so the asker is checked before it is written."""
         actor = "human:" + person["id"]
         delivered, refs = [], self.refs_for(event, channel, decision, thread, person)
@@ -1482,7 +1482,7 @@ class Gateway:
         return decision
 
     def record_only(self, c, event, person, decision, gates):
-        """A message nobody can be woken for (no bot chosen, no assistant or BotOps running): kept on the thread's
+        """A message nobody can be woken for (no bot chosen, no assistant or Agent Ops running): kept on the thread's
         conversations, no job queued. Each copy is checked as the org rules decide, as a routed one is."""
         actor = "human:" + person["id"]
         kept = []
@@ -1698,7 +1698,7 @@ class Gateway:
                     type(post_exc).__name__,
                 )
         if decision["routed_by"] == "budget" and state_out != "routed":
-            # Over the cap with no assistant or BotOps to take it: the message is kept, and the human is told.
+            # Over the cap with no assistant or Agent Ops to take it: the message is kept, and the human is told.
             try:
                 self.slack.post_message(
                     event["channel"],
@@ -2152,7 +2152,7 @@ class Gateway:
 
 
 class _Fallback(Exception):
-    """Every recipient of a message was dropped: the write is rolled back, and the assistant (or BotOps) is checked and asked."""
+    """Every recipient of a message was dropped: the write is rolled back, and the assistant (or Agent Ops) is checked and asked."""
 
     def __init__(self, asker):
         super().__init__(asker)

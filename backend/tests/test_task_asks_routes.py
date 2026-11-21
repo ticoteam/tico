@@ -243,15 +243,15 @@ def test_an_ok_whose_own_step_needs_the_person_is_refused_without_them_and_stays
         assert standing(api, rid) == K.WAITING, kind
 
 
-# ----------------------------------------------------------------------------- the Assistant and BotOps never OK
-def test_the_assistant_and_botops_never_answer_ok_to_an_ok_even_a_plain_one(api):
-    """A plain OK (no grant behind it) asked of Ana. Her Assistant, confirmed or not, and BotOps acting for her, are
+# ----------------------------------------------------------------------------- the Assistant and Agent Ops never OK
+def test_the_assistant_and_agent_ops_never_answer_ok_to_an_ok_even_a_plain_one(api):
+    """A plain OK (no grant behind it) asked of Ana. Her Assistant, confirmed or not, and Agent Ops acting for her, are
     refused an `ok` at the answer route, before anything is written; their send back still goes through."""
     as_bot(api)
     ids = api.app.state.auth.settings.test_identities
     ids["ana-assistant"] = Identity("human:ana", "owner", "ana@acme.example", via="assistant")
     ids["ana-assistant-confirmed"] = Identity("human:ana", "owner", "ana@acme.example", via="assistant", confirmed=True)
-    ids["ana-botops"] = Identity("human:ana", "owner", "ana@acme.example", via="botops")
+    ids["ana-agent-ops"] = Identity("human:ana", "owner", "ana@acme.example", via="botops")
     assistant = as_bot(api, "assistant")
     tid = bots_task(api, "ops-bot-test")
     with api.app.state.store.transaction() as c:
@@ -259,11 +259,11 @@ def test_the_assistant_and_botops_never_answer_ok_to_an_ok_even_a_plain_one(api)
         rid = H.task_ask(c, "bot:ops", tid, "human:ana", "OK?", kind="ok", shows=X.shown(c), seen_version=version)[
             "requirement_id"
         ]
-    for token in ("ana-assistant", "ana-assistant-confirmed", "ana-botops", assistant):
+    for token in ("ana-assistant", "ana-assistant-confirmed", "ana-agent-ops", assistant):
         status, code, _, _ = call(api, "POST", f"tasks/{tid}/asks/{rid}/answer", token, {"value": "ok"})
-        # Unconfirmed (BotOps never is), the write waits for the person's tap on a card first: refused either way.
+        # Unconfirmed (Agent Ops never is), the write waits for the person's tap on a card first: refused either way.
         assert status == 403 and code in ("ok_not_yours", "confirm_required"), (token, code)
-        assert code == "ok_not_yours" or token in ("ana-assistant", "ana-botops")
+        assert code == "ok_not_yours" or token in ("ana-assistant", "ana-agent-ops")
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM answers WHERE requirement_id=?", (rid,)).fetchone()
     status, _, _, _ = call(
@@ -338,15 +338,15 @@ def test_the_generic_use_lets_only_the_asker_act_once_on_exactly_what_was_okd(ap
     assert use(api, rid2, bot, content, subject + "-2")[:2] == (409, "task_ok_missing")
 
 
-def test_the_assistant_and_botops_never_give_a_bound_ok_from_its_preview(api):
+def test_the_assistant_and_agent_ops_never_give_a_bound_ok_from_its_preview(api):
     bot = as_bot(api)
     ids = api.app.state.auth.settings.test_identities
     ids["ben-assistant"] = Identity("human:ben", "human", "ben@acme.example", via="assistant", confirmed=True)
-    ids["ben-botops"] = Identity("human:ben", "human", "ben@acme.example", via="botops", confirmed=True)
+    ids["ben-agent-ops"] = Identity("human:ben", "human", "ben@acme.example", via="botops", confirmed=True)
     ids["ben-token"] = Identity("human:ben", "human", "ben@acme.example", via_token=True)
     tid = bots_task(api, bot)
     rid = ask(api, bot, tid)
-    for token in ("ben-assistant", "ben-botops", "ben-token"):
+    for token in ("ben-assistant", "ben-agent-ops", "ben-token"):
         shown = api.get(f"/api/v2/oks/{rid}", headers=headers("ben-test")).json()["shown_hash"]
         status, _, _, _ = call(api, "POST", f"tasks/{tid}/asks/{rid}/ok", token, {"shown_hash": shown})
         assert status in (403, 409), token

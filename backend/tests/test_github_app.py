@@ -31,7 +31,7 @@ from backend.tests.helpers.github_app import (
     _box,
     api,
     auth,
-    botops_turn,
+    agent_ops_turn,
     connect,
     gh,
     manifest,
@@ -45,12 +45,12 @@ from backend.tests.helpers.github_app import (
 
 
 def test_repository_delete_is_owner_only_scoped_audited_and_never_treats_404_as_success(api, gh):
-    botops_turn(api)
+    agent_ops_turn(api)
     connect(api, administration="true")
     path = "/api/v2/github/repos/Acme/bot-qa-delete"
     head = {**auth(), "Idempotency-Key": str(uuid.uuid4())}
     assert api.delete(path, headers={**head, **auth("person-test")}).status_code == 403
-    assert api.delete(path, headers={**head, **auth("botops-test")}).status_code == 403
+    assert api.delete(path, headers={**head, **auth("agent-ops-test")}).status_code == 403
     assert api.delete("/api/v2/github/repos/elsewhere/bot-qa-delete", headers=head).status_code == 422
     assert not any(c[0] == "DELETE" for c in gh.calls)
     response = api.delete(path, headers=head)
@@ -68,13 +68,13 @@ def test_repository_delete_is_owner_only_scoped_audited_and_never_treats_404_as_
         )
         conversation = rooms.personal_room(c, "human:ana", "botops")
         c.execute(
-            "UPDATE messages SET sender_id='human:ana',conversation_id=?,kind='say',body='Delete the QA repository' WHERE id='m-botops'",
+            "UPDATE messages SET sender_id='human:ana',conversation_id=?,kind='say',body='Delete the QA repository' WHERE id='m-agent-ops'",
             (conversation["id"],),
         )
         c.execute("INSERT INTO attempt_conversations VALUES('a2',?)", (conversation["id"],))
     delegated = api.delete(
         "/api/v2/github/repos/Acme/bot-qa-delegated",
-        headers={**auth("botops-test"), "X-Tico-On-Behalf-Of": "turn", "Idempotency-Key": str(uuid.uuid4())},
+        headers={**auth("agent-ops-test"), "X-Tico-On-Behalf-Of": "turn", "Idempotency-Key": str(uuid.uuid4())},
     )
     assert delegated.status_code == 200 and delegated.json()["deleted"] and "needs_confirm" not in delegated.json(), (
         delegated.text
@@ -146,15 +146,15 @@ def manifest_permissions():
     return G.manifest(SimpleNamespace(public_url=PUBLIC), "Acme Tico", True)["default_permissions"]
 
 
-def test_missing_repo_permission_is_refused_with_both_fixes_and_botops_creates_it_once_granted(api, gh):
-    """BotOps' create without Administration: a refusal naming a person and both fixes, no task filed, the bot kept as
-    planned; once GitHub reports the permission, BotOps's next try makes the repository."""
+def test_missing_repo_permission_is_refused_with_both_fixes_and_agent_ops_creates_it_once_granted(api, gh):
+    """Agent Ops' create without Administration: a refusal naming a person and both fixes, no task filed, the bot kept as
+    planned; once GitHub reports the permission, Agent Ops's next try makes the repository."""
     connect(api, administration="false")
     gh.permissions = {"administration": "read", "contents": "write", "metadata": "read"}
     gh.missing = {"bot-newbie"}
-    botops_turn(api)
+    agent_ops_turn(api)
     create = lambda: api.post(
-        "/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth("botops-test")
+        "/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth("agent-ops-test")
     )
     with api.app_state.store.read() as c:
         tasks = c.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
@@ -701,8 +701,8 @@ def test_product_repository_preview_is_owner_only_and_rejects_paths_before_githu
     connect(api, administration="true")
     gh.permissions = {"administration": "write", "metadata": "read"}
     path = "/api/v2/github/product-repos/preview"
-    botops_turn(api)
-    # Every bot may create product repositories unless switched off (test_bot_product_repos.py): BotOps is, here.
+    agent_ops_turn(api)
+    # Every bot may create product repositories unless switched off (test_bot_product_repos.py): Agent Ops is, here.
     assert (
         api.put(
             "/api/v2/bots/botops/repositories",
@@ -713,7 +713,7 @@ def test_product_repository_preview_is_owner_only_and_rejects_paths_before_githu
     )
     before = len(gh.calls)
     body = {"org": "Acme", "name": "tico-recorder", "visibility": "private", "auto_init": False, "confirmed": True}
-    for actor in ("person-test", "botops-test"):
+    for actor in ("person-test", "agent-ops-test"):
         assert api.get(path, params={"name": "tico-recorder"}, headers=auth(actor)).status_code == 403
         assert product_repo_request(api, body, actor=actor, key="non-owner-" + actor).status_code == 403
     assert len(gh.calls) == before, "non-Owner credentials cannot preview or create a product repository"
@@ -949,7 +949,7 @@ def test_selected_bot_repository_creation_grant_and_revocation(api, gh):
     create = lambda body: api.post('/api/v2/github/repos', json=body, headers=auth('bot-test'))
     assert api.get(path, headers=auth()).json()['create_repositories'] is False
     denied = create({'slug': 'newbie'})
-    assert denied.status_code == 403 and 'Ask BotOps' in denied.text
+    assert denied.status_code == 403 and 'Ask Agent Ops' in denied.text
     for actor in ('bot-test', 'person-test', 'runner-test'):
         assert api.put(path, json={'mode': 'own', 'create_repositories': True}, headers=auth(actor)).status_code == 403
     saved = api.put(path, json={'mode': 'own', 'create_repositories': True}, headers=auth())
@@ -977,16 +977,16 @@ def test_selected_bot_repository_creation_grant_and_revocation(api, gh):
     assert api.get('/api/v2/bots/botops/repositories', headers=auth()).json()['create_repositories'] is True
 
 
-def test_botops_token_writes_every_bot_in_its_own_run_the_persons_bots_for_them_and_none_for_a_bot(api, gh):
+def test_agent_ops_token_writes_every_bot_in_its_own_run_the_persons_bots_for_them_and_none_for_a_bot(api, gh):
     from backend import team_rules
 
     connect(api)
-    botops_turn(api)
+    agent_ops_turn(api)
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE jobs SET message_id='m-botops' WHERE bot_id='botops'")
-        # The daily update: BotOps' own schedule.
-        c.execute("UPDATE messages SET kind='notice',refs='{\"wake\": \"update\"}' WHERE id='m-botops'")
-    wide = ["Acme/emp-botops", "Acme/emp-cmo", "Acme/emp-cpo", "Acme/emp-newbie"]
+        c.execute("UPDATE jobs SET message_id='m-agent-ops' WHERE bot_id='botops'")
+        # The daily update: Agent Ops' own schedule.
+        c.execute("UPDATE messages SET kind='notice',refs='{\"wake\": \"update\"}' WHERE id='m-agent-ops'")
+    wide = ["Acme/emp-agent-ops", "Acme/emp-cmo", "Acme/emp-cpo", "Acme/emp-newbie"]
     assert sorted(turn_token(api, "botops").json()["repositories"]) == wide
     with api.app_state.store.read() as c:
         # The computer's git helper asked: the run in progress on it decided the scope.
@@ -999,33 +999,35 @@ def test_botops_token_writes_every_bot_in_its_own_run_the_persons_bots_for_them_
     assert audit["runs"] == [{"attempt": "a2", "rights": "bot:botops", "own_run": True}]
     assert (
         sorted(
-            api.post("/api/v2/github/token", json={"bot": "botops"}, headers=auth("botops-test")).json()["repositories"]
+            api.post("/api/v2/github/token", json={"bot": "botops"}, headers=auth("agent-ops-test")).json()[
+                "repositories"
+            ]
         )
         == wide
     )
     with api.app_state.store.transaction() as c:
-        team_rules.save(c, "human:ana", {"botops_manages_bots": False})
-    assert turn_token(api, "botops").json()["repositories"] == ["Acme/emp-botops"]
+        team_rules.save(c, "human:ana", {"agent_ops_manages_bots": False})
+    assert turn_token(api, "botops").json()["repositories"] == ["Acme/emp-agent-ops"]
     with api.app_state.store.transaction() as c:
-        team_rules.save(c, "human:ana", {"botops_manages_bots": True})
-        c.execute("UPDATE messages SET sender_id='bot:cmo' WHERE id='m-botops'")
-    assert turn_token(api, "botops").json()["repositories"] == ["Acme/emp-botops"]
+        team_rules.save(c, "human:ana", {"agent_ops_manages_bots": True})
+        c.execute("UPDATE messages SET sender_id='bot:cmo' WHERE id='m-agent-ops'")
+    assert turn_token(api, "botops").json()["repositories"] == ["Acme/emp-agent-ops"]
     # A person asking: the bots they manage (Riley runs cpo), whatever team rule; nothing once no run is in progress.
     from backend import rooms
 
     with api.app_state.store.transaction() as c:
-        team_rules.save(c, "human:ana", {"botops_manages_bots": False})
+        team_rules.save(c, "human:ana", {"agent_ops_manages_bots": False})
         c.execute("UPDATE bot_config SET owner_id='riley' WHERE bot='cpo'")
         room = rooms.personal_room(c, "human:riley", "botops")
         c.execute(
-            "UPDATE messages SET sender_id='human:riley',conversation_id=?,kind='say' WHERE id='m-botops'",
+            "UPDATE messages SET sender_id='human:riley',conversation_id=?,kind='say' WHERE id='m-agent-ops'",
             (room["id"],),
         )
         c.execute("INSERT INTO attempt_conversations VALUES('a2',?)", (room["id"],))
-    assert sorted(turn_token(api, "botops").json()["repositories"]) == ["Acme/emp-botops", "Acme/emp-cpo"]
+    assert sorted(turn_token(api, "botops").json()["repositories"]) == ["Acme/emp-agent-ops", "Acme/emp-cpo"]
     with api.app_state.store.transaction() as c:
         c.execute("UPDATE attempts SET state='completed' WHERE id='a2'")
-    assert turn_token(api, "botops").json()["repositories"] == ["Acme/emp-botops"]
+    assert turn_token(api, "botops").json()["repositories"] == ["Acme/emp-agent-ops"]
 
 
 def lose_key(api, *sources):
@@ -1085,7 +1087,7 @@ def test_two_directory_sources_sealed_with_a_lost_key_do_not_deadlock(api, gh):
 
 
 def test_a_proposal_cannot_carry_the_lost_key_replacement():
-    """PUT /api/v2/directory is a route BotOps may propose; replacing the lost key is a person's own confirm, not a card's."""
+    """PUT /api/v2/directory is a route Agent Ops may propose; replacing the lost key is a person's own confirm, not a card's."""
     from types import SimpleNamespace
 
     from backend import assistant
@@ -1163,13 +1165,13 @@ def test_without_github_app_key_a_pre_kms_secret_still_fails_and_no_key_file_is_
     assert not state.github_app.key_file().exists()
 
 
-def _built_by_botops(api, gh):
-    """BotOps builds newbie in its workspace on "mac" (r1) and asks for its empty GitHub repository."""
+def _built_by_agent_ops(api, gh):
+    """Agent Ops builds newbie in its workspace on "mac" (r1) and asks for its empty GitHub repository."""
     connect(api, administration="true")
     gh.permissions = {"administration": "write", "contents": "write", "metadata": "read"}
-    botops_turn(api)
+    agent_ops_turn(api)
     _box(api)
-    made = api.post("/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth("botops-test"))
+    made = api.post("/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth("agent-ops-test"))
     assert made.status_code == 200, made.text
     with api.app_state.store.read() as c:
         assert c.execute("SELECT value FROM registry_metadata WHERE key='bot-built-on:newbie'").fetchone()
@@ -1192,7 +1194,7 @@ def _placed(api):
 def test_a_new_bot_goes_live_first_on_the_computer_that_built_it(api, gh):
     """Only the building computer can publish a new bot's history, so another computer is refused while GitHub's
     repository is empty, and a go-live without a computer goes there and waits for its report."""
-    _built_by_botops(api, gh)
+    _built_by_agent_ops(api, gh)
     refused = _go_live(api, computer="box")
     assert refused.status_code == 409, refused.text
     error = refused.json()["error"]
@@ -1207,7 +1209,7 @@ def test_a_new_bot_goes_live_first_on_the_computer_that_built_it(api, gh):
 
 
 def test_a_new_bot_whose_history_is_on_github_goes_anywhere(api, gh):
-    _built_by_botops(api, gh)
+    _built_by_agent_ops(api, gh)
     gh.history.add("Acme/emp-newbie")
     waiting = _go_live(api, computer="box")
     assert waiting.status_code == 202 and waiting.json()["computer"] == "box", waiting.text
@@ -1220,7 +1222,7 @@ def _built_on(api, bot="newbie"):
         return row and json.loads(row[0])["runner_id"]
 
 
-def test_only_botops_records_where_a_bot_was_built_and_never_over_another_record(api, gh):
+def test_only_agent_ops_records_where_a_bot_was_built_and_never_over_another_record(api, gh):
     """Another bot allowed to create repositories cannot steer a new bot's first placement, a failed create
     records nothing, and a second call never moves the first record."""
     from backend.repositories import save_metadata
@@ -1244,17 +1246,17 @@ def test_only_botops_records_where_a_bot_was_built_and_never_over_another_record
     made = api.post("/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth("bot-test"))
     assert made.status_code == 200, made.text
     assert _built_on(api) is None  # cmo's call is not a build
-    botops_turn(api)
+    agent_ops_turn(api)
     _box(api)
     gh.generate_status = 500  # (a 422 is "already exists": cmo's repository, this company's own, is the answer)
-    failed = api.post("/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth("botops-test"))
+    failed = api.post("/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth("agent-ops-test"))
     assert failed.status_code >= 400 and _built_on(api) is None  # GitHub refused: nothing recorded
     gh.generate_status = 201
     with api.app_state.store.transaction() as c:
         c.execute("INSERT INTO registry_metadata VALUES('bot-built-on:newbie',?)", (json.dumps({"runner_id": "r2"}),))
     assert (
         api.post(
-            "/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth("botops-test")
+            "/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth("agent-ops-test")
         ).status_code
         == 200
     )
@@ -1262,7 +1264,7 @@ def test_only_botops_records_where_a_bot_was_built_and_never_over_another_record
 
 
 def test_a_refusal_says_when_github_could_not_be_checked(api, gh, monkeypatch):
-    _built_by_botops(api, gh)
+    _built_by_agent_ops(api, gh)
     monkeypatch.setattr(api.app_state.github_app, "repository_history", lambda name: None)
     refused = _go_live(api, computer="box")
     assert refused.status_code == 409 and "Tico could not check GitHub's copy" in refused.json()["error"]["detail"]
@@ -1478,14 +1480,14 @@ def test_an_empty_personal_repository_is_made_with_the_owners_token_and_a_templa
     connect(api, org="ana-dev")
     authorize(api)
     gh.permissions = {"administration": "write", "contents": "write", "metadata": "read"}
-    botops_turn(api)
-    empty = api.post("/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth("botops-test"))
+    agent_ops_turn(api)
+    empty = api.post("/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth("agent-ops-test"))
     assert empty.status_code == 200, empty.text
     assert empty.json()["repository"] == "ana-dev/bot-newbie" and empty.json()["empty"] is True
     posts = [c for c in gh.calls if c[0] == "POST" and c[1] == "/user/repos"]
     assert posts and posts[-1][3] == "Bearer gho_1" and posts[-1][2]["auto_init"] is False
     assert not [c for c in gh.calls if c[0] == "POST" and c[1].startswith("/orgs/")]
-    templated = api.post("/api/v2/github/repos", json={"slug": "cpo"}, headers=auth("botops-test"))
+    templated = api.post("/api/v2/github/repos", json={"slug": "cpo"}, headers=auth("agent-ops-test"))
     assert templated.status_code == 200, templated.text
     generated = [c for c in gh.calls if c[1].endswith("/generate")]
     assert generated and generated[-1][3].startswith("Bearer ghs_"), (
@@ -1505,7 +1507,7 @@ def test_an_expired_user_token_is_refreshed_once_and_its_rotated_refresh_token_i
         assert service._open_user(c, service._user_token_row(c)) == {"access_token": "gho_2", "refresh_token": "ghr_2"}
 
 
-def test_a_refused_refresh_forgets_the_authorization_and_the_next_authorization_lets_botops_create_it(api, gh):
+def test_a_refused_refresh_forgets_the_authorization_and_the_next_authorization_lets_agent_ops_create_it(api, gh):
     personal(gh, "ana-dev")
     connect(api, org="ana-dev")
     authorize(api)
@@ -1513,8 +1515,8 @@ def test_a_refused_refresh_forgets_the_authorization_and_the_next_authorization_
     gh.missing = {"bot-newbie"}  # not made yet: the bot waits
     expire(api)
     gh.refuse_refresh = True
-    botops_turn(api)
-    created = api.post("/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth("botops-test"))
+    agent_ops_turn(api)
+    created = api.post("/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth("agent-ops-test"))
     error = created.json()["error"]
     assert created.status_code == 409 and error["code"] == "github_permission_missing", created.text
     assert error["detail"].startswith("A person must act: Tico is not authorized to create repositories in ana-dev yet")
@@ -1522,8 +1524,8 @@ def test_a_refused_refresh_forgets_the_authorization_and_the_next_authorization_
     with api.app_state.store.read() as c:
         assert c.execute("SELECT count(*) FROM github_user_token").fetchone()[0] == 0
     gh.refuse_refresh = False
-    authorize(api)  # the owner authorizes again: BotOps's next try makes the empty repository in the account
-    again = api.post("/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth("botops-test"))
+    authorize(api)  # the owner authorizes again: Agent Ops's next try makes the empty repository in the account
+    again = api.post("/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth("agent-ops-test"))
     assert again.status_code == 200 and "ana-dev/bot-newbie" in gh.created_repositories, again.text
 
 
@@ -1658,12 +1660,12 @@ def test_a_refresh_github_cannot_answer_is_retryable_and_forgets_nothing(api, gh
     gh.permissions = {"administration": "write", "contents": "write", "metadata": "read"}
     expire(api)
     gh.refresh_status = 503
-    botops_turn(api)
+    agent_ops_turn(api)
     with api.app_state.store.read() as c:
         tasks = c.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
 
     def create():
-        return api.post("/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth("botops-test"))
+        return api.post("/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth("agent-ops-test"))
 
     down = create()
     assert down.status_code == 502 and down.json()["error"]["code"] == "github_unreachable", down.text

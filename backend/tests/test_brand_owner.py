@@ -55,7 +55,7 @@ def as_brand_owner(api):
 def test_it_is_built_for_every_company_outside_the_chart_with_its_audit_off(environment):
     api, record = set_up(environment)
     row = next(row for row in record["bots"] if row["slug"] == H.DESIGN_OWNER)
-    assert row["setup_task_id"] is None  # the runner sets it up, not BotOps
+    assert row["setup_task_id"] is None  # the runner sets it up, not Agent Ops
     with api.app.state.store.read() as c:
         assert H.bot(c, H.DESIGN_OWNER)["state"] == "active"
         assert (

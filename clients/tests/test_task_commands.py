@@ -16,7 +16,7 @@ class Recorder:
 
     def __init__(self, task=None):
         self.calls, self.task = [], task or {"id": "T1", "version": 3, "labels": ["bug"]}
-        self.__dict__["_tico_is_botops"] = False
+        self.__dict__["_tico_is_agent_ops"] = False
 
     def get(self, path, **query):
         self.calls.append(("GET", path, {k: v for k, v in query.items() if v is not None}))

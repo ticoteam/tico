@@ -428,7 +428,7 @@ def test_picking_a_candidate_creates_the_bot_in_onboarding_in_the_seat_and_only_
     as_member(api, "ben@acme.example")
     post(api, f"seats/{seat['id']}/hire", {"template": pick["template"]}, token="cara-test", expected=403)
     post(api, f"seats/{seat['id']}/hire", {"template": pick["template"], "model": "gemini-3-pro"}, expected=422)
-    post(api, f"seats/{seat['id']}/hire", {"template": "botops"}, expected=422)  # a built-in is never a candidate
+    post(api, f"seats/{seat['id']}/hire", {"template": "agent-ops"}, expected=422)  # a built-in is never a candidate
     with api.app.state.store.read() as c:
         assert {r["slug"] for r in c.execute("SELECT slug FROM bots")} == before
 
@@ -571,7 +571,7 @@ def test_a_bot_or_an_unconfirmed_assistant_never_picks_and_a_refused_pick_leaves
         api, "seats", {"title": "Support lead", "reports_to": "assistant", "description": "Answers customer email."}
     )
     pick = post(api, f"seats/{seat['id']}/recruit", {})["candidates"][0]
-    # A template that is not a starter: BotOps builds its repository, so a team with no BotOps cannot hire it.
+    # A template that is not a starter: Agent Ops builds its repository, so a team with no Agent Ops cannot hire it.
     real = recruiting._recruitable
 
     def no_starters(onboarding):
@@ -606,7 +606,7 @@ def test_a_bot_or_an_unconfirmed_assistant_never_picks_and_a_refused_pick_leaves
             with pytest.raises(Problem, match="Only a person picks"):
                 recruiting._may_hire(api.app.state.auth, c, who, row)
     refused = api.post(f"/api/v2/seats/{seat['id']}/hire", headers=headers(), json={"template": pick["template"]})
-    assert refused.status_code == 409 and "BotOps" in refused.text
+    assert refused.status_code == 409 and "Agent Ops" in refused.text
     assert state() == before
 
 

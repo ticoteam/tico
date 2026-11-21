@@ -13,7 +13,7 @@ state the necessary assumption or ask for the missing preference.
 
 ## Sending
 
-Off by default. Replies and forwards to outsiders stay drafts until the owner asks BotOps to turn sending on: BotOps
+Off by default. Replies and forwards to outsiders stay drafts until the owner asks Agent Ops to turn sending on: Agent Ops
 adds `send` to the gmail Tool and records the rules here, and the owner sets this bot's sending policy in Tico
 (Tools > the mailbox > Limits). With sending on, send within the requested work and those rules using your
 Tools; Tico decides each send, and under Ask first a person OKs it in Tico.

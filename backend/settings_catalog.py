@@ -1,15 +1,15 @@
-"""The settings catalogue: one entry per control in Settings that writes, so a person, or BotOps for them, can find a
+"""The settings catalogue: one entry per control in Settings that writes, so a person, or Agent Ops for them, can find a
 setting by its words, read it and change it without guessing a route or a body (docs/permissions.md).
 
 Each entry (backend/settings_entries.py) names a stable key (`team.rules.admin_sql`), the control's plain name and
 where it sits in Settings, who may change it, its class and the route it writes:
 
-  direct       runs at once, as the person (BotOps or their Assistant acting for them has exactly their rights)
-  confirm      BotOps or the Assistant acting for a person puts it to them as a Confirm card; the person's own call
+  direct       runs at once, as the person (Agent Ops or their Assistant acting for them has exactly their rights)
+  confirm      Agent Ops or the Assistant acting for a person puts it to them as a Confirm card; the person's own call
                runs at once
-  person       only the person themselves, in Settings: BotOps or the Assistant is told why, with the link to the card
+  person       only the person themselves, in Settings: Agent Ops or the Assistant is told why, with the link to the card
 
-The Assistant acts for its person with the same entries and classes as BotOps (`ACTING_FOR`). A direct entry runs on the
+The Assistant acts for its person with the same entries and classes as Agent Ops (`ACTING_FOR`). A direct entry runs on the
 person's own words in their own chat (the turn cites their message, as a task action does) while the owner's rule
 "Assistant acts without asking" is on; otherwise it too is a Confirm card in their chat.
 
@@ -45,7 +45,7 @@ WHO = {
     "anyone": "anyone on the team",
 }
 TARGETS = ("bot", "computer", "person", "id")
-# Who acts for a person through the catalogue, with exactly their rights: BotOps, and the person's own Assistant.
+# Who acts for a person through the catalogue, with exactly their rights: Agent Ops, and the person's own Assistant.
 ACTING_FOR = ("botops", "assistant")
 
 
@@ -352,7 +352,7 @@ def refusal(e, base="", target=None):
 
 
 def raw_refusal(c, auth, who, method, path, body=None, base=""):
-    """For a person's own write that its route refused (403), as BotOps or the Assistant made it for them: the line
+    """For a person's own write that its route refused (403), as Agent Ops or the Assistant made it for them: the line
     `tico settings` gives for that setting (`refusal`), as `{"fix", "link", "who_may"}`, when the request is one entry's
     (or its route is only entries with the same who), that who is not everyone, and the entry's own check refuses this
     person too (so a refusal for another reason keeps the route's words); else None."""
@@ -385,7 +385,7 @@ def plan(
     direct_ok=False,
 ):
     """The exact request that sets `e` to `value` for `target`, after the entry's own checks: `{"run": {...}}` to
-    make with the caller's rights; for BotOps or the Assistant acting for a person, a confirm entry's Confirm card
+    make with the caller's rights; for Agent Ops or the Assistant acting for a person, a confirm entry's Confirm card
     (`propose`) or a person-only entry's reason and link. `card_direct`: a direct entry is a card too (the Assistant,
     when the owner's rule is off or the turn cites no words of the person's). `can_card(method, path)`: whether that
     card can carry the route. `card_words(c, auth, who, e, body, target)`: for an entry whose class rests on what the
@@ -429,7 +429,7 @@ def plan(
         # What the route itself does with the request: a kept Run workflows tick that comes back with
         # `{"mode": "chosen"}` needs the card though the body holds no tick, and re-sending a tick that is on doesn't.
         kind = e.when_held if tried[0] else "direct"
-    # The plan is never what a card runs (the card runs the route itself), so BotOps acting for a person always gets
+    # The plan is never what a card runs (the card runs the route itself), so Agent Ops acting for a person always gets
     # the card here, and with no way to make one it gets nothing it could run.
     # A turn's direct change runs only where the gate would admit the run itself (the Assistant's own switches, a credential,
     # SQL, token or support grant, a sign-in or a removal are the person's own tap): those stay Confirm cards.
@@ -601,7 +601,7 @@ def install(app, store, auth, settings):
     @app.post("/api/v2/settings/catalog/{key}/plan")
     def settings_plan(request: Request, key: str, body: M.SettingsPlan):
         """The request that sets this entry, checked against the caller first: `run` (make it with your rights), a Confirm
-        card for BotOps or the Assistant acting for a person on a confirm entry, or a refusal that names who may change
+        card for Agent Ops or the Assistant acting for a person on a confirm entry, or a refusal that names who may change
         it. The Assistant's direct change runs only on the person's cited words while "Assistant acts without asking" is
         on (the same check its write then meets); otherwise it is a card in their chat."""
         from .assistant import valid_operation
@@ -625,7 +625,7 @@ def install(app, store, auth, settings):
                 )
             )
         else:
-            made = getattr(app.state, "botops_propose", None)
+            made = getattr(app.state, "agent_ops_propose", None)
             propose = made and (
                 lambda c, who, method, path, data, summary, what=None: made(
                     c, who, method, path, data, summary[:300], what=what

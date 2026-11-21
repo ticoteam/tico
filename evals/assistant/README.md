@@ -2,7 +2,7 @@
 
 Scripted chats from one person (Dana, the owner) to the Assistant template (`templates/catalog/assistant`, slug `assistant`),
 scored with a real model. The CI test (`backend/tests/test_assistant_evals.py`) checks the cases without a model; the
-model run is on demand only and never in CI. The shape follows `evals/botops/`.
+model run is on demand only and never in CI. The shape follows `evals/agent_ops/`.
 
     python3 evals/assistant/run.py --repo <tico checkout> [--model claude-haiku-5-5] [--judge claude-opus-5-5] \
         [--only queue,approvals,jobs] [--case id,id] [--samples 2] [-j 6] [--tag base-haiku] [--surface both]
@@ -113,7 +113,7 @@ keeping as a guard.
 - `cases/queue.yaml`: the Needs you queue, the sources that file it, undo, and the morning summary.
 - `cases/approvals.yaml`: OKs the Assistant never gives (it links them for the person's own tap), a named send-back,
   text that asks the Assistant to act, and a direct clear of old tasks, send-backs and a question.
-- `cases/jobs.yaml`: launch status, routing to a bot, a BotOps hand-off, a decision for the CFO, a routine change, what a
+- `cases/jobs.yaml`: launch status, routing to a bot, an Agent Ops hand-off, a decision for the CFO, a routine change, what a
   bot did, a doc search, and a task for a person.
 - `cases/jobs2.yaml`: the everyday asks the jobs file does not cover: what is open, catch-up, meetings and files, owners and
   goals, why something happened, mark done and reopen, handing work to a bot, ask and tell a bot, pause and resume, a

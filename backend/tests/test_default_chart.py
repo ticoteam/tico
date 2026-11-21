@@ -100,14 +100,14 @@ def test_every_bot_has_one_manager_and_the_built_ins_are_the_general_managers_te
 
 
 def seeded_under_the_assistant(api):
-    """BotOps as the seed roster makes it (templates/environment-registry/employees.yaml): under the Assistant, set by
+    """Agent Ops as the seed roster makes it (templates/environment-registry/employees.yaml): under the Assistant, set by
     no person, before the General Manager exists."""
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET reports_to='assistant' WHERE bot='botops'")
 
 
-def test_a_new_company_puts_botops_under_the_general_manager_whatever_line_the_seed_gave(environment):
-    """Tico Team on rc.7: BotOps kept the seed's line to the Assistant, because only an unset line was filled. Setup lays
+def test_a_new_company_puts_agent_ops_under_the_general_manager_whatever_line_the_seed_gave(environment):
+    """Tico Team on rc.7: Agent Ops kept the seed's line to the Assistant, because only an unset line was filled. Setup lays
     out the built-ins' lines for a new company; a line set afterwards stays through later starts."""
     api = environment()
     seeded_under_the_assistant(api)
@@ -133,9 +133,9 @@ def test_a_new_company_puts_botops_under_the_general_manager_whatever_line_the_s
     assert lines(api) == {**first, "botops": "assistant"}
 
 
-@pytest.mark.parametrize("botops_line", ["assistant", "general-manager"])
-def test_a_company_started_on_rc7_starts_again_with_the_same_bots_and_lines(environment, monkeypatch, botops_line):
-    """A company made on rc.7 (BotOps on the seed's line, or moved under the General Manager by hand since) starts on
+@pytest.mark.parametrize("agent_ops_line", ["assistant", "general-manager"])
+def test_a_company_started_on_rc7_starts_again_with_the_same_bots_and_lines(environment, monkeypatch, agent_ops_line):
+    """A company made on rc.7 (Agent Ops on the seed's line, or moved under the General Manager by hand since) starts on
     this release: no second built-in, no bot without a manager, no bot hired, no setup task filed, no line changed."""
     from backend.onboarding import Onboarding
 
@@ -149,7 +149,7 @@ def test_a_company_started_on_rc7_starts_again_with_the_same_bots_and_lines(envi
         machine(api)
     assert lines(api)["botops"] == "assistant"
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET reports_to=? WHERE bot='botops'", (botops_line,))
+        c.execute("UPDATE bot_config SET reports_to=? WHERE bot='botops'", (agent_ops_line,))
 
     def company():
         return (
@@ -163,9 +163,9 @@ def test_a_company_started_on_rc7_starts_again_with_the_same_bots_and_lines(envi
     with restarted.app.state.store.transaction() as c:
         restarted.app.state.onboarding.complete_company(c)
     assert company() == before
-    assert before[0]["botops"] == botops_line and [slug for slug, line in before[0].items() if not line] == []
+    assert before[0]["botops"] == agent_ops_line and [slug for slug, line in before[0].items() if not line] == []
     slugs = [row["slug"] for row in before[1]]
-    assert len(slugs) == len(set(slugs)) and not {"growth-manager-2", "botops-2", "general-manager-2"} & set(slugs)
+    assert len(slugs) == len(set(slugs)) and not {"growth-manager-2", "agent-ops-2", "general-manager-2"} & set(slugs)
 
 
 MANAGERS = (
@@ -205,14 +205,14 @@ def test_a_manager_changes_its_reports_model_name_and_routines_and_nothing_that_
         # Given: its model, its task model, its name and description, and its routines.
         assert [auth.report_manager(c, who, it, scope) for scope in report_managers.SCOPES] == [True, True, True]
         assert automations.may_change(c, who, {"owner": "bot:" + it})
-        # A hire or an archive only through the BotOps ask, three of each in seven days.
+        # A hire or an archive only through the Agent Ops ask, three of each in seven days.
         assert not any(auth.report_lifecycle(c, who, it, op, "bot:" + me) for op in report_managers.LIFECYCLE_OPS)
         asked = Identity("bot:" + me, "bot", via="botops")
         assert auth.report_lifecycle(c, asked, it, "archive") and auth.report_lifecycle(c, asked, "new", "create", me)
         assert (report_managers.cap_limit(c, "create"), report_managers.cap_limit(c, "archive")) == (3, 3)
         # Refused: everything `Auth.bot_manager` gates (instructions, access, repository access, status, computer),
         # the rest of the definition, reach, spend limits and task caps.
-        assert not auth.bot_manager(c, who, it) and not auth.botops_manages(c, who, it)
+        assert not auth.bot_manager(c, who, it) and not auth.agent_ops_manages(c, who, it)
         for field in ("reports_to", "status", "repo", "owners"):
             with pytest.raises(Problem):
                 admin.report_change(c, who, it, {field})

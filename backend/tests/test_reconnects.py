@@ -194,25 +194,25 @@ def ops_machine(api):
     return machine
 
 
-def botops_turn(api, title="Connect the Acme CRM for ops"):
+def agent_ops_turn(api, title="Connect the Acme CRM for ops"):
     from backend.store import encode
     from backend.tests.helpers.api import ready
 
     with api.app.state.store.transaction() as c:
         if not c.execute("SELECT 1 FROM bots WHERE id='botops'").fetchone():
-            c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
+            c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','botops','Agent Ops','active')")
             c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('botops','ana')")
             BS.write(c, 'botops', {'name': 'botops', 'runtime': 'fake', 'status': 'active'})
-    if "_botops_machine" not in api.__dict__:
-        machine = api.__dict__["_botops_machine"] = runner(api)
+    if "_agent_ops_machine" not in api.__dict__:
+        machine = api.__dict__["_agent_ops_machine"] = runner(api)
         assign(api, machine, "botops")
         ready(api, machine, ["botops"])
-    machine = api.__dict__["_botops_machine"]
+    machine = api.__dict__["_agent_ops_machine"]
     t = post(api, "tasks", {"owner": "botops", "title": title, "body": "Get it working."})
     return t, claim(api, machine, "botops")
 
 
-def botops_ask(api, attempt, bot, env="ACME_CRM_TOKEN"):
+def agent_ops_ask(api, attempt, bot, env="ACME_CRM_TOKEN"):
     opened = api.post(
         "/api/v2/credential-requests",
         json={"env": env, "for_bot": bot, "label": f"{bot}'s Acme CRM token", "on_behalf_of": "turn"},
@@ -222,7 +222,7 @@ def botops_ask(api, attempt, bot, env="ACME_CRM_TOKEN"):
     return opened.json()
 
 
-def botops_wakes(api, t):
+def agent_ops_wakes(api, t):
     with api.app.state.store.read() as c:
         return [
             r["body"]
@@ -606,26 +606,26 @@ def test_a_private_task_cards_only_a_fixer_who_can_read_it_and_a_former_reader_l
         assert R.person_for(c, api.app.state.store.settings, "ops") == "human:cara"
 
 
-def test_botops_asking_for_a_credential_cards_the_task_and_waits_on_each_bots_card(api):
-    # botops asking on its own task cards that task which waits and wakes once
-    t, attempt = botops_turn(api)
-    opened = botops_ask(api, attempt, "ops")
+def test_agent_ops_asking_for_a_credential_cards_the_task_and_waits_on_each_bots_card(api):
+    # agent-ops asking on its own task cards that task which waits and wakes once
+    t, attempt = agent_ops_turn(api)
+    opened = agent_ops_ask(api, attempt, "ops")
     [card] = cards(api, t)
     assert card["key"] == "secret:ops:ACME_CRM_TOKEN" and card["bot"] == "ops" and card["status"] == "open"
     assert shown(api, t)["task"]["status"] == "open"
     with api.app.state.store.read() as c:
         assert H.message(c, opened["message_id"])["conversation_id"] == H.task(c, t["id"])["conversation_id"]
     post(api, f"credential-requests/{opened['id']}/save", {"value": "crm-token-0123456789"})
-    assert botops_wakes(api, t) == [f"Reconnected: {t['title']}\nops's Acme CRM token is saved. Continue."]
+    assert agent_ops_wakes(api, t) == [f"Reconnected: {t['title']}\nops's Acme CRM token is saved. Continue."]
     assert shown(api, t)["task"]["status"] == "open"
-    # botops asking one variable for two bots on one task waits on both cards
+    # agent-ops asking one variable for two bots on one task waits on both cards
     drain(api)
-    t, attempt = botops_turn(api, "Connect the Acme CRM for ops and cpo")
-    first, second = botops_ask(api, attempt, "ops"), botops_ask(api, attempt, "cpo")
+    t, attempt = agent_ops_turn(api, "Connect the Acme CRM for ops and cpo")
+    first, second = agent_ops_ask(api, attempt, "ops"), agent_ops_ask(api, attempt, "cpo")
     assert sorted(c["key"] for c in cards(api, t)) == ["secret:cpo:ACME_CRM_TOKEN", "secret:ops:ACME_CRM_TOKEN"]
     post(api, f"credential-requests/{second['id']}/save", {"value": "crm-token-0123456789"})
     assert sorted(c["status"] for c in cards(api, t)) == ["fixed", "open"]  # cpo's saved, ops's still asked
-    assert shown(api, t)["task"]["status"] == "open" and botops_wakes(api, t) == []
+    assert shown(api, t)["task"]["status"] == "open" and agent_ops_wakes(api, t) == []
     post(api, f"credential-requests/{first['id']}/save", {"value": "crm-token-9876543210"})
-    [woke] = botops_wakes(api, t)
+    [woke] = agent_ops_wakes(api, t)
     assert "ops's Acme CRM token is saved." in woke and "cpo's Acme CRM token is saved." in woke

@@ -60,9 +60,9 @@ EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 LISTED = 50
 HQ_WAIT = 8
 # The sources this server names when it files (HQ's `source` field; HQ owns the full list and stores `unknown` for any
-# value it does not know): a person, a bot's report a person approved, BotOps, the Health Monitor.
+# value it does not know): a person, a bot's report a person approved, Agent Ops, the Health Monitor.
 SOURCES = ("person", "bot_report", "botops", "health_monitor")
-# The person's own tickets, as SQL (`_source` says the same in Python). A bot's report, the Health Monitor's and BotOps'
+# The person's own tickets, as SQL (`_source` says the same in Python). A bot's report, the Health Monitor's and Agent Ops'
 # are not: they name their source in `sent`, and a ticket kept before that was by its request key (`approval:` for a
 # bot's report, `health:` for the Health Monitor's). The person's chat lists only these; a bot's ticket is still pulled
 # and stored, and the bots' own follow-ups (note) reach HQ. The person's own keys are `idem:` (their idempotency key)
@@ -74,7 +74,7 @@ OWN = (
 RESERVED_KEYS = ("approval:", "health:", "draft:", "idem:", "feedback:")  # request keys the server itself writes
 RULE = "bot_reports_direct"  # the team rule: a bot's report is sent without an OK (`report`)
 SUBJECT = "support:"  # an OK's subject for one report: SUBJECT + a new id
-# Who may act for a person on their confirmation (`Identity.confirmed`): BotOps and the Assistant, with their yes to a
+# Who may act for a person on their confirmation (`Identity.confirmed`): Agent Ops and the Assistant, with their yes to a
 # read-back or their tap on a Confirm card (backend/app.py, backend/auth.py). Unconfirmed, they are refused here.
 CONFIRMED_VIA = ("botops", "assistant")
 TRANSPORT = None  # tests replace it with an httpx.MockTransport: nothing reaches the network
@@ -95,7 +95,7 @@ class SupportTicket(Contract):
     # What the person is asking for: help, help with setting up (backend/support_asks.py setup_snapshot), or feedback.
     kind: Literal["support", "setup", "feedback"] = "support"
     # Who is filing, for HQ's queue (`source`; HQ owns the list): the person's own app sends nothing, so `person`; only
-    # BotOps' `tico support file` says `botops`, kept only when BotOps makes the request. It sorts tickets at HQ and
+    # Agent Ops' `tico support file` says `agent-ops`, kept only when Agent Ops makes the request. It sorts tickets at HQ and
     # grants nothing.
     source: Literal["person", "botops"] = "person"
 
@@ -206,10 +206,10 @@ def from_source():
 
 
 def require_person(who):
-    """A person at their own browser: not a personal token, not a bot or a computer, and not the Assistant or BotOps acting
+    """A person at their own browser: not a personal token, not a bot or a computer, and not the Assistant or Agent Ops acting
     for them unless they act on the person's confirmation (`confirmed`: a yes to their read-back, or a tap on a Confirm
     card). The Assistant's chat turn is a token too (`via_token`, auth.py chat_person), so it counts only when confirmed.
-    Confirmed, they file as that person; BotOps with its own rights is a bot and is refused."""
+    Confirmed, they file as that person; Agent Ops with its own rights is a bot and is refused."""
     if (
         who.role not in ("owner", "human")
         or (who.via_token and who.via != "assistant")
@@ -564,7 +564,7 @@ class Support:
         # could not keep.
         with self.store.transaction() as c:
             self.vault.cipher.key(c)
-        # Only BotOps says botops: the same claim from a person's own app or the Assistant is the person's ticket.
+        # Only Agent Ops says agent-ops: the same claim from a person's own app or the Assistant is the person's ticket.
         source = source or ("person" if body.source == "botops" and who.via != "botops" else body.source)
         if source not in SOURCES:
             raise ValueError(f"not a support source: {source}")
@@ -593,7 +593,7 @@ class Support:
         answer = _ask_hq("POST", "/v1/support", body=payload, idem=idem)
         if answer.status_code == 422 and _refused_field(answer) == "fields":
             # An HQ from before source refuses it as an unknown field: the ticket goes again without it, keeping the
-            # rest (BotOps' and the Health Monitor's messages start with their name, which is how such an HQ reads it).
+            # rest (Agent Ops' and the Health Monitor's messages start with their name, which is how such an HQ reads it).
             payload.pop("source")
             answer = _ask_hq("POST", "/v1/support", body=payload, idem=idem)
         if answer.status_code == 422 and {"app_version", "kind"} & set(payload) and _refused_field(answer) == "fields":
@@ -789,7 +789,7 @@ class Support:
 
     def _approval_asker(self, grant, who):
         """The agent an OK'd report is checked as: the bot that asked for the OK, else the agent sending it now (a
-        person's Assistant or BotOps, whose OK keeps the person's id), else None."""
+        person's Assistant or Agent Ops, whose OK keeps the person's id), else None."""
         by = str(grant["asked_by_id"])
         return (by, by, "") if H.is_bot(by) else rule_links.agent_of(self.store, who)
 
@@ -902,7 +902,7 @@ class Support:
             task_asks.settle(c, rid, "Sent the report to Tico support.")
 
         # Checked as whoever asked for the OK when that is an agent (the grant keeps it), an approval from before too;
-        # else as the person's Assistant or BotOps sending it now.
+        # else as the person's Assistant or Agent Ops sending it now.
         asker = self._approval_asker(found, who)
         ticket = self._send(
             person,
@@ -943,7 +943,7 @@ class Support:
 
     def write(self, who, ticket_id, text, attachment="", asker=None):
         """Add a message to one of the person's own tickets (the chat's; a bot's ticket is not theirs to write on).
-        `asker`: the agent writing it for the person (their Assistant or BotOps), checked on the support link before it
+        `asker`: the agent writing it for the person (their Assistant or Agent Ops), checked on the support link before it
         goes and logged once it went."""
         text = clean_message(text)
         row = self._own(who, ticket_id)

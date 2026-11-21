@@ -220,5 +220,5 @@
     - '^task (close|done)(?! -h\b| --help)'
   reply: |
     Replies to Engineering Lead's question in its task chat with Dana's choice, "Keep it", as Dana, and says in one line it
-    is answered, with the task link. It does not reply to the BotOps question, which Dana did not mention, closes nothing, and
+    is answered, with the task link. It does not reply to the Agent Ops question, which Dana did not mention, closes nothing, and
     does not message Engineering Lead.

@@ -29,11 +29,11 @@ DEFAULT_NAMES = {
     "assistant_bot": "assistant",
 }
 # The two bots the runner sets up from the catalog itself, and the template each one comes from.
-# Everybody else is BotOps's to create in a turn (`tico bot create`); BotOps cannot create itself,
+# Everybody else is Agent Ops's to create in a turn (`tico bot create`); Agent Ops cannot create itself,
 # and the assistant is who the person talks to, so neither can wait for a bot that does not exist.
 BOOTSTRAP_TEMPLATES = {
     "assistant": "assistant",
-    "botops": "botops",
+    "botops": "agent-ops",  # Agent Ops keeps its first id
     "librarian": "librarian",
     "strategy-owner": "strategy-owner",
 }
@@ -88,7 +88,7 @@ class BotSetup:
         a card that says `bootstrap: true`, and a starter bot that first run created (its config says
         `materialize: true`, which only onboarding writes): those are set up the moment they are
         placed, not on first use. A registration made before the catalog existed carries no template,
-        so the assistant and BotOps are recognized by their own slugs as well.
+        so the assistant and Agent Ops are recognized by their own slugs as well.
         """
         named = str((config or {}).get("template") or "")
         if named:
@@ -151,7 +151,7 @@ class BotSetup:
         """Set a bootstrap bot, or a starter bot first run created, up from the catalog. Returns (note, problem).
 
         Called from readiness, so a fresh installation is a working assistant and a working
-        BotOps without anyone copying a folder. An existing repository is never touched, and a
+        Agent Ops without anyone copying a folder. An existing repository is never touched, and a
         failure is a problem string on the readiness row rather than an exception: a bot that
         cannot be set up must show as not ready, not stop the machine reporting the others.
         """

@@ -1,7 +1,7 @@
-"""Copy a bot and copy a skill, done by BotOps as the person who asked (backend/bot_copy.py, clients/botcopy.py).
+"""Copy a bot and copy a skill, done by Agent Ops as the person who asked (backend/bot_copy.py, clients/botcopy.py).
 
 Ana owns the company, Ben is an admin, Cara is a member (the base fixture). A copy is an ordinary bot its requester owns; the
-server decides and records, BotOps's computer moves the files.
+server decides and records, Agent Ops's computer moves the files.
 """
 
 import json
@@ -13,9 +13,9 @@ from backend.credentials import effective_grant
 from backend import built_on
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post, restrict, runner  # noqa: F401  (fixture)
-from backend.tests.helpers.botops_parity import act, bot_id
+from backend.tests.helpers.agent_ops_parity import act, bot_id
 from backend.tests.helpers.credential_sharing import jira, local
-from backend.tests.helpers.member_bots import botops, call, turn  # noqa: F401  (fixture)
+from backend.tests.helpers.member_bots import agent_ops, call, turn  # noqa: F401  (fixture)
 from clients import botcopy, hubtools
 from clients.tico import APIError
 from backend import bot_settings as BS
@@ -84,7 +84,7 @@ def test_a_copy_is_an_independent_bot_owned_by_whoever_asked(api, scribe):
     copy(api, {"slug": "cara-scribe"}, expected=409)  # a slug someone holds
 
 
-def test_who_may_copy_what_and_how_many(api, botops, scribe):
+def test_who_may_copy_what_and_how_many(api, agent_ops, scribe):
     scribe_id = bot_id(api, "scribe")
     with api.app.state.store.transaction() as c:
         restrict(c, scribe_id, see={"everyone": True}, read={"people": ["ana"]}, write={"people": ["ana"]})
@@ -94,7 +94,7 @@ def test_who_may_copy_what_and_how_many(api, botops, scribe):
     restrict_open = {"see": {"everyone": True}, "read": {"everyone": True}, "write": {"everyone": True}}
     with api.app.state.store.transaction() as c:
         restrict(c, scribe_id, **restrict_open)
-    copy(api, {"slug": "botops-copy"}, bot="botops", expected=409)  # the company's own bots are not copied
+    copy(api, {"slug": "agent-ops-copy"}, bot="botops", expected=409)  # the company's own bots are not copied
     copy(api, bot="nobody", expected=404)
     # It counts toward the requester's limit like any bot they add; a member switched off from adding bots may not copy.
     assert call(api, "put", "access/limits", "ben-test", {"member_bot_limit": 1}).status_code == 200
@@ -133,11 +133,11 @@ def placed_on(api, slug):
         return row and row["runner_id"]
 
 
-def test_a_copy_named_onto_another_computer_is_not_stranded_there(api, botops, scribe):
-    """The copy's history is made in BotOps's workspace after the copy route answers: an older BotOps that still names
-    `--computer` in the route gets the copy recorded as built on BotOps's computer, and another computer refused."""
+def test_a_copy_named_onto_another_computer_is_not_stranded_there(api, agent_ops, scribe):
+    """The copy's history is made in Agent Ops's workspace after the copy route answers: an older Agent Ops that still names
+    `--computer` in the route gets the copy recorded as built on Agent Ops's computer, and another computer refused."""
     box = runner(api, label="Box")
-    attempt = turn(api, botops, text="Copy the scribe onto the box")
+    attempt = turn(api, agent_ops, text="Copy the scribe onto the box")
     hub = Hub(api, attempt["token"])
     made = hub.call(
         "POST", "bots/scribe/copy", {"sha": SHA, "slug": "cara-scribe", "computer": box["runner_id"]}, delegate=True
@@ -146,28 +146,33 @@ def test_a_copy_named_onto_another_computer_is_not_stranded_there(api, botops, s
     assert not placed_on(api, "cara-scribe")
     cara = bot_id(api, "cara-scribe")
     with api.app.state.store.read() as c:
-        assert built_on.computer(c, cara)["id"] == botops["runner_id"]
-    # Named onto BotOps's own computer, it goes there, which publishes it.
+        assert built_on.computer(c, cara)["id"] == agent_ops["runner_id"]
+    # Named onto Agent Ops's own computer, it goes there, which publishes it.
     again = hub.call(
-        "POST", "bots/scribe/copy", {"sha": SHA, "slug": "cara-notes", "computer": botops["runner_id"]}, delegate=True
+        "POST",
+        "bots/scribe/copy",
+        {"sha": SHA, "slug": "cara-notes", "computer": agent_ops["runner_id"]},
+        delegate=True,
     )
-    assert again["placement"].get("placed") is not False and placed_on(api, "cara-notes") == botops["runner_id"], again
-    # A person's own call (not BotOps) records nothing: where the files are made is not known.
+    assert again["placement"].get("placed") is not False and placed_on(api, "cara-notes") == agent_ops["runner_id"], (
+        again
+    )
+    # A person's own call (not Agent Ops) records nothing: where the files are made is not known.
     copy(api, {"slug": "cara-own", "computer": box["runner_id"]})
     own = bot_id(api, "cara-own")
     with api.app.state.store.read() as c:
         assert not built_on.computer(c, own)
 
 
-def test_a_build_record_is_replaced_only_once_its_computer_is_removed(api, botops, scribe):
+def test_a_build_record_is_replaced_only_once_its_computer_is_removed(api, agent_ops, scribe):
     box = runner(api, label="Box")
     copy(api, {"slug": "cara-scribe"})
     cara = bot_id(api, "cara-scribe")
     with api.app.state.store.transaction() as c:
-        built_on.remember(c, cara, botops["runner_id"])
+        built_on.remember(c, cara, agent_ops["runner_id"])
         built_on.remember(c, cara, box["runner_id"])  # the first record stands
-        assert built_on.computer(c, cara)["id"] == botops["runner_id"]
-        c.execute("UPDATE runners SET revoked_at=? WHERE id=?", ("2026-10-14T00:00:00Z", botops["runner_id"]))
+        assert built_on.computer(c, cara)["id"] == agent_ops["runner_id"]
+        c.execute("UPDATE runners SET revoked_at=? WHERE id=?", ("2026-10-14T00:00:00Z", agent_ops["runner_id"]))
         built_on.remember(c, cara, box["runner_id"])  # ...until its computer is removed
         assert built_on.computer(c, cara)["id"] == box["runner_id"]
 
@@ -208,9 +213,9 @@ class GitHub:
 
 
 # ------------------------------------------------------------------ a skill
-# ------------------------------------------------------------------ BotOps, as the requester
+# ------------------------------------------------------------------ Agent Ops, as the requester
 class Hub:
-    """The `api` the tools call, as BotOps's runner makes it: its own token, and the requester's header when acting for a person."""
+    """The `api` the tools call, as Agent Ops's runner makes it: its own token, and the requester's header when acting for a person."""
 
     def __init__(self, api, token):
         self.api, self.token = api, token
@@ -241,7 +246,7 @@ def git(path, *argv):
 
 @pytest.mark.slow
 def test_the_tools_copy_update_and_share_a_skill_in_the_workspace_as_the_requester(
-    api, botops, scribe, monkeypatch, tmp_path
+    api, agent_ops, scribe, monkeypatch, tmp_path
 ):
     workspace = tmp_path / "workspace"
     original = workspace / "bot-scribe"
@@ -260,7 +265,7 @@ def test_the_tools_copy_update_and_share_a_skill_in_the_workspace_as_the_request
     git(original, "add", "-A")
     git(original, "commit", "-q", "-m", "Start")
     monkeypatch.setenv("HUB_WORKSPACE", str(workspace))
-    attempt = turn(api, botops, text="Copy the scribe for me, and bring it up to date later")
+    attempt = turn(api, agent_ops, text="Copy the scribe for me, and bring it up to date later")
     hub = Hub(api, attempt["token"])
 
     def tool(tool_name, **args):
@@ -279,9 +284,9 @@ def test_the_tools_copy_update_and_share_a_skill_in_the_workspace_as_the_request
     # ...so it is not put on another computer that could never get it (it used to be, before the files were made)...
     assert made["placement"]["placed"] is False and "Put it on Test Mac first" in made["placement"]["problem"], made
     assert not placed_on(api, "cara-scribe")
-    # ...but named onto BotOps's own computer, the one that holds it, it goes there, GitHub or not.
-    mine = tool("tico_bot_copy", bot="scribe", slug="cara-mine", computer=botops["runner_id"])
-    assert mine["published"] is False and placed_on(api, "cara-mine") == botops["runner_id"], mine
+    # ...but named onto Agent Ops's own computer, the one that holds it, it goes there, GitHub or not.
+    mine = tool("tico_bot_copy", bot="scribe", slug="cara-mine", computer=agent_ops["runner_id"])
+    assert mine["published"] is False and placed_on(api, "cara-mine") == agent_ops["runner_id"], mine
     copy_dir = workspace / "bot-cara-scribe"
     assert git(copy_dir, "log", "--format=%s") == f"Copied from scribe at {made['from_sha'][:12]}"
     assert not (copy_dir / ".env").exists() and not (copy_dir / "state.md").exists()
@@ -336,7 +341,7 @@ def rename(api, slug, new_slug, token="ana-test"):
 
 
 @pytest.mark.slow
-def test_renamed_bots_are_found_in_the_folders_they_were_made_with(api, botops, scribe, monkeypatch, tmp_path):
+def test_renamed_bots_are_found_in_the_folders_they_were_made_with(api, agent_ops, scribe, monkeypatch, tmp_path):
     # A rename keeps a bot's folder (bot-<slug it was made with>). The tools found a bot's checkout from the slug it has
     # now, so after a rename a skill copy answered no_repository, and copying or updating a renamed original failed.
     workspace = tmp_path / "workspace"
@@ -349,7 +354,7 @@ def test_renamed_bots_are_found_in_the_folders_they_were_made_with(api, botops, 
     git(original, "add", "-A")
     git(original, "commit", "-q", "-m", "Start")
     monkeypatch.setenv("HUB_WORKSPACE", str(workspace))
-    hub = Hub(api, turn(api, botops, text="Copy the scribe, then share its minutes skill")["token"])
+    hub = Hub(api, turn(api, agent_ops, text="Copy the scribe, then share its minutes skill")["token"])
 
     def tool(tool_name, **args):
         return hubtools.BY_NAME[tool_name]["fn"](hub, args)
@@ -377,11 +382,11 @@ def test_renamed_bots_are_found_in_the_folders_they_were_made_with(api, botops, 
     assert git(workspace / "bot-cara-helper", "show", "HEAD:skills/minutes/SKILL.md") == "Minutes."
 
 
-def test_botops_is_given_a_read_only_token_for_a_bot_on_another_computer_only_for_a_person_who_may_read_it(
-    api, botops, scribe, monkeypatch, tmp_path
+def test_agent_ops_is_given_a_read_only_token_for_a_bot_on_another_computer_only_for_a_person_who_may_read_it(
+    api, agent_ops, scribe, monkeypatch, tmp_path
 ):
     service, minted = api.app.state.github_app, []
-    attempt = turn(api, botops, text="Copy the scribe")
+    attempt = turn(api, agent_ops, text="Copy the scribe")
     token = lambda who="botops": act(api, attempt, "POST", "bots/scribe/repository-read-token", {})
     assert token().json() == {"configured": False}  # GitHub is not connected: nothing to fetch
     monkeypatch.setattr(service, "row", lambda c=None: {"org": "Acme", "administration": 1})

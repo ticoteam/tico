@@ -1,7 +1,7 @@
 # Setup guide: your first bots
 
 A practical guide to getting real work out of your first bots. The screens themselves are in [Finish setup](onboarding.md); what each of
-the role templates does is in [Starter bots](starter-bots.md). BotOps and the Librarian can answer questions from this page.
+the role templates does is in [Starter bots](starter-bots.md). Agent Ops and the Librarian can answer questions from this page.
 
 ## Pick your first bots
 
@@ -12,7 +12,7 @@ Start from what your team does, not from what a bot could do.
 2. **Start from the default team.** Setup shows it one team at a time, each team's top seat first and the seats under it
    after it. Switch off a team you do not need. A big chart is safe: a role you have not recruited yet is only a
    Recruiting seat. It is not a bot, does nothing on its own and costs nothing. Recruiting it creates a bot parked in
-   **Needs setup**. The built-in bots (Assistant, BotOps, Librarian and Strategy Owner) are always made.
+   **Needs setup**. The built-in bots (Assistant, Agent Ops, Librarian and Strategy Owner) are always made.
 3. **Change it if you want to.** **Change** opens the team builder: pick the groups you want, answer one short question for
    each ("What kind of sales do you do today?"), and Tico recruits bots for that group: its head is checked, the usual ones
    are checked or shown, and the rest are under **More**. On the finished chart, click a bot to rename it, choose who it
@@ -51,7 +51,7 @@ Whether it is a first message, a task or a change to what a bot does:
 - **Name the limits.** Who may be contacted, which topics are off limits (pay, legal, HR matters), what needs your OK.
 - **One request at a time.** Ask for a second thing after the first is right.
 
-If a bot gets it wrong twice, change its instructions, not your message: ask BotOps to tailor it, or edit its `AGENTS.md` and playbooks.
+If a bot gets it wrong twice, change its instructions, not your message: ask Agent Ops to tailor it, or edit its `AGENTS.md` and playbooks.
 
 ## Sending and access
 
@@ -94,7 +94,7 @@ Set aside fifteen minutes at the end of the week for each bot you set up.
 - **Look at the gaps it named.** Repeated "could not read X" means a tool to connect or access to grant.
 - **Look at what it asked you.** Questions it asked twice belong in its knowledge (`knowledge/`), not in Needs you.
 - **Look at the cost of attention.** If reviewing takes longer than doing the work, it is too chatty or too broad: narrow its instructions.
-- **Decide.** Keep it, tighten it (edit its instructions or ask BotOps), give it one more responsibility, or pause it. Then set up the
+- **Decide.** Keep it, tighten it (edit its instructions or ask Agent Ops), give it one more responsibility, or pause it. Then set up the
   next bot.
 
 A routine that has not earned your trust stays off. Turn a second routine on only after the first has been useful for a week.

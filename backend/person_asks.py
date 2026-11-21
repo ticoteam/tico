@@ -8,7 +8,7 @@ their Tasks and nowhere they are told. So a feature that needs a person to act f
 owns the feature (`bot`), and that bot asks the person `question` on it, with `why` it matters: its message on the
 task's chat, marked ❓ (backend/question_marks.py). The person finds it in Needs you, and their reply clears it and
 reaches the bot. With no such bot here (none named, removed or archived) the task is the person's own. Only bots write
-questions, never Tico (`author`): the bot that holds the task or filed it asks when it can run, else BotOps, the
+questions, never Tico (`author`): the bot that holds the task or filed it asks when it can run, else Agent Ops, the
 built-in bot that owns Tico's own notices. The ❓ clears once the task ends, so nothing a person is meant to act on is
 left out of Needs you, and nothing holds them once it is done.
 
@@ -60,19 +60,19 @@ def owner_bot(conn: "sqlite3.Connection", bot: str | None) -> str | None:
     return str(H.bot_actor(H.actor_id(bot)))
 
 
-def botops() -> str:
-    """BotOps, the built-in bot that owns Tico's own notices to a person, as an actor."""
+def agent_ops() -> str:
+    """Agent Ops, the built-in bot that owns Tico's own notices to a person, as an actor."""
     return "bot:" + str(_h().FLEET_MAINTAINER)
 
 
 def author(conn: "sqlite3.Connection", *bots: str | None) -> str | None:
     """Who writes a feature's question to a person: only bots write questions, never Tico. The first of `bots` that can
-    run now, else BotOps when it can; else the first of them, BotOps last, that is here at all (paused, or not set up
+    run now, else Agent Ops when it can; else the first of them, Agent Ops last, that is here at all (paused, or not set up
     yet: its question waits like any other). None when the company has no such bot."""
     from . import task_wakes
 
     named = [str(b) for b in bots if b and is_bot(b)]
-    here = [b for b in (*named, botops()) if _here(conn, b)]
+    here = [b for b in (*named, agent_ops()) if _here(conn, b)]
     ready = next((b for b in here if task_wakes.cannot_run(conn, b) is None), None)
     return ready or next(iter(here), None)
 
@@ -99,7 +99,7 @@ def ask(
 ) -> Row:
     """File `title` as a task owned by `bot` (when it is here, else by `person`) and ask `person` `question` on it, with
     `why` it matters. The bot that asks: `asker` when it is here (the bot acting now, whose words the question is, or
-    BotOps for a notice no other bot should write), else `author` of the task's bot and `by`; with no bot here at all,
+    Agent Ops for a notice no other bot should write), else `author` of the task's bot and `by`; with no bot here at all,
     the task is left without a question, in the person's Tasks. `create` goes to hubdb.task_create as it is (due, private, labels, ...). Returns
     the task as hubdb.task_create gives it, read again after the ask."""
     H = _h()

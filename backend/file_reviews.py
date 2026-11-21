@@ -23,7 +23,7 @@ def review(c, auth, who, fid=None, version=None, path=None, digest=None, task=No
     """A verdict given directly (`tico file review`): a bot reviewing another bot's file, on a task it reads, when it can
     open the file. Recorded as a `reviewed` line like an answer's, with no question. A bot's only: a person approves a
     file by a bound OK of the version pinned when it was asked (task_asks), and their token or Assistant never gives a
-    verdict here; nor does a bot that acts for a person (the Assistant, BotOps)."""
+    verdict here; nor does a bot that acts for a person (the Assistant, Agent Ops)."""
     from . import task_asks
     from .files import file_visible
 

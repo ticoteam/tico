@@ -40,8 +40,8 @@ def built(environment):
 
 def test_it_is_built_for_every_company_with_its_two_pass_routines_paused(environment):
     api, record = built(environment)
-    assert sorted(row["slug"] for row in record["bots"]) == ["assistant", "botops", "strategy-owner"]
-    assert all(row["setup_task_id"] is None for row in record["bots"])  # the runner sets it up, not BotOps
+    assert sorted(row["slug"] for row in record["bots"]) == ["agent-ops", "assistant", "strategy-owner"]
+    assert all(row["setup_task_id"] is None for row in record["bots"])  # the runner sets it up, not Agent Ops
     assert states(api)["strategy-owner"] == "active"
     assert {k: v["enabled"] for k, v in routines(api).items()} == {
         "strategy-owner:kpi-pass": 0,

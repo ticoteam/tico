@@ -7,7 +7,7 @@ code then applies the verdict inside the write (`apply`). Nothing here calls an 
 
 - Whose writes: every person's and every bot's, however it was sent. `checked_as` gives the principal a write is held
   as (a person, or a bot writing alone), the sender (the person, or the bot acting for them: their Assistant or
-  BotOps, with `via` saying which) and the route. A person's own writes, their Assistant's and BotOps's for them
+  Agent Ops, with `via` saying which) and the route. A person's own writes, their Assistant's and Agent Ops's for them
   included, are checked as that person.
 - Which rules: `org_rules.matching(c, author, recipients, place)`, the full audience of the write and its place
   (`place_for`: its conversation, kind, teams and outside members, for `where:`). No matching rule is no call, which is
@@ -28,7 +28,7 @@ code then applies the verdict inside the write (`apply`). Nothing here calls an 
 - The API, stable for core's `threads.post` (backend/threads.py) and its outside callers:
   `preflight(store, primary, who, operation, output, recipients=(), context=None, obj="", draft=False, skip=(),
   place=None)` checks one write one identity makes; it reads the principal, the authenticated actor and the route from
-  `who` (`checked_as`: a person's Assistant or BotOps writes are checked as the person, with `via` set).
+  `who` (`checked_as`: a person's Assistant or Agent Ops writes are checked as the person, with `via` set).
   `check_as(store, primary, principal, sender, via, operation, output, recipients=(), *, context=None, obj="",
   draft=False, skip=(), place=None, attempt_id="", origin=None)` checks one output held as `principal`, sent by
   `sender` by route `via`. `inbound(store, primary, principal, operation, output, recipients=(), *, source,
@@ -173,7 +173,7 @@ def replayer(operation, prepare=None, audience=None):
 def checked_as(who, assistant_bot=""):
     """(principal, sender, via) a write is checked as, or None when nothing is. The principal is the teammate the write
     is held as: a person, or a bot that writes alone. The sender is who made the write: the person themselves, their
-    Assistant or BotOps acting for them (`via` says which), or the bot that sent it. A person's own write is checked
+    Assistant or Agent Ops acting for them (`via` says which), or the bot that sent it. A person's own write is checked
     as that person, whatever token sent it."""
     if who is None:
         return None
@@ -2332,7 +2332,7 @@ def _is_reviewer(who, hold, c=None, auth=None):
     or an Admin, reviews their own hold too. A bot's hold is reviewed by its reviewer, by the owner always (whoever can
     change a block's source can waive it, reviewer named or not), and by an Admin when the reviewer is missing or gone
     (with `c` and `auth`; app-only Tico support is not an Admin here, see `_admin_reads_hold`); a person's hold by the
-    reviewer it names and the editors and Admins of its rules (`_person_reviewer`). An Assistant or BotOps acting for a
+    reviewer it names and the editors and Admins of its rules (`_person_reviewer`). An Assistant or Agent Ops acting for a
     person releases nothing."""
     actor = who.actor
     if not H.is_human(actor) or who.via in ("botops", "assistant"):
@@ -2352,7 +2352,7 @@ def _is_reviewer(who, hold, c=None, auth=None):
 
 def _is_represented(who, hold, c=None):
     """Whether `who` is the person a bot's hold is held for (`represented`): they read it and may withdraw it, not
-    release it. An Assistant or BotOps acting for them does neither."""
+    release it. An Assistant or Agent Ops acting for them does neither."""
     return (
         c is not None
         and H.is_human(who.actor)
@@ -3301,7 +3301,7 @@ def health_findings(c, settings):
 # ----------------------------------------------------------------------------- HTTP
 def mail_prepare(store, primary, who, author, to, cc, subject, body, contacts=(), most_calls=None, parts=True):
     """The org rule check of one mail, before its write: None when no rule is in force, else what `mail_decide` needs.
-    `author` is the teammate the mail is checked as (a person, when BotOps sends it for one): its holds and approvals
+    `author` is the teammate the mail is checked as (a person, when Agent Ops sends it for one): its holds and approvals
     are found under it; `who` stays the caller, for the write's permission and audit. An approved mail (Send anyway) is
     not judged again on the rules it was held on; rules changed or added since are a new check, as for any Send anyway.
     Otherwise the whole mail is checked."""
@@ -3447,7 +3447,7 @@ def install(app, store, auth, mutate):
     @app.post("/api/v2/bots/{bot}/mail-check")
     def mail_check(request: Request, bot: str, body: MailCheck):
         """The org rule check of one mail without sending it (a draft read before it goes): the same check the send
-        queue runs on every bot's email (backend/email_sending.py `rule_gate`). Only the bot itself asks, and BotOps
+        queue runs on every bot's email (backend/email_sending.py `rule_gate`). Only the bot itself asks, and Agent Ops
         asks for a person it acts for, whose mail is checked as that person (`checked_as`). A person's own mail is not
         checked (`not_checked`); another bot's token is refused."""
         who = request.state.identity

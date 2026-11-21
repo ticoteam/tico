@@ -1,6 +1,6 @@
 """Runs are built from grants alone (backend/bot_tools.py, credential-runtime): a tool granted in Tools reaches the bot's
 run (its key, its settings, its MCP server) and shows on the bot's Tools tab with no bot.yaml entry, and asking to
-register an entry that only names it files no task for BotOps, while an entry with notes still does."""
+register an entry that only names it files no task for Agent Ops, while an entry with notes still does."""
 
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, post, ready, runner
@@ -41,7 +41,7 @@ def test_a_granted_tool_reaches_the_run_and_the_tools_tab_with_no_bot_yaml_entry
     rows = {t["id"]: t for t in get(api, "bots/ops/tools")["tools"]}
     assert rows["granted-" + crm]["granted"]["kind"] == "api" and rows["granted-" + crm]["status"] == "ready"
     assert rows["granted-" + errors]["granted"]["kind"] == "mcp"
-    # Asking to register what it already holds files nothing; an entry with a note is still BotOps' to commit.
+    # Asking to register what it already holds files nothing; an entry with a note is still Agent Ops' to commit.
     made = post(api, "bots/ops/tools", {"service": "close-crm", "can": ["read"], "env": "CLOSE_API_KEY"})
     assert made["granted"] is True and made["task_id"] is None and made["tool"]["id"] == "granted-" + crm
     assert requests(api) == []

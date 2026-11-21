@@ -96,9 +96,9 @@ def tools_report(api, args):
 
 @tool(
     "tico_tool_add",
-    "Add a note on a tool for yourself, or (the Tools Owner, BotOps, a credential admin, a person who manages it) for any bot: a `tools:` entry for its bot.yaml. "
+    "Add a note on a tool for yourself, or (the Tools Owner, Agent Ops, a credential admin, a person who manages it) for any bot: a `tools:` entry for its bot.yaml. "
     "A tool granted in Tools already reaches the bot's runs and shows on its Tools tab with no entry: an entry that only names one is answered with the grant and "
-    "opens no task. Otherwise the server checks it and opens a task with the exact YAML for BotOps, or for an External agent profile to configure itself; it stays "
+    "opens no task. Otherwise the server checks it and opens a task with the exact YAML for Agent Ops, or for an External agent profile to configure itself; it stays "
     "pending until a tool report lists it. Names and verbs only: never a Credential value. To give the bot a vendor's remote MCP server Tools does not hold, add "
     "`mcp_url`, `transport` and `headers` (the credential is a ${VAR} placeholder for `env`).",
     {
@@ -119,7 +119,7 @@ def tools_report(api, args):
         },
         "env": _s("The environment variable's name, such as POSTHOG_KEY; never its value"),
         "note": _s("Who authorized it and what is excluded"),
-        "title_prefix": _s("Keep this prefix on the generated BotOps task"),
+        "title_prefix": _s("Keep this prefix on the generated Agent Ops task"),
         "dry_run": {"type": "boolean", "description": "Validate only; create no task"},
     },
     required=("bot", "service", "can"),
@@ -144,8 +144,8 @@ def tools_add(api, args):
 @tool(
     "tico_tool_update",
     "Change a tool a bot already declares, in place: what it `can` do, its `scope` or its `note` "
-    "(BotOps: as the person who asked you). Only what you send changes; a `scope` key with an empty value comes off. "
-    "A task for BotOps or the external profile carries the whole changed entry and the tool shows as pending its change. Use this, never "
+    "(Agent Ops: as the person who asked you). Only what you send changes; a `scope` key with an empty value comes off. "
+    "A task for Agent Ops or the external profile carries the whole changed entry and the tool shows as pending its change. Use this, never "
     "remove and add again: that files a removal nobody wants. The identity and the env name do not change here. "
     "An MCP server's `mcp_url`, `transport` or `headers` change the same way: what you send replaces that part.",
     {
@@ -164,7 +164,7 @@ def tools_add(api, args):
             "description": "Keys to set: database, channels, project, mailbox and the like; '' takes one off",
         },
         "note": _s("The new note; an empty string clears it"),
-        "title_prefix": _s("Keep this prefix on the generated BotOps task"),
+        "title_prefix": _s("Keep this prefix on the generated Agent Ops task"),
     },
     required=("bot", "id"),
     writes=True,
@@ -190,7 +190,7 @@ def tools_update(api, args):
 @tool(
     "tico_tool_remove",
     "Request removal of a tool from yourself or a bot you may change (its id from `tico_tool_list`), or withdraw "
-    "a pending request. BotOps changes bot.yaml; an external profile changes its own tools and reports the list.",
+    "a pending request. Agent Ops changes bot.yaml; an external profile changes its own tools and reports the list.",
     {"bot": _s("The bot's slug"), "id": _s("The tool id from tico_tool_list")},
     required=("bot", "id"),
     writes=True,
@@ -282,7 +282,7 @@ def credential_request(api, args):
 
 @tool(
     "tico_access_request",
-    "Ask for a level on a tool in Tools or a GitHub repository that already exists, for yourself (BotOps, the Tools "
+    "Ask for a level on a tool in Tools or a GitHub repository that already exists, for yourself (Agent Ops, the Tools "
     "Owner and people: `for_bot`). Read where Tico can hold it to reads is granted at once; anything else is one card "
     "to each person who can grant it, and the first to act decides. Asking again adds nothing and notifies nobody. You "
     "are woken on your task when it is granted, however it was given: work on something else or end your turn. Use "
@@ -415,7 +415,7 @@ def _bot_of_credentials(listing, ref):
 
 @tool(
     "tico_credential_grant",
-    "Give a bot a stored credential, as the person who asked you (BotOps and the Tools Owner: a credential "
+    "Give a bot a stored credential, as the person who asked you (Agent Ops and the Tools Owner: a credential "
     "administrator, or the person who stored it, for a bot they own or manage): from then "
     "on every run of that bot has it as its variable. A bot never uses a credential that was not granted to it. Safe to repeat. "
     "Never copy a value from one bot to another: if the credential is only in another bot's own secrets file, "
@@ -697,7 +697,7 @@ def repo_product_create(api, args):
     "or env names, how it is declared, writes, and query and learning counts. Read this before "
     "touching an outside system; `tico_tool_show` is the full page. With `bot`, the tools that "
     "bot uses (its model and harness, its repository, each declared tool), with who it acts as, "
-    "what it may do, its scope and a status (ready, problem, unknown, or pending while BotOps "
+    "what it may do, its scope and a status (ready, problem, unknown, or pending while Agent Ops "
     "adds it).",
     {"bot": _s("A bot's slug, or `me`: that bot's own tools instead of the team's")},
 )
@@ -1071,7 +1071,7 @@ TOOL_AFTER_CALL = (
     ),
     Command(
         "tool add",
-        "register a tool: BotOps adds it to bot.yaml; never a credential value",
+        "register a tool: Agent Ops adds it to bot.yaml; never a credential value",
         args=(Arg("can", flag="--can", action="store"), _SCOPE, *_MCP_ARGS),
         example="tico tool add analyst posthog --can read --env POSTHOG_KEY",
     ),
@@ -1083,7 +1083,7 @@ TOOL_AFTER_CALL = (
     ),
     Command(
         "tool remove",
-        "ask BotOps to remove a tool, or withdraw a pending request",
+        "ask Agent Ops to remove a tool, or withdraw a pending request",
         example="tico tool remove analyst posthog",
     ),
 )

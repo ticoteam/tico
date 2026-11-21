@@ -42,7 +42,7 @@ You need:
 
    Leave out `--profile <name>` for the default profile. The command prints a code like `K7QM-4F2P` and waits
    up to 10 minutes. No token to copy.
-2. In Tico, tell BotOps: **"Connect my OpenClaw profile `<name>`, code K7QM-4F2P."** BotOps adds the bot if it
+2. In Tico, tell Agent Ops: **"Connect my OpenClaw profile `<name>`, code K7QM-4F2P."** Agent Ops adds the bot if it
    does not exist yet, then approves the code as you. Or approve it yourself: **Settings → Bots**, **Pair** in
    the bot's Computer column, type the code. Only a bot's owner or an admin can approve.
 3. **Check it worked.** The command ends with `Registered OpenClaw profile ...`, `OpenClaw cron job tico-sync,
@@ -128,7 +128,7 @@ The commands are Hermes's (see [Keep it working](hermes-agents.md#keep-it-workin
 **Remove it.** `uninstall` removes the heartbeat timer, the `tico-sync` job, the skill, `tico.env` and the
 credential file; it leaves OpenClaw's own config, your other cron jobs and the connector copy in
 `~/.config/tico/agents/hermes_agent.py` (other profiles may use it) alone. It does **not** revoke the
-credential in Tico: do that as a separate step in **Settings → Bots** (the bot's Computer column), or ask BotOps.
+credential in Tico: do that as a separate step in **Settings → Bots** (the bot's Computer column), or ask Agent Ops.
 After a revoke, a profile that still has the connector gets 401: the heartbeat backs off to once an hour and
 says `credential revoked: run pair again`, `check` and `doctor` say the same, and the skill stops at its first
 step. The cron job still starts one short agent turn each interval until you `uninstall`.

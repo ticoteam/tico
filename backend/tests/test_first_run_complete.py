@@ -1,6 +1,6 @@
 """Every way a new company is set up leaves it complete at once: what a start does to complete a company
 (Onboarding.complete_company) has run by the end of the first run, so the next start finds nothing to add. Before it,
-General had no manager and BotOps no "Sweep stuck tasks" routine until the server restarted."""
+General had no manager and Agent Ops no "Sweep stuck tasks" routine until the server restarted."""
 
 import pytest
 
@@ -49,7 +49,7 @@ def company_file(api):
     draft["company"]["signals"] = ["sells_services"]
     draft = C.Turn(draft).finish()
     draft["company"].update(name="Kiln & Co", about="We make pottery.")
-    draft["bots"] = [b for b in draft["bots"] if b["template"] in ("assistant", "botops")]
+    draft["bots"] = [b for b in draft["bots"] if b["template"] in ("assistant", "agent-ops")]
     body = {"company_yaml": C.to_yaml(draft)}
     preview = api.post("/api/v2/setup/company/preview", json=body, headers=signed_in())
     assert preview.status_code == 200, preview.text
@@ -61,7 +61,7 @@ def company_file(api):
     assert done.status_code == 200, done.text
 
 
-# Setup starts the default chart's bots; a company file starts the bots it lists (here only the COO and BotOps). With no
+# Setup starts the default chart's bots; a company file starts the bots it lists (here only the COO and Agent Ops). With no
 # Manager for the team, the General Manager stands in (pipeline_settings.preset: the ladder).
 MANAGERS = {
     "onboarding": {"product": "product-manager"},
@@ -73,7 +73,7 @@ MANAGERS = {
 def test_a_new_company_is_complete_when_its_first_run_ends_and_a_restart_adds_nothing(environment, first_run):
     api = environment()
     _providers(api)
-    machine(api)  # the owner's computer, so the built-ins can run and BotOps is active
+    machine(api)  # the owner's computer, so the built-ins can run and Agent Ops is active
     first_run(api)
     after_setup = whole(api)
     # No answer to "Software is the product" is yes: Product and Engineering come too. Their managers are the default

@@ -96,7 +96,7 @@ impl TokenCache {
         } else {
             0.0
         };
-        // BotOps' answer depends on the runs live when it was asked; the hub says so with hold=false.
+        // Agent Ops' answer depends on the runs live when it was asked; the hub says so with hold=false.
         let holdable = granted
             .get("hold")
             .map(|h| h != &Value::Bool(false))

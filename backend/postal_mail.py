@@ -852,7 +852,7 @@ class PostalMail:
         private = True if private else None
         requester = owner_actor(c, self.auth) if inform_owner else None
         if H.is_human(to):
-            # A letter for a person is their task with BotOps' question on it (backend/person_asks.py), so it is in their
+            # A letter for a person is their task with Agent Ops' question on it (backend/person_asks.py), so it is in their
             # Needs you, not only their Tasks. No bot holds it: a private letter never reaches a bot's turn unasked.
             from . import person_asks
 

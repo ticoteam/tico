@@ -1,5 +1,5 @@
 """One Assistant for everyone (backend/assistant.py, docs/assistant.md): the owner's chat is their Assistant like
-everyone else's, and the Strategy Owner, the Librarian and BotOps are helpers it hands cited work to. The owner's earlier
+everyone else's, and the Strategy Owner, the Librarian and Agent Ops are helpers it hands cited work to. The owner's earlier
 chat with the Strategy Owner (room_key "ceo") is read-only history under "Earlier chats", and it stays with the owner
 seat."""
 
@@ -189,11 +189,11 @@ def test_the_assistant_hands_the_strategy_bot_and_the_librarian_cited_work(api):
                 "SELECT body FROM messages WHERE conversation_id=? AND body LIKE '%in their words%'",
                 (task["conversation_id"],),
             ).fetchone()["body"]
-            botops = c.execute(
+            agent_ops = c.execute(
                 "SELECT 1 FROM events WHERE action='botops.asked_via_assistant' AND target=?", (task["id"],)
             ).fetchone()
         assert (asked["helper"], asked["cited"], asked["for"]) == ("bot:" + slug, turn_message(api, coo), "human:ana")
-        assert "> " + said in quoted and botops is None
+        assert "> " + said in quoted and agent_ops is None
         # The helper works it as itself: the citation lends it nobody's rights.
         attempt = post(api, "jobs/claim", {"bot": slug}, token=r["token"])["attempt"]
         assert attempt["task"]["id"] == task["id"]

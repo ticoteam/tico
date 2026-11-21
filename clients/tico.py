@@ -173,7 +173,7 @@ class Client:
             "User-Agent": "Tico-Client/" + CLIENT_VERSION,
         }
         if delegate:
-            # BotOps doing what the person who asked it could do: the server answers as them, or with a Confirm card.
+            # Agent Ops doing what the person who asked it could do: the server answers as them, or with a Confirm card.
             headers["X-Tico-On-Behalf-Of"] = delegate if isinstance(delegate, str) else "turn"
         if extra_headers:
             if set(extra_headers) != {"X-Tico-Processing-Token"}:
@@ -311,7 +311,7 @@ class Client:
         return self.request("PATCH", "/api/v2/" + path, body or {}, key)
 
     def call(self, method, path, body=None, key=None, query=None, delegate=False):
-        """Any v2 route by method, path relative to /api/v2/; `delegate` acts as the person BotOps works for."""
+        """Any v2 route by method, path relative to /api/v2/; `delegate` acts as the person Agent Ops works for."""
         filtered = {k: v for k, v in (query or {}).items() if v is not None}
         suffix = "?" + urllib.parse.urlencode(filtered) if filtered else ""
         return self.request(

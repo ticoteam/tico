@@ -2,7 +2,7 @@
 
 Triggered when the weekly summary finds recurring product work with no owner, or when the owner asks
 "do we need someone for this?". Budget 15 minutes. The outcome is one proposal on a task for the owner,
-A BotOps task follows only when a task asks for it and a granted Tool allows it.
+An Agent Ops task follows only when a task asks for it and a granted Tool allows it.
 
 ---
 
@@ -30,7 +30,7 @@ you, and what it needs connected. Stop there.
 
 ## 4. Carry out the requested hire
 
-    tico task create --owner botops --title "Set up <template>" --message "<why, first routine, reports to product-lead, what to connect>" --parent <id>
+    tico task create --owner agent-ops --title "Set up <template>" --message "<why, first routine, reports to product-lead, what to connect>" --parent <id>
 
 Record the hire in `knowledge/team.md` and `memory/decisions.md`. On a no, record the reason so the same
 proposal is not made again without new evidence.

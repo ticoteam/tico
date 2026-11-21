@@ -204,6 +204,8 @@ def counts_for_person(conn, message, reason, conversation_id):
 
 REVIEW_OWNER = "assistant"  # rule 8's first review task
 FLEET_MAINTAINER = "botops"  # the fleet's maintainer bot: reviews refused writes and may start any bot's task
+# Its slug and template. Its id keeps the old name, so every actor string and history row still names it (#4863).
+AGENT_OPS_SLUG = "agent-ops"
 BOT_STATES = SV.BOT_STATES
 STATUS_STATES = SV.BOT_STATUS_STATES
 MESSAGE_KINDS = ("say", "notice", "steer")
@@ -311,26 +313,26 @@ def uuid7():
 
 
 # A message written in a person's name by someone else's hand says so in refs.via (_write_message): the Assistant,
-# BotOps, an automation, a personal token ("token"). Slack is the one way a person types a message themselves.
+# Agent Ops, an automation, a personal token ("token"). Slack is the one way a person types a message themselves.
 OWN_HAND_VIA = ("slack",)
 
 
 def delegated(refs) -> bool:
     """Whether a message's refs say it was written in a person's name but not by their hand (refs.via). The same notion
-    as task_asks.refuses_ok_by for a request: the Assistant, BotOps, a token, anything acting for the person."""
+    as task_asks.refuses_ok_by for a request: the Assistant, Agent Ops, a token, anything acting for the person."""
     via = str((_json(refs, {}) or {}).get("via") or "")
     return bool(via) and via not in OWN_HAND_VIA
 
 
 def by_own_hand(actor) -> bool:
-    """Whether this request's act is a person's own, in their own session: not the Assistant, BotOps, an automation or
+    """Whether this request's act is a person's own, in their own session: not the Assistant, Agent Ops, an automation or
     a personal token acting as them (VIA, BY_TOKEN, set by backend/app.py for the request). The engine's twin of
     task_asks.refuses_ok_by, and the act's twin of typed_by_person: only this lifts a task Late brought to a person."""
     return is_human(actor) and not (VIA.get() or BY_TOKEN.get())
 
 
 def in_person_name(message):
-    """Whether a message is in a person's name: one they typed, one the Assistant, BotOps or a token wrote for them
+    """Whether a message is in a person's name: one they typed, one the Assistant, Agent Ops or a token wrote for them
     (they act with the person's rights), or Tico's carrier of one (threads._carrier: refs.carries, refs.from).
     Enough for the claim's order, a snooze or done hold, fences and labels. in_person_name_sql is the row test."""
     message = message or {}
@@ -342,7 +344,7 @@ def in_person_name(message):
 
 
 def typed_by_person(message):
-    """Whether a message is in a person's name and typed by their own hand: not delegated (the Assistant, BotOps, a
+    """Whether a message is in a person's name and typed by their own hand: not delegated (the Assistant, Agent Ops, a
     token; a carrier copies its source's refs.via). Only that lifts a safeguard against runaway automatic runs and
     spend: the 7 runs and level person, a retry backoff, a usage-limit cooldown. typed_by_person_sql is the row test."""
     return in_person_name(message) and not delegated((message or {}).get("refs"))
@@ -621,8 +623,8 @@ def _one(conn, sql, args=()):
 # the length of one request (backend/app.py request_guard), so every event and task-history row the
 # request writes says "via assistant" without each write knowing about it.
 VIA = contextvars.ContextVar("hub_via", default="")
-# When BotOps acts with a person's rights: whose, which request lent them (a message or task id), and whether the person
-# asked in this run (`live`) or BotOps cites their open task in a later one (`follow_through`). Every event then says so.
+# When Agent Ops acts with a person's rights: whose, which request lent them (a message or task id), and whether the person
+# asked in this run (`live`) or Agent Ops cites their open task in a later one (`follow_through`). Every event then says so.
 # The Tools Owner sets it the same way for a Tools change (via "tools-owner", backend/tools_delegation.py), naming itself
 # (`by`).
 # The Assistant sets it too, for a task action the person asked for in their own Assistant chat (`asked`, the message cited).
@@ -1116,7 +1118,7 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
     said = _clip(detail)
     reviewer = bot_actor(REVIEW_OWNER if slug == FLEET_MAINTAINER else FLEET_MAINTAINER)
     if slug == FLEET_MAINTAINER and (bot(conn, REVIEW_OWNER) or {}).get("state") in (None, "planned", "archived"):
-        # A company without an assistant has nobody to review BotOps: a person does.
+        # A company without an assistant has nobody to review Agent Ops: a person does.
         reviewer = human_actor(default_human(conn))
     # By the name people know it by, not its id (Initech, Nov 11: "Review 01a1cb0d-…'s refused writes").
     found = bot(conn, slug) or {}
@@ -1130,7 +1132,7 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
             f"The last one broke the {rule} rule: {said}. "
             f"Read its refusals and decide whether its playbook or its reach needs a change.",
             origin=actor,
-            # A person reviews only BotOps (no assistant to do it), and BotOps asks them about itself.
+            # A person reviews only Agent Ops (no assistant to do it), and Agent Ops asks them about itself.
             why=f"{count} of my writes were turned down today.",
         )
     # Refusals are diagnostics for the bot, not decisions for the human.
@@ -1156,8 +1158,8 @@ def _review_exists(conn, title, day):
 def _review_task(conn, owner, title, body, origin=None, why=None):
     try:
         if is_human(owner):
-            # A person's review is BotOps' question to them on their task (backend/person_asks.py): in their Needs
-            # you. No bot holds it: the bot it reviews is BotOps itself, with no assistant to review it.
+            # A person's review is Agent Ops' question to them on their task (backend/person_asks.py): in their Needs
+            # you. No bot holds it: the bot it reviews is Agent Ops itself, with no assistant to review it.
             from . import person_asks
 
             row = person_asks.ask(
@@ -1168,7 +1170,7 @@ def _review_task(conn, owner, title, body, origin=None, why=None):
                 body,
                 "Does my playbook or reach need a change?",
                 why or body.split(". ")[0].rstrip(".") + ".",
-                asker=person_asks.botops(),
+                asker=person_asks.agent_ops(),
             )
         else:
             # lint=False: a review reads as written; the shape rule is for asks bots write.
@@ -1205,7 +1207,7 @@ def quarantine_is_escape(conn, slug):
 
 
 def released_how(actor):
-    """How a quarantine this actor lifted ended (holds.released_how): Tico's own cooldown, a person, or BotOps."""
+    """How a quarantine this actor lifted ended (holds.released_how): Tico's own cooldown, a person, or Agent Ops."""
     return "expired" if actor == TICO_ACTOR else "person" if is_human(actor) else "botops"
 
 
@@ -1333,7 +1335,7 @@ QUARANTINE_LIFTED = "Do not retry this action; leave a note for a person if you 
 
 
 def quarantine_lifted_note(conn, slug):
-    """When a quarantine lifts (the cooldown, or a person or BotOps clearing it), a quiet note for the bot's next
+    """When a quarantine lifts (the cooldown, or a person or Agent Ops clearing it), a quiet note for the bot's next
     run: the refusal that stopped it and not to retry it. While quarantined nobody could tell it why, and a bot
     back from a cooldown retried the same refused write. Read before its hold is released."""
     hold = quarantine_hold(conn, slug) or {}
@@ -1659,18 +1661,18 @@ def _learner(conn, actor):
 HEALTH_MONITOR = "health-monitor"
 
 
-def _botops_only(conn, actor, target):
-    """The Health Monitor gives its fixes to BotOps and never a person a task or a message nobody asked for
-    (docs/health-monitor.md): BotOps decides who to ask."""
+def _agent_ops_only(conn, actor, target):
+    """The Health Monitor gives its fixes to Agent Ops and never a person a task or a message nobody asked for
+    (docs/health-monitor.md): Agent Ops decides who to ask."""
     if actor != bot_actor(HEALTH_MONITOR) or not is_human(target or ""):
         return
     refuse(
         conn,
         actor,
-        "botops-only",
-        "The Health Monitor gives its fixes to BotOps, not to a person: file it with "
-        "`tico task create --owner botops` (or hand a task to it with `tico task update <id> --owner botops`), and "
-        "BotOps decides who to ask",
+        "agent-ops-only",
+        "The Health Monitor gives its fixes to Agent Ops, not to a person: file it with "
+        "`tico task create --owner agent-ops` (or hand a task to it with `tico task update <id> --owner agent-ops`), and "
+        "Agent Ops decides who to ask",
     )
 
 
@@ -1702,7 +1704,9 @@ def sync_registry(conn, employees, people):
             state = "active"
         # The runtime, model and host are the entry's own, in bot_config (the seed writes the whole entry there).
         row = {
-            "slug": slug,
+            "slug": str(
+                e.get("slug") or slug
+            ),  # a registry name is the bot's id, and its slug unless `slug` says otherwise
             "display_name": str(e.get("display_name") or slug),
             "effort": str(e.get("reasoning_effort") or e.get("effort") or ""),
             "state": state,
@@ -2173,7 +2177,7 @@ def _write_message(
         if moved and moved != conv["id"]:
             conv = conversation(conn, moved)
     if (VIA.get() or BY_TOKEN.get()) and is_human(actor):
-        # The Assistant, BotOps or a personal token wrote this for the person: not by their hand (delegated).
+        # The Assistant, Agent Ops or a personal token wrote this for the person: not by their hand (delegated).
         refs = {**(refs or {}), "via": VIA.get() or "token"}
     from . import wake_rules
 
@@ -2835,6 +2839,8 @@ def new_bot_id(slug):
     """The id a new bot is created with: its slug for a product bot (PRODUCT_BOT_SLUGS, or the Assistant an install
     names with TICO_ASSISTANT_BOT), else a UUIDv7."""
     assistant = os.environ.get("TICO_ASSISTANT_BOT", "").strip()
+    if slug == AGENT_OPS_SLUG:
+        return FLEET_MAINTAINER
     return slug if slug in PRODUCT_BOT_SLUGS or (assistant and slug == assistant) else uuid7()
 
 
@@ -4735,7 +4741,7 @@ def task_create(
     owner = route(conn, actor, owner)
     _learner(conn, actor)
     target = _reach(conn, actor, owner, allow_planned=allow_planned)
-    _botops_only(conn, actor, target)
+    _agent_ops_only(conn, actor, target)
     from . import profiles
 
     labels = profiles.review_labels(title, parent_id, _labels(labels))
@@ -4782,7 +4788,7 @@ def task_create(
         requester = actor
     from .roadmaps import settings as roadmap_settings
 
-    # Bots (and Assistant/BotOps acting for a person) publish only through an approved publication.
+    # Bots (and Assistant/Agent Ops acting for a person) publish only through an approved publication.
     if visibility == 'public' or public_title or public_summary:
         from .strategy_acts import gate
 
@@ -6049,7 +6055,7 @@ def setup_finished(conn, slug, archived=False):
         )
 
 
-# BotOps's task to review a bot's stopped runs held for a check (execution._hand_to_maintainer).
+# Agent Ops's task to review a bot's stopped runs held for a check (execution._hand_to_maintainer).
 HELD_REVIEW_TITLE = "Review {bot}'s stopped runs held for a check"
 HELD_OPERATOR_REVIEW_TITLE = "Review {display_name}'s unresolved interrupted runs"
 # The operator review's title carries the bot's display name, which is neither unique nor fixed, so its body names the
@@ -6324,7 +6330,7 @@ def status_set(conn, actor, bot_slug, state=None, focus=None, task_id=None, reas
     slug = actor_id(bot_slug) if actor_kind(bot_slug) else str(bot_slug).strip()
     if not bot(conn, slug):
         refuse(conn, actor, "not-found", f"no bot {slug}")
-    lifting = actor == bot_actor(FLEET_MAINTAINER) and state == "active"  # BotOps ending a quarantine
+    lifting = actor == bot_actor(FLEET_MAINTAINER) and state == "active"  # Agent Ops ending a quarantine
     if is_bot(actor) and actor_id(actor) != slug and not lifting:
         refuse(conn, actor, "identity", f"{actor_name(conn, actor)} may only set its own status")
     if state is not None and state not in STATUS_STATES and state != "active":
@@ -6332,7 +6338,7 @@ def status_set(conn, actor, bot_slug, state=None, focus=None, task_id=None, reas
     quarantined = (bot(conn, slug) or {}).get("state") == "quarantined"
     if quarantined and state == "active" and not is_human(actor):
         # A quarantine for too many refusals lifts without a person (the cooldown,
-        # or BotOps); only an escape (secrets, another bot's repo, reaching outside) waits for one.
+        # or Agent Ops); only an escape (secrets, another bot's repo, reaching outside) waits for one.
         lifter = actor in (TICO_ACTOR, bot_actor(FLEET_MAINTAINER)) and actor != bot_actor(slug)
         if not lifter or quarantine_is_escape(conn, slug):
             refuse(conn, actor, "quarantined", f"only a person takes {slug} out of this quarantine")

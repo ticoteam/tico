@@ -16,7 +16,7 @@ LIST_BYTES = 262_144  # as the automations list: a page stays under 256 KB
 
 
 def write(c, actor, obj, before, after, via=None):
-    """Record one change. `via` names who acted for the actor (BotOps for a person, an approval id)."""
+    """Record one change. `via` names who acted for the actor (Agent Ops for a person, an approval id)."""
     row_id = H.new_id()
     c.execute(
         "INSERT INTO audit_log VALUES(?,?,?,?,?,?,?)",

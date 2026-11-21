@@ -45,7 +45,7 @@ When recurring product work has no owner, propose a hire; never create one yours
    The candidates are in `team_templates` on this template's card.
 3. Put the proposal in the summary and on a task for the owner, in five lines: the template, the reason,
    its first routine (from its card), who it reports to (you), and what it needs connected.
-4. With a task that asks for it and a granted Tool, run `tico task create --owner botops --title "Set up <template>" --message "<why, first routine, reports to product-lead, what to connect>" --parent <id>`.
+4. With a task that asks for it and a granted Tool, run `tico task create --owner agent-ops --title "Set up <template>" --message "<why, first routine, reports to product-lead, what to connect>" --parent <id>`.
    Record the hire in `knowledge/team.md` and `memory/decisions.md`. A no is recorded too, with the reason.
 
 ## First message: setup

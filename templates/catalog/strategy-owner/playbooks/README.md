@@ -25,7 +25,7 @@ One file per recurring kind of work. A playbook is the checklist you would hand 
 - `weekly-goals-review.md`: the short review for the owner.
 - `recoveries.md`: where the Strategy Owner is on at level 2, recoveries for red or stalled goals and merged asks.
 - `acts-on-its-own.md`: at level 3, decisions on bot tasks for red or stalled goals and clashes between Heads,
-  answering bots' questions from recorded rules and decisions, and BotOps asks for broken bots.
+  answering bots' questions from recorded rules and decisions, and Agent Ops asks for broken bots.
 - `owner-chat.md`: a task the owner's Assistant hands you, quoting their words: advice, or the change they asked for.
 
 ## Proposals

@@ -433,8 +433,8 @@ def register(
             task_id = auth.resolve_task(c, who, tid)
             auth.task(c, who, task_id)
             if who.via == "botops" and not who.confirmed:
-                # BotOps acting for a person changes who sees a task only on that person's own tap (a Confirm card).
-                return app.state.botops_propose(
+                # Agent Ops acting for a person changes who sees a task only on that person's own tap (a Confirm card).
+                return app.state.agent_ops_propose(
                     c,
                     who,
                     request.method,

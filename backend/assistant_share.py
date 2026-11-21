@@ -2,7 +2,7 @@
 """A person lets bots they choose read their own Assistant chat, read only (docs/assistant.md, "Private to you").
 
 Nobody is on a person's list at first. Only that person adds a bot or removes one, on their own click: not their
-Assistant's turn, not BotOps acting for them, not the owner or an admin. A bot on the list reads the person's messages,
+Assistant's turn, not Agent Ops acting for them, not the owner or an admin. A bot on the list reads the person's messages,
 the Assistant's replies and its cards through `GET /api/v2/assistant/shared/{person}`, and nothing else is opened to it:
 every route that posts, reacts or acts on a card in the room still refuses it. Removing a bot refuses its next read at
 once, since every read checks the list as it is now. What the Assistant has learned about the person stays out unless

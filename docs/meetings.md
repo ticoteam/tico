@@ -58,7 +58,7 @@ action items work identically whatever the source.
 ## Review before sharing
 
 Imported meetings wait in the importing person's **Pending** queue by default. Only the person
-they are filed for can open that queue or review a meeting, including through their own BotOps
+they are filed for can open that queue or review a meeting, including through their own Agent Ops
 acting with their rights. The Team owner, participants, other people and bots cannot see pending
 or dismissed meetings. They do not appear in search, SQL exports, routines, Updates or KPIs.
 Pending is quiet: it does not add to **Needs you**. Existing meetings stay live after upgrade.
@@ -122,7 +122,7 @@ and Share them, or the explicit whole-queue CLI/API action.
 CLI: `tico meeting pending`, `tico meeting approve <id>` or `tico meeting approve --all`,
 `tico meeting dismiss <id>`, and `tico meeting restore <id>`. MCP equivalents are
 `tico_meeting_pending`, `tico_meeting_approve` (`id` or `all: true`), `tico_meeting_dismiss`, and
-`tico_meeting_restore`. All use the caller's own meetings; BotOps uses the requesting person's
+`tico_meeting_restore`. All use the caller's own meetings; Agent Ops uses the requesting person's
 rights. `tico meeting import ... --review live` shares immediately. `send_to` on a pending import
 is held until approval; direct Send and pushing items require a live meeting.
 
@@ -522,7 +522,7 @@ Status also includes `skip_reasons`, the last attempt's skipped count per code (
 the fixed `signal` that classified a throttle (`rate limit`, `slow down` or `too many requests`) and the
 `batch` size. It never holds Granola's text, note IDs or titles.
 The MCP tools `tico_meeting_granola_status` and `tico_meeting_granola_sync` use the caller's person
-rights; BotOps can give the Meetings link but cannot complete the browser sign-in.
+rights; Agent Ops can give the Meetings link but cannot complete the browser sign-in.
 
 The account sync matches existing meetings by person and Granola ID, then by the Granola web URL
 when the IDs differ, and fills only empty fields. Summaries written by the account sync can update

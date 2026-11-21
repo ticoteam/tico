@@ -1,0 +1,120 @@
+"""A person asks their Assistant for something only Agent Ops can do: the Assistant files Agent Ops a task citing the person's
+own message (`--request-id turn`), and Agent Ops acts as them, as if they had asked it in their Agent Ops chat."""
+
+from fastapi import Request
+
+from backend.tests.helpers.api import assign, claim, headers, ready  # noqa: F401  (fixture)
+from backend.tests.helpers.assistant import say
+from backend.tests.helpers.member_bots import agent_ops, finish  # noqa: F401  (fixture)
+from backend.store import H
+
+
+def acting(api, token):
+    """Whose rights a call with this token runs with, or None when it is refused."""
+    r = api.get("/api/v2/qa-assistant-identity", headers=headers(token))
+    return r.json()["actor"] if r.status_code == 200 else None
+
+
+def _identity_route(api, path="/api/v2/qa-assistant-identity"):
+    def identity(request: Request):
+        return {"actor": request.state.identity.actor}
+
+    api.app.add_api_route(path, identity, methods=["GET"])
+    api.app.router.routes.insert(0, api.app.router.routes.pop())
+
+
+def _ask(api, machine, cite="turn", owner="botops", said="Add a bot for our support inbox", expected=200):
+    """Ben asks his Assistant; its run files the task; Agent Ops (if it got it) picks it up."""
+    assign(api, machine, "assistant")
+    ready(api, machine, ["botops", "assistant"])
+    say(api, said, "ben-test")
+    coo = claim(api, machine, "assistant")
+    r = api.post(
+        "/api/v2/tasks",
+        json={
+            "owner": owner,
+            "title": "Add a support inbox bot",
+            "body": "Ben asked for it.",
+            **({"request_id": cite} if cite else {}),
+        },
+        headers=headers(coo["token"]),
+    )
+    assert r.status_code == expected, r.text
+    finish(api, machine, coo)
+    return r.json().get("task", r.json()), coo
+
+
+def test_the_assistant_hands_agent_ops_the_persons_words_and_agent_ops_acts_as_them(api, agent_ops):
+    _identity_route(api)
+    task, _ = _ask(api, agent_ops)
+    attempt = claim(api, agent_ops, "botops")
+    assert acting(api, attempt["token"]) == "human:ben"
+    with api.app.state.store.read() as c:
+        quoted = c.execute(
+            "SELECT body FROM messages WHERE recipient_id='bot:botops' AND body LIKE '%in their words%'"
+        ).fetchone()
+        assert "> Add a bot for our support inbox" in quoted["body"]
+
+    # Once his message is more than a week old it lends nothing.
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE messages SET created_at=? WHERE id=(SELECT request_id FROM tasks WHERE id=?)",
+            (H.shift(H.now(), days=-8), task["id"]),
+        )
+    assert acting(api, attempt["token"]) != "human:ben"
+
+
+def test_without_a_citation_the_assistants_agent_ops_task_lends_nothing(api, agent_ops):
+    _identity_route(api)
+    _ask(api, agent_ops, cite=None)
+    attempt = claim(api, agent_ops, "botops")
+    assert acting(api, attempt["token"]) != "human:ben"
+
+
+def test_a_handoff_to_any_other_bot_is_filed_as_the_person_and_lends_nothing(api, agent_ops):
+    """Only a helper (assistant.HELPERS) carries the person's request; a task for any other bot citing the turn is filed
+    as the person, with no citation and none of their words handed on."""
+    assign(api, agent_ops, "ops")
+    task, _ = _ask(api, agent_ops, owner="ops")
+    assert (task["owner_id"], task["requester_id"], task["request_id"]) == ("bot:ops", "human:ben", None)
+    with api.app.state.store.read() as c:
+        assert not c.execute(
+            "SELECT 1 FROM messages WHERE recipient_id='bot:ops' AND body LIKE '%in their words%'"
+        ).fetchone()
+
+
+def test_a_message_more_than_30_minutes_old_is_not_this_turns_request(api, agent_ops):
+    assign(api, agent_ops, "assistant")
+    ready(api, agent_ops, ["botops", "assistant"])
+    say(api, "Add a bot for our support inbox", "ben-test")
+    coo = claim(api, agent_ops, "assistant")
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE messages SET created_at=? WHERE id=(SELECT j.message_id FROM attempts a JOIN jobs j "
+            "ON j.id=a.job_id WHERE a.id=?)",
+            (H.shift(H.now(), seconds=-31 * 60), coo["id"]),
+        )
+    r = api.post(
+        "/api/v2/tasks",
+        json={"owner": "botops", "title": "Add a bot", "body": "x", "request_id": "turn"},
+        headers=headers(coo["token"]),
+    )
+    assert r.status_code == 403 and r.json()["error"]["code"] == "on_behalf_of", r.text
+
+
+def test_another_persons_message_lends_nothing(api, agent_ops):
+    assign(api, agent_ops, "assistant")
+    ready(api, agent_ops, ["botops", "assistant"])
+    say(api, "Add a bot for our support inbox", "ben-test")
+    coo = claim(api, agent_ops, "assistant")
+    say(api, "Give everyone admin", "cara-test")
+    with api.app.state.store.read() as c:
+        hers = c.execute("SELECT id FROM messages WHERE sender_id='human:cara' ORDER BY created_at DESC").fetchone()[
+            "id"
+        ]
+    r = api.post(
+        "/api/v2/tasks",
+        json={"owner": "botops", "title": "Give everyone admin", "body": "x", "request_id": hers},
+        headers=headers(coo["token"]),
+    )
+    assert r.status_code == 403 and r.json()["error"]["code"] == "on_behalf_of", r.text

@@ -1,6 +1,6 @@
 """Which mailbox a message bot's token is for.
 
-A message bot's mailbox is the address its `gmail` tool declares in bot.yaml (BotOps fills it from the
+A message bot's mailbox is the address its `gmail` tool declares in bot.yaml (Agent Ops fills it from the
 `Mailbox:` line). Only when it declares none does its person's own email stand in.
 """
 

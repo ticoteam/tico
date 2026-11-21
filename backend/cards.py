@@ -17,7 +17,7 @@ A pin puts a page (`page:<file id>`) or a card (`card:<id>`) at a place, in orde
   Readers (people, or bots acting as themselves) may link pages they can read. Unpinning is for whoever pinned it,
   the task's owner or requester, or the org owner. A task pin widens nothing.
 - `person:<id>`, a person's Company (`#/home`, the landing page): theirs alone. Only they read and arrange it,
-  BotOps and the Assistant only when acting for them; an admin has no way in, and a card pinned there is known to no one
+  Agent Ops and the Assistant only when acting for them; an admin has no way in, and a card pinned there is known to no one
   else. `person:me` is the caller's own. Its cards are cards they made. Its first default card is the Floor (`floor`),
   which goes on no other place and once only.
 
@@ -1283,7 +1283,7 @@ def audience_of(c, place):
 
 
 def own_person(ctx, ident):
-    """Whether `person:<ident>` is the reader's own Company page: the person, or BotOps or the Assistant acting for
+    """Whether `person:<ident>` is the reader's own Company page: the person, or Agent Ops or the Assistant acting for
     them (both carry the person's actor)."""
     return ctx.person and ctx.who.actor == H.human_actor(ident)
 

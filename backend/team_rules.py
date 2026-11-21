@@ -2,7 +2,7 @@
 
 One record, `rules`, holds only what the owner changed. Each rule is on by default, the fast way; turning it off puts
 back the click or the limit the product had before. They are read wherever the decision is made: the Assistant's
-direct writes (backend/assistant.py), what BotOps does without a card (backend/botops_act.py), the bots BotOps
+direct writes (backend/assistant.py), what Agent Ops does without a card (backend/agent_ops_act.py), the bots Agent Ops
 manages in its own runs and who is a credential administrator (backend/auth.py), who stores a credential for their
 own bot (backend/credentials.py), the SQL page and personal tokens, whether a bot goes ahead on its own default when
 a person leaves its ask unanswered (backend/ask_deadlines.py), whether a bot's report to the Tico team goes without a card
@@ -21,8 +21,8 @@ KEY = "rules"
 DEFAULTS = {
     "assistant_direct": True,  # the Assistant makes tasks (for a person or a bot), comments and messages to bots without a card
     "assistant_approvals": True,  # a person may let their own Assistant decide their approvals (backend/assistant.py)
-    "botops_direct": True,  # BotOps sets AI providers and raises limits without a card
-    "botops_manages_bots": True,  # BotOps, in its own runs, manages every bot that is not built in (Auth.botops_manages)
+    "agent_ops_direct": True,  # Agent Ops sets AI providers and raises limits without a card
+    "agent_ops_manages_bots": True,  # Agent Ops, in its own runs, manages every bot that is not built in (Auth.agent_ops_manages)
     "admin_credentials": True,  # Admins store credentials, not only the owner
     "members_store_credentials": True,  # anyone on the team stores a credential for a bot they manage
     "admin_sql": True,  # Admins see the SQL page
@@ -44,7 +44,7 @@ ENV_DEFAULTS = {"topic_fresh": "TICO_TOPIC_FRESH"}
 # Numbers the owner sets, with their default and bounds.
 NUMBERS = {
     "go_ahead_days": (3, 1, 14),  # days an ask with a default waits for a person before the bot goes ahead
-    # Most reports a manager bot may add, and most it may archive or restore, each rolling week, through BotOps
+    # Most reports a manager bot may add, and most it may archive or restore, each rolling week, through Agent Ops
     # (backend/report_managers.py). 0 turns that off.
     "report_creates_per_week": (3, 0, 50),
     "report_archives_per_week": (3, 0, 50),

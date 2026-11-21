@@ -103,7 +103,7 @@ def inbound_inboxes(api, args):
 @tool(
     'tico_inbound_audience',
     'Who reads an inbox: company (everyone), or team with group (that group and the groups '
-    'under it). The owner and admins always read it. Owner or admin only (BotOps: the person who asked).',
+    'under it). The owner and admins always read it. Owner or admin only (Agent Ops: the person who asked).',
     {
         'inbox_id': _s('Inbox id'),
         'audience': _s('company or team', enum=['company', 'team']),

@@ -3,8 +3,8 @@
 A draft is the object the tico.team/setup page keeps (setup.js `blankDraft()`): step, company, people, bots, goals,
 rules, tools and seq, and `strategy` once the Strategy step has drafted one (optional: a draft without it is still
 valid). The server adds four fields the page passes back untouched and the company file never holds:
-`undo` (the draft before BotOps's last change), `chat` (the conversation so far), `removed` (bots taken off the chart,
-so they are not added back unasked) and `pending` (teams BotOps has suggested removing). Anything else is refused.
+`undo` (the draft before Agent Ops's last change), `chat` (the conversation so far), `removed` (bots taken off the chart,
+so they are not added back unasked) and `pending` (teams Agent Ops has suggested removing). Anything else is refused.
 """
 
 import copy
@@ -328,7 +328,7 @@ def chart_ids(draft):
 
 
 def manager_of(draft, bot):
-    """setup.js `managerOf()`, with a reports-to the visitor or BotOps set taking precedence while it still exists."""
+    """setup.js `managerOf()`, with a reports-to the visitor or Agent Ops set taking precedence while it still exists."""
     chosen = bot.get("reports_to")
     if chosen and chosen != bot["id"] and chosen in chart_ids(draft):
         return chosen

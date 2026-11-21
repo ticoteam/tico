@@ -14,7 +14,7 @@ PREFIXES = (
 
 
 def test_every_company_page_route_the_server_serves_is_in_the_v2_document(api):  # noqa: F811
-    # A route added without its document row would be missing from the API reference and from BotOps' list of calls.
+    # A route added without its document row would be missing from the API reference and from Agent Ops' list of calls.
     served = {
         (method.lower(), route.path)
         for route in api.app.routes

@@ -204,7 +204,7 @@ def test_try_again_is_a_persons_and_a_bot_is_told_what_it_can_do(c, general, lat
 
 @pytest.mark.parametrize("via", ["assistant", "botops", "token"])
 def test_try_again_needs_a_persons_own_hand_and_a_change_after_late_starts_the_ladder_again(c, general, later, via):
-    """The Assistant, BotOps and a personal token act in a person's name, but Try again is the person's own act in Tico:
+    """The Assistant, Agent Ops and a personal token act in a person's name, but Try again is the person's own act in Tico:
     it is refused with what to do. A change they make on a task Late rested the ladder on starts the ladder again, as
     any change does: no person holds the task to keep it for."""
     task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
@@ -329,7 +329,7 @@ def test_a_run_held_for_a_check_pauses_its_task_and_says_so_to_the_bots_owner(c,
     check (execution.auto_reconcile, `job.held`), and the bot claims nothing more on that task until someone resumes or
     dismisses it (execution.unfenced_sql). The task said it was still the bot's turn, Needs you was empty and the
     never-stuck pass kept writing wakes the bot could not take: a silent hold for up to 4 hours. Now it is Paused with
-    the cause, on the bot's owner's Needs you when no BotOps reviews it, and carries on once the run is settled."""
+    the cause, on the bot's owner's Needs you when no Agent Ops reviews it, and carries on once the run is settled."""
     task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
     X.ran(c, task_id, BUILDER, state="expired")  # its job is uncertain
     attempt, job = c.execute("SELECT id, job_id FROM attempts WHERE task_id=?", (task_id,)).fetchone()
@@ -339,7 +339,7 @@ def test_a_run_held_for_a_check_pauses_its_task_and_says_so_to_the_bots_owner(c,
     assert later(hours=2) == {} and _queued(c, task_id) == []  # nobody is woken meanwhile
     paused = [n for n in W.needs(c, ANA) if n["kind"] == "paused"]
     assert [(n["line"], n["bots"], n["tasks"]) for n in paused] == [(line, [BUILDER], [task_id])]
-    X.bot(c, "botops")  # BotOps reviews held runs (its review task): no person row then
+    X.bot(c, "botops")  # Agent Ops reviews held runs (its review task): no person row then
     assert [n for n in W.needs(c, ANA) if n["kind"] == "paused"] == []
     c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (job,))  # dismissed (POST jobs/{id}/reconcile)
     assert _states(c, task_id) == [("bot", BUILDER)]
@@ -352,7 +352,7 @@ def test_a_run_that_stopped_partway_is_never_a_silent_wait(c, general, later):
     """Nov 12, Tico Team: a Codex reviewer's turn ended "interrupted" (a steer race) and its job was held for a person to
     run it again. For the quarter hour before auto_reconcile records `job.held`, the task still said it was the
     reviewer's turn, nothing was on Needs you and the never-stuck reading counted nothing. From the moment the run stops
-    the task is Paused with the wait, the bot's owner has it on Needs you (no BotOps here) and the reading counts it."""
+    the task is Paused with the wait, the bot's owner has it on Needs you (no Agent Ops here) and the reading counts it."""
     task_id = X.new_task(c, ANA, "Review the footer fix", assignee=REVIEWER)["id"]
     X.ran(c, task_id, REVIEWER, state="interrupted")  # its job is uncertain, with no `job.held` yet
     line = "reviewer " + task_wakes.RUN_HELD

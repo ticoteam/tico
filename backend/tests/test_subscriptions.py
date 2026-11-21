@@ -67,8 +67,8 @@ def test_sign_in_permissions(api):
     assert any(m['id'] == rid for m in get(api, 'operations')['computers'])
 
 
-def test_botops_signin_uses_requester_rights_by_default():
-    from backend.botops_act import default_delegable
+def test_agent_ops_signin_uses_requester_rights_by_default():
+    from backend.agent_ops_act import default_delegable
 
     assert not default_delegable('PUT', 'subscriptions')
     assert default_delegable('POST', 'computers/computer-a/logins', {'runtime': 'codex'})

@@ -23,7 +23,7 @@
 #   1 install     the PREVIOUS release: its checksummed bundle unpacked, a .env, `docker compose up -d`
 #   2 seed        data shaped like a real team's: older releases' rows (scripts/make_upgrade_fixture.py), a computer
 #                 enrolled with a one-time code (the previous runner, started as docker/runner.compose.yaml starts it),
-#                 a team HUB_ variable granted to BotOps, and one BotOps turn answered by a fake `codex`
+#                 a team HUB_ variable granted to Agent Ops, and one Agent Ops turn answered by a fake `codex`
 #                 (scripts/journey-fake-codex.py) that opens a session and adds a task worktree with `hub`
 #   3 restart     the server restarts; data, environment id and the runner survive
 #   4 upgrade     "Update now" (POST /api/v2/system/update) moves the server to the candidate; the previous updater
@@ -217,7 +217,7 @@ last_seen() {  # the computers' last contact: runner_states (migration 0062) onc
   fi
 }
 seen_since() { [[ "$(last_seen)" > "$1" ]]; }
-botops_ready() { get operations | json 'sys.exit(0 if d["machines"][0]["readiness"]["bots"]["botops"]["ready"] else 1)'; }
+agent_ops_ready() { get operations | json 'sys.exit(0 if d["machines"][0]["readiness"]["bots"]["botops"]["ready"] else 1)'; }
 
 reply_to() {  # conversation nonce: the fake harness's answer to that ask, into $WORK/reply
   get "conversations/$1/messages" | python3 -c '
@@ -228,7 +228,7 @@ if not found:
     sys.exit(1)
 open(out, "w").write(found[-1])' "$2" "$WORK/reply"
 }
-ask() {  # name, then what to ask (env=NAME, worktree=TASK): one turn with BotOps in the owner's chat with it
+ask() {  # name, then what to ask (env=NAME, worktree=TASK): one turn with Agent Ops in the owner's chat with it
   local nonce="$1-$RANDOM$RANDOM" cid
   shift
   cid="$(post chat/botops "{\"text\": \"journey-ask $nonce $*\"}" | json 'd["conversation"]["id"]')" || return 1
@@ -256,7 +256,7 @@ worktree_state() {  # task: the state of its worktree link and whether its check
   docker exec "$RUNNER" test -e "/home/runner/workspace/$path/.git" && echo on-disk || echo not-on-disk
 }
 on_old_line() { [ "$JOURNEY" = fresh-start ] && [ "$(server_tag)" = "$PREV" ]; }   # the server runs a release below 0.6
-new_task() {  # title: a task BotOps is working on, so a worktree may start for it; prints its id
+new_task() {  # title: a task Agent Ops is working on, so a worktree may start for it; prints its id
   local task version
   if ! on_old_line; then   # 0.6: a new task is open in General's first stage, and its owner bot may add a worktree
     post tasks "{\"owner\": \"bot:botops\", \"title\": \"$1\", \"body\": \"A worktree for the journey.\"}" | json 'd.get("task", d)["id"]'
@@ -400,10 +400,10 @@ step_seed() {
     post bots/botops/assignment "{\"runner_id\": \"$rid\", \"expected_generation\": $generation}" >/dev/null || return 1
   fi
   # The runner builds starter repositories asynchronously after enrollment.
-  retry 180 botops_ready || { say "BotOps repository never became ready on the runner"; return 1; }
-  revision="$(get bots | json '[b for b in d if b["slug"] == "botops"][0]["revision"]')" || return 1
+  retry 180 agent_ops_ready || { say "Agent Ops repository never became ready on the runner"; return 1; }
+  revision="$(get bots | json '[b for b in d if b["id"] == "botops"][0]["revision"]')" || return 1
   post bots/botops/definition "{\"status\": \"active\", \"expected_revision\": $revision}" >/dev/null || return 1
-  retry 180 botops_ready || { say "BotOps never became ready on the runner"; return 1; }
+  retry 180 agent_ops_ready || { say "Agent Ops never became ready on the runner"; return 1; }
   # A team's own HUB_ variable, stored as a credential and granted to the bot.
   credential="$(post credentials "{\"name\": \"Acme bucket\", \"kind\": \"api_key\", \"env\": \"HUB_BUCKET\", \"secret\": \"$BUCKET\"}" | json 'd.get("credential", d)["id"]')" || return 1
   post "credentials/$credential/grants" '{"subject": "bot:botops"}' >/dev/null || return 1
@@ -566,7 +566,7 @@ step_new_runner() {
   before="$(last_seen)"
   start_runner "$CAND" --code "" || return 1
   retry 120 seen_since "$before" || { say "the candidate runner did not connect"; return 1; }
-  retry 120 botops_ready || { say "BotOps is not ready on the candidate runner"; return 1; }
+  retry 120 agent_ops_ready || { say "Agent Ops is not ready on the candidate runner"; return 1; }
   ask new env=HUB_BUCKET || return 1
   [ "$(fact HUB_BUCKET)" = "$(bucket_sha)" ] || { say "the team's HUB_BUCKET did not reach the turn after the upgrade: $(cat "$WORK/reply")"; return 1; }
   [ "$(fact thread)" = "$SEED_THREAD" ] || { say "the session from before the upgrade did not continue: $(cat "$WORK/reply")"; return 1; }
@@ -630,7 +630,7 @@ step_runner_restart() {
   before="$(last_seen)"
   docker restart "$RUNNER" >/dev/null || return 1
   retry 120 seen_since "$before" || { say "the runner did not come back after docker restart: $(docker logs --tail 5 "$RUNNER" 2>&1 | tr '\n' ' ')"; return 1; }
-  retry 120 botops_ready || { say "BotOps is not ready after the restart"; return 1; }
+  retry 120 agent_ops_ready || { say "Agent Ops is not ready after the restart"; return 1; }
   ask restarted || { say "no reply to the turn after the restart"; return 1; }
 }
 

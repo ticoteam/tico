@@ -244,8 +244,8 @@ def test_remove_is_for_a_named_subscription_on_this_computer_by_its_operator_or_
     assert pending(api, r) == []
 
 
-def test_botops_never_removes_a_subscription_even_with_a_persons_rights(api):
-    """Remove takes a login off a computer, so like Sign out it is a person's, checked before anything else; BotOps'
+def test_agent_ops_never_removes_a_subscription_even_with_a_persons_rights(api):
+    """Remove takes a login off a computer, so like Sign out it is a person's, checked before anything else; Agent Ops'
     allow-list does not reach the route either."""
     import pytest
     from backend.auth import Identity
@@ -257,7 +257,7 @@ def test_botops_never_removes_a_subscription_even_with_a_persons_rights(api):
     with api.app.state.store.transaction() as c:
         with pytest.raises(Problem) as no:
             remove(c, Identity("human:ana", "owner", via="botops", confirmed=True), r["runner_id"], "codex", "work", {})
-    assert no.value.status == 403 and "BotOps cannot remove a subscription" in str(no.value)
+    assert no.value.status == 403 and "Agent Ops cannot remove a subscription" in str(no.value)
     assert pending(api, r) == []
 
 

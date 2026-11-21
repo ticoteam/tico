@@ -247,12 +247,12 @@ def test_the_tools_and_the_cli_set_access_as_whoever_asked(acme):
     assert group["write"]["teams"] == ["sales"]
 
 
-def test_botops_sets_access_with_the_rights_of_the_person_who_asked(acme):
-    from backend.tests.helpers.botops_parity import act
-    from backend.tests.helpers.member_bots import botops as make_botops, finish, turn
+def test_agent_ops_sets_access_with_the_rights_of_the_person_who_asked(acme):
+    from backend.tests.helpers.agent_ops_parity import act
+    from backend.tests.helpers.member_bots import agent_ops as make_agent_ops, finish, turn
 
     api, tokens = acme
-    machine = make_botops.__wrapped__(api)
+    machine = make_agent_ops.__wrapped__(api)
     body = {"see": EVERYONE, "read": NOBODY, "write": EVERYONE}
     eve = turn(api, machine, person="eve-test", text="Hide Cara's Home")
     assert act(api, eve, "GET", "humans/cara/access").status_code == 403  # only for whoever manages Cara
@@ -536,12 +536,12 @@ def problem(response):
     return {k: v for k, v in (body.get("error") or body).items() if k in ("code", "message", "detail", "title")}
 
 
-def test_botops_sets_access_as_the_person_without_the_delegation_header(acme):
-    from backend.tests.helpers.botops_parity import act
-    from backend.tests.helpers.member_bots import botops as make_botops, finish, turn
+def test_agent_ops_sets_access_as_the_person_without_the_delegation_header(acme):
+    from backend.tests.helpers.agent_ops_parity import act
+    from backend.tests.helpers.member_bots import agent_ops as make_agent_ops, finish, turn
 
     api, tokens = acme
-    machine = make_botops.__wrapped__(api)
+    machine = make_agent_ops.__wrapped__(api)
     body = {"see": EVERYONE, "read": NOBODY, "write": EVERYONE, "revision": 0}
     eve = turn(api, machine, person="eve-test", text="Hide Cara's Home")
     assert act(api, eve, "PUT", "humans/cara/access", body, ref=None).status_code == 403

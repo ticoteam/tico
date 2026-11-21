@@ -292,7 +292,7 @@ attach the version the signing made. `POST /api/v2/files/{id}/signings` (multipa
 ## Deleting a file for good
 
 For a file that holds something it shouldn't. **Only the owner** deletes a file for good: **Delete for good** in a
-page's menu, `DELETE /api/v2/files/{id}`, or `tico file delete ID` with an owner token. BotOps asks the owner to
+page's menu, `DELETE /api/v2/files/{id}`, or `tico file delete ID` with an owner token. Agent Ops asks the owner to
 confirm first.
 
 - Every version's bytes leave every place Tico stored them: this server, the company's bucket and its earlier
@@ -484,7 +484,7 @@ File hosting does not change the visual upload caps: 25 MB for bots and 10 MB fo
 ### A company's own bucket
 
 In **Settings › General › Storage** the owner enters a bucket, its region, an optional folder in it, and an access key ID
-and secret access key. Only the owner, signed in as themselves, can see or change it; a bot, BotOps and the Assistant
+and secret access key. Only the owner, signed in as themselves, can see or change it; a bot, Agent Ops and the Assistant
 cannot. Before saving, Tico uses those keys to start and cancel a multipart upload, then writes a small check object
 (`<folder>/blobs/…`, about 80 bytes) and reads it back; when any step fails it saves nothing and says which S3 error it
 got. The keys need `s3:PutObject`, `s3:GetObject`
@@ -619,7 +619,7 @@ never approved by an older one's review, and a deleted task's verdicts stop coun
 `tico file review <path|FILE[@N]> --approve|--changes --task <task> [--note TEXT]` (MCP `tico_file_review`,
 `POST /api/v2/file-reviews`) gives a verdict directly, for a company where a bot moves a stage: a bot reviews another
 bot's file on a task it can read, when it can open the file. A bot never reviews its own bot's file (403). Bots only: a
-person, or a bot acting for one (the Assistant, BotOps), gets 403. A person approves a file with their own OK of the
+person, or a bot acting for one (the Assistant, Agent Ops), gets 403. A person approves a file with their own OK of the
 version, asked on the task.
 
 Upload retries verify their idempotency receipt before writing bytes to durable storage.

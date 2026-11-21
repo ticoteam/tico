@@ -252,7 +252,7 @@ def live_masks(unsettled):
 # their own hand, Slack, their personal token, their Assistant on their word): a row of its history, or a message they
 # wrote on the task the server says it names (hubdb.refs_task_id: its refs' task or task_id, a list read as its first
 # string that is not blank), else the task of the message it replies to (the same way, then that one's chat), else its
-# own chat's task. BotOps or another agent acting with their rights is not theirs, and Tico's carrier copy of a message
+# own chat's task. Agent Ops or another agent acting with their rights is not theirs, and Tico's carrier copy of a message
 # is not a second touch.
 _OWN_VIA = "(" + ", ".join(f"'{via or ''}'" for via in question_marks.REPLY_VIA if via is not None) + ")"
 # What Python's str.strip() takes off (hubdb._task_ref): every Unicode space.
@@ -488,7 +488,7 @@ DERIVED = {
 # (backend/outcome_stats.py). Each groups by week and fixed names (status, proposer, bot, tool) and carries no text, no
 # id and no person: a proposal's owner, a call's person and its token label never leave the base row.
 GRANTED = {
-    # Assistant and BotOps proposals per week, proposer and status (pending, running, done, failed, canceled,
+    # Assistant and Agent Ops proposals per week, proposer and status (pending, running, done, failed, canceled,
     # expired); `share_pct` is that status's share of its week and proposer.
     "assistant_action_weekly": (
         ("assistant_actions",),

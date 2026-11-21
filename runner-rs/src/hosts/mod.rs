@@ -1753,7 +1753,7 @@ pub(crate) mod tests {
             "tico task create"
         );
         assert_eq!(
-            command_program("tico message send botops please check the release"),
+            command_program("tico message send agent-ops please check the release"),
             "tico message send"
         );
         assert_eq!(command_program("FOO=1 && curl x"), "curl");

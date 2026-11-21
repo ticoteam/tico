@@ -315,7 +315,7 @@ CONTENT = {
         },
         {
             "key": "rings",
-            "name": "Firmware rings to BotOps",
+            "name": "Firmware rings to Agent Ops",
             "owner": "person:eli",
             "closer": "botops",
             "note": "Restarts stayed flat.",

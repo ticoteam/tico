@@ -23,9 +23,9 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import replay
 
-_spec = importlib.util.spec_from_file_location("botops_run", HERE.parent / "botops" / "run.py")
-botops_run = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(botops_run)
+_spec = importlib.util.spec_from_file_location("agent_ops_run", HERE.parent / "agent_ops" / "run.py")
+agent_ops_run = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(agent_ops_run)
 
 TEXT_LIMIT = 200_000
 
@@ -72,7 +72,7 @@ def main(argv=None):
     ):
         raise SystemExit("write cases outside this repository: it is public")
     out.mkdir(parents=True, exist_ok=True)
-    server = botops_run.Live(args.url)
+    server = agent_ops_run.Live(args.url)
     for task_id in args.task:
         try:
             case = capture(server, args.url, args.token, task_id)

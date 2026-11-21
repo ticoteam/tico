@@ -1,6 +1,6 @@
 """Who may see and change an automation (backend/automations.py `may_change`), one rule for the UI, the CLI and MCP:
 the top of the org; the owner; anyone above the owner; the lead of its group and anyone above that lead. Peers are
-refused, and seeing follows the same rule. BotOps has whoever asked it's rights (test_botops_automations.py)."""
+refused, and seeing follows the same rule. Agent Ops has whoever asked it's rights (test_agent_ops_automations.py)."""
 
 from backend import automations as AU
 from backend.auth import Identity
@@ -118,7 +118,7 @@ def test_automations_follow_their_owner_into_a_new_group(api):
 
 
 def test_a_chat_may_name_only_an_automation_its_writer_can_see(api):
-    """A chat's refs.automation (BotOps edits the open one): the automation must exist and the writer must be able to
+    """A chat's refs.automation (Agent Ops edits the open one): the automation must exist and the writer must be able to
     see it, the rule GET /api/v2/automations/{aid} applies."""
     chat = {"text": "Change this one", "refs": {"automation": "auto_missing"}}
     aid = post(

@@ -62,7 +62,7 @@ ALERT_PREFERENCES = {
 
 @tool(
     "tico_alerts_show",
-    "Your own phone, alert preferences and spend. Only a person acting as themselves; never BotOps or the Assistant.",
+    "Your own phone, alert preferences and spend. Only a person acting as themselves; never Agent Ops or the Assistant.",
     {},
 )
 def alerts_show(api, args):
@@ -456,7 +456,7 @@ def _api_path(path):
 
 @tool(
     "tico_api",
-    "Use a v2 route with your own rights. BotOps uses the requester's rights by default, including a requesting bot's narrower rights. "
+    "Use a v2 route with your own rights. Agent Ops uses the requester's rights by default, including a requesting bot's narrower rights. "
     "Requested bot deletion, outside-domain invites, Team rules and "
     "Tico updates run directly. Never put a secret in body; use Credentials or its chat card. Prefer a friendly tool when one fits.",
     {
@@ -501,7 +501,7 @@ def _pointer(data, pointer):
 @tool(
     "tico_settings_find",
     "Find a control in Settings by its words: each one's `key`, `name`, `where` it sits, who may "
-    "change it, its `class` (direct: runs at once as the person; confirm: BotOps acting for a "
+    "change it, its `class` (direct: runs at once as the person; confirm: Agent Ops acting for a "
     "person gets a Confirm card for them; person: only the person, in Settings; `class_when` "
     "names what makes a direct one confirm or person), the route and body it writes, and the "
     "`card` link. Then `tico_settings_show` or `tico_settings_set` with its key.",
@@ -515,7 +515,7 @@ def settings_find(api, args):
 @tool(
     "tico_settings_show",
     "One setting from `tico_settings_find`: its current `value` (read with your rights, or the "
-    "requester's for BotOps), who may change it, whether you may (`you_may`), its class and the card link.",
+    "requester's for Agent Ops), who may change it, whether you may (`you_may`), its class and the card link.",
     {"key": _s("The setting's key, e.g. team.rules.admin_sql"), **SETTING_TARGET},
     required=("key",),
 )
@@ -533,9 +533,9 @@ def settings_show(api, args):
 
 @tool(
     "tico_settings_set",
-    "Change one setting from `tico_settings_find`, as the person who asked (BotOps, the "
+    "Change one setting from `tico_settings_find`, as the person who asked (Agent Ops, the "
     "Assistant) or yourself. direct: it changes now and the answer has the new `value`; confirm, "
-    "from BotOps or the Assistant: a Confirm card in the person's chat (`needs_confirm`), nothing "
+    "from Agent Ops or the Assistant: a Confirm card in the person's chat (`needs_confirm`), nothing "
     "changed yet; person: refused with a one-line reason that names who may change it, and the "
     "card's `link`. The Assistant cites the person's words (`on_behalf_of`) for a direct change; "
     "without them, or while the owner's \"Assistant acts without asking\" is off, it is a card.",
@@ -701,7 +701,7 @@ SETTINGS = (
     ),
     Command(
         "settings set",
-        "change one setting as yourself, or BotOps or the Assistant as the person who asked",
+        "change one setting as yourself, or Agent Ops or the Assistant as the person who asked",
         args=(Arg("on_behalf_of", metavar="MESSAGE_ID"),),
         exclusive=(_TARGETS,),
         example="tico settings set team.rules.admin_sql on",

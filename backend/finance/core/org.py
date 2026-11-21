@@ -90,8 +90,8 @@ class Org:
 
 @dataclass(frozen=True)
 class Principal:
-    """Who is acting. `actor` made the call; `for_actor` is whose authority it uses (the Assistant and BotOps act as
-    the teammate who asked, BotOps parity), and `rule` the finance rule it runs under. Rights and view are always the
+    """Who is acting. `actor` made the call; `for_actor` is whose authority it uses (the Assistant and Agent Ops act as
+    the teammate who asked, Agent Ops parity), and `rule` the finance rule it runs under. Rights and view are always the
     effective teammate's (`who`), never a manager's."""
 
     actor: str

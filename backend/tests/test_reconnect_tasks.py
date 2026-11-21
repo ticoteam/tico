@@ -13,7 +13,7 @@ from backend.store import H
 from backend.tests.helpers.api import get, post, put
 from backend.tests.helpers.api_tools import key, level, tool
 from backend.tests.helpers.credentials import setup
-from backend.tests.helpers.held_runs import botops
+from backend.tests.helpers.held_runs import agent_ops
 
 OLD = "acme-close-synthetic-old-0011223344"
 NEW = "acme-close-synthetic-new-5566778899"
@@ -197,14 +197,14 @@ def test_a_limited_key_opens_nothing(api, monkeypatch):
     assert tasks(api, tid) == []
 
 
-def test_without_a_tools_owner_botops_takes_it_and_a_member_connector_falls_back_to_an_admin(api, monkeypatch):
+def test_without_a_tools_owner_agent_ops_takes_it_and_a_member_connector_falls_back_to_an_admin(api, monkeypatch):
     tid, kid = connected(api, owner=False)
     checks(api, monkeypatch)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tools SET created_by='human:cara' WHERE id=?", (tid,))  # a member, who cannot change it
     assert post(api, f"api-tools/{tid}/check", {})["detail"] == "Key rejected"  # nobody to take it: the check stands
     assert tasks(api, tid) == []
-    botops(api)
+    agent_ops(api)
     post(api, f"api-tools/{tid}/check", {})
     [task] = tasks(api, tid)
     assert task["owner_id"] == "bot:" + H.FLEET_MAINTAINER

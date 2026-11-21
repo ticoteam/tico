@@ -5,7 +5,7 @@ cards; a bot's bot.yaml `tools:` notes). `require` raises the refusal in the wor
 
 The rule, in order:
 - Nobody but a person or a bot: never Tico support, a computer or another system's key.
-- A delegation is the person's rights. BotOps, the Tools Owner and the Assistant acting for someone (`via` botops,
+- A delegation is the person's rights. Agent Ops, the Tools Owner and the Assistant acting for someone (`via` botops,
   tools-owner, assistant: app.py `delegated_identity`, backend/tools_delegation.py) arrive here as that person, and the
   person's rights decide. The built-in that acted never receives access through it (the Tools Owner connects keys for
   others and holds none), and through the Tools Owner a person's own access stays their own tap in Tools.
@@ -23,7 +23,7 @@ The rule, in order:
   else. The Tools page's owner holds no key, so it has none of its own.
 - A website account: an administrator, or its holder (a person, or a person who manages the bot that holds it).
 - A bot's bot.yaml `tools:` entries, which are notes (identity, scope, note) and never access: the bot itself,
-  BotOps and the Tools page's owner on their own, an administrator, or anyone who manages the bot.
+  Agent Ops and the Tools page's owner on their own, an administrator, or anyone who manages the bot.
 
 The Tools page's owner reads every tool (`api_tools.tools_reader`) but, being a bot, is never a credential
 administrator: it changes access only with a person's delegation.
@@ -368,7 +368,7 @@ def _note(c: Any, who: Who, bot_id: str, admins: Any, auth: Any) -> Decision:
     page_owners: Any = importlib.import_module(".page_owners", __package__)
 
     if who.role == "bot" and who.actor == "bot:" + bot_id:
-        return Decision(True)  # its own entries, also when BotOps or the Tools Owner carries its request
+        return Decision(True)  # its own entries, also when Agent Ops or the Tools Owner carries its request
     own = who.role == "bot" and not who.via
     if own and who.actor in ("bot:" + H.FLEET_MAINTAINER, page_owners.owner(c, "tools")):
         return Decision(True)
@@ -376,14 +376,14 @@ def _note(c: Any, who: Who, bot_id: str, admins: Any, auth: Any) -> Decision:
         return Decision(True)
     if who.role == "owner" or manages(c, who, "bot:" + bot_id, auth):
         return Decision(True)
-    if auth is not None and auth.botops_manages(c, who, bot_id):
+    if auth is not None and auth.agent_ops_manages(c, who, bot_id):
         return Decision(True)
     found: Any = H.bot(c, bot_id) or {}
     name = str(found.get("display_name") or bot_id)
     return Decision(
         False,
-        f"Only {name} itself, BotOps, the Tools Owner, a credential admin, or someone who manages {name} changes its "
-        "tools. Ask the Tools Owner in its chat (or BotOps): it makes the change for you",
+        f"Only {name} itself, Agent Ops, the Tools Owner, a credential admin, or someone who manages {name} changes its "
+        "tools. Ask the Tools Owner in its chat (or Agent Ops): it makes the change for you",
         extra={"fix": "Ask the Tools Owner to add it: it acts with your rights", "link": "#/tools"},
     )
 
@@ -392,10 +392,10 @@ ADDRESS_FIELDS = ("base_url", "auth_scheme", "check_path")
 
 
 def catalog_only(who: Who, service: Any = "", fields: Any = None, mcp_url: str = "") -> None:
-    """The one guard on an address an agent brings unconfirmed (not `persons_own`: BotOps, the Assistant, the Tools
+    """The one guard on an address an agent brings unconfirmed (not `persons_own`: Agent Ops, the Assistant, the Tools
     Owner or any agent, in its own run or with a person's rights): only the catalog's (backend/tool_services.py), a known service
     with its own address, scheme and check path, or a vendor's listed MCP server (`mcp_url`). Called before anything
-    reaches the address (a probe, a check) or stores it (a tool, a bot.yaml entry for BotOps). Any other address is a
+    reaches the address (a probe, a check) or stores it (a tool, a bot.yaml entry for Agent Ops). Any other address is a
     person's to add."""
     if persons_own(who):
         return

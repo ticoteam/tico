@@ -1,5 +1,5 @@
 """Which Slack channels bots may read and post in is a list in the database (backend/slack_channels.py): who may change it,
-BotOps and the MCP tools as the requester, and the Slack gateway following the list.
+Agent Ops and the MCP tools as the requester, and the Slack gateway following the list.
 
 Ana owns the company, Ben is an admin, Cara is a member (the base fixture).
 """
@@ -12,9 +12,9 @@ from backend import slack_channels as SC
 from backend import slack_threads as ST
 from backend.auth import Identity
 from backend.tests.helpers.api import get, post, setup_attempt  # noqa: F401  (fixture)
-from backend.tests.helpers.botops_parity import act
+from backend.tests.helpers.agent_ops_parity import act
 from backend.tests.helpers.mcp import call as mcp
-from backend.tests.helpers.member_bots import botops, finish, turn  # noqa: F401  (fixture)
+from backend.tests.helpers.member_bots import agent_ops, finish, turn  # noqa: F401  (fixture)
 from backend.tests.helpers.slack_gateway import (  # noqa: F401  (fixtures)
     CHANNELS,
     MARKETING,
@@ -70,8 +70,8 @@ def test_an_owner_or_admin_lists_a_channel_and_a_member_may_read_the_list_but_no
     post(api, "slack/channels/remove", {"channel": "#customer_success"}, attempt["token"], expected=403)
 
 
-# ------------------------------------------------------------------ BotOps and the MCP tools, as the requester
-def test_botops_and_the_mcp_tools_change_the_list_as_the_person_who_asked(api, botops):
+# ------------------------------------------------------------------ Agent Ops and the MCP tools, as the requester
+def test_agent_ops_and_the_mcp_tools_change_the_list_as_the_person_who_asked(api, agent_ops):
     err, added = mcp(
         api,
         "tico_slack_channel_add",
@@ -81,8 +81,8 @@ def test_botops_and_the_mcp_tools_change_the_list_as_the_person_who_asked(api, b
     assert not err and added["created"] and added["readers"] == ["ops"], added
     err, refused = mcp(api, "tico_slack_channel_add", {"channel": "#sales", "readers": ["ops"]}, token="cara-test")
     assert err and "owner or an admin" in json.dumps(refused)
-    # BotOps is an admin's hands when an admin asks, and a member's when a member does.
-    ben = turn(api, botops, person="ben-test", text="Let the CPO read #customer_success")
+    # Agent Ops is an admin's hands when an admin asks, and a member's when a member does.
+    ben = turn(api, agent_ops, person="ben-test", text="Let the CPO read #customer_success")
     err, done = mcp(
         api,
         "tico_slack_channel_add",
@@ -101,8 +101,8 @@ def test_botops_and_the_mcp_tools_change_the_list_as_the_person_who_asked(api, b
     assert not err and removed["readers"] == ["ops"]
     err, listing = mcp(api, "tico_slack_channel_list", {}, token=ben["token"])
     assert not err and [r["channel"] for r in listing["channels"]] == ["#customer_success"]
-    finish(api, botops, ben)
-    cara = turn(api, botops, person="cara-test", text="Let ops read #sales")
+    finish(api, agent_ops, ben)
+    cara = turn(api, agent_ops, person="cara-test", text="Let ops read #sales")
     assert act(api, cara, "POST", "slack/channels", {"channel": "#sales", "readers": ["ops"]}).status_code == 403
 
 

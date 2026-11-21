@@ -324,7 +324,7 @@ def test_a_refused_pick_partway_through_leaves_no_seat_and_no_bot(api, monkeypat
         calls.append(body.template)
         if len(calls) == 2:
             raise Problem(
-                "botops", "BotOps builds this bot, and this team has no BotOps; add it from Templates first", 409
+                "botops", "Agent Ops builds this bot, and this team has no Agent Ops; add it from Templates first", 409
             )
         return real(auth, onboarding, c, who, seat_id, body)
 

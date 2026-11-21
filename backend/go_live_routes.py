@@ -51,8 +51,8 @@ def register(
         # go-live event name the ones this turned on, and `routines` says which are on now, so a report of them
         # comes from this fact rather than from the template.
         armed = [routine["name"] for routine in onboarding.arm_routines(c, who, bot)]
-        # BotOps' wait on this bot's setup task ends here, and BotOps is woken to say done.
-        setup_live.go_live_ends_botops_wait(c, bot, who.actor)
+        # Agent Ops' wait on this bot's setup task ends here, and Agent Ops is woken to say done.
+        setup_live.go_live_ends_agent_ops_wait(c, bot, who.actor)
         # A seat bot nobody chats with runs the same setup on its own, with no person (backend/setup_live.py).
         own = setup_live.start_setup(c, onboarding, bot)
         c.execute("DELETE FROM registry_metadata WHERE key=?", (GO_LIVE_PENDING + bot,))
@@ -234,14 +234,14 @@ def register(
                     if settings_admin.computer_builds_repository(c, bot):
                         building = True
                     elif github == "present" or (declared.get("template") and declared.get("setup_task_id")):
-                        # GitHub has it, or BotOps has its build in hand (its setup task, often the very run asking):
+                        # GitHub has it, or Agent Ops has its build in hand (its setup task, often the very run asking):
                         # the computer gets it and its report finishes this go-live. Attaching the template again
                         # here would park a starter in Onboarding behind a person.
                         return wait_for_repository(c, who, bot, placed, body)
                     elif declared.get("template"):
                         if not H.bot(c, "botops"):
                             raise Problem(
-                                "repository_missing", "Its repository is not built yet. Add BotOps to build it", 409
+                                "repository_missing", "Its repository is not built yet. Add Agent Ops to build it", 409
                             )
                         build = onboarding.attach_template(
                             c, who, bot, declared["template"], declared.get("instructions") or "", queue_build=True
@@ -249,12 +249,12 @@ def register(
                         if settings_admin.computer_builds_repository(c, bot):
                             building = True  # a starter: its computer builds it from the template, so it goes live now
                         else:
-                            # BotOps builds it on its setup task; the computer's report of it finishes this go-live.
+                            # Agent Ops builds it on its setup task; the computer's report of it finishes this go-live.
                             return {
                                 **wait_for_repository(c, who, bot, placed, body),
                                 **build,
                                 "building": True,
-                                "note": "BotOps is building its repository; it goes live by itself when it is built",
+                                "note": "Agent Ops is building its repository; it goes live by itself when it is built",
                             }
                     elif missing is not None:
                         raise Problem(
@@ -268,7 +268,7 @@ def register(
                     else:
                         raise Problem(
                             "repository_missing",
-                            "It has no repository yet. Ask BotOps to build it "
+                            "It has no repository yet. Ask Agent Ops to build it "
                             f"(`tico bot repo-create {row['slug']}`), then run `tico bot go-live {row['slug']}` again",
                             409,
                         )
