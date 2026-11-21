@@ -65,13 +65,15 @@ def test_a_question_from_updates_is_handed_only_the_updates_the_person_may_read_
     text = json.dumps(attempt)
     for secret in ("Runway", "agency", hidden["id"], "Finance"):
         assert secret not in text, secret + " reached the bot"
-    # The owner reads Finance's too, in her own Assistant chat; not the ones that link a private task her Assistant is
-    # no party to.
+    # The owner reads Finance's too, in her own Assistant chat, and the ones that link her own private task: her
+    # Assistant reads with her rights (rooms.run_person).
     strategy_bot(api)
     _, owner = claim(api, r, "assistant", "What's the top update today?", "ana-test")
     assert sorted(u["text"] for u in owner["updates"]["updates"]) == [
         "- Closed the Acme renewal",
         "- Runway is nine months",
+        f"- Sorted out [the agency](#/task/{hidden['id']})",
+        f"- Went through {hidden['id']} with the team",
     ]
 
 

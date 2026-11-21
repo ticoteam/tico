@@ -100,6 +100,23 @@ def run_to_turn(flow, payload):
     return services.turns[-1]
 
 
+def saved(c, auto_id, actor):
+    """The routine as `actor` last saved it (automation_actions._last_editor reads its newest active version)."""
+    now = H.now()
+    c.execute(
+        "INSERT OR IGNORE INTO automations(id,name,owner_id,trigger_type,enabled,flow,version,created_at,created_by_id,"
+        "updated_at) VALUES(?,?,?,'message',1,'{}',1,?,?,?)",
+        (auto_id, auto_id, actor, now, actor, now),
+    )
+    n = c.execute("SELECT coalesce(max(n),0)+1 FROM automation_versions WHERE automation_id=?", (auto_id,)).fetchone()[
+        0
+    ]
+    c.execute(
+        "INSERT INTO automation_versions(automation_id,n,actor,created_at,flow,status) VALUES(?,?,?,?,'{}','active')",
+        (auto_id, n, actor, now),
+    )
+
+
 def bot_flow(api, bot, inbox="ana@acme.example"):
     with api.app.state.store.read() as c:
         flow = T.fill(c, "founder", f"bot:{bot}", inbox, api.app.state.store.settings)
@@ -325,6 +342,7 @@ def test_the_turn_task_carries_the_mail_subject_and_body(api):
     flow = bot_flow(api, "assistant")
     prompt = run_to_turn(flow, MAIL)["prompt"]
     with api.app.state.store.transaction() as c:
+        saved(c, "auto_founder", "human:ana")  # Ana's inbox routine, as she set it
         started = AA.start_turn(
             c, {"id": "auto_founder", "flow": flow}, "run_1", "draft", "bot:assistant", prompt, None
         )
@@ -349,6 +367,7 @@ def test_a_mail_turn_is_titled_by_the_mail_only_on_a_private_task(api):
         turn = run_to_turn(flow, reply)
         assert turn["about"] == "Winberg Law: Demand letter"
         with api.app.state.store.transaction() as c:
+            saved(c, "auto_" + bot, "human:ana")
             started = AA.start_turn(
                 c,
                 {"id": "auto_" + bot, "flow": flow},
@@ -373,6 +392,7 @@ def test_a_persons_message_routine_turn_stays_the_assistants_and_runs_as_a_perso
     flow = bot_flow(api, "assistant")
     prompt = run_to_turn(flow, MAIL)["prompt"]
     with api.app.state.store.transaction() as c:
+        saved(c, "auto_mine", "human:ana")
         started = AA.start_turn(c, {"id": "auto_mine", "flow": flow}, "run_1", "draft", "bot:assistant", prompt, None)
         task = H.task(c, started["ref"])
     assert task["owner_id"] == "bot:assistant" and task["private"]
@@ -401,6 +421,7 @@ def test_an_assistant_run_reads_a_routine_turn_only_for_the_person_it_works_for(
         flow = bot_flow(api, "assistant", inbox)
         prompt = run_to_turn(flow, MAIL)["prompt"]
         with api.app.state.store.transaction() as c:
+            saved(c, "auto_" + person, "human:" + person)
             started = AA.start_turn(
                 c, {"id": "auto_" + person, "flow": flow}, "run_" + person, "draft", "bot:assistant", prompt, None
             )
@@ -432,6 +453,65 @@ def test_an_assistant_run_reads_a_routine_turn_only_for_the_person_it_works_for(
         assert reads_shared == (200 if person == "ana" else 404), (person, reads_shared)
         assert (shared["id"] in listed) is (person == "ana")
     assert api.get("/api/v2/tasks/" + turns["ana"]["id"], headers=headers("ana-test")).status_code == 200
+    # A run reads with its person's standing now: once Ben may not sign in, his run reads none of his work.
+    with api.app.state.store.transaction() as c:
+        doc = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
+        for p in doc["people"]:
+            p["sign_in"] = False if p.get("id") == "ben" else p.get("sign_in", True)
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(doc),))
+    assert api.get("/api/v2/tasks/" + turns["ben"]["id"], headers=headers(runs["ben"])).status_code == 404
+    assert turns["ben"]["id"] not in api.get("/api/v2/tasks", headers=headers(runs["ben"])).text
+
+
+def test_a_routine_someone_else_last_changed_runs_as_the_person_only_once_they_save_it_again(api):
+    """Its turn is read with the person's rights, so only while the routine is as they set it: after the Assistant's
+    manager edits Ana's inbox routine it stops, saying so, until Ana saves it again."""
+    set_templates(api, STAFF)
+    flow = bot_flow(api, "assistant")
+    prompt = run_to_turn(flow, MAIL)["prompt"]
+    with api.app.state.store.transaction() as c:
+        saved(c, "auto_inbox", "human:ana")
+        saved(c, "auto_inbox", "human:cara")
+    with pytest.raises(ValueError, match="save it again"):
+        with api.app.state.store.transaction() as c:
+            AA.start_turn(c, {"id": "auto_inbox", "flow": flow}, "run_1", "draft", "bot:assistant", prompt, None)
+    with api.app.state.store.transaction() as c:
+        saved(c, "auto_inbox", "human:ana")
+        started = AA.start_turn(c, {"id": "auto_inbox", "flow": flow}, "run_2", "draft", "bot:assistant", prompt, None)
+        assert H.task(c, started["ref"])["requester_id"] == "human:ana"
+
+
+def test_earlier_routine_turns_take_their_person_as_requester_only_when_provenance_names_one(api):
+    """#4841's routine turns named the Assistant as requester; the backfill gives each its routine's person (its owner,
+    else the one person whose inbox starts it) and leaves a row whose provenance names nobody as it is."""
+    import importlib
+
+    migration = importlib.import_module("backend.migrations.20261121160351_routine_turn_requesters")
+    now = H.now()
+    routines = {
+        "by_ana": ("person:ana", {}),
+        "on_ben": ("bot:assistant", {"trigger": {"type": "message", "inbox": "Ben@acme.example"}}),
+        "on_nobody": ("bot:assistant", {"trigger": {"type": "message", "inbox": "nobody@acme.example"}}),
+    }
+    with api.app.state.store.transaction() as c:
+        made = {}
+        for rid, (owner, flow) in routines.items():
+            c.execute(
+                "INSERT INTO automations(id,name,owner_id,trigger_type,enabled,flow,version,created_at,created_by_id,"
+                "updated_at) VALUES(?,?,?,'message',1,?,1,?,?,?)",
+                (rid, rid, owner, json.dumps(flow), now, "human:ana", now),
+            )
+            task = H.task_create(c, "bot:assistant", "Turn " + rid, "", "bot:assistant", private=False, lint=False)
+            c.execute("UPDATE tasks SET private=1, requester_id='bot:assistant' WHERE id=?", (task["id"],))
+            c.execute(
+                "INSERT INTO automation_holds(ref,automation_id,run_id,amount,created_at) VALUES(?,?,?,0,?)",
+                (task["id"], rid, "run_" + rid, now),
+            )
+            made[rid] = task["id"]
+        migration.up(c)
+        migration.up(c)  # again: nothing more changes
+        asked = {rid: H.task(c, tid)["requester_id"] for rid, tid in made.items()}
+    assert asked == {"by_ana": "human:ana", "on_ben": "human:ben", "on_nobody": "bot:assistant"}
 
 
 def test_a_mail_turn_title_names_the_sender_when_the_subject_is_empty():

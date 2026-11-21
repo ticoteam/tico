@@ -159,7 +159,8 @@ def test_two_peoples_private_work_stays_apart_and_a_private_handoff_is_filed_as_
     with api.app.state.store.read() as c:
         row = H.task(c, handed["id"])
         assert not H.task_private_readable(c, "bot:assistant", row) and H.task_private_readable(c, "human:ana", row)
-    get(api, "tasks/" + handed["id"], token)  # her run reads what she reads
+    get(api, "tasks/" + handed["id"], token)  # her run reads what she reads, by id and in her lists
+    assert handed["id"] in json.dumps(get(api, "tasks", token))
     get(api, "tasks/" + handed["id"], "ben-test", expected=404)
 
 

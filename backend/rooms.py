@@ -45,15 +45,23 @@ def personal_run(c, assistant_bot, bot, conversation, task):
 
 def run_person(c, attempt_id):
     """The person a run works for, or "": the person its private task was filed for (its requester: a message routine's
-    turn), else the owner of the person's own room, or of the room a sub-thread hangs off, it runs in. Kept for the
-    read (read_cache)."""
+    turn), else the owner of the person's own room, or of the room a sub-thread hangs off, it runs in; "" too when that
+    person has left or may not sign in now (auth.standing). A call's turn has none. Kept for the read (read_cache)."""
     return read_cache.value(c, ("run_person", attempt_id), lambda: _run_person(c, attempt_id), True)
 
 
 def _run_person(c, attempt_id):
+    from .auth import standing
+
+    person = _run_owner(c, attempt_id)
+    human = H.human(c, H.actor_id(person)) if H.is_human(person) else None
+    return person if human and not standing(c, human["id"]) else ""
+
+
+def _run_owner(c, attempt_id):
     row = c.execute(
-        "SELECT a.task_id,m.conversation_id,json_extract(m.refs,'$.live_meeting.meeting_id') AS meeting "
-        "FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id WHERE a.id=?",
+        "SELECT a.task_id,m.conversation_id FROM attempts a JOIN jobs j ON j.id=a.job_id "
+        "JOIN messages m ON m.id=j.message_id WHERE a.id=?",
         (attempt_id,),
     ).fetchone()
     if not row:
@@ -61,13 +69,6 @@ def _run_person(c, attempt_id):
     task = H.task(c, row["task_id"]) if row["task_id"] else None
     if task and H.task_private(c, task) and H.is_human(task["requester_id"]):
         return task["requester_id"]
-    if row["meeting"]:
-        # A call in a person's own room: its turns work for them (call_follow_ups._personal_for).
-        call = c.execute("SELECT thread_id FROM calls WHERE live_meeting_id=?", (row["meeting"],)).fetchone()
-        if call:
-            from .calls import room_owner
-
-            return str(room_owner(c, call["thread_id"]) or "")
     room = H.conversation(c, row["conversation_id"]) or {}
     if room.get("scope") != PERSONAL and room.get("root_id") and room["root_id"] != room.get("id"):
         room = H.conversation(c, room["root_id"]) or {}

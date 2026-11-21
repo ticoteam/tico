@@ -2374,6 +2374,17 @@ def task_private_readable(conn, actor, row):
     if not row:
         return False
     row = dict(row)
+    nobody = False
+    if isinstance(actor, RunPrincipal):
+        # One Assistant serves everyone and acts with the rights of the person its run works for (rooms.run_person): it
+        # reads exactly what that person reads, by their own rule (page copies included); a run for nobody reads no
+        # private task (below).
+        from .rooms import run_person
+
+        person = run_person(conn, actor.attempt)
+        if person:
+            return task_private_readable(conn, person, row)
+        actor, nobody = str(actor), True
     from . import counsel, teammate_access
 
     copied = counsel.page_copies(conn).get(row["id"])
@@ -2392,13 +2403,8 @@ def task_private_readable(conn, actor, row):
         row = task(conn, row["id"])
         if not row:
             return False
-    if actor == assistant_actor(conn) and RUN.get():
-        # One Assistant serves everyone and acts with the rights of the person its run works for (rooms.run_person): it
-        # reads exactly the private tasks that person reads, by their own rule, and none in a run for nobody.
-        from .rooms import run_person
-
-        person = run_person(conn, RUN.get())
-        return bool(person) and task_private_readable(conn, person, row)
+    if nobody:
+        return False  # a run of the shared Assistant for nobody (above)
     if actor in (row["owner_id"], row["requester_id"]):
         return True
     from .task_rights import private_subjects
@@ -2550,6 +2556,20 @@ def _reader_target(conn, actor, value):
     if not who or not (is_human(who) and human(conn, actor_id(who)) or is_bot(who) and bot(conn, actor_id(who))):
         refuse(conn, actor, "not-found", f"{value} is not a person, bot or group on the team")
     return who
+
+
+class RunPrincipal(str):
+    """The shared Assistant as the identity of one of its runs (task_privacy.actor): it reads a task as the person that
+    run works for (task_private_readable). Equal to the plain actor everywhere else; a server-side check about the
+    Assistant itself (a wake, a notice, an owner) passes the plain actor and is not narrowed."""
+
+    attempt = ""
+
+
+def run_principal(actor, attempt):
+    principal = RunPrincipal(actor)
+    principal.attempt = attempt
+    return principal
 
 
 def assistant_actor(conn=None):
@@ -4764,6 +4784,15 @@ def task_create(
         ):
             refuse(conn, actor, "identity", "Human requester attribution requires the bot's own verified work")
         requester = requester_actor
+    # A person's message routine's turn (automation_actions.start_turn, `routine_for` that person) stays the Assistant's,
+    # as it was, and so does a follow-up from a call in their own room that they are the requester of
+    # (call_follow_ups.file_task); its runs are personal ones (rooms.personal_run). It is the person's own: they read it
+    # as its requester, from here on (the duplicate check included), and the Assistant's runs only when for them.
+    routine_turn = bool(
+        private and (routine or requester == routine_for) and is_human(routine_for) and target == assistant_actor(conn)
+    )
+    if routine_turn:
+        requester = routine_for
     title = str(title or "").strip()
     body = str(body or "")
     instructions = str(instructions or "").strip()
@@ -4850,16 +4879,7 @@ def task_create(
             )
         number = _number_free(conn, actor, number)
     if private:
-        # A person's message routine's turn (automation_actions.start_turn, `routine_for` that person) stays the
-        # Assistant's, as it was, and so does a follow-up from a call in their own room that they are the requester of
-        # (call_follow_ups.file_task); its runs are personal ones (rooms.personal_run).
-        routine_turn = bool(
-            (routine or requester == routine_for) and is_human(routine_for) and target == assistant_actor(conn)
-        )
         refuse_shared_assistant(conn, actor, *(() if routine_turn else (target, requester)), *(readers or ()))
-        if routine_turn:
-            # The person's own: they read it as its requester, and the Assistant's runs only when for them.
-            requester = routine_for
     from contextlib import ExitStack
 
     from . import task_trigger_rules
