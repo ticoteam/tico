@@ -14,6 +14,7 @@ import { Link } from '@/kit/Link';
 import { toast } from '@/kit/Toast';
 import { useFollow } from '@/live/follow';
 import { Document, type PageState, type PageTab } from '@/pagekinds';
+import { fileQuery, FilePreview } from '@/features/library/exports';
 import { threadQuery } from '@/features/threads/exports';
 import { whoHref } from '@/features/team/routing';
 import { leaveTask } from '@/lib';
@@ -25,7 +26,7 @@ import { EmailSource, Email as EmailView } from './Email';
 import { ArchiveMenu } from './Files';
 import { FileTab, FileView, PageBones } from './FileView';
 import { FlowTop, MoreMenu, QuietLine, WhereLine } from './Head';
-import { changesAskedOf, decisionOf, defaultTab, DETAILS, emailOf, failedToast, personOf, sendTitle, tabAddress, tabsOf, type TaskTab } from './model';
+import { changesAskedOf, decisionOf, defaultTab, DETAILS, emailOf, failedToast, personOf, sendTitle, tabAddress, tabLabel, tabsOf, type TaskTab } from './model';
 import { FlowMark } from '@/kit/FlowMark';
 import { Face } from './parts';
 import { taskDetailQuery, taskFilesQuery, taskRefQuery, type TaskData } from './queries';
@@ -116,6 +117,10 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
   // An email's OK filed as its own task (a "Send:" sub-task) that waits on the person: the matter opens on it.
   const waiting = useWaiting(t);
   const own = tabsOf(t, files.data);
+  // The file the ask is about when it is another task's: its tab is named once its record is read.
+  const away = own.find((x) => x.other);
+  const other = useQuery({ ...fileQuery(away?.other ?? ''), enabled: !!away });
+  if (away && other.data) away.label = tabLabel(other.data.title || other.data.name || 'File');
   const tabs: Tab[] = [...waitTabs(waiting.items, own), ...own];
   const known = tab !== undefined && tabs.some((x) => x.slug === tab);
   const unresolved = !!tab && !known && (!files.isSuccess || !waiting.settled);
@@ -209,8 +214,12 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
       <Details t={t} flow={flow} adding={adding} onAdding={setAdding} />
     ) : versions ? (
       <PageView task={t.id} vs={versions} at={at} />
+    ) : current?.other ? (
+      <div className="frame fv">
+        <FilePreview file={current.other} version={current.version} />
+      </div>
     ) : current?.file ? (
-      <FileTab task={t.id} f={current.file} />
+      <FileTab task={t.id} f={current.file} version={current.version} />
     ) : current?.wait && current.email ? (
       <EmailView
         task={current.wait.id}

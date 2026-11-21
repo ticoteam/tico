@@ -60,12 +60,22 @@ function useNamed(t: TaskData, r: TaskRequirement) {
   return { name: decisionName(t, r, to ? personOf(to) : undefined), effect: effectOf(t, r), send, recipients: all.length ? all : to ? [to] : [] };
 }
 
-/** The second review's state beside the ask; while one runs, the stream follows it, so the pill turns once it ends. */
+/** One task the stream follows, for its status alone. */
+function Follow({ task }: { task: string }) {
+  useFollow({ task });
+  return null;
+}
+
+/** The second review's state beside the ask. The stream follows each review, so the pill turns as one ends or reopens;
+    one filed later arrives with the task's children, read again on the relation's event (live/patch.ts). */
 function ReviewPill({ t }: { t: TaskData }) {
-  const running = t.children.find((c) => c.role === 'review' && c.status === 'open')?.id;
-  useFollow(running ? { task: running } : null);
   const review = reviewOf(t);
-  return review && <Pill>{review}</Pill>;
+  return (
+    <>
+      {t.children.filter((c) => c.role === 'review').map((c) => <Follow key={c.id} task={c.id} />)}
+      {review && <Pill>{review}</Pill>}
+    </>
+  );
 }
 
 /** The face of who asks: the agent that asked, else whoever has the task. */

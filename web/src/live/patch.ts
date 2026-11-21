@@ -231,6 +231,8 @@ function patchTasks(batch: TaskEvent[]): void {
     const held = queryClient.getQueryData<TaskRow>(detail);
     // Writing the same data still counts as a write (and a redraw): only a real change is set.
     if (held && !older(task, held) && !same({ ...held, ...task }, held)) queryClient.setQueryData(detail, { ...held, ...task });
+    // A sub-task filed under it or taken off (a relation): its children are read again (a second review's pill).
+    if (held && e.kinds?.includes('relation')) void queryClient.invalidateQueries({ queryKey: detail, exact: true }, { cancelRefetch: false });
     // A file or a linked page changed: whatever the task view reads under its detail key (not the detail itself).
     if (e.kinds?.includes('files'))
       void queryClient.invalidateQueries(

@@ -47,8 +47,20 @@ describe('the open task', () => {
     expect(defaultTab(tabsOf(own))).toBe('spec');
   });
 
+  it('opens a file the ask is about on another task as its own tab, at the version it pinned @approvals', () => {
+    const t = task({ documents: [doc('f1', 'Review')], to_leave: [req('r1', { shows: ['file:x9@1', 'page:f1@2'] })] });
+    // until the task's files are read, nothing says the file is not one of them
+    expect(tabsOf(t).some((x) => x.other)).toBe(false);
+    const tabs = tabsOf(t, []);
+    expect(tabs[0]).toMatchObject({ slug: 'file', mark: 'ask', other: 'x9', version: 1 });
+    expect(defaultTab(tabs)).toBe('file');
+    // one of this task's own files keeps the version it pinned
+    const pdf = { id: 'x9', name: 'declaration.pdf', title: '', archived: false, current_version: 2, versions: [{ n: 1, mime: 'application/pdf' }, { n: 2, mime: 'application/pdf' }] } as unknown as TaskFileView;
+    expect(tabsOf(t, [pdf])[0]).toMatchObject({ slug: 'declaration-pdf', version: 1, file: pdf });
+  });
+
   it('reads the second review: running while one is open, then reviewed @approvals', () => {
-    const kid = (status: string, role?: string) => ({ id: `k-${status}`, title: 'Review: second opinion', status, owner_id: 'bot:lo', role });
+    const kid = (status: string, role?: 'review' | 'check') => ({ id: `k-${status}`, title: 'Review: second opinion', status, owner_id: 'bot:lo', label: null, stage: null, ...(role && { role }) });
     expect(reviewOf(task({ children: [] }))).toBeNull();
     expect(reviewOf(task({ children: [kid('open')] }))).toBeNull();
     expect(reviewOf(task({ children: [kid('done', 'review'), kid('open', 'review')] }))).toBe('Review running');

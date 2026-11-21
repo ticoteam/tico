@@ -26,13 +26,24 @@ const open = ['tasks', 'list', { status: 'open', pipeline: 'p1' }];
 const done = ['tasks', 'list', { status: 'done', pipeline: 'p1' }];
 
 describe('tasks', () => {
-  it('land a sub-task’s status in the children of the task above it', () => {
+  it('keep a task’s children current: one filed is read again, one that ends or reopens lands in place', () => {
     const parent = ['tasks', 'detail', 't1'];
-    queryClient.setQueryData(parent, { id: 't1', children: [{ id: 't2', status: 'open', role: 'review' }, { id: 't3', status: 'open' }] });
-    FakeEventSource.last.feed(taskFrame(901, task('t2', { status: 'done', version: 2 })));
+    const children = () => queryClient.getQueryData<{ children: unknown[] }>(parent)?.children;
+    queryClient.setQueryData(parent, { ...task('t1'), children: [{ id: 't2', status: 'open', role: 'review' }, { id: 't3', status: 'open' }] });
+    // a review filed under it: the relation's event on the task above marks its read stale, to be read again
+    FakeEventSource.last.feed(taskFrame(901, task('t1', { version: 2 }), 'relation'));
     flushFrame();
-    expect(queryClient.getQueryData<{ children: unknown[] }>(parent)?.children).toEqual([
+    expect(queryClient.getQueryState(parent)?.isInvalidated).toBe(true);
+    FakeEventSource.last.feed(taskFrame(902, task('t2', { status: 'done', version: 2 })));
+    flushFrame();
+    expect(children()).toEqual([
       { id: 't2', status: 'done', role: 'review' },
+      { id: 't3', status: 'open' },
+    ]);
+    FakeEventSource.last.feed(taskFrame(903, task('t2', { status: 'open', version: 3 })));
+    flushFrame();
+    expect(children()).toEqual([
+      { id: 't2', status: 'open', role: 'review' },
       { id: 't3', status: 'open' },
     ]);
   });

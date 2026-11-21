@@ -551,10 +551,24 @@ class TaskDetailParent(TypedDict):
 
 
 @answer
+class TaskDetailChild(TypedDict):
+    """A sub-task the reader may open, in its rank order."""
+
+    id: str
+    title: str
+    status: str
+    owner_id: str | None
+    label: str | None
+    stage: str | None
+    role: NotRequired[Literal["review", "check"]]
+    """A check sub-task's role (`--role`, backend/check_models.py); absent on any other"""
+
+
+@answer
 class TaskDetail(TypedDict):
     task: TaskDetailTask
     events: list[TaskDetailEvent]
-    children: list[Any]
+    children: list[TaskDetailChild]
     parent: NotRequired[TaskDetailParent | None]
     comments: list[Message]
     messages: list[Message]

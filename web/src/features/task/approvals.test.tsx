@@ -10,6 +10,7 @@ import { sendMessage } from '@/conversation';
 import { keys, queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
 import { forgetPlaces, notePlace } from '@/lib';
+import { useFollow } from '@/live/follow';
 import { fakePdf } from '@/test/fakePdf';
 import { decisionName, effectOf, sendTitle } from './model';
 import type { TaskData } from './queries';
@@ -20,7 +21,9 @@ import { TaskChat, TaskPage } from './TaskPage';
 
 vi.mock('@/live/follow', () => ({ useFollow: vi.fn(), follow: vi.fn(() => () => {}) }));
 // PDF.js has no canvas or worker here: a PDF reads as one page (test/fakePdf.ts).
-vi.mock('@/features/library/pdf', () => ({ openPdf: vi.fn(() => Promise.resolve(fakePdf(1).open)) }));
+// Each PDF read, by its address: which version a tab shows.
+const pdfRead = vi.hoisted(() => [] as string[]);
+vi.mock('@/features/library/pdf', () => ({ openPdf: vi.fn((src: string) => (pdfRead.push(src), Promise.resolve(fakePdf(1).open))) }));
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 // The conversation is tested in its own folder: here a stand-in with its foot and, while it may post, its message box.
 vi.mock('@/conversation', async (orig) => ({
@@ -198,9 +201,50 @@ describe('the thing is the first tab', () => {
     expect(await screen.findByRole('region', { name: 'declaration.pdf' })).toBeTruthy();
     const box = within(screen.getByRole('region', { name: 'Chat with Legal Owner' })).getByRole('region', { name: 'The decision' });
     expect(within(box).getByText('Review running')).toBeTruthy();
-    // the review ends: the stream's row lands in the children, and the pill turns
-    act(() => queryClient.setQueryData(keys.tasks.detail('t1'), { ...queryClient.getQueryData<TaskData>(keys.tasks.detail('t1'))!, children: [{ ...review, status: 'done' }] }));
-    expect(await within(screen.getByRole('region', { name: 'Chat with Legal Owner' })).findByText('Reviewed')).toBeTruthy();
+    // the stream follows the review, so its end or reopening reaches the pill (live/patch.test.ts lands it)
+    expect(vi.mocked(useFollow)).toHaveBeenCalledWith({ task: 'k1' });
+  });
+
+  it('shows the version the ask pinned, not a newer one, and Approve binds to what was shown @approvals', async () => {
+    const at = (n: number) => ({ n, by: 'bot:lo', created_at: '2026-11-01T10:00:00Z', mime: 'application/pdf', size: 10, url: `/api/v2/files/f9?v=${n}`, answers: [], ask: null });
+    const pdf = { id: 'f9', name: 'declaration.pdf', title: 'declaration.pdf', mime: 'application/pdf', archived: false, current_version: 2, links: [], writers: [], versions: [at(1), at(2)] };
+    shown = task({ title: 'Search warrant', to_leave: [req({ shows: ['file:f9@1'], line: 'Sign the declaration' })] });
+    reply = (url) =>
+      url.endsWith('/files?all=1') ? { body: { files: [pdf] } } : url.endsWith('/oks/r1') ? { body: { subject: 'file:f9@1', shown_hash: 'h-v1', content: { file: 'f9', version: 1 } } } : null;
+    const router = show(
+      <>
+        <TaskPage task="12" pipeline="p1" />
+        <TaskChat task="12" />
+      </>,
+      '/tasks/p1/12',
+    );
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/declaration-pdf'));
+    expect(await screen.findByRole('region', { name: 'declaration.pdf' })).toBeTruthy();
+    expect(pdfRead.at(-1)).toBe('/api/v2/files/f9?v=1');
+    // an older version is read, not signed
+    expect(screen.queryByRole('button', { name: 'Sign' })).toBeNull();
+    const box = within(screen.getByRole('region', { name: 'Chat with Legal Owner' })).getByRole('region', { name: 'The decision' });
+    fireEvent.click(await ready(box));
+    await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/tasks/t1/asks/r1/ok', body: { shown_hash: 'h-v1' } }));
+  });
+
+  it('a file the ask is about on another task opens as its own tab, read by its id, never the review beside it @approvals', async () => {
+    shown = task({
+      title: 'Search warrant',
+      documents: [{ file_id: 'd1', name: 'Review', kind: 'markdown', version: 1 }] as never,
+      to_leave: [req({ shows: ['file:x9@1', 'page:d1@1'], line: 'Sign the declaration' })],
+    });
+    reply = (url) =>
+      url.endsWith('/api/v2/files/x9/info')
+        ? { body: { file: { id: 'x9', name: 'declaration.pdf', title: 'Declaration', mime: 'application/pdf', version: 2, size: 10 } } }
+        : url.endsWith('/api/v2/files/x9/versions')
+          ? { body: { versions: [{ version: 1, mime: 'application/pdf', name: 'declaration.pdf', size: 10 }, { version: 2, current: true, mime: 'application/pdf', name: 'declaration.pdf', size: 10 }] } }
+          : null;
+    const router = show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/file'));
+    const tabs = screen.getByRole('navigation', { name: 'Search warrant pages' });
+    await waitFor(() => expect((tabs.querySelector('.doc-tab') as HTMLElement).textContent).toBe('Declaration'));
+    await waitFor(() => expect(pdfRead.at(-1)).toBe('/api/v2/files/x9/versions/1'));
   });
 
   it('names a page by its version and says what Approve does @approvals', () => {

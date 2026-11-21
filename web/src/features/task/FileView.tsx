@@ -66,10 +66,12 @@ export function DocFrame({ task, doc }: { task: string; doc: TaskDocument }) {
   return <PageOrFile task={task} id={doc.file_id} title={doc.title || doc.name} page={isPage(doc)} file={<FilePreview file={doc.file_id} version={doc.version} />} />;
 }
 
-/** One of the task's other files as a tab, at its current version: an HTML file may be a page linked to the task. */
-export function FileTab({ task, f }: { task: string; f: TaskFileView }) {
+/** One of the task's other files as a tab, at its current version or the one an ask pinned (`version`): an HTML file
+    may be a page linked to the task. */
+export function FileTab({ task, f, version }: { task: string; f: TaskFileView; version?: number }) {
   const isPerson = useIsPerson();
-  const v = currentOf(f);
+  const now = currentOf(f);
+  const v = (version !== undefined && f.versions.find((x) => x.n === version)) || now;
   if (!v) return null;
   const name = f.title || f.name;
   // A Word file is drawn as its words on paper, with Download beside it.
@@ -86,8 +88,8 @@ export function FileTab({ task, f }: { task: string; f: TaskFileView }) {
         <WordPages url={v.url} name={name} />
       </>
     );
-  // The tab is the file at its current version, so a person may sign it here as in its file view.
-  const file = <FileFrame id={f.id} version={v.n} mime={v.mime} title={name} url={v.url} name={f.name} size={v.size} signable={isPerson} />;
+  // At its current version a person may sign it here as in its file view; an older version pinned by an ask is read only.
+  const file = <FileFrame id={f.id} version={v.n} mime={v.mime} title={name} url={v.url} name={v.name || f.name} size={v.size} signable={isPerson && v === now} />;
   return <PageOrFile task={task} id={f.id} title={name} page={v.mime.startsWith('text/html')} file={file} />;
 }
 

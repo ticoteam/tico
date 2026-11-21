@@ -141,7 +141,7 @@ export function Details({ t, flow, adding = null, onAdding = () => undefined }: 
   const leave = t.to_leave ?? [];
   const left = leave.filter((r) => !r.met);
   const met = leave.filter((r) => r.met);
-  const kids: Linked[] = t.children.map((c) => ({ id: c.id, title: c.title, owner: c.owner_id, stage: c.step, done: c.status !== 'open' }));
+  const kids: Linked[] = t.children.map((c) => ({ id: c.id, title: c.title, owner: c.owner_id, stage: c.stage, done: c.status !== 'open' }));
   const open = kids.filter((k) => !k.done);
   const fin = kids.filter((k) => k.done);
   // A task can be linked in several ways, such as a parent that also blocks this task.
