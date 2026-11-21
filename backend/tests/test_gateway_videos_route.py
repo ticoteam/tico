@@ -6,7 +6,8 @@ import io
 import json
 import urllib.error
 
-from backend.tests.helpers.api import headers  # noqa: F401
+from backend import paid_renders
+from backend.tests.helpers.api import assign, claim, headers, post, ready, runner
 from clients import gateway as G
 
 JOB = "gv_" + "c" * 24
@@ -82,12 +83,13 @@ def test_the_video_routes_map_the_gateways_answers_to_plain_problems(api, monkey
         assert (refused.status_code, refused.json()["error"]["code"]) == (status, code), refused.text
     monkeypatch.setattr(G, "video_status", lambda *a: (404, {}, "not_found"))
     assert api.get(f"/api/v2/gateway/videos/{JOB}", headers=headers("ana-test")).status_code == 404
-    monkeypatch.setattr(G, "video_submit", lambda *a: (502, {}, "unreadable"))
-    refused = api.post("/api/v2/gateway/videos", json={"prompt": "x"}, headers=headers("ana-test"))
-    assert (refused.status_code, refused.json()["error"]["code"]) == (503, "gateway_video_failed")
     monkeypatch.setattr(G, "video_submit", lambda *a: (404, {}, "404"))
     refused = api.post("/api/v2/gateway/videos", json={"prompt": "x"}, headers=headers("ana-test"))
     assert (refused.status_code, refused.json()["error"]["code"]) == (503, "gateway_video_unavailable")
+    # A 202 whose job id cannot be read may have started (and been charged): the shot is not sent again.
+    monkeypatch.setattr(G, "video_submit", lambda *a: (502, {}, "unreadable"))
+    refused = api.post("/api/v2/gateway/videos", json={"prompt": "x"}, headers=headers("ana-test"))
+    assert (refused.status_code, refused.json()["error"]["code"]) == (409, "reconcile_shot")
 
 
 def test_a_refused_video_says_the_gateways_reason(api, monkeypatch):
@@ -143,3 +145,73 @@ def test_a_video_needs_a_connected_gateway_and_stops_at_the_video_budget(api, mo
 
     refused = api.post("/api/v2/gateway/videos", json={"prompt": "x"}, headers=headers("ana-test"))
     assert refused.status_code == 409 and refused.json()["error"]["code"] == "gateway_not_connected"
+
+
+def turn(api):
+    """ops at work on its card: a runner claims ops's task, and the attempt's token is ops for that turn."""
+    r = runner(api)
+    assign(api, r, "ops")
+    ready(api, r, ["ops"])
+    task = post(api, "tasks", {"owner": "ops", "title": "Make the shots", "body": "From the storyboard."})
+    return task, claim(api, r)["token"]
+
+
+def reconcile_asks(api, task):
+    with api.app.state.store.read() as c:
+        rows = c.execute("SELECT person_id, line FROM question_marks WHERE task_id=?", (task["id"],)).fetchall()
+    return [tuple(row) for row in rows]
+
+
+def test_a_shot_whose_answer_was_lost_is_never_sent_again_and_asks_once_to_reconcile_it(api, monkeypatch):
+    connect(api)
+    task, token = turn(api)
+    sent = []
+
+    def lost(base, key, body, header):  # the Gateway may have started (and charged) it, but no answer came back
+        sent.append(header.get("Idempotency-Key", ""))
+        return 0, {}, "unreachable"
+
+    monkeypatch.setattr(G, "video_submit", lost)
+    body = {"prompt": "a kettle on the stove, steam rising"}
+    first = api.post("/api/v2/gateway/videos", json=body, headers=headers(token, "first-try"))
+    again = api.post("/api/v2/gateway/videos", json=body, headers=headers(token, "second-try"))
+    assert len(sent) == 1, sent  # no second provider call
+    assert sent[0].startswith("shot_")  # the shot key is the Gateway's Idempotency-Key
+    for refused in (first, again):
+        assert (refused.status_code, refused.json()["error"]["code"]) == (409, "reconcile_shot"), refused.text
+    assert reconcile_asks(api, task) == [("human:ana", "Reconcile shot a kettle on the stove, steam")]
+
+
+def test_a_started_shot_answers_its_job_again_and_one_cut_off_by_a_restart_is_reconciled(api, monkeypatch):
+    connect(api)
+    task, token = turn(api)
+    sent = []
+
+    def submit(base, key, body, header):
+        sent.append(body)
+        return 202, {"id": JOB, "status": "queued"}, ""
+
+    monkeypatch.setattr(G, "video_submit", submit)
+    body = {"prompt": "a kettle", "shot": "Kettle close-up"}
+    for idempotency in ("one", "two"):
+        started = api.post("/api/v2/gateway/videos", json=body, headers=headers(token, idempotency))
+        assert started.status_code == 202 and started.json() == {"id": JOB, "status": "queued"}, started.text
+    assert len(sent) == 1 and "shot" not in sent[0]
+    # The server stops after the call, before it writes the answer down: after the restart nothing is in flight.
+    take = {**body, "shot": "Kettle wide"}
+    with monkeypatch.context() as stopped:
+        stopped.setattr(paid_renders, "end", lambda *a: None)
+        assert api.post("/api/v2/gateway/videos", json=take, headers=headers(token, "three")).status_code == 202
+    busy = api.post("/api/v2/gateway/videos", json=take, headers=headers(token, "while-in-flight"))
+    assert (busy.status_code, busy.json()["error"]["code"]) == (429, "paid_render_busy"), busy.text
+    paid_renders._IN_FLIGHT.clear()
+    refused = api.post("/api/v2/gateway/videos", json=take, headers=headers(token, "four"))
+    assert (refused.status_code, refused.json()["error"]["code"]) == (409, "reconcile_shot"), refused.text
+    assert len(sent) == 2 and reconcile_asks(api, task) == [("human:ana", "Reconcile shot Kettle wide")]
+    # A refusal charged nothing, so that shot may be sent again.
+    monkeypatch.setattr(G, "video_submit", lambda *a: (422, {}, "invalid"))
+    retake = {**body, "shot": "Kettle top"}
+    assert api.post("/api/v2/gateway/videos", json=retake, headers=headers(token)).status_code == 422
+    monkeypatch.setattr(G, "video_submit", submit)
+    assert api.post("/api/v2/gateway/videos", json=retake, headers=headers(token)).status_code == 202
+    assert len(sent) == 3

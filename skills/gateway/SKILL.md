@@ -78,7 +78,7 @@ not more. Use `--count` only when you want variants to choose from.
 ## Make a video: `tico_gateway_video` and `tico_gateway_video_status`
 
 ```
-tico gateway video "what the video shows" [--seconds 8] [--resolution 720p] [--aspect 16:9] [--no-audio] [--first-frame FILE] [--last-frame FILE]
+tico gateway video "what the video shows" [--seconds 8] [--resolution 720p] [--aspect 16:9] [--no-audio] [--first-frame FILE] [--last-frame FILE] [--shot NAME]
 tico gateway video-status JOB_ID --out clips/intro.mp4
 ```
 
@@ -87,7 +87,9 @@ id at once. It takes minutes, so check it with `video-status` later, passing the
 queued or running the answer says so and nothing is saved. When it is done the MP4 is saved to `--out` (never
 overwritten), beside a sidecar `.json`, and the answer gives its seconds and cost. The Gateway keeps no video, so
 save it then. A video costs by the second at the catalog's price (`tico gateway catalog video`), held when it starts and
-charged when it ends. Ask for a video only when a picture will not do.
+charged when it ends. Ask for a video only when a picture will not do. Name each shot with `--shot`: the same shot
+is made once (asking again answers the same job), and one the Gateway never confirmed is never sent again; it is
+refused with `reconcile_shot` and a person is asked on your task to reconcile it. A new take needs a new shot name.
 
 Images and videos are refused with `video_budget_reached` when the company's Video production budget is at its
 cutoff; say so and carry on without.

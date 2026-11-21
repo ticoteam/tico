@@ -247,6 +247,8 @@ def test_a_video_is_started_then_checked_until_it_is_done_and_saved_once(video, 
             "--no-audio",
             "--first-frame",
             str(frame),
+            "--shot",
+            "kettle close-up",
         ]
     )
     assert started == {"id": "gv_" + "a" * 24, "status": "queued", "seconds": 5, "resolution": "1080p"}
@@ -254,6 +256,7 @@ def test_a_video_is_started_then_checked_until_it_is_done_and_saved_once(video, 
     assert (method, path) == ("POST", "gateway/videos")
     assert "model" not in body and body["audio"] is False and body["aspect"] == "16:9"  # the route sets the model
     assert body["first_frame"] == "data:image/png;base64," + base64.b64encode(PNG).decode() and "last_frame" not in body
+    assert body["shot"] == "kettle close-up"
     out = tmp_path / "clips" / "kettle.mp4"
     job = "gv_" + "a" * 24
     assert run(["gateway", "video-status", job, "--out", str(out)])["status"] == "queued"

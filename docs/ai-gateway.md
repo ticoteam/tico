@@ -348,12 +348,18 @@ answers the saved paths, never the image bytes.
 
 `tico gateway video PROMPT` starts a short video: 3 to 15 seconds (8 by default), 360p, 720p (the default), 1080p or 4k,
 16:9 or 9:16, with sound unless `--no-audio`. Optional `--first-frame` and `--last-frame` are PNG or JPEG files the video
-starts or ends on. It answers a job id at once. A video takes minutes, so the command does not wait: check it with
+starts or ends on. `--shot NAME` names the shot (by default, the prompt's first words). It answers a job id at once. A video takes minutes, so the command does not wait: check it with
 `tico gateway video-status ID --out PATH.mp4`. While the job runs the answer says so and nothing is saved; once it is done
 the MP4 is saved to `PATH.mp4` (never overwritten) with a sidecar `PATH.mp4.json`, and the answer gives its seconds and cost.
 The Gateway keeps no video: save it when it is done, as the status command does. A video that fails costs nothing;
 one still open after 15 minutes is given up and charged its hold, since the provider may still finish it. Only the key
 that started a job can read it.
+
+One charge per shot: before a video is sent, the server writes down its shot (who asks, the card's stage visit, the
+input and the shot name) and sends that key to the Gateway as the Idempotency-Key. Asking for the same shot again answers
+the same job without a second call. When the Gateway's answer never arrives (a timeout, a lost connection, a restart
+mid-call) the shot is never sent again: the request is refused with `reconcile_shot`, and on a bot's task the bot asks
+the person the task falls to "Reconcile shot NAME", once. A new take needs a new shot name.
 
 Bots use the same two things with the `tico_gateway_video` and `tico_gateway_video_status` tools. The video is priced per
 second at what the video model costs plus 25% (`tico gateway catalog video`), held when the job starts and charged when it
