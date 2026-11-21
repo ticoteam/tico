@@ -180,6 +180,8 @@ def test_task_list_asks_for_the_callers_own_requests_with_requester_me():
         {"id": "t1"}
     ]
     assert asked[-1] == ("tasks", {"owner": None, "requester": "bot:botops", "status": "open,done", "label": None})
+    hubtools.BY_NAME["tico_task_list"]["fn"](Api(), {"requester": "me", "exact": True})
+    assert asked[-1] == ("tasks", {"owner": None, "requester": "bot:botops", "status": None, "label": None, "exact": "true"})
 
 
 class _Sync:

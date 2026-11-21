@@ -777,6 +777,11 @@ def _first_stage_picks(api, pipeline):
         "pipeline": _s("Only this pipeline's tasks: its id"),
         "stage": _s("Only the tasks in this stage: its id (engineering-build), or its name with pipeline"),
         "waiting_on": _s("Only open tasks waiting on this person or bot: `me`, a human id or a bot slug"),
+        "exact": {
+            "type": "boolean",
+            "default": False,
+            "description": "Refuse an owner or requester that names nobody, instead of listing without that filter",
+        },
     },
 )
 def task_list(api, args):
@@ -798,6 +803,8 @@ def task_list(api, args):
             more["role"] = args["role"]
     if args.get("brief"):
         more["brief"] = "true"
+    if args.get("exact"):
+        more["exact"] = "true"
     page = api.get(
         "tasks",
         owner=_target(api, args.get("owner")) if args.get("owner") else None,

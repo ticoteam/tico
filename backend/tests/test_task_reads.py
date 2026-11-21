@@ -334,6 +334,10 @@ def test_exact_refuses_a_requester_that_names_nobody_and_the_tracker_reads_only_
     assert r.status_code == 422 and r.json()["error"]["code"] == "requester", r.text
     r = api.get("/api/v2/tasks?owner=nobody-here&exact=true", headers=headers())
     assert r.status_code == 422 and r.json()["error"]["code"] == "owner", r.text
+    # An empty name is no name either: refused, not dropped.
+    for empty, code in (("requester=", "requester"), ("owner=", "owner")):
+        r = api.get(f"/api/v2/tasks?{empty}&status=open&exact=true", headers=headers())
+        assert r.status_code == 422 and r.json()["error"]["code"] == code, (empty, r.text)
     # Without exact the unknown name still drops the filter: the reason the tracker always sends it.
     assert theirs["id"] in {t["id"] for t in tasks(api, "requester=me&status=open")["tasks"]}
     tracked = tasks(api, "requester=human:ana&status=open&snoozed=all&exact=true")["tasks"]

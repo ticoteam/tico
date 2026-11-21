@@ -6,6 +6,7 @@ import type { GetPreferenceResponse, Task } from '@/api/schema';
 import { keys, queryClient, quietRoot, write } from '@/data';
 import { readTicoInfo, ticoRoomQuery, type TicoInfo } from '@/conversation';
 import { onRefetch } from '@/live';
+import { backSince, finishedAt } from './tracked';
 
 // Read again after the person's own turn-on and when the stream is back.
 quietRoot('tico');
@@ -58,25 +59,58 @@ export type TrackedTask = Pick<Task, 'id' | 'number' | 'title' | 'status' | 'pip
 interface TrackedList {
   tasks: TrackedTask[];
   cursor?: string;
+  next_after?: string | null;
 }
 
 /* Both lists sit under the tasks root, so the stream's tasks events patch them in place (live/patch.ts). They name the
    person by actor id, never `me`, and send exact: a requester the server does not know answers 422, never every task. */
-const trackedParams = (me: string) => ({ requester: me, status: 'open', snoozed: 'all', exact: 'true', brief: 'true', limit: 500 });
+const trackedParams = (me: string) => ({ requester: me, status: 'open', snoozed: 'all', exact: 'true', brief: 'true', limit: 200 });
 const backParams = (me: string) => ({ requester: me, status: 'done,closed', sort: 'finished', snoozed: 'all', exact: 'true', brief: 'true', limit: 50 });
 
-const taskList = (params: Record<string, string | number>) =>
-  queryOptions({
+/** How many pages a list reads before it leaves the rest. */
+const PAGES = 50;
+
+/**
+ * A task list page after page (each names the next with `next_after`, passed back as `after`) in one cache entry,
+ * until there is no next page or `enough` says the rows read so far suffice. The first page's `cursor` stays: the
+ * stream's changes after it apply again, which is harmless.
+ */
+async function pages(params: Record<string, string | number>, signal: AbortSignal, enough?: (rows: TrackedTask[]) => boolean): Promise<TrackedList> {
+  const read = (after?: string) => {
+    const q = new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)]));
+    if (after) q.set('after', after);
+    return api.get<TrackedList>(`/api/v2/tasks?${q}`, { signal });
+  };
+  const first = await read();
+  let tasks = first.tasks;
+  let after = first.next_after;
+  for (let n = 1; after && n < PAGES && !enough?.(tasks); n++) {
+    const page = await read(after);
+    const seen = new Set(tasks.map((t) => t.id));
+    tasks = [...tasks, ...page.tasks.filter((t) => !seen.has(t.id))];
+    after = page.next_after;
+  }
+  return { ...first, tasks, next_after: null };
+}
+
+/** The open tasks the person asked for (`me`: their actor id), every page: the ones they hold are left out after. */
+export const trackedQuery = (me: string) => {
+  const params = trackedParams(me);
+  return queryOptions({ queryKey: keys.tasks.list(params), queryFn: ({ signal }) => pages(params, signal) });
+};
+
+/** What came back: the tasks the person asked for, most recently finished first, read back as far as Back ever looks.
+    The one read Back counts from; report-back messages can take its place without changing the tracker's groups. */
+export const backQuery = (me: string) => {
+  const params = backParams(me);
+  return queryOptions({
     queryKey: keys.tasks.list(params),
-    queryFn: ({ signal }) => api.get<TrackedList>(`/api/v2/tasks?${new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)]))}`, { signal }),
+    queryFn: ({ signal }) => {
+      const floor = Date.parse(backSince(null, Date.now()));
+      return pages(params, signal, (rows) => rows.length > 0 && Date.parse(finishedAt(rows[rows.length - 1]!)) <= floor);
+    },
   });
-
-/** The open tasks the person asked for (`me`: their actor id). */
-export const trackedQuery = (me: string) => taskList(trackedParams(me));
-
-/** What came back: the tasks the person asked for, most recently finished first. The one read Back counts from;
-    report-back messages can take its place without changing the tracker's groups. */
-export const backQuery = (me: string) => taskList(backParams(me));
+};
 
 const SEEN_KEY = 'ui.tracker_seen_at';
 

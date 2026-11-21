@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { meQuery, useActor } from '@/data';
 import { flowQuery } from '@/features/tasks/routing';
 import { Avatar } from '@/kit/Avatar';
@@ -17,7 +17,6 @@ import './tracker.css';
    Opening it shows three groups and starts Back again from now. One stream filter keeps it live: party=<their actor
    id>, which sends the tasks they own or asked for, however many (task=<ids> stops narrowing past 20). */
 
-const NONE: TrackedTask[] = [];
 const rows = (list: { tasks: TrackedTask[] }) => list.tasks;
 
 const taskHref = (t: TrackedTask) =>
@@ -46,34 +45,37 @@ function Rows({ tasks, waits }: { tasks: TrackedTask[]; waits?: boolean }) {
 export function Tracker() {
   const me = useQuery(meQuery).data?.id;
   useFollow(me ? { party: me } : null);
-  const { data: open = NONE } = useQuery({ ...trackedQuery(me ?? ''), enabled: !!me, select: rows });
-  const { data: back = NONE } = useQuery({ ...backQuery(me ?? ''), enabled: !!me, select: rows });
+  const open = useQuery({ ...trackedQuery(me ?? ''), enabled: !!me, select: rows });
+  const back = useQuery({ ...backQuery(me ?? ''), enabled: !!me, select: rows });
   const { data: waiting } = useQuery({ ...flowQuery, select: (f) => new Set(f.items.map((i) => i.id)) });
-  const { data: seenAt } = useQuery(trackerSeenQuery);
-  // While open, Back shows what came back since the tracker was last opened; the count is already cleared.
-  const [shownSince, setShownSince] = useState<string | null>(null);
-  // Back's 7-day floor, from when the sheet drew: a long-open sheet only looks a little further back.
-  const [drawn] = useState(() => Date.now());
-  if (!me) return null;
-  const counted = trackerGroups(open, back, waiting ?? new Set(), me, backSince(seenAt, drawn));
-  const groups = shownSince ? trackerGroups(open, back, waiting ?? new Set(), me, shownSince) : counted;
-  const tracking = counted.needs.length + counted.open.length;
-  if (!shownSince && !tracking && !counted.back.length) return null;
-  const toggle = () => {
-    if (shownSince) return setShownSince(null);
-    const now = Date.now();
-    setShownSince(backSince(seenAt, now));
-    void markTrackerSeen(new Date(now).toISOString()).catch(() => undefined);
-  };
+  const seen = useQuery(trackerSeenQuery);
+  // Open: when, and the last opening before it, which Back counts from while it stays open.
+  const [opened, setOpened] = useState<{ at: number; seen: string | null } | null>(null);
+  // Back moves on to now once the groups it counted are on screen (after this opening's render), not before.
+  const marked = useRef<number | null>(null);
+  useEffect(() => {
+    if (!opened || marked.current === opened.at) return;
+    marked.current = opened.at;
+    void markTrackerSeen(new Date(opened.at).toISOString()).catch(() => undefined);
+  }, [opened]);
+  // Nothing shows until the lists and the last opening are read: a count from half the reads would be wrong.
+  if (!me || !open.isSuccess || !back.isSuccess || !seen.isSuccess) return null;
+  // One cutoff, from the newest read or change of what came back: the same for the count and the open group.
+  const now = Math.max(back.dataUpdatedAt, opened?.at ?? 0);
+  const groups = trackerGroups(open.data, back.data, waiting ?? new Set(), me, backSince(opened ? opened.seen : seen.data, now));
+  const tracking = groups.needs.length + groups.open.length;
+  const backCount = opened ? 0 : groups.back.length;
+  if (!opened && !tracking && !backCount) return null;
+  const toggle = () => setOpened(opened ? null : { at: Date.now(), seen: seen.data });
   return (
     <div className="tracker">
-      <button type="button" className="tracker-row" aria-expanded={!!shownSince} onClick={toggle}>
+      <button type="button" className="tracker-row" aria-expanded={!!opened} onClick={toggle}>
         <span className="tracker-n">Tracking {tracking}</span>
-        {counted.needs.length > 0 && <span className="tracker-tag">{counted.needs.length} needs you</span>}
-        {counted.back.length > 0 && <span className="tracker-tag">{counted.back.length} back</span>}
+        {groups.needs.length > 0 && <span className="tracker-tag">{groups.needs.length} needs you</span>}
+        {backCount > 0 && <span className="tracker-tag">{backCount} back</span>}
         <Icon name="chevdown" />
       </button>
-      {shownSince && (
+      {opened && (
         <div className="tracker-groups">
           {groups.needs.length > 0 && (
             <Section name="Needs you" count={groups.needs.length}>

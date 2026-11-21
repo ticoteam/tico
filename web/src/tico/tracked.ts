@@ -10,7 +10,8 @@ export function backSince(seenAt: string | null | undefined, now: number): strin
   return new Date(Number.isFinite(seen) && seen > floor ? seen : floor).toISOString();
 }
 
-const finishedAt = (t: TrackedTask) => t.done_at ?? t.closed_at ?? t.updated_at;
+/** When a task finished: done, else closed, else its last change (the server's finished order). */
+export const finishedAt = (t: TrackedTask) => t.done_at ?? t.closed_at ?? t.updated_at;
 
 export interface TrackerGroups {
   /** Open, and waiting on the person (their Needs you). */
@@ -27,7 +28,8 @@ export interface TrackerGroups {
  * patched in out of place is sorted out here: an open list's finished task and a finished list's open one are left.
  */
 export function trackerGroups(open: TrackedTask[], back: TrackedTask[], waiting: ReadonlySet<string>, me: string, since: string): TrackerGroups {
-  const others = (t: TrackedTask) => t.owner_id !== me;
+  // Held by someone else: an owner, and not the person. An unassigned task waits on no one yet.
+  const others = (t: TrackedTask) => !!t.owner_id && t.owner_id !== me;
   const live = open.filter((t) => t.status === 'open' && others(t));
   const at = Date.parse(since);
   return {
