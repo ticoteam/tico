@@ -842,7 +842,8 @@ class Support:
 
         def before_send():
             """Claimed, with no ticket yet: the first send, or a retry after a crash or HQ out of reach, under the same
-            Idempotency-Key (HQ answers a retry with the ticket the first send made). Right before the first send (after
+            Idempotency-Key (HQ does not replay by it yet, so a retry after a lost answer can make a second ticket:
+            #4891). Right before the first send (after
             the support link's check, so authority lost while it ran still stops it), whoever gave the OK must still be
             here and still entitled to give it (rule C); if not, it is given up on and never sent. Once a send has begun
             (`ok.sending`) HQ may have it, so a retry is never refused for that."""
