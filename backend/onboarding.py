@@ -1751,7 +1751,14 @@ class Onboarding:
                 "instructions": card["instructions"],
             }
         for slug, choice in record["selected"].items():
-            plan[self._bot_slug(slug)] = dict(choice)
+            bot = self._bot_slug(slug)
+            if bot == AGENT_OPS:
+                # Agent Ops' entry is reserved: a pick may rename it or write its instructions, never make it another
+                # template (a pick saved before the rename names the old one).
+                if choice.get("template") not in (H.AGENT_OPS_SLUG, AGENT_OPS):
+                    continue
+                choice = {**choice, "template": H.AGENT_OPS_SLUG}
+            plan[bot] = dict(choice)
         return plan
 
     def _bot_slug(self, card_slug):
@@ -1802,7 +1809,7 @@ class Onboarding:
         bot_id = (found or {}).get("id", slug)
         existing = c.execute("SELECT revision FROM bot_config WHERE bot=?", (bot_id,)).fetchone()
         if not existing:
-            slug = H.AGENT_OPS_SLUG if slug == AGENT_OPS else slug  # made under its slug; new_bot_id keeps its first id
+            slug = H.agent_ops_slug(c) if slug == AGENT_OPS else slug  # made under its slug; new_bot_id keeps its id
             picked = self._runtime(c, card)
             # No provider yet: a stand-in model satisfies the definition, then the bot is left to follow the company default.
             model, effort = picked or next(

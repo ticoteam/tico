@@ -887,7 +887,7 @@ class Collector:
         self.line("FAIL", text)
 
 
-def check(path, slug):
+def check(path, slug, also=()):
     """The preflight rules that apply to one repository, as a list of problems ([] is ready).
 
     `clients/preflight.py` is the authority and stays the operator's full check (registry entry,
@@ -901,7 +901,7 @@ def check(path, slug):
     if not path.is_dir():
         return [f"repo: {path} does not exist"]
     report = Collector()
-    manifest = preflight.check_manifest(report, slug, path)
+    manifest = preflight.check_manifest(report, slug, path, also)
     preflight.check_instructions(report, path)
     if manifest is not None:
         preflight.check_schedules(report, path, manifest)

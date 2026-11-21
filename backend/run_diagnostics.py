@@ -34,6 +34,7 @@ LAPSED_NAMED = '{computer} took it and never started it'
 # (Nov 12) one took ~344 runs in a day and never started them, and nobody was told.
 SAME = 3
 AGENT_OPS_HAS_IT = 'Agent Ops is checking why.'  # ends the failed run's text: no person is asked (execution.last_stop)
+OLD_HAS_IT = 'BotOps is checking why.'  # the same, in a run saved before the rename (#4863)
 # The reason a job's runs that only lapsed are filed with: the computer said nothing, so this is all that is known.
 LAPSED_WHY = 'it took each run and never started it, renewed its lease or handed it back'
 # The reason when the day's budget of missed starts (execution.PRE_START_TRIES) runs out with fewer than SAME silent

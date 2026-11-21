@@ -91,6 +91,14 @@ def test_three_hand_backs_for_the_same_reason_go_to_agent_ops_and_pause_the_task
     assert "upstream could not be read" in turn["end_reason"]
     stop = get(api, "status?bot=ops")["status"]["last_stop"]
     assert stop["needs_person"] is False and stop["text"].endswith(RD.AGENT_OPS_HAS_IT)
+    # A run saved before the rename (#4863) reads the same, under the current name.
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE attempts SET final_text=replace(final_text, ?, ?) WHERE id=?",
+            (RD.AGENT_OPS_HAS_IT, RD.OLD_HAS_IT, attempt["id"]),
+        )
+    stop = get(api, "status?bot=ops")["status"]["last_stop"]
+    assert stop["needs_person"] is False and stop["text"].endswith(RD.AGENT_OPS_HAS_IT)
     # The task waits on the bot, Paused with the cause: not "Queued", not a person's.
     with api.app.state.store.read() as c:
         assert task_wakes.task_cause(c, task_id, "bot:ops") == task_wakes.CANT_START

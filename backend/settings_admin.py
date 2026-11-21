@@ -423,7 +423,9 @@ class SettingsAdmin:
         """A free slug from the bot's name: never one in use, archived or reserved for the company's own bots."""
         return free_slug(
             name,
-            lambda slug: bool(H.resolve_bot(c, slug)) or self.auth.system_bot(slug) or slug == "assistant",
+            lambda slug: (
+                bool(H.resolve_bot(c, slug)) or self.auth.system_bot(slug) or slug in ("assistant", H.AGENT_OPS_SLUG)
+            ),
             fallback,
         )
 
@@ -533,8 +535,8 @@ class SettingsAdmin:
     def create_bot(self, c, who, body):
         CA.gate(c, who.actor, "bots", "add a bot")
         self.validate_template(body.template)
-        if body.template == H.AGENT_OPS_SLUG:
-            body = body.model_copy(update={"slug": H.AGENT_OPS_SLUG})  # one Agent Ops: never a second under -2
+        if body.template == H.AGENT_OPS_SLUG:  # one Agent Ops: never a second under -2
+            body = body.model_copy(update={"slug": H.agent_ops_slug(c)})
         elif body.slug == H.AGENT_OPS_SLUG:
             raise Problem("duplicate", "That slug is Agent Ops'", 409)  # held for the built-in, made or not
         if not body.slug:
@@ -554,7 +556,9 @@ class SettingsAdmin:
         bot_id = H.new_bot_id(body.slug)
         if existing or (bot_id != body.slug and H.bot(c, bot_id)):  # Agent Ops' slug names its first id
             raise Problem("duplicate", "That bot slug already exists", 409)
-        if not privileged and (self.auth.system_bot(body.slug) or body.slug == "assistant"):
+        if not privileged and (
+            self.auth.system_bot(body.slug) or body.slug == "assistant" or body.template == H.AGENT_OPS_SLUG
+        ):
             # The company's own bots (the Assistant, Agent Ops, the Librarian, the COO) are added by an owner or an Admin.
             raise Problem(
                 "forbidden", "That name is reserved for the company's own bots; ask an owner or an admin", 403
@@ -786,9 +790,9 @@ class SettingsAdmin:
         CA.gate(c, who.actor, "bots", "add a bot")
         self.validate_template(body.template)
         if body.template == H.AGENT_OPS_SLUG:  # one Agent Ops, under its slug: never a second under -2
-            if H.bot(c, H.FLEET_MAINTAINER) or H.resolve_bot(c, H.AGENT_OPS_SLUG):
+            if H.bot(c, H.FLEET_MAINTAINER):
                 raise Problem("duplicate", "This company has its Agent Ops already", 409)
-            body = body.model_copy(update={"slug": H.AGENT_OPS_SLUG})
+            body = body.model_copy(update={"slug": H.agent_ops_slug(c)})
         elif body.slug == H.AGENT_OPS_SLUG:
             raise Problem("duplicate", "That slug is Agent Ops'", 409)  # held for the built-in, made or not
         if not body.slug and (asked := self._bot_being_set_up(c, body.template)):

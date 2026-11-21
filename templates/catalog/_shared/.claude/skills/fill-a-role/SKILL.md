@@ -91,9 +91,9 @@ numbered message, save the answers there with the date, and work on the defaults
    split: the bot takes every line it can, and only the remainder goes to step 10. Most roles split.
 6. **Get the bot created.** Bots do not create bots directly. Use the route that fits you:
    - *You are a manager bot and the new bot reports to you.* Ask Agent Ops in a message
-     (`tico message send agent-ops "<request>" --needs-action`) with the template, the display name, who it reports to
+     (`tico message send botops "<request>" --needs-action`) with the template, the display name, who it reports to
      and a link to the scorecard. Tico allows this by default up to 3 creates in any 7 days.
-   - *Anyone else.* File `tico task create --owner agent-ops --title "Build a bot: <name>"` with the same four things. If
+   - *Anyone else.* File `tico task create --owner botops --title "Build a bot: <name>"` with the same four things. If
      a person asked for the role, cite their request.
    - *Refused.* If Agent Ops answers `report_cap` or any other refusal, Tico has already put a task in front of the
      person above. Wait for it. Never try another route around a refusal.

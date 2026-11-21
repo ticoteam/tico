@@ -691,7 +691,10 @@ def last_stop(c, bot, status):
             ),
         }
     if attempt and not attempt["started_at"] and attempt["state"] == "failed":
-        if str(attempt["final_text"] or "").endswith(RD.AGENT_OPS_HAS_IT):
+        said = str(attempt["final_text"] or "")
+        if said.endswith(RD.OLD_HAS_IT):  # saved before the rename: read under the current name
+            said = said[: -len(RD.OLD_HAS_IT)] + RD.AGENT_OPS_HAS_IT
+        if said.endswith(RD.AGENT_OPS_HAS_IT):
             # Handed back for the same reason RD.SAME times, or taken and dropped in silence that many times
             # in a row: Agent Ops has it, so it is no person's to fix.
             return {
@@ -708,7 +711,7 @@ def last_stop(c, bot, status):
                     if RD.MISSED_WHY in str(attempt["final_text"])
                     else f"Its computer handed this run back {RD.SAME} times for the same reason."
                 ),
-                "text": attempt["final_text"],
+                "text": said,
             }
         # RD.SAME silent lapses in a row (LAPSED_WHY in its text), or PRE_START_TRIES missed starts: the
         # text names the computer and what to do about it (expire()).

@@ -212,7 +212,7 @@ def stops_for(c, cause, task):
             {"how": "Pause the bot until its source is fixed", "command": f"tico bot pause {shlex.quote(slug)}"},
             {
                 "how": "Have Agent Ops fix the bot's source",
-                "command": "tico task create --owner agent-ops --title "
+                "command": "tico task create --owner botops --title "
                 + shlex.quote(f"Stop {slug} filing: {title[:60]}"),
                 "note": "Agent Ops reads the cause and files the fix in the bot's code",
             },

@@ -857,7 +857,6 @@ class Auth:
             self.settings.assistant_bot,
             "assistant",
             "botops",
-            H.AGENT_OPS_SLUG,  # its slug: the same bot
             "librarian",
             "strategy-owner",
             "health-monitor",

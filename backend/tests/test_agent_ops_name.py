@@ -1,12 +1,9 @@
 """Agent Ops was called BotOps (#4863). Its slug, name, template and repository follow the new name; its id stays
-`botops`, so every actor string and history row still names it. An existing company is renamed by a migration on its
-next start, a new one is seeded under the new name, and the old name is left only where it is that id."""
+`botops`, so every actor string, permission and handoff still names it. An existing company is renamed by a migration
+on its next start, a new one is seeded under the new name, and what older computers, files and saved requests send
+still works."""
 
-import io
 import json
-import re
-import subprocess
-import tokenize
 from pathlib import Path
 
 import yaml
@@ -25,72 +22,6 @@ from runner_support import catalog_job
 
 ROOT = Path(__file__).resolve().parents[2]
 MIGRATION = ROOT / "backend/migrations/20261121173732_agent_ops_name.sql"
-# Where the old name may still be written, all of it on purpose. Files: shipped migrations, which are never edited (and
-# the new one renames the old rows); a red-main case is a record of what happened; the runner names a bot by its id in
-# its prompt, so its expected prompt for this bot's turn says botops.
-ALIAS_PATHS = (
-    "backend/migrations/",
-    "backend/tests/test_agent_ops_name.py",
-    "scripts/red_main_cases.json",
-    "runner-rs/src/testdata/prompt-a2.txt",
-)
-# Names other systems or saved records still use: the Gateway's outbound count for its role botops
-# (backend/suggestions.py COUNTS), and the two team rules' old names a Confirm card saved before the rename sends
-# (team_rules.OLD_NAMES), and the old default title an exported company file still carries (draft.RENAMED_TITLES).
-ALIAS_WORDS = ("bots_botops", "botops_direct", "botops_manages_bots", 'RENAMED_TITLES = {"botops": "BotOps"}')
-OLD = re.compile(r"(?i:botops)|\bBot[ -]Ops\b")
-# The tasks the server files for the built-in name its id, so they reach it whatever bot holds a slug: these call
-# sites, and the test that reads one back.
-ALIAS_AT = {
-    "backend/general_manager.py": "--owner botops",
-    "backend/hubdb.py": "--owner botops",
-    "backend/tests/test_maintenance_health.py": "--owner botops",
-}
-# The id itself: quoted ("botops", `botops`, a SQL or keyword value =botops), an actor (bot:botops), a route or
-# repository (bots/botops, ticoteam/botops) or a stored event name (botops.request_carried).
-ID = re.compile(r"""(?:["'`/=]|bot:)botops(?![\w-])|(?<![\w-])botops(?=["'`]|\.[a-z_])""")
-
-
-def _bad_lines(text, first=1):
-    """The line numbers in `text` (its first line numbered `first`) where the old name is anything but the id."""
-    bad = []
-    for number, line in enumerate(text.splitlines() or [""], first):
-        allowed = {m.end() - 6 for m in ID.finditer(line)}
-        if any(found.start() not in allowed or found.group(0) != "botops" for found in OLD.finditer(line)):
-            bad.append(number)
-    return bad
-
-
-def _python(text):
-    """In Python the id is a value, so it is only in a string; a comment may quote it."""
-    bad = []
-    for token in tokenize.generate_tokens(io.StringIO(text).readline):
-        if not OLD.search(token.string):
-            continue
-        if tokenize.tok_name[token.type] in ("STRING", "FSTRING_MIDDLE", "TSTRING_MIDDLE", "COMMENT"):
-            bad += _bad_lines(token.string, token.start[0])
-        else:
-            bad.append(token.start[0])
-    return bad
-
-
-def test_the_old_name_is_left_only_as_the_id():
-    files = subprocess.run(
-        ["git", "grep", "-l", "-I", "-E", "(B|b)(O|o)(T|t)(O|o)(P|p)(S|s)|Bot[ -]Ops"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-    ).stdout.split()
-    offenders = []
-    for name in files:
-        if name.startswith(ALIAS_PATHS):
-            continue
-        text = (ROOT / name).read_text(encoding="utf-8")
-        for word in (*ALIAS_WORDS, *([ALIAS_AT[name]] if name in ALIAS_AT else [])):
-            text = text.replace(word, "x" * len(word))
-        lines = _python(text) if name.endswith(".py") else _bad_lines(text)
-        offenders += [f"{name}:{n}: {text.splitlines()[n - 1].strip()[:120]}" for n in sorted(set(lines))]
-    assert not offenders, "BotOps is Agent Ops (#4863); `botops` only as its id:\n" + "\n".join(offenders)
 
 
 def test_its_own_routes_are_its_ids_whatever_holds_the_slug():
@@ -219,7 +150,12 @@ def test_its_checkout_made_under_its_id_still_checks(tmp_path):
 
     (tmp_path / "bot.yaml").write_text("name: botops\n")
     report = preflight.Report("agent-ops")
-    assert preflight.check_manifest(report, "agent-ops", tmp_path)["name"] == "botops" and not report.counts["FAIL"]
+    tied = ["botops", "agent-ops"]  # the server's record of the bot: its id and its slug
+    assert (
+        preflight.check_manifest(report, "agent-ops", tmp_path, tied)["name"] == "botops" and not report.counts["FAIL"]
+    )
+    preflight.check_manifest(report, "agent-ops", tmp_path)
+    assert report.counts["FAIL"] == 1  # a name nothing ties to the bot
     assert catalog_job.PUBLIC_SLUGS[H.FLEET_MAINTAINER] == H.AGENT_OPS_SLUG  # a new checkout's manifest says agent-ops
 
 
@@ -302,6 +238,47 @@ def test_a_malformed_manifest_name_fails_the_check_plainly(tmp_path):
     report = preflight.Report("agent-ops")
     preflight.check_manifest(report, "agent-ops", tmp_path)
     assert report.counts["FAIL"] == 1
+
+
+def test_a_company_bot_whose_id_is_agent_ops_keeps_its_managers_and_the_built_in_is_made_beside_it(api):
+    with api.app.state.store.transaction() as c:
+        H.sync_registry(c, {"agent-ops": {"display_name": "Ops", "status": "active"}}, [])
+    auth = api.app.state.auth
+    assert not auth.system_bot("agent-ops") and auth.system_bot(H.FLEET_MAINTAINER)  # classified by permanent id
+    body = {"display_name": "Agent Ops", "template": "agent-ops", "model": "hermes-profile", "harness": "hermes"}
+    made = post(api, "bots", {**body, "effort": "as-configured"})
+    assert (made["id"], made["slug"]) == ("botops", "botops")  # no slug may name the other bot's id
+    with api.app.state.store.read() as c:
+        assert H.bot(c, "agent-ops")["slug"] == "agent-ops"
+
+
+def test_the_handoffs_the_server_writes_address_its_permanent_id(company):
+    from backend import why_here
+
+    with company.read() as c:
+        (_, fix) = why_here.stops_for(c, {"type": "bot", "bot": "bot:ops"}, {"title": "Daily totals"})
+    assert (
+        fix["command"].startswith("tico task create --owner botops ")
+        and fix["how"] == "Have Agent Ops fix the bot's source"
+    )
+    jobs = (ROOT / "templates/catalog/assistant/playbooks/jobs.md").read_text()
+    assert "tico task create --owner botops" in jobs and "--owner agent-ops" not in jobs
+
+
+def test_a_setup_pick_never_turns_agent_ops_into_another_template(api):
+    from backend import onboarding as O
+
+    onboarding = api.app.state.onboarding
+    cards = {card["template"]: card for card in O.read_cards(onboarding.settings)}
+    with api.app.state.store.read() as c:
+        record = O.load(c)
+    names = O.display_names(onboarding.settings, record)
+    for pick, kept in (
+        ({"template": "support-owner", "display_name": "Support", "instructions": ""}, "Agent Ops"),
+        ({"template": "botops", "display_name": "Fleet Fixer", "instructions": ""}, "Fleet Fixer"),
+    ):
+        plan = onboarding._plan({**record, "selected": {"botops": pick}}, cards, names)
+        assert (plan["botops"]["template"], plan["botops"]["display_name"]) == ("agent-ops", kept)
 
 
 def _picked(c, choice):

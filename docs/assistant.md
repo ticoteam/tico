@@ -8,7 +8,7 @@ few things to ask while it is empty. The **Assistant** tab, first on your own pa
 page. Attach files or
 pictures there, or in the Ask panel, with the clip, a drop or a paste, like any bot chat. There is no Agent Ops, Strategy Owner, Librarian or Assistant row in
 the rail: you ask the Assistant, and it hands its helpers what needs them (below). Agent Ops' own Home is still at
-`#/bot/agent-ops`. These built-ins stay out of the team chart and Goals tree; Settings > Bots still manages all four.
+`#/bot/botops`. These built-ins stay out of the team chart and Goals tree; Settings > Bots still manages all four.
 It works on a phone too.
 
 In the thread the Assistant's turns are plain text; yours are dark bubbles on the right. The live dot stays in the

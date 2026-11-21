@@ -682,10 +682,17 @@ def bots(client, args):
         fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
         return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
     if args.fn == "bot check":
-        from clients.botcopy import folder_of
         from clients.manifest import folder_dir
 
-        problems = catalog.check(folder_dir(workspace, folder_of(client, args.slug), args.slug), args.slug)
+        try:
+            found = client.get(f"bots/{args.slug}")
+        except (APIError, AttributeError):
+            found = None
+        found = found if isinstance(found, dict) else {}
+        # The server's record of this bot: its id and slug, either of which its checkout's manifest may name.
+        also = [str(found[key]) for key in ("id", "slug") if found.get(key)]
+        path = folder_dir(workspace, found.get("folder"), args.slug)  # the folder the server recorded, as before
+        problems = catalog.check(path, args.slug, also)
         return {"ready": not problems, "problems": problems}
     if not args.template:
         raise APIError("usage", "tico bot create --template T builds the bot; --record-only only registers it")

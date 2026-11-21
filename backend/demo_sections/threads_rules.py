@@ -248,7 +248,7 @@ CONTENT = {
             "in": "eng",
             "ago": 29,
             "by": "bot:support-quality-analyst",
-            "say": "The render queue has not moved in 40 minutes, so customer previews are stuck. Handing it to @agent-ops.",
+            "say": "The render queue has not moved in 40 minutes, so customer previews are stuck. Handing it to @botops.",
         },
         {
             "in": "eng",

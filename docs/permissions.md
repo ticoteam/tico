@@ -587,7 +587,7 @@ When the person asks Agent Ops in their chat to take over one of their tasks, th
 work; the move itself is Agent Ops', so later runs on that task lend nothing (they ask again or move it themselves).
 A bot's message or task uses only that bot's rights, including its Credential grants; Agent Ops never lends it a human's
 or its own wider access. The one exception is a person's own request the bot hands on: a bot filing an Agent Ops task may cite
-the person's message (`tico task create --owner agent-ops --request-id turn`, or the message id). When that person wrote it
+the person's message (`tico task create --owner botops --request-id turn`, or the message id). When that person wrote it
 to the bot themselves, in their 1:1 chat with it (the app or a Slack DM) or as a comment on an open task they asked it for,
 in the conversation the bot's run is working on and within the last week, Agent Ops' run on the task files and updates tasks, docs,
 goals and KPIs with the person's rights while the task is open and has never been finished (`agent_ops_act.CARRIED`, an

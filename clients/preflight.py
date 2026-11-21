@@ -92,12 +92,10 @@ def check_repo(r, d):
     return True
 
 
-# A built-in's slug and the id it keeps, either of which its checkout's manifest may name: Agent Ops (#4863).
-RETAINED = [("agent-ops", "botops"), ("botops", "agent-ops")]
-
-
-def check_manifest(r, slug, d):
-    """bot.yaml (older: employee.yaml) parses and identifies this employee. Returns the parsed manifest or None."""
+def check_manifest(r, slug, d, also=()):
+    """bot.yaml (older: employee.yaml) parses and identifies this employee: by `slug`, or by a name in `also` the
+    server ties to the same bot (its id, which a checkout made before a rename names). Returns the parsed manifest or
+    None."""
     p = manifest_path(d)
     if not p.exists():
         r.fail(f"{p.name}: missing")
@@ -108,7 +106,7 @@ def check_manifest(r, slug, d):
         r.fail(f"{p.name}: does not parse: {str(e).splitlines()[0][:120]}")
         return None
     r.ok(f"{p.name}: parses")
-    if m.get("name") == slug or (slug, m.get("name")) in RETAINED:
+    if m.get("name") == slug or m.get("name") in also:
         r.ok(f"{p.name}: name is {m.get('name')}")
     else:
         r.fail(f"{p.name}: name is {m.get('name')!r}, expected {slug!r}")
@@ -378,7 +376,7 @@ def preflight(slug, defaults, entries):
     r.ok(f"registry: entry found, status={entry.get('status')} reports_to={entry.get('reports_to')}")
     d = repo_dir(REG.ROOT, slug)
     if check_repo(r, d):
-        m = check_manifest(r, slug, d)
+        m = check_manifest(r, slug, d, also=[str(entry.get("slug") or slug)])
         check_instructions(r, d)
         if m is not None:
             check_schedules(r, d, m)

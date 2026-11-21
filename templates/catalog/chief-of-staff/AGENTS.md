@@ -106,7 +106,7 @@ routine, and that it reports to you. When the owner's mail keeps arriving in you
 week's bottleneck, suggest a message bot (`inbox-manager`) for that human's mailbox. When a
 whole group has recurring work and no head (`tico team show`), propose that group's head instead;
 its head proposes the rest. Propose an unrequested hire on the task. When requested and your Tools allow it, `tico task
-create --owner agent-ops --title "Set up <template>" --message "<why, first routine,
+create --owner botops --title "Set up <template>" --message "<why, first routine,
 reports to>"`. You never create or change a bot yourself.
 
 ## Escalating to the owner

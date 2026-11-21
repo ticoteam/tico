@@ -1,18 +1,19 @@
 -- BotOps is Agent Ops (#4863). Its id stays 'botops', so every actor string, reference and history row that names it
 -- is unchanged; its slug, its default name, its template and the two team rules named after it follow the new name.
 -- A name a person gave it is kept. The slug agent-ops is the built-in's, made yet or not: any other bot that holds it
--- moves to the first free agent-ops-2, -3, ... (no bot's id or slug), keeping its name and its id, so every actor
--- string that names it stays; an event says where it went. Only when the built-in can take it: see below.
+-- moves to the first free agent-ops-2, -3, ... (no bot's id or slug; the bots hold at most two names each, so the search
+-- always finds one), keeping its name and its id, so every actor string that names it stays; an event says where it
+-- went. Only when the built-in can take it: see below.
 INSERT INTO events (id, created_at, actor, action, target, detail)
 SELECT lower(hex(randomblob(16))), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 'keeper', 'bot.renamed', b.id,
-  json_object('from', 'agent-ops', 'to', COALESCE((WITH RECURSIVE n(i) AS (SELECT 2 UNION ALL SELECT i + 1 FROM n WHERE i < 999)
+  json_object('from', 'agent-ops', 'to', (WITH RECURSIVE n(i) AS (SELECT 2 UNION ALL SELECT i + 1 FROM n WHERE i <= 2 * (SELECT count(*) FROM bots) + 2)
     SELECT 'agent-ops-' || i FROM n
-    WHERE NOT EXISTS (SELECT 1 FROM bots o WHERE o.id = 'agent-ops-' || i OR o.slug = 'agent-ops-' || i) LIMIT 1), 'agent-ops-' || b.id), 'why', 'agent-ops is the built-in Agent Ops')
+    WHERE NOT EXISTS (SELECT 1 FROM bots o WHERE o.id = 'agent-ops-' || i OR o.slug = 'agent-ops-' || i) LIMIT 1), 'why', 'agent-ops is the built-in Agent Ops')
 FROM bots b
 WHERE b.slug = 'agent-ops' AND b.id <> 'botops' AND NOT EXISTS (SELECT 1 FROM bots WHERE id = 'agent-ops');
-UPDATE bots SET slug = COALESCE((WITH RECURSIVE n(i) AS (SELECT 2 UNION ALL SELECT i + 1 FROM n WHERE i < 999)
+UPDATE bots SET slug = (WITH RECURSIVE n(i) AS (SELECT 2 UNION ALL SELECT i + 1 FROM n WHERE i <= 2 * (SELECT count(*) FROM bots) + 2)
     SELECT 'agent-ops-' || i FROM n
-    WHERE NOT EXISTS (SELECT 1 FROM bots o WHERE o.id = 'agent-ops-' || i OR o.slug = 'agent-ops-' || i) LIMIT 1), 'agent-ops-' || id)
+    WHERE NOT EXISTS (SELECT 1 FROM bots o WHERE o.id = 'agent-ops-' || i OR o.slug = 'agent-ops-' || i) LIMIT 1)
 WHERE slug = 'agent-ops' AND id <> 'botops' AND NOT EXISTS (SELECT 1 FROM bots WHERE id = 'agent-ops');
 -- A bot whose own id is agent-ops (a registry bot an older release made under that name) keeps its id and its slug: no
 -- slug may name another bot's id, so the built-in could never take agent-ops there. It keeps botops, and an event says

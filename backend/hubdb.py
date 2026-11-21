@@ -206,6 +206,14 @@ REVIEW_OWNER = "assistant"  # rule 8's first review task
 FLEET_MAINTAINER = "botops"  # the fleet's maintainer bot: reviews refused writes and may start any bot's task
 # Its slug and template. Its id keeps the old name, so every actor string and history row still names it (#4863).
 AGENT_OPS_SLUG = "agent-ops"
+
+
+def agent_ops_slug(conn):
+    """The slug Agent Ops is made under: agent-ops, or its id where an older registry bot's own id is agent-ops (no slug
+    may name another bot's id)."""
+    return FLEET_MAINTAINER if _one(conn, "SELECT 1 FROM bots WHERE id=?", (AGENT_OPS_SLUG,)) else AGENT_OPS_SLUG
+
+
 BOT_STATES = SV.BOT_STATES
 STATUS_STATES = SV.BOT_STATUS_STATES
 MESSAGE_KINDS = ("say", "notice", "steer")
