@@ -520,7 +520,15 @@ def install(app, store, auth, mutate, rule_check):
         starts it (`dm_start`), made only when the send goes through."""
         if not body.to_dm:
             raise Problem("to_dm", "Name who the DM is with in to_dm", 422)
-        return threads._open_dm(c, who.actor, threads._dm_members_for(c, who.actor, [body.to_dm]), legacy=False)
+        resolved = threads._dm_members_for(c, who.actor, [body.to_dm])
+        found = threads._open_dm(c, who.actor, resolved, legacy=False)
+        if not found:
+            # starting one needs what starting any DM needs: an unseen teammate is the same 404 as an unknown one, and
+            # nothing is checked, judged or stored for it (threads.dm)
+            v = threads.viewer(auth, who)
+            for target in resolved:
+                threads._require_write(c, v, target)
+        return found
 
     def dm_start(who, body):
         """The first message of the poster's DM with `to_dm`: its start (as `POST /threads/dm` makes one) and its rule

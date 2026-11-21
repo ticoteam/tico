@@ -378,3 +378,40 @@ def test_a_message_naming_its_page_and_what_was_open_takes_no_per_message_check(
     named = post(api, f"threads/{dm['id']}/messages", {'text': 'Hi', 'refs': {'from_page': FROM}})
     with api.app.state.store.read() as c:
         assert c.execute("SELECT restricted FROM messages WHERE id=?", (named['id'],)).fetchone()[0] == 0
+
+
+def test_a_first_message_or_file_to_an_agent_the_person_cannot_see_is_the_same_404_as_an_unknown_one(api, monkeypatch):
+    # #4857: no DM yet with a hidden agent: refused before any check, judgment or byte, as an unknown agent is.
+    from backend import teammate_access
+    from backend.tests.helpers.automation_api import as_bot
+
+    as_bot(api, 'scout')
+    real = teammate_access.levels_for
+
+    def hidden(c, viewer, target, auth=None):
+        levels = real(c, viewer, target, auth)
+        return dict(levels, see=False) if target == 'bot:scout' else levels
+
+    monkeypatch.setattr(teammate_access, 'levels_for', hidden)
+    from backend import secret_drop
+
+    judged = []
+    real_refuse = secret_drop.refuse_start
+    monkeypatch.setattr(secret_drop, 'refuse_start', lambda *a, **k: judged.append(a) or real_refuse(*a, **k))
+    codes = set()
+    for to in ('bot:scout', 'bot:nobody'):
+        r = api.post('/api/v2/threads/dm/messages', json={'text': 'Hi', 'to_dm': to}, headers=headers('ana-test'))
+        u = api.post(
+            '/api/v2/uploads/threads/dm/messages',
+            data={'text': 'Look', 'to_dm': to},
+            files={'files': ('a.txt', b'hello', 'text/plain')},
+            headers={**headers('ana-test'), 'Idempotency-Key': 'hidden-' + to},
+        )
+        assert (r.status_code, u.status_code) == (404, 404), (r.text, u.text)
+        codes |= {
+            (r.json()['error']['code'], r.json()['error']['detail']),
+            (u.json()['error']['code'], u.json()['error']['detail']),
+        }
+    assert codes == {('not_found', 'Unknown teammate')} and judged == []
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM blobs").fetchone()[0] == 0
