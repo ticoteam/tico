@@ -77,28 +77,41 @@ def state(release, update_state="", server=None):
 
 def record(c, runner_id, body):
     """Store what a heartbeat reported. Called only when the runner sent a release."""
-    release = clean(body.release)
     update = body.update
-    since = update_since(c, runner_id, update.state if update else "")
+    state, target, error, running, handed_back = (
+        (update.state, update.target, update.error, update.running, update.handed_back)
+        if update
+        else ("", "", "", None, None)
+    )
+    before, now = _version(c, runner_id), H.now()
+    moved = now  # when the update last moved: a changed release, state, target or drain count, never a repeated report
+    if before and (clean(body.release), state, target, running, handed_back) == tuple(
+        before[k] for k in ("release", "update_state", "update_target", "update_running", "update_handed_back")
+    ):
+        # A row from before the column has none: its unchanged state counts from when that state began.
+        moved = before["update_changed_at"] or before["update_since"] or now
     c.execute(
-        "INSERT INTO runner_versions(runner_id,release,kind,update_state,update_target,update_error,reported_at,commit_sha) "
-        "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(runner_id) DO UPDATE SET release=excluded.release,"
-        "kind=excluded.kind,update_state=excluded.update_state,update_target=excluded.update_target,"
-        "update_error=excluded.update_error,reported_at=excluded.reported_at,commit_sha=excluded.commit_sha",
+        "INSERT INTO runner_versions(runner_id,release,kind,update_state,update_target,update_error,reported_at,"
+        "commit_sha,update_since,update_running,update_handed_back,update_changed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(runner_id) DO UPDATE SET release=excluded.release,kind=excluded.kind,"
+        "update_state=excluded.update_state,update_target=excluded.update_target,update_error=excluded.update_error,"
+        "reported_at=excluded.reported_at,commit_sha=excluded.commit_sha,update_since=excluded.update_since,"
+        "update_running=excluded.update_running,update_handed_back=excluded.update_handed_back,"
+        "update_changed_at=excluded.update_changed_at",
         (
             runner_id,
-            release,
+            clean(body.release),
             body.kind or "",
-            update.state if update else "",
-            update.target if update else "",
-            update.error if update else "",
-            H.now(),
+            state,
+            target,
+            error,
+            now,
             body.commit or "",
+            update_since(before, state, now),
+            running,
+            handed_back,
+            moved,
         ),
-    )
-    c.execute(
-        "UPDATE runner_versions SET update_since=?,update_running=?,update_handed_back=? WHERE runner_id=?",
-        (since, update.running if update else None, update.handed_back if update else None, runner_id),
     )
     nudge(c, runner_id)
 
@@ -153,16 +166,14 @@ def nudge(c, runner_id, server=None):
 UPDATE_DRAIN_S = 20 * 60
 
 
-def update_since(c, runner_id, state):
-    """When this computer's reported update state began, as the runner keeps its own `pending_since`: a `waiting`
-    that goes on (even for a newer target) keeps its start, and any other state starts the clock again, so a retry
-    after a failed update waits its full drain time. An update that follows a drain already past holds from the
-    drain's end, so Health's duration covers the whole hold."""
-    row = c.execute("SELECT update_state,update_since FROM runner_versions WHERE runner_id=?", (runner_id,)).fetchone()
-    now = H.now()
+def update_since(row, state, now):
+    """When this computer's reported update state began (`row` its stored version, before this report), as the runner
+    keeps its own `pending_since`: a `waiting` that goes on (even for a newer target) keeps its start, and any other
+    state starts the clock again, so a retry after a failed update waits its full drain time. An update that follows a
+    drain already past holds from the drain's end, so Health's duration covers the whole hold."""
     if row and row["update_state"] == state and row["update_since"]:
         return row["update_since"]
-    if row and state == "updating" and (held := holding_since(c, runner_id)):
+    if row and state == "updating" and (held := _hold_start(row)):
         return held
     return now
 
@@ -182,14 +193,63 @@ def holding_since(c, runner_id):
     New runners report drain counts as soon as they stop claiming. Older runners keep claiming for UPDATE_DRAIN_S.
     An `updating` runner claims nothing, whatever release it is on (a Docker update still settling reports it on the
     new release)."""
-    row = _version(c, runner_id)
+    return _hold_start(_version(c, runner_id))
+
+
+def _hold_start(row):
     if not row or row["update_state"] not in ("waiting", "updating") or not row["update_since"]:
         return None
-    progress = drain_progress(c, runner_id)
-    if row["update_state"] == "updating" or progress:
+    if row["update_state"] == "updating" or row["update_running"] is not None:  # it reports its drain (drain_progress)
         return row["update_since"]
     since = H.shift(row["update_since"], seconds=UPDATE_DRAIN_S)
     return since if since <= H.now() else None
+
+
+# One Health finding (maintenance_health update_stuck) for a computer whose hold on new work for an update has lasted
+# this long, or whose update has not moved for NO_PROGRESS_MINUTES. Older runners' 20-minute claim window fits inside.
+HOLD_ALERT_MINUTES = 45
+NO_PROGRESS_MINUTES = 15
+
+
+# Every computer, not revoked, in an update, with the newest event any of its turns wrote in the last
+# NO_PROGRESS_MINUTES since its update state began, whatever state the turn is in now (an expired turn can still write).
+# The time range is an index's: every attempt event also writes a `runs`/`output` change (changes_at), so the read walks
+# back from now through those minutes alone, never through each attempt the computer ever ran.
+HOLDS_SQL = (
+    "SELECT v.*,(SELECT ch.created_at FROM changes ch INDEXED BY changes_at JOIN attempts a ON a.id=ch.subject_id "
+    "WHERE ch.created_at>=max(v.update_since,?) AND ch.topic='runs' AND ch.kind='output' AND a.runner_id=v.runner_id "
+    "ORDER BY ch.created_at DESC LIMIT 1) AS turn_moved FROM runner_versions v JOIN runners r ON r.id=v.runner_id "
+    "WHERE r.revoked_at IS NULL AND v.update_state IN ('waiting','updating')"
+)
+
+
+def stuck(c):
+    """{runner_id: {held, quiet, exact}} for every computer, not revoked, holding new work for an update for
+    HOLD_ALERT_MINUTES, or whose update has not moved for NO_PROGRESS_MINUTES: the minutes since its hold began and since
+    its update last moved. It moves when its report changes (release, state, target or drain counts:
+    `update_changed_at`), when its hold begins, and when any of its turns writes an event after its own hold began.
+    Turn events are read for the last NO_PROGRESS_MINUTES only, so past that `quiet` is NO_PROGRESS_MINUTES and `exact`
+    is False ("at least"). One statement, read once per Health pass (check_health `gather`) and handed to the readers
+    the ticket names, which leave these computers to their update_stuck finding."""
+    out, now = {}, H.now()
+    window = H.shift(now, minutes=-NO_PROGRESS_MINUTES)
+    for row in c.execute(HOLDS_SQL, (window,)):
+        since = _hold_start(row)
+        if not since:
+            continue
+        turn = row["turn_moved"] if row["turn_moved"] and row["turn_moved"] >= since else None
+        moved = max(filter(None, (row["update_changed_at"], since, turn)))
+        held, quiet = (_minutes_since(at, H.parse_ts(now)) for at in (since, moved))
+        exact = turn is not None or quiet < NO_PROGRESS_MINUTES
+        if held >= HOLD_ALERT_MINUTES or quiet >= NO_PROGRESS_MINUTES:
+            quiet = quiet if exact else NO_PROGRESS_MINUTES
+            out[row["runner_id"]] = {"held": held, "quiet": quiet, "exact": exact}
+    return out
+
+
+def _minutes_since(at, now):
+    then = H.parse_ts(at)
+    return int((now - then).total_seconds() // 60) if now and then else 0
 
 
 def drain_progress(c, runner_id):

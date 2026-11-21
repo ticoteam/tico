@@ -56,7 +56,7 @@ def _readers(monkeypatch):
 def _code_findings(monkeypatch):
     _readers(monkeypatch)
     items = []
-    monkeypatch.setattr(MH, "findings", lambda c, settings: list(items))
+    monkeypatch.setattr(MH, "findings", lambda c, settings, stuck=None: list(items))
     return items
 
 
@@ -1098,9 +1098,9 @@ def _part_outside_lock(api, runner, monkeypatch, hq=None, comments=None, clock=N
     holders = []
     real = MH.findings
 
-    def watched(c, settings):
+    def watched(c, settings, stuck=None):
         holders.append(len(store.writer.queue))  # the write gate: holder plus waiters, 0 when none holds it
-        return real(c, settings)
+        return real(c, settings, stuck)
 
     monkeypatch.setattr(MH, "findings", watched)
     runner_errors(api, runner, STREAM)
@@ -1886,7 +1886,7 @@ def test_maintenance_runs_health_and_files_reports_after_the_write_transaction(e
     store, auth = api.app.state.store, api.app.state.auth
     reports = []
 
-    def findings(c, settings):
+    def findings(c, settings, stuck=None):
         assert settings is store.settings and not store.writer.queue
         return [item("worktree_error"), item("push_stuck", kind=MH.BUG)]
 

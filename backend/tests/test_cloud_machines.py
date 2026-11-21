@@ -4293,3 +4293,17 @@ def test_replace_then_deleted_for_good_before_enrolling_gives_a_later_machine_no
     code = [x for x in cloud.hq.calls if x[0] == "create"][-1][3]
     new = post(cloud.api, "runners/enroll", {"code": code, "label": "boat-vm", "platform": "linux"})
     assert "claude" not in people(cloud, new["runner_id"])
+
+
+def test_cloud_health_leaves_out_a_machine_whose_computer_has_a_stuck_update(cloud):
+    """Check health hands its stuck updates to the cloud line too: such a machine is its update_stuck finding's alone."""
+    computer = enrolled(cloud)
+    store = cloud.api.app.state.store
+    with store.transaction() as c:
+        c.execute("UPDATE cloud_machines SET problem='hq:http_502' WHERE runner_id=?", (computer["runner_id"],))
+        c.execute(  # and an old deletion fence of its own
+            "INSERT INTO cloud_machine_deletions(machine_id,bot,runner_id,created_at) VALUES('m-old','ops',?,?)",
+            (computer["runner_id"], CM.now() - CM.DELETION_WARN - 60),
+        )
+        assert "deletion" in CM.health(c, store.settings)["summary"]
+        assert CM.health(c, store.settings, skip={computer["runner_id"]}) is None

@@ -31,7 +31,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from .. import health, hosted_updates, invariants, maintenance_limits, providers, replication
+from .. import health, hosted_updates, invariants, maintenance_limits, providers, replication, runner_versions
 from .. import maintenance_health as MH
 from .. import run_triggers as RT
 from .. import sources as SRC
@@ -72,6 +72,7 @@ TAGS = {
     "gateway": "urgent",
     "hook_relay": "urgent",
     "never_stuck": "urgent",  # a rule that holds at all times is broken (never_stuck.rules_hold): an engine bug
+    "update_stuck": "urgent",  # already held 45 minutes or still 15 (runner_versions.stuck): no blip
     # noisy (the default for anything else): a state that can be a blip, a slow or idle computer, a usage limit, a version
     "runner_outdated": "noisy",
     "limited_no_fallback": "noisy",
@@ -149,7 +150,8 @@ def run(c, ctx):
             "details": {},
         }
     ctx = dict(ctx, settings=store.settings)  # the app's settings: the engine's ctx["settings"] is the step's own row
-    checked, found, notes = gather(c, ctx)
+    with store.read_transaction() as r:  # one snapshot for every reader (the stuck updates and the computers they skip)
+        checked, found, notes = gather(r, ctx)
     with store.transaction() as w:
         result = apply(w, ctx, checked, found, notes)
     support = getattr(store, "report_support", None)  # support.py sets it on the app's store; none without an app
@@ -192,22 +194,26 @@ def gather(c, ctx):
     noted and skipped: the others still run, and nothing it would have cleared is cleared on its account."""
     settings, now, notes = ctx["settings"], _now(ctx), {}
     checked, found = 0, []
-    found += _code_findings(c, settings, notes)
+    # Computers whose update has its own finding (update_stuck), read once: every reader leaves them out.
+    stuck = runner_versions.stuck(c)
+    found += _code_findings(c, settings, notes, stuck)
     checked += 1
     found += _busy_findings(c, now)
     count, items = _invariant_findings(c, now, _at(ctx), notes)
     checked += count
     found += items
-    count, items = _page_findings(c, ctx, notes)
+    count, items = _page_findings(c, ctx, notes, frozenset(stuck))
+    if "offline" in notes:  # what the offline aggregates must not name any more (`apply`)
+        notes["offline"]["stuck"] = sorted(stuck)
     checked += count
     found += items
     checked += 1
     return checked, found, notes
 
 
-def _code_findings(c, settings, notes):
+def _code_findings(c, settings, notes, stuck=None):
     try:
-        return MH.findings(c, settings)
+        return MH.findings(c, settings, stuck)
     except Exception as exc:  # noqa: BLE001 - one reader's failure must not stop the others or clear their findings
         log.warning("Check health: the code checks failed", exc_info=True)
         notes["code"] = f"failed: {type(exc).__name__}"
@@ -263,7 +269,7 @@ OFFLINE_KEYS = ("page:computers", "page:waiting")
 OFFLINE_STATE = "health-offline:state"  # registry_metadata: per offline finding, the computers its last text named
 
 
-def _page_findings(c, ctx, notes):
+def _page_findings(c, ctx, notes, stuck=frozenset()):
     """The Health page's warn and bad checks, read as the owner (a read). Their id and summary are the finding."""
     auth = ctx.get("auth")
     if auth is None:
@@ -276,7 +282,7 @@ def _page_findings(c, ctx, notes):
         github = getattr(
             ctx.get("store"), "github_app", None
         )  # install_github_app sets it: the App's health, no network
-        page = health.view(c, who, ctx["settings"], auth, github, config, filing=True)
+        page = health.view(c, who, ctx["settings"], auth, github, config, filing=True, updates_stuck=stuck)
     except Exception as exc:  # noqa: BLE001 - the page's own checks may fail on an install; the other readers still run
         log.warning("Check health: the Health page checks failed", exc_info=True)
         notes["page"] = f"failed: {type(exc).__name__}"
@@ -378,11 +384,13 @@ def apply(c, ctx, checked, found, notes):
     offline = notes.get("offline")
     silent = set(offline["silent"]) if offline is not None else set()
     named = _reg_get(c, OFFLINE_STATE) if offline is not None else {}
+    stuck = set(offline.get("stuck", [])) if offline is not None else set()  # its own finding's: no aggregate names it
     held = {}
     for row in c.execute("SELECT key,signature,pending FROM health_findings WHERE present=1").fetchall():
         if row["key"] in seen or _unread_key(row["key"], unread):
             continue
-        if row["key"] in OFFLINE_KEYS and set(named.get(row["key"], [])) & silent:
+        members = set(named.get(row["key"], []))
+        if row["key"] in OFFLINE_KEYS and members & silent and not members & stuck:
             held[row["key"]] = named[row["key"]]
             continue
         c.execute("UPDATE health_findings SET present=0, pending=0 WHERE key=?", (row["key"],))
@@ -457,7 +465,7 @@ def apply(c, ctx, checked, found, notes):
         if not botops:
             details["unrouted"].append({"signature": sig, "titles": [r["title"] for r in rows]})
             continue
-        _task_for(c, sig, rows, now, details, wakes)
+        _task_for(c, sig, rows, now, details, wakes, seen)
 
     details["open"] = c.execute("SELECT count(*) FROM health_findings WHERE present=1 AND pending=0").fetchone()[0]
     woke = _wake(c, wakes, details)
@@ -472,7 +480,12 @@ def apply(c, ctx, checked, found, notes):
     }
 
 
-def _task_for(c, sig, rows, now, details, wakes):
+def _action(seen, rows):
+    """The way-out key a finding read now carries (maintenance_health update_stuck `action`), or None."""
+    return (seen.get(rows[0]["key"]) or {}).get("action")
+
+
+def _task_for(c, sig, rows, now, details, wakes, seen):
     """Opens or updates the BotOps task of a setup signature with its filed rows. A task that is new, comes back, or clears
     is added to `wakes` (one BotOps wake per run, `_wake`). A comment moves its marker only when it is written: a comment
     that fails is tried again on the next run."""
@@ -487,19 +500,32 @@ def _task_for(c, sig, rows, now, details, wakes):
             details["unrouted"].append({"signature": sig, "titles": [r["title"] for r in rows], "refused": True})
             return
         reg = {"task": made["id"], "keys": places, "count": total, "last_comment": now, "cleared": False}
+        if action := _action(seen, rows):
+            reg["action"] = action
         _reg_set(c, _reg_key(sig), reg)
         details["tasks"][sig] = made["id"]
         wakes.append(made["id"])
         return
+    # A finding whose way out changed (a stuck update's turns stopped moving, say): the same task hears the new fix,
+    # then the marker moves, and BotOps wakes. A finding that comes back says its current fix too.
+    action, row = _action(seen, rows), rows[0]
+    if action and not reg.get("cleared") and reg.get("action", action) != action:
+        if _comment(c, task["id"], f"Now: {row['title']}\n{row['detail']}\n\nFix:\n{row['fix']}", wake=False):
+            reg["action"] = action
+            wakes.append(task["id"])
+    elif action and not reg.get("cleared"):
+        reg["action"] = action
     if reg.get("cleared"):
         if _comment(
             c,
             task["id"],
             f"Back: {rows[0]['title']} (seen {total} times, last at {now[:16]} UTC). "
-            f"The task was marked cleared; this is the same problem again.",
+            f"The task was marked cleared; this is the same problem again.\n\nFix:\n{rows[0]['fix']}",
             wake=False,
         ):
             reg["cleared"] = False
+            if action:
+                reg["action"] = action
             wakes.append(task["id"])
     elif places > reg.get("keys", 1):
         if _comment(

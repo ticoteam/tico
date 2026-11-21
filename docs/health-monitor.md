@@ -57,11 +57,19 @@ work, mail asks, bot history, computers offline, and the rest. Each check is tag
 - **Noisy** checks file only if the problem is still there on the next run, so a blip that clears first files nothing:
   `runner_outdated`, `slow` and `quota`.
 
-Setup checks (each problem is one BotOps task): `runner_outdated`, `runner_restarting`, `computer_silent`,
+Setup checks (each problem is one BotOps task): `runner_outdated`, `update_stuck`, `runner_restarting`, `computer_silent`,
 `limited_no_fallback`, `default_login_limited`, `check_limited`, `run_hold`, `claim_failed`, `claim_check`,
 `new_sessions`, `turn_budget`, `reviewer_holds_tasks`, `responder_has_tasks`, `doer_idle`, `stuck_setup`,
 `worktree_error`, `push_stuck`, `cannot_fetch`. While a computer is silent with work queued, its `computer_silent` task is the
-one task for that outage. The Health page's `computers` and `waiting` checks file only for the computers no silent-computer finding reports: a silent computer's outage is that one task, and those two checks are held (not cleared) while it lasts.
+one task for that outage. An update that has held new work for 45 minutes, or made no progress for 15, is that computer's one `update_stuck`
+task, filed at once. Progress is a change in what the runner reports (its release, update state, target or drain
+counts), the hold beginning, or an event written by any of its turns after the hold began, a late write from an
+expired turn included; a heartbeat that repeats the same report is not. Past 15 minutes it says "at least 15 min", as
+turn events are read for the last 15 minutes only. The task says how to get out (wait for working turns, look at a
+stalled run, read a Docker updater or a checkout's update) and hears it again when that changes. These checks read
+the computers without it, counts included: `runner_outdated`, `computer_silent`, `runner_restarting`, and the Health
+page's computers, waiting, queue, version and cloud lines; an offline aggregate whose last text named it clears.
+Every other check, a full disk say, still sees it. The Health page's `computers` and `waiting` checks file only for the computers no silent-computer finding reports: a silent computer's outage is that one task, and those two checks are held (not cleared) while it lasts.
 
 Tico-bug checks (each problem is also reported to Tico support): `queue_idle`, `worktree_fallback`, `event_stream`,
 `readiness_403`, `runner_route_latency`, `server_cpu`.
