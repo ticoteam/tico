@@ -141,16 +141,21 @@ rule_due_status(due_date_id, due_on, satisfied_by, via routine|person, task_id?,
   (`market_watch.py`) only detect changes: they keep one mutable `last_text`, not a history, and a change saves a new
   version for review. No new snapshot store.
 - Every change writes `audit_log` (`org_rule:<id>`) with actor and `via`. A rule's history
-  (`GET /api/v2/rules/{id}/history`) is those versions plus its last 30 days: its holds the reader may read and a count
-  of its `rules.*` events.
+  (`GET /api/v2/rules/{id}/history`) is those versions (not its due dates' rows) and the holds of it from its last 30
+  days the reader may read, each paged by its own cursor.
 - **Checked exactly:** `exact_check` is one stateless typed check on one action, adopted with exact params (unknown
-  keys are refused). `org_rule_check.exact_check(c, author, action, params)` returns the rules in force whose check the
+  keys are refused; a rule with a `toward_scope` takes none). `org_rule_check.exact_check(c, author, action, params)` returns the rules in force whose check the
   params break; the sentence stays the rule people read.
-- **Constitution:** a locked doc at `rules/constitution.md` (five articles and the order of law), made once a company's
-  Rules page has an owner. Only people change a locked doc: not a bot, not an Assistant or BotOps acting for a person.
+- **Constitution:** a locked doc (five articles and the order of law), made once a company's Rules page has an owner or
+  at the first "Make this a rule". It is recorded by id (`rules.constitution`) and read by it; its path,
+  `rules/constitution.md`, is reserved. Only people lock, change or restore a locked doc: not a bot, not an Assistant or
+  BotOps acting for a person unconfirmed.
 - **Make this a rule** (`POST /api/v2/rules/make`) files a private task for the Rules page's owner, with the
-  constitution in it. Its clerk skill (`templates/catalog/_shared/.claude/skills/clerk-a-rule`) suggests one rule and
-  asks one OK (`POST /api/v2/rules/{id}/ok`); the person's OK accepts exactly that version, as them.
+  constitution in it. Its clerk skill (`templates/catalog/_shared/.claude/skills/clerk-a-rule`) suggests one rule in its
+  run on that task, which binds the suggestion to the task, and asks one OK from that run (`POST
+  /api/v2/rules/{id}/ok`, line "Approve this rule") of the requester when they may add it, else the owner or an Admin.
+  The preview binds the sentence, Who, With, Where, If broken and the typed check; a revised draft replaces the ask and
+  sets the old draft aside. The person's OK accepts exactly that version, as them, on its bound task only.
 
 ### 2. The Rules Owner reads a document and suggests rules
 

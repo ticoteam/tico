@@ -14,7 +14,8 @@ import { answered } from './answered';
 import { AskCard, Docked, useAnswering } from './AskCard';
 import { HeldDecision, isRuleReview } from './Held';
 import { followSend } from './sending';
-import { addressesOf, answerKey, decisionShownQuery, emailSendQuery, sendStateQuery, type AnswerKey, type TaskData } from './queries';
+import { addressesOf, answerKey, decisionShownQuery, emailSendQuery, sendStateQuery, type AnswerKey, type BoundRule, type TaskData } from './queries';
+import { Facts, LabelValue } from '@/kit/LabelValue';
 
 /* The decision (plan/approvals.html): one box wherever a request waits on the person. It names the thing, who asks and
    what Approve does; Request changes opens one line in it; Approve is the one filled button, bound to exactly what was
@@ -230,6 +231,7 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
         )
       }
     >
+      {!asking && preview?.rule && <RuleShown rule={preview.rule} />}
       {!asking && files.length > 0 && (
         <span className="askcard-files">
           {files.map((f) => (
@@ -248,6 +250,31 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
         </label>
       )}
     </AskCard>
+  );
+}
+
+const names = (s: { groups?: { id: string; name?: string }[]; bots?: { id: string; name?: string }[]; people?: { id: string; name?: string }[] }) =>
+  [...(s.groups ?? []), ...(s.bots ?? []), ...(s.people ?? [])].map((x) => x.name || x.id);
+const BROKEN_WORDS = { block: 'Stop', escalate: 'Ask first', warn: 'Warn' } as const;
+
+/** The rule a rule's OK adds, exactly as it was asked: its words and every field that decides what it stops. */
+function RuleShown({ rule }: { rule: BoundRule }) {
+  const who = rule.who.everyone ? ['Everyone'] : [...(rule.who.all_bots ? ['Every agent'] : []), ...names(rule.who)];
+  const withWho = names(rule.with);
+  const c = rule.exact_check;
+  return (
+    <div className="askcard-rule" data-target={`rule:${rule.rule}`}>
+      <p className="t-read">{rule.text}</p>
+      <Facts label="The rule">
+        <LabelValue label="Who">{who.join(', ') || 'No one'}</LabelValue>
+        <LabelValue label="With">{withWho.join(', ') || 'Anyone'}</LabelValue>
+        <LabelValue label="Where">{rule.where.join(', ') || 'Everywhere'}</LabelValue>
+        <LabelValue label="If broken">{BROKEN_WORDS[rule.if_broken]}</LabelValue>
+        <LabelValue label="Checked exactly">
+          {!c ? 'No' : c.kind === 'max_usd' ? `${c.action}: ${c.field} at most $${c.max_usd}` : `${c.action}: ${c.field} only ${c.values.join(', ')}`}
+        </LabelValue>
+      </Facts>
+    </div>
   );
 }
 

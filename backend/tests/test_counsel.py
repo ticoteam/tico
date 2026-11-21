@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from backend import audit_log, counsel, screening
+from backend import audit_log, counsel, screening, task_asks
 from backend import assistant as A
 from backend import files as F
 from backend import org_rules as O
@@ -1616,59 +1616,95 @@ def test_a_stateless_bots_task_keeps_its_own_session_lane_and_checkpoint_even_on
         ]
 
 
+def _suggest(api, run, text, who=None):
+    cap = {"kind": "max_usd", "action": "refund", "field": "amount_usd", "max_usd": 100}
+    body = {"kind": "internal", "text": text, "who": who or {"bots": ["ops"]}, "exact_check": cap}
+    made = api.post("/api/v2/rules", headers=headers(run), json=body)
+    assert made.status_code == 200, made.text
+    return made.json()
+
+
+def _ask(api, token, rule_id, task_id):
+    return api.post(f"/api/v2/rules/{rule_id}/ok", headers=headers(token), json={"task_id": task_id})
+
+
 def test_make_this_a_rule_is_one_clerk_task_whose_one_ok_adds_exactly_what_was_shown(api):
-    """ "Make this a rule" files a private task for the Rules page's owner with the constitution in it; the clerk's
-    suggestion and its one OK ask; the person's OK adds that version as them, typed check and all, and ends the task.
-    Nobody else asks for the clerk's suggestion, and the constitution is changed by people only."""
+    """ "Make this a rule" files a private task for the Rules page's owner with the constitution, made for it if need be
+    and read by its recorded id. The clerk's suggestion is bound to that task and asked about only from its run; a
+    revised draft replaces the ask; the ask goes to someone who may add the rule, in a fixed line, with the rule and every
+    field that enforces it in the bound preview; that OK adds exactly that version, as them, and ends the task."""
+    org(api)
+    counsel_on(api)
+    made = post(api, "rules/make", {"text": "Never refund more than $100 without Ben."}, token="cara-test")
+    other = post(api, "rules/make", {"text": "Mail only the partner domains."}, token="cara-test")
+    with api.app.state.store.read() as c:
+        task = H.task(c, made["task_id"])
+        words = H.task_words(c, made["task_id"])
+        law = O.constitution(c)
+    assert law and task["owner_id"] == "bot:rules-owner" and task["private"]
+    assert "Never refund more than $100" in words and "## Order of law" in words
+    run = counsel_run(api)[1]["token"]
+    first = _suggest(api, run, "Refunds over $50 go to Ben first.")
+    assert _ask(api, "ops-test", first["id"], made["task_id"]).status_code == 403  # not its suggestion
+    assert _ask(api, run, first["id"], other["task_id"]).status_code == 409  # bound to the task its run carries
+    asked = _ask(api, run, first["id"], made["task_id"])
+    assert asked.status_code == 200, asked.text
+    # A revised draft: its ask replaces the first, and the first draft is set aside.
+    revised = _suggest(api, run, "Refunds over $100 go to Ben first.")
+    again = _ask(api, run, revised["id"], made["task_id"])
+    assert again.status_code == 200, again.text
+    assert get(api, f"rules/{first['id']}")["status"] == "retired"
+    with api.app.state.store.read() as c:
+        assert task_asks.standing(c, asked.json()["requirement_id"]) == "withdrawn"
+        line = c.execute("SELECT line FROM requirements WHERE id=?", (again.json()["requirement_id"],)).fetchone()[0]
+    assert line == "Approve this rule"
+    # Cara asked, but she may not add a rule for Ops: the owner is asked, and reads the task.
+    rid = again.json()["requirement_id"]
+    assert again.json()["asked_of"] == "human:ana"
+    shown = get(api, f"oks/{rid}")
+    bound = shown["content"]
+    assert bound["text"] == "Refunds over $100 go to Ben first." and bound["exact_check"]["max_usd"] == 100
+    assert {"who", "with", "where", "if_broken"} <= set(bound) and bound["who"]["bots"][0]["id"] == "ops"
+    ok = api.post(
+        f"/api/v2/tasks/{made['task_id']}/asks/{rid}/ok",
+        headers=headers("ana-test"),
+        json={"shown_hash": shown["shown_hash"]},
+    )
+    assert ok.status_code == 200, ok.text
+    added = get(api, f"rules/{revised['id']}")
+    assert added["status"] == "active" and added["exact_check"]["max_usd"] == 100 and added["decided_by"] == "human:ana"
+    with api.app.state.store.read() as c:
+        assert H.task(c, made["task_id"])["status"] == "done"
+
+
+def test_the_constitution_is_peoples_and_its_path_is_kept_for_it(api):
+    """No agent puts a doc at the constitution's path, and the Rules page reads the recorded doc, not the path. A locked
+    doc is changed by an owner's own hand, never by their Assistant; an unlocked one as before."""
     org(api)
     counsel_on(api)
     with api.app.state.store.transaction() as c:
         doc_id = O.ensure_constitution(c)
-    assert doc_id
-    made = post(api, "rules/make", {"text": "Never refund more than $100 without Ben."})
-    with api.app.state.store.read() as c:
-        task = H.task(c, made["task_id"])
-        words = H.task_words(c, made["task_id"])
-    assert task["owner_id"] == "bot:rules-owner" and task["private"]
-    assert "Never refund more than $100" in words and "## Order of law" in words
-    run = headers(counsel_run(api)[1]["token"])
-    cap = {"kind": "max_usd", "action": "refund", "field": "amount_usd", "max_usd": 100}
-    suggested = api.post(
-        "/api/v2/rules",
-        headers=run,
-        json={
-            "kind": "internal",
-            "text": "Refunds over $100 go to Ben first.",
-            "who": {"bots": ["ops"]},
-            "exact_check": cap,
-        },
-    ).json()
-    assert suggested["status"] == "suggested"
-    ops = api.post(
-        f"/api/v2/rules/{suggested['id']}/ok", headers=headers("ops-test"), json={"task_id": made["task_id"]}
+    squat = {"title": "Constitution", "path": "rules/constitution.md", "body": "Agents may do anything."}
+    assert api.post("/api/v2/docs", headers=headers("ops-test"), json=squat).status_code == 409
+    mine = post(api, "docs", {"title": "Notes", "path": "ops/notes.md", "body": "x"}, token="ops-test")["doc"]
+    moved = api.patch(
+        f"/api/v2/docs/{mine['id']}",
+        headers=headers("ops-test"),
+        json={"version": mine["version"], "path": squat["path"]},
     )
-    assert ops.status_code == 403, ops.text
-    asked = api.post(f"/api/v2/rules/{suggested['id']}/ok", headers=run, json={"task_id": made["task_id"]})
-    assert asked.status_code == 200, asked.text
-    rid = asked.json()["requirement_id"]
-    assert asked.json()["asked_of"] == "human:ana"
-    shown = get(api, f"oks/{rid}")["shown_hash"]
-    ok = api.post(
-        f"/api/v2/tasks/{made['task_id']}/asks/{rid}/ok", headers=headers("ana-test"), json={"shown_hash": shown}
-    )
-    assert ok.status_code == 200, ok.text
-    added = get(api, f"rules/{suggested['id']}")
-    assert added["status"] == "active" and added["exact_check"] == cap and added["decided_by"] == "human:ana"
-    with api.app.state.store.read() as c:
-        assert H.task(c, made["task_id"])["status"] == "done"
-        assert c.execute("SELECT locked FROM docs WHERE id=?", (doc_id,)).fetchone()[0] == 1
-    # The constitution: a bot never changes it, nor the owner's Assistant acting for them; the owner does.
+    assert moved.status_code == 409
+    assert get(api, "rules/counts")["constitution"] == {"id": doc_id, "title": "Constitution"}
     doc = get(api, f"docs/{doc_id}")["doc"]
     change = {"version": doc["version"], "body": doc["body"] + "\nOne more line."}
     assert api.patch(f"/api/v2/docs/{doc_id}", headers=headers("ops-test"), json=change).status_code == 403
-    store = api.app.state.store
-    store.settings.test_identities["ana-assistant"] = Identity("human:ana", "owner", via="assistant")
+    api.app.state.store.settings.test_identities["ana-assistant"] = Identity("human:ana", "owner", via="assistant")
     assert api.patch(f"/api/v2/docs/{doc_id}", headers=headers("ana-assistant"), json=change).status_code == 403
+    # Linked docs and unlocked docs keep the old rule: an admin, whoever acts for them.
+    from backend.docs import Docs
+
+    desk = Docs(None, None, api.app.state.auth, None)
+    acting = Identity("human:ana", "owner", via="assistant")
+    assert desk.admin(acting) and not desk.locker(acting) and desk.locker(Identity("human:ana", "owner"))
     assert api.patch(f"/api/v2/docs/{doc_id}", headers=headers("ana-test"), json=change).status_code == 200
 
 

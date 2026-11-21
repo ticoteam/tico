@@ -238,12 +238,13 @@ export interface RuleVersion {
   before: Partial<OrgRule> | null;
   after: Partial<OrgRule> | null;
 }
-/** A rule's history (GET /api/v2/rules/{id}/history): its versions, newest first, and its last 30 days. */
+/** A rule's history (GET /api/v2/rules/{id}/history): its versions, newest first, and its holds from the last 30 days,
+    each a page with its own cursor. */
 export interface RuleHistory {
   versions: RuleVersion[];
-  counts: Record<string, number>;
+  versions_next?: string | null;
   holds: RuleHold[];
-  holds_more?: string | null;
+  holds_next?: string | null;
 }
 /** A stage rule: When (event, timer), If (cond, jev: the decision model's question), Then. */
 export interface StageRule {

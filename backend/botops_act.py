@@ -350,6 +350,8 @@ DO = _routes(
     # Tasks, docs and what the people asked of BotOps.
     ("POST", r"tasks"),
     ("POST", r"tasks/dry-run"),
+    # "Make this a rule" files a task for the Rules page's owner, as the person (backend/counsel.py make).
+    ("POST", r"rules/make"),
     ("POST", rf"tasks/{_S}"),
     # A task's moves and owner (task_moves_routes.py): what `POST tasks/{id}` with a status or owner did before.
     ("POST", rf"tasks/{_S}/(comments|links|ask|questions|run-now|move|owner|done|snooze)"),
