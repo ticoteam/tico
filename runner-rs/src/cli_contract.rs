@@ -638,11 +638,17 @@ fn claude_full_login_shows_a_link_with_the_manual_code_callback_and_a_code_promp
         true,
         &[("CLAUDE_CODE_FULL_SIGN_IN_LINK", "1")],
     );
-    screen.wait(60, |raw| {
+    let ready = screen.wait(60, |raw| {
         let (url, _, _, prompt) = parse(raw, "");
         !url.is_empty() && prompt
     });
     let (url, _, _, _) = parse(&screen.raw(), "");
+    assert!(
+        ready,
+        "with CLAUDE_CODE_FULL_SIGN_IN_LINK=1, `claude auth login --claudeai` showed no link and code prompt within \
+         60 s. It shows: {}",
+        screen.shown("")
+    );
     assert!(
         manual_code_link(&url),
         "with CLAUDE_CODE_FULL_SIGN_IN_LINK=1, the link `claude auth login --claudeai` shows does not return to the \
@@ -651,12 +657,37 @@ fn claude_full_login_shows_a_link_with_the_manual_code_callback_and_a_code_promp
     );
 }
 
-/// A full sign-in link whose redirect is the manual-code page (`https://platform.claude.com/oauth/code/callback`).
-fn manual_code_link(url: &str) -> bool {
-    let plain = url.replace("%2F", "/").replace("%3A", ":");
-    url.starts_with("https://")
-        && !url.contains(char::is_whitespace)
-        && plain.contains("code/callback")
+/// A full sign-in link whose `redirect_uri` is the manual-code page: `https://<host>/oauth/code/callback`, never a
+/// local port. Only that parameter is read, so a marker elsewhere in the link (its `state`, say) does not count.
+fn manual_code_link(link: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(link) else {
+        return false;
+    };
+    parsed.scheme() == "https"
+        && parsed.query_pairs().any(|(k, v)| {
+            k == "redirect_uri"
+                && url::Url::parse(&v).is_ok_and(|r| {
+                    r.scheme() == "https"
+                        && r.port().is_none()
+                        && r.path() == "/oauth/code/callback"
+                        && !matches!(r.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))
+                })
+        })
+}
+
+#[test]
+fn a_manual_code_link_is_read_from_its_redirect_alone() {
+    let full = "https://claude.com/cai/oauth/authorize?code=true&response_type=code\
+                &redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&state=s";
+    assert!(manual_code_link(full));
+    // A local-port redirect with the marker in another parameter is not the manual-code page.
+    let local = "https://claude.com/cai/oauth/authorize?code=true\
+                 &redirect_uri=http%3A%2F%2Flocalhost%3A54545%2Fcallback\
+                 &state=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback";
+    assert!(!manual_code_link(local));
+    let short = format!("https://claude.ai/oauth/authorize?z-{}", "a".repeat(43));
+    assert!(short_sign_in_link(&short) && !manual_code_link(&short));
+    assert!(!short_sign_in_link(local));
 }
 
 /// Claude Code's short sign-in link (2.1.330 on): scope bits and the 43-character code challenge, then optional
