@@ -1805,31 +1805,51 @@ def chat_room(c, settings, who, create=True):
 # pages it names in words (`page:file-<hex>@2`).
 _LINKED = re.compile(r"\]\(\s*([^)\s]+)")
 _FILE_REF = re.compile(r"(?<![\w/-])(?:page:)?(file-[0-9a-f]{12,40})")
-# One item however it is linked: a task by `#/task/<id>`, `#/tasks/<id>` or `/tasks/<pipeline>/<id>`; a page or file by
-# `#/file/<id>`, `/api/v2/files/<id>/versions/<n>`, `/library/files?file=<id>`, `page:<id>@<n>`; else `<kind>/<id>`.
-_ITEM_FORMS = (
-    ("file", re.compile(r"(?:^|[/:=])(file-[0-9a-f]{12,40})")),
-    ("file", re.compile(r"^(?:api/v2/)?(?:files?|pages?)/([^/?#@]+)")),
-    ("task", re.compile(r"^(?:tasks?|flow)/(?:[^/?#]+/)?([^/?#]+)$")),
-    ("", re.compile(r"^([^/?#]+/[^/?#]+)")),
+# One item however it is linked: a page or file by `#/file/<id>`, `/api/v2/files/<id>/versions/<n>`,
+# `/library/files?file=<id>` or `page:<id>@<n>`; else `<kind>/<id>`. Tasks are read by _task_item.
+_FILE_FORMS = (
+    re.compile(r"(?:^|[/:=])(file-[0-9a-f]{12,40})"),
+    re.compile(r"^(?:api/v2/)?(?:files?|pages?)/([^/?#@]+)"),
 )
 
 
-def _item(target):
-    """A link target as the item it names (`task:412`, `file:file-ab12…`, `goals:g-1`), whatever form it took."""
-    path = re.sub(r"^[a-z]+://[^/]+", "", target.strip(), flags=re.I)
+def _task_ref(segs):
+    """The task a route names, from its path parts: `task/<ref>`, `flow/<ref>`, `tasks/<pipeline>/<ref>[/<tab>]`, or an
+    old `tasks/<number>`; None for any other page (a board, `tasks/<pipeline>/edit`)."""
+    if segs[0] in ("task", "flow") and len(segs) > 1:
+        return segs[1]
+    if segs[0] == "tasks" and len(segs) > 2 and segs[2] != "edit":
+        return segs[2]
+    if segs[0] == "tasks" and len(segs) == 2 and segs[1].isdigit():
+        return segs[1]
+    return None
+
+
+def _item(c, target):
+    """A link target as the item it names (`task:<id>`, `file:file-ab12…`, `goals/g-1`), whatever form it took: a task by
+    its id or its number, read as its id, so its routes, tabs and query strings all name the same task."""
+    path = re.sub(r"^[a-z]+://[^/]+", "", unquote(target.strip()), flags=re.I)
     path = re.sub(r"^/?(?:next/)?#?/?", "", path)
-    for kind, form in _ITEM_FORMS:
-        m = form.search(unquote(path))
+    for form in _FILE_FORMS:
+        m = form.search(path)
         if m:
-            return (kind + ":" if kind else "") + m.group(1)
-    return path
+            return "file:" + m.group(1)
+    route, _, query = path.partition("?")
+    segs = [p for p in route.split("#")[0].split("/") if p]
+    ref = _task_ref(segs) if segs else None
+    if ref:
+        found = c.execute(
+            "SELECT id FROM tasks WHERE number=?" if ref.isdigit() else "SELECT id FROM tasks WHERE id=?",
+            (int(ref) if ref.isdigit() else ref,),
+        ).fetchone()
+        return "task:" + (found[0] if found else ref)
+    return "/".join(segs[:2]) + ("?" + query if len(segs) < 2 and query else "")
 
 
-def morning_items(text):
+def morning_items(c, text):
     """A stable hash of the items a morning message links, in any order, form or number of times (None when it links
     none): a morning that names the same items as the person's last one is not sent again."""
-    linked = sorted({_item(t) for t in _LINKED.findall(text or "") + _FILE_REF.findall(text or "")} - {""})
+    linked = sorted({_item(c, t) for t in _LINKED.findall(text or "") + _FILE_REF.findall(text or "")} - {""})
     return digest("\n".join(linked))[:16] if linked else None
 
 
@@ -1847,7 +1867,7 @@ def last_morning_items(c, actor):
     if not row or row[0]:
         return row[0] if row else None
     sent = c.execute("SELECT body FROM messages WHERE id=?", (row[1],)).fetchone()
-    return morning_items(sent[0]) if sent else None
+    return morning_items(c, sent[0]) if sent else None
 
 
 def morning_day():
@@ -2454,7 +2474,7 @@ def install(app, store, auth, mutate, onboarding):
                     409,
                     extra={"next_at": next_at},
                 )
-            items = morning_items(body.body)
+            items = morning_items(c, body.body)
             if items and items == last_morning_items(c, found.actor):
                 raise Problem(
                     "same_as_last",

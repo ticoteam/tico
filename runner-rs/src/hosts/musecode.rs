@@ -178,14 +178,14 @@ pub fn session_log(env: &Env, session_id: &str) -> Option<PathBuf> {
     found
 }
 
-/// (input, cached, output, model, model calls) summed over the `model_completed` records of `run_id` (any run when
-/// None) from byte `offset` on, or None when there are none. Records that repeat the same counts
-/// (`goal_usage_attribution`) are not counted.
+/// (input, cached, output, model) summed over the `model_completed` records of `run_id` (any run when None) from
+/// byte `offset` on, or None when there are none. Records that repeat the same counts (`goal_usage_attribution`)
+/// are not counted.
 pub fn session_usage(
     path: &Path,
     offset: u64,
     run_id: Option<&str>,
-) -> Option<(i64, i64, i64, String, usize)> {
+) -> Option<(i64, i64, i64, String)> {
     let mut file = std::fs::File::open(path).ok()?;
     let size = file.metadata().ok()?.len();
     if offset > 0 && offset <= size {
@@ -194,7 +194,6 @@ pub fn session_usage(
     let mut bytes = vec![];
     file.read_to_end(&mut bytes).ok()?;
     let (mut found, mut model): (Option<(i64, i64, i64)>, String) = (None, String::new());
-    let mut calls = 0;
     for line in String::from_utf8_lossy(&bytes)
         .lines()
         .filter(|l| l.contains("model_completed"))
@@ -225,12 +224,43 @@ pub fn session_usage(
         );
         let (a, b, c) = found.unwrap_or_default();
         found = Some((a + row.0, b + row.1, c + row.2));
-        calls += 1;
         if let Some(m) = event["model"].as_str().filter(|m| !m.is_empty()) {
             model = m.into();
         }
     }
-    found.map(|(a, b, c)| (a, b, c, model, calls))
+    found.map(|(a, b, c)| (a, b, c, model))
+}
+
+/// How many model requests `run_id` made, from byte `offset` on: its `model_completed` records, each request once (by
+/// the run record it came from), whatever told the turn its token counts. None without a log or a record.
+pub fn session_calls(path: &Path, offset: u64, run_id: Option<&str>) -> Option<usize> {
+    let mut file = std::fs::File::open(path).ok()?;
+    if offset > 0 && offset <= file.metadata().ok()?.len() {
+        file.seek(SeekFrom::Start(offset)).ok()?;
+    }
+    let mut bytes = vec![];
+    file.read_to_end(&mut bytes).ok()?;
+    let mut seen = std::collections::HashSet::new();
+    for line in String::from_utf8_lossy(&bytes)
+        .lines()
+        .filter(|l| l.contains("model_completed"))
+    {
+        let Ok(rec) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let payload = &rec["payload"];
+        if payload["event"]["kind"] != "model_completed"
+            || run_id.is_some_and(|r| payload["run_id"].as_str() != Some(r))
+        {
+            continue;
+        }
+        let request = payload["source_run_record_id"]
+            .as_str()
+            .or(rec["id"].as_str())
+            .unwrap_or(line);
+        seen.insert(request.to_string());
+    }
+    (!seen.is_empty()).then_some(seen.len())
 }
 
 fn placeholder_re() -> &'static Regex {
@@ -634,7 +664,7 @@ struct Turn {
     run: String,
     /// The model the run used (`run.model.configured`, else the session log's).
     model: String,
-    /// Its model requests: the session log's `model_completed` records, when the usage came from there.
+    /// Its model requests: the session log's `model_completed` records, each once, wherever its usage came from.
     calls: Option<usize>,
 }
 
@@ -987,13 +1017,13 @@ impl MuseCodeHost {
             }
         };
         let _ = std::fs::remove_file(&prompt);
+        let run = Some(state.run.as_str()).filter(|r| !r.is_empty());
+        state.calls = session_log(&env, &tid).and_then(|p| session_calls(&p, offset, run));
         if state.usage.is_none() {
-            let run = Some(state.run.as_str()).filter(|r| !r.is_empty());
-            if let Some((a, b, c, model, calls)) =
+            if let Some((a, b, c, model)) =
                 session_log(&env, &tid).and_then(|p| session_usage(&p, offset, run))
             {
                 state.usage = Some((a, b, c));
-                state.calls = Some(calls);
                 if !model.is_empty() {
                     state.model = model;
                 }
@@ -1269,6 +1299,27 @@ mod tests {
                 .count(),
             0
         );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_runs_model_calls_count_each_request_once_and_only_its_own() {
+        let dir = temp("muse-calls");
+        let log = dir.join("session.jsonl");
+        let rec = |id: &str, run: &str, source: &str| {
+            json!({"id": id, "payload": {"kind": "run", "run_id": run, "source_run_record_id": source,
+                   "event": {"kind": "model_completed", "usage": {"input_tokens": 1}}}})
+            .to_string()
+        };
+        let lines = [
+            rec("r1", "run-a", "s1"),
+            rec("r2", "run-a", "s1"), // the same request recorded again
+            rec("r3", "run-a", "s2"),
+            rec("r4", "run-b", "s3"),
+        ];
+        std::fs::write(&log, lines.join("\n")).unwrap();
+        assert_eq!(session_calls(&log, 0, Some("run-a")), Some(2));
+        assert_eq!(session_calls(&log, 0, Some("run-c")), None);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
