@@ -1,36 +1,36 @@
 import { useQuery } from '@tanstack/react-query';
 import { tasksIn, type ChatMessage } from '@/conversation';
-import { AskCard } from '@/features/task/exports';
+import { AskCard, taskAddress } from '@/features/task/exports';
 import { flowQuery, type FlowItem } from '@/features/tasks/routing';
-import { taskHref } from './tracked';
 
 /* Tico's approval card (plan: the assistant as a delegator): a Tico message that links one task, whose OK waits on the
    person in their Needs you, shows one card under its words. The card only opens the task, beside the chat on a
    computer or as the page on a phone (the shell's own link handling), where the existing preview and Approve are. The
-   chat never reads the OK itself (GET /api/v2/oks/{rid} records that the person was shown it) and never answers it.
-   A message that links more than one task stays linked text. */
+   chat never reads the OK itself (GET /api/v2/oks/{rid} records that the person was shown it), never answers it, and
+   fetches nothing: it reads the Needs-you list Tico's tracker already holds. A message that links more than one task
+   stays linked text. */
 
-/** The pending OK a message's text links to: its one linked task, when an OK on it waits on the person; else null. */
-export function linkedOk(text: string, items: readonly FlowItem[], origin: string): FlowItem | null {
-  const linked = tasksIn(text, origin);
-  if (linked.length !== 1) return null;
-  const [{ pipeline, key }] = linked as [(typeof linked)[number]];
-  return (
-    items.find(
-      (it) => (it.ask?.kind === 'ok' || it.ask?.kind === 'page') && (it.id === key || String(it.number) === key) && (!pipeline || pipeline === 'all' || it.pipeline_id === pipeline),
-    ) ?? null
-  );
+/** The pending approval a message's text links to: its one linked task (its addresses counted as one), when an
+    approval on it waits on the person; else null. */
+export function linkedOk(text: string, approvals: readonly FlowItem[], origin: string): FlowItem | null {
+  const found = new Map<string, FlowItem | null>();
+  for (const { pipeline, key } of tasksIn(text, origin)) {
+    const ok = approvals.find((it) => (it.id === key || String(it.number) === key) && (!pipeline || pipeline === 'all' || it.pipeline_id === pipeline));
+    found.set(ok ? ok.id : `${pipeline}/${key}`, ok ?? null);
+  }
+  return found.size === 1 ? ([...found.values()][0] ?? null) : null;
 }
 
 export function OkCard({ m }: { m: ChatMessage }) {
   const text = m.body ?? '';
-  const ok = useQuery({ ...flowQuery, enabled: !m.pending && text.includes('/'), select: (f) => linkedOk(text, f.items, location.origin) }).data;
+  // Observed, never fetched here: the tracker over the chat reads it, and the stream keeps it current.
+  const ok = useQuery({ ...flowQuery, enabled: false, select: (f) => (m.pending ? null : linkedOk(text, f.approvals ?? [], location.origin)) }).data;
   if (!ok) return null;
   return (
     <AskCard
       name={ok.ask?.line || ok.title}
       who={ok.ask?.by ?? ok.owner_id}
-      href={taskHref(ok)}
+      href={taskAddress(ok, undefined, false).to}
       target={`ok:${ok.id}`}
       actions={<span className="btn">Review and approve</span>}
     />

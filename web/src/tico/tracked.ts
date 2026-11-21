@@ -10,10 +10,6 @@ export function backSince(seenAt: string | null | undefined, now: number): strin
   return new Date(Number.isFinite(seen) && seen > floor ? seen : floor).toISOString();
 }
 
-/** A task's page: by its pipeline and number, else by its id. */
-export const taskHref = (t: Pick<TrackedTask, 'id' | 'number' | 'pipeline_id'>) =>
-  t.pipeline_id && t.number ? `/tasks/${encodeURIComponent(t.pipeline_id)}/${t.number}` : `/task/${encodeURIComponent(t.id)}`;
-
 /** When a task finished: done, else closed, else its last change (the server's finished order). */
 export const finishedAt = (t: TrackedTask) => t.done_at ?? t.closed_at ?? t.updated_at;
 

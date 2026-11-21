@@ -62,6 +62,24 @@ export function headings(text: string): Heading[] {
   return [...ids(lex(text))].map(([t, id]) => ({ id, text: t.text.trim() }));
 }
 
+// ---------------------------------------------------------------- links
+
+/** Every safe link the text draws, in reading order, read from the same tokens `Markdown` draws (a bare address
+    before a period counts; one inside code does not). */
+export function linksIn(text: string, compact = false): string[] {
+  const out: string[] = [];
+  const walk = (tokens: Token[] | undefined) => {
+    for (const t of (tokens ?? []) as MarkedToken[]) {
+      if (t.type === 'link' && SAFE_URL.test(t.href)) out.push(t.href);
+      if (t.type === 'list') t.items.forEach((it) => walk(it.tokens));
+      else if (t.type === 'table') [t.header, ...t.rows].forEach((row) => row.forEach((cell) => walk(cell.tokens)));
+      else if ('tokens' in t) walk(t.tokens);
+    }
+  };
+  walk(lex(text, compact));
+  return out;
+}
+
 // ---------------------------------------------------------------- drawing
 
 /** Draws one safe link its own way (a chat's chips): its address, its words drawn, and whether the words are only the

@@ -1,4 +1,5 @@
 import type { IconName } from '@/kit/Icon';
+import { linksIn } from '@/kit/Markdown';
 import { newAddressFor } from '@/oldAddress/map';
 
 /* What an address in a message points at, read from the address alone (thread-content.html, "What is in a thread"):
@@ -129,12 +130,13 @@ export function withFileRefs(text: string): string {
 /** The words a chip shows for words that are only an address or a ref: nothing to keep. */
 export const isRawWords = (words: string, href: string) => words === href || /^(page:)?file-[0-9a-f]{12,40}(@\d+)?$/.test(words) || /^https?:\/\//.test(words);
 
-/** The app's tasks a message's text links to (`/tasks/<pipeline>/<n>`, `/task/<id>`, `/flow/<n>`), each once, as
-    `{ pipeline, key }`: the pipeline when the address names one, and its number or id. */
+/** The app's tasks a message's text links to (`/tasks/<pipeline>/<n>`, `/task/<id>`, `/flow/<n>`, an old `#/task/…`),
+    read from the links its Markdown draws, each address once, as `{ pipeline, key }`: the pipeline when the address
+    names one, and its number or id. */
 export function tasksIn(text: string, origin: string): { pipeline: string | null; key: string }[] {
   const out = new Map<string, { pipeline: string | null; key: string }>();
-  for (const m of text.matchAll(/\]\(([^)\s]+)\)|<([^>\s]+)>|(https?:\/\/[^\s)\]>]+)/g)) {
-    const p = pointerOf(m[1] ?? m[2] ?? m[3] ?? '', origin);
+  for (const href of linksIn(withFileRefs(text), true)) {
+    const p = pointerOf(href, origin);
     if (p?.kind !== 'app' || p.what !== 'task') continue;
     const [, kind, a = '', b = ''] = /^\/(tasks|task|flow)\/([^/]+)(?:\/([^/]+))?/.exec(new URL(p.to, 'http://app').pathname) ?? [];
     const t = kind === 'tasks' ? { pipeline: decodeURIComponent(a), key: decodeURIComponent(b) } : { pipeline: null, key: decodeURIComponent(a) };
