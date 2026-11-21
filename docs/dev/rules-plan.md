@@ -146,8 +146,8 @@ rule_due_status(due_date_id, due_on, satisfied_by, via routine|person, task_id?,
 - **Checked exactly:** `exact_check` is one stateless typed check on one action, adopted with exact params (unknown
   keys are refused; a rule with a `toward_scope` takes none). `org_rule_check.exact_check(c, author, action, params)` returns the rules in force whose check the
   params break; the sentence stays the rule people read.
-- **Constitution:** a locked doc (five articles and the order of law), made once a company's Rules page has an owner or
-  at the first "Make this a rule". It is recorded by id (`rules.constitution`) and read by it; its path,
+- **Constitution:** a locked doc (five articles and the order of law), made once a company is completed (whoever owns
+  Rules) or at the first "Make this a rule". It is recorded by id (`rules.constitution`) and read by it; its path,
   `rules/constitution.md`, is reserved. Only people lock, change or restore a locked doc: not a bot, not an Assistant or
   BotOps acting for a person unconfirmed.
 - **Make this a rule** (`POST /api/v2/rules/make`) files a private task for the Rules page's owner, with the
@@ -155,7 +155,9 @@ rule_due_status(due_date_id, due_on, satisfied_by, via routine|person, task_id?,
   run on that task, which binds the suggestion to the task, and asks one OK from that run (`POST
   /api/v2/rules/{id}/ok`, line "Approve this rule") of the requester when they may add it, else the owner or an Admin.
   The preview binds the sentence, Who, With, Where, If broken and the typed check; a revised draft replaces the ask and
-  sets the old draft aside. The person's OK accepts exactly that version, as them, on its bound task only.
+  sets the old draft aside, whoever asked (a reassigned task). The fallback is the first owner or Admin who may add it
+  and is within the clerk's reach. A clerk's draft may name Everyone; the person's OK accepts exactly that version, as
+  them, on its bound task only, and a direct accept of a bound draft is refused.
 
 ### 2. The Rules Owner reads a document and suggests rules
 

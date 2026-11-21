@@ -1225,7 +1225,7 @@ class Onboarding:
             ("goal_manager", self.ensure_goal_manager),
             ("general_manager", self.ensure_general_manager),
             ("counsel", self.ensure_counsel),
-            ("constitution", org_rules.ensure_constitution),
+            ("constitution", lambda c: org_rules.ensure_constitution(c) if load(c)["completed"] else None),
             ("brand_owner", self.ensure_brand_owner),
             ("tools_owner", self.ensure_tools_owner),
             ("bookkeeper", lambda c: bookkeeper.ensure(c, self, self.auth)),

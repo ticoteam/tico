@@ -771,6 +771,8 @@ def view(c, auth, who, row, ctx, dues=None, quote=True):
         "if_broken": row["if_broken"],
         "reviewer": reviewer,
         "exact_check": row["exact_check"],
+        # a clerk's draft: added only by its OK on this task
+        "clerk_task": bound_task(c, row["id"]) if row["status"] == "suggested" else None,
         "status": row["status"],
         "suggested_by": row["suggested_by"],
         "decided_by": row["decided_by"],
@@ -1022,7 +1024,9 @@ def add_rule(c, auth, who, body):
         raise Problem("validation", "A cite names its file", 422)
     ctx = _ctx(c)
     given = scope_in(c, body.get("who") or {}, flags=True)
-    if who.role == "bot" and not _has(given):
+    clerk = _bind(c, who)
+    if who.role == "bot" and (not _has(given) or clerk):
+        # A clerk's draft may name anyone, Everyone too: the person whose OK adds it must be allowed to (decide_rule).
         # The Rules Owner names no Who when no department is named: the suggestion is stored with none, and the owner sets it
         # when they accept (decide_rule refuses an accept with no Who).
         scope = given
@@ -1076,7 +1080,7 @@ def add_rule(c, auth, who, body):
     )
     stored = _get(c, row["id"])
     _audit(c, who.actor, row["id"], None, _core(stored), who)
-    clerk = _bind(c, who) if status == "suggested" else None
+    clerk = clerk if status == "suggested" else None
     _event(
         c, who.actor, "added", row["id"], {"kind": kind, "status": status, **({"clerk_task": clerk} if clerk else {})}
     )
@@ -1131,11 +1135,14 @@ def edit_rule(c, auth, who, rule_id, body):
     return view(c, auth, who, stored, ctx, quote=False)
 
 
-def decide_rule(c, auth, who, rule_id, body, action):
-    """accept | skip | retire. Accept and skip act on a suggestion; retire on a rule in force."""
+def decide_rule(c, auth, who, rule_id, body, action, by_ok=False):
+    """accept | skip | retire. Accept and skip act on a suggestion; retire on a rule in force. A clerk's draft bound to
+    its task is accepted only by its OK there (`by_ok`, ok_given): what was shown is what is added."""
     row = _get(c, rule_id)
     if who.role == "bot":
         raise Problem("forbidden", "A bot suggests a rule; a person accepts, skips or retires it", 403)
+    if action == "accept" and not by_ok and (task := bound_task(c, rule_id)):
+        raise Problem("conflict", "This draft is added by its OK on its task", 409, extra={"task_id": task})
     if action == "accept" and body.get("who") is None and not _has(row["who"]):
         raise Problem("validation", "Say who follows it: a suggestion with no Who is accepted with one", 422)
     ctx = _ctx(c)
@@ -1532,14 +1539,14 @@ When two rules disagree, the higher one wins:
 
 
 def ensure_constitution(c):
-    """The constitution, once per company whose Rules page has an owner to check drafts against it (page_owners
-    `rules`; "Make this a rule" makes sure of it too): Tico's own locked doc, so only people change it (backend/docs.py
-    locks), recorded under docs.CONSTITUTION_KEY and read by that id. Its path is reserved; a doc someone put there
-    before keeps it, and the constitution goes beside it. A doc a person changed, moved or archived stays as they left it.
-    Returns the doc's id when it was made now, else None."""
-    from . import docs, page_owners
+    """The constitution, once per company (a completed company's start makes it, whoever owns Rules; "Make this a rule"
+    makes sure of it too): Tico's own locked doc, so only people change it (backend/docs.py locks), recorded under
+    docs.CONSTITUTION_KEY and read by that id. Its path is reserved; a doc someone put there before keeps it, and the
+    constitution goes beside it. A doc a person changed, moved or archived stays as they left it. Returns the doc's id
+    when it was made now, else None."""
+    from . import docs
 
-    if docs.constitution_id(c) or not page_owners.owner(c, "rules", fallback=False):
+    if docs.constitution_id(c):
         return None
     taken = c.execute(
         "SELECT 1 FROM docs WHERE archived=0 AND path=? COLLATE NOCASE", (docs.CONSTITUTION_PATH,)
@@ -1619,21 +1626,39 @@ def bound_task(c, rule_id):
     return (json.loads(row[0] or "{}") or {}).get("clerk_task") if row else None
 
 
-def _adopter(c, auth, row, task):
-    """Who is asked: the task's requester when they may add this rule, else the owner or an Admin. A person asked who
-    cannot read the task yet is brought onto it. None when nobody here may add it."""
+def _people_to_ask(c, task):
+    """The task's requester, then the owner and each Admin (access.owner_and_admin_emails), as person actors."""
+    from . import access
+
+    out = [task.get("requester_id") or ""]
+    for email in access.owner_and_admin_emails(c):
+        found = c.execute("SELECT id FROM humans WHERE lower(email)=?", (email,)).fetchone()
+        if found:
+            out.append(H.human_actor(found["id"]))
+    return list(dict.fromkeys(p for p in out if H.is_human(p)))
+
+
+def _adopter(c, auth, asker, row, task):
+    """Who is asked: the first of the requester, the owner and the Admins who is here, may add this rule and is within
+    the asker's reach for this task (reach.check, as the ask itself checks). A person asked who cannot read the task yet
+    is brought onto it. None when nobody here may add it."""
+    from types import SimpleNamespace as NS
+
     from . import org_rule_check as OC
+    from . import reach
 
     ctx = _ctx(c)
-    for person in (task.get("requester_id") or "", OC.owner_or_admin(c)):
-        if not person or not H.is_human(person) or not OC._present(c, person):
+    for person in _people_to_ask(c, task):
+        if not OC._present(c, person):
             continue
         try:
             ident = auth.identity_for_actor(c, person)
+            if not may_manage(c, auth, ident, row["who"], ctx):
+                continue
+            reach.check(c, NS(role="bot", actor=asker), person, "task", task_id=task["id"])
         except Problem:
             continue
-        if may_manage(c, auth, ident, row["who"], ctx):
-            return person
+        return person
     return None
 
 
@@ -1644,6 +1669,8 @@ def ask_ok(c, auth, who, rule_id, task_id):
     drafts on the task are withdrawn and those drafts set aside: one ask waits on the task."""
     from . import task_asks
 
+    task_id = auth.resolve_task(c, who, task_id)
+    auth.task(c, who, task_id)
     row = _get(c, rule_id)
     if row["status"] != "suggested":
         raise Problem("conflict", "Only a suggestion waits for an OK", 409)
@@ -1656,9 +1683,11 @@ def ask_ok(c, auth, who, rule_id, task_id):
     if not _has(row["who"]):
         raise Problem("validation", "Say who follows it: suggest it again with a Who", 422)
     task = H.task(c, task_id) or {}
-    person = _adopter(c, auth, row, task)
+    person = _adopter(c, auth, who.actor, row, task)
     if not person:
-        raise Problem("conflict", "Nobody here may add this rule: close the task and say so", 409)
+        raise Problem(
+            "conflict", "Nobody here may add this rule and is within your reach: close the task and say so", 409
+        )
     if not H.task_private_readable(c, person, task):
         H.task_reach(c, who.actor, task, person)
     ctx = _ctx(c)
@@ -1676,14 +1705,14 @@ def ask_ok(c, auth, who, rule_id, task_id):
     asked = task_asks.ask_ok(
         c, who.actor, person, OK_LINE, shows=[subject], subject=subject, content=content, task_id=task_id
     )
+    # Every earlier draft's ask on this task, whoever asked it (a task reassigned to another clerk included).
     earlier = c.execute(
-        "SELECT requirement_id, subject FROM ok_grants WHERE asked_by_id=? AND subject LIKE 'rule:%' AND subject!=? "
-        "AND used_at IS NULL",
-        (who.actor, subject),
+        "SELECT g.requirement_id, g.subject FROM ok_grants g JOIN requirements r ON r.id=g.requirement_id "
+        "JOIN visits v ON v.id=r.visit_id WHERE v.task_id=? AND g.subject LIKE 'rule:%' AND g.subject!=? "
+        "AND g.used_at IS NULL",
+        (task_id, subject),
     ).fetchall()
     for rid, old in earlier:
-        if task_asks.task_of(c, rid) != task_id:
-            continue
         task_asks.withdraw(c, rid, "A revised draft replaces it")
         _replaced(c, old[len(OK_SUBJECT) :], rule_id)
     _event(c, who.actor, "ok_asked", rule_id, {"task_id": task_id, "to": person})
@@ -1717,7 +1746,7 @@ def ok_given(c, grant, ctx):
         raise Problem("conflict", "This OK is not on the task the rule was drafted on", 409)
     if row["status"] != "suggested" or row["version"] != content.get("version"):
         raise Problem("conflict", "This suggestion changed after it was asked: it needs a new ask", 409)
-    decide_rule(c, ctx.auth, who, row["id"], {"version": row["version"]}, "accept")
+    decide_rule(c, ctx.auth, who, row["id"], {"version": row["version"]}, "accept", by_ok=True)
     task_asks.use(c, rid, grant["subject"], content, grant["asked_by_id"])
     H.attempt(c, H.task_done, H.TICO_ACTOR, task_id, f"Added: {row['text']}"[:500])
 
