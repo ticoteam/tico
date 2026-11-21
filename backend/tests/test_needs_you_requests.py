@@ -219,3 +219,47 @@ def test_a_grant_refusal_says_not_found_for_a_hidden_tool_before_forbidden(api, 
         visible = key_grants._refusal(c, vault, cara, [{"tool_id": crm}])  # pyright: ignore[reportPrivateUsage]
         hidden = key_grants._refusal(c, vault, cara, [{"tool_id": crm}, {"tool_id": ads}])  # pyright: ignore[reportPrivateUsage]
     assert (visible.status, hidden.status) == (403, 404)
+
+
+def test_a_new_key_proposal_reaches_its_person_on_the_live_stream(api, monkeypatch, live):  # noqa: F811
+    machine, _ = setup(api)
+    put(api, "page-owners/tools", {"bot": "ops"})
+    dm = post(api, "threads/dm", {"members": ["bot:ops"]})
+    creds.setup(api)
+    monkeypatch.setattr(api_tools, "send_check", lambda url, hdrs, params: api_tools.Reply(200))
+    crm = tool(api)["id"]
+    secret = {"name": "JIRA_LOGIN", "kind": "password", "env": "JIRA_LOGIN", "secret": PASSWORD, "source": "tools-chat"}
+    post(api, "credentials", secret)
+    post(api, f"threads/{dm['id']}/messages", {"text": "for close [saved JIRA_LOGIN for Close CRM]"})
+    bot = claim(api, machine)["token"]
+    stream = live("ana-test", "?topics=needs")
+    ready(stream)
+    with api.app.state.store.read() as c:
+        before = c.execute("SELECT COALESCE(MAX(seq),0) FROM changes").fetchone()[0]
+    rows = [{"key": "JIRA_LOGIN", "tool": crm, "level": "read", "bots": ["cpo"]}]
+    post(api, "tools-chat/proposals", {"thread_id": dm["id"], "rows": rows}, bot)
+    stream.until(lambda e: topic("needs")(e) and any(it["kind"] == "key_drop" for it in e["data"].get("items") or []))
+    with api.app.state.store.read() as c:
+        rows = c.execute("SELECT kind FROM changes WHERE seq>? AND topic='needs' AND subject_id='human:ana'", (before,))
+        assert "key_drop" in {r[0] for r in rows}
+
+
+def test_a_task_key_card_is_neither_listed_nor_saved_once_its_person_cannot_read_the_task(api, monkeypatch):
+    # Cara connected Close CRM, so its Reconnect card is hers; once she may not read ops (the task's agent), the card
+    # in its task's thread is not there for her.
+    import json
+
+    setup(api)
+    put(api, "page-owners/tools", {"bot": "ops"})
+    creds.setup(api)
+    api.app.state.store.settings.credential_admins = ("ana@acme.example", "cara@acme.example")
+    monkeypatch.setattr(api_tools, "send_check", lambda url, hdrs, params: api_tools.Reply(401))
+    crm = post(api, "api-tools", {"name": "Close CRM"}, "cara-test")["id"]
+    key(api, crm, OLD, token="cara-test")
+    assert post(api, f"api-tools/{crm}/check", {}, "cara-test")["detail"] == "Key rejected"
+    card = requests(api, "cara-test")["key"]["key"]
+    only_ana = {"see": {"everyone": True}, "read": {"people": ["ana"]}, "write": {"people": ["ana"]}}
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET access=? WHERE bot='ops'", (json.dumps(only_ana),))
+    assert requests(api, "cara-test") == {}
+    post(api, f"credential-requests/{card['id']}/save", {"value": NEW}, "cara-test", expected=404)

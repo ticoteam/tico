@@ -243,7 +243,9 @@ def propose(c: Any, who: Any, thread_id: str, rows: list[Row], note: str = "") -
     token = MINTING.set(True)
     try:
         # Written as the owner by the server itself: the rows are the server's, checked above.
-        return _threads().post(c, owner, thread["id"], text, kind="notice", refs={"card": CARD, CARD: card})
+        sent: Row = _threads().post(c, owner, thread["id"], text, kind="notice", refs={"card": CARD, CARD: card})
+        _events().needs_moved(c, [person], "key_drop")  # the proposal is in their Needs you now
+        return sent
     finally:
         MINTING.reset(token)
 

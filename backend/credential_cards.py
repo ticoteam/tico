@@ -26,7 +26,7 @@ from urllib.parse import urlsplit
 from fastapi import Request
 from pydantic import Field, SecretStr
 
-from .auth import validate_identity
+from .auth import actor_reads_task, validate_identity
 from .credentials import CredentialWrite, administrator, admin_names as _admin_names, ask_admin_detail, owned
 from .models import Contract, ID
 from . import events, reconnect_tasks, reconnects, runner_online
@@ -318,9 +318,10 @@ def card_row(c, vault, rid, viewer):
     row = c.execute("SELECT * FROM credential_requests WHERE id=?", (rid,)).fetchone()
     if not row or (row["requester"] != viewer.actor and not administrator(c, viewer, vault.admins)):
         raise Problem("not_found", "No such request", 404)
-    # A card in a task's thread is for someone who can read the task now: one made private since asks them nothing.
+    # A card in a task's thread is for someone who can read the task now, by every read rule (private, its pipeline,
+    # its agents): one they lost asks them nothing.
     task_id = (H.conversation(c, row["conversation_id"]) or {}).get("task_id")
-    if task_id and not H.task_private_readable(c, viewer.actor, H.task(c, task_id)):
+    if task_id and not actor_reads_task(c, viewer.actor, H.task(c, task_id)):
         raise Problem("not_found", "No such request", 404)
     return row
 
