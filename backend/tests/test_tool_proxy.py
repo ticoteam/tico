@@ -635,7 +635,7 @@ def test_write_keys_of_ads_payments_and_crm_tools_reach_runs_only_through_the_pr
     setup(api)
     org(api)
     judge = api.app.state.judge = Judge()
-    tool(api, delivery="computer")  # Close CRM, its keys on computers
+    tool(api, delivery="computer", base="https://api.close.com")  # Close CRM at its own API, keys on computers
     full = key(api, "close-crm", FULL)
     rule(
         api,
@@ -703,8 +703,10 @@ def test_hubspots_documented_reads_are_no_writes_and_a_neighbouring_write_still_
     setup(api)
     org(api)
     api.app.state.judge = Judge()
-    tool(api, "hubspot", "HubSpot", "bearer", base="https://api.hubapi.example", service="hubspot")
+    tool(api, "hubspot", "HubSpot", "bearer", base="https://api.hubapi.com", service="hubspot")
+    tool(api, "elsewhere", "HubSpot copy", "bearer", base="https://api.hubapi.example", service="hubspot")
     give(api, key(api, "hubspot", "hubspot-synthetic-0003", env="HUBSPOT_KEY"), "bot:ops")
+    give(api, key(api, "elsewhere", "hubspot-synthetic-0009", env="HUBSPOT_COPY_KEY"), "bot:ops")
     api.app.state.tool_proxy_transport = httpx.MockTransport(Vendor())
     _, ops = run(api)
     token = handed(api, ops, "HUBSPOT_KEY")["value"]
@@ -725,6 +727,10 @@ def test_hubspots_documented_reads_are_no_writes_and_a_neighbouring_write_still_
     assert call(api, "POST", "crm/v3/objects/contacts/batch/create", token, tid="hubspot", json={}).status_code == 200
     assert call(api, "POST", "crm/lists/2026-03", token, tid="hubspot", json={}).status_code == 200  # makes a list
     assert gated() == 2
+    # The same search anywhere but HubSpot's own API host is a write.
+    copy = handed(api, ops, "HUBSPOT_COPY_KEY")["value"]
+    assert call(api, "POST", "crm/v3/objects/contacts/search", copy, tid="elsewhere", json={}).status_code == 200
+    assert gated() == 3
 
 
 def test_the_write_key_policy_comes_first_by_service_or_known_host_and_its_exceptions_beat_the_stored_delivery(api):
@@ -810,3 +816,74 @@ def test_the_write_key_policy_holds_for_default_reads_edits_and_one_time_moves_a
     # Exact names and hosts only.
     assert TS.gated_vendor("stripe-adapter", "") == "" and TS.gated_vendor("", "https://dashboard.stripe.com") == ""
     assert TS.gated_vendor("close", "") == "close-crm" and TS.gated_vendor("", "https://api.stripe.com/v1") == "stripe"
+
+
+def test_a_bot_held_at_read_on_a_crm_tool_gets_its_read_key_alone(api):
+    """A bot held at Read that holds both the Read key and the Read and write key of a CRM tool gets the Read key, as
+    it is: the write key is skipped, never handed as a proxy token beside it."""
+    setup(api)
+    tool(api, delivery="computer")  # Close CRM
+    full = key(api, "close-crm", FULL)
+    read = key(api, "close-crm", READ, level="read", env="CLOSE_READ_KEY")
+    give(api, full, "bot:ops", "read")
+    give(api, read, "bot:ops", "read")
+    _, ops = run(api)
+    items = get(api, "credential-runtime", ops["token"])["credentials"]
+    assert [(i["env"], i["value"]) for i in items] == [("CLOSE_READ_KEY", READ)]
+
+
+def test_a_protected_tools_keys_and_reach_change_only_by_a_person_and_intake_keeps_its_write_keys(api):
+    """Rule P: an agent, even confirmed with a person's rights, may not relabel a CRM or payments tool's write key as
+    Read nor move it to another vendor; the person signed in may. A HubSpot write key under an id-like name stored in
+    the vault stays a key on a tool with HubSpot's address, never an id's own addressless tool. A service given at
+    create is kept as given, so "Stripe Adapter" at a dashboard host is not Stripe. The report says `unknown` where
+    only a value would decide."""
+    from dataclasses import replace
+
+    from backend import proxy_keys
+    from backend.auth import Identity
+    from backend.store import Problem
+    from backend.tests.helpers.api import headers
+
+    setup(api)
+    tool(api, "billing", "Billing", "bearer", delivery="computer", base="https://api.stripe.com", service="stripe")
+    write = key(api, "billing", "sk_synthetic_billing_0010", env="BILLING_KEY")
+    agent = replace(Identity("human:ana", "owner"), via="assistant", confirmed=True)
+    vault = api.app.state.vault
+    for change in (
+        lambda c: api_tools.update_key(c, agent, vault, "billing", write, api_tools.KeyUpdate(access_level="read")),
+        lambda c: api_tools.update_tool(
+            c, agent, "billing", api_tools.ToolUpdate(service="brex"), vault.admins, api.app.state.auth
+        ),
+    ):
+        with api.app.state.store.transaction() as c, pytest.raises(Problem) as refused:
+            change(c)
+        assert refused.value.status == 403
+    relabel = api.patch(f"/api/v2/api-tools/billing/keys/{write}", json={"access_level": "read"}, headers=headers())
+    assert relabel.status_code == 200, relabel.text  # Ana herself
+    # Intake: a HubSpot write key under an id-like variable stays a key on a tool HubSpot's API reaches.
+    stored = post(
+        api,
+        "credentials",
+        {"name": "HubSpot", "env": "HUBSPOT_ACCOUNT_ID", "secret": "1a2b3c4d-1a2b-3c4d-5e6f-1a2b3c4d5e6f"},
+    )
+    with api.app.state.store.read() as c:
+        home = c.execute(
+            "SELECT t.* FROM credentials k JOIN tools t ON t.id=k.tool_id WHERE k.id=?", (stored["id"],)
+        ).fetchone()
+        assert home["service"] == "hubspot" and home["base_url"] == "https://api.hubapi.com"
+        assert not c.execute("SELECT 1 FROM tool_settings WHERE name='HUBSPOT_ACCOUNT_ID'").fetchone()
+    # A service given is kept: no Stripe for a "stripe-adapter" at a dashboard host.
+    made = post(
+        api,
+        "api-tools",
+        {"name": "Stripe Adapter", "service": "stripe-adapter", "base_url": "https://dashboard.stripe.com"},
+    )
+    assert made["service"] == "stripe-adapter"
+    # A Read key under an id-like name: only its value says whether it goes as an id or a key.
+    give(api, key(api, "billing", "acct_synthetic0012", level="read", env="STRIPE_ACCOUNT_ID"), "bot:ops", "read")
+    with api.app.state.store.read() as c:
+        adapter = c.execute("SELECT * FROM tools WHERE id=?", (made["id"],)).fetchone()
+        assert api_tools.proxy_policy(adapter) is None  # its own delivery decides; an agent may change it
+        listed = proxy_keys.report(c)
+    assert [(d["tool"], d["env"], d["level"]) for d in listed["unknown"]] == [("billing", "STRIPE_ACCOUNT_ID", "read")]

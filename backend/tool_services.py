@@ -318,15 +318,29 @@ def gated_vendor(service="", host=""):
     return _gated_hosts().get(hostname, "") if hostname else ""
 
 
+def protected(service=""):
+    """Whether a key of this service is a write key that lives in the proxy (GATED, but not DIRECT): what the intake of
+    a stored or imported key reads before any id or setting guess, so such a key is never made a setting nor put on a
+    tool with no address."""
+    vendor = gated_vendor(service)
+    return bool(vendor) and vendor not in DIRECT
+
+
 def gated(service="", host=""):
     """`ads`, `payments` or `crm` for a tool of one of those vendors, else ""."""
     return GATED.get(gated_vendor(service, host), ("", ()))[0]
 
 
 def vendor_read(service, method, path, host=""):
-    """A POST the vendor's API answers as a read (GATED), at exactly this URL path (the whole path): not a write."""
-    reads = GATED.get(gated_vendor(service, host), ("", ()))[1]
-    return method == "POST" and any(re.fullmatch(pattern, path) for pattern in reads)
+    """A POST the vendor's API answers as a read (GATED), at exactly this URL path (the whole path) and only at the
+    vendor's own known API host: not a write. Anywhere else the same path is a write."""
+    from urllib.parse import urlsplit
+
+    vendor = gated_vendor(service, host)
+    hostname = urlsplit(host if "//" in str(host) else "//" + str(host or "")).hostname if host else None
+    if not vendor or _gated_hosts().get(hostname) != vendor:
+        return False
+    return method == "POST" and any(re.fullmatch(pattern, path) for pattern in GATED[vendor][1])
 
 
 # Vendors' own MCP servers (docs/connect-tools.md): Find or connect offers a sign-in with the vendor on these.

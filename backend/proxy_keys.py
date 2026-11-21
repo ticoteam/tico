@@ -10,6 +10,7 @@ the person who rotates the keys at each vendor:
   rotate;
 - `direct`: each one whose key still reaches runs as it is, with its level: a Read key, or any key of Google Ads or of
   a tool the proxy cannot call (Not covered on Rules › Links);
+- `unknown`: each one only the key's value would decide (a Read key under an id-like variable: an id goes as it is);
 - `computers`: each computer whose runner predates proxy tokens (PROXY_RELEASE) or reports no release.
 Nothing is revoked, rotated or changed: rotating a key is the person's, at the vendor.
 """
@@ -36,9 +37,9 @@ PROXY_RELEASE = "0.5.192"  # the first runner that takes a proxy token in a key'
 
 
 def report(c: Any) -> dict[str, Any]:
-    """{proxied, direct, computers}, as the module's text says: each bot's effective grant on such a tool, by how its
+    """{proxied, direct, unknown, computers}, as the module's text says: each bot's effective grant on such a tool, by how its
     key actually reaches the bot's runs (credentials.held_at_read, the one delivery decision)."""
-    out: dict[str, list[dict[str, Any]]] = {"proxied": [], "direct": []}
+    out: dict[str, list[dict[str, Any]]] = {"proxied": [], "direct": [], "unknown": []}
     for tool in c.execute("SELECT * FROM tools WHERE kind='api' ORDER BY lower(name), id").fetchall():
         category = TS.gated(tool["service"], tool["base_url"] or api_tools._field(tool, "mcp_url") or "")
         if not category:
@@ -52,11 +53,12 @@ def report(c: Any) -> dict[str, Any]:
         ).fetchall():
             if credentials.effective_grant(c, row["id"], row["subject"]) is None:
                 continue  # its parent grant was taken back: no run gets it
-            through, way = credentials.held_at_read(c, proxied, row, row["subject"])
+            # The runtime's own decision, the values aside: where only a value would say, it is `unknown`.
+            through, way = credentials.held_at_read(c, proxied, row, row["subject"], credentials.UNREAD)
             if way == "skip":
                 continue  # a read key of the tool goes instead
             level = "read" if row["access_level"] == "read" or row["granted"] == "read" else "read_write"
-            out["proxied" if through is not None else "direct"].append(
+            out["proxied" if through is not None else "unknown" if way == "unknown" else "direct"].append(
                 {
                     "tool": tool["id"],
                     "name": tool["name"],

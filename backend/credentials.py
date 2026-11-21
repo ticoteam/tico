@@ -21,6 +21,7 @@ from pydantic import ConfigDict, Field, SecretStr
 
 from . import providers
 from . import tool_access as TA
+from . import tool_services
 from .auth import validate_identity
 from .models import Contract, ID
 from .store import H, Problem, encode
@@ -1170,12 +1171,16 @@ def same_value(c, cipher, env, value):
     return None
 
 
+# `held_at_read`'s cipher for a reader that cannot open values (the report): where the id check would decide, `unknown`.
+UNREAD = object()
+
+
 def held_at_read(c, proxied, row, subject, cipher=None):
     """The one decision on how a held key reaches a run, which the runtime, a reveal, Rules › Links and the report all
     follow: (tool row or None, way), the tool when the run gets a proxy token for it. In order:
     - the write-key policy of an ads, payments or CRM tool (backend/api_tools.py `proxy_policy`), ahead of anything
       else, the tool's own delivery included: `direct` (Google Ads, or no address the proxy can call) goes as it is;
-      `proxy` takes a Read and write key through the proxy;
+      `proxy` takes a Read and write key through the proxy, but `skip` for a holder at Read who has a Read key;
     - an id stored as a key (`tool_settings.is_setting`: its name and its value both say id, POSTHOG_PROJECT_ID,
       TWILIO_ACCOUNT_SID) goes as its value: a bot sends it as it is, in a path or as a username;
     - a proxied tool's key: a proxy token;
@@ -1190,8 +1195,14 @@ def held_at_read(c, proxied, row, subject, cipher=None):
     if policy == 'direct':
         return None, 'key'
     if policy == 'proxy' and row['access_level'] == 'read_write':
-        return tool, 'proxy'
-    if cipher is not None and _is_id(c, cipher, row):
+        # A bot held at Read with a Read key of the tool gets that key alone: this one is skipped, never a token too.
+        return (None, 'skip') if api_tools.computer_way(c, row, subject, tool) == 'skip' else (tool, 'proxy')
+    if cipher is UNREAD:
+        from . import tool_settings
+
+        if row['tool_id'] and tool_settings.known_name(row['env']):
+            return None, 'unknown'  # an id goes as its value, a key as a token: only its value says which
+    elif cipher is not None and _is_id(c, cipher, row):
         return None, 'key'
     if row['tool_id'] in proxied:
         return tool, 'proxy'
@@ -1355,7 +1366,12 @@ def install_credentials(app, store, delegate=None, propose=None):
                     (item.env, subject),
                 ).fetchone():
                     continue
-                if item.kind != 'file' and tool_settings.is_setting(item.env, item.value.get_secret_value()):
+                # A write key of an ads, payments or CRM vendor stays a key, policy first: never taken for a setting.
+                if (
+                    item.kind != 'file'
+                    and not tool_services.protected(tool_services.match(env=item.env) or '')
+                    and tool_settings.is_setting(item.env, item.value.get_secret_value())
+                ):
                     later.append(item)  # after the keys: a setting goes on a tool one of them is a key of
                     continue
                 keep(item)

@@ -86,7 +86,7 @@ from . import tool_templates
 from . import default_read
 from . import reconnect_tasks
 from . import tool_access as TA
-from .credentials import CredentialWrite, administrator, effective_grant, may_remove, owned, signed_in_person
+from .credentials import CredentialWrite, administrator, effective_grant, may_remove, owned
 from .models import AccessAudience, Contract
 from .store import H, Problem, encode
 from .api_contract import api_v2
@@ -1386,7 +1386,8 @@ def create_tool(c, who, body, admins, vault=None):
         # A value is a person's own to paste (plan P4): never an agent's, with anyone's rights or its own.
         raise Problem("secret_in_request", "A key goes in through a person's own paste in Tools, never an agent", 422)
     fields = _clean(body.model_dump(exclude={"key"}))
-    service = TS.match(service=fields["service"], name=fields["name"])
+    # A service given is kept as given (a "stripe-adapter" is no Stripe); only none given is matched from the name.
+    service = fields["service"].strip().lower() if fields["service"] else TS.match(name=fields["name"])
     TA.catalog_only(who, service, fields)
     known = TS.defaults(service)
     # A known service's check path belongs to its own address: a tool given another address gets none by default.
@@ -1429,7 +1430,9 @@ def update_tool(c, who, tool_id, body, admins, auth=None):
     asked = body.model_dump(exclude_none=True, exclude={"audience", "everyone_reads"})
     audience_set = "audience" in body.model_fields_set
     if asked or not audience_set or getattr(who, "role", "") != "owner":
-        TA.require(c, who, TA.tool(), action=TA.EDIT, admins=admins, auth=auth)
+        # Its service, address, check or delivery: on an ads, payments or CRM tool a person's own (tool_access Rule P).
+        reach = bool(set(asked) & {"service", "base_url", "auth_scheme", "check_path", "delivery"})
+        TA.require(c, who, TA.tool(tool_id=tool_id) if reach else TA.tool(), action=TA.EDIT, admins=admins, auth=auth)
     tool = dict(_readable(c, who, tool_id, admins, auth))
     if audience_set:
         set_audience(c, who, tool, body.audience.model_dump() if body.audience is not None else None, admins, auth)
@@ -1450,12 +1453,6 @@ def update_tool(c, who, tool_id, body, admins, auth=None):
             access_requests.settled(c, who, resource_type="tool", resource_id=tool_id, via="everyone-reads")
     fields = {k: v for k, v in _clean(asked).items()}
     merged = tool | fields
-    if proxy_policy(tool) == "proxy" and proxy_policy(merged) != "proxy" and not signed_in_person(who):
-        # Its write keys would reach runs as they are (another service, no address the proxy can call): a secret's
-        # way out of the proxy is a person's own act, never an agent's, confirmed or not.
-        raise Problem(
-            "forbidden", f"Only a person signed in themselves takes {tool['name']}'s write keys out of the proxy", 403
-        )
     # What the tool reaches after the change, whole: an agent's change of any part leaves only the catalog's.
     if any(merged[k] != tool[k] for k in (*TA.ADDRESS_FIELDS, "service")):
         TA.catalog_only(who, merged["service"], {k: merged[k] for k in TA.ADDRESS_FIELDS})
@@ -1574,7 +1571,7 @@ def forget_audience_member(c, actor, field, ident):
 def delete_tool(c, who, tool_id, admins, kind="api"):
     """The tool, its checks and calls, and its keys with their grants: a key belongs to its tool (a website tool's
     accounts too)."""
-    TA.require(c, who, TA.tool(), action=TA.DELETE, admins=admins)
+    TA.require(c, who, TA.tool(tool_id=tool_id), action=TA.DELETE, admins=admins)
     tool = _readable(c, who, tool_id, admins, kind=kind)
     keys = [k["id"] for k in _keys(c, tool_id)]
     refuse_finance_key(c, keys)  # before anything goes
@@ -1682,7 +1679,10 @@ def ensure_tool(c, who, credential_id, from_computer=False, value=None):
         c.execute("UPDATE credentials SET tool_id=?, access_level='read_write' WHERE id=?", (home, credential_id))
         H.event(c, who.actor, "tool.key_added", home, {"credential": credential_id, "access_level": "read_write"})
         return home
-    if tool_settings.is_setting(env, value) if value is not None else tool_settings.known_name(env):
+    # A write key of an ads, payments or CRM vendor stays a key on its tool, policy first: never an id's own tool.
+    if not TS.protected(service or "") and (
+        tool_settings.is_setting(env, value) if value is not None else tool_settings.known_name(env)
+    ):
         tid = TS.insert_tool(c, service, row["name"], "computer", who.actor, H.now(), tid=_unique_id(c, TS.slug(env)))
         c.execute("UPDATE tools SET name=?, base_url='', check_path='' WHERE id=?", (env, tid))
         c.execute("UPDATE credentials SET tool_id=?, access_level='read_write' WHERE id=?", (tid, credential_id))
@@ -1819,7 +1819,8 @@ def delete_key(c, who, vault, tool_id, key_id):
     _readable(c, who, tool_id, vault.admins, vault.auth)
     key = _tool_key(c, tool_id, key_id)
     if not may_remove(who, key["created_by"], manages=TA.admin(c, who, vault.admins)):
-        TA.require(c, who, TA.tool(), action=TA.EDIT, admins=vault.admins, auth=vault.auth)
+        TA.require(c, who, TA.tool(tool_id=tool_id), action=TA.EDIT, admins=vault.admins, auth=vault.auth)
+    TA.person_only(c, who, TA.tool(tool_id=tool_id))
     _drop_key(c, who, key["id"])
     reconnect_tasks.redated(c, tool_id)  # the key it renewed is gone
     return {"deleted": True, "id": key_id}
