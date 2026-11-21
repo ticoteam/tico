@@ -83,3 +83,16 @@ def test_a_repository_request_end_to_end(api, gh):
     )
     assert (row(api, waiting["id"])["state"], row(api, waiting["id"])["resolved_via"]) == ("granted", "tools")
     assert reach(api)["Acme/bot-sales"] == "read"
+
+
+def test_write_for_a_bot_reading_every_repository_in_use_keeps_its_reads_and_writes_the_one_asked(api, gh):
+    catalog(api, gh)
+    api.app_state.auth.owner_email = "ana@acme.example"
+    for name in ("product", "docs"):
+        put(api, "repositories/Acme/" + name, {"enabled": True})
+    put(api, "bots/cpo/repositories", {"mode": "all", "all_access": "read"})  # where a new agent starts
+    asked = ask(api, "Acme/product", "read_write")
+    assert asked["state"] == "open"
+    assert tap(api, asked["id"], "grant")["state"] == "granted"
+    assert reach(api) == {"Acme/emp-cpo": "write", "Acme/product": "write", "Acme/docs": "read"}
+    assert api.get("/api/v2/bots/cpo/repositories", headers=auth()).json()["mode"] == "chosen"

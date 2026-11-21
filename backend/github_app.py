@@ -3135,21 +3135,7 @@ def install_github_app(app, settings, store):
             if before["mode"] == "all" and before["all_access"] == "write":
                 pass  # it writes every ticked repository, this one now too
             else:
-                if before["mode"] == "chosen":
-                    keep = [R.Grant(**r) for r in before["chosen"]]
-                elif before["mode"] == "all":
-                    # All ticked repos has one level for every repository, so a read-only bot moves to Chosen
-                    # repos: read on each repository it reaches now, write on the new one. Nothing gets wider.
-                    # Its own repository is the one write in what it reaches; it stays write whatever the mode.
-                    keep = [
-                        R.Grant(full_name=r["full_name"], access="read")
-                        for r in before["effective"]
-                        if r["access"] == "read"
-                    ]
-                    moved = len([g for g in keep if g.full_name.lower() != repository.lower()])
-                else:
-                    keep = []
-                keep = [g for g in keep if g.full_name.lower() != repository.lower()]
+                keep, moved = R.chosen_keeping(before, repository)
                 R.set_access(
                     c,
                     bot,

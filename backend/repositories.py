@@ -748,6 +748,22 @@ def new_bot_default(c, fallback='read'):
     return chosen if chosen in NEW_BOT_ACCESS else fallback
 
 
+def chosen_keeping(before, repository):
+    """The Chosen repos grants a bot keeps when `repository` is added at its own level, and how many it moved from All
+    ticked repos (None when it was not there). All ticked repos has one level for every repository, so a bot on it at
+    Read moves to Chosen repos with read on each repository it reaches now: nothing gets wider. Its own repository is
+    the one write in what it reaches; it stays write whatever the mode."""
+    moved = None
+    if before['mode'] == 'chosen':
+        keep = [Grant(**r) for r in before['chosen']]
+    elif before['mode'] == 'all':
+        keep = [Grant(full_name=r['full_name'], access='read') for r in before['effective'] if r['access'] == 'read']
+        moved = len([g for g in keep if g.full_name.lower() != repository.lower()])
+    else:
+        keep = []
+    return [g for g in keep if g.full_name.lower() != repository.lower()], moved
+
+
 def card_access(catalog_dir, template):
     """The repository access a template's card declares for a bot made from it (templates/catalog/<template>/card.yaml
     `repo_access_mode`, own or all, and `repo_all_access`, read or write, read when left out), or {} when it declares

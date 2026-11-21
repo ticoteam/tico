@@ -263,6 +263,13 @@ def test_a_name_finds_the_tool_the_asker_may_see_and_two_it_may_see_are_offered_
     two = ask(api, "Ledger", token="cara-test", expected=409)["error"]
     assert sorted(choice["resource"] for choice in two["choices"]) == sorted(["tool:" + ledger, "tool:" + site])
     assert ask(api, "tool:" + site, token="cara-test", expected=422)["error"]["code"] == "resource"
+    # A website tool named Pager and an API tool whose id is `pager` are two matches for a bare "pager" too.
+    pager = tool(api, "Pager", base_url="https://pager.acme.example")["id"]
+    assert pager == "pager"
+    assert api.patch("/api/v2/api-tools/pager", json={"name": "Paging API"}, headers=headers()).status_code == 200
+    page = post(api, "website-tools", {"name": "Pager", "sites": ["pager.acme.example"]})["id"]
+    three = ask(api, "pager", token="cara-test", expected=409)["error"]
+    assert sorted(choice["resource"] for choice in three["choices"]) == sorted(["tool:pager", "tool:" + page])
 
 
 def test_titles_of_old_access_tasks_tie_only_when_certain(api):
@@ -295,6 +302,17 @@ def test_titles_of_old_access_tasks_tie_only_when_certain(api):
         assert found == {tied: True}
         assert c.execute("SELECT status FROM tasks WHERE id=?", (tied,)).fetchone()[0] == "closed"
         assert c.execute("SELECT status FROM tasks WHERE id=?", (loose,)).fetchone()[0] == "open"
+    # An Everyone tool behind an Only listed namesake ties; two Everyone tools by the name do not.
+    hidden = tool(api, "Acme Bank", base_url="https://api.bank.acme.example")["id"]
+    nobody = {"audience": {"everyone": False, "people": [], "teams": [], "bots": []}}
+    assert api.patch(f"/api/v2/api-tools/{hidden}", json=nobody, headers=headers()).status_code == 200
+    seen = tool(api, "Acme Bank", base_url="https://api2.bank.acme.example")["id"]
+    title = "Give Ops Bot read access to Acme Bank"
+    with api.app.state.store.read() as c:
+        assert AR.tie(c, title) == [("bot:ops", "tool", seen, "read")]
+    tool(api, "Acme Bank", base_url="https://api3.bank.acme.example")
+    with api.app.state.store.read() as c:
+        assert AR.tie(c, title) is None
 
 
 def test_a_bot_asks_for_itself_from_its_turn_and_that_task_waits(api):

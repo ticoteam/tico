@@ -94,3 +94,25 @@ def test_hosting_digest_is_bound_to_owner_machine_and_one_runner(tmp_path, monke
             renewed_expiry,
         )
     assert code.encode() not in (tmp_path / 'hub.sqlite').read_bytes()
+
+
+def test_a_first_import_s_agents_read_every_repository_in_use_unless_the_registry_names_their_access(tmp_path):
+    import yaml
+
+    from backend import bot_settings as BS
+    from backend.store import H
+
+    registry = seed_registry(
+        tmp_path, "Ana", "ana@acme.example", {"company_name": "Acme", "app_name": "Acme", "assistant_name": "Assistant"}
+    )
+    document = yaml.safe_load((registry / "employees.yaml").read_text())
+    entries = {e["name"]: {**document.get("defaults", {}), **e} for e in document["employees"]}
+    first, second = sorted(entries)[:2]
+    entries[second]["repo_access_mode"] = "own"
+    store = Store(Settings(db_path=tmp_path / "hub.sqlite", registry_dir=registry))
+    store.initialize()
+    store.seed(entries=entries)
+    with store.read() as c:
+        read = BS.read(c, H.resolve_bot(c, first)["id"])
+        assert (read["repo_access_mode"], read["repo_all_access"]) == ("all", "read")
+        assert BS.read(c, H.resolve_bot(c, second)["id"])["repo_access_mode"] == "own"
