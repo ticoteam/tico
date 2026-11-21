@@ -1984,10 +1984,6 @@ class Calls:
             log.warning("A call's action items were not drafted: %s", exc)
             return self._action_items_failed(call_id)
         items, summary = notes["items"], notes["summary"]
-        listed = "\n".join(f"- {item['title']}" for item in items) or "No action items were found."
-        body = f"Action items: {row['title']}\n{listed}"
-        if summary:
-            body += "\n\nSummary:\n" + "\n".join(f"- {line}" for line in summary)
         # The meeting window's notes read them from here (backend/call_notes.py): the items with who took each on.
         shown = {"summary": summary, "items": [{"title": item["title"], "owner": item["owner"]} for item in items]}
         try:
@@ -1995,7 +1991,13 @@ class Calls:
                 row = _call(c, call_id)
                 if row["action_items_posted_at"]:
                     return True
-                self._post_in_thread(c, row, body, notes=shown)
+                if items or summary:  # neither posts nothing; the call is still done with its action items
+                    body = f"Action items: {row['title']}"  # the header is what backend/call_notes.py looks for
+                    if items:
+                        body += "\n" + "\n".join(f"- {item['title']}" for item in items)
+                    if summary:
+                        body += "\n\nSummary:\n" + "\n".join(f"- {line}" for line in summary)
+                    self._post_in_thread(c, row, body, notes=shown)
                 c.execute(
                     "UPDATE calls SET action_items_posted_at=?,action_items_retry_at=NULL,updated_at=? WHERE id=?",
                     (H.now(), H.now(), call_id),

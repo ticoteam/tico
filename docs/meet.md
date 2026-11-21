@@ -185,8 +185,10 @@ A Google Meet call still opens Meet in a tab of its own.
    no bot in the thread: a bot does not start on the action items by itself.
    - `Call transcript: <title>` with one `speaker: text` line per piece of speech. Long transcripts are cut short, and
      the message says where the full one is.
-   - `Action items: <title>` with one `- ` line per item, or `No action items were found.`, then `Summary:` and 3 to 5
-     `- ` lines. The items and the summary come from one call to the install's meeting model through the Gateway. The
+   - `Action items: <title>`, with one `- ` line per item only when there are items, and then `Summary:` with 3 to 5
+     `- ` lines only when there is a summary. A call with neither posts no message, and its drafting still completes,
+     so the sweep does not draft it again. The items and the summary come from one call to the install's meeting
+     model through the Gateway. The
      drafting follows a prompt and rule (an item stands only when its quote is in the transcript word for word; at most
      5; its owner, when someone took it on, is one of the speakers), in `backend/call_items.py`. The message keeps them
      as data too (`refs.call.notes`), which the meeting window reads. If the Gateway does not answer, the items stay
