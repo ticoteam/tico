@@ -341,11 +341,10 @@ ABOUT: dict[str, Callable[[object], str]] = {
 
 
 def _finance_summary(content: object) -> str:
-    """What a Finance OK does, from the action it binds (finance/actions.py `_approval_payload`): its plan's summary,
-    which names the payee and the amount of a payment ("Pay 540.00 USD to Figma by ach"), without the reasons it needs
-    an OK or its action id."""
-    what = _named(content, "what")
-    return re.sub(r" \(Finance action [^)]*\)$", "", what.split("; ", 1)[0]) if what else ""
+    """What a Finance OK does, from the action it binds (finance/actions.py `_approval_payload`): its plan's text, which
+    names a payment's payee and amount first ("Pay 540.00 USD to Figma by ach; <why it needs an OK>"), without its
+    action id. Read whole: a payee's name may hold a "; ". The payload itself names a payee only by its id."""
+    return re.sub(r" \(Finance action [^)]*\)$", "", _named(content, "what"))
 
 
 def _published_title(content: object) -> str:
@@ -780,6 +779,17 @@ def party(conn: "sqlite3.Connection", actor: object, row: Row) -> bool:
     if who in {row["asked_by_id"], row.get("asked_of_id"), row.get("ok_by_id")} - {None, ""}:
         return True
     return owner_or_admin(conn, who)
+
+
+def parties_to_all(conn: "sqlite3.Connection", actor: object, requirement_ids: list[str]) -> bool:
+    """Whether `actor` is a party (`party`) to every bound OK of these requirements, read in one statement."""
+    who = str(actor or "")
+    rows = conn.execute(
+        "SELECT asked_by_id, asked_of_id, ok_by_id FROM ok_grants WHERE requirement_id IN (SELECT value FROM json_each(?))",
+        (json.dumps(requirement_ids),),
+    ).fetchall()
+    named = all(who and who in (row[0], row[1], row[2]) for row in rows)
+    return named or bool(who) and owner_or_admin(conn, who)
 
 
 def hidden_from(conn: "sqlite3.Connection", viewer: object, requirement_id: str) -> bool:

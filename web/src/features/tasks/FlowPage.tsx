@@ -14,7 +14,7 @@ import './tasks.css';
 function FlowRow({ it }: { it: FlowItem }) {
   return (
     <TaskRow
-      title={it.title}
+      title={it.about || it.title}
       href={`/flow/${it.number ?? encodeURIComponent(it.id)}`}
       target={`task:${it.number ?? it.id}`}
       mark={<FlowMark />}

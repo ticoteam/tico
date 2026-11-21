@@ -624,6 +624,9 @@ export interface FlowItem {
   /** What it asks of the person, when an ask holds it (`ask`): its kind ("ok", "page"), who asked and what it shows
       ("email:<send id>", "page:<file>@<v>"). */
   ask?: { kind: string; by: string | null; shows: string[] };
+  /** What its ask is about, when the server lets this person read it (Needs you `about`): a page ask's page title, a
+      Finance OK's payee and amount. The row shows it in place of the task's title. */
+  about?: string;
 }
 
 /** One of Flow's sections: a pipeline's stage and its tasks that wait on you. */
@@ -689,6 +692,7 @@ export const flowQuery = queryOptions({
         since: it.since ?? t.stage_since ?? new Date().toISOString(),
         blocks: t.blocks,
         ...(it.ask && { ask: { kind: it.ask.kind, by: it.ask.asked_by ?? null, shows: it.ask.shows ?? [] } }),
+        ...(it.about && { about: it.about }),
       });
     }
     return { count: items.length, items, task_ids: [...named] };

@@ -2085,34 +2085,46 @@ def _asked_page(item):
 
 
 def needs_lines(c, auth, who, items):
-    """Needs-you items as they are served, each time, from a build or a held one (backend/needs_cache.py): a page ask's
-    row is the submitted page's own title (`about`) and first line (`line`) instead of its document's name ("Release
-    report"), once the reader is seen to read that version (files.page_refs_readable). A changed item is a copy, so a
-    held list stays as built."""
-    from .files import page_lines, page_refs_readable
+    """Needs-you items as a reader is served them: a page ask's row is the submitted page's title (`about` and `line`)
+    instead of its document's name ("Release report"), for a reader who may read that version
+    (files.page_refs_readable). Read with every list, so its marks and version move with the reader's access; a
+    changed item is a copy."""
+    from .files import page_refs_readable
 
     out = []
     for item in items:
         page = _asked_page(item)
         if page and page_refs_readable(c, auth, who, [page["ref"]]):
-            title, first = page_lines(c, page["file_id"], page["version"])
+            row = c.execute("SELECT title FROM bot_files WHERE id=?", (page["file_id"],)).fetchone()
+            title = _clip(row[0] if row else "", 120)
             if title:
-                item = {**item, "about": title, "line": first or title}
+                item = {**item, "about": title, "line": title}
         out.append(item)
     return out
 
 
-def needs_still_party(c, who, items):
-    """Whether the caller is still a party (task_asks.party) to every OK a held list says what it is about (`about`: a
-    Finance action's payee and amount), before a page is cut from that build (backend/needs_cache.py)."""
-    from . import task_asks
+def needs_shown(c, auth, who, task_view=None, **how):
+    """needs_items as the reader is served them (needs_lines): what every route and stream of Needs you gives."""
+    return needs_lines(c, auth, who, needs_items(c, auth, who, task_view, **how))
 
+
+def needs_still_shown(c, auth, who, items):
+    """Whether items cut from a held build (backend/needs_cache.py) still show only what the caller may read: each
+    page ask's title (page_refs_readable), and what each OK is about (a Finance action's payee and amount) to its
+    parties alone (task_asks.parties_to_all, one statement for them all)."""
+    from . import task_asks
+    from .files import page_refs_readable
+
+    oks = []
     for item in items:
-        if item.get("about") and (item.get("ask") or {}).get("kind") == "ok":
-            found = task_asks.grant(c, item["requirement_id"])
-            if found and not task_asks.party(c, who.actor, found):
-                return False
-    return True
+        if not item.get("about"):
+            continue
+        page = _asked_page(item)
+        if page and not page_refs_readable(c, auth, who, [page["ref"]]):
+            return False
+        if (item.get("ask") or {}).get("kind") == "ok":
+            oks.append(str(item["requirement_id"]))
+    return not oks or task_asks.parties_to_all(c, who.actor, oks)
 
 
 def needs_key(x):
@@ -2237,7 +2249,7 @@ def needs_summary(c, auth, who, task_view, limit):
     """What the caller's Needs you holds: the total, the number per kind, and per bot (`by_bot`, needs_actor): its
     count, the ones made this week and the ones older than three days, and its newest `limit` items. Items no bot put
     there are grouped under `other`. Ages are days from each item's `since`."""
-    items = needs_items(c, auth, who, task_view)
+    items = needs_shown(c, auth, who, task_view)
     now = H.now()
     week, older = H.shift(now, days=-7), H.shift(now, days=-3)
     groups, kinds, this_week = {}, {}, 0
@@ -3519,26 +3531,25 @@ def install_views(app, store, auth, mutate, task_view):
             built = held.get(viewer, cursor.partition(".")[0])
             if built is not None:
                 with store.read_transaction() as c:
-                    if needs_still_readable(c, auth, who, built.task_ids) and needs_still_party(c, who, built.items):
-                        out = needs_paged(
-                            who, built.items, built.version, limit, cursor, built.snoozed_until, built.counts
-                        )
-                        return {**out, "items": needs_lines(c, auth, who, out["items"])}
+                    out = needs_paged(who, built.items, built.version, limit, cursor, built.snoozed_until, built.counts)
+                    if needs_still_readable(c, auth, who, built.task_ids) and needs_still_shown(
+                        c, auth, who, out["items"]
+                    ):
+                        return out
                 held.drop(viewer, built)
         began = needs_cache.begin()
         with store.read_transaction() as c:
             if count:
                 items = needs_items(c, auth, who, count_only=True)
                 return {"actor": who.actor, "count": len(items)}
-            listed = needs_items(c, auth, who)
-            current = needs_marks(listed)[1]
-            items = needs_lines(c, auth, who, listed)  # as served; the held build is checked again when it serves
+            items = needs_shown(c, auth, who)
+            current = needs_marks(items)[1]
             # When an ask this person snoozed comes back: the page reads the list again then (backend/ask_snoozes.py).
             from . import ask_snoozes
 
             woken = {"snoozed_until": ask_snoozes.next_end(c, who)}
         counts = {}  # the page counts, worked out by the first page, kept for the next ones
-        held.keep(viewer, current, listed, woken["snoozed_until"], began, counts)
+        held.keep(viewer, current, items, woken["snoozed_until"], began, counts)
         if version and version == current and not cursor:
             return {"actor": who.actor, "count": len(items), "version": current, "unchanged": True, **woken}
         if ids is not None:

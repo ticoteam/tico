@@ -624,45 +624,6 @@ def page_refs_readable(c, auth, who, refs):
     return True
 
 
-PAGE_HEAD_BYTES = 256 * 1024  # what page_lines reads of a version: its title and first paragraphs are near the top
-PAGE_LINES_HELD = 2048
-_page_lines = {}  # blob digest -> (title, first line): a version's bytes never change
-
-
-def page_lines(c, file_id, version):
-    """(title, first line) of one stored version of a page: its <title> (else its first line, a heading), and the first
-    line of its text after that. ("", "") when it has none or its bytes cannot be read. The caller checks first that
-    the reader may read that version (page_refs_readable). Read once per version in this process."""
-    v = stored_version(c, file_id, version)
-    blobs = getattr(c, "blobs", None)
-    if v is None or blobs is None or not str(v["mime"]).startswith("text/html"):
-        return "", ""
-    digest = v["blob_digest"]
-    if digest in _page_lines:
-        return _page_lines[digest]
-    try:
-        head = b"".join(blobs.open_range(digest, 0, PAGE_HEAD_BYTES - 1))
-    except Exception as exc:  # noqa: BLE001 - an unread page keeps its ask's own line
-        LOG.warning("A page's title could not be read for its ask: %s", type(exc).__name__)
-        return "", ""
-    from .html_convert import to_text
-
-    text, title = to_text(head.decode("utf-8", errors="replace"))
-    lines = [line for line in text.splitlines() if line.strip()]
-    title = title or (lines.pop(0) if lines else "")
-    first = next((line for line in lines if line != title), "")
-    found = (_clipped(title, 120), _clipped(first, 160))
-    if len(_page_lines) >= PAGE_LINES_HELD:
-        _page_lines.pop(next(iter(_page_lines), None), None)
-    _page_lines[digest] = found
-    return found
-
-
-def _clipped(text, most):
-    said = " ".join(str(text or "").split())
-    return said if len(said) <= most else said[: most - 1].rstrip() + "…"
-
-
 def readable_earlier(c, auth, who, entry):
     """A `to_leave` entry with the page it shows from an earlier stage (task_calls.earlier_page) taken out unless
     `who` may read it in full (page_refs_readable): a reader who may not open it gets no reference to it, and the OK

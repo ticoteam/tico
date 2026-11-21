@@ -320,25 +320,23 @@ def test_a_page_cut_from_a_held_build_leaves_out_a_task_the_caller_no_longer_rea
     assert later["items"] == rebuilt["items"][:2] and later["count"] == first["count"] - 1
 
 
-def test_a_page_asks_row_is_its_pages_title_and_first_line_while_the_reader_reads_that_version(api):
+def test_a_page_asks_row_is_its_pages_title_while_the_reader_reads_that_version(api):
     """Marketing C3: seven page asks all read "Release report", the document's name. A page ask's row is the submitted
-    page's own title (`about`) and first line (`line`), and only while the reader may read that version: once the page
-    is deleted, a page cut from the held build (backend/needs_cache.py) and a new build both show the ask's own line,
-    never the page's words."""
+    page's own title (`about` and `line`), only while the reader may read that version: once the page is deleted the
+    list's version moves (`version=` is not "unchanged"), a cursor into the held build (backend/needs_cache.py) is
+    built again, and every answer shows the ask's own line, never the page's title."""
     store = api.app.state.store
     store.blobs = store.blobs or Blobs(store.settings)
-    pages = {
-        "Pause 3 rental Google campaigns": "$269 of $514 spent with 0 booked demos",
-        "Publish 3 comparison pages": "TIDY vs Vacasa, Evolve and a local manager",
-    }
+    titles = ["Pause 3 rental Google campaigns", "Publish 3 comparison pages"]
     fids = []
     with store.transaction() as c:
         for slug in ("manager", "writer"):
             X.bot(c, slug)
         X.pipeline(c, "product", "Product", SPEC, manager="bot:manager")
-        for n, (title, first) in enumerate(pages.items()):
+        for n, title in enumerate(titles):
             row = X.new_task(c, ANA, f"Release report {n}", "product", assignee="bot:writer")
-            fid, _ = _page(c, store, f"<title>{title}</title><h1>{title}</h1><p>{first}</p><p>Why, below.</p>")
+            fid, _ = _page(c, store, f"<h1>{title}</h1><p>Why, below.</p>")
+            c.execute("UPDATE bot_files SET title=? WHERE id=?", (title, fid))
             made = P.attach(c, row["id"], "Spec page", "page:" + fid, "bot:writer", seen_version=row["version"])
             _say(c, made, "met")
             fids.append(fid)
@@ -348,18 +346,19 @@ def test_a_page_asks_row_is_its_pages_title_and_first_line_while_the_reader_read
 
     first = api.get("/api/v2/needs-you?limit=50", headers=headers("ana-test")).json()
     shown = rows(first)
-    for fid, (title, line) in zip(fids, pages.items(), strict=True):
-        assert (shown[fid]["about"], shown[fid]["line"]) == (title, line)
+    for fid, title in zip(fids, titles, strict=True):
+        assert (shown[fid]["about"], shown[fid]["line"]) == (title, title)
     with store.transaction() as c:
         c.execute("UPDATE bot_files SET state='deleted' WHERE id=?", (fids[1],))
     held = api.get(f"/api/v2/needs-you?limit=50&cursor={first['version']}.0", headers=headers("ana-test")).json()
-    rebuilt = api.get("/api/v2/needs-you", headers=headers("ana-test")).json()
-    assert "restart" not in held and held["version"] == first["version"]  # cut from the held build
-    for answer in (held, rebuilt):
+    same = api.get(f"/api/v2/needs-you?version={first['version']}", headers=headers("ana-test")).json()
+    assert "unchanged" not in same and same["version"] != first["version"]
+    assert held["restart"] is True and held["version"] == same["version"]
+    for answer in (same, held):
         shown = rows(answer)
-        assert shown[fids[0]]["about"] == "Pause 3 rental Google campaigns"
+        assert shown[fids[0]]["about"] == titles[0]
         assert shown[fids[1]]["line"] == "Spec page" and "about" not in shown[fids[1]]
-        assert "comparison" not in json.dumps(answer) and "Vacasa" not in json.dumps(answer)
+        assert "comparison" not in json.dumps(answer)
 
 
 def preset_company(api, count):

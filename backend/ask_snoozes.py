@@ -29,10 +29,10 @@ _is_human = cast(Callable[[object], bool], H.is_human)
 
 
 def _needs(c: Any, auth: Any, who: Any, **how: Any) -> list[Item]:
-    """The caller's Needs you, as views.needs_items reads it."""
+    """The caller's Needs you, as it is served (views.needs_shown)."""
     from . import views
 
-    return cast(Callable[..., list[Item]], views.needs_items)(c, auth, who, **how)
+    return cast(Callable[..., list[Item]], views.needs_shown)(c, auth, who, **how)
 
 
 MAX_DAYS = 366  # the latest a snooze may end: a year on (a leap year's day included)
