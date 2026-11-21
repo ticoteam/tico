@@ -184,7 +184,35 @@ def test_a_key_proposal_whose_tools_are_all_deleted_is_superseded(api, monkeypat
         crm = c.execute("SELECT id FROM tools WHERE name='Close CRM'").fetchone()[0]
     assert api.delete(f"/api/v2/api-tools/{crm}", headers=headers()).status_code == 200
     assert "key_drop" not in requests(api, "ana-test")
-    assert post(api, f"tools-chat/proposals/{mid}/grant", {"keep": [0]})["state"] == "superseded"
+    # A keep that does not say it names places on the card as proposed is refused first, even with no row left.
+    post(api, f"tools-chat/proposals/{mid}/grant", {"keep": [0]}, expected=409)
+    assert (
+        post(api, f"tools-chat/proposals/{mid}/grant", {"keep": [0], "positions": "original"})["state"] == "superseded"
+    )
+
+
+def test_grant_takes_a_rows_tool_by_its_id_alone(api, monkeypatch):
+    # A tool named like the row's tool id is added: Grant attaches the key to the row's own tool, never that one.
+    _, mid, _ = world(api, monkeypatch)
+    with api.app.state.store.read() as c:
+        crm = c.execute("SELECT id FROM tools WHERE name='Close CRM'").fetchone()[0]
+    named = tool(api, crm.upper())["id"]
+    assert named != crm
+    card = requests(api, "ana-test")["key_drop"]["key_drop"]
+    body = {"keep": [0], "seen": card["losses"], "positions": "original"}
+    assert post(api, f"tools-chat/proposals/{mid}/grant", body)["state"] == "granted"
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT tool_id FROM credentials WHERE name='JIRA_LOGIN'").fetchone()[0] == crm
+    # Grant's stored rows name a tool by its id alone: a name finds nothing there.
+    import pytest
+
+    from backend import key_grants
+    from backend.store import Problem
+
+    with api.app.state.store.read() as c:
+        assert key_grants._tool(c, "Close CRM")["id"] == crm  # pyright: ignore[reportPrivateUsage]
+        with pytest.raises(Problem):
+            key_grants._tool(c, "Close CRM", exact=True)  # pyright: ignore[reportPrivateUsage]
 
 
 def test_a_grant_from_a_card_whose_loss_preview_moved_is_refused(api, monkeypatch):
@@ -303,8 +331,17 @@ def test_a_proposal_with_one_deleted_tool_lists_and_grants_the_other_row(api, mo
     [card] = [it["key_drop"] for it in page["items"] if it["kind"] == "key_drop"]
     assert [(r["at"], r["key"]) for r in card["rows"]] == [(1, "JIRA_LOGIN")]
     # A keep that does not say it names places on the card as proposed is refused, granting nothing.
-    old = post(api, f"tools-chat/proposals/{proposal['id']}/grant", {"keep": [0], "seen": card["losses"]}, expected=409)
+    old = post(api, f"tools-chat/proposals/{proposal['id']}/grant", {"keep": [1], "seen": card["losses"]}, expected=409)
     assert old["error"]["code"] == "changed"
+    # Acme Ads made again under the same id never brings its old row back, to the list or to Grant.
+    assert tool(api, "Acme Ads", base_url="https://ads.acme.example")["id"] == ads
+    card = requests(api, "ana-test")["key_drop"]["key_drop"]
+    assert [r["at"] for r in card["rows"]] == [1]
+    revived = {"keep": [0, 1], "seen": card["losses"], "positions": "original"}
+    post(api, f"tools-chat/proposals/{proposal['id']}/grant", revived, expected=409)
+    with api.app.state.store.read() as c:  # refused before any key was attached
+        attached = c.execute("SELECT name FROM credentials WHERE tool_id IS NOT NULL AND name LIKE '%_LOGIN'")
+        assert [r[0] for r in attached] == []
     body = {"keep": [1, 1], "seen": card["losses"], "positions": "original"}
     done = post(api, f"tools-chat/proposals/{proposal['id']}/grant", body)
     assert done["state"] == "granted" and [r["key"] for r in done["rows"]] == ["JIRA_LOGIN"]
