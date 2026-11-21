@@ -1107,7 +1107,7 @@ export interface RuleLink {
   id: string;
   name: string;
   mode: 'enforced' | 'informed' | 'not_covered';
-  counts: { passed: number; refused: number; held: number } | null;
+  counts: { passed: number; refused: number; held: number; unchecked: number } | null;
 }
 export const ruleLinksQuery = queryOptions({
   queryKey: ['rules', 'links'],

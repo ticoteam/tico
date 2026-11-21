@@ -446,7 +446,7 @@ def test_a_streamed_401_reaches_the_caller_unchanged_with_the_phrase_split_acros
 class Judge:
     """The org rule check's model (backend/org_rule_check.py): a rule is broken when what it reads says NEEDLE."""
 
-    NEEDLE = "favorite color is"
+    NEEDLE = "post to close crm"  # a write to Close CRM: what the check reads is names only
 
     def __init__(self):
         self.read = []
@@ -461,7 +461,8 @@ class Judge:
 def test_an_agents_write_is_rule_checked_before_the_key_goes_in_logged_once_and_never_stopped(api):
     """Rules › Links, log-only (backend/rule_links.py): a write by a bot meets the org rules before the proxy puts the key
     in, and leaves one outcome event on the tool's link with the rule in it. A Block rule broken is a would-be refusal:
-    the write still goes. What the check reads holds no credential in any spelling, and a read is never counted."""
+    the write still goes. What the check reads is names only, so no credential reaches it, and a read is never
+    counted."""
     from backend.tests.helpers.org_rules import org, rule
 
     setup(api)
@@ -469,8 +470,9 @@ def test_an_agents_write_is_rule_checked_before_the_key_goes_in_logged_once_and_
     judge = api.app.state.judge = Judge()
     tool(api, scheme="query:api_key")
     give(api, key(api, "close-crm", FULL), "bot:ops")
-    color = "Never tell anyone Acme's favorite color."
-    made = rule(api, {"kind": "internal", "text": color, "who": {"bots": ["ops"]}, "if_broken": "block"})
+    made = rule(
+        api, {"kind": "internal", "text": "Never write to Close CRM.", "who": {"bots": ["ops"]}, "if_broken": "block"}
+    )
     vendor = Vendor()
     api.app.state.tool_proxy_transport = httpx.MockTransport(vendor)
     _, attempt = run(api)
@@ -490,9 +492,7 @@ def test_an_agents_write_is_rule_checked_before_the_key_goes_in_logged_once_and_
     assert r.status_code == 200 and len(vendor.seen) == 1  # log-only: the would-be refusal still went
     assert "api_key=" + FULL in str(vendor.seen[0].url)  # the key went in after the check
     [read] = judge.read
-    for secret in (token, basic, token.split(".")[1], FULL):
-        assert secret not in read
-    assert "favorite color is gold" in read and "[token]" in read and "api_key=[key]&mode=x" in read
+    assert read == "POST to Close CRM\nFields: basic, copy, note"  # names only: no value, path, query or header
     with api.app.state.store.read() as c:
         rows = c.execute("SELECT actor, action, target, detail FROM events WHERE action LIKE 'rules.%'").fetchall()
     assert [(a, b, t) for a, b, t, _ in rows] == [("bot:ops", "rules.refused", "link:tool:close-crm")]
@@ -515,17 +515,17 @@ def test_an_agents_write_is_rule_checked_before_the_key_goes_in_logged_once_and_
         c.execute("UPDATE tools SET mcp_url='https://api.close.example/mcp' WHERE id='close-crm'")
     assert write("mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).status_code == 200
     assert len(logged()) == 2
-    # With no Idempotency-Key, or a body over what the check reads, a write is forwarded as before, never judged, and
-    # recorded unchecked.
+    # With no Idempotency-Key a write is forwarded as before, never judged, and recorded as its own outcome.
     asked, forwarded = len(judge.read), len(vendor.seen)
     assert write("api/v1/lead/", key=False, json=note).status_code == 200
-    assert write("api/v1/lead/", content=b"x" * (1024 * 1024 + 1)).status_code == 200
-    assert [d["unchecked"] for d in logged()[2:]] == ["no_key", "too_large"]
-    assert len(judge.read) == asked and len(vendor.seen) == forwarded + 2
+    with api.app.state.store.read() as c:
+        last = c.execute("SELECT action, detail FROM events WHERE action LIKE 'rules.%' ORDER BY rowid DESC").fetchone()
+    assert (last[0], json.loads(last[1])["unchecked"]) == ("rules.unchecked", "no_key")
+    assert len(judge.read) == asked and len(vendor.seen) == forwarded + 1
     # A destination refused at its check is never judged: the address is checked and pinned first.
     ANSWERS["api.close.example"] = "10.0.0.5"
     assert write("api/v1/lead/", json=note).status_code == 403
-    assert len(logged()) == 4 and len(judge.read) == asked
+    assert len(logged()) == 3 and len(judge.read) == asked
 
 
 def test_only_an_mcp_read_sent_to_exactly_the_tools_mcp_address_is_not_a_write(api):
@@ -535,13 +535,22 @@ def test_only_an_mcp_read_sent_to_exactly_the_tools_mcp_address_is_not_a_write(a
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tools SET mcp_url='https://mcp.close.example/mcp' WHERE id='close-crm'")
     give(api, key(api, "close-crm", FULL), "bot:ops")
-    api.app.state.tool_proxy_transport = httpx.MockTransport(Vendor())
+    api.app.state.tool_proxy_transport = httpx.MockTransport(McpVendor())
     _, attempt = run(api)
     token = handed(api, attempt)["value"]
     listing = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
-    sent = {"Authorization": "Bearer " + token}
+    search = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "search"}}
+
+    def send(path, body):
+        sent = {"Authorization": "Bearer " + token, "Idempotency-Key": uuid.uuid4().hex}
+        assert api.post("/api/v2/tool-proxy/close-crm/" + path, headers=sent, json=body).status_code == 200
+        with api.app.state.store.read() as c:
+            return c.execute("SELECT count(*) FROM events WHERE action LIKE 'rules.%'").fetchone()[0]
+
     for path in ("mcp", "mcp/", "mcp?session=1"):  # only the first is exactly the MCP address
-        sent["Idempotency-Key"] = uuid.uuid4().hex
-        assert api.post("/api/v2/tool-proxy/close-crm/" + path, headers=sent, json=listing).status_code == 200
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM events WHERE action LIKE 'rules.%'").fetchone()[0] == 2
+        send(path, listing)
+    assert send("mcp", search) == 2  # `search` is read-only by the listing the MCP address gave
+    # The same id made again: the hints of the tool it replaced are not its own.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tools SET created_at='2099-01-01T00:00:00Z' WHERE id='close-crm'")
+    assert send("mcp", search) == 3

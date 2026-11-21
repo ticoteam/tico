@@ -1593,23 +1593,27 @@ def install(app, settings, store, auth, mutate):
         from . import rule_links
 
         who = request.state.identity
+        names = {}
 
         def sendable(c):
             name = body.type.strip()
             if not CUSTOM.fullmatch(name):
                 return False
-            may_send(c, who, _row(c, hook_id), name)
+            hook = _row(c, hook_id)
+            may_send(c, who, hook, name)
             try:
                 publishable(c, name, body.subject or name, body.data, who.actor, hook_id)
             except Refused:
                 return False
+            names.update(event=name, endpoint=hook["name"])
             return True
 
         # An agent's send meets the org rules first (backend/rule_links.py), its one event in the send's write; only a
-        # send that would be made is checked. Log-only.
-        said = json.dumps(body.model_dump(), sort_keys=True, default=str)
+        # send that would be made is checked, on its names only (the event and the endpoint, never its data). Log-only.
         found = (
-            rule_links.check(store, request.app.state.judge, who, "webhook", "webhook", said)
+            rule_links.check(
+                store, request.app.state.judge, who, "webhook", "webhook", f"{names['event']} to {names['endpoint']}"
+            )
             if rule_links.would_write(store, who, request, sendable)
             else None
         )

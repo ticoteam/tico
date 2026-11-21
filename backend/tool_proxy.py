@@ -67,8 +67,9 @@ MCP_READS = frozenset(
     )
 )
 READ_ONLY_TOOLS = {}  # {tool id: {MCP tool name}}: what the vendor's latest tools/list marked read-only
-# The same, learned only from a tools/list sent to exactly the tool's MCP address (backend/rule_links.mcp_endpoint): the
-# hints the outside-write gate trusts. Read authorization keeps READ_ONLY_TOOLS, as before.
+# The same, learned only from a tools/list sent to exactly the tool's MCP address (backend/rule_links.mcp_endpoint), by
+# (tool id, MCP address, tool created_at): the hints the outside-write gate trusts. Read authorization keeps
+# READ_ONLY_TOOLS, as before.
 GATE_READ_ONLY = {}
 MAX_LISTING = 4 * 1024 * 1024
 MAX_NAMES = 5000
@@ -484,11 +485,9 @@ def install(app, store):
                 reconnect_tasks.called(c, tool_id, status)  # Key rejected opens its Reconnect task, Working ends it
             rule_links.record(c, gate)  # the write's rule check, in the same transaction as its row (in a savepoint)
 
-    def gated(subject, tool_id, method, rest, query, body, params, content_type):
+    def gated(subject, tool_id, name, method, body, calls):
         try:
-            if body is None:  # over rule_links.MAX_JUDGED: never copied or read, recorded unchecked
-                return rule_links.unchecked(subject, subject, 'tool:' + tool_id, 'tool_call', 'too_large')
-            output = rule_links.proxy_output(method, rest, query, body, params, content_type)
+            output = rule_links.proxy_output(name, method, body, calls)
             return rule_links.check_as(
                 store, getattr(app.state, 'judge', None), subject, subject, '', 'tool:' + tool_id, 'tool_call', output
             )
@@ -543,11 +542,8 @@ def install(app, store):
                 return (403, 'forbidden', read_only_detail(who, name), log), None
             # An MCP tool's sign-in has no stored key: its access token is fetched below.
             key = None if credential['kind'] == 'oauth' else vault.cipher.decrypt(c, credential)
-            scheme = tool['auth_scheme'] or ''
             return None, {
                 'auth': auth,
-                # Where a caller may put the key in the query: blanked from what the org rule check reads.
-                'auth_params': {*params, *([scheme[6:]] if scheme.startswith('query:') else [])},
                 'tool': dict(tool),
                 'credential': dict(credential),
                 'key': key,
@@ -638,7 +634,7 @@ def install(app, store):
                 return refused(413, 'too_large', 'A tool call sends at most 25 MB.')
             chunks.append(chunk)
         # Read authorization parses a Read caller's POST whatever its size, as before; the gate reads it only up to its
-        # 1 MB limit (`gate_calls`), and a larger one is not parsed for it at all (its check is too_large).
+        # 1 MB limit (`gate_calls`), and a larger one is not parsed for it at all.
         small = total <= rule_links.MAX_JUDGED
         calls = rpc_calls(b''.join(chunks)) if method == 'POST' and (small or ready['reads_only']) else None
         gate_calls = calls if small else None
@@ -650,13 +646,15 @@ def install(app, store):
                 await log(403, 'refused', detail)
                 return refused(403, 'forbidden', detail)
         listing = bool(calls) and any(m == 'tools/list' for m, _ in calls)
-        asked = query
         url = tool['base_url'].rstrip('/') + '/' + rest.lstrip('/')
         query = outgoing_query(query, tool, key, auth['query'] if auth else None)
         url += ('?' + query) if query else ''
         # The gate's MCP read exemption, and the read-only hints it trusts, need the final address (the key's own query
         # parameters included) to be exactly the tool's MCP address.
         mcp = rule_links.mcp_endpoint(tool, url)
+        # The gate's hints belong to this MCP address of this tool as made: a tool made again under the same id starts
+        # with none.
+        hinted = (tool_id, tool.get('mcp_url') or '', tool.get('created_at') or '')
         if urlsplit(url).hostname != urlsplit(tool['base_url']).hostname:
             await log(None, 'refused', 'Address left the tool host')
             return refused(404, 'not_found', 'Not found')
@@ -666,11 +664,11 @@ def install(app, store):
             await log(None, 'refused', exc.reason)
             return refused(403, 'tool_address', exc.reason)
         if method not in SAFE and not (
-            mcp and gate_calls is not None and not mcp_write(tool_id, gate_calls, GATE_READ_ONLY)
+            mcp and gate_calls is not None and not mcp_write(hinted, gate_calls, GATE_READ_ONLY)
         ):
-            # The destination checked and pinned, a write meets the org rules on what the caller sent, scrubbed, before
-            # it is forwarded with the key (backend/rule_links.py). Log-only: its one outcome event on the tool's link
-            # goes with the call's own row, after it is forwarded.
+            # The destination checked and pinned, a write meets the org rules on its names only (the tool, the method,
+            # MCP methods and tools, a JSON body's key names: never a value) before it is forwarded with the key
+            # (backend/rule_links.py). Log-only: its one outcome event goes with the call's own row, after forwarding.
             idem = request.headers.get('idempotency-key', '')
             if not idem or len(idem) > 200:
                 # No usable Idempotency-Key: not judged (a retry could not be told from a new write), recorded
@@ -678,10 +676,9 @@ def install(app, store):
                 subject = got['subject']
                 checked['found'] = rule_links.unchecked(subject, subject, 'tool:' + tool_id, 'tool_call', 'no_key')
             else:
-                sent = b''.join(chunks) if total <= rule_links.MAX_JUDGED else None
-                kind = request.headers.get('content-type', '')
+                sent = b''.join(chunks) if small and not gate_calls else None
                 checked['found'] = await loop().run_in_executor(
-                    None, gated, got['subject'], tool_id, method, rest, asked, sent, got['auth_params'], kind
+                    None, gated, got['subject'], tool_id, tool['name'] or tool_id, method, sent, gate_calls
                 )
         client = httpx.AsyncClient(
             transport=getattr(app.state, 'tool_proxy_transport', None),
@@ -774,7 +771,7 @@ def install(app, store):
                 if heard:
                     learn_read_only(tool_id, b''.join(heard))
                     if mcp:
-                        learn_read_only(tool_id, b''.join(heard), GATE_READ_ONLY)
+                        learn_read_only(hinted, b''.join(heard), GATE_READ_ONLY)
             finally:
                 await upstream.aclose()
                 await client.aclose()

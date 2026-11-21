@@ -294,10 +294,10 @@ def register(app: FastAPI, auth: Any, mutate: Callable[..., Any], store: Any) ->
 
         for _ in range(2):
             # An agent's ask meets the org rules first (backend/rule_links.py), its one event in the ask's write; only
-            # an ask that would file a task is checked. Log-only.
+            # an ask that would file a task is checked, on its name only (never its note). Log-only.
             filing = agent and links.would_write(store, who, request, filing_now)
             found = (
-                links.check(store, request.app.state.judge, who, "release", "release", body.note or "")
+                links.check(store, request.app.state.judge, who, "release", "release", "Release now")
                 if filing
                 else None
             )

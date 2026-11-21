@@ -28,6 +28,7 @@ export function RuleLinks() {
               <Th num>Writes</Th>
               <Th num>Refused</Th>
               <Th num>Held</Th>
+              <Th num>Unchecked</Th>
             </tr>
           </thead>
           <tbody>
@@ -50,14 +51,17 @@ function LinkRow({ link }: { link: RuleLink }) {
         {link.name}
       </td>
       <td className="t-words">{MODE[link.mode]}</td>
-      <Td num zero={c?.passed === 0 && c.refused === 0 && c.held === 0}>
-        {n(c ? c.passed + c.refused + c.held : undefined)}
+      <Td num zero={c ? c.passed + c.refused + c.held + c.unchecked === 0 : false}>
+        {n(c ? c.passed + c.refused + c.held + c.unchecked : undefined)}
       </Td>
       <Td num zero={c?.refused === 0}>
         {n(c?.refused)}
       </Td>
       <Td num zero={c?.held === 0}>
         {n(c?.held)}
+      </Td>
+      <Td num zero={c?.unchecked === 0}>
+        {n(c?.unchecked)}
       </Td>
     </Tr>
   );

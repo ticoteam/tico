@@ -17,8 +17,8 @@ beforeEach(() => {
 
 it('shows each link with its mode, and counts only where it is measured', async () => {
   const links: RuleLink[] = [
-    { id: 'email', name: 'Email', mode: 'enforced', counts: { passed: 4, refused: 0, held: 1 } },
-    { id: 'tool:close', name: 'Close', mode: 'informed', counts: { passed: 2, refused: 3, held: 0 } },
+    { id: 'email', name: 'Email', mode: 'enforced', counts: { passed: 4, refused: 0, held: 1, unchecked: 2 } },
+    { id: 'tool:close', name: 'Close', mode: 'informed', counts: { passed: 2, refused: 3, held: 0, unchecked: 0 } },
     { id: 'computer', name: 'Calls straight from computers', mode: 'not_covered', counts: null },
   ];
   queryClient.setQueryData(ruleLinksQuery.queryKey, links);
@@ -31,7 +31,7 @@ it('shows each link with its mode, and counts only where it is measured', async 
     </QueryClientProvider>,
   );
   const row = async (name: string) => within((await screen.findByText(name)).closest('tr') as HTMLElement).getAllByRole('cell').map((c) => c.textContent);
-  expect(await row('Email')).toEqual(['Email', 'Enforced', '5', '0', '1']);
-  expect(await row('Close')).toEqual(['Close', 'Informed only', '5', '3', '0']);
-  expect(await row('Calls straight from computers')).toEqual(['Calls straight from computers', 'Not covered', '', '', '']);
+  expect(await row('Email')).toEqual(['Email', 'Enforced', '7', '0', '1', '2']);
+  expect(await row('Close')).toEqual(['Close', 'Informed only', '5', '3', '0', '0']);
+  expect(await row('Calls straight from computers')).toEqual(['Calls straight from computers', 'Not covered', '', '', '', '']);
 });

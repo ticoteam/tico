@@ -902,12 +902,12 @@ def existing(c, auth, actor, body, operation_key="", request=None, draft_verifie
     }
 
 
-def duplicate(c, auth, actor, body, operation_key="", request=None, draft_verified=True):
+def duplicate(c, auth, actor, body, operation_key="", request=None, draft_verified=True, snap=None):
     """Read only, before the rule check: whether `enqueue` will queue nothing new for this email (`existing`: a send it
     has, by its receipt, its draft or its key, another sender's included, which it refuses), or refuse it outright (a
     receipt for other content). `enqueue` decides again inside its write."""
     try:
-        found = existing(c, auth, actor, body, operation_key, request, draft_verified)
+        found = existing(c, auth, actor, body, operation_key, request, draft_verified, snap)
     except Problem:
         return True
     old = found["old"]
@@ -2078,7 +2078,7 @@ def install(app, store, auth, mutate):
             again = rule_links.is_agent(store, who) and (
                 not idem
                 or len(idem) > 200
-                or duplicate(c, auth, actor, body, operation_key, asked, draft_verified=not asked.raw)
+                or duplicate(c, auth, actor, body, operation_key, asked, draft_verified=not asked.raw, snap=snap)
             )
         rules = None if composed else _raced if again else rule_gate(app, store, who, snap)
         via = who.via or ("agent:" + who.agent if who.agent else "")

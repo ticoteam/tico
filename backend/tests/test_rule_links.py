@@ -20,14 +20,14 @@ COLOR = "Never tell anyone Acme's favorite color."
 
 
 class Judge:
-    """The org rule check's model: a rule is broken when what it reads says "favorite color is"."""
+    """The org rule check's model: a rule is broken when what it reads says its needle ("favorite color is")."""
 
-    def __init__(self):
-        self.read = []
+    def __init__(self, needle="favorite color is"):
+        self.read, self.needle = [], needle
 
     def __call__(self, state, questions, label=None):
         self.read.append(state["output"])
-        broken = "favorite color is" in state["output"].lower()
+        broken = self.needle in state["output"].lower()
         answers = {qid: {"type": "noul", "noul": 0.95 if broken else 0.05} for qid in questions}
         return {"model": "jev-1.14", "usage": {"input_tokens": 10, "output_tokens": 0}, "ms": 1, "answers": answers}
 
@@ -49,6 +49,7 @@ def link_events(api, link):
 
 def test_an_agents_outside_write_logs_one_would_be_outcome_and_a_persons_own_is_never_gated(ruled):
     api, judge = ruled
+    judge.needle = "release now"  # what a release ask is judged on: its name, never its note
     escalate = rule(api, {"kind": "internal", "text": COLOR, "who": {"bots": ["ops"]}, "if_broken": "escalate"})
     patched = api.patch("/api/v2/release-schedule", json={"bot": "ops"}, headers=headers())
     assert patched.status_code == 200, patched.text
@@ -115,6 +116,7 @@ def test_release_now_checks_again_when_the_open_task_went_between_its_read_and_i
     api, judge = ruled
     assert api.patch("/api/v2/release-schedule", json={"bot": "ops"}, headers=headers()).status_code == 200
     rule(api, {"kind": "internal", "text": COLOR, "who": {"bots": ["ops"]}, "if_broken": "block"})
+    judge.needle = "release now"
     real, reads = RS.would_file, []
 
     def stale_first(c, who):  # the first read still saw an open Release task, gone by the write
@@ -168,52 +170,28 @@ def test_a_failure_to_log_leaves_the_write_as_it_was(ruled, monkeypatch):
 TOKEN = "tpx1.eyJ0IjoiY2xvc2UifQ.c2lnbmF0dXJlLXZhbHVlLTEy"
 
 
-@pytest.mark.parametrize(
-    "rest,query,body,kind",
-    [
-        ("leads/" + TOKEN.replace(".", "%2E"), "", b"", ""),  # percent-encoded in the path
-        ("leads", "q=" + TOKEN.replace(".", "%252E"), b"", ""),  # twice percent-encoded in a value
-        ("leads", TOKEN + "=1", b"", ""),  # a query name
-        ("leads", "basic=" + base64.b64encode(("u:" + TOKEN).encode()).decode().replace("+", "%2B"), b"", ""),
-        ("leads", "", ('{"note": "\\u0074' + TOKEN[1:] + '"}').encode(), ""),  # a JSON escape
-        (
-            "leads",
-            "",
-            json.dumps({TOKEN: "key", "b": base64.b64encode(TOKEN.encode()).decode()}).encode(),
-            "application/json",
-        ),
-        ("leads", "", ("a=" + TOKEN.replace(".", "%2E")).encode(), "application/x-www-form-urlencoded"),
-        ("leads", "", ("see " + TOKEN).encode(), "text/plain; charset=utf-8"),
-        # a JSON escape that, undone, leaves a percent escape; and the same inside base64
-        ("leads", "q=" + TOKEN.replace(".", "\\u00252E", 1), b"", ""),
-        ("leads", "b=" + base64.b64encode(TOKEN.replace(".", "\\u00252E", 1).encode()).decode(), b"", ""),
-        # base64 whose content is itself percent- or JSON-escaped, in either alphabet
-        ("leads", "b=" + base64.urlsafe_b64encode(("u:" + TOKEN.replace(".", "%2E")).encode()).decode(), b"", ""),
-        ("leads", "", json.dumps({"b": base64.b64encode(("\\u0074" + TOKEN[1:]).encode()).decode()}).encode(), ""),
-    ],
-)
-def test_what_the_check_reads_holds_no_credential_in_any_spelling(rest, query, body, kind):
-    read = L.proxy_output("POST", rest, query, body, (), kind)
-    assert L.clean(read) and "tpx1" not in read.lower() and "[token]" in read
-
-
-def test_a_value_escaped_deeper_than_is_read_is_not_read():
-    deep = TOKEN.replace(".", "%" + "25" * 5 + "2E")  # six layers of percent escapes
-    assert L.scrub(deep) == "[a value not read]" and not L.clean(deep)
-    assert "tpx1" not in L.proxy_output("POST", "leads", "q=" + deep, b"", ())
-
-
-def test_four_layers_of_escapes_are_not_read_in_a_path_a_query_or_a_form():
-    four = TOKEN.replace(".", "%" + "25" * 3 + "2E")  # %25252525 2E: four layers, one more than is read
-    form = "application/x-www-form-urlencoded"
-    for read in (
-        L.proxy_output("POST", "leads/" + four, "", b"", ()),
-        L.proxy_output("POST", "leads", "q=" + four, b"", ()),
-        L.proxy_output("POST", "leads", "", ("a=" + four).encode(), (), form),
-    ):
-        assert "tpx1" not in read.lower() and "not read" in read
-    three = TOKEN.replace(".", "%" + "25" * 2 + "2E")
-    assert "[token]" in L.proxy_output("POST", "leads", "", ("a=" + three).encode(), (), form)
+def test_the_check_reads_names_only_so_no_credential_can_reach_it():
+    """A proxied write is judged on its names only: the tool, the method, MCP methods and tools, a JSON body's top-level
+    key names. A body full of secrets (a token in a value, in base64, folded, or as a key) never reaches the judge."""
+    basic = base64.b64encode(("u:" + TOKEN).encode()).decode()
+    body = {
+        "note": TOKEN,
+        "auth": "Basic " + basic,
+        "folded": TOKEN[:20] + "\r\n " + TOKEN[20:],
+        "escaped": TOKEN.replace(".", "%252E"),
+        TOKEN: "x",
+        basic: 1,
+        "name": "Acme",
+    }
+    read = L.proxy_output("Close CRM", "POST", json.dumps(body).encode())
+    assert read == "POST to Close CRM\nFields: auth, escaped, folded, name, note"
+    calls = [("tools/call", {"name": "create_lead", "arguments": {"q": TOKEN}}), ("tools/call", {"name": TOKEN})]
+    assert (
+        L.proxy_output("Close CRM", "POST", None, calls)
+        == "POST to Close CRM\nMCP tools/call create_lead\nMCP tools/call"
+    )
+    for secret in (TOKEN, basic, TOKEN[20:], "c2lnbmF0dXJl"):
+        assert secret not in read
 
 
 def test_a_link_check_asks_one_provider_and_never_falls_back(ruled):
@@ -263,7 +241,7 @@ def test_a_send_that_became_eligible_after_its_preflight_is_logged_unchecked(rul
     )
     assert r.status_code == 200, r.text
     [(actor, action, detail)] = link_events(api, "webhook")
-    assert (actor, action, detail["unchecked"]) == ("bot:ops", "rules.passed", "changed_during_check")
+    assert (actor, action, detail["unchecked"]) == ("bot:ops", "rules.unchecked", "changed_during_check")
     assert judge.read == []
 
 
@@ -271,13 +249,6 @@ def test_an_approved_mails_unchecked_recheck_keeps_its_reason_on_the_link():
     result = {"outcome": "pass", "rules": ["r1"], "unchecked": "too_many_calls", "approved": "h1"}
     found = L.mailed(("bot:ops", "bot:ops", ""), result)
     assert (found["outcome"], found["unchecked"], found["rules"]) == ("passed", "too_many_calls", ["r1"])
-
-
-def test_a_body_that_cannot_be_read_safely_is_named_not_read():
-    assert "not read]" in L.proxy_output("POST", "page", "", ("<p>" + TOKEN).encode(), (), "text/html")
-    read = L.proxy_output("POST", "files", "", b"\x89PNG" + TOKEN.encode(), (), "image/png")
-    assert read.endswith(f"[a body of {4 + len(TOKEN)} bytes, not read]") and "tpx1" not in read
-    assert "[key]" in L.proxy_output("POST", "x", "api_key=" + TOKEN, b"", {"api_key"})
 
 
 def test_a_held_or_warned_mail_is_logged_on_the_email_link_with_the_rules_its_decision_applied(ruled):
@@ -326,6 +297,7 @@ def test_rules_links_lists_each_link_with_its_mode_and_30_day_counts(ruled, monk
         old = H.event(c, "bot:ops", "rules.refused", "link:tool:close", {})
         c.execute("UPDATE events SET created_at=? WHERE id=?", (H.shift(now, days=-31), old["id"]))
         # Before this tool was made: an earlier tool's under the same id, not counted.
+        H.event(c, "bot:ops", "rules.unchecked", "link:tool:close", {"unchecked": "no_key"})  # counted apart
         earlier = H.event(c, "bot:ops", "rules.held", "link:tool:close", {})
         c.execute("UPDATE events SET created_at=? WHERE id=?", (H.shift(now, days=-1), earlier["id"]))
     links = {row["id"]: row for row in get(api, "rule-links")["links"]}
@@ -341,7 +313,7 @@ def test_rules_links_lists_each_link_with_its_mode_and_30_day_counts(ruled, monk
         "support": "not_covered",
         "computer": "not_covered",
     }
-    assert links["tool:close"]["counts"] == {"passed": 1, "refused": 1, "held": 0}
+    assert links["tool:close"]["counts"] == {"passed": 1, "refused": 1, "held": 0, "unchecked": 1}
     assert links["tool:acme"]["counts"] is None
     assert "tool:quiet" not in {row["id"] for row in get(api, "rule-links", token="ben-test")["links"]}
     assert api.get("/api/v2/rule-links", headers=headers("cara-test")).status_code == 403
@@ -380,3 +352,27 @@ def test_email_keeps_its_own_judge_and_falls_back_to_a_second_provider(ruled):
         assert gate(c)["outcome"] == "held"
     assert asked == ["first", "second"]
     assert link_events(api, "email")[0][2]["rules"] == [blocked["id"]]
+
+
+def test_a_mail_decision_keeps_its_unchecked_reason_beside_a_directory_warning(ruled):
+    """The judged check out (timeout) and a Directory Warn rule met: the mail goes with its warning, and the link event
+    keeps both, the warned rule and why the judged check could not run."""
+    api, _ = ruled
+    verdict = {
+        "author": "bot:ops",
+        "operation": "mail",
+        "recipients": [],
+        "rules": [],
+        "broken": [],
+        "matched": [],
+        "outcome": "unchecked",
+        "error": "timeout",
+        "draft": False,
+        "obj": "",
+        "structured_warned": [{"id": "r9", "if_broken": "warn", "text": "Say please."}],
+    }
+    with api.app.state.store.transaction() as c:
+        out = K.mail_decide(c, {"author": "bot:ops", "key": "k1", "output": "Hi", "approved": None, "verdict": verdict})
+    assert (out["outcome"], out["rules"], out["unchecked"]) == ("warn", ["r9"], "timeout")
+    found = L.mailed(("bot:ops", "bot:ops", ""), out)
+    assert (found["rules"], found["unchecked"]) == (["r9"], "timeout")

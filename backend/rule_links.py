@@ -5,8 +5,9 @@ log-only for now.
 A link is one way out: a proxied tool (`tool:<id>`, backend/tool_proxy.py), outgoing webhooks (`webhook`), a release
 (`release`) and email (`email`). An agent's write on a link is checked the way a task
 write is (`org_rule_check.check_as`, outside any transaction, on a budget of one call: needing more is unchecked) and
-leaves exactly one outcome event on `link:<id>`: `rules.passed`, `rules.refused` (a Block rule broken) or `rules.held`
-(an Escalate rule broken), with the rules in its detail. An agent's write is one whose sender is a bot: a bot's own, or
+leaves exactly one outcome event on `link:<id>`: `rules.passed`, `rules.refused` (a Block rule broken), `rules.held`
+(an Escalate rule broken) or `rules.unchecked` (not judged, or the judge out: the reason in its detail), with the rules
+in its detail. An agent's write is one whose sender is a bot: a bot's own, or
 a person's Assistant or BotOps acting for them (`org_rule_check.checked_as`). A person's own write is never gated, and
 a read is never counted. A caller checks first, reading only, that the write would be made (its rights, not a replay),
 so no call is spent on a write that will not happen; the write's own checks still run inside it.
@@ -19,24 +20,21 @@ failure to log never changes the write or its answer; the proxy writes it with t
 A link's mode is what its path does (`mode`): Enforced for email, which holds mail, Informed only for the rest. No
 setting changes it until a link can switch.
 
-What the check reads of a proxied write is scrubbed first (`proxy_output`): no header at all (so no Authorization,
-Cookie or a tool's own auth header); the path, the query's names and values and a JSON, form or plain text body read
-decoded (percent and JSON escapes to a fixed point of at most DECODE_PASSES, base64 content too) with every proxy token
-(`tpx1.*`, plain or inside base64 such as a Basic pair) taken out and the tool's auth query parameters blanked, never
-encoded again. A value still escaped after that is not read; a body of any other kind, one over MAX_JUDGED or one whose
-scrubbing cannot be verified, is not read (an oversized one is recorded unchecked). It runs before the proxy puts the key in. Events never carry the text.
+What the check reads is names only, never a value (`proxy_output`): for a proxied write the tool's name, the HTTP
+method, an MCP call's method and tool name, and a JSON object body's top-level key names (short plain names: a key that
+could be a credential is left out); for a webhook send its event and endpoint names; for Release now nothing more. No
+path, query, header or value is read, so no credential can reach the judge. It runs before the proxy puts the key in.
+Events never carry the text. A vendor's own replay of a write under the same Idempotency-Key can log a second event.
 
 Not covered: reports to Tico support (#4869), a tool whose key goes to computers, a website tool's browser sign-in, and
 any call a computer makes straight out. Rules › Links lists them, unmeasured.
 """
 
-import base64
 import json
 import logging
 import re
-from collections.abc import Callable, Collection
+from collections.abc import Callable
 from typing import Any, cast
-from urllib.parse import unquote
 
 from fastapi import FastAPI, Request
 
@@ -53,17 +51,13 @@ ENFORCED, INFORMED, NOT_COVERED = "enforced", "informed", "not_covered"
 ENFORCED_LINKS = frozenset({"email"})  # the links whose path really stops a write; every other is Informed only
 FIXED = {"email": "Email", "webhook": "Outgoing webhooks", "release": "Releases"}
 UNCOVERED = {"support": "Tico support", "computer": "Calls straight from computers"}  # unmeasured paths, besides tools
-DECODE_PASSES = 3  # percent and JSON escapes undone to a fixed point within this many passes, or the value is not read
-MAX_JUDGED = 1024 * 1024  # a body over this is not copied or read: its check is recorded unchecked (too_large)
-OUTCOMES = ("rules.passed", "rules.refused", "rules.held")
+MAX_JUDGED = 1024 * 1024  # a proxied body over this is not parsed for its key names (the check reads the rest)
+OUTCOMES = ("rules.passed", "rules.refused", "rules.held", "rules.unchecked")
 DAYS = 30
 TOOLS_LISTED = 500
 CALLS = 1  # the judge calls one link check may make
-TOKEN = re.compile(r"tpx1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")  # backend/tool_proxy.py TOKEN_RE
-BASE64 = re.compile(r"[A-Za-z0-9+/_-]{16,}={0,2}")
-URLSAFE = str.maketrans("-_", "+/")
-ESCAPE = re.compile(r"\\u([0-9a-fA-F]{4})")
-FORM = "application/x-www-form-urlencoded"
+NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_-]{0,39}")  # a key or MCP tool name the check may read: short and plain
+METHOD = re.compile(r"[a-z][a-z/_]{0,39}")  # an MCP method the check may read
 # What each link's write is, in the words the check reads (org_rule_check.OPERATIONS).
 for _op, _words in (
     ("tool_call", "a call to an outside tool's API"),
@@ -74,97 +68,32 @@ for _op, _words in (
 
 
 # ----------------------------------------------------------------------------- what is judged
-def _decoded(text: str) -> str | None:
-    """`text` with percent escapes and JSON `\\u` escapes undone together, pass after pass, until nothing changes:
-    None when it still changes after DECODE_PASSES passes (an escape nested deeper than is read)."""
-    for _ in range(DECODE_PASSES + 1):
-        once = ESCAPE.sub(lambda m: chr(int(m.group(1), 16)), unquote(text))
-        if once == text:
-            return text
-        text = once
-    return None
+def _name(value: Any, pattern: re.Pattern[str] = NAME) -> str | None:
+    """`value` when it is a short plain name the check may read, never anything shaped like a proxy token."""
+    text = value if isinstance(value, str) else ""
+    return text if pattern.fullmatch(text) and not text.lower().startswith("tpx1") else None
 
 
-def _hidden(match: re.Match[str]) -> str:
-    """A base64 run that holds a proxy token, read from any of its four offsets in either alphabet, its content decoded
-    in turn (`_decoded`), as `[token]`; so is a run whose content cannot be decoded to its end."""
-    raw = match.group(0).translate(URLSAFE)  # either alphabet, read as the standard one
-    for offset in range(4):
-        part = raw[offset:].rstrip("=")
-        part = part[: len(part) // 4 * 4]  # whole quanta only: a run's tail never makes it fail to decode
+def proxy_output(tool_name: str, method: str, body: bytes | None, calls: Any = None) -> str:
+    """What the check reads of a proxied write, names only: the tool's name and the HTTP method; for MCP calls (`calls`,
+    tool_proxy.rpc_calls) each call's method and tool name; for a JSON object body its top-level key names. Never a
+    value, the path, the query or a header. `body` is None when it is not read (over MAX_JUDGED)."""
+    lines = [f"{method} to {tool_name}"]
+    for called, params in calls or ():
+        named = _name(called, METHOD)
+        if named:
+            tool = _name(cast("dict[str, Any]", params).get("name")) if called == "tools/call" else None
+            lines.append(f"MCP {named}" + (f" {tool}" if tool else ""))
+    if body and not calls:
         try:
-            plain = _decoded(base64.b64decode(part, validate=True).decode("latin-1"))
-        except ValueError:
-            continue
-        if plain is None or "tpx1" in plain.lower():
-            return "[token]"
-    return match.group(0)
-
-
-def scrub(text: str) -> str:
-    """`text`, decoded, without a proxy token: plain, or inside a base64 run (a Basic `user:token` pair). A value whose
-    escapes do not settle (`_decoded`) is not read."""
-    plain = _decoded(text)
-    if plain is None:
-        return "[a value not read]"
-    return BASE64.sub(_hidden, TOKEN.sub("[token]", plain))
-
-
-def clean(text: str) -> bool:
-    """Whether `text` holds no proxy token in any spelling `scrub` reads, and nothing still escaped."""
-    plain = _decoded(text)
-    return plain is not None and "tpx1" not in plain.lower() and BASE64.sub(_hidden, plain) == plain
-
-
-def _scrubbed(value: Any) -> Any:
-    if isinstance(value, str):
-        return scrub(value)
-    if isinstance(value, list):
-        return [_scrubbed(v) for v in cast("list[Any]", value)]
-    if isinstance(value, dict):
-        return {scrub(str(k)): _scrubbed(v) for k, v in cast("dict[Any, Any]", value).items()}
-    return value
-
-
-def _body(body: bytes, content_type: str) -> str | None:
-    """A JSON, form or text/plain body as the check reads it, scrubbed; None for any other kind or one that fails."""
-    kind = content_type.split(";")[0].strip().lower()
-    try:
-        text = body.decode("utf-8")
-        if not kind or kind.endswith("/json") or kind.endswith("+json"):
-            out = json.dumps(_scrubbed(json.loads(text)), ensure_ascii=False)
-        elif kind == FORM:
-            out = "&".join(f"{scrub(k)}={scrub(v)}" for k, v in _pairs(text))
-        elif kind == "text/plain":
-            out = scrub(text)
-        else:
-            return None
-    except (ValueError, RecursionError):
-        return None
-    return out if clean(out) else None
-
-
-def _pairs(text: str) -> list[tuple[str, str]]:
-    """A query or form body's (name, value) pairs, split but not decoded: `scrub` undoes every layer of escapes itself,
-    so a path, a query and a form share one limit (DECODE_PASSES)."""
-    return [(k, v) for k, _, v in (part.partition("=") for part in text.split("&") if part)]
-
-
-def proxy_output(
-    method: str, rest: str, query: str, body: bytes, params: Collection[str] = (), content_type: str = ""
-) -> str:
-    """What the check reads of a proxied write: its method, path and query, and its body, each decoded and scrubbed and
-    never encoded again. The tool's auth query parameters (`params`) are blanked; no header is read. A body (or an
-    address) that cannot be read safely is named, not read."""
-    path = "/".join(scrub(part) for part in rest.lstrip("/").split("/"))
-    asked = "&".join(f"{scrub(k)}={'[key]' if (_decoded(k) or k) in params else scrub(v)}" for k, v in _pairs(query))
-    head = f"{method} /{path}" + ("?" + asked if asked else "")
-    if not clean(head):
-        head = f"{method} [an address not read]"
-    if not body:
-        return head
-    text = _body(body, content_type)
-    return head + "\n\n" + (text if text is not None else f"[a body of {len(body)} bytes, not read]")
+            data: Any = json.loads(body)
+        except (ValueError, RecursionError):
+            data = None
+        if isinstance(data, dict):
+            keys = sorted({k for k in (_name(k) for k in cast("dict[Any, Any]", data)) if k})[:50]
+            if keys:
+                lines.append("Fields: " + ", ".join(keys))
+    return "\n".join(lines)
 
 
 def mcp_endpoint(tool: Any, forwarded: str) -> bool:
@@ -266,9 +195,11 @@ def record(c: Any, found: Found | None, stopped: bool = False) -> Any:
         detail["would"] = True
     if found["for"] != found["actor"]:
         detail["for"] = found["for"]
+    # Not judged (or the judge out) and nothing found: its own outcome, counted apart from a write that passed.
+    action = "rules.unchecked" if found["unchecked"] and found["outcome"] == "passed" else "rules." + found["outcome"]
     c.execute("SAVEPOINT rule_link")
     try:
-        row = H.event(c, found["actor"], "rules." + found["outcome"], "link:" + found["link"], detail)
+        row = H.event(c, found["actor"], action, "link:" + found["link"], detail)
     except Exception:
         c.execute("ROLLBACK TO rule_link")
         c.execute("RELEASE rule_link")
@@ -298,8 +229,8 @@ def mailed(found: Any, result: Any) -> Found:
 
 
 def unchecked(principal: str, sender: str, link: str, operation: str, reason: str) -> Found:
-    """The outcome of an agent's write that is not judged (too large to read, no Idempotency-Key, eligible only after its
-    check): passed, recorded unchecked with `reason`."""
+    """The outcome of an agent's write that is not judged (no Idempotency-Key, eligible only after its check): nothing
+    found, recorded as `rules.unchecked` with `reason`."""
     return {
         "link": link,
         "actor": sender,
@@ -327,9 +258,9 @@ def mode(link: str) -> str:
 
 
 def counts(c: Any, links: dict[str, str]) -> dict[str, dict[str, int]]:
-    """{link id: {passed, refused, held}}, each since its own time (`links`: {link id: since}): one seek per (outcome,
+    """{link id: {passed, refused, held, unchecked}}, each since its own time (`links`: {link id: since}): one seek per (outcome,
     link) on events_action_target, one query per distinct time."""
-    found = {link: {"passed": 0, "refused": 0, "held": 0} for link in links}
+    found = {link: {"passed": 0, "refused": 0, "held": 0, "unchecked": 0} for link in links}
     by_since: dict[str, list[str]] = {}
     for link, since in links.items():
         by_since.setdefault(since, []).append("link:" + link)
@@ -337,7 +268,7 @@ def counts(c: Any, links: dict[str, str]) -> dict[str, dict[str, int]]:
         for start in range(0, len(targets), 300):
             part = targets[start : start + 300]
             rows: Any = c.execute(
-                "SELECT action, target, count(*) FROM events WHERE action IN (?,?,?) "
+                "SELECT action, target, count(*) FROM events WHERE action IN (?,?,?,?) "
                 f"AND target IN ({','.join('?' * len(part))}) AND created_at>=? GROUP BY action, target",
                 (*OUTCOMES, *part, since),
             )

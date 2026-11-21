@@ -441,25 +441,31 @@ tico rules ask "<question>"                                                     
 ### 7. Links: agents' writes that leave the company (log-only)
 
 An agent's write on a link (a bot's own, or a person's Assistant or BotOps acting for them; never a person's own) meets
-the same org rule check as a task write, outside any transaction, on a budget of one call to one provider (no fallback)
-with no part call, and leaves
-exactly one event on `link:<id>`: `rules.passed`, `rules.refused` (a Block rule broken) or `rules.held` (an Escalate rule
-broken), with the rules in its detail (backend/rule_links.py), written in a savepoint so a failure never changes the
-write. The links: each proxied tool (`tool:<id>`, checked before the proxy puts the key in; reads, and MCP calls that
-only read sent to exactly the tool's MCP address, the final query included, are never counted; a proxied write with
-no Idempotency-Key is forwarded and recorded unchecked, `tico tools call` sends one), outgoing webhook sends, Release
-now, and email. A write that would not be made (no right, no usable Idempotency-Key or a replay
-of one, a paused endpoint, a duplicate email, a release already open) is not checked, and a webhook send that became eligible
-after that read is recorded unchecked; a proxied body over 1 MB is not
-read and is recorded unchecked. Nothing is stopped yet: `would` in the detail marks an outcome that did not
-happen. Email's own held path is older and does stop a mail, so email is Enforced by default and its event carries the
-rule ids its decision used; a link's mode is what its path does, with no setting until a link can switch. A proxied write is judged after
-its destination is checked and pinned, and its event goes in the same transaction as the call's own row. What the check reads of a proxied call is
-decoded and scrubbed: no header, the path, query and a JSON, form or plain text body with every proxy token (plain,
-percent-encoded, JSON-escaped, in base64, decoded to a fixed point of at most three passes) taken out and the tool's auth query parameters blanked; any other body, or
-one whose scrubbing cannot be verified, is not read. Rules › Links (`/company/rules/links`, from the Rules page's "⋯";
-the owner and Admins in person) lists them with 30-day counts (a tool's from when it was made), then the Not covered paths: reports to Tico support
-(#4869), tools whose keys go to computers, website tools, and calls a computer makes straight out, each tool only to a reader who may see it.
+the org rules and leaves exactly one event on `link:<id>` (backend/rule_links.py): `rules.passed`, `rules.refused` (a
+Block rule broken), `rules.held` (an Escalate rule broken) or `rules.unchecked` (not judged, or the judge out, with the
+reason), the rules in its detail, written in a savepoint so a failure never changes the write. Nothing is stopped yet:
+`would` marks an outcome that did not happen.
+
+- **The links.** Each proxied tool (`tool:<id>`), outgoing webhook sends, Release now: Informed only. Email: Enforced,
+  as its own held path already stops a mail. A link's mode is what its path does; no setting changes it yet.
+- **What is judged: names only.** A proxied write is judged on the tool's name, the HTTP method, an MCP call's method
+  and tool name, and a JSON body's top-level key names; a webhook send on its event and endpoint names; Release now on
+  its name. Never a value, path, query or header, so no credential reaches the judge.
+- **How.** The Informed only links ask one provider (no fallback), one call, no part call; a failure is unchecked.
+  Email keeps its own judge exactly as before this PR, fallback provider and part call included, and logs the rule ids
+  its decision used with any unchecked reason.
+- **When.** A proxied write is judged after its destination is checked and pinned, before the key goes in; its event
+  goes in the same transaction as the call's own row. Reads, and read-only MCP calls sent to exactly the tool's MCP
+  address (the final URL), are never counted; the read-only hints this trusts belong to that tool as made (id, MCP
+  address, created_at). A write that would not be made (no right, no usable Idempotency-Key or a replay of one, a
+  paused endpoint, a duplicate email, a release already open) is not judged. A proxied write with no Idempotency-Key is
+  forwarded and recorded unchecked (`tico tools call` sends one); a webhook send that became eligible after its
+  preflight is recorded unchecked. A vendor's own replay under the same key can log a second event.
+- **Rules › Links** (`/company/rules/links`, from the Rules page's "⋯"; the owner and Admins in person) lists each link
+  with its 30-day counts, unchecked apart (a tool's from when it was made), then the Not covered paths: reports to Tico
+  support (#4869), tools whose keys go to computers, website tools, and calls a computer makes straight out. A tool is
+  listed only to a reader who may see it.
+
 Refusals, appeals and Allow once come next.
 
 ### 8. laws.sh (optional, later)

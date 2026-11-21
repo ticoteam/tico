@@ -3321,14 +3321,21 @@ def mail_decide(c, prep):
             return rules_of(_hold(c, gate["hold_id"]))
         return sorted(r["id"] for r in (gate or {}).get("warned", {}).get("rules", []))
 
+    def why():
+        """The judged check's unchecked reason, kept beside whatever else the decision used (a Directory warning)."""
+        if verdict and (verdict["outcome"] == "unchecked" or verdict.get("unchecked_rules")):
+            return {"unchecked": verdict.get("error") or "unchecked"}
+        return {}
+
     def outcome(gate):
         if gate and gate.get("held"):
-            return {"outcome": "held", **answer(gate), "rules": used(gate)}
+            return {"outcome": "held", **answer(gate), "rules": used(gate), **why()}
         if gate and gate.get("warned"):
-            return {"outcome": "warn", "warning_line": mail_warning_line(gate), **answer(gate), "rules": used(gate)}
+            warned = {"warning_line": mail_warning_line(gate), **answer(gate)}
+            return {"outcome": "warn", **warned, "rules": used(gate), **why()}
         if verdict and verdict["outcome"] == "unchecked":
-            return {"outcome": "unchecked", "rules": [], "unchecked": verdict.get("error") or "unchecked"}
-        return {"outcome": "pass", "rules": []}
+            return {"outcome": "unchecked", "rules": [], **why()}
+        return {"outcome": "pass", "rules": [], **why()}
 
     waiting = open_mail_hold(c, author, key, operation) if holds(verdict) else None
     if approved:
