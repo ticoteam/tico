@@ -2,7 +2,7 @@
 
 import pytest
 
-from backend import bot_settings as BS, store as S, task_engine
+from backend import bot_settings as BS, run_header, store as S, task_engine
 from backend.tests.helpers.api import as_member, assign, headers, post, ready, runner  # noqa: F401
 from backend.tests.helpers.files import turn
 from backend.tests.helpers.make_page import start
@@ -66,6 +66,8 @@ def test_private_make_page_receipts_replay_after_finish_and_recheck_person_and_c
         with monkeypatch.context() as patch:
             # Polls no longer save receipts. Exercise receipts kept by older servers through the real routes.
             patch.setattr(S, "is_poll", lambda operation, result: False)
+            # The first claim's header is asserted below: give its best-effort build room, as test_run_header.py does.
+            patch.setattr(run_header, "BUDGET_SECONDS", 30.0)
             patch.setattr(api.app.state.execution, "idle_inputs", lambda *args: None)
             real_renew = api.app.state.execution.renew
             patch.setattr(
