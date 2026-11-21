@@ -155,6 +155,8 @@ def _certain(text: str, rule: dict[str, Any]) -> list[Item]:
             continue
         if check == "secretish" and not secretish(value, shapes):
             continue
+        if rule.get("prose") and _re(str(rule["prose"])).fullmatch(value):
+            continue  # a plain word and its sentence punctuation (`key needed).`): prose, not a key
         if check in ("env", "context"):
             word = _word(named)
             if shapes != "negative" and (_placeholder(value) or _negative_full(value, shapes)):
