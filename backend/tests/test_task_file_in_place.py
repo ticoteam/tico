@@ -93,8 +93,12 @@ def test_an_archived_file_is_restored_by_a_participant_with_its_versions(api):
     archived = api.patch(f"/api/v2/files/{fid}", json={"archived": True}, headers=headers(token))
     assert archived.json() == {"file": {"id": fid, "archived": True}}
     assert listed(api, tid)[fid]["archived"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET updated_at='2000-01-01T00:00:00Z' WHERE id=?", (tid,))
     restored = api.patch(f"/api/v2/files/{fid}", json={"archived": False}, headers=headers(token))
     assert restored.json() == {"file": {"id": fid, "archived": False}}, restored.text
+    with api.app.state.store.read() as c:  # the task's stream and ETag move
+        assert c.execute("SELECT updated_at FROM tasks WHERE id=?", (tid,)).fetchone()[0] > "2000-01-01T00:00:00Z"
     file = listed(api, tid)[fid]
     assert not file["archived"] and file["current_version"] == 2 and read(api, fid, 1) == b"Items 1-9"
     events = get(api, f"tasks/{tid}")["events"]
@@ -133,14 +137,24 @@ def test_an_attachment_from_before_versioned_files_is_replaced_and_archived_with
     assert not listed(api, tid)[kept]["archived"]
 
 
-def test_replaces_refuses_a_page_another_type_and_an_attachment_other_tasks_share(api):
+def test_replaces_refuses_a_page_another_type_and_an_attachment_other_tasks_share(api, tmp_path, monkeypatch):
     tid = post(api, "tasks", {"title": "Arbitration", "owner": "ops", "body": "File the claim."})["id"]
     token = as_bot(api, "ops")
     claim = post(api, f"tasks/{tid}/files", {"name": "claim.pdf", "content_base64": "JVBERi0xLjQK"}, token)["file_id"]
+    # A refused replacement stores no bytes, sent whole or streamed.
+    blobs, stored = api.app.state.blobs, []
+    monkeypatch.setattr(blobs, "put", lambda *a, **k: stored.append(a))
+    monkeypatch.setattr(blobs, "put_staged", lambda *a, **k: stored.append(a))
     refused = post(
         api, f"tasks/{tid}/files", {"name": "claim.md", "text": "# Claim", "replaces": claim}, token, expected=422
     )
     assert "keeps the file's type" in refused["error"]["detail"]
+    notes = tmp_path / "claim.md"
+    notes.write_text("# Claim")
+    with pytest.raises(remotecli.APIError, match="keeps the file's type"):
+        Agent(api, token).post_multipart(f"tasks/{tid}/files", {"file": notes}, {"replaces": claim})
+    assert stored == []
+    monkeypatch.undo()
 
     page = post(api, "pages", {"task": tid, "as": "Brief", "name": "brief.html", "text": "<p>Brief</p>"}, token)
     page_id = page.get("file_id") or page["page"]["file_id"]
@@ -176,3 +190,60 @@ def test_a_file_published_for_a_task_and_a_version_by_its_blob_id_archive_and_re
     assert archived.json() == {"file": {"id": fid, "archived": True}}, archived.text
     files = listed(api, tid)
     assert files[fid]["archived"] and blob not in files
+
+
+def test_a_recording_is_replaced_under_either_name_of_its_type(api):
+    tid = post(api, "tasks", {"title": "Hearing", "owner": "ops", "body": "Record it."})["id"]
+    old = legacy_attachment(api, tid, "take-1.wav", b"RIFF")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE blobs SET content_type='audio/vnd.wave' WHERE id=?", (old,))
+    token = as_bot(api, "ops")
+    body = {"name": "take-2.wav", "content_base64": "UklGRg==", "replaces": old}
+    assert post(api, f"tasks/{tid}/files", body, token)["version"] == 2
+
+
+def test_who_may_not_read_a_file_or_may_not_manage_its_file_neither_archives_nor_restores_it(api):
+    tid = post(api, "tasks", {"title": "Warrant", "owner": "ops", "body": "Declaration."}, "cara-test")["id"]
+    token = as_bot(api, "ops")
+    publish = hubtools.BY_NAME["tico_file_publish"]["fn"]
+    # A page for the task that only Ana may read: Cara asked for the task, but cannot see it.
+    secret = publish(Agent(api, token), {"name": "sealed.html", "text": "<p>Sealed</p>", "task": tid})["file"]["id"]
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO pages(file_id,audience,created_at,updated_at) VALUES(?,?,?,?)",
+            (secret, '{"people": ["ana"]}', "2026-11-20T00:00:00Z", "2026-11-20T00:00:00Z"),
+        )
+    for archived in (True, False):
+        r = api.patch(f"/api/v2/files/{secret}", json={"archived": archived}, headers=headers("cara-test"))
+        assert r.status_code == 404, r.text
+    assert "sealed.html" not in str(get(api, f"tasks/{tid}")["events"])
+    # A page Cara sees but may not write: she is on the task, yet only its managers and writers archive it.
+    brief = publish(Agent(api, token), {"name": "brief.html", "text": "<p>Brief</p>", "task": tid})["file"]["id"]
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO pages(file_id,created_at,updated_at) VALUES(?,?,?)",
+            (brief, "2026-11-20T00:00:00Z", "2026-11-20T00:00:00Z"),
+        )
+    r = api.patch(f"/api/v2/files/{brief}", json={"archived": True}, headers=headers("cara-test"))
+    assert r.status_code == 403, r.text
+    # Archived as a page, it is restored as one, by whoever may manage the page.
+    assert api.patch(f"/api/v2/pages/{secret}", json={"archived": True}, headers=headers()).status_code == 200
+    page = listed(api, tid)[secret]
+    assert page["archived"] and page["page_archived"] and page["can_restore"]
+
+    # A bot-wide file a same-name upload on the task continued keeps its own rule: its managers archive and restore.
+    shared = publish(Agent(api, token), {"name": "policy.md", "text": "v1", "task": tid, "scope": "bot"})["file"]["id"]
+    assert post(api, f"tasks/{tid}/files", {"name": "policy.md", "text": "v2"})["file_id"] == shared
+    with api.app.state.store.read() as c:
+        blob = c.execute("SELECT blob_id FROM bot_file_versions WHERE file_id=? AND version=2", (shared,)).fetchone()[0]
+    r = api.patch(f"/api/v2/files/{blob}", json={"archived": True}, headers=headers("cara-test"))
+    assert r.status_code == 403, r.text
+    assert api.patch(f"/api/v2/files/{blob}", json={"archived": True}, headers=headers()).status_code == 200
+    files = get(api, f"tasks/{tid}/files?all=1", token="cara-test")["files"]
+    assert [(f["id"], f["archived"], f["can_restore"]) for f in files if f["name"] == "policy.md"] == [
+        (shared, True, False)
+    ]
+    assert blob not in {f["id"] for f in files}
+    assert listed(api, tid)[shared]["can_restore"]
+    assert api.patch(f"/api/v2/files/{shared}", json={"archived": False}, headers=headers()).status_code == 200
+    assert not listed(api, tid)[shared]["archived"]

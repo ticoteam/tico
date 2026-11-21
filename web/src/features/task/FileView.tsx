@@ -171,12 +171,14 @@ export function FileView({ t, file, full, flow }: { t: TaskData; file: string; f
     toast({ text: 'Removed', name: x.title || x.name, action: { label: 'Undo', run: () => void run('task.archiveFile', { task: t.id, file: x.id, archived: false }, { via: 'click' }).then((u) => u.ok || toast(failedToast(u))) } });
     void navigate({ to: details.to as never, search: back as never });
   };
-  // Restore clears the flag that archived it: a page's own (by whoever may archive the page, its ⋯ rule), else the file's.
-  const page = !!f?.page_archived;
-  const shown = useQuery({ ...pageShownQuery(t.id, file), enabled: page });
-  const mayRestore = page ? !!shown.data?.can_manage || !!shown.data?.page?.may_write : mayRemove;
+  // Restore clears each flag that archived it, a page's own and its file's; the server says who may.
+  const mayRestore = !!f?.can_restore;
   const restore = async (x: TaskFileView) => {
-    const r = await (page ? run('task.archivePage', { task: t.id, page: x.id, archived: false }, { via: 'click' }) : run('task.archiveFile', { task: t.id, file: x.id, archived: false }, { via: 'click' }));
+    const page = !!x.page_archived;
+    const file = !page || !!x.file_archived;
+    let r = page ? await run('task.archivePage', { task: t.id, page: x.id, archived: false }, { via: 'click' }) : null;
+    if (file && (!r || r.ok)) r = await run('task.archiveFile', { task: t.id, file: x.id, archived: false }, { via: 'click' });
+    if (!r) return;
     toast(r.ok ? { text: 'Restored', name: x.title || x.name } : failedToast(r));
   };
 

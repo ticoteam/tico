@@ -833,7 +833,7 @@ describe('a task’s files and pages @s56 @s76 @s780', () => {
       current_version: 1,
       versions: [{ n: 1, by: 'bot:a1', created_at: '2026-11-02T10:00:00Z', mime: 'text/markdown', url: '/api/v2/files/f8?v=1', answers: [], ask: null }],
     };
-    const draft = { ...live, id: 'f7', name: 'letter-v1.md', title: 'Letter draft', archived: true, versions: [{ ...live.versions[0], url: '/api/v2/files/f7?v=1' }] };
+    const draft = { ...live, id: 'f7', name: 'letter-v1.md', title: 'Letter draft', archived: true, can_restore: true, versions: [{ ...live.versions[0], url: '/api/v2/files/f7?v=1' }] };
     const withDraft = (url: string, method: string): Reply | undefined => {
       if (url.endsWith('/api/v2/tasks/t1/files?all=1')) return { status: 200, body: { files: [live, draft] } };
       if (method === 'PATCH' && url.endsWith('/api/v2/files/f7')) return ok;
@@ -868,11 +868,11 @@ describe('a task’s files and pages @s56 @s76 @s780', () => {
       const brief = { ...draft, id: 'f5', name: 'brief.html', title: 'Brief', mime: 'text/html', page_archived: true, links: [], writers: [] };
       serve((url, method) => {
         if (url.endsWith('/api/v2/tasks/t1/files?all=1')) return { status: 200, body: { files: [brief] } };
-        if (url.endsWith('/api/v2/pages/f5')) return method === 'PATCH' ? { status: 200, body: { page: { file_id: 'f5', archived: false } } } : { status: 200, body: { page: { file_id: 'f5', archived: true, may_write: true }, can_manage: false } };
+        if (method === 'PATCH' && url.endsWith('/api/v2/pages/f5')) return { status: 200, body: { page: { file_id: 'f5', archived: false } } };
         return reads(task({ mover: false, owner_id: 'bot:a1', requester_id: 'human:other', documents: [], to_leave: [] } as unknown as Partial<TaskData>))(url);
       });
       show(<TaskPage task="12" pipeline="p1" tab="details" file="f5" />, '/tasks/p1/12/details?file=f5');
-      await waitFor(() => expect(calls).toContain('GET /api/v2/pages/f5'));
+      await waitFor(() => expect(calls).toContain('GET /api/v2/files/f5/versions/1'));
       await lastMore();
       fireEvent.click(await screen.findByRole('menuitem', { name: 'Restore' }));
       await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/pages/f5', method: 'PATCH', body: { archived: false } }));
@@ -883,7 +883,6 @@ describe('a task’s files and pages @s56 @s76 @s780', () => {
       serve((url, method) => {
         if (url.endsWith('/api/v2/tasks/t1/files?all=1')) return { status: 200, body: { files: [brief] } };
         if (method === 'PATCH' && url.endsWith('/api/v2/files/f5')) return ok;
-        if (url.endsWith('/api/v2/pages/f5')) return { status: 200, body: { page: { file_id: 'f5', archived: true, may_write: false }, can_manage: false } };
         return files(url);
       });
       show(<TaskPage task="12" pipeline="p1" tab="details" file="f5" />, '/tasks/p1/12/details?file=f5');
@@ -893,11 +892,30 @@ describe('a task’s files and pages @s56 @s76 @s780', () => {
       await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/files/f5', method: 'PATCH', body: { archived: false } }));
     });
 
-    it('open an archived picture without a full size view', async () => {
-      serve((url) => (url.endsWith('/api/v2/tasks/t1/files?all=1') ? { status: 200, body: { files: [{ ...shot, archived: true }] } } : files(url)));
+    it('restore a page archived both as a page and as a file by clearing both', async () => {
+      const brief = { ...draft, id: 'f5', name: 'brief.html', title: 'Brief', mime: 'text/html', page_archived: true, file_archived: true, links: [], writers: [] };
+      serve((url, method) => {
+        if (url.endsWith('/api/v2/tasks/t1/files?all=1')) return { status: 200, body: { files: [brief] } };
+        if (method === 'PATCH' && url.endsWith('/api/v2/pages/f5')) return { status: 200, body: { page: { file_id: 'f5', archived: true } } };
+        if (method === 'PATCH' && url.endsWith('/api/v2/files/f5')) return ok;
+        return files(url);
+      });
+      show(<TaskPage task="12" pipeline="p1" tab="details" file="f5" />, '/tasks/p1/12/details?file=f5');
+      await waitFor(() => expect(calls).toContain('GET /api/v2/files/f5/versions/1'));
+      await lastMore();
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'Restore' }));
+      await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/files/f5', method: 'PATCH', body: { archived: false } }));
+      expect(sent.at(-2)).toEqual({ url: '/api/v2/pages/f5', method: 'PATCH', body: { archived: false } });
+    });
+
+    it('open an archived picture without a full size view, and offer Restore only to whoever may', async () => {
+      serve((url) => (url.endsWith('/api/v2/tasks/t1/files?all=1') ? { status: 200, body: { files: [{ ...shot, archived: true, can_restore: false }] } } : files(url)));
       show(<TaskPage task="12" pipeline="p1" tab="details" file="f9" />, '/tasks/p1/12/details?file=f9');
       expect(await screen.findByAltText('Sign-in screen, v2')).toBeTruthy();
       expect(screen.queryByRole('button', { name: 'Sign-in screen, full size' })).toBeNull();
+      await lastMore();
+      expect(await screen.findByRole('menuitem', { name: 'Download' })).toBeTruthy();
+      expect(screen.queryByRole('menuitem', { name: 'Restore' })).toBeNull();
     });
   });
 

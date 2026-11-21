@@ -819,6 +819,13 @@ def install_media(
                 return found
 
         tid = await asyncio.to_thread(allowed)
+
+        def replaceable(body, content_type):
+            # A refused replacement stores nothing; the write checks it again in its own transaction.
+            if body.replaces:
+                with store.read() as c:
+                    files.replaced(c, who, tid, body.replaces, content_type)
+
         upload_key(request)
         poster = None
         if request.headers.get("content-type", "").lower().startswith("multipart/form-data"):
@@ -868,6 +875,7 @@ def install_media(
                 replay = await asyncio.to_thread(replay_upload, store, request, payload)
                 if replay is not None:
                     return replay
+                await asyncio.to_thread(replaceable, body, content_type)
                 await asyncio.to_thread(blobs.put_staged, upload["stream"], digest, size, content_type)
                 if poster:
                     await asyncio.to_thread(
@@ -919,6 +927,7 @@ def install_media(
             replay = await asyncio.to_thread(replay_upload, store, request, payload)
             if replay is not None:
                 return replay
+            await asyncio.to_thread(replaceable, body, content_type)
             digest = await asyncio.to_thread(blobs.put, data, content_type)
 
         def work(c):

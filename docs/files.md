@@ -188,7 +188,7 @@ The check applies to every list row, the total, metadata, activity, versions and
 A bot cannot make a thread's file bot-wide. The owner or a bot administrator **promotes** a task or
 thread file to bot-wide, explicitly and never automatically (`PATCH /api/v2/files/{id}` with `promote: true`); the move is
 recorded in the file's activity. Archiving (`archived: true`) takes a file off the list; its bytes stay, and it returns when
-the bot publishes a changed version.
+the bot publishes a changed version or its owner or a bot administrator restores it (`archived: false`).
 
 ## API
 

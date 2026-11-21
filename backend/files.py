@@ -103,6 +103,21 @@ def new_id():
     return "file-" + secrets.token_hex(12)
 
 
+def same_type(mime):
+    """A type as a replacement compares it: no parameters, lower case, under its common name (audio/vnd.wave is
+    audio/wav)."""
+    from .visuals import stored_type
+
+    return stored_type(str(mime or "").split(";", 1)[0].strip().lower())
+
+
+def task_scoped(row):
+    """A file kept on its task: attached to it, or published for it."""
+    return bool(row["task_id"]) and (
+        str(row["identity"]).startswith("task-file:") or row["scope"] == "task:" + row["task_id"]
+    )
+
+
 def removed_event(c, task_id, actor, fid, title, *, back=False):
     """The task's activity says which file was taken off it (or brought `back`), by its newest name."""
     row = c.execute(
@@ -1709,14 +1724,14 @@ class Files:
         if legacy is not None:
             if c.execute("SELECT count(*) FROM task_assets WHERE blob_id=?", (fid,)).fetchone()[0] > 1:
                 raise Problem("validation", "This attachment is on more than one task; attach the new one by name", 422)
-            current = str(legacy["content_type"]).split(";", 1)[0]
+            current = same_type(legacy["content_type"])
         elif row is not None:
             if row["is_page"]:
                 raise Problem("validation", "A page takes its new version from tico page publish, not replaces", 422)
-            current = str(row["mime"]).split(";", 1)[0]
+            current = same_type(row["mime"])
         else:
             raise Problem("not_found", "No file on this task to replace by that id", 404)
-        if current != mime.split(";", 1)[0]:
+        if current != same_type(mime):
             raise Problem(
                 "validation", f"A replacement keeps the file's type ({current}); attach a {mime} by name", 422
             )
@@ -1780,22 +1795,52 @@ class Files:
         actor = next((a for a in (who.actor, task["owner_id"], task["requester_id"]) if H.is_bot(a)), None)
         return H.actor_id(actor) if actor else default_bot(c, self.store.settings)
 
-    def may_archive(self, c, who, task):
-        if who.actor not in (task["owner_id"], task["requester_id"]) and not (
+    @staticmethod
+    def participant(c, who, task):
+        """Who archives and restores a task's files: its owner or requester, or a person who may move tasks."""
+        return who.actor in (task["owner_id"], task["requester_id"]) or (
             who.role == "owner" or who.role == "human" and H.can_move(c, who.actor)
-        ):
+        )
+
+    def may_archive(self, c, who, task):
+        if not self.participant(c, who, task):
             raise Problem(
                 "forbidden", "Only a task participant or someone who can move it archives its attachments", 403
             )
+
+    def page_rights(self, c, who, row):
+        """Whether `who` may archive this file as far as its page goes: a page's managers and writers, or no page."""
+        from . import page_links
+        from .pages import may_manage
+
+        if not c.execute("SELECT 1 FROM pages WHERE file_id=? AND deleted_at IS NULL", (row["id"],)).fetchone():
+            return True
+        return may_manage(c, self.auth, who, row) or page_links.may_write(c, self.auth, who, row)
+
+    def can_restore(self, c, who, row):
+        """Whether `who` may bring back an archived file on a task listing: each flag that archived it under its own
+        rule, a page's (page managers and writers), a task file's (participants with page rights), else a file's
+        (its managers)."""
+        if (row["page_archived"] or task_scoped(row)) and not self.page_rights(c, who, row):
+            return False
+        if not row["archived"]:
+            return True
+        if task_scoped(row):
+            return self.participant(c, who, H.task(c, row["task_id"]))
+        return who.role in ("owner", "human") and bool(self.auth.bot_admin(who))
 
     def archive_task_file(self, c, who, stored, archived):
         """Take a task file off its task, or bring it back. Its versions stay either way."""
         from . import task_pages
 
         fid, task_id = stored["id"], stored["task_id"]
+        if not self.visible(c, who, stored, {}):
+            raise Problem("not_found", "File not found", 404)
         task = self.auth.task(c, who, task_id)
         H._writer(c, who.actor, task_id=task["id"])
         self.may_archive(c, who, task)
+        if not self.page_rights(c, who, stored):
+            raise Problem("forbidden", "Only the page's managers and writers archive or restore it", 403)
         c.execute("UPDATE bot_files SET archived=?,last_activity_at=? WHERE id=?", (int(archived), H.now(), fid))
         if archived:
             c.execute(
@@ -1805,6 +1850,7 @@ class Files:
             )
         else:
             self.relink(c, task_id, fid)
+        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), task_id))  # the task's stream and ETag move
         self.activity(c, fid, who.actor, "archived" if archived else "restored", task=task_id)
         removed_event(c, task_id, who.actor, fid, stored["title"], back=not archived)
         task_pages.submit_linked(c, fid, None, who.actor)
@@ -1859,6 +1905,7 @@ class Files:
                 details = {
                     "title": row["title"],
                     "page_archived": bool(row["page_archived"]),
+                    "file_archived": bool(row["archived"]),
                     "links": page_links.links_of(c, self.auth, who, fid),
                     "writers": page_links.writers_of(c, fid),
                 }
@@ -1873,6 +1920,7 @@ class Files:
                         "mime": row["mime"],
                         "current_version": row["current_version"],
                         "archived": archived,
+                        **({"can_restore": self.can_restore(c, who, row)} if archived else {}),
                         "versions": [
                             {
                                 "n": v["version"],
@@ -2381,11 +2429,17 @@ class Files:
         who = request.state.identity
 
         def work(c):
+            nonlocal fid
             stored = c.execute(TASK_SCOPED_SQL, (fid, fid, fid)).fetchone()
             asked = body.model_dump(exclude_none=True)
             if stored and set(asked) == {"archived"}:
                 return self.archive_task_file(c, who, stored, body.archived)
-            if not is_file_id(fid) and not stored:
+            legacy = not is_file_id(fid) and not stored
+            series = legacy and c.execute("SELECT file_id FROM bot_file_versions WHERE blob_id=?", (fid,)).fetchone()
+            if series:
+                # A version of a file kept elsewhere (a bot-wide one a same-name upload continued) is that file's.
+                fid, legacy = series["file_id"], False
+            if legacy:
                 if asked != {"archived": True}:
                     raise Problem("validation", "Task attachments support archive only", 422)
                 linked = c.execute("SELECT task_id FROM task_assets WHERE blob_id=?", (fid,)).fetchall()
@@ -2438,24 +2492,22 @@ class Files:
                 if self.find(c, row["bot_id"], "bot", row["identity"]):
                     raise Problem("conflict", "A bot-wide file with the same identity already exists", 409)
                 fields["scope"] = "bot"
-            if body.archived:
-                fields["archived"] = 1
-            elif body.archived is False:
-                raise Problem("validation", "A removed file comes back when the bot publishes it again", 422)
+            if body.archived is not None:
+                fields["archived"] = int(body.archived)
             if not fields:
                 return {"file": self.brief(c, row)}
             fields["last_activity_at"] = now
             c.execute(
                 "UPDATE bot_files SET " + ",".join(k + "=?" for k in fields) + " WHERE id=?", (*fields.values(), fid)
             )
-            if "archived" in fields and not row["archived"]:
+            if "archived" in fields and fields["archived"] != row["archived"]:
                 task_pages.submit_linked(c, fid, None, actor)
             if "title" in fields:
                 file_library.retitle(c, fid, fields["title"])
             if body.promote:
                 self.activity(c, fid, actor, "promoted", task=row["task_id"], now=now, detail={"from": row["scope"]})
-            elif body.archived:
-                self.activity(c, fid, actor, "archived", now=now)
+            elif body.archived is not None:
+                self.activity(c, fid, actor, "archived" if body.archived else "restored", now=now)
             else:
                 self.activity(
                     c,
