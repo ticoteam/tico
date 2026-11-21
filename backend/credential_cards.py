@@ -622,7 +622,6 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             if row["status"] != "pending":
                 raise Problem("state", "This card is already " + row["status"], 409)
             value = check_format(row["format"], body.value.get_secret_value())
-            events.needs_moved(c, [row["requester"]], "key")  # it leaves their Needs you, whoever saves it
             if reconnect_tasks.card_tool(c, row) is not None:
                 # A Reconnect card: the value replaces the tool's key in place, every grant kept, and its task ends.
                 reconnect_tasks.save(c, vault, who, row, value)
@@ -634,6 +633,7 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
                 "UPDATE credential_requests SET status='saved',updated_at=?,credential_id=? WHERE id=?",
                 (H.now(), stored["id"], rid),
             )
+            events.needs_moved(c, [row["requester"]], "key")  # it leaves their Needs you, whoever saved it
             # The asking bot hears it as the person's own next message: saved, go on. The value is not in it. A card in
             # a task's thread already woke the task once (backend/reconnects.py).
             conversation = H.conversation(c, row["conversation_id"])

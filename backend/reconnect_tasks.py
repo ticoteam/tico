@@ -543,7 +543,8 @@ def save(c: Any, vault: Any, who: Any, row: Row, value: str) -> None:
         raise Problem("not_found", "That key is no longer in Tools", 404)
     api_tools = _api_tools()
     api_tools.update_key(c, who, vault, tool["id"], row["credential_id"], api_tools.KeyUpdate(value=SecretStr(value)))
-    c.execute(
+    if c.execute(
         "UPDATE credential_requests SET status='saved',updated_at=? WHERE id=? AND status='pending'",
         (H.now(), row["id"]),
-    )
+    ).rowcount:
+        _module("events").needs_moved(c, [row["requester"]], "key")  # it leaves their Needs you

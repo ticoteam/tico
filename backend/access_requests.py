@@ -245,14 +245,9 @@ def _level_of(c: Any, row: Any) -> Any:
     return None
 
 
-def _wanted(row: Any) -> Any:
-    """The level that settles the request: its own, or Read once a person chose Read only (its `kind` says read)."""
-    return "read" if str(row.get("kind") or "").endswith("_read") else row["level"]
-
-
 def has(c: Any, row: Any) -> Any:
     held = _level_of(c, row)
-    return held is not None and RANK[held] >= RANK[_wanted(row)]
+    return held is not None and RANK[held] >= RANK[row["level"]]
 
 
 # ---------------------------------------------------------------------------------------------------- who decides
@@ -691,22 +686,23 @@ def view(c: Any, row: Any) -> Any:
 
 
 # ---------------------------------------------------------------------------------------------------- closing
-def _close(c: Any, row: Any, state: Any, actor: Any, via: Any) -> Any:
-    """Resolve an open request: every copy of its card says so; the waiting task is woken (granted, declined)."""
+def _close(c: Any, row: Any, state: Any, actor: Any, via: Any, level: Any = None) -> Any:
+    """Resolve an open request: every copy of its card says so; the waiting task is woken (granted, declined). `level`:
+    granted at less than was asked (Read only), recorded so and said to the waiting task."""
     reconnects = _mod("reconnects")
 
     at = H.now()
+    given = level or row["level"]
     if (
         c.execute(
-            "UPDATE access_requests SET state=?,resolved_by=?,resolved_via=?,resolved_at=?,level=? "
+            "UPDATE access_requests SET state=?,resolved_by=?,resolved_via=?,resolved_at=?,level=?,kind=? "
             "WHERE id=? AND state='open'",
-            (state, actor, via, at, _wanted(row) if state == "granted" else row["level"], row["id"]),
+            (state, actor, via, at, given, _kind(row["resource_type"], given), row["id"]),
         ).rowcount
         != 1
     ):
         return False
-    if state == "granted" and _wanted(row) != row["level"]:
-        # Read only took effect: the request is recorded as granted for Read, and a task waiting on it is told so.
+    if given != row["level"]:
         c.execute(
             "UPDATE task_reconnects SET label=? WHERE json_extract(fix,'$.request')=? AND fixed_at IS NULL",
             (f"{row['resource_name']} · Read only", row["id"]),
@@ -820,12 +816,7 @@ def grant(c: Any, who: Any, rid: Any, vault: Any, auth: Any, level: Any = None) 
     if row["state"] != "open":
         return view(c, row)
     only = bool(level) and level != row["level"]
-    if only:
-        # Read only: Read settles it from now on (`_wanted`), whenever Read takes effect; its level stays as asked
-        # until it closes, so an open request for Read on the same thing is left alone.
-        c.execute("UPDATE access_requests SET kind=? WHERE id=?", (_kind(row["resource_type"], "read"), rid))
-        row = _row(c, rid)
-    given = row | {"level": _wanted(row)}
+    given = row | {"level": level} if only else row
     narrow = {"subject": row["subject"], "resource_type": row["resource_type"], "resource_id": row["resource_id"]}
     token = VIA.set("card")
     try:
@@ -836,6 +827,10 @@ def grant(c: Any, who: Any, rid: Any, vault: Any, auth: Any, level: Any = None) 
                 api_tools.set_level(c, who, vault, row["resource_id"], row["subject"], given["level"])
             else:
                 _give_repository(c, given, who.actor, person=True)
+        if only:
+            # Read only is configured now, whether GitHub reaches the repository this minute or not: the request
+            # closes as granted for Read, as any configured grant does, and its waiting task is told.
+            _close(c, row, "granted", who.actor, "card", level=given["level"])
         settled(c, who, **narrow)
     finally:
         VIA.reset(token)

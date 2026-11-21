@@ -283,7 +283,9 @@ def proposed_for(c: Any, vault: Any, who: Any) -> list[Row]:
         except Problem:
             continue
         if card is not None and who.actor in _members(c, thread) and _may_grant(c, vault, who, card["rows"]):
-            out.append(card | {"message_id": m["id"], "created_at": m["created_at"], "by": owner})
+            # Who keeps and who loses access, as the tools' grants stand now (Grant refuses when it moved since).
+            rows = [r | {"replaces": _replaced(c, r, owner)} for r in card["rows"]]
+            out.append(card | {"rows": rows, "message_id": m["id"], "created_at": m["created_at"], "by": owner})
     return out
 
 
@@ -332,10 +334,21 @@ def _save(c: Any, message_id: str, card: Row) -> None:
     c.execute("UPDATE messages SET refs=? WHERE id=?", (json.dumps(refs), message_id))
 
 
+def _losses(rows: list[Row]) -> list[Any]:
+    """Who each row says loses access with the key it replaces."""
+    out: list[Any] = []
+    for r in rows:
+        replaced: Row = r.get("replaces") or {}
+        out.append(replaced.get("loses") or [])
+    return out
+
+
 def grant(store: Any, vault: Any, who: Any, message_id: str, keep: list[int] | None = None) -> Row:
     """The person's Grant: exactly the rows kept (`keep`: their positions; None keeps all), then each tool's check.
-    The card after it, with a result per row: Connected to <tool>, or Didn't work: <reason>."""
+    The card after it, with a result per row: Connected to <tool>, or Didn't work: <reason>. When who loses access
+    moved since the card said it, nothing is granted: the card is brought up to date and the answer is a 409."""
     api_tools = _api_tools()
+    moved = False
     with store.transaction() as c:
         from . import tool_access as TA
 
@@ -370,11 +383,20 @@ def grant(store: Any, vault: Any, who: Any, message_id: str, keep: list[int] | N
             card["person"],
             owner,
         )
-        for row in rows:
-            _attach(c, who, vault, row)
-        card = card | {"state": "granted", "rows": rows, "granted_by": who.actor, "results": []}
-        _save(c, message_id, card)
-        _events().needs_moved(c, [card["person"]], "key_drop")  # settled: it leaves their Needs you
+        if _losses(again) != _losses(rows):
+            fresh = list(card["rows"])
+            for i, row in zip(positions, rows, strict=True):
+                fresh[i] = fresh[i] | {"replaces": row["replaces"]}
+            _save(c, message_id, card | {"rows": fresh})
+            moved = True
+        else:
+            for row in rows:
+                _attach(c, who, vault, row)
+            card = card | {"state": "granted", "rows": rows, "granted_by": who.actor, "results": []}
+            _save(c, message_id, card)
+            _events().needs_moved(c, [card["person"]], "key_drop")  # settled: it leaves their Needs you
+    if moved:
+        raise Problem("changed", "Who loses access changed: check the card again", 409)
     results: list[Row] = []
     for tool_id in dict.fromkeys(r["tool_id"] for r in rows):
         try:

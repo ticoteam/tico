@@ -12,10 +12,10 @@ from backend.tests.helpers.github_app import api, auth, gh, runner_token, turn_t
 from backend.tests.helpers.repositories import catalog, put
 
 
-def ask(api, resource, level="read", token="owner-test", expected=200, bot="cpo"):
+def ask(api, resource, level="read", token="owner-test", expected=200, bot="cpo", **more):
     r = api.post(
         "/api/v2/access-requests",
-        json={"resource": resource, "level": level, "for_bot": bot, "why": "review the release"},
+        json={"resource": resource, "level": level, "for_bot": bot, "why": "review the release", **more},
         headers={**auth(token), "Idempotency-Key": uuid.uuid4().hex},
     )
     assert r.status_code == expected, r.text
@@ -206,10 +206,10 @@ def test_read_only_where_all_ticked_repos_already_gives_read_keeps_the_bot_there
     assert (got["mode"], got["all_access"]) == ("all", "read")
 
 
-def test_read_only_on_a_repository_github_misses_waits_and_closes_as_read_once_it_takes_effect(api, gh):
-    # Read and Read and write both open on a repository GitHub misses: Read only leaves the open request as it is
-    # (another open request already asks for Read) and closes it, as granted for Read, once Read is there.
-    from backend import access_requests as AR
+def test_read_only_on_a_repository_github_misses_closes_the_request_and_frees_its_task(api, gh):
+    # Read only is configured at once, as any grant is, whether GitHub reaches the repository this minute or not.
+    from backend import reconnects
+    from backend.store import H
 
     catalog(api, gh)
     api.app_state.auth.owner_email = "ana@acme.example"
@@ -217,13 +217,16 @@ def test_read_only_on_a_repository_github_misses_waits_and_closes_as_read_once_i
         put(api, "repositories/Acme/" + name, {"enabled": True})
     put(api, "bots/cpo/repositories", {"mode": "all", "all_access": "write"})
     missing(api, "Acme/docs")
-    reading, writing = ask(api, "Acme/docs"), ask(api, "Acme/docs", "read_write")
-    assert (reading["state"], writing["state"]) == ("open", "open")
-    assert read_only(api, writing["id"])["state"] == "open"  # not there yet
-    assert row(api, writing["id"])["level"] == "read_write"
-    missing(api, "Acme/docs", gone=False)
     with api.app_state.store.transaction() as c:
-        AR.settled(c)
-    assert (row(api, writing["id"])["state"], row(api, writing["id"])["level"]) == ("granted", "read")
-    assert row(api, reading["id"])["state"] == "granted"
-    assert reach(api)["Acme/docs"] == "read"
+        tid = H.task_create(c, "human:ana", "Review the docs", "Details.", "bot:cpo", lint=False)["id"]
+    asked = ask(api, "Acme/docs", "read_write", task=tid)
+    with api.app_state.store.read() as c:
+        assert reconnects.hold(c, tid) is not None
+    done = read_only(api, asked["id"])
+    assert (done["state"], done["level"]) == ("granted", "read")
+    with api.app_state.store.read() as c:
+        assert reconnects.hold(c, tid) is None
+    chosen = {
+        r["full_name"]: r["access"] for r in api.get("/api/v2/bots/cpo/repositories", headers=auth()).json()["chosen"]
+    }
+    assert chosen["Acme/docs"] == "read"

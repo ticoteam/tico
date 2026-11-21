@@ -705,6 +705,8 @@ export const wordQuery = (url: string) =>
 /** Answer an access request, a key card or a key-drop proposal from Needs you, through its own route: the row stays,
     busy, until the server has taken it, then leaves Flow; every other copy of it settles on the server. */
 function answerRequest<T>(item: string, send: (idem: string) => Promise<T>, taken: (out: T) => boolean = () => true): Promise<T> {
+  // Read Flow again once answered, refused or not: one answer can settle other cards too (another copy, a Read request).
+  const again = () => void queryClient.invalidateQueries({ queryKey: flowQuery.queryKey });
   return write<T>({
     key: flowQuery.queryKey,
     wait: true,
@@ -715,7 +717,7 @@ function answerRequest<T>(item: string, send: (idem: string) => Promise<T>, take
       return { ...cur, count: cur.count - 1, requests: cur.requests.filter((r) => r.id !== item) };
     },
     send,
-  });
+  }).finally(again);
 }
 
 /** An access request as its route answers: where it stands now, whoever settled it, and the level it is for. */
