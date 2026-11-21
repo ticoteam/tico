@@ -29,6 +29,8 @@ are on it:
   tasks (backend/stage_rule_timers.py): they tell the manager, in one wake an hour, tell the owner or move the task back.
 - A snooze the owner bot set on its own task ends when everything is met and there is room, and the task moves
   (`_ready_snoozes`).
+- Each task's open wait span (backend/wait_spans.py) is compared with the waits the pass read, and the spans of tasks
+  that ended are closed: the backstop for a flip no write made (checks finished, a bot out of credit, room).
 
 A pass is one write transaction, opened by the caller. Each task is done on its own inside it: a task the check cannot
 work out is left as it was and named in `failures`, and the pass goes on to the next one. Doing a pass twice is
@@ -58,6 +60,7 @@ from . import (
     stage_rule_timers,
     task_depends,
     task_wakes,
+    wait_spans,
 )
 from . import task_engine as E
 from . import task_requirements as R
@@ -161,6 +164,7 @@ def check(
     _ready_snoozes(conn, done, failures)
     # A ❓ whose person can no longer answer it (a change the roster and readers hooks did not see) goes nowhere.
     question_marks.clear_gone(conn)
+    spans = wait_spans.open_spans(conn)  # each task's open wait span, compared with what the pass reads of it
     # A snooze of a task that was deleted, or is not on the engine, is no task's: it is left alone.
     due = conn.execute(
         "SELECT z.task_id FROM snoozes z JOIN tasks t ON t.id = z.task_id AND t.pipeline_id IS NOT NULL "
@@ -197,6 +201,9 @@ def check(
                 done["snoozes_ended"] += 1
             else:
                 _one(conn, task_id, at, done, seen, live, read)
+                # A flip no write made (checks finished, out of credit, room). What was read holds while nothing was
+                # written; after a write the task is read again.
+                wait_spans.recheck(conn, task_id, spans.get(task_id), read if conn.total_changes == changes else None)
         except Exception as error:
             # SQLite may already have ended the transaction (a full disk, an I/O error): that stops the pass.
             if failures is None or not conn.in_transaction or storage_error(error):
@@ -211,31 +218,31 @@ def check(
                 else:
                     _keeping_reads(conn, "RELEASE never_stuck_task")
         quiet = quiet + 1 if conn.total_changes == changes else 0
-    _keeping_reads(conn, "SAVEPOINT never_stuck_room")
-    try:
-        done["moved"] += _requests(conn)
-    except Exception as error:
-        if failures is None or not conn.in_transaction or storage_error(error):
-            raise
-        conn.execute("ROLLBACK TO never_stuck_room")
-        failures.append(("room", error))
-    finally:
-        if conn.in_transaction:
-            conn.execute("RELEASE never_stuck_room")
-    _keeping_reads(conn, "SAVEPOINT never_stuck_stage_rules")
-    try:
-        # Stage rules whose When is a timer: tables only, no model (backend/stage_rule_timers.py).
-        timers: Any = stage_rule_timers
-        timers.sweep(conn, at)
-    except Exception as error:
-        if failures is None or not conn.in_transaction or storage_error(error):
-            raise
-        conn.execute("ROLLBACK TO never_stuck_stage_rules")
-        failures.append(("stage_rules", error))
-    finally:
-        if conn.in_transaction:
-            conn.execute("RELEASE never_stuck_stage_rules")
+    done["moved"] += _step(conn, "room", failures, lambda: _requests(conn))
+    # Stage rules whose When is a timer: tables only, no model (backend/stage_rule_timers.py).
+    timers: Any = stage_rule_timers
+    _step(conn, "stage_rules", failures, lambda: timers.sweep(conn, at))
+    _step(conn, "wait_spans", failures, lambda: wait_spans.close_ended(conn))
     return done
+
+
+def _step(
+    conn: "sqlite3.Connection", name: str, failures: list[tuple[str, Exception]] | None, work: Callable[[], Any]
+) -> Any:
+    """One step of the pass after the tasks, in its own savepoint: a step that raises is undone alone and named in
+    `failures` (without the list, the error is raised). Returns what `work` returns, 0 when it raised."""
+    _keeping_reads(conn, f"SAVEPOINT never_stuck_{name}")
+    try:
+        return work()
+    except Exception as error:
+        if failures is None or not conn.in_transaction or storage_error(error):
+            raise
+        conn.execute(f"ROLLBACK TO never_stuck_{name}")
+        failures.append((name, error))
+        return 0
+    finally:
+        if conn.in_transaction:
+            conn.execute(f"RELEASE never_stuck_{name}")
 
 
 # ----------------------------------------------------------------------------- the pass in a read snapshot first

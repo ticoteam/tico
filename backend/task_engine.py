@@ -720,16 +720,27 @@ def wake_turn(conn: "sqlite3.Connection", row: Row) -> str | None:
     return _wake_turn(conn, row)
 
 
+def _sync_wait(conn: "sqlite3.Connection", task_id: str) -> None:
+    """After a move, a new task, a snooze or its end: the task's wait span follows its headline (wait_spans.sync)."""
+    from . import wait_spans
+
+    wait_spans.sync(conn, task_id)
+
+
 def _drop_stale(conn: "sqlite3.Connection", task_id: str) -> int:
     """The turn may have gone to someone else: cancel the wakes still queued for a bot that has no turn on the task
     now, and keep those of a bot that still has one, a bot named on an OK or an answer included (R2). A snoozed or
-    ended task, or one at level `person`, keeps none."""
+    ended task, or one at level `person`, keeps none. Its wait span follows the waits read here (wait_spans.sync)."""
+    from . import wait_spans
     from . import waiting_on as W
 
     row = task(conn, task_id)
     if not row or row["status"] != "open" or row.get("snooze"):
+        wait_spans.sync(conn, task_id, row)
         return task_wakes.drop(conn, task_id)
-    return task_wakes.drop(conn, task_id, keep=W.turns(conn, row))
+    waits = W.of(conn, row)
+    wait_spans.sync(conn, task_id, row, waits)
+    return task_wakes.drop(conn, task_id, keep=W.turns(conn, row, waits))
 
 
 # ----------------------------------------------------------------------------- one of several
@@ -912,6 +923,7 @@ def enter(
     entered = _task(conn, task_id)
     lead = stage_effects.enter(conn, entered, by)
     _wake_turn(conn, entered, lead, refs=wake, trigger=trigger, source=source)
+    _sync_wait(conn, task_id)
     return entered
 
 
@@ -1327,6 +1339,7 @@ def move(
     # What a move causes beyond the task's own row: the events, a routine's day, stopping work on a closed task
     # (backend/task_effects.py). Last, and for every move, so nothing that moves a task can leave them out.
     task_effects.moved(conn, row, moved, "side" if side else kind, by, why, revision)
+    _sync_wait(conn, task_id)
     return _task(conn, task_id)
 
 
@@ -1530,6 +1543,7 @@ def refile(
     if target["kind"] == "work":
         _wake_turn(conn, moved, stage_effects.enter(conn, moved, by))
     task_effects.moved(conn, row, moved, MOVED, by, why, revision, batch=batch)
+    _sync_wait(conn, task_id)
     return _task(conn, task_id)
 
 
@@ -2115,9 +2129,9 @@ def _end_snooze(conn: "sqlite3.Connection", snoozed: Row, by: str, ts: str) -> N
 
 def on_delete(conn: "sqlite3.Connection", task_ids: Sequence[str], by: str) -> int:
     """The delete path (`task_delete.delete_tasks`), before the rows go: a deleted task keeps no place in a pipeline.
-    Its snooze, its visits with their answers, the asks added to them and the effects they owed are removed, and its
-    queued wakes are canceled. The links to and from it stay: the task that filed it reads a deleted task as closed,
-    and a restore (`restore`) starts it on a new visit. Returns how many visits went."""
+    Its snooze, its visits with their answers, the asks added to them and the effects they owed are removed, its
+    queued wakes are canceled and its open wait span is closed. The links to and from it stay: the task that filed it
+    reads a deleted task as closed, and a restore (`restore`) starts it on a new visit. Returns how many visits went."""
     ids = [str(task_id) for task_id in task_ids if task_id]
     if not ids:
         return 0
@@ -2129,6 +2143,9 @@ def on_delete(conn: "sqlite3.Connection", task_ids: Sequence[str], by: str) -> i
     conn.execute(f"DELETE FROM answers WHERE visit_id IN ({visits})", ids)
     conn.execute(f"DELETE FROM requirements WHERE visit_id IN ({visits})", ids)
     conn.execute(f"DELETE FROM snoozes WHERE task_id IN ({marks})", ids)
+    conn.execute(
+        f"UPDATE task_wait_spans SET closed_at=? WHERE closed_at IS NULL AND task_id IN ({marks})", (_h().now(), *ids)
+    )
     conn.execute(f"DELETE FROM idea_checks WHERE task_id IN ({marks})", ids)  # an owed check is for this visit
     conn.execute(f"DELETE FROM related_inputs WHERE task_id IN ({marks})", ids)  # likewise Jev's related bots
     conn.execute(f"DELETE FROM ask_opinions WHERE task_id IN ({marks})", ids)  # and Flow's opinion on each ask
@@ -2214,6 +2231,7 @@ def restore(conn: "sqlite3.Connection", task_id: str, by: str, was: Row) -> Row:
         _owned(conn, {**row, "owner_id": was.get("owner_id")}, _task(conn, task_id), by)
         stage_effects.enter(conn, _task(conn, task_id), by)
         _wake_turn(conn, _task(conn, task_id), "This task was restored.")
+    _sync_wait(conn, task_id)
     return _task(conn, task_id)
 
 
@@ -2288,6 +2306,7 @@ def snooze(
     task_wakes.drop(conn, task_id)  # nothing wakes for a snoozed task
     _event(conn, task_id, by, "snooze", None, until, why)
     H.event(conn, by, "task.snoozed", task_id, {"until": until, "why": why or "", "stage": row["stage_id"]})
+    _sync_wait(conn, task_id)
     out = _task(conn, task_id)
     if not until and is_bot(by):
         _tell_manager(conn, out, f"On ice, with no end date: {why}", f"on_ice:{out['snooze']['id']}")
@@ -2341,6 +2360,7 @@ def unsnooze(conn: "sqlite3.Connection", task_id: str, by: str, why: str | None 
     _end_snooze(conn, row["snooze"], by, ts)
     conn.execute("UPDATE visits SET next_try_at=? WHERE id=?", (ts, row["visit"]["id"]))
     _event(conn, task_id, by, "unsnooze", row["snooze"].get("until_at"), None, why)
+    _sync_wait(conn, task_id)
     return _task(conn, task_id)
 
 

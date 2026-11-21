@@ -767,6 +767,16 @@ describe('Details: the facts @s58', () => {
     expect(rows[0]?.getAttribute('href')).toBe('/task/13');
   });
 
+  it('says how long the task has waited and on whom', async () => {
+    const since = new Date(Date.now() - 2 * 3600_000).toISOString();
+    serve(reads(task({ turn: { state: 'person', who: 'human:bo', line: 'OK the draft?', since } } as Partial<TaskData>)));
+    details();
+    await facts();
+    const label = await screen.findByText('Waiting');
+    const line = label.parentElement as HTMLElement;
+    expect(line.textContent).toBe('Waiting2h on Bo Lee');
+  });
+
   it('sets the Human in place', async () => {
     serve(base);
     details();
