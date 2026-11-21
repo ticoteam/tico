@@ -358,29 +358,6 @@ def test_a_booked_call_in_your_assistant_chat_shares_its_meeting_with_nobody_bef
         assert shared["error"]["code"] == "call_private"
 
 
-def test_the_private_calls_lease_reads_threads_as_you_and_none_once_you_cannot_sign_in(meet):
-    from backend.store import encode
-
-    call, session, _ = _private_call(meet)
-    from backend import threads
-
-    with meet.app.state.store.transaction() as c:  # a thread of Ana's and Ben's, which the Assistant alone may not read
-        ana = threads.viewer(meet.app.state.auth, meet.app.state.auth.identity_for_actor(c, "human:ana"))
-        dm = threads.create(c, ana, title="Plans", audience="members", members=["human:ben"])["id"]
-    assert get(meet, f"threads/{dm}", session["token"])["id"] == dm
-    listed = get(meet, "threads?limit=200", session["token"])
-    assert dm in json.dumps(listed)
-    with meet.app.state.store.transaction() as c:  # Ana's sign-in is turned off
-        roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
-        for person in roster["people"]:
-            if person["id"] == "ana":
-                person["sign_in"] = False
-        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(roster),))
-    get(meet, f"threads/{dm}", session["token"], expected=404)
-    get(meet, f"threads/{call['thread_id']}", session["token"], expected=404)
-    assert dm not in json.dumps(get(meet, "threads?limit=200", session["token"]))
-
-
 def test_a_call_whose_meeting_names_anyone_else_gets_no_snapshot(meet):
     worker = _resident(meet)
     rid = room(meet)["room_id"]
@@ -400,42 +377,34 @@ def test_a_call_whose_meeting_names_anyone_else_gets_no_snapshot(meet):
         post(meet, f"calls/{call['id']}/end", {})
 
 
-def test_the_private_calls_lease_reads_as_you_but_never_writes_as_you(meet):
+def test_the_private_calls_lease_reads_and_writes_threads_as_the_assistant_and_none_once_you_cannot_sign_in(meet):
     from backend import threads
+    from backend.store import encode
 
-    _call, session, _ = _private_call(meet)
+    call, session, _ = _private_call(meet)
     token = session["token"]
-    with meet.app.state.store.transaction() as c:  # a thread of Ana's and Ben's, which the Assistant alone may not read
+    with (
+        meet.app.state.store.transaction() as c
+    ):  # a thread of Ana's and Ben's, which the Assistant itself may not read
         ana = threads.viewer(meet.app.state.auth, meet.app.state.auth.identity_for_actor(c, "human:ana"))
         plans = threads.create(c, ana, title="Plans", audience="members", members=["human:ben"])["id"]
         said = threads.post(c, ana, plans, "Ship on Friday")
-    assert get(meet, f"threads/{plans}", token)["id"] == plans  # reads it as Ana
+        everyone = threads.create(c, ana, title="All hands", audience="company")["id"]
+    # As on main: threads read and write as the Assistant itself, never as Ana.
+    get(meet, f"threads/{plans}", token, expected=404)
+    assert plans not in json.dumps(get(meet, "threads?limit=200", token))
+    assert get(meet, f"threads/{everyone}", token)["id"] == everyone  # a company thread, as any agent's run reads it
     for refused in (
         meet.post(f"/api/v2/threads/{plans}/messages", json={"text": "Hello"}, headers=headers(token)),
         meet.post(f"/api/v2/threads/{plans}/members", json={"actor": "human:cara"}, headers=headers(token)),
         meet.put(f"/api/v2/messages/{said['id']}/reactions/👍", json={}, headers=headers(token)),
     ):
         assert refused.status_code in (403, 404), refused.text
-    with meet.app.state.store.read() as c:
-        assert [r[0] for r in c.execute("SELECT body FROM messages WHERE conversation_id=?", (plans,))] == [
-            "Ship on Friday"
-        ]
-        assert not c.execute(
-            "SELECT 1 FROM thread_members WHERE thread_id=? AND actor='human:cara'", (plans,)
-        ).fetchone()
-
-
-def test_the_private_calls_lease_reads_a_migrated_homes_history_as_you_do(meet):
-    from backend import threads
-    from backend.tests.helpers.thread_rail_batches import home as _home
-
-    _call, session, _ = _private_call(meet)
-    home = _home(meet, "human:cara", token="cara-test")
-    with meet.app.state.store.transaction() as c:  # a Home that still holds shared-room history
-        old = threads.post(c, "human:cara", home["id"], "From the shared room")
-        c.execute("UPDATE messages SET legacy_audience='shared:ops', restricted=1 WHERE id=?", (old["id"],))
-    shown = json.dumps(get(meet, f"threads/{home['id']}/timeline", session["token"]))
-    assert "From the shared room" in shown  # as Ana, one of its old readers, reads it; the Assistant itself does not
-    with meet.app.state.store.read() as c:
-        lease = threads.viewer(meet.app.state.auth, meet.app.state.auth.identity_for_actor(c, "human:ana"))
-        assert not threads.legacy_hidden(c, lease, dict(H.message(c, old["id"])))
+    with meet.app.state.store.transaction() as c:  # Ana's sign-in is turned off: the lease reads no thread at all
+        roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
+        for person in roster["people"]:
+            if person["id"] == "ana":
+                person["sign_in"] = False
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(roster),))
+    get(meet, f"threads/{everyone}", token, expected=404)
+    assert get(meet, "threads?limit=200", token)["threads"] == []

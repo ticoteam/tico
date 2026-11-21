@@ -337,7 +337,7 @@ class Viewer:
         # {thread id: whether a member}, while a sidebar page reads (`_prefetch_members`)
         self._members: dict | None = None
         self._member_rows = {}  # {thread id: its member actors}, read once a request (`_member_rows`)
-        self._run: Viewer | None = None  # whom a lease of the shared Assistant reads as (`as_run`), once a request
+        self._gone: bool | None = None  # a lease of the shared Assistant whose person may not sign in (`_gone_run`)
 
     @property
     def is_bot(self):
@@ -512,34 +512,32 @@ def _bot_grant(c, v, row):
 _MISSING = (404, "not_found", "Thread not found")
 
 
-def as_run(c, v: "Viewer") -> "Viewer":
-    """The reader a lease of the shared Assistant reads threads as, in either form of its lease (Auth.run_viewer by
-    rooms.run_scope): the person its run is for, by their own rights ("person": their own chat, or a private call in
-    it), nobody when that person may not sign in ("gone"), else itself. Anyone else reads as themselves."""
-    who = v.who
-    if v.auth is None or not getattr(who, "attempt_id", ""):
-        return v
-    run = v._run
-    if run is None:
-        run = v
-        if H.assistant_actor(c) in (v.actor, getattr(who, "task_actor", "")):
-            reader = v.auth.run_viewer(c, who)
-            run = v if reader is who else Viewer(v.auth, reader)
-        v._run = run
-    return run
+def _gone_run(c, v):
+    """A lease of the shared Assistant whose person may no longer sign in (rooms.run_scope "gone") reads no thread: a
+    deny only, never a wider read. Asked once a request."""
+    if v._gone is None:
+        who = v.who
+        lease = v.auth is not None and getattr(who, "attempt_id", "")
+        if lease and H.assistant_actor(c) in (v.actor, getattr(who, "task_actor", "")):
+            from . import rooms
+
+            v._gone = rooms.run_scope(c, who.attempt_id)[0] == "gone"
+        else:
+            v._gone = False
+    return v._gone
 
 
-def denial(c, v, row, *, as_self=False):
+def denial(c, v, row):
     """None when the viewer reads this thread, else (status, code, message) for why not: always a 404, since an
     unreadable thread is never confirmed to exist. The one Python rendering of C1; `readable`, `require` and
-    Auth.conversation all ask it. A lease of the shared Assistant reads as `as_run` says; `as_self` (every write gate:
-    post, react, manage, membership) checks the identity itself, never the person it reads as."""
+    Auth.conversation all ask it."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
-    v = v if as_self else as_run(c, v)
     row = thread_row(c, row)
     if row is None or row.get("deleted_at"):
         return _MISSING
     if v.is_person and not v.in_good_standing(c):
+        return _MISSING
+    if _gone_run(c, v):
         return _MISSING
     from .live_privacy import sources
     from .task_privacy import actor as principals
@@ -707,11 +705,9 @@ def readable(c, v, thread_or_message):
     return denial(c, v, value) is None
 
 
-def thread_readable(c, v, thread, *, as_self=False):
+def thread_readable(c, v, thread):
     """Cached per viewer: a timeline or SSE batch asks about the same thread many times. `thread` is its id, or its row
-    when a list already holds the row (no second read of it). `as_self`: a write gate's check (`denial`), not cached."""
-    if as_self:
-        return denial(c, v, thread, as_self=True) is None
+    when a list already holds the row (no second read of it)."""
     key = thread if isinstance(thread, str) else thread["id"]
     if key not in v._threads:
         v._threads[key] = denial(c, v, thread) is None
@@ -767,18 +763,16 @@ def _legacy_home(c, v, conversation_id):
 def legacy_reader_only(c, v, thread):
     """A person who opens a migrated Home only as one of its shared room's old readers (no Home Read): they see the
     history they read before and nothing new (spec section 4)."""
-    v = as_run(c, v)
     if not v.is_person:
         return False
     found = _legacy_home(c, v, thread["id"])
     return bool(found) and not v.can_read_home(c, found["owner_id"]) and bool(v.shared_slugs(c, sorted(found["slugs"])))
 
 
-def legacy_hidden(c, v, message, *, as_self=False):
+def legacy_hidden(c, v, message):
     """A message of a migrated Home this viewer may not read: shared-room history is read by exactly its old readers
     (evaluated live: room members for people; participants and the room's bot for an agent, any thread a run is
     granted), and everything new by the Home's Read audience."""
-    v = v if as_self else as_run(c, v)
     message = message or {}
     legacy = message.get("legacy_audience")
     if legacy and str(legacy).startswith("shared:"):
@@ -821,7 +815,7 @@ def legacy_gate(c, principals, message):
 def readable_before_deletion(c, v, message):
     """Whether the viewer read a deleted message before it went (its thread already checked): only then is its
     tombstone shown, else the quiet hidden row. The per-message check, run on the row as it stands."""
-    v = as_run(c, viewer(None, v) if not isinstance(v, Viewer) else v)
+    v = viewer(None, v) if not isinstance(v, Viewer) else v
     message = dict(message)
     if legacy_hidden(c, v, message):
         return False
@@ -838,17 +832,14 @@ def readable_before_deletion(c, v, message):
         return False
 
 
-def message_readable(c, v, message, *, thread_checked=False, as_self=False):
-    """Whether the viewer reads this message: its thread and the per-message check, as `as_run` reads (`as_self`: a
-    write gate's check, the identity itself: reacting, replying under it)."""
+def message_readable(c, v, message, *, thread_checked=False):
     v = viewer(None, v) if not isinstance(v, Viewer) else v
-    v = v if as_self else as_run(c, v)
     message = dict(message)
     if message.get("deleted_at"):
         return False
-    if not thread_checked and not thread_readable(c, v, message["conversation_id"], as_self=as_self):
+    if not thread_checked and not thread_readable(c, v, message["conversation_id"]):
         return False
-    if legacy_hidden(c, v, message, as_self=as_self):
+    if legacy_hidden(c, v, message):
         return False
     if message.get("restricted") == 0 and "restricted" in message:
         return True
@@ -857,12 +848,11 @@ def message_readable(c, v, message, *, thread_checked=False, as_self=False):
     return task_privacy.message_readable(c, task_privacy.actor(v.who), message)
 
 
-def require(c, v, thread_id, *, write=False, as_self=False):
-    """The thread row, or 404: an unreadable thread is never confirmed to exist. A write (`write`, or `as_self` for one
-    that checks its own rights after) reads as the identity itself (`denial`)."""
+def require(c, v, thread_id, *, write=False):
+    """The thread row, or 404: an unreadable thread is never confirmed to exist."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     row = thread_row(c, thread_id)
-    if row is None or denial(c, v, row, as_self=write or as_self) is not None:
+    if row is None or denial(c, v, row) is not None:
         raise Problem("not_found", "Thread not found", 404)
     if write and not can_post(c, v, row):
         raise Problem("forbidden", "You can read this thread but not post in it", 403)
@@ -872,7 +862,7 @@ def require(c, v, thread_id, *, write=False, as_self=False):
 def can_post(c, v, thread):
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     row = thread_row(c, thread)
-    if row is None or denial(c, v, row, as_self=True) is not None:
+    if row is None or denial(c, v, row) is not None:
         return False
     root = root_of(c, row)
     if row.get("archived_at") or root.get("archived_at") or row.get("closed_at"):
@@ -895,7 +885,7 @@ def can_post(c, v, thread):
 def can_manage(c, v, thread):
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     row = thread_row(c, thread)
-    if row is None or denial(c, v, row, as_self=True) is not None:
+    if row is None or denial(c, v, row) is not None:
         return False
     root = root_of(c, row) or row  # a thread's root is never None
     if v.is_person and v.admin(c):
@@ -969,7 +959,9 @@ def readable_sql(
     `per_row` (a person's check, with none of the options above, over alias r or s): the same answer, tested row by row (the row's root
     and task looked up by id) rather than against every readable root and task, built whole for each statement. For a
     statement that tests few rows: building those lists reads every conversation and task."""
-    v = as_run(c, viewer(None, v) if not isinstance(v, Viewer) else v)
+    v = viewer(None, v) if not isinstance(v, Viewer) else v
+    if _gone_run(c, v):
+        return "0"
     plain = inner is None and meeting is None and conversation is None and tasks == "SELECT id FROM tasks"
     per_row = per_row and plain and alias in ("r", "s")  # never rd or rt, which its own subqueries name
     t = inner or (lambda name: name)
@@ -1063,7 +1055,7 @@ def readable_sql(
 def message_sql(c, v, alias="messages", *, legacy_slugs=None, inner=None):
     """A SQL boolean over a messages row: its legacy audience admits the viewer. (The thread term and the
     restricted check stay the caller's.) `legacy_slugs` is the viewer's readable shared bots when known."""
-    v = as_run(c, viewer(None, v) if not isinstance(v, Viewer) else v)
+    v = viewer(None, v) if not isinstance(v, Viewer) else v
     t = inner or (lambda name: name)
     x = (alias + ".") if alias else ""
     if v.is_bot:
@@ -2564,7 +2556,7 @@ def _post_making(c, principal, thread_id, body, start, parent_message_id, checke
         thread = thread_row(c, thread_id)
         if not parent or thread is None or parent["conversation_id"] != thread["id"]:
             raise Problem("not_found", "Message not found", 404)
-        if v is not None and (not message_readable(c, v, parent, as_self=True) or not can_post(c, v, thread)):
+        if v is not None and (not message_readable(c, v, parent) or not can_post(c, v, thread)):
             raise Problem("not_found", "Message not found", 404)
     text = str(body or "")
     if checked is not None:
@@ -2726,11 +2718,11 @@ def _post(
         parent = H.message(c, parent_message_id)
         if not parent or parent["conversation_id"] != thread["id"]:
             raise Problem("not_found", "Message not found", 404)
-        if v is not None and not message_readable(c, v, parent, as_self=True):
+        if v is not None and not message_readable(c, v, parent):
             raise Problem("not_found", "Message not found", 404)
         thread = sub_thread(c, principal, parent_message_id)
     if v is not None:
-        if denial(c, v, thread, as_self=True) is not None:
+        if denial(c, v, thread) is not None:
             raise Problem("not_found", "Thread not found", 404)
         if not can_post(c, v, thread):
             raise Problem("forbidden", "You can read this thread but not post in it", 403)
@@ -3268,7 +3260,7 @@ def search(c, v, query, *, limit=20, before=None):
     says. The SQL only narrows; a hit is shown when `message_readable` says so (a private task, a restricted message)."""
     from . import thread_search
 
-    v = as_run(c, viewer(None, v) if not isinstance(v, Viewer) else v)
+    v = viewer(None, v) if not isinstance(v, Viewer) else v
     # A person finds what a timeline shows: Tico's notices to a bot have no seq (H.run_notice).
     shown = "" if v.is_bot else " AND m.seq IS NOT NULL"
     found = thread_search.search(
@@ -3479,11 +3471,7 @@ def _reactable(c, principal, message_id):
     """The message, when the principal reads it (C1 plus the per-message check); else 404."""
     actor, v = _actor_of(principal)
     message = H.message(c, message_id)
-    if (
-        not message
-        or _carrier_message(message)
-        or (v is not None and not message_readable(c, v, message, as_self=True))
-    ):
+    if not message or _carrier_message(message) or (v is not None and not message_readable(c, v, message)):
         raise Problem("not_found", "Message not found", 404)
     return actor, message
 
@@ -3553,7 +3541,7 @@ def reactions(c, message_ids):
 # ----------------------------------------------------------------------------- membership and attention
 def _require_thread(c, principal, thread_id):
     actor, v = _actor_of(principal)
-    row = require(c, v, thread_id, as_self=True) if v is not None else thread_row(c, thread_id)
+    row = require(c, v, thread_id) if v is not None else thread_row(c, thread_id)
     if row is None:
         raise Problem("not_found", "Thread not found", 404)
     H._writer(c, actor, task_id=row.get("task_id"))
@@ -5307,7 +5295,7 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None, flat=Fal
     message has `reply_to` (reply_quotes) in both modes; the first page also has `bot_status` (thread_bot_status)."""
     from . import task_privacy
 
-    v = as_run(c, viewer(None, v) if not isinstance(v, Viewer) else v)
+    v = viewer(None, v) if not isinstance(v, Viewer) else v
     row = require(c, v, thread_id)
     limit = max(1, min(int(limit or 50), MAX_PAGE))
     max_bytes = min(int(max_bytes or MAX_PAGE_BYTES), MAX_PAGE_BYTES)
@@ -5663,7 +5651,7 @@ def sidebar(c, v, *, cursor=None, limit=50, sort=None):
     unread in each one-bot DM (bot_dm_unread), which is not Needs attention."""
     if sort is not None and sort not in SIDEBAR_SORTS:
         raise Problem("sort", "sort is important or recent", 422)
-    v = as_run(c, viewer(None, v) if not isinstance(v, Viewer) else v)  # an Assistant lease lists as its person
+    v = viewer(None, v) if not isinstance(v, Viewer) else v
     v._members = {}
     try:
         return _sidebar_page(c, v, cursor, limit, sort)
