@@ -131,16 +131,17 @@ export function withFileRefs(text: string): string {
 export const isRawWords = (words: string, href: string) => words === href || /^(page:)?file-[0-9a-f]{12,40}(@\d+)?$/.test(words) || /^https?:\/\//.test(words);
 
 /** The app's tasks a message's text links to (`/tasks/<pipeline>/<n>`, `/task/<id>`, `/flow/<n>`, an old `#/task/…`),
-    read from the links its Markdown draws, each address once, as `{ pipeline, key }`: the pipeline when the address
-    names one, and its number or id. */
-export function tasksIn(text: string, origin: string): { pipeline: string | null; key: string }[] {
-  const out = new Map<string, { pipeline: string | null; key: string }>();
+    read from the links its Markdown draws, each once, by its number or id (the route's task reference). */
+export function tasksIn(text: string, origin: string): string[] {
+  const out = new Set<string>();
   for (const href of linksIn(withFileRefs(text), true)) {
     const p = pointerOf(href, origin);
     if (p?.kind !== 'app' || p.what !== 'task') continue;
     const [, kind, a = '', b = ''] = /^\/(tasks|task|flow)\/([^/]+)(?:\/([^/]+))?/.exec(new URL(p.to, 'http://app').pathname) ?? [];
-    const t = kind === 'tasks' ? { pipeline: decodeURIComponent(a), key: decodeURIComponent(b) } : { pipeline: null, key: decodeURIComponent(a) };
-    if (t.key) out.set(`${t.pipeline}/${t.key}`, t);
+    // the pipeline's editor (`/tasks/<pipeline>/edit`) is no task
+    if (kind === 'tasks' && b === 'edit') continue;
+    const key = decodeURIComponent(kind === 'tasks' ? b : a);
+    if (key) out.add(key);
   }
   return [...out.values()];
 }

@@ -11,12 +11,13 @@ import { flowQuery, type FlowItem } from '@/features/tasks/routing';
    stays linked text. */
 
 /** The pending approval a message's text links to: its one linked task (its addresses counted as one), when an
-    approval on it waits on the person; else null. */
+    approval on it waits on the person; else null. A task is matched by its number or id alone, so a link written
+    before the task moved to another pipeline still counts; the card opens it where it is now. */
 export function linkedOk(text: string, approvals: readonly FlowItem[], origin: string): FlowItem | null {
   const found = new Map<string, FlowItem | null>();
-  for (const { pipeline, key } of tasksIn(text, origin)) {
-    const ok = approvals.find((it) => (it.id === key || String(it.number) === key) && (!pipeline || pipeline === 'all' || it.pipeline_id === pipeline));
-    found.set(ok ? ok.id : `${pipeline}/${key}`, ok ?? null);
+  for (const key of tasksIn(text, origin)) {
+    const ok = approvals.find((it) => it.id === key || String(it.number) === key);
+    found.set(ok ? ok.id : key, ok ?? null);
   }
   return found.size === 1 ? ([...found.values()][0] ?? null) : null;
 }
@@ -24,7 +25,7 @@ export function linkedOk(text: string, approvals: readonly FlowItem[], origin: s
 export function OkCard({ m }: { m: ChatMessage }) {
   const text = m.body ?? '';
   // Observed, never fetched here: the tracker over the chat reads it, and the stream keeps it current.
-  const ok = useQuery({ ...flowQuery, enabled: false, select: (f) => (m.pending ? null : linkedOk(text, f.approvals ?? [], location.origin)) }).data;
+  const ok = useQuery({ ...flowQuery, enabled: false, select: (f) => linkedOk(text, f.approvals ?? [], location.origin) }).data;
   if (!ok) return null;
   return (
     <AskCard

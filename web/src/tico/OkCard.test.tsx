@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, Link as RouterLink, Outlet, RouterProvider } from '@tanstack/react-router';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Message, type ChatMessage } from '@/conversation';
 import { queryClient } from '@/data';
@@ -50,9 +50,9 @@ afterEach(() => {
 
 const msg = (body: string): ChatMessage => ({ id: 'm1', seq: 1, sender_id: 'bot:assistant', sender_name: 'Tico', body, created_at: '2026-11-20T09:01:00Z' });
 
-async function show(m: ChatMessage) {
+async function show(m: ChatMessage, read = true) {
   // The tracker over the chat reads Needs you; the card only observes it.
-  queryClient.setQueryData(flowQuery.queryKey, await flowOf());
+  if (read) queryClient.setQueryData(flowQuery.queryKey, await flowOf());
   gets = [];
   const root = createRootRoute({ component: Outlet });
   const chat = createRoute({ getParentRoute: () => root, path: '/', component: () => <Message m={m} variant="tico" me={ME} below={okCard} /> });
@@ -79,6 +79,16 @@ describe("Tico's approval card", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/ops/12'));
     expect(await screen.findByText('The preview')).toBeTruthy();
     expect(theCards()).toEqual([]);
+  });
+
+  it('starts no read of its own: it draws once the Needs-you list it observes is read', async () => {
+    await show(msg('[Add Builder 3](/tasks/ops/12)'), false);
+    expect(await screen.findByText(/Add Builder 3|Task/)).toBeTruthy();
+    expect(theCards()).toEqual([]);
+    expect(screen.queryByRole('link', { name: /Review and approve/ })).toBeNull();
+    const flow = await flowOf();
+    act(() => queryClient.setQueryData(flowQuery.queryKey, flow));
+    expect(await screen.findByRole('link', { name: /Review and approve/ })).toBeTruthy();
   });
 
   it('shows for an OK behind an older ask on the same task', async () => {
@@ -118,11 +128,15 @@ describe('linkedOk', () => {
     expect(linkedOk('[a](/task/t2)', items, O)?.id).toBe('t2');
     expect(linkedOk('see http://app.test/flow/12.', items, O)?.id).toBe('t1');
     expect(linkedOk('[a](/tasks/ops/12) or [b](/task/t1) or [c](/#/task/t1)', items, O)?.id).toBe('t1');
+    // a link written before the task moved pipelines still names it
+    expect(linkedOk('[a](/tasks/eng/12)', items, O)?.id).toBe('t1');
+    // the pipeline's editor is no task: the one task linked beside it still counts
+    expect(linkedOk('[a](/tasks/ops/12), see [the stages](/tasks/ops/edit)', items, O)?.id).toBe('t1');
   });
 
-  it('leaves lists, other pipelines and tasks without an OK as linked text', () => {
+  it('leaves lists and tasks without an OK as linked text', () => {
     expect(linkedOk('[a](/tasks/ops/12) and [b](/tasks/ops/13)', items, O)).toBeNull();
-    expect(linkedOk('[a](/tasks/eng/12)', items, O)).toBeNull();
+    expect(linkedOk('[the stages](/tasks/ops/edit)', items, O)).toBeNull();
     expect(linkedOk('[a](/tasks/ops/14)', items, O)).toBeNull();
     expect(linkedOk('no link', items, O)).toBeNull();
     expect(linkedOk('`http://app.test/flow/12`', items, O)).toBeNull();

@@ -192,10 +192,10 @@ export function answerAsk(id: string, rid: string, value: 'ok' | 'no', note?: st
     turn: t.turn?.requirement_id === rid ? null : t.turn,
   });
   const gone = (cur: unknown): unknown => {
-    const f = cur as { count?: number; items?: { id: string }[]; approvals?: { id: string }[] } | undefined;
+    const f = cur as { count?: number; items?: { id: string }[] } | undefined;
     if (!f?.items) return cur;
     const items = f.items.filter((w) => w.id !== id);
-    return { ...f, items, count: items.length, ...(f.approvals && { approvals: f.approvals.filter((w) => w.id !== id) }) };
+    return { ...f, items, count: items.length };
   };
   const flows = queryClient.getQueriesData({ queryKey: ['flow'] }).map(([k]) => k);
   return write<TaskResult>({
