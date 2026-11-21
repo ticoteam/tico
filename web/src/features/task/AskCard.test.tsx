@@ -1,6 +1,6 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import { AskCard } from './AskCard';
+import { AskCard, Docked } from './AskCard';
 
 /* On a computer the note sits in the buttons' row, at its left, only while that row is the card's last line: with no
    buttons, or with what went wrong said under them, it stays in the card's top line. On a phone it is always there. */
@@ -35,4 +35,16 @@ describe('AskCard', () => {
     expect(where({ actions: approve, asking: true })).toBe('top');
   });
 
+  /* #4820: a phone opened a task with its decision under the Chat sheet and Tico's bar while they sprang away. The dock
+     is fresh on its first frames (phone.css sends the cards resting over it off at once then), and only then. */
+  it('marks a new dock fresh on its first frames only', async () => {
+    const { container } = render(
+      <Docked dock>
+        <AskCard name="Send the letter" end={<span />} actions={approve} />
+      </Docked>,
+    );
+    const dock = container.querySelector('[data-dock]');
+    expect(dock?.hasAttribute('data-fresh')).toBe(true);
+    await waitFor(() => expect(dock?.hasAttribute('data-fresh')).toBe(false));
+  });
 });

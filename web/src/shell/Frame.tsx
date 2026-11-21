@@ -88,7 +88,8 @@ function useWindowMode() {
     window.addEventListener('resize', on);
     return () => window.removeEventListener('resize', on);
   }, []);
-  useEffect(() => {
+  // before the first paint: what reads it (useCards: a phone's dock, its sheets) draws the phone from the first frame
+  useLayoutEffect(() => {
     document.documentElement.dataset.layout = s.mode;
   }, [s.mode]);
   return s;
