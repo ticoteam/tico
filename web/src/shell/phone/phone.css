@@ -26,7 +26,7 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
   --drawM:calc((var(--lipM) - var(--peek)) * var(--c));--drawC:0px;
   --behind:var(--peek);       /* the peeks above a raised Tico: the menu's, and an open chat's above that */
   --at:0px;                   /* where the raised card stands (its translateY), below the peeks of the cards behind it */
-  --top:calc(var(--sat) + 57px);   /* where a raised card stops: the page's head stays in view above it */
+  --top:calc(var(--sat) + 57px);   /* where a raised menu or chat stops: the page's head stays in view above it */
   --half:410px;               /* Tico at half: this much of its card shows */
   --kb:0px;--vv-top:0px;
   --edgeT:calc(var(--sab) + 58px);   /* the bar on its own under whatever holds the bottom: the stack's last line */
@@ -99,7 +99,7 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
 .phone>.ly:focus{outline:none}
 .phone>.ly-chat{z-index:var(--z-chat);background:var(--c-chat);--surface:var(--c-chat);--ty:calc(100% - var(--cards-h) + var(--drawM) + var(--drawC))}
 .phone>.ly-menu{z-index:var(--z-nav);background:var(--c-menu);--surface:var(--c-menu);--ty:calc(100% - var(--sab) - var(--lipT) - var(--lipM) + var(--drawM))}
-.phone>.ly-tico{z-index:var(--z-tico);background:var(--c-tico);--surface:var(--c-tico);--ty:calc(100% - var(--sab) - var(--lipT))}
+.phone>.ly-tico{z-index:var(--z-tico);background:var(--c-tico);--surface:var(--c-tico);--ty:calc(100% - var(--sab) - var(--lipT));top:var(--sat);height:calc(100% - var(--sat))}
 .phone:not(.has-chat)>.ly-chat{--ty:calc(100% + 48px)}
 .phone.is-handle>.ly{--ty:calc(100% + 48px)}
 /* a request that waits on the person holds the bottom with its decision (plan/approvals.html): nothing rests over it,
@@ -117,7 +117,12 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
 .phone[data-card^="tico"]>.ly-chat.is-behind{--ty:calc(var(--at) - var(--peek) * 2)}
 /* a call's card starts at the top of the screen, not at --top: a place counted from --top is moved down by it */
 .phone.is-call[data-card="menu"]>.ly-chat.is-behind{--ty:calc(var(--top) + var(--at) - var(--peek))}
-.phone.is-call[data-card="tico"]>.ly-chat.is-behind{--ty:calc(var(--top) + var(--at) - var(--peek) * 2)}
+/* Tico raised fills the screen: its card starts under the status bar (.ly-tico), not at --top, with only the peeks of
+   the cards behind it above, moved up as far (#4920). Its lip and half sit where they did: they are counted from the
+   bottom. A call's card starts at the top of the screen. */
+.phone[data-card="tico"]>.ly-menu.is-behind{--ty:calc(var(--at) - var(--peek) - var(--top) + var(--sat))}
+.phone[data-card="tico"]>.ly-chat.is-behind{--ty:calc(var(--at) - var(--peek) * 2 - var(--top) + var(--sat))}
+.phone.is-call[data-card="tico"]>.ly-chat.is-behind{--ty:calc(var(--sat) + var(--at) - var(--peek) * 2)}
 /* raised, a card stands a step higher */
 .phone[data-card="menu"]>.ly-menu,.phone[data-card="chat"]>.ly-chat,.phone[data-card^="tico"]>.ly-tico{box-shadow:var(--lift-3),0 -14px 34px -10px var(--up)}
 
@@ -183,12 +188,14 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
 .phone .ly-tico .lip .lip-did .ico{width:15px;height:15px;stroke-width:2;color:var(--muted);flex:none}
 .phone .ly-tico .lip .lip-did span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .phone .ly-tico>.full{height:var(--vis,100%)}
+/* Tico's sheet fills its card, so the conversation takes what the head, the tracker and the box leave */
+.phone .ly-tico>.full>.pane{flex:1;min-height:0}
 .phone[data-card="tico-half"] .ly-tico>.full{--vis:var(--half)}
 .phone[data-card="tico"] .ly-tico>.full{--vis:calc(100% - var(--at))}
 .phone .tico-head{flex:none;height:58px;display:flex;align-items:center;gap:4px;padding:0 6px 0 56px}
 .phone .tico-head b{font-weight:var(--w-title);font-size:var(--t-md);line-height:var(--lh-tight);margin-right:auto}
 .phone .ly-tico .chat-body{padding:4px 16px 8px}
-.phone .tico-foot{flex:none;padding:4px 10px calc(var(--sab) + 6px);display:flex;flex-direction:column;align-items:flex-start;gap:8px}
+.phone .ly-tico .chat-foot{flex:none;padding:4px 10px calc(var(--sab) + 6px);display:flex;flex-direction:column;align-items:flex-start;gap:8px}
 .phone .composer{min-height:48px;font-size:var(--t-md)}
 .phone .did{min-height:28px}
 .phone .msg p,.phone .msg ul{font-size:15px}
@@ -254,10 +261,12 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
 .phone[data-typing="tico"][data-card="tico-half"]>.ly-tico>.full{--vis:204px}
 .phone[data-typing="tico"][data-card="tico"]>.ly-tico>.full{--vis:calc(100% - var(--at) - var(--kb))}
 .phone[data-typing="tico"][data-card="tico-half"] .tico-head{display:none}
+/* typing to Tico, the latest messages keep the room over the box: the tracker's row and the chips fold away */
+.phone[data-typing="tico"] .ly-tico .tracker,.phone[data-typing="tico"] .ly-tico .qchips{display:none;transition:none}
 .phone[data-typing="tico"][data-card="tico-half"] .ly-tico .tico-dot{opacity:0}
 /* stylelint-disable-next-line color-no-hex -- mask */
 .phone[data-typing="tico"][data-card="tico-half"] .ly-tico .chat-body{padding-top:18px;-webkit-mask-image:linear-gradient(transparent 4px,#000 16px);mask-image:linear-gradient(transparent 4px,#000 16px)}
-.phone[data-typing] .tico-foot,.phone[data-typing] .p-dock{padding-bottom:8px}
+.phone[data-typing] .ly-tico .chat-foot,.phone[data-typing] .p-dock{padding-bottom:8px}
 .phone[data-typing="chat"]>.ly-chat>.full{height:calc(100% - var(--kb))}
 .phone[data-typing="menu"]>.ly-menu>.full{height:calc(100% - var(--at) - var(--kb))}
 .phone[data-typing="chat"] .ly-chat .chat-body{padding-bottom:8px}

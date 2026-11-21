@@ -451,6 +451,11 @@ describe('phone: the cards behind a raised one peek above it', () => {
     expect(rule('.phone[data-card^="tico"]>.ly-chat.is-behind')).toContain('--ty:calc(var(--at) - var(--peek) * 2)');
     expect(rule('.phone[data-card="tico"] .ly-tico>.full')).toContain('--vis:calc(100% - var(--at))');
     expect(rule('.phone[data-card="menu"] .ly-menu>.full')).toContain('height:calc(100% - var(--at))');
+    // #4920: Tico's fills the screen, under only the peeks behind it (they move up with it), and its sheet fills it
+    expect(rule('.phone>.ly-tico')).toContain('top:var(--sat);height:calc(100% - var(--sat))');
+    expect(rule('.phone[data-card="tico"]>.ly-menu.is-behind')).toContain('--ty:calc(var(--at) - var(--peek) - var(--top) + var(--sat))');
+    expect(rule('.phone[data-card="tico"]>.ly-chat.is-behind')).toContain('--ty:calc(var(--at) - var(--peek) * 2 - var(--top) + var(--sat))');
+    expect(rule('.phone .ly-tico>.full>.pane')).toContain('flex:1;min-height:0');
     // moves are transform only
     expect(rule('.phone>.ly')).toContain('transition:transform var(--card-dur) var(--card-ease)');
   });
@@ -458,6 +463,9 @@ describe('phone: the cards behind a raised one peek above it', () => {
   it('while typing, the cards in front go under the keyboard and the peeks behind stay, clear of the box', () => {
     expect(rule('.phone[data-typing]>.ly:not(.is-up):not(.is-behind)')).toContain('--ty:calc(100% + 48px)');
     expect(rule('.phone[data-typing="tico"][data-card="tico"]>.ly-tico>.full')).toContain('--vis:calc(100% - var(--at) - var(--kb))');
+    // #4920: typing to Tico, the tracker's row and the chips fold at once so the latest messages keep the room over the box
+    expect(rule('.phone[data-typing="tico"] .ly-tico .qchips')).toContain('display:none;transition:none');
+    expect(rule('.phone[data-typing] .ly-tico .chat-foot')).toContain('padding-bottom:8px');
   });
 });
 
