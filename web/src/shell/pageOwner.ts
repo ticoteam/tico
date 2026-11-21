@@ -48,6 +48,8 @@ const LIBRARY: Record<string, [string, string]> = {
   tools: ['tools', 'Tools'],
 };
 const SETTINGS: Record<string, [string, string]> = { computers: ['computers', 'Computers'], changelog: ['changelog', 'Changelog'] };
+/** A map's own entry for an address part: never one the object inherits ('constructor', '__proto__'). */
+const own = (map: Record<string, [string, string]>, key: string | undefined) => (key !== undefined && Object.hasOwn(map, key) ? map[key] : undefined);
 
 /** The page an address is; `search` (the address's search) names a file open over it (`?file=`, files.view), which is
     then what is open there. */
@@ -76,12 +78,12 @@ function mapped(path: string): PageAt {
       return page('updates', 'Updates');
     case 'company': {
       if (a === 'strategy' && b === 'goals') return page('goals', 'Goals');
-      const [key, label] = (a && COMPANY[a]) || ['company', 'Company'];
+      const [key, label] = own(COMPANY, a) ?? ['company', 'Company'];
       return page(key, label);
     }
     case 'library': {
-      if (a && !LIBRARY[a]) return page('docs', 'Docs', { kind: 'doc', id: a });
-      const [key, label] = LIBRARY[a ?? 'docs']!;
+      if (a && !own(LIBRARY, a)) return page('docs', 'Docs', { kind: 'doc', id: a });
+      const [key, label] = own(LIBRARY, a ?? 'docs')!;
       return page(key, label);
     }
     case 'tags':
@@ -89,7 +91,7 @@ function mapped(path: string): PageAt {
     case 'settings': {
       if (a === 'account') return tico('account', 'Account');
       if (a === 'style-guide') return chat('style-guide', 'Style guide');
-      const [key, label] = (a && SETTINGS[a]) || ['settings', 'Settings'];
+      const [key, label] = own(SETTINGS, a) ?? ['settings', 'Settings'];
       return page(key, label);
     }
     case 'calendar':

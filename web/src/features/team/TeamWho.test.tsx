@@ -2,7 +2,7 @@
 import '@/actions';
 import { QueryClientProvider, QueryObserver } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { run } from '@/actions';
@@ -228,7 +228,15 @@ describe('Team pages', () => {
       docs: { bot: 'bot:0190-ana', name: 'Docs', choice: 'bot:0190-ana' },
       growth: { bot: 'bot:gm', name: 'Growth', choice: 'default' },
     };
-    serve((url, method) => (method === 'GET' && url.includes('/api/v2/page-owners') ? ok({ pages }) : method === 'PUT' ? ok({}) : undefined));
+    let admin = false;
+    serve((url, method) => (method === 'GET' && url.includes('/api/v2/page-owners') ? ok({ pages, can_change: admin }) : method === 'PUT' ? ok({}) : undefined));
+    // a member reads the pages it owns but changes none (the server's PUT is the owner's or an admin's)
+    show(<TeamWho who="ana" tab="settings" />, '/team/ana?tab=settings');
+    expect(await screen.findByText('Finance, Docs')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^Pages/ })).toBeNull();
+    cleanup();
+    queryClient.removeQueries({ queryKey: ['settings', 'page-owners'] });
+    admin = true;
     show(<TeamWho who="ana" tab="settings" />, '/team/ana?tab=settings');
     fireEvent.click(await screen.findByRole('button', { name: /^Pages\s*Finance, Docs/ }));
     expect((await screen.findByRole('menuitem', { name: /Finance/ })).getAttribute('aria-disabled')).toBe('true');

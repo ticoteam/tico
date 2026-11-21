@@ -21,6 +21,7 @@ from . import (
     rooms,
     rules as wake_rule_engine,
     updates_chat,
+    page_chat_cards,
     gateway_connection,
     inbox_isolation,
     login_holds,
@@ -5665,6 +5666,9 @@ class Execution:
                 # place "updates": the recent updates that person may read and open, read now as them
                 # (backend/updates_chat.py). None for every other turn.
                 "updates": updates_chat.for_turn(c, self.auth, self.store.settings, conv, row["bot_id"], msg, aid),
+                # A person's message from a page that takes a card (Goals): whether this turn may propose it, else whose
+                # chat does (backend/page_chat_cards.py; rendered by runner-rs/src/prompt.rs `from_page`).
+                "page_card": page_chat_cards.for_turn(c, conv, row["bot_id"], msg),
                 # The owner's earlier Strategy Owner chat is a session of its own (backend/rooms.py).
                 "config": rooms.session_config(conv, row["bot_id"], config),
                 # Bumped by a session clear or reset (views.py clear_session, app.py reset_bot_sessions):

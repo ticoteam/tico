@@ -73,6 +73,12 @@ describe('the page map', () => {
     expect(pageAt('/settings/changelog').page).toBe('changelog');
   });
 
+  it('reads only its own entries for an address part, never one an object inherits @4857-S12', () => {
+    expect(pageAt('/company/constructor')).toEqual({ page: 'company', label: 'Company', owner: 'page' });
+    expect(pageAt('/settings/__proto__').page).toBe('settings');
+    expect(pageAt('/library/toString')).toEqual({ page: 'docs', label: 'Docs', owner: 'page', item: { kind: 'doc', id: 'toString' } });
+  });
+
   it('carries the open item, named by the page’s own name, in from_page', () => {
     expect(fromPage(pageAt('/library/d%201'), 'Pricing 2027')).toEqual({ page: 'docs', label: 'Docs', item: { kind: 'doc', id: 'd 1', name: 'Pricing 2027' } });
     expect(fromPage(pageAt('/tasks/eng'), '')).toEqual({ page: 'tasks', label: 'Tasks', item: { kind: 'pipeline', id: 'eng', name: 'eng' } });

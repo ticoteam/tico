@@ -1,5 +1,5 @@
 import { notifyManager, QueryClientProvider } from '@tanstack/react-query';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, cleanup } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClient, type Actor } from '@/data';
@@ -136,7 +136,7 @@ describe('Conversation', () => {
     show();
     type('Can you check the label?');
     expect(screen.getByText('Can you check the label?')).toBeTruthy();
-    expect(sends()[0]).toEqual({ url: `/api/v2/threads/${T}/messages`, body: { text: 'Can you check the label?', refs: { from_page: FROM } } });
+    expect(sends()[0]).toEqual({ url: `/api/v2/threads/${T}/messages`, body: { text: 'Can you check the label?', refs: { from_page: { page: 'tasks', label: 'Tasks' } } } });
 
     const real = msg(3, ME, 'Can you check the label?');
     emit('messages', [{ id: real.id, conversation_id: T, message: real }]);
@@ -360,7 +360,7 @@ describe('Composer', () => {
 });
 
 describe('the page it sits beside', () => {
-  it('draws no chip for it, and sends it with each message as from_page, the item by its head name, not the window title', async () => {
+  it('draws no chip for it, and sends the page with each message; what is open there, by its head name, only to Tico @4857', async () => {
     seed([]);
     serve(() => ({ status: 200, body: {} }));
     window.history.pushState({}, '', '/library/d1');
@@ -373,8 +373,21 @@ describe('the page it sits beside', () => {
     expect(document.querySelector('.look')).toBeNull();
     type('Is this right?');
     await waitFor(() => expect(sends()).toHaveLength(1));
-    expect((sends()[0]?.body as { refs: unknown }).refs).toEqual({
-      from_page: { page: 'docs', label: 'Docs', item: { kind: 'doc', id: 'd1', name: 'Records production' } },
+    // another chat's members may not read the doc: they are told the page alone
+    expect((sends()[0]?.body as { refs: unknown }).refs).toEqual({ from_page: { page: 'docs', label: 'Docs' } });
+    cleanup();
+    render(<Conversation id={T} variant="tico" />, {
+      wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+    });
+    act(() => showPageName('Records production'));
+    const box = screen.getByRole('textbox', { name: 'Message Tico' });
+    fireEvent.change(box, { target: { value: 'Who wrote this?' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    await waitFor(() => expect(sends()).toHaveLength(2));
+    expect((sends()[1]?.body as { from_page: unknown }).from_page).toEqual({
+      page: 'docs',
+      label: 'Docs',
+      item: { kind: 'doc', id: 'd1', name: 'Records production' },
     });
     act(() => showPageName(''));
     window.history.pushState({}, '', '/');

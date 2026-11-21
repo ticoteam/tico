@@ -60,9 +60,10 @@ def register(app, admin_only, auth, mutate, onboarding, owner_only, recruiter, s
 
     @app.get("/api/v2/page-owners")
     def page_owners_read(request: Request):
-        """Each page's owner, the bot its Chat opens (backend/page_owners.py). Anyone on the team reads it."""
+        """Each page's owner, the bot its Chat opens (backend/page_owners.py). Anyone on the team reads it; `can_change`
+        says whether the reader may change one (the owner or an admin, as PUT checks)."""
         with store.read() as c:
-            return {"pages": page_owners.read(c)}
+            return {"pages": page_owners.read(c), "can_change": auth.bot_admin(request.state.identity)}
 
     @app.get("/api/v2/secret-rules")
     def secret_rules_read(request: Request):

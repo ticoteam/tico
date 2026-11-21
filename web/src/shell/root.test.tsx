@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, Link, Outlet, RouterProvider } from '@tanstack/react-router';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { ApiError } from '@/api/client';
@@ -20,7 +20,9 @@ import { tabTitle, useTabTitle } from './title';
 /* The root as the app draws it, with the features around the shell stood in: the second chat for Tico support, the
    desktop app's small call window, and what the page tells the desktop app. */
 
-const { gate, q, catchUpRead, lists, owners } = vi.hoisted(() => ({
+const { gate, q, catchUpRead, lists, owners, waiting } = vi.hoisted(() => ({
+  /** Each agent with a question or an ask waiting on Maya (Needs you's `bots`). */
+  waiting: {} as Record<string, number>,
   gate: { screen: null as string | null, setup: false },
   /** Each page's owner, as GET /page-owners answers: none unless a test names one. */
   owners: {} as Record<string, { bot: string | null }>,
@@ -59,6 +61,7 @@ vi.mock('@/data', async (orig) => ({
   recordVisit: vi.fn(),
   useHeldCount: () => 0,
   pageOwnersQuery: { queryKey: ['settings', 'page-owners'], queryFn: async () => owners, staleTime: Infinity },
+  waitingAgentsQuery: { queryKey: ['needs', 'agents'], queryFn: async () => waiting, staleTime: Infinity },
 }));
 // A feature's routing.ts is what the first load carries (the gate, counts, reads); its exports.ts the parts the root
 // loads when they first have something to show.
@@ -202,6 +205,7 @@ beforeEach(() => {
   forgetPlaces();
   for (const k of Object.keys(lists)) delete lists[k];
   for (const k of Object.keys(owners)) delete owners[k];
+  for (const k of Object.keys(waiting)) delete waiting[k];
   resetDesktopReports();
 });
 afterEach(() => {
@@ -333,7 +337,7 @@ describe('the Agent bar @4857', () => {
     expect(JSON.parse(localStorage.getItem('tico-next:owner-bar.v1') ?? '{}')).toEqual({ 'human:maya': { tasks: true } });
   });
 
-  it('is folded to its named edge under 1200, and opens from it', async () => {
+  it('is folded to its named edge under 1200 with no chat drawn in it, and opens from it @4857-S8', async () => {
     at(1100);
     people(MAYA, QA);
     owners.tasks = { bot: 'bot:qa' };
@@ -341,23 +345,67 @@ describe('the Agent bar @4857', () => {
     await screen.findByRole('complementary', { name: 'Chat with QA Owner', hidden: true });
     await waitFor(() => expect(edge()).toBeTruthy());
     expect(bar()?.dataset.shut).toBe('true');
+    // folded, it opens no chat: no DM is made and nothing is marked read
+    expect(screen.queryByText('a teammate chat', { ignore: false })).toBeNull();
     fireEvent.click(edge()!);
     await waitFor(() => expect(bar()?.dataset.shut).toBeUndefined());
+    expect(await screen.findByText('a teammate chat')).toBeTruthy();
   });
 
-  it('opens by itself when an ask from the owner waits on you, until you fold it again', async () => {
+  it('opens by itself when a question from the owner waits on you, until you fold it again @4857-S9', async () => {
     at(1100);
     people(MAYA, QA);
     owners.tasks = { bot: 'bot:qa' };
-    catchUpRead.mockResolvedValueOnce({
-      count: 1,
-      items: [{ thread: { id: 'dm1', audience: 'personal', dm_with: [{ actor: 'human:maya' }, { actor: 'bot:qa' }] }, mention: true }],
-    } as never);
+    waiting['bot:other'] = 2;
+    waiting['bot:qa'] = 1;
     show('/tasks/eng');
     await screen.findByRole('complementary', { name: 'Chat with QA Owner' });
     await waitFor(() => expect(bar()?.dataset.shut).toBeUndefined());
     act(() => foldSheet('chat', true));
     await waitFor(() => expect(edge()).toBeTruthy());
+  });
+
+  it('with no room in the row, an ask or a tap brings it forward over the sheets above it @4857-S4', async () => {
+    at(820);
+    people(MAYA, QA);
+    owners.tasks = { bot: 'bot:qa' };
+    show('/tasks/eng');
+    await waitFor(() => expect(edge()).toBeTruthy());
+    fireEvent.click(edge()!);
+    await waitFor(() => expect(bar()?.dataset.shut).toBeUndefined());
+    expect(document.querySelector<HTMLElement>('.shell-place[data-sheet="tico"]')?.dataset.shut).toBe('true');
+    cleanup();
+    localStorage.clear();
+    queryClient.clear();
+    people(MAYA, QA);
+    waiting['bot:qa'] = 1;
+    show('/tasks/eng');
+    await screen.findByRole('complementary', { name: 'Chat with QA Owner' });
+    await waitFor(() => expect(bar()?.dataset.shut).toBeUndefined());
+  });
+
+  it("is the pipeline's first agent still on the team, never an archived one, before the page's owner @4857-S7", async () => {
+    at(1440);
+    const em = { id: 'bot:em', kind: 'agent', name: 'Engineering Manager', slug: 'em' };
+    people(MAYA, QA, em);
+    owners.tasks = { bot: 'bot:em' };
+    queryClient.setQueryData(['pipelines'], [{ id: 'eng', name: 'Engineering', stages: [], manager: 'bot:gone', owner: 'bot:qa' }]);
+    show('/tasks/eng');
+    expect(await screen.findByRole('complementary', { name: 'Chat with QA Owner' })).toBeTruthy();
+  });
+
+  it("on a phone is a lip that keeps the page's fold: raising it and putting it down are kept @4857-S3", async () => {
+    at(390);
+    people(MAYA, QA);
+    owners.tasks = { bot: 'bot:qa' };
+    show('/tasks/eng');
+    const lip = await screen.findByRole('button', { name: 'Open QA Owner' });
+    expect(lip.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(lip);
+    await waitFor(() => expect(JSON.parse(localStorage.getItem('tico-next:owner-bar.v1') ?? '{}')).toEqual({ 'human:maya': { tasks: false } }));
+    expect(await screen.findByText('a teammate chat')).toBeTruthy();
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    await waitFor(() => expect(JSON.parse(localStorage.getItem('tico-next:owner-bar.v1') ?? '{}')).toEqual({ 'human:maya': { tasks: true } }));
   });
 
   it('is not drawn on a personal page, whose chat is Tico, nor where no owner is set', async () => {

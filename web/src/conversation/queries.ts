@@ -145,10 +145,10 @@ function post(s: Send, idempotencyKey: string): Promise<Sent> {
   const reply = s.replyTo ? { in_reply_to: s.replyTo } : {};
   if (!files.length)
     return api.post<Sent>(`/api/v2/threads/${enc(s.id)}/messages`, { text: s.text, refs: s.from ? { from_page: s.from } : {}, ...reply }, opts);
-  // The upload form has no refs: a message with files does not carry the page.
   const f = new FormData();
   f.set('text', s.text);
   if (s.replyTo) f.set('in_reply_to', s.replyTo);
+  if (s.from) f.set('from_page', JSON.stringify(s.from));
   for (const file of files) f.append('files', file);
   return api.post<Sent>(`/api/v2/uploads/threads/${enc(s.id)}/messages`, f, opts);
 }

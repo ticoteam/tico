@@ -1,7 +1,7 @@
 import { useInfiniteQuery, useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import { useAction } from '@/actions';
-import { meQuery, pageOwnersQuery, useActors, type Actor, type PageOwnerRow } from '@/data';
+import { meQuery, pageOwnersMayQuery, pageOwnersQuery, useActors, type Actor, type PageOwnerRow } from '@/data';
 import { useFollow } from '@/live/follow';
 import { Ago } from '@/kit/Ago';
 import { Avatar } from '@/kit/Avatar';
@@ -388,7 +388,7 @@ function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; a
               <LabelValue label="Model" onEdit={manage ? () => setEditing('model') : undefined}>
                 {row ? modelLine(row, models?.models) : ''}
               </LabelValue>
-              <PagesLine agent={actor.id} manage={manage} />
+              <PagesLine agent={actor.id} />
             </Facts>
             {instructions.data && (
               <div className="ins">
@@ -489,8 +489,10 @@ function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; a
 
 /** The pages this agent owns (backend/page_owners.py), its face in their Agent bar: given or taken back here, as in
     Settings › Page owners. A page it owns by default stays its own until another agent is given it. */
-function PagesLine({ agent, manage }: { agent: string; manage: boolean }) {
+function PagesLine({ agent }: { agent: string }) {
   const pages = Object.entries(useQuery(pageOwnersQuery).data ?? {});
+  // who may change a page's owner is the company's owner or an admin, as the server's PUT checks: not this agent's managers
+  const manage = useQuery(pageOwnersMayQuery).data === true;
   const set = useAction('settings.setPageOwner');
   // by the choice, so a change shows at once: chosen, or on its default when the default is this agent
   const owns = (row: PageOwnerRow) => row.choice === agent || ((row.choice ?? 'default') === 'default' && (row.default ?? row.bot) === agent);

@@ -19,7 +19,7 @@ import { BrowserDialog } from '@/features/team/exports';
 import { FilterRow, ListAndItem, PageMore, Section } from '@/pagekinds';
 import { AddAccountDialog, AddDialog, AddMenu, ReplaceLoginDialog, type Adding } from './AddTool';
 import { CodeDialog, Confirm, EditApiDialog, ExpiryDialog, PasteDialog, RevealDialog, SettingDialog, SitesDialog } from './ToolDialogs';
-import { Face, Held, idsAndNames, KindTile, More, OwnerButton, press, when } from './parts';
+import { Face, Held, idsAndNames, KindTile, More, press, when } from './parts';
 import { apiToolQuery, teamsQuery, toolsQuery, vaultQuery, websiteToolQuery, type StoredKey } from './queries';
 import { AddressOne, CompanyAddress } from './ToolLetters';
 import { EmailView, hasWho, InboxView, KeyView, MailboxView, MessagesView, NumbersView, ServiceView, subjectOf, WebhookView, WhoMenu } from './ToolMore';
@@ -192,7 +192,6 @@ export function ToolsPage({ search }: { search: ToolsSearch }) {
             <section className="tool is-empty" aria-label="Tools">
               <header className="conv-head tool-head">
                 <span className="grow" />
-                <OwnerButton page="tools" />
               </header>
             </section>
           )

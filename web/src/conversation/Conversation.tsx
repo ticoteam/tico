@@ -285,7 +285,9 @@ export function Conversation({ id, variant, title, actor, session, from, starter
       variant,
       text,
       files,
-      from: at,
+      // what is open there goes only to Tico, which acts with the person's own rights; another chat's members may not
+      // read it, so they are told the page alone
+      from: at && (variant === 'tico' ? at : { page: at.page, label: at.label }),
       me: myId,
       ...(retry && { retry: retry.id }),
       ...(answers && { replyTo: answers, quote }),
