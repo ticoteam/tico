@@ -14,6 +14,7 @@ import functools
 import hashlib
 import json
 import logging
+import html
 import re
 import secrets
 import sqlite3
@@ -622,6 +623,87 @@ def page_refs_readable(c, auth, who, refs):
         if version_refusal(c, auth, who, row, number, stored_version(c, file_id, number)):
             return False
     return True
+
+
+TITLED = "file.titled"  # event: a page took its own heading as its title (adopt_title); detail {"title"}
+HEADING_BYTES = 256 * 1024  # where a page's <title> and first <h1> are looked for
+
+
+def page_heading(data):
+    """A page's own name in its bytes: its <title>, else its first <h1>, on one line and at most 300 characters, or
+    "". Read from the bytes being published, never later."""
+    head = bytes(data[:HEADING_BYTES])
+    for pattern in (rb"<title[^>]*>(.*?)</title>", rb"<h1[^>]*>(.*?)</h1>"):
+        found = re.search(pattern, head, re.I | re.S)
+        text = re.sub(rb"<[^>]+>", b" ", found.group(1)).decode("utf-8", errors="replace") if found else ""
+        if said := " ".join(html.unescape(text).split())[:300]:
+            return said
+    return ""
+
+
+def adopt_title(c, row, data, actor):
+    """A page version published with no title: the file takes that version's own heading (page_heading) while nobody
+    has named it, that is while its title is still one of its versions' file names or the heading it last took (a
+    TITLED event). A title given at publish or a rename is never overwritten. The row as it is now."""
+    heading = page_heading(data)
+    if not heading or heading == row["title"]:
+        return row
+    names = {r[0] for r in c.execute("SELECT name FROM bot_file_versions WHERE file_id=?", (row["id"],))}
+    last = c.execute(
+        "SELECT json_extract(detail,'$.title') FROM events WHERE action=? AND target=? ORDER BY created_at DESC LIMIT 1",
+        (TITLED, row["id"]),
+    ).fetchone()
+    if row["title"] not in names and not (last and last[0] == row["title"]):
+        return row
+    c.execute("UPDATE bot_files SET title=? WHERE id=?", (heading, row["id"]))
+    file_library.retitle(c, row["id"], heading)
+    H.event(c, actor, TITLED, row["id"], {"title": heading})
+    return c.execute("SELECT * FROM bot_files WHERE id=?", (row["id"],)).fetchone()
+
+
+def readable_titles(c, auth, who, pinned):
+    """{(file id, version): the file's title} of the pinned page versions in `pinned` that `who` may read, each through
+    the check page_refs_readable makes (page_ref_denials, then version_refusal), with the files, their versions and
+    what file_visible reads loaded together (prime_visible) rather than once a page."""
+    pinned = sorted({(str(f), int(v)) for f, v in pinned})
+    if not pinned:
+        return {}
+    rows = {
+        r["id"]: r
+        for r in c.execute(f"SELECT * FROM bot_files WHERE id IN {ANY_OF}", (json.dumps([f for f, _ in pinned]),))
+    }
+    prime_visible(c, list(rows.values()))  # first: page_ref_denials asks file_visible of a restricted page
+    denied = page_ref_denials(c, auth, who, [f"page:{f}@{v}" for f, v in pinned])
+    stored = {
+        (r["file_id"], r["version"]): r
+        for r in c.execute(
+            "SELECT v.*,b.digest AS blob_digest,b.content_type FROM bot_file_versions v JOIN blobs b ON b.id=v.blob_id "
+            f"WHERE v.file_id IN {ANY_OF}",
+            (json.dumps([f for f, _ in pinned]),),
+        )
+    }
+    # What page_blob_visible reads of each version's blob: the pages it holds, and their rows.
+    held = page_identities(c, sorted({stored[k]["blob_id"] for k in pinned if k in stored}))
+    page_rows(c, sorted({fid for found in held.values() for fid in found}))
+    # A title that is only a file name, this version's or an older one's ("draft-1.html"), names nothing: left out.
+    names = defaultdict(set)
+    for (fid, _), r in stored.items():
+        names[fid].add(r["name"])
+
+    def readable(f, v):
+        return (f, v) in stored and version_refusal(c, auth, who, rows[f], v, stored[(f, v)]) is None
+
+    # The title is the file's now: shown for an older version only to a reader of the current one too, whose newer
+    # name it may be.
+    return {
+        (f, v): rows[f]["title"]
+        for f, v in pinned
+        if f in rows
+        and f not in denied
+        and rows[f]["title"] not in names[f]
+        and readable(f, v)
+        and (v == rows[f]["current_version"] or readable(f, rows[f]["current_version"]))
+    }
 
 
 def readable_earlier(c, auth, who, entry):
@@ -2256,6 +2338,8 @@ class Files:
                 version_time=str(fields.get("written_at") or "") if page_publish else None,
             )
             H.event(c, actor, "file.publish", row["id"], {"bot": bot, "version": row["current_version"], "size": size})
+            if page_publish and changed and not fields.get("title"):
+                row = adopt_title(c, row, data, actor)  # before it is indexed and returned
             if changed:
                 # Video and audio have no text to search; their bytes are never read back here.
                 file_library.index(

@@ -34,6 +34,7 @@ have a Spec, a QA report and any number of other pages.
     tico page publish reports/weekly-review.html --title "Engineering weekly" --cadence weekly [--as-of 2026-10-27]
         [--task ID [--as ROLE]] [--page ID] [--replaces PAGE]
 
+- **`--title`** names the page. Without it, the page takes its own `<title>`, unless someone has named it since.
 - **The same path again** adds a version of the same page. **`--page ID`** adds a version of that page, whatever its
   file name, if you may write it.
 - **`--cadence`** says how often the bot means to update it: `none`, `daily`, `weekly` or `monthly`.

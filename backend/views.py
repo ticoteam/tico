@@ -2068,14 +2068,59 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
                 if item["ask"]["kind"] == "ok":
                     item["missing"] = [item["ask"]["line"]]
                     # A task filed for the OK is titled by its kind, alone or with its matter (task_asks.kind_titled);
-                    # the row says what this one is about, to its party, beside that title (task #389).
+                    # the row says what this one is about, to its party, beside that title (task #389). A Finance OK
+                    # says so on any task: its bound grant's kind decides (task_asks.ALWAYS_ABOUT).
                     title = str((item.get("task") or {}).get("title") or "")
                     # Only to a party of the OK: one handed the ask reads its line as PRIVATE_LINE, and no more here.
-                    if task_asks.kind_titled(title) and item["line"] != task_asks.PRIVATE_LINE:
-                        said = task_asks.about(c, item["requirement_id"], item["line"])
+                    if item["line"] != task_asks.PRIVATE_LINE:
+                        said = task_asks.about(
+                            c, item["requirement_id"], item["line"], titled=task_asks.kind_titled(title)
+                        )
                         if said:
                             item["about"] = said
     return sorted(items, key=needs_key)
+
+
+def _asked_page(item):
+    """The page a page ask of a Needs-you item submits ({file_id, version, ref}), or None."""
+    ask = (item.get("ask") or {}) if item.get("kind") == "ask" else {}
+    return ask.get("page") if ask.get("kind") == "page" else None
+
+
+def needs_lines(c, auth, who, items):
+    """Needs-you items as a reader is served them: a page ask's row is the submitted page's title (`about` and `line`)
+    instead of its document's name ("Release report"), for a reader who may read that version (files.readable_titles,
+    every page together). Read with every list, so its marks and version move with the reader's access; a changed item
+    is a copy."""
+    from .files import readable_titles
+
+    pages = [_asked_page(item) for item in items]
+    titles = readable_titles(c, auth, who, [(p["file_id"], p["version"]) for p in pages if p])
+    out = []
+    for item, page in zip(items, pages, strict=True):
+        title = _clip(titles.get((page["file_id"], int(page["version"])), ""), 120) if page else ""
+        out.append({**item, "about": title, "line": title} if title else item)
+    return out
+
+
+def needs_shown(c, auth, who, task_view=None, **how):
+    """needs_items as the reader is served them (needs_lines): what every route and stream of Needs you gives."""
+    return needs_lines(c, auth, who, needs_items(c, auth, who, task_view, **how))
+
+
+def needs_still_shown(c, auth, who, items):
+    """Whether items cut from a held build (backend/needs_cache.py) still show only what the caller may read: each
+    page ask's title (files.readable_titles), and what each OK is about (a Finance action's payee and amount) to its
+    parties alone (task_asks.parties_to_all, one statement for them all)."""
+    from . import task_asks
+    from .files import readable_titles
+
+    told = [item for item in items if item.get("about")]
+    pages = [(p["file_id"], int(p["version"])) for item in told if (p := _asked_page(item))]
+    if pages and len(readable_titles(c, auth, who, pages)) < len(set(pages)):
+        return False
+    oks = [str(item["requirement_id"]) for item in told if (item.get("ask") or {}).get("kind") == "ok"]
+    return not oks or task_asks.parties_to_all(c, who.actor, oks)
 
 
 def needs_key(x):
@@ -2200,7 +2245,7 @@ def needs_summary(c, auth, who, task_view, limit):
     """What the caller's Needs you holds: the total, the number per kind, and per bot (`by_bot`, needs_actor): its
     count, the ones made this week and the ones older than three days, and its newest `limit` items. Items no bot put
     there are grouped under `other`. Ages are days from each item's `since`."""
-    items = needs_items(c, auth, who, task_view)
+    items = needs_shown(c, auth, who, task_view)
     now = H.now()
     week, older = H.shift(now, days=-7), H.shift(now, days=-3)
     groups, kinds, this_week = {}, {}, 0
@@ -2218,7 +2263,7 @@ def needs_summary(c, auth, who, task_view, limit):
                 "id": str(it["id"]),
                 "kind": it["kind"],
                 "task_id": it.get("task_id"),
-                "line": _clip(it.get("line"), 80),
+                "line": it.get("about") or _clip(it.get("line"), 80),  # `about` is bounded where it is made
                 "since": created,
                 "age_days": round(age_days(created, now), 1),
             }
@@ -2359,7 +2404,7 @@ def fleet_snapshot(c, auth, identity, task_view):
                 for k in ("id", "title", "owner_id", "requester_id", "status", "due_at", "note", "updated_at")
             }
         )
-    items = needs_items(c, auth, principal, task_view)
+    items = needs_shown(c, auth, principal, task_view)
     return {
         "actor": principal.actor,
         "as_of": H.now(),
@@ -3439,7 +3484,7 @@ def install_views(app, store, auth, mutate, task_view):
             return {
                 "actor": who.actor,
                 "since": since,
-                "bots": recent_bots(c, auth, who, since, limit, needs_items(c, auth, who, task_view)),
+                "bots": recent_bots(c, auth, who, since, limit, needs_shown(c, auth, who, task_view)),
             }
 
     @app.get(
@@ -3482,18 +3527,18 @@ def install_views(app, store, auth, mutate, task_view):
             built = held.get(viewer, cursor.partition(".")[0])
             if built is not None:
                 with store.read_transaction() as c:
-                    readable = needs_still_readable(c, auth, who, built.task_ids)
-                if readable:
-                    return needs_paged(
-                        who, built.items, built.version, limit, cursor, built.snoozed_until, built.counts
-                    )
+                    out = needs_paged(who, built.items, built.version, limit, cursor, built.snoozed_until, built.counts)
+                    if needs_still_readable(c, auth, who, built.task_ids) and needs_still_shown(
+                        c, auth, who, out["items"]
+                    ):
+                        return out
                 held.drop(viewer, built)
         began = needs_cache.begin()
         with store.read_transaction() as c:
             if count:
                 items = needs_items(c, auth, who, count_only=True)
                 return {"actor": who.actor, "count": len(items)}
-            items = needs_items(c, auth, who)
+            items = needs_shown(c, auth, who)
             current = needs_marks(items)[1]
             # When an ask this person snoozed comes back: the page reads the list again then (backend/ask_snoozes.py).
             from . import ask_snoozes

@@ -58,6 +58,7 @@ def test_a_published_page_is_cleaned_and_reads_with_its_status_fields_only_for_w
     # The same bytes again are no new version; a change is.
     assert page(api, attempt).json()["page"]["version"] == 1
     assert page(api, attempt, data=HTML.replace(b"42", b"43")).json()["page"]["version"] == 2
+    assert read(api, fid, "ben-test").json()["page"]["title"] == "Engineering weekly"  # named: its <title> never wins
 
 
 def test_a_page_has_an_inline_address_only_with_a_visual_address(api):
@@ -82,6 +83,22 @@ def test_publishing_refuses_what_is_not_a_page(api):
     )  # a person publishes under their Assistant storage bot
 
 
+def test_an_untitled_page_takes_its_newest_versions_heading_and_a_given_or_renamed_title_stands(api):
+    """Published with no --title, a page is named by each version's own <title>, else its first <h1>, never its file
+    name, and the publish answers with that title; a title given at publish or a rename is never overwritten."""
+    _, attempt = turn(api)
+    made = page(api, attempt, name="draft.html").json()
+    fid = made["page"]["file_id"]
+    assert made["file"]["title"] == made["page"]["title"] == "Weekly"
+    newer = page(api, attempt, name="draft.html", data=HTML.replace(b"<title>Weekly", b"<title>Weekly, week 2")).json()
+    assert newer["file"]["title"] == read(api, fid, "ben-test").json()["page"]["title"] == "Weekly, week 2"
+    headed = page(api, attempt, name="headed.html", data=b"<h1>Acme <b>review</b></h1><p>Up 4%.</p>").json()
+    assert headed["page"]["title"] == "Acme review"
+    assert api.patch("/api/v2/files/" + fid, json={"title": "Numbers"}, headers=headers("ben-test")).status_code == 200
+    page(api, attempt, name="draft.html", data=HTML.replace(b"<title>Weekly", b"<title>Weekly, week 3"))
+    assert read(api, fid, "ben-test").json()["page"]["title"] == "Numbers"
+
+
 def test_a_page_goes_stale_after_one_and_a_half_cadences():
     now = datetime(2026, 10, 28, tzinfo=timezone.utc)
     stamp = lambda days: (now - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
@@ -96,7 +113,7 @@ def test_a_replaced_page_names_its_replacement_only_to_readers_who_may_see_it(ap
     old = page(api, attempt).json()["page"]["file_id"]
     new = page(api, attempt, name="weekly-2.html", data=HTML + b"<p>v2</p>", replaces=old).json()["page"]
     seen = read(api, old, "ben-test").json()["page"]
-    assert (seen["replaced_by_id"], seen["replaced_by_title"]) == (new["file_id"], "weekly-2.html")
+    assert (seen["replaced_by_id"], seen["replaced_by_title"]) == (new["file_id"], "Weekly")  # its own <title>
     # A bot without write rights on the old page cannot replace it.
     _, other = turn(api, bot="finance")
     assert page(api, other, name="f.html", replaces=old).status_code == 404

@@ -624,6 +624,9 @@ export interface FlowItem {
   /** What it asks of the person, when an ask holds it (`ask`): its kind ("ok", "page"), who asked and what it shows
       ("email:<send id>", "page:<file>@<v>"). */
   ask?: { kind: string; by: string | null; shows: string[] };
+  /** What its ask is about, when the server lets this person read it (Needs you `about`): a page ask's page title, a
+      Finance OK's payee and amount. The row shows it in place of the task's title. */
+  about?: string;
 }
 
 /** One of Flow's sections: a pipeline's stage and its tasks that wait on you. */
@@ -668,15 +671,22 @@ export const flowQuery = queryOptions({
   queryKey: ['flow'] as const,
   // The Flow loader still needs this result if the shell unsubscribes.
   queryFn: async (): Promise<Flow> => {
-    const seen = new Set<string>();
+    // One row a task, where its oldest item is; an ask that says what it is about (`about`) names the row.
+    const seen = new Map<string, number>();
     const named = new Set<string>();
     const items: FlowItem[] = [];
     for (const it of await needsYouItems()) {
       // a paused item names its tasks in task_ids (backend/views.py), which the generated type leaves out
       for (const id of [it.task_id, it.task?.id, ...((it as { task_ids?: string[] }).task_ids ?? [])]) if (id) named.add(id);
       const t = it.task;
-      if (!t || seen.has(t.id)) continue;
-      seen.add(t.id);
+      if (!t) continue;
+      const at = seen.get(t.id);
+      if (at !== undefined) {
+        const row = items[at];
+        if (row && !row.about && it.about) items[at] = { ...row, about: it.about };
+        continue;
+      }
+      seen.set(t.id, items.length);
       items.push({
         id: t.id,
         number: t.number,
@@ -689,6 +699,7 @@ export const flowQuery = queryOptions({
         since: it.since ?? t.stage_since ?? new Date().toISOString(),
         blocks: t.blocks,
         ...(it.ask && { ask: { kind: it.ask.kind, by: it.ask.asked_by ?? null, shows: it.ask.shows ?? [] } }),
+        ...(it.about && { about: it.about }),
       });
     }
     return { count: items.length, items, task_ids: [...named] };

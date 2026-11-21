@@ -3019,9 +3019,9 @@ NEEDS_CHANGES_MAX = 100  # ids named in one `needs` event; more than this reads 
 
 def needs_baseline(c, auth, who, task_view):
     """What a `needs=changes` stream describes its first change against: the list's marks as the stream starts."""
-    from .views import needs_items, needs_marks
+    from .views import needs_marks, needs_shown
 
-    items = needs_items(c, auth, who, task_view)
+    items = needs_shown(c, auth, who, task_view)
     marks, version = needs_marks(items)
     return {"marks": marks, "version": version}
 
@@ -3101,11 +3101,11 @@ def baselines(store):
 
 
 def _needs_list(view, rows, task_view, held=None):
-    from .views import needs_bots, needs_items, needs_kinds, needs_marks, needs_stages
+    from .views import needs_bots, needs_kinds, needs_marks, needs_shown, needs_stages
 
     built = view.mine["needs"]
     if task_view not in built:
-        built[task_view] = needs_items(view.c, view.auth, view.who, task_view)
+        built[task_view] = needs_shown(view.c, view.auth, view.who, task_view)
     items = built[task_view]  # read only below: each stream's own marks and counts come from it
     if held is None:
         return [(rows[-1], {"count": len(items), "items": items})]

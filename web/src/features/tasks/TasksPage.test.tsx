@@ -606,6 +606,30 @@ describe('Flow @s5 @s112', () => {
     expect(asked.filter((u) => u.includes('/needs-you')).map((u) => new URL(u, 'http://x').searchParams.get('cursor'))).toEqual([null, 'v1.1', 'v2.1']);
   });
 
+  it("an ask's row says what it is about, on a desktop and a phone, whichever of its task's items comes first", async () => {
+    const task = { ...item, id: 'a4', number: 10, title: 'OK a Finance action' };
+    const mention = { id: 'n-m4', kind: 'mention', line: 'Can you look?', since: ago(9), task };
+    const pay = { id: 'n-a4', kind: 'ask', line: 'OK this in Finance?', about: 'Pay 540.00 USD to Figma by ach', since: ago(5), task };
+    serve((url) => (url.includes('/needs-you') ? { status: 200, body: { actor: ME, items: [mention, pay], next: null } } : { status: 200, body: {} }));
+    queryClient.setQueryData(pipelinesQuery.queryKey, [PIPE]);
+    for (const layout of ['', 'cards']) {
+      if (layout) document.documentElement.dataset.layout = layout;
+      try {
+        queryClient.removeQueries({ queryKey: ['flow'] });
+        show(<FlowPage />, '/flow');
+        expect((await screen.findByTitle('Pay 540.00 USD to Figma by ach')).closest('a')?.getAttribute('href')).toBe('/flow/10');
+        expect(screen.queryByTitle('OK a Finance action')).toBeNull();
+        // One row, named by the ask's `about`, keeping its oldest item's own fields (no ask: a mention's).
+        const flow = queryClient.getQueryData<{ count: number; items: { about?: string; ask?: unknown }[] }>(['flow']);
+        expect(flow?.count).toBe(1);
+        expect(flow?.items[0]?.ask).toBeUndefined();
+        cleanup();
+      } finally {
+        delete document.documentElement.dataset.layout;
+      }
+    }
+  });
+
   it('says so when nothing waits on you', async () => {
     serve(() => ({ status: 200, body: {} }));
     queryClient.setQueryData(pipelinesQuery.queryKey, [PIPE]);

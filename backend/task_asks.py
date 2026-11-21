@@ -335,7 +335,22 @@ ABOUT: dict[str, Callable[[object], str]] = {
     "edition": lambda c: f"Publish: {t}" if (t := _named(c, "title")) else "",
     "webhook": lambda c: f"Make webhook endpoint {n}" if (n := _named(c, "name")) else "",
     "publish": lambda c: f"Publish to the roadmap: {t}" if (t := _published_title(c)) else "",
+    "finance": lambda c: _finance_summary(c),
 }
+
+
+def _finance_summary(content: object) -> str:
+    """What a Finance OK does, from the action it binds (finance/actions.py `_approval_payload`): its plan's text, which
+    names a payment's payee and amount first ("Pay 540.00 USD to Figma by ach; <why it needs an OK>"), whole (a payee's
+    name may hold a "; "), without its own action id, then shortened. The payload names a payee only by its id."""
+    bound = cast("dict[str, object]", content) if isinstance(content, dict) else {}
+    what = bound.get("what")
+    if not isinstance(what, str):
+        return ""
+    return _clip_words(what.removesuffix(f" (Finance action {bound.get('action_id')})"), FINANCE_ABOUT_CHARS)
+
+
+FINANCE_ABOUT_CHARS = 200  # room for a full payee and amount before the reasons it needs an OK
 
 
 def _published_title(content: object) -> str:
@@ -350,13 +365,20 @@ def _published_title(content: object) -> str:
     return _named(values, "public_title")
 
 
-def about(conn: "sqlite3.Connection", requirement_id: str, line: str = "") -> str:
+# Kinds whose OK says what it is about on any task, not only one titled by its kind (`about`).
+ALWAYS_ABOUT = frozenset({"finance"})
+
+
+def about(conn: "sqlite3.Connection", requirement_id: str, line: str = "", *, titled: bool = True) -> str:
     """What one OK is about for its parties' Needs you rows: its subject's words (ABOUT); else the ask's own line when it
-    says more than a question of the kind does (a Finance action's line names the payee and amount); else ""."""
+    says more than a question of the kind does; else "". Only on a task titled by its kind (`titled`, kind_titled),
+    except for an ALWAYS_ABOUT kind, whose bound grant says what it is (a Finance OK's payee and amount)."""
     found = grant(conn, requirement_id)
     if not found:
         return ""
     kind = kind_of(found["subject"])
+    if not titled and kind not in ALWAYS_ABOUT:
+        return ""
     said = ABOUT.get(kind, lambda _c: "")(found["content"])
     if said:
         return said
@@ -770,6 +792,21 @@ def party(conn: "sqlite3.Connection", actor: object, row: Row) -> bool:
     if who in {row["asked_by_id"], row.get("asked_of_id"), row.get("ok_by_id")} - {None, ""}:
         return True
     return owner_or_admin(conn, who)
+
+
+def parties_to_all(conn: "sqlite3.Connection", actor: object, requirement_ids: list[str]) -> bool:
+    """Whether `actor` is a party (`party`) to the bound OK of every one of these requirements, read in one statement.
+    False with no actor, no requirement, or one that names no bound OK: nothing then vouches for the reader."""
+    who, wanted = str(actor or ""), set(requirement_ids)
+    if not who or not wanted:
+        return False
+    rows = conn.execute(
+        "SELECT asked_by_id, asked_of_id, ok_by_id FROM ok_grants WHERE requirement_id IN (SELECT value FROM json_each(?))",
+        (json.dumps(sorted(wanted)),),
+    ).fetchall()
+    if len(rows) != len(wanted):  # one is no bound OK (any more): nothing vouches for it
+        return False
+    return all(who in (row[0], row[1], row[2]) for row in rows) or owner_or_admin(conn, who)
 
 
 def hidden_from(conn: "sqlite3.Connection", viewer: object, requirement_id: str) -> bool:

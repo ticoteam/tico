@@ -21,7 +21,7 @@ from . import models as M
 from . import task_text_keys
 from . import note_outcomes
 from .blobs import Blobs, brief, register
-from .files import is_file_id
+from .files import adopt_title, is_file_id
 from clients import bot_files as BF
 from . import rooms
 from . import visuals
@@ -828,6 +828,7 @@ def install_media(
 
         upload_key(request)
         poster = None
+        document_html = b""  # a document's cleaned HTML, which names its file (files.adopt_title)
         if request.headers.get("content-type", "").lower().startswith("multipart/form-data"):
             from .file_upload import parse
 
@@ -901,7 +902,7 @@ def install_media(
                 if body.text is None:
                     raise Problem("validation", "A document is HTML text: send it as text", 422)
                 body = body.model_copy(update={"document": document, "name": TD.file_name(document)})
-                data = TD.clean(body.text)
+                data = document_html = TD.clean(body.text)
             elif body.text is not None:
                 data = body.text.encode("utf-8")
             else:
@@ -944,6 +945,9 @@ def install_media(
                 page = TD.file_of(c, tid, document, lambda row: files.visible(c, who, row, {}))
                 fid, number = files.attach_task(c, who, tid, item, digest, bot, file=page, series=False)
                 TD.record(c, tid, document, fid, who.actor)
+                # A document version is a page: untitled, it takes its own heading, as a published page does.
+                row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
+                adopt_title(c, row, document_html, who.actor)
             else:
                 fid, number = files.attach_task(c, who, tid, item, digest, bot, replaces=body.replaces)
             c.execute("INSERT INTO task_assets VALUES(?,?)", (tid, item["id"]))

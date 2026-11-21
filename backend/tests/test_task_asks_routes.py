@@ -423,6 +423,76 @@ def test_a_filed_oks_needs_you_row_names_what_it_is_about_to_its_party_only(api)
     assert "Globex Records Office" not in cara.text and not handed[mail["requirement_id"]].get("about")
 
 
+def test_a_finance_oks_row_names_its_payee_and_amount_to_its_parties_only_cached_reads_too(api):
+    """Marketing C3: five Finance asks read only "OK a Finance action". The filed task keeps that title, and a party's
+    row says what the action does from the payload the OK binds (its plan's text: payee and amount first), whole (a
+    payee may hold a "; "), without its action id; on a task of its own title too, and in the summary MCP reads.
+    Handed to Ben, an Admin, he reads it as a party; made a plain member, a page cut from his held list
+    (backend/needs_cache.py) is checked again and he reads only that it waits on a person's OK."""
+    from backend.finance.store.tico import OK_LINE
+    from backend.tests.helpers.api import as_member
+
+    as_bot(api)
+    content = {
+        "source": "finance",
+        "action_id": "fa1",
+        "kind": "payment_send",
+        "what": "Pay 540.00 USD to Acme; Europe by ach; Over the design budget (Finance action fa1)",
+        "payload": {"recipient_id": "r1", "amount": 54000},
+        "amount": 54000,
+        "account": "bank",
+    }
+    tid = bots_task(api, "ops", "Refund Dana's duplicate charge")
+    with api.app.state.store.transaction() as c:
+        pay = K.ask_ok(c, "bot:ops", "human:ana", OK_LINE, shows=[], subject="finance:fa1", content=content)
+        assert H.task(c, pay["task_id"])["title"] == "OK a Finance action"
+        c.execute("UPDATE tasks SET private=0 WHERE id=?", (pay["task_id"],))
+        version = H.task(c, pay["task_id"])["version"]
+        H.task_give(c, "human:ana", pay["task_id"], pay["requirement_id"], "human:ben", version)
+        refund = {**content, "action_id": "fa2", "what": "Refund 12.00 EUR to Dana Lee (Finance action fa2)"}
+        named = K.ask_ok(
+            c,
+            "bot:ops",
+            "human:ben",
+            OK_LINE,
+            shows=[],
+            subject="finance:fa2",
+            content=refund,
+            task_id=tid,
+        )
+    first = get(api, "needs-you?limit=50", token="ben-test")
+    items = {i.get("requirement_id"): i for i in first["items"]}
+    assert items[pay["requirement_id"]]["about"] == "Pay 540.00 USD to Acme; Europe by ach; Over the design budget"
+    assert items[named["requirement_id"]]["about"] == "Refund 12.00 EUR to Dana Lee"
+    summary = json.dumps(get(api, "needs-you/summary", token="ben-test"))
+    assert "Pay 540.00 USD to Acme; Europe" in summary and "Refund 12.00 EUR to Dana Lee" in summary
+    assert "Europe" not in api.get("/api/v2/needs-you", headers=headers("cara-test")).text
+    as_member(api, "ben@acme.example")
+    held = api.get(f"/api/v2/needs-you?limit=50&cursor={first['version']}.0", headers=headers("ben-test"))
+    rebuilt = api.get("/api/v2/needs-you", headers=headers("ben-test"))
+    for answer in (held, rebuilt):
+        items = {i.get("requirement_id"): i for i in answer.json()["items"]}
+        assert items[pay["requirement_id"]]["line"] == K.PRIVATE_LINE, answer.text
+        assert "Europe" not in answer.text and "USD" not in answer.text
+        assert items[named["requirement_id"]]["about"] == "Refund 12.00 EUR to Dana Lee"  # asked of him: still his
+    assert held.json()["restart"] is True  # built again, not cut from the list he read as a party
+
+
+def test_parties_to_all_vouches_only_for_bound_oks_and_a_named_reader(api):
+    """The held-list recheck (views.needs_still_shown) asks this of every OK whose `about` a page shows: never true for
+    nobody, for no OK, or for an id that is no bound OK, however the rest stand."""
+    as_bot(api)
+    with api.app.state.store.transaction() as c:
+        rid = K.ask_ok(c, "bot:ops", "human:cara", "Send this?", shows=[], subject="email_send:p1", content={"a": 1})[
+            "requirement_id"
+        ]
+        assert K.parties_to_all(c, "human:cara", [rid]) and K.parties_to_all(c, "bot:ops", [rid, rid])
+        assert not K.parties_to_all(c, "", [rid]) and not K.parties_to_all(c, None, [rid])
+        assert not K.parties_to_all(c, "human:cara", [])
+        assert not K.parties_to_all(c, "human:cara", [rid, "no-such-requirement"])
+        assert not K.parties_to_all(c, "human:dana", [rid])
+
+
 def test_a_filed_oks_task_names_the_matter_the_asker_was_working_where_its_title_may_go(api):
     """A row of "Mail a letter" said nothing of which matter each was for: the OK's task takes the title of the task the
     asker was working. A private one's title goes there only when the person asked and the asker (as its owner or

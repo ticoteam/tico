@@ -1704,8 +1704,9 @@ def test_a_failed_grouped_call_counts_a_try_on_each_page(store, seeded, monkeypa
 
 
 def test_needs_you_names_a_page_ok_by_its_name_beside_its_task(api):
-    """A stage's page OK in Needs you is its name: the task's title is beside it, and which version and what changed is
-    the version line beside the document, never pasted into the row."""
+    """A stage's page OK in Needs you is the submitted page's title (Marketing C3: not the document's name, "Spec
+    page"): the task's title is beside it, and which version and what changed is the version line beside the
+    document, never pasted into the row."""
     store = api.app.state.store
     store.blobs = store.blobs or Blobs(store.settings)
     with store.transaction() as conn:
@@ -1718,7 +1719,7 @@ def test_needs_you_names_a_page_ok_by_its_name_beside_its_task(api):
     r = api.get("/api/v2/needs-you", headers=headers("ana-test"))
     assert r.status_code == 200, r.text
     (item,) = [i for i in r.json()["items"] if i.get("requirement_id") == rid]
-    assert (item["line"], item["task"]["title"]) == ("Spec page", "Importer spec"), item["line"]
+    assert (item["line"], item["about"], item["task"]["title"]) == ("Spec", "Spec", "Importer spec"), item["line"]
 
 
 # ----------------------------------------------------------------------------- Jev says what is missing (task #351)

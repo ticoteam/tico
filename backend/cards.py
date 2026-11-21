@@ -398,7 +398,7 @@ def done_per_week(ctx, s):
 def needs_list(ctx):
     from . import views
 
-    return ctx.memo("needs", lambda: views.needs_items(ctx.c, ctx.auth, ctx.who, ctx.task_view))
+    return ctx.memo("needs", lambda: views.needs_shown(ctx.c, ctx.auth, ctx.who, ctx.task_view))
 
 
 def needs_act(it):

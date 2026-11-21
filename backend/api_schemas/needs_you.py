@@ -42,7 +42,8 @@ NEEDS_ITEM = obj(
     about={
         "type": "string",
         "description": "An OK whose task is titled by its kind alone (\"Mail a letter\"): what this one is about, "
-        "in its subject's words (\"Mail a letter to Ana Diaz\"), for its party; the row's first line",
+        "in its subject's words (\"Mail a letter to Ana Diaz\"; a Finance action's payee and amount), for its party; "
+        "a page ask's submitted page title (its `line` too), for a reader of that version; the row's first line",
     },
 )
 

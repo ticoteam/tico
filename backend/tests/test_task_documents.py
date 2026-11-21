@@ -21,6 +21,22 @@ def documents(api, tid, token="ana-test"):
     return get(api, "tasks/" + tid, token)["task"]["documents"]
 
 
+def test_a_documents_file_is_named_by_its_newest_versions_heading_until_someone_names_it(api):
+    """Untitled, a document's file takes each version's own heading (its <h1> here), never its file name, so a page
+    ask names the page (Marketing C3); a rename stands through the next version."""
+    tid = task(api, "bot:ops", "Write the export spec")
+    first = write(api, tid, "Spec", SPEC)
+    title = lambda: get(api, "files/" + first["file_id"] + "/info")["file"]["title"]  # noqa: E731
+    assert title() == "Export spec"
+    write(api, tid, "Spec", SPEC.replace("Export spec", "Export spec v2"))
+    assert title() == "Export spec v2"
+    assert (
+        api.patch("/api/v2/files/" + first["file_id"], json={"title": "Exports"}, headers=headers()).status_code == 200
+    )
+    write(api, tid, "Spec", SPEC.replace("Export spec", "Export spec v3"))
+    assert title() == "Exports"
+
+
 def test_a_task_without_documents_lists_none(api):
     tid = task(api, "human:ben", "Check the export")
     assert documents(api, tid) == []

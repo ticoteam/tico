@@ -126,6 +126,16 @@ def more(store, pages, questions, idle, start=0):
             Q.ask_in_chat(c, f"bot:{BOTS[k]}", ANA, f"Which tone should note {k} take?")
 
 
+def restrict(store):
+    """Every page an audience of its own (Ana's), so each title shown passes a restricted page's audience check."""
+    with store.transaction() as c:
+        c.execute(
+            "INSERT OR IGNORE INTO pages(file_id, audience, created_at, updated_at) "
+            "SELECT id, ?, ?, ? FROM bot_files WHERE mime='text/html'",
+            (json.dumps({"people": [ANA]}), H.now(), H.now()),
+        )
+
+
 def build(api, person, how, **kw):
     """(the person's Needs you, the statements it took): `how` "snapshot" in one read transaction, as the route
     reads it; "rows" with no snapshot cache (read_cache.cache gives None, as outside a snapshot), where nothing is
@@ -136,7 +146,7 @@ def build(api, person, how, **kw):
             patched.setattr(read_cache, "cache", lambda c: None)
         with store.read_transaction() as c:
             c.set_trace_callback(seen.append)
-            items = V.needs_items(c, api.app.state.auth, WHO[person], **kw)
+            items = V.needs_shown(c, api.app.state.auth, WHO[person], **kw)  # as served: page titles included
             c.set_trace_callback(None)
     if how == "rows":  # the reference read each PR's metadata on its own, never in a batch
         assert not any("FROM item_metadata" in sql and "json_each" in sql for sql in seen)
@@ -166,9 +176,13 @@ def test_more_pages_questions_and_idle_bots_read_no_more_statements(api):
     """A build's statements do not grow with its items: six times the pages, ❓s and bots that cannot run read the same
     statements, give or take a chunk."""
     store = company(api, pages=3, questions=2, idle=2)
+    restrict(store)
     few_items, few = build(api, ANA, "snapshot")
     more(store, pages=15, questions=12, idle=12, start=3)
+    restrict(store)
     many_items, many = build(api, ANA, "snapshot")
+    titled = [i for i in many_items if (i.get("ask") or {}).get("page") and i.get("about")]
+    assert len(titled) >= 18, len(titled)  # each spec's title shown, through its page's audience
     assert len(many_items) >= len(few_items) + 20
     assert many <= few + 3, (few, many)
     assert many <= 150, many
@@ -318,6 +332,91 @@ def test_a_page_cut_from_a_held_build_leaves_out_a_task_the_caller_no_longer_rea
     rebuilt = api.get("/api/v2/needs-you", headers=headers("ben-test")).json()
     assert gone not in {item.get("task_id") for item in rebuilt["items"]}
     assert later["items"] == rebuilt["items"][:2] and later["count"] == first["count"] - 1
+
+
+def test_a_page_asks_row_is_its_pages_title_while_the_reader_reads_that_version(api):
+    """Marketing C3: seven page asks all read "Release report", the document's name. A page ask's row is the submitted
+    page's own title (`about` and `line`), only while the reader may read that version: once the page is deleted the
+    list's version moves (`version=` is not "unchanged"), a cursor into the held build (backend/needs_cache.py) is
+    built again, and every answer shows the ask's own line, never the page's title. A title that is only the file's
+    name ("spec.html", this version's or an older one's) names nothing, and the team brief (views.fleet_snapshot) lists the same rows."""
+    store = api.app.state.store
+    store.blobs = store.blobs or Blobs(store.settings)
+    titles = ["Pause 3 rental Google campaigns", "Publish 3 comparison pages", "spec.html", "older"]
+    fids = []
+    with store.transaction() as c:
+        for slug in ("manager", "writer"):
+            X.bot(c, slug)
+        X.pipeline(c, "product", "Product", SPEC, manager="bot:manager")
+        for n, title in enumerate(titles):
+            row = X.new_task(c, ANA, f"Release report {n}", "product", assignee="bot:writer")
+            fid, _ = _page(c, store, f"<h1>{title}</h1><p>Why, below.</p>")
+            if (
+                title == "older"
+            ):  # named by its first version's file ("spec.html"); the version asked about is "draft-2"
+                second, _ = _page(c, store, "<h1>Draft</h1><p>Two.</p>")
+                c.execute(
+                    "INSERT INTO bot_file_versions (file_id, version, blob_id, digest, size, name, mime, actor, created_at) "
+                    "SELECT ?, 2, blob_id, digest, size, 'draft-2.html', mime, actor, created_at FROM bot_file_versions "
+                    "WHERE file_id=?",
+                    (fid, second),
+                )
+                c.execute("UPDATE bot_files SET current_version=2 WHERE id=?", (fid,))
+                title = "spec.html"
+            c.execute("UPDATE bot_files SET title=? WHERE id=?", (title, fid))
+            made = P.attach(c, row["id"], "Spec page", "page:" + fid, "bot:writer", seen_version=row["version"])
+            _say(c, made, "met")
+            fids.append(fid)
+
+    def rows(answer):
+        return {i["ask"]["page"]["file_id"]: i for i in answer["items"] if (i.get("ask") or {}).get("page")}
+
+    first = api.get("/api/v2/needs-you?limit=50", headers=headers("ana-test")).json()
+    shown = rows(first)
+    for fid, title in zip(fids[:2], titles, strict=False):
+        assert (shown[fid]["about"], shown[fid]["line"]) == (title, title)
+    for fid in fids[2:]:  # a file's name, this version's or an older one's, is no title
+        assert shown[fid]["line"] == "Spec page" and "about" not in shown[fid]
+    with store.read_transaction() as c:
+        brief = V.fleet_snapshot(c, api.app.state.auth, WHO[ANA], lambda row, **k: row)["needs_you"]
+    assert rows({"items": brief})[fids[0]]["about"] == titles[0]
+    with store.transaction() as c:
+        c.execute("UPDATE bot_files SET state='deleted' WHERE id=?", (fids[1],))
+    held = api.get(f"/api/v2/needs-you?limit=50&cursor={first['version']}.0", headers=headers("ana-test")).json()
+    same = api.get(f"/api/v2/needs-you?version={first['version']}", headers=headers("ana-test")).json()
+    assert "unchanged" not in same and same["version"] != first["version"]
+    assert held["restart"] is True and held["version"] == same["version"]
+    for answer in (same, held):
+        shown = rows(answer)
+        assert shown[fids[0]]["about"] == titles[0]
+        assert shown[fids[1]]["line"] == "Spec page" and "about" not in shown[fids[1]]
+        assert "comparison" not in json.dumps(answer)
+
+
+def test_an_older_versions_ask_shows_the_files_title_only_to_a_reader_of_its_current_version(api, monkeypatch):
+    """The title is the file's now, perhaps named for a newer version: an ask about version 1 shows it only to a reader
+    who may also read the current version; one refused it (here, its bytes' fence) keeps the ask's own line."""
+    from backend import files as F
+
+    store = api.app.state.store
+    store.blobs = store.blobs or Blobs(store.settings)
+    with store.transaction() as c:
+        X.bot(c, "writer")
+        fid, _ = _page(c, store, "<h1>Plan</h1>")
+        _page(c, store, "<h1>Plan, renamed for the merger</h1>", fid=fid)
+        c.execute("UPDATE bot_files SET title='Merger plan' WHERE id=?", (fid,))
+    auth, who = api.app.state.auth, WHO[ANA]
+    with store.read_transaction() as c:
+        assert F.readable_titles(c, auth, who, [(fid, 1), (fid, 2)]) == {
+            (fid, 1): "Merger plan",
+            (fid, 2): "Merger plan",
+        }
+    real = F.version_refusal
+    monkeypatch.setattr(
+        F, "version_refusal", lambda c, a, w, row, n, v: "blob_fence" if n == 2 else real(c, a, w, row, n, v)
+    )
+    with store.read_transaction() as c:
+        assert F.readable_titles(c, auth, who, [(fid, 1), (fid, 2)]) == {}
 
 
 def preset_company(api, count):
