@@ -79,7 +79,7 @@ def test_a_tool_that_is_not_offered_is_refused_when_it_is_called(api, botops):
 def test_the_assistant_is_offered_reads_its_own_writes_and_its_proposal_tool():
     names = {t["name"] for t in hubtools.listing(kind="assistant")}
     assert "tico_assistant_propose" in names and "tico_task_create" in names and "tico_health_check" in names
-    # Only the NEVER tools are hidden from an Assistant turn (hubtools.ASSISTANT_HIDDEN): the server's gate decides the rest.
+    # The NEVER tools are never offered to an Assistant turn (hubtools.ASSISTANT_HIDDEN): the server's gate decides the rest.
     assert not set(hubtools.ASSISTANT_HIDDEN) & names and "tico_sql" not in names
     assert "tico_message_send" in names and "tico_update_create" not in names
     assert {t["name"] for t in hubtools.listing()} >= names  # no kind: everything, the server decides

@@ -156,6 +156,25 @@ def test_the_mcp_surface_lists_the_real_tools_and_logs_a_call_as_a_canon_line(tm
             "method": "tools/call",
             "params": {"name": "tico_task_close", "arguments": {"id": "x", "why": "y", "version": 3}},
         },
+        {
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": {"name": "tico_assistant_morning", "arguments": {"for_person": "human:dana", "body": "Hi"}},
+        },
+        # Gated as production gates a call: an unlisted tool the kind is offered runs, a NEVER tool is refused.
+        {
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "tools/call",
+            "params": {"name": "tico_needs_you_next", "arguments": {"batch": "b1"}},
+        },
+        {
+            "jsonrpc": "2.0",
+            "id": 6,
+            "method": "tools/call",
+            "params": {"name": "tico_sql", "arguments": {"sql": "SELECT 1"}},
+        },
     ]
     proc = subprocess.run(
         [sys.executable, str(server)],
@@ -167,13 +186,17 @@ def test_the_mcp_surface_lists_the_real_tools_and_logs_a_call_as_a_canon_line(tm
         check=False,
     )
     replies = {r["id"]: r for r in map(json.loads, proc.stdout.splitlines())}
-    assert set(replies) == {1, 2, 3}, proc.stderr
+    assert set(replies) == {1, 2, 3, 4, 5, 6}, proc.stderr
+    assert "result" in replies[5] and "tico_needs_you_next" not in {t["name"] for t in replies[2]["result"]["tools"]}
+    assert replies[6]["result"]["isError"] and "forbidden" in replies[6]["result"]["content"][0]["text"]
     real = [t["name"] for t in hubtools.listing(local=True, kind="assistant")]
     assert [t["name"] for t in replies[2]["result"]["tools"]] == real
     assert not replies[3]["result"]["isError"], replies[3]
     logged = [json.loads(l) for l in log.read_text().splitlines()]
-    assert logged[-1]["via"] == "mcp" and logged[-1]["tool"] == "tico_task_close", logged
-    assert re.search(r"^task close\b", logged[-1]["argv"]), logged[-1]
+    by_tool = {entry["tool"]: entry for entry in logged if entry.get("via") == "mcp"}
+    assert re.search(r"^task close\b", by_tool["tico_task_close"]["argv"]), logged
+    # A tool argument named apart from its CLI flag logs the flag: the morning message's person is `--for`.
+    assert by_tool["tico_assistant_morning"]["argv"].startswith("assistant morning --for human:dana "), logged
 
 
 PROMPT_RS = Path(__file__).resolve().parents[2] / "runner-rs" / "src" / "prompt.rs"

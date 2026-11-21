@@ -512,11 +512,14 @@ from clients import hubtools              # the real tool table: listing, argume
 from clients.remotecli import tool_name   # the command -> tool derivation production uses
 import hubcli
 
-LISTING = hubtools.listing(local=True, kind=os.environ.get("EVAL_MCP_KIND", "assistant"))
-OFFERED = {t["name"]: t for t in LISTING}
+KIND = os.environ.get("EVAL_MCP_KIND", "assistant")
+# What tools/list shows (discovery); a call is gated as production gates it (clients/commands/_mcp.py): any tool its
+# kind is offered, listed or not.
+LISTING = hubtools.listing(local=True, kind=KIND)
 # Production runs `task show` with several ids as tico_task_show_many (remotecli: `show` with len(ids) > 1).
 TOOL_COMMAND = {"tico_task_show_many": "tico_task_show"}
-TOOL_ARGS = {"tico_task_show_many": {"ids": "id"}}
+# Tool arguments named apart from the CLI flag the same call takes, so an MCP call logs the line the CLI would.
+TOOL_ARGS = {"tico_task_show_many": {"ids": "id"}, "tico_assistant_morning": {"for_person": "for"}}
 
 
 def command_map():
@@ -592,7 +595,7 @@ def tool_result(text, is_error):
 def call(name, args):
     """One tools/call: an argument the tool's inputSchema rejects is logged as invalid and answered as a tool error."""
     argv = argv_for(name, args)
-    problem = hubtools.argument_error(args, OFFERED[name]["inputSchema"])
+    problem = hubtools.argument_error(args, hubtools.BY_NAME[name]["inputSchema"])
     if problem:
         with open(os.environ["EVAL_LOG"], "a") as log:
             log.write(json.dumps({"argv": " ".join(argv), "via": "mcp", "tool": name, "exit": 1, "out": problem[:200],
@@ -623,9 +626,12 @@ def handle(message):
         name, args = params.get("name"), params.get("arguments", {})
         if not isinstance(name, str) or not isinstance(args, dict):
             return {"jsonrpc": "2.0", "id": rid, "error": {"code": -32602, "message": "name must be a string, arguments an object"}}
-        if name not in OFFERED:
+        if name not in hubtools.BY_NAME:
             return {"jsonrpc": "2.0", "id": rid, "error": {"code": -32602, "message": f"Unknown tool: {name}"}}
-        result = call(name, args)
+        if KIND not in hubtools.offered_to(hubtools.BY_NAME[name]):
+            result = tool_result(json.dumps({"error": "forbidden", "detail": f"{name} is not available to you"}), True)
+        else:
+            result = call(name, args)
     else:
         return {"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": f"Method not found: {method}"}}
     return {"jsonrpc": "2.0", "id": rid, "result": result}
@@ -700,22 +706,14 @@ def opening(background=False):
             "preferences, messages, or attachments into shared repository files.",
         ]
         last = [
-            "Replies in this chat follow AGENTS.md: short, with links, what changed and how to undo it. Never mention your "
-            "repository, memory or commits to the person."
+            "AGENTS.md is your rulebook: it routes the work (the helpers included), and replies in this chat follow it: "
+            "short, with links, what changed and how to undo it. Never mention your repository, memory or commits to the "
+            "person."
         ]
     personal = [
-        "For live questions about running, queued, blocked, waiting, unhealthy, or approval work, run `tico health check`. "
-        "Its response is already filtered to the signed-in person you represent.",
-        f"You act as {OWNER}, with their rights, on what they ask in this chat. Decline any approval addressed to them when "
-        "they ask; approve only after `tico approval read-back` and their plain yes, and only with their setting on "
-        "(AGENTS.md, Approvals).",
-        "For strategy advice or goal changes (goal and KPI colours and reasons, the vision) ask the Strategy Owner: "
-        "`tico task create --owner strategy-owner --request-id turn`.",
-        "For research, Market and Docs setup or library work ask the Librarian: "
-        "`tico task create --owner librarian --request-id turn`.",
-        "To create a new bot, or change a bot's instructions or code, ask BotOps: `tico task create --owner botops "
-        "--request-id turn`, so BotOps acts with the person's own rights, then report its result when the task returns. "
-        "Pausing or resuming a bot, its model, its routines and automations, and rules: make the change yourself, as the person.",
+        f"You act as {OWNER}, with their rights, on what they ask in this chat. Reply to a bot's ❓ to them only when they "
+        "ask, in their words, in its chat (`tico task comment`). An OK that lets something go (send, spend, publish) is "
+        "their own click on its preview in Tico: link it, never answer it.",
     ]
     return "\n".join([*shared, *first, *personal, *last])
 
