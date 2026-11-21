@@ -283,6 +283,8 @@ EMPTY = (
     "call_bot_notes",
     "call_voice_options",
     "call_follow_ups",
+    # Who waits on an agent's reply to their Assistant's ask: live state of the source's runs, answered or not there.
+    "awaiting_replies",
     # Slack links: an active link posts to Slack both ways; its queue and message map only serve that link.
     "slack_thread_links",
     "slack_link_members",

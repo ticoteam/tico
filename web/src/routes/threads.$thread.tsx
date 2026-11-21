@@ -1,4 +1,4 @@
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, useLocation } from '@tanstack/react-router';
 import { ThreadsPage } from '@/features/threads/exports';
 import { loadThreads } from '@/features/threads/routing';
 
@@ -17,5 +17,7 @@ export const Route = createFileRoute('/threads/$thread')({
 function ThreadRoute() {
   const { thread } = Route.useParams();
   const { m } = Route.useSearch();
-  return <ThreadsPage pane="thread" thread={thread} message={m} />;
+  // Each opening of the address has its own history key: the same link opened again jumps again.
+  const openKey = useLocation({ select: (l) => l.state.__TSR_key ?? l.href });
+  return <ThreadsPage pane="thread" thread={thread} message={m} openKey={openKey} />;
 }

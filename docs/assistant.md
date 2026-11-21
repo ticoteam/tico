@@ -256,9 +256,8 @@ task, the message names it only by the title it was filed with.
 ## An agent's answer comes back
 
 When your Assistant asks another agent something for you, the agent's first message after it in that thread (or one of
-its sub-threads) comes back to your Assistant chat once: "<agent> replied", with a link that opens the reply. A plain
-reply in your own chat with that agent also carries a short excerpt; a reply you cannot read is not told at all.
-Known gap: an agent synced from outside Tico (its transcript imported) is not relayed.
+its sub-threads) comes back to your Assistant chat once: "<agent> replied", with a link that opens the reply. A reply you
+cannot read is not told at all. Known gap: an agent synced from outside Tico (its transcript imported) is not relayed.
 
 ## Undo
 
