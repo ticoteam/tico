@@ -122,6 +122,27 @@ function Tasks({ name, rows, adding, onAdd, children }: { name: string; rows: Li
   );
 }
 
+/** Paid shots whose outcome is unknown (backend/paid_renders.py): the card waits on its person to mark them reconciled. */
+const isShots = (w: { requirement_id: string | null } | null | undefined) => !!w?.requirement_id?.startsWith('paid_render:');
+/** The shots in batches of 50, the most one Mark reconciled sends. */
+const batches = <T,>(all: T[]) => Array.from({ length: Math.ceil(all.length / 50) }, (_, i) => all.slice(i * 50, i * 50 + 50));
+
+/** Mark reconciled: busy until the server answers, a refusal in a toast. */
+function Reconcile({ task, keys }: { task: string; keys: string[] }) {
+  const [busy, setBusy] = useState(false);
+  const mark = async () => {
+    setBusy(true);
+    const r = await run('task.reconcileShots', { task, shots: keys }, { via: 'click' });
+    setBusy(false);
+    if (!r.ok) toast(failedToast(r));
+  };
+  return (
+    <button type="button" className="dt-act" disabled={busy} aria-busy={busy} onClick={() => void mark()}>
+      Mark reconciled
+    </button>
+  );
+}
+
 /** The waiting question as a line: a leading "❓" goes, since the line already says it waits (and the emoji draws in red). */
 const question = (line: string | null | undefined) => (line ?? '').replace(/^\s*\u2753\uFE0F?\s*/u, '');
 
@@ -139,6 +160,7 @@ export function Details({ t, flow, adding = null, onAdding = () => undefined }: 
   const files = useQuery(taskFilesQuery(t.id));
   const criteria = t.acceptance_criteria ?? [];
   const leave = t.to_leave ?? [];
+  const shots = t.waits?.find(isShots);
   const left = leave.filter((r) => !r.met);
   const met = leave.filter((r) => r.met);
   const kids: Linked[] = t.children.map((c) => ({ id: c.id, title: c.title, owner: c.owner_id, stage: c.stage, done: c.status !== 'open' }));
@@ -199,7 +221,7 @@ export function Details({ t, flow, adding = null, onAdding = () => undefined }: 
             }
           />
         </div>
-        {t.turn?.who && t.turn.who !== t.owner_id && (
+        {t.turn?.who && t.turn.who !== t.owner_id && !isShots(t.turn) && (
           <Kv k="Waiting on">
             <Face id={t.turn.who} />
             <span>
@@ -208,6 +230,19 @@ export function Details({ t, flow, adding = null, onAdding = () => undefined }: 
             {question(t.turn.line) && <small>{question(t.turn.line)}</small>}
           </Kv>
         )}
+        {shots && (
+          <Kv k="Waiting on" target={`task-shots:${t.id}`}>
+            {shots.who && <Face id={shots.who} />}
+            <small>{shots.line}</small>
+          </Kv>
+        )}
+        {/* Each batch the button sends (the server takes 50 keys at most), with every shot's full name it marks. */}
+        {batches(shots?.shots ?? []).map((batch) => (
+          <Kv key={batch[0]!.key} k="">
+            <small>{batch.map((s) => s.name || s.key).join(', ')}</small>
+            {t.can_comment && <Reconcile task={t.id} keys={batch.map((s) => s.key)} />}
+          </Kv>
+        ))}
         <EditKv
             k="Due"
             target={`task-due:${t.id}`}

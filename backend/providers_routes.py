@@ -13,6 +13,8 @@ from . import gateway_connection
 from . import gateway_page
 from . import gateway_tiers
 from . import paid_renders
+from .api_answers.tasks import ShotsReconciled
+from .api_contract import api_v2
 import hashlib
 import json
 from . import model_login
@@ -316,7 +318,8 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
         # One charge per paid shot: a shot that started, is in flight or is unknown is answered before any check; a new
         # one is written down before it is sent and never sent again when its outcome is unknown (backend/paid_renders.py).
         operation = request.headers.get("idempotency-key")
-        started = paid_renders.resolve(store, who, job, body.shot, operation)
+        shot = paid_renders.shot_of(job, body.shot)  # hashed once, outside any transaction
+        started, pin = paid_renders.resolve(store, who, shot, operation)  # the shot picked, sent as it is
         if started:
             return started
         key, base, header = gateway_for(who)
@@ -324,10 +327,10 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
         status, answer, code = paid_renders.send(
             store,
             who,
-            job,
-            body.shot,
+            shot,
             lambda shot: gateway_client.video_submit(base, key, job, {**header, "Idempotency-Key": shot}),
             operation,
+            pin,
         )
         if status != 202:
             if status == 404:
@@ -341,6 +344,45 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
                 503 if status in (0, 429) or status >= 500 else 422,
             )
         return answer
+
+    @app.post(
+        "/api/v2/tasks/{tid}/shots/reconcile",
+        **api_v2(
+            "Tasks",
+            "reconcileTaskShots",
+            "A person marks a task's paid shots of unknown outcome reconciled: exactly the keys in `shots`, a "
+            "required, non-empty list (1 to 50, as its wait showed them), never every one by default. They leave "
+            "its Reconcile wait and are never sent again",
+            ShotsReconciled,
+        ),
+    )
+    def shots_reconcile(tid: str, request: Request, body: M.ShotsReconcile):
+        """Mark the card's paid shots of unknown outcome reconciled once its person checked Gateway usage
+        (`tico_gateway_reconcile`, backend/paid_renders.py). A person who may comment on the card may, checked again on
+        a replay of the same Idempotency-Key; never an agent. The receipt holds the task the id named, never only what was typed: a
+        replay through a prefix that now names another task is a conflict."""
+        from types import SimpleNamespace
+
+        from . import task_reads
+
+        who = request.state.identity
+        if (
+            who.role == "bot"
+            or getattr(who, "via", "")
+            or getattr(who, "task_actor", None)
+            or not H.is_human(who.actor)
+        ):
+            # An agent never clears a wait on its own shots: the person checks Gateway usage.
+            raise Problem("forbidden", "Only a person, signed in as themselves, marks paid shots reconciled", 403)
+        with store.read() as c:
+            task_id = auth.resolve_task(c, who, tid)
+        keyed = SimpleNamespace(model_dump=lambda: {**body.model_dump(), "task": task_id})
+        return mutate(
+            request,
+            keyed,
+            lambda c: {"reconciled": paid_renders.reconcile(c, who.actor, task_id, body.shots)},
+            check=lambda c: task_reads.comment_rights(c, auth, who, task_id),
+        )
 
     @app.get("/api/v2/gateway/videos/{job_id}")
     def gateway_video_status(job_id: str, request: Request):

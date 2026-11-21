@@ -1966,7 +1966,7 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
     if not H.is_human(who.actor):
         return []
     visible = auth.task_sql(c, who)
-    raw = list(waiting_on.needs(c, who.actor, snoozed))
+    raw = list(waiting_on.needs(c, who.actor, snoozed, shots=True))  # with paid shots to reconcile: shown only
     mentions = []  # an @ is not a wait: it is in Threads' Needs attention, not here (#4762)
     wanted = {i["task_id"] for i in raw if i.get("task_id")} | {t for i in raw for t in i.get("tasks") or ()}
     wanted |= {m["task_id"] for m in mentions if m.get("task_id")}

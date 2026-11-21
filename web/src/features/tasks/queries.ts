@@ -98,7 +98,7 @@ export type TaskItem = Pick<
   Task,
   'id' | 'number' | 'title' | 'status' | 'pipeline_id' | 'stage_id' | 'owner_id' | 'labels' | 'late' | 'turn' | 'updated_at' | 'version'
 > &
-  Partial<Pick<Task, 'stuck' | 'stage_since' | 'snoozed' | 'created_at' | 'due_at' | 'visibility' | 'blocks' | 'email_send' | 'status_line'>>;
+  Partial<Pick<Task, 'stuck' | 'stage_since' | 'snoozed' | 'created_at' | 'due_at' | 'visibility' | 'blocks' | 'email_send' | 'status_line' | 'reconcile'>>;
 
 /** The cache's shape for a list: the server's page, kept as is so the stream's patches apply (live/patch.ts). */
 export interface TaskPage {
@@ -725,6 +725,8 @@ const flowItemOf = (it: NeedsRow, t: NonNullable<NeedsRow['task']>): FlowItem =>
   blocks: t.blocks,
   ...(it.ask && { ask: { kind: it.ask.kind, by: it.ask.asked_by ?? null, shows: it.ask.shows ?? [], line: it.line, requirement: it.ask.requirement_id } }),
   ...(it.about && { about: it.about }),
+  // Paid shots to reconcile (backend/paid_renders.py): no ask to show, so the row says so beside the task's title.
+  ...(it.requirement_id?.startsWith('paid_render:') && { about: `${it.line} · ${t.title}` }),
 });
 
 /** Every task that waits on the person, across pipelines (GET /api/v2/needs-you). Asks without a task stay in chats. */
@@ -756,7 +758,8 @@ export const flowQuery = queryOptions({
       const at = seen.get(t.id);
       if (at !== undefined) {
         const row = items[at];
-        if (row && !row.about && it.about) items[at] = { ...row, about: it.about };
+        if (row && it.requirement_id?.startsWith('paid_render:')) items[at] = { ...row, about: `${it.line} · ${row.about || row.title}` };
+        else if (row && !row.about && it.about) items[at] = { ...row, about: it.about };
         continue;
       }
       seen.set(t.id, items.length);

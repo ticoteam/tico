@@ -33,7 +33,7 @@ def sent(monkeypatch):
                 "category": body.get("category"),
                 "images": [
                     {"mime": "image/png", "b64": base64.b64encode(MADE + bytes([n])).decode()}
-                    for n in range(body["count"])
+                    for n in range(body.get("count", 0))
                 ],
                 "usage": {"cost_usd": 0.05},
             }
@@ -304,3 +304,12 @@ def test_a_video_needs_an_out_file_an_mp4_name_and_a_job_id(video, tmp_path):
     with pytest.raises(ValueError, match="PNG or JPEG"):
         run(["gateway", "video", "x", "--first-frame", str(frame)])
     assert not any(call[0] == "POST" for call in video.calls)
+
+
+def test_a_tasks_paid_shots_are_marked_reconciled_from_the_cli(sent):
+    run(["gateway", "reconcile", "1a2b3c4d", "--shot", "shot_a", "--shot", "shot_b"])
+    assert sent == [("tasks/1a2b3c4d/shots/reconcile", {"shots": ["shot_a", "shot_b"]})]
+    with pytest.raises(SystemExit):  # never every shot by default: the keys are needed
+        run(["gateway", "reconcile", "1a2b3c4d"])
+    assert hubtools.BY_NAME["tico_gateway_reconcile"]["inputSchema"]["required"] == ["task", "shots"]
+    assert "bot" not in hubtools.AUDIENCE["tico_gateway_reconcile"]  # a person's tool, never an agent's

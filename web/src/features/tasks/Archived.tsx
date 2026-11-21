@@ -1,5 +1,6 @@
 import { useSuspenseQuery } from '@tanstack/react-query';
 import { Ago } from '@/kit/Ago';
+import { Pill } from '@/kit/Pill';
 import { useCards } from '@/kit/Popover';
 import { Row } from '@/kit/Row';
 import { Section } from '@/pagekinds';
@@ -53,6 +54,8 @@ function ArchRow({ t, p, stage }: { t: TaskItem; p: Pipeline; stage: string | un
       <span className="row-mark" />
       <span className="row-title">{t.title}</span>
       <span className="row-stage">{stage}</span>
+      {/* Paid shots to reconcile (backend/paid_renders.py) still wait on a person on a card that ended. */}
+      {t.reconcile && <Pill>{t.reconcile.line}</Pill>}
       {t.owner_id ? <Face actor={t.owner_id} /> : <span className="av-gap" />}
       <Ago at={t.updated_at} className="row-age" />
     </Row>

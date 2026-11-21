@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from clients.cli_spec import Arg, Command, Group
 from clients.commands._registry import tool
-from clients.commands._schemas import _key, _s
+from clients.commands._schemas import TASK_ID, _key, _s
 from clients.commands._shared import json_file
 from clients.tico import APIError
 
@@ -450,8 +450,8 @@ VIDEO_JOB = re.compile(r"gv_[0-9a-f]{24}")
     "tico_gateway_video_status, since a video takes minutes. `first_frame` and `last_frame` are "
     "optional PNG or JPEG files on this computer. It spends from the company's Gateway cap, held "
     "until the job ends. Name the `shot`: the same shot is made once, and one the Gateway never "
-    "confirmed is refused with reconcile_shot: ask the task's person to reconcile it (check Gateway "
-    "usage), and never render it again under another name.",
+    "confirmed is refused with reconcile_shot: its card asks the task's person to check Gateway usage "
+    "and mark it reconciled; never render it again under another name.",
     {
         "prompt": _s("What the video shows"),
         "seconds": {
@@ -555,6 +555,29 @@ def gateway_video_status(api, args):
     }
 
 
+@tool(
+    "tico_gateway_reconcile",
+    "For a person: mark a task's paid shots of unknown outcome reconciled, once you checked Gateway usage: the "
+    "`shots` keys its wait shows. They leave the card's Reconcile wait and are never sent again: name a new shot to "
+    "render one again. Answers {reconciled: [{key, name}]}.",
+    {
+        "task": TASK_ID,
+        "shots": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 50,
+            "items": _s("A shot's key, e.g. shot_0123456789abcdef0123456789abcdef"),
+            "description": "The shots to mark reconciled, by key",
+        },
+    },
+    required=("task", "shots"),
+    writes=True,
+)
+def gateway_reconcile(api, args):
+    body = {"shots": [str(shot) for shot in args["shots"]]}
+    return api.post(f"tasks/{args['task']}/shots/reconcile", body, key=_key(args))
+
+
 # ----------------------------------------------------------------------------- the `tico gateway` commands
 GATEWAY = (
     Group("gateway", "the Tico AI Gateway: its lineup, web search and page reading"),
@@ -605,5 +628,11 @@ GATEWAY = (
         "check a video job; once done, save its MP4 to --out",
         args=(Arg("out", metavar="PATH.mp4"),),
         example="tico gateway video-status gv_0123456789abcdef01234567 --out clips/intro.mp4",
+    ),
+    Command(
+        "gateway reconcile",
+        "for a person: mark a task's paid shots reconciled once Gateway usage was checked; never sent again",
+        args=(Arg("shots", "--shot", metavar="KEY", required=True),),
+        example="tico gateway reconcile 1a2b3c4d --shot shot_0123456789abcdef0123456789abcdef",
     ),
 )

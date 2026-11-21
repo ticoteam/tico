@@ -117,6 +117,12 @@ class TaskRelationView(TypedDict):
     """depends_on only: when the dependency was written"""
 
 
+@answer
+class TaskReconcile(TypedDict):
+    who: str | None
+    line: str
+
+
 class TaskFields(TypedDict):
     """What every read of a task carries; Task and TaskDetailTask add stage_since, which only the task's own read
     always has. Not published: each answer names Task or TaskDetailTask."""
@@ -142,6 +148,8 @@ class TaskFields(TypedDict):
     status_line: NotRequired[Literal["starting", "up_next", "working", "needs_you", "paused"] | None]
     """The card's one status line, on every read and the live stream (task_reads.status_line): starting (its agent's computer is waking or starting the run), up_next (its agent's turn, no run yet), working (a run going now), needs_you (a person's turn: `turn.who`), paused (its agent cannot run: `turn.line` says why, `turn.href` where it is fixed); null when none applies"""
     late: TaskLate | None
+    reconcile: NotRequired[TaskReconcile]
+    """Paid shots of unknown outcome it waits on a person to reconcile, apart from its turn and status line: who and "Reconcile N shots"; only when there are any"""
     stuck: NotRequired[bool]
     """Present and true when the never-stuck ladder brought it to a person (stuck or late)"""
     lane: str
@@ -235,6 +243,12 @@ class Task(TaskFields):
 
 
 @answer
+class ReconciledShot(TypedDict):
+    key: str
+    name: str
+
+
+@answer
 class TaskWait(TypedDict):
     state: Literal["snoozed", "person", "paused", "bot", "jev", "source", "tasks", "room", "pick", "by_hand"]
     who: str | None
@@ -249,6 +263,8 @@ class TaskWait(TypedDict):
     """On a list row, on a bot's turn (state bot) only: a run is going now; false while it waits to try again"""
     share: NotRequired[list[str]]
     """A private task waits on these actors being let in (the next stage's owner and those it asks, or someone asked here, can't see it): move with to next and let_see set to exactly this list"""
+    shots: NotRequired[list[ReconciledShot]]
+    """Paid shots of unknown outcome it waits on its person to reconcile, each its key and full name: the keys go to POST /api/v2/tasks/{tid}/shots/reconcile"""
 
 
 @answer
@@ -789,3 +805,9 @@ class TaskMakePageState(TypedDict):
 @answer
 class TaskMakePage(TypedDict):
     make_page: TaskMakePageState | None
+
+
+@answer
+class ShotsReconciled(TypedDict):
+    reconciled: list[ReconciledShot]
+    """The paid shots marked reconciled: they leave the card's wait and are never sent again"""
