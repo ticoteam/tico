@@ -228,6 +228,16 @@ describe('the thing is the first tab', () => {
     await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/tasks/t1/asks/r1/ok', body: { shown_hash: 'h-v1' } }));
   });
 
+  it('opens the version the address names over the one the ask pinned @approvals', async () => {
+    const at = (n: number) => ({ n, by: 'bot:lo', created_at: '2026-11-01T10:00:00Z', mime: 'application/pdf', size: 10, url: `/api/v2/files/f9?v=${n}`, answers: [], ask: null });
+    const pdf = { id: 'f9', name: 'declaration.pdf', title: 'declaration.pdf', mime: 'application/pdf', archived: false, current_version: 2, links: [], writers: [], versions: [at(1), at(2)] };
+    shown = task({ title: 'Search warrant', to_leave: [req({ shows: ['file:f9@1'], line: 'Sign the declaration' })] });
+    reply = (url) => (url.endsWith('/files?all=1') ? { body: { files: [pdf] } } : null);
+    show(<TaskPage task="12" pipeline="p1" tab="declaration-pdf" />, '/tasks/p1/12/declaration-pdf?v=2');
+    expect(await screen.findByRole('region', { name: 'declaration.pdf' })).toBeTruthy();
+    await waitFor(() => expect(pdfRead.at(-1)).toBe('/api/v2/files/f9?v=2'));
+  });
+
   it('reads a pinned version the file’s listing no longer reaches by the file’s id @approvals', async () => {
     // its newest version is another type: the pinned one is drawn by its own type, read from its meta
     const v2 = { n: 2, by: 'bot:lo', created_at: '2026-11-02T10:00:00Z', mime: 'text/plain', size: 10, url: '/api/v2/files/f9?v=2', answers: [], ask: null };

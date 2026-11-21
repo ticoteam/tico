@@ -82,14 +82,16 @@ export function FileTab({ task, f, version }: { task: string; f: TaskFileView; v
   if (meta.isError) return <Empty icon="alert" title="This file did not load" />;
   if (!v) return <PageBones />;
   const name = f.title || f.name;
+  // Each version keeps the name it was stored under: its viewer and its download follow that version's own.
+  const stored = v.name || f.name;
   // A Word file is drawn as its words on paper, with Download beside it.
-  if (isWord(f.name, v.mime))
+  if (isWord(stored, v.mime))
     return (
       <>
         <div className="fv-bar">
           <b>{name}</b>
           <span className="grow" />
-          <a className="ib ib-sm" href={v.url} download={f.name} aria-label="Download" title="Download">
+          <a className="ib ib-sm" href={v.url} download={stored} aria-label="Download" title="Download">
             <Icon name="download" />
           </a>
         </div>
@@ -97,7 +99,7 @@ export function FileTab({ task, f, version }: { task: string; f: TaskFileView; v
       </>
     );
   // At its current version a person may sign it here as in its file view; an older version pinned by an ask is read only.
-  const file = <FileFrame id={f.id} version={v.n} mime={v.mime} title={name} url={v.url} name={v.name || f.name} size={v.size} signable={isPerson && v === now} />;
+  const file = <FileFrame id={f.id} version={v.n} mime={v.mime} title={name} url={v.url} name={stored} size={v.size} signable={isPerson && v === now} />;
   return <PageOrFile task={task} id={f.id} title={name} page={v.mime.startsWith('text/html')} pin={version} file={file} />;
 }
 

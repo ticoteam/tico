@@ -138,7 +138,8 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
   useEffect(() => {
     if (known || unresolved || first === null || leaving.current) return;
     const a = tabAddress(t, opened, flow);
-    void navigate({ to: a.to as never, search: a.search as never, replace: true });
+    // The address's other words (a version, `v`) stay while the tab is named.
+    void navigate({ to: a.to as never, search: ((prev: TaskSearch) => ({ ...prev, ...a.search })) as never, replace: true });
   }, [known, unresolved, first, opened, flow, t, navigate]);
   /* Answered outside Flow (Flow opens its next item itself): while something else on this task waits on the person,
      its page opens; once nothing does, the task closes, back to the board, list or page it was opened from. */
@@ -217,10 +218,10 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
       <PageView task={t.id} vs={versions} at={at} />
     ) : current?.other ? (
       <div className="frame fv">
-        <FilePreview file={current.other} version={current.version} />
+        <FilePreview file={current.other} version={search.v ?? current.version} />
       </div>
     ) : current?.file ? (
-      <FileTab task={t.id} f={current.file} version={current.version} />
+      <FileTab task={t.id} f={current.file} version={search.v ?? current.version} />
     ) : current?.wait && current.email ? (
       <EmailView
         task={current.wait.id}
