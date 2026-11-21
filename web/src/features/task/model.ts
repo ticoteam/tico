@@ -50,6 +50,9 @@ export function decisionOf(t: TaskData, email?: string | null): TaskRequirement 
   return (t.to_leave ?? []).find((r) => answerable(r) && belongs(r, email)) ?? null;
 }
 
+/** The task's requirement `rid` in any state (an answer being sent clears its `may`), or null when the read lacks it. */
+export const requirementOf = (t: TaskData, rid: string): TaskRequirement | null => (t.to_leave ?? []).find((r) => r.requirement_id === rid) ?? null;
+
 /** The task's open requirement `rid` the person may answer now, or null (answered, withdrawn, or not read yet). */
 export const askOf = (t: TaskData, rid: string): TaskRequirement | null => (t.to_leave ?? []).find((r) => r.requirement_id === rid && answerable(r)) ?? null;
 

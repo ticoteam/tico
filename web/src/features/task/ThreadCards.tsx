@@ -75,7 +75,7 @@ export function useApprovalCards(scope: ApprovalScope, chat?: string): ChatMessa
   const files = useQueries({
     queries: asks.map((it, i) => {
       const sub = subs[i]?.data;
-      return { ...taskFilesQuery(it.id), enabled: !!sub && !emailIn(it.ask?.shows ?? []) && thingsOf(askOf(sub, it.ask?.requirement ?? '')).size > 0, retry: false };
+      return { ...taskFilesQuery(it.id), enabled: !!sub && !emailIn(it.ask.shows) && thingsOf(askOf(sub, it.ask.requirement)).size > 0, retry: false };
     }),
   });
   // An approval entry its task's cached read does not have yet (a new OK): that read is refreshed, once.
@@ -83,9 +83,9 @@ export function useApprovalCards(scope: ApprovalScope, chat?: string): ChatMessa
   const stale = asks
     .filter((it, i) => {
       const sub = subs[i]?.data;
-      return !!sub && !hasAsk(sub, it.ask?.requirement ?? '');
+      return !!sub && !hasAsk(sub, it.ask.requirement);
     })
-    .map((it) => `${it.id}:${it.ask?.requirement ?? ''}`)
+    .map((it) => `${it.id}:${it.ask.requirement}`)
     .join(',');
   useEffect(() => {
     for (const id of new Set(stale.split(',').filter(Boolean).map((k) => k.split(':')[0]!)))
@@ -96,9 +96,9 @@ export function useApprovalCards(scope: ApprovalScope, chat?: string): ChatMessa
     const send = emailIn(it.ask?.shows ?? []);
     // An email's card stands for that email's own open OK on the task, never another ask there.
     // Any other card, the task's own decision that is not an email's (an email's OK beside it has its own card).
-    const requirement = it.ask?.requirement;
+    const requirement = it.ask.requirement;
     // Only an open ask it can still answer is drawn.
-    if (!sub || !requirement || !askOf(sub, requirement)) return [];
+    if (!sub || !askOf(sub, requirement)) return [];
     // An email's: still to go out, as its OK task's row says (sendToGo); its preview is read only on its Email tab.
     if (send) {
       if (!sendToGo(sub, send)) return [];

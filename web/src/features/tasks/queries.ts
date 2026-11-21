@@ -658,6 +658,9 @@ export interface FlowItem {
   about?: string;
 }
 
+/** An approval that waits on the person, always with the requirement it answers. */
+export type ApprovalItem = FlowItem & { ask: NonNullable<FlowItem['ask']> & { requirement: string } };
+
 /** One of Flow's sections: a pipeline's stage and its tasks that wait on you. */
 export interface FlowGroup {
   key: string;
@@ -703,7 +706,7 @@ export interface Flow {
   task_ids?: string[];
   /** Each approval (an OK or a page) that waits on the person, from every row of the list, one per requirement: `items`
       keeps one row per task, the oldest, which may be another ask (the thread cards read this). */
-  approvals?: FlowItem[];
+  approvals?: ApprovalItem[];
 }
 
 type NeedsRow = Awaited<ReturnType<typeof needsYouItems>>[number];
@@ -733,7 +736,7 @@ export const flowQuery = queryOptions({
     const seen = new Map<string, number>();
     const named = new Set<string>();
     const items: FlowItem[] = [];
-    const approvals = new Map<string, FlowItem>();
+    const approvals = new Map<string, ApprovalItem>();
     const requests: FlowRequest[] = [];
     for (const it of await needsYouItems()) {
       if (isRequest(it)) {
@@ -746,7 +749,10 @@ export const flowQuery = queryOptions({
       if (!t) continue;
       // One approval per requirement: two OKs on one task, emails or not, are two approvals. An entry names its own.
       const rid = it.ask?.requirement_id;
-      if ((it.ask?.kind === 'ok' || it.ask?.kind === 'page') && rid && !approvals.has(`${t.id}:${rid}`)) approvals.set(`${t.id}:${rid}`, flowItemOf(it, t));
+      if ((it.ask?.kind === 'ok' || it.ask?.kind === 'page') && rid && !approvals.has(`${t.id}:${rid}`)) {
+        const item = flowItemOf(it, t);
+        if (item.ask) approvals.set(`${t.id}:${rid}`, { ...item, ask: { ...item.ask, requirement: rid } });
+      }
       const at = seen.get(t.id);
       if (at !== undefined) {
         const row = items[at];

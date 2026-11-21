@@ -26,7 +26,7 @@ import { EmailSource, Email as EmailView } from './Email';
 import { ArchiveMenu } from './Files';
 import { FileTab, FileView, PageBones } from './FileView';
 import { FlowTop, MoreMenu, QuietLine, WhereLine } from './Head';
-import { askOf, changesAskedOf, decisionOf, defaultTab, DETAILS, emailOf, failedToast, sendTitle, tabAddress, type TaskTab } from './model';
+import { askOf, changesAskedOf, decisionOf, defaultTab, DETAILS, emailOf, failedToast, requirementOf, sendTitle, tabAddress, tabsOf, targetOf, type TaskTab } from './model';
 import { FlowMark } from '@/kit/FlowMark';
 import { Face } from './parts';
 import { taskDetailQuery, taskRefQuery, type TaskData } from './queries';
@@ -125,7 +125,10 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
   const navigate = useNavigate();
   // The ask a card opened it for (`?ask=`): its tab, at the version it pinned, and its Approve.
   const ask = (useSearch({ strict: false }) as TaskSearch).ask;
-  const { tabs, files, waiting } = useTabs(t, ask ? askOf(t, ask) : undefined);
+  // Its tab and pin hold while its answer is being sent (that clears `may`) or was refused: whether it can be answered
+  // decides only the action.
+  const named = ask ? requirementOf(t, ask) : null;
+  const { tabs, files, waiting } = useTabs(t, named ?? undefined);
   const own = tabs.filter((x) => !x.wait);
   const known = tab !== undefined && tabs.some((x) => x.slug === tab);
   const unresolved = !!tab && !known && (!files.isSuccess || !waiting.settled);
@@ -161,10 +164,23 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
   }, [flow, t.id, client, router]);
   const asks = tabs.find((x) => x.mark === 'ask')?.slug;
   useEffect(() => {
-    if (seek === sought.current || !asks) return;
+    if (seek === sought.current) return;
+    // Opened for one ask (`?ask=`): the next one still waiting that is not an email's opens for its own ask, its tab
+    // (the same one too) and the thread beside it kept.
+    // The answer to it is not read back yet: wait for it.
+    if (ask && named && askOf(t, ask)) return;
+    const next = ask && named ? decisionOf(t, null) : null;
+    if (next) {
+      sought.current = seek;
+      const target = targetOf(next);
+      const slug = tabsOf(t, files.data, next).find((x) => (x.doc?.file_id ?? x.file?.id ?? x.other) === target?.id)?.slug;
+      void navigate({ to: tabAddress(t, slug, false).to as never, search: ((s: Record<string, unknown>) => ({ ...s, ask: next.requirement_id })) as never });
+      return;
+    }
+    if (!asks) return;
     sought.current = seek;
     if (asks !== on) void navigate({ to: tabAddress(t, asks, false).to as never });
-  }, [seek, asks, on, t, navigate]);
+  }, [seek, asks, on, t, navigate, ask, named, files.data]);
   const [adding, setAdding] = useState<Adding | null>(null);
   const [asking, setAsking] = useState(false);
   const search = useSearch({ strict: false }) as TaskSearch;
@@ -202,11 +218,15 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
   const approvals = useApprovalCards({ task: current?.chat ? t : undefined });
   const moreMenu = <MoreMenu t={t} flow={flow} details={quiet} />;
 
+  const askTarget = targetOf(named);
   const pageTabs: PageTab[] = tabs
     .filter((x) => !(quiet && x.slug === DETAILS))
     .map((x) => {
       const a = tabAddress(t, x.slug, flow);
-      return { label: x.label, to: a.to, ...(flow && { search: { tab: x.slug } }), mark: markOf(x), target: `task-tab:${x.slug}`, ...(x.chat && { className: 'tab-chat' }) };
+      // The tab of the ask the address names keeps it (`?ask=`), so going back to it is still that ask.
+      const mine = !!askTarget && (x.doc?.file_id ?? x.file?.id ?? x.other) === askTarget.id;
+      const search = { ...(flow && { tab: x.slug }), ...(mine && ask && { ask }) };
+      return { label: x.label, to: a.to, ...(Object.keys(search).length > 0 && { search }), mark: markOf(x), target: `task-tab:${x.slug}`, ...(x.chat && { className: 'tab-chat' }) };
     });
 
   const body =
@@ -384,7 +404,7 @@ export function TaskChat({ task, flow = false }: TaskChatProps) {
 function ChatDecision({ t, flow, onAsking }: { t: TaskData; flow: boolean; onAsking: (asking: boolean) => void }) {
   const location = useRouterState({ select: (s) => s.location });
   const ask = (location.search as TaskSearch).ask;
-  const { tabs, settled } = useTabs(t, ask ? askOf(t, ask) : undefined);
+  const { tabs, settled } = useTabs(t, (ask && requirementOf(t, ask)) || undefined);
   const tab = flow ? (location.search as TaskSearch).tab : location.pathname.split('/')[4];
   if (!settled) return null;
   const pick = decisionFor(tabs.find((x) => x.slug === resolveTab(tabs, tab && decoded(tab))));
