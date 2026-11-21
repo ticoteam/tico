@@ -7,7 +7,8 @@ import type { Assistant, SlackMessage, SlackThread } from '@/api/schema';
 import { keys, queryClient, quietRoot, write } from '@/data';
 import { onTopic } from '@/live';
 import { newId } from '@/lib/ids';
-import type { ChatMessage, LiveRun, PageRef, ReplyQuote, TimelinePage, Variant } from './types';
+import type { FromPage } from '@/shell/pageOwner';
+import type { ChatMessage, LiveRun, ReplyQuote, TimelinePage, Variant } from './types';
 
 const PAGE = 50;
 const enc = encodeURIComponent;
@@ -117,8 +118,8 @@ export interface Send {
   variant: Variant;
   text: string;
   files?: File[];
-  /** The page it was sent from (refs.page). */
-  page?: PageRef | null;
+  /** The page it was written on (`from_page`, backend/page_owners.py check_from). */
+  from?: FromPage | null;
   me: string;
   /** Retry: the failed row to send again in its place. */
   retry?: string;
@@ -134,16 +135,16 @@ function post(s: Send, idempotencyKey: string): Promise<Sent> {
   const files = s.files ?? [];
   const opts = { idempotencyKey };
   if (s.variant === 'tico') {
-    if (!files.length) return api.post<Sent>('/api/v2/assistant/messages', { text: s.text, ...(s.page && { page: s.page }) }, opts);
+    if (!files.length) return api.post<Sent>('/api/v2/assistant/messages', { text: s.text, ...(s.from && { from_page: s.from }) }, opts);
     const f = new FormData();
     f.set('text', s.text);
-    if (s.page) f.set('page', JSON.stringify(s.page));
+    if (s.from) f.set('from_page', JSON.stringify(s.from));
     for (const file of files) f.append('files', file);
     return api.post<Sent>('/api/v2/uploads/assistant/messages', f, opts);
   }
   const reply = s.replyTo ? { in_reply_to: s.replyTo } : {};
   if (!files.length)
-    return api.post<Sent>(`/api/v2/threads/${enc(s.id)}/messages`, { text: s.text, refs: s.page ? { page: s.page } : {}, ...reply }, opts);
+    return api.post<Sent>(`/api/v2/threads/${enc(s.id)}/messages`, { text: s.text, refs: s.from ? { from_page: s.from } : {}, ...reply }, opts);
   // The upload form has no refs: a message with files does not carry the page.
   const f = new FormData();
   f.set('text', s.text);
@@ -183,7 +184,7 @@ export async function sendMessage(s: Send): Promise<ChatMessage | null> {
     body: s.text,
     created_at: new Date().toISOString(),
     refs: {
-      ...(s.page && { page: s.page }),
+      ...(s.from && { from_page: s.from }),
       ...(s.files?.length && { attachments: s.files.map((f, i) => ({ id: `${tmp}:${i}`, name: f.name, content_type: f.type })) }),
     },
     pending: 'sending',

@@ -18,7 +18,7 @@ import { fmtDate } from '@/lib';
 import { Capped, LIST_CAP, LIST_SHOW, RowMore, ROW_H } from './capped';
 import { FilterItems, FilterMenu } from './FilterMenu';
 import { NewTask } from './NewTask';
-import { Face, isPending, OwnerButton, taskHref, waitsOnMe } from './parts';
+import { Face, isPending, taskHref, waitsOnMe } from './parts';
 import { isFiltered, loadMore, loadMoreOf, pipelinesQuery, pipelineTasksQuery, shelfParams, shelfQuery, shelfTotal, type Filters, type Pipeline, type TaskItem } from './queries';
 import { RequestersDialog } from './Requesters';
 import { byHorizon, HORIZONS, roadmapPipeline, stageName, trackOf, type Horizon } from './roadmap';
@@ -73,7 +73,7 @@ function Roadmap({ p, pipes, search }: { p: Pipeline; pipes: readonly Pipeline[]
         title="Roadmap"
         path="/roadmap"
         className="tasks-page"
-        actions={<HeadActions p={p} search={search} onNew={newFeature} none={none} />}
+        actions={<HeadActions search={search} onNew={newFeature} none={none} />}
         more={<MoreMenu p={p} search={search} none={none} />}
         state={none ? 'empty' : 'ready'}
         empty={{
@@ -101,14 +101,13 @@ function Roadmap({ p, pipes, search }: { p: Pipeline; pipes: readonly Pipeline[]
   );
 }
 
-/** Filter, New feature, the pipeline's owner (their chat opens beside the page). Share is left out: the public roadmap
-    pages are off on the server. A phone's head keeps New feature; Filter moves into the "⋯". */
-function HeadActions({ p, search, onNew, none }: { p: Pipeline; search: RoadmapSearch; onNew: () => void; none: boolean }) {
+/** Filter and New feature (the pipeline's agent is in the Agent bar). Share is left out: the public roadmap pages are
+    off on the server. A phone's head keeps New feature; Filter moves into the "⋯". */
+function HeadActions({ search, onNew, none }: { search: RoadmapSearch; onNew: () => void; none: boolean }) {
   return (
     <>
       {!none && <FilterMenu filters={search} />}
       {!none && <IconButton icon="plus" label="New feature" onClick={onNew} data-target="tasks:new" data-phone />}
-      {p.owner && <OwnerButton actor={p.owner} />}
     </>
   );
 }

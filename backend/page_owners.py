@@ -1,11 +1,12 @@
 # pyright: strict
-"""Who owns a page: the one bot you chat with from it (ui/app/page-chat.ts).
+"""Who owns a page: the one bot you chat with from it, in the shell's Agent bar (web/src/features/threads/OwnerBar.tsx).
 
-A page names only its owner. The chat it opens is the viewer's ordinary direct chat with that bot, the same one as on
-the bot's page; a message sent from the page carries `refs.from_page` (`check_from`), which the bot's turn reads.
+A page names only its owner. The bar is the viewer's own private direct chat with that bot, the same one as on the bot's
+page, never a shared thread; a message sent from any page carries `from_page` (`check_from`: `refs.from_page` on a
+thread post, `from_page` on a post to the Assistant), which the bot's turn reads (runner-rs prompt.rs `from_page`).
 
-One owner per page, changeable in Settings > General > Page owners or with `tico settings set pages.<page>.owner`
-by the owner or an admin. A page follows its owner at the next load, with no release. The choices are kept in
+One owner per page, changeable on the agent's page, in Settings > General > Page owners or with
+`tico settings set pages.<page>.owner` by the owner or an admin. A page follows its owner at the next load, with no release. The choices are kept in
 registry_metadata under `page_owners` ({page: bot id, or null for "no owner"}); a page with no choice kept has its
 default ("default" in a save drops the choice). Every page has an owner (style guide "Where chat lives"): a chosen
 owner or default that is missing, planned or archived gives way to the next in line (the page's default, then the
@@ -31,52 +32,45 @@ if TYPE_CHECKING:
     import sqlite3
 
 KEY = "page_owners"
-# The bot that does each page's work (spec chat-on-every-page), one per page the sidebar and the router reach, in the
-# sidebar's order (Settings lists them so). ui/app/page-chat.ts maps each address to its key. A default names a bot a new
-# company has where one fits (the built-ins: general-manager, strategy-owner, finance-owner, rules-owner, librarian,
-# botops, automations-owner, updates-owner, tools-owner); growth-manager is the catalogue's bot for the work, which a company
-# may not have installed: its page falls back to the General Manager. A page may name a second bot in line (`then`): Tools
-# goes to an IT Support Specialist a company hired when it has no Tools Owner (one from before it was built in, until a
-# start makes it), and only then to the General Manager.
-# Pages with no key have no page chat because the chat IS the page (a bot's or person's page, a thread, a task, the
-# Assistant) or it is setup or the style guide. Calendar and Meetings have none of their own either: the Assistant owns
-# them, and their chat is Ask itself, in the sidebar (page-chat.ts PGC_ASK), never a second Assistant chat.
+# The bot that does each page's work, one per company page the menu and the router reach, in the menu's order (Settings
+# lists them so). web/src/shell/pageOwner.ts maps every address to its key: a page with an item open (a pipeline) asks
+# the item's owner first, then the page's, then the General Manager. A default names a bot a new company has where one
+# fits (the built-ins: general-manager, strategy-owner, finance-owner, librarian, botops (Agent Ops), automations-owner,
+# updates-owner, tools-owner); the others (growth-manager, legal-owner, product-lead) are catalogue bots a company may
+# not have hired: their pages fall back to the General Manager. A page may name a second bot in line (`then`): Tools goes
+# to an IT Support Specialist a company hired when it has no Tools Owner, and only then to the General Manager.
+# Rules and Risk are the Legal Owner's (Rules merged into Legal, Nov 21); the built-in Rules Owner still reads the
+# documents added to Rules (backend/counsel.py), but it owns no page.
+# A personal page (Calendar, Mail, Needs you, Learned, Account, Flow) has no key: its chat is Tico itself. Neither does a
+# page whose chat IS the page (a teammate's page, a thread, a task, a call) or the style guide.
 PAGES: dict[str, dict[str, str]] = {
-    "tasks": {"name": "Tasks", "default": "general-manager"},  # a pipeline's manager answers while one is shown
+    "tasks": {"name": "Tasks", "default": "general-manager"},  # a pipeline's own manager answers while one is shown
+    "roadmap": {"name": "Roadmap", "default": "general-manager"},
     "updates": {"name": "Updates", "default": "updates-owner"},
     "company": {"name": "Company", "default": "general-manager"},  # Company's dashboards, its teams', the Company page
-    "strategy": {
-        "name": "Strategy",
-        "default": "strategy-owner",
-    },  # Strategy's other tabs: Market, Org, Budget, Lenses, Brand
-    "products": {"name": "Products", "default": "product-lead"},  # Company › Products; else the General Manager
+    "strategy": {"name": "Strategy", "default": "strategy-owner"},  # Strategy's other tabs: Market, Org, Brand
     "goals": {"name": "Goals", "default": "strategy-owner"},
+    "products": {"name": "Products", "default": "product-lead"},
     "finance": {"name": "Finance", "default": "finance-owner"},  # with Bills (Payables)
     "growth": {"name": "Growth", "default": "growth-manager"},
-    "risk": {"name": "Risk", "default": "legal-owner", "then": "rules-owner"},
-    "automations": {"name": "Automations", "default": "automations-owner"},
+    "risk": {"name": "Risk", "default": "legal-owner"},  # with Disputes
+    "rules": {"name": "Rules", "default": "legal-owner"},
+    "automations": {"name": "Automations", "default": "automations-owner"},  # Routines
     "listening": {"name": "Listening", "default": "automations-owner"},
-    "rules": {"name": "Rules", "default": "rules-owner"},
-    "docs": {"name": "Docs", "default": "librarian"},  # Docs and Library > Files
-    "skills": {"name": "Skills", "default": "botops"},
+    "usage": {"name": "Usage", "default": "botops"},
+    "docs": {"name": "Docs", "default": "librarian"},  # Docs, a doc, and Library > Files
     "contacts": {"name": "Contacts", "default": "librarian"},
+    "skills": {"name": "Skills", "default": "botops"},
     "tools": {
         "name": "Tools",
         "default": "tools-owner",
         "then": "it-support-specialist",
     },  # with its keys and inboxes: who sets up tools, keys and levels
-    "mail": {"name": "Mail", "default": "general-manager"},
     "messaging": {"name": "Messaging", "default": "general-manager"},
-    "settings": {"name": "Settings", "default": "botops"},
-    "learnings": {"name": "Learnings", "default": "botops"},
-    "usage": {"name": "Usage", "default": "botops"},
-    "changelog": {"name": "Changelog", "default": "updates-owner"},
-    "replay": {"name": "Replay", "default": "botops"},
-    "roadmap": {"name": "Roadmap", "default": "general-manager"},
     "tags": {"name": "Tags", "default": "general-manager"},
-    "computers": {"name": "Computers", "default": "botops"},  # a computer's screen and performance pages
-    "sql": {"name": "SQL", "default": "botops"},
-    "seat": {"name": "Hiring", "default": "botops"},  # a seat being filled (recruit.ts)
+    "settings": {"name": "Settings", "default": "botops"},
+    "computers": {"name": "Computers", "default": "botops"},  # Settings > Computers, a computer's screen
+    "changelog": {"name": "Changelog", "default": "updates-owner"},  # Settings > Changelog
 }
 # Every company has the General Manager (onboarding.complete_company): the owner of last resort, to chat with only.
 FALLBACK = "general-manager"

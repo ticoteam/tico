@@ -67,7 +67,8 @@ function serve(reply: (url: string) => Reply) {
   });
 }
 
-const chat = (id: string) => <Conversation id={id} variant="side" title="Ana" actor="bot:qa" page={{ path: '/tasks/engineering', title: 'Engineering' }} />;
+const FROM = { page: 'tasks', label: 'Tasks', item: { kind: 'pipeline', id: 'engineering', name: 'Engineering' } };
+const chat = (id: string) => <Conversation id={id} variant="side" title="Ana" actor="bot:qa" from={FROM} />;
 const show = () =>
   render(chat(T), { wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider> });
 
@@ -135,7 +136,7 @@ describe('Conversation', () => {
     show();
     type('Can you check the label?');
     expect(screen.getByText('Can you check the label?')).toBeTruthy();
-    expect(sends()[0]).toEqual({ url: `/api/v2/threads/${T}/messages`, body: { text: 'Can you check the label?', refs: { page: { path: '/tasks/engineering', title: 'Engineering' } } } });
+    expect(sends()[0]).toEqual({ url: `/api/v2/threads/${T}/messages`, body: { text: 'Can you check the label?', refs: { from_page: FROM } } });
 
     const real = msg(3, ME, 'Can you check the label?');
     emit('messages', [{ id: real.id, conversation_id: T, message: real }]);
@@ -359,9 +360,10 @@ describe('Composer', () => {
 });
 
 describe('the page it sits beside', () => {
-  it('draws no chip for it, and sends it with each message by its head name, not the window title', async () => {
+  it('draws no chip for it, and sends it with each message as from_page, the item by its head name, not the window title', async () => {
     seed([]);
     serve(() => ({ status: 200, body: {} }));
+    window.history.pushState({}, '', '/library/d1');
     document.title = 'Records production - Tico';
     render(<Conversation id={T} variant="side" title="Ana" actor="bot:qa" />, {
       wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
@@ -371,8 +373,22 @@ describe('the page it sits beside', () => {
     expect(document.querySelector('.look')).toBeNull();
     type('Is this right?');
     await waitFor(() => expect(sends()).toHaveLength(1));
-    expect((sends()[0]?.body as { refs: { page: { title: string } } }).refs.page.title).toBe('Records production');
+    expect((sends()[0]?.body as { refs: unknown }).refs).toEqual({
+      from_page: { page: 'docs', label: 'Docs', item: { kind: 'doc', id: 'd1', name: 'Records production' } },
+    });
     act(() => showPageName(''));
+    window.history.pushState({}, '', '/');
+  });
+
+  it('opens on words to start with while it is empty: a press puts them in the box and sends nothing', async () => {
+    seed([]);
+    serve(() => ({ status: 200, body: {} }));
+    render(<Conversation id={T} variant="side" title="Ana" actor="bot:qa" from={FROM} starters={['What needs me on Tasks?']} />, {
+      wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'What needs me on Tasks?' }));
+    expect((screen.getByRole('textbox', { name: 'Message Ana' }) as HTMLTextAreaElement).value).toBe('What needs me on Tasks?');
+    expect(sends()).toHaveLength(0);
   });
 });
 
@@ -467,7 +483,7 @@ describe('a chat head', () => {
   const head = (actor: string | undefined, title: string) => {
     serve(() => ({ status: 200, body: {} }));
     queryClient.setQueryData(['directory'], { actors: [scout], byId: { [scout.id]: scout } });
-    render(<Conversation id={T} variant="side" title={title} actor={actor} page={null} />, {
+    render(<Conversation id={T} variant="side" title={title} actor={actor} from={null} />, {
       wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
     });
   };

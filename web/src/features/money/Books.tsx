@@ -19,7 +19,7 @@ import { FilterRow, List, PageMore, Section } from '@/pagekinds';
 import { AddBillDialog, EntryDialog, NewInvoiceDialog } from './BillForms';
 import { CardPanel, DocPanel, useBookSearch } from './BookPanels';
 import { acctKey, asOfDay, compareDay, type AsOf } from './ledger';
-import { FIN, FinanceOwner, plural, useFinanceHead } from './head';
+import { FIN, plural, useFinanceHead } from './head';
 import { cash } from './model';
 import { CardDialog, ConfirmDialog, TransferDialog, useMay } from './dialogs';
 import { BillsAddressDialog, copied, ImportDialog, RuleDialog, ShareDialog, type RuleRow } from './forms';
@@ -77,7 +77,6 @@ function Page({
       actions={
         <>
           {tools}
-          <FinanceOwner />
           {actions}
         </>
       }

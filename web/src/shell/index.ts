@@ -1,5 +1,6 @@
 export { Frame, foldSheet } from './Frame';
-export type { FrameProps } from './Frame';
+export type { FrameProps, AgentBar } from './Frame';
+export { pageAt, fromPage, useBarFold, barFolded, type PageAt, type FromPage } from './pageOwner';
 export { Sheet, SheetHead, useSheet } from './Sheet';
 export { PageFault } from './PageFault';
 export { tabTitle, useTabTitle } from './title';

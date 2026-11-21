@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import { Composer, sendMessage, type PageRef } from '@/conversation';
+import { Composer, sendMessage, type FromPage } from '@/conversation';
 import { useActor } from '@/data';
 import { chatAddress } from '@/lib';
 import { useMe } from './people';
@@ -9,8 +9,8 @@ import { chatQuery } from './queries';
 export interface AgentBoxProps {
   /** The agent that handles the conversation (bot:<id or slug>). */
   agent: string;
-  /** The conversation it is about: sent with each message as `refs.page`. */
-  page: PageRef;
+  /** The conversation it is about: sent with each message as `from_page`, its item. */
+  from: FromPage;
 }
 
 /**
@@ -18,7 +18,7 @@ export interface AgentBoxProps {
  * it, never to the outside party (plan/threads-team.html "From outside"). What is typed goes to your DM with the agent
  * with this conversation as its page, and that DM opens beside, where the agent answers and drafts any reply.
  */
-export function AgentBox({ agent, page }: AgentBoxProps) {
+export function AgentBox({ agent, from }: AgentBoxProps) {
   const me = useMe();
   const who = useActor(agent);
   const chat = chatAddress(agent, who?.kind ?? 'agent');
@@ -27,7 +27,7 @@ export function AgentBox({ agent, page }: AgentBoxProps) {
   if (!me) return null;
   return (
     <Composer
-      id={`agent:${page.path}`}
+      id={`agent:${from.page}:${from.item?.id ?? ''}`}
       me={me}
       to={who?.name ?? 'the agent'}
       canSend={!!dm.data}
@@ -35,7 +35,7 @@ export function AgentBox({ agent, page }: AgentBoxProps) {
       attach={false}
       onSend={(text, files) => {
         if (!dm.data) return;
-        void sendMessage({ id: dm.data.id, variant: 'page', text, files, me, page });
+        void sendMessage({ id: dm.data.id, variant: 'page', text, files, me, from });
         void navigate({ to: '.', search: (s: Record<string, unknown>) => ({ ...s, chat }) } as never);
       }}
     />

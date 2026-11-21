@@ -3,8 +3,12 @@
 Ana owns the company, Ben is an admin, Cara is a member (the base fixture). The ops bot runs on a test computer.
 """
 
-from backend import settings_catalog
-from backend.tests.helpers.api import claim, get, post, put
+import json
+from pathlib import Path
+
+from backend import page_owners, settings_catalog
+from backend.tests.helpers.api import claim, get, headers, post, put
+from backend.tests.helpers.assistant import room
 from backend.tests.helpers.chat_goals import setup
 
 
@@ -109,12 +113,16 @@ def test_every_page_the_app_reaches_has_an_owner_in_a_new_company(api):
         'skills',
         'contacts',
         'tools',
-        'mail',
         'usage',
         'settings',
+        'roadmap',
+        'risk',
+        'messaging',
     }
-    # Calendar and Meetings open Ask (the Assistant's one chat): no page owner of their own.
-    assert 'calendar' not in pages and 'meetings' not in pages
+    # A personal page (Calendar, Mail, Needs you, Learned, Account, Flow) is Tico's: no page owner of its own. The dead
+    # keys no page reaches are gone.
+    for gone in ('calendar', 'meetings', 'mail', 'learnings', 'replay', 'sql', 'seat'):
+        assert gone not in pages, gone
     put(api, 'page-owners/calendar', {'bot': 'general-manager'}, expected=404)
     assert {p['bot'] for p in pages.values()} == {'bot:general-manager'}
     assert pages['finance']['name'] == 'Finance'
@@ -197,3 +205,82 @@ def test_a_long_item_name_is_shortened_not_refused(api):
     sent = post(api, f"threads/{dm['id']}/messages", {'text': 'Hi', 'refs': {'from_page': long}})
     name = sent['refs']['from_page']['item']['name']
     assert len(name) == 200 and name.endswith('…') and name.startswith('Plan Plan')
+
+
+def test_rules_and_risk_are_the_legal_owners_and_an_unhired_one_gives_way_to_the_general_manager(api):
+    # Rules merged into Legal (#4857): the Rules Owner owns no page, and a company with no Legal Owner talks to the GM.
+    general_manager(api)
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO bots(id,slug,display_name,state) VALUES('rules-owner','rules-owner','Rules Owner','active')"
+        )
+    pages = get(api, 'page-owners')['pages']
+    assert (pages['rules']['bot'], pages['risk']['bot']) == ('bot:general-manager', 'bot:general-manager')
+    assert all(
+        spec['default'] != 'rules-owner' and spec.get('then') != 'rules-owner' for spec in page_owners.PAGES.values()
+    )
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO bots(id,slug,display_name,state) VALUES('legal-owner','legal-owner','Legal Owner','active')"
+        )
+    pages = get(api, 'page-owners')['pages']
+    assert (pages['rules']['bot'], pages['risk']['bot']) == ('bot:legal-owner', 'bot:legal-owner')
+
+
+def _refs(api, message_id):
+    with api.app.state.store.read() as c:
+        return json.loads(c.execute("SELECT refs FROM messages WHERE id=?", (message_id,)).fetchone()[0])
+
+
+def test_a_message_to_the_assistant_carries_the_page_it_was_written_on(api):
+    # One shape everywhere (#4857): the web sends from_page to the Assistant too, checked like a thread post's.
+    room(api)
+    goals = {'page': 'goals', 'label': 'Goals'}
+    sent = post(api, 'assistant/messages', {'text': 'Add these goals', 'from_page': goals})['message']
+    refs = _refs(api, sent['id'])
+    assert refs['from_page'] == goals and refs['assistant'] is True and 'page' not in refs
+    # Beside the old app's page, from_page wins; the old page alone is still kept.
+    both = {'text': 'Hi', 'from_page': goals, 'page': {'path': '#/goals', 'title': 'Goals'}}
+    assert 'page' not in _refs(api, post(api, 'assistant/messages', both)['message']['id'])
+    old = {'text': 'Hi', 'page': {'path': '#/goals', 'title': 'Goals'}}
+    assert _refs(api, post(api, 'assistant/messages', old)['message']['id'])['page'] == old['page']
+    post(api, 'assistant/messages', {'text': 'Hi', 'from_page': {'page': 'goals'}}, expected=422)
+    r = api.post(
+        '/api/v2/uploads/assistant/messages',
+        data={'text': 'Look', 'from_page': json.dumps({'page': 'goals', 'label': 'Goals', 'item': 'x'})},
+        files={'files': ('a.txt', b'hello', 'text/plain')},
+        headers={**headers('ana-test'), 'Idempotency-Key': 'from-page-upload'},
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_botops_is_called_agent_ops_and_keeps_its_slug_unless_someone_renamed_it(api):
+    text = (Path(__file__).parents[1] / 'migrations' / '20261121124603_agent_ops_name.sql').read_text()
+    sql = '\n'.join(line for line in text.splitlines() if not line.startswith('--'))
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
+        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('ops2','ops2','BotOps','active')")
+        c.execute(
+            "INSERT INTO bot_settings(bot_id,extra,updated_at) VALUES('botops',?,'2026-11-21')",
+            (json.dumps({'display_name': 'BotOps'}),),
+        )
+        for statement in filter(str.strip, sql.split(';')):
+            c.execute(statement)
+        rows = dict(c.execute("SELECT id, display_name FROM bots WHERE id IN ('botops','ops2')").fetchall())
+        extra = json.loads(c.execute("SELECT extra FROM bot_settings WHERE bot_id='botops'").fetchone()[0])
+        c.execute("UPDATE bots SET display_name='Fleet' WHERE id='botops'")
+        for statement in filter(str.strip, sql.split(';')):
+            c.execute(statement)
+        renamed = c.execute("SELECT slug, display_name FROM bots WHERE id='botops'").fetchone()
+    assert rows == {'botops': 'Agent Ops', 'ops2': 'BotOps'} and extra['display_name'] == 'Agent Ops'
+    assert tuple(renamed) == ('botops', 'Fleet'), 'a name chosen since is left alone, and the slug stays'
+
+
+def test_every_company_page_the_web_maps_is_a_page_with_an_owner_and_every_owned_page_is_reached():
+    # 100% page map (#4857): web/src/shell/pageOwner.ts names each company page by a PAGES key (its own test walks
+    # every route); a key no page reaches would be a dead one (replay, sql and seat were).
+    import re
+
+    source = (Path(__file__).parents[2] / 'web' / 'src' / 'shell' / 'pageOwner.ts').read_text()
+    keys = set(re.findall(r"\bpage\('([a-z-]+)'", source)) | set(re.findall(r"\['([a-z-]+)', '[A-Z][^']*'\]", source))
+    assert keys == set(page_owners.PAGES)

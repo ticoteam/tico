@@ -29,13 +29,13 @@ afterEach(() => {
 });
 
 describe('Ask Tico', () => {
-  it('says which page it was asked from, the address and its search after a "#", as the server takes it', async () => {
+  it('says which page it was asked from as from_page, with the file open over it', async () => {
     const root = createRootRoute();
     const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: ['/library/files?file=f1'] }) });
     await router.load();
     bind({ router });
     await run('tico.ask', { text: 'Who made this?' }, { via: 'click' });
     const ask = sent.find((s) => s.url === '/api/v2/assistant/messages');
-    expect(ask?.body).toMatchObject({ text: 'Who made this?', page: { path: '#/library/files?file=f1' } });
+    expect(ask?.body).toEqual({ text: 'Who made this?', from_page: { page: 'docs', label: 'Files', item: { kind: 'file', id: 'f1', name: 'f1' } } });
   });
 });

@@ -1,4 +1,4 @@
-import { Link, useLocation, useRouter } from '@tanstack/react-router';
+import { Link, useRouter } from '@tanstack/react-router';
 import type { HTMLAttributes, ReactElement, ReactNode, Ref } from 'react';
 import { useAction } from '@/actions';
 import { useActor } from '@/data';
@@ -7,10 +7,9 @@ import { FlowMark } from '@/kit/FlowMark';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { ContextMenu, Menu, MenuItem } from '@/kit/Menu';
-import { OwnerButton as KitOwnerButton } from '@/kit/OwnerButton';
 import { Pill } from '@/kit/Pill';
 import type { Stage, TaskItem } from './queries';
-import { chatAddress, leaveFlow } from '@/lib';
+import { leaveFlow } from '@/lib';
 
 /** The head's Flow button: the play mark and how many tasks wait on you (parts-kit.js playBtn). On Flow it says so
     ("Flow · 3"), and × leaves it, back to the page Flow was entered from. It stays in a phone's head. */
@@ -39,21 +38,6 @@ export function Face({ actor, size = 22 }: { actor: string | null | undefined; s
   const who = useActor(actor);
   if (!actor) return null;
   return <Avatar kind={who?.kind ?? (actor.startsWith('bot:') ? 'agent' : 'person')} name={who?.name ?? (actor.startsWith('bot:') ? 'Agent' : 'Person')} hue={who?.hue} live={who?.working} size={size} />;
-}
-
-/** The page owner's face in the head: it opens their chat beside the page (`?chat=`, the shell's). */
-export function OwnerButton({ actor }: { actor: string }) {
-  const who = useActor(actor);
-  const name = who?.name ?? 'the owner';
-  // `chat` is the shell's, in no route's search schema: built as an address, it keeps the page's own filters.
-  const href = useLocation({
-    select: (l) => {
-      const q = new URLSearchParams(l.searchStr);
-      q.set('chat', chatAddress(who?.id ?? actor, who?.kind));
-      return `${l.pathname}?${q.toString()}`;
-    },
-  });
-  return <KitOwnerButton name={name} kind={who?.kind ?? (actor.startsWith('bot:') ? 'agent' : 'person')} hue={who?.hue} live={who?.working} href={href} />;
 }
 
 /** What hangs in a row's margin: the Flow mark when it waits on you, else the stopped mark. */

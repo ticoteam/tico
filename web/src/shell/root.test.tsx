@@ -14,13 +14,16 @@ import { pipelineTasksQuery } from '@/features/tasks/routing';
 import { forgetPlaces } from '@/lib';
 import { router as appRouter } from '@/router';
 import { showPageName } from '@/tico/pageName';
+import { foldSheet } from './Frame';
 import { tabTitle, useTabTitle } from './title';
 
 /* The root as the app draws it, with the features around the shell stood in: the second chat for Tico support, the
    desktop app's small call window, and what the page tells the desktop app. */
 
-const { gate, q, catchUpRead, lists } = vi.hoisted(() => ({
+const { gate, q, catchUpRead, lists, owners } = vi.hoisted(() => ({
   gate: { screen: null as string | null, setup: false },
+  /** Each page's owner, as GET /page-owners answers: none unless a test names one. */
+  owners: {} as Record<string, { bot: string | null }>,
   /** Each pipeline's open tasks, as its list read gives them. */
   lists: {} as Record<string, unknown[]>,
   q: <T,>(key: string, data: T) => ({ queryKey: [key], queryFn: async () => data, staleTime: Infinity }),
@@ -55,6 +58,7 @@ vi.mock('@/data', async (orig) => ({
   directoryQuery: { queryKey: ['directory'], queryFn: async () => ({ actors: [], byId: {} }), staleTime: Infinity },
   recordVisit: vi.fn(),
   useHeldCount: () => 0,
+  pageOwnersQuery: { queryKey: ['settings', 'page-owners'], queryFn: async () => owners, staleTime: Infinity },
 }));
 // A feature's routing.ts is what the first load carries (the gate, counts, reads); its exports.ts the parts the root
 // loads when they first have something to show.
@@ -197,6 +201,7 @@ beforeEach(() => {
   queryClient.clear();
   forgetPlaces();
   for (const k of Object.keys(lists)) delete lists[k];
+  for (const k of Object.keys(owners)) delete owners[k];
   resetDesktopReports();
 });
 afterEach(() => {
@@ -299,6 +304,70 @@ describe('the root', () => {
     show('/call/abc');
     expect(await screen.findByText('call page')).toBeTruthy();
     expect(document.querySelector('.shell-frame')?.getAttribute('data-arrangement')).toBe('call');
+  });
+});
+
+describe('the Agent bar @4857', () => {
+  const at = (w: number) =>
+    act(() => {
+      Object.defineProperty(window, 'innerWidth', { value: w, configurable: true });
+      window.dispatchEvent(new Event('resize'));
+    });
+  const bar = () => document.querySelector<HTMLElement>('.shell-place[data-sheet="chat"]');
+  const edge = () => screen.queryByRole('button', { name: 'Open QA Owner' });
+  beforeEach(() => localStorage.clear());
+  afterEach(() => at(1024));
+
+  it("is the page owner's chat, open on a wide window, and a fold kept for that page and that person", async () => {
+    at(1440);
+    people(MAYA, QA);
+    owners.tasks = { bot: 'qa' };
+    show('/tasks/eng');
+    const sheet = await screen.findByRole('complementary', { name: 'Chat with QA Owner' });
+    expect(within(sheet).getByText('a teammate chat')).toBeTruthy();
+    expect(bar()?.dataset.shut).toBeUndefined();
+    expect(document.querySelector('.shell-frame')?.getAttribute('data-arrangement')).toBe('chat');
+    // its head's fold control, as the chat draws it (stood in here): the shell's fold
+    act(() => foldSheet('chat', true));
+    expect(await screen.findByRole('button', { name: 'Open QA Owner' })).toBeTruthy();
+    expect(JSON.parse(localStorage.getItem('tico-next:owner-bar.v1') ?? '{}')).toEqual({ 'human:maya': { tasks: true } });
+  });
+
+  it('is folded to its named edge under 1200, and opens from it', async () => {
+    at(1100);
+    people(MAYA, QA);
+    owners.tasks = { bot: 'bot:qa' };
+    show('/tasks/eng');
+    await screen.findByRole('complementary', { name: 'Chat with QA Owner', hidden: true });
+    await waitFor(() => expect(edge()).toBeTruthy());
+    expect(bar()?.dataset.shut).toBe('true');
+    fireEvent.click(edge()!);
+    await waitFor(() => expect(bar()?.dataset.shut).toBeUndefined());
+  });
+
+  it('opens by itself when an ask from the owner waits on you, until you fold it again', async () => {
+    at(1100);
+    people(MAYA, QA);
+    owners.tasks = { bot: 'bot:qa' };
+    catchUpRead.mockResolvedValueOnce({
+      count: 1,
+      items: [{ thread: { id: 'dm1', audience: 'personal', dm_with: [{ actor: 'human:maya' }, { actor: 'bot:qa' }] }, mention: true }],
+    } as never);
+    show('/tasks/eng');
+    await screen.findByRole('complementary', { name: 'Chat with QA Owner' });
+    await waitFor(() => expect(bar()?.dataset.shut).toBeUndefined());
+    act(() => foldSheet('chat', true));
+    await waitFor(() => expect(edge()).toBeTruthy());
+  });
+
+  it('is not drawn on a personal page, whose chat is Tico, nor where no owner is set', async () => {
+    at(1440);
+    people(MAYA, QA);
+    owners.tasks = { bot: 'bot:qa' };
+    show('/flow');
+    expect(await screen.findByRole('heading', { name: 'Flow page' })).toBeTruthy();
+    expect(screen.queryByRole('complementary', { name: 'Chat with QA Owner' })).toBeNull();
+    expect(document.querySelector('.shell-frame')?.getAttribute('data-arrangement')).toBe('page');
   });
 });
 

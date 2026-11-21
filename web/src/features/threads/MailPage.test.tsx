@@ -117,7 +117,7 @@ describe('Mail @s159', () => {
     await waitFor(() => expect(sent('POST', '/api/v2/threads/d9/messages')).toBeTruthy());
     expect(sent('POST', '/api/v2/threads/d9/messages')?.body).toEqual({
       text: 'Is it paid?',
-      refs: { page: { path: '/threads/mail?box=help%40example.test&open=th1', title: 'Invoice question' } },
+      refs: { from_page: { page: 'mail', label: 'Mail', item: { kind: 'mail', id: 'help@example.test/th1', name: 'Invoice question' } } },
     });
     expect(all('POST', '/api/v2/email/sends')).toEqual([]);
     expect(all('POST', '/api/v2/mail/drafts')).toEqual([]);

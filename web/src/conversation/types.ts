@@ -1,11 +1,7 @@
+import type { FromPage } from '@/shell/pageOwner';
+
 /** Where the conversation sits: Tico's sheet, the 320 second chat, an agent's page (stretching), a task's chat. */
 export type Variant = 'tico' | 'side' | 'page' | 'task';
-
-/** The page a message was sent from, as `refs.page` on the message: Tico reads what the person was looking at. */
-export interface PageRef {
-  path: string;
-  title: string;
-}
 
 export interface Attachment {
   id: string;
@@ -19,7 +15,8 @@ export interface Attachment {
 
 /** What a message's `refs` holds that this module reads; the server sends more. */
 export interface Refs {
-  page?: PageRef;
+  /** The page it was written on (backend/page_owners.py check_from): its owner's turn reads it. */
+  from_page?: FromPage;
   /** An assistant action proposal (a confirm or approval card). */
   action?: string;
   /** The run that posted this reply: its live row gives way to it. */

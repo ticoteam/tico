@@ -22,12 +22,9 @@ import {
   editSource,
   externalDocAtQuery,
   externalDocQuery,
-  skillsQuery,
   sourceDocsQuery,
   sourcesQuery,
 } from './queries';
-import { SkillsPage } from './SkillsPage';
-import { skillsSearch } from './search';
 
 /* Docs: the list, its search and archive, one doc read, typed in and versioned, importing a file, and outside sources
    and their docs. What a person sees and presses, what is sent, and what Tico may not run. Made-up docs and sources only. */
@@ -186,19 +183,6 @@ describe('docs list', () => {
     expect(repotting.querySelector('.tie')?.textContent).toBe('How to');
   });
 
-  it('puts the owner’s face in the head, opening their chat; a phone’s head keeps only search, the filled button and ⋯', async () => {
-    serve();
-    queryClient.setQueryData(['settings', 'page-owners'], { docs: { bot: 'fern-librarian' }, skills: { bot: 'fern-ops' } });
-    queryClient.setQueryData(docsListQuery.queryKey, list([row('d1', 'Fern index')]));
-    at('/library/docs', <DocsPage search={{}} />);
-    const face = await screen.findByRole('link', { name: /^Chat with/ });
-    expect(face.closest('[data-phone]')).toBeNull();
-    expect(face.getAttribute('href')).toContain('chat=');
-    cleanup();
-    queryClient.setQueryData(skillsQuery.queryKey, []);
-    at('/library/skills', <SkillsPage search={skillsSearch({})} />);
-    expect((await screen.findByRole('link', { name: /^Chat with/ })).closest('[data-phone]')).toBeNull();
-  });
 });
 
 describe('Docs search', () => {

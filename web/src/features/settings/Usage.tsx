@@ -12,7 +12,7 @@ import { Segmented } from '@/kit/Segmented';
 import { Select } from '@/kit/Select';
 import { Dashboard, FiguresStrip, Section } from '@/pagekinds';
 import { agentsQuery, modelName } from '@/features/team/routing';
-import { Meter, NO_ACCESS, PageOwner, Verb, dollars, isForbidden, useFaces, usd } from './parts';
+import { Meter, NO_ACCESS, Verb, dollars, isForbidden, useFaces, usd } from './parts';
 import {
   agentUsageWhereQuery,
   limitsQuery,
@@ -343,7 +343,6 @@ export function UsagePage({ search }: { search: UsageSearch }) {
       after={view}
       actions={
         <>
-          <PageOwner page="usage" />
           {limits && !isForbidden(lim.error) && <AddLimit />}
         </>
       }

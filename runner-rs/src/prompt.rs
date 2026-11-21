@@ -441,12 +441,6 @@ fn parts(
             format!("You act as {owner}, with their rights, on what they ask in this chat. Reply to a bot's ❓ to them only when they ask, in their words, in its chat (`tico task comment`). An OK that lets something go (send, spend, publish) is their own click on its preview in Tico: link it, never answer it."),
             "AGENTS.md is your rulebook: it routes the work (the helpers included), and replies in this chat follow it: short, with links, what changed and how to undo it. Never mention your repository, memory or commits to the person.".into(),
         ].into_iter().map(|l: String| (Part::Standing, l)));
-        // Asked from the Ask panel on another page (backend/assistant.py post_message_sync `refs.page`).
-        let page = &attempt["message"]["refs"]["page"];
-        if page["path"].is_string() {
-            put(&mut lines, Part::Turn, format!("They asked from the {:?} page ({}). Read that page's subject if their words point at it (\"this\", \"here\").",
-                               s(&page["title"]), s(&page["path"])));
-        }
     }
     // The team's live strategy: every turn carries it once one is saved (backend/strategy.py summary_text,
     // handed over in `learned.strategy` by backend/learned.py for_turn). Rendered on its own, before what the bot learned.
@@ -503,11 +497,8 @@ fn parts(
             );
         }
     }
-    // Written from Goals (ui/app/page-chat.ts `refs.from_page`): a list of goals is a card the person confirms
-    // (backend/page_chat_cards.py), never goals the bot makes itself.
-    let from_page = &attempt["message"]["refs"]["from_page"];
-    if from_page["page"] == "goals" && from_human(&attempt["message"]) {
-        put(&mut lines, Part::Turn, format!("To add several goals, propose a card (`tico page card --page goals --for {} --rows <json>`); never create them yourself.", s(&attempt["message"]["from_actor"])));
+    for line in from_page(&attempt["message"]) {
+        put(&mut lines, Part::Turn, line);
     }
     let context = task_context(&attempt["task_context"]);
     if !context.is_empty() {
@@ -767,6 +758,40 @@ fn parts(
     (lines, run)
 }
 
+/// The page a message was written on, for every owner's turn, the Assistant's included: `refs.from_page {page, label,
+/// item?}` (backend/page_owners.py check_from; the web's shell/pageOwner.ts), else the old app's `refs.page {path, title}`.
+/// Written on Goals by a person, a list of goals is a card the person confirms (backend/page_chat_cards.py), never goals
+/// the bot makes itself.
+fn from_page(message: &Value) -> Vec<String> {
+    let refs = &message["refs"];
+    let from = &refs["from_page"];
+    let (title, place) = if from["page"].is_string() {
+        let item = &from["item"];
+        let open = if item["kind"].is_string() {
+            format!(
+                ", with the {} {:?} open ({})",
+                s(&item["kind"]),
+                s(&item["name"]),
+                s(&item["id"])
+            )
+        } else {
+            String::new()
+        };
+        (s(&from["label"]), format!("{}{open}", s(&from["page"])))
+    } else if refs["page"]["path"].is_string() {
+        (s(&refs["page"]["title"]), s(&refs["page"]["path"]))
+    } else {
+        return Vec::new();
+    };
+    let mut out = vec![format!(
+        "They asked from the {title:?} page ({place}). Read that page's subject if their words point at it (\"this\", \"here\")."
+    )];
+    if from["page"] == "goals" && from_human(message) {
+        out.push(format!("To add several goals, propose a card (`tico page card --page goals --for {} --rows <json>`); never create them yourself.", s(&message["from_actor"])));
+    }
+    out
+}
+
 fn put(lines: &mut Vec<(Part, String)>, part: Part, line: String) {
     lines.push((part, line));
 }
@@ -837,6 +862,10 @@ mod tests {
         };
         let built = prompt(&from("goals"), &Names::from_config(None), None, false);
         assert!(built.contains("To add several goals, propose a card (`tico page card --page goals --for human:ana --rows <json>`); never create them yourself."), "{built}");
+        assert!(
+            built.contains("They asked from the \"Goals\" page (goals)."),
+            "{built}"
+        );
         for other in [
             from("listening"),
             json!({"id": "a", "bot": "strategy-owner"}),
@@ -845,6 +874,61 @@ mod tests {
                 !prompt(&other, &Names::from_config(None), None, false).contains("tico page card")
             );
         }
+    }
+
+    #[test]
+    fn every_goals_message_from_a_person_gets_the_card_hint_whoever_owns_it_and_a_bots_does_not() {
+        // The web sends from_page with every message (#4857): the hint fires on each one a person writes on Goals, in
+        // the owner's DM or the Assistant's room, with an item open or none; never on a bot's.
+        let names = Names::from_config(None);
+        let goals = json!({"page": "goals", "label": "Goals"});
+        let with_item = json!({"page": "goals", "label": "Goals", "item": {"kind": "goal", "id": "g1", "name": "Ship v1"}});
+        let turn = |bot: &str, from: &str, refs: Value| {
+            json!({"id": "a", "bot": bot,
+                "conversation": {"id": "c1", "kind": "chat", "scope": "personal", "owner_actor": "human:ana", "room_key": "assistant"},
+                "message": {"id": "m1", "from_actor": from, "body": "Ship v1 and grow 10%", "refs": refs}, "history": []})
+        };
+        for (bot, refs) in [
+            ("strategy-owner", json!({"from_page": goals})),
+            ("general-manager", json!({"from_page": with_item})),
+            (
+                "assistant",
+                json!({"assistant": true, "from_page": goals, "page": {"path": "#/x", "title": "X"}}),
+            ),
+        ] {
+            let built = prompt(&turn(bot, "human:ana", refs), &names, None, false);
+            assert!(
+                built.contains("--page goals --for human:ana"),
+                "{bot}: {built}"
+            );
+            assert!(
+                !built.contains("(#/x)"),
+                "refs.page is read only without from_page: {built}"
+            );
+        }
+        let item = prompt(
+            &turn(
+                "general-manager",
+                "human:ana",
+                json!({"from_page": with_item}),
+            ),
+            &names,
+            None,
+            false,
+        );
+        assert!(
+            item.contains(
+                "They asked from the \"Goals\" page (goals, with the goal \"Ship v1\" open (g1))."
+            ),
+            "{item}"
+        );
+        let bot = prompt(
+            &turn("strategy-owner", "bot:ops", json!({"from_page": goals})),
+            &names,
+            None,
+            false,
+        );
+        assert!(!bot.contains("tico page card"), "{bot}");
     }
 
     #[test]

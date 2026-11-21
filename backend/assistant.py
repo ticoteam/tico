@@ -25,6 +25,7 @@ from urllib.parse import unquote
 import httpx
 from fastapi import Request
 
+from . import page_owners
 from . import strategy_bot
 from . import models as M
 from . import visuals
@@ -2110,15 +2111,18 @@ def install(app, store, auth, mutate, onboarding):
         return {"message": message, **org_rule_check.answer(gate)}
 
     def post_message_sync(request, body, who, uploads=None, rc=None):
+        page_owners.check_from({"from_page": body.from_page})  # a 422 before anything is written
+
         def work(c):
             bot = chat_bot_for(c, who)
             room = chat_room(c, settings, who)
             refs = {"assistant": True}
             if getattr(body, "place", None) == "updates":
                 refs["updates"] = True  # its turn is handed the updates they may read (backend/updates_chat.py)
-            page = getattr(body, "page", None)
-            if page and page.path.startswith("#/"):
-                refs["page"] = {"path": page.path, "title": page.title}  # where they asked from (runner-rs prompt.rs)
+            if body.from_page is not None:
+                refs["from_page"] = body.from_page  # the page it was written on (runner-rs prompt.rs `from_page`)
+            elif (page := body.page) and page.path.startswith("#/"):
+                refs["page"] = {"path": page.path, "title": page.title}  # the old app's, read without from_page
             return assistant_say(c, who, bot, room, body.text, refs, rc, uploads, getattr(body, "titles", None) or [])
 
         if uploads is not None:
@@ -2267,6 +2271,7 @@ def install(app, store, auth, mutate, onboarding):
 
         def admit(body):
             # Before any byte is stored, so a refused send keeps nothing; the write checks again in its transaction.
+            page_owners.check_from({"from_page": body.from_page})
             with store.read() as c:
                 chat_bot_for(c, who)
 

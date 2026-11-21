@@ -1,5 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
-import { Link, useLocation } from '@tanstack/react-router';
+import { Link } from '@tanstack/react-router';
 import { useState, type ReactNode } from 'react';
 import { refusal, run } from '@/actions';
 import { useActor } from '@/data';
@@ -12,13 +11,10 @@ import { FlowMark } from '@/kit/FlowMark';
 import { Icon, type IconName } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem } from '@/kit/Menu';
-import { OwnerButton } from '@/kit/OwnerButton';
 import { SkeletonRows } from '@/kit/Skeleton';
 import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
 import { VirtualList } from '@/kit/VirtualList';
-import { chatAddress } from '@/lib';
-import { pageOwnersQuery } from './queries';
 
 /* The pieces Routines, Rules and Listening share, ported from pages/3-company/rules.js: a word, a quiet verb, the rule
    row and its marks, a face for any owner id, and the press that says why a refusal happened. */
@@ -81,28 +77,6 @@ export function PanelRead({ q, what }: { q: { isPending: boolean; isError: boole
 export function Rows<T>({ items, getKey, draw, label }: { items: readonly T[]; getKey: (x: T) => string; draw: (x: T) => ReactNode; label: string }) {
   if (items.length <= 100) return items.map(draw);
   return <VirtualList className="rr-long" label={label} items={items} getKey={getKey} estimateSize={34} measure renderItem={draw} />;
-}
-
-/** The page owner's face in the head: it opens their chat beside the page. Nothing when the page has none. Kept on a
-    phone. */
-export function PageOwner({ page }: { page: string }) {
-  const bot = useQuery(pageOwnersQuery).data?.[page]?.bot ?? null;
-  const actor = bot && !bot.includes(':') ? `bot:${bot}` : bot;
-  const who = useActor(actor ?? undefined);
-  // `chat` is the shell's, in no route's search schema: built as an address, it keeps the page's own search.
-  const href = useLocation({
-    select: (l) => {
-      const q = new URLSearchParams(l.searchStr);
-      if (actor) q.set('chat', chatAddress(actor, 'agent'));
-      return `${l.pathname}?${q.toString()}`;
-    },
-  });
-  if (!actor) return null;
-  return (
-    <span className="rr-phone" data-phone>
-      <OwnerButton name={who?.name ?? 'the owner'} kind="agent" hue={who?.hue} live={who?.working} href={href} />
-    </span>
-  );
 }
 
 /** Their face, 22 unless asked; a gap the same size when the directory does not know them. */

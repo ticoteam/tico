@@ -543,7 +543,7 @@ export const askManager = defineAction({
     const words = text?.trim();
     if (words) {
       const lead = growthScopeWords(router, qc);
-      await askGrowthManager(who, lead ? `${lead}: ${words}` : words, { path: router.state.location.href, title: 'Growth' });
+      await askGrowthManager(who, lead ? `${lead}: ${words}` : words);
     }
     const chat = chatAddress(who, 'agent');
     await router.navigate({ to: '.', search: (prev: Record<string, unknown>) => ({ ...prev, chat }) });

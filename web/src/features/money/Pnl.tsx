@@ -11,7 +11,7 @@ import { GroupRow, Table } from '@/kit/Table';
 import { List, Section, SidePanel } from '@/pagekinds';
 import { lineBudget, LineBudgetDialog } from './Budgets';
 import { useCaps } from './caps';
-import { FIN, FinanceOwner, useFinanceHead } from './head';
+import { FIN, useFinanceHead } from './head';
 import { budgetDay, cash, colLabel, monShort, nowCol, paceOf, pnlRange, rangeLabel, statement, stepRange, valueAt, type Period, type StatementRow } from './model';
 import { ActLink, Meter, Pfig, Prow, readState, usePhone, usePress, useViewAs } from './parts';
 import { budgetsQuery, lineQuery, pnlQuery, type LineDetail, type Pnl } from './queries';
@@ -69,7 +69,6 @@ export function PnlPage({ search }: { search: FinanceSearch }) {
               <Segmented className="pnl-head-option" label="Basis" options={BASES} value={basis} onValueChange={(v) => void press('finance.setBasis', { basis: v })} />
             </>
           )}
-          <FinanceOwner />
         </>
       }
       sections={q.data && (phone ? <PhoneStatement pnl={q.data} open={lineId} /> : <Statement pnl={q.data} open={lineId} />)}

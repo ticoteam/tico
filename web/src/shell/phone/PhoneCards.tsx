@@ -118,11 +118,16 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
   const id = useId();
 
   const [seen, setSeen] = useState(second);
+  const [wasTucked, setWasTucked] = useState(tucked);
   if (seen !== second) {
     setSeen(second);
     if (second === 'call' || (second === 'chat' && !seen && comesUp(second))) setCard('chat');
     else if (card === 'chat') setCard('none');
+  } else if (wasTucked !== tucked) {
+    // a page's own chat that stops waiting as a lip comes up (an ask from the page's owner now waits on you)
+    if (!tucked && second === 'chat') setCard('chat');
   }
+  if (wasTucked !== tucked) setWasTucked(tucked);
 
   const isUp = (s: Slot) => slotOf(card) === s;
   const raised = slotOf(card);

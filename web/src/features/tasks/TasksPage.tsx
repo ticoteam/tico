@@ -27,7 +27,7 @@ import { Capped, CARD_H, COL_CAP, COL_SHOW, LIST_CAP, LIST_SHOW, moreText, PHONE
 import { DUE_NAMES, FilterItems, FilterMenu } from './FilterMenu';
 import { SelectBar, StageMenu } from './many';
 import { NewTask } from './NewTask';
-import { Blocks, Face, FlowButton, isPending, markOf, Movable, OwnerButton, StoppedMark, taskHref, waitsOnMe } from './parts';
+import { Blocks, Face, FlowButton, isPending, markOf, Movable, StoppedMark, taskHref, waitsOnMe } from './parts';
 import {
   flowQuery,
   isFiltered,
@@ -110,7 +110,7 @@ function OpenPage({ pipeline, p, pipes, search, view, head }: PageProps & { view
     ...head,
     title: 'Tasks',
     search: !cards || finding || search.q ? <TaskFind search={search} /> : undefined,
-    actions: <HeadActions pipeline={pipeline} view={view} search={search} p={p} onNew={onNew} />,
+    actions: <HeadActions pipeline={pipeline} view={view} search={search} onNew={onNew} />,
     more: p && (
       <MoreMenu
         p={p}
@@ -173,7 +173,7 @@ function ArchivedPage({ pipeline, p, search, head }: Omit<PageProps, 'pipes'>) {
       {...head}
       title="Archived"
       search={<TaskFind search={search} />}
-      actions={<HeadActions pipeline={pipeline} view="archived" search={search} p={p} />}
+      actions={<HeadActions pipeline={pipeline} view="archived" search={search} />}
       // "⋯" stays last in the head (list.js archived): the pipeline's own verb, for whoever may change it
       more={
         <PageMore target="tasks:more">
@@ -267,21 +267,9 @@ function TaskFind({ search }: { search: TasksSearch }) {
   );
 }
 
-/** Filter, the view switch, New task, Flow, the owner (list.js head). A phone keeps only Flow; the rest is under "⋯".
-    Archived keeps the filter. */
-function HeadActions({
-  pipeline,
-  view,
-  search,
-  p,
-  onNew,
-}: {
-  pipeline: string;
-  view: View;
-  search: TasksSearch;
-  p: Pipeline | undefined;
-  onNew?: () => void;
-}) {
+/** Filter, the view switch, New task, Flow (list.js head; the pipeline's agent is in the Agent bar). A phone keeps only
+    Flow; the rest is under "⋯". Archived keeps the filter. */
+function HeadActions({ pipeline, view, search, onNew }: { pipeline: string; view: View; search: TasksSearch; onNew?: () => void }) {
   const setView = useAction('tasks.setView');
   return (
     <>
@@ -301,7 +289,6 @@ function HeadActions({
       )}
       {onNew && <IconButton icon="plus" label="New task" onClick={onNew} data-target="tasks:new" />}
       {view !== 'archived' && <OpenFlowButton />}
-      {p?.owner && <OwnerButton actor={p.owner} />}
     </>
   );
 }

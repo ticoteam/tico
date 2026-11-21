@@ -21,7 +21,7 @@ const NONE: SheetControls = { id: null, state: 'open', peek: false, folded: fals
 export const SheetContext = createContext<SheetControls>(NONE);
 export const useSheet = () => use(SheetContext);
 
-const FOLD_LABEL: Partial<Record<SheetId, string>> = { tico: 'Fold Tico', menu: 'Fold the menu', list: 'Fold the list', widgets: 'Hide widgets', side: 'Hide the side' };
+const FOLD_LABEL: Partial<Record<SheetId, string>> = { tico: 'Fold Tico', menu: 'Fold the menu', list: 'Fold the list', chat: 'Fold the chat', widgets: 'Hide widgets', side: 'Hide the side' };
 const CLOSE_LABEL: Partial<Record<SheetId, string>> = { chat: 'Close chat', panel: 'Close' };
 
 /* The sheet itself, with the mock's element and classes for each kind. */
