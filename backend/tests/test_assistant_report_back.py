@@ -91,6 +91,27 @@ def test_no_report_when_the_person_closed_it_themselves(api):
     assert reports(api) == []
 
 
+def test_a_task_filed_for_someone_else_posts_nothing(api):
+    [made], _ = handoff(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET requester_id='human:ana' WHERE id=?", (made["id"],))
+    end(api, made["id"], E.DONE, why="Shipped.")
+    assert reports(api) == []
+
+
+def test_a_filer_who_has_left_gets_no_report_and_no_room(api):
+    [made], origin = handoff(api)
+    open_rooms = "SELECT count(*) FROM conversations WHERE owner_id='human:ben' AND closed_at IS NULL"
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE conversations SET closed_at=? WHERE id=?", (H.now(), origin))
+        X.no_sign_in(c, "human:ben")
+        before = c.execute(open_rooms).fetchone()[0]
+    end(api, made["id"], E.DONE, why="Shipped.")
+    assert reports(api) == []
+    with api.app.state.store.read() as c:
+        assert c.execute(open_rooms).fetchone()[0] == before
+
+
 def said_done(c, task_id, note):
     """Ops says done through the supported call (task_calls.task_done), on the version it sees."""
     return H.task_done(c, "bot:ops", task_id, note, E.task(c, task_id)["version"])
@@ -290,31 +311,14 @@ def test_a_report_that_fails_never_undoes_the_move(api, monkeypatch):
     assert reports(api) == []
 
 
-def test_a_task_the_person_can_no_longer_read_is_reported_by_its_filed_title_alone(api):
+def test_a_task_the_person_can_no_longer_read_is_reported_by_its_filed_title_alone(api, monkeypatch):
+    # The requester is a party, so only a copied page's rules (counsel.page_copy_readable) can hide it from them.
+    from backend import auth
+
     [made], _ = handoff(api, "Plan the offsite")
     with api.app.state.store.transaction() as c:
-        c.execute(
-            "UPDATE tasks SET title='Offsite at the lake house', requester_id='human:cara', private=1, readers=NULL "
-            "WHERE id=?",
-            (made["id"],),
-        )
+        c.execute("UPDATE tasks SET title='Offsite at the lake house' WHERE id=?", (made["id"],))
+    monkeypatch.setattr(auth, "actor_reads_task", lambda c, actor, row: actor != "human:ben")
     end(api, made["id"], E.DONE, why="Secret venue picked.")
     [report] = reports(api)
-    assert report["body"] == "Plan the offsite has ended" and "task" not in report["refs"]
-
-
-def test_a_company_task_hidden_by_agent_access_is_reported_by_its_filed_title_alone(api):
-    [made], _ = handoff(api, "Plan the offsite", person="cara")
-    current = api.get("/api/v2/bots/ops/access", headers=headers()).json()
-    body = {"see": {"everyone": True}, "read": {"people": ["ana"]}, "write": {"everyone": True}}
-    r = api.put("/api/v2/bots/ops/access", json={**body, "revision": current["revision"]}, headers=headers())
-    assert r.status_code == 200, r.text
-    with api.app.state.store.transaction() as c:
-        c.execute(
-            "UPDATE tasks SET title='Offsite at the lake house', requester_id='human:ana', private=0 WHERE id=?",
-            (made["id"],),
-        )
-    end(api, made["id"], E.DONE, why="Secret venue picked.")
-    [report] = reports(api)
-    assert report["recipient_id"] == "human:cara"
     assert report["body"] == "Plan the offsite has ended" and "task" not in report["refs"]
