@@ -45,7 +45,7 @@ function ThreadConversation({ id }: { id: string }) {
       card={(m) => approvalCard(m) ?? callCard(m)}
       extra={approvals}
       canPost={!outside && data?.me?.can_post !== false}
-      foot={outside?.handler ? <AgentBox agent={outside.handler} page={{ path: `/threads/${id}`, title }} /> : undefined}
+      foot={outside?.handler ? <AgentBox agent={outside.handler} from={{ page: 'thread', label: 'Thread', item: { kind: 'thread', id } }} /> : undefined}
     />
   );
 }

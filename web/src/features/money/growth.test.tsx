@@ -32,7 +32,9 @@ function serve(over: Record<string, Reply> = {}, urls: URL[] = []) {
     const path = u.pathname.replace('/api/v2', '');
     if ((init?.method ?? 'GET') === 'POST') {
       posts.push({ path, body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown> });
-      return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+      // a message to an agent's DM answers with the message and the thread it went to
+      const sent = path === '/threads/dm/messages' ? { id: 'm1', conversation_id: 'dm-gm1', thread_id: 'dm-gm1' } : {};
+      return new Response(JSON.stringify(sent), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }
     urls.push(u);
     const scope = u.searchParams.get('scope');
@@ -212,11 +214,14 @@ describe('Growth on the one read @s400 @s444', () => {
     expect(within(table).getByText('no spend')).toBeTruthy();
     expect(within(table).queryByRole('link', { name: 'Unknown' })).toBeNull();
 
-    // The ask line sends the words to the Growth Manager, led by the scope and month, and opens its chat.
+    // The ask line sends the words to the reader's DM with the Growth Manager, led by the scope and month, and opens
+    // the thread they went to (#4882).
     fireEvent.change(screen.getByRole('textbox', { name: 'Ask the Growth Manager' }), { target: { value: 'Why is search over?' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-    await waitFor(() => expect(router.state.location.search).toEqual({ month: '2026-10', chat: 'agent:gm1' }));
-    expect(posts).toEqual([{ path: '/chat/gm1', body: expect.objectContaining({ text: 'All, October 2026: Why is search over?' }) as unknown }]);
+    await waitFor(() => expect(router.state.location.search).toEqual({ month: '2026-10', chat: 'thread:dm-gm1' }));
+    expect(posts).toEqual([
+      { path: '/threads/dm/messages', body: { text: 'All, October 2026: Why is search over?', to_dm: 'bot:gm1', refs: { from_page: { page: 'growth', label: 'Growth' } } } },
+    ]);
   });
 
   it('no segments, no spend, all zeros: the KPIs lead and the funnel folds below', async () => {

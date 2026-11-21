@@ -100,29 +100,29 @@ describe('Mail @s159', () => {
         ? ok({ messages: [letter()] })
         : url.includes('/mail/threads/th1')
           ? ok({ messages: [letter({ body: 'Hi, is the March invoice paid?' })] })
-          : url.includes('/threads/dm?with=bot%3Aqa')
-            ? ok({ id: 'd9', title: '', audience: 'personal', root_id: 'd9', last_seq: 0, last_unread_seq: 0, pinned_for_everyone: false, me: { can_manage: true, can_post: true } })
-            : method === 'POST' && url.endsWith('/threads/d9/messages')
-              ? ok({ id: 'm9', seq: 9, thread_id: 'd9', sender_id: 'human:me', body: 'Is it paid?', created_at: ago(0) })
-              : undefined,
+          : method === 'POST' && url.endsWith('/threads/dm/messages')
+            ? ok({ id: 'm9', seq: 9, thread_id: 'd9', conversation_id: 'd9', sender_id: 'human:me', body: 'Is it paid?', created_at: ago(0) })
+            : undefined,
     );
     queryClient.setQueryData(mailboxesQuery.queryKey, [{ address: 'help@example.test', agent_bot: 'qa' }]);
     const router = show(<MailPage box="help@example.test" open="th1" />, '/threads/mail?box=help%40example.test&open=th1');
     expect(screen.queryByRole('textbox', { name: /Reply to/ })).toBeNull();
     const box = await screen.findByRole('textbox', { name: 'Message QA' });
-    await waitFor(() => expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true));
     fireEvent.change(box, { target: { value: 'Is it paid?' } });
     await waitFor(() => expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-    await waitFor(() => expect(sent('POST', '/api/v2/threads/d9/messages')).toBeTruthy());
-    expect(sent('POST', '/api/v2/threads/d9/messages')?.body).toEqual({
+    // to the person's DM with exactly the mailbox's agent, which the server finds as it writes (#4882), with this mail
+    // as a pointer, no words of it
+    await waitFor(() => expect(sent('POST', '/api/v2/threads/dm/messages')).toBeTruthy());
+    expect(sent('POST', '/api/v2/threads/dm/messages')?.body).toEqual({
       text: 'Is it paid?',
-      refs: { page: { path: '/threads/mail?box=help%40example.test&open=th1', title: 'Invoice question' } },
+      to_dm: 'bot:qa',
+      refs: { from_page: { page: 'mail', label: 'Mail', item: { kind: 'mail', id: 'help@example.test/th1' } } },
     });
     expect(all('POST', '/api/v2/email/sends')).toEqual([]);
     expect(all('POST', '/api/v2/mail/drafts')).toEqual([]);
-    // the DM opens beside
-    await waitFor(() => expect(new URLSearchParams(router.state.location.searchStr).get('chat')).toBe('agent:qa'));
+    // the thread it went to opens beside, as the server answered it
+    await waitFor(() => expect(new URLSearchParams(router.state.location.searchStr).get('chat')).toBe('thread:d9'));
   });
 });
 

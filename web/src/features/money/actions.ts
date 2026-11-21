@@ -541,11 +541,14 @@ export const askManager = defineAction({
     const who = await findGrowthManager(qc);
     if (!who) throw new Error('No Growth Manager');
     const words = text?.trim();
+    let chat = chatAddress(who, 'agent');
     if (words) {
       const lead = growthScopeWords(router, qc);
-      await askGrowthManager(who, lead ? `${lead}: ${words}` : words, { path: router.state.location.href, title: 'Growth' });
+      const sent = await askGrowthManager(who, lead ? `${lead}: ${words}` : words);
+      // the thread it went to opens beside the page
+      const thread = sent?.conversation_id || sent?.thread_id;
+      if (thread) chat = `thread:${thread}`;
     }
-    const chat = chatAddress(who, 'agent');
     await router.navigate({ to: '.', search: (prev: Record<string, unknown>) => ({ ...prev, chat }) });
     return chat;
   },

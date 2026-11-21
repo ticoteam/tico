@@ -152,6 +152,28 @@ describe('A thread @s157', () => {
   });
 });
 
+describe('A thread from outside @4882', () => {
+  it('has a box only to its agent, sent to the DM with exactly it, and the thread it went to opens beside', async () => {
+    serve((url, method) =>
+      method === 'POST' && url.endsWith('/threads/dm/messages') ? ok({ ...msg('m5', 'human:me', 'Answer them for me'), conversation_id: 'd5', thread_id: 'd5' }) : undefined,
+    );
+    const outside = thread({ id: 's1', title: 'Slack: Acme', root_id: 's1', members: { members: [{ actor: 'human:me' }, { actor: 'slack:U1' }, { actor: 'bot:qa' }] } });
+    seedList([outside]);
+    seedThread(outside, [msg('m1', 'slack:U1', 'Is the order shipped?', 's1')]);
+    const router = show(<ThreadsPage pane="thread" thread="s1" />, '/threads/s1');
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Message QA' }), { target: { value: 'Answer them for me' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(sent('POST', '/api/v2/threads/dm/messages')).toBeTruthy());
+    expect(sent('POST', '/api/v2/threads/dm/messages')?.body).toEqual({
+      text: 'Answer them for me',
+      to_dm: 'bot:qa',
+      refs: { from_page: { page: 'thread', label: 'Thread', item: { kind: 'thread', id: 's1' } } },
+    });
+    expect(calls.some((c) => c.method === 'POST' && c.url.endsWith('/threads/s1/messages'))).toBe(false);
+    await waitFor(() => expect(new URLSearchParams(router.state.location.searchStr).get('chat')).toBe('thread:d5'));
+  });
+});
+
 describe('Threads, no thread open @s156', () => {
   it('says no thread is open; its list is the menu\'s', async () => {
     serve();

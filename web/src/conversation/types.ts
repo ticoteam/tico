@@ -3,11 +3,6 @@ import type { FromPage } from '@/shell/pageOwner';
 /** Where the conversation sits: Tico's sheet, the 320 second chat, an agent's page (stretching), a task's chat. */
 export type Variant = 'tico' | 'side' | 'page' | 'task';
 
-/** The conversation a box from outside is about (features/threads/AgentBox), as `refs.page` on its messages. */
-export interface PageRef {
-  path: string;
-  title: string;
-}
 
 export interface Attachment {
   id: string;

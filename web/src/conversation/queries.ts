@@ -8,7 +8,7 @@ import { keys, queryClient, quietRoot, write } from '@/data';
 import { onTopic } from '@/live';
 import { newId } from '@/lib/ids';
 import type { FromPage } from '@/shell/pageOwner';
-import type { ChatMessage, LiveRun, PageRef, ReplyQuote, TimelinePage, Variant } from './types';
+import type { ChatMessage, LiveRun, ReplyQuote, TimelinePage, Variant } from './types';
 
 const PAGE = 50;
 const enc = encodeURIComponent;
@@ -120,8 +120,6 @@ export interface Send {
   files?: File[];
   /** The page it was written on (`from_page`, backend/page_owners.py check_from). */
   from?: FromPage | null;
-  /** A box from outside (AgentBox): the conversation it is about, as `refs.page` (as main sends it). */
-  page?: PageRef | null;
   /** The Agent bar's: sent to the sender's DM with exactly this agent, which the server finds (or makes) as it writes
       (`/threads/dm/messages`, `to_dm`), never to a thread named by the id the page holds. */
   toDm?: string;
@@ -154,7 +152,7 @@ function post(s: Send, idempotencyKey: string): Promise<Sent> {
   const where = s.toDm ? 'dm' : enc(s.id);
   const dm = s.toDm ? { to_dm: s.toDm } : {};
   if (!files.length)
-    return api.post<Sent>(`/api/v2/threads/${where}/messages`, { text: s.text, refs: s.from ? { from_page: s.from } : s.page ? { page: s.page } : {}, ...reply, ...dm }, opts);
+    return api.post<Sent>(`/api/v2/threads/${where}/messages`, { text: s.text, refs: s.from ? { from_page: s.from } : {}, ...reply, ...dm }, opts);
   const f = new FormData();
   f.set('text', s.text);
   if (s.replyTo) f.set('in_reply_to', s.replyTo);
@@ -169,6 +167,17 @@ const answerOf = (r: Sent): ChatMessage | null => {
   const m = 'message' in r && r.message ? r.message : (r as ChatMessage);
   return m && typeof m.id === 'string' ? m : null;
 };
+
+/**
+ * A message to an agent from a page that is not its chat (Mail's box, an outside thread's box, Growth's ask line): to
+ * the sender's DM with exactly that agent, which the server finds (or makes with this message) as it writes
+ * (`/threads/dm/messages`, `to_dm`, the Agent bar's path and checks). `from` says the page, and what is open there as
+ * a pointer {kind, id}. Resolves with the message, whose thread is where it went, or null when it was held.
+ */
+export async function sendToDm(agent: string, text: string, from: FromPage): Promise<ChatMessage | null> {
+  const r = await api.post<Sent>('/api/v2/threads/dm/messages', { text, to_dm: agent, refs: { from_page: from } }, { idempotencyKey: newId() });
+  return answerOf(r);
+}
 
 const withRows = (d: Timeline | undefined, fn: (rows: ChatMessage[]) => ChatMessage[]): Timeline | undefined => {
   if (!d?.pages.length) return d;
@@ -204,7 +213,6 @@ export async function sendMessage(given: Send): Promise<ChatMessage | null> {
     created_at: new Date().toISOString(),
     refs: {
       ...(s.from && { from_page: s.from }),
-      ...(s.page && { page: s.page }),
       ...(s.files?.length && { attachments: s.files.map((f, i) => ({ id: `${tmp}:${i}`, name: f.name, content_type: f.type })) }),
     },
     pending: 'sending',
