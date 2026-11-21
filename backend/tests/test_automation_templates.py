@@ -489,6 +489,7 @@ def test_a_routine_turn_reads_the_turn_it_was_woken_for_and_no_other_of_its_pers
             "reconcile": {"with_actor": "bot:assistant", "active": [{"id": earlier["id"]}, {"id": hidden["id"]}]},
         }
         c.execute("UPDATE messages SET refs=? WHERE id=?", (json.dumps(refs), wake["id"]))
+        stored = c.execute("SELECT refs FROM messages WHERE id=?", (wake["id"],)).fetchone()[0]
     machine = runner(api)
     with api.app.state.store.read() as c:
         held = c.execute(
@@ -516,6 +517,8 @@ def test_a_routine_turn_reads_the_turn_it_was_woken_for_and_no_other_of_its_pers
                 message["refs_json"] = json.dumps(message["refs"])
         c.execute("UPDATE idempotency SET response=? WHERE rowid=?", (json.dumps(receipt), saved["rowid"]))
     replayed = claim(api, machine, key=keys[newer["id"]])
+    with api.app.state.store.read() as c:  # the claim and its replay filter what they show, never the stored wake
+        assert c.execute("SELECT refs FROM messages WHERE id=?", (wake["id"],)).fetchone()[0] == stored
     for shown in (new, replayed):
         for named in (earlier["id"], hidden["id"]):
             assert named not in json.dumps(shown), "the new turn's claim names a task it may not read"
@@ -563,6 +566,41 @@ def test_an_earlier_routine_turn_whose_routine_run_cannot_be_found_reads_nothing
     assign(api, machine, "assistant", held["generation"] if held else 0)
     ready(api, machine, ["assistant"])
     assert claim(api, machine) is None
+
+
+def test_a_routine_turns_person_comes_from_the_version_its_run_ran_never_the_routine_now(api):
+    from backend import rooms
+
+    now = H.now()
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, "human:ana", "Turn", "x", "bot:ops", private=False, lint=False)
+        c.execute(
+            "INSERT INTO automations(id,name,owner_id,trigger_type,enabled,flow,version,created_at,created_by_id,"
+            "updated_at) VALUES('auto_pin','Inbox','person:cara','message',1,'{}',2,?,'human:cara',?)",
+            (now, now),
+        )
+        c.execute(
+            "INSERT INTO automation_versions(automation_id,n,actor,created_at,flow,status) "
+            "VALUES('auto_pin',1,'human:ana',?,?,'active')",
+            (now, json.dumps({"owner": "person:ana", "trigger": {"type": "message"}})),
+        )
+        c.execute(
+            "INSERT INTO automation_runs(id,automation_id,version,started_at,status) VALUES('run_pin','auto_pin',1,?,'running')",
+            (now,),
+        )
+        c.execute(
+            "INSERT INTO messages(id,conversation_id,sender_id,kind,body,refs,created_at) VALUES(?,?,?,?,?,?,?)",
+            (
+                H.new_id(),
+                task["conversation_id"],
+                H.TICO_ACTOR,
+                "notice",
+                "Run",
+                json.dumps({"automation_run": "run_pin"}),
+                now,
+            ),
+        )
+        assert rooms._routine_person(c, H.task(c, task["id"])) == "human:ana"
 
 
 def test_a_mail_turn_title_names_the_sender_when_the_subject_is_empty():

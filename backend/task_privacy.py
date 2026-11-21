@@ -629,6 +629,8 @@ def message_readable(c, actor, message, current=False):
             return False
         return message_readable(c, actor, source)
     try:
+        if _shared_run(c, actor):
+            message, stored = _no_reconcile(message), message
         return meeting_sources(c).message_readable(actor, message) and readable(
             c, actor, message_tasks(c, message, current=bool(stored))
         )
@@ -1112,11 +1114,25 @@ def hosted_owner_reads(c, who, owner, ids):
     return bool(hosted) and readable(c, "bot:" + owner, ids)
 
 
+def _shared_run(c, actor):
+    """Whether `actor` (one, or a person and whom they act as) reads as a run of the shared Assistant (hubdb.RunPrincipal):
+    a wake's reconcile list is then no part of what it reads, checked where it is shown (rooms.scoped_wake)."""
+    shared = H.assistant_actor(c)
+    return any(isinstance(a, H.RunPrincipal) and a == shared for a in (actor if isinstance(actor, tuple) else (actor,)))
+
+
+def _no_reconcile(message):
+    refs = H._json(message.get("refs"), {}) or {}
+    if isinstance(refs, dict) and "reconcile" in refs:
+        return {**message, "refs": {key: value for key, value in refs.items() if key != "reconcile"}}
+    return message
+
+
 def attempt_readable(c, actor, aid, memo=None):
     try:
         return (
             meeting_sources(c).attempt_readable(actor, aid)
-            and readable(c, actor, attempt_tasks(c, aid, memo))
+            and readable(c, actor, carried_tasks(c, aid) if _shared_run(c, actor) else attempt_tasks(c, aid, memo))
             and attempt_pages_readable(c, actor, aid)
         )
     except Problem:

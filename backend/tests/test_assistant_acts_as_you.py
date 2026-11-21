@@ -309,6 +309,9 @@ def test_a_page_read_in_the_persons_own_chat_is_checked_against_its_audience_as_
             "INSERT INTO pages(file_id,audience,created_at,updated_at) VALUES(?,?,?,?)",
             (fid, json.dumps({"everyone": False, "people": ["ana"]}), H.now(), H.now()),
         )
+    with api.app.state.store.transaction() as c:  # and one with no audience of its own
+        open_id = X.shown(c, "Pricing notes", "ops", task["id"])[0].split(":", 1)[1]
+        open_page = dict(c.execute("SELECT * FROM bot_files WHERE id=?", (open_id,)).fetchone())
     r, attempt = assistant_turn(api, "ana-test", text="Show me the pricing page")
     auth = api.app.state.auth
 
@@ -323,6 +326,8 @@ def test_a_page_read_in_the_persons_own_chat_is_checked_against_its_audience_as_
     with api.app.state.store.read() as c:
         run = auth.run_viewer(c, Identity("bot:assistant", "bot", attempt_id=attempt["id"]))
         assert run.actor == "" and run.role == "none"
+        assert not files.page_audience_visible(c, auth, run, dict(open_page), {})  # not even a page open to all
+    assert refusal() == "audience"
 
 
 def test_a_private_task_is_never_the_shared_assistants_as_owner_or_reader(api):

@@ -375,7 +375,10 @@ def restricted_page_rows(c, ids):
 
 
 def page_audience_visible(c, auth, who, row, cache):
-    """A page only narrows its inherited visibility, with management kept outside its audience."""
+    """A page only narrows its inherited visibility, with management kept outside its audience. Nobody (auth.NOBODY, a
+    run whose person may no longer sign in) sees no page at all."""
+    if who.role == "none":
+        return False
     privacy.snapshot(c)
     page = restricted_page_rows(c, [row["id"]]).get(row["id"])
     if page:
@@ -417,7 +420,7 @@ def file_visible(c, auth, who, row, cache):
     # A page's own audience and its pins are read as the request sees (auth.run_viewer: a run of the shared Assistant in
     # a person's own chat as that person); its task, below, by the run's principal.
     reader = auth.run_viewer(c, who)
-    if reader.role == "none" or not page_audience_visible(c, auth, reader, row, cache):
+    if not page_audience_visible(c, auth, reader, row, cache):
         return False
     if asked_to_read(c, who, row["id"], cache=cache, auth=auth):
         return True
