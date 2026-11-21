@@ -1,8 +1,15 @@
 """A task list page reads its rows once: the turn and late columns take them from the page's own read."""
 
+import re
+
 from backend import hubdb
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.status_reads import page
+
+# A read of listed tasks' rows by id, all columns or only the ones the turn column needs (waiting_on.SLIM_TASK_COLUMNS):
+# `SELECT * FROM tasks WHERE id=?`, `SELECT id,owner_id,... FROM tasks WHERE id IN (SELECT value FROM json_each(?))`.
+# The page's own read (`FROM tasks tasks WHERE id IN`) is not one.
+ROW_READ = re.compile(r"SELECT [^()]+ FROM tasks WHERE id\b")
 
 
 def test_task_list_page_reads_its_tasks_once_and_answers_the_same(api, monkeypatch):
@@ -18,16 +25,14 @@ def test_task_list_page_reads_its_tasks_once_and_answers_the_same(api, monkeypat
     for path in ("/api/v2/tasks?status=open", "/api/v2/tasks?status=open&sort=finished"):
         page(api, monkeypatch, path)  # warm: the table checks each connection keeps
         kept, statements = page(api, monkeypatch, path)
-        reread = [
-            sql for sql in statements_of(api, monkeypatch, path) if sql.startswith("SELECT * FROM tasks WHERE id")
-        ]
+        reread = [sql for sql in statements_of(api, monkeypatch, path) if ROW_READ.match(sql)]
         assert len(kept["tasks"]) == 12 and reread == [], (path, reread)
         with monkeypatch.context() as patched:
             patched.setattr(hubdb, "_TASK_ROW_READS", ())
             plain, more = page(api, monkeypatch, path)
-            assert any(
-                sql.startswith("SELECT * FROM tasks WHERE id") for sql in statements_of(api, monkeypatch, path)
-            ), "the control reads the rows again"
+            assert any(ROW_READ.match(sql) for sql in statements_of(api, monkeypatch, path)), (
+                "the control reads the rows again"
+            )
         assert {k: v for k, v in plain.items() if k != "cursor"} == {k: v for k, v in kept.items() if k != "cursor"}
         assert more > statements
 
