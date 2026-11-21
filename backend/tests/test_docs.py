@@ -20,10 +20,10 @@ def test_create_edit_conflict_history_and_restore(api):
     assert found()["excerpt"] == "Refund within 30 days."
     second = edit(api, doc, body="Refund within 14 days.", note="Shorter window")["doc"]
     assert second["version"] == 2
-    assert found()["excerpt"] == "Refund within 14 days."  # each write stores the new parse search reads
+    assert found()["excerpt"] == "Refund within 14 days."  # each write indexes the doc's sections again
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE docs SET search_parse=NULL")  # as a database from before the stored parse
-    api.app.state.store.initialize(seed_market=False)  # the start parses each live doc
+        c.execute("DELETE FROM doc_sections_fts")  # as a database from before the section index
+    api.app.state.store.initialize(seed_market=False)  # the start indexes each live doc
     assert found()["excerpt"] == "Refund within 14 days."
     stale = edit(api, doc, who=BEN, body="mine", expected=409)  # ben still holds version 1
     assert stale["error"]["code"] == "version_conflict" and stale["error"]["version"] == 2
@@ -135,6 +135,32 @@ def test_search_ranks_internal_docs_and_lists_linked_docs_beside_them(api):
     make(api, "Export guide", "# Steps\n\nChoose CSV.", path="notes/a.md")
     export = call(api, "GET", "docs/search", params={"q": "export"})["results"][0]
     assert export["title"] == "Export guide" and export["section"] == "Steps" and "CSV" in export["excerpt"]
+
+
+def test_search_puts_a_named_doc_first_and_a_librarian_log_last_with_each_best_section(api):
+    log = make(api, "Questions and answers", "## Expense report\n\nExpense report, expense report.")
+    log = edit(api, log, path="_librarian/faq-log.md")["doc"]
+    week = make(api, "Week one", "# Week one\n\nLaptop.\n\n## Expense report\n\nThe expense report: receipts.")
+    named = make(api, "Expense report", "Day one: a laptop.")
+    by_path = make(api, "Day two", "Lunch.", path="finance/expense.md")
+    hits = call(api, "GET", "docs/search", params={"q": "expense report"})["results"]
+    assert [h["id"] for h in hits] == [named["id"], week["id"], by_path["id"], log["id"]]
+    three = call(api, "GET", "docs/search", params={"q": "expense report", "limit": 3})["results"]
+    assert [h["id"] for h in three] == [named["id"], week["id"], by_path["id"]]  # the log never crowds a doc out
+    assert (hits[1]["section"], hits[1]["anchor"]) == ("Expense report", "expense-report")
+    assert hits[1]["excerpt"] == "The expense report: receipts."
+    assert [h["score"] for h in hits] == sorted((h["score"] for h in hits), reverse=True)
+    # Its path names a doc as its title does; and the team's named doc leads the manual's sections too.
+    assert call(api, "GET", "docs/search", params={"q": "finance expense"})["results"][0]["id"] == by_path["id"]
+    both = call(api, "GET", "docs/search", params={"q": "expense report", "collection": "all"})["results"]
+    assert both[0]["id"] == named["id"] and {r["collection"] for r in both} == {"company", "manual"}
+    assert archive(api, named) and named["id"] not in [
+        h["id"] for h in call(api, "GET", "docs/search", params={"q": "expense report"})["results"]
+    ]
+
+
+def archive(api, doc):
+    return edit(api, doc, archived=True)["doc"]["archived"]
 
 
 def bot_token(api):
