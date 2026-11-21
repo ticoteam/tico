@@ -1300,11 +1300,15 @@ class AccessSet(Contract):
 class _Receipt:
     """What `Vault.change` fingerprints for a body with a key value: the value itself (keyed HMAC, never stored)."""
 
-    def __init__(self, body, **extra):
-        self.body, self.extra = body, extra
+    def __init__(self, body, omit_none=(), **extra):
+        self.body, self.omit_none, self.extra = body, omit_none, extra
 
     def model_dump(self):
         out = self.body.model_dump() if self.body is not None else {}
+        # A field a later version added, left out when not sent: a retry across that deploy fingerprints the same.
+        for name in self.omit_none:
+            if out.get(name) is None:
+                out.pop(name, None)
         for name, value in list(out.items()):
             if isinstance(value, SecretStr):
                 out[name] = value.get_secret_value()
@@ -1360,6 +1364,9 @@ def _clean(fields):
 
 def create_tool(c, who, body, admins, vault=None):
     TA.require(c, who, TA.tool(), action=TA.CREATE, admins=admins)
+    if body.key is not None and (TA.acting_agent(who) or getattr(who, "via", "")):
+        # A value is a person's own to paste (plan P4): never an agent's, with anyone's rights or its own.
+        raise Problem("secret_in_request", "A key goes in through a person's own paste in Tools, never an agent", 422)
     fields = _clean(body.model_dump(exclude={"key"}))
     service = TS.match(service=fields["service"], name=fields["name"])
     TA.catalog_only(who, service, fields)
@@ -1384,9 +1391,6 @@ def create_tool(c, who, body, admins, vault=None):
         tool,
     )
     H.event(c, who.actor, "tool.created", tool["id"], {"service": tool["service"], "delivery": tool["delivery"]})
-    if body.key is not None and (TA.acting_agent(who) or getattr(who, "via", "")):
-        # A value is a person's own to paste (plan P4): never an agent's, with anyone's rights or its own.
-        raise Problem("secret_in_request", "A key goes in through a person's own paste in Tools, never an agent", 422)
     if body.key is not None:
         # Its own variable: another connection of the service (Stripe prod, Stripe sandbox) may hold the plain one.
         base = (
@@ -1428,9 +1432,9 @@ def update_tool(c, who, tool_id, body, admins, auth=None):
             access_requests.settled(c, who, resource_type="tool", resource_id=tool_id, via="everyone-reads")
     fields = {k: v for k, v in _clean(asked).items()}
     merged = tool | fields
-    moved = {k: merged[k] for k in TA.ADDRESS_FIELDS if merged[k] != tool[k]}
-    if moved:
-        TA.catalog_only(who, merged["service"], moved)
+    # What the tool reaches after the change, whole: an agent's change of any part leaves only the catalog's.
+    if any(merged[k] != tool[k] for k in (*TA.ADDRESS_FIELDS, "service")):
+        TA.catalog_only(who, merged["service"], {k: merged[k] for k in TA.ADDRESS_FIELDS})
     if merged["delivery"] == "proxy" and not merged["base_url"]:
         raise Problem("delivery", f"Set {tool['name']}'s address before moving it to the proxy", 422)
     if merged["delivery"] == "computer" and _field(tool, "mcp_oauth"):
@@ -1914,7 +1918,7 @@ def _index_row(id, kind, name, status_, href, *, detail="", way="", who=(), who_
     }
 
 
-def _api_rows(c, who, admins, view):
+def _api_rows(c, who, admins, view, access=False):
     admin = _admin(c, who, admins)
     person = who.role in ("owner", "human") and not who.support
     out = []
@@ -1938,7 +1942,7 @@ def _api_rows(c, who, admins, view):
             continue
         keys = _keys(c, tool["id"])
         state = state_of(c, tool, keys)
-        people = access_rows(c, who, tool["id"], admins, view.auth)
+        people = access_rows(c, who, tool["id"], admins, view.auth, usage=False)
         if who.role in ("owner", "human"):
             # A bot listed is one the reader may see (the same rule every list of bots follows).
             bots = {r["id"] for r in people if r["kind"] == "bot"}
@@ -1968,6 +1972,8 @@ def _api_rows(c, who, admins, view):
                 private=tool["audience"] is not None,
             )
         )
+        if access:  # a vendor's page: who holds it at which level (no use times), and whether it is an MCP server
+            out[-1].update(access=people, mcp=bool(_field(tool, "mcp_url")))
     return out
 
 
@@ -2157,13 +2163,13 @@ def _website_rows(c, who, auth, admins):
     return website_tools.index_rows(c, who, auth, admins)
 
 
-def index_rows(c, who, auth, settings, admins):
+def index_rows(c, who, auth, settings, admins, access=False):
     """Every Tools row the reader may see, in list order: API tools, website tools, mail and numbers, the company's connections,
     declared tools."""
     from . import connections as CN
 
     view = CN.view(c, auth, who, settings)
-    rows = _api_rows(c, who, admins, view)
+    rows = _api_rows(c, who, admins, view, access)
     covered = {r["service"] for r in rows if r.get("service")}
     # A tool the reader may not see, or sees by name alone (`requestable`), covers nothing: its keys' variables are not
     # the reader's to know, and the list reads as if it did not exist.
@@ -2200,15 +2206,13 @@ def vendor_page(c, who, auth, settings, admins, vendor):
     server. Its keys, settings, checks and calls are its own page's (`detail`). A vendor with nothing the reader may see
     is a 404, as a tool is."""
     vendor = str(vendor or "").strip().lower()
-    rows = [r for r in index_rows(c, who, auth, settings, admins) if vendor and r.get("vendor") == vendor]
+    rows = [r for r in index_rows(c, who, auth, settings, admins, access=True) if vendor and r.get("vendor") == vendor]
     if not rows:
         raise Problem("not_found", "No such vendor", 404)
     out = []
     for row in rows[:INDEX_LIMIT_MAX]:
         if row["kind"] == "api":
-            tool = _readable(c, who, row["id"][len("api:") :], admins, auth)
-            access = access_rows(c, who, tool["id"], admins, auth, usage=False)
-            row = row | {"access": access[:WHO_MAX], "access_total": len(access), "mcp": bool(_field(tool, "mcp_url"))}
+            row = row | {"access": row["access"][:WHO_MAX], "access_total": len(row["access"])}
         out.append(row)
     return {"vendor": vendor, "name": TS.vendor_name(vendor), "rows": out}
 
@@ -2307,7 +2311,7 @@ def install(app, store, auth, settings):
     def create_api_tool(request: Request, body: ToolCreate):
         return change(
             request,
-            _Receipt(body),
+            _Receipt(body, omit_none=("key",)),
             manager,
             lambda c: create_tool(c, request.state.identity, body, vault().admins, vault()),
         )

@@ -1083,7 +1083,8 @@ def update(c, auth, settings, who, bot, tool_id, body, admins=()):
         if not (old.get("mcp") or body.mcp.get("url")):
             raise Problem("entry", "That tool is not an MCP server yet; send its url as well", 422)
         merged["mcp"] = {**(old.get("mcp") or {}), **body.mcp}
-        if merged["mcp"].get("url") != (old.get("mcp") or {}).get("url"):
+        # Any change to what the runner sends (its address, its headers): the server it reaches is the catalog's.
+        if merged["mcp"] != (old.get("mcp") or {}):
             TA.catalog_only(who, mcp_url=str(merged["mcp"].get("url") or ""))
     try:
         entry = access_entry.clean(merged)

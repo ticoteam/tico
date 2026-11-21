@@ -111,6 +111,12 @@ def test_the_tools_owner_defines_a_tool_from_the_catalog_only_never_an_address_o
     r = api.patch(f"/api/v2/api-tools/{made['id']}", json={"base_url": "https://evil.example"}, headers=headers(run))
     assert r.status_code == 403 and r.json()["error"]["code"] == "catalog_only", r.text
     assert api.patch(f"/api/v2/api-tools/{made['id']}", json={"name": "Stripe prod"}, headers=headers(run)).is_success
+    # A person's own address: the agent's change of any part (its check path alone) is judged on the whole result.
+    own = post(api, "api-tools", {"name": "Stripe EU", "service": "stripe", "base_url": "https://eu.stripe.example"})[
+        "id"
+    ]
+    r = api.patch(f"/api/v2/api-tools/{own}", json={"check_path": "/v1/balance"}, headers=headers(run))
+    assert r.status_code == 403 and r.json()["error"]["code"] == "catalog_only", r.text
     # An MCP server not in the catalog is refused before anything reaches its address.
     r = api.post(
         "/api/v2/mcp-tools",
@@ -175,11 +181,17 @@ def test_the_tools_owner_in_its_own_run_adds_or_moves_an_mcp_server_only_from_th
         "env": "LINEAR_API_KEY",
         "mcp": {"url": "https://mcp.linear.app/mcp"},
     }
-    assert report(api, machine, "cpo", [linear]).status_code == 200
-    tid = next(t["id"] for t in get(api, "bots/cpo/tools")["tools"] if t["service"] == "linear")
+    assert report(api, machine, "cpo", [linear, acme]).status_code == 200
+    ids = {t["service"]: t["id"] for t in get(api, "bots/cpo/tools")["tools"]}
     moved = api.post(
-        f"/api/v2/bots/cpo/tools/{tid}/update", json={"mcp": {"url": acme["mcp"]["url"]}}, headers=headers(own)
+        f"/api/v2/bots/cpo/tools/{ids['linear']}/update",
+        json={"mcp": {"url": acme["mcp"]["url"]}},
+        headers=headers(own),
     )
+    assert moved.status_code == 403 and moved.json()["error"]["code"] == "catalog_only", moved.text
+    # A person's own server off the catalog: the agent changes nothing the runner sends, its headers included.
+    headers_only = {"mcp": {"headers": {"Authorization": "Bearer ${ACME_TOKEN}"}}}
+    moved = api.post(f"/api/v2/bots/cpo/tools/{ids['acme']}/update", json=headers_only, headers=headers(own))
     assert moved.status_code == 403 and moved.json()["error"]["code"] == "catalog_only", moved.text
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM bot_tool_requests").fetchone()[0] == 0

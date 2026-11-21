@@ -2,7 +2,7 @@
 //! declared tools and mail request in readiness, its MCP servers in each run, its watchers, its memory history.
 //! One field on the Runner, so the run loop and a turn reach these with one-line hooks.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -119,20 +119,25 @@ pub fn mcp_for_run(
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     let (servers, problems) = crate::mcp::servers_for_run(&tools, &visible, proxied);
-    let mut problems = crate::mcp::drop_covered(problems, &tools, from_grants);
-    // What the harness cannot take goes first, then one server per connection, then the names.
+    // What the harness can take first; then one server per connection, bot.yaml's first, then the names.
+    let declared = crate::mcp::supported(&servers, runtime, harness);
+    let granted = crate::mcp::supported(from_grants, runtime, harness);
+    let mut problems = crate::mcp::drop_covered(problems, &tools, &granted);
+    let passed = crate::mcp::merge(declared, &granted);
+    // A connection the harness cannot take is said once, and not at all when another way to it is passed.
+    let mut told: HashSet<(String, String)> = passed.iter().map(crate::mcp::connection).collect();
     for (server, why) in crate::mcp::unsupported(&servers, runtime, harness)
         .into_iter()
         .chain(crate::mcp::unsupported(from_grants, runtime, harness))
     {
-        problems.push(format!(
-            "{}: MCP server not passed. {why}",
-            text_of(&server["service"])
-        ));
+        if told.insert(crate::mcp::connection(&server)) {
+            problems.push(format!(
+                "{}: MCP server not passed. {why}",
+                text_of(&server["service"])
+            ));
+        }
     }
-    let declared = crate::mcp::supported(&servers, runtime, harness);
-    let granted = crate::mcp::supported(from_grants, runtime, harness);
-    (crate::mcp::merge(declared, &granted), problems)
+    (passed, problems)
 }
 
 #[cfg(test)]
@@ -182,17 +187,21 @@ mod tests {
             "tools:\n  - service: notion\n    env: NOTION_KEY\n    mcp: {url: 'https://mcp.notion.com/mcp', transport: sse, headers: {Authorization: 'Bearer ${NOTION_KEY}'}}\n",
         )
         .unwrap();
-        let grants = [
-            json!({"name": "notion", "service": "notion", "url": "https://mcp.notion.com/mcp",
-                             "transport": "http", "headers": {"Authorization": "Bearer ${NOTION_KEY}"}, "env": "NOTION_KEY"}),
-        ];
+        // Granted twice, over SSE first: the http one still goes, once.
+        let grant = |transport: &str| {
+            json!({"name": "notion", "service": "notion", "url": "https://mcp.notion.com/mcp", "env": "NOTION_KEY",
+                   "transport": transport, "headers": {"Authorization": "Bearer ${NOTION_KEY}"}})
+        };
+        let grants = [grant("sse"), grant("http")];
         let env: Env = [("NOTION_KEY".to_string(), "made-up".to_string())]
             .into_iter()
             .collect();
         let held: BTreeSet<String> = ["NOTION_KEY".to_string()].into_iter().collect();
-        let (servers, _) = mcp_for_run(&dir, &env, &held, "pi", "", &[], &grants);
+        let (servers, problems) = mcp_for_run(&dir, &env, &held, "pi", "", &[], &grants);
         assert_eq!(servers.len(), 1);
         assert_eq!(servers[0]["transport"], "http");
+        // Passed another way: no "not passed" for the SSE ones.
+        assert!(problems.is_empty(), "{problems:?}");
         std::fs::remove_dir_all(dir).ok();
     }
 

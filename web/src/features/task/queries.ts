@@ -727,7 +727,12 @@ export const wordQuery = (url: string) =>
     busy, until the server has taken it, then leaves Flow; every other copy of it settles on the server. */
 function answerRequest<T>(item: string, send: (idem: string) => Promise<T>, taken: (out: T) => boolean = () => true): Promise<T> {
   // Read Flow again once answered, refused or not: one answer can settle other cards too (another copy, a Read request).
-  const again = () => void queryClient.invalidateQueries({ queryKey: flowQuery.queryKey });
+  // A grant or a key changes Tools as well: its list, a vendor's access lists and the tool's own page (all under
+  // `tools`).
+  const again = () => {
+    void queryClient.invalidateQueries({ queryKey: flowQuery.queryKey });
+    void queryClient.invalidateQueries({ queryKey: ['tools'] });
+  };
   return write<T>({
     key: flowQuery.queryKey,
     wait: true,

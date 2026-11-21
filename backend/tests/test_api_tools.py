@@ -288,6 +288,9 @@ def test_a_tool_and_its_first_key_are_one_write_taken_once(api, monkeypatch):
     body = {"name": "Stripe", "service": "stripe", "key": SECRET_RW}
     send = lambda: api.post("/api/v2/api-tools", json=body, headers=headers() | {"Idempotency-Key": "paste-1"})  # noqa: E731
     first, again = send(), send()
+    # No key sent, none fingerprinted: a retry across the deploy that added `key` is the same request.
+    plain = api_tools._Receipt(api_tools.ToolCreate(name="Stripe"), omit_none=("key",)).model_dump()
+    assert "key" not in plain
     assert first.status_code == again.status_code == 200 and first.json()["id"] == again.json()["id"]
     page = get(api, f"api-tools/{first.json()['id']}")
     assert [k["access_level"] for k in page["keys"]] == ["read_write"] and SECRET_RW not in json.dumps(page)

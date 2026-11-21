@@ -98,6 +98,7 @@ const gone = (name: string) => waitFor(() => expect(screen.queryByRole('region',
 describe('an access request in Needs you', () => {
   it('says who asks for what and why; Grant gives what was asked and the card leaves', async () => {
     reply = () => ({ body: { state: 'granted', level: 'read_write' } });
+    queryClient.setQueryData(['tools', 'index', 'vendor', 'meta'], { vendor: 'meta', name: 'Meta', rows: [] });
     show();
     const box = await card('Access request');
     expect(within(box).getByText('Growth Manager asks for Meta Ads')).toBeTruthy();
@@ -108,6 +109,8 @@ describe('an access request in Needs you', () => {
     await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/access-requests/r1/grant', body: {} }]));
     await gone('Access request');
     await waitFor(() => expect(document.querySelector('.toasts')?.textContent).toContain('Granted: Meta Ads'));
+    // Tools reads what the grant changed: its list, the vendor's access lists, the tool's page.
+    expect(queryClient.getQueryState(['tools', 'index', 'vendor', 'meta'])?.isInvalidated).toBe(true);
   });
 
   it('says what the server settled: Read only, or a decline someone else made first', async () => {

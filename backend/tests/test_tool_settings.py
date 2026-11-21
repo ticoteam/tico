@@ -228,6 +228,10 @@ def test_tools_list_one_row_a_vendor_and_a_vendors_page_holds_its_website_mcp_to
     # A summary: who holds each API tool and whether it is an MCP server; its keys and settings stay on its own page.
     assert by_id[mcp]["mcp"] is True and by_id[prod]["mcp"] is False and by_id[prod]["access_total"] == 0
     assert "keys" not in by_id[prod] and "settings" not in by_id[staging]
+    level(api, prod[4:], "bot:ops", "read")
+    again = {r["id"]: r for r in get(api, "tool-vendors/raygun")["rows"]}
+    assert [a["subject"] for a in again[prod]["access"]] == ["bot:ops"]
+    assert "last_used_at" not in again[prod]["access"][0]  # use times are the tool's own page's
     assert [k["env"] for k in get(api, "api-tools/" + prod[4:])["keys"]] == ["RAYGUN_MCP_TOKEN"]
     assert "acme-synthetic" not in json.dumps(page)
     # A member who holds none of its keys sees only what everyone sees of it: the website. Its API tools are hers to

@@ -388,9 +388,9 @@ pub fn servers_for_run(
 /// (servers, problems), servers shaped as `servers_for_run`'s.
 pub fn granted(items: &Value, server: &str, held: &BTreeSet<String>) -> (Vec<Value>, Vec<String>) {
     let (mut servers, mut problems) = (vec![], vec![]);
-    // One server per connection (its address and variable): a tool's two keys in two variables are two servers. Two
-    // tools whose ids make one name, or one whose id is Tico's own server's, each get their own name.
-    let (mut used, mut seen) = (reserved(), HashSet::new());
+    // Every grant that passes its checks, each with a name of its own: `merge` passes one per connection, after the
+    // harness's transports have been applied, so a grant it cannot take never hides one it can.
+    let mut used = reserved();
     for item in items.as_array().into_iter().flatten() {
         let label = text_of(&item["tool"]);
         let service = text_of(&item["name"]).trim().to_lowercase();
@@ -442,13 +442,11 @@ pub fn granted(items: &Value, server: &str, held: &BTreeSet<String>) -> (Vec<Val
             json!({"url": checked, "transport": item["transport"], "headers": item["headers"]});
         match clean_mcp(&block, &env) {
             Ok(m) => {
-                let server = json!({"service": service, "url": url, "upstream": upstream, "env": env,
-                                    "transport": m["transport"], "headers": m.get("headers").cloned().unwrap_or(json!({}))});
-                if seen.insert(connection(&server)) {
-                    let mut server = server;
-                    server["name"] = json!(unique_name(&service, &mut used));
-                    servers.push(server);
-                }
+                servers.push(
+                    json!({"name": unique_name(&service, &mut used), "service": service, "url": url,
+                                    "upstream": upstream, "env": env, "transport": m["transport"],
+                                    "headers": m.get("headers").cloned().unwrap_or(json!({}))}),
+                );
             }
             Err(why) => problems.push(format!("{label}: MCP server not passed. {why}")),
         }
@@ -459,7 +457,7 @@ pub fn granted(items: &Value, server: &str, held: &BTreeSet<String>) -> (Vec<Val
 /// A server's connection: the server's own address (`upstream`, whatever proxy address the run reaches it by) and the
 /// variable its credential comes in. Two servers are one connection only when both match, so two accounts on one
 /// endpoint stay two, and a proxied grant of bot.yaml's server is that server.
-fn connection(server: &Value) -> (String, String) {
+pub fn connection(server: &Value) -> (String, String) {
     let upstream = text_of(&server["upstream"]);
     let url = if upstream.is_empty() {
         text_of(&server["url"])
@@ -1052,8 +1050,9 @@ mod tests {
         .collect();
         let (servers, problems) = granted(&items, "", &held);
         assert!(problems.is_empty(), "{problems:?}");
+        // `merge` passes each connection once (the repeated key), then names them from one set.
         assert_eq!(
-            servers
+            merge(vec![], &servers)
                 .iter()
                 .map(|s| text_of(&s["name"]))
                 .collect::<Vec<_>>(),
