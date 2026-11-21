@@ -171,10 +171,18 @@ def read_many(c, bots=None):
 
 
 def write(c, bot, config, at=None):
-    """Store `config` as the bot's whole declaration, replacing the one before. A new row gets the company's default
-    repository access when the declaration names none (the repository_new_bot_default trigger)."""
+    """Store `config` as the bot's whole declaration, replacing the one before. A new row that names no repository access
+    gets the team's New agents get when it was chosen, else Their own repo (settings_admin.create_bot picks a made
+    bot's before this)."""
     from . import hubdb as H
 
+    if (
+        "repo_access_mode" not in config
+        and not c.execute("SELECT 1 FROM bot_settings WHERE bot_id=?", (bot,)).fetchone()
+    ):
+        from .repositories import NEW_BOT_ACCESS, new_bot_default
+
+        config = {**config, **NEW_BOT_ACCESS[new_bot_default(c, "own")]}
     columns, extra = split(config)
     names = list(COLUMNS)
     values = [columns[key] for key in names] + [_encode(extra), at or H.now()]

@@ -1156,7 +1156,7 @@ export const newAgentRepos = defineAction({
   id: 'settings.newAgentRepos',
   title: 'Choose the repositories new agents get',
   kind: 'change',
-  input: z.strictObject({ value: z.enum(['own', 'all'] as const) }),
+  input: z.strictObject({ value: z.enum(['own', 'read', 'all'] as const) }),
   run: (_ctx, { value }) => setNewAgentRepos(value),
   did: () => 'Saved',
   target: () => setting('repositories'),

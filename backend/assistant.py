@@ -989,8 +989,9 @@ def describe(c, method, path, body, viewer=None, admins=()):
             r"/api/v2/repositories/settings",
             lambda g: {
                 "own": "New bots get only their own repository",
+                "read": "New bots read every repository ticked in Settings > General › Repositories",
                 "all": "New bots get every repository ticked in Settings > General › Repositories",
-            }.get(body.get("new_bot_default"), "Change which repositories new bots get"),
+            }.get(str(body.get("new_bot_default")), "Change which repositories new bots get"),
         ),
         (r"/api/v2/repositories/refresh", lambda g: "Refresh the repository list from GitHub"),
         (r"/api/v2/repositories/([^/]+)/([^/]+)", lambda g: f"Change repository {g[1]}: " + fields(body)),

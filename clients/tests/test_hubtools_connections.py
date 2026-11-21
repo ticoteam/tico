@@ -353,7 +353,7 @@ def test_repo_show_lists_who_reads_and_writes_a_repository(monkeypatch):
 def test_repo_default_and_setup_command_are_saved_on_the_hub(api, live):
     seed_repos(api)
     hub = Client(live, "ana-test")
-    assert tool("tico_repo_default", hub) == {"new_bot_default": "own"}
+    assert tool("tico_repo_default", hub) == {"new_bot_default": "read"}
     assert tool("tico_repo_default", hub, mode="all") == {"new_bot_default": "all"}
     assert tool("tico_repo_default", hub) == {"new_bot_default": "all"}
     got = tool("tico_repo_setup_command", hub, repository="acme/web", command="npm ci")

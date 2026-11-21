@@ -526,9 +526,10 @@ def repo_claim(api, args):
 
 @tool(
     "tico_repo_default",
-    "The repository access a new bot starts with: own (its own repository only) or all (All ticked repos). Without "
-    "`mode` it reads it; setting it is the Owner's or an admin's. Example: tico repo default own",
-    {"mode": _s("own or all", enum=["own", "all"])},
+    "The repository access a new bot starts with: own (its own repository only), read (reads All ticked repos, the "
+    "default) or all (writes All ticked repos). Without `mode` it reads it; setting it is the Owner's or an admin's. "
+    "Example: tico repo default own",
+    {"mode": _s("own, read or all", enum=["own", "read", "all"])},
     writes=True,
 )
 def repo_default(api, args):

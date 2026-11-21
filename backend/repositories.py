@@ -20,6 +20,12 @@ from . import bot_settings as BS
 from .api_contract import KEYLESS, api_v2
 
 SETTINGS = 'repos_new_bot_default'
+# What New agents get gives a new bot: their own repo, or All repos in use with read or with write.
+NEW_BOT_ACCESS = {
+    'own': {'repo_access_mode': 'own'},
+    'read': {'repo_access_mode': 'all', 'repo_all_access': 'read'},
+    'all': {'repo_access_mode': 'all', 'repo_all_access': 'write'},
+}
 # {bot: [owner/name, ...]}: write grants an Owner or admin let start and manage workflow runs (Actions: write).
 WORKFLOWS = 'repository-workflow-grants'
 # {bot: [owner/name, ...]}: write grants an Owner or admin let edit workflow files (Workflows: write).
@@ -735,6 +741,13 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
     return {**after, **lost}
 
 
+def new_bot_default(c, fallback='read'):
+    """The team's New agents get (a key of NEW_BOT_ACCESS), or `fallback` while nobody has chosen: a bot made in
+    Settings, by hiring or from a template reads every repository in use (settings_admin.create_bot)."""
+    chosen = metadata(c, SETTINGS).get('new_bot_default')
+    return chosen if chosen in NEW_BOT_ACCESS else fallback
+
+
 def card_access(catalog_dir, template):
     """The repository access a template's card declares for a bot made from it (templates/catalog/<template>/card.yaml
     `repo_access_mode`, own or all, and `repo_all_access`, read or write, read when left out), or {} when it declares
@@ -1396,7 +1409,7 @@ class RepoUpdate(Contract):
 
 
 class RepoSettings(Contract):
-    new_bot_default: Literal['own', 'all']
+    new_bot_default: Literal['own', 'read', 'all']
 
 
 class RepoClaim(Contract):
@@ -1435,7 +1448,7 @@ def install(app, store, service):
             github_row = service.row(c)
             return {
                 'repositories': repos,
-                'new_bot_default': metadata(c, SETTINGS).get('new_bot_default', 'own'),
+                'new_bot_default': new_bot_default(c),
                 'github_connected': bool(github_row),
                 # An App that was created but never installed cannot reach any repository.
                 'github_installed': bool(github_row and github_row['installation_id']),

@@ -42,7 +42,7 @@ SCHEMAS.update(
         "RepositoryList": obj(
             {
                 "repositories": items(ref("Repository")),
-                "new_bot_default": {"enum": ["own", "all"]},
+                "new_bot_default": {"enum": ["own", "read", "all"]},
                 "github_connected": "b",
                 "github_installed": "b",
             }
