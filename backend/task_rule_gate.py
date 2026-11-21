@@ -186,15 +186,26 @@ def not_asked(rule: Row) -> str:
 QUESTIONS = ("question", "chat_question")
 
 
-def refuse_question(c: Any, verdict: Row, rule: Row, too_large: bool) -> None:
+NOT_ASKED_UNCHECKED = "Not asked yet: the company's Contacts rules could not be checked. Try again in a minute."
+
+
+def asks_person(verdict: Row) -> bool:
+    """Whether a verdict is a bot's ❓ to a person (`QUESTIONS`)."""
+    return verdict.get("operation") in QUESTIONS and H.is_bot(str(verdict.get("author") or ""))
+
+
+def refuse_question(c: Any, verdict: Row, rule: Row, too_large: bool, error: str | None = None) -> None:
     """Where a bot's ❓ would be held (org_rule_check `_write_hold`: its permissions, audience and rules in force all
     checked), it is refused back to the bot at once instead, with the rule and how to make it lawful, under `COVERS`
     (never counted toward quarantine): held, it sat on a review task the person never saw while the bot believed it had
-    asked. Too long to check against a Block or Escalate rule, it is refused to shorten. A Warn rule never holds, so it
-    never reaches here: the ❓ is asked, with its warning. Any other write is held as before."""
-    author = str(verdict.get("author") or "")
-    if verdict.get("operation") not in QUESTIONS or not H.is_bot(author):
+    asked. Too long to check against a Block or Escalate rule, it is refused to shorten. The Directory's check failing
+    (`error`, no rule found broken) refuses it to try again (503, retryable, not a refusal on record). A Warn rule never
+    holds, so it never reaches here: the ❓ is asked, with its warning. Any other write is held as before."""
+    if not asks_person(verdict):
         return
+    author = str(verdict["author"])
+    if error:
+        raise Problem("task_rule_unchecked", NOT_ASKED_UNCHECKED, 503, retryable=True)
     if too_large:
         H.refuse(c, author, COVERS, NOT_ASKED_LOCAL["too_large"])
     H.refuse(

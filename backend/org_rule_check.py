@@ -953,6 +953,10 @@ def _structured_apply(c, verdict, payload, replay, tell, judged_text=None, priva
         if holds(judged)
         else []
     )
+    from . import task_rule_gate
+
+    if judged_held and task_rule_gate.asks_person(verdict) and not _same_rules(c, judged):
+        judged_held = []  # a bot's ❓ is refused only by rules still in force as checked (`apply`'s same check)
     if now["outcome"] != "held" and not judged_held:
         return _warn_structured(c, verdict, now["warned"], tell) if now["outcome"] == "warn" else None
     found: dict[str, dict] = {}
@@ -1584,6 +1588,18 @@ def _people(recipients, author):
     return sorted({r for r in recipients or () if r and r != author})
 
 
+def _same_rules(c, verdict):
+    """Whether the rules in force now for a judged verdict's write are the ones it checked."""
+    now = {
+        (r["id"], r["version"]) for r in R.matching(c, verdict["author"], verdict["recipients"], verdict.get("place"))
+    }
+    checked = verdict.get("matched")
+    checked = (
+        {tuple(x) for x in checked} if checked is not None else {(r["id"], r["version"]) for r in verdict["rules"]}
+    )
+    return now == checked
+
+
 def apply(
     c,
     verdict,
@@ -1631,12 +1647,7 @@ def apply(
     if verdict["outcome"] in ("broken", "too_large"):
         # The rules in force now must be the ones checked: a rule edited, retired or added since is a new check, which
         # cannot run here (no engine under the write lock), so the output goes through unchecked.
-        now = {(r["id"], r["version"]) for r in R.matching(c, author, verdict["recipients"], verdict.get("place"))}
-        checked = verdict.get("matched")
-        checked = (
-            {tuple(x) for x in checked} if checked is not None else {(r["id"], r["version"]) for r in verdict["rules"]}
-        )
-        if now != checked:
+        if not _same_rules(c, verdict):
             verdict = {**verdict, "outcome": "unchecked", "error": "rules_changed"}
     if verdict["outcome"] == "unchecked" or verdict.get("unchecked_rules"):
         H.event(
@@ -1747,7 +1758,7 @@ def _write_hold(
     (task_rule_gate.refuse_question)."""
     from . import task_rule_gate
 
-    task_rule_gate.refuse_question(c, verdict, strictest, too_large)
+    task_rule_gate.refuse_question(c, verdict, strictest, too_large, error)
     author, operation = verdict["author"], verdict["operation"]
     target = "org_rule:" + strictest["id"] if strictest["id"] else "org_rule_check"
     reviewer = reviewer_for(c, author, broken)

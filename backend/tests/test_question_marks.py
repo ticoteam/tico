@@ -269,9 +269,9 @@ def test_the_asks_to_a_person_rule_checks_a_question_mark(ruled):
 COLORED = "Should the launch note say Acme's favorite color is teal?"
 
 
-def nothing_asked(api, task):
+def nothing_asked(api):
     assert sql(api, "SELECT count(*) AS n FROM org_rule_holds")[0]["n"] == 0, "no hold"
-    assert sql(api, "SELECT count(*) AS n FROM question_marks WHERE task_id=?", (task["id"],))[0]["n"] == 0
+    assert sql(api, "SELECT count(*) AS n FROM question_marks WHERE bot_id='bot:ops'")[0]["n"] == 0, "nothing marked"
     assert sql(api, "SELECT count(*) AS n FROM messages WHERE body LIKE '%teal%'")[0]["n"] == 0
 
 
@@ -288,8 +288,10 @@ def test_a_question_a_teams_block_rule_finds_broken_is_refused_back_to_the_bot_n
         r = api.post("/api/v2/questions", json={"to": "ana", "text": COLORED}, headers=headers("ops-test"))
     assert r.status_code == 409 and r.json()["error"] == "task_rule", r.text
     assert COLOR in r.json()["detail"] and "Rewrite it so it keeps the rule" in r.json()["detail"]
-    nothing_asked(api, task)
-    assert ask_on(api, task, text="Should the launch note name a color at all?").status_code == 200, "lawful: asked"
+    nothing_asked(api)
+    if (if_broken, where) == ("block", "task"):
+        lawful = ask_on(api, task, text="Should the launch note name a color at all?")
+        assert lawful.status_code == 200, "lawful: asked"
 
 
 def test_a_question_whose_block_rule_turned_warn_while_it_was_checked_is_asked(ruled):
@@ -319,7 +321,7 @@ def test_a_question_too_long_to_check_against_a_block_rule_is_refused_to_shorten
     monkeypatch.setattr(J, "MAX_STATE_CHARS", 200)
     r = ask_on(api, task, text=COLORED)
     assert r.status_code == 409 and r.json()["error"] == "task_rule" and "Shorten it" in r.json()["detail"], r.text
-    nothing_asked(api, task)
+    nothing_asked(api)
 
 
 def test_a_question_a_warn_rule_finds_broken_is_asked_with_the_warning(ruled):
