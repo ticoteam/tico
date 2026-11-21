@@ -766,6 +766,7 @@ describe('a rule to add', () => {
     shown = ruleTask();
     const wide = {
       ...bound,
+      if_broken: 'block', // a Stop rule with a named reviewer: its holds still go to them
       who: { ...bound.who, everyone: true, outside_editions: true },
       exact_check: { kind: 'allow_list', action: 'mail', field: 'to', values: ['a.example, b.example', 'c.example'] },
     };
@@ -775,6 +776,9 @@ describe('a rule to add', () => {
     const facts = await within(box).findByRole('group', { name: 'The rule' });
     expect(within(facts).getByText('Everyone, Outside editions, Ops')).toBeTruthy();
     expect(within(facts).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['a.example, b.example', 'c.example']);
+    const pairs = [...facts.querySelectorAll('.fact')].map((f) => [f.firstElementChild?.textContent, f.lastElementChild?.textContent]);
+    expect(pairs).toContainEqual(['If broken', 'Stop']);
+    expect(pairs).toContainEqual(['Ask', 'Ben']);
   });
 
   it('keeps Approve off while a field that enforces the rule is missing from what is shown @approvals', async () => {

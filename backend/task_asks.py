@@ -1099,11 +1099,12 @@ def revoke(conn: "sqlite3.Connection", requirement_id: str) -> None:
     )
 
 
-def withdraw(conn: "sqlite3.Connection", requirement_id: str, why: str) -> None:
+def withdraw(conn: "sqlite3.Connection", requirement_id: str, why: str, *, advance: bool = True) -> None:
     """Take an OK back that nobody needs any more: the content changed, or the act will not happen. A grant that was
     used stays as it is. One that was not is revoked for good (`revoke`), even when its visit already ended met and
     its requirement can no longer be withdrawn: asking about the same content again needs a new OK. Its answer stays
-    on record. A task ask_ok filed is closed with `why`."""
+    on record. A task ask_ok filed is closed with `why`. `advance` False: its task does not move on for it (a revised
+    draft's ask is about to take its place)."""
     H = _h()
     row = grant(conn, requirement_id)
     if not row or row.get("used_at"):
@@ -1111,7 +1112,7 @@ def withdraw(conn: "sqlite3.Connection", requirement_id: str, why: str) -> None:
     revoke(conn, requirement_id)
     requirement = _requirement(conn, requirement_id)
     if requirement and not requirement.get("withdrawn_at"):
-        H.attempt(conn, H.task_withdraw_ask, SYSTEM, requirement_id, why)
+        H.attempt(conn, H.task_withdraw_ask, SYSTEM, requirement_id, why, advance=advance)
     settle(conn, requirement_id, why)
 
 

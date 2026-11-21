@@ -499,14 +499,21 @@ def _task_of_requirement(conn: "sqlite3.Connection", actor: str, requirement_id:
 
 @_task_write("requirement")
 def task_withdraw_ask(
-    conn: "sqlite3.Connection", actor: str, requirement_id: str, why: str | None = None, *, mover: bool | None = None
+    conn: "sqlite3.Connection",
+    actor: str,
+    requirement_id: str,
+    why: str | None = None,
+    *,
+    mover: bool | None = None,
+    advance: bool = True,
 ) -> Row | None:
-    """Take back an ask that was added to a task. The task moves on if that was all it waited for."""
+    """Take back an ask that was added to a task. The task moves on if that was all it waited for, unless `advance` is
+    False: another ask is about to take its place."""
     from . import task_engine as E
 
     _open(conn, actor, _task_of_requirement(conn, actor, requirement_id), mover)
     with task_effects.because(actor):
-        return E.withdraw_requirement(conn, requirement_id, actor, why)
+        return E.withdraw_requirement(conn, requirement_id, actor, why, advance_task=advance)
 
 
 @_task_write()

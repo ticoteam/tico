@@ -743,12 +743,17 @@ def _cite(c, auth, who, cite, memo=None):
 
 
 def _readable_task(c, auth, who, task_id):
-    """The task's id when the caller, as it acts (a bot as itself, not only its principal), passes the full task read
-    check (auth.task); else None: a private clerk task's id is not shown to others."""
+    """The task's id when the caller, as it acts (a bot as itself, not only its principal), passes the task read check
+    (auth.task, reading no tags), and a Rules Owner run only for a task it carries (counsel.read_refused's scope, as the
+    task route applies it); else None: a private clerk task's id is not shown to others."""
+    from . import counsel
+
     if not task_id:
         return None
+    if counsel.is_counsel(who) and task_id not in _run_tasks(c, who):
+        return None
     try:
-        auth.task(c, who, task_id)
+        auth.task(c, who, task_id, tags=False)
     except Problem:
         return None
     return task_id
@@ -1673,14 +1678,34 @@ def _run_tasks(c, who):
     return set(task_privacy.carried_tasks(c, who.attempt_id)) if who.attempt_id else set()
 
 
+def _primary_task(c, who):
+    """The task the run itself is on (its message's task, as execution.work_task_id reads it), or None."""
+    if not who.attempt_id:
+        return None
+    row = c.execute(
+        "SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?", (who.attempt_id,)
+    ).fetchone()
+    message = H.message(c, row[0]) if row else None
+    if not message:
+        return None
+    return H.message_task_id(message, H.conversation(c, message["conversation_id"]))
+
+
 def _bind(c, who):
-    """The clerk task a bot's suggestion is made for: the one "Make this a rule" task its run carries and it owns."""
+    """The clerk task a bot's suggestion is made for, when its run carries "Make this a rule" tasks it owns: the run's
+    own task when it is one of them, else the only one. More than one and none the run's own: refused, so a clerk's write
+    never leaves a draft bound to no task."""
     if who.role != "bot":
         return None
     found = [
         t for t in sorted(_run_tasks(c, who)) if clerk_task(c, t) and (H.task(c, t) or {}).get("owner_id") == who.actor
     ]
-    return found[0] if len(found) == 1 else None
+    if len(found) <= 1:
+        return found[0] if found else None
+    primary = _primary_task(c, who)
+    if primary in found:
+        return primary
+    raise Problem("conflict", "This run carries more than one Make this a rule task: draft from the run on one", 409)
 
 
 def bound_task(c, rule_id):
@@ -1772,21 +1797,32 @@ def ask_ok(c, auth, who, rule_id, task_id):
         "exact_check": row["exact_check"],
     }
     subject = OK_SUBJECT + rule_id
+    was = task_asks.latest(c, subject)
     asked = task_asks.ask_ok(
-        c, who.actor, person, OK_LINE, shows=[subject], subject=subject, content=content, task_id=task_id
+        c,
+        who.actor,
+        person,
+        OK_LINE,
+        shows=[subject],
+        subject=subject,
+        content=content,
+        task_id=task_id,
+        # asked of someone else now (the last one lost access): a new ask, not the old one back
+        renew=bool(was) and was["asked_of_id"] != person,
     )
     _event(c, who.actor, "ok_asked", rule_id, {"task_id": task_id, "to": person})
     return {**asked, "asked_of": person}
 
 
-def _withdraw_ok(c, rule_id, why):
-    """Take back the OK still asked for this draft (task_asks subject `rule:<id>`), if any."""
+def _withdraw_ok(c, rule_id, why, advance=True):
+    """Take back the OK still asked for this draft (task_asks subject `rule:<id>`), if any. `advance` False: its task
+    does not move on for it (a revised draft replaced it, and its own ask comes next)."""
     from . import task_asks
 
     for (rid,) in c.execute(
         "SELECT requirement_id FROM ok_grants WHERE subject=? AND used_at IS NULL", (OK_SUBJECT + rule_id,)
     ).fetchall():
-        task_asks.withdraw(c, rid, why)
+        task_asks.withdraw(c, rid, why, advance=advance)
 
 
 def _supersede(c, task_id, by_id):
@@ -1806,7 +1842,7 @@ def _replaced(c, old_id, by_id):
     old = _get(c, old_id)
     if old["status"] != "suggested":
         return
-    _withdraw_ok(c, old_id, "A revised draft replaces it")
+    _withdraw_ok(c, old_id, "A revised draft replaces it", advance=False)
     _save(c, old_id, status="retired", extra={"decided_by": H.TICO_ACTOR, "decided_at": H.now()})
     _audit(c, H.TICO_ACTOR, old_id, _core(old), _core(_get(c, old_id)), SimpleNamespace(via="", actor=H.TICO_ACTOR))
     _event(c, H.TICO_ACTOR, "replaced", old_id, {"by": by_id})
@@ -1902,7 +1938,9 @@ def _renderer(c, auth, who, ctx):
     def render(chunk):
         dues = D.due_rows(c, [r["id"] for r in chunk])
         suggested = [r["id"] for r in chunk if r["status"] == "suggested"]
-        ctx.setdefault("bound", {}).update(bound_tasks(c, suggested))
+        bound = bound_tasks(c, suggested)
+        H.prime_tasks(c, bound.values(), with_tags=False)  # their read checks read each task row once, no tags
+        ctx.setdefault("bound", {}).update(bound)
         ctx.setdefault("bound_read", set()).update(suggested)
         return [view(c, auth, who, r, ctx, dues.get(r["id"], [])) for r in chunk]  # view hides a task's dates
 

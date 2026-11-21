@@ -1784,12 +1784,25 @@ def test_a_reassigned_clerk_task_keeps_one_ask_and_asks_someone_within_reach(api
     def per_row(c, rule_id):
         raise AssertionError("a list read a clerk task one row at a time")
 
-    one_by_one = O.bound_task
+    def tagged(c, rows):
+        raise AssertionError("a draft's task read check read its tags")
+
+    one_by_one, with_tags = O.bound_task, H.hydrate_task_tags
     monkeypatch.setattr(O, "bound_task", per_row)
+    monkeypatch.setattr(H, "hydrate_task_tags", tagged)
     listed = get(api, "rules?status=suggested&limit=100", token="ben-test")["rules"]
     mine = next(r for r in listed if r["id"] == second["id"])
     assert mine["bound"] is True and mine["clerk_task"] == made["task_id"]
     monkeypatch.setattr(O, "bound_task", one_by_one)
+    monkeypatch.setattr(H, "hydrate_task_tags", with_tags)
+    # Asked again of someone else (the one asked lost access): a new ask, not the old grant back.
+    real_adopter = O._adopter
+    monkeypatch.setattr(O, "_adopter", lambda c, auth, asker, task: "human:cara")
+    moved = _ask(api, "ops-test", second["id"], made["task_id"])
+    assert moved.status_code == 200 and moved.json()["asked_of"] == "human:cara", moved.text
+    assert moved.json()["requirement_id"] != again.json()["requirement_id"]
+    monkeypatch.setattr(O, "_adopter", real_adopter)
+    again = moved
     # Ben sets the draft aside instead: its OK stops waiting, so no Approve is left to fail. Retire does the same.
     post(api, f"rules/{second['id']}/skip", {"version": second["version"]}, token="ben-test")
     with api.app.state.store.read() as c:
@@ -1800,6 +1813,61 @@ def test_a_reassigned_clerk_task_keeps_one_ask_and_asks_someone_within_reach(api
     post(api, f"rules/{third['id']}/retire", {"version": third["version"]}, token="ben-test")
     with api.app.state.store.read() as c:
         assert task_asks.standing(c, last.json()["requirement_id"]) == "withdrawn"
+
+
+def test_a_clerk_run_binds_every_draft_keeps_its_task_open_and_sees_only_its_own_tasks(api, monkeypatch):
+    """A run carrying two clerk tasks binds a draft to its own task, and refuses when neither is its own: no clerk draft
+    is ever unbound. A revised draft's save withdraws the last ask without moving a task marked done on to Done, so the
+    new ask goes on. A Rules Owner run is told only the clerk tasks it carries."""
+    org(api)
+    counsel_on(api)
+    made = _make(api, "Never refund more than $100 without Ben.")
+    other = _make(api, "Mail only the partner domains.")
+    run = counsel_run(api)[1]["token"]
+    with api.app.state.store.read() as c:
+        attempt = c.execute("SELECT id FROM attempts ORDER BY rowid DESC LIMIT 1").fetchone()[0]
+        own = O._primary_task(c, SimpleNamespace(attempt_id=attempt))
+    assert own in (made["task_id"], other["task_id"])
+    elsewhere = other["task_id"] if own == made["task_id"] else made["task_id"]
+    real_tasks = O._run_tasks
+    both = {made["task_id"], other["task_id"]}
+    monkeypatch.setattr(O, "_run_tasks", lambda c, who: both if who.attempt_id else set())
+    assert get(api, f"rules/{_suggest(api, run, 'Refunds over $50 go to Ben first.')['id']}")["clerk_task"] == own
+    monkeypatch.setattr(O, "_primary_task", lambda c, who: None)
+    unbound = api.post(
+        "/api/v2/rules",
+        headers=headers(run),
+        json={"kind": "internal", "text": "Refunds wait.", "who": {"bots": ["ops"]}},
+    )
+    assert unbound.status_code == 409, unbound.text
+    monkeypatch.setattr(O, "_run_tasks", real_tasks)
+    monkeypatch.undo()
+    # The run's own task only, from here: its first ask, the task marked done while it waits, then a revision.
+    first = _suggest(api, run, "Refunds over $60 go to Ben first.")
+    asked = _ask(api, run, first["id"], own)
+    assert asked.status_code == 200, asked.text
+    with api.app.state.store.transaction() as c:
+        H.task_done(c, "bot:rules-owner", own, "Drafted", H.task(c, own)["version"])
+        assert H.task(c, own)["status"] == "open"  # done waits on the ask
+    revised = _suggest(api, run, "Refunds over $100 go to Ben first.")
+    with api.app.state.store.read() as c:
+        assert (
+            H.task(c, own)["status"] == "open" and task_asks.standing(c, asked.json()["requirement_id"]) == "withdrawn"
+        )
+    again = _ask(api, run, revised["id"], own)
+    assert again.status_code == 200, again.text
+    # A draft bound to the other clerk task, which this run does not carry: listed without its task's id.
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE events SET detail=? WHERE action='org_rule.added' AND target=?",
+            (
+                json.dumps({"kind": "internal", "status": "suggested", "clerk_task": elsewhere}),
+                "org_rule:" + revised["id"],
+            ),
+        )
+    listed = api.get("/api/v2/rules?status=suggested&limit=100", headers=headers(run)).json()["rules"]
+    seen = next(r for r in listed if r["id"] == revised["id"])
+    assert seen["bound"] is True and seen["clerk_task"] is None
 
 
 def test_the_constitution_is_peoples_and_its_path_is_kept_for_it(api):
@@ -1855,6 +1923,18 @@ def test_the_constitution_is_peoples_and_its_path_is_kept_for_it(api):
     acting = Identity("human:ana", "owner", via="assistant")
     assert desk.admin(acting) and not desk.locker(acting) and desk.locker(Identity("human:ana", "owner"))
     assert api.patch(f"/api/v2/docs/{doc_id}", headers=headers("ana-test"), json=change).status_code == 200
+    # Moved by a person to the Librarian's index path, the constitution is still not rewritten by index cleanup.
+    now = get(api, f"docs/{doc_id}")["doc"]
+    moved = api.patch(
+        f"/api/v2/docs/{doc_id}",
+        headers=headers("ana-test"),
+        json={"version": now["version"], "path": "_librarian/index.md", "body": now["body"] + "\nSee ops/notes.md\n"},
+    )
+    assert moved.status_code == 200, moved.text
+    kept = moved.json()["doc"]["body"]
+    gone = api.patch(f"/api/v2/docs/{mine['id']}", headers=headers("ana-test"), json={"version": 1, "archived": True})
+    assert gone.status_code == 200, gone.text
+    assert get(api, f"docs/{doc_id}")["doc"]["body"] == kept
 
 
 def test_the_cli_makes_a_rule_asks_its_ok_reads_its_history_and_sends_a_typed_check():
@@ -1918,4 +1998,6 @@ def test_the_cli_makes_a_rule_asks_its_ok_reads_its_history_and_sends_a_typed_ch
         ("POST", "rules/r1", {"version": 2, "exact_check": {}}),
     ]
     assert {"tico_rules_ok", "tico_doc_read"} <= hubtools.COUNSEL_TOOLS
-    assert "tico_rules_make" in {t["name"] for t in hubtools.listing(kind="assistant")}
+    # Filed as the caller through the normal task route: people and agents on their own runs, not the Assistant or BotOps.
+    for kind, offered in (("member", True), ("bot", True), ("assistant", False), ("botops", False)):
+        assert ("tico_rules_make" in {t["name"] for t in hubtools.listing(kind=kind)}) is offered, kind

@@ -276,7 +276,8 @@ function RuleShown({ rule }: { rule: BoundRule }) {
         <LabelValue label="With">{withWho.join(', ') || 'Anyone'}</LabelValue>
         <LabelValue label="Where">{rule.where.join(', ') || 'Everywhere'}</LabelValue>
         <LabelValue label="If broken">{BROKEN_WORDS[rule.if_broken]}</LabelValue>
-        {rule.if_broken === 'escalate' && <LabelValue label="Ask">{rule.reviewer?.name || rule.reviewer?.id || 'Manager'}</LabelValue>}
+        {/* a named reviewer decides its holds whatever If broken says, so it is shown whenever there is one */}
+        {(rule.reviewer || rule.if_broken === 'escalate') && <LabelValue label="Ask">{rule.reviewer?.name || rule.reviewer?.id || 'Manager'}</LabelValue>}
         <LabelValue label="Checked exactly">
           {!c ? (
             'No'
