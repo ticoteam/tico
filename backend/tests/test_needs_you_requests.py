@@ -273,6 +273,8 @@ def test_a_proposal_with_one_deleted_tool_lists_and_grants_the_other_row(api, mo
     dm = post(api, "threads/dm", {"members": ["bot:ops"]})
     creds.setup(api)
     monkeypatch.setattr(api_tools, "send_check", lambda url, hdrs, params: api_tools.Reply(200))
+    task = post(api, "tasks", {"owner": "ben", "title": "Coverage", "body": "Please."}, "ben-test")
+    post(api, f"tasks/{task['id']}/asks", {"to": "ana", "line": "OK Monday", "kind": "ok"}, "ben-test")  # older
     crm = tool(api)["id"]
     ads = tool(api, "Acme Ads", base_url="https://ads.acme.example")["id"]
     for name in ("ADS_LOGIN", "JIRA_LOGIN"):
@@ -285,7 +287,17 @@ def test_a_proposal_with_one_deleted_tool_lists_and_grants_the_other_row(api, mo
         {"key": "JIRA_LOGIN", "tool": crm, "level": "read", "bots": ["cpo"]},
     ]
     proposal = post(api, "tools-chat/proposals", {"thread_id": dm["id"], "rows": rows}, bot)
+    first = get(api, "needs-you?limit=1")
+    assert first["next"] and first["items"][0]["kind"] == "ask"
+    with api.app.state.store.read() as c:
+        before = c.execute("SELECT COALESCE(MAX(seq),0) FROM changes").fetchone()[0]
     assert api.delete(f"/api/v2/api-tools/{ads}", headers=headers()).status_code == 200
+    with api.app.state.store.read() as c:  # its person's Needs you moved
+        told = c.execute("SELECT kind FROM changes WHERE seq>? AND topic='needs' AND subject_id='human:ana'", (before,))
+        assert "key_drop" in {r[0] for r in told}
+    # The page after the first is not cut from the build that still had the deleted tool's row.
+    after = get(api, f"needs-you?limit=1&cursor={first['next']}")
+    assert all(len(it["key_drop"]["rows"]) == 1 for it in after["items"] if it["kind"] == "key_drop")
     card = requests(api, "ana-test")["key_drop"]["key_drop"]
     assert [(r["at"], r["key"]) for r in card["rows"]] == [(1, "JIRA_LOGIN")]
     body = {"keep": [1, 1], "seen": card["losses"]}

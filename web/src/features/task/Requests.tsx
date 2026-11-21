@@ -142,6 +142,8 @@ function KeyDropCard({ it, d }: { it: NeedsYouItem; d: NonNullable<NeedsYouItem[
   const [error, setError] = useState('');
   // A row's place on the card (`at`): Needs you leaves out a row whose tool was deleted.
   const [kept, setKept] = useState<ReadonlySet<number>>(() => new Set(d.rows.map((r) => r.at)));
+  // Only rows still on the card: one whose tool was deleted since it was drawn leaves the list, and what Grant sends.
+  const ticked = d.rows.map((r) => r.at).filter((at) => kept.has(at));
   const once = useOnce(setError);
   const name = keysName(d.rows);
   const flip = (i: number, on: boolean) => setKept((was) => (on ? new Set(was).add(i) : new Set([...was].filter((x) => x !== i))));
@@ -153,7 +155,7 @@ function KeyDropCard({ it, d }: { it: NeedsYouItem; d: NonNullable<NeedsYouItem[
       target={`request:${it.id}`}
       error={error}
       actions={
-        <Button variant="primary" disabled={!kept.size} onClick={once(() => grantKeyDrop(it.id, d.message_id, [...kept].sort((x, y) => x - y), d.losses), keyDropDone, name)}>
+        <Button variant="primary" disabled={!ticked.length} onClick={once(() => grantKeyDrop(it.id, d.message_id, [...ticked].sort((x, y) => x - y), d.losses), keyDropDone, name)}>
           Grant selected
         </Button>
       }

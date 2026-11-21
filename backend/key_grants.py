@@ -308,22 +308,37 @@ def proposed_for(c: Any, vault: Any, who: Any) -> list[Row]:
             thread = _thread(c, m["conversation_id"], owner)
         except Problem:
             continue
-        if (
-            card is not None
-            and who.actor in _members(c, thread)
-            and not _superseded(c, card["rows"])
-            and _refusal(c, vault, who, card["rows"]) is None
-        ):
-            # Who keeps and who loses access, as the tools' grants stand now (Grant refuses when it moved since). A row
-            # whose tool was deleted is left out; each row keeps its place on the card (`at`), which Grant takes.
-            rows = [
-                r | {"at": at, "replaces": _replaced(c, r, owner)}
-                for at, r in enumerate(card["rows"])
-                if c.execute("SELECT 1 FROM tools WHERE id=?", (r["tool_id"],)).fetchone()
-            ]
+        if card is None or who.actor not in _members(c, thread):
+            continue
+        # A row whose tool was deleted is left out (none left: the card is not listed); each row keeps its place on the
+        # card (`at`), which Grant takes. Who keeps and loses access, as the tools' grants stand now.
+        rows = [
+            r | {"at": at, "replaces": _replaced(c, r, owner)}
+            for at, r in enumerate(card["rows"])
+            if c.execute("SELECT 1 FROM tools WHERE id=?", (r["tool_id"],)).fetchone()
+        ]
+        if rows and _refusal(c, vault, who, rows) is None:
             shown = {"losses": losses(c, card["rows"], owner), "message_id": m["id"], "created_at": m["created_at"]}
             out.append(card | {"rows": rows, "by": owner} | shown)
     return out
+
+
+def tool_gone(c: Any, tool_id: str) -> None:
+    """A tool was deleted: each person with a proposal naming it hears that their Needs you moved (its row leaves)."""
+    owner = _owner(c)
+    if not owner:
+        return
+    people: list[str] = []
+    for m in c.execute(
+        "SELECT refs FROM messages WHERE sender_id=? AND kind='notice' AND json_extract(refs,'$.card')=? "
+        "AND json_extract(refs,'$.key_grant.state')='proposed'",
+        (owner, CARD),
+    ).fetchall():
+        card = _card(dict(m))
+        if card and any(r["tool_id"] == tool_id for r in card["rows"]):
+            people.append(str(card["person"]))
+    if people:
+        _events().needs_moved(c, people, "key_drop")
 
 
 def _attach(c: Any, who: Any, vault: Any, row: Row) -> None:

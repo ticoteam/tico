@@ -206,12 +206,14 @@ describe('a key-drop proposal in Needs you', () => {
     await waitFor(() => expect(document.querySelector('.toasts')?.textContent).toContain('Granted, 1 not connected: JIRA_LOGIN for Jira'));
   });
 
-  it('names each row by its place on the card, which a row whose tool was deleted leaves a gap in', async () => {
-    const [, close] = DROP.key_drop?.rows ?? [];
-    waiting = [{ ...DROP, key_drop: { ...DROP.key_drop!, rows: [{ ...close!, at: 2 }] } }];
-    queryClient.setQueryData(flowQuery.queryKey, { count: 1, items: [], requests: waiting, task_ids: [] });
+  it('sends only the rows still on the card when a tool is deleted after it was drawn', async () => {
     show();
-    fireEvent.click(within(await card('Key proposal')).getByRole('button', { name: 'Grant selected' }));
-    await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/tools-chat/proposals/m1/grant', body: { keep: [2], seen: 'l0ss' } }]));
+    const box = await card('Key proposal');
+    const [, close] = DROP.key_drop?.rows ?? [];
+    waiting = [{ ...DROP, key_drop: { ...DROP.key_drop!, rows: [{ ...close!, at: 1 }] } }];
+    queryClient.setQueryData(flowQuery.queryKey, { count: 1, items: [], requests: waiting, task_ids: [] });
+    await waitFor(() => expect(within(box).getAllByRole('checkbox')).toHaveLength(1));
+    fireEvent.click(within(box).getByRole('button', { name: 'Grant selected' }));
+    await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/tools-chat/proposals/m1/grant', body: { keep: [1], seen: 'l0ss' } }]));
   });
 });
