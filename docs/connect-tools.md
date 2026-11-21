@@ -47,9 +47,9 @@ website, webhook, mail). The Tools Owner adds tools from the catalog only, never
      granted is left out, and the run's log says which.
    - From a shell or a chat: `tico tool add <bot> linear --can read,write --env LINEAR_API_KEY --mcp-url https://mcp.linear.app/mcp
      --header 'Authorization: Bearer ${LINEAR_API_KEY}'`. `tico tool update` takes the same three flags. When Tools
-     also grants the bot the same connection (the same variable or address) under that name, the bot.yaml server is used
-     if its key reached the run, else the granted one, and nothing is reported missing; another connection under the
-     same name gets its own (`linear_2`).
+     also grants the bot the same connection (the same address and variable), it is passed once; any other connection,
+     another account on the same address included, is passed under its own name (`linear_2`), and a bot.yaml server
+     whose variable the bot does not hold is reported missing unless a grant brings that very connection.
 2. **Otherwise a small client or skill in the bot's own repository** (`skills/<service>/SKILL.md`, or a script under
    `software/`) that calls the vendor's REST API with a key from `env`. See [A REST skill](#a-rest-skill) below.
 3. **The credential.** `tico credential request <VAR> --for-bot <bot> ...` opens a card in the chat, or

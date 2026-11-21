@@ -49,10 +49,7 @@ const held = (r: ToolIndexRow) => r.kind === 'api' && r.delivery === 'proxy';
 export const deliveryOf = (r: { kind: string; delivery?: string | null; requestable?: boolean }) =>
   r.requestable ? null : r.kind === 'website' ? 'Browser session' : r.kind === 'api' ? (r.delivery === 'proxy' ? 'Proxy-protected' : 'Direct key') : null;
 
-/** A Read grant the proxy holds to reads: every one on a proxied tool, and an agent's on a computer tool unless its row
-    says nothing can (`read_not_enforced`, backend/api_tools.py access_rows). */
-export const proxiedRead = (a: { level: string; kind: string; read_not_enforced?: boolean }, delivery?: string | null) =>
-  a.level === 'read' && (delivery === 'proxy' || (a.kind === 'bot' && !a.read_not_enforced));
+/** A Read the proxy holds to reads, as the run really gets it (`proxied_read`, backend/api_tools.py access_rows). */
 const Proxied = () => <span className="row-ctx">Proxied</span>;
 
 const host = (url: string) => url.replace(/^https?:\/\//, '').split('/')[0];
@@ -365,7 +362,7 @@ function Connection({ row }: { row: VendorRow }) {
   const delivery = deliveryOf(row);
   const who =
     row.access?.map((a) => (
-      <WhoRow key={a.subject} actor={a.kind === 'finance' ? null : a.subject} name={a.name} level={a.level} right={proxiedRead(a, row.delivery) && <Proxied />} />
+      <WhoRow key={a.subject} actor={a.kind === 'finance' ? null : a.subject} name={a.name} level={a.level} right={a.proxied_read && <Proxied />} />
     )) ?? row.who.map((w) => <WhoRow key={w.id} actor={w.kind === 'group' ? null : w.id} name={w.name} />);
   const more = (row.access_total ?? row.who_total) - who.length;
   return (
@@ -598,7 +595,7 @@ function ApiToolView({ id, row }: { id: string; row: ToolIndexRow | undefined })
           name={a.name}
           at={a.last_used_at}
           level={a.level}
-          right={proxiedRead(a, t?.tool.delivery) && <Proxied />}
+          right={a.proxied_read && <Proxied />}
           onLevel={manage && !a.fixed ? (level) => void press('tools.setAccess', { tool: id, subject: a.subject, level }) : undefined}
         />
       ))}

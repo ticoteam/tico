@@ -165,6 +165,10 @@ SCHEMAS['ApiTool'] = obj(
                         'type': 'boolean',
                         'description': 'Finance reads this key; it goes when the source is disconnected, not here',
                     },
+                    'proxied_read': {
+                        'type': 'boolean',
+                        'description': "Read, held to reads by Tico's proxy: the run gets a proxy token, never the key",
+                    },
                 },
                 required=['subject', 'kind', 'name', 'initials', 'level', 'last_used_at'],
             )

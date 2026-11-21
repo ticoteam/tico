@@ -229,11 +229,14 @@ def test_read_on_a_computer_tool_goes_through_the_proxy_unless_a_read_key_or_no_
     assert call(api, "POST", "api/v1/lead/", item["value"], json={"name": "Acme"}).status_code == 403
     _, finance = run(api, "finance")
     assert handed(api, finance)["value"] == FULL  # Read and write on a computer tool: the key itself
-    # A read key of the tool goes instead of the Read and write one.
+    access = lambda: {r["subject"]: r for r in get(api, "api-tools/close-crm")["access"]}  # noqa: E731 - read 3 times
+    assert access()["bot:ops"].get("proxied_read") is True and "proxied_read" not in access()["bot:finance"]
+    # A read key of the tool goes instead of the Read and write one, as it is: no longer through the proxy.
     read = key(api, "close-crm", READ, level="read", env="CLOSE_READ_KEY")
     give(api, read, "bot:ops", "read")
     items = get(api, "credential-runtime", ops["token"])["credentials"]
     assert [(i["env"], i["value"]) for i in items] == [("CLOSE_READ_KEY", READ)]
+    assert "proxied_read" not in access()["bot:ops"]
     # No address to call through: the key itself, and the row is marked.
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM credential_grants WHERE credential_id=?", (read,))

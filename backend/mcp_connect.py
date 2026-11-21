@@ -23,7 +23,8 @@ one per held key whose tool has an MCP address, {name, tool, url, transport, hea
 url is the tool's proxy address with the server's path and the header carries the run's proxy token as `${ENV}`; the
 proxy puts the current access token (refreshed when needed) or the stored token in its place. On computers the url is
 the server's own and the header's `${ENV}` is the key itself. The runner merges these with bot.yaml's servers, bot.yaml
-winning for the same connection under one name, any other taking a name of its own (runner-rs/src/mcp.rs `merge`).
+winning for the same connection (address and variable), any other taking a name of its own (runner-rs/src/mcp.rs
+`merge`).
 
 Legacy SSE servers (the transport before streamable HTTP) are not added here: they stay a bot.yaml `tools:` entry.
 """

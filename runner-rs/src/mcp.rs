@@ -447,15 +447,23 @@ pub fn granted(items: &Value, server: &str, held: &BTreeSet<String>) -> (Vec<Val
     (servers, problems)
 }
 
-/// `problems` without the bot.yaml servers left out for a variable the bot does not hold whose name a granted MCP
-/// tool's server takes: `merge` passes the granted one, so a grant alone is enough and nothing is missing.
+/// A server's connection: its address and the variable its credential comes in. Two servers are one connection only
+/// when both match, so two accounts on one endpoint stay two.
+fn connection(url: &Value, env: &str) -> (String, String) {
+    (text_of(url), env.to_string())
+}
+
+/// `problems` without the bot.yaml servers left out for a variable the bot does not hold whose very connection (its
+/// address and variable) a granted MCP tool brings: `merge` passes the granted one, so nothing is missing.
 pub fn drop_covered(problems: Vec<String>, tools: &Value, granted: &[Value]) -> Vec<String> {
-    let names: HashSet<String> = granted.iter().map(|s| text_of(&s["name"])).collect();
+    let brought: HashSet<(String, String)> = granted
+        .iter()
+        .map(|s| connection(&s["url"], &text_of(&s["env"])))
+        .collect();
     let covered: Vec<String> = declared(tools)
         .iter()
-        .map(|(entry, _)| service_of(entry))
-        .filter(|service| names.contains(&server_name(service)))
-        .map(|service| format!("{service}: MCP server not passed, "))
+        .filter(|(entry, mcp)| brought.contains(&connection(&mcp["url"], &entry_env(entry))))
+        .map(|(entry, _)| format!("{}: MCP server not passed, ", service_of(entry)))
         .collect();
     problems
         .into_iter()
@@ -464,23 +472,21 @@ pub fn drop_covered(problems: Vec<String>, tools: &Value, granted: &[Value]) -> 
 }
 
 /// bot.yaml's servers, then the granted ones, every name from one set (Tico's own `tico` held back). A granted server
-/// that is bot.yaml's same connection under its name (the same variable or address) is passed once, as bot.yaml's;
-/// any other takes the next free name (`linear_2`), so none is dropped.
+/// that is one of bot.yaml's connections (`connection`: address and variable) is passed once, as bot.yaml's; any other
+/// takes the next free name (`linear_2`), so none is dropped.
 pub fn merge(mut servers: Vec<Value>, granted: &[Value]) -> Vec<Value> {
     let mut used = reserved();
     used.extend(servers.iter().map(|s| text_of(&s["name"])));
     for s in granted {
-        let name = text_of(&s["name"]);
-        let same = |d: &Value| {
-            text_of(&d["name"]) == name
-                && ((!text_of(&d["env"]).is_empty() && d["env"] == s["env"])
-                    || d["url"] == s["url"])
-        };
-        if servers.iter().any(same) {
+        let own = connection(&s["url"], &text_of(&s["env"]));
+        if servers
+            .iter()
+            .any(|d| connection(&d["url"], &text_of(&d["env"])) == own)
+        {
             continue;
         }
         let mut s = s.clone();
-        s["name"] = json!(unique_name(&name, &mut used));
+        s["name"] = json!(unique_name(&text_of(&s["name"]), &mut used));
         servers.push(s);
     }
     servers
@@ -935,13 +941,14 @@ mod tests {
             problems[1],
             "Acme Missing: MCP server not passed, its key did not reach this turn"
         );
-        // bot.yaml's entry for the same connection (its variable): bot.yaml's is passed
+        // bot.yaml's entry for the same connection (its address and variable): bot.yaml's is passed
         let declared = vec![
-            json!({"name": "acme_errors", "url": "https://from.bot.yaml/mcp", "env": "ACME_ERRORS_MCP_TOKEN"}),
+            json!({"name": "acme_errors", "env": "ACME_ERRORS_MCP_TOKEN",
+                                   "url": "http://server:8080/api/v2/tool-proxy/acme-errors/mcp"}),
         ];
         let merged = merge(declared, &servers);
         assert_eq!(merged.len(), 2);
-        assert_eq!(text_of(&merged[0]["url"]), "https://from.bot.yaml/mcp");
+        assert_eq!(text_of(&merged[1]["name"]), "acme_docs");
     }
 
     #[test]
@@ -949,10 +956,10 @@ mod tests {
         let yaml = |env: &str, url: &str| json!({"name": "linear", "service": "linear", "url": url, "env": env});
         let declared = vec![yaml("LINEAR_API_KEY", "https://mcp.linear.example/mcp")];
         let granted = [
-            // bot.yaml's own connection, granted too: passed once, as bot.yaml's
-            json!({"name": "linear", "service": "linear", "url": "https://tico.example/p/linear", "env": "LINEAR_API_KEY"}),
-            // another connection under the same name: its own name, never dropped
-            json!({"name": "linear", "service": "linear", "url": "https://mcp.linear.example/mcp/readonly", "env": "LINEAR_RO"}),
+            // bot.yaml's own connection (its address and variable), granted too: passed once, as bot.yaml's
+            json!({"name": "linear", "service": "linear", "url": "https://mcp.linear.example/mcp", "env": "LINEAR_API_KEY"}),
+            // another account on the same endpoint: its own name, never dropped
+            json!({"name": "linear", "service": "linear", "url": "https://mcp.linear.example/mcp", "env": "LINEAR_OPS"}),
         ];
         let names: Vec<String> = merge(declared, &granted)
             .iter()

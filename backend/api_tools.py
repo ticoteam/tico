@@ -628,10 +628,16 @@ def access_rows(c, who, tool_id, admins, auth=None):
     for subject, level in found.items():
         name = label.get(subject) or H.actor_id(subject)
         row = {"subject": subject, **_person(subject, name), "level": level, "last_used_at": used.get(subject)}
-        # Read on a computer tool is held to reads by the proxy; with no API address nothing can, and the row says so.
+        # Read on a computer tool is held to reads by the proxy when only a Read and write key holds it; with no API
+        # address nothing can, and the row says so. A Read key of its own goes to the run as it is.
         if on_computers and level == "read" and subject.startswith("bot:"):
-            if any(computer_way(c, k, subject) == "unenforced" for k in keys.values() if k["ciphertext"] is not None):
+            ways = {computer_way(c, k, subject) for k in keys.values() if k["ciphertext"] is not None}
+            if "unenforced" in ways:
                 row["read_not_enforced"] = True
+            if "proxy" in ways:
+                row["proxied_read"] = True
+        elif not on_computers and level == "read":
+            row["proxied_read"] = True
         out.append(row)
     return sorted(out, key=lambda r: (r["kind"] != "person", r["name"].lower()))
 
@@ -2133,8 +2139,9 @@ def index_rows(c, who, auth, settings, admins):
     view = CN.view(c, auth, who, settings)
     rows = _api_rows(c, who, admins, view)
     covered = {r["service"] for r in rows if r.get("service")}
-    # A tool the reader may not see covers nothing: the list reads as if it did not exist.
-    shown = {r["id"][len("api:") :] for r in rows}
+    # A tool the reader may not see, or sees by name alone (`requestable`), covers nothing: its keys' variables are not
+    # the reader's to know, and the list reads as if it did not exist.
+    shown = {r["id"][len("api:") :] for r in rows if not r.get("requestable")}
     envs = {
         r[0]
         for r in c.execute("SELECT env, tool_id FROM credentials WHERE tool_id IS NOT NULL AND env<>''")

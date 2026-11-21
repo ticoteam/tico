@@ -153,6 +153,31 @@ def test_the_tools_owner_registers_an_agents_mcp_server_only_from_the_catalog_be
     assert register(api, "cpo", run, linear)["task_id"]
 
 
+def test_the_tools_owner_in_its_own_run_adds_or_moves_an_mcp_server_only_from_the_catalog(api):
+    active_botops(api)
+    configure(api, "cpo")
+    put(api, "page-owners/tools", {"bot": "ops"})
+    own = turn_of(api, "ops", requester="bot:ops")  # its own task: no one's rights but its own
+    acme = {"service": "acme", "can": ["read"], "env": "ACME_TOKEN", "mcp": {"url": "https://mcp.acme.example/mcp"}}
+    assert register(api, "cpo", own, acme, expected=403)["error"]["code"] == "catalog_only"
+    machine = runner(api)
+    assign(api, machine, "cpo")
+    linear = {
+        "service": "linear",
+        "can": ["read"],
+        "env": "LINEAR_API_KEY",
+        "mcp": {"url": "https://mcp.linear.app/mcp"},
+    }
+    assert report(api, machine, "cpo", [linear]).status_code == 200
+    tid = next(t["id"] for t in get(api, "bots/cpo/tools")["tools"] if t["service"] == "linear")
+    moved = api.post(
+        f"/api/v2/bots/cpo/tools/{tid}/update", json={"mcp": {"url": acme["mcp"]["url"]}}, headers=headers(own)
+    )
+    assert moved.status_code == 403 and moved.json()["error"]["code"] == "catalog_only", moved.text
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM bot_tool_requests").fetchone()[0] == 0
+
+
 def test_a_tools_owner_run_a_bot_started_keeps_that_bots_rights(api):
     vault(api)
     tid = tool(api)["id"]
@@ -214,6 +239,19 @@ def test_the_assistant_hands_the_tools_owner_the_persons_request_and_it_acts_as_
     with api.app.state.store.read() as c:
         asked = c.execute("SELECT detail FROM events WHERE action='assistant.asked_helper'").fetchone()
     assert json.loads(asked["detail"])["helper"] == "bot:tools-owner"
+
+
+def test_a_tool_a_member_sees_by_name_alone_never_hides_an_agents_declared_tool_from_her(api):
+    vault(api)
+    configure(api)
+    key(api, tool(api, service="close-crm")["id"], SECRET)  # Everyone; Cara holds nothing on it
+    machine = runner(api)
+    assign(api, machine, "ops")
+    entry = {"service": "crm-sync", "can": ["read"], "env": "CLOSE_API_KEY"}  # the tool's key's variable
+    assert report(api, machine, "ops", [entry]).status_code == 200
+    rows = {r["id"]: r for r in get(api, "tool-index", "cara-test")["rows"]}
+    assert rows["api:close-crm"]["requestable"] is True
+    assert "declared:crm-sync" in rows
 
 
 def test_a_bots_tools_tab_lists_what_it_can_use_through_grants_one_row_per_service(api):

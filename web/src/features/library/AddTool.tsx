@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import type { ToolIndexRow, WebsiteTool } from '@/api/schema';
+import type { WebsiteTool } from '@/api/schema';
 import { meQuery } from '@/data';
 import { Button } from '@/kit/Button';
 import { Checkbox } from '@/kit/Checkbox';
@@ -11,7 +11,7 @@ import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
 import { Foot, press, ToolGlyph, trimmed, useGo } from './parts';
 import { ConnectMailboxDialog, MailingAddressDialog, NewAddressDialog, RequestNumberDialog, WebhookDialog } from './ToolDialogs';
-import { addApiTool, catalogQuery, probeMcp, toolsQuery, type CatalogService, type LoginAdd, type McpProbe } from './queries';
+import { addApiTool, catalogQuery, probeMcp, type CatalogService, type LoginAdd, type McpProbe } from './queries';
 import { useAdmin } from './ToolShell';
 
 /* Find or connect (the plan's catalog-first Add): a service from the catalog, then one of its ways in (Sign in with
@@ -103,26 +103,20 @@ function Ways({ service, onWay, onBack, onClose }: { service: CatalogService; on
   );
 }
 
-const NEW = 'new';
-
-/** A key for a catalog service, on the connection the person picks: one of the service's they see, or a new one, made
-    from the catalog's entry only when the key is sent. The key is only sent, never read back. */
+/** A key for a catalog service, on a new connection made from the catalog's entry only when the key is sent. A
+    connection that already has one is replaced from its own page (Replace key). The key is only sent, never read back. */
 function PasteKey({ service, onClose }: { service: CatalogService; onClose: () => void }) {
-  const rows = (useQuery(toolsQuery).data?.rows ?? []).filter((r: ToolIndexRow) => r.kind === 'api' && r.service === service.id && !r.requestable);
-  const [target, setTarget] = useState(rows.length ? '' : NEW);
   const [value, setValue] = useState('');
   const [busy, setBusy] = useState(false);
   const save = async () => {
     setBusy(true);
-    let tool = target.replace(/^api:/, '');
-    if (target === NEW) {
-      try {
-        tool = (await addApiTool({ name: service.name, service: service.id, auth_scheme: service.auth_scheme })).id;
-      } catch (e) {
-        setBusy(false);
-        toast({ text: e instanceof Error && e.message ? e.message : 'Not added', kind: 'failed' });
-        return;
-      }
+    let tool: string;
+    try {
+      tool = (await addApiTool({ name: service.name, service: service.id, auth_scheme: service.auth_scheme })).id;
+    } catch (e) {
+      setBusy(false);
+      toast({ text: e instanceof Error && e.message ? e.message : 'Not added', kind: 'failed' });
+      return;
     }
     const ok = await press('tools.setKey', { tool, value: value.trim() }, 'Not added');
     setBusy(false);
@@ -136,16 +130,8 @@ function PasteKey({ service, onClose }: { service: CatalogService; onClose: () =
       onOpenChange={(o) => !o && onClose()}
       title={`Paste a ${service.name} key`}
       className="connect"
-      actions={<Foot onClose={onClose} label="Save" busy={busy} ready={!!target && !!value.trim()} onGo={() => void save()} />}
+      actions={<Foot onClose={onClose} label="Save" busy={busy} ready={!!value.trim()} onGo={() => void save()} />}
     >
-      {rows.length > 0 && (
-        <Select
-          label="Connection"
-          options={[...rows.map((r) => ({ value: r.id, label: r.name })), { value: NEW, label: 'New connection' }]}
-          value={target}
-          onValueChange={setTarget}
-        />
-      )}
       <Field label="Key" type="password" value={value} onValueChange={setValue} autoComplete="off" autoFocus wide />
     </Dialog>
   );
