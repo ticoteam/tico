@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 Row = dict[str, Any]
 Key = tuple[str | None, str, str | None]  # (visit_id, kind, who)
 
+_INSERT = "INSERT INTO task_wait_spans (id, task_id, visit_id, kind, who, opened_at) VALUES (?,?,?,?,?,?)"
 _OPEN_SQL = "SELECT id, visit_id, kind, who FROM task_wait_spans WHERE task_id=? AND closed_at IS NULL"
 _ENDED_SQL = (
     "SELECT s.id FROM task_wait_spans s LEFT JOIN tasks t ON t.id = s.task_id WHERE s.closed_at IS NULL "
@@ -83,10 +84,7 @@ def _put(conn: "sqlite3.Connection", task_id: str, open_id: str | None, want: Ke
     if open_id:
         conn.execute("UPDATE task_wait_spans SET closed_at=? WHERE id=?", (now, open_id))
     if want:
-        conn.execute(
-            "INSERT INTO task_wait_spans (id, task_id, visit_id, kind, who, opened_at) VALUES (?,?,?,?,?,?)",
-            (H.new_id(), task_id, *want, now),
-        )
+        conn.execute(_INSERT, (H.new_id(), task_id, *want, now))
 
 
 def sync(conn: "sqlite3.Connection", task_id: str, row: Row | None = None, waits: list[W.Wait] | None = None) -> bool:
@@ -138,7 +136,8 @@ _OPEN_OF = (
 def write(conn: "sqlite3.Connection", wanted: dict[str, Key | None], have: dict[str, Key]) -> int:
     """The backstop's writes, after every read of the pass: each task whose span should differ from `have` (its open
     span when the pass began) gets one, unless a write in this pass already moved its span (that write read the task
-    fresh). One read of the open spans, then a statement or two a task. Returns how many spans it changed."""
+    fresh). One read of the open spans, then one statement for the spans it closes and one for those it opens, however
+    many. Returns how many spans it changed."""
     differ = {task_id: want for task_id, want in wanted.items() if want != have.get(task_id)}
     if not differ:
         return 0
@@ -146,12 +145,24 @@ def write(conn: "sqlite3.Connection", wanted: dict[str, Key | None], have: dict[
         str(row[0]): (str(row[1]), (row[2], str(row[3]), row[4]))
         for row in conn.execute(_OPEN_OF, (json.dumps(sorted(differ)),)).fetchall()
     }
+    H = _h()
+    at = H.now()
+    closes: list[tuple[str, str]] = []
+    opens: list[tuple[str, str, str | None, str, str | None, str]] = []
     changed = 0
     for task_id, want in differ.items():
         open_id, now = found.get(task_id, (None, None))
-        if now == have.get(task_id):
-            _put(conn, task_id, open_id, want)
-            changed += 1
+        if now != have.get(task_id):
+            continue
+        changed += 1
+        if open_id:
+            closes.append((at, open_id))
+        if want:
+            opens.append((H.new_id(), task_id, *want, at))
+    if closes:
+        conn.executemany("UPDATE task_wait_spans SET closed_at=? WHERE id=?", closes)
+    if opens:
+        conn.executemany(_INSERT, opens)
     return changed
 
 

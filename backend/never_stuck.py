@@ -227,7 +227,14 @@ def check(
                 else:
                     _keeping_reads(conn, "RELEASE never_stuck_task")
         quiet = quiet + 1 if conn.total_changes == changes else 0
-    done["moved"] += _step(conn, "room", failures, lambda: _requests(conn))
+
+    def room() -> int:
+        # The queued requests are among the open tasks the ladder does not check: read with them, as one read (nothing
+        # more when the ladder's read ahead took them already and nothing was written since).
+        W.prime(conn, others)
+        return _requests(conn)
+
+    done["moved"] += _step(conn, "room", failures, room)
     # Stage rules whose When is a timer: tables only, no model (backend/stage_rule_timers.py).
     timers: Any = stage_rule_timers
     _step(conn, "stage_rules", failures, lambda: timers.sweep(conn, at))

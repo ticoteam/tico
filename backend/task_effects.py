@@ -112,7 +112,7 @@ def filed_ended(conn: "sqlite3.Connection", above: Row, by: str) -> Row:
     from . import task_engine
 
     engine: Any = task_engine
-    return engine.unsnooze(conn, above["id"], by, "What it filed has ended")
+    return engine.unsnooze(conn, above["id"], by, "What it filed has ended", consequence="filed_ended")
 
 
 def _tell_requester(conn: "sqlite3.Connection", after: Row, actor: str, why: str | None) -> None:

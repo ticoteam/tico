@@ -288,6 +288,8 @@ def test_a_messages_task_is_read_from_its_refs_as_the_server_reads_it():
         {"task": [""], "task_id": "t2"},
         {"task_id": ["", "t2"]},
         {"task": 5},
+        {"task": "\u00a0t1\u3000"},
+        {"task": ["\u2003\u205f", "\tt1\n"]},
         {},
     ]
     conn = sqlite3.connect(":memory:")
@@ -296,3 +298,38 @@ def test_a_messages_task_is_read_from_its_refs_as_the_server_reads_it():
             f"SELECT {S._refs_task_sql('m')} FROM (SELECT ? AS refs) m", (json.dumps(refs),)
         ).fetchone()
         assert got == H.refs_task_id(refs), refs
+
+
+def test_what_a_close_an_end_or_run_now_makes_by_itself_is_no_decision_of_its_own(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        parent = H.task_create(c, ANA, "Launch the site", "Soon.", "bot:ops", lint=False)["id"]
+        first = H.task_create(c, "bot:ops", "Check the copy", "x", "bot:ops", parent_id=parent, lint=False)["id"]
+        E.snooze(c, parent, "bot:ops", "Waiting for the check", seen_version=E.task(c, parent)["version"])
+        E.move(c, first, E.CLOSED, ANA, "Not needed")  # the last it filed: ends the snooze that waited for it
+        assert not E.task(c, parent)["snooze"]
+        second = H.task_create(c, "bot:ops", "Check the links", "x", "bot:ops", parent_id=parent, lint=False)["id"]
+        version = E.task(c, parent)["version"]
+        E.move(c, parent, E.CLOSED, ANA, "Dropped", seen_version=version)  # closes the second with it
+        assert E.task(c, second)["status"] == "closed"
+        # Run now on a task its agent snoozed ends the snooze by itself.
+        invoice = H.task_create(c, ANA, "Send the invoice", "Today.", "bot:ops", lint=False)["id"]
+        E.snooze(c, invoice, "bot:ops", "After the bank", seen_version=E.task(c, invoice)["version"])
+        H.task_run_now(c, ANA, invoice)
+        assert not E.task(c, invoice)["snooze"]
+        ended = c.execute(
+            "SELECT json_extract(data, '$.consequence') FROM history_events WHERE kind='unsnooze' AND actor_id=? "
+            "AND subject_id IN (?,?) ORDER BY created_at",
+            (ANA, parent, invoice),
+        ).fetchall()
+        assert [r[0] for r in ended] == ["filed_ended", "run_now"]
+        c.execute(
+            "UPDATE history_events SET created_at=? WHERE actor_id=? AND subject_id IN (?,?,?,?) "
+            "AND coalesce(json_extract(data, '$.move'), '') <> 'new'",
+            (f"{WEEK4}T10:00:00.000000Z", ANA, parent, first, second, invoice),
+        )
+    [week] = rows(api, f"SELECT decisions FROM human_decisions_weekly WHERE week='{WEEK4}'", "ana-test")
+    assert week == {"decisions": 2}  # her two closes
+
+
+WEEK4 = "2030-04-01"
