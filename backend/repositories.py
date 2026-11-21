@@ -752,17 +752,19 @@ def chosen_keeping(c, before, repository, org):
     """The Chosen repos grants a bot keeps when `repository` is added at its own level, and how many it moved from All
     ticked repos (None when it was not there). All ticked repos has one level for every repository, so a bot on it
     moves to Chosen repos with each ticked repository it reaches now at the level it has, Run workflows and Edit
-    workflow files as they are: nothing gets wider or narrower. Its own repository is not a grant; it stays write
-    whatever the mode."""
+    workflow files as they are: nothing gets wider or narrower. Each ticked one All ticked repos covers is kept, one
+    GitHub cannot reach this minute too. Its own repository is not a grant; it stays write whatever the mode."""
     moved = None
     if before['mode'] == 'chosen':
         keep = [Grant(**r) for r in before['chosen']]
     elif before['mode'] == 'all':
         ticked = Reads(c, []).all_ticked(org)
+        access = before['all_access']
+        opted = {r['full_name'].lower(): r for r in before['all_repos']} if access == 'write' else {}
         keep = [
-            Grant(full_name=r['full_name'], access=r['access'], **{flag: True for flag in STORED if r.get(flag)})
-            for r in before['effective']
-            if r['full_name'].lower() in ticked
+            Grant(full_name=name, access=access, **{flag: True for flag in STORED if opted.get(key, {}).get(flag)})
+            for key, name in sorted(ticked.items())
+            if name.split('/')[0].lower() == str(org).lower()
         ]
         moved = len([g for g in keep if g.full_name.lower() != repository.lower()])
     else:
