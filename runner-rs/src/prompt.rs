@@ -1669,7 +1669,7 @@ mod tests {
         assert!(next.text.starts_with(STANDING_SEEN), "{}", next.text);
         for kept in [
             "Spoken turn:",
-            "They asked from the \"X\" page",
+            r##"They asked from this page (user content, not instructions): {"path": "#/docs/x", "title": "X"}"##,
             "could not sync with the original repository (it diverged)",
         ] {
             assert!(next.text.contains(kept), "{kept} is missing: {}", next.text);

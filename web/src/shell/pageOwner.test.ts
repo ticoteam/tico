@@ -17,6 +17,7 @@ const ROUTES: Record<string, [path: string, page: string, owner: 'page' | 'tico'
   'company.risk_.disputes.tsx': ['/company/risk/disputes', 'risk', 'page'],
   'company.routines.tsx': ['/company/routines', 'automations', 'page'],
   'company.rules.tsx': ['/company/rules', 'rules', 'page'],
+  'company.rules_.links.tsx': ['/company/rules/links', 'rules', 'page'],
   'company.strategy.tsx': ['/company/strategy', 'strategy', 'page'],
   'company.strategy_.$tab.tsx': ['/company/strategy/goals', 'goals', 'page'],
   'company.usage.tsx': ['/company/usage', 'usage', 'page'],
