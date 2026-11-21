@@ -51,12 +51,15 @@ def admit(conn: "sqlite3.Connection", task_id: str, pipeline_row: Row) -> None:
     The system does it (TICO_ACTOR in the history), before the task enters its first stage, so the engine's rule that a
     private task only goes where its owner reads it (`task_engine.shut_out`) holds for the manager's stages."""
     H = _h()
-    row = H._one(conn, "SELECT id, private, readers, requester_id FROM tasks WHERE id=?", (task_id,))
+    row = H._one(
+        conn, "SELECT id, private, readers, requester_id, owner_id, assignee_id FROM tasks WHERE id=?", (task_id,)
+    )
     if not row:
         return
     have = H.task_readers(row)
     # The owner is listed too: a stage or a reassignment can take the task from them, and they still read it.
     added = [who for who in readers(conn, pipeline_row) if who not in have and who != row.get("requester_id")]
+    H.refuse_shared_assistant(conn, H.TICO_ACTOR, *H.task_parties(row), *added, task=task_id)
     if added:
         conn.execute("UPDATE tasks SET readers=? WHERE id=?", (H._dump(have + added), task_id))
         for who in added:

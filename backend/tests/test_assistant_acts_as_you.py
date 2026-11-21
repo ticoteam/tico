@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from backend import assistant
+from backend import bot_settings as BS
 from backend import hubdb as H
 from backend.store import Problem
 from backend.tests.helpers import engine as X
@@ -134,6 +135,126 @@ def test_a_run_that_is_not_the_persons_own_chat_lends_nothing(api):
         with pytest.raises(Problem) as refused:
             assistant.instruction(c, who, "turn")
         assert refused.value.code == "on_behalf_of"
+
+
+def test_two_peoples_private_work_stays_apart_and_a_private_handoff_is_filed_as_the_person(api):
+    """One Assistant serves everyone. Ana's own chat neither reads nor writes Ben's private task, and her private handoff
+    is filed as Ana for that one request: the shared Assistant becomes no reader or owner of it, so it still reads none."""
+    ben = post(api, "tasks", {"owner": "ops", "title": "Ben's raise", "body": "Salary.", "private": True}, "ben-test")
+    post(api, "tasks", {"owner": "ops", "title": "Ana's offer", "body": "Offer.", "private": True})
+    r, attempt = assistant_turn(api, "ana-test", text="Hand the payroll check to Ops, privately")
+    token = attempt["token"]
+    get(api, "tasks/" + ben["id"], token, expected=404)
+    post(api, f"tasks/{ben['id']}/comments", {"text": "Seen it"}, token=token, expected=404)
+    assert "Ben's raise" not in json.dumps(get(api, "tasks", token))
+    handed = post(
+        api, "tasks", {"owner": "ops", "title": "Check payroll", "body": "Mine.", "private": True}, token=token
+    )
+    assert handed["requester_id"] == "human:ana" and handed["owner_id"] == "bot:ops" and handed["readers"] == []
+    with api.app.state.store.read() as c:
+        row = H.task(c, handed["id"])
+        assert not H.task_private_readable(c, "bot:assistant", row) and H.task_private_readable(c, "human:ana", row)
+    get(api, "tasks/" + handed["id"], token, expected=404)
+    get(api, "tasks/" + handed["id"], "ben-test", expected=404)
+
+
+def test_a_private_task_is_never_the_shared_assistants_as_owner_or_reader(api):
+    """One Assistant serves everyone, so a private task naming it would be read by its runs for all: refused as owner or
+    reader, on create and on a later change, from the person's own chat and from the person directly."""
+
+    def refused(path, body, token="ana-test"):
+        answer = api.post("/api/v2/" + path, json=body, headers=headers(token))
+        assert answer.status_code >= 400 and "shared Assistant" in answer.json()["error"]["detail"], answer.text
+
+    r, attempt = assistant_turn(api, "ana-test", text="Keep this to yourself")
+    for token in (attempt["token"], "ana-test"):
+        mine = {"title": "Payroll", "body": "Mine.", "private": True}
+        refused("tasks", {**mine, "owner": "assistant"}, token)
+        refused("tasks", {**mine, "owner": "ops", "readers": ["bot:assistant"]}, token)
+    task = post(api, "tasks", {"owner": "ops", "title": "Payroll", "body": "Mine.", "private": True})
+    refused(f"tasks/{task['id']}/readers", {"add": ["assistant"]})
+    refused(
+        f"tasks/{task['id']}/owner",
+        {"owner": "assistant", "version": get(api, "tasks/" + task["id"])["task"]["version"]},
+    )
+    public = post(api, "tasks", {"owner": "assistant", "title": "Tidy notes", "body": "For all.", "private": False})
+    refused("tasks/" + public["id"], {"private": True, "version": get(api, "tasks/" + public["id"])["task"]["version"]})
+
+
+def test_making_a_task_private_never_carries_down_to_a_task_the_shared_assistant_owns(api):
+    """A task's subtasks go private with it; one the shared Assistant owns refuses the whole change, which writes nothing."""
+    parent = post(api, "tasks", {"owner": "ops", "title": "Launch", "body": "Plan.", "private": False})
+    child = post(
+        api,
+        "tasks",
+        {"owner": "assistant", "title": "Launch notes", "body": "Tidy.", "private": False, "parent": parent["id"]},
+    )
+    version = get(api, "tasks/" + parent["id"])["task"]["version"]
+    answer = api.post("/api/v2/tasks/" + parent["id"], json={"private": True, "version": version}, headers=headers())
+    assert answer.status_code >= 400 and "shared Assistant" in answer.json()["error"]["detail"], answer.text
+    with api.app.state.store.read() as c:
+        assert not H.task_private(c, H.task(c, parent["id"])) and not H.task_private(c, H.task(c, child["id"]))
+
+
+def test_the_shared_assistant_is_no_requester_or_assignee_and_reads_no_private_task_through_a_group_or_report(api):
+    """Refused as a private task's requester or assignee (on create, as it goes private, and on the engine's own writes).
+    A group it is in, or a bot that reports to it, lends it no read: those private tasks are filed, and it reads none."""
+    from backend import rooms
+    from backend import task_engine as E
+
+    def refused(write):
+        with pytest.raises(H.Refused, match="shared Assistant"):
+            with api.app.state.store.transaction() as c:
+                write(c)
+
+    refused(lambda c: H.task_create(c, "bot:assistant", "Pay run", "Mine.", "bot:ops", private=True, lint=False))
+    with api.app.state.store.transaction() as c:
+        asked = H.task_create(c, "bot:assistant", "Pay run", "Company.", "bot:ops", private=False, lint=False)["id"]
+        mine = H.task_create(c, "human:ana", "Offer", "Mine.", "bot:ops", private=True, lint=False)["id"]
+    refused(lambda c: H._made_private(c, "human:ana", asked))
+    refused(lambda c: E._write(c, mine, assignee_id="bot:assistant"))
+    # Built-in bots stay outside groups in the app; one placed there by its configuration reads nothing through it.
+    desk = post(api, "groups", {"name": "Desk", "add": {"bots": ["ops"]}})["id"]
+    with api.app.state.store.transaction() as c:
+        BS.update(c, "assistant", {"team": desk})
+        c.execute("UPDATE bot_config SET reports_to='assistant' WHERE bot='finance'")
+    grouped = post(
+        api,
+        "tasks",
+        {"owner": "ops", "title": "Desk offer", "body": "Ours.", "private": True, "readers": ["group:" + desk]},
+    )
+    with api.app.state.store.transaction() as c:
+        books = H.task_create(c, "human:ana", "Books", "Mine.", "bot:finance", private=True, lint=False)
+    with api.app.state.store.read() as c:
+        for row in (H.task(c, grouped["id"]), books):
+            assert not H.task_private_readable(c, "bot:assistant", row)
+            assert H.task_private_readable(c, "bot:finance" if row["id"] == books["id"] else "bot:ops", row)
+        seen = c.execute(
+            f"SELECT id FROM tasks WHERE id IN (?,?) AND {api.app.state.auth.task_sql(c, bot_identity('bot:assistant'))}",
+            (grouped["id"], books["id"]),
+        ).fetchall()
+        assert seen == []
+        # Its company tasks open a room of their own, never a person's chat with it.
+        assert rooms.task_conversation_id(c, api.app.state.auth, "bot:assistant", "human:ana") is None
+
+
+def bot_identity(actor):
+    from backend.auth import Identity
+
+    return Identity(actor, "bot")
+
+
+def test_archiving_an_agent_never_makes_the_shared_assistant_a_private_tasks_requester(api):
+    """Its open tasks' requests go to its successor; a private one, with the shared Assistant as successor, goes to the
+    agent's human owner instead (the default person when it has none)."""
+    from backend import settings_admin
+
+    with api.app.state.store.transaction() as c:
+        mine = H.task_create(c, "bot:finance", "Books", "Private.", "bot:ops", private=True, lint=False)["id"]
+        ours = H.task_create(c, "bot:finance", "Notes", "Company.", "bot:ops", private=False, lint=False)["id"]
+        settings_admin.archive_bot(c, "human:ana", "finance", successor="assistant")
+        assert H.is_human(H.task(c, mine)["requester_id"])
+        assert H.task(c, ours)["requester_id"] == "bot:assistant"
 
 
 def test_a_batch_commit_never_oks_on_an_assistant_walk(api):

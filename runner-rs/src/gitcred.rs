@@ -583,6 +583,70 @@ pub(crate) fn git_environment(env: &mut Env, token: &str, helper: &str) {
     }
 }
 
+/// A turn's git credentials from `granted` (`apply_granted`), with the credential socket when it has one. A personal
+/// claim (crate::sessions::PersonalCopy) gets none: `env` is left with nothing to sign in with, and the runner's grant
+/// goes only into the environment returned, which refreshes the shared checkout before the turn's copy is made.
+pub fn for_turn(
+    env: &mut Env,
+    granted: Result<Value, ApiError>,
+    bot: &str,
+    socket: Option<&Path>,
+    state_dir: &Path,
+    personal: bool,
+) -> Option<Env> {
+    if !personal {
+        apply_granted(env, granted, bot, socket, state_dir);
+        return None;
+    }
+    let mut refresh = env.clone();
+    apply_granted(&mut refresh, granted, bot, None, state_dir);
+    without_credentials(env);
+    Some(refresh)
+}
+
+/// A turn that must push nothing (a person's own Assistant chat, crate::sessions::PersonalCopy): no GitHub token, no
+/// credential socket, no SSH agent or askpass program, no system git config and no credential helper (an empty
+/// `credential.helper` read last clears every helper the user's own config names), so git and gh have nothing to sign in
+/// with. Keys left on disk under the user's HOME are beyond what an environment can take away.
+pub fn without_credentials(env: &mut Env) {
+    let dropped: Vec<String> = env
+        .keys()
+        .filter(|k| {
+            k.starts_with("GH_")
+                || k.starts_with("GITHUB_")
+                || k.starts_with("TICO_GITHUB_")
+                || [
+                    SOCKET_ENV,
+                    "SSH_AUTH_SOCK",
+                    "GIT_ASKPASS",
+                    "SSH_ASKPASS",
+                    "GIT_SSH",
+                    "GIT_SSH_COMMAND",
+                ]
+                .contains(&k.as_str())
+        })
+        .cloned()
+        .collect();
+    for key in dropped {
+        env.remove(&key);
+    }
+    let count: usize = env
+        .get("GIT_CONFIG_COUNT")
+        .and_then(|c| c.parse().ok())
+        .unwrap_or(0);
+    for i in 0..count {
+        let helper = env
+            .get(&format!("GIT_CONFIG_KEY_{i}"))
+            .is_some_and(|k| k.starts_with("credential.") && k.ends_with(".helper"));
+        if helper {
+            env.insert(format!("GIT_CONFIG_VALUE_{i}"), String::new());
+        }
+    }
+    push_config(env, "credential.helper", "");
+    env.insert("GIT_CONFIG_NOSYSTEM".into(), "1".into());
+    env.insert("GIT_TERMINAL_PROMPT".into(), "0".into());
+}
+
 /// Git refuses a work tree another user owns. A Gateway turn's leased user works in the bot's checkout, so the
 /// turn trusts exactly these paths (never `*`), after the entries `git_environment` set.
 pub fn trust_directories(env: &mut Env, paths: &[PathBuf]) {

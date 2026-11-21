@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import replace
 from collections.abc import Iterator
 from itertools import islice
 from sqlite3 import Connection
@@ -37,6 +38,15 @@ def snapshot(c):
     return False
 
 
+def as_the_person(who):
+    """The person a turn of their own Assistant acts for (Auth.assistant_principal), as that person alone, or None for
+    any other caller. Only a write that files their private handoff, and its receipt, uses it: the shared Assistant
+    (`task_actor`) is left out, so it becomes no reader or owner and still reads none of it afterwards."""
+    if who.via == "assistant" and not who.confirmed and who.attempt_id and who.task_actor and H.is_human(who.actor):
+        return replace(who, task_actor="")
+    return None
+
+
 def actor(who):
     other = getattr(who, "task_actor", "")
     return (who.actor, other) if other and other != who.actor else who.actor
@@ -53,7 +63,7 @@ def principals_read(c, principals, row):
     from .task_asks import assistant_for, assistant_reads_own_ok
 
     return (
-        assistant_for(*principals)
+        assistant_for(c, *principals)
         and H.task_private_readable(c, principals[0], row)
         and assistant_reads_own_ok(c, principals[0], principals[1], dict(row)["id"])
     )

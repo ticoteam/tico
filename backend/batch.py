@@ -74,6 +74,9 @@ def _row(c, entry):
             return None
         frm = requirement.get("added_by_id") if requirement.get("visit_id") else task.get("owner_id")
         kind = requirement["kind"]
+        if frm == H.TICO_ACTOR and kind == "ok":
+            # An OK the Assistant asked is filed as Tico's (task_asks.ask_ok): it is from its asker.
+            frm = (task_asks.grant(c, entry["requirement_id"]) or {}).get("asked_by_id") or frm
         row = {
             "key": "ask:" + waiting_on.ask_id(entry),
             "kind": kind,

@@ -364,6 +364,29 @@ def test_a_mail_turn_is_titled_by_the_mail_only_on_a_private_task(api):
         assert task["title"] == ("Winberg Law: Demand letter" if private else flow["name"])
 
 
+def test_a_persons_message_routine_turn_stays_the_assistants_and_runs_as_a_personal_turn(api):
+    """The one private task the shared Assistant may hold: a person's own message routine's turn (as before). Its run is
+    claimed personal for that person, so it works in a throwaway copy with no git credentials."""
+    from backend.tests.helpers.api import assign, claim, ready, runner
+
+    set_templates(api, STAFF)
+    flow = bot_flow(api, "assistant")
+    prompt = run_to_turn(flow, MAIL)["prompt"]
+    with api.app.state.store.transaction() as c:
+        started = AA.start_turn(c, {"id": "auto_mine", "flow": flow}, "run_1", "draft", "bot:assistant", prompt, None)
+        task = H.task(c, started["ref"])
+    assert task["owner_id"] == "bot:assistant" and task["private"]
+    machine = runner(api)
+    with api.app.state.store.read() as c:
+        held = c.execute(
+            "SELECT generation FROM assignments WHERE bot=?", (H.resolve_bot(c, "assistant")["id"],)
+        ).fetchone()
+    assign(api, machine, "assistant", held["generation"] if held else 0)
+    ready(api, machine, ["assistant"])
+    attempt = claim(api, machine)
+    assert attempt["task"]["id"] == task["id"] and attempt["personal"] is True
+
+
 def test_a_mail_turn_title_names_the_sender_when_the_subject_is_empty():
     about = E._turn_about({"message": {"source": "mail", "from": "jo@acme.example", "from_name": "", "subject": "Re:"}})
     assert about == "jo@acme.example"

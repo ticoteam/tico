@@ -24,6 +24,20 @@ def private(api, token="ana-test"):
     ]
 
 
+def test_a_group_reader_never_counts_the_shared_assistant_in_a_private_meetings_audience(live):
+    """A group lends the shared Assistant no private task (hubdb.reader_names), so a meeting-linked private task read by
+    a group it is in is not refused for it (no false 409)."""
+    from backend import bot_settings as BS, meeting_audience
+
+    mid = private(live)
+    desk = post(live, "groups", {"name": "Desk", "add": {"people": ["ana"]}})["id"]
+    with live.app.state.store.transaction() as c:
+        BS.update(c, "assistant", {"team": desk})
+        assert "bot:assistant" not in H.reader_actors(c, {"readers": ["group:" + desk]})
+        ana = Identity("human:ana", "owner", "ana@acme.example")
+        meeting_audience.check(c, live.app.state.auth, ana, "human:ana", live_id=mid, readers=["group:" + desk])
+
+
 def test_removed_human_cannot_replay_join_view(live):
     mid = private(live)
     chunk(live, mid, 1, 0, 1000, "Synthetic restricted transcript")

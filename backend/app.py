@@ -1664,7 +1664,7 @@ def _routine_permissions(auth, delegated_identity):
 
 
 def _mutation(auth, store):
-    def mutate(request, body, fn, check=None, durable=False, retry_body=None):
+    def mutate(request, body, fn, check=None, durable=False, retry_body=None, receipt=None):
         def current_access(c):
             # Privacy can narrow after middleware preflight, including before a cached retry.
             source = getattr(request.state, "privacy_source", request.state.identity)
@@ -1701,6 +1701,8 @@ def _mutation(auth, store):
         money = {"durable": True} if durable else {}
         if retry_body:
             money["retry_body"] = retry_body
+        if receipt:
+            money["receipt"] = receipt
         result = store.mutate(
             request.state.identity,
             request.url.path,
@@ -1720,7 +1722,7 @@ def _mutation(auth, store):
                 extra={**(refusal.get("extra") or {}), "idempotency_refused": True},
             )
         with store.read() as c:
-            privacy.require_payload(c, request.state.identity, result)
+            privacy.require_payload(c, (receipt and receipt(result)) or request.state.identity, result)
         return result
 
     return mutate

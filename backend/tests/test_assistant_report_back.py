@@ -6,6 +6,7 @@ title for a task they can no longer read, and never at the cost of the move."""
 import json
 
 from backend import answers as A
+from backend import auth as auth_module
 from backend import assistant, task_effects
 from backend import task_engine as E
 from backend.store import H
@@ -135,22 +136,28 @@ def review(api, approver):
     return made["requirements"]["Review"][1]
 
 
-def test_a_call_follow_up_reports_in_its_call_not_in_the_assistant_chat(meet):
+def test_a_call_follow_up_reports_in_its_call_not_in_the_assistant_chat(meet, monkeypatch):
     with meet.app.state.store.transaction() as c:
         unrelated_task_managers(c, "ops")
     room = thread(meet)
     call = start_call(meet, room, bots=["ops"])
     join(meet, call["id"], "ben-test")
     _, attempt = assistant_turn(meet, "ben-test", "Have ops find the ship date")
-    # Filed through the call's own route. Its response is refused to the Assistant's turn today (a private task, #4781),
-    # but the follow-up is filed, so the status is not what this test is about.
-    meet.post(
-        f"/api/v2/calls/{call['id']}/follow-ups",
-        json={"ask": "Find the ship date", "bot": "ops"},
-        headers=headers(attempt["token"]),
-    )
+    # Filed through the call's own route, as Ben: the private follow-up's receipt is his, the first time and on a retry,
+    # and the Assistant reads none. The turn itself (its lease) is what the write lock validates.
+    validated = []
+    real = auth_module.validate_identity
+    monkeypatch.setattr(auth_module, "validate_identity", lambda c, who: (validated.append(who), real(c, who))[1])
+    ask = {"ask": "Find the ship date", "bot": "ops"}
+    sent = headers(attempt["token"], key="follow-up-once")
+    filed, again = (meet.post(f"/api/v2/calls/{call['id']}/follow-ups", json=ask, headers=sent) for _ in range(2))
+    assert filed.status_code == 200 and again.json() == filed.json(), (filed.text, again.text)
+    ben = [who for who in validated if who.actor == "human:ben"]
+    assert ben and all(who.task_actor == "bot:assistant" for who in ben), validated
+    task_id = filed.json()["task_id"]
+    assert meet.get("/api/v2/tasks/" + task_id, headers=headers(attempt["token"])).status_code == 404
     with meet.app.state.store.read() as c:
-        task_id = c.execute("SELECT task_id FROM call_follow_ups WHERE call_id=?", (call["id"],)).fetchone()[0]
+        assert not H.task_private_readable(c, "bot:assistant", H.task(c, task_id))
     with meet.app.state.store.transaction() as c:
         said_done(c, task_id, "June 3")
     meet.app.state.calls.sweep()

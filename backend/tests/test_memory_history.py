@@ -4,6 +4,8 @@ import json
 
 import pytest
 
+from backend import bot_settings as BS
+from backend.store import H
 from backend.memory_history import MAX_DOCUMENT_BYTES, MAX_REPORT_BYTES
 from backend.tests.helpers.api import assign, claim, headers, post, ready, runner  # noqa: F401  (fixtures)
 
@@ -56,6 +58,174 @@ def test_a_reported_update_shows_its_source_only_to_readers_of_that_chat(api):
         assert theirs["updates"][0]["source"] is None and "live PR" not in str(theirs["updates"][0]["source"])
     files = api.get("/api/employees/ops/files", headers=headers("ben-test")).json()
     assert "Check the live PR" in files["memory/learnings.md"]
+
+
+def test_a_memory_commit_from_a_persons_own_assistant_chat_is_never_recorded(api):
+    """One Assistant serves everyone. An older runner still runs a person's own chat in the shared checkout: what that
+    turn committed in memory/ is never shown (withdrawn if shown before its run was known), nor that report's documents,
+    and an Assistant commit whose run is not known waits."""
+    machine = runner(api)
+    assign(api, machine, "assistant")
+    ready(api, machine, ["assistant"])
+    post(api, "assistant/messages", {"text": "My salary is 90k"}, "ben-test")
+    attempt = claim(api, machine, "assistant")
+    assert attempt["personal"] is True
+    unknown = {"commits": [commit(subject="Ben earns 90k")]}
+    assert post(api, "bots/assistant/memory/report", unknown, machine["token"])["recorded"] == 0
+    with api.app.state.store.transaction() as c:  # shown by an older server before its run was known
+        c.execute(
+            "INSERT INTO bot_memory_updates(bot,sha,subject,author,committed_at,files,diff,truncated,attempt_id,shared,"
+            "runner_id,reported_at) VALUES('assistant',?,'Ben earns 90k','',?,'[]','',0,'',1,'',?)",
+            (SHA, H.now(), H.now()),
+        )
+    known = {
+        "commits": [commit(attempt=attempt["id"], subject="Ben earns 90k")],
+        "documents": {"memory/learnings.md": "- Ben earns 90k\n"},
+    }
+    assert post(api, "bots/assistant/memory/report", known, machine["token"])["recorded"] == 1
+    shown = history(api, "ana-test", "assistant")
+    assert shown["updates"] == [] and "90k" not in json.dumps(shown)
+
+
+def test_the_assistants_documents_and_rows_of_unknown_runs_are_never_shown(api):
+    """A document names no run, so none of the Assistant's is kept or shown, even from a report of documents alone or
+    stored by an older server; nor is a row an older server stored before its run was known."""
+    machine = runner(api)
+    assign(api, machine, "assistant")
+    alone = {"documents": {"memory/learnings.md": "- Ben earns 90k\n"}}
+    post(api, "bots/assistant/memory/report", alone, machine["token"])
+    with api.app.state.store.transaction() as c:
+        assert c.execute("SELECT count(*) FROM bot_memory_documents WHERE bot='assistant'").fetchone()[0] == 0
+        c.execute(
+            "INSERT INTO bot_memory_documents(bot,path,content,updated_at) VALUES('assistant','memory/learnings.md',?,?)",
+            ("- Ana earns 80k\n", H.now()),
+        )
+        c.execute(
+            "INSERT INTO bot_memory_updates(bot,sha,subject,author,committed_at,files,diff,truncated,attempt_id,shared,"
+            "runner_id,reported_at) VALUES('assistant',?,'Ana earns 80k','',?,'[]','',0,'',1,'',?)",
+            (SHA, H.now(), H.now()),
+        )
+    shown = history(api, "ana-test", "assistant")
+    assert (
+        shown["updates"] == [] and shown["unseen"] == 0 and shown["documents"] == {} and "80k" not in json.dumps(shown)
+    )
+    files = api.get("/api/employees/assistant/files", headers=headers("ana-test")).json()
+    assert "80k" not in json.dumps(files)
+
+
+def test_a_branch_of_the_assistant_and_an_orphaned_run_get_the_same_guard(api):
+    """A bot that writes the Assistant's repository (its branch) keeps and shows no documents either, and a row whose run
+    does not resolve to a run and a room never shows, whoever stored it."""
+    machine = runner(api)
+    assign(api, machine, "cpo")
+    with api.app.state.store.transaction() as c:
+        BS.update(c, "cpo", {"shared_from": "assistant"})
+    post(api, "bots/cpo/memory/report", {"documents": {"memory/learnings.md": "- Ben earns 90k\n"}}, machine["token"])
+    orphan = {"commits": [commit(attempt="not-a-run", subject="Ben earns 90k")]}
+    assert post(api, "bots/cpo/memory/report", orphan, machine["token"])["recorded"] == 0
+    with api.app.state.store.transaction() as c:
+        assert c.execute("SELECT count(*) FROM bot_memory_documents WHERE bot='cpo'").fetchone()[0] == 0
+        c.execute(
+            "INSERT INTO bot_memory_updates(bot,sha,subject,author,committed_at,files,diff,truncated,attempt_id,shared,"
+            "runner_id,reported_at) VALUES('assistant',?,'Ana earns 80k','',?,'[]','',0,'gone-run',1,'',?)",
+            (SHA, H.now(), H.now()),
+        )
+    for bot in ("cpo", "assistant"):
+        shown = history(api, "ana-test", bot)
+        assert shown["updates"] == [] and shown["documents"] == {} and "k\n" not in json.dumps(shown), bot
+
+
+def test_a_bot_on_the_assistants_repository_and_a_sub_thread_of_a_personal_room_get_the_guard(api):
+    """The guard follows the repository, however it is written, and a thread's root: a turn in a sub-thread of a
+    person's own room is personal (its claim says so), and its row never shows; nor one whose root is gone."""
+    from backend import rooms
+
+    machine = runner(api)
+    assign(api, machine, "finance")
+    assign(api, machine, "assistant")
+    ready(api, machine, ["assistant"])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET repo='https://github.com/Acme/emp-assistant.git' WHERE bot='finance'")
+    post(
+        api, "bots/finance/memory/report", {"documents": {"memory/learnings.md": "- Ben earns 90k\n"}}, machine["token"]
+    )
+    assert history(api, "ana-test", "finance")["documents"] == {}
+    post(api, "assistant/messages", {"text": "My salary is 90k"}, "ben-test")
+    attempt = claim(api, machine, "assistant")
+    with api.app.state.store.transaction() as c:
+        room = c.execute(
+            "SELECT m.conversation_id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.id=?",
+            (attempt["job_id"],),
+        ).fetchone()[0]
+        root = H.open_conversation(
+            c,
+            "human:ben",
+            ["human:ben", "bot:assistant"],
+            kind="chat",
+            scope="personal",
+            owner_actor="human:ben",
+            room_key="elsewhere",
+        )["id"]
+        c.execute("UPDATE conversations SET scope='shared',root_id=? WHERE id=?", (root, room))
+        thread = H.conversation(c, room)
+        assert rooms.personal_root(c, thread) and rooms.personal_root(c, {**thread, "root_id": "gone"})
+    sub = {"commits": [commit(attempt=attempt["id"], subject="Ben earns 90k")]}
+    assert post(api, "bots/assistant/memory/report", sub, machine["token"])["recorded"] == 0
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO bot_memory_updates(bot,sha,subject,author,committed_at,files,diff,truncated,attempt_id,shared,"
+            "runner_id,reported_at) VALUES('assistant',?,'Ben earns 90k','',?,'[]','',0,?,1,'',?)",
+            (SHA, H.now(), attempt["id"], H.now()),
+        )
+    assert history(api, "ana-test", "assistant")["updates"] == []
+
+
+def test_a_bot_that_leaves_the_assistants_repository_loses_the_documents_hidden_there(api):
+    """Documents stored while a bot wrote the Assistant's repository (an older server) go when its repository changes away,
+    in the same write, so leaving the group never shows them."""
+    from backend.tests.helpers.shared_bots import revision
+
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET repo='emp-assistant' WHERE bot='finance'")
+        c.execute(
+            "INSERT INTO bot_memory_documents(bot,path,content,updated_at) VALUES('finance','memory/learnings.md',?,?)",
+            ("- Ben earns 90k\n", H.now()),
+        )
+    post(api, "bots/finance/definition", {"repo": "emp-finance", "expected_revision": revision(api, "finance")})
+    assert history(api, "ana-test", "finance")["documents"] == {}
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM bot_memory_documents WHERE bot='finance'").fetchone()[0] == 0
+
+
+def test_a_turn_in_a_sub_thread_of_a_personal_room_gets_no_github_token(api):
+    """The same root-room test as the claim: the Assistant's run in a sub-thread of a person's own room is refused a
+    GitHub token, as the person's turn and as the bot's own wake there."""
+    machine = runner(api)
+    assign(api, machine, "assistant")
+    ready(api, machine, ["assistant"])
+    post(api, "assistant/messages", {"text": "Push my notes"}, "ben-test")
+    attempt = claim(api, machine, "assistant")
+    with api.app.state.store.transaction() as c:
+        message, room = c.execute(
+            "SELECT m.id,m.conversation_id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.id=?",
+            (attempt["job_id"],),
+        ).fetchone()
+        root = H.open_conversation(
+            c,
+            "human:ben",
+            ["human:ben", "bot:assistant"],
+            kind="chat",
+            scope="personal",
+            owner_actor="human:ben",
+            room_key="assistant-root",
+        )["id"]
+        c.execute("UPDATE conversations SET scope='shared',root_id=? WHERE id=?", (root, room))
+    for refs in (None, "{}"):  # the person's own words, then a wake of the bot's own
+        if refs:
+            with api.app.state.store.transaction() as c:
+                c.execute("UPDATE messages SET refs=? WHERE id=?", (refs, message))
+        asked = api.post("/api/v2/github/token", json={"bot": "assistant"}, headers=headers(attempt["token"]))
+        assert asked.status_code == 403 and "token" not in asked.json(), asked.text
 
 
 def test_only_the_assigned_computer_reports_and_runs_must_be_the_bots_own(api):

@@ -51,6 +51,15 @@ def _file(c, by=CARA, title="Review the reseller contract", **more):
     return H.task_create(c, by, title, "The contract is attached.", by, pipeline="legal", lint=False, **more)
 
 
+def test_a_private_pipeline_never_admits_a_task_the_shared_assistant_owns_or_would_read(c):
+    """One Assistant serves everyone: no private pipeline takes in a task it owns, or names it among the readers."""
+    with pytest.raises(H.Refused, match="shared Assistant"):
+        H.task_create(c, CARA, "Review the contract", "Attached.", "bot:assistant", pipeline="legal", lint=False)
+    company = H.task_create(c, CARA, "Review the NDA", "Attached.", CARA, lint=False)
+    with pytest.raises(H.Refused, match="shared Assistant"):
+        PP.admit(c, company["id"], {"manager_id": "bot:assistant"})
+
+
 # ----------------------------------------------------------------------------- the presets
 def test_legal_and_finance_wait_for_their_owner_bots(company):
     """No owner bot, no pipeline (never the General Manager standing in), and no empty Corporate factory. Each appears

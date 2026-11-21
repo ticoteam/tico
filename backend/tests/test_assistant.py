@@ -365,18 +365,13 @@ def test_real_assistant_lease_keeps_actual_bot_private_boundaries_and_revocation
             assert run(conn, 'SELECT id,body FROM tasks WHERE id=?', [private['id']], 500, 5)['rows'] == []
         finally:
             conn.close()
-    own = post(
-        api,
-        'tasks',
-        {'owner': 'bot:assistant', 'title': 'Review the assistant packet', 'body': 'Review it.', 'private': True},
-        token='ben-test',
+    # One Assistant serves everyone: no private task is its own, so none reaches its other runs.
+    own = api.post(
+        '/api/v2/tasks',
+        json={'owner': 'bot:assistant', 'title': 'Review the assistant packet', 'body': 'Review it.', 'private': True},
+        headers=headers('ben-test'),
     )
-    assert get(api, 'tasks/' + own['id'], token)['task']['id'] == own['id']
-    published = api.post(
-        '/api/v2/tasks/' + own['id'], json={'version': own['version'], 'private': False}, headers=headers(token)
-    )
-    assert published.status_code in (403, 422) and published.json()['error']['code'] in ('privacy', 'confirm_required')
-    assert get(api, 'tasks/' + own['id'], 'ben-test')['task']['private']
+    assert own.status_code >= 400 and 'shared Assistant' in own.json()['error']['detail'], own.text
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE attempts SET state='completed' WHERE id=?", (attempt['id'],))
     with pytest.raises(Problem) as revoked:

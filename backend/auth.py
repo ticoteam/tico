@@ -634,8 +634,10 @@ class Auth:
         ):
             return None
         row = c.execute(
+            # The room's root decides, so a sub-thread of the person's own room is theirs too (rooms.personal_root).
             "SELECT v.owner_id,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id "
-            "JOIN conversations v ON v.id=m.conversation_id WHERE j.id=? AND v.scope='personal' "
+            "JOIN conversations c0 ON c0.id=m.conversation_id "
+            "JOIN conversations v ON v.id=COALESCE(NULLIF(c0.root_id,''),c0.id) WHERE j.id=? AND v.scope='personal' "
             "AND v.room_key=? AND m.sender_id=v.owner_id AND json_extract(m.refs,'$.assistant')=1",
             (attempt["job_id"], room_key),
         ).fetchone()
@@ -1092,7 +1094,7 @@ class Auth:
             # The person's own Assistant also reads the tasks filed for the OKs asked of her (task_asks.assistant_reads_own_ok).
             own_oks = (
                 (" OR id IN (" + FILED_FOR_SQL.replace("?", me) + ")")
-                if assistant_for(who.actor, who.task_actor)
+                if assistant_for(c, who.actor, who.task_actor)
                 else ""
             )
             audience += (

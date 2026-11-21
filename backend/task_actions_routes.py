@@ -649,7 +649,10 @@ def register_core(
         if body.for_actor:
             # A bot files a person's own ask: the person asked for it, so it is theirs (Ideas: say it once, #227).
             requester_actor = filed_for(c, who, body.for_actor, body.from_message)
-        if private and actual_bot and actual_bot not in (requester_actor or who.actor, owner):
+        # The person's own Assistant turn files their private handoff as them (privacy.as_the_person): the Assistant
+        # stays out of it, so it is no participant to require.
+        person = privacy.as_the_person(who) if private else None
+        if private and actual_bot and not person and actual_bot not in (requester_actor or who.actor, owner):
             raise Problem("privacy", "The acting bot must be a current participant of the private task", 403)
         if reach_to:
             H.task_reach(c, who.actor, parent, owner)
@@ -682,7 +685,6 @@ def register_core(
             pipeline=body.pipeline,
             number=body.number,
             mover=mover(c, who) or None,
-            own_room=H.actor_id(owner) != settings.assistant_bot,
             public=public,
             same=same,
             follow=body.follow,
@@ -828,8 +830,11 @@ def register_core(
                 (usage_limits.warning(c, owner) or holds.warning(c, owner) or H.setup_hold(c, owner),),
             )
         )
+        # Read back as the person when the task is private now: it may have become private on entering its stage.
+        created = H.task(c, row["id"])
+        reader = privacy.as_the_person(who) if H.task_private(c, created) else None
         return {
-            "task": task_view(H.task(c, row["id"]), c, visible_sql=auth.task_sql(c, who), who=who),
+            "task": task_view(created, c, visible_sql=auth.task_sql(c, reader or who), who=reader or who),
             **({"readback": readback} if readback else {}),
             **ask_ingest.reply(gate),
             **org_rule_check.answer(rule_gate),
@@ -896,8 +901,15 @@ def register_core(
                 request,
                 body,
                 lambda c: task_create(c, request.state.identity, body, ingest=ingest, rule=rc),
+                receipt=handoff_receipt(request.state.identity),
             ),
         )
+
+    def handoff_receipt(who):
+        """Who reads back a task the person's own Assistant turn filed (privacy.as_the_person): the person, when it is
+        private, first time and on a retry; the turn's own identity is still the one validated under the write lock."""
+        person = privacy.as_the_person(who)
+        return (lambda made: person if (made.get("task") or {}).get("private") else None) if person else None
 
     def rule_prepare_task(store_, bot, replay):
         body = replay.get("body") or {}

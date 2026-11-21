@@ -22,6 +22,43 @@ STRATEGY_ROOM = "ceo"
 DOCS_ROOM = "docs"
 
 
+def personal_root(c, conversation):
+    """Whether a room is a person's own (`PERSONAL`) or hangs off one: a sub-thread's root decides, and a root that is
+    gone counts as one. The Assistant's turn there is a personal claim (backend/execution.py)."""
+    if not conversation:
+        return False
+    if conversation.get("scope") == PERSONAL:
+        return True
+    root = conversation.get("root_id")
+    if not root or root == conversation.get("id"):
+        return False
+    found = H.conversation(c, root)
+    return not found or found.get("scope") == PERSONAL
+
+
+def personal_run(c, assistant_bot, bot, conversation, task):
+    """Whether a run is the Assistant's for one person: in their own room or a sub-thread of one (`personal_root`), or on
+    a private task, which the Assistant holds only as a person's own message routine's turn
+    (hubdb.refuse_shared_assistant). Its claim says `personal`, and it is issued no git credential."""
+    return bot == assistant_bot and (personal_root(c, conversation) or bool(task and H.task_private(c, task)))
+
+
+def personal_attempt(c, assistant_bot, attempt_id):
+    """`personal_run` for a run by its id (backend/github_app.py token)."""
+    row = c.execute(
+        "SELECT a.bot_id,a.task_id,m.conversation_id FROM attempts a JOIN jobs j ON j.id=a.job_id "
+        "JOIN messages m ON m.id=j.message_id WHERE a.id=?",
+        (attempt_id,),
+    ).fetchone()
+    return bool(row) and personal_run(
+        c,
+        assistant_bot,
+        row["bot_id"],
+        H.conversation(c, row["conversation_id"]),
+        H.task(c, row["task_id"]) if row["task_id"] else None,
+    )
+
+
 def session_config(conversation, bot, config):
     """The config a turn is handed. In the owner's earlier Strategy Owner chat (a turn queued there before it became
     history) it keys its session on that conversation
@@ -309,8 +346,9 @@ def work_room(c, auth, bot, requester):
 
 
 def task_conversation_id(c, auth, owner, requester):
-    """Conversation id for a new task: the bot's chat room, or None to open a task thread."""
-    if not str(owner).startswith("bot:"):
+    """Conversation id for a new task: the bot's chat room, or None to open a task thread. The Assistant's task always
+    opens its own: its chat rooms are each person's own."""
+    if not str(owner).startswith("bot:") or owner == H.assistant_actor(c):
         return None
     try:
         room = work_room(c, auth, H.actor_id(owner), requester)

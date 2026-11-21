@@ -2490,8 +2490,12 @@ def task_readers(row):
 
 
 def reader_names(conn, actor):
-    """The reader-list values that name `actor`: itself and every group it is in (its own and each one above it)."""
+    """The reader-list values that name `actor`: itself and every group it is in (its own and each one above it). The
+    shared Assistant is named by itself alone: no group lends it a private task (refuse_shared_assistant)."""
     from . import people as P, views
+
+    if actor == assistant_actor(conn):
+        return [actor]
 
     roster = views.roster(conn, shared=True)
     if is_bot(actor):
@@ -2519,7 +2523,10 @@ def reader_actors(conn, row):
 
     out = set()
     for reader in task_readers(row):
-        out |= group_member_actors(conn, reader[6:]) if reader.startswith("group:") else {reader}
+        # A group lends the shared Assistant no private task (reader_names), so it is not among the group's readers.
+        out |= (
+            group_member_actors(conn, reader[6:]) - {assistant_actor(conn)} if reader.startswith("group:") else {reader}
+        )
     return out
 
 
@@ -2538,11 +2545,40 @@ def _reader_target(conn, actor, value):
     return who
 
 
+def assistant_actor(conn=None):
+    """The shared Assistant's actor: the connection's settings' `assistant_bot`, else TICO_ASSISTANT_BOT (as new_bot_id
+    reads it)."""
+    slug = getattr(getattr(conn, "settings", None), "assistant_bot", "") or os.environ.get("TICO_ASSISTANT_BOT", "")
+    return "bot:" + (str(slug).strip() or "assistant")
+
+
+def refuse_shared_assistant(conn, actor, *parties, task=None):
+    """One Assistant serves everyone: a private task is never the shared Assistant's, as owner, requester, assignee or
+    reader, or its background and routine runs would read one person's private work for all. Its person's work goes to a
+    person or another agent. A group it is in or a bot that reports to it lends it no read of a private task
+    (reader_names, task_rights.private_subjects), so those are not refused here."""
+    if assistant_actor(conn) in parties:
+        refuse(
+            conn,
+            actor,
+            "private",
+            "A private task can't be the shared Assistant's: give it to a person or another agent",
+            task=task,
+        )
+
+
+def task_parties(row):
+    """Who holds or reads a task: its owner, requester, assignee and readers (refuse_shared_assistant)."""
+    row = row or {}
+    return (row.get("owner_id"), row.get("requester_id"), row.get("assignee_id"), *task_readers(row))
+
+
 def new_readers(conn, actor, row, names):
     """The readers `names` would add to task `row`: not on its list yet, and not its requester or owner, who read it
     already. A bot adds people and bots only: a group may be the whole company, which only a person opens it to."""
     have = set(task_readers(row)) | {row.get("owner_id"), row.get("requester_id")}
     added = [r for r in dict.fromkeys(_reader_target(conn, actor, v) for v in names) if r not in have]
+    refuse_shared_assistant(conn, actor, *added, task=row.get("id"))
     if is_bot(actor) and any(r.startswith("group:") for r in added):
         refuse(conn, actor, "identity", "Only a person adds a group to Who can see")
     return added
@@ -3925,7 +3961,10 @@ CHECK_MODEL_SQL = (
 
 
 def _made_private(conn, actor, task_id):
-    """A company-visible task goes private because the task above it is: the flag, its record, and the follow-ups."""
+    """A company-visible task goes private because the task above it is: the flag, its record, and the follow-ups. Never
+    one the shared Assistant owns or reads (refuse_shared_assistant)."""
+    row = task(conn, task_id) or {}
+    refuse_shared_assistant(conn, actor, *task_parties(row), task=task_id)
     conn.execute("UPDATE tasks SET private=1,visibility='private' WHERE id=?", (task_id,))
     _task_event(conn, task_id, actor, "private", 0, 1, "")
     _private_followups(conn, task_id)
@@ -4579,6 +4618,7 @@ def task_create(
     trigger_source=None,
     public=False,
     routine=False,
+    routine_for=None,
     same=None,
     occurrence=None,
     occurrence_step=None,
@@ -4802,6 +4842,11 @@ def task_create(
                 f"{', '.join(MOVER_TEAMS)} teams, not by {actor_name(conn, actor)}",
             )
         number = _number_free(conn, actor, number)
+    if private:
+        # A person's message routine's turn (automation_actions.start_turn, `routine_for` that person) stays the
+        # Assistant's, as it was; its runs are personal ones (rooms.personal_run).
+        routine_turn = bool(routine and is_human(routine_for) and target == assistant_actor(conn))
+        refuse_shared_assistant(conn, actor, *(() if routine_turn else (target, requester)), *(readers or ()))
     from contextlib import ExitStack
 
     from . import task_trigger_rules
@@ -4815,7 +4860,7 @@ def task_create(
         dedicated = False
         # A bot's task always gets its own room: its comments, notices and replies stay out of the chat
         # the bot's main session reads. The chat it was started from gets one "Started task" line.
-        # `own_room=False` (the Assistant, whose turns act for the person of the room) keeps the old way.
+        # `own_room=False` keeps the old way: a task filed into the chat it came from, as before task rooms.
         started_in = conversation(conn, conversation_id) if conversation_id and is_bot(target) and own_room else None
         if conversation_id and not private and (not is_bot(target) or not own_room):
             conv = conversation(conn, conversation_id)
@@ -5185,6 +5230,8 @@ def task_update(
 
         if not private and private_pipelines.of_task(conn, task_id):
             refuse(conn, actor, "private", private_pipelines.STAYS_PRIVATE)
+        if private:
+            refuse_shared_assistant(conn, actor, *task_parties(row), task=task_id)
     # The same owner sent in another form (`cmo` for `bot:cmo`) is no reassignment.
     if owner is not None and resolve_actor(conn, owner) == row["owner_id"]:
         owner = None

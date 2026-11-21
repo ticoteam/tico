@@ -298,8 +298,10 @@ def test_make_page_keeps_private_chat_history_and_other_queued_work_out_of_the_t
             (H.new_id(), earlier["conversation_id"], H.now(), H.now()),
         )
         other = H.task_create(
-            c, "human:ana", "Private follow-up", "Private details", "bot:assistant", private=True, lint=False
+            c, "human:ana", "Private follow-up", "Private details", "bot:assistant", private=False, lint=False
         )
+        # One stored before a private task could no longer be the shared Assistant's (hubdb.refuse_shared_assistant).
+        c.execute("UPDATE tasks SET private=1 WHERE id=?", (other["id"],))
     machine, attempt, message = start(api, t["id"])
     assert [m["id"] for m in attempt["history"]] == [message["id"]]
     assert attempt["next_run"] == [] and attempt["notes"] == []

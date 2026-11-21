@@ -1642,10 +1642,15 @@ pub struct Place {
     pub execution_path: PathBuf,
     pub add_dirs: Vec<String>,
     pub rules_digest: String,
-    /// Make page and a retired lane from a previous hub release both use a disposable checkout.
+    /// Make page, a person's own Assistant chat (PersonalCopy) and a retired lane from a previous hub release use a
+    /// disposable checkout: nothing in it is pushed or reported.
     pub disposable: bool,
+    /// A person's own Assistant chat (`personal` on the claim): it runs in its PersonalCopy.
+    pub personal: bool,
     /// The turn is a person's: it goes first for the checkout and never waits for its worktree.
     person: bool,
+    // Fields drop in this order: the copy goes while the lane and the checkout are still held.
+    _copy: Option<PersonalCopy>,
     _lane: OwnedMutexGuard<()>,
     checkout: Option<OwnedMutexGuard<()>>,
     _scratch: Option<MakePageScratch>,
@@ -1681,7 +1686,113 @@ impl Drop for MakePageScratch {
     }
 }
 
+/// Whether the server marked the claim personal (backend/execution.py claim: the Assistant in a person's own room), a
+/// Make page one included: such a turn gets no git credentials (crate::gitcred::for_turn). All but Make page, which
+/// keeps its scratch folder, also run in a PersonalCopy.
+pub fn personal_claim(attempt: &Value) -> bool {
+    truthy(attempt.get("personal"))
+}
+
+/// A personal turn's own copy of the bot's checkout (`personal` on the claim: the Assistant in a person's own room). One
+/// Assistant serves the whole company, so nothing such a turn writes may reach the checkout every other person's turn
+/// reads: it runs in a local clone with no remote, which its environment has no git credentials to push from either
+/// (crate::gitcred::without_credentials), and the clone is removed when the turn ends. Its path is the same for every
+/// turn in the room on this runner's workspace (`projects`), so the harness finds the room's session again, and another
+/// runner on this computer never shares it. The shared checkout is only read.
+pub(crate) struct PersonalCopy(pub PathBuf);
+
+impl PersonalCopy {
+    fn key(projects: &Path, attempt: &Value) -> String {
+        let conversation = &attempt["conversation"];
+        let room = [&conversation["root_id"], &conversation["id"]]
+            .into_iter()
+            .map(text_of)
+            .find(|r| !r.is_empty())
+            .unwrap_or_else(|| text_of(&attempt["id"]));
+        let key = gitrun::sha256_hex(
+            format!(
+                "{}\n{}\n{room}",
+                projects.display(),
+                text_of(&attempt["bot"])
+            )
+            .as_bytes(),
+        );
+        key[..16].to_string()
+    }
+
+    pub(crate) fn path_for(projects: &Path, attempt: &Value) -> PathBuf {
+        std::env::temp_dir().join(format!("tico-personal-{}", Self::key(projects, attempt)))
+    }
+
+    /// Clone `main` (already refreshed for this turn) into the room's path, replacing a copy a stopped turn left.
+    pub(crate) async fn make(
+        main: &Path,
+        projects: &Path,
+        attempt: &Value,
+    ) -> Result<Self, String> {
+        let copy = Self(Self::path_for(projects, attempt));
+        copy.remove();
+        crate::isolation::mkdir(&copy.0, 0o700)
+            .map_err(|e| format!("cannot make this chat's copy of the checkout: {e}"))?;
+        crate::checkout_groups::prepare(copy.0.clone()).await;
+        let env = crate::safegit::clean_environment(&crate::env::process_environment());
+        let (from, to) = (main.display().to_string(), copy.0.display().to_string());
+        // `--no-local`: objects of its own, never hard links into the shared checkout's, and any filesystem.
+        let cloned = g(main, &env, &["clone", "-q", "--no-local", ".", &to], 120)
+            .await
+            .map_err(|f| fault_name(&f))?;
+        if !cloned.ok() {
+            return Err(format!(
+                "cannot copy {from} for this chat: {}",
+                git_reason(&cloned)
+            ));
+        }
+        let remotes = g(&copy.0, &env, &["remote"], 15)
+            .await
+            .map_err(|f| fault_name(&f))?;
+        for remote in remotes.stdout.lines().filter(|r| !r.trim().is_empty()) {
+            let gone = g(&copy.0, &env, &["remote", "remove", remote.trim()], 15)
+                .await
+                .map_err(|f| fault_name(&f))?;
+            if !gone.ok() {
+                return Err(format!(
+                    "cannot take this chat's copy off its remote: {}",
+                    git_reason(&gone)
+                ));
+            }
+        }
+        Ok(copy)
+    }
+
+    fn remove(&self) {
+        match std::fs::remove_dir_all(&self.0) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => log(&format!(
+                "Tico runner: cannot remove a chat's copy of its checkout {}: {e}",
+                self.0.display()
+            )),
+            _ => {}
+        }
+    }
+}
+
+impl Drop for PersonalCopy {
+    fn drop(&mut self) {
+        self.remove();
+    }
+}
+
 impl Place {
+    /// The folders a leased turn user is given, for the primary harness and any fallback alike: the turn's own, the bot's
+    /// checkout and the task's set-up worktrees; a person's own chat its PersonalCopy alone, never the shared checkout.
+    pub fn granted_paths(&self) -> Vec<PathBuf> {
+        if self.personal {
+            return vec![self.execution_path.clone()];
+        }
+        let mut paths = vec![self.main_path.clone(), self.execution_path.clone()];
+        paths.extend(self.add_dirs.iter().map(PathBuf::from));
+        paths
+    }
+
     pub fn has_checkout(&self) -> bool {
         self.checkout.is_some()
     }
@@ -1715,7 +1826,9 @@ impl Runner {
         let lane = turn_lane(attempt);
         let make_page = attempt["make_page"]["task"].is_object();
         let legacy_meeting = lane.starts_with(LEGACY_MEETING_LANE);
-        let task = if !slug_ok(&bot) || make_page {
+        // A person's own Assistant chat, a task's turn there included, works in its PersonalCopy, never a worktree.
+        let personal = personal_claim(attempt) && !make_page;
+        let task = if !slug_ok(&bot) || make_page || personal {
             String::new()
         } else if legacy_meeting {
             private_of(&lane)
@@ -1768,8 +1881,10 @@ impl Runner {
             session_path: None,
             add_dirs: vec![],
             rules_digest: String::new(),
-            disposable: legacy_meeting || make_page,
+            disposable: legacy_meeting || make_page || personal,
+            personal,
             person,
+            _copy: None,
             _lane: lane_guard,
             checkout,
             _scratch: scratch,
@@ -1830,6 +1945,16 @@ impl Runner {
         lost: &AtomicBool,
     ) -> Result<&'static str, String> {
         if place._scratch.is_some() {
+            return Ok("");
+        }
+        if place.personal {
+            // Its own copy, made from the checkout refreshed for this turn; the checkout itself is never its workspace.
+            let copy =
+                PersonalCopy::make(&place.main_path, &self.config.projects_dir(), attempt).await?;
+            place.execution_path = copy.0.clone();
+            place._copy = Some(copy);
+            // No other folder: the claim's worktrees are not this chat's to reach (granted_paths).
+            attempt["_repo_rules"] = json!("");
             return Ok("");
         }
         let mut suffix = "";

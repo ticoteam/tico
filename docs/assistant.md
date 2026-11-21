@@ -124,6 +124,12 @@ Everyone, the owner and administrators included, has the Assistant.
 The team owner and administrators cannot read anyone else's, and no other route reaches the assistant: the ordinary
 chat routes still refuse it (`403`).
 
+One Assistant serves everyone, so nothing a turn in your DM writes in the Assistant's files is kept: the runner runs it in
+a throwaway copy it cannot push from (on Pi, its session goes with the copy, so each turn starts anew), and the server
+records none of its memory/ or knowledge/ in the Assistant's learnings. A private task it hands off for you is filed as you. No private task is ever the Assistant's: not as owner, requester,
+assignee or reader, and a group it is in or a bot that reports to it lends it no read of one; an OK it asks you for is
+filed on a task you hold.
+
 You may let bots you choose view it, read only. On **What it has learned** (your Assistant's settings), the line
 **Bots that can view this chat** says None until you add one: **Add a bot**, type part of its name, pick it. Nobody is
 on it at first, and only you change it, on your own click in Tico: not your Assistant, not BotOps acting for you, not a

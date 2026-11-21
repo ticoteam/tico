@@ -1215,6 +1215,9 @@ class SettingsAdmin:
             from .repositories import note_chosen
 
             note_chosen(c, values["repo"], self.settings.github_owner)  # a person's choice: Tico uses it
+        from . import memory_history
+
+        was = bot in memory_history.guarded(c, self.settings.assistant_bot)
         BS.write(c, bot, declared)
         c.execute(
             "UPDATE bot_config SET description=?,reports_to=?,repo=?,thread_mode=?,"
@@ -1229,6 +1232,7 @@ class SettingsAdmin:
                 bot,
             ),
         )
+        memory_history.left_group(c, bot, self.settings.assistant_bot, was)
         entries = self._entries(c)
         roster = self._roster(c)
         for slug in entries:
@@ -2354,9 +2358,12 @@ def archive_bot(c, actor, bot, successor="", revoke_agent=True):
     for task in c.execute("SELECT id FROM tasks WHERE owner_id=? AND status='open'", (gone,)).fetchall():
         H.attempt(c, H.task_reassign, H.TICO_ACTOR, task["id"], heir, why)
     # Who asked for a task is not the engine's: it changes here, with its line in the task's history.
-    for task in c.execute("SELECT id FROM tasks WHERE requester_id=? AND status='open'", (gone,)).fetchall():
-        H._task_event(c, task["id"], actor, "requester", gone, heir, why)
-        c.execute("UPDATE tasks SET requester_id=?,updated_at=? WHERE id=?", (heir, ts, task["id"]))
+    # The shared Assistant is never a private task's requester (hubdb.refuse_shared_assistant): there its owner asks.
+    owner_heir = H.human_actor(config["owner_id"] or H.default_human(c))
+    for task in c.execute("SELECT * FROM tasks WHERE requester_id=? AND status='open'", (gone,)).fetchall():
+        asker = owner_heir if heir == H.assistant_actor(c) and H.task_private(c, task) else heir
+        H._task_event(c, task["id"], actor, "requester", gone, asker, why)
+        c.execute("UPDATE tasks SET requester_id=?,updated_at=? WHERE id=?", (asker, ts, task["id"]))
     H._recount(c, "bot:" + bot)
     H._recount(c, heir)
     # Its tasks' reconnect cards retired as they changed hands; a card for its own account on another bot's task too.

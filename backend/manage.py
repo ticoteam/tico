@@ -236,8 +236,12 @@ def main(argv=None):
             if not row:
                 raise SystemExit("Unknown bot: " + args.bot)
             config = {**json.loads(row["config"] or "{}"), "repo": repo}
+            from . import memory_history
+
+            was = bot in memory_history.guarded(c, store.settings.assistant_bot)
             BS.write(c, bot, config)
             c.execute("UPDATE bot_config SET repo=?,revision=revision+1 WHERE bot=?", (repo, bot))
+            memory_history.left_group(c, bot, store.settings.assistant_bot, was)
             H.event(c, H.TICO_ACTOR, "bot.repo_set", bot, {"repo": repo})
             from .repositories import note_chosen
 

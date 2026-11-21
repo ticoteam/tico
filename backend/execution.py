@@ -5641,6 +5641,13 @@ class Execution:
                 # with the completion, and the reply lands in that sub-thread (Execution._say_reply).
                 "message": ({**msg, "parent_message_id": (conv or {}).get("parent_message_id")} if msg else msg),
                 "conversation": conversation,
+                # The Assistant in a person's own room serves one person out of a company-wide checkout: the runner keeps
+                # nothing such a turn writes in it (runner-rs/src/sessions.rs PersonalCopy).
+                **(
+                    {"personal": True}
+                    if rooms.personal_run(c, self.store.settings.assistant_bot, row["bot_id"], conv, task)
+                    else {}
+                ),
                 "task": wire_task,
                 **({"github_repository": github_repository} if github_repository else {}),
                 **({"continue_thread": continue_thread} if continue_thread else {}),

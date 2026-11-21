@@ -122,20 +122,26 @@ def test_task_version_conflict_preserves_first_write(api):
 
 def test_the_assistant_chats_only_in_its_own_room_and_people_still_hand_it_work(api):
     """The assistant takes chat in one place, each person's own Assistant room (backend/assistant.py,
-    tested in test_assistant.py). Every other route still refuses it, and a person's task for it
-    still lands in that person's own room."""
+    tested in test_assistant.py). Every other route still refuses it. A company task for it has a room of its own, which
+    its readers read like any task's; a private task's room stays its readers' alone."""
     post(api, "chat/assistant", {"text": "Hello"}, expected=403)
     # `assistant` names the caller's own Assistant (backend/recipients.py), so a message to it lands in their room.
     sent = post(api, "messages", {"to": "assistant", "text": "Hello"}, token="ben-test")
     assert sent["refs"]["assistant"] is True and sent["recipient_id"] == "bot:assistant"
-    ana = post(api, "tasks", {"owner": "assistant", "title": "Ana's review", "body": "Private context."})
-    ben = post(
-        api, "tasks", {"owner": "assistant", "title": "Ben's review", "body": "Private context."}, token="ben-test"
+    ana = post(
+        api, "tasks", {"owner": "assistant", "title": "Ana's review", "body": "Company context.", "private": False}
     )
-    assert ana["conversation_id"] != ben["conversation_id"]
-    get(
-        api, "conversations/" + ana["conversation_id"] + "/messages", "ben-test", expected=404
-    )  # unreadable looks missing
+    ben = post(
+        api,
+        "tasks",
+        {"owner": "assistant", "title": "Ben's review", "body": "Company context.", "private": False},
+        token="ben-test",
+    )
+    assert ana["conversation_id"] != ben["conversation_id"] != sent["conversation_id"]
+    said = get(api, "conversations/" + ana["conversation_id"] + "/messages", "ben-test")
+    assert any("Company context." in m["body"] for m in said)
+    secret = post(api, "tasks", {"owner": "ops", "title": "Ana's offer", "body": "Private context.", "private": True})
+    get(api, "conversations/" + secret["conversation_id"] + "/messages", "ben-test", expected=404)
     post(
         api,
         "messages",
@@ -143,6 +149,16 @@ def test_the_assistant_chats_only_in_its_own_room_and_people_still_hand_it_work(
         token="ben-test",
         expected=403,
     )
+
+
+def test_a_company_task_for_the_assistant_runs_in_its_own_room_not_as_a_personal_turn(api):
+    task = post(api, "tasks", {"owner": "assistant", "title": "Tidy the notes", "body": "For all.", "private": False})
+    machine = runner(api)
+    assign(api, machine, "assistant")
+    ready(api, machine, ["assistant"])
+    attempt = claim(api, machine)
+    assert attempt["task"]["id"] == task["id"] and attempt["conversation"]["id"] == task["conversation_id"]
+    assert "personal" not in attempt and attempt["conversation"]["scope"] != "personal"
 
 
 def test_shared_room_membership_updates_and_revokes_history_access(api):
