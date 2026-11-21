@@ -289,6 +289,35 @@ def test_a_read_callers_mcp_read_over_a_megabyte_still_passes(api):
     assert call(api, "POST", "mcp", token, json=big).status_code == 200
 
 
+def test_an_mcp_read_over_a_megabyte_is_never_counted_as_a_write(api):
+    """The gate reads Read authorization's parse whatever its size, so a Read caller's large MCP read at the tool's MCP
+    address is no write; a Read and write caller's large POST is not parsed at all, so it is recorded unchecked,
+    never judged or counted as a write."""
+    setup(api)
+    judge = api.app.state.judge = Judge()
+    tool(api, scheme="bearer", base="https://mcp.close.example")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tools SET mcp_url='https://mcp.close.example/mcp' WHERE id='close-crm'")
+    full = key(api, "close-crm", FULL)
+    give(api, full, "bot:ops", "read")
+    give(api, full, "bot:finance", "read_write")
+    api.app.state.tool_proxy_transport = httpx.MockTransport(McpVendor())
+    _, ops = run(api)
+    _, finance = run(api, "finance")
+    big = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "search", "q": "x" * (1024 * 1024)}}
+
+    def actions():
+        with api.app.state.store.read() as c:
+            return [r[0] for r in c.execute("SELECT action FROM events WHERE action LIKE 'rules.%' ORDER BY rowid")]
+
+    reader = handed(api, ops)["value"]
+    assert call(api, "POST", "mcp", reader, json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).status_code == 200
+    assert call(api, "POST", "mcp", reader, json=big).status_code == 200
+    assert actions() == []
+    assert call(api, "POST", "mcp", handed(api, finance)["value"], json=big).status_code == 200
+    assert actions() == ["rules.unchecked"] and judge.read == []
+
+
 @pytest.mark.parametrize("sse", [False, True])
 def test_mcp_at_read_passes_set_up_listings_and_read_only_tools_and_refuses_the_rest(api, sse):
     from backend import tool_proxy
@@ -526,8 +555,12 @@ def test_an_agents_write_is_rule_checked_before_the_key_goes_in_logged_once_and_
         last = c.execute("SELECT action FROM events WHERE action LIKE 'rules.%' ORDER BY rowid DESC").fetchone()
     assert last[0] == "rules.refused" and len(logged()) == 3  # judged (the same names: the cached verdict)
     again = {"Authorization": "Bearer " + token, "Idempotency-Key": "lead-2"}
-    for _ in range(2):
-        assert api.post("/api/v2/tool-proxy/close-crm/api/v1/lead/", headers=again, json=note).status_code == 200
+    assert api.post("/api/v2/tool-proxy/close-crm/api/v1/lead/", headers=again, json=note).status_code == 200
+    asked = len(judge.read)
+    # The retry under that key reads a body the judge has not seen, and is still not judged: its event is logged.
+    retried = {"name": "Acme", "owner": "ana"}
+    assert api.post("/api/v2/tool-proxy/close-crm/api/v1/lead/", headers=again, json=retried).status_code == 200
+    assert len(judge.read) == asked
     assert len(logged()) == 4 and len(vendor.seen) == forwarded + 3
     asked = len(judge.read)
     # A destination refused at its check is never judged: the address is checked and pinned first.
