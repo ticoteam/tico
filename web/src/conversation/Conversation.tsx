@@ -17,7 +17,7 @@ import { fromPage, pageAt, type FromPage } from '@/shell/pageOwner';
 import { dot, type DotState } from '@/tico/dot';
 import { usePageName } from '@/tico/pageName';
 import { MessageBones } from './Bones';
-import { Composer, writeDraft } from './Composer';
+import { Composer, readDraft, writeDraft } from './Composer';
 import { dayKey, dayLabel } from './dates';
 import { Face, LiveRow, Message, whoOf } from './Message';
 import { onJump } from './Outline';
@@ -308,10 +308,18 @@ export function Conversation({ id, variant, title, actor, session, from, starter
     // The Agent bar's send that fails (any refusal or fault) keeps no row: its words go back into the box, its draft
     // kept by the agent (`draftId`), so they stay through the bar reading its DM again; the reason shows; and the
     // quote stays unless the DM changed under it (what it answered is in the other one). Send again sends it.
+    // Newer words are never written over: with something typed since, the box keeps it and the toast holds the unsent
+    // words until it is closed, so nothing is lost.
+    let failed = false;
     const onFailed = (e: unknown) => {
-      if (myId && draftId) writeDraft(myId, draftId, text);
-      setFill({ text });
-      toast(refusalFor(e, 'Not sent'));
+      failed = true;
+      const why = refusalFor(e, 'Not sent').name;
+      const empty = !myId || !draftId || !readDraft(myId, draftId).trim();
+      if (empty) {
+        if (myId && draftId) writeDraft(myId, draftId, text);
+        setFill({ text });
+        toast({ text: 'Not sent', ...(why && { name: why }), kind: 'failed' });
+      } else toast({ text: why ? `Not sent (${why})` : 'Not sent', name: text, kind: 'failed', timeout: 0 });
       if (replied && !isDmChanged(e)) setReplying({ id, m: replied });
       onMoved?.('');
     };
@@ -326,6 +334,9 @@ export function Conversation({ id, variant, title, actor, session, from, starter
       ...(toDm && { toDm, onMoved, onFailed }),
       ...(retry && { retry: retry.id }),
       ...(answers && { replyTo: answers, quote }),
+    }).then((sent) => {
+      // the org rules held it: said, as everywhere a message is held
+      if (toDm && !sent && !failed) toast({ text: 'Held for a check' });
     });
   };
 

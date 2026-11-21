@@ -1,7 +1,7 @@
 // The conversation's reads and writes: its timeline (paged backwards), sending, read marks, and the live reply.
 // Messages themselves reach the timeline through live/patch.ts (the built-in `messages` patcher); this file adds
 // what only a conversation knows: a pending send giving way to its echo, and a reply being written (`runs`).
-import { infiniteQueryOptions, queryOptions, type InfiniteData, type QueryKey } from '@tanstack/react-query';
+import { infiniteQueryOptions, queryOptions, type InfiniteData } from '@tanstack/react-query';
 import { api, ApiError } from '@/api/client';
 import type { Assistant, SlackMessage, SlackThread } from '@/api/schema';
 import { keys, queryClient, quietRoot, write } from '@/data';
@@ -99,19 +99,6 @@ export async function decideProposal(aid: string, yes: boolean): Promise<Proposa
 }
 
 /* ---------------------------------------------------------------- sending */
-
-function dropRow(key: QueryKey, rowId: string): void {
-  queryClient.setQueryData<Timeline>(key, (d) => {
-    if (!d) return d;
-    let changed = false;
-    const pages = d.pages.map((p) => {
-      if (!p.messages.some((m) => m.id === rowId)) return p;
-      changed = true;
-      return { ...p, messages: p.messages.filter((m) => m.id !== rowId) };
-    });
-    return changed ? { ...d, pages } : d;
-  });
-}
 
 export interface Send {
   /** The conversation (a thread id; for Tico, the person's assistant room). */
@@ -257,19 +244,17 @@ export async function sendMessage(given: Send): Promise<ChatMessage | null> {
         const out = withRows(d, (rows) => rows.filter((m) => m.id !== tmp));
         return has ? out : withRows(out, (rows) => [...rows, real]);
       },
-      // A failed send is not taken back: it stays, marked, so the words are not lost.
-      revert: (d: Timeline | undefined) => withRows(d, markRow(tmp, 'failed')),
+      // A failed send is not taken back: it stays, marked, so the words are not lost. The Agent bar's goes, its words
+      // back in its box (`onFailed`).
+      revert: (d: Timeline | undefined) => withRows(d, s.toDm ? (rows) => rows.filter((m) => m.id !== tmp) : markRow(tmp, 'failed')),
       offline: 'hold',
     });
     const real = answerOf(answer);
     if (real && movedTo(s, real)) s.onMoved?.(real.conversation_id ?? real.thread_id ?? '');
     return real;
   } catch (e) {
-    // The Agent bar keeps no failed row: its words go back into its box (`onFailed`), for Send again
-    if (s.toDm) {
-      dropRow(timelineKey(s.id), tmp);
-      s.onFailed?.(e);
-    }
+    // The Agent bar keeps no failed row (`revert`): its words go back into its box (`onFailed`), for Send again
+    if (s.toDm) s.onFailed?.(e);
     return null;
   }
 }

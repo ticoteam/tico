@@ -526,9 +526,12 @@ function growthScopeWords(router: AnyRouter, qc: typeof queryClient) {
   const loc = router.state.location;
   if (loc.pathname !== GROWTH) return '';
   const search = loc.search as { segment?: string; month?: string };
-  const seg = search.segment && qc.getQueryData(segmentsQuery.queryKey)?.segments.find((x) => x.slug === search.segment);
   const read = qc.getQueryData(growthReadQuery(search.segment, search.month).queryKey);
-  return `${seg ? seg.name : 'All'}, ${monthName(read?.period ?? search.month ?? lastFullMonth())}`;
+  // the segment as the board names it (its read), else the list's name, else the address's own word: never "All"
+  // for a segment whose names have not loaded
+  const seg = search.segment && qc.getQueryData(segmentsQuery.queryKey)?.segments.find((x) => x.slug === search.segment);
+  const name = search.segment ? (read?.segment?.name ?? (seg ? seg.name : search.segment)) : 'All';
+  return `${name}, ${monthName(read?.period ?? search.month ?? lastFullMonth())}`;
 }
 
 /** Growth changes (channels, customers, sources) are asked of the Growth Manager: its chat opens beside the page. With

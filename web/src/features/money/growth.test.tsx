@@ -226,6 +226,17 @@ describe('Growth on the one read @s400 @s444', () => {
     ]);
   });
 
+  it("leads with the segment as the board's read names it, before the segment list has loaded @4882-S17", async () => {
+    directory(GM());
+    const alpha = { ...READ, scope: 'segment:alpha', segment: { slug: 'alpha', name: 'Alpha', rule: null, value_kind: 'revenue' as const } };
+    serve({ ...OWNED, '/growth/read?scope=segment:alpha': ok(alpha), '/growth/segments': ok({ segments: [] }) });
+    show('/company/growth?month=2026-10&segment=alpha');
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Ask the Growth Manager' }), { target: { value: 'Why is search over?' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect(posts[0]?.body).toMatchObject({ text: 'Alpha, October 2026: Why is search over?' });
+  });
+
   it('says the channel open in its panel as a pointer, with the segment and month read before anything is awaited @4882-S14', async () => {
     directory(GM());
     serve(OWNED);
