@@ -544,3 +544,15 @@ def test_a_rules_history_pages_its_versions_apart_from_its_due_dates_and_its_rec
     cara = get(api, f"rules/{made['id']}/history", token="cara-test")
     assert cara["holds"] == [] and len(cara["versions"]) == 2
     assert api.get("/api/v2/rules/nope/history", headers=headers("ana-test")).status_code == 404
+
+
+def test_a_company_without_a_constitution_gets_it_on_its_first_rules_read(api):
+    """A company that never ran a start since the constitution shipped has none: the first Rules read makes it, once."""
+    from backend import docs
+
+    org(api)
+    with api.app.state.store.read() as c:
+        assert docs.constitution_id(c) is None
+    first = get(api, "rules/counts")["constitution"]
+    assert first and first["title"] == "Constitution"
+    assert get(api, "rules/counts", token="cara-test")["constitution"] == first

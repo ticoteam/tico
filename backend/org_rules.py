@@ -2278,7 +2278,16 @@ def install(app, store, auth, mutate):
         ),
     )
     def rules_counts(request: Request):
-        """The tab counts: internal and external rules in force, the due dates kept, the suggestions waiting."""
+        """The tab counts: internal and external rules in force, the due dates kept, the suggestions waiting, and the
+        constitution. A company that has none yet (one that never completed a start since it shipped) gets it here, on
+        the read the Rules page and `tico rules make` make first: one key's lookup when it is there."""
+        from . import docs
+
+        with store.read() as c:
+            missing = not docs.constitution_id(c)
+        if missing:
+            with store.transaction() as c:
+                ensure_constitution(c)
         with store.read() as c:
             return counts(c, auth, request.state.identity)
 

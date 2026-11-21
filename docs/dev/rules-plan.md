@@ -146,8 +146,9 @@ rule_due_status(due_date_id, due_on, satisfied_by, via routine|person, task_id?,
 - **Checked exactly:** `exact_check` is one stateless typed check on one action, adopted with exact params (unknown
   keys are refused; a rule with a `toward_scope` takes none). `org_rule_check.exact_check(c, author, action, params)` returns the rules in force whose check the
   params break; the sentence stays the rule people read.
-- **Constitution:** a locked doc (five articles and the order of law), made once a company is completed (whoever owns
-  Rules) or at the first "Make this a rule". It is recorded by id (`rules.constitution`) and read by it; its path,
+- **Constitution:** a locked doc (five articles and the order of law), made once at a completed company's start
+  (whoever owns Rules), or else on the first `GET /api/v2/rules/counts`, the read the Rules page and `tico rules make`
+  make before a clerk task is filed. It is recorded by id (`rules.constitution`) and read by it; its path,
   `rules/constitution.md`, is reserved. Only people lock, change or restore a locked doc, or the
   recorded constitution locked or not: not a bot, not an Assistant or BotOps acting for a person unconfirmed.
 - **Make this a rule** is a normal private task (`POST /api/v2/tasks`, every filing check) for the Rules page's owner,
