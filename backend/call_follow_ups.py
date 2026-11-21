@@ -385,7 +385,7 @@ def install(app: FastAPI, auth: Any, write: Any) -> None:
         def receipt(made: Any) -> Identity | None:
             """Who reads the receipt back: the person, for their own Assistant turn; for the Assistant's lease from this
             call, the person the follow-up is filed for (file_task: its requester), whose work it is. A call's turn
-            otherwise reads no private task (rooms.run_person)."""
+            otherwise reads no private task (rooms.run_scope)."""
             if person:
                 return person
             with auth.store.read() as c:

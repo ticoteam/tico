@@ -1087,14 +1087,21 @@ class Auth:
             f"OR (coalesce(private,1)=0 AND (owner_id IN {parties} OR requester_id IN {parties} OR ({clear}))))"
         )
         if who.attempt_id and H.assistant_actor(c) in (who.actor, who.task_actor):
-            # One Assistant serves everyone and acts with the rights of the person its run works for (rooms.run_person),
-            # in either form of its lease (its own run, or a person's own chat as them): it reads exactly the private
-            # tasks that person reads, by their own rule, and none in a run for nobody (hubdb.task_private_readable).
-            person = rooms.run_person(c, who.attempt_id)
-            try:
-                theirs = self.task_sql(c, self.identity_for_actor(c, person)) if person else "0"
-            except Problem:
-                theirs = "0"  # the person is gone or barred: they read nothing now
+            # One Assistant serves everyone, in either form of its lease (its own run, or a person's own chat as them),
+            # by the same rule as hubdb.task_private_readable (rooms.run_scope): in a person's own chat it reads the
+            # private tasks they read, by their own rule; a routine turn its own task alone; a run whose person may no
+            # longer sign in nothing at all; a run for nobody no private task.
+            kind, value = rooms.run_scope(c, who.attempt_id)
+            if kind == "gone":
+                return "0"
+            theirs = "0"
+            if kind == "person":
+                try:
+                    theirs = self.task_sql(c, self.identity_for_actor(c, value))
+                except Problem:
+                    return "0"  # gone since: nothing
+            elif kind == "task":
+                theirs = f"id={A.q(value)}"
             audience = f"((coalesce(private,1)=0 AND {audience}) OR (coalesce(private,1)<>0 AND ({theirs})))"
         elif who.task_actor:
             actor = A.q(who.task_actor)
@@ -1369,12 +1376,12 @@ class Auth:
 
     def run_viewer(self, c, who):
         """Whom a lease of the shared Assistant reads as, in either form (its own run, or a person's own chat as them):
-        the person the run works for (rooms.run_person), by their own rights. Anyone else reads as themselves."""
+        the person whose own chat it is (rooms.run_scope), by their own rights. Anyone else reads as themselves."""
         if not (who.attempt_id and H.assistant_actor(c) in (who.actor, who.task_actor)):
             return who
-        person = rooms.run_person(c, who.attempt_id)
+        kind, person = rooms.run_scope(c, who.attempt_id)
         try:
-            return self.identity_for_actor(c, person) if person else who
+            return self.identity_for_actor(c, person) if kind == "person" else who
         except Problem:
             return who
 

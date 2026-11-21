@@ -66,18 +66,6 @@ def _routine_person(c, auto, actor):
     return H.human_actor(row["id"]) if row else None
 
 
-def _last_editor(c, auto):
-    """Who last saved the routine as it runs: its newest active version's author, else whoever made it."""
-    row = (
-        c.execute(
-            "SELECT actor FROM automation_versions WHERE automation_id=? AND status='active' ORDER BY n DESC LIMIT 1",
-            (auto["id"],),
-        ).fetchone()
-        or c.execute("SELECT created_by_id AS actor FROM automations WHERE id=?", (auto["id"],)).fetchone()
-    )
-    return row["actor"] if row else None
-
-
 def _chain_refs(auto):
     return {"automation_chain": list(auto.get("chain") or [])}
 
@@ -733,16 +721,10 @@ def start_turn(
     where = bookkeeper.filing(c, H.bot_actor(bot))
     # A company-visible task's title is in every teammate's lists, where the mail is not: it keeps the automation's
     # name, and the bot may retitle it in words the company may read.
-    privately = private_readers.will_be_private(c, actor, H.bot_actor(bot), None, None, where[0] or H.GENERAL_PIPELINE)
-    if about and privately:
+    if about and private_readers.will_be_private(
+        c, actor, H.bot_actor(bot), None, None, where[0] or H.GENERAL_PIPELINE
+    ):
         title = str(about)[:300]
-    routine_for = _routine_person(c, auto, actor) if H.bot_actor(bot) == H.assistant_actor(c) else None
-    if privately and routine_for and _last_editor(c, auto) != routine_for:
-        # Its turn is the person's own, read with their rights (rooms.run_person): only while they set it as it is.
-        raise ValueError(
-            f"{name} was last changed by someone other than {H.actor_name(c, routine_for)}: "
-            "they save it again to run it as theirs"
-        )
     # A scheduled run waits as the routine's settings say (backend/wake_presets.py); its wake names the routine, which
     # the repeat guard reads.
     release = release_of(c, auto, run_id)
@@ -762,7 +744,7 @@ def start_turn(
         stage=where[1],
         routine=True,
         # The person a message routine works for keeps its private turn the Assistant's (hubdb.refuse_shared_assistant).
-        routine_for=routine_for,
+        routine_for=_routine_person(c, auto, actor) if H.bot_actor(bot) == H.assistant_actor(c) else None,
         trigger="other",
         trigger_source="automation:" + auto["id"],
         occurrence=marker,

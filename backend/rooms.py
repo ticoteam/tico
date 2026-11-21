@@ -43,36 +43,40 @@ def personal_run(c, assistant_bot, bot, conversation, task):
     return bot == assistant_bot and (personal_root(c, conversation) or bool(task and H.task_private(c, task)))
 
 
-def run_person(c, attempt_id):
-    """The person a run works for, or "": the person its private task was filed for (its requester: a message routine's
-    turn), else the owner of the person's own room, or of the room a sub-thread hangs off, it runs in; "" too when that
-    person has left or may not sign in now (auth.standing). A call's turn has none. Kept for the read (read_cache)."""
-    return read_cache.value(c, ("run_person", attempt_id), lambda: _run_person(c, attempt_id), True)
+def run_scope(c, attempt_id):
+    """What a run of the shared Assistant reads of private tasks, as (kind, value). "person": everything that person reads,
+    by their own rule, in their own room or a sub-thread of it (their own chat with it). "task": its own routine turn
+    task alone, the one filed for a person's message routine. "gone": nothing at all, its person may no longer sign in
+    (auth.standing). "": no person, so no private task; a call's turn is one. Kept for the read (read_cache)."""
+    return read_cache.value(c, ("run_scope", attempt_id), lambda: _run_scope(c, attempt_id), True)
 
 
-def _run_person(c, attempt_id):
+def _run_scope(c, attempt_id):
     from .auth import standing
 
-    person = _run_owner(c, attempt_id)
-    human = H.human(c, H.actor_id(person)) if H.is_human(person) else None
-    return person if human and not standing(c, human["id"]) else ""
-
-
-def _run_owner(c, attempt_id):
     row = c.execute(
         "SELECT a.task_id,m.conversation_id FROM attempts a JOIN jobs j ON j.id=a.job_id "
         "JOIN messages m ON m.id=j.message_id WHERE a.id=?",
         (attempt_id,),
     ).fetchone()
     if not row:
-        return ""
+        return ("", "")
     task = H.task(c, row["task_id"]) if row["task_id"] else None
-    if task and H.task_private(c, task) and H.is_human(task["requester_id"]):
-        return task["requester_id"]
+    if (
+        task
+        and task["owner_id"] == H.assistant_actor(c)
+        and H.task_private(c, task)
+        and H.is_human(task["requester_id"])
+    ):
+        return ("task", task["id"])
     room = H.conversation(c, row["conversation_id"]) or {}
     if room.get("scope") != PERSONAL and room.get("root_id") and room["root_id"] != room.get("id"):
         room = H.conversation(c, room["root_id"]) or {}
-    return str(room.get("owner_id") or "") if room.get("scope") == PERSONAL else ""
+    person = str(room.get("owner_id") or "") if room.get("scope") == PERSONAL else ""
+    if not H.is_human(person):
+        return ("", "")
+    human = H.human(c, H.actor_id(person))
+    return ("person", person) if human and not standing(c, human["id"]) else ("gone", "")
 
 
 def personal_attempt(c, assistant_bot, attempt_id):

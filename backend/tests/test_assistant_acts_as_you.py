@@ -162,6 +162,55 @@ def test_two_peoples_private_work_stays_apart_and_a_private_handoff_is_filed_as_
     get(api, "tasks/" + handed["id"], token)  # her run reads what she reads, by id and in her lists
     assert handed["id"] in json.dumps(get(api, "tasks", token))
     get(api, "tasks/" + handed["id"], "ben-test", expected=404)
+    # In her own chat it reads what she reads, by her own rule: a private task Cara shared with her too.
+    shared = post(
+        api,
+        "tasks",
+        {"owner": "ops", "title": "Desk offer", "body": "Ours.", "private": True, "readers": ["human:ana"]},
+        token="cara-test",
+    )
+    company = post(api, "tasks", {"owner": "ops", "title": "Tidy the wiki", "body": "For all.", "private": False})
+    get(api, "tasks/" + shared["id"], token)
+    assert shared["id"] in json.dumps(get(api, "tasks", token))
+    # Ben's own chat does not, and once Ben may not sign in, his run reads nothing at all, company work included.
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "thread-ana"}, token=r["token"])
+    post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {"outcome": "completed", "text": "Done", "last_seq": 0},
+        token=r["token"],
+    )
+    say(api, "What's on my plate?", "ben-test")
+    bens = post(api, "jobs/claim", {}, token=r["token"])["attempt"]
+    get(api, "tasks/" + shared["id"], bens["token"], expected=404)
+    get(api, "tasks/" + company["id"], bens["token"])
+    with api.app.state.store.transaction() as c:
+        doc = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
+        for person in doc["people"]:
+            if person.get("id") == "ben":
+                person["sign_in"] = False
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(doc),))
+    get(api, "tasks/" + company["id"], bens["token"], expected=404)
+    assert get(api, "tasks", bens["token"])["tasks"] == []
+
+
+def test_a_task_read_in_the_persons_own_chat_shows_what_they_read_under_it(api):
+    """The task's own view reads what it names (its subtasks, what it waits on) as the request reads: in Ana's own chat,
+    by her rights, so her private subtask shows; Ben's chat sees "a private task" no more than he does."""
+    parent = post(api, "tasks", {"owner": "ops", "title": "Launch", "body": "Plan.", "private": False})
+    with api.app.state.store.transaction() as c:
+        child = H.task_create(c, "human:ana", "Launch budget", "Mine.", "bot:ops", parent_id=parent["id"], private=True)
+        handed = H.task_create(c, "human:ana", "Launch venue", "Mine.", "bot:ops", private=True)
+        c.execute(  # the launch handed this on (task_calls: the tasks it filed)
+            "INSERT INTO links(id,from_task_id,to_task_id,kind,created_at) VALUES(?,?,?,'handoff',?)",
+            (H.new_id(), parent["id"], handed["id"], H.now()),
+        )
+    r, attempt = assistant_turn(api, "ana-test", text="What's under the launch?")
+    shown = get(api, "tasks/" + parent["id"], attempt["token"])
+    assert child["id"] in json.dumps(shown["children"]), shown["children"]
+    assert handed["id"] in json.dumps(shown["task"]["filed"]), shown["task"]["filed"]
+    bens = get(api, "tasks/" + parent["id"], "ben-test")
+    assert child["id"] not in json.dumps(bens["children"]) and handed["id"] not in json.dumps(bens["task"]["filed"])
 
 
 def test_a_private_task_is_never_the_shared_assistants_as_owner_or_reader(api):

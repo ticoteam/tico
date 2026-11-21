@@ -599,7 +599,10 @@ def readers(auth):
         value = plain_view(row, c)
         if c is None:
             return value
-        viewer = (who.task_actor or who.actor) if who is not None else None
+        # What it reads (the tasks it filed, its stage inputs) as the request reads (task_privacy.actor: a lease of the
+        # shared Assistant by its run's scope); what it may do stays the acting identity's (`who`).
+        principals = privacy.actor(who) if who is not None else None
+        viewer = principals[-1] if isinstance(principals, tuple) else principals
         # Another task it names is shown under the reader's whole rule, the one a direct read of that task uses.
         rule = auth.task_sql(c, who) if who is not None and visible_sql == "1" else visible_sql
         from . import waiting_on

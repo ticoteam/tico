@@ -49,7 +49,7 @@ def as_the_person(who):
 
 def actor(who):
     """Whom a request reads as: its actor, or a person and whom they act as. A lease of the shared Assistant, in either
-    form, reads as the person its run works for (hubdb.RunPrincipal, rooms.run_person)."""
+    form, reads by its run's scope (hubdb.RunPrincipal, rooms.run_scope)."""
     other = getattr(who, "task_actor", "")
     shared = H.assistant_actor() if getattr(who, "attempt_id", "") else ""
     me = H.run_principal(who.actor, who.attempt_id) if shared and who.actor == shared else who.actor

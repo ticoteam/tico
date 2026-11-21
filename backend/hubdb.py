@@ -2376,14 +2376,18 @@ def task_private_readable(conn, actor, row):
     row = dict(row)
     nobody = False
     if isinstance(actor, RunPrincipal):
-        # One Assistant serves everyone and acts with the rights of the person its run works for (rooms.run_person): it
-        # reads exactly what that person reads, by their own rule (page copies included); a run for nobody reads no
-        # private task (below).
-        from .rooms import run_person
+        # One Assistant serves everyone (rooms.run_scope): in a person's own chat it reads exactly what they read, by
+        # their own rule (page copies included); a routine turn reads its own task and no other private one; a run whose
+        # person may no longer sign in reads nothing; a run for nobody reads no private task (below).
+        from .rooms import run_scope
 
-        person = run_person(conn, actor.attempt)
-        if person:
-            return task_private_readable(conn, person, row)
+        kind, value = run_scope(conn, actor.attempt)
+        if kind == "person":
+            return task_private_readable(conn, value, row)
+        if kind == "gone":
+            return False
+        if kind == "task" and row.get("id") == value:
+            return True
         actor, nobody = str(actor), True
     from . import counsel, teammate_access
 
