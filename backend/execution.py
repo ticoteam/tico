@@ -4176,6 +4176,8 @@ class Execution:
                     ).fetchone()
                 )
                 retry_state = state = "queued" if row["state"] == "leased" and not acted else "uncertain"
+                if row["state"] == "leased":
+                    card_slot.release(c, row["id"], row["job_id"])  # never started: its folded slot jobs wait again
                 jobs = c.execute(
                     "SELECT j.id,j.message_id,t.status AS task_status FROM jobs j "
                     "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
@@ -4455,6 +4457,7 @@ class Execution:
                         in_reply_to=msg["id"],
                         refs={"turn_id": row["id"]},
                     )
+        card_slot.release(c, row["id"], row["job_id"])  # its folded slot jobs wait again, whatever the turn's own job
         requeued = c.execute(
             "UPDATE jobs SET state=? WHERE attempt_id=? AND state IN ('leased','running','input') RETURNING id",
             (state, row["id"]),
@@ -4683,11 +4686,6 @@ class Execution:
         for i, row in enumerate(candidates):
             if failed is not None and failed.full():
                 break  # CLAIM_HOLDS jobs are held by this claim: it picks no more
-            # A card's slot starts from its stage wake, which the checks below judge (backend/card_slot.py); a wake
-            # this claim passed over or that waits out its claim error leaves `row` to start alone.
-            wake = card_slot.carrier(c, row, people_only)
-            if wake["id"] == row["id"] or not (wake["id"] in skip or claim_waiting(c, wake, loads)):
-                row = wake
             if (
                 row["id"] in skip
                 or (failed is not None and row["bot_id"] in failed.bots)
@@ -5079,7 +5077,7 @@ class Execution:
     def start_claimed(self, c, who, body, runner, row, *, people_only=False):
         """The preparation of the job a claim hands out: its turn, attempt, inputs and hand-out. The claim runs it in a
         savepoint of its own (claim), so an error here rolls back only this job's writes. `people_only`: the computer
-        holds every start but a person's own message (held_starts), so a card slot's run takes that message alone."""
+        holds every start but a person's own message (held_starts), so a card slot's run takes nothing else."""
         row = {"slot": None, **dict(row)}
         msg = H.message(c, row["message_id"])
         from . import threads
@@ -5374,10 +5372,6 @@ class Execution:
             since=epoch["updated_at"] if epoch else None,
         )["messages"]
         history = lane_history(c, row["bot_id"], followed, history, conv, lane)[-HISTORY_PAGE:]
-        if people_only and row["slot"]:
-            # A run that may not take the card's stage work does not read it waiting either.
-            pending = card_slot.pending_wakes(c, [m["id"] for m in history])
-            history = [m for m in history if m["id"] not in pending]
         conversation = thread_payload(c, conv, msg)
         if conversation and conversation.get("audience_class") == "public":
             from . import threads
@@ -5584,6 +5578,11 @@ class Execution:
         make_page_task = self.auth.task(c, acting or bot_who, making_page["task"]) if making_page else None
         if making_page:
             history = [msg]
+        if row["slot"]:
+            # The slot's work this run was not handed (over the cap, or a run that takes none) waits for the slot's
+            # next run: it is not read here either (backend/card_slot.py).
+            pending = card_slot.pending(c, row["slot"], [m["id"] for m in history])
+            history = [m for m in history if m["id"] not in pending]
         chat_goal = current(c, conv["id"])
         if chat_goal and (making_page or chat_goal["bot"] != row["bot_id"]):
             # Another bot's turn in the room (the requester answering) works without the owner's goal.
@@ -6360,25 +6359,35 @@ class Execution:
         read them again (Dev 543). Each joins this turn as an input given in its prompt, already acknowledged, and its
         job settles with the turn (complete); a lane's other work, a command and a redirect keep their own turns. A card
         slot's run (backend/card_slot.py) takes its slot's queued jobs alone, at every claim, and records what it was
-        handed (`slot_rev`). On a computer that holds every start but a person's own (`people_only`), a slot's run
-        takes no other job: its stage work waits as any held start does."""
+        handed (`slot_rev`). A run whose job carries nothing else (`card_slot.carries_more`: a people-only claim, a
+        redirect, a claim-error probe) takes no other job; the slot's work waits as any held start does."""
         from . import threads
 
         slot = row["slot"]
-        if slot and people_only:
+        if slot and not card_slot.carries_more(c, row, people_only):
             card_slot.handed(c, row["id"], [row["message_id"]])
             return msg
-        rows = c.execute(
-            "SELECT m.*,j.id AS job_id FROM jobs j JOIN messages m ON m.id=j.message_id "
-            "JOIN conversations cv ON cv.id=m.conversation_id "
-            "WHERE j.bot_id=? AND j.state='queued' AND j.held=0 AND j.redirect=0 AND j.id<>? "
-            "AND m.deleted_at IS NULL AND coalesce(json_extract(m.refs,'$.command'),0)!=1 "
-            # A run for a thread's waiting notes carries them at its own claim, so it is never folded.
-            f"AND coalesce(json_extract(m.refs,'$.wake'),'')<>'{threads.NOTE_WAKE}' "
-            # Nor one waiting out its claim error, as the claim would not start it either.
-            f"AND NOT {CLAIM_WAITING_SQL} AND {queued_task_sql()}=? AND (? IS NULL OR j.slot=?) ORDER BY m.rowid",
-            (row["bot_id"], row["id"], H.now(), task_id, slot, slot),
-        ).fetchall()
+        rows = (
+            c.execute(
+                "SELECT m.*,j.id AS job_id FROM jobs j JOIN messages m ON m.id=j.message_id "
+                "WHERE j.slot=? AND j.state='queued' AND j.held=0 AND j.redirect=0 AND j.id<>? "
+                "AND m.deleted_at IS NULL AND coalesce(json_extract(m.refs,'$.command'),0)!=1 "
+                f"AND NOT {CLAIM_WAITING_SQL} ORDER BY m.rowid LIMIT ?",
+                (slot, row["id"], H.now(), 2 * card_slot.FOLD_MAX),
+            ).fetchall()
+            if slot
+            else c.execute(
+                "SELECT m.*,j.id AS job_id FROM jobs j JOIN messages m ON m.id=j.message_id "
+                "JOIN conversations cv ON cv.id=m.conversation_id "
+                "WHERE j.bot_id=? AND j.state='queued' AND j.held=0 AND j.redirect=0 AND j.id<>? AND j.slot IS NULL "
+                "AND m.deleted_at IS NULL AND coalesce(json_extract(m.refs,'$.command'),0)!=1 "
+                # A run for a thread's waiting notes carries them at its own claim, so it is never folded.
+                f"AND coalesce(json_extract(m.refs,'$.wake'),'')<>'{threads.NOTE_WAKE}' "
+                # Nor one waiting out its claim error, as the claim would not start it either.
+                f"AND NOT {CLAIM_WAITING_SQL} AND {queued_task_sql()}=? ORDER BY m.rowid",
+                (row["bot_id"], row["id"], H.now(), task_id),
+            ).fetchall()
+        )
         lines, folded, handed, size = [], [], [row["message_id"]], 0
         audience = thread_payload(c, H.conversation(c, msg["conversation_id"]), msg)["audience_class"] if slot else None
         for queued in rows:
@@ -7698,8 +7707,9 @@ class Execution:
                     (task_id, actor, row["started_at"] or row["created_at"]),
                 ).fetchone()
                 deferred = bool(task and task["status"] in H.ACTIVE_STATUSES and not outcome)
-            # A card slot's job folded into a turn refused before it started was never read: it waits again.
-            deferred = deferred or bool(skipped and incoming["slot"])
+            # A card slot's job folded into a turn that never started (stopped, refused) was never read: it waits again,
+            # and the stop or refusal is the picked job's alone.
+            deferred = deferred or bool(row["state"] == "leased" and incoming["slot"])
             state = (
                 "queued"
                 if deferred
@@ -7732,6 +7742,8 @@ class Execution:
             for extra in c.execute(
                 "SELECT j.id,j.message_id FROM jobs j JOIN messages m ON m.id=j.message_id "
                 "WHERE j.bot_id=? AND j.state='queued' AND m.kind='notice' AND j.slot IS NULL "
+                # A thread's private-notes wake carries them at its own claim (threads.NOTE_WAKE).
+                "AND coalesce(json_extract(m.refs,'$.wake'),'')<>'thread_notes' "
                 "AND m.conversation_id=? AND m.created_at<=? AND j.id<>?",
                 (row["bot_id"], conv["id"], row["created_at"], row["job_id"]),
             ).fetchall():

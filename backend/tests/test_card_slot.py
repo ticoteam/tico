@@ -6,6 +6,7 @@ run that ends after the card moved on or changed hands settles none of the work 
 
 Synthetic rows only: the fictional company's bots `ops` and `cpo`, and Ana."""
 
+import json
 from types import SimpleNamespace
 
 from backend import paid_renders, task_wakes
@@ -18,6 +19,7 @@ from backend.tests.helpers.api import assign, claim, post, ready, runner
 ANA = "human:ana"
 QUESTION = "Did you get my OK on the storyboard?"
 ANSWER = "Yes, I have your OK."
+DRAFT = "Draft cut: PP-06 v1."
 VIDEO = (
     {"name": "Storyboard", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
     {"name": "Draft", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
@@ -73,8 +75,11 @@ class Agent:
 
     def finish(self, run):
         body, said = run["message"]["body"], []
-        if run["message"]["refs"].get("wake") == "task_turn" and "Draft" in body:
+        if "Draft" in body:  # handed the card's Draft turn, as its message or folded into its prompt
             self.render(run)  # the same shot again is the one it already paid for (backend/paid_renders.py)
+            with self.api.app.state.store.transaction() as c:
+                room = c.execute("SELECT conversation_id FROM messages WHERE id=?", (run["message"]["id"],)).fetchone()
+                H.say(c, "bot:ops", ANA, DRAFT, conversation_id=room[0])
             self.drafts += 1
         if QUESTION in body:
             self.answers += 1
@@ -84,18 +89,37 @@ class Agent:
 
 
 def _delivered(api, task, asked):
-    """What was kept: (paid shots started for the card, answers posted in its room, every question delivered)."""
+    """What was kept: (drafts delivered in the card's room, paid shots started for it, answers posted there, every
+    question delivered)."""
     with api.app.state.store.read() as c:
+
+        def posted(text):
+            return c.execute(
+                "SELECT count(*) FROM messages WHERE conversation_id=? AND sender_id='bot:ops' AND body LIKE ?",
+                (task["conversation_id"], f"%{text}%"),
+            ).fetchone()[0]
+
         shots = c.execute(
             "SELECT count(*) FROM events WHERE action='paid_render.started' AND json_extract(detail,'$.task')=?",
             (task["id"],),
         ).fetchone()[0]
-        answers = c.execute(
-            "SELECT count(*) FROM messages WHERE conversation_id=? AND sender_id='bot:ops' AND body LIKE ?",
-            (task["conversation_id"], f"%{ANSWER}%"),
-        ).fetchone()[0]
         read = all(c.execute("SELECT delivered_at FROM messages WHERE id=?", (i,)).fetchone()[0] for i in asked)
-    return shots, answers, read
+        return posted(DRAFT), shots, posted(ANSWER), read
+
+
+def _queue(api, task, sender, body, **refs):
+    """A message to `ops` in the card's room as its writer queues it (enqueue), past the wake rules a say goes through."""
+    from backend.enqueue import enqueue_stored
+
+    mid = H.new_id()
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
+            "VALUES(?,?,?,'bot:ops','notice',?,?,?)",
+            (mid, task["conversation_id"], sender, body, json.dumps({"task": task["id"], **refs}), H.now()),
+        )
+        enqueue_stored(c, mid)
+    return mid
 
 
 def _jobs(api, *ids):
@@ -117,13 +141,13 @@ def test_ok_then_chat_is_one_run_with_the_draft_and_the_answer(api):
     asked = _ask(api, task)
     agent = Agent(api, machine)
     run = agent.start()
-    assert run["message"]["id"] == _wake(api, task, draft)  # the stage's work is the run, the question rides in it
-    assert QUESTION in run["message"]["body"]
+    assert run["message"]["id"] == asked  # a person's chat goes first, and the stage's work rides in its run
+    assert "Draft" in run["message"]["body"]
     agent.finish(run)
     assert claim(api, machine) is None  # nothing left for a second run
     assert (agent.drafts, agent.charges, agent.answers) == (1, 1, 1)
-    assert set(_jobs(api, asked, run["message"]["id"]).values()) == {"completed"}
-    assert _delivered(api, task, [asked]) == (1, 1, True)
+    assert set(_jobs(api, asked, _wake(api, task, draft)).values()) == {"completed"}
+    assert _delivered(api, task, [asked]) == (1, 1, 1, True)
 
 
 def test_chat_then_ok_answers_in_its_own_run_and_drafts_once_after(api):
@@ -141,12 +165,12 @@ def test_chat_then_ok_answers_in_its_own_run_and_drafts_once_after(api):
     assert work["message"]["id"] == wake
     agent.finish(work)
     assert (agent.drafts, agent.charges, agent.answers) == (1, 1, 1)
-    assert _delivered(api, task, [asked]) == (1, 1, True)
+    assert _delivered(api, task, [asked]) == (1, 1, 1, True)
 
 
 def test_ok_and_chat_across_a_runner_restart(api):
     machine, task = _card(api)
-    draft = _ok(api, task)
+    _ok(api, task)
     agent = Agent(api, machine)
     first = agent.start()
     agent.render(first)  # the paid shot went out before the restart
@@ -158,12 +182,11 @@ def test_ok_and_chat_across_a_runner_restart(api):
     with api.app.state.store.transaction() as c:
         assert [d["state"] for d in api.app.state.execution.auto_reconcile(c)] == ["queued"]
     again = agent.start()
-    assert again["message"]["id"] == _wake(api, task, draft)
-    assert QUESTION in again["message"]["body"]
+    assert again["message"]["id"] == asked and "Draft" in again["message"]["body"]  # the resumed turn rides along
     agent.finish(again)
     assert claim(api, machine) is None
     assert (agent.drafts, agent.charges, agent.answers) == (1, 1, 1)
-    assert _delivered(api, task, [asked]) == (1, 1, True)
+    assert _delivered(api, task, [asked]) == (1, 1, 1, True)
     with api.app.state.store.read() as c:
         rev = c.execute("SELECT slot_rev FROM jobs WHERE id=?", (again["job_id"],)).fetchone()[0]
         assert rev == c.execute("SELECT rowid FROM messages WHERE id=?", (asked,)).fetchone()[0]
@@ -254,7 +277,7 @@ def test_chat_then_ok_both_queued_before_the_first_claim(api):
         agent.finish(agent.start())
     assert claim(api, machine) is None
     assert (agent.drafts, agent.charges, agent.answers) == (1, 1, 1)
-    assert _delivered(api, task, [asked]) == (1, 1, True)
+    assert _delivered(api, task, [asked]) == (1, 1, 1, True)
     assert _jobs(api, _wake(api, task, draft)) == {_wake(api, task, draft): "completed"}
 
 
@@ -286,22 +309,29 @@ def test_a_stage_wake_waiting_out_its_claim_error_leaves_the_question_to_run_alo
     assert _jobs(api, wake)[wake] == "queued"
 
 
-def test_a_lease_refused_after_the_card_moved_puts_its_folded_question_back(api):
+def test_a_lease_refused_after_the_card_moved_puts_its_folded_work_back(api):
     machine, task = _card(api)
-    _ok(api, task)
-    asked = _ask(api, task)
+    draft = _ok(api, task)
+    note = _queue(api, task, "bot:cpo", "The music is licensed.")
     run = claim(api, machine)
-    assert QUESTION in run["message"]["body"]  # folded into the Draft run, not started yet
+    assert run["message"]["id"] == _wake(api, task, draft) and "licensed" in run["message"]["body"]
     with api.app.state.store.transaction() as c:
         E.move(c, task["id"], "Storyboard", ANA)  # moved back before the computer started it
     post(api, f"attempts/{run['id']}/started", {"thread_id": "t"}, machine["token"], expected=409)
     post(api, f"attempts/{run['id']}/complete", {"outcome": "interrupted", "last_seq": 0}, machine["token"])
-    assert _jobs(api, asked)[asked] == "queued"
-    agent = Agent(api, machine)
-    again = agent.start()
-    assert QUESTION in again["message"]["body"]
-    agent.finish(again)
-    assert _delivered(api, task, [asked])[1] == 1
+    assert _jobs(api, run["job_id"], note) == {run["job_id"]: "canceled", note: "queued"}
+
+
+def test_a_stop_before_start_ends_the_picked_job_and_puts_the_folded_work_back(api):
+    machine, task = _card(api)
+    draft = _ok(api, task)
+    asked = _ask(api, task)
+    run = claim(api, machine)
+    assert run["message"]["id"] == asked and "Draft" in run["message"]["body"]
+    post(api, "bots/ops/stop", {"run_id": run["id"]})
+    post(api, f"attempts/{run['id']}/complete", {"outcome": "interrupted", "last_seq": 0}, machine["token"])
+    wake = _wake(api, task, draft)
+    assert _jobs(api, asked, wake) == {asked: "canceled", wake: "queued"}
 
 
 def test_a_card_comment_through_a_thread_carrier_joins_the_slot(api):
@@ -314,7 +344,40 @@ def test_a_card_comment_through_a_thread_carrier_joins_the_slot(api):
         carried = threads._carrier(c, H.conversation(c, task["conversation_id"]), said, "bot:ops", "mention", None)
         assert c.execute("SELECT slot FROM jobs WHERE id=?", (carried,)).fetchone()[0] == f"{draft}:ops"
     run = Agent(api, machine).start()
-    assert run["message"]["id"] == _wake(api, task, draft) and QUESTION in run["message"]["body"]
+    assert QUESTION in run["message"]["body"] and "Draft" in run["message"]["body"]  # one run for both
+    assert set(_jobs(api, carried, _wake(api, task, draft)).values()) <= {"running", "input"}
+
+
+def test_a_carrier_of_a_message_some_reader_may_not_read_gets_no_slot(api):
+    from backend import threads
+
+    _, task = _card(api)
+    _ok(api, task)
+    with api.app.state.store.transaction() as c:
+        said = H.say(c, ANA, "human:ben", "Kept from the room.", conversation_id=task["conversation_id"])
+        c.execute("UPDATE messages SET legacy_audience=? WHERE id=?", ('["human:ana","bot:ops"]', said["id"]))
+        carried = threads._carrier(c, H.conversation(c, task["conversation_id"]), said, "bot:ops", "mention", None)
+        assert carried and c.execute("SELECT slot FROM jobs WHERE id=?", (carried,)).fetchone()[0] is None
+
+
+def test_a_slot_run_leaves_a_threads_notes_wake_for_its_own_run(api):
+    machine, task = _card(api)
+    _ok(api, task)
+    notes = _queue(api, task, H.TICO_ACTOR, "Notes wait in this thread.", wake="thread_notes")
+    agent = Agent(api, machine)
+    agent.finish(agent.start())
+    assert _jobs(api, notes)[notes] == "queued"
+
+
+def test_unsettled_older_work_keeps_the_card_on_the_older_path(api):
+    _, task = _card(api, name="Video")
+    asked = _ask(api, task)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='uncertain' WHERE id=?", (asked,))  # a run held for review
+        c.execute("UPDATE pipelines SET name='Video Production' WHERE id='video'")
+    later = _ask(api, task)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT slot FROM jobs WHERE id=?", (later,)).fetchone()[0] is None
 
 
 def test_a_reassign_during_older_work_stays_on_the_older_path_until_it_settles(api):
@@ -353,7 +416,9 @@ def test_a_slot_run_takes_a_capped_batch_and_the_rest_wait(api, monkeypatch):
     first = _ask(api, task)
     second = post(api, f"conversations/{task['conversation_id']}/messages", {"text": "And the music?"})["message"]["id"]
     run = claim(api, machine)
-    assert _jobs(api, first, second) == {first: "input", second: "queued"}
+    assert run["message"]["id"] == first and "Draft" in run["message"]["body"]  # the wake fills the batch
+    assert _jobs(api, second)[second] == "queued" and "music" not in run["message"]["body"]
+    assert second not in {m["id"] for m in run["history"]}  # nor read in the run's history
     with api.app.state.store.read() as c:
         rev = c.execute("SELECT slot_rev FROM jobs WHERE id=?", (run["job_id"],)).fetchone()[0]
         assert rev == c.execute("SELECT rowid FROM messages WHERE id=?", (first,)).fetchone()[0]
