@@ -1940,29 +1940,6 @@ BRIEF_FIELDS = (
 )
 
 
-def _mentions(c, who):
-    """The open @s of `who` (open_mentions: by a person, not yet answered) that they may still read, oldest first."""
-    from . import open_mentions
-
-    rows = open_mentions.rows(c, who.actor)
-    # Each mention's message, rooms and references read together, not a few statements per mention.
-    stored = H.prime_messages(c, [row["id"] for row in rows])
-    privacy.prime_messages(c, list(stored.values()))
-    from . import threads
-
-    # Each row names its room's root already (open_mentions), so the rooms are not read again for it.
-    threads.prime_members(c, who, [row["conversation_id"] for row in rows], roots={row["root_id"] for row in rows})
-    seen, out = set(), []
-    for row in rows:
-        if row["id"] in seen:
-            continue
-        seen.add(row["id"])
-        message = H.message(c, row["id"])
-        if message and privacy.message_readable(c, privacy.actor(who), message):
-            out.append(row)
-    return out
-
-
 def _briefs(c, ids, visible):
     """The brief task (docs/dev/pipelines-v3-cutover.md, "The task as JSON") of each id, read together."""
     from . import task_reads
@@ -1977,20 +1954,19 @@ def _briefs(c, ids, visible):
 def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
     """Needs you, one list for a person (docs/dev/pipelines-v3-cutover.md, "Needs you"), oldest first:
     `waiting_on.needs(person)` (every OK and question asked of them, a private task they must let someone see, every
-    Paused cause they can fix; never a task that only is theirs) and every @ of them by a person, on a task or in a
-    channel, until they reply (C28). Only what the
-    person may read is listed. Each item has `kind` (task, ask, paused, mention, question: a bot's ❓), `id`, `line`, `since` and the brief
-    `task`; an ask also has the fields of its requirement in `to_leave` (`ask`). `count_only` leaves out the brief
+    Paused cause they can fix; never a task that only is theirs) and a bot's ❓ for them. An @ alone is not here: it is
+    in Threads' Needs attention (C28). Only what the person may read is listed. Each item has `kind` (task, ask, paused,
+    question: a bot's ❓), `id`, `line`, `since` and the brief `task`; an ask also has the fields of its requirement in `to_leave` (`ask`). `count_only` leaves out the brief
     task and the ask's fields: a count needs neither. `task_view` is the callers' and not read here. An ask the person
     snoozed for themselves (backend/ask_snoozes.py) is out until its time; `snoozed` "only" lists just those, each with
     its `snoozed_until`."""
-    from . import question_marks, teammate_access, waiting_on
+    from . import question_marks, waiting_on
 
     if not H.is_human(who.actor):
         return []
     visible = auth.task_sql(c, who)
     raw = list(waiting_on.needs(c, who.actor, snoozed))
-    mentions = _mentions(c, who) if snoozed != "only" else []  # an @ is not snoozed: only asks are
+    mentions = []  # an @ is not a wait: it is in Threads' Needs attention, not here (#4762)
     wanted = {i["task_id"] for i in raw if i.get("task_id")} | {t for i in raw for t in i.get("tasks") or ()}
     wanted |= {m["task_id"] for m in mentions if m.get("task_id")}
     readable = _readable_task_ids(c, visible, wanted)
@@ -2031,11 +2007,7 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
                 **({"snoozed_until": it["snoozed_until"]} if it.get("snoozed_until") else {}),
             }
         )
-    # A person the reader may not see is named only to someone in the same conversation (teammate_access.Known).
-    known = teammate_access.Known(c, who, auth)  # reads nothing until it is asked
     # A bot's ❓ for the reader (backend/question_marks.py): its bot and its line, on a task's chat or in a direct chat.
-    # It stands for its message, so the same message is not listed again as an @.
-    marked = set()
     # Their messages and chats in one read each, not one per ❓.
     stored = H.prime_messages(c, {it["message_id"] for it in questions})
     chats = question_marks.chat_rows(c, {m["conversation_id"] for m in stored.values()})
@@ -2051,7 +2023,6 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
             continue
         if not question_marks.readable(c, who.actor, message, chats.get(str(message["conversation_id"])), reader):
             continue
-        marked.add(it["message_id"])
         refs = H._json(message.get("refs"), {}) or {}
         shows = (
             [str(r) for r in refs.get("shows") or [] if str(r).startswith("browser:")] if isinstance(refs, dict) else []
@@ -2071,26 +2042,6 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
                 "task": briefs.get(it.get("task_id")),
                 **({"shows": shows} if shows else {}),
                 **({"snoozed_until": it["snoozed_until"]} if it.get("snoozed_until") else {}),
-            }
-        )
-    for m in mentions:
-        if m.get("task_id") and m["task_id"] not in readable:
-            continue
-        if m["id"] in marked:
-            continue
-        first = (m["body"] or "").strip().splitlines()
-        items.append(
-            {
-                "kind": "mention",
-                "id": m["id"],
-                "message_id": m["id"],
-                "conversation_id": m["conversation_id"],
-                "root_id": m["root_id"],  # the thread a rail row stands for: a sub-thread's mention moves its root's
-                "task_id": m.get("task_id"),
-                "from_id": known.name(m["sender_id"], m["conversation_id"]),
-                "line": _clip(first[0] if first else "", 160),
-                "since": m["created_at"],
-                "task": briefs.get(m.get("task_id")),
             }
         )
     if not count_only:
@@ -2187,9 +2138,9 @@ def needs_bots(items, me):
     return counts
 
 
-# The items a stage's review walks (the ▶ on a stage): asks, tasks and @s on a task in that stage. A Paused cause is the
+# The items a stage's review walks (the ▶ on a stage): asks, tasks and ❓s on a task in that stage. A Paused cause is the
 # person's to fix in settings, whatever stage its first task is in.
-NEEDS_STAGE_KINDS = ("ask", "task", "mention", "question")
+NEEDS_STAGE_KINDS = ("ask", "task", "question")
 
 
 def needs_stage(it):
@@ -2225,7 +2176,7 @@ def needs_plate_count(items):
 
 def needs_actor(it, me):
     """The bot one Needs-you item goes with, or None: the bot that asked, for an ask; the bot that asked for the task,
-    for a task; the first bot that cannot run, for a Paused cause. A mention is a person's."""
+    for a task; the first bot that cannot run, for a Paused cause."""
     task = it.get("task") or {}
     if it.get("kind") == "paused":
         return next(iter(it.get("bots") or ()), None)
@@ -3496,7 +3447,7 @@ def install_views(app, store, auth, mutate, task_view):
         **api_v2(
             "Needs you",
             "getNeedsYou",
-            "What waits on the caller (kind task, ask, paused or mention, oldest first), with its `version` and `count`; count=true for the number alone, version=<held> answers `unchanged` without items while it holds, ids=<comma list> only those items and their `positions`, limit=<n> (at most 200) a page with `next` to pass as cursor=<next> for the one after it (cut from the build that gave the first page while it is held, about 30 s; a cursor from an older version starts again from the top, with `restart`); without limit or cursor, the whole list",
+            "What waits on the caller (kind task, ask, paused or question, oldest first), with its `version` and `count`; count=true for the number alone, version=<held> answers `unchanged` without items while it holds, ids=<comma list> only those items and their `positions`, limit=<n> (at most 200) a page with `next` to pass as cursor=<next> for the one after it (cut from the build that gave the first page while it is held, about 30 s; a cursor from an older version starts again from the top, with `restart`); without limit or cursor, the whole list",
             "NeedsYou",
         ),
     )

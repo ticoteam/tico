@@ -24,6 +24,21 @@ describe('the threads list', () => {
     expect(page.rows.map((t) => t.id)).toEqual(['dm', 'a']);
     expect(page.next).toBe('n1');
   });
+
+  it('lists a task\'s thread only while it holds an open @ of you: Needs you lists no @ (#4762)', () => {
+    const task = row('k1', 2, { task_id: 'task-1' });
+    const quiet = row('k2', 1, { task_id: 'task-2' });
+    const page = toPage({ attention: [{ ...task, mentioned: true }], threads: [task, quiet] });
+    expect(conversationsOf(page.rows, 'human:me').map((t) => [t.id, !!t.mentioned])).toEqual([['k1', true]]);
+    expect(conversationsOf(toPage({ threads: [task, quiet] }).rows, 'human:me')).toEqual([]);
+  });
+
+  it('knows a task\'s thread a live brief added without its task_id, by audience or kind, and lists it only when marked', () => {
+    const byAudience = row('b1', 3, { audience: 'task' });
+    const byKind = row('b2', 2, { kind: 'task' });
+    expect(conversationsOf([byAudience, byKind, row('t1', 1)], 'human:me').map((t) => t.id)).toEqual(['t1']);
+    expect(conversationsOf([{ ...byAudience, mentioned: true }, byKind], 'human:me').map((t) => t.id)).toEqual(['b1']);
+  });
 });
 
 describe('names', () => {

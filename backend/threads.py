@@ -5364,7 +5364,9 @@ def read_marks(c, v, thread_ids):
 def _attention_roots(c, v):
     """{root id: extra row fields}: the roots of what waits on the viewer in Needs attention (thread_attention: open
     mentions and asks, unread DMs, held messages), and every root they are in whose bots' wakes the loop guard holds
-    (`capped`): a person's post there lets them go. `new_at` says where the oldest item is, when a sub-thread holds it."""
+    (`capped`): a person's post there lets them go. `new_at` says where the oldest item is, when a sub-thread holds it.
+    `mentioned` marks a root with an open @ of the viewer (open_mentions): Needs you lists no @, so a task's thread with
+    one is listed in Threads (#4762)."""
     from . import thread_attention
 
     roots = {}
@@ -5386,6 +5388,8 @@ def _attention_roots(c, v):
                 "new_at",
                 None if thread["id"] == root else {"thread_id": thread["id"], "message_id": item.get("message_id")},
             )
+            if item.get("kind") == "thread_mention":
+                roots[root]["mentioned"] = True
     for row in capped_rows:
         root = found.get(row["root_id"])
         if root is not None and _involved(c, v, root):
@@ -5670,6 +5674,7 @@ def _sidebar_page(c, v, cursor, limit, sort):
     args = {
         "me": v.actor,
         "needing": json.dumps(sorted(needing)),
+        "mentioned": json.dumps(sorted(root for root, extra in needing.items() if extra.get("mentioned"))),
         "history": json.dumps(history),
         "fetch": limit * 3,
         **{f"name{i}": name for i, name in enumerate(names)},
@@ -5694,14 +5699,16 @@ def _sidebar_page(c, v, cursor, limit, sort):
         "recent": f"CASE WHEN {is_needing} THEN 0 ELSE 1 END",
         "important": f"CASE WHEN {is_needing} THEN 0 ELSE {thread_rank.LEVELS + 1}-importance END",
     }[sort]
-    # A task's thread lists only while it has unread for the viewer: its parties (maker, requester, owner) and anyone who
-    # posted in it are no reason on their own. The full Threads page, the Tasks page and search still show it.
+    # A task's thread lists only while it has unread for the viewer, or an open @ of them (read or not, until they reply:
+    # Needs you lists no @, #4762): its parties (maker, requester, owner) and anyone who posted in it are no reason on
+    # their own. The full Threads page, the Tasks page and search still show it.
     is_task = f"COALESCE(r.audience,{_derived_audience('r')})='task'"
+    is_mentioned = "r.id IN (SELECT value FROM json_each(:mentioned))"
     where = [
         "r.parent_id IS NULL",
         "r.archived_at IS NULL",
         "r.closed_at IS NULL",
-        f"(NOT {is_task} OR {by_person} OR {to_viewer})",
+        f"(NOT {is_task} OR {by_person} OR {to_viewer} OR {is_mentioned})",
         f"(r.audience IN ('company','team') OR r.owner_id=:me OR {is_needing} OR EXISTS (SELECT 1 FROM "
         f"thread_members m WHERE m.thread_id=r.id AND m.actor IN ({marks})) OR r.id IN (SELECT s.root_id FROM "
         f"thread_followers f JOIN conversations s ON s.id=f.thread_id WHERE f.actor=:me AND f.following=1 "

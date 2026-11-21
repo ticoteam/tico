@@ -5,7 +5,8 @@ and each one shows up where the person already looks.
 
 ## Needs attention
 
-Threads that need the person sit in the same [Needs you](tasks.md#needs-you) list as their tasks and asks:
+Threads that need the person are listed in the threads sidebar's Needs attention, not in
+[Needs you](tasks.md#needs-you), which holds only what is asked of them:
 
 | Item | Listed when | Cleared when |
 |---|---|---|
@@ -16,11 +17,11 @@ Threads that need the person sit in the same [Needs you](tasks.md#needs-you) lis
 | **Paused** | A thread's bot replies were held back by the loop guard (`TICO_THREAD_LOOP_GUARD`, 6 an hour by default) | Its held replies resume, when a person posts in the thread or the hour passes |
 
 Bot posts that name nobody are activity, not attention. A message addressed to a person without an @ is unread in its
-thread, not attention. A mention or a reply is the one definition Needs you reads too (`backend/open_mentions.py`), so a
-thread listed here has the same item on Needs you. A paused thread is listed once, to the people who can manage it.
-Items the Needs you list already shows are not listed twice.
+thread, not attention. A mention or a reply (`backend/open_mentions.py`) is listed in the sidebar, never in Needs you.
+On a task, its thread is listed in Threads with its Dot until they post there. A paused thread is listed once, to the
+people who can manage it.
 
-The thread items are not cut from the list: they page with the rest of Needs you, in the same order. A held item is
+The sidebar lists every thread item; none is cut. A held item is
 listed to its reviewer and to the person its author bot reports up to. The reviewer sees the card with Send anyway and Keep
 blocked. The person sees the text and Withdraw, which keeps the write blocked, and cannot release it. A peer does not
 see it. Only the first person up the bot's chain reads its holds, not everyone above them (`org_rule_check.represented`).

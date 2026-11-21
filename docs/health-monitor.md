@@ -47,10 +47,6 @@ green and mergeable for more than 12 hours. Each names the task, the wait and th
 or merges or says why it waits. These clocks start when GitHub sync first sees the condition, survive repeated
 refreshes, and clear when it resolves. Health performs no extra GitHub polling.
 
-**Needs you plate** names each person whose Needs you count is over 10 items (the number the Tasks page's You tab
-shows): a warning over 10, bad over 25. It names the three bots asking most of that plate. An administrator sees
-everyone's plate; anyone else sees only their own. A plate of 10 or fewer shows nothing.
-
 ## What it checks
 
 Check health runs the plain-code checks below and the Health page's own checks: the queue (Stuck bots), refused queue

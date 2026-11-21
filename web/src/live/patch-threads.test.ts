@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { patchThreadList, type ThreadListData, type ThreadListRow } from './patch';
+import { mentionMayHaveMoved, patchThreadList, type ThreadListData, type ThreadListRow } from './patch';
 
 const at = (min: number) => new Date(Date.UTC(2026, 0, 1, 12, min)).toISOString();
 const row = (id: string, min: number, extra: Partial<ThreadListRow> & { title?: string } = {}) => ({ id, title: `Thread ${id}`, last_message_at: at(min), ...extra });
@@ -23,6 +23,14 @@ describe('the Threads list from the threads topic', () => {
     expect(ids(patchThreadList(start, { kind: 'archived', thread_id: 'a', root_id: 'a' }))).toEqual(['b']);
     const renamed = patchThreadList(start, { kind: 'renamed', thread_id: 'b', root_id: 'b', thread: { ...row('b', 1), title: 'Launch plan' } });
     expect(renamed?.pages[0]?.rows.find((t) => t.id === 'b')?.title).toBe('Launch plan');
+  });
+
+  it('asks for a list read on every attention event, and on activity in a marked thread', () => {
+    const start = list(row('plain', 5), row('task', 4, { task_id: 'k1' }), row('marked', 3, { mentioned: true }));
+    const moved = (kind: string, id: string) => mentionMayHaveMoved(start, { kind, thread_id: id, root_id: id });
+    expect(['task', 'marked', 'new', 'plain'].map((id) => moved('attention', id))).toEqual([true, true, true, true]);
+    expect(['marked', 'task', 'plain'].map((id) => moved('activity', id))).toEqual([true, false, false]);
+    expect(patchThreadList(start, { kind: 'attention', thread_id: 'task', root_id: 'task' })).toBe(start);
   });
 
   it('clears the unread count on read, and leaves the list as it was when nothing changed', () => {

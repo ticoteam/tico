@@ -158,19 +158,18 @@ def test_needs_you_rows_lead_with_the_task_and_carry_the_ask(api):
     ]
 
 
-def test_an_ask_reads_as_an_ok_a_question_or_mention_as_a_reply_and_anything_else_as_a_fix():
+def test_an_ask_reads_as_an_ok_a_question_as_a_reply_and_anything_else_as_a_fix():
     """A Needs you row's word (ui/app/decide.ts decideKind sorts the same): an ask is an OK or a page's OK, so ok; a
-    bot's ❓ or an @ is answered in the chat; a task row is the reader's to fix."""
+    bot's ❓ is answered in the chat; a task row is the reader's to fix."""
     from backend.cards import needs_act
 
     rows = [
         {"kind": "ask", "ask": {"kind": "ok"}},
         {"kind": "ask", "ask": {"kind": "page"}},
         {"kind": "question"},
-        {"kind": "mention"},
         {"kind": "task"},
     ]
-    assert [needs_act(row) for row in rows] == ["ok", "ok", "reply", "reply", "fix"]
+    assert [needs_act(row) for row in rows] == ["ok", "ok", "reply", "fix"]
 
 
 def test_a_page_pinned_by_a_person_widens_to_the_places_audience_and_is_in_its_activity(api):

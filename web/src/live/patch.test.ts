@@ -104,6 +104,34 @@ describe('read-again topics', () => {
     expect(queryClient.getQueryState(['letters'])?.isInvalidated).toBe(true);
   });
 
+  describe('a task\'s thread with an open @ of the reader (#4762)', () => {
+    const list = (rows: object[]) => ({ pages: [{ rows, next: null }], pageParams: [null] });
+    const send = (seq: number, data: object) => FakeEventSource.last.feed(frame(seq, 'threads', { seq, actor: 'human:p1', at: AT, thread_id: 'k1', root_id: 'k1', ...data }));
+    const brief = { id: 'k1', title: 'Choose the venue', audience: 'task', root_id: 'k1', parent_id: null, kind: 'task', last_message_at: AT };
+    const stale = () => queryClient.getQueryState(keys.threads.list())?.isInvalidated;
+
+    it('reads the list again when the first @ arrives on a thread it never held: activity, then attention', async () => {
+      queryClient.setQueryData(keys.threads.list(), list([]));
+      send(901, { kind: 'activity', message_id: 'm1', unread: true, unread_count: 1, counters: { last_seq: 1, last_unread_seq: 1 }, thread: brief });
+      send(902, { kind: 'attention' });
+      flushFrame();
+      expect(stale()).toBe(true);
+      await vi.runAllTimersAsync();
+    });
+
+    it('reads the list again when a marked thread has activity: a reply from elsewhere may have answered it', async () => {
+      queryClient.setQueryData(keys.threads.list(), list([{ ...brief, task_id: 'task-1', mentioned: true, me: { unread: 0 } }]));
+      send(901, { kind: 'activity', message_id: 'm2', unread: false, unread_count: 0, counters: { last_seq: 2, last_unread_seq: 1 }, thread: brief });
+      flushFrame();
+      expect(stale()).toBe(true);
+      await vi.runAllTimersAsync();
+      queryClient.setQueryData(keys.threads.list(), list([{ ...brief, me: { unread: 0 } }]));
+      send(902, { kind: 'activity', message_id: 'm3', unread: false, unread_count: 0, counters: { last_seq: 3, last_unread_seq: 1 }, thread: brief });
+      flushFrame();
+      expect(stale()).toBe(false); // an unmarked thread's activity is patched in place, no read
+    });
+  });
+
   it('mark a call and the live and ringing lists stale on a call change in the threads topic', () => {
     for (const k of [['calls', 'c1'], ['calls', 'c1', 'notes'], ['calls', 'live'], ['calls', 'ringing'], ['calls', 'c2']]) queryClient.setQueryData(k, {});
     FakeEventSource.last.feed(frame(901, 'threads', { seq: 901, actor: 'human:p1', at: AT, thread_id: 'th1', kind: 'call.updated', call_id: 'c1' }));

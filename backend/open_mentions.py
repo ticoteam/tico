@@ -2,9 +2,9 @@
 """The one definition of an open @mention: a person's message that @s another person, or replies to one of their
 messages, that they have not answered.
 
-Needs you (views.needs_items) and Needs attention (thread_attention, the threads sidebar) both read it, so the sidebar
-never flags a thread that Needs you does not list. The spec is docs/dev/pipelines-v3-cutover.md, "Needs you": every @ of
-a person by a person, on a task or in a channel, until they reply. A person's reply to a message of the person's needs
+Needs attention (thread_attention, the threads sidebar) reads it; Needs you does not, since an @ alone is not a wait
+(docs/dev/pipelines-v3-cutover.md, "Needs you", C28). It is every @ of a person by a person, on a task or in a channel,
+until they reply. A person's reply to a message of the person's needs
 them too (the Nov 6 reply_needs_you intent). A bot's message, an @ or a reply, only marks its thread unread: a bot that
 needs a person marks its message ❓ (backend/question_marks.py), which is its own Needs-you item. A message addressed to a
 person without an @ only marks it unread; a DM has its own item in Needs attention.

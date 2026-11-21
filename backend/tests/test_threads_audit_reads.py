@@ -374,24 +374,25 @@ def test_search_keeps_to_a_private_task_and_a_restricted_message(acme, monkeypat
 
 
 # ----------------------------------------------------------------------------- Needs you and Catch up name no one hidden
-def needs(api, token, kind):
-    return [i for i in ok(call(api, "GET", "needs-you", token))["items"] if i["kind"] == kind]
-
-
-def test_needs_you_names_a_hidden_person_only_to_someone_in_the_thread_with_them(acme):
+def test_a_mention_names_a_hidden_person_only_to_someone_in_the_thread_with_them(acme):
+    """Needs attention (the threads sidebar) lists an @ of the reader; Needs you does not (#4762)."""
     api, _ = acme
     made = dm(api, "cara-test", "human:eve")
     set_access(api, "humans/cara", token="cara-test", see=LEGAL, read=LEGAL, write=LEGAL)
     thread = create_thread(api, "cara-test", audience="company")
     say(api, "cara-test", thread["id"], "@eve can you check the lease?", to="human:eve")
     say(api, "cara-test", made["id"], "@eve a word?", to="human:eve")
+    with api.app.state.store.read() as c:
+        listed = [
+            i for i in thread_attention.items(c, api.app.state.auth, who(api, "eve")) if i["kind"] == "thread_mention"
+        ]
 
-    item = next(i for i in needs(api, "eve-test", "mention") if i["conversation_id"] == thread["id"])
-    assert item["line"] == "@eve can you check the lease?"
-    assert not item["from_id"] and "human:cara" not in str(item)
+    item = next(i for i in listed if i["conversation_id"] == thread["id"])
+    assert item["first_line"] == "@eve can you check the lease?"
+    assert not item["requester_id"] and "human:cara" not in str(item)
     # Eve is in the DM with her, so there she is told who it is.
-    item = next(i for i in needs(api, "eve-test", "mention") if i["conversation_id"] == made["id"])
-    assert item["from_id"] == "human:cara"
+    item = next(i for i in listed if i["conversation_id"] == made["id"])
+    assert item["requester_id"] == "human:cara"
 
 
 def test_needs_you_names_a_held_writes_author_only_to_someone_who_may_see_them(acme, monkeypatch):

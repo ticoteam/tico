@@ -7,7 +7,7 @@ import { FlowMark } from '@/kit/FlowMark';
 import { Icon, type IconName } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { SkeletonRows } from '@/kit/Skeleton';
-import { contactsOf, conversationsOf, isDm, letterAt, letterRows, letterUnread, othersOf, rowsOf, senderName, teamOf, unreadOf, type LetterRow, type Text, type Thread } from './model';
+import { contactsOf, conversationsOf, isDm, isTaskThread, letterAt, letterRows, letterUnread, othersOf, rowsOf, senderName, teamOf, unreadOf, type LetterRow, type Text, type Thread } from './model';
 import { Face, press, useMe, useTitle } from './people';
 import { archivedQuery, inboxQuery, mailboxesQuery, textListQuery, threadListQuery } from './queries';
 
@@ -52,7 +52,7 @@ export function MenuThreads({ asks }: MenuThreadsProps) {
     ),
     ...contactsOf(texts.data?.pages.flatMap((p) => p.messages ?? []) ?? []).map((t): Item => ({ kind: 'text', key: `text:${t.from ?? t.message_id}`, at: when(t.received_at), t })),
   ].sort((a, b) => b.at - a.at);
-  const gone = (archived.data?.pages.flatMap((p) => p.threads ?? []) ?? []).filter((t) => !t.task_id);
+  const gone = (archived.data?.pages.flatMap((p) => p.threads ?? []) ?? []).filter((t) => !isTaskThread(t));
   const swipe = (key: string) => (on: boolean) => setSwiped(on ? key : null);
 
   return (
@@ -66,7 +66,7 @@ export function MenuThreads({ asks }: MenuThreadsProps) {
         ) : null}
         {items.map((it) =>
           it.kind === 'thread' ? (
-            <ThreadLine key={it.key} t={it.t} ask={asks.has(it.t.id)} />
+            <ThreadLine key={it.key} t={it.t} ask={asks.has(it.t.id) || !!it.t.mentioned} />
           ) : it.kind === 'mail' ? (
             <MailLine key={it.key} r={it.r} box={it.box} organize={it.organize} swiped={swiped === it.key} onSwipe={swipe(it.key)} />
           ) : (

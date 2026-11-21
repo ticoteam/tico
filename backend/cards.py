@@ -409,7 +409,7 @@ def needs_act(it):
     kind = it.get("kind")
     if kind == "ask":
         return "ok"
-    if kind in ("mention", "question"):  # an @, or a bot's ❓: answered in the chat
+    if kind == "question":  # a bot's ❓: answered in the chat
         return "reply"
     return "fix"
 
@@ -418,7 +418,7 @@ def needs_brief(items, n):
     """The first `n` Needs you items (views.needs_items) as a card's rows. A row is titled by what an OK is about
     (`about`, for a task filed for an OK), else its task's title, from the brief needs_items gives for a task the reader
     may read; a Paused cause and an item without a task by its own `line`.
-    `line` (the ask, the missing work, the cause, the mention's first line) goes along as the row's tooltip, and `act`
+    `line` (the ask, the missing work, the cause, the ❓'s line) goes along as the row's tooltip, and `act`
     (needs_act) as the word at its right."""
     return [
         {
