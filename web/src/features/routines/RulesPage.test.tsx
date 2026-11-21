@@ -4,13 +4,12 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsRoot } from '@/actions';
-import { queryClient } from '@/data';
+import { pageOwnersQuery, queryClient } from '@/data';
 import { pipelinesQuery } from '@/features/tasks/exports';
 import { validateRulesSearch } from './load';
 import {
   constitutionQuery,
   dueQuery,
-  pageOwnersQuery,
   holdsQuery,
   orgRulesQuery,
   reachQuery,
@@ -250,7 +249,7 @@ describe('Rules: checked exactly, history, the constitution and the clerk', () =
     const sent = record((url, method) => (method === 'POST' && url.endsWith('/api/v2/tasks') ? ok({ task: { id: 't9' } }) : nothing()));
     company([]);
     queryClient.setQueryData(constitutionQuery.queryKey, () => ({ id: 'doc-1', title: 'Constitution', locked: true }));
-    queryClient.setQueryData(pageOwnersQuery.queryKey, { rules: { bot: 'bot:rules-owner' } });
+    queryClient.setQueryData(pageOwnersQuery.queryKey, { pages: { rules: { bot: 'bot:rules-owner' } }, canChange: false });
     show('/company/rules');
     expect(href(await screen.findByTitle('Constitution'))).toBe('/library/doc-1');
     fireEvent.click(screen.getByRole('button', { name: 'More' }));

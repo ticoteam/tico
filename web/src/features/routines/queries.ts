@@ -2,7 +2,7 @@ import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import type { AutomationOverviewRuns, AutomationTemplate, AutomationTemplates } from '@/api/schema';
 import type { Dest } from './board';
-import { queryClient, quietRoot, write } from '@/data';
+import { pageOwnersQuery, QUIET_STALE_MS, queryClient, quietRoot, write } from '@/data';
 import type {
   Delivery,
   DocFile,
@@ -44,6 +44,7 @@ import type {
 for (const root of ['routines', 'rules', 'listening']) quietRoot(root);
 
 const enc = encodeURIComponent;
+const quiet = { staleTime: QUIET_STALE_MS } as const;
 const tmpId = () => `tmp:${Math.random().toString(36).slice(2, 10)}`;
 const now = () => new Date().toISOString();
 
@@ -479,7 +480,7 @@ export const MAKE_LABEL = 'make-rule';
     labelled for its clerk skill, private to the one who asks and the owner, naming the constitution to read. `tico rules
     make` files the same (clients/commands/rules.py make_task). */
 export async function makeRule(text: string): Promise<{ task_id: string }> {
-  const owner = (await queryClient.ensureQueryData(pageOwnersQuery)).rules?.bot;
+  const owner = (await queryClient.ensureQueryData(pageOwnersQuery)).pages.rules?.bot;
   if (!owner) throw Object.assign(new Error('The Rules page has no owner to draft it'), { code: 'counsel_off: The Rules page has no owner to draft it' });
   const law = await queryClient.ensureQueryData(constitutionQuery);
   const read = law ? ` The constitution is doc ${law.id}: read it with \`tico doc read ${law.id}\`.` : '';
