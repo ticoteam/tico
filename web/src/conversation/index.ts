@@ -10,4 +10,5 @@ export { clock, dayKey, dayLabel, stamp } from './dates';
 export { DidLine, type DidLineProps } from '@/kit/DidLine';
 export { Outline, jumpTo, type OutlineProps } from './Outline';
 export { liveQuery, timelineQuery, ticoRoomQuery, readTicoInfo, sendMessage, markRead, type TicoInfo } from './queries';
+export { tasksIn } from './links';
 export type { Variant, ChatMessage, PageRef, LiveRun } from './types';

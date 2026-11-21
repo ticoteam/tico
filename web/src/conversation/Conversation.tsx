@@ -51,6 +51,8 @@ export interface ConversationProps {
   foot?: ReactNode;
   /** What a message draws in place of its text, when it is more than words (a thread's call card). */
   card?: (m: ChatMessage) => ReactNode;
+  /** What someone else's message draws under its words (Tico's approval card). */
+  below?: (m: ChatMessage) => ReactNode;
   /** false: the person may read but not write here (an archived, closed or meeting thread): no box. */
   canPost?: boolean;
   /** Not the thread's own messages, drawn among them by time (a team's updates, through `card`): no reply, no rating. */
@@ -150,7 +152,7 @@ function withExtra(rows: ChatMessage[], extra: ChatMessage[] | undefined, more: 
   return [...out, ...left];
 }
 
-export function Conversation({ id, variant, title, actor, session, page, foot, card, canPost = true, extra, chat }: ConversationProps) {
+export function Conversation({ id, variant, title, actor, session, page, foot, card, below, canPost = true, extra, chat }: ConversationProps) {
   useFollow(variant === 'tico' ? { conversation: id } : { thread: id });
 
   const { data: me } = useQuery(meQuery);
@@ -320,6 +322,7 @@ export function Conversation({ id, variant, title, actor, session, page, foot, c
               cont={it.cont}
               onRetry={(m) => send(m.body ?? '', m.files ?? [], m)}
               card={card}
+              below={below}
               onReply={canReply && !extraIds.has(it.m.id) ? startReply : undefined}
               quote={quoteOf(it.m, byId)}
               onQuote={toQuoted}

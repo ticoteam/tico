@@ -11,7 +11,7 @@ import { TaskRow } from '@/kit/Row';
 import { Section } from '@/kit/SectionHead';
 import { useFollow } from '@/live/follow';
 import { backQuery, markTrackerSeen, trackedQuery, trackerSeenQuery, type TrackedTask } from './queries';
-import { backSince, nextAgeOut, trackerGroups } from './tracked';
+import { backSince, nextAgeOut, taskHref, trackerGroups } from './tracked';
 import './tracker.css';
 
 /* The tracker (plan: the assistant as a delegator): one row at the top of Tico's chat counting every open task the
@@ -20,9 +20,6 @@ import './tracker.css';
    id>, which sends the tasks they own or asked for, however many (task=<ids> stops narrowing past 20). */
 
 const rows = (list: { tasks: TrackedTask[] }) => list.tasks;
-
-const taskHref = (t: TrackedTask) =>
-  t.pipeline_id && t.number ? `/tasks/${encodeURIComponent(t.pipeline_id)}/${t.number}` : `/task/${encodeURIComponent(t.id)}`;
 
 function Owner({ id }: { id: string | null }) {
   const a = useActor(id);
