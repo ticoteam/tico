@@ -78,6 +78,7 @@ BARGE_IN_MS = 300
 # A 1:1 call's turn ends at this much silence since the person's last voiced frame: speech is cut at every pause, an
 # "um" too, and the pieces of one turn are asked as one question.
 TURN_END_MS = 1200
+GATHERED_SOURCE = "turn:"  # a gathered 1:1 turn's source_key: "turn:<its last piece's transcript seq>"
 ANSWER_SECONDS = 30  # a bot that has not answered this long after it was asked does not answer
 QUESTION_WAIT_SECONDS = 30  # a question waiting behind another this long is dropped
 NOTE_SECONDS = 10  # how long a note stays on the call view
@@ -736,18 +737,20 @@ class Voice:
 
     def _enqueue(self, c: Any, row: Any, bot: str, question: dict[str, Any]) -> tuple[list[dict[str, Any]], bool]:
         """Put one bot's turn on the queue (inside a transaction, no lock held): the turns made, and whether it goes to a
-        resident session. A gathered 1:1 turn keeps its joined question on the turn (live_meeting_turns.question)."""
+        resident session. A gathered 1:1 turn is marked by its source (GATHERED_SOURCE and its last piece's seq), so a
+        resident one's fallback delivery and a retry still ask its joined question, whatever the roster is then."""
         warm = call_sessions.ensure(c, self.store.settings, row, bot)
+        gathered = bool(question.get("gathered"))
         selected, _skipped = live_meetings._enqueue(
             c,
             row["live_meeting_id"],
             [bot],
-            source_key=question["source_key"],
+            source_key=f"{GATHERED_SOURCE}{question.get('seq')}" if gathered else question["source_key"],
             transcript_seq=question.get("seq"),
             at_ms=question.get("at_ms"),
             named=True,
             voice_input=question["text"] if warm else None,
-            question=question["text"] if question.get("gathered") else None,
+            question=question["text"] if gathered else None,
             voice_expires_at=H.shift(H.now(), seconds=question["heard"] + ANSWER_SECONDS - self.clock())
             if warm
             else None,

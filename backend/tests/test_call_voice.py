@@ -2230,7 +2230,8 @@ def test_a_turn_keeps_whether_it_was_gathered_whatever_the_roster_does_after(mee
     assert left.status_code == 200, left.text
     with meet.app.state.store.transaction() as c:
         call_sessions.dispatch_pending(c, group["meeting_id"], "ops")
-        assert c.execute("SELECT question FROM live_meeting_turns WHERE id=?", (named["id"],)).fetchone()[0] is None
+        source = c.execute("SELECT source_key FROM live_meeting_turns WHERE id=?", (named["id"],)).fetchone()[0]
+        assert not source.startswith(call_voice.GATHERED_SOURCE)
         bodies = _bodies(c, group["meeting_id"])
     assert bodies and not any('"question"' in body for body in bodies)
 
