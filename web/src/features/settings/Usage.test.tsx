@@ -65,6 +65,7 @@ const LIM = {
   blocked_by: null,
   monthly_usd: 10,
   month_spent: 2,
+  spent: { month: 2 },
   day_spent: null,
   hour_spent: null,
   week_spent: null,
@@ -217,6 +218,18 @@ describe('Usage › Limits: company, teams, Add limit, the panel', () => {
     fireEvent.click(within(dlg).getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(sent[0]).toMatchObject({ url: '/api/v2/usage/pools/groups/g2', method: 'PUT', body: { monthly_usd: 40 } }));
     expect(read.some((u) => u.startsWith('/api/v2/usage?'))).toBe(false);
+  });
+
+  it('a row with no limit shows what it really spent this month', async () => {
+    serve();
+    // month_spent is set only under a monthly limit; spent.month is the real figure, capped or not
+    const company = pool({ month_spent: null, spent: { month: 2168 } });
+    const free = { ...LIM, monthly_usd: null, own_monthly_usd: null, month_spent: null, percent: 0, spent: { month: 37 } };
+    queryClient.setQueryData(limitsQuery.queryKey, { bots: { builder: free }, default: { ...NONE, monthly_usd: null, count_subscription: false }, may_edit_default: true, pools: { company, groups: {} } });
+    queryClient.setQueryData(['directory'], DIRECTORY);
+    show(<UsagePage search={{ view: 'limits' }} />, '/company/usage?view=limits');
+    expect((await screen.findByTitle('Sample Co')).querySelector('.u-used')?.textContent).toBe('$2,168');
+    expect(screen.getByTitle('Builder').querySelector('.u-used')?.textContent).toBe('$37');
   });
 
   it('Tico may lower a limit but never raise or remove one @s313', async () => {

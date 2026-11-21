@@ -18,7 +18,7 @@ import { toast } from '@/kit/Toast';
 import { refusal } from '@/actions';
 import { Section, SidePanel } from '@/pagekinds';
 import { Foot, Meter, SwitchLine, Verb, Word, act, dollars, useEveryone, useFaces, usd } from './parts';
-import { agentUsageQuery, limitsQuery, poolsOf, taskCapsQuery, type UsagePool } from './queries';
+import { agentUsageQuery, limitsQuery, monthSpent, poolsOf, taskCapsQuery, type UsagePool } from './queries';
 import type { UsageSearch } from './Usage';
 
 /* Usage › Limits (pages/8-settings/more.js; the old Strategy › Budget, ui/app/strategy-budget.ts). Monthly limits only:
@@ -192,7 +192,7 @@ function PoolRow({ id, name, pool, depth, search }: { id: string; name: string; 
       <span className="u-bar">
         <Meter pct={pool.percent} over={!!pool.blocked} />
       </span>
-      <Spent spent={pool.month_spent} limit={pool.monthly_usd} />
+      <Spent spent={monthSpent(pool)} limit={pool.monthly_usd} />
     </Link>
   );
 }
@@ -205,7 +205,7 @@ export function Limits({ search }: { search: UsageSearch }) {
   const [editing, setEditing] = useState<Editing>(null);
   const v = limits.data;
   if (!v) return null;
-  const bots = Object.entries(v.bots ?? {}).sort((a, b) => (b[1].month_spent ?? 0) - (a[1].month_spent ?? 0));
+  const bots = Object.entries(v.bots ?? {}).sort((a, b) => monthSpent(b[1]) - monthSpent(a[1]));
   const pools = poolsOf(v);
   const teams = teamTree(pools?.groups ?? {});
   return (
@@ -265,7 +265,7 @@ export function Limits({ search }: { search: UsageSearch }) {
                 <span className="u-bar">
                   <Meter pct={l.percent} over={!!l.blocked} />
                 </span>
-                <Spent spent={l.month_spent} limit={l.monthly_usd} />
+                <Spent spent={monthSpent(l)} limit={l.monthly_usd} />
               </Link>
             );
           })
@@ -397,7 +397,7 @@ function AgentPanel({ slug, onClose }: { slug: string; onClose: () => void }) {
       }
     >
       <div className="rail-sec">
-        <Figure spent={l.month_spent} limit={l.monthly_usd} blocked={l.blocked} percent={l.percent} />
+        <Figure spent={monthSpent(l)} limit={l.monthly_usd} blocked={l.blocked} percent={l.percent} />
         <Facts label={name}>
           <LabelValue label="Limit" onEdit={l.may_edit ? () => setEditing({ who: name, now: l.own_monthly_usd ?? l.monthly_usd, agent: slug }) : undefined}>
             {l.monthly_usd != null ? `${usd(l.monthly_usd)} a month` : 'No limit'}
@@ -458,7 +458,7 @@ function PoolPanel({ scope, search, onClose }: { scope: string; search: UsageSea
   return (
     <SidePanel title={name} target={`limit:${scope === COMPANY ? COMPANY : `team:${scope}`}`} lead={<Icon name={scope === COMPANY ? 'company' : 'people'} />} onClose={onClose}>
       <div className="rail-sec">
-        <Figure spent={pool.month_spent} limit={pool.monthly_usd} blocked={pool.blocked} percent={pool.percent} />
+        <Figure spent={monthSpent(pool)} limit={pool.monthly_usd} blocked={pool.blocked} percent={pool.percent} />
         <Facts label={name}>
           <LabelValue label="Limit" onEdit={editable ? () => setEditing({ who: name, now: pool.monthly_usd, scope }) : undefined}>
             {pool.monthly_usd != null ? `${usd(pool.monthly_usd)} a month` : 'No limit'}
@@ -477,7 +477,7 @@ function PoolPanel({ scope, search, onClose }: { scope: string; search: UsageSea
           {teams.map(([gid, g]) => (
             <Link key={gid} className="rail-row u-line" to="/company/usage" search={{ ...search, open: POOL + gid }} title={g.name ?? gid}>
               <span className="row-title">{g.name ?? gid}</span>
-              <span className="row-fig">{usd(g.month_spent ?? 0)}</span>
+              <span className="row-fig">{usd(monthSpent(g))}</span>
             </Link>
           ))}
         </div>
@@ -492,7 +492,7 @@ function PoolPanel({ scope, search, onClose }: { scope: string; search: UsageSea
             return (
               <Link key={a.id} className="rail-row u-line" to="/company/usage" search={{ ...search, open: v.bots?.[a.slug] ? a.slug : a.id }} title={label}>
                 <span className="row-title">{label}</span>
-                <span className="row-fig">{l ? usd(l.month_spent ?? 0) : ''}</span>
+                <span className="row-fig">{l ? usd(monthSpent(l)) : ''}</span>
               </Link>
             );
           })}
