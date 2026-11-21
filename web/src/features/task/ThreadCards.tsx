@@ -70,7 +70,7 @@ export function useApprovalCards(scope: ApprovalScope, chat?: string): ChatMessa
     const send = emailIn(it.ask?.shows ?? []);
     // An email's: still to go out, as its OK task's row says (sendToGo); its preview is read only on its Email tab.
     if (send) {
-      if (!sendToGo(sub)) return [];
+      if (!sendToGo(sub, send)) return [];
     } else if (files[i]?.isPending && files[i]?.fetchStatus !== 'idle') return [];
     // The words stand for the card where words are read (a row with none is not drawn).
     const row: ChatMessage = {

@@ -676,10 +676,11 @@ def for_tasks(c, ids):
     marks = ",".join("?" * len(ids))
     mine = f"(task_id IN ({marks}) OR approval_task_id IN ({marks}))"
     fields = ",".join(TASK_FIELDS)
+    # An open send's matter dates come in the same read (DATES_SQL): its not before, on its own case's row.
     rows = c.execute(
-        f"SELECT task_id,approval_task_id,{fields},created_at,rowid AS n FROM email_sends "
+        f"SELECT task_id,approval_task_id,{fields},created_at,s.rowid AS n,{DATES_SQL} AS dates FROM email_sends s "
         f"WHERE state IN ({','.join('?' * len(OPEN_STATES))}) AND {mine} "
-        f"UNION ALL SELECT task_id,approval_task_id,{fields},created_at,rowid AS n FROM email_sends "
+        f"UNION ALL SELECT task_id,approval_task_id,{fields},created_at,rowid AS n,NULL FROM email_sends "
         f"WHERE state IN ({','.join('?' * len(ENDED_STATES))}) AND send_after>=? AND finished_at>=? AND {mine}",
         (
             *OPEN_STATES,
@@ -698,7 +699,13 @@ def for_tasks(c, ids):
             held = newest.get(task)
             if held is None or (row["created_at"], row["n"]) > (held["created_at"], held["n"]):
                 newest[task] = row
-    return {task: {key: row[key] for key in TASK_FIELDS} for task, row in newest.items()}
+    out = {}
+    for task, row in newest.items():
+        held = latest_bound((row["dates"] or "").split(",")) if task == row["task_id"] else ""
+        # `not_before`: the day a send past its undo window still waits for (its matter's not before), said only on its
+        # own case's row (whose readers read the matter), else null.
+        out[task] = {**{key: row[key] for key in TASK_FIELDS}, "not_before": held if held > now else None}
+    return out
 
 
 def moved(c, sid):
@@ -1453,8 +1460,11 @@ def _lease(c, auth, mailbox, runner_id, *, permit=False, lease=True):
             continue
         token = H.new_id()
         c.execute(
-            "UPDATE email_sends SET state='dispatching',decision=?,runner_id=?,claimed_at=?,lease_id=? WHERE id=?",
-            (dump(found), runner_id, now, token, row["id"]),
+            # `send_after` becomes when it went: a send held past its undo window for weeks is still shown once sent
+            # (for_tasks reads ended sends by it).
+            "UPDATE email_sends SET state='dispatching',decision=?,runner_id=?,claimed_at=?,lease_id=?,send_after=? "
+            "WHERE id=?",
+            (dump(found), runner_id, now, token, now, row["id"]),
         )
         moved(c, row["id"])
         if permit:
@@ -1561,9 +1571,20 @@ def drain(store, auth, limit=20, budget=None):
             with store.read() as c:
                 for queued in _queued(c, mailbox, lease=token is not None):
                     warm(c, queued)
+                # Nothing to lease, nothing waiting on an OK and nothing being handed over (only sends held for later):
+                # no write this pass.
+                idle = (
+                    token is None
+                    and not c.execute(
+                        "SELECT 1 FROM email_sends WHERE mailbox=? AND state IN ('waiting_approval','dispatching') LIMIT 1",
+                        (mailbox,),
+                    ).fetchone()
+                )
         except Problem as unread:
             # Gmail could not tell a decision what it needs: this inbox's mail waits, as it was, for a later pass.
             LOG.info("email drain left an inbox for later: %s", unread.code)
+            continue
+        if idle:
             continue
         for _ in range(limit):
             if not drains.left(budget):

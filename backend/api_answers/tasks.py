@@ -222,6 +222,8 @@ class TaskEmailSend(TypedDict):
     send_after: str
     finished_at: str | None
     detail: str
+    not_before: NotRequired[str | None]
+    """The day a send past its undo window still waits for (its matter's not before), on its own case's row; else null"""
 
 
 @answer

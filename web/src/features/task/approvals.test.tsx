@@ -327,6 +327,15 @@ describe('the decision', () => {
     expect(screen.queryByText('Check the brief?')).toBeNull();
   });
 
+  it('an email OK on a case itself shows the case’s own brief, and names no other matter @approvals', async () => {
+    shown = task({ title: 'Ruiz: late delivery', note: 'Dana Ruiz wants a refund.', parent: { id: 'p0', title: 'Legal 2026' } } as Partial<TaskData>);
+    show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1/12/email');
+    const brief = await screen.findByRole('region', { name: 'Brief' });
+    expect(within(brief).getByText('Dana Ruiz wants a refund.')).toBeTruthy();
+    expect(screen.queryByText(/Legal 2026/)).toBeNull();
+    expect(screen.queryByRole('link', { name: /^From / })).toBeNull();
+  });
+
   it('names the email, who asks and what Approve does; the head is quiet and Details sits under ⋯ @approvals', async () => {
     show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
     expect(await screen.findByRole('heading', { level: 1, name: 'Reply to the late-delivery claim' })).toBeTruthy();

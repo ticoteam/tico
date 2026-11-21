@@ -70,6 +70,9 @@ function answer(url: string): Reply {
   if (url.includes('/needs-you')) return { body: { actor: 'human:me', items: needs } };
   if (url.endsWith('/api/v2/tasks/t1')) return { body: { task: okTask('t1') } };
   if (url.endsWith('/api/v2/tasks/t2')) return { body: { task: okTask('t2', 'bot:other') } };
+  // a case whose OK is on itself: its newest send (s2) was canceled, the one its OK shows (s1) still waits
+  if (url.endsWith('/api/v2/tasks/c1'))
+    return { body: { task: { ...okTask('c1'), title: 'Ruiz: reply letter', relations: {}, parent: { id: 'p0', title: 'Legal 2026' }, email_send: { id: 's2', state: 'canceled' } } } };
   if (url.endsWith('/api/v2/tasks/p1')) return { body: { task: otherTask('p1', 'Release report', ['page:file-a@2']) } };
   if (url.endsWith('/api/v2/tasks/p1/files?all=1'))
     return { body: { files: [{ id: 'file-a', name: 'release-report.md', title: 'Release report', mime: 'text/markdown', archived: false, current_version: 2, links: [], versions: [], writers: [] }, { id: 'file-b', name: 'notes.md', title: 'Notes', mime: 'text/markdown', archived: false, current_version: 1, links: [], versions: [], writers: [] }] } };
@@ -179,6 +182,15 @@ describe('an approval waiting, as a card in the agent’s thread @approvals', ()
     show({ agent: 'bot:lo' });
     const card = await screen.findByRole('link', { name: /Approve/ });
     await waitFor(() => expect(card.getAttribute('href')).toBe('/tasks/general/40'));
+  });
+
+  it('a case whose newer send was canceled still shows the card of the email its OK waits on, named as the case', async () => {
+    needs = [ask('c1', 'bot:lo', 's1')];
+    show({ agent: 'bot:lo' });
+    const card = await screen.findByRole('link', { name: /Approve/ });
+    expect(card.textContent).toContain('Ruiz: reply letter'); // the case itself, never its parent
+    expect(card.textContent).not.toContain('Legal 2026');
+    expect(card.getAttribute('href')).toBe('/task/c1');
   });
 
   it('an email already sent or canceled shows no card', async () => {

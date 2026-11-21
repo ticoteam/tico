@@ -10,7 +10,7 @@ import { FakeEventSource, opening, task, taskFrame } from '@/live/fake-stream';
 // eslint-disable-next-line no-restricted-imports -- the test plays the server's stream, as the shell's startLive opens it
 import { flushFrame } from '@/live/frame';
 import { resetFollows } from '@/live/follow';
-import { followSend, rowWhere, SendMark } from './sending';
+import { followSend, markLine, rowWhere, SendMark, type SendWhere } from './sending';
 
 /* After Approve on an email: the toast counts down the undo window, then says Sent or Not sent; the email's quiet line
    says Sending, then Sent. The send is read once; each move after that comes on the live stream as its tasks' rows
@@ -140,6 +140,13 @@ describe("a task row's send", () => {
     expect(rowWhere({ ...row, state: 'pending', finished_at: null }, NOW)?.kind).toBe('sending');
     expect(rowWhere({ ...row, state: 'sent', finished_at: '2026-11-19T05:23:00Z' }, NOW)?.kind).toBe('sent');
     expect(rowWhere({ ...row, state: 'sent', finished_at: '2026-11-17T05:23:00Z' }, NOW)).toBeNull();
+  });
+
+  it('held past its undo window for its matter’s day, it says that day, never Sending', () => {
+    const held = { ...row, state: 'pending' as const, finished_at: null, not_before: '2026-12-08T00:00:00-08:00' };
+    const w = rowWhere(held, NOW);
+    expect(w).toEqual({ kind: 'held', on: '2026-12-08T00:00:00-08:00' });
+    expect(markLine(w as SendWhere, NOW)).toBe('Sends Dec 8');
   });
 
   it('says nothing once canceled, and Not sent only when it failed, was blocked, or is unsure', () => {
