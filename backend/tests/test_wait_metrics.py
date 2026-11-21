@@ -167,7 +167,8 @@ def test_an_ask_added_in_product_validate_is_left_out_by_its_visits_stage(drafts
 
 def test_a_new_page_for_the_ask_asks_again_and_only_stored_oks_and_pages_count(drafts, time_machine):
     """Ana sends a page back and OKs the replacement in the same visit: two decisions, one repeat. An ok or no on
-    something that is no stored OK or page (an old structured question's reply) is not a decision."""
+    something that is no stored OK or page (an old structured question's reply, a requirement of another kind) is not a
+    decision."""
 
     def say(c, task_id, actor, kind, old, new, data):
         time_machine.shift(timedelta(minutes=1))
@@ -181,4 +182,7 @@ def test_a_new_page_for_the_ask_asks_again_and_only_stored_oks_and_pages_count(d
         say(c, task_id, BUILDER, "page_attached", "page:f1@1", "page:f1@2", {"requirement": page})
         say(c, task_id, ANA, "answer", None, "ok", {"requirement": page, "answer_id": "a2"})
         say(c, task_id, ANA, "answer", None, "ok", {"requirement": "an-old-question", "answer_id": "a3"})
+        # A stored requirement of another kind answered ok or no (no ask of a person): not a decision either.
+        done = requirement(c, E.task(c, task_id), "owner_done")
+        say(c, task_id, ANA, "answer", None, "ok", {"requirement": done, "answer_id": "a4"})
     assert view(drafts, "SELECT answers, repeats FROM repeat_ask_weekly") == [{"answers": 2, "repeats": 1}]
