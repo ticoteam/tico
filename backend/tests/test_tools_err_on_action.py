@@ -308,3 +308,30 @@ def test_a_bots_tools_tab_lists_what_it_can_use_through_grants_one_row_per_servi
     # A member who neither manages ops nor may see the tool is not told about it.
     seen = api.get("/api/v2/bots/ops/tools", headers=headers("cara-test"))
     assert seen.status_code != 200 or not any(t.get("granted") for t in seen.json()["tools"])
+
+
+def test_a_confirmed_assistant_act_is_the_persons_own_and_an_unconfirmed_one_is_refused(api):
+    """The person's read-back and yes (`confirmed`) makes the Assistant's act theirs: it may share a login and bring an
+    address outside the catalog; unconfirmed, neither."""
+    from dataclasses import replace
+
+    import pytest
+
+    from backend import tool_access as TA
+    from backend.auth import Identity
+    from backend.store import Problem
+
+    vault(api)
+    site = post(api, "website-tools", {"sites": ["app.acme.example"]})["id"]
+    account = post(api, f"website-tools/{site}/accounts", {"password": "acme-synthetic-pass-03"})["id"]
+    asked = replace(Identity("human:ana", "owner"), via="assistant", task_actor="bot:assistant")
+    yes = replace(asked, confirmed=True)
+    v = api.app.state.vault
+    acme = "https://mcp.acme.example/mcp"
+    with api.app.state.store.read() as c:
+        grant = lambda who: TA.decide(c, who, TA.key(account), "bot:cpo", TA.GRANT, admins=v.admins, auth=v.auth).ok  # noqa: E731
+        assert grant(yes) is True and grant(asked) is False
+    TA.catalog_only(yes, mcp_url=acme)
+    with pytest.raises(Problem) as refused:
+        TA.catalog_only(asked, mcp_url=acme)
+    assert refused.value.code == "catalog_only"
