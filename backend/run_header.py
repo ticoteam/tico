@@ -281,7 +281,7 @@ def _view(c: Any, auth: Any, who: Any, task_id: str) -> Row:
     """The engine's part of the task as its own read gives it to `who` (task_list_routes task_view): each OK's page from
     an earlier stage only when they may open it, and every entry whose words come from a page they may not open
     replaced by that page's label. {} for a task on no pipeline."""
-    view: Row | None = H.task_view(c, task_id, who.task_actor or who.actor, auth.task_sql(c, who))
+    view: Row | None = H.task_view(c, task_id, who.task_actor or who.actor, auth.task_sql(c, who), turn_for=who.actor)
     if not view:
         return {}
     for entry in view["to_leave"]:

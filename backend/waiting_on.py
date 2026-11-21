@@ -734,9 +734,9 @@ def head_for(waits: Sequence[Wait], viewer: object = None) -> Wait | None:
 
 
 def turn_viewer(who: object) -> str | None:
-    """Whom a read's `turn` is said to: the person a task actor works for, else the caller (task_calls.task_view's
-    viewer)."""
-    found = getattr(who, "task_actor", None) or getattr(who, "actor", None)
+    """Whom a read's `turn` is said to: the caller's person (`who.actor`), also when an agent acts for them
+    (`who.task_actor`, the Assistant or BotOps), so their read shows that person's turn. Access is decided apart."""
+    found = getattr(who, "actor", None)
     return str(found) if found else None
 
 

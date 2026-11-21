@@ -341,3 +341,21 @@ def test_a_page_unshared_between_the_read_and_the_write_is_refused_to_check_agai
     assert sent.status_code == 409 and sent.json()["retryable"], sent.text
     with store.read() as c:
         assert c.execute("SELECT 1 FROM answers WHERE requirement_id=?", (rid,)).fetchone() is None
+
+
+def test_an_assistant_read_for_ben_shows_bens_turn_on_a_shared_page(c, company):
+    """`turn` is said to the person a read is for (`who.actor`), also when the Assistant acts for them
+    (`who.task_actor`): its read for Ben shows Ben's turn, as his own does; access stays the acting agent's."""
+    from backend import task_calls as TC
+    from backend import task_reads
+    from backend.auth import Identity
+
+    _shared(c, ANA, BEN)
+    row = _task(c)
+    _submitted(c, company, row)
+    who = Identity(BEN, "human", "ben@acme.example", via="assistant", task_actor="bot:assistant")
+    assert W.turn_viewer(who) == BEN
+    view = TC.task_view(c, row["id"], who.task_actor or who.actor, turn_for=W.turn_viewer(who))
+    assert view and view["turn"]["who"] == BEN
+    (brief,) = task_reads.brief(c, [{"id": row["id"]}], "1", W.turn_viewer(who))
+    assert brief["turn"]["who"] == BEN
