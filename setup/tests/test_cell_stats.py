@@ -1241,6 +1241,23 @@ def test_push_prunes_once_an_hour_from_the_core_it_runs_from(box):
     assert json.loads(out.getvalue())["prune"] is None and len(pruned) == 1
 
 
+def test_a_full_disk_still_pushes_and_prunes(box, monkeypatch):
+    enrolled(box)
+    pruned = []
+    real = box.run
+    box.run = lambda argv, timeout=20, cwd=None: (
+        pruned.append(argv) or Result(0, '{"ok": true}\n') if argv[-1] == "prune" else real(argv, timeout, cwd)
+    )
+
+    def full(*a, **k):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(cs, "_write_private", full)
+    out = io.StringIO()
+    assert cs.push(box, out=out) == 0
+    assert json.loads(out.getvalue())["prune"] == {"ok": True} and len(pruned) == 1
+
+
 def test_push_without_enrollment_says_so(box):
     with pytest.raises(SystemExit, match="not enrolled"):
         cs.push(box, out=io.StringIO())

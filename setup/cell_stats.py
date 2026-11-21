@@ -1676,7 +1676,8 @@ def push(box: Box, out=None) -> int:
     cache = _read_json(cache_path)
     snap = collect(box, cache, host_id=cfg["host_id"])
     body = fit(snap)
-    _write_private(cache_path, cache)
+    with contextlib.suppress(OSError):  # a full disk still gets its push, and its prune
+        _write_private(cache_path, cache)
     status, headers, answer = box.post(
         f"{cfg['hq']}/v1/cells/{cfg['host_id']}/stats", gzip.compress(body, 5), _headers(cfg, True)
     )
@@ -1723,7 +1724,8 @@ def prune_hourly(box: Box, started: float, cache_path: Path) -> dict | None:
     if now - (cache.get("prune_at") or 0) < PRUNE_EVERY or remaining < TOOL_MIN:
         return None
     cache["prune_at"] = now
-    _write_private(cache_path, cache)
+    with contextlib.suppress(OSError):  # unsaved on a full disk: it prunes again next tick, which is what it needs
+        _write_private(cache_path, cache)
     r = box.run([sys.executable, "-m", "setup", "cell", "prune"], timeout=remaining, cwd=str(box.path(CORE_LINK)))
     with contextlib.suppress(ValueError, IndexError):
         answer = json.loads(r.stdout.strip().splitlines()[-1])

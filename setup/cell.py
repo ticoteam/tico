@@ -350,7 +350,8 @@ SNAPSHOT_SPARE = 1 << 30  # free bytes a snapshot must leave beyond its own copy
 CORES = "opt/tico-cell"
 CORE_DIR_RE = re.compile(r"core-(v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.]+)?)")
 UNIT_DIR = "etc/systemd/system"
-FRESH_S = 3600  # a core folder this new may be a running update's; a leftover (.core-*, .prune-*) this old is not
+FRESH_S = 3600  # a core folder this new may be a running update's; a leftover .prune-* this old is not
+PRUNE_S = 120  # seconds of image removals per prune; the next one goes on
 DB_FILES = ("hub.sqlite", "hub.sqlite-wal", "hub.sqlite-shm")
 STOPPED = ("", "exited", "created", "dead")  # container states in which nothing has the database open
 # Each company's updater (setup/cell_updater.py): this port on its default network's gateway address, nowhere else.
@@ -2126,6 +2127,8 @@ class Cell:
         if self.wake_service():
             changed.append("wake")
         cell = {**saved, "domain": domain, "router": f"http://{ROUTER_ADDRESS}:{ROUTER_PORT}"}
+        if CORE_DIR_RE.fullmatch(own_core()):  # HQ runs every later command from the core it last ran init from
+            cell["init_cores"] = sorted({*saved.get("init_cores", []), own_core()})
         for name, value in (("page_domain", page_domain), ("meet_domain", meet_domain), ("kms_key", kms_key)):
             if value:
                 cell[name] = value
@@ -3190,11 +3193,13 @@ class Cell:
                 else:
                     ready = self.wait_healthy(c, started, args.timeout) if running else 0
                 return self.answer(c, ready, changed)
+            if not pending and self.short_of_space(slug):
+                self.prune_quietly({args.version})  # room for the snapshot, made while the company still serves
             self.pull(args.version)
             try:
                 self.ensure_stopped(slug)
                 # An update still pending keeps its release and snapshot: the database has not moved on since.
-                snap = pending or {"from": c["version"], "snapshot": self.snapshot(slug, c["version"], args.version)}
+                snap = pending or {"from": c["version"], "snapshot": self.snapshot(slug, c["version"])}
             except CellError as e:
                 raise self.restarted(c, e, running) from None
             self.taken = snap.get("snapshot", "")
@@ -3227,11 +3232,19 @@ class Cell:
         err.extra = {"version": c["version"]}
         return err
 
-    def snapshot(self, slug: str, version: str, target: str = "") -> str:
+    def short_of_space(self, slug: str) -> int:
+        """Bytes a snapshot of the company's database would still need on this disk (0: it fits with SNAPSHOT_SPARE)."""
+        data = self.dir(slug) / "data"
+        size = sum(os.lstat(data / n).st_size for n in DB_FILES if os.path.isfile(data / n))
+        with contextlib.suppress(OSError):
+            return max(0, size + SNAPSHOT_SPARE - self.system.free_bytes(str(data)))
+        return 0
+
+    def snapshot(self, slug: str, version: str) -> str:
         """The stopped server's database, before a new release migrates it, in snapshots/<name>; the name, or "" when
         there is no database yet. The last SNAPSHOTS_KEPT are kept, the oldest removed before the copy so the disk
-        never holds one more. A copy that would leave less than SNAPSHOT_SPARE free first has `prune` make room (keeping
-        `target`, the release being pulled for); still short, it is refused as disk_full, before a byte is copied.
+        never holds one more. A copy that would leave less than SNAPSHOT_SPARE free is refused as disk_full before a
+        byte is copied (`update` has `prune` make room before it stops the server).
         data/ belongs to the server, and its updater lets the company itself start this, so only plain files are
         copied: a symlink there would have root copy a host file into snapshots/, and a rollback would hand it to the
         server."""
@@ -3247,16 +3260,12 @@ class Cell:
         older = sorted(p for p in snaps.iterdir() if p.is_dir()) if snaps.is_dir() else []
         for old in older[: max(0, len(older) - (SNAPSHOTS_KEPT - 1))]:
             shutil.rmtree(old, ignore_errors=True)
-        need = sum(os.lstat(data / n).st_size for n in found) + SNAPSHOT_SPARE
-        free = self.system.free_bytes(str(data))
-        if free < need:
-            self.prune_quietly({target} if target else set())
-            free = self.system.free_bytes(str(data))
-        if free < need:
+        short = self.short_of_space(slug)
+        if short:
             raise CellError(
                 "disk_full",
-                f"copying the database needs {need / 1e9:.1f} GB free and this host has {free / 1e9:.1f} GB; "
-                "nothing was copied. Free space on the host or grow its disk",
+                f"copying the database needs {short / 1e9:.1f} GB more free space on this host; nothing was copied. "
+                "Free space on the host or grow its disk",
             )
         dest = snaps / f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}-{version}"
         try:
@@ -3273,13 +3282,16 @@ class Cell:
         """The server images and core folders (/opt/tico-cell/core-vX.Y.Z) no company here needs, removed: every
         release leaves both behind, and nothing else ever removes them. Needed: each company's release and the one its
         pending update would roll back to, `keep`, and any release newer than all of those (an update on its way in).
-        A core folder also stays while it is the one running this, a link's target (stats-core), a systemd unit's
-        WorkingDirectory (the updater runs from the core that installed it), or under FRESH_S old. An image a container
-        uses stays (docker rmi refuses it). With no company here nothing is removed. One prune at a time."""
+        A core folder also stays while it is the one running this, one `init` ran from (cell.json `init_cores`: HQ runs
+        its commands from the core it installed), a link's target (stats-core), one a tico-* systemd unit names, any
+        process's working directory, or under FRESH_S old. An image a container uses stays (docker rmi refuses it); one
+        removed between an update's pull and its start is pulled again by `up`. With no company here nothing is
+        removed. One prune at a time."""
         self.load_cell()
         try:
             with self.lock("prune", timeout=0):
                 in_use = {v for c in self.companies() for v in (c.get("version"), (c.get("pending") or {}).get("from"))}
+                in_use |= self.updates_under_way()
                 in_use = {v for v in in_use | set(keep) if isinstance(v, str) and VERSION_RE.fullmatch(v)}
                 if not in_use:
                     return {"ok": True, "images_removed": 0, "cores_removed": 0}
@@ -3295,6 +3307,17 @@ class Cell:
             return {"ok": True, "busy": True}
         return {"ok": True, "images_removed": images, "cores_removed": cores}
 
+    def updates_under_way(self) -> set[str]:
+        """The releases each company's updater is moving it to right now (its updater-status.json), so an update
+        between its pull or core install and its record keeps both."""
+        out = set()
+        for d in (self.root / "companies").glob("*/updater-status.json"):
+            with contextlib.suppress(OSError, ValueError, AttributeError):
+                s = json.loads(d.read_text())
+                if s.get("state") in ("pulling", "restarting"):
+                    out.add(s.get("to"))
+        return out
+
     def prune_quietly(self, keep: set[str] = frozenset()) -> None:
         """`prune` where its failure must not fail the command that asked for it (update, snapshot)."""
         with contextlib.suppress(Exception):
@@ -3302,12 +3325,10 @@ class Cell:
 
     def prune_images(self, needed) -> int:
         r = self.system.run(["docker", "images", SERVER_IMAGE, "--format", "{{.Tag}}"], timeout=60)
-        removed = 0
+        removed, deadline = 0, self.system.monotonic() + PRUNE_S
         for tag in sorted(set(r.stdout.split()) if not r.returncode else ()):
-            if VERSION_RE.fullmatch(tag) and not needed(tag):
-                removed += not self.system.run(["docker", "rmi", f"{SERVER_IMAGE}:{tag}"], timeout=120).returncode
-        if removed:
-            self.system.run(["docker", "image", "prune", "--force"], timeout=300)  # their layers no tag holds now
+            if VERSION_RE.fullmatch(tag) and not needed(tag) and self.system.monotonic() < deadline:
+                removed += not self.system.run(["docker", "rmi", f"{SERVER_IMAGE}:{tag}"], timeout=60).returncode
         return removed
 
     def prune_cores(self, needed) -> int:
@@ -3316,20 +3337,29 @@ class Cell:
             entries = sorted(base.iterdir())
         except OSError:
             return 0
-        held = {Path(__file__).resolve().parent.parent.name}
-        held |= {Path(os.readlink(p)).name for p in entries if p.is_symlink()}
+        held = {own_core(), *(self.saved_cell().get("init_cores") or [])}
+        for p in entries:
+            with contextlib.suppress(OSError):
+                if p.is_symlink():
+                    held.add(Path(os.readlink(p)).name)
         with contextlib.suppress(OSError):
-            for unit in (self.host / UNIT_DIR).glob("tico-*.service"):
-                held |= {
-                    Path(line.split("=", 1)[1].strip()).name
-                    for line in _read(unit).splitlines()
-                    if line.startswith("WorkingDirectory=")
-                }
+            for proc in (self.host / "proc").iterdir():
+                with contextlib.suppress(OSError):
+                    cwd = Path(os.readlink(proc / "cwd")).parts  # ("/", "opt", "tico-cell", "core-v…", …)
+                    if cwd[1:3] == tuple(CORES.split("/")) and len(cwd) > 3:
+                        held.add(cwd[3])
+        with contextlib.suppress(OSError):
+            for unit in [*(self.host / UNIT_DIR).glob("tico-*.service"), *(self.host / UNIT_DIR).glob("tico-*.d/*")]:
+                held |= {f"core-{v}" for v in CORE_DIR_RE.findall(_read(unit))}
         now, removed = time.time(), 0
         for p in entries:
-            if p.is_symlink() or not p.is_dir():
+            try:
+                st = p.lstat()
+            except OSError:
+                continue  # gone since the listing (a link swap, an installer's staging folder)
+            if not stat.S_ISDIR(st.st_mode):
                 continue
-            age = now - p.lstat().st_mtime
+            age = now - st.st_mtime
             m = CORE_DIR_RE.fullmatch(p.name)
             if m and p.name not in held and age > FRESH_S and not needed(m[1]):
                 gone = base / f".prune-{p.name}.{os.getpid()}"
@@ -3339,8 +3369,8 @@ class Cell:
                     continue
                 shutil.rmtree(gone, ignore_errors=True)
                 removed += 1
-            elif p.name.startswith((".prune-", ".core-")) and age > FRESH_S:
-                shutil.rmtree(p, ignore_errors=True)  # an interrupted removal, or an install that died half-way
+            elif p.name.startswith(".prune-") and age > FRESH_S:
+                shutil.rmtree(p, ignore_errors=True)  # a removal that was interrupted
         return removed
 
     def rollback(self, c: dict, timeout: int, *, restart: bool = True) -> None:
@@ -3716,6 +3746,11 @@ def kms_answer(env: dict[str, str]) -> dict:
         "warning": "KMS is not set: the company's stored secrets are opened by a key file that its backups carry; "
         "give it --kms-key and --kms-credentials-file with `update`, then run `rewrap`",
     }
+
+
+def own_core() -> str:
+    """The name of the core folder this runs from (core-vX.Y.Z on a cell host)."""
+    return Path(__file__).resolve().parent.parent.name
 
 
 def _release_key(v: str) -> tuple:

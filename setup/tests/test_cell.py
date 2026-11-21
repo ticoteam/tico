@@ -1097,7 +1097,7 @@ def test_a_successful_update_removes_the_releases_nothing_needs(ready):
         "core-v1.1.0",  # a unit's WorkingDirectory
         "core-v1.2.3",  # the release before: no longer needed once the update is healthy
         "core-v2.0.0",  # newer than every company's: an update on its way in
-        ".core-v1.9.0.x1",  # an install that died half-way
+        ".core-v1.9.0.x1",  # an installer's staging folder: its installer's to remove
         ".prune-core-v0.1.0.7",  # an interrupted removal
         fresh=["core-v1.1.5"],  # just installed: maybe a running update's
     )
@@ -1110,14 +1110,27 @@ def test_a_successful_update_removes_the_releases_nothing_needs(ready):
     assert ready("update", "--company", "boatyard", "--version", "v1.3.0")["ok"]
     assert _tags(ready) == ["latest", "v1.3.0", "v2.0.0"]
     assert sorted(p.name for p in base.iterdir()) == [
+        ".core-v1.9.0.x1",
         "core-v1.0.0",
         "core-v1.1.0",
         "core-v1.1.5",
         "core-v2.0.0",
         "stats-core",
     ]
-    assert ["docker", "image", "prune", "--force"] in ready.system.calls
     assert ready("prune") == {"ok": True, "images_removed": 0, "cores_removed": 0}  # nothing left to remove
+
+
+def test_prune_keeps_every_core_init_ran_from(ready, monkeypatch):
+    """HQ runs each command for a host from the core it installed (and ran init from), even after a newer init."""
+    for core in ("core-v1.0.0", "core-v1.1.0"):
+        monkeypatch.setattr(cell, "own_core", lambda core=core: core)
+        assert ready("init", "--json")["ok"]
+    monkeypatch.undo()
+    assert json.loads((ready.root / "cell.json").read_text())["init_cores"] == ["core-v1.0.0", "core-v1.1.0"]
+    ready(*add_args(ready))
+    base = _cores(ready, "core-v0.9.0", "core-v1.0.0", "core-v1.1.0")
+    assert ready("prune") == {"ok": True, "images_removed": 0, "cores_removed": 1}
+    assert sorted(p.name for p in base.iterdir()) == ["core-v1.0.0", "core-v1.1.0"]
 
 
 def test_prune_keeps_a_pending_rollback_and_removes_nothing_without_a_company(ready):
@@ -1131,6 +1144,12 @@ def test_prune_keeps_a_pending_rollback_and_removes_nothing_without_a_company(re
     assert record(ready)["pending"]["from"] == "v1.2.3"
     assert _tags(ready) == ["v1.2.3", "v1.3.0"]
     assert not (ready.etc / cell.CORES / "core-v1.0.0").exists()
+    # An update its updater has under way keeps its target, though the record does not name it yet.
+    ready.system.images |= {f"{cell.SERVER_IMAGE}:v1.2.5", f"{cell.SERVER_IMAGE}:v1.2.4"}
+    status = ready.root / "companies" / "boatyard" / "updater-status.json"
+    status.write_text(json.dumps({"state": "pulling", "from": "v1.3.0", "to": "v1.2.5"}))
+    ready("prune")
+    assert _tags(ready) == ["v1.2.3", "v1.2.5", "v1.3.0"]
 
 
 def test_a_snapshot_the_disk_cannot_hold_makes_room_first_then_is_refused(ready):
