@@ -1,5 +1,5 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { refusalFor } from '@/actions';
 import { toast } from '@/kit/Toast';
 import { meQuery, useActor, type Actor } from '@/data';
@@ -69,6 +69,9 @@ export interface ConversationProps {
   /** This thread as the shell's `?chat=` (a second chat's own address): a page a message links to opens beside it.
       Defaults to `thread:<id>`; Tico's sheet has none (it is always there). */
   chat?: string;
+  /** A message to open at (a link's `?m=`): once the first page is in, the chat pages back to it, as a jump from the
+      Outline does. */
+  openAt?: string;
 }
 
 type Item =
@@ -178,7 +181,7 @@ function withExtra(rows: ChatMessage[], extra: ChatMessage[] | undefined, more: 
   return [...out, ...left];
 }
 
-export function Conversation({ id, variant, title, actor, session, from, starters, toDm, onMoved, foot, card, below, canPost = true, extra, chat }: ConversationProps) {
+export function Conversation({ id, variant, title, actor, session, from, starters, toDm, onMoved, foot, card, below, canPost = true, extra, chat, openAt }: ConversationProps) {
   useFollow(variant === 'tico' ? { conversation: id } : { thread: id });
 
   const { data: me } = useQuery(meQuery);
@@ -241,24 +244,31 @@ export function Conversation({ id, variant, title, actor, session, from, starter
     if (!scroller.current?.scrollToKey(message)) toast({ text: 'That message is not loaded', kind: 'failed' });
   };
 
-  /* ---- a jump from the Outline: page back until the message is loaded, then bring it to the middle */
+  /* ---- a jump from the Outline or a link's `?m=`: page back until the message is loaded, then bring it to the middle */
   const { fetchNextPage } = timeline;
-  useEffect(
-    () =>
-      onJump(id, (message) => {
-        void (async () => {
-          for (let n = 0; n <= JUMP_PAGES; n++) {
-            if (scroller.current?.scrollToKey(message)) return;
-            if (n === JUMP_PAGES) break;
-            const r = await fetchNextPage();
-            await frame();
-            if (!r.hasNextPage && !scroller.current?.scrollToKey(message)) break;
-          }
-          if (!scroller.current?.scrollToKey(message)) toast({ text: 'That message is not in this chat', kind: 'failed' });
-        })();
-      }),
-    [id, fetchNextPage],
+  const goTo = useCallback(
+    (message: string) => {
+      void (async () => {
+        for (let n = 0; n <= JUMP_PAGES; n++) {
+          if (scroller.current?.scrollToKey(message)) return;
+          if (n === JUMP_PAGES) break;
+          const r = await fetchNextPage();
+          await frame();
+          if (!r.hasNextPage && !scroller.current?.scrollToKey(message)) break;
+        }
+        if (!scroller.current?.scrollToKey(message)) toast({ text: 'That message is not in this chat', kind: 'failed' });
+      })();
+    },
+    [fetchNextPage],
   );
+  useEffect(() => onJump(id, goTo), [id, goTo]);
+  const openedAt = useRef('');
+  const loaded = !!timeline.data;
+  useEffect(() => {
+    if (!openAt || !loaded || openedAt.current === `${id}:${openAt}`) return;
+    openedAt.current = `${id}:${openAt}`;
+    void frame().then(() => goTo(openAt));
+  }, [id, openAt, loaded, goTo]);
 
   /* ---- where the person is: scrolled up past UP_PX, the asks over the box fade; up more than a window, Jump to latest
      shows, counting what came in since. Set only when that changes, so scrolling draws nothing. */

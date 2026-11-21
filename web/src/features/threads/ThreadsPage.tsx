@@ -14,21 +14,23 @@ export interface ThreadsPageProps {
   /** What the page holds: the thread `thread`, or nothing open yet. */
   pane: 'thread' | 'none';
   thread?: string;
+  /** A message to open the thread at (the address's `?m=`). */
+  message?: string;
 }
 
 /** Threads: one open conversation. Its list is anchored in the menu's Threads tab (plan/threads-team.html). */
-export function ThreadsPage({ pane, thread }: ThreadsPageProps) {
+export function ThreadsPage({ pane, thread, message }: ThreadsPageProps) {
   if (pane === 'none' || !thread) return <ThreadsIndex />;
   return (
     <ThreadPane>
       <ThreadHead id={thread} />
-      <ThreadConversation id={thread} />
+      <ThreadConversation id={thread} message={message} />
     </ThreadPane>
   );
 }
 
 /** A team's thread draws its updates and meetings as cards; a thread from outside has a box only to its agent. */
-function ThreadConversation({ id }: { id: string }) {
+function ThreadConversation({ id, message }: { id: string; message?: string }) {
   const { data } = useQuery(threadQuery(id));
   const title = useTitle(data);
   // A thread with an agent shows what it asked you to approve, as cards among its messages; a card's page opens
@@ -45,6 +47,7 @@ function ThreadConversation({ id }: { id: string }) {
       card={(m) => approvalCard(m) ?? callCard(m)}
       extra={approvals}
       canPost={!outside && data?.me?.can_post !== false}
+      openAt={message}
       foot={outside?.handler ? <AgentBox agent={outside.handler} from={{ page: 'thread', label: 'Thread', item: { kind: 'thread', id } }} draftId={`agent:/threads/${id}`} /> : undefined}
     />
   );

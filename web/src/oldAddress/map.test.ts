@@ -108,7 +108,7 @@ const CASES: [old: string, now: string | null][] = [
   ['#/threads', '/threads'],
   ['#/calendar?view=3day&date=2026-03-04', '/calendar?view=3day&date=2026-03-04'],
   ['#/threads/new', '/threads'],
-  ['#/thread/th_9?m=msg_2', '/threads/th_9'],
+  ['#/thread/th_9?m=msg_2', '/threads/th_9?m=msg_2'],
   ['#/seat/s_1/ops', '/settings/agents'],
   ['#/assistant', '/'],
   ['#/assistant/learned', '/learned'],

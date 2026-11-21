@@ -176,10 +176,10 @@ def _report_back(conn: "sqlite3.Connection", after: Row, by: str, why: str | Non
         _write_report(conn, after, by, why, f"report_back:{after['id']}:{revision}")
 
 
-def plain_line(text: object) -> str:
+def plain_line(text: object, empty: str = "A task") -> str:
     """Text as plain Markdown on one line: whitespace collapsed, Markdown marks escaped, and no list marker or heading
-    at its start."""
-    flat = re.sub(r"([\\`*_\[\]<>#|~!])", r"\\\1", " ".join(str(text or "").split())) or "A task"
+    at its start. `empty` stands in for no text."""
+    flat = re.sub(r"([\\`*_\[\]<>#|~!])", r"\\\1", " ".join(str(text or "").split())) or empty
     return re.sub(r"^(\d+)([.)])", r"\1\\\2", re.sub(r"^([-+])", r"\\\1", flat))
 
 

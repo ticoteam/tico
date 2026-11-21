@@ -2187,6 +2187,13 @@ def _write_message(
     if (VIA.get() or BY_TOKEN.get()) and is_human(actor):
         # The Assistant, Agent Ops or a personal token wrote this for the person: not by their hand (delegated).
         refs = {**(refs or {}), "via": VIA.get() or "token"}
+    if isinstance(refs, dict) and "awaiting_reply" in refs:
+        refs = {k: v for k, v in refs.items() if k != "awaiting_reply"}  # server-owned: never a writer's own
+    if VIA.get() == "assistant" and kind == "say" and is_human(actor) and is_bot(target) and conv:
+        # The Assistant asked an agent for the person: its first message in this thread comes back to their Assistant
+        # chat (backend/assistant_relay.py).
+        root = conv.get("root_id") or conv["id"]
+        refs = {**(refs or {}), "awaiting_reply": {"person": actor, "agent": target, "root": root}}
     from . import wake_rules
 
     if actor == TICO_ACTOR and str(target).startswith("bot:") and is_human(wake_rules.CAUSE.get()):
@@ -2281,8 +2288,8 @@ def _write_message(
     if held:
         wake_rules.hold(conn, message(conn, row["id"]), held, rule_id=decision.rule)
     written = message(conn, row["id"])
-    if kind == "say" and is_bot(actor) and is_human(target):
-        # An agent's answer to what the person's Assistant asked it for them goes back to their Assistant chat.
+    if kind == "say" and is_bot(actor):
+        # An agent's answer to what a person's Assistant asked it for them goes back to their Assistant chat.
         from . import assistant_relay
 
         assistant_relay.replied(conn, written)
