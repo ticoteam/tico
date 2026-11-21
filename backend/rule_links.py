@@ -16,9 +16,8 @@ Email's own held path (backend/email_sending.py `rule_gate`) does stop a mail, s
 its event says what happened, with the rules the mail's decision applied. The event is written in a savepoint: a
 failure to log never changes the write or its answer; the proxy writes it with the call's own row, after forwarding.
 
-Each link's mode lives in registry_metadata (`MODES`), by default Enforced for email and Informed only for the rest; only
-the owner changes one, and not from here. Only a mode the link's path implements is taken: a label never makes a path
-that only logs read as Enforced, nor email, which holds mail, read as Informed only.
+A link's mode is what its path does (`mode`): Enforced for email, which holds mail, Informed only for the rest. No
+setting changes it until a link can switch.
 
 What the check reads of a proxied write is scrubbed first (`proxy_output`): no header at all (so no Authorization,
 Cookie or a tool's own auth header); the path, the query's names and values and a JSON, form or plain text body read
@@ -51,9 +50,6 @@ H: Any = _H
 Found = dict[str, Any]  # what `check_as` found and `record` writes
 LOG = logging.getLogger("tico.rule_links")
 ENFORCED, INFORMED, NOT_COVERED = "enforced", "informed", "not_covered"
-MODES = (
-    "rule-link-modes"  # registry_metadata: {link id: "enforced" | "informed"}; a link it does not name has its default
-)
 ENFORCED_LINKS = frozenset({"email"})  # the links whose path really stops a write; every other is Informed only
 FIXED = {"email": "Email", "webhook": "Outgoing webhooks", "release": "Releases"}
 UNCOVERED = {"support": "Tico support", "computer": "Calls straight from computers"}  # unmeasured paths, besides tools
@@ -325,22 +321,9 @@ def unchecked_for(store: Any, who: Any, link: str, operation: str, reason: str) 
 
 
 # ----------------------------------------------------------------------------- Rules › Links
-def modes(c: Any) -> dict[str, Any]:
-    """{link id: mode} as registry_metadata names them (`MODES`; only the owner changes one, not from here)."""
-    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (MODES,)).fetchone()
-    try:
-        saved: Any = json.loads(row[0]) if row else {}
-    except ValueError:
-        saved = {}
-    return cast("dict[str, Any]", saved) if isinstance(saved, dict) else {}
-
-
-def mode(link: str, saved: dict[str, Any]) -> str:
-    """A link's mode from registry_metadata (`saved`), taken only when its path implements it: Enforced where the path
-    stops a write (ENFORCED_LINKS, email), Informed only elsewhere. Any other label leaves the mode its path has."""
-    implemented = ENFORCED if link in ENFORCED_LINKS else INFORMED
-    named = saved.get(link, implemented)
-    return named if named == implemented else implemented  # a label the path does not implement is not taken
+def mode(link: str) -> str:
+    """A link's mode, what its path does: Enforced where it stops a write (ENFORCED_LINKS, email), else Informed only."""
+    return ENFORCED if link in ENFORCED_LINKS else INFORMED
 
 
 def counts(c: Any, links: dict[str, str]) -> dict[str, dict[str, int]]:
@@ -379,9 +362,8 @@ def listing(c: Any, who: Any, admins: Any, auth: Any, now: str | None = None) ->
     # A tool's counts start when this tool was made: events of an earlier tool under the same id are not its own.
     made = {"tool:" + str(t["id"]): str(t["created_at"] or "") for t in tools}
     seen = counts(c, {link: max(since, made.get(link, "")) for link, _ in links})
-    saved = modes(c)
     rows: list[dict[str, Any]] = [
-        {"id": link, "name": name, "mode": mode(link, saved), "counts": seen[link]} for link, name in links
+        {"id": link, "name": name, "mode": mode(link), "counts": seen[link]} for link, name in links
     ]
     rows += [
         {"id": "tool:" + str(t["id"]), "name": str(t["name"] or t["id"]), "mode": NOT_COVERED, "counts": None}
