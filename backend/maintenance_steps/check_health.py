@@ -150,8 +150,13 @@ def run(c, ctx):
             "details": {},
         }
     ctx = dict(ctx, settings=store.settings)  # the app's settings: the engine's ctx["settings"] is the step's own row
-    with store.read_transaction() as r:  # one snapshot for every reader (the stuck updates and the computers they skip)
-        checked, found, notes = gather(r, ctx)
+    # One snapshot for every reader (the stuck updates and the computers they skip), on the engine's own read connection:
+    # no second one from the pool. It ends before the findings are written.
+    c.execute("BEGIN")
+    try:
+        checked, found, notes = gather(c, ctx)
+    finally:
+        c.rollback()
     with store.transaction() as w:
         result = apply(w, ctx, checked, found, notes)
     support = getattr(store, "report_support", None)  # support.py sets it on the app's store; none without an app
