@@ -512,7 +512,7 @@ def approval_of(conn: sqlite3.Connection, row: Row, person: str) -> str | None:
     pages = {
         str(r["id"]): r
         for r in R.for_visit(conn, row["visit"])
-        if r["kind"] == "page" and r.get("stage_id") and (R.people_only(r) or r.get("person_id"))
+        if r["kind"] == "page" and r.get("stage_id") and (R.people_only(r) or R.named(r))
     }
     if not pages:
         return None

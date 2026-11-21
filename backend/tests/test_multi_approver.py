@@ -284,3 +284,19 @@ def test_a_shared_answer_is_taken_back_only_by_the_approvers_own_click(c, compan
         A.undo(c, given, ANA)  # the Assistant, BotOps or a token acting for Ana
     A.undo(c, given, ANA, own_click=True)
     assert c.execute("SELECT undone_at FROM answers WHERE id=?", (given,)).fetchone()[0]
+
+
+def test_an_approver_taken_off_the_list_after_their_ok_no_longer_moves_the_stage(c, company):
+    rid = _shared(c, ANA, BEN)
+    X.requirement(c, "product-spec", "owner_done", position=1)  # a sibling the stage still waits on
+    row = _task(c)
+    _, version = _submitted(c, company, row)
+    _answer(c, row, rid, ANA, "ok", version)
+    assert E.task(c, row["id"])["stage"]["name"] == "Spec"
+    c.execute("UPDATE requirements SET person_id=?, person_ids=? WHERE id=?", (BEN, json.dumps([BEN]), rid))
+    task = E.task(c, row["id"])
+    (page,) = [s for s in R.standings(c, task) if s.requirement["id"] == rid]
+    assert not page.met and W.asked_of(c, task, page) == [BEN], "the ask goes back to who may approve now"
+    done = next(r["id"] for r in R.for_visit(c, task["visit"]) if r["kind"] == "owner_done")
+    A.answer(c, row["id"], done, "bot:writer", "done", seen_version=task["version"])
+    assert E.task(c, row["id"])["stage"]["name"] == "Spec", "her OK no longer moves the stage"

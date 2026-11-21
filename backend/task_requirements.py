@@ -785,6 +785,9 @@ def _one_page(
     if signoff and answer and _reviews_new(requirement, answer):
         answer = _newest_signoff(conn, visit_id, requirement)  # a bot's review of new commits is not the OK
     answer = answer or carried
+    if answer and answer["answer"] == "ok" and shared(requirement):
+        if not _still_approves(conn, task, requirement, str(answer["by_id"])):
+            answer = None  # authority is read again now: an approver taken off the list no longer approves
     if answer and document_of(requirement):
         from . import task_pages as P
 
@@ -921,6 +924,17 @@ def _one_page(
     return Standing(
         requirement, MET, line="Decision model passed it", approved=(f"page:{page['file_id']}@{page['version']}",)
     )
+
+
+def _still_approves(conn: "sqlite3.Connection", task: Row, requirement: Row, by: str) -> bool:
+    """Whether whoever gave an OK on a page several people approve may still approve it: one of its approvers who can
+    act, or with none the owner or Admin standing in (waiting_on.asked_of), and on a private task one who can open
+    it. Read every time the OK is counted, so it lapses once they are taken off the list or lose access."""
+    from . import task_engine as E
+    from . import waiting_on as W
+
+    eligible = people_of(conn, requirement, task["visit"]["id"]) or [W.admin_person(conn)]
+    return by in eligible and not E.not_shared(conn, task, by)
 
 
 def _same_code_ok(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row, page: Row) -> bool:
