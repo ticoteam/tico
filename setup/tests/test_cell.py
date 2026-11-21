@@ -1127,6 +1127,11 @@ def test_prune_keeps_every_core_init_ran_from(ready, monkeypatch):
         assert ready("init", "--json")["ok"]
     monkeypatch.undo()
     assert json.loads((ready.root / "cell.json").read_text())["init_cores"] == ["core-v1.0.0", "core-v1.1.0"]
+    # A host set up before init_cores: the core its units named stays pinned when init rewrites them.
+    unit = ready.etc / cell.UPDATER_UNIT
+    unit.write_text(unit.read_text() + "\nWorkingDirectory=/opt/tico-cell/core-v0.9.5\n")
+    assert ready("init", "--json")["ok"]
+    assert "core-v0.9.5" in json.loads((ready.root / "cell.json").read_text())["init_cores"]
     ready(*add_args(ready))
     base = _cores(ready, "core-v0.9.0", "core-v1.0.0", "core-v1.1.0")
     assert ready("prune") == {"ok": True, "images_removed": 0, "cores_removed": 1}

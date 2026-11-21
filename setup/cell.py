@@ -2122,13 +2122,16 @@ class Cell:
             meet_domain = was_on
         if self.write_router(meet=bool(meet_domain)):
             changed.append("router")
+        # The cores the units ran from before this rewrites them: a host set up before init_cores keeps them pinned.
+        before = {f"core-{v}" for u in (UPDATER_UNIT, WAKE_UNIT) for v in CORE_DIR_RE.findall(_read(self.host / u))}
         if self.updater_service():
             changed.append("updater")
         if self.wake_service():
             changed.append("wake")
         cell = {**saved, "domain": domain, "router": f"http://{ROUTER_ADDRESS}:{ROUTER_PORT}"}
-        if CORE_DIR_RE.fullmatch(own_core()):  # HQ runs every later command from the core it last ran init from
-            cell["init_cores"] = sorted({*saved.get("init_cores", []), own_core()})
+        pinned = {*saved.get("init_cores", []), *before, *([own_core()] if CORE_DIR_RE.fullmatch(own_core()) else [])}
+        if pinned:  # HQ runs every later command from the core it last ran init from
+            cell["init_cores"] = sorted(pinned)
         for name, value in (("page_domain", page_domain), ("meet_domain", meet_domain), ("kms_key", kms_key)):
             if value:
                 cell[name] = value
