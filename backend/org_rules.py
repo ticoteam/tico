@@ -742,16 +742,22 @@ def _cite(c, auth, who, cite, memo=None):
     }
 
 
-def _readable_task(c, who, task_id):
-    """The task's id when the caller can open it, else None: a private clerk task's id is not shown to others."""
-    task = H.task(c, task_id) if task_id else None
-    return task_id if task and H.task_private_readable(c, who.actor, task) else None
+def _readable_task(c, auth, who, task_id):
+    """The task's id when the caller, as it acts (a bot as itself, not only its principal), passes the full task read
+    check (auth.task); else None: a private clerk task's id is not shown to others."""
+    if not task_id:
+        return None
+    try:
+        auth.task(c, who, task_id)
+    except Problem:
+        return None
+    return task_id
 
 
-def _bound_view(c, who, row):
+def _bound_view(c, auth, who, row):
     """A clerk's draft (`bound`): added only by its OK on its task, whose id (`clerk_task`) only its readers get."""
     task = bound_task(c, row["id"]) if row["status"] == "suggested" else None
-    return {"bound": bool(task), "clerk_task": _readable_task(c, who, task)}
+    return {"bound": bool(task), "clerk_task": _readable_task(c, auth, who, task)}
 
 
 def view(c, auth, who, row, ctx, dues=None, quote=True):
@@ -774,7 +780,7 @@ def view(c, auth, who, row, ctx, dues=None, quote=True):
         "if_broken": row["if_broken"],
         "reviewer": reviewer,
         "exact_check": row["exact_check"],
-        **_bound_view(c, who, row),
+        **_bound_view(c, auth, who, row),
         "status": row["status"],
         "suggested_by": row["suggested_by"],
         "decided_by": row["decided_by"],
@@ -982,6 +988,15 @@ NO_EXACT_WITH_TOWARD = "A rule checked in code by its toward scope takes no type
 NO_EXACT_OUTSIDE = "A rule only for outside editions takes no typed check: no teammate's write meets it"
 
 
+def _exact_fits(who, toward, check):
+    """Refuse a typed check on a rule that never runs it: one checked in code (toward scope), or one whose final Who is
+    Outside editions alone. Checked on the Who and check a rule ends with, on add, edit and accept."""
+    if check and toward:
+        raise Problem("validation", NO_EXACT_WITH_TOWARD, 422)
+    if check and _outside_only(who):
+        raise Problem("validation", NO_EXACT_OUTSIDE, 422)
+
+
 def _outside_only(scope):
     """Whether a Who names Outside editions and no teammate (`matching` never reaches such a rule)."""
     return bool(scope.get("outside_editions")) and not _has({**scope, "outside_editions": False})
@@ -1047,10 +1062,7 @@ def add_rule(c, auth, who, body):
     )
     where = _where_terms(c, body.get("where"))
     toward, applies = _structured_terms(body.get("toward_scope"), body.get("applies_when"))
-    if toward and exact_check_in(body.get("exact_check")):
-        raise Problem("validation", NO_EXACT_WITH_TOWARD, 422)
-    if _outside_only(given) and exact_check_in(body.get("exact_check")):
-        raise Problem("validation", NO_EXACT_OUTSIDE, 422)
+    _exact_fits(scope, toward, exact_check_in(body.get("exact_check")))
     # A bot's add is a suggestion, and so is a person's add they may not manage (the rule is theirs to suggest). Whoever may
     # manage the rule, Everyone included, makes it active at once.
     status = "active" if who.role != "bot" and may_manage(c, auth, who, scope, ctx) else "suggested"
@@ -1094,6 +1106,8 @@ def add_rule(c, auth, who, body):
     _event(
         c, who.actor, "added", row["id"], {"kind": kind, "status": status, **({"clerk_task": clerk} if clerk else {})}
     )
+    if clerk:
+        _supersede(c, clerk, row["id"])
     return view(c, auth, who, stored, ctx, quote=False)
 
 
@@ -1127,16 +1141,15 @@ def edit_rule(c, auth, who, rule_id, body):
         changes["where_terms"] = _json(_where_terms(c, body["where"]))
     if body.get("exact_check") is not None:
         check = _exact_json(body["exact_check"])
-        if check and row["toward_scope"]:
-            raise Problem("validation", NO_EXACT_WITH_TOWARD, 422)
-        if check and _outside_only(scope_in(c, body["who"], flags=True) if body.get("who") is not None else row["who"]):
-            raise Problem("validation", NO_EXACT_OUTSIDE, 422)
         if check != (_json(row["exact_check"]) if row["exact_check"] else None):
             changes["exact_check"] = check
     if body.get("source_id") is not None:
         if row["kind"] != "external":
             raise Problem("validation", "Only an external rule has a From", 422)
         changes["source_entity_id"] = _source_named(c, body["source_id"])
+    final_who = json.loads(changes["who"]) if "who" in changes else row["who"]
+    final_check = json.loads(changes["exact_check"] or "null") if "exact_check" in changes else row["exact_check"]
+    _exact_fits(final_who, row["toward_scope"], final_check)  # the Who and check the rule ends with, together
     if not changes:
         return view(c, auth, who, row, ctx, quote=False)
     before = _core(row)
@@ -1154,7 +1167,7 @@ def decide_rule(c, auth, who, rule_id, body, action, by_ok=False):
     if who.role == "bot":
         raise Problem("forbidden", "A bot suggests a rule; a person accepts, skips or retires it", 403)
     if action == "accept" and not by_ok and (task := bound_task(c, rule_id)):
-        readable = _readable_task(c, who, task)
+        readable = _readable_task(c, auth, who, task)
         raise Problem(
             "conflict",
             "This draft is added by its OK on its task",
@@ -1170,6 +1183,7 @@ def decide_rule(c, auth, who, rule_id, body, action, by_ok=False):
             raise Problem("conflict", "Only a suggested rule is accepted", 409)
         scope = _scope_checked(c, auth, who, body["who"]) if body.get("who") is not None else row["who"]
         _check_manage(c, auth, who, scope, ctx)
+        _exact_fits(scope, row["toward_scope"], row["exact_check"])  # the Who it is accepted with, its check
         _check_version(row, body.get("version"))
         before = _core(row)
         extra = {"decided_by": who.actor, "decided_at": H.now()}
@@ -1183,7 +1197,6 @@ def decide_rule(c, auth, who, rule_id, body, action, by_ok=False):
         _check_version(row, body.get("version"))
         before = _core(row)
         _save(c, rule_id, status="retired", extra={"decided_by": who.actor, "decided_at": H.now()})
-        _withdraw_ok(c, rule_id, "Set aside")  # a clerk's draft set aside: its OK no longer waits on anyone
         event = "skipped"
     else:
         if row["status"] == "retired":
@@ -1192,6 +1205,8 @@ def decide_rule(c, auth, who, rule_id, body, action, by_ok=False):
         before = _core(row)
         _save(c, rule_id, status="retired", extra={"decided_by": who.actor, "decided_at": H.now()})
         event = "retired"
+    if action != "accept":
+        _withdraw_ok(c, rule_id, "Set aside")  # retired either way: its OK, if any, no longer waits on anyone
     stored = _get(c, rule_id)
     _audit(c, who.actor, rule_id, before, _core(stored), who)
     _event(c, who.actor, event, rule_id, {})
@@ -1611,14 +1626,18 @@ def history(c, auth, who, rule_id, versions_cursor=None, holds_cursor=None):
 
 
 # ----------------------------------------------------------------------------- adopted by OK
+MAKE_LABEL = "make-rule"  # a "Make this a rule" task: a normal task filed for the Rules page's owner with this label
+
+
+def _labels(task):
+    """A task's label keys: its tags (hubdb.hydrate_task_tags), as a label filed with it is kept."""
+    return {str(tag.get("key")) for tag in task.get("tags") or []}
+
+
 def clerk_task(c, task_id):
-    """Whether a task is a "Make this a rule" task (counsel.make records it)."""
-    return (
-        c.execute(
-            "SELECT 1 FROM events WHERE action='rules.make_requested' AND target=? LIMIT 1", (task_id,)
-        ).fetchone()
-        is not None
-    )
+    """Whether a task is a "Make this a rule" task: it carries MAKE_LABEL."""
+    task = H.task(c, task_id)
+    return bool(task) and MAKE_LABEL in _labels(task)
 
 
 def _run_tasks(c, who):
@@ -1657,22 +1676,22 @@ def _people_to_ask(c, task):
     return list(dict.fromkeys(p for p in out if H.is_human(p)))
 
 
-def _adopter(c, auth, asker, row, task):
-    """Who is asked: the first of the requester, the owner and the Admins who is here, can already read the task (an ask
-    shares it with nobody), may add this rule and is within the asker's reach for this task (reach.check, as the ask
-    itself checks). None when nobody is: sharing the task with someone who may is a person's step."""
+def _adopter(c, auth, asker, task):
+    """Who is asked: the first of the requester, the owner and the Admins who is the owner or an Admin (a clerk's draft
+    becomes company law: only they adopt it), is here, can already read the task (an ask shares it with nobody) and is
+    within the asker's reach for this task (reach.check, as the ask itself checks). None when nobody is: sharing the
+    task with someone who may is a person's step."""
     from types import SimpleNamespace as NS
 
     from . import org_rule_check as OC
     from . import reach
 
-    ctx = _ctx(c)
     for person in _people_to_ask(c, task):
         if not OC._present(c, person) or not H.task_private_readable(c, person, task):
             continue
         try:
             ident = auth.identity_for_actor(c, person)
-            if not may_manage(c, auth, ident, row["who"], ctx):
+            if not auth.bot_admin(ident):
                 continue
             reach.check(c, NS(role="bot", actor=asker), person, "task", task_id=task["id"])
         except Problem:
@@ -1684,8 +1703,8 @@ def _adopter(c, auth, asker, row, task):
 def ask_ok(c, auth, who, rule_id, task_id):
     """Ask one person to OK a suggestion exactly as it is now, on the clerk task it is bound to, from the run on that
     task (task_asks subject `rule:<id>`, line OK_LINE; the preview carries the rule and every field that enforces it).
-    The person is the requester when they may add it, else the owner or an Admin. The asker's earlier asks for other
-    drafts on the task are withdrawn and those drafts set aside: one ask waits on the task."""
+    The person is the first owner or Admin (the requester first, when they are one) who reads the task and is in reach.
+    One ask waits on the task: saving a revised draft set the earlier ones aside (`_supersede`)."""
     from . import task_asks
 
     task_id = auth.resolve_task(c, who, task_id)
@@ -1705,7 +1724,7 @@ def ask_ok(c, auth, who, rule_id, task_id):
         # the OK card shows every field it binds; a rule checked in code is added on Rules, not through a clerk's OK
         raise Problem("validation", "A clerk's draft takes no toward scope or condition", 422)
     task = H.task(c, task_id) or {}
-    person = _adopter(c, auth, who.actor, row, task)
+    person = _adopter(c, auth, who.actor, task)
     if not person:
         raise Problem(
             "conflict",
@@ -1729,16 +1748,6 @@ def ask_ok(c, auth, who, rule_id, task_id):
     asked = task_asks.ask_ok(
         c, who.actor, person, OK_LINE, shows=[subject], subject=subject, content=content, task_id=task_id
     )
-    # Every earlier draft's ask on this task, whoever asked it (a task reassigned to another clerk included).
-    earlier = c.execute(
-        "SELECT g.requirement_id, g.subject FROM ok_grants g JOIN requirements r ON r.id=g.requirement_id "
-        "JOIN visits v ON v.id=r.visit_id WHERE v.task_id=? AND g.subject LIKE 'rule:%' AND g.subject!=? "
-        "AND g.used_at IS NULL",
-        (task_id, subject),
-    ).fetchall()
-    for rid, old in earlier:
-        task_asks.withdraw(c, rid, "A revised draft replaces it")
-        _replaced(c, old[len(OK_SUBJECT) :], rule_id)
     _event(c, who.actor, "ok_asked", rule_id, {"task_id": task_id, "to": person})
     return {**asked, "asked_of": person}
 
@@ -1753,11 +1762,24 @@ def _withdraw_ok(c, rule_id, why):
         task_asks.withdraw(c, rid, why)
 
 
+def _supersede(c, task_id, by_id):
+    """A revised draft saved on a clerk task, in its own transaction: every earlier draft bound to that task, whoever
+    drafted it (a reassigned task's first clerk included), is set aside and its ask withdrawn, so one ask waits."""
+    for (target,) in c.execute(
+        "SELECT target FROM events WHERE action='org_rule.added' AND json_extract(detail,'$.clerk_task')=?",
+        (task_id,),
+    ).fetchall():
+        old_id = str(target)[len("org_rule:") :]
+        if old_id != by_id:
+            _replaced(c, old_id, by_id)
+
+
 def _replaced(c, old_id, by_id):
-    """A draft a revised one replaced is set aside, as a person's Skip would."""
+    """A draft a revised one replaced is set aside, as a person's Skip would, and its OK withdrawn."""
     old = _get(c, old_id)
     if old["status"] != "suggested":
         return
+    _withdraw_ok(c, old_id, "A revised draft replaces it")
     _save(c, old_id, status="retired", extra={"decided_by": H.TICO_ACTOR, "decided_at": H.now()})
     _audit(c, H.TICO_ACTOR, old_id, _core(old), _core(_get(c, old_id)), SimpleNamespace(via="", actor=H.TICO_ACTOR))
     _event(c, H.TICO_ACTOR, "replaced", old_id, {"by": by_id})
@@ -1780,6 +1802,8 @@ def ok_given(c, grant, ctx):
         raise Problem("conflict", "This OK is not on the task the rule was drafted on", 409)
     if row["status"] != "suggested" or row["version"] != content.get("version"):
         raise Problem("conflict", "This suggestion changed after it was asked: it needs a new ask", 409)
+    if not ctx.auth.bot_admin(who):
+        raise Problem("forbidden", "Only the owner or an Admin adds a clerk's draft", 403)
     decide_rule(c, ctx.auth, who, row["id"], {"version": row["version"]}, "accept", by_ok=True)
     task_asks.use(c, rid, grant["subject"], content, grant["asked_by_id"])
     H.attempt(c, H.task_done, H.TICO_ACTOR, task_id, f"Added: {row['text']}"[:500])

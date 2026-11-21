@@ -148,18 +148,19 @@ rule_due_status(due_date_id, due_on, satisfied_by, via routine|person, task_id?,
   params break; the sentence stays the rule people read.
 - **Constitution:** a locked doc (five articles and the order of law), made once a company is completed (whoever owns
   Rules) or at the first "Make this a rule". It is recorded by id (`rules.constitution`) and read by it; its path,
-  `rules/constitution.md`, is reserved. Only people lock, change or restore a locked doc: not a bot, not an Assistant or
-  BotOps acting for a person unconfirmed.
-- **Make this a rule** (`POST /api/v2/rules/make`) files a private task for the Rules page's owner, with the
-  constitution in it. Its clerk skill (`templates/catalog/_shared/.claude/skills/clerk-a-rule`) suggests one rule in its
-  run on that task, which binds the suggestion to the task, and asks one OK from that run (`POST
-  /api/v2/rules/{id}/ok`, line "Approve this rule") of the requester when they may add it, else the owner or an Admin.
-  The preview binds the sentence, Who, With, Where, If broken and the typed check; a revised draft replaces the ask and
-  sets the old draft aside, whoever asked (a reassigned task); Set aside withdraws its ask. The person asked is the first
-  of the requester, the owner and the Admins who already reads the task, may add it and is within the clerk's reach: an
-  ask shares the task with no one. A draft with a toward scope or condition is not asked about. Only the task's readers
-  get its id on the draft (`clerk_task`); others see `bound`. A clerk's draft may name Everyone; the person's OK accepts exactly that version, as
-  them, on its bound task only, and a direct accept of a bound draft is refused.
+  `rules/constitution.md`, is reserved. Only people lock, change or restore a locked doc, or the
+  recorded constitution locked or not: not a bot, not an Assistant or BotOps acting for a person unconfirmed.
+- **Make this a rule** is a normal private task (`POST /api/v2/tasks`, every filing check) for the Rules page's owner,
+  labelled `make-rule` and naming the constitution's doc, the one doc outside its task the Rules Owner may read. Its
+  clerk skill (`templates/catalog/_shared/.claude/skills/clerk-a-rule`) suggests one rule in its run on that task, which
+  binds the suggestion to the task; saving a revised draft there sets every earlier one aside and withdraws its ask,
+  whoever drafted it (a reassigned task). It asks one OK from that run (`POST /api/v2/rules/{id}/ok`, line "Approve
+  this rule") of the first of the requester, the owner and the Admins who is the owner or an Admin, already reads the
+  task and is within the clerk's reach: an ask shares the task with no one. The preview binds the sentence, Who, With,
+  Where, If broken, the reviewer and the typed check, each shown whole. A draft with a toward scope or condition is not
+  asked about. Retiring a draft either way withdraws its ask. Only those who can open the task get its id on the draft
+  (`clerk_task`); others see `bound`. A clerk's draft may name Everyone; the OK, by the owner or an Admin, accepts
+  exactly that version, as them, on its bound task only, and a direct accept of a bound draft is refused.
 
 ### 2. The Rules Owner reads a document and suggests rules
 
@@ -429,7 +430,7 @@ tico rules suggested [--from F]   tico rules accept <id> [--who ...]   tico rule
 tico rules check "<draft>" --to <teammate> [--as message|comment|task|assign]  # same check Decide runs on send
 tico rules appeal <hold-id> "<why>"                                             # a blocked bot asks its reviewer
 tico rules ask "<question>"                                                     # the Rules Owner answers with cites
-tico rules make "<words>"                                                       # the Rules page's owner drafts a rule
+tico rules make "<words>"                                                       # a task: the Rules page's owner drafts a rule
 tico rules ok <id> --task <task>                                                # ask one OK for your suggestion
 tico rules history <id>                                                         # versions and its last 30 days
 tico rules add|edit ... --exact '<json>'                                         # a typed check; {} on edit removes it

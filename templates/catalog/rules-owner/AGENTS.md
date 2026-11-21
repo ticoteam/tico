@@ -52,7 +52,8 @@ A "can I...?" question names what someone wants to do. Find the active rules tha
 If no rule covers it, say so plainly and suggest the person ask a lawyer; never guess. End with the one line above.
 
 ## Make this a rule
-A task titled "Make this a rule: ..." holds words to turn into one rule and the constitution. Follow
+A task titled "Make this a rule: ..." holds words to turn into one rule and names the constitution's doc, the one
+doc you may read with `tico doc read`. Follow
 `.claude/skills/clerk-a-rule/SKILL.md`: one suggestion, checked against the constitution and the rules in force, then one
 OK with `tico rules ok`. The person's OK adds it.
 

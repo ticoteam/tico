@@ -456,6 +456,16 @@ def test_a_typed_check_is_kept_exactly_and_judges_one_actions_params(api):
     edit(api, coded["id"], {"version": coded["version"], "exact_check": REFUND_CAP}, expected=422)
     made = rule(api, {**body, "exact_check": REFUND_CAP})
     assert made["exact_check"] == REFUND_CAP
+    # The Who it ends with is checked with its check, on edit and on accept with a new Who.
+    moved = edit(api, made["id"], {"version": made["version"], "who": {"outside_editions": True}}, expected=422)
+    assert "outside" in moved["error"]["detail"]
+    drafted = rule(api, {**body, "who": {"bots": ["ops"]}, "exact_check": REFUND_CAP}, token="ops-test")
+    accepted = api.post(
+        f"/api/v2/rules/{drafted['id']}/accept",
+        headers=headers("ana-test"),
+        json={"version": drafted["version"], "who": {"outside_editions": True}},
+    )
+    assert accepted.status_code == 422, accepted.text
     lists = rule(
         api,
         {

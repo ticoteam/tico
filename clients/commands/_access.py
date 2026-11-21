@@ -329,6 +329,7 @@ COUNSEL_TOOLS = frozenset(
         "tico_rules_get",
         "tico_rules_add",
         "tico_rules_ok",
+        "tico_doc_read",
         "tico_file_read",
         "tico_task_comment",
         "tico_task_close",
