@@ -4,6 +4,7 @@ import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
 import { MenuItem } from '@/kit/Menu';
+import { LinksEntry } from '@/features/company/exports';
 import { pipelinesQuery, type Pipeline } from '@/features/tasks/routing';
 import { List, PageMore, Section, type PageTab } from '@/pagekinds';
 import { hasWho, ROUTINES, RULES, type RuleTab } from './actions';
@@ -120,6 +121,7 @@ function Page({ search, asked, state, retry, empty, dialogs, children }: Omit<Ta
         <PageMore>
           <MenuItem label="Add due date" icon="calendar" onSelect={() => void press('rules.newDue', {})} />
           <MenuItem label="Add document" icon="file" onSelect={() => setReading(true)} />
+          <LinksEntry />
         </PageMore>
       }
       state={state}

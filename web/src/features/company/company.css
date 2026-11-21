@@ -441,3 +441,6 @@
 .pnl .fld-v>span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .pnl .fld-link{color:var(--ink)}
 .pnl .fld-link:hover{text-decoration:underline;text-underline-offset:3px}
+
+/* Rules › Links (RuleLinks.tsx): a narrow sheet scrolls the table's counts sideways, never the page */
+.co .rl-scroll{overflow-x:auto}

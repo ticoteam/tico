@@ -178,6 +178,25 @@ def view(c: Any, who: Any, auth: Any) -> dict[str, Any]:
     }
 
 
+class _Recheck(Exception):
+    """Release now's write found what its read did not (the open Release task gone): it checks again outside it."""
+
+
+def open_release(c: Any, owner: str) -> Any:
+    """The Release Owner's unfinished Release task (its id first), or None."""
+    return c.execute(
+        "SELECT id FROM tasks WHERE owner_id=? AND status='open' AND substr(title, 1, ?)=? "
+        "ORDER BY created_at DESC LIMIT 1",
+        (owner, len(TITLE), TITLE),
+    ).fetchone()
+
+
+def would_file(c: Any, who: Any) -> bool:
+    """Whether Release now by `who` would file a task now: theirs to ask, a Release Owner named, none open."""
+    manager = release_manager(c)
+    return may_release(c, who) and bool(manager) and not open_release(c, H.bot_actor(manager))
+
+
 def request_now(c: Any, actor: str, note: str = "", visible_sql: str | None = None) -> dict[str, Any]:
     """ONE task for the Release Owner, or its unfinished Release task. Anyone may read that task, so it says who
     asked and their note, never which tasks wait or how many: the Release Owner finds what waits itself, and closes
@@ -190,11 +209,7 @@ def request_now(c: Any, actor: str, note: str = "", visible_sql: str | None = No
     if not manager:
         return {"sent": False, "reason": "no_release_manager", "task": None, "tasks": seen}
     owner = H.bot_actor(manager)
-    found = c.execute(
-        "SELECT id FROM tasks WHERE owner_id=? AND status='open' AND substr(title, 1, ?)=? "
-        "ORDER BY created_at DESC LIMIT 1",
-        (owner, len(TITLE), TITLE),
-    ).fetchone()
+    found = open_release(c, owner)
     if found:
         mine = (
             not visible_sql or c.execute(f"SELECT 1 FROM tasks WHERE id=? AND ({visible_sql})", (found[0],)).fetchone()
@@ -269,7 +284,36 @@ def register(app: FastAPI, auth: Any, mutate: Callable[..., Any], store: Any) ->
             if not may_release(c, who):
                 raise Problem("forbidden", "Only a person, the Release Owner or a releasing pipeline's manager", 403)
 
-        def write(c: Any) -> dict[str, Any]:
-            return request_now(c, who.actor, body.note or "", auth.task_sql(c, who))
+        from . import rule_links as _rule_links
 
-        return mutate(request, body, write)
+        links: Any = _rule_links
+        agent = links.is_agent(store, who)
+
+        def filing_now(c: Any) -> bool:
+            return would_file(c, who)
+
+        for _ in range(2):
+            # An agent's ask meets the org rules first (backend/rule_links.py), its one event in the ask's write; only
+            # an ask that would file a task is checked, on its name only (never its note). Log-only.
+            filing = agent and links.would_write(store, who, request, filing_now)
+            found = (
+                links.check(store, request.app.state.judge, who, "release", "release", "Release now")
+                if filing
+                else None
+            )
+
+            def write(c: Any, filing: bool = filing, found: Any = found) -> dict[str, Any]:
+                if agent and not filing and would_file(c, who):
+                    raise _Recheck  # the open Release task went since it was read: check again, outside this write
+                out = request_now(c, who.actor, body.note or "", auth.task_sql(c, who))
+                if out["sent"]:
+                    links.record(c, found)
+                return out
+
+            try:
+                return mutate(request, body, write)
+            except _Recheck:
+                continue
+        raise Problem(
+            "release_changed", "The Release task changed while this was asked. Ask again.", 409, retryable=True
+        )
