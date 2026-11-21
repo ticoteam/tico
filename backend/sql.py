@@ -65,7 +65,12 @@ SAFE_COLUMNS = {
 # Columns nobody reads through SQL. Tables not named in `guarded` (credentials, credential_keys,
 # credential_grants, credential_uses, idempotency, runners, runner_states, enrollments, session_epochs, bot_session_epochs, settings_changes,
 # backup_verified_blobs, _litestream_*, sqlite_* except sqlite_master) are denied outright.
-HIDDEN = {"task_requesters": {"token_hash"}, "attempts": {"token_hash"}, "service_jobs": {"token_hash"}}
+HIDDEN = {
+    "task_requesters": {"token_hash"},
+    "attempts": {"token_hash"},
+    "service_jobs": {"token_hash"},
+    "question_marks": {"line"},  # the question's words are its message's, read there
+}
 # Columns read as an expression over the caller's own views: a column naming a task the caller may not read gives
 # its id to nobody. A bot's claim limit (bot_control.claim_task) on such a task reads '': a limit is on, as
 # GET /api/v2/bots says with `claim_scoped` and no `claim_task`.
@@ -74,6 +79,11 @@ HIDDEN = {"task_requesters": {"token_hash"}, "attempts": {"token_hash"}, "servic
 SPAN_TASK = "CASE WHEN source.kind = 'tasks' AND source.who NOT IN (SELECT id FROM tasks) THEN '' ELSE {who} END"
 MASKED = {
     "task_wait_spans": {"who": SPAN_TASK.format(who="source.who")},
+    # A ❓ in a chat about a task names that task only to a reader who may read it.
+    "question_marks": {
+        "task_id": "CASE WHEN source.task_id = '' OR source.task_id IN (SELECT id FROM tasks) THEN source.task_id "
+        "ELSE '' END"
+    },
     "bot_control": {
         "claim_task": "CASE WHEN source.claim_task IS NULL THEN NULL "
         "WHEN source.claim_task IN (SELECT id FROM tasks) THEN source.claim_task "
@@ -123,6 +133,11 @@ def teammate_masks(unseen, me, inner=None, names=None, bots=()):
 
         out["thread_members"] = {
             column: masked(column, member("source.thread_id"), qlist(strangers)) for column in ("actor", "added_by")
+        }
+        # A ❓ names its bot and its person, and who gave or cleared it, as its chat names its members.
+        out["question_marks"] = {
+            column: masked(column, member("source.conversation_id"), qlist(strangers))
+            for column in ("bot_id", "person_id", "given_by_id", "cleared_by_id")
         }
         # A wait span names a person, group or bot the caller may not see as task_waits does: as ''.
         out["task_wait_spans"] = {
@@ -304,6 +319,34 @@ _AGENT_ACTION = (
     + " AND ".join(f"action NOT LIKE '{prefix}%'" for prefix in RT.BOOKKEEPING_PREFIXES)
 )
 _WEEK = "date({at}, '-6 days', 'weekday 1')"
+# Whether the answer in history row `{row}` was taken back (answers.undo writes `answer_undone` naming it).
+_UNDONE = (
+    "EXISTS (SELECT 1 FROM {{history_events}} u WHERE u.subject_type = 'task' AND u.subject_id = {row}.subject_id "
+    "AND u.kind = 'answer_undone' AND json_extract(u.data, '$.answer_id') = json_extract({row}.data, '$.answer_id'))"
+)
+# Product's Validate stages (validate_gate.STAGES): a bot's OK there waits for its page to pass before it is asked.
+_VALIDATE = (
+    "(coalesce(x.stage, '') = 'product-validate' OR (coalesce(x.stage, '') LIKE 'product-validate-%' "
+    "AND substr(x.stage, 18) <> '' AND substr(x.stage, 18) NOT GLOB '*[^0-9]*'))"
+)
+# An OK or a page added to one task and asked of a person (a `requirement` history row naming them): when it was asked
+# of whoever answered (the ask, or its newest give before the answer), when it was first answered, and the stage the
+# task was in when it was asked.
+_ASKS = (
+    "SELECT 'ask' AS source, max(x.created_at, coalesce((SELECT max(g.created_at) FROM {history_events} g "
+    "WHERE g.subject_type = 'task' AND g.subject_id = x.subject_id AND g.kind = 'give' "
+    "AND json_extract(g.data, '$.requirement') = x.requirement AND g.created_at < x.answered), '')) AS asked, "
+    "x.answered AS answered "
+    "FROM (SELECT r.subject_id, r.created_at, r.new AS requirement, "
+    "(SELECT min(a.created_at) FROM {history_events} a WHERE a.subject_type = 'task' AND a.subject_id = r.subject_id "
+    "AND a.kind = 'answer' AND a.new IN ('ok', 'no') AND a.actor_id LIKE 'human:%' "
+    "AND json_extract(a.data, '$.requirement') = r.new) AS answered, "
+    "(SELECT m.new FROM {history_events} m WHERE m.subject_type = 'task' AND m.subject_id = r.subject_id "
+    "AND m.kind = 'move' AND m.created_at <= r.created_at ORDER BY m.created_at DESC LIMIT 1) AS stage "
+    "FROM {history_events} r WHERE r.subject_type = 'task' AND r.kind = 'requirement' "
+    "AND json_extract(r.data, '$.person') LIKE 'human:%') x "
+    "WHERE NOT " + _VALIDATE
+)
 
 
 # Read-only views built over the caller's connection: name -> (base tables it reads, SELECT over `{table}`, the
@@ -395,6 +438,40 @@ DERIVED = {
         "AND json_extract(result, '$.timings.send_to_claim_ms') IS NOT NULL)) "
         "GROUP BY week",
     ),
+    # Per week: people's answers to an OK or a page (an `answer` row of ok or no, not taken back), and the repeats: an
+    # answer by someone who had already answered the same requirement on the same task, so it was asked of them again
+    # (sent back and asked again, an OK that lapsed, the task back in the stage). Keyed by the requirement, never by
+    # later waits: each approver of a page several people approve answers it once. A ❓ is a new ask each time.
+    "repeat_ask_weekly": (
+        ("history_events",),
+        "SELECT week, count(*) AS answers, sum(repeated) AS repeats, "
+        "round(100.0 * sum(repeated) / count(*), 1) AS repeat_pct "
+        "FROM (SELECT " + _WEEK.format(at="a.created_at") + " AS week, "
+        "EXISTS (SELECT 1 FROM {history_events} p WHERE p.subject_type = 'task' AND p.subject_id = a.subject_id "
+        "AND p.kind = 'answer' AND p.created_at < a.created_at AND p.actor_id = a.actor_id "
+        "AND p.new IN ('ok', 'no') AND json_extract(p.data, '$.requirement') = json_extract(a.data, '$.requirement') "
+        "AND NOT " + _UNDONE.format(row="p") + ") AS repeated "
+        "FROM {history_events} a WHERE a.subject_type = 'task' AND a.kind = 'answer' AND a.new IN ('ok', 'no') "
+        "AND a.actor_id LIKE 'human:%' AND NOT " + _UNDONE.format(row="a") + ") "
+        "GROUP BY week",
+    ),
+    # Per week a person answered, by source: `ask`, an OK or a page added to one task and asked of a person (from the
+    # ask, or its newest give to someone, to the first answer; not one asked in Product's Validate, which waits for its
+    # page to pass first), and `question`, a ❓ (from it, or its give, to the reply that cleared it). How many, and the
+    # median seconds (the mean of the middle two for an even count). A stage's own OKs and pages are not in it.
+    "ask_answer_weekly": (
+        ("history_events", "question_marks"),
+        "SELECT week, source, count(*) AS answers, CAST(round(avg(CASE WHEN n IN ((total + 1) / 2, (total + 2) / 2) "
+        "THEN secs END)) AS INTEGER) AS median_s "
+        "FROM (SELECT *, row_number() OVER (PARTITION BY week, source ORDER BY secs) AS n, "
+        "count(*) OVER (PARTITION BY week, source) AS total "
+        "FROM (SELECT " + _WEEK.format(at="answered") + " AS week, source, "
+        "CAST(round((julianday(answered) - julianday(asked)) * 86400) AS INTEGER) AS secs FROM ("
+        + _ASKS
+        + " UNION ALL SELECT 'question', coalesce(given_at, created_at), cleared_at FROM {question_marks} "
+        "WHERE cleared_reason = 'replied' AND cleared_message_id IS NOT NULL AND cleared_at IS NOT NULL) "
+        "WHERE answered IS NOT NULL)) GROUP BY week, source",
+    ),
 }
 # Totals over rows the reader may not read one by one, built only for the owner and a bot the owner granted them
 # (backend/outcome_stats.py). Each groups by week and fixed names (status, proposer, bot, tool) and carries no text, no
@@ -471,6 +548,7 @@ _TABLE_DEPS: dict[str, tuple[str, ...]] = {
     "task_roles": ("tasks",),
     "task_relations": ("tasks",),
     "task_wait_spans": ("tasks",),
+    "question_marks": (READABLE_MESSAGES, "conversations", "tasks"),
     "goal_asks": ("tasks",),
     "message_assets": (READABLE_MESSAGES,),
     "bot_control": ("tasks",),
@@ -530,6 +608,7 @@ GUARDED_TABLES = frozenset(
         "task_roles",
         "task_relations",
         "task_wait_spans",
+        "question_marks",
         "message_assets",
         "bots",
         "bot_status",
@@ -613,6 +692,7 @@ _UNSEEN_TABLES = frozenset(
         "thread_followers",
         "tasks",
         "task_wait_spans",
+        "question_marks",
         "history_events",
         "events",
         "messages",
@@ -1140,6 +1220,8 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None, private=No
         # A relation is read only when the caller may read both of its tasks.
         "task_relations": "from_task IN (SELECT id FROM tasks) AND to_task IN (SELECT id FROM tasks)",
         "task_wait_spans": by_task,
+        # A ❓ is read with its message.
+        "question_marks": by_message,
         "message_assets": by_message,
         "bots": bots_visible("id"),
         "bot_status": bots_visible("bot"),
@@ -1730,7 +1812,12 @@ def connect(
                     masks[table] = {**masks.get(table, {}), **cols_masked}
         if "messages" in tables:
             masks["messages"] = {**masks.get("messages", {}), "refs": function("page_refs") + "(source.refs)"}
-        need_bots = "thread_members" in tables or "task_wait_spans" in tables or "task_waits" in worked_out
+        need_bots = (
+            "thread_members" in tables
+            or "task_wait_spans" in tables
+            or "question_marks" in tables
+            or "task_waits" in worked_out
+        )
         bots = TA.hidden(conn, who, "see", ("bot",), auth) if need_bots else set()
         if (unseen or bots) and (set(tables) & _UNSEEN_TABLES):
             from . import threads
