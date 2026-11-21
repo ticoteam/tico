@@ -10,6 +10,18 @@ WHERE bot_id = 'botops' AND json_valid(extra) AND json_extract(extra, '$.display
 -- The catalog folder is templates/catalog/agent-ops now. A computer on an older release has no such folder: it leaves
 -- the bot's files as they are and says so once (backend/template_refresh.py template_missing) until it updates.
 UPDATE bot_settings SET template = 'agent-ops' WHERE template = 'botops';
+-- A seed from before the catalog gave the built-in no template; it names its own now, so an older computer does not
+-- fall back to the template it carries under the old name, and the Gateway's count and roles find it.
+UPDATE bot_settings SET template = 'agent-ops' WHERE bot_id = 'botops' AND COALESCE(template, '') = '';
+INSERT INTO bot_settings (bot_id, template, extra)
+SELECT 'botops', 'agent-ops', '{}'
+WHERE EXISTS (SELECT 1 FROM bots WHERE id = 'botops') AND NOT EXISTS (SELECT 1 FROM bot_settings WHERE bot_id = 'botops');
+-- Setup keeps each pick under its bot's id: re-completing setup builds the built-in from its new template, under the
+-- new name unless a person chose another (their name and instructions stay).
+UPDATE registry_metadata SET value = json_set(value, '$.selected.botops.template', 'agent-ops')
+WHERE key = 'onboarding' AND json_valid(value) AND json_extract(value, '$.selected.botops.template') = 'botops';
+UPDATE registry_metadata SET value = json_set(value, '$.selected.botops.display_name', 'Agent Ops')
+WHERE key = 'onboarding' AND json_valid(value) AND json_extract(value, '$.selected.botops.display_name') = 'BotOps';
 UPDATE registry_metadata
 SET value = json_remove(json_set(value, '$.agent_ops_direct', json_extract(value, '$.botops_direct')), '$.botops_direct')
 WHERE key = 'rules' AND json_valid(value) AND json_type(value, '$.botops_direct') IS NOT NULL;

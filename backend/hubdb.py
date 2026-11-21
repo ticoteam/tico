@@ -1671,7 +1671,7 @@ def _agent_ops_only(conn, actor, target):
         actor,
         "agent-ops-only",
         "The Health Monitor gives its fixes to Agent Ops, not to a person: file it with "
-        "`tico task create --owner agent-ops` (or hand a task to it with `tico task update <id> --owner agent-ops`), and "
+        "`tico task create --owner botops` (or hand a task to it with `tico task update <id> --owner botops`), and "
         "Agent Ops decides who to ask",
     )
 

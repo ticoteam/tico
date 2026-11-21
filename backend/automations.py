@@ -524,7 +524,7 @@ def _stamp_blocked(c, auth, who, flow, before=None):
 
 def _by_agent_ops(who):
     """Whether Agent Ops makes this call: for a person or a bot it acts for (the dispatcher lends their identity, via
-    botops), or with its own rights."""
+    `botops`), or with its own rights."""
     return who.via == "botops" or who.actor == AGENT_OPS
 
 

@@ -1339,7 +1339,7 @@ def install(app, store, auth, mutate, settings):
         **api_v2(
             "Health",
             "getHealthFindings",
-            "What Check health found on this install: each open problem with its count, last seen time and Tico-bug report, plus botops (whether Agent Ops is there to take findings) and reports_without_asking (the team rule)",
+            "What Check health found on this install: each open problem with its count, last seen time and Tico-bug report, plus `botops` (whether Agent Ops is there to take findings) and reports_without_asking (the team rule)",
         ),
     )
     def health_findings(request: Request):

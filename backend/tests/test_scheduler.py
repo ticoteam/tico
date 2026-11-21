@@ -537,7 +537,7 @@ def test_a_duplicate_refusal_is_done_not_a_health_error(tmp_path):
     c.execute('BEGIN IMMEDIATE')
     failures = []
     with isolated(c, 'wake_stalled', 't1', failures):
-        raise H.Refused('duplicate', 'x already asks botops for this')
+        raise H.Refused('duplicate', 'x already asks Agent Ops for this')
     c.commit()
     assert failures == [] and c.execute('SELECT * FROM service_health').fetchall() == []
     c.close()

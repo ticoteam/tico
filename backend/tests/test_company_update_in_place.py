@@ -178,7 +178,7 @@ def pitch_removed(reading):
 
 
 def agent_ops_renamed(reading):
-    """The reading as migration agent_ops_name leaves it (a copy): the bot whose id is botops goes by its new slug and
+    """The reading as migration agent_ops_name leaves it (a copy): the bot whose id is `botops` goes by its new slug and
     name, wherever the reading names it."""
 
     def renamed(value):

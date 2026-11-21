@@ -694,7 +694,8 @@ def automation_deleted(method, path):
 
 
 def own_powers(body):
-    return isinstance(body, dict) and any(body.get(name) is not None for name in OWN_POWER_RULES)
+    names = (*OWN_POWER_RULES, *team_rules.OLD_NAMES)  # a card saved before the rename sends the old names
+    return isinstance(body, dict) and any(body.get(name) is not None for name in names)
 
 
 def card_for_person(method, path, body=None, rules=None, lowers=None, *, force_confirm=False):
@@ -950,7 +951,8 @@ def parse_body(raw):
 # Taking back its own Confirm card, and listing them (backend/assistant.py): Agent Ops' own cards, never run for a person.
 OWN = re.compile(
     API + r"(credential-runtime|runner-credential-.*|runner-watcher-credentials|attempts.*|jobs.*|runners/.*|"
-    r"messages(/.*)?|chat/.*|conversations/.*|bots/" + "botops" + r"(/.*)?|files/(uploads|imports)|uploads/.*|me(/.*)?|"
+    r"messages(/.*)?|chat/.*|conversations/.*|bots/(" + H.FLEET_MAINTAINER + "|" + H.AGENT_OPS_SLUG + r")(/.*)?|"
+    r"files/(uploads|imports)|uploads/.*|me(/.*)?|"
     r"assistant/proposals|assistant/actions/" + _S + r"/withdraw)"
 )
 

@@ -37,6 +37,7 @@ def resolved_registry(projects, registry_dir):
     fields = {
         "name",
         "slug",
+        "template",
         "display_name",
         "description",
         "repo",

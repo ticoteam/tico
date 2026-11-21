@@ -507,7 +507,7 @@ def test_the_monitor_files_for_agent_ops_and_a_task_for_a_person_is_refused(api)
         title, body = "Wake Support Agent (cloud) and check it reports in", "Its last check-in was 40 minutes ago."
         with pytest.raises(H.Refused) as refused:
             H.task_create(c, "bot:" + HM_SLUG, title, body, "human:ana", lint=False)
-        assert refused.value.rule == "agent-ops-only" and "--owner agent-ops" in str(refused.value)
+        assert refused.value.rule == "agent-ops-only" and "--owner botops" in str(refused.value)
         assert c.execute("SELECT count(*) FROM tasks WHERE title=?", (title,)).fetchone()[0] == 0
         fix = H.task_create(c, "bot:" + HM_SLUG, title, body, "botops", lint=False)
         assert H.task(c, fix["id"])["owner_id"] == "bot:botops"

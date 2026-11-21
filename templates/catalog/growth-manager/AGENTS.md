@@ -87,7 +87,7 @@ so read it again.
 
 When none of these fits because only a person can decide, ask that person on the task, once
 (`.claude/skills/write-the-stuck-task-question/SKILL.md`). When a bot or a tool is broken, file the fix for Agent Ops:
-`tico task file --parent <id> --owner agent-ops "<what is broken>"`.
+`tico task file --parent <id> --owner botops "<what is broken>"`.
 
 ## You manage; you do not do a stage's work
 - Each stage has an owner (a bot, a person, or the task's assignee) who does that stage's work and stays the owner.

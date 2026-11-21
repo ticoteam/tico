@@ -121,7 +121,7 @@ def write_catalog(root, cards):
 
 @pytest.fixture
 def environment(tmp_path):
-    """A signed-in, loopback environment seeded with just assistant and botops, plus a catalog."""
+    """A signed-in, loopback environment seeded with just the Assistant and Agent Ops, plus a catalog."""
     clients = []
 
     def build(cards=None, seed=SEED, **overrides):

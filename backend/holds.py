@@ -278,7 +278,7 @@ def put(
 def release(
     c: Any, kind: str, holdable_type: str, holdable_id: str, *, actor: str, how: str, bot_id: str | None = None
 ) -> dict[str, Any] | None:
-    """End the open hold of `kind` on the holdable, kept as history: `how` is its released_how (person, botops, raised,
+    """End the open hold of `kind` on the holdable, kept as history: `how` is its released_how (person, `botops`, raised,
     expired, probe_passed, moot, superseded). Answers the row it ended, or None when none was open."""
     now = str(H.now())
     found = c.execute(

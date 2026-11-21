@@ -29,6 +29,7 @@ employees:
 
   - name: "botops"  # Agent Ops keeps its first id (#4863)
     slug: agent-ops
+    template: agent-ops  # an older computer otherwise sets it up from the template it carries under the old name
     display_name: "Agent Ops"
     reports_to: assistant
     status: planned

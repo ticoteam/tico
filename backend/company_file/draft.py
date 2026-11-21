@@ -133,6 +133,8 @@ RENAMED = {
     # Nov 14: one Product pipeline, and each feature owned from spec to production by one bot: the Product Owner is the
     # Feature Owner (templates/catalog/feature-owner, the Product Owner and Builder templates in one).
     "segment-product-owner": "feature-owner",
+    # Nov 21 (#4863): slugs match names, and the bot engineer is Agent Ops (its bot keeps the id `botops`).
+    "botops": "agent-ops",
 }
 # Each team's Manager: the bot that leads the team and manages its pipelines. {team: (template, department, title)}.
 TEAM_MANAGERS = {

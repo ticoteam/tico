@@ -5,7 +5,7 @@ cards; a bot's bot.yaml `tools:` notes). `require` raises the refusal in the wor
 
 The rule, in order:
 - Nobody but a person or a bot: never Tico support, a computer or another system's key.
-- A delegation is the person's rights. Agent Ops, the Tools Owner and the Assistant acting for someone (`via` botops,
+- A delegation is the person's rights. Agent Ops, the Tools Owner and the Assistant acting for someone (`via` `botops`,
   tools-owner, assistant: app.py `delegated_identity`, backend/tools_delegation.py) arrive here as that person, and the
   person's rights decide. The built-in that acted never receives access through it (the Tools Owner connects keys for
   others and holds none), and through the Tools Owner a person's own access stays their own tap in Tools.

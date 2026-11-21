@@ -2604,8 +2604,13 @@ class AccessRules(Contract):
 
     assistant_direct: bool | None = None
     assistant_approvals: bool | None = None
-    agent_ops_direct: bool | None = None
-    agent_ops_manages_bots: bool | None = None
+    # A Confirm card saved before the rename (#4863) still sends the rules' old names.
+    agent_ops_direct: bool | None = Field(
+        default=None, validation_alias=AliasChoices("agent_ops_direct", "botops_direct")
+    )
+    agent_ops_manages_bots: bool | None = Field(
+        default=None, validation_alias=AliasChoices("agent_ops_manages_bots", "botops_manages_bots")
+    )
     admin_credentials: bool | None = None
     members_store_credentials: bool | None = None
     admin_sql: bool | None = None

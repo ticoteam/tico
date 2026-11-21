@@ -533,6 +533,8 @@ class SettingsAdmin:
     def create_bot(self, c, who, body):
         CA.gate(c, who.actor, "bots", "add a bot")
         self.validate_template(body.template)
+        if body.template == H.AGENT_OPS_SLUG:
+            body = body.model_copy(update={"slug": H.AGENT_OPS_SLUG})  # one Agent Ops: never a second under -2
         if not body.slug:
             body = body.model_copy(update={"slug": self.pick_slug(c, body.display_name)})
         if body.template and "shared" not in body.model_fields_set:

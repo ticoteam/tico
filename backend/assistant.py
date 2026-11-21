@@ -2634,7 +2634,7 @@ def install(app, store, auth, mutate, onboarding):
     )
     def proposals(request: Request, proposer: str = "", owner: str = ""):
         """The Confirm cards still waiting, newest first, so a teammate can find one to withdraw: summary and what it
-        does, with its id, owner and proposer. Filter by `proposer` (botops, assistant) and/or `owner` (a person's id)."""
+        does, with its id, owner and proposer. Filter by `proposer` (`botops`, `assistant`) and/or `owner` (a person's id)."""
         who = request.state.identity
         if not teammate(who):
             raise Problem("forbidden", "Only people and bots of the company can list proposals", 403)

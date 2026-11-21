@@ -51,7 +51,7 @@ def test_the_redactor_leaves_what_is_not_a_secret(raw):
 def test_names_become_labels_that_are_the_same_all_through_a_bundle():
     r = redactor()
     out = r.text(
-        "Morgan Reed (morgan@acme.example, morgan) asked bot:assistant; Agent Ops and botops; Riley Quinn later; morgan again"
+        "Morgan Reed (morgan@acme.example, morgan) asked bot:assistant; Agent Ops and bot:botops; Riley Quinn later; morgan again"
     )
     assert out == "person-1 (person-1, person-1) asked bot-1; bot-2 and bot-2; person-2 later; person-1 again"
     assert r.label("AGENT OPS") == "bot-2" and r.label("Zed") is None

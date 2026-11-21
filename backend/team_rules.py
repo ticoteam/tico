@@ -35,6 +35,8 @@ DEFAULTS = {
     "managers_manage_reports": True,  # a bot changes its direct reports' model, task model, name and description (backend/report_managers.py)
     "org_rule_checks": True,  # a bot's outputs are checked against the org rules that apply to them (backend/org_rule_check.py)
 }
+# The names two rules had before the rename to Agent Ops (#4863): a Confirm card saved then still sends them.
+OLD_NAMES = {"botops_direct": "agent_ops_direct", "botops_manages_bots": "agent_ops_manages_bots"}
 # Rules an admin may change too, not only the owner (Settings > General).
 ADMIN_RULES = ("topic_fresh", "org_rule_checks")
 # The rules that grant access to credentials, personal tokens, the SQL page or Tico support: a turn never changes them.
@@ -79,7 +81,8 @@ def load(c):
 
 
 def save(c, actor, changes):
-    """Set the rules named in `changes`; returns all of them."""
+    """Set the rules named in `changes` (under a rule's old name too, OLD_NAMES); returns all of them."""
+    changes = {OLD_NAMES.get(name, name): value for name, value in changes.items()}
     before = load(c)
     after = {
         **before,

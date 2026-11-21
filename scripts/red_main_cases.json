@@ -868,7 +868,7 @@
       "backend/api_tools.py",
       "backend/app.py",
       "backend/assistant.py",
-      "backend/agent_ops_act.py",
+      "backend/botops_act.py",
       "backend/browser_commands.py",
       "backend/computers.py",
       "backend/credentials.py",
@@ -961,7 +961,7 @@
       "backend/api_tools.py",
       "backend/app.py",
       "backend/assistant.py",
-      "backend/agent_ops_act.py",
+      "backend/botops_act.py",
       "backend/browser_commands.py",
       "backend/computers.py",
       "backend/credentials.py",
@@ -1054,7 +1054,7 @@
       "backend/api_tools.py",
       "backend/app.py",
       "backend/assistant.py",
-      "backend/agent_ops_act.py",
+      "backend/botops_act.py",
       "backend/browser_commands.py",
       "backend/computers.py",
       "backend/credentials.py",
@@ -1147,7 +1147,7 @@
       "backend/api_tools.py",
       "backend/app.py",
       "backend/assistant.py",
-      "backend/agent_ops_act.py",
+      "backend/botops_act.py",
       "backend/browser_commands.py",
       "backend/computers.py",
       "backend/credentials.py",
@@ -1271,7 +1271,7 @@
       "backend/api_tools.py",
       "backend/app.py",
       "backend/assistant.py",
-      "backend/agent_ops_act.py",
+      "backend/botops_act.py",
       "backend/browser_commands.py",
       "backend/computers.py",
       "backend/credentials.py",
@@ -1436,7 +1436,7 @@
       "pr 3642 (merge 47fe1358f; ticoteam/tico/ef10050a-wave-2a-one-release-policy-for-runs-that-can-wait- | tip: Keep a release run's thread when its conversation has no session; clos)"
     ],
     "failing_tests": [
-      "backend/tests/test_agent_ops_parity.py::test_only_the_daily_update_and_the_owners_automations_start_an_own_run"
+      "backend/tests/test_botops_parity.py::test_only_the_daily_update_and_the_owners_automations_start_an_own_run"
     ],
     "changed_files": [
       "backend/automation_actions.py",
@@ -1494,7 +1494,7 @@
     ],
     "cause": "other",
     "confidence": "medium",
-    "evidence": "Not a selection miss: the test reaches automation_actions.py through agent_ops_act.py (two levels, inside queue depth 2), and the fix body says every merge group failed on it from 14:55Z. The breaker's scheduling change (routines held by release policy) broke the test's fire-then-claim expectation.",
+    "evidence": "Not a selection miss: the test reaches automation_actions.py through botops_act.py (two levels, inside queue depth 2), and the fix body says every merge group failed on it from 14:55Z. The breaker's scheduling change (routines held by release policy) broke the test's fire-then-claim expectation.",
     "suggested_fix": "none",
     "pin_glob": null,
     "hub_file": null
@@ -1708,8 +1708,8 @@
       "e2e/mcp/expected-refusals/tico_tools_propose_grant.json",
       "templates/catalog/assistant/playbooks/how-tico-works.md",
       "templates/catalog/assistant/playbooks/jobs.md",
-      "templates/catalog/agent-ops/AGENTS.md",
-      "templates/catalog/agent-ops/playbooks/README.md",
+      "templates/catalog/botops/AGENTS.md",
+      "templates/catalog/botops/playbooks/README.md",
       "templates/catalog/general-manager/AGENTS.md",
       "templates/catalog/tools-owner/.claude/settings.json",
       "templates/catalog/tools-owner/.env.example",
@@ -1796,7 +1796,7 @@
   {
     "fix_pr": 3852,
     "breaking_prs": [
-      "pr 3844 (merge b27ea0a68; ticoteam/chris/tools-err-on-action | tip: Bot tool entries: Agent Ops and the Tools Owner with their own rights, or)"
+      "pr 3844 (merge b27ea0a68; ticoteam/chris/tools-err-on-action | tip: Bot tool entries: BotOps and the Tools Owner with their own rights, or)"
     ],
     "failing_tests": [
       "clients/tests/test_hubtools_fleet.py (bots not offered tool add/update)"
@@ -1809,7 +1809,7 @@
       "backend/credentials.py",
       "backend/hubdb.py",
       "backend/openapi_v2.py",
-      "backend/tests/test_agent_ops_handoff.py",
+      "backend/tests/test_botops_handoff.py",
       "backend/tests/test_tools_err_on_action.py",
       "backend/tools_delegation.py",
       "clients/access_entry.py",
@@ -1826,7 +1826,7 @@
       "templates/catalog/assistant/AGENTS.md",
       "templates/catalog/assistant/playbooks/acting-for-them.md",
       "templates/catalog/assistant/playbooks/jobs.md",
-      "templates/catalog/agent-ops/AGENTS.md",
+      "templates/catalog/botops/AGENTS.md",
       "templates/catalog/tools-owner/AGENTS.md",
       "templates/catalog/tools-owner/skills/manage-tools-and-keys/SKILL.md",
       "ui/bot-tools.ts",
@@ -2978,7 +2978,7 @@
       "skills/decisions/SKILL.md",
       "templates/catalog/accounts-payable-specialist/AGENTS.md",
       "templates/catalog/accounts-receivable-specialist/AGENTS.md",
-      "templates/catalog/agent-ops/playbooks/turn-on-sending.md",
+      "templates/catalog/botops/playbooks/turn-on-sending.md",
       "templates/catalog/contracts-manager/AGENTS.md",
       "templates/catalog/customer-insights-analyst/AGENTS.md",
       "templates/catalog/hr-generalist/AGENTS.md",
@@ -3063,8 +3063,8 @@
       "e2e/mcp/expected-refusals/tico_tools_propose_grant.json",
       "templates/catalog/assistant/playbooks/how-tico-works.md",
       "templates/catalog/assistant/playbooks/jobs.md",
-      "templates/catalog/agent-ops/AGENTS.md",
-      "templates/catalog/agent-ops/playbooks/README.md",
+      "templates/catalog/botops/AGENTS.md",
+      "templates/catalog/botops/playbooks/README.md",
       "templates/catalog/general-manager/AGENTS.md",
       "templates/catalog/tools-owner/.claude/settings.json",
       "templates/catalog/tools-owner/.env.example",

@@ -38,7 +38,7 @@ These sit alongside `handoffs.md` and `approvals.md`.
 - **Keep live copy accurate.** Edit, test and publish requested copy with your Tools. Public copy stays a draft until your sending policy in Tico lets you send (Outbound sends, below). See `documentation.md`.
 - **Name the model that actually did the work.** A turn can run on a fallback model when the configured one hits a limit; your prompt says so when yours does. Reviews prefer a model family different from the work's; when you choose a reviewer by family, read each implementing run's `ran_on` in `tico task show <task>` (`runs`), never a bot's configured model or harness label. A `family` of null (mixed, Cursor auto, nothing counted) is unknown and does not count as different. A different family is a preference, never a requirement: when no reviewer from another family is free or healthy, a same-family review goes ahead rather than the work waiting or anyone being asked to rule on it.
 - **Speak as the owner only in the owner's own accounts.** Keep messages to outsiders as drafts until your sending policy in Tico lets you send; then follow the requested work and standing instructions.
-- **Ask the owner when** missing information changes the result. Never ask people about your own setup (a Tool, a secret, a setting): file it for Agent Ops (`tico task file --parent <id> --owner agent-ops "<title>"`), which asks the person who can fix it. A level on a tool or repository that exists is `tico access request`. Act on work already requested and say what was done. Stay quiet when the run finished and nothing is new.
+- **Ask the owner when** missing information changes the result. Never ask people about your own setup (a Tool, a secret, a setting): file it for Agent Ops (`tico task file --parent <id> --owner botops "<title>"`), which asks the person who can fix it. A level on a tool or repository that exists is `tico access request`. Act on work already requested and say what was done. Stay quiet when the run finished and nothing is new.
 - **Scheduling on the owner's behalf** follows the team's scheduling rules: meeting length,
   minimum notice, allowed hours and time zone, and buffers are set in the calendar policy of the
   inbox bot, not improvised. When someone needs to book the owner directly, use the owner's
@@ -109,12 +109,12 @@ A private task is read only by its requester, owner and readers. Never share or 
 cannot read it. Asking a person on it lets them read that task and nothing else. A task you file from private work is
 private; `tico task create --public` files it company-visible, so write it in your own words.
 When a person asks you for something only Agent Ops can do (repository access, a Tool, a setting), hand it on with
-their own message: `tico task create --owner agent-ops ... --request-id turn` (or that message's id). Agent Ops does the
+their own message: `tico task create --owner botops ... --request-id turn` (or that message's id). Agent Ops does the
 work for them, or puts the change to them as one Confirm card; never ask them to message Agent Ops themselves.
 When a Tico limit blocks you (a permission your token lacks, a policy switch, a refusal Tico gives your run), no
 person on the team can lift it by answering you: file it with `tico support report --message "..." --task <id>` (it is
 sent at once, or a person only OKs sending it) or file a task for Agent Ops from yours
-(`tico task file --parent <id> --owner agent-ops "<title>"`), and say which limit in its body. Your task waits on that
+(`tico task file --parent <id> --owner botops "<title>"`), and say which limit in its body. Your task waits on that
 task. Never ask a person to lift it.
 When what you need is a pull request merged or a release published, link it with `--wake-once` and snooze the task
 to when you expect it, with the pull request or release in the reason.

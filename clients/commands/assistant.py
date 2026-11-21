@@ -421,7 +421,7 @@ def assistant_withdraw(api, args):
 @tool(
     "tico_assistant_proposals",
     "The Confirm cards still waiting for their owner: id, owner, proposer, summary and what "
-    "confirming does. Filter by proposer (botops, assistant) and/or owner (a person's id). Use it "
+    "confirming does. Filter by proposer (`botops`, `assistant`) and/or owner (a person's id). Use it "
     "to find a card's id to withdraw it.",
     {"proposer": _s("botops or assistant (optional)"), "owner": _s("The card owner's id, e.g. human:ana (optional)")},
 )

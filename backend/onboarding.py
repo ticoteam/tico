@@ -607,9 +607,17 @@ class Onboarding:
         if rendered:
             record = load(c)
             names = display_names(self.settings, record)
-            # A bot the person already named and renamed reads under that name, not the card's.
+            # A bot the person already named and renamed reads under that name, not the card's. Setup keeps each pick
+            # under its bot's id (`complete`), which for Agent Ops is not its card's slug.
+            picked = record["selected"]
             cards = [
-                render(card, names, (record["selected"].get(card["slug"]) or {}).get("display_name")) for card in cards
+                render(
+                    card,
+                    names,
+                    (picked.get(self._bot_slug(card["slug"])) or picked.get(card["slug"]) or {}).get("display_name")
+                    or "",
+                )
+                for card in cards
             ]
         # What the company must have comes first; the rest reads as an alphabetical menu.
         cards.sort(key=lambda card: (not card["required"], card["name"].lower()))
