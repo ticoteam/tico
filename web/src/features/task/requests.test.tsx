@@ -2,7 +2,7 @@ import { QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data';
-import { flowQuery, type FlowRequest } from '@/features/tasks/routing';
+import { flowQuery, type FlowItem, type FlowRequest } from '@/features/tasks/routing';
 import { Toasts } from '@/kit/Toast';
 import { answerAsk } from './queries';
 import { RequestCard } from './Requests';
@@ -63,7 +63,7 @@ beforeEach(() => {
     if (method !== 'GET') {
       sent.push({ url: String(url), body: typeof init?.body === 'string' ? (JSON.parse(init.body) as Record<string, unknown>) : {} });
       r = reply(String(url)) ?? { body: {} };
-      if ((r.status ?? 200) === 200) waiting = waiting.filter((it) => !String(url).includes(`/${it.id.split(':')[1]}/`));
+      if ((r.status ?? 200) === 200 && (r.body as { state?: string }).state !== 'open') waiting = waiting.filter((it) => !String(url).includes(`/${it.id.split(':')[1]}/`));
     } else if (String(url).includes('/needs-you')) r = { body: { actor: 'human:me', items: waiting, next: null } };
     return new Response(JSON.stringify(r.body), { status: r.status ?? 200, headers: { 'Content-Type': 'application/json' } });
   });
@@ -134,11 +134,19 @@ describe('an access request in Needs you', () => {
     expect((await within(box).findByRole('alert')).textContent).toBe('You can’t grant this');
     expect(screen.getByRole('region', { name: 'Access request' })).toBeTruthy();
   });
+  it('a grant that did not take effect yet keeps the card and says so', async () => {
+    reply = () => ({ body: { state: 'open', level: 'read_write' } });
+    show();
+    const box = await card('Access request');
+    fireEvent.click(within(box).getByRole('button', { name: 'Grant' }));
+    expect((await within(box).findByRole('alert')).textContent).toBe('The grant didn’t take effect yet');
+    expect(screen.getByRole('region', { name: 'Access request' })).toBeTruthy();
+  });
 });
 
 describe('Flow’s count', () => {
   it('keeps the requests when a task’s ask is answered', async () => {
-    queryClient.setQueryData(flowQuery.queryKey, { count: 2, items: [{ id: 't1' }], requests: [ACCESS], task_ids: ['t1'] });
+    queryClient.setQueryData(flowQuery.queryKey, { count: 2, items: [{ id: 't1' } as FlowItem], requests: [ACCESS], task_ids: ['t1'] });
     const answered = answerAsk('t1', 'q1', 'ok');
     expect(queryClient.getQueryData<{ count: number }>(flowQuery.queryKey)?.count).toBe(1);
     await answered.catch(() => undefined);
@@ -161,6 +169,7 @@ describe('a key card in Needs you', () => {
 
 describe('a key-drop proposal in Needs you', () => {
   it('lists each key, its tool, level and agents, ticked; Grant selected grants the rows left ticked', async () => {
+    reply = () => ({ body: { state: 'granted', rows: [{ key: 'JIRA_LOGIN' }], results: [{ key: 'JIRA_LOGIN', ok: false, detail: 'Didn’t work: 401' }] } });
     show();
     const box = await card('Key proposal');
     expect(within(box).getByText('2 keys')).toBeTruthy();
@@ -171,5 +180,6 @@ describe('a key-drop proposal in Needs you', () => {
     fireEvent.click(within(box).getByRole('button', { name: 'Grant selected' }));
     await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/tools-chat/proposals/m1/grant', body: { keep: [0] } }]));
     await gone('Key proposal');
+    await waitFor(() => expect(document.querySelector('.toasts')?.textContent).toContain('Granted; JIRA_LOGIN: Didn’t work: 401'));
   });
 });

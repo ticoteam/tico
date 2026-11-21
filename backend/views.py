@@ -2166,8 +2166,7 @@ def needs_shown(c, auth, who, task_view=None, **how):
 def needs_still_shown(c, auth, who, items):
     """Whether items cut from a held build (backend/needs_cache.py) still show only what the caller may read: each
     page ask's title (files.readable_titles), and what each OK is about (a Finance action's payee and amount) to its
-    parties alone (task_asks.parties_to_all, one statement for them all), and each request still the caller's to settle
-    (request_items)."""
+    parties alone (task_asks.parties_to_all, one statement for them all)."""
     from . import task_asks
     from .files import readable_titles
 
@@ -2176,9 +2175,12 @@ def needs_still_shown(c, auth, who, items):
     if pages and len(readable_titles(c, auth, who, pages)) < len(set(pages)):
         return False
     oks = [str(item["requirement_id"]) for item in told if (item.get("ask") or {}).get("kind") == "ok"]
-    if oks and not task_asks.parties_to_all(c, who.actor, oks):
-        return False
-    # An access request, key card or key proposal: still one the caller may settle, by its own checks (request_items).
+    return not oks or task_asks.parties_to_all(c, who.actor, oks)
+
+
+def needs_requests_still(c, auth, who, items):
+    """Whether every access request, key card and key proposal in a held build (all of it: they are few, and its counts
+    name them too) is still one the caller may settle, by each kind's own checks (request_items)."""
     held = {str(item["id"]) for item in items if item.get("kind") in REQUEST_KINDS}
     return not held or held <= {str(item["id"]) for item in request_items(c, auth, who)}
 
@@ -2285,7 +2287,7 @@ def needs_actor(it, me):
     task = it.get("task") or {}
     if it.get("kind") == "paused":
         return next(iter(it.get("bots") or ()), None)
-    if it.get("kind") == "question":
+    if it.get("kind") == "question" or it.get("kind") in REQUEST_KINDS:  # a ❓'s bot; the agent a request is for
         return it.get("from_id") if H.is_bot(it.get("from_id")) else None
     if it.get("kind") == "ask":
         asked = (it.get("ask") or {}).get("asked_by")
@@ -3588,8 +3590,10 @@ def install_views(app, store, auth, mutate, task_view):
             if built is not None:
                 with store.read_transaction() as c:
                     out = needs_paged(who, built.items, built.version, limit, cursor, built.snoozed_until, built.counts)
-                    if needs_still_readable(c, auth, who, built.task_ids) and needs_still_shown(
-                        c, auth, who, out["items"]
+                    if (
+                        needs_still_readable(c, auth, who, built.task_ids)
+                        and needs_still_shown(c, auth, who, out["items"])
+                        and needs_requests_still(c, auth, who, built.items)
                     ):
                         return out
                 held.drop(viewer, built)

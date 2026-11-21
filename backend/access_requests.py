@@ -433,10 +433,11 @@ def _auto_repository(c: Any, auth: Any, row: Any) -> Any:
         return False
 
 
-def _give_repository(c: Any, row: Any, actor: Any, person: Any = False) -> Any:
+def _give_repository(c: Any, row: Any, actor: Any, person: Any = False, only: Any = False) -> Any:
     """The bot reaches the repository at the request's level: ticked for the team if a person grants it, then chosen for
     the bot (its other chosen repositories kept). A bot on All ticked repos already reaches every ticked one at its
-    level; past that level it is a choice in Settings."""
+    level; past that level it is a choice in Settings. `only` (Read only): this repository at exactly that level, even
+    for a bot on All ticked repos at Write, whose other repositories keep theirs."""
     R = _mod("repositories")
 
     bot, name, org = H.actor_id(row["subject"]), row["resource_id"], _org(c)
@@ -451,7 +452,7 @@ def _give_repository(c: Any, row: Any, actor: Any, person: Any = False) -> Any:
     # All ticked repos covers it by configuration (all_ticked), whether GitHub reaches it this minute or not.
     ticked = {n.lower() for n in current["all_ticked"]}
     covered = name.lower() in ticked and (current["all_access"] == "write" or want == "read")
-    if current["mode"] == "all" and (covered or has(c, row)):
+    if current["mode"] == "all" and (covered or has(c, row)) and not only:
         return
     # As a product repository its bot makes (github_app): from All ticked repos it moves to Chosen repos, each
     # repository All ticked repos covers kept at its level, and this one at the asked level or the one it has, if higher.
@@ -464,7 +465,7 @@ def _give_repository(c: Any, row: Any, actor: Any, person: Any = False) -> Any:
         ),
         None,
     )
-    grant = R.Grant(full_name=name, access="write" if "write" in (held, want) else "read")
+    grant = R.Grant(full_name=name, access=want if only else "write" if "write" in (held, want) else "read")
     body = R.RepoAccessUpdate(mode="chosen", chosen=[*keep, grant])
     R.set_access(c, bot, body, org, actor, team_list=True, own_click=person, default=False)
 
@@ -621,6 +622,7 @@ def ask(c: Any, who: Any, body: Any, vault: Any, auth: Any) -> Any:
         "UPDATE access_requests SET approvers=?,cards=? WHERE id=?",
         (json.dumps([p.actor for p in people]), json.dumps(cards), row["id"]),
     )
+    _mod("events").needs_moved(c, cards, "access")  # each copy is in its person's Needs you now
     row = _row(c, row["id"])
     _wait(c, row, task, cards)
     names = ", ".join(H.actor_name(c, p.actor) for p in people[:3])
@@ -708,9 +710,8 @@ def _close(c: Any, row: Any, state: Any, actor: Any, via: Any) -> Any:
 def _wake(c: Any, row: Any) -> Any:
     reconnects = _mod("reconnects")
 
-    if not row["task_id"]:
-        return
-    # The waits on this request: its key, or the key it was asked under before Read only narrowed it.
+    # The waits on this request: its key, or the key it was asked under before Read only narrowed it. A repeat from a
+    # task can wait on a request first opened in chat, with no task of its own.
     keys = [
         r[0]
         for r in c.execute(
@@ -721,6 +722,8 @@ def _wake(c: Any, row: Any) -> Any:
     if keys:
         for key in keys:
             reconnects.fixed(c, key, H.actor_id(row["subject"]), why="access")
+        return
+    if not row["task_id"]:
         return
     task = H.task(c, row["task_id"])
     if task and task["status"] in H.ACTIVE_STATUSES and H.is_bot(task["owner_id"]):
@@ -810,7 +813,7 @@ def grant(c: Any, who: Any, rid: Any, vault: Any, auth: Any, level: Any = None) 
             if row["resource_type"] == TOOL:
                 api_tools.set_level(c, who, vault, row["resource_id"], row["subject"], given["level"])
             else:
-                _give_repository(c, given, who.actor, person=True)
+                _give_repository(c, given, who.actor, person=True, only=given is not row)
         settled(c, who, **narrow)
         if given is not row:
             # An open request for Read on the same thing closed just above, so this one can be it now; a task waiting

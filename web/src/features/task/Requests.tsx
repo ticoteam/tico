@@ -4,7 +4,7 @@ import { Button } from '@/kit/Button';
 import { Checkbox } from '@/kit/Checkbox';
 import { toast } from '@/kit/Toast';
 import { AskCard } from './AskCard';
-import { declineAccess, grantAccess, grantKeyDrop, saveKey, type AccessAnswer } from './queries';
+import { declineAccess, grantAccess, grantKeyDrop, saveKey, type AccessAnswer, type KeyDropAnswer } from './queries';
 
 /* What waits on the person without a task (master plan P1): an agent's access request, a key card and the Tools owner's
    key-drop proposal, each in the one ask card with its own body. The server checks again on every press and settles
@@ -26,6 +26,21 @@ function useOnce(setError: (s: string) => void) {
       setError(said(err));
     }
   };
+}
+
+/** A grant the server answered with the request still open (it could not be given yet): said in the card, which stays. */
+const NOT_YET = 'The grant didn’t take effect yet';
+const taken = async (out: Promise<AccessAnswer>) => {
+  const answer = await out;
+  if (answer.state === 'open') throw new Error(NOT_YET);
+  return answer;
+};
+
+/** What a key proposal's Grant says happened: its state, the keys granted and any whose tool check failed. */
+export function keyDropDone(out: KeyDropAnswer): string {
+  if (out.state !== 'granted') return 'Not granted yet';
+  const failed = (out.results ?? []).filter((r) => !r.ok);
+  return failed.length ? `Granted; ${failed.map((r) => `${r.key}: ${r.detail}`).join('; ')}` : 'Granted';
 }
 
 /** What the access request's answer says happened: the server's state and level, which may be someone else's. */
@@ -53,11 +68,11 @@ function AccessCard({ it, a }: { it: NeedsYouItem; a: NonNullable<NeedsYouItem['
       error={error}
       actions={
         <>
-          <Button onClick={once(() => declineAccess(it.id, a.id), (out) => accessDone('decline', out), a.resource_name)}>Decline</Button>
+          <Button onClick={once(() => taken(declineAccess(it.id, a.id)), (out) => accessDone('decline', out), a.resource_name)}>Decline</Button>
           {a.level === 'read_write' && (
-            <Button onClick={once(() => grantAccess(it.id, a.id, 'read'), (out) => accessDone('grant', out), a.resource_name)}>Read only</Button>
+            <Button onClick={once(() => taken(grantAccess(it.id, a.id, 'read')), (out) => accessDone('grant', out), a.resource_name)}>Read only</Button>
           )}
-          <Button variant="primary" onClick={once(() => grantAccess(it.id, a.id), (out) => accessDone('grant', out), a.resource_name)}>
+          <Button variant="primary" onClick={once(() => taken(grantAccess(it.id, a.id)), (out) => accessDone('grant', out), a.resource_name)}>
             Grant
           </Button>
         </>
@@ -115,7 +130,7 @@ function KeyDropCard({ it, d }: { it: NeedsYouItem; d: NonNullable<NeedsYouItem[
       target={`request:${it.id}`}
       error={error}
       actions={
-        <Button variant="primary" disabled={!kept.size} onClick={once(() => grantKeyDrop(it.id, d.message_id, [...kept].sort((x, y) => x - y)), 'Granted', name)}>
+        <Button variant="primary" disabled={!kept.size} onClick={once(() => grantKeyDrop(it.id, d.message_id, [...kept].sort((x, y) => x - y)), keyDropDone, name)}>
           Grant selected
         </Button>
       }

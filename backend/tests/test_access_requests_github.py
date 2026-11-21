@@ -152,3 +152,15 @@ def test_a_grant_past_all_ticked_repos_at_write_keeps_every_write_and_its_workfl
     }
     chosen = {r["full_name"]: r for r in api.get("/api/v2/bots/cpo/repositories", headers=auth()).json()["chosen"]}
     assert chosen["Acme/product"].get("run_workflows") is True and not chosen["Acme/docs"].get("run_workflows")
+
+
+def test_read_only_for_a_bot_on_all_ticked_repos_at_write_gives_that_repository_read_alone(api, gh):
+    catalog(api, gh)
+    api.app_state.auth.owner_email = "ana@acme.example"
+    put(api, "repositories/Acme/product", {"enabled": True})
+    put(api, "bots/cpo/repositories", {"mode": "all", "all_access": "write"})
+    asked = ask(api, "Acme/docs", "read_write")  # not ticked: it asks
+    assert asked["state"] == "open"
+    r = api.post(f"/api/v2/access-requests/{asked['id']}/grant", json={"level": "read"}, headers=auth())
+    assert r.status_code == 200 and r.json()["state"] == "granted", r.text
+    assert reach(api) == {"Acme/emp-cpo": "write", "Acme/product": "write", "Acme/docs": "read"}

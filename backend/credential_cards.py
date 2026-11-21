@@ -592,6 +592,15 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
 
     @app.post("/api/v2/credential-requests/{rid}/save")
     def save_card(request: Request, rid: str, body: CredentialSave):
+        person_only(request)  # its own words: they name nobody
+        try:
+            return save_key(request, rid, body)
+        except Problem as refused:
+            if refused.status == 403:  # a refusal names nobody: who could save it is the card's own
+                raise Problem("forbidden", "You can't save this key", 403) from None
+            raise
+
+    def save_key(request, rid, body):
         who = person_only(request)
         with store.transaction() as c:
             validate_identity(c, who)

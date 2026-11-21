@@ -248,12 +248,12 @@ def propose(c: Any, who: Any, thread_id: str, rows: list[Row], note: str = "") -
         MINTING.reset(token)
 
 
-def _may_grant(c: Any, vault: Any, who: Any, card: Row) -> bool:
-    """Whether `who` may grant every row of the card: each tool is one they can see and grant on (Only listed tools
-    included). Listing and Grant both ask this."""
+def _may_grant(c: Any, vault: Any, who: Any, rows: list[Row]) -> bool:
+    """Whether `who` may grant these rows: each tool is one they can see and grant on (Only listed tools included).
+    Listing and the whole card ask it of every row; Grant of the rows kept."""
     from . import tool_access as TA
 
-    for row in card["rows"]:
+    for row in rows:
         tool = c.execute("SELECT * FROM tools WHERE id=?", (row["tool_id"],)).fetchone()
         if tool is None or not TA.decide(c, who, TA.tool(tool), "", TA.GRANT, admins=vault.admins, auth=vault.auth).ok:
             return False
@@ -282,7 +282,7 @@ def proposed_for(c: Any, vault: Any, who: Any) -> list[Row]:
             thread = _thread(c, m["conversation_id"], owner)
         except Problem:
             continue
-        if card is not None and who.actor in _members(c, thread) and _may_grant(c, vault, who, card):
+        if card is not None and who.actor in _members(c, thread) and _may_grant(c, vault, who, card["rows"]):
             out.append(card | {"message_id": m["id"], "created_at": m["created_at"], "by": owner})
     return out
 
@@ -339,20 +339,26 @@ def grant(store: Any, vault: Any, who: Any, message_id: str, keep: list[int] | N
     with store.transaction() as c:
         from . import tool_access as TA
 
-        TA.require(c, who, TA.tool(), action=TA.GRANT, admins=vault.admins, auth=vault.auth)  # an administrator's tap
+        # An administrator's tap; a refusal names nobody.
+        if not TA.decide(c, who, TA.tool(), "", TA.GRANT, admins=vault.admins, auth=vault.auth).ok:
+            raise Problem("forbidden", "You can't grant this", 403)
         message: Row | None = H.message(c, message_id)
         card = _card(message or {})
         owner = _owner(c)
         if not owner or not message or card is None or message.get("sender_id") != owner:
             raise Problem("not_found", "No key proposal here", 404)
         thread = _thread(c, message["conversation_id"], owner)
-        if who.actor not in _members(c, thread) or not _may_grant(c, vault, who, card):
+        if who.actor not in _members(c, thread):
             raise Problem("not_found", "No key proposal here", 404)
         if card["state"] != "proposed":
+            if not _may_grant(c, vault, who, card["rows"]):
+                raise Problem("not_found", "No key proposal here", 404)
             return card
         positions = list(range(len(card["rows"]))) if keep is None else [int(i) for i in keep]
         if not positions or any(i < 0 or i >= len(card["rows"]) for i in positions):
             raise Problem("proposal", "Keep at least one of the card's rows", 422)
+        if not _may_grant(c, vault, who, [card["rows"][i] for i in positions]):
+            raise Problem("not_found", "No key proposal here", 404)
         # Checked again at Grant: the rows are the server's, and a key or bot may have changed since.
         again = [card["rows"][i] for i in positions]
         rows = _rows(

@@ -406,3 +406,17 @@ def test_a_refused_tap_names_nobody_who_could_grant_it(api):
         r = api.post(f"/api/v2/access-requests/{asked['id']}/{what}", json={}, headers=headers("cara-test"))
         assert r.status_code == 403 and r.json()["error"]["detail"] == "You can't grant this"
         assert "Ana" not in r.text and "Ben" not in r.text and "human:" not in r.text
+
+
+def test_read_only_frees_a_task_that_waits_on_a_repeat_of_a_request_first_made_in_chat(api):
+    world(api)
+    crm = tool(api)["id"]
+    key(api, crm, SECRET)
+    asked = ask(api, crm, "read_write")  # in chat: no task
+    tid = task(api, "bot:ops", "Update the deal stages")
+    assert ask(api, crm, "read_write", task=tid)["id"] == asked["id"]  # the repeat waits on the same request
+    with api.app.state.store.read() as c:
+        assert reconnects.hold(c, tid) is not None
+    post(api, f"access-requests/{asked['id']}/grant", {"level": "read"}, "ben-test")
+    with api.app.state.store.read() as c:
+        assert reconnects.hold(c, tid) is None

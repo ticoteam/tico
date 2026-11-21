@@ -69,9 +69,12 @@ def test_needs_you_lists_each_request_only_to_someone_who_may_settle_it_and_its_
 
     # Cara can settle none of them: she sees none, and each action refuses her.
     assert requests(api, "cara-test") == {}
-    post(api, f"access-requests/{rid}/grant", {}, "cara-test", expected=403)
-    post(api, f"credential-requests/{mine['key']['key']['id']}/save", {"value": NEW}, "cara-test", expected=404)
-    post(api, f"tools-chat/proposals/{mid}/grant", {"keep": [0]}, "cara-test", expected=403)
+    refusals = [
+        post(api, f"access-requests/{rid}/grant", {}, "cara-test", expected=403),
+        post(api, f"credential-requests/{mine['key']['key']['id']}/save", {"value": NEW}, "cara-test", expected=404),
+        post(api, f"tools-chat/proposals/{mid}/grant", {"keep": [0]}, "cara-test", expected=403),
+    ]
+    assert not any(name in str(refusals) for name in ("Ana", "Ben", "human:"))  # a refusal names nobody
 
     # Ben's Read only settles every copy: Ana's list drops it too, and cpo reads Acme Ads, no more.
     assert post(api, f"access-requests/{rid}/grant", {"level": "read"}, "ben-test")["state"] == "granted"
@@ -83,16 +86,17 @@ def test_needs_you_lists_each_request_only_to_someone_who_may_settle_it_and_its_
 
 
 def test_a_held_page_never_serves_a_request_the_viewer_lost(api, monkeypatch):
-    # The next page of a list built seconds ago is cut from that build: Ben's access requests are checked again first.
+    # The next page of a list built seconds ago is cut from that build: every request in it (the counts name them too)
+    # is checked again first, not only the page's own items.
     world(api, monkeypatch)
-    crm = tool(api, "Acme Billing", base_url="https://billing.acme.example")["id"]
-    key(api, crm, ADS + "-billing")
-    post(api, "access-requests", {"resource": crm, "level": "read_write", "for_bot": "cpo"})
+    task = post(api, "tasks", {"owner": "ana", "title": "Coverage", "body": "Please."})
+    post(api, f"tasks/{task['id']}/asks", {"to": "ben", "line": "OK Monday", "kind": "ok"})
     first = get(api, "needs-you?limit=1", "ben-test")
     assert first["next"] and [it["kind"] for it in first["items"]] == ["access"]
     api.app.state.store.settings.credential_admins = ("ana@acme.example",)  # Ben may grant nothing now
     after = get(api, f"needs-you?limit=1&cursor={first['next']}", "ben-test")
     assert [it for it in after["items"] if it["kind"] in KINDS] == []
+    assert not set(after["by_kind"]) & set(KINDS)
 
 
 def test_a_key_proposal_is_listed_and_granted_only_by_someone_who_can_see_its_tool(api, monkeypatch):
@@ -133,3 +137,21 @@ def test_a_new_key_card_reaches_its_person_on_the_live_stream(api, monkeypatch, 
     with api.app.state.store.read() as c:
         rows = c.execute("SELECT kind FROM changes WHERE seq>? AND topic='needs' AND subject_id='human:ana'", (before,))
         assert "key" in {r[0] for r in rows}
+
+
+def test_a_refused_key_save_names_nobody(api, monkeypatch):
+    # Ben connected Close CRM, so its Reconnect card is his; once he is no credential administrator his save is
+    # refused, in words naming nobody, and the card leaves his list.
+    setup(api)
+    put(api, "page-owners/tools", {"bot": "ops"})
+    creds.setup(api)
+    monkeypatch.setattr(api_tools, "send_check", lambda url, hdrs, params: api_tools.Reply(401))
+    crm = post(api, "api-tools", {"name": "Close CRM"}, "ben-test")["id"]
+    key(api, crm, OLD, token="ben-test")
+    assert post(api, f"api-tools/{crm}/check", {}, "ben-test")["detail"] == "Key rejected"
+    card = requests(api, "ben-test")["key"]["key"]
+    api.app.state.store.settings.credential_admins = ("ana@acme.example",)
+    assert requests(api, "ben-test") == {}
+    refused = post(api, f"credential-requests/{card['id']}/save", {"value": NEW}, "ben-test", expected=403)
+    assert refused["error"]["detail"] == "You can't save this key"
+    assert not any(name in str(refused) for name in ("Ana", "Ben", "human:"))
