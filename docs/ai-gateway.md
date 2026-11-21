@@ -361,8 +361,9 @@ the same job without a second call, even when the Gateway or the budget would re
 lets a shot be sent again. When the outcome is unknown (no answer, a provider timeout, a restart mid-call) the shot is
 never sent again: the request is refused with `reconcile_shot`, and one question on the task asks the person it falls
 to to reconcile it, listing every such shot. A shot a restart left unanswered is asked about within minutes, with no
-request needed. A request with no shot name outside a task is keyed to its own Idempotency-Key. A new take needs a new
-shot name.
+request needed. A request with no shot name outside a task is keyed to its own Idempotency-Key (one without is refused),
+and a retry under the same key is the same shot even after the task moved on; the same key with another video is a
+409 `idempotency_conflict`. A new take needs a new shot name.
 
 Bots use the same two things with the `tico_gateway_video` and `tico_gateway_video_status` tools. The video is priced per
 second at what the video model costs plus 25% (`tico gateway catalog video`), held when the job starts and charged when it

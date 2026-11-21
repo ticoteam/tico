@@ -49,7 +49,9 @@ def test_a_video_is_started_polled_and_read_through_the_server(api, monkeypatch)
     )
     monkeypatch.setattr(G, "video_content", lambda base, key, job_id, header: (200, b"mp4 bytes", ""))
     started = api.post(
-        "/api/v2/gateway/videos", json={"prompt": "a kettle", "seconds": 5, "audio": False}, headers=headers("ana-test")
+        "/api/v2/gateway/videos",
+        json={"prompt": "a kettle", "seconds": 5, "audio": False},
+        headers=headers("ana-test"),
     )
     assert started.status_code == 202 and started.json() == {"id": JOB, "status": "queued"}, started.text
     assert submitted[0][2] == {
@@ -160,13 +162,14 @@ def turn(api):
 
 
 def reconcile_asks(api, task):
-    """The open reconcile questions on the card: (person, first line)."""
+    """The open reconcile questions on the card: (person, first line, the shots its text names)."""
     with api.app.state.store.read() as c:
         rows = c.execute(
-            "SELECT person_id, line FROM question_marks WHERE task_id=? AND cleared_at IS NULL AND line LIKE 'Reconcile%'",
+            "SELECT q.person_id, q.line, m.body FROM question_marks q JOIN messages m ON m.id=q.message_id "
+            "WHERE q.task_id=? AND q.cleared_at IS NULL AND q.line LIKE 'Reconcile%'",
             (task["id"],),
         ).fetchall()
-    return [tuple(row) for row in rows]
+    return [(person, line, [t[2:] for t in body.splitlines() if t.startswith("- ")]) for person, line, body in rows]
 
 
 def video(api, token, body, key=None):
@@ -198,7 +201,7 @@ def test_a_shot_whose_answer_was_lost_is_never_sent_again_and_asks_once_to_recon
     assert sent[0].startswith("shot_")  # the shot key is the Gateway's Idempotency-Key
     for refused in (first, again):
         assert (refused.status_code, refused.json()["error"]["code"]) == (409, "reconcile_shot"), refused.text
-    assert reconcile_asks(api, task) == [("human:ana", "Reconcile shot a kettle on the stove, steam")]
+    assert reconcile_asks(api, task) == [("human:ana", "Reconcile 1 shot", ["a kettle on the stove, steam"])]
 
 
 def test_a_started_shot_answers_its_job_again_and_one_cut_off_by_a_restart_is_reconciled(api, monkeypatch):
@@ -226,7 +229,7 @@ def test_a_started_shot_answers_its_job_again_and_one_cut_off_by_a_restart_is_re
     paid_renders._IN_FLIGHT.clear()
     refused = api.post("/api/v2/gateway/videos", json=take, headers=headers(token, "four"))
     assert (refused.status_code, refused.json()["error"]["code"]) == (409, "reconcile_shot"), refused.text
-    assert len(sent) == 2 and reconcile_asks(api, task) == [("human:ana", "Reconcile shot Kettle wide")]
+    assert len(sent) == 2 and reconcile_asks(api, task) == [("human:ana", "Reconcile 1 shot", ["Kettle wide"])]
     # A refusal charged nothing, so that shot may be sent again.
     monkeypatch.setattr(G, "video_submit", lambda *a: (422, {}, "invalid"))
     retake = {**body, "shot": "Kettle top"}
@@ -245,7 +248,7 @@ def test_a_gateway_unavailable_answer_is_unknown_and_asked_about_once(api, monke
     body = {"prompt": "a kettle", "shot": "Kettle pour"}
     for key in ("one", "two"):
         assert video(api, token, body, key).json()["error"]["code"] == "reconcile_shot"
-    assert len(sent) == 1 and reconcile_asks(api, task) == [("human:ana", "Reconcile shot Kettle pour")]
+    assert len(sent) == 1 and reconcile_asks(api, task) == [("human:ana", "Reconcile 1 shot", ["Kettle pour"])]
 
 
 def test_the_sweep_asks_about_a_shot_a_restart_left_sent_with_no_request(api, monkeypatch):
@@ -265,7 +268,7 @@ def test_the_sweep_asks_about_a_shot_a_restart_left_sent_with_no_request(api, mo
         assert paid_renders.sweep(c) == 1
     with store.transaction() as c:
         assert paid_renders.sweep(c) == 0
-    assert len(sent) == 1 and reconcile_asks(api, task) == [("human:ana", "Reconcile shot Kettle wide")]
+    assert len(sent) == 1 and reconcile_asks(api, task) == [("human:ana", "Reconcile 1 shot", ["Kettle wide"])]
 
 
 def test_unknown_shots_share_one_question_and_leave_the_agents_own_question_open(api, monkeypatch):
@@ -281,14 +284,14 @@ def test_unknown_shots_share_one_question_and_leave_the_agents_own_question_open
     monkeypatch.setattr(G, "video_submit", lambda *a: (0, {}, "unreachable"))
     for shot in ("Kettle wide", "Kettle top"):
         assert video(api, token, {"prompt": "a kettle", "shot": shot}).status_code == 409
-    assert reconcile_asks(api, task) == [("human:ana", "Reconcile shots Kettle wide, Kettle top")]
+    assert reconcile_asks(api, task) == [("human:ana", "Reconcile 2 shots", ["Kettle wide", "Kettle top"])]
     with api.app.state.store.read() as c:
         opened = c.execute(
             "SELECT line FROM question_marks WHERE task_id=? AND cleared_at IS NULL ORDER BY created_at", (task["id"],)
         ).fetchall()
     assert [row[0] for row in opened] == [
         "Which tone should the launch video take?",
-        "Reconcile shots Kettle wide, Kettle top",
+        "Reconcile 2 shots",
     ]
 
 
@@ -318,7 +321,7 @@ def test_the_reconcile_question_goes_to_the_pipelines_person(api, monkeypatch):
         c.execute("UPDATE tasks SET human_id=NULL WHERE id=?", (task["id"],))
     monkeypatch.setattr(G, "video_submit", lambda *a: (0, {}, "unreachable"))
     assert video(api, token, {"prompt": "a kettle", "shot": "Kettle wide"}).status_code == 409
-    assert reconcile_asks(api, task) == [("human:ben", "Reconcile shot Kettle wide")]
+    assert reconcile_asks(api, task) == [("human:ben", "Reconcile 1 shot", ["Kettle wide"])]
 
 
 def test_an_unnamed_video_outside_a_card_is_keyed_to_its_request(api, monkeypatch):
@@ -330,3 +333,56 @@ def test_an_unnamed_video_outside_a_card_is_keyed_to_its_request(api, monkeypatc
     assert video(api, "ana-test", body, "first").status_code == 202  # a retry of the same request
     assert video(api, "ana-test", body, "second").status_code == 202  # a new request is a new take
     assert len(sent) == 2
+    # Nothing names the shot: refused before anything is sent.
+    keyless = api.post("/api/v2/gateway/videos", json=body, headers={"Authorization": "Bearer ana-test"})
+    assert keyless.status_code == 422 and "Idempotency-Key" in keyless.json()["error"]["detail"], keyless.text
+    conflict = video(api, "ana-test", {"prompt": "a teapot"}, "first")
+    assert (conflict.status_code, conflict.json()["error"]["code"]) == (409, "idempotency_conflict"), conflict.text
+    assert len(sent) == 2
+
+
+def test_a_retry_after_the_card_moved_on_is_the_same_shot(api, monkeypatch):
+    connect(api)
+    task, token = turn(api)
+    sent = []
+    monkeypatch.setattr(G, "video_submit", counting(sent, (202, {"id": JOB, "status": "queued"}, "")))
+    body = {"prompt": "a kettle", "shot": "Kettle wide"}
+    assert video(api, token, body, "the-request").status_code == 202
+    with api.app.state.store.transaction() as c:  # the card moves to a new visit before the retry
+        c.execute("UPDATE visits SET id='visit-moved' WHERE task_id=? AND left_at IS NULL", (task["id"],))
+    again = video(api, token, body, "the-request")
+    assert again.status_code == 202 and again.json() == {"id": JOB, "status": "queued"}, again.text
+    assert len(sent) == 1
+
+
+def test_the_sweep_finds_a_resent_shot_and_asks_later_when_nobody_could(api, monkeypatch):
+    connect(api)
+    task, token = turn(api)
+    own = api.post(
+        f"/api/v2/tasks/{task['id']}/questions",
+        json={"to": "ana", "text": "Which tone should the launch video take?"},
+        headers=headers(token),
+    )
+    assert own.status_code == 200, own.text
+    store = api.app.state.store
+    # Refused once, then sent again under the same key and cut off by a restart, long ago.
+    body = {"prompt": "a kettle", "shot": "Kettle wide"}
+    monkeypatch.setattr(G, "video_submit", lambda *a: (422, {}, "invalid"))
+    assert video(api, token, body).status_code == 422
+    with monkeypatch.context() as stopped:
+        stopped.setattr(paid_renders, "end", lambda *a: None)
+        monkeypatch.setattr(G, "video_submit", lambda *a: (202, {"id": JOB, "status": "queued"}, ""))
+        assert video(api, token, body).status_code == 202
+    paid_renders._IN_FLIGHT.clear()
+    with store.transaction() as c:
+        c.execute("UPDATE events SET created_at=? WHERE action LIKE 'paid_render.%'", (H.shift(H.now(), days=-3),))
+    # No BotOps, and the agent's own question is open: nobody can ask yet, and the shot stays unknown.
+    with store.transaction() as c:
+        assert paid_renders.sweep(c) == 1
+    assert reconcile_asks(api, task) == []
+    botops(api)
+    with store.transaction() as c:
+        assert paid_renders.sweep(c) == 1  # BotOps can ask now
+    with store.transaction() as c:
+        assert paid_renders.sweep(c) == 0
+    assert reconcile_asks(api, task) == [("human:ana", "Reconcile 1 shot", ["Kettle wide"])]
