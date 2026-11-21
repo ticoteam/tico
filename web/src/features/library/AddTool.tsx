@@ -1,25 +1,26 @@
 import { useQuery } from '@tanstack/react-query';
-import { useState, type ReactElement } from 'react';
-import type { WebsiteTool } from '@/api/schema';
+import { useState } from 'react';
+import type { ToolIndexRow, WebsiteTool } from '@/api/schema';
 import { meQuery } from '@/data';
+import { Button } from '@/kit/Button';
 import { Checkbox } from '@/kit/Checkbox';
 import { Dialog } from '@/kit/Dialog';
-import { Field } from '@/kit/Field';
-import { Menu, MenuItem } from '@/kit/Menu';
+import { Field, Search } from '@/kit/Field';
 import { Segmented } from '@/kit/Segmented';
 import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
-import { Foot, ToolGlyph, trimmed, useGo } from './parts';
+import { Foot, press, ToolGlyph, trimmed, useGo } from './parts';
 import { ConnectMailboxDialog, MailingAddressDialog, NewAddressDialog, RequestNumberDialog, WebhookDialog } from './ToolDialogs';
-import { probeMcp, type LoginAdd, type McpProbe } from './queries';
+import { catalogQuery, probeMcp, toolsQuery, type CatalogService, type LoginAdd, type McpProbe } from './queries';
 import { useAdmin } from './ToolShell';
 
-/* Add tool (tools.js addMenu; the old app's tools-api, tools-mcp and tools-website dialogs): an API, an MCP server,
-   a website, an outgoing webhook, or mail. Secrets typed here are only sent: nothing typed comes back to the page. */
+/* Find or connect (the plan's catalog-first Add): a service from the catalog, then one of its ways in (Sign in with
+   the vendor, Paste a key, Sign in on the website); any other tool by its kind, one click away (the old app's
+   tools-api, tools-mcp and tools-website dialogs). Secrets typed here are only sent: nothing typed comes back. */
 
 export type Adding = 'api' | 'mcp' | 'website' | 'webhook' | 'mailbox' | 'tico' | 'number' | 'address';
 
-/** The mock's Add menu, in its order; each with the glyph its tool shows. */
+/** The kinds, in the mock's order; each with the glyph its tool shows. */
 const ADD: Array<[Adding, string, string]> = [
   ['api', 'API', 'api'],
   ['mcp', 'MCP server', 'mcp'],
@@ -31,23 +32,82 @@ const ADD: Array<[Adding, string, string]> = [
   ['address', 'Mailing address', 'address'],
 ];
 
-export function AddMenu({ trigger, onPick }: { trigger: ReactElement; onPick: (a: Adding) => void }) {
-  return (
-    <Menu trigger={trigger}>
-      <AddItems onPick={onPick} />
-    </Menu>
-  );
-}
-
 /** What only an owner or admin adds, as in the old app: a company mailbox, a paid number, a paid address. */
 const ADMIN_ONLY: Adding[] = ['mailbox', 'number', 'address'];
 
-/** The Add menu's rows, for a menu that holds them as a second level (a phone's ⋯). */
-export function AddItems({ onPick }: { onPick: (a: Adding) => void }) {
+type Way = 'mcp' | 'site';
+
+/** Find or connect: search the catalog and pick a service, or add a tool by its kind. `vendor` starts on that service's
+    ways (a vendor's Add connection): what it offers comes from the catalog alone, never from the vendor's tools. */
+export function ConnectDialog({ vendor, onKind, onClose }: { vendor?: string; onKind: (a: Adding) => void; onClose: () => void }) {
+  const read = useQuery(catalogQuery);
+  const catalog = read.data ?? [];
   const admin = useAdmin();
-  return ADD.filter(([k]) => admin || !ADMIN_ONLY.includes(k)).map(([k, label, glyph]) => (
-    <MenuItem key={k} label={label} lead={<ToolGlyph kind={glyph} />} onSelect={() => onPick(k)} />
-  ));
+  const [words, setWords] = useState('');
+  const [chosen, setChosen] = useState(vendor ?? '');
+  const [way, setWay] = useState<Way | null>(null);
+  const service = catalog.find((s) => s.id === chosen);
+  if (service && way === 'mcp') return <AddMcp onClose={onClose} start={{ url: service.mcp_url, name: service.name }} />;
+  if (service && way === 'site') return <AddWebsite onClose={onClose} site={service.site} />;
+  if (service) return <Ways service={service} onWay={setWay} onBack={vendor ? undefined : () => setChosen('')} onClose={onClose} />;
+  const w = words.trim().toLowerCase();
+  const found = catalog.filter((s) => !w || s.name.toLowerCase().includes(w) || s.id.includes(w));
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()} title="Find or connect" className="connect-find">
+      <Search label="Find a service" value={words} onValueChange={setWords} placeholder="Find a service" wide autoFocus />
+      <div className="connect-list" aria-label="Services">
+        {found.map((s) => (
+          <button key={s.id} type="button" className="row connect-row" onClick={() => setChosen(s.id)}>
+            <span className="row-title">{s.name}</span>
+          </button>
+        ))}
+        {read.isSuccess && !found.length && <p className="connect-none">Not in the catalog</p>}
+      </div>
+      <div className="connect-kinds" role="group" aria-label="Add by kind">
+        {ADD.filter(([k]) => admin || !ADMIN_ONLY.includes(k)).map(([k, label, glyph]) => (
+          <button key={k} type="button" className="btn connect-kind" onClick={() => onKind(k)}>
+            <ToolGlyph kind={glyph} />
+            {label}
+          </button>
+        ))}
+      </div>
+    </Dialog>
+  );
+}
+
+/** A catalog service's ways in: its MCP server's sign-in where it has one, a key, and its website. */
+function Ways({ service, onWay, onBack, onClose }: { service: CatalogService; onWay: (w: Way) => void; onBack?: () => void; onClose: () => void }) {
+  const rows = useQuery(toolsQuery).data?.rows ?? [];
+  const [busy, setBusy] = useState(false);
+  // A key goes on the service's tool the reader already sees, else on a new one made from the catalog's entry.
+  const paste = async () => {
+    const mine = rows.find((r: ToolIndexRow) => r.kind === 'api' && r.service === service.id && !r.requestable);
+    setBusy(true);
+    const done = mine
+      ? await press('tools.open', { tool: mine.id })
+      : await press('tools.addApi', { name: service.name, service: service.id, auth_scheme: service.auth_scheme }, 'Not added');
+    setBusy(false);
+    if (done) onClose();
+  };
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()} title={service.name} actions={onBack && <Button onClick={onBack}>Back</Button>}>
+      <div className="connect-ways">
+        {service.mcp_url && (
+          <Button icon="link" onClick={() => onWay('mcp')}>
+            {`Sign in with ${service.name}`}
+          </Button>
+        )}
+        <Button icon="keys" busy={busy} onClick={() => void paste()}>
+          Paste a key
+        </Button>
+        {service.site && (
+          <Button icon="globe" onClick={() => onWay('site')}>
+            Sign in on the website
+          </Button>
+        )}
+      </div>
+    </Dialog>
+  );
 }
 
 export function AddDialog({ adding, onClose }: { adding: Adding; onClose: () => void }) {
@@ -115,9 +175,9 @@ export function nameFromUrl(url: string) {
   }
 }
 
-function AddMcp({ onClose }: { onClose: () => void }) {
-  const [url, setUrl] = useState('');
-  const [name, setName] = useState('');
+function AddMcp({ onClose, start }: { onClose: () => void; start?: { url: string; name: string } }) {
+  const [url, setUrl] = useState(start?.url ?? '');
+  const [name, setName] = useState(start?.name ?? '');
   const [found, setFound] = useState<McpProbe | null>(null);
   const [probing, setProbing] = useState(false);
   const [way, setWay] = useState<'oauth' | 'token'>('token');
@@ -281,8 +341,8 @@ function useLogin() {
   return [l, setLogin, body] as const;
 }
 
-function AddWebsite({ onClose }: { onClose: () => void }) {
-  const [site, setSite] = useState('');
+function AddWebsite({ onClose, site: start = '' }: { onClose: () => void; site?: string }) {
+  const [site, setSite] = useState(start);
   const [login, setLogin, body] = useLogin();
   const [busy, go] = useGo(onClose);
   return (

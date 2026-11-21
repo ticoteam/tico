@@ -90,6 +90,10 @@ SCHEMAS['ToolIndexRow'] = obj(
             'enum': ['proxy', 'computer'],
             'description': 'An API tool: proxy when Tico holds its key and adds it to each call',
         },
+        'requestable': {
+            'type': 'boolean',
+            'description': 'An Everyone API tool a person may not read: listed by name alone, to ask for access to it',
+        },
     },
     required=['id', 'kind', 'name', 'detail', 'way', 'status', 'who', 'who_total', 'needs_you', 'href'],
 )

@@ -89,7 +89,8 @@ def test_a_member_sees_only_the_tools_they_hold_and_cannot_manage_them(api):
     level(api, tid, "bot:ops", "read_write")
     rows = lambda token: {r["id"]: r for r in get(api, "tool-index", token)["rows"]}  # noqa: E731 - a lookup used 3 times
     assert "api:" + tid in rows("ben-test")
-    assert "api:" + tid not in rows("cara-test")
+    assert rows("cara-test")["api:" + tid]["requestable"] is True  # its name alone, to ask for access
+    assert rows("cara-test")["api:" + tid]["who"] == []
     get(api, f"api-tools/{tid}", "cara-test", expected=404)
     level(api, tid, "human:cara", "read")
     row = rows("cara-test")["api:" + tid]

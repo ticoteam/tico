@@ -633,6 +633,34 @@ export const apiToolQuery = (id: string) =>
     queryFn: () => api.get<ApiTool>(`/api/v2/api-tools/${enc(id)}`),
   });
 
+/** A connection on a vendor's page (GET /api/v2/tool-vendors/{vendor}): an API tool's comes with who can use it at
+    which level; one the reader holds nothing on (`requestable`) with its name alone. */
+export type VendorRow = ToolIndexRow & Partial<Pick<ApiTool, 'access' | 'can_manage' | 'mcp'>>;
+export const vendorQuery = (vendor: string) =>
+  queryOptions({
+    queryKey: ['tools', 'vendor', vendor],
+    queryFn: () => api.get<{ vendor: string; name: string; rows: VendorRow[] }>(`/api/v2/tool-vendors/${enc(vendor)}`),
+  });
+
+/** A service Find or connect offers (backend/tool_services.py `catalog`): how a pasted key goes on a call, the site a
+    person signs in to, and the vendor's MCP server where it has one. */
+export interface CatalogService {
+  id: string;
+  name: string;
+  auth_scheme: string;
+  site: string;
+  mcp_url: string;
+}
+export const catalogQuery = queryOptions({
+  queryKey: ['tools', 'catalog'],
+  queryFn: () => api.get<{ services?: CatalogService[] }>('/api/v2/tool-templates').then((r) => r.services ?? []),
+  staleTime: Infinity,
+});
+
+/** A person asks for an agent's level on a tool: granted at once when it can be, else a card to whoever can grant it. */
+export const requestAccess = (body: { resource: string; level: 'read' | 'read_write'; for_bot: string; why?: string }) =>
+  api.post<{ state?: string }>('/api/v2/access-requests', body);
+
 export const websiteToolQuery = (id: string) =>
   queryOptions({
     queryKey: ['tools', 'website', id],

@@ -1345,6 +1345,7 @@ def create_tool(c, who, body, admins):
     TA.require(c, who, TA.tool(), action=TA.CREATE, admins=admins)
     fields = _clean(body.model_dump())
     service = TS.match(service=fields["service"], name=fields["name"])
+    TA.catalog_only(who, service, fields)
     known = TS.defaults(service)
     # A known service's check path belongs to its own address: a tool given another address gets none by default.
     own = not fields["base_url"] or fields["base_url"] == known.get("base_url")
@@ -1395,6 +1396,9 @@ def update_tool(c, who, tool_id, body, admins, auth=None):
             access_requests.settled(c, who, resource_type="tool", resource_id=tool_id, via="everyone-reads")
     fields = {k: v for k, v in _clean(asked).items()}
     merged = tool | fields
+    moved = {k: merged[k] for k in TA.ADDRESS_FIELDS if merged[k] != tool[k]}
+    if moved:
+        TA.catalog_only(who, merged["service"], moved)
     if merged["delivery"] == "proxy" and not merged["base_url"]:
         raise Problem("delivery", f"Set {tool['name']}'s address before moving it to the proxy", 422)
     if merged["delivery"] == "computer" and _field(tool, "mcp_oauth"):
@@ -1878,11 +1882,34 @@ def _index_row(id, kind, name, status_, href, *, detail="", way="", who=(), who_
     }
 
 
+def _vendor(tool, keys):
+    """The vendor Tools lists an API tool under (`tool_services.vendor_of`), from its keys' variables too."""
+    host = tool["base_url"] or _field(tool, "mcp_url") or ""
+    return TS.vendor_of(tool["service"], tool["name"], [k["env"] for k in keys if k["env"]], host)
+
+
 def _api_rows(c, who, admins, view):
     admin = _admin(c, who, admins)
+    person = who.role in ("owner", "human") and not who.support
     out = []
     for tool in c.execute("SELECT * FROM tools WHERE kind='api' ORDER BY lower(name), id").fetchall():
         if not (admin and tool["audience"] is None) and not visible(c, who, tool, admins, view.auth):
+            if person and tool["audience"] is None:
+                # An Everyone tool a person holds nothing on: its name alone, so they can ask for an agent's access.
+                out.append(
+                    _index_row(
+                        "api:" + tool["id"],
+                        "api",
+                        tool["name"],
+                        {"tone": "idle", "text": ""},
+                        "#/tools/api/" + tool["id"],
+                        needs_you=False,
+                        service=tool["service"],
+                        vendor=_vendor(tool, _keys(c, tool["id"])),
+                        delivery=tool["delivery"],
+                        requestable=True,
+                    )
+                )
             continue
         keys = _keys(c, tool["id"])
         state = state_of(c, tool, keys)
@@ -1906,12 +1933,7 @@ def _api_rows(c, who, admins, view):
                 who_total=len(people),
                 needs_you=state["needs_you"],
                 service=tool["service"],
-                vendor=TS.vendor_of(
-                    tool["service"],
-                    tool["name"],
-                    [k["env"] for k in keys if k["env"]],
-                    tool["base_url"] or _field(tool, "mcp_url") or "",
-                ),
+                vendor=_vendor(tool, keys),
                 delivery=tool["delivery"],
                 private=tool["audience"] is not None,
             )
@@ -2151,9 +2173,9 @@ def vendor_page(c, who, auth, settings, admins, vendor):
         raise Problem("not_found", "No such vendor", 404)
     out = []
     for row in rows[:INDEX_LIMIT_MAX]:
-        if row["kind"] == "api":
+        if row["kind"] == "api" and not row.get("requestable"):
             page = detail(c, who, row["id"][len("api:") :], admins, auth)
-            row = row | {k: page[k] for k in ("tool", "keys", "access", "settings", "can_manage")}
+            row = row | {k: page[k] for k in ("tool", "keys", "access", "settings", "can_manage", "mcp")}
         out.append(row)
     return {"vendor": vendor, "name": TS.vendor_name(vendor), "rows": out}
 

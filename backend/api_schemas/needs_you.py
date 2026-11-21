@@ -51,6 +51,7 @@ NEEDS_ITEM = obj(
             "state": "s",
             "subject": "s",
             "subject_name": "s",
+            "resource_type": {"type": "string", "enum": ["tool", "repository"]},
             "resource_name": "s",
             "level": {"type": "string", "enum": ["read", "read_write"]},
             "why": "s",

@@ -37,6 +37,7 @@ import {
   sendLoginCode,
   setBrowserControl,
   setAgentModel,
+  setAgentRepos,
   setCompactAt,
   COMPACT_AT,
   setAgentStatus,
@@ -288,6 +289,24 @@ export const worksFor = defineAction({
   // Who an agent works for is ordinary setup among teammates: Tico's too.
   run: (_ctx, { slug, people }) => said("Couldn't change it", () => setWorksFor(slug, people)),
   did: () => 'Changed who it works for',
+  target: ({ slug }) => onPage(slug),
+});
+
+const repo = z.strictObject({ full_name: z.string().check(z.minLength(1), z.maxLength(200)), access: z.enum(['read', 'write'] as const) });
+
+/** Its own repository only, every ticked one at one level, or chosen ones each at its level. */
+export const setRepositories = defineAction({
+  id: 'agents.setRepositories',
+  title: 'Change which repositories an agent reaches',
+  kind: 'change',
+  input: z.strictObject({
+    slug,
+    mode: z.enum(['own', 'all', 'chosen'] as const),
+    all_access: z.optional(z.enum(['read', 'write'] as const)),
+    chosen: z.optional(z.array(repo).check(z.maxLength(500))),
+  }),
+  run: (_ctx, { slug, ...change }) => said("Couldn't change its repositories", () => setAgentRepos(slug, change)),
+  did: () => 'Changed its repositories',
   target: ({ slug }) => onPage(slug),
 });
 

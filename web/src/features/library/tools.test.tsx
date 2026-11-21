@@ -47,6 +47,7 @@ import {
 import { loadDocs, loadTools } from './routing';
 import { toolsSearch } from './search';
 import { NumberRequests, SharedInboxDialog } from './ToolSettings';
+import { flowQuery, type FlowRequest } from '@/features/tasks/exports';
 import { narrow, ToolsPage } from './ToolsPage';
 
 /* Tools: the list, and the one page every kind of tool opens on (what it is, how it connects, who may use it, what it
@@ -132,6 +133,12 @@ const tools = (rows: ToolIndexRow[] = []) => queryClient.setQueryData(toolsQuery
 async function pick(menu: string, item: string, inside?: HTMLElement) {
   fireEvent.click(await (inside ? within(inside) : screen).findByRole('button', { name: menu }));
   fireEvent.click(await screen.findByRole('menuitem', { name: item }));
+}
+/** Add tool › Find or connect › one of the kinds. */
+async function addKind(kind: string) {
+  fireEvent.click(await screen.findByRole('button', { name: 'Add tool' }));
+  const kinds = await screen.findByRole('group', { name: 'Add by kind' });
+  fireEvent.click(within(kinds).getByRole('button', { name: kind }));
 }
 /** The open tool's own ⋯ (the list's head has one too). */
 const toolMore = async (name: string) => fireEvent.click(await within(await page(name)).findByRole('button', { name: 'More' }));
@@ -819,13 +826,15 @@ describe('who sees what', () => {
     queryClient.setQueryData(toolsQuery.queryKey, { rows: [indexRow({ id: 'api:t1', name: 'Sample API' })] } as never);
     open('');
     fireEvent.click(await screen.findByRole('button', { name: 'Add tool' }));
-    expect(await screen.findByRole('menuitem', { name: 'Tico address' })).toBeTruthy();
-    for (const name of ['Email', 'Phone number', 'Mailing address']) expect(screen.queryByRole('menuitem', { name })).toBeNull();
+    let kinds = await screen.findByRole('group', { name: 'Add by kind' });
+    expect(within(kinds).getByRole('button', { name: 'Tico address' })).toBeTruthy();
+    for (const name of ['Email', 'Phone number', 'Mailing address']) expect(within(kinds).queryByRole('button', { name })).toBeNull();
     cleanup();
     as('owner');
     open('');
     fireEvent.click(await screen.findByRole('button', { name: 'Add tool' }));
-    for (const name of ['Email', 'Phone number', 'Mailing address']) expect(await screen.findByRole('menuitem', { name })).toBeTruthy();
+    kinds = await screen.findByRole('group', { name: 'Add by kind' });
+    for (const name of ['Email', 'Phone number', 'Mailing address']) expect(await within(kinds).findByRole('button', { name })).toBeTruthy();
     expect((await tico('tools.requestNumber', { name: 'Mobile number' })).ok).toBe(true);
   });
 
@@ -1144,8 +1153,7 @@ describe('Tools head', () => {
     const router = at('/library/tools', <ToolsPage search={{}} />);
     const head = (await screen.findByRole('heading', { name: 'Tools' })).closest('header') as HTMLElement;
     expect(controls(head)).toEqual(['Filter tools', 'Add tool']);
-    fireEvent.click(within(head).getByRole('button', { name: 'Add tool' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'API' }));
+    await addKind('API');
     expect(await screen.findByRole('dialog', { name: 'Add API' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     fireEvent.click(within(head).getByRole('button', { name: 'More' }));
@@ -1238,12 +1246,12 @@ describe('a section whose read fails', () => {
 });
 
 describe('the list and the open tool’s states', () => {
-  it('lists the tools in use and the ones available, each opening beside the list, each group folding by its name; with no tools at all says so with Add tool @s862', async () => {
+  it('lists the tools in use and the unassigned ones, each opening beside the list, each group folding by its name; with no tools at all says so with Add tool @s862', async () => {
     serve();
     tools([indexRow({ id: 'api:t1', name: 'Sample API', who_total: 1 }), indexRow({ id: 'api:t2', name: 'Other API' })]);
     open('');
     expect((await screen.findByText('Sample API')).closest('a')?.getAttribute('href')).toBe('/library/tools?tool=api%3At1');
-    expect(screen.getByText('Available')).toBeTruthy();
+    expect(screen.getByText('Unassigned')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /^In use/ }));
     expect(screen.queryByText('Sample API')).toBeNull();
     expect(screen.getByText('Other API')).toBeTruthy();
@@ -1252,7 +1260,7 @@ describe('the list and the open tool’s states', () => {
     open('');
     expect(await screen.findByText('No tools yet')).toBeTruthy();
     fireEvent.click(screen.getByText('Add tool', { selector: 'button' }));
-    expect(await screen.findByRole('menuitem', { name: 'API' })).toBeTruthy();
+    expect(within(await screen.findByRole('group', { name: 'Add by kind' })).getByRole('button', { name: 'API' })).toBeTruthy();
   });
 
   // A Tools list not shared with you is the router's no-access page (PageFault).
@@ -1287,7 +1295,7 @@ describe('an outgoing webhook’s add and edit', () => {
     const sent = serve((url, method) => (url === '/api/v2/event-types' ? hookTypes : method === 'POST' && url === '/api/v2/webhooks' ? { webhook: { ...HOOK, secret: SECRET } } : undefined));
     tools([indexRow({ id: 'api:t1', name: 'Sample API' })]);
     open('');
-    await pick('Add tool', 'Webhook');
+    await addKind('Webhook');
     const dialog = await screen.findByRole('dialog', { name: 'Add webhook' });
     fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Order feed' } });
     fireEvent.change(within(dialog).getByLabelText('Address'), { target: { value: 'https://hooks.example.test/orders' } });
@@ -1846,5 +1854,120 @@ describe('Loading a Library page', () => {
     serve((url) => (url.startsWith('/api/v2/tool-index') ? { rows: [] } : refused(403, 'forbidden')));
     await expect(loadTools(queryClient, { tool: 'api:t1' })).resolves.toBeTruthy();
     await expect(loadDocs(queryClient, {})).rejects.toMatchObject({ status: 403 });
+  });
+});
+
+describe('the Tools page: requests, connections by vendor, find or connect', () => {
+  const accessFor = (id: string, type: 'tool' | 'repository', name: string): FlowRequest => ({
+    kind: 'access',
+    id: `access:${id}`,
+    line: `Clerk asks for ${name}`,
+    since: '2026-11-20T09:00:00Z',
+    from_id: 'bot:b1',
+    access: { id, state: 'open', subject: 'bot:b1', subject_name: 'Clerk', resource_type: type, resource_name: name, level: 'read', why: '' },
+  });
+  const waiting = (requests: FlowRequest[]) => queryClient.setQueryData(flowQuery.queryKey, { count: requests.length, items: [], requests, task_ids: [] });
+  const raygun = [
+    indexRow({ id: 'api:rg', name: 'Raygun API', vendor: 'raygun', vendor_name: 'Raygun', delivery: 'proxy', who_total: 1 }),
+    indexRow({ id: 'api:rg-dev', name: 'Raygun dev', vendor: 'raygun', vendor_name: 'Raygun', delivery: 'computer' }),
+    indexRow({ id: 'website:rg-site', kind: 'website', name: 'raygun.com', vendor: 'raygun', vendor_name: 'Raygun' }),
+  ];
+
+  it('answers the tool requests that wait on you beside the list, and leaves a repository request to Flow', async () => {
+    serve();
+    tools([indexRow({ id: 'api:t1', name: 'Sample API' })]);
+    waiting([accessFor('r1', 'tool', 'Meta Ads'), accessFor('r2', 'repository', 'acme/site')]);
+    open('');
+    const requests = await screen.findByRole('region', { name: /^Requests/ });
+    expect(within(requests).getByText('Clerk asks for Meta Ads')).toBeTruthy();
+    expect(within(requests).queryByText(/acme\/site/)).toBeNull();
+    cleanup();
+    // A phone shows the list first: the requests lead it.
+    document.documentElement.dataset.layout = 'cards';
+    waiting([accessFor('r1', 'tool', 'Meta Ads')]);
+    open('');
+    const list = await screen.findByRole('region', { name: /^Requests/ });
+    expect(list.closest('.tools-list')).toBeTruthy();
+  });
+
+  it('lists a vendor’s tools as one row whose page shows each connection with its delivery and access', async () => {
+    const sent = serve((url) =>
+      url === '/api/v2/tool-vendors/raygun'
+        ? {
+            vendor: 'raygun',
+            name: 'Raygun',
+            rows: [
+              { ...raygun[0], access: [{ subject: 'bot:b1', kind: 'bot', name: 'Clerk', level: 'read', initials: 'C', last_used_at: null }] },
+              { ...raygun[1], access: [] },
+              { ...raygun[2], who: [{ kind: 'bot', id: 'b1', name: 'Clerk', initials: 'C' }] },
+            ],
+          }
+        : undefined,
+    );
+    tools([...raygun, indexRow({ id: 'api:solo', name: 'Solo API', vendor: 'solo', vendor_name: 'Solo' })]);
+    open('');
+    expect((await screen.findByText('Raygun')).closest('a')?.getAttribute('href')).toBe('/library/tools?tool=vendor%3Araygun');
+    expect(screen.queryByText('Raygun dev')).toBeNull();
+    expect(screen.getByText('Solo API')).toBeTruthy(); // a lone tool of its vendor stays itself
+    cleanup();
+    open('vendor:raygun');
+    const vendor = await page('Raygun');
+    const api = await within(vendor).findByRole('region', { name: /^Raygun API/ });
+    expect(within(api).getByText('Proxy-protected')).toBeTruthy();
+    expect(within(api).getByText('Clerk')).toBeTruthy();
+    expect(within(within(vendor).getByRole('region', { name: /^Raygun dev/ })).getByText('Direct key')).toBeTruthy();
+    expect(within(within(vendor).getByRole('region', { name: /^raygun\.com/ })).getByText('Browser session')).toBeTruthy();
+    expect(reads(sent)()).not.toContain('/api/v2/api-tools/rg-dev');
+  });
+
+  it('finds a service in the catalog and offers its ways in; Paste a key adds it from the catalog’s entry', async () => {
+    const linear = { id: 'linear', name: 'Linear', auth_scheme: 'header:Authorization', site: 'linear.app', mcp_url: 'https://mcp.linear.app/mcp' };
+    const stripe = { id: 'stripe', name: 'Stripe', auth_scheme: 'bearer', site: 'stripe.com', mcp_url: '' };
+    const sent = serve((url, method) =>
+      url === '/api/v2/tool-templates' ? { services: [linear, stripe], templates: [] } : method === 'POST' && url === '/api/v2/api-tools' ? { id: 'linear' } : undefined,
+    );
+    as('owner');
+    tools([indexRow({ id: 'api:t1', name: 'Sample API' })]);
+    open('');
+    fireEvent.click(await screen.findByRole('button', { name: 'Add tool' }));
+    const find = await screen.findByRole('dialog', { name: 'Find or connect' });
+    fireEvent.change(within(find).getByRole('textbox', { name: 'Find a service' }), { target: { value: 'lin' } });
+    expect(within(find).queryByRole('button', { name: 'Stripe' })).toBeNull();
+    fireEvent.click(within(find).getByRole('button', { name: 'Linear' }));
+    const ways = await screen.findByRole('dialog', { name: 'Linear' });
+    expect(within(ways).getByRole('button', { name: 'Sign in with Linear' })).toBeTruthy();
+    expect(within(ways).getByRole('button', { name: 'Sign in on the website' })).toBeTruthy();
+    fireEvent.click(within(ways).getByRole('button', { name: 'Paste a key' }));
+    await waitFor(() => expect(writes(sent)).toEqual([{ url: '/api/v2/api-tools', method: 'POST', body: { name: 'Linear', service: 'linear', auth_scheme: 'header:Authorization' } }]));
+    cleanup();
+    // The website way opens Add website on the catalog's site; the MCP way Add MCP server on the vendor's address.
+    serve((url) => (url === '/api/v2/tool-templates' ? { services: [linear], templates: [] } : undefined));
+    tools([indexRow({ id: 'api:t1', name: 'Sample API' })]);
+    open('');
+    fireEvent.click(await screen.findByRole('button', { name: 'Add tool' }));
+    fireEvent.click(await within(await screen.findByRole('dialog', { name: 'Find or connect' })).findByRole('button', { name: 'Linear' }));
+    fireEvent.click(await within(await screen.findByRole('dialog', { name: 'Linear' })).findByRole('button', { name: 'Sign in on the website' }));
+    expect((within(await screen.findByRole('dialog', { name: 'Add website' })).getByLabelText('Site') as HTMLInputElement).value).toBe('linear.app');
+  });
+
+  it('lists an Everyone tool a person holds nothing on under Everyone, whose page asks for an agent’s access', async () => {
+    const sent = serve((url, method) => (method === 'POST' && url === '/api/v2/access-requests' ? { state: 'open' } : undefined));
+    queryClient.setQueryData(['directory'], { actors: ACTORS, byId: Object.fromEntries(ACTORS.map((a) => [a.id, a])) });
+    tools([indexRow({ id: 'api:crm', name: 'Acme CRM', requestable: true, delivery: 'proxy', status: { tone: 'idle', text: '' } })]);
+    open('');
+    expect(await screen.findByRole('button', { name: /^Everyone/ })).toBeTruthy();
+    cleanup();
+    open('api:crm');
+    const tool = await page('Acme CRM');
+    expect(within(tool).getByText('Proxy-protected')).toBeTruthy();
+    fireEvent.click(within(tool).getByRole('button', { name: 'Request access' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Request access to Acme CRM' });
+    fireEvent.click(within(dialog).getByRole('combobox', { name: 'Agent' }));
+    const clerk = await screen.findByRole('option', { name: 'Clerk' });
+    fireEvent.pointerDown(clerk, { pointerType: 'mouse' });
+    fireEvent.click(clerk);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Request' }));
+    await waitFor(() => expect(writes(sent)).toEqual([{ url: '/api/v2/access-requests', method: 'POST', body: { resource: 'tool:crm', level: 'read', for_bot: 'b1' } }]));
+    expect(reads(sent)()).not.toContain('/api/v2/api-tools/crm');
   });
 });
