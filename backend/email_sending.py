@@ -25,6 +25,7 @@ from urllib.parse import quote
 from pydantic import Field
 
 from . import mailbox_access as access
+from . import rule_links
 from . import task_asks
 from .models import Contract, Empty
 from .email_content import MAX_RAW, attachment, digest, snapshot
@@ -1645,6 +1646,39 @@ def drain(store, auth, limit=20, budget=None):
     return sent
 
 
+def queued_already(c, actor, body, operation_key="", request=None, draft_verified=True):
+    """Read only, before the rule check: whether `enqueue` would answer with a send it already has (its operation's
+    receipt, the same content as a draft's newest send, the same email queued or sent by this sender) and queue none.
+    `enqueue` makes these checks again inside its write."""
+    mailbox = body.mailbox.strip().lower()
+    snap = snapshot(body.raw, mailbox)
+    operation_key = operation_key or body.operation_id
+    try:
+        if operation_key and receipt(
+            c, actor, operation_key, mailbox, request_hash(request or body), snap["content_sha256"]
+        ):
+            return True
+    except Problem:
+        return False
+    draft_id = body.draft_id if draft_verified else ""
+    drafts = revised(c, mailbox, draft_id)
+    if drafts and snap["content_sha256"] in (
+        drafts[0]["content_sha256"],
+        json.loads(drafts[0]["classification"]).get("source_sha256"),
+    ):
+        return True
+    if draft_id:
+        return False
+    key = digest(dump([mailbox, snap["content_sha256"], snap["recipients"], body.task_id or "no task"]))
+    old = c.execute("SELECT state, actor FROM email_sends WHERE idempotency_key=?", (key,)).fetchone()
+    return bool(old and old["state"] in (*ACTIVE, "sent", "unknown") and old["actor"] == actor)
+
+
+def _raced(c):
+    """The rule gate of an email first found already queued: reached only when the write would queue it after all."""
+    raise Problem("changed", "This email changed while it was checked. Send it again.", 409, retryable=True)
+
+
 def rule_gate(app, store, who, snap):
     """The org rule checks of a bot's own email, before its write: the in-write half for `enqueue`, or None when the
     sender is not a bot writing (a person's own mail is not checked). The Directory's structured rules and the judged
@@ -1652,7 +1686,7 @@ def rule_gate(app, store, who, snap):
     path as a judged one, and a check that cannot complete holds it too (fail closed). The judged check fails open, as
     it always has: an error is a `rules.unchecked` outcome, never a lost send. When the judged check cannot be prepared
     at all, the structured rules still decide the mail inside the write."""
-    from . import org_rule_check as rules, rule_links
+    from . import org_rule_check as rules
 
     found = rules.checked_as(who, store.settings.assistant_bot)
     if not found or not H.is_bot(found[1]):
@@ -1671,6 +1705,8 @@ def rule_gate(app, store, who, snap):
             snap["subject"],
             snap["body"],
             contacts=addresses,
+            most_calls=rule_links.CALLS,  # a link's budget, first send and approved recheck alike: one call, no part call
+            parts=False,
         )
     except Exception as exc:  # noqa: BLE001  (the judged check fails open, as every judged check does)
         LOG.warning("The org rule check of an email failed: %s", type(exc).__name__)
@@ -1682,7 +1718,7 @@ def rule_gate(app, store, who, snap):
         else:
             result = rules.mail_decide(c, prep)
         # The email link's one outcome event (backend/rule_links.py), in the mail's write: a held mail is not sent.
-        rule_links.record(c, rule_links.mailed(found, result), stopped=True)
+        rule_links.record(c, rule_links.mailed(c, found, result), stopped=True)
         return result
 
     return gate
@@ -2026,7 +2062,14 @@ def install(app, store, auth, mutate):
         # Every bot's writing, the Assistant's for its person included, meets the org rules (`rule_gate` answers None
         # for a person's own mail); Tico's own automation and calendar email does not.
         composed = body.automation_action_id or body.calendar_action_id
-        rules = None if composed else rule_gate(app, store, who, snap)
+        operation_key = body.operation_id or request.headers.get("Idempotency-Key", "")
+        with store.read() as c:
+            # An email already queued or sent is answered with that send: no rule check is spent on it. The write
+            # checks again, and an email the write would now queue after all is refused for a retry (`_raced`).
+            again = rule_links.is_agent(store, who) and queued_already(
+                c, actor, body, operation_key, asked, draft_verified=not asked.raw
+            )
+        rules = None if composed else _raced if again else rule_gate(app, store, who, snap)
         via = who.via or ("agent:" + who.agent if who.agent else "")
         return mutate(
             request,
@@ -2040,7 +2083,7 @@ def install(app, store, auth, mutate):
                     classification,
                     via=via,
                     rules=rules,
-                    operation_key=body.operation_id or request.headers.get("Idempotency-Key", ""),
+                    operation_key=operation_key,
                     request=asked,
                     # Gmail read the draft named only when no `raw` came with it (`frozen_draft`).
                     draft_verified=not asked.raw,
