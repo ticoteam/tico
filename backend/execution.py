@@ -5368,6 +5368,10 @@ class Execution:
             since=epoch["updated_at"] if epoch else None,
         )["messages"]
         history = lane_history(c, row["bot_id"], followed, history, conv, lane)[-HISTORY_PAGE:]
+        if card_slot.of(row):
+            # The bot's own work waiting for its own run (the card's next turn, a comment) is not read in this one.
+            waiting = card_slot.pending(c, row["bot_id"], [m["id"] for m in history])
+            history = [m for m in history if m["id"] not in waiting]
         conversation = thread_payload(c, conv, msg)
         if conversation and conversation.get("audience_class") == "public":
             from . import threads

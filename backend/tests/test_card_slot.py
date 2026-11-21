@@ -202,8 +202,11 @@ def test_ok_and_chat_across_a_runner_restart(api):
     post(api, f"attempts/{first['id']}/complete", stopped, machine["token"])
     with api.app.state.store.transaction() as c:
         assert [d["state"] for d in api.app.state.execution.auto_reconcile(c)] == ["queued"]
-    for _ in range(2):
-        agent.finish(agent.start())
+    chat = agent.start()  # a person's chat goes first; the resumed Draft turn waits for its own run
+    assert chat["message"]["id"] == asked
+    assert _wake(api, task, draft) not in {m["id"] for m in chat["history"]}  # nor is it read in this one
+    agent.finish(chat)
+    agent.finish(agent.start())
     assert claim(api, machine) is None
     assert _jobs(api, _wake(api, task, draft), asked) == {_wake(api, task, draft): "completed", asked: "completed"}
     assert (agent.drafts, agent.charges, agent.answers) == (1, 1, 1)
@@ -351,3 +354,33 @@ def test_a_deferred_comments_deadline_run_joins_the_slot(api):
         delivery.defer(c, "bot:ops", "comment", waiting, conversation_id=task["conversation_id"], task_id=task["id"])
         job = delivery.now(c, "ops", task["conversation_id"])
     assert job == waiting and _slot(api, job) == f"{draft}:ops"
+
+
+def test_a_fired_deferral_stays_with_its_own_run(api):
+    from backend import delivery
+
+    machine, task = _card(api)
+    _ok(api, task)
+    run = Agent(api, machine).start()  # the card's Draft turn
+    waiting = _queue(api, task, ANA, QUESTION, quiet=True)
+    with api.app.state.store.transaction() as c:
+        delivery.defer(c, "bot:ops", "comment", waiting, conversation_id=task["conversation_id"], task_id=task["id"])
+        assert delivery.now(c, "ops", task["conversation_id"]) == waiting
+        # Another turn's claim in the same room carries what is deferred there: not this.
+        delivery.carried(c, "ops", run["id"], [task["conversation_id"]], job=run["job_id"])
+        assert c.execute("SELECT settled_at FROM deferrals WHERE item=?", (waiting,)).fetchone()[0] is None
+    assert _jobs(api, waiting)[waiting] == "queued"
+
+
+def test_older_work_kept_from_some_of_the_room_does_not_hold_the_card(api):
+    from backend import threads
+
+    _, task = _card(api, name="Video")
+    with api.app.state.store.transaction() as c:
+        said = H.say(c, ANA, "human:ben", "Kept from the room.", conversation_id=task["conversation_id"])
+        carried = threads._carrier(c, H.conversation(c, task["conversation_id"]), said, "bot:ops", "mention", None)
+        # Its source is kept from some of the room's readers: neither it nor its carrier is the card's work.
+        c.execute("UPDATE messages SET legacy_audience=? WHERE id=?", ('["human:ana","bot:ops"]', said["id"]))
+        c.execute("UPDATE pipelines SET name='Video Production' WHERE id='video'")
+    assert carried and _slot(api, carried) is None
+    assert _slot(api, _ask(api, task))

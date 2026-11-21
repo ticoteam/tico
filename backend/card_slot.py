@@ -8,7 +8,9 @@ also carries its slot, `<visit id>:<bot id>` (`assign`):
 - While one of a slot's jobs has a run, its other queued jobs wait (`busy`), then run one at a time by the usual pick.
 - A slot's run carries its own job alone: nothing is steered into it and its completion coalesces nothing, and no
   slot job is steered into or coalesced by another run (`Execution.inputs`, `complete`). So a completion settles only
-  its own job, never the work of the next visit or of the next agent, which is another slot's.
+  its own job, never the work of the next visit or of the next agent, which is another slot's. The bot's own work
+  still waiting is not read in a slot run's history either (`pending`), and a fired deadline run keeps its deferred
+  items until it is picked (backend/delivery.py `carried`).
 - The card's room is the baseline audience: a message whose provenance narrows it further keeps its own older run.
 - While any agent has live or unsettled work in the card's room from before the switch, the card stays on the older
   path, so one scheduler drives a card at a time.
@@ -17,6 +19,7 @@ SWITCHED is temporary: it goes, with the older path, once every pipeline runs by
 """
 
 import json
+from collections.abc import Collection
 from typing import Any, cast
 
 from . import hubdb
@@ -25,7 +28,6 @@ H: Any = hubdb
 Row = dict[str, Any]
 
 SWITCHED = frozenset({"video production"})  # pipeline names, case-folded
-LIVE = ("queued", "leased", "running", "input", "uncertain")  # older work not settled yet
 RUNNING = ("leased", "running", "input")
 _SWITCHED_SQL = f"SELECT 1 FROM pipelines WHERE name IN ({','.join('?' * len(SWITCHED))}) AND retired_at IS NULL LIMIT 1"  # pipelines.name is NOCASE
 
@@ -53,21 +55,43 @@ def busy(conn: Any, row: Any) -> bool:
     return found is not None
 
 
-def _narrows(conn: Any, message: Row, private_room: bool) -> bool:
-    """Whether the message's provenance narrows the card room's audience. In a public room that is any reader of the
-    room who may not read it (threads.message_narrower). A private card's room is narrow already, so only a message
-    kept from some of its own readers (a legacy audience, on it or on the message it carries) narrows it."""
+def _never(refs: Row) -> bool:
+    """A server command, a meeting's turn and a thread's notes wake are never a card's work: they get no slot."""
     from . import threads
 
     T: Any = threads  # untyped
-    if not private_room:
-        return bool(T.message_narrower(conn, message))
+    return bool(refs.get("command") or refs.get("live_meeting") or refs.get("wake") == T.NOTE_WAKE)
+
+
+def _narrows(conn: Any, message_id: str, private_room: bool) -> bool:
+    """Whether a message, or the message it carries, is kept from some reader of the card's room: the card's own access
+    is the baseline. One with a legacy audience is; in a public room, so is one some reader of the room may not read
+    (threads.message_narrower). A private card's room is narrow already, so only a legacy audience narrows it."""
+    from . import threads
+
+    T: Any = threads  # untyped
     found = conn.execute(
-        "SELECT m.legacy_audience, s.legacy_audience FROM messages m "
+        "SELECT m.legacy_audience, s.id, s.legacy_audience FROM messages m "
         "LEFT JOIN messages s ON s.id = json_extract(m.refs,'$.carries') WHERE m.id=?",
-        (message["id"],),
+        (message_id,),
     ).fetchone()
-    return bool(found and (found[0] or found[1]))
+    if not found or found[0] or found[2]:
+        return bool(found)
+    if private_room:
+        return False
+    return bool(
+        T.message_narrower(conn, {"id": message_id}) or (found[1] and T.message_narrower(conn, {"id": found[1]}))
+    )
+
+
+# The older path's unsettled jobs in one room, read from the live and uncertain job indexes (jobs_live_created,
+# jobs_uncertain), each joined to its message by key: never the room's message history.
+_OLDER = (
+    "SELECT j.message_id, m.refs FROM jobs j JOIN messages m ON m.id = j.message_id "
+    "WHERE j.state IN ('queued','leased','running','input') AND j.slot IS NULL AND j.id<>? AND m.conversation_id=? "
+    "UNION ALL SELECT j.message_id, m.refs FROM jobs j JOIN messages m ON m.id = j.message_id "
+    "WHERE j.state='uncertain' AND j.slot IS NULL AND j.id<>? AND m.conversation_id=?"
+)
 
 
 def assign(conn: Any, message: Row) -> str | None:
@@ -75,12 +99,10 @@ def assign(conn: Any, message: Row) -> str | None:
     the card's own room: a message elsewhere (a private chat that names the card) has another audience and keeps its
     own run. A thread's carrier is its card's when the message it carries is (`task_wakes.message_task`); a thread's
     private-notes wake never is. Returns the slot, or None for a job that stays on the older path."""
-    from . import task_wakes, threads
+    from . import task_wakes
 
-    T: Any = threads  # untyped
-    refs = _refs(message.get("refs"))
-    if refs.get("command") or refs.get("live_meeting") or refs.get("wake") == T.NOTE_WAKE:
-        return None  # a server command, a meeting's turn or a thread's notes are not the card's work
+    if _never(_refs(message.get("refs"))):
+        return None
     if not H._has_table(conn, "visits"):  # a bare hub database has no cards
         return None
     # Two key reads before anything else: most messages are not in a card's room, and most companies switch nothing.
@@ -98,20 +120,30 @@ def assign(conn: Any, message: Row) -> str | None:
     ).fetchone()
     if not found or str(found[1]).casefold() not in SWITCHED:
         return None
-    if _narrows(conn, message, found[2] is None or bool(found[2])):
+    private = found[2] is None or bool(found[2])
+    if _narrows(conn, message["id"], private):
         return None  # some reader of the card's room may not read it: its own run answers it
-    # Any agent's live work in the card's room from before the switch settles first: until then the card stays on
-    # the older path, a reassign mid-run included. Work that never gets a slot (above, or kept from some of the room)
-    # does not count.
-    legacy = conn.execute(
-        "SELECT 1 FROM jobs j JOIN messages m ON m.id = j.message_id WHERE j.slot IS NULL AND j.id<>? "
-        f"AND j.state IN ({','.join('?' * len(LIVE))}) AND m.conversation_id=? "
-        "AND coalesce(json_extract(m.refs,'$.command'),0)=0 AND json_extract(m.refs,'$.live_meeting') IS NULL "
-        "AND coalesce(json_extract(m.refs,'$.wake'),'')<>? AND m.legacy_audience IS NULL LIMIT 1",
-        (message["id"], *LIVE, room[0], T.NOTE_WAKE),
-    ).fetchone()
-    if legacy:
-        return None
+    # Any agent's unsettled work in the card's room from before the switch settles first: until then the card stays on
+    # the older path, a reassign mid-run included. Work that could never have a slot (above) does not count.
+    for older, raw in conn.execute(_OLDER, (message["id"], room[0], message["id"], room[0])).fetchall():
+        if not _never(_refs(raw)) and not _narrows(conn, older, private):
+            return None
     slot = f"{found[0]}:{str(message['recipient_id'])[4:]}"
     conn.execute("UPDATE jobs SET slot=? WHERE id=?", (slot, message["id"]))
     return slot
+
+
+def pending(conn: Any, bot: str, message_ids: Collection[str]) -> set[str]:
+    """Of these messages, the ones `bot` still has a queued job for, or whose carrier it does: its own work waiting for
+    a run of its own, in any visit, is not read in another run's history."""
+    if not message_ids:
+        return set()
+    marks = ",".join("?" * len(message_ids))
+    found = conn.execute(
+        "SELECT j.message_id, json_extract(m.refs,'$.carries') FROM jobs j INDEXED BY jobs_queue "
+        "JOIN messages m ON m.id = j.message_id "
+        f"WHERE j.bot_id=? AND j.state='queued' AND (j.message_id IN ({marks}) "
+        f"OR json_extract(m.refs,'$.carries') IN ({marks}))",
+        (bot, *message_ids, *message_ids),
+    ).fetchall()
+    return {str(value) for row in found for value in row if value}

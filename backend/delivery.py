@@ -138,8 +138,11 @@ def carried(conn, bot, attempt_id, conversation_ids, notes=(), *, job=None, curr
             "SELECT d.id,d.kind,d.item,m.sender_id,m.body,m.created_at,m.deleted_at,m.refs,m.conversation_id,"
             "d.conversation_id FROM deferrals d "
             "LEFT JOIN messages m ON m.id=d.item WHERE d.bot=? AND d.settled_at IS NULL AND d.conversation_id IN "
-            f"({','.join('?' * len(ids))}) ORDER BY d.created_at,d.id",
-            (bot, *ids),
+            f"({','.join('?' * len(ids))}) "
+            # A card slot's fired deadline run keeps its items until it is picked (backend/card_slot.py).
+            "AND NOT EXISTS(SELECT 1 FROM jobs fj WHERE fj.id=d.fired_job AND fj.slot IS NOT NULL AND fj.id IS NOT ?) "
+            "ORDER BY d.created_at,d.id",
+            (bot, *ids, job),
         ).fetchall()
         for row in rows:
             rid, kind, item, sender, body, created, deleted, refs, room, session = row
