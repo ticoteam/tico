@@ -1,7 +1,7 @@
 # The bot engineer. Installed with every environment; it sets up everything else in these templates.
 template: botops
 slug: botops
-name: Agent Ops
+name: BotOps
 required: true
 bootstrap: true
 icon: smart_toy

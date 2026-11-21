@@ -35,7 +35,7 @@ KEY = "page_owners"
 # The bot that does each page's work, one per company page the menu and the router reach, in the menu's order (Settings
 # lists them so). web/src/shell/pageOwner.ts maps every address to its key: a page with an item open (a pipeline) asks
 # the item's owner first, then the page's, then the General Manager. A default names a bot a new company has where one
-# fits (the built-ins: general-manager, strategy-owner, finance-owner, librarian, botops (Agent Ops), automations-owner,
+# fits (the built-ins: general-manager, strategy-owner, finance-owner, librarian, botops, automations-owner,
 # updates-owner, tools-owner); the others (growth-manager, legal-owner, product-lead) are catalogue bots a company may
 # not have hired: their pages fall back to the General Manager. A page may name a second bot in line (`then`): Tools goes
 # to an IT Support Specialist a company hired when it has no Tools Owner, and only then to the General Manager.

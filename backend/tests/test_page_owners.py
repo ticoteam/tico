@@ -254,28 +254,6 @@ def test_a_message_to_the_assistant_carries_the_page_it_was_written_on(api):
     assert r.status_code == 422, r.text
 
 
-def test_botops_is_called_agent_ops_and_keeps_its_slug_unless_someone_renamed_it(api):
-    text = (Path(__file__).parents[1] / 'migrations' / '20261121124603_agent_ops_name.sql').read_text()
-    sql = '\n'.join(line for line in text.splitlines() if not line.startswith('--'))
-    with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
-        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('ops2','ops2','BotOps','active')")
-        c.execute(
-            "INSERT INTO bot_settings(bot_id,extra,updated_at) VALUES('botops',?,'2026-11-21')",
-            (json.dumps({'display_name': 'BotOps'}),),
-        )
-        for statement in filter(str.strip, sql.split(';')):
-            c.execute(statement)
-        rows = dict(c.execute("SELECT id, display_name FROM bots WHERE id IN ('botops','ops2')").fetchall())
-        extra = json.loads(c.execute("SELECT extra FROM bot_settings WHERE bot_id='botops'").fetchone()[0])
-        c.execute("UPDATE bots SET display_name='Fleet' WHERE id='botops'")
-        for statement in filter(str.strip, sql.split(';')):
-            c.execute(statement)
-        renamed = c.execute("SELECT slug, display_name FROM bots WHERE id='botops'").fetchone()
-    assert rows == {'botops': 'Agent Ops', 'ops2': 'BotOps'} and extra['display_name'] == 'Agent Ops'
-    assert tuple(renamed) == ('botops', 'Fleet'), 'a name chosen since is left alone, and the slug stays'
-
-
 def test_every_company_page_the_web_maps_is_a_page_with_an_owner_and_every_owned_page_is_reached():
     # 100% page map (#4857): web/src/shell/pageOwner.ts names each company page by a PAGES key (its own test walks
     # every route); a key no page reaches would be a dead one (replay, sql and seat were).
