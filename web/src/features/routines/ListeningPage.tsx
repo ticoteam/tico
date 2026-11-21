@@ -15,7 +15,7 @@ import { MenuItem } from '@/kit/Menu';
 import { fmtDate } from '@/lib';
 import { List, PageMore, Record as RecordPage, Section, type PageTab } from '@/pagekinds';
 import { LISTENING } from './actions';
-import { Face, Find, HeadSwitch, PageOwner, press, pressOut, RemoveItem, Rows, RuleRow, useConfirmRemove, Verb, Word } from './parts';
+import { Face, Find, HeadSwitch, press, pressOut, RemoveItem, Rows, RuleRow, useConfirmRemove, Verb, Word } from './parts';
 import { matchesQuery, runsQuery, sourcesQuery, watchesQuery, watchQuery } from './queries';
 import type { ListenSource, Match, Routine, WatchSource } from './types';
 import { agentWords, cap, limitsWords, runLink } from './words';
@@ -71,7 +71,6 @@ function Watches({ q }: { q?: string }) {
       search={all.length > 0 && <Find label="Search watches" value={q} onFind={(words) => void press('listening.list', { q: words })} />}
       actions={
         <>
-          <PageOwner page="listening" />
           {all.length > 0 && add}
           <AddWatch open={adding} onOpenChange={setAdding} />
         </>
@@ -177,7 +176,6 @@ function WatchPage({ id, tab, match }: { id: string; tab?: 'sources'; match?: st
       empty={{ title: 'No matches yet' }}
       actions={
         <>
-          <PageOwner page="listening" />
           <span className="rr-phone" data-phone>
             <HeadSwitch label={on ? 'On' : 'Paused'} checked={on} disabled={tmp} onChange={(next) => void press(next ? 'listening.resume' : 'listening.pause', { watch: id })} />
           </span>

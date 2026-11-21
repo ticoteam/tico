@@ -11,7 +11,7 @@ import { FoldButton } from '@/kit/SectionHead';
 import { Select } from '@/kit/Select';
 import { List, PageMore, Section, SidePanel, type PageTab } from '@/pagekinds';
 import { Dot } from '@/tico/dot';
-import { Face, Go, NameOf, PageOwner, PanelLink, teamPath, useDo } from './parts';
+import { Face, Go, NameOf, PanelLink, teamPath, useDo } from './parts';
 import { accessQuery, factoriesQuery, groupsQuery, type Team } from './queries';
 
 /* Org (pages/3-company/company.js orgPage): who reports to whom, as a light chart. A teammate opens its sheet beside
@@ -66,7 +66,6 @@ export function OrgTab({ head, search }: { head: Head; search: { panel?: string 
           <Button variant={search.panel ? 'plain' : 'primary'} onClick={() => add.run({})} data-target="org:add">
             Add teammate
           </Button>
-          <PageOwner page="strategy" />
         </>
       }
       state={teams.length ? 'ready' : 'empty'}

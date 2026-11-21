@@ -14,7 +14,7 @@ import { List, PageMore, Section, SidePanel } from '@/pagekinds';
 import type { AccessList, Grant, Mate, Team } from './caps';
 import { Ask, DefaultsDialog, useAsk } from './dialogs';
 import { ViewAsDialog } from './forms';
-import { FIN, FinanceOwner, useFinanceHead } from './head';
+import { FIN, useFinanceHead } from './head';
 import { budgetDay, count, dayOf, monthSpan } from './model';
 import { ActLink, readState, usePress, useViewAs, Who } from './parts';
 import { accessQuery, balanceQuery, pnlQuery } from './queries';
@@ -84,7 +84,6 @@ export function AccessPage({ search }: { search: FinanceSearch }) {
       actions={
         !viewing && (
           <>
-            <FinanceOwner />
             {may && (
               <Button variant="primary" onClick={() => setGiving('')}>
                 Give access

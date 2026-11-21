@@ -11,7 +11,7 @@ import { Table, Tr } from '@/kit/Table';
 import { List, RecordPanel, SidePanel } from '@/pagekinds';
 import type { Product } from '@/api/schema';
 import type { PRODUCT_FIELDS } from './actions';
-import { Face, Go, NameOf, PageOwner, PanelLink, PanelSection, useDo } from './parts';
+import { Face, Go, NameOf, PanelLink, PanelSection, useDo } from './parts';
 import { productsQuery, repositoriesQuery, type ProductListField } from './queries';
 import './company.css';
 
@@ -64,7 +64,6 @@ export function ProductsPage({ search }: { search: ProductsSearch }) {
       className="co"
       actions={
         <>
-          <PageOwner page="products" />
           {add}
         </>
       }

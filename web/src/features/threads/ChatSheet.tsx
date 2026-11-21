@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { Conversation, MessageBones, type Session } from '@/conversation';
+import { Conversation, MessageBones, type FromPage, type Session } from '@/conversation';
 import { callCard } from '@/features/calls/exports';
 import { approvalCard, useApprovalCards } from '@/features/task/exports';
 import { Button } from '@/kit/Button';
@@ -10,13 +10,16 @@ import { chatQuery } from './queries';
 import { chatActor } from '@/lib';
 
 export interface ChatSheetProps {
-  /** The shell's `?chat=`: agent:<slug>, person:<id> or thread:<id>. */
+  /** The shell's `?chat=`: agent:<slug>, person:<id> or thread:<id>; or the page owner's, in the Agent bar. */
   chat: string;
+  /** The Agent bar's: the page its messages carry, and the words to start with while it is empty. */
+  from?: FromPage;
+  starters?: readonly string[];
 }
 
 /** The second chat's body: the address resolved to a thread, drawn as the side conversation (its head and the
     conversation). The root puts it in the shell's chat sheet. */
-export function ChatSheet({ chat }: ChatSheetProps) {
+export function ChatSheet({ chat, from, starters }: ChatSheetProps) {
   const { data: t, isError, refetch } = useQuery(chatQuery(chat));
   const me = useMe();
   const nameOf = useNameOf();
@@ -53,6 +56,8 @@ export function ChatSheet({ chat }: ChatSheetProps) {
       card={(m) => approvalCard(m) ?? callCard(m)}
       extra={approvals}
       canPost={t.me?.can_post !== false}
+      from={from}
+      starters={starters}
     />
   );
 }

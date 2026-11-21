@@ -2,7 +2,7 @@ import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import type { AutomationOverviewRuns, AutomationTemplate, AutomationTemplates } from '@/api/schema';
 import type { Dest } from './board';
-import { QUIET_STALE_MS, queryClient, quietRoot, write } from '@/data';
+import { queryClient, quietRoot, write } from '@/data';
 import type {
   Delivery,
   DocFile,
@@ -43,7 +43,6 @@ import type {
 for (const root of ['routines', 'rules', 'listening']) quietRoot(root);
 
 const enc = encodeURIComponent;
-const quiet = { staleTime: QUIET_STALE_MS } as const;
 const tmpId = () => `tmp:${Math.random().toString(36).slice(2, 10)}`;
 const now = () => new Date().toISOString();
 
@@ -445,13 +444,6 @@ export function updateHook(id: string, body: { name: string }) {
 export function stripSecret(url: string): string {
   return url.replace(/\/[^/]+$/, '');
 }
-
-/** Who owns each page (GET /page-owners), for the face in a page's head. Library and Finance read it under this key too. */
-export const pageOwnersQuery = queryOptions({
-  queryKey: ['settings', 'page-owners'],
-  queryFn: async ({ signal }) => (await api.get<{ pages?: Record<string, { bot: string | null }> }>('/api/v2/page-owners', { signal })).pages ?? {},
-  ...quiet,
-});
 
 // ---------------------------------------------------------------- rules
 

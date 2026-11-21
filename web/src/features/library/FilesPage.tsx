@@ -17,7 +17,7 @@ import { Document, FilterRow, List, Section } from '@/pagekinds';
 import { SectionHead } from '@/kit/SectionHead';
 import { VirtualList } from '@/kit/VirtualList';
 import { FileGet, linkOf, Preview } from './FileViewer';
-import { Face, Find, KindGlyph, OwnerButton, press, size, when, Who } from './parts';
+import { Face, Find, KindGlyph, press, size, when, Who } from './parts';
 import { fileQuery, fileSearchQuery, filesQuery, fileUrl, fileVersionsQuery, type FileRow } from './queries';
 import type { FilesSearch } from './search';
 import { signedLine } from './signing';
@@ -141,7 +141,6 @@ function FilesList({ search }: { search: FilesSearch }) {
               ))}
               </Menu>
             )}
-            <OwnerButton page="docs" />
             {!none && add}
             <input ref={input} type="file" multiple hidden aria-label="Choose files" onChange={(e) => take(e.target.files)} />
           </>
@@ -302,7 +301,6 @@ function FilePage({ id, search }: { id: string; search: FilesSearch }) {
       actions={
         <>
           {!unavailable && <FileGet url={url} link={linkOf(file)} />}
-          <OwnerButton page="docs" />
         </>
       }
       framed

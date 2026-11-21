@@ -24,7 +24,7 @@ import type {
   FinanceSalesTax,
   FinanceTransactions,
 } from '@/api/schema';
-import { directoryQuery, isNetworkError, QUIET_STALE_MS, queryClient, quietRoot, write, type Directory } from '@/data';
+import { directoryQuery, isNetworkError, pageOwnersQuery, QUIET_STALE_MS, queryClient, quietRoot, write, type Directory, type PageOwnerRow } from '@/data';
 import { newId } from '@/lib';
 
 /* Finance, budgets and Growth. None has a live topic: each root is read again after the person's own writes, on
@@ -764,8 +764,8 @@ export const growthChannelQuery = (channel: string, month: string | undefined) =
   });
 
 /** A message to the Growth Manager in its chat (POST /api/v2/chat/{bot}, backend/thread_api.py), sent from the page. */
-export const askGrowthManager = (bot: string, text: string, page: { path: string; title: string }) =>
-  api.post<unknown>(`/api/v2/chat/${enc(bot.replace(/^bot:/, ''))}`, { text, refs: { page } });
+export const askGrowthManager = (bot: string, text: string) =>
+  api.post<unknown>(`/api/v2/chat/${enc(bot.replace(/^bot:/, ''))}`, { text, refs: { from_page: { page: 'growth', label: 'Growth' } } });
 
 export interface Segment {
   slug: string;
@@ -778,17 +778,7 @@ export const segmentsQuery = queryOptions({
   queryFn: ({ signal }) => api.get<{ segments: Segment[] }>('/api/v2/growth/segments', { signal }),
 });
 
-export interface PageOwnerRow {
-  bot?: string | null;
-  /** 'default', 'none' or the chosen agent ('bot:<id>'). */
-  choice?: string;
-}
-/** Each page's owner (backend/page_owners.py); Settings and Library read the same key. */
-export const pageOwnersQuery = queryOptions({
-  queryKey: ['settings', 'page-owners'],
-  queryFn: async ({ signal }) => (await api.get<{ pages?: Record<string, PageOwnerRow> }>('/api/v2/page-owners', { signal })).pages ?? {},
-  ...quiet,
-});
+export { pageOwnersQuery };
 
 const botId = (ref: string) => (ref.includes(':') ? ref : `bot:${ref}`);
 

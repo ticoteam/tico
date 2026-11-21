@@ -222,6 +222,23 @@ describe('Team pages', () => {
     expect(screen.queryByText('Writes the newsletter')).toBeNull();
   });
 
+  it('lists the pages it owns and gives it another or takes one back, as Settings › Page owners does @4857', async () => {
+    const pages = {
+      finance: { bot: 'bot:0190-ana', name: 'Finance', choice: 'default' },
+      docs: { bot: 'bot:0190-ana', name: 'Docs', choice: 'bot:0190-ana' },
+      growth: { bot: 'bot:gm', name: 'Growth', choice: 'default' },
+    };
+    serve((url, method) => (method === 'GET' && url.includes('/api/v2/page-owners') ? ok({ pages }) : method === 'PUT' ? ok({}) : undefined));
+    show(<TeamWho who="ana" tab="settings" />, '/team/ana?tab=settings');
+    fireEvent.click(await screen.findByRole('button', { name: /^Pages\s*Finance, Docs/ }));
+    expect((await screen.findByRole('menuitem', { name: /Finance/ })).getAttribute('aria-disabled')).toBe('true');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Growth' }));
+    await waitFor(() => expect(posted('/page-owners/growth')).toMatchObject({ method: 'PUT', body: { bot: '0190-ana' } }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Pages/ }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Docs/ }));
+    await waitFor(() => expect(posted('/page-owners/docs')).toMatchObject({ method: 'PUT', body: { bot: 'default' } }));
+  });
+
   it('links the agent’s computer and instructions as tabs of its own address', async () => {
     serve((url) => (url.includes('/instructions') ? ok({ content: 'Write short.' }) : undefined));
     show(<TeamWho who="ana" tab="settings" />, '/team/ana?tab=settings');

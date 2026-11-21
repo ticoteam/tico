@@ -9,7 +9,7 @@ import { Dashboard, FiguresStrip, List, Section } from '@/pagekinds';
 import { useBooksReturn } from './booksReturn';
 import { useCaps } from './caps';
 import { axis, cash, connected, dayOf, monShort, monthSpan, nowCol, ymOf } from './model';
-import { FIN, FinanceOwner, plural, useFinanceHead } from './head';
+import { FIN, plural, useFinanceHead } from './head';
 import { ActLink, readState, usePhone, usePress, useViewAs } from './parts';
 import {
   billsQuery,
@@ -133,7 +133,6 @@ function Overview({ mayReadSources, mayReadPayables, mayReadReceivables }: { may
       {...head}
       state={state}
       onRetry={() => void sources.refetch()}
-      actions={<FinanceOwner />}
       empty={{
         title: 'No source connected',
         action: (

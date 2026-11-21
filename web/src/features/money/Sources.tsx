@@ -11,7 +11,7 @@ import { Table } from '@/kit/Table';
 import { List, Section, SidePanel } from '@/pagekinds';
 import { ConfirmDialog, ConnectBooksDialog, ConnectKeyDialog, ShownOnce, useMay, WebhookDialog } from './dialogs';
 import { StatementDialog } from './forms';
-import { FIN, FinanceOwner, plural, useFinanceHead } from './head';
+import { FIN, plural, useFinanceHead } from './head';
 import { cash } from './model';
 import { ActLink, PhoneRows, Prow, readState, usePhone, usePress, useViewAs } from './parts';
 import { balanceQuery, BOOKS, hooksQuery, KEY_SOURCES, sourcesQuery, type KeyProvider, type SourceGroup, type SourceRow } from './queries';
@@ -178,7 +178,6 @@ export function SourcesPage({ failure, onDismiss, search }: { failure: string | 
       empty={{ title: 'No source connected' }}
       actions={
         <>
-          <FinanceOwner />
           {connect}
           {dialogs}
         </>

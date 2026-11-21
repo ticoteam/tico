@@ -14,7 +14,7 @@ import { Row } from '@/kit/Row';
 import { toast } from '@/kit/Toast';
 import { VirtualList } from '@/kit/VirtualList';
 import { List, PageMore, Section, SidePanel, type PageState, type PageTab } from '@/pagekinds';
-import { Face, Find, Foot, KindGlyph, More, OwnerButton, press, trimmed, useGo, Who } from './parts';
+import { Face, Find, Foot, KindGlyph, More, press, trimmed, useGo, Who } from './parts';
 import { archivedDocsQuery, docRows, docsListQuery, docsSearchQuery, IMPORT_MAX, IMPORT_TYPES, sourceDocsQuery, sourcesQuery, type DocHit, type DocRow } from './queries';
 import type { DocSource } from '@/api/schema';
 import type { DocsSearch } from './search';
@@ -113,7 +113,6 @@ function OwnDocs({ search }: { search: DocsSearch }) {
       search={<Find label="Search docs" value={search.q} onFind={(q) => void press('docs.list', { q, archived: archived || undefined })} />}
       actions={
         <>
-          <OwnerButton page="docs" />
           <Button variant="primary" onClick={newDoc} data-target="docs:new">
             New doc
           </Button>
@@ -231,7 +230,6 @@ function SourcesPage({ panel }: { panel?: string }) {
       tabs={tabs(docs.data && docRows(docs.data).length, list.length)}
       actions={
         <>
-          <OwnerButton page="docs" />
           <Button variant="primary" onClick={() => setAdding(true)} data-target="sources:new">
             Connect
           </Button>

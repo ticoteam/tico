@@ -14,7 +14,7 @@ import { Pill } from '@/kit/Pill';
 import { Select } from '@/kit/Select';
 import { fmtAge, fmtDate } from '@/lib';
 import { List, RecordPanel, SidePanel, type PageTab } from '@/pagekinds';
-import { amount, Face, Go, NameOf, PageOwner, PanelLink, PanelSection, Trend, useDo } from './parts';
+import { amount, Face, Go, NameOf, PanelLink, PanelSection, Trend, useDo } from './parts';
 import {
   goalNeedsQuery,
   goalQuery,
@@ -71,7 +71,6 @@ export function GoalsPage({ head, search }: { head: Head; search: GoalsSearch })
       actions={
         <>
           {!blank && add}
-          <PageOwner page="goals" />
         </>
       }
       state={blank ? 'empty' : 'ready'}

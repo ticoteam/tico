@@ -10,7 +10,7 @@ import { Pill } from '@/kit/Pill';
 import { Table, Td, Th, Tr } from '@/kit/Table';
 import { fmtAge, fmtDate } from '@/lib';
 import { Dashboard, FiguresStrip, PageMore, Section, SidePanel, type Figure, type PageTab } from '@/pagekinds';
-import { Go, PageOwner, PanelLink, useDo, usdShort } from './parts';
+import { Go, PanelLink, useDo, usdShort } from './parts';
 import {
   listeningStatsQuery,
   marketBriefingQuery,
@@ -86,7 +86,6 @@ export function MarketTab({ head, search }: { head: Head; search: { panel?: stri
     <Dashboard
       {...head}
       className={`${head.className} co-market`}
-      actions={<PageOwner page="strategy" />}
       more={
         <PageMore target="market:more">
           <MenuItem label="Definition" onSelect={() => void open.run({ panel: 'definition' })} />

@@ -61,13 +61,6 @@ quietRoot('skills');
 quietRoot('tools');
 quietRoot('contacts');
 
-/** Each page's owner (the agent its chat opens), as an actor id. Same key and shape the settings feature reads. */
-export const pageOwnersQuery = queryOptions({
-  queryKey: ['settings', 'page-owners'],
-  queryFn: async ({ signal }) => (await api.get<{ pages?: Record<string, { bot: string | null }> }>('/api/v2/page-owners', { signal })).pages ?? {},
-  staleTime: QUIET_STALE_MS,
-});
-
 const q = (o: Record<string, string | number | boolean | null | undefined>) => {
   const p = new URLSearchParams();
   for (const [k, v] of Object.entries(o)) if (v !== undefined && v !== null && v !== '') p.set(k, String(v));

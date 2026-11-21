@@ -159,15 +159,6 @@ describe('Roadmap head and Shipped, computer and phone', () => {
     queryClient.setQueryData(['directory'], { actors: [fern], byId: { [fern.id]: fern } });
   };
 
-  it("the owner's face opens an agent's chat as an agent, not a person", async () => {
-    serve(() => ({ status: 200, body: {} }));
-    seedOwned();
-    show(<RoadmapPage search={{}} />, '/roadmap');
-    const face = await screen.findByRole('link', { name: 'Chat with Fern Planner' });
-    const chat = new URLSearchParams(face.getAttribute('href')?.split('?')[1]).get('chat');
-    expect(chat).toBe('agent:f00d-1');
-  });
-
   it('a computer draws Shipped once, as its section; the phone line is not there', async () => {
     serve(() => ({ status: 200, body: {} }));
     seedOwned();
@@ -181,7 +172,7 @@ describe('Roadmap head and Shipped, computer and phone', () => {
     expect(screen.queryByRole('menuitem', { name: 'Filter' })).toBeNull();
   });
 
-  it('a phone folds Shipped to one line, keeps New feature (not the face), and moves Filter into the "⋯"', async () => {
+  it('a phone folds Shipped to one line, keeps New feature, and moves Filter into the "⋯"', async () => {
     document.documentElement.dataset.layout = 'cards';
     serve(() => ({ status: 200, body: {} }));
     seedOwned();
@@ -190,7 +181,6 @@ describe('Roadmap head and Shipped, computer and phone', () => {
     expect(line.getAttribute('href')).toBe('/tasks/feat?view=archived');
     expect(screen.queryByRole('region', { name: 'Shipped' })).toBeNull();
     expect(screen.getByRole('button', { name: 'New feature' }).hasAttribute('data-phone')).toBe(true);
-    expect(screen.getByRole('link', { name: 'Chat with Fern Planner' }).closest('[data-phone]')).toBeNull();
     fireEvent.click(pageMore());
     expect(await screen.findByRole('menuitem', { name: 'Filter' })).toBeTruthy();
   });

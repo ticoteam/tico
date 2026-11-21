@@ -13,7 +13,7 @@ import { Select, type SelectOption } from '@/kit/Select';
 import { Switch } from '@/kit/Switch';
 import { newId } from '@/lib';
 import { Record as RecordPage, Section, type PageState } from '@/pagekinds';
-import { Face, OwnerButton } from './parts';
+import { Face } from './parts';
 import {
   factoryChoicesQuery,
   pipelineChanged,
@@ -198,7 +198,6 @@ export function PipelinePage({ pipeline, fresh }: { pipeline: string; fresh: boo
       onRetry={() => void rec.refetch()}
       actions={
         <>
-          {p?.owner && <OwnerButton actor={p.owner} />}
           {held?.move && keepId && p && (
             <Button onClick={() => send({ pipeline: p.id, stage: keepId })} disabled={busy}>
               Move tasks

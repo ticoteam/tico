@@ -23,7 +23,7 @@ import type {
   UsageFigures,
   UsageLimits,
 } from '@/api/schema';
-import { configQuery, queryClient, quietRoot, write } from '@/data';
+import { configQuery, pageOwnersQuery, queryClient, quietRoot, write, type PageOwnerRow } from '@/data';
 import type { TaskCaps } from '@/api/schema';
 import type { ProductRepositoryPreview, ProductRepositoryResult, Repository, RepositoryList } from '@/api/schema';
 
@@ -205,18 +205,7 @@ export const syncDirectory = async (planHash: string, confirm: boolean) => {
 
 // ---------------------------------------------------------------- page owners
 
-export interface PageOwnerRow {
-  name?: string;
-  choice?: string;
-  bot?: string | null;
-  default?: string | null;
-}
-
-export const pageOwnersQuery = queryOptions({
-  queryKey: ['settings', 'page-owners'],
-  queryFn: async ({ signal }) =>
-    (await api.get<{ pages?: Record<string, PageOwnerRow> }>('/api/v2/page-owners', { signal })).pages ?? {},
-});
+export { pageOwnersQuery, type PageOwnerRow };
 
 /** `choice`: 'default', 'none' or an agent's actor id ('bot:<id>'), as the server's `choice` reads. */
 export const setPageOwner = (page: string, choice: string) =>

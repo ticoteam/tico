@@ -6,12 +6,12 @@ import { Fault } from '@/kit/Fault';
 import { IconButton } from '@/kit/IconButton';
 // the open/close state alone, not the dialog: Tico's sheet only opens it
 import { openSearch } from '@/search/state';
-import { Sheet, SheetHead, TICO_MARK } from '@/shell';
+import { Sheet, SheetHead, TICO_MARK, fromPage, pageAt } from '@/shell';
 import { usePhoneCards } from '@/shell/phone';
 import { Dot } from '@/tico/dot';
 import { TicoChips } from './Chips';
 import { okCard } from './OkCard';
-import { askedFrom, usePageName } from './pageName';
+import { usePageName } from './pageName';
 import { useTicoPower } from './power';
 import { TicoOff } from './TicoOff';
 import { Tracker } from './Tracker';
@@ -26,7 +26,7 @@ export function TicoSheet() {
   const power = useTicoPower();
   const room = useQuery(ticoRoomQuery);
   // what the person is looking at: the page's own name, not the window's title
-  const address = useLocation({ select: (l) => l.pathname + l.searchStr });
+  const [path, search] = useLocation({ select: (l) => `${l.pathname}\n${l.searchStr}` }).split('\n');
   const name = usePageName();
   // On a phone the card draws Tico's one Dot itself, where the lip had it: the head has none of its own.
   const phone = usePhoneCards();
@@ -40,7 +40,7 @@ export function TicoSheet() {
       ) : room.data ? (
         <>
           <Tracker />
-          <Conversation id={room.data} variant="tico" page={askedFrom(address, name)} foot={<TicoChips room={room.data} />} below={okCard} />
+          <Conversation id={room.data} variant="tico" from={fromPage(pageAt(path ?? '/', search), name)} foot={<TicoChips room={room.data} />} below={okCard} />
         </>
       ) : room.isError ? (
         // The grey fault, then the one way out (the kit's empty-state row).

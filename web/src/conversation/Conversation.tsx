@@ -12,6 +12,7 @@ import { IconButton } from '@/kit/IconButton';
 import { motionLevel } from '@/motion';
 import { VirtualList, type VirtualListHandle } from '@/kit/VirtualList';
 import { SheetHead } from '@/shell';
+import { fromPage, pageAt, type FromPage } from '@/shell/pageOwner';
 import { dot, type DotState } from '@/tico/dot';
 import { usePageName } from '@/tico/pageName';
 import { MessageBones } from './Bones';
@@ -23,7 +24,7 @@ import { ChatPlace } from './Rich';
 import { quoteFrom, quoteOf, Replying } from './Quote';
 import { SessionLine, type Session } from './Session';
 import { installConversationLive, liveQuery, liveText, markRead, rowsOf, sendMessage, timelineQuery } from './queries';
-import type { ChatMessage, LiveRun, PageRef, Variant } from './types';
+import type { ChatMessage, LiveRun, Variant } from './types';
 
 /** Within this many pixels of the end counts as "at the bottom": what comes in is read, and the asks over the box come back. */
 const READ_PX = 24;
@@ -45,8 +46,11 @@ export interface ConversationProps {
   actor?: string;
   /** A second chat's head, under the name: which of the agent's chats this is (a task's, or its main chat). */
   session?: Session;
-  /** The page it sits beside, sent as `refs.page` with each message (nothing is drawn). Defaults to the address and title. */
-  page?: PageRef | null;
+  /** The page it was written on, sent as `from_page` with each message (nothing is drawn). Defaults to the address's
+      page (shell/pageOwner.ts) with its own name. */
+  from?: FromPage | null;
+  /** With no messages yet: words to start with, each a press that puts them in the box (nothing is sent). */
+  starters?: readonly string[];
   /** Above the composer, in the chat's foot: a card the chat is waiting on (a task's answer card). */
   foot?: ReactNode;
   /** What a message draws in place of its text, when it is more than words (a thread's call card). */
@@ -130,9 +134,9 @@ function teammateHref(actor: string | undefined, a: Actor | undefined): string |
 
 /* the page the person is on, by its own name (its h1, as the tab's title says it), not the window's "<name> - Tico". Kept
    current: a page whose data comes after the chat drew (a task opened beside its thread) names itself once it has. */
-function useHerePage(): PageRef {
+function useHerePage(): FromPage {
   const title = usePageName();
-  return { path: typeof location === 'undefined' ? '/' : location.pathname, title };
+  return fromPage(typeof location === 'undefined' ? pageAt('/') : pageAt(location.pathname, location.search), title);
 }
 
 
@@ -152,7 +156,7 @@ function withExtra(rows: ChatMessage[], extra: ChatMessage[] | undefined, more: 
   return [...out, ...left];
 }
 
-export function Conversation({ id, variant, title, actor, session, page, foot, card, below, canPost = true, extra, chat }: ConversationProps) {
+export function Conversation({ id, variant, title, actor, session, from, starters, foot, card, below, canPost = true, extra, chat }: ConversationProps) {
   useFollow(variant === 'tico' ? { conversation: id } : { thread: id });
 
   const { data: me } = useQuery(meQuery);
@@ -180,7 +184,10 @@ export function Conversation({ id, variant, title, actor, session, page, foot, c
   const name = variant === 'tico' ? 'Tico' : (title ?? mate?.name ?? (actor?.startsWith('bot:') ? 'Agent' : 'Person'));
   const mateHref = teammateHref(actor, mate);
   const here = useHerePage();
-  const at = page === undefined ? here : page;
+  const at = from === undefined ? here : from;
+  // a starter puts its words in the box; opening the chat never sends anything, so it never starts a run
+  const [fill, setFill] = useState<{ text: string } | null>(null);
+  const empty = !!starters?.length && !!timeline.data && !rows.some((m) => !m.hidden) && !live.length;
 
   /* VirtualList follows the end while the person is at it (a new row, a reply growing) and keeps their place
      otherwise, and when older pages load above. */
@@ -278,7 +285,7 @@ export function Conversation({ id, variant, title, actor, session, page, foot, c
       variant,
       text,
       files,
-      page: at && { path: at.path, title: at.title },
+      from: at,
       me: myId,
       ...(retry && { retry: retry.id }),
       ...(answers && { replyTo: answers, quote }),
@@ -357,7 +364,16 @@ export function Conversation({ id, variant, title, actor, session, page, foot, c
       </div>
       {foot}
       {canReply && replyTo && myId && <Replying q={quoteFrom(replyTo)} me={myId} onDrop={() => setReplying(null)} />}
-      {myId && canPost && <Composer id={id} me={myId} to={name} canSend={!!timeline.data} onSend={(text, files) => send(text, files)} />}
+      {myId && canPost && empty && (
+        <div className="qchips">
+          {starters!.map((words) => (
+            <button key={words} type="button" className="qchip" onClick={() => setFill({ text: words })}>
+              {words}
+            </button>
+          ))}
+        </div>
+      )}
+      {myId && canPost && <Composer id={id} me={myId} to={name} fill={fill} canSend={!!timeline.data} onSend={(text, files) => send(text, files)} />}
     </footer>
   );
 

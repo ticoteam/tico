@@ -35,7 +35,7 @@ import type {
   TaskBrief,
   Usage,
 } from '@/api/schema';
-import { keys, needsYouItems, QUIET_STALE_MS, queryClient, quietRoot, write } from '@/data';
+import { keys, needsYouItems, queryClient, quietRoot, write } from '@/data';
 import type {
   FileSearch,
   GetGoalsNeedsYouResponse,
@@ -60,7 +60,6 @@ import type {
 for (const root of ['company', 'goals', 'kpis', 'strategy', 'brand', 'market', 'products', 'risks', 'groups', 'finance', 'usage', 'needs', 'listening']) quietRoot(root);
 
 const enc = encodeURIComponent;
-const quiet = { staleTime: QUIET_STALE_MS } as const;
 const tmpId = () => `tmp:${Math.random().toString(36).slice(2, 10)}`;
 
 // ---------------------------------------------------------------- Company: the Floor and its figures
@@ -124,13 +123,6 @@ export const spendQuery = queryOptions({
       return null;
     }
   },
-});
-
-/** Each page's owner (the agent its chat opens). Same key and shape the settings and library features read. */
-export const pageOwnersQuery = queryOptions({
-  queryKey: ['settings', 'page-owners'],
-  queryFn: async ({ signal }) => (await api.get<{ pages?: Record<string, { bot: string | null }> }>('/api/v2/page-owners', { signal })).pages ?? {},
-  ...quiet,
 });
 
 // ---------------------------------------------------------------- Strategy

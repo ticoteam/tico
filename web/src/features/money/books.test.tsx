@@ -532,15 +532,5 @@ describe('Finance on a phone, and its owner', () => {
     expect(screen.queryByRole('table')).toBeNull();
   });
 
-  it("Finance Owner's face in the head opens its chat beside the page", async () => {
-    serve([
-      ['/page-owners', { pages: { finance: { bot: 'bot:fo1', choice: 'default' } } }],
-      ['/finance/sources', { groups: [] }],
-    ]);
-    queryClient.setQueryData(['directory'], { actors: [], byId: { 'bot:fo1': { id: 'bot:fo1', kind: 'agent', name: 'Finance Owner' } } });
-    show('/company/finance?tab=sources');
-    const face = await screen.findByRole('link', { name: 'Chat with Finance Owner' });
-    expect(new URL(face.getAttribute('href')!, 'http://x').searchParams.get('chat')).toBe('agent:fo1');
-  });
 });
 

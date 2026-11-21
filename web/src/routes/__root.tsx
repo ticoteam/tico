@@ -4,7 +4,7 @@ import { Fragment, Suspense, lazy, useEffect, useState, type ReactNode } from 'r
 import { ActionsRoot, run } from '@/actions';
 import { reportCallToDesktop, useCallWindow } from '@/desktop';
 import { ticoRoomQuery } from '@/conversation';
-import { configQuery, meQuery, recordVisit, useActor, useDirectory, useHeldCount, type Actor, type Directory } from '@/data';
+import { configQuery, meQuery, pageOwnersQuery, recordVisit, useActor, useDirectory, useHeldCount, type Actor, type Directory } from '@/data';
 import { TOGGLE_MUTE, isCallActive, ringingQuery, useCall } from '@/features/calls/routing';
 import { useFileOpen } from '@/features/library/routing';
 import { AssetRecovery, DesktopMove, PlanLock } from '@/features/notices/exports';
@@ -41,6 +41,11 @@ import {
   arrangementFor,
   desktop,
   foldSheet,
+  fromPage,
+  pageAt,
+  useBarFold,
+  type AgentBar,
+  type PageAt,
   isCallWindow,
   isTeammate,
   reportToDesktop,
@@ -60,7 +65,7 @@ import { MenuLip } from '@/shell/phone';
 import { TicoSheet } from '@/tico';
 import { dot } from '@/tico/dot';
 import { pageName, usePageName } from '@/tico/pageName';
-import { boardSearch, isFlowPath, leaveFlow, notePlace } from '@/lib';
+import { boardSearch, chatAddress, isFlowPath, leaveFlow, notePlace } from '@/lib';
 
 export interface RouterContext {
   queryClient: QueryClient;
@@ -275,6 +280,11 @@ function App() {
   const callNow = useCall();
   const callChat = arrangement === 'page' && !chat && isCallActive(callNow) ? (callNow.chat ?? null) : null;
   if (callChat) chat = <SecondChat chat={callChat} />;
+  // Every company page's owner, in the Agent bar beside it (master plan P5): the viewer's own DM with them.
+  const place = pageAt(at.path);
+  const bar = useOwnerBar(place, me.data?.id);
+  const barShown = !!bar && arrangement === 'page' && !chat;
+  if (barShown) chat = <OwnerBar bar={bar} place={place} />;
   const hideCallChat = () => void run('calls.hideChat', {}, { via: 'click' });
   const callOut = useCallWindow().open;
   const ringing = (useQuery(ringingQuery).data?.calls ?? []).some((c) => c.ring && c.state === 'live');
@@ -291,7 +301,7 @@ function App() {
           <CallBar />
         </Later>
         <Frame
-          arrangement={callChat ? 'chat' : arrangement}
+          arrangement={callChat || barShown ? 'chat' : arrangement}
           tico={<TicoSheet />}
           menu={<AppMenu note={status === 'offline' ? <OfflineBar held={held} /> : <DesktopMove />} />}
           page={page}
@@ -306,6 +316,7 @@ function App() {
           edgeActs={{ tico: <SearchButton /> }}
           onCloseChat={callChat ? hideCallChat : closeChat}
           onClosePanel={closePanel}
+          bar={barShown ? bar : undefined}
         />
       </div>
       {signedIn ? (
@@ -543,6 +554,66 @@ function SecondChat({ chat }: { chat: string }) {
     <Sheet kind="chat" label={`Chat with ${who?.name ?? 'teammate'}`}>
       <Suspense fallback={null}>
         <ChatSheet chat={chat} />
+      </Suspense>
+    </Sheet>
+  );
+}
+
+/* ---------------------------------------------------------------- the Agent bar */
+
+type OwnerBarState = AgentBar & { owner: string };
+
+/** The open page's owner for the Agent bar (shell/pageOwner.ts): a pipeline's own agent while one is shown, else the
+    page's (backend/page_owners.py, which falls back to the General Manager); none on a personal page (Tico is its chat)
+    or a page that is a chat already. Its fold is the person's for this page; an ask from the owner that waits on them
+    opens it until they fold it again. */
+function useOwnerBar(place: PageAt, me: string | undefined): OwnerBarState | null {
+  const company = place.owner === 'page';
+  const { data: owners } = useQuery({ ...pageOwnersQuery, enabled: company && !!me });
+  const { data: pipelines } = useQuery({ ...pipelinesQuery, enabled: company && !!me });
+  const pipeline =
+    place.item?.kind === 'pipeline' ? pipelines?.find((p) => p.id === place.item!.id) : place.page === 'roadmap' && pipelines ? roadmapPipeline(pipelines) : null;
+  const mine = pipeline ? [pipeline.manager, pipeline.owner].find((a) => a?.startsWith('bot:')) : undefined;
+  const bot = owners?.[place.page]?.bot;
+  const owner = !company ? null : (mine ?? (bot ? (bot.includes(':') ? bot : `bot:${bot}`) : null));
+  const who = useActor(owner);
+  const opened = usePageOpened();
+  const { data: catchUp } = useQuery({ ...catchUpQuery, enabled: opened && !!owner });
+  const { data: list } = useInfiniteQuery({ ...threadListQuery, enabled: !!owner });
+  const asking = !!owner && asksOf(catchUp, list?.pages.flatMap((p) => p.rows) ?? [], me).mates.has(who?.id ?? owner);
+  const [fold, setFold] = useBarFold(me, place.page);
+  const [dismissed, setDismissed] = useState<string | null>(null);
+  if (!asking && dismissed === place.page) setDismissed(null);
+  if (!owner) return null;
+  const name = who?.name ?? 'Agent';
+  return {
+    owner,
+    name,
+    face: <Avatar decorative kind="agent" name={name} initials={short(name)} hue={who?.hue ?? 0} size={28} live={who?.working} />,
+    fold,
+    ask: asking && dismissed !== place.page,
+    onFold: (folded) => {
+      setFold(folded);
+      if (folded && asking) setDismissed(place.page);
+    },
+  };
+}
+
+/* The Agent bar's sheet: the owner's DM, never a shared thread. Opening it sends nothing: its latest messages, or words
+   to start with while it is empty. Each message carries the page it was written on. */
+function OwnerBar({ bar, place }: { bar: OwnerBarState; place: PageAt }) {
+  const name = usePageName();
+  // a file open over the page (`?file=`) is what is open there; read alone, so the page's other search draws nothing here
+  const file = useLocation({ select: (l) => new URLSearchParams(l.searchStr).get('file') ?? '' });
+  const here = file ? pageAt(location.pathname, `?file=${encodeURIComponent(file)}`) : place;
+  return (
+    <Sheet kind="chat" label={`Chat with ${bar.name}`}>
+      <Suspense fallback={null}>
+        <ChatSheet
+          chat={chatAddress(bar.owner, 'agent')}
+          from={fromPage(here, name)}
+          starters={[`What needs me on ${place.label}?`, `What changed on ${place.label} this week?`]}
+        />
       </Suspense>
     </Sheet>
   );

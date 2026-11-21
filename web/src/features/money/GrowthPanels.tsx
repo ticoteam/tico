@@ -1,45 +1,18 @@
 import { useQuery } from '@tanstack/react-query';
-import { useSearch } from '@tanstack/react-router';
-import { useActor, useDirectory } from '@/data';
-import { chatAddress, fmtDate, fmtMoney } from '@/lib';
+import { fmtDate, fmtMoney } from '@/lib';
 import { Button } from '@/kit/Button';
 import { Lines } from '@/kit/Chart';
 import { Empty } from '@/kit/Empty';
 import { SkeletonRows } from '@/kit/Skeleton';
-import { OwnerButton } from '@/kit/OwnerButton';
 import { Section, SidePanel } from '@/pagekinds';
 import { axis, count, monShort, monthName, ratio, readDay, statusWord } from './model';
 import { Pfig, Prow, Ptrace, usePress } from './parts';
-import { growthChannelQuery, growthManager, pageOwnersQuery, type GrowthChannel, type GrowthPoint, type GrowthRead } from './queries';
+import { growthChannelQuery, type GrowthChannel, type GrowthPoint, type GrowthRead } from './queries';
 
 /* What Growth opens beside the board (old ui/app growth-channels.ts), read only. Changes to channels and customers are
    asked of the Growth Manager in its chat. */
 
 const usd = (v: number | null | undefined, cents = false) => (v == null ? '' : fmtMoney(v, { cents }));
-/** The Growth Manager's face in the head: it opens its chat beside the page. Nothing when the company has none. */
-export function ManagerFace() {
-  const owners = useQuery(pageOwnersQuery).data;
-  const bot = useDirectory((dir) => growthManager(owners, dir)) ?? null;
-  const who = useActor(bot);
-  const press = usePress();
-  const chat = (useSearch({ strict: false }) as { chat?: string }).chat;
-  if (!bot) return null;
-  const addr = chatAddress(bot, 'agent');
-  return (
-    <span className="gm-ask" data-phone>
-      <OwnerButton
-        name={who?.name ?? 'Growth Manager'}
-        kind="agent"
-        hue={who?.hue}
-        live={who?.working}
-        on={chat === addr}
-        target={`chat:${addr}`}
-        onPress={() => void press('growth.askManager', {})}
-      />
-    </span>
-  );
-}
-
 /** A small read's fault inside a panel: what did not load, and Try again. */
 function Failed({ what, retry }: { what: string; retry: () => unknown }) {
   return (
