@@ -1,17 +1,26 @@
-import { type CSSProperties, useSyncExternalStore } from 'react';
+import { createContext, type CSSProperties, use, useSyncExternalStore } from 'react';
 import { popLayer, popMotion } from './Popover';
 
 const root = () => document.documentElement;
 const read = () => root().dataset.layout === 'cards';
+const no = () => false;
+const unwatched = () => () => {};
 function subscribe(changed: () => void) {
   const watch = new MutationObserver(changed);
   watch.observe(root(), { attributes: true, attributeFilter: ['data-layout'] });
   return () => watch.disconnect();
 }
 
+/** The shell's own cards-or-sheets, given to what it draws: read in render, it is the window's mode at once, where the
+    html attribute (kept for CSS) is written only once the shell has drawn. */
+export const CardsContext = createContext<boolean | null>(null);
+
 /** True on the phone's cards (`html[data-layout="cards"]`, which the shell sets): a menu is then a sheet. */
 export function useCards() {
-  return useSyncExternalStore(subscribe, read, () => false);
+  const shell = use(CardsContext);
+  // the attribute only outside the frame (a call's own window), where nothing gives the mode
+  const html = useSyncExternalStore(shell == null ? subscribe : unwatched, shell == null ? read : no, no);
+  return shell ?? html;
 }
 
 /* Base UI writes the anchored position inline; on the cards a menu's positioner is pinned to the bottom edge instead. */
