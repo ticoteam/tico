@@ -1,6 +1,7 @@
 """Files: visibility first (a private chat leaks nothing), versions, refusals,
 S3 imports and link rules. See docs/files.md."""
 
+import base64
 import os
 
 import pytest
@@ -212,20 +213,54 @@ def test_refusals_and_a_bot_writes_only_its_own_files(api):
     )
 
 
-def test_an_agent_attaches_any_work_file_a_person_can_but_never_a_program(api):
-    """People and agents share one rule (clients/bot_files.py check_name): captions go, an executable does not."""
+def test_people_and_agents_attach_any_work_file_but_never_a_program(api):
+    """One rule for a task's attachments (clients/bot_files.py check_program), through the same endpoint, as JSON and
+    as a form: captions, hidden and extensionless work files go; a program by its extension or first bytes does not.
+    A credential-like name is refused for an agent only."""
     from backend.tests.helpers.cards import task
 
     tid = task(api, "bot:ops", "Caption the launch video")
     _, attempt = turn(api)
-    captions = "1\n00:00:01,000 --> 00:00:03,000\nHello\n"
-    made = post(api, f"tasks/{tid}/files", {"name": "launch.srt", "text": captions}, attempt["token"])
-    assert api.get("/api/v2/files/" + made["file_id"], headers=headers()).content.decode() == captions
-    assert publish(api, attempt, "Makefile", "all:").status_code == 200
-    for name in ("tool.exe", "install.sh"):
-        body = {"name": name, "content_base64": "TVo="}
-        refused = api.post(f"/api/v2/tasks/{tid}/files", json=body, headers=headers(attempt["token"]))
-        assert refused.status_code == 422 and "never published" in refused.text, (name, refused.text)
+    captions = b"1\n00:00:01,000 --> 00:00:03,000\nHello\n"
+
+    def attach(token, name, data, form=False):
+        path = f"/api/v2/tasks/{tid}/files"
+        if form:
+            return api.post(path, files={"file": (name, data)}, headers=headers(token))
+        return api.post(
+            path, json={"name": name, "content_base64": base64.b64encode(data).decode()}, headers=headers(token)
+        )
+
+    for token in ("ana-test", attempt["token"]):
+        for form in (False, True):
+            for name, data in (
+                ("launch.srt", captions),
+                ("Makefile", b"all:\n"),
+                (".gitignore", b"*.log\n"),
+                ("raw.bin", b"\x00\x01"),
+                ("fit.py", b"#!/usr/bin/env python3\n"),
+            ):
+                made = attach(token, name, data, form)
+                assert made.status_code == 200, (token, form, name, made.text)
+            for name, data in (
+                ("tool.exe", b"TVo"),
+                ("tool", b"\x7fELF\x02\x01"),
+                ("notes.txt", b"MZ\x90\x00"),
+                ("run", b"#!/bin/sh\n"),
+            ):
+                refused = attach(token, name, data, form)
+                assert refused.status_code == 422 and "never published" in refused.text, (
+                    token,
+                    form,
+                    name,
+                    refused.text,
+                )
+    srt = next(
+        f for f in api.get(f"/api/v2/tasks/{tid}/files", headers=headers()).json()["files"] if f["name"] == "launch.srt"
+    )
+    assert api.get("/api/v2/files/" + srt["id"], headers=headers()).content == captions
+    assert attach("ana-test", "AWS credentials guide.pdf", b"%PDF-1.4").status_code == 200
+    assert attach(attempt["token"], "AWS credentials guide.pdf", b"%PDF-1.4").status_code == 422
 
 
 def test_a_file_that_failed_to_sync_is_ready_again_once_it_publishes(api):

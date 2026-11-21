@@ -193,6 +193,17 @@ def replay_upload(store, request, payload):
     return result
 
 
+def refuse_file(who, name, head):
+    """One rule for a task's attachments (clients/bot_files.py): nobody attaches a program; an agent also never
+    attaches a credential-like name. A person may: "AWS credentials guide.pdf" is a normal name for a document."""
+    try:
+        BF.check_program(name, head)
+        if who.role == "bot":
+            BF.check_name(name)
+    except BF.Refused as exc:
+        raise Problem("file_refused", str(exc), 422) from exc
+
+
 def guessed_type(name):
     """The stored type for a file name, or None: mimetypes' guess under its common name (visuals.stored_type)."""
     return visuals.stored_type(mimetypes.guess_type(name)[0])
@@ -826,11 +837,9 @@ def install_media(
                     else "application/octet-stream"
                 )
                 size = upload["size"]
-                if who.role == "bot":
-                    try:
-                        BF.check_name(name)
-                    except BF.Refused as exc:
-                        raise Problem("file_refused", str(exc), 422) from exc
+                head = upload["stream"].read(16)
+                upload["stream"].seek(0)
+                refuse_file(who, name, head)
                 digest = upload["digest"]
                 if "poster" in uploads:
                     supplied = uploads["poster"]
@@ -888,11 +897,7 @@ def install_media(
             if not data or size > 10_000_000:
                 raise Problem("validation", "A file is at least one byte and at most 10 MB", 422)
             content_type = guessed_type(name) or ("text/plain" if body.text is not None else "application/octet-stream")
-            if who.role == "bot":
-                try:
-                    BF.check_name(name)
-                except BF.Refused as exc:
-                    raise Problem("file_refused", str(exc), 422) from exc
+            refuse_file(who, name, data[:16])
             payload = body.model_dump()
             if not body.note:
                 payload.pop("note")

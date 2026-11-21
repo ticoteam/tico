@@ -1,7 +1,7 @@
 """What a bot may publish as a file, checked the same way by the hub, the runner and `tico file`.
 
-The rule people have: any work file goes, whatever its type. Only secrets (credential-like names) and programs a
-computer runs (EXECUTABLE) are refused.
+The rule people have: any work file goes, whatever its type. Only programs a computer runs (check_program: people
+and agents alike) and, for agents, secrets (credential-like names) are refused.
 
 Pure stdlib. The server repeats every rule here (backend/files.py): this module is what lets the
 client refuse early, with a reason, before any bytes are sent. See docs/files.md.
@@ -77,9 +77,19 @@ TYPES = {
 }
 # Programs, installers and scripts a computer runs: never published, whatever else the file is.
 EXECUTABLE = frozenset(
-    ".app .apk .appimage .bat .bin .cmd .com .command .cpl .deb .dll .dmg .dylib .elf .exe .hta .ipa .jar "
+    ".app .apk .appimage .bat .cmd .com .command .cpl .deb .dll .dmg .dylib .elf .exe .hta .ipa .jar "
     ".lnk .msi .msp .mpkg .pif .pkg .ps1 .psm1 .reg .rpm .run .scr .sh .bash .zsh .csh .ksh .so .sys .vbe .vbs "
     ".wsf .wsh".split()
+)
+# The first bytes of a program: ELF, Mach-O (either byte order, 32 or 64 bit, and universal) and Windows PE.
+PROGRAM_MAGIC = (
+    b"\x7fELF",
+    b"\xfe\xed\xfa\xce",
+    b"\xfe\xed\xfa\xcf",
+    b"\xce\xfa\xed\xfe",
+    b"\xcf\xfa\xed\xfe",
+    b"\xca\xfe\xba\xbe",
+    b"MZ",
 )
 KINDS = {
     ".mp4": "video",
@@ -138,14 +148,22 @@ def check_name(name):
     """The display name and content type of an allowed file, or Refused."""
     base = posixpath.basename(str(name or "").replace("\\", "/")).strip()
     base = re.sub(r"[\x00-\x1f\x7f]", "", base)[:200]
-    if not base or base.startswith(".") and Path(base).suffix.lower() not in TYPES:
+    if base in ("", ".", ".."):
         raise Refused(f"{base or 'that name'} is not a file name Tico publishes")
     if CREDENTIAL_NAME.search(base) or base.lower().startswith(".env"):
         raise Refused(f"{base} looks like a credential, so it is never published")
+    check_program(base)
+    return base, TYPES.get(Path(base).suffix.lower()) or mimetypes.guess_type(base)[0] or "application/octet-stream"
+
+
+def check_program(name, head=b""):
+    """Refuses a program, the one rule for people and agents: an EXECUTABLE extension, a program's first bytes
+    (`head`, when known), or a script (`#!`) with no extension. A `.py` that starts with `#!` is source, so it goes."""
+    base = posixpath.basename(str(name or "").replace("\\", "/")).strip()
     suffix = Path(base).suffix.lower()
-    if suffix in EXECUTABLE:
+    head = bytes(head[:16])
+    if suffix in EXECUTABLE or head.startswith(PROGRAM_MAGIC) or (not suffix and head.startswith(b"#!")):
         raise Refused(f"{base} is a program, so it is never published")
-    return base, TYPES.get(suffix) or mimetypes.guess_type(base)[0] or "application/octet-stream"
 
 
 def is_media(name):
@@ -227,6 +245,8 @@ def local_file(root, rel, extra_types=()):
             raise Refused(f"{walk.name} looks like a credential, which is never published")
     else:
         check_name(walk.name)
+    with open(walk, "rb") as stream:
+        check_program(walk.name, stream.read(16))
     info = walk.stat()
     if info.st_nlink > 1:
         raise Refused(f"{'/'.join(parts)} has more than one hard link, so it may be another file under a new name")

@@ -40,48 +40,12 @@ pub const GIVE_UP_AFTER: i64 = 20;
 pub const UPLOAD_TIMEOUT: u64 = 120;
 pub const MAX_BYTES: u64 = 25 * 1024 * 1024;
 pub const DEFAULT_FOLDERS: &[&str] = &["reports", "artifacts"];
-/// Known types: a hidden name (`.x`) goes only with one of these (bot_files.TYPES).
-pub const TYPES: &[&str] = &[
-    ".mp4",
-    ".webm",
-    ".mov",
-    ".mp3",
-    ".wav",
-    ".m4a",
-    ".ogg",
-    ".md",
-    ".markdown",
-    ".txt",
-    ".csv",
-    ".tsv",
-    ".json",
-    ".yaml",
-    ".yml",
-    ".html",
-    ".htm",
-    ".pdf",
-    ".rtf",
-    ".doc",
-    ".docx",
-    ".xls",
-    ".xlsx",
-    ".ppt",
-    ".pptx",
-    ".odt",
-    ".ods",
-    ".png",
-    ".jpg",
-    ".jpeg",
-    ".gif",
-    ".webp",
-];
 /// Programs, installers and scripts a computer runs: never published (bot_files.EXECUTABLE).
 pub const EXECUTABLE: &[&str] = &[
     ".app",
     ".apk",
     ".appimage",
     ".bat",
-    ".bin",
     ".cmd",
     ".com",
     ".command",
@@ -118,6 +82,17 @@ pub const EXECUTABLE: &[&str] = &[
     ".vbs",
     ".wsf",
     ".wsh",
+];
+/// The first bytes of a program: ELF, Mach-O (either byte order, 32 or 64 bit, and universal) and Windows PE
+/// (bot_files.PROGRAM_MAGIC).
+pub const PROGRAM_MAGIC: &[&[u8]] = &[
+    b"\x7fELF",
+    b"\xfe\xed\xfa\xce",
+    b"\xfe\xed\xfa\xcf",
+    b"\xce\xfa\xed\xfe",
+    b"\xcf\xfa\xed\xfe",
+    b"\xca\xfe\xba\xbe",
+    b"MZ",
 ];
 
 pub const TABLES: &str = "
@@ -160,8 +135,7 @@ pub fn check_name(name: &str) -> Result<String, String> {
         .filter(|c| !matches!(*c as u32, 0..=0x1f | 0x7f))
         .take(200)
         .collect();
-    let ext = suffix(&base);
-    if base.is_empty() || (base.starts_with('.') && !TYPES.contains(&ext.as_str())) {
+    if base.is_empty() || base == "." || base == ".." {
         return Err(format!(
             "{} is not a file name Tico publishes",
             if base.is_empty() { "that name" } else { &base }
@@ -172,10 +146,21 @@ pub fn check_name(name: &str) -> Result<String, String> {
             "{base} looks like a credential, so it is never published"
         ));
     }
-    if EXECUTABLE.contains(&ext.as_str()) {
+    check_program(&base, b"")?;
+    Ok(base)
+}
+
+/// Why a file is a program, or Ok (bot_files.check_program): an EXECUTABLE extension, a program's first bytes, or a
+/// script (`#!`) with no extension.
+pub fn check_program(base: &str, head: &[u8]) -> Result<(), String> {
+    let ext = suffix(base);
+    if EXECUTABLE.contains(&ext.as_str())
+        || PROGRAM_MAGIC.iter().any(|m| head.starts_with(m))
+        || (ext.is_empty() && head.starts_with(b"#!"))
+    {
         return Err(format!("{base} is a program, so it is never published"));
     }
-    Ok(base)
+    Ok(())
 }
 
 pub fn check_size(size: u64) -> Result<(), String> {
@@ -234,12 +219,17 @@ pub fn local_file(root: &Path, rel: &str) -> Result<(PathBuf, String), String> {
     {
         return Err("That path is outside the bot's checkout".into());
     }
-    check_name(
+    let base = check_name(
         &walk
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default(),
     )?;
+    let mut head = Vec::with_capacity(16);
+    std::fs::File::open(&walk)
+        .and_then(|f| std::io::Read::read_to_end(&mut std::io::Read::take(f, 16), &mut head))
+        .map_err(|e| e.to_string())?;
+    check_program(&base, &head)?;
     if meta.nlink() > 1 {
         return Err(format!(
             "{joined} has more than one hard link, so it may be another file under a new name"
@@ -328,8 +318,8 @@ pub fn candidates(
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default();
-                if name.starts_with('.') && !TYPES.contains(&suffix(&name).as_str()) {
-                    continue;
+                if name == ".DS_Store" {
+                    continue; // the Mac's folder settings, not anything the bot made
                 }
                 let rel = entry
                     .strip_prefix(&root)
@@ -339,7 +329,8 @@ pub fn candidates(
                 if meta.as_ref().is_ok_and(|m| m.file_type().is_symlink()) {
                     found.push((mtime(&entry), rel, "is a symbolic link".into()));
                 } else if meta.as_ref().is_ok_and(|m| m.is_dir()) {
-                    if depth < MAX_DEPTH {
+                    // A hidden folder (.git, .cache) is never walked; a hidden file is a file like any other.
+                    if depth < MAX_DEPTH && !name.starts_with('.') {
                         stack.push((entry, depth + 1));
                     }
                 } else {
@@ -891,7 +882,12 @@ mod tests {
     #[test]
     fn names_types_links_and_sizes_are_refused_with_reasons() {
         assert_eq!(check_name("reports/q3.md").unwrap(), "q3.md");
-        assert!(check_name(".env").unwrap_err().contains("not a file name"));
+        assert!(check_name(".env")
+            .unwrap_err()
+            .contains("looks like a credential"));
+        for hidden in [".gitignore", ".editorconfig", ".launch.srt", "raw.bin"] {
+            assert_eq!(check_name(hidden).unwrap(), hidden);
+        }
         assert_eq!(
             check_name("prod.env.md").unwrap_err(),
             "prod.env.md looks like a credential, so it is never published"
@@ -928,6 +924,31 @@ mod tests {
         assert!(local_file(&dir, "reports/hard.md")
             .unwrap_err()
             .contains("more than one hard link"));
+        // A program is known by its first bytes too; a script without `#!` or with an extension is a work file.
+        std::fs::write(dir.join("reports/tool"), b"\x7fELF\x02\x01").unwrap();
+        std::fs::write(dir.join("reports/run"), "#!/bin/sh\necho hi\n").unwrap();
+        std::fs::write(dir.join("reports/Makefile"), "all:\n").unwrap();
+        std::fs::write(dir.join("reports/fit.py"), "#!/usr/bin/env python3\n").unwrap();
+        assert_eq!(
+            local_file(&dir, "reports/tool").unwrap_err(),
+            "tool is a program, so it is never published"
+        );
+        assert!(local_file(&dir, "reports/run").is_err());
+        assert!(local_file(&dir, "reports/Makefile").is_ok());
+        assert!(local_file(&dir, "reports/fit.py").is_ok());
+        // A hidden file is a candidate; a hidden folder is never walked.
+        std::fs::write(dir.join("reports/.gitignore"), "*.log\n").unwrap();
+        std::fs::create_dir_all(dir.join("reports/.cache")).unwrap();
+        std::fs::write(dir.join("reports/.cache/x.md"), "x").unwrap();
+        let found: Vec<String> = candidates(&dir, &["reports".to_string()], &HashSet::new())
+            .into_iter()
+            .map(|(rel, _)| rel)
+            .collect();
+        assert!(
+            found.contains(&"reports/.gitignore".to_string()),
+            "{found:?}"
+        );
+        assert!(!found.iter().any(|rel| rel.contains(".cache")), "{found:?}");
         std::fs::remove_dir_all(dir).ok();
     }
 
