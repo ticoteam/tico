@@ -123,9 +123,11 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
     setSeen(second);
     if (second === 'call' || (second === 'chat' && !seen && comesUp(second))) setCard('chat');
     else if (card === 'chat') setCard('none');
-  } else if (wasTucked !== tucked) {
-    // a page's own chat that stops waiting as a lip comes up (an ask from the page's owner now waits on you)
-    if (!tucked && second === 'chat') setCard('chat');
+  } else if (wasTucked !== tucked && second === 'chat') {
+    // a page's own chat follows its page both ways: one that stops waiting as a lip comes up (its fold is open, or an ask
+    // from the page's owner waits on you), and one that waits as a lip again goes down unless the address names a chat
+    if (!tucked) setCard('chat');
+    else if (card === 'chat' && !named()) setCard('none');
   }
   if (wasTucked !== tucked) setWasTucked(tucked);
 

@@ -36,9 +36,10 @@ def test_listening_is_owned_by_the_automations_owner_until_an_admin_changes_it(a
         'name': 'Listening',
         'choice': 'default',
         'default': 'bot:automations-owner',
+        'own': True,
     }
     # No IT Support Specialist and no General Manager in the base fixture: nothing to fall back to, no chat.
-    assert pages['tools'] == {'bot': None, 'name': 'Tools', 'choice': 'default', 'default': None}
+    assert pages['tools'] == {'bot': None, 'name': 'Tools', 'choice': 'default', 'default': None, 'own': False}
     setup(api)
     assert put(api, 'page-owners/listening', {'bot': 'ops'}, 'ben-test')['bot'] == 'bot:ops'
     assert get(api, 'page-owners', 'cara-test')['pages']['listening']['bot'] == 'bot:ops'
@@ -125,6 +126,8 @@ def test_every_page_the_app_reaches_has_an_owner_in_a_new_company(api):
         assert gone not in pages, gone
     put(api, 'page-owners/calendar', {'bot': 'general-manager'}, expected=404)
     assert {p['bot'] for p in pages.values()} == {'bot:general-manager'}
+    # it owns its own pages; on the others it stands in, and their bar opens for none of its asks (#4857 N1)
+    assert (pages['tasks']['own'], pages['finance']['own']) == (True, False)
     assert pages['finance']['name'] == 'Finance'
     # The bot that does the page's work wins once the company has it.
     with api.app.state.store.transaction() as c:
@@ -284,3 +287,35 @@ def test_a_message_with_files_carries_the_page_it_was_written_on_and_a_bad_one_i
     assert sent.status_code == 200, sent.text
     assert _refs(api, sent.json()['message']['id'])['from_page'] == FROM
     assert upload({'page': 'listening', 'label': 'a\nb'}, 'upload-bad-from-page').status_code == 422
+
+
+def test_from_page_is_trimmed_before_it_is_checked_and_stored_trimmed(api):
+    # #4857 S11: a value is checked as it is kept.
+    setup(api)
+    dm = post(api, 'threads/dm', {'members': ['bot:ops']})
+    padded = {'page': ' goals ', 'label': '  Goals ', 'item': {'kind': ' goal', 'id': 'g1 ', 'name': ' Ship v1 '}}
+    sent = post(api, f"threads/{dm['id']}/messages", {'text': 'Hi', 'refs': {'from_page': padded}})
+    kept = {'page': 'goals', 'label': 'Goals', 'item': {'kind': 'goal', 'id': 'g1', 'name': 'Ship v1'}}
+    assert sent['refs']['from_page'] == kept and _refs(api, sent['id'])['from_page'] == kept
+    post(
+        api,
+        f"threads/{dm['id']}/messages",
+        {'text': 'Hi', 'refs': {'from_page': {'page': '  ', 'label': 'Goals'}}},
+        expected=422,
+    )
+
+
+def test_an_owners_message_and_question_land_in_the_dm_the_person_opened_with_it(api):
+    # #4857 S9: the person opened the owner's DM in the Agent bar before the owner wrote; the owner's message and ❓ go
+    # there, not to a new pair chat, so the bar that opens for the ❓ shows it.
+    from backend.tests.helpers.automation_api import as_bot
+
+    token = as_bot(api, 'scout')
+    dm = get(api, 'threads/dm?with=bot:scout')
+    said = api.post('/api/v2/messages', json={'to': 'ana', 'text': 'Morning'}, headers=headers(token))
+    asked = api.post(
+        '/api/v2/questions', json={'to': 'ana', 'text': 'Can you OK the October close?'}, headers=headers(token)
+    )
+    assert said.status_code == 200 and asked.status_code == 200, (said.text, asked.text)
+    assert (said.json()['conversation_id'], asked.json()['conversation_id']) == (dm['id'], dm['id'])
+    assert get(api, 'threads/dm?with=bot:scout')['id'] == dm['id']

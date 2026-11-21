@@ -109,6 +109,25 @@ it('finishes the route’s pipeline read when the shell unsubscribes', async () 
   await expect(loaded).resolves.toEqual([expect.objectContaining({ id: PIPE.id })]);
 });
 
+it('names the agents with a ❓ question or an ask waiting on the person, not those with tasks, pauses or requests @4857-S9', async () => {
+  serve(() => ({
+    status: 200,
+    body: {
+      items: [
+        { id: 'q1', kind: 'question', from_id: 'bot:qa' },
+        { id: 'a1', kind: 'ask', ask: { kind: 'ok', asked_by: 'bot:fin' }, task: { id: 't9', pipeline_id: 'finance' } },
+        { id: 't1', kind: 'task', from_id: 'bot:ops' },
+        { id: 'p1', kind: 'paused', bots: ['bot:ops'] },
+        { id: 'r1', kind: 'access', from_id: 'bot:tools' },
+      ],
+    },
+  }));
+  expect((await queryClient.fetchQuery(flowQuery)).asks).toEqual([
+    { by: 'bot:qa', pipeline: null },
+    { by: 'bot:fin', pipeline: 'finance' },
+  ]);
+});
+
 it('finishes the route’s Flow read when the shell unsubscribes', async () => {
   let respond!: (reply: Reply) => void;
   serve(() => new Promise((resolve) => { respond = resolve; }));
@@ -116,7 +135,7 @@ it('finishes the route’s Flow read when the shell unsubscribes', async () => {
   const stop = new QueryObserver(queryClient, flowQuery).subscribe(() => {});
   stop();
   respond({ status: 200, body: { items: [] } });
-  await expect(loaded).resolves.toEqual({ count: 0, items: [], requests: [], task_ids: [], approvals: [] });
+  await expect(loaded).resolves.toEqual({ count: 0, items: [], requests: [], task_ids: [], approvals: [], asks: [] });
 });
 
 it('keeps the Reconcile summary on a Flow row that folds several items of one task', async () => {

@@ -707,6 +707,9 @@ export interface Flow {
   /** Each approval (an OK or a page) that waits on the person, from every row of the list, one per requirement: `items`
       keeps one row per task, the oldest, which may be another ask (the thread cards read this). */
   approvals?: ApprovalItem[];
+  /** Each ❓ question or ask an agent put to the person that still waits, with the pipeline of its task when it is on
+      one: the Agent bar opens for its page's owner on that page (a pipeline's on that pipeline's page). */
+  asks?: { by: string; pipeline: string | null }[];
 }
 
 type NeedsRow = Awaited<ReturnType<typeof needsYouItems>>[number];
@@ -740,7 +743,10 @@ export const flowQuery = queryOptions({
     const items: FlowItem[] = [];
     const approvals = new Map<string, ApprovalItem>();
     const requests: FlowRequest[] = [];
+    const asks: NonNullable<Flow['asks']> = [];
     for (const it of await needsYouItems()) {
+      const by = it.kind === 'question' ? it.from_id : it.kind === 'ask' ? it.ask?.asked_by : null;
+      if (by?.startsWith('bot:')) asks.push({ by, pipeline: it.task?.pipeline_id ?? null });
       if (isRequest(it)) {
         requests.push(it);
         continue;
@@ -765,7 +771,7 @@ export const flowQuery = queryOptions({
       seen.set(t.id, items.length);
       items.push(flowItemOf(it, t));
     }
-    return { count: items.length + requests.length, items, requests, task_ids: [...named], approvals: [...approvals.values()] };
+    return { count: items.length + requests.length, items, requests, task_ids: [...named], approvals: [...approvals.values()], asks };
   },
 });
 

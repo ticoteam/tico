@@ -806,7 +806,7 @@ export function growthManager(owners: Record<string, PageOwnerRow> | undefined, 
 /** The Growth Manager, read from the server if not held yet. */
 export async function findGrowthManager(qc: QueryClient): Promise<string | null> {
   const [owners, dir] = await Promise.all([qc.ensureQueryData(pageOwnersQuery), qc.ensureQueryData(directoryQuery).catch(() => undefined)]);
-  return growthManager(owners, dir);
+  return growthManager(owners.pages, dir);
 }
 
 // ---------------------------------------------------------------- one bill, invoice, card or transaction (the books tabs' panels and forms)

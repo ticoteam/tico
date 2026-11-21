@@ -29,6 +29,8 @@ export interface Actor {
   hue?: number;
   /** An agent running a turn now: `Avatar`'s `live`. */
   working?: boolean;
+  /** An agent's lifecycle state on the org (`active`, `planned`, `paused`...). */
+  lifecycle?: string;
 }
 
 /**
@@ -142,6 +144,7 @@ export function buildDirectory(org: GetOrgResponse, lines: StatusLine[]): Direct
       teamId: teamId(b.team),
       hue: agentHue(slug),
       ...(row.template === 'assistant' ? { assistant: true } : {}),
+      ...(text(b.status) ? { lifecycle: b.status } : {}),
       ...statusOf(statuses.get(b.id)),
     };
     if (text(b.reports_to)) boss.set(a, b.reports_to!);

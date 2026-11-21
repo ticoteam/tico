@@ -159,9 +159,8 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
   const bar = typeof spec === 'object' && 'bar' in spec && p.bar ? p.bar : null;
   const arr = typeof spec === 'string' ? spec : spec.name; // which memory: a panel alone uses the chat one
   const mem = draft ?? saved;
-  // opened by its edge only while it would be tucked without it: once the window has room, the usual layout is back.
-  // An ask from the page's owner brings its Agent bar forward the same way when there is no room for it in the row.
-  const forward = forwardFor(width, spec, mem, opened?.arr === p.arr ? opened.id : bar?.ask ? 'chat' : null);
+  // opened by its edge only while it would be tucked without it: once the window has room, the usual layout is back
+  const forward = forwardFor(width, spec, mem, opened?.arr === p.arr ? opened.id : null);
   const L = layout(width, spec, mem, forward);
   const sheets = L.mode === 'sheets' ? L.sheets : [];
   const stretch = L.mode === 'sheets' ? L.stretch : null;
@@ -171,13 +170,11 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
   const onPress = (id: SheetId) => {
     const cur = find(id);
     if (!cur) return;
-    if (id === 'chat' && bar && cur.state !== 'tucked') {
-      // the Agent bar: its fold is the page's, kept by the root; tucked for room, its edge opens it for now as any sheet's
+    if (id === 'chat' && bar) {
+      // the Agent bar: open or folded is the page's own fold, kept by the root, never a state of the moment; open, it
+      // keeps its place in the row (layout.ts) and the sheets above it tuck
       cause.current = 'fold';
-      const open = cur.state === 'open';
-      bar.onFold(open);
-      // opened where the row has no room for it, it comes forward over the sheets above it, in the same move
-      setOpened(open ? null : { arr: p.arr, id: 'chat' });
+      bar.onFold(cur.state === 'open');
       return;
     }
     const r = press(width, spec, saved, id, forward);
@@ -267,7 +264,6 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
       if (drag.current) endDrag(false);
       else if (forward) {
         cause.current = 'fold';
-        if (forward === 'chat' && bar?.ask) bar.onFold(true);
         setOpened(null);
       } else if (inChat && p.arr === 'chat' && !bar && p.onCloseChat && (!typing(t) || !(t as HTMLInputElement).value)) p.onCloseChat();
       else if (inPanel && p.onClosePanel) p.onClosePanel();

@@ -206,23 +206,3 @@ def test_a_stored_page_card_with_another_route_runs_nothing(api):
     with api.app.state.store.read() as c:
         assert c.execute('SELECT count(*) FROM tasks').fetchone()[0] == tasks
     assert goal_titles(api) == []
-
-
-def test_the_turn_is_told_whether_it_may_propose_the_card_and_else_whose_chat_takes_it(api):
-    # #4857 S6: only the Goals owner's turn in the person's own chat with it proposes the card; another turn gets the
-    # owner to point the person to, and a message from another page or from a bot gets nothing.
-    from backend import page_chat_cards
-
-    machine = goals_owned_by_ops(api)
-    dm, sent = said_from(api, 'goals')
-    assert claim(api, machine)['page_card'] == {'page': 'goals', 'owner': 'bot:ops', 'eligible': True}
-    with api.app.state.store.read() as c:
-        room, msg = H.conversation(c, dm['id']), H.message(c, sent['id'])
-        assert page_chat_cards.for_turn(c, room, 'librarian', msg) == {
-            'page': 'goals',
-            'owner': 'bot:ops',
-            'eligible': False,
-        }
-        assert page_chat_cards.for_turn(c, room, 'ops', {**msg, 'sender_id': 'bot:x'}) is None
-        other = {**msg, 'refs': {'from_page': {'page': 'listening', 'label': 'Listening'}}}
-        assert page_chat_cards.for_turn(c, room, 'ops', other) is None

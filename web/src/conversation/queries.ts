@@ -174,7 +174,12 @@ const markRow = (tmp: string, pending: ChatMessage['pending']) => (rows: ChatMes
  * gives way to it (installConversationLive) and the answer then adds nothing, so it never shows twice. A failure keeps
  * the row, marked "Not sent", for Retry; a held message is marked "Held". Resolves with the real message, or null.
  */
-export async function sendMessage(s: Send): Promise<ChatMessage | null> {
+/** What a message says of its page: what is open there (a doc, a mail) goes only to Tico, which acts with the person's
+    own rights; any other chat's members may not read it, so they are told the page alone. Every send passes here. */
+const pageFor = (s: Send): FromPage | null => (!s.from ? null : s.variant === 'tico' ? s.from : { page: s.from.page, label: s.from.label });
+
+export async function sendMessage(given: Send): Promise<ChatMessage | null> {
+  const s = { ...given, from: pageFor(given) };
   const tmp = s.retry ?? `tmp:${newId()}`;
   const row: ChatMessage = {
     id: tmp,

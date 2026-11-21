@@ -31,23 +31,6 @@ PROPOSER = "page:"
 VIA = "page_chat"
 
 
-def for_turn(c: Any, conversation: Row | None, bot: str, message: Row | None) -> Row | None:
-    """What a turn is handed about a page card: None unless a person wrote this message on a page that takes one. `eligible`
-    only for the page's owner bot in that person's own chat with it (what `propose` checks); `owner` names the bot whose
-    chat takes the card, for a turn that is not it."""
-    from . import page_owners
-
-    refs: object = (message or {}).get("refs")
-    given: object = cast("Row", refs).get("from_page") if isinstance(refs, dict) else None
-    page = str(cast("Row", given).get("page") or "") if isinstance(given, dict) else ""
-    person = str((message or {}).get("sender_id") or "")
-    if page not in PAGES or not person.startswith("human:"):
-        return None
-    owner = page_owners.owner(c, page)
-    eligible = bool(owner) and owner == "bot:" + bot and members(c, conversation) == {person, owner}
-    return {"page": page, "owner": owner, "eligible": eligible}
-
-
 def proposer_page(proposer: object) -> str | None:
     """The page a card's proposer names (`page:goals` -> `goals`), or None for any other proposer."""
     proposer = str(proposer or "")

@@ -55,7 +55,7 @@ export function General() {
   const access = useQuery(accessQuery);
   const owners = useQuery(pageOwnersQuery);
   const c = config.data;
-  const pages = Object.entries(owners.data ?? {});
+  const pages = Object.entries(owners.data?.pages ?? {});
   return (
     <>
       <Section name="Company" target="setting:company">
@@ -80,7 +80,7 @@ export function General() {
           </Facts>
         </Section>
       )}
-      {pages.length > 0 && <PageOwners pages={pages} />}
+      {pages.length > 0 && <PageOwners pages={pages} canChange={owners.data?.canChange === true} />}
       {access.data && <Repositories admin={access.data.you === 'owner' || access.data.you === 'admin'} owner={access.data.you === 'owner'} />}
       <TicoSection version={c?.version} />
     </>
@@ -89,7 +89,7 @@ export function General() {
 
 /** Page owners (t-settings-general): the pages given an owner, each a face and a name to change; the pages left on
     their defaults are one line that opens them. */
-function PageOwners({ pages }: { pages: [string, PageOwnerRow][] }) {
+function PageOwners({ pages, canChange }: { pages: [string, PageOwnerRow][]; canChange: boolean }) {
   const agents = useAgentFaces();
   const faces = useFaces();
   const [all, setAll] = useState(false);
@@ -103,6 +103,10 @@ function PageOwners({ pages }: { pages: [string, PageOwnerRow][] }) {
     return (
       <Line key={page} label={row.name ?? page} target={`page-owner:${page}`}>
         {face && <Avatar kind={face.kind} name={face.name} hue={face.hue} size={22} decorative />}
+        {/* only whoever the server's PUT lets change it (the owner or an admin) gets the picker */}
+        {!canChange ? (
+          <span>{(who && faces[who]?.name) || (value === 'none' ? 'No owner' : 'Default')}</span>
+        ) : (
         <Select
           label={`${row.name ?? page} owner`}
           labelHidden
@@ -115,6 +119,7 @@ function PageOwners({ pages }: { pages: [string, PageOwnerRow][] }) {
             ...agents.map((a) => ({ value: a.id, label: a.name })),
           ]}
         />
+        )}
       </Line>
     );
   };

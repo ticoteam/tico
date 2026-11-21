@@ -188,6 +188,17 @@ describe('The second chat @s225 @s226', () => {
   });
 });
 
+describe('The Agent bar that did not load @4857-S16', () => {
+  it('keeps its head, the agent named and linked, where the frame puts its fold control, with Try again', async () => {
+    serve((url) => (url.includes('/threads/dm?') ? { status: 500, body: { error: { code: 'boom', detail: 'Broke' } } } : undefined));
+    queryClient.setDefaultOptions({ queries: { ...queryClient.getDefaultOptions().queries, retry: false } });
+    show(<ChatSheet chat="agent:qa" />, '/tasks');
+    expect(await screen.findByText('This chat did not load')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'QA' }).closest('header')?.className).toContain('side-head');
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+  });
+});
+
 describe('Message @s158', () => {
   const pick = () => show(<MessagePick open onOpenChange={() => undefined} />, '/threads');
 
