@@ -157,6 +157,29 @@ def test_two_peoples_private_work_stays_apart_and_a_private_handoff_is_filed_as_
     get(api, "tasks/" + handed["id"], "ben-test", expected=404)
 
 
+def test_a_private_task_is_never_the_shared_assistants_as_owner_or_reader(api):
+    """One Assistant serves everyone, so a private task naming it would be read by its runs for all: refused as owner or
+    reader, on create and on a later change, from the person's own chat and from the person directly."""
+
+    def refused(path, body, token="ana-test"):
+        answer = api.post("/api/v2/" + path, json=body, headers=headers(token))
+        assert answer.status_code >= 400 and "shared Assistant" in answer.json()["error"]["detail"], answer.text
+
+    r, attempt = assistant_turn(api, "ana-test", text="Keep this to yourself")
+    for token in (attempt["token"], "ana-test"):
+        mine = {"title": "Payroll", "body": "Mine.", "private": True}
+        refused("tasks", {**mine, "owner": "assistant"}, token)
+        refused("tasks", {**mine, "owner": "ops", "readers": ["bot:assistant"]}, token)
+    task = post(api, "tasks", {"owner": "ops", "title": "Payroll", "body": "Mine.", "private": True})
+    refused(f"tasks/{task['id']}/readers", {"add": ["assistant"]})
+    refused(
+        f"tasks/{task['id']}/owner",
+        {"owner": "assistant", "version": get(api, "tasks/" + task["id"])["task"]["version"]},
+    )
+    public = post(api, "tasks", {"owner": "assistant", "title": "Tidy notes", "body": "For all.", "private": False})
+    refused("tasks/" + public["id"], {"private": True, "version": get(api, "tasks/" + public["id"])["task"]["version"]})
+
+
 def test_a_batch_commit_never_oks_on_an_assistant_walk(api):
     with api.app.state.store.transaction() as c:
         made = H.task_create(c, "human:ana", "Run the LinkedIn ads", "Q4.", "bot:finance", lint=False)

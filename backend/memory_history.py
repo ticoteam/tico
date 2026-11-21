@@ -19,7 +19,9 @@ from datetime import timezone
 from fastapi import Request
 from pydantic import Field
 
+from . import bot_settings as BS
 from . import models as M
+from . import read_cache
 from . import rooms
 from . import task_privacy as privacy
 from .shared_bots import copies, declared, source_of
@@ -70,22 +72,27 @@ def _run_of(c, bot, attempt):
     return attempt if row and row["bot_id"] in family(c, bot) else ""
 
 
-def repository(c, bot):
-    """The repository `bot` writes, normalized (`acme/emp-ops.git`, a URL or a bare name all give `emp-ops`): a branch
-    writes its original's."""
-    root = source_of(declared(c, bot)) or bot
-    row = c.execute("SELECT repo FROM bot_config WHERE bot=?", (root,)).fetchone()
-    repo = (row["repo"] if row else "") or "emp-" + (H.bot(c, root) or {}).get("slug", root)
-    return repo.strip().rstrip("/").lower().removesuffix(".git").rsplit("/", 1)[-1].rsplit(":", 1)[-1]
+def normalized(repo):
+    """A repository's name however it is written (`acme/emp-ops.git`, a URL or a bare name all give `emp-ops`)."""
+    return str(repo or "").strip().rstrip("/").lower().removesuffix(".git").rsplit("/", 1)[-1].rsplit(":", 1)[-1]
 
 
 def guarded(c, assistant_bot):
-    """Every bot that writes the Assistant's repository, the Assistant and its branches included. One Assistant serves
-    everyone, so their history is shown only with a run from a thread whose room and root are not a person's own chat,
-    and their documents, which name no run, never (a person's own chat on an older runner wrote in the shared
-    checkout)."""
-    mine = repository(c, assistant_bot)
-    return {assistant_bot} | {row["id"] for row in c.execute("SELECT id FROM bots") if repository(c, row["id"]) == mine}
+    """Every bot that writes the Assistant's repository (a branch writes its original's), the Assistant included. One
+    Assistant serves everyone, so their history is shown only with a run from a thread whose room and root are not a
+    person's own chat, and their documents, which name no run, never (a person's own chat on an older runner wrote in
+    the shared checkout). One query, kept for the rest of the read or write until something changes (read_cache)."""
+    return read_cache.value(c, ("assistant_repository", assistant_bot), lambda: _guarded(c, assistant_bot), True)
+
+
+def _guarded(c, assistant_bot):
+    rows = c.execute(
+        f"SELECT b.id,b.slug,bc.repo,{BS.CONFIG} AS config FROM bots b LEFT JOIN bot_config bc ON bc.bot=b.id {BS.JOIN}"
+    ).fetchall()
+    own = {r["id"]: normalized(r["repo"]) or "emp-" + str(r["slug"] or r["id"]).lower() for r in rows}
+    writes = {r["id"]: own.get(source_of(json.loads(r["config"] or "{}")) or r["id"], own[r["id"]]) for r in rows}
+    mine = writes.get(assistant_bot) or "emp-" + assistant_bot.lower()
+    return frozenset({assistant_bot, *(bot for bot, repo in writes.items() if repo == mine)})
 
 
 # The run's room and the root of its thread; inner joins, so a run whose message, room or root is gone has none.

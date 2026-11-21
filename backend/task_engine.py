@@ -1943,6 +1943,8 @@ def reassign(
     if owner == row.get("owner_id"):
         return row
     _may_name(conn, by, owner, task_id)
+    if H.task_private(conn, row):
+        H.refuse_shared_assistant(conn, by, owner, task=task_id)
     overturned = _owner_rule(conn, row, owner, by, set_anyway)
     ts = H.now()
     fields: Row = {"owner_id": owner, "version": int(row.get("version") or 0) + 1, "updated_at": ts}
