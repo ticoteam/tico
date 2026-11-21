@@ -555,7 +555,7 @@ def test_a_continue_latest_run_never_forks_a_private_task_or_a_chat(api):
     settle_all(api)
     t0 = H.shift(H.now(), hours=-2)
     with api.app.state.store.transaction() as c:
-        secret = H.task_create(c, "bot:assistant", "Private matter", "x", "bot:ops", private=True)
+        secret = H.task_create(c, "human:ana", "Private matter", "x", "bot:ops", private=True)
         for n, (task_id, thread) in enumerate(
             ((open_task["id"], "shared-thread"), (secret["id"], "private-thread"), (None, "chat-thread"))
         ):
@@ -657,7 +657,7 @@ def test_a_forking_job_counts_idle_from_the_turn_it_continues_not_a_later_privat
     settle_all(api)
     t0 = H.shift(H.now(), hours=-6)
     with api.app.state.store.transaction() as c:
-        secret = H.task_create(c, "bot:assistant", "Private matter", "x", "bot:ops", private=True)
+        secret = H.task_create(c, "human:ana", "Private matter", "x", "bot:ops", private=True)
     settle_all(api)
     _turn_on(api, "ops", shared["id"], H.shift(t0, minutes=-46), "shared-thread")
     _turn_on(api, "ops", secret["id"], H.shift(t0, minutes=-10), "private-thread")

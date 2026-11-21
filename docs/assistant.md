@@ -126,7 +126,9 @@ chat routes still refuse it (`403`).
 
 One Assistant serves everyone, so nothing a turn in your DM writes in the Assistant's files is kept: the runner runs it in
 a throwaway copy it cannot push from (on Pi, its session goes with the copy, so each turn starts anew), and the server
-records none of its memory/ or knowledge/ in the Assistant's learnings. A private task it hands off for you is filed as you; the Assistant itself becomes no reader or owner of it.
+records none of its memory/ or knowledge/ in the Assistant's learnings. A private task it hands off for you is filed as you. No private task is ever the Assistant's: not as owner, requester,
+assignee or reader, nor through a group it is in or a bot that reports to it; an OK it asks you for is filed on a task
+you hold.
 
 You may let bots you choose view it, read only. On **What it has learned** (your Assistant's settings), the line
 **Bots that can view this chat** says None until you add one: **Add a bot**, type part of its name, pick it. Nobody is

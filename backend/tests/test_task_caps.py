@@ -96,6 +96,10 @@ def _ok(api, rid, token="ana-test", expected=200):
 
 def test_a_bot_asks_for_its_cap_as_an_ok_a_person_gives_and_the_hub_applies_it(api):
     org(api)
+    # Its OK is a private task it holds, so it reports to a bot other than the shared Assistant, which reads its reports'
+    # private tasks and so may hold none (hubdb.refuse_shared_assistant).
+    report(api, "cpo", "human:ana")
+    report(api, "ops", "cpo")
     asked = api.put(
         "/api/v2/task-caps",
         json={"sender": "bot:ops", "receiver": "person:ana", "per_day": 1},

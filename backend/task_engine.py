@@ -554,9 +554,10 @@ def _write(conn: "sqlite3.Connection", task_id: str, **fields: Any) -> None:
     names = list(fields)
     if set(names) - WRITES:
         raise ValueError(f"not a column the engine writes: {sorted(set(names) - WRITES)}")
-    if fields.get("owner_id") == _h().assistant_actor() and _h().task_private(conn, _h().task(conn, task_id)):
+    held = [fields[k] for k in ("owner_id", "assignee_id") if fields.get(k)]
+    if held and _h().task_private(conn, _h().task(conn, task_id)):
         # One Assistant serves everyone: no stage, move, refile or pick gives it a private task (refuse_shared_assistant).
-        _h().refuse_shared_assistant(conn, _h().TICO_ACTOR, fields["owner_id"], task=task_id)
+        _h().refuse_shared_assistant(conn, _h().TICO_ACTOR, *held, task=task_id)
     sets = ", ".join(f"{name}=?" for name in names)
     conn.execute("INSERT OR REPLACE INTO task_move_guards (id, open, task_id) VALUES (1, 1, ?)", (task_id,))
     try:

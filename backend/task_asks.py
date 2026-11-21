@@ -741,14 +741,18 @@ def ask_ok(
                 return {"task_id": found, "requirement_id": before["requirement_id"]}
         replaced.append(before["requirement_id"])
     filed = task_id is None
+    # One Assistant serves everyone and never holds a private task (hubdb.refuse_shared_assistant): an OK it asks with no
+    # task of its own is filed and asked as the engine's, on a task the person it is for owns, as the Health Monitor's
+    # are. The grant still names the Assistant as the asker, which is who may use the OK.
+    filer = H.TICO_ACTOR if by == H.assistant_actor(conn) else by
     if filed:
-        owner = by if (is_bot(by) or is_human(by)) else target
+        owner = filer if (is_bot(filer) or is_human(filer)) else target
         kind = kind_of(subject)
         named = FILED_TITLES.get(kind)
         about = _matter_title(conn, by, target, matter) if named else ""
         made: Row = H.task_create(
             conn,
-            by,
+            filer,
             (f"{named} · {about}"[:300] if about else named) or (title or line).strip(),
             line.strip(),
             owner,
@@ -762,13 +766,21 @@ def ask_ok(
     if not row:
         _refuse(conn, by, "not-found", "No such task")
     if filed and not H.task_private_readable(conn, target, row):
-        H.task_reach(conn, by, row, target)
+        H.task_reach(conn, filer, row, target)
         reached: Row | None = H.task(conn, task_id)
         if reached:
             row = reached
     # Acting for `by` inside this transaction: the version is the one just read.
     asked: Row = H.task_ask(
-        conn, by, task_id, target, line, kind="ok", shows=shows, seen_version=row.get("version"), for_action=True
+        conn,
+        filer if filed else by,
+        task_id,
+        target,
+        line,
+        kind="ok",
+        shows=shows,
+        seen_version=row.get("version"),
+        for_action=True,
     )
     requirement_id = str(asked["requirement_id"])
     conn.execute(

@@ -334,8 +334,9 @@ def work_room(c, auth, bot, requester):
 
 
 def task_conversation_id(c, auth, owner, requester):
-    """Conversation id for a new task: the bot's chat room, or None to open a task thread."""
-    if not str(owner).startswith("bot:"):
+    """Conversation id for a new task: the bot's chat room, or None to open a task thread. The Assistant's task always
+    opens its own: its chat rooms are each person's own."""
+    if not str(owner).startswith("bot:") or H.actor_id(owner) == getattr(auth.settings, "assistant_bot", "assistant"):
         return None
     try:
         room = work_room(c, auth, H.actor_id(owner), requester)

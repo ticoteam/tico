@@ -320,13 +320,18 @@ def test_the_draft_turn_is_asked_about_the_slack_text_it_handles(api):
     assert "Can you send the deck by Friday?" in turn["prompt"]
 
 
+# A general counsel's turn tasks are private; the shared Assistant never holds a private task
+# (hubdb.refuse_shared_assistant), so these mail turns are another bot's made from that template.
+COUNSEL = {**STAFF, "doc-updater": "general-counsel"}
+
+
 def test_the_turn_task_carries_the_mail_subject_and_body(api):
-    set_templates(api, STAFF)
-    flow = bot_flow(api, "assistant")
+    set_templates(api, COUNSEL)
+    flow = bot_flow(api, "doc-updater")
     prompt = run_to_turn(flow, MAIL)["prompt"]
     with api.app.state.store.transaction() as c:
         started = AA.start_turn(
-            c, {"id": "auto_founder", "flow": flow}, "run_1", "draft", "bot:assistant", prompt, None
+            c, {"id": "auto_founder", "flow": flow}, "run_1", "draft", "bot:doc-updater", prompt, None
         )
         words = H.task_words(c, started["ref"])  # the turn's instructions: Tico's, to the bot in its run
     assert "Board pack" in words and "Can you send the deck by Friday?" in words
@@ -334,9 +339,9 @@ def test_the_turn_task_carries_the_mail_subject_and_body(api):
 
 def test_a_mail_turn_is_titled_by_the_mail_only_on_a_private_task(api):
     """An inbox's turns all shared its name ("Ana's inbox"). A mail's turn is titled by its sender and subject where
-    only the task's readers see the title (the assistant's tasks are private, as a general counsel's); a company-visible
-    task keeps the automation's name, since its title is in every teammate's lists and the mail is not."""
-    set_templates(api, STAFF)
+    only the task's readers see the title (a general counsel's tasks are private); a company-visible task keeps the
+    automation's name, since its title is in every teammate's lists and the mail is not."""
+    set_templates(api, COUNSEL)
     reply = {
         "message": {
             **MAIL["message"],
@@ -344,7 +349,7 @@ def test_a_mail_turn_is_titled_by_the_mail_only_on_a_private_task(api):
             "subject": "RE: Fwd: Demand letter",
         }
     }
-    for bot, private in (("assistant", True), ("cpo", False)):
+    for bot, private in (("doc-updater", True), ("cpo", False)):
         flow = bot_flow(api, bot)
         turn = run_to_turn(flow, reply)
         assert turn["about"] == "Winberg Law: Demand letter"
