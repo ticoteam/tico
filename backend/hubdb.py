@@ -2292,7 +2292,7 @@ def _write_message(
         # An agent's answer to what a person's Assistant asked it for them goes back to their Assistant chat.
         from . import assistant_relay
 
-        assistant_relay.replied(conn, written)
+        assistant_relay.replied(conn, written, conv)
     return {**written, "warnings": mention_warnings} if mention_warnings else written
 
 

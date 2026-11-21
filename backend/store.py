@@ -1170,6 +1170,8 @@ class Store:
         c.row_cache = self.row_cache
         c.write_transaction = False
         c.after_commit = []
+        # Relays owed before this write commits (backend/assistant_relay.py).
+        c.relay_pending = []  # pyright: ignore[reportAttributeAccessIssue]
         c.automation_bell = self.automation_bell
         c.provenance_changes = c.total_changes
         c.provenance_start = None
@@ -1241,6 +1243,9 @@ class Store:
                 yield c
                 message_links.refresh_dirty(c)
                 H.owed_sync(c)
+                from . import assistant_relay
+
+                assistant_relay.flush(c)  # on each reply as it will commit (its attachments are on it by now)
                 if notify:
                     logged = events.claim(c, since, None)
                 c.commit()

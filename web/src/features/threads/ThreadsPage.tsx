@@ -37,7 +37,8 @@ function ThreadConversation({ id, message }: { id: string; message?: string }) {
   // beside this thread.
   const approvals = useApprovalCards({ agent: agentOf(data, useMe()) }, `thread:${id}`);
   const team = data && teamOf(data);
-  if (team) return <TeamThread who={team} />;
+  // A team's own thread draws its updates; one of its sub-threads (a link to a reply in it) opens as itself.
+  if (team && !data?.parent_id) return <TeamThread who={team} openAt={message} />;
   const outside = outsideOf(data);
   return (
     <Conversation

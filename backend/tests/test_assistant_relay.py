@@ -10,10 +10,14 @@ from backend.tests.helpers.api import assign, headers, post, ready, runner
 from backend.tests.helpers.assistant import assistant_turn
 
 
-def ask_ops(api, text="What does Business Development do, in one line?", person="ben", **extra):
-    """Ben's (or `person`'s) Assistant asks ops for them, in their chat with ops (or `conversation_id`)."""
+def ask_ops(api, text="What does Business Development do, in one line?", person="ben", more=(), **extra):
+    """Ben's (or `person`'s) Assistant asks ops for them, in their chat with ops (or `conversation_id`); `more` are
+    further asks in the same turn. Returns the first message."""
     _, attempt = assistant_turn(api, person + "-test", "Ask ops what BD does")
-    return post(api, "messages", {"to": "ops", "text": text, **extra}, token=attempt["token"])
+    first = post(api, "messages", {"to": "ops", "text": text, **extra}, token=attempt["token"])
+    for then in more:
+        post(api, "messages", {"to": "ops", "text": then, **extra}, token=attempt["token"])
+    return first
 
 
 def ops_replies(api, text):
@@ -130,7 +134,7 @@ def test_a_person_set_marker_or_via_never_triggers_a_relay(api):
     assert relays(api) == []
 
 
-def test_a_relay_that_fails_leaves_the_reply_intact(api, monkeypatch):
+def test_a_relay_that_fails_leaves_the_reply_intact_and_never_reopens_the_marker(api, monkeypatch):
     asked = ask_ops(api)
 
     def broken(*_):
@@ -140,7 +144,83 @@ def test_a_relay_that_fails_leaves_the_reply_intact(api, monkeypatch):
     reply = ops_writes(api, asked["conversation_id"], "BD finds partners.")
     with api.app.state.store.read() as c:
         assert c.execute("SELECT body FROM messages WHERE id=?", (reply["id"],)).fetchone()[0] == "BD finds partners."
+        mark = json.loads(c.execute("SELECT refs FROM messages WHERE id=?", (asked["id"],)).fetchone()[0])
+    assert mark["awaiting_reply"]["reply_id"] == reply["id"]
+    monkeypatch.undo()
+    ops_writes(api, asked["conversation_id"], "And one more thing.")
     assert relays(api) == []
+
+
+def test_one_reply_answers_every_waiting_ask_and_tells_each_person_once(api):
+    asked = ask_ops(api, more=("And who leads it?",))
+    ops_writes(api, asked["conversation_id"], "BD finds partners; Dana leads it.")
+    assert len(relays(api)) == 1
+    with api.app.state.store.read() as c:
+        open_marks = c.execute(
+            "SELECT count(*) FROM messages WHERE json_extract(refs,'$.awaiting_reply.agent')='bot:ops' "
+            "AND json_extract(refs,'$.awaiting_reply.reply_id') IS NULL"
+        ).fetchone()[0]
+    assert open_marks == 0
+
+
+def test_a_reply_naming_a_task_or_carrying_files_has_no_excerpt(api, monkeypatch):
+    import base64
+
+    from backend.tests.helpers.api import claim
+    from backend.tests.helpers.files import publish
+
+    asked = ask_ops(api)
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, "human:ana", "Launch plan", "Public.", "bot:ops", private=False, lint=False)
+    ops_writes(api, asked["conversation_id"], "See the plan.", refs={"task_id": task["id"]})
+    with api.app.state.store.transaction() as c:  # a second ask in the same chat, as the Assistant writes one
+        from backend import hubdb
+
+        via = hubdb.VIA.set("assistant")
+        try:
+            room = H.conversation(c, asked["conversation_id"])
+            H._write_message(c, "human:ben", "bot:ops", "Send the chart?", room, "say", {}, None, None)
+        finally:
+            hubdb.VIA.reset(via)
+    machine = runner(api)
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    token = claim(api, machine, "ops")["token"]
+    made = publish(
+        api,
+        {"token": token},
+        name="chart.png",
+        text=None,
+        content_base64=base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64).decode(),
+    )
+    assert made.status_code == 200, made.text
+    fid = made.json()["file"]["id"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_files SET scope=? WHERE id=?", ("conversation:" + asked["conversation_id"], fid))
+    post(
+        api,
+        "messages",
+        {
+            "to": "human:ben",
+            "text": "Here is the chart.",
+            "conversation_id": asked["conversation_id"],
+            "attachments": [{"ref": f"{fid}@1", "title": "Chart"}],
+        },
+        token=token,
+    )
+    assert [r["body"].split("\n\n")[0] for r in relays(api)] == ["ops replied", "ops replied"]
+
+
+def test_a_native_dm_with_just_the_agent_is_the_persons_own_chat(api):
+    from backend import threads
+    from backend.auth import Identity
+
+    with api.app.state.store.transaction() as c:
+        dm = threads.dm(c, Identity("human:ben", "human"), ["bot:ops"], private=True)["id"]
+        assert H.conversation(c, dm)["scope"] == "direct"
+    ask_ops(api, conversation_id=dm)
+    ops_writes(api, dm, "BD finds partners.")
+    assert [r["body"].split("\n\n")[0] for r in relays(api)] == ["ops replied: BD finds partners."]
 
 
 def test_a_person_who_has_left_gets_no_relay(api):
@@ -164,3 +244,21 @@ def test_a_reply_in_a_thread_the_person_no_longer_reads_has_no_excerpt(api):
     reply = ops_writes(api, asked["conversation_id"], "The buyer is Acme.", to="human:cara")
     [relay] = relays(api)
     assert relay["body"] == f"ops replied\n\n[Open the reply](#/thread/{asked['conversation_id']}?m={reply['id']})"
+
+
+def test_the_migration_clears_markers_written_before_the_server_owned_them(api):
+    from pathlib import Path
+
+    asked = ask_ops(api)
+    forged = {"awaiting_reply": {"person": "human:ben", "agent": "bot:ops", "root": asked["conversation_id"]}}
+    with api.app.state.store.transaction() as c:
+        room = H.conversation(c, asked["conversation_id"])
+        old = H._write_message(c, "human:ben", "bot:ops", "Older words.", room, "say", {}, None, None)
+        c.execute("UPDATE messages SET refs=? WHERE id=?", (json.dumps(forged), old["id"]))
+        c.execute("UPDATE messages SET refs=json_remove(refs,'$.awaiting_reply') WHERE id=?", (asked["id"],))
+        for statement in Path("backend/migrations/20261121210139_messages_awaiting_reply.sql").read_text().split(";"):
+            if statement.strip():
+                c.execute(statement)
+        assert json.loads(c.execute("SELECT refs FROM messages WHERE id=?", (old["id"],)).fetchone()[0]) == {}
+    ops_writes(api, asked["conversation_id"], "BD finds partners.")
+    assert relays(api) == []
