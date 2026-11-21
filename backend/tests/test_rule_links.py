@@ -350,7 +350,10 @@ def test_email_keeps_its_own_judge_and_falls_back_to_a_second_provider(ruled):
     gate = S.rule_gate(api.app, api.app.state.store, Identity("bot:ops", "bot", agent="test"), snap)
     with api.app.state.store.transaction() as c:
         assert gate(c)["outcome"] == "held"
-    assert asked == ["first", "second"]
+    # The held mail's part call (org_rule_check._start_parts) asks the same chain on its own thread after the write:
+    # wait for it, so both calls are counted, each falling back from the first provider to the second.
+    K.settle_parts()
+    assert asked == ["first", "second", "first", "second"]
     assert link_events(api, "email")[0][2]["rules"] == [blocked["id"]]
 
 
