@@ -8,6 +8,7 @@ import type { TaskRequirement } from '@/api/schema';
 import type * as conversations from '@/conversation';
 import { sendMessage } from '@/conversation';
 import { keys, queryClient } from '@/data';
+import { matterWhen } from '@/features/company/exports';
 import { Toasts } from '@/kit/Toast';
 import { forgetPlaces, notePlace } from '@/lib';
 import { useFollow } from '@/live/follow';
@@ -1168,8 +1169,8 @@ describe('an email’s OK reads with the matter it answers', () => {
   it('shows the matter’s open key dates in one line above the email @approvals', async () => {
     shown = task({ title: 'Send: Re: Notice of claim → dana@example.test' });
     const dates = [
-      { id: 'd1', label: 'Earliest send', starts_at: '2026-12-08', due_at: null, done_at: null },
-      { id: 'd2', label: 'Reply due', starts_at: null, due_at: '2026-12-15', done_at: null },
+      { id: 'd1', label: 'Reply due', starts_at: null, due_at: '2026-12-15', done_at: null },
+      { id: 'd2', label: 'Earliest send', starts_at: '2026-12-08', due_at: null, done_at: null },
       { id: 'd3', label: 'Old date', starts_at: null, due_at: '2026-10-01', done_at: '2026-10-02' },
     ];
     const matter = task({ id: 't5', number: 40, title: 'Late-delivery claim: Dana Ruiz', pipeline_id: 'p9', to_leave: [], matter: { dates } as unknown as TaskData['matter'] });
@@ -1180,8 +1181,9 @@ describe('an email’s OK reads with the matter it answers', () => {
       return null;
     };
     show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
-    const strip = await screen.findByText('Earliest send: Not before Dec 8');
-    expect(screen.getByText('Reply due: Due Dec 15')).toBeTruthy();
+    // Soonest first, date then label, one line; the expected dates come from the same formatter, so no clock is pinned.
+    const line = `${matterWhen('2026-12-08')} Earliest send · ${matterWhen('2026-12-15')} Reply due`;
+    const strip = await screen.findByText(line);
     expect(screen.queryByText(/Old date/)).toBeNull();
     const body = await screen.findByText('Dear Ms. Ruiz, our response is attached.');
     expect(strip.compareDocumentPosition(body) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
