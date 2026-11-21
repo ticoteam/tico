@@ -22,6 +22,7 @@ import type {
   ReachValues,
   Routine,
   RuleGroups,
+  RuleHistory,
   RuleHold,
   Repeats,
   RuleSource,
@@ -452,6 +453,50 @@ export const orgRulesQuery = (status: 'active' | 'suggested') =>
     queryKey: ['rules', 'org', status],
     queryFn: async ({ signal }) => (await api.get<{ rules: OrgRule[] }>(`/api/v2/rules?status=${status}&limit=100`, { signal })).rules,
   });
+
+/** One rule's versions and its holds from the last 30 days the reader may read: the first page of each. */
+export const ruleHistoryQuery = (id: string) =>
+  queryOptions({
+    queryKey: ['rules', 'history', id],
+    queryFn: ({ signal }) => api.get<RuleHistory>(`/api/v2/rules/${enc(id)}/history`, { signal }),
+  });
+
+/** The next page of a rule's versions or holds, from its cursor. */
+export const ruleHistoryMore = (id: string, part: 'versions' | 'holds', cursor: string) =>
+  api.get<RuleHistory>(`/api/v2/rules/${enc(id)}/history?${part}_cursor=${enc(cursor)}`);
+
+/** The constitution at the root of Rules: the recorded doc (GET /rules/counts), never whatever sits at its path. */
+export const constitutionQuery = queryOptions({
+  queryKey: ['rules', 'constitution'],
+  queryFn: async ({ signal }) => (await api.get<{ constitution?: { id: string; title: string } | null }>('/api/v2/rules/counts', { signal })).constitution ?? null,
+  ...quiet,
+});
+
+/** What makes a task a clerk's (backend/org_rules.py MAKE_LABEL). */
+export const MAKE_LABEL = 'make-rule';
+
+/** "Make this a rule": a normal task (POST /api/v2/tasks, every check a filed task passes) for the Rules page's owner,
+    labelled for its clerk skill, private to the one who asks and the owner, naming the constitution to read. `tico rules
+    make` files the same (clients/commands/rules.py make_task). */
+export async function makeRule(text: string): Promise<{ task_id: string }> {
+  const owner = (await queryClient.ensureQueryData(pageOwnersQuery)).rules?.bot;
+  if (!owner) throw Object.assign(new Error('The Rules page has no owner to draft it'), { code: 'counsel_off: The Rules page has no owner to draft it' });
+  const law = await queryClient.ensureQueryData(constitutionQuery);
+  const read = law ? ` The constitution is doc ${law.id}: read it with \`tico doc read ${law.id}\`.` : '';
+  const body = {
+    title: `Make this a rule: ${text.split(/\s+/).join(' ').slice(0, 150)}`,
+    body: `Make these words into one rule with the clerk-a-rule skill.${read}\n\nThe words:\n${text}`,
+    owner,
+    labels: [MAKE_LABEL],
+    private: true,
+  };
+  const made = await write<{ task: { id: string } }>({
+    key: [orgRulesQuery('suggested').queryKey],
+    optimistic: (cur: unknown) => cur,
+    send: (idempotencyKey) => api.post<{ task: { id: string } }>('/api/v2/tasks', body, { idempotencyKey }),
+  });
+  return { task_id: made.task.id };
+}
 
 export interface StageRules {
   items: StageRule[];

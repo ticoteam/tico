@@ -7,7 +7,21 @@ import { ActionsRoot } from '@/actions';
 import { queryClient } from '@/data';
 import { pipelinesQuery } from '@/features/tasks/exports';
 import { validateRulesSearch } from './load';
-import { dueQuery, holdsQuery, orgRulesQuery, reachQuery, routinesQuery, ruleGroupsQuery, ruleSourcesQuery, stageRulesQuery, teamsQuery, type StageRules } from './queries';
+import {
+  constitutionQuery,
+  dueQuery,
+  pageOwnersQuery,
+  holdsQuery,
+  orgRulesQuery,
+  reachQuery,
+  routinesQuery,
+  ruleGroupsQuery,
+  ruleHistoryQuery,
+  ruleSourcesQuery,
+  stageRulesQuery,
+  teamsQuery,
+  type StageRules,
+} from './queries';
 import { RulesPage } from './RulesPage';
 import { StageRules as StageRulesList } from './StageRules';
 import type { OrgRule, Reach, Routine, StageRule } from './types';
@@ -198,6 +212,62 @@ describe('Rules: the page and Company', () => {
     expect(sent[0]!.body).toMatchObject({ version: 4, text: 'Ship only from main, always', who: { groups: ['g1'], people: ['ann'] } });
     expect(sent[0]!.body).not.toHaveProperty('with');
     expect(sent[0]!.body).not.toHaveProperty('description');
+  });
+});
+
+describe('Rules: checked exactly, history, the constitution and the clerk', () => {
+  it('a rule with a typed check says Checked exactly, then its holds and its versions, each continuing on More', async () => {
+    const sent = record((url) =>
+      url.includes('/history?versions_cursor=')
+        ? ok({ versions: [{ id: 'a1', created_at: '2026-11-19T10:00:00Z', actor: 'bot:rel', before: null, after: { status: 'suggested', version: 1 } }], versions_next: null, holds: [], holds_next: null })
+        : nothing(),
+    );
+    company([org({ id: 'o7', text: 'Refunds over $100 go to Ben first', exact_check: { kind: 'max_usd', action: 'refund', field: 'amount_usd', max_usd: 100 } })]);
+    queryClient.setQueryData(ruleHistoryQuery('o7').queryKey, {
+      versions: [
+        { id: 'a2', created_at: '2026-11-20T10:00:00Z', actor: 'human:ann', before: { text: 'Refunds go to Ben', status: 'active', version: 1 }, after: { text: 'Refunds over $100 go to Ben first', status: 'active', version: 2 } },
+      ],
+      versions_next: '2026-11-20T10:00:00Z|a2',
+      holds: [{ id: 'h1', state: 'held', created_at: '2026-11-20T11:00:00Z', author: 'bot:rel', rules: [{ id: 'o7' }], to: ['Ann Lee'] }],
+      holds_next: null,
+    });
+    show('/company/rules?panel=org:o7');
+    const panel = await screen.findByRole('complementary', { name: 'Rule' });
+    expect(within(panel).getByRole('heading', { name: 'Checked exactly' })).toBeTruthy();
+    expect(within(panel).getByText('refund: amount_usd at most $100')).toBeTruthy();
+    const days = within(panel).getByRole('region', { name: 'Last 30 days' });
+    expect(within(days).getByTitle('Ann Lee')).toBeTruthy();
+    expect(within(days).queryByRole('button', { name: 'More' })).toBeNull();
+    const versions = within(panel).getByRole('region', { name: 'Versions' });
+    expect(within(versions).getAllByText(/Changed words|Suggested/).map((e) => e.textContent)).toEqual(['Changed words']);
+    fireEvent.click(within(versions).getByRole('button', { name: 'More' }));
+    await waitFor(() => expect(within(versions).getAllByText(/Changed words|Suggested/).map((e) => e.textContent)).toEqual(['Changed words', 'Suggested']));
+    expect(sent.reads.some((u) => u.endsWith('/api/v2/rules/o7/history?versions_cursor=2026-11-20T10%3A00%3A00Z%7Ca2'))).toBe(true);
+    expect(within(versions).queryByRole('button', { name: 'More' })).toBeNull();
+  });
+
+  it('the constitution heads Company and opens its doc; Make this a rule files a normal task for the Rules owner', async () => {
+    const sent = record((url, method) => (method === 'POST' && url.endsWith('/api/v2/tasks') ? ok({ task: { id: 't9' } }) : nothing()));
+    company([]);
+    queryClient.setQueryData(constitutionQuery.queryKey, () => ({ id: 'doc-1', title: 'Constitution', locked: true }));
+    queryClient.setQueryData(pageOwnersQuery.queryKey, { rules: { bot: 'bot:rules-owner' } });
+    show('/company/rules');
+    expect(href(await screen.findByTitle('Constitution'))).toBe('/library/doc-1');
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Make this a rule' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Make this a rule' });
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Rule' }), { target: { value: '  Refunds over $100 go to Ben first ' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]!.body).toEqual({
+      title: 'Make this a rule: Refunds over $100 go to Ben first',
+      body: 'Make these words into one rule with the clerk-a-rule skill. The constitution is doc doc-1: read it with `tico doc read doc-1`.\n\nThe words:\nRefunds over $100 go to Ben first',
+      owner: 'bot:rules-owner',
+      labels: ['make-rule'],
+      private: true,
+    });
+    const done = await screen.findByRole('dialog', { name: 'Make this a rule' });
+    expect(href(await within(done).findByRole('link', { name: 'Open task' }))).toBe('/task/t9');
   });
 });
 
@@ -413,6 +483,25 @@ describe('Rules: Suggested', () => {
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Set aside' }));
     await waitFor(() => expect(sent).toHaveLength(3));
     expect(sent[2]!.url).toContain('/api/v2/rules/o9/skip');
+  });
+
+  it('a clerk’s draft is not added here: Open task goes to its task, where its OK adds it', async () => {
+    const sent = record();
+    queryClient.setQueryData(orgRulesQuery('suggested').queryKey, [
+      org({ id: 'o6', status: 'suggested', text: 'Refunds over $100 go to Ben first', bound: true, clerk_task: 't5' }),
+      // a clerk's draft on a task this reader cannot open: no Add, and nothing names the task
+      org({ id: 'o5', status: 'suggested', text: 'Mail only the partner domains', bound: true, clerk_task: null }),
+    ]);
+    stageRules([], 'suggested');
+    const router = show('/company/rules?tab=suggested');
+    const row = await screen.findByTitle('Refunds over $100 go to Ben first');
+    expect(within(row).queryByRole('button', { name: 'Add' })).toBeNull();
+    const hidden = screen.getByTitle('Mail only the partner domains');
+    expect(within(hidden).queryByRole('button', { name: 'Add' })).toBeNull();
+    expect(within(hidden).queryByRole('button', { name: 'Open task' })).toBeNull();
+    fireEvent.click(within(row).getByRole('button', { name: 'Open task' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/task/t5'));
+    expect(sent).toHaveLength(0);
   });
 
   it('a suggested change to a stage rule says what it changes @s524', async () => {

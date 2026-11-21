@@ -52,6 +52,14 @@ RULE_WHERE = {
 }
 
 
+EXACT_CHECK = {
+    "type": "object",
+    "description": "A typed check, checked exactly: {kind: allow_list, action, field, values} (the field's value, or each "
+    "of a list, is one of the values) or {kind: max_usd, action, field, max_usd} (the field is at most that many "
+    "dollars). Shown as Checked exactly; on edit, {} takes it off",
+}
+
+
 STAGE = "sr_"  # a stage rule's id starts with it (backend/stage_rules.py); an org rule's never does
 STAGE_FIELDS = {
     "name": _s("Stage rule: its name"),
@@ -260,6 +268,7 @@ def rules_ask(api, args):
         "if_broken": {"type": "string", "enum": ["block", "escalate", "warn"]},
         "where": RULE_WHERE,
         "reviewer": _s("A person who reviews outputs under it"),
+        "exact_check": EXACT_CHECK,
         "on_behalf_of": ASKED,
         **STAGE_FIELDS,
     },
@@ -284,6 +293,7 @@ def rules_add(api, args):
                 "cite",
                 "if_broken",
                 "reviewer",
+                "exact_check",
             )
         }
     )
@@ -306,6 +316,7 @@ def rules_add(api, args):
         "where": RULE_WHERE,
         "if_broken": {"type": "string", "enum": ["block", "escalate", "warn"]},
         "reviewer": _s("A reviewer"),
+        "exact_check": EXACT_CHECK,
         **STAGE_FIELDS,
     },
     required=("id", "version"),
@@ -318,10 +329,86 @@ def rules_edit(api, args):
     body = _present(
         {
             k: args.get(k)
-            for k in ("version", "text", "description", "who", "with", "where", "source_id", "if_broken", "reviewer")
+            for k in (
+                "version",
+                "text",
+                "description",
+                "who",
+                "with",
+                "where",
+                "source_id",
+                "if_broken",
+                "reviewer",
+                "exact_check",
+            )
         }
     )
     return _as_person(api).post(f"rules/{args['id']}", body, key=_key(args))
+
+
+@tool(
+    "tico_rules_history",
+    "One org rule's history: its versions, newest first, and the holds of it from the last 30 days you may read, each "
+    "a page: pass versions_next as versions_cursor, or holds_next as holds_cursor, for the rest.",
+    {
+        "id": _s("The rule's id"),
+        "versions_cursor": _s("versions_next from the last page"),
+        "holds_cursor": _s("holds_next from the last page"),
+    },
+    required=("id",),
+)
+def rules_history(api, args):
+    query = _present({"versions_cursor": args.get("versions_cursor"), "holds_cursor": args.get("holds_cursor")})
+    return _as_person(api).get(f"rules/{args['id']}/history", **query)
+
+
+@tool(
+    "tico_rules_make",
+    "Make this a rule: your words (an answer, an incident, a refusal) become a normal task for the Rules page's owner, "
+    "who drafts one rule and its typed check, checks it against the constitution and the rules in force, and asks one "
+    "OK. Filed as you, through the normal task route.",
+    {"text": _s("What should become a rule, in your own words")},
+    required=("text",),
+    writes=True,
+)
+def rules_make(api, args):
+    owner = ((api.get("page-owners").get("pages") or {}).get("rules") or {}).get("bot")
+    if not owner:
+        raise APIError("counsel_off", "The Rules page has no owner to draft it", 409)
+    law = (api.get("rules/counts") or {}).get("constitution") or {}
+    return api.post("tasks", make_task(args["text"], owner, law.get("id")), key=_key(args))
+
+
+MAKE_LABEL = "make-rule"  # backend/org_rules.py MAKE_LABEL: what makes a task a clerk's
+
+
+def make_task(text, owner, constitution=None):
+    """A "Make this a rule" task as `POST /api/v2/tasks` takes it: the words, the Rules page's owner, its label, private
+    to the one who asks and the owner. The web app files the same (web/src/features/routines/queries.ts makeRule)."""
+    words = " ".join(str(text).split())
+    law = (
+        f" The constitution is doc {constitution}: read it with `tico doc read {constitution}`." if constitution else ""
+    )
+    body = f"Make these words into one rule with the clerk-a-rule skill.{law}\n\nThe words:\n{text}"
+    return {
+        "title": "Make this a rule: " + words[:150],
+        "body": body,
+        "owner": owner,
+        "labels": [MAKE_LABEL],
+        "private": True,
+    }
+
+
+@tool(
+    "tico_rules_ok",
+    "Ask one person to OK your suggested rule exactly as it is, on the task it was made for (its requester, else the "
+    "owner or an Admin). Their OK adds it as them. Ask again after a change.",
+    {"id": _s("Your suggestion's id"), "task": _s("The task it was made for")},
+    required=("id", "task"),
+    writes=True,
+)
+def rules_ok(api, args):
+    return api.post(f"rules/{args['id']}/ok", {"task_id": args["task"]}, key=_key(args))
 
 
 @tool(
@@ -602,6 +689,7 @@ CITE = (
     Arg("file_version", "--version", type=int, metavar="N", into="cite", part="version"),
 )
 FROM = Arg("source_id", "--from", metavar="SOURCE")
+EXACT = Arg("exact_check", "--exact", type=json.loads, metavar="JSON")
 STAGE_JSON = (Arg("timer", type=json.loads, metavar="JSON"), Arg("cond", "--if", type=json.loads, metavar="JSON"))
 DAY = "YYYY-MM-DD"
 
@@ -640,7 +728,16 @@ CLI = (
     Command(
         "rules add",
         "add a rule: a bot's is a suggestion; only owners and admins add Everyone",
-        args=(Arg("kind", positional=False), Arg("text", positional=False), FROM, *WHO, *WITH, *CITE, *STAGE_JSON),
+        args=(
+            Arg("kind", positional=False),
+            Arg("text", positional=False),
+            FROM,
+            EXACT,
+            *WHO,
+            *WITH,
+            *CITE,
+            *STAGE_JSON,
+        ),
         convert=_add,
         example="tico rules add --kind stage --name 'Owner on the team' --pipeline engineering --stages engineering-build "
         "--event owner_changes --then block",
@@ -648,7 +745,7 @@ CLI = (
     Command(
         "rules edit",
         "change a rule, only the fields given, against the version you read",
-        args=(Arg("version", positional=False), FROM, *WHO, *WITH, *STAGE_JSON),
+        args=(Arg("version", positional=False), FROM, EXACT, *WHO, *WITH, *STAGE_JSON),
         convert=_who_with,
         example="tico rules edit r1 --version 2 --text 'Reply within four hours'",
     ),
@@ -660,6 +757,22 @@ CLI = (
         example="tico rules accept r1 --who Support",
     ),
     Command("rules skip", "set a suggestion aside", example="tico rules skip r1"),
+    Command(
+        "rules history",
+        "one rule's versions and its holds from the last 30 days, each paged by its own cursor",
+        example="tico rules history r1 --versions-cursor '2026-11-20T10:00:00Z|a2'",
+    ),
+    Command(
+        "rules make",
+        "make this a rule: a task for the Rules page's owner, who drafts it, checks it and asks one OK",
+        example="tico rules make 'Refunds over $100 need Ben'",
+    ),
+    Command(
+        "rules ok",
+        "ask one person to OK your suggestion exactly as it is, on its task",
+        args=(Arg("task", positional=False),),
+        example="tico rules ok r1 --task T1",
+    ),
     Command(
         "rules retire",
         "retire a rule in force; its due dates come back; a bot's retire of a stage rule is a suggestion",

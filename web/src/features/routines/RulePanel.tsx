@@ -21,9 +21,9 @@ import { RULES, type RuleTab } from './actions';
 import { PartyPick, useNamer } from './CompanyRules';
 import { DuePanel } from './DuePanel';
 import { Face, press, RemoveItem, useConfirmRemove, useName, Verb, Word } from './parts';
-import { holdsQuery, orgRulesQuery, partiesOf, ruleSourcesQuery, stageRulesQuery, teamsQuery } from './queries';
-import type { OrgRule, RuleHold, StageRule } from './types';
-import { agentWords, BROKEN, cap, dayWords, STAGE_EVENTS, STAGE_THENS, STAGE_TIMERS, stageParts } from './words';
+import { orgRulesQuery, partiesOf, ruleHistoryMore, ruleHistoryQuery, ruleSourcesQuery, stageRulesQuery, teamsQuery } from './queries';
+import type { OrgRule, RuleHold, RuleVersion, StageRule } from './types';
+import { agentWords, BROKEN, cap, dayWords, exactWords, STAGE_EVENTS, STAGE_THENS, STAGE_TIMERS, stageParts } from './words';
 
 /* One rule, as a panel (rules.js rulePanel): When, Check and Then as facts, then the tasks it holds. Edit turns the
    panel into the rule's editor; `org:new` and `stage:new` open the editor empty. */
@@ -102,6 +102,12 @@ function OrgView({ id, onClose }: { id: string; onClose: () => void }) {
           </blockquote>
         )}
       </section>
+      {r.exact_check && (
+        <section className="rail-sec">
+          <h3>Checked exactly</h3>
+          <p className="inst t-read">{exactWords(r.exact_check)}</p>
+        </section>
+      )}
       {(dues.length > 0 || (r.can_edit && !tmp)) && (
         <section className="rail-sec">
           <h3>
@@ -122,7 +128,7 @@ function OrgView({ id, onClose }: { id: string; onClose: () => void }) {
           {!!r.due_more && <p className="row-sub">{`${r.due_more} more`}</p>}
         </section>
       )}
-      {!tmp && <Holds id={r.id} />}
+      {!tmp && <History id={r.id} />}
       {remove.node}
     </SidePanel>
   );
@@ -435,22 +441,80 @@ function StageEditor({ rule, onDone, onClose }: { rule?: StageRule; onDone: () =
   );
 }
 
-// ---------------------------------------------------------------- what a rule holds
+// ---------------------------------------------------------------- a rule's history
 
 /** A hold's state, as its row's mark says it: held until its reviewer sends it anyway or keeps it blocked. */
 const HOLD_MARK: Record<string, string> = { held: 'Waits on you', sent: 'Sent anyway', kept: 'Kept blocked' };
 
-function Holds({ id }: { id: string }) {
-  const q = useQuery(holdsQuery);
-  const list = (q.data ?? []).filter((h) => h.rules.some((r) => r.id === id));
-  if (!list.length) return null;
+/** What one version changed, in a word or two. */
+function versionWords(v: RuleVersion): string {
+  const a = v.after;
+  const b = v.before;
+  if (!b) return a?.status === 'suggested' ? 'Suggested' : 'Added';
+  if (!a) return 'Removed';
+  if (b.status !== a.status) return a.status === 'active' ? 'Added' : a.status === 'retired' ? (b.status === 'suggested' ? 'Set aside' : 'Removed') : 'Changed';
+  const changed: [keyof OrgRule, string][] = [
+    ['text', 'Words'],
+    ['who', 'Who'],
+    ['if_broken', 'If broken'],
+    ['exact_check', 'Checked exactly'],
+  ];
+  const said = changed.filter(([k]) => JSON.stringify(b[k] ?? null) !== JSON.stringify(a[k] ?? null)).map(([, w]) => w);
+  return said.length ? `Changed ${said.join(', ').toLowerCase()}` : 'Changed';
+}
+
+/** Its holds from the last 30 days the reader may read, then its versions, newest first; each continues on More. */
+function History({ id }: { id: string }) {
+  const q = useQuery(ruleHistoryQuery(id));
+  // later pages, read on More: each list keeps its own cursor
+  const [more, setMore] = useState<{ versions: RuleVersion[]; holds: RuleHold[]; versionsNext?: string | null; holdsNext?: string | null }>({ versions: [], holds: [] });
+  const [busy, setBusy] = useState(false);
+  if (!q.data) return null;
+  const versions = [...q.data.versions, ...more.versions];
+  const holds = [...q.data.holds, ...more.holds];
+  const versionsNext = more.versionsNext === undefined ? q.data.versions_next : more.versionsNext;
+  const holdsNext = more.holdsNext === undefined ? q.data.holds_next : more.holdsNext;
+  const next = async (part: 'versions' | 'holds', cursor: string) => {
+    setBusy(true);
+    try {
+      const r = await ruleHistoryMore(id, part, cursor);
+      setMore((m) =>
+        part === 'versions' ? { ...m, versions: [...m.versions, ...r.versions], versionsNext: r.versions_next ?? null } : { ...m, holds: [...m.holds, ...r.holds], holdsNext: r.holds_next ?? null },
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
-    <section className="rail-sec">
-      <h3>Holds</h3>
-      {list.map((h) => (
-        <HoldRow key={h.id} h={h} />
-      ))}
-    </section>
+    <>
+      <section className="rail-sec" aria-label="Last 30 days">
+        <h3>Last 30 days</h3>
+        {holds.length ? holds.map((h) => <HoldRow key={h.id} h={h} />) : <p className="row-sub">No holds</p>}
+        {holdsNext && (
+          <Button variant="quiet" busy={busy} onClick={() => void next('holds', holdsNext)}>
+            More
+          </Button>
+        )}
+      </section>
+      {versions.length > 0 && (
+        <section className="rail-sec" aria-label="Versions">
+          <h3>Versions</h3>
+          {versions.map((v) => (
+            <Row key={v.id} className="hold" title={versionWords(v)} target={`version:${v.id}`}>
+              <span className="hold-mark">{`v${v.after?.version ?? v.before?.version ?? ''}`}</span>
+              <span className="row-title">{versionWords(v)}</span>
+              <Face id={v.actor} />
+              <Ago at={v.created_at} className="row-age" />
+            </Row>
+          ))}
+          {versionsNext && (
+            <Button variant="quiet" busy={busy} onClick={() => void next('versions', versionsNext)}>
+              More
+            </Button>
+          )}
+        </section>
+      )}
+    </>
   );
 }
 

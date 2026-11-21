@@ -22,6 +22,7 @@ import {
   decideStageRule,
   discardVersion,
   hooksQuery,
+  makeRule,
   orgRulesQuery,
   partiesOf,
   readDocument,
@@ -1027,6 +1028,19 @@ export const readDocumentAction = defineAction({
     return said(readDocument({ ...(i.file ? { file_id: i.file } : { url: i.url }), note: i.note?.trim() ?? '', source_id: i.source.trim(), ...(i.kind ? { kind: i.kind } : {}) }));
   },
   did: (_i, out) => (out?.screening === 'hold' ? 'Screening held it' : 'Reading it'),
+  target: (_i, out) => (out ? { kind: 'task', id: out.task_id } : null),
+});
+
+// ---------------------------------------------------------------- rules: make this a rule
+
+export const makeRuleAction = defineAction({
+  id: 'rules.make',
+  title: 'Make this a rule',
+  kind: 'change',
+  // the words to turn into a rule: the Rules page's owner drafts it, checks it and asks one OK
+  input: z.strictObject({ text: z.string().check(z.minLength(3), z.maxLength(2000)) }),
+  run: (_ctx, i) => said(makeRule(i.text.trim())),
+  did: () => 'Sent to the Rules owner',
   target: (_i, out) => (out ? { kind: 'task', id: out.task_id } : null),
 });
 

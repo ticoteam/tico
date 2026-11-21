@@ -15,6 +15,10 @@ and answers "can I...?" from the rules in force (docs/dev/rules-plan.md §2, §5
   cites only the exact (file, version) it was asked to read, named in the cite, and the quote must appear in that
   version's normalized text. A quote that does not is dropped (the response says so, and `rules.quote_dropped` counts
   it), never stored. Only the Rules Owner and a person cite; no other bot can.
+- "Make this a rule" is a normal task (`POST /api/v2/tasks`, label org_rules.MAKE_LABEL) for the Rules page's owner,
+  who runs the clerk skill (templates/catalog/_shared/.claude/skills/clerk-a-rule): it reads the constitution (the one
+  doc outside its task it may read, `docs.constitution_id`), drafts the rule and its typed check, checks them against
+  the constitution and the rules in force, suggests it and asks one OK (`POST /api/v2/rules/{id}/ok`, org_rules.ask_ok).
 - `POST /api/v2/rules/ask` answers "can I...?" with the active rules that share words with the question, at once, and
   opens a private Rules Owner task for the full answer. Every answer carries the one line that it is not legal advice.
 
@@ -759,6 +763,8 @@ COUNSEL_ROUTES = tuple(
         (GET, r"rules"),
         (GET, r"rules/(?!counts$|due$|stats$)[^/]+"),
         (WRITE, r"rules"),
+        (WRITE, r"rules/[^/]+/ok"),  # the clerk's one OK ask on its own suggestion (org_rules.ask_ok)
+        (GET, r"docs/[^/]+"),  # the constitution alone (read_refused)
         (GET | WRITE, r"tasks/(?!(?:flow|labels|stuck|dry-run)$)[^/]+"),  # one task, never a collection route
         (WRITE, r"tasks/[^/]+/comments"),
         (GET, r"files/[^/]+"),
@@ -804,6 +810,11 @@ def read_refused(store, auth, who, method, path, query):
     kind, ident, rest = parts[0], (parts[1] if len(parts) > 1 else ""), parts[2:]
     if kind in ("attempts", "turns"):  # `turns` is an older client's path for a run
         return READ_SCOPE if ident != who.attempt_id else None
+    if kind == "docs":  # the constitution, which a clerk checks drafts against; no other doc
+        from . import docs
+
+        with store.read() as c:
+            return None if ident and ident == docs.constitution_id(c) and not rest else READ_SCOPE
     if kind not in ("tasks", "files"):
         return None
     from .task_privacy import carried_tasks

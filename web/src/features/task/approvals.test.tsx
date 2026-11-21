@@ -729,6 +729,70 @@ describe('the decision', () => {
   });
 });
 
+describe('a rule to add', () => {
+  const bound = {
+    rule: 'o7',
+    version: 2,
+    text: 'Refunds over $100 go to Ben first.',
+    who: { everyone: false, all_bots: false, groups: [], bots: [{ id: 'ops', name: 'Ops' }], people: [] },
+    with: { groups: [], bots: [], people: [{ id: 'ben', name: 'Ben' }] },
+    where: [],
+    if_broken: 'escalate',
+    reviewer: { id: 'ben', name: 'Ben' },
+    exact_check: { kind: 'max_usd', action: 'refund', field: 'amount_usd', max_usd: 100 },
+  };
+  const ruleTask = () => task({ title: 'Make this a rule: refunds', to_leave: [req({ line: 'Approve this rule', shows: ['rule:o7'] })] });
+
+  it('shows the bound rule and every field that enforces it, and Approve sends what was shown @approvals', async () => {
+    shown = ruleTask();
+    reply = (url) => (url.endsWith('/api/v2/oks/r1') ? { body: { requirement_id: 'r1', subject: 'rule:o7', content: bound, shown_hash: 'h-rule', standing: 'waiting' } } : null);
+    show(<TaskChat task="12" />, '/tasks/p1/12');
+    const box = await decision();
+    expect(await within(box).findByText('Refunds over $100 go to Ben first.')).toBeTruthy();
+    const facts = [...within(box).getByRole('group', { name: 'The rule' }).querySelectorAll('.fact')].map((f) => [f.firstElementChild?.textContent, f.lastElementChild?.textContent]);
+    expect(facts).toEqual([
+      ['Who', 'Ops'],
+      ['With', 'Ben'],
+      ['Where', 'Everywhere'],
+      ['If broken', 'Ask first'],
+      ['Ask', 'Ben'],
+      ['Checked exactly', 'refund: amount_usd at most $100'],
+    ]);
+    fireEvent.click(await ready(box));
+    await waitFor(() => expect(sent.at(-1)?.url).toBe('/api/v2/tasks/t1/asks/r1/ok'));
+    expect(sent.at(-1)?.body).toMatchObject({ shown_hash: 'h-rule' });
+  });
+
+  it('shows Outside editions beside Everyone, and each allowed value as its own item @approvals', async () => {
+    shown = ruleTask();
+    const wide = {
+      ...bound,
+      if_broken: 'block', // a Stop rule with a named reviewer: its holds still go to them
+      who: { ...bound.who, everyone: true, outside_editions: true },
+      exact_check: { kind: 'allow_list', action: 'mail', field: 'to', values: ['a.example, b.example', 'c.example'] },
+    };
+    reply = (url) => (url.endsWith('/api/v2/oks/r1') ? { body: { requirement_id: 'r1', subject: 'rule:o7', content: wide, shown_hash: 'h-rule', standing: 'waiting' } } : null);
+    show(<TaskChat task="12" />, '/tasks/p1/12');
+    const box = await decision();
+    const facts = await within(box).findByRole('group', { name: 'The rule' });
+    expect(within(facts).getByText('Everyone, Outside editions, Ops')).toBeTruthy();
+    expect(within(facts).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['a.example, b.example', 'c.example']);
+    const pairs = [...facts.querySelectorAll('.fact')].map((f) => [f.firstElementChild?.textContent, f.lastElementChild?.textContent]);
+    expect(pairs).toContainEqual(['If broken', 'Stop']);
+    expect(pairs).toContainEqual(['Ask', 'Ben']);
+  });
+
+  it('keeps Approve off while a field that enforces the rule is missing from what is shown @approvals', async () => {
+    shown = ruleTask();
+    const { with: _w, ...partial } = bound;
+    reply = (url) => (url.endsWith('/api/v2/oks/r1') ? { body: { requirement_id: 'r1', subject: 'rule:o7', content: partial, shown_hash: 'h-rule', standing: 'waiting' } } : null);
+    show(<TaskChat task="12" />, '/tasks/p1/12');
+    const box = await decision();
+    expect(await within(box).findByText('Part of it did not load')).toBeTruthy();
+    expect(within(box).getByRole('button', { name: 'Approve' })).toHaveProperty('disabled', true);
+  });
+});
+
 describe('an email waiting to send', () => {
   const titled = 'Send: Re: Notice of claim → Dana Ruiz <dana@example.test> +1';
 

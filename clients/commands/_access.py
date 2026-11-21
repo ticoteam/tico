@@ -247,6 +247,11 @@ AUDIENCE = {
     # A bot checks its own drafts and appeals its own holds; a person's writes are never checked.
     "tico_rules_check": BOTS,
     "tico_rules_appeal": BOTS,
+    # Whoever suggested a rule asks its OK: a bot (a person adds a rule directly).
+    "tico_rules_ok": BOTS,
+    # "Make this a rule" is a normal task its caller files as itself: a person, or an agent on its own run. The Assistant
+    # and BotOps file as someone else, which the task route refuses here: they are not offered it.
+    "tico_rules_make": PEOPLE + ("bot", "agent"),
     "tico_rules_withdraw": PEOPLE + BOTS,
     # A bot does not unsnooze (docs/dev/pipelines-v3-cutover.md, Bot commands): a person brings a task back.
     "tico_task_unsnooze": HUMANS_AND_ASSISTANT,
@@ -325,6 +330,8 @@ COUNSEL_TOOLS = frozenset(
         "tico_rules_list",
         "tico_rules_get",
         "tico_rules_add",
+        "tico_rules_ok",
+        "tico_doc_read",
         "tico_file_read",
         "tico_task_comment",
         "tico_task_close",
@@ -468,6 +475,7 @@ ASSISTANT_TOOLS = frozenset(
         "tico_rules_get",
         "tico_rules_read",
         "tico_rules_ask",
+        "tico_rules_history",
         "tico_settings_find",
         "tico_settings_show",
         "tico_settings_set",

@@ -1207,7 +1207,8 @@ class Onboarding:
     def complete_company(self, c, failed=None):
         """What makes a set-up company whole once its bots can run: the built-ins it is missing (`_ensure_builtin`: the
         Librarian, the Strategy Owner, the General Manager, the Rules Owner, the Design Owner, the Tools Owner, and the Finance Owner
-        once Finance is set up), the Assistant's routines it never had, General's manager once the General Manager exists
+        once Finance is set up), the constitution at the root of Rules (org_rules.ensure_constitution), the Assistant's
+        routines it never had, General's manager once the General Manager exists
         (pipeline_settings.ensure_presets), BotOps' daily "Sweep stuck tasks" once BotOps is active, and the models of
         the bots that follow the company's plans (plan_models.follow). Every start
         runs it (start_jobs), and so do the end of every first run (complete(), a company file's import) and a
@@ -1216,7 +1217,7 @@ class Onboarding:
 
         Each step runs in its own savepoint. `failed(step, exc)` takes a step's failure and the next step runs; with no
         `failed` the failure is raised (the caller's transaction then keeps nothing)."""
-        from . import bookkeeper, pipeline_settings, plan_models
+        from . import bookkeeper, org_rules, pipeline_settings, plan_models
 
         # In order: a later step reads a bot an earlier one makes (General's manager is the General Manager).
         steps = (
@@ -1224,6 +1225,7 @@ class Onboarding:
             ("goal_manager", self.ensure_goal_manager),
             ("general_manager", self.ensure_general_manager),
             ("counsel", self.ensure_counsel),
+            ("constitution", lambda c: org_rules.ensure_constitution(c) if load(c)["completed"] else None),
             ("brand_owner", self.ensure_brand_owner),
             ("tools_owner", self.ensure_tools_owner),
             ("bookkeeper", lambda c: bookkeeper.ensure(c, self, self.auth)),

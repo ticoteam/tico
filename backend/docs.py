@@ -47,6 +47,28 @@ STOP = frozenset(
 )
 
 
+# The constitution (backend/org_rules.py ensure_constitution): its doc's id is recorded under CONSTITUTION_KEY and it is
+# read by that id, never by its path. Its path is reserved: no one but Tico puts another doc there.
+CONSTITUTION_PATH = "rules/constitution.md"
+CONSTITUTION_KEY = "rules.constitution"
+
+
+def constitution_id(c):
+    """The recorded constitution's doc id, or None."""
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (CONSTITUTION_KEY,)).fetchone()
+    return (json.loads(row[0]) or {}).get("doc") if row else None
+
+
+def reserved(c, path, doc_id, actor):
+    """Refuse a doc at the constitution's path unless Tico puts it there or it is the recorded constitution itself;
+    before one is recorded, the path is kept for it all the same."""
+    if actor == H.TICO_ACTOR or str(path).casefold() != CONSTITUTION_PATH:
+        return
+    recorded = constitution_id(c)
+    if recorded is None or doc_id != recorded:
+        raise Problem("path_taken", "That path is kept for the constitution", 409)
+
+
 # ------------------------------------------------------------------ list cursors
 def list_cursor(row):
     """Where the next page starts: after this row in `ORDER BY path COLLATE NOCASE, id`."""
@@ -387,6 +409,8 @@ def refresh_generated_docs(c):
     for row in c.execute(
         "SELECT rowid AS rid,* FROM docs WHERE archived=0 AND (path GLOB '_librarian/*' OR path='FAQ.md')"
     ).fetchall():
+        if row["id"] == constitution_id(c):
+            continue  # the constitution is people's, wherever a person moved it
         title = titles.get(row["path"], {}).get(row["title"], row["title"])
         text = H.librarian_text(row["body"]) if row["updated_by_id"] == "bot:librarian" else row["body"]
         if (title, text) == (row["title"], row["body"]):
@@ -637,6 +661,12 @@ class Docs:
     def admin(self, who):
         return who.role in ("owner", "human") and self.auth.bot_admin(who)
 
+    def locker(self, who):
+        """Who locks a doc, or changes or restores a locked one: an owner or bot administrator by their own hand. Their
+        Assistant or BotOps acting for them unconfirmed is an agent, and a locked doc (the constitution) is people's."""
+        acting = who.via in ("assistant", "botops") and not who.confirmed
+        return self.admin(who) and not acting
+
     # -------------------------------------------------------------- views
     def doc_view(self, c, row, body=True, names=None):
         names = names if names is not None else label_names(c, [row["created_by_id"], row["updated_by_id"]])
@@ -724,6 +754,7 @@ class Docs:
             if path
             else self.free_path(c, slugify(str(title).casefold(), limit=80, fallback="untitled") + ".md", unique=True)
         )
+        reserved(c, path, None, actor)
         if actor == "bot:librarian":
             body = H.librarian_text(body)
         now, doc_id = H.now(), "doc-" + secrets.token_hex(6)
@@ -764,9 +795,10 @@ class Docs:
         def work(c):
             row = self.get_row(c, doc_id)
             locking = body.locked is not None and bool(body.locked) != bool(row["locked"])
-            if locking and not self.admin(who):
+            if locking and not self.locker(who):
                 raise Problem("forbidden", "Only an owner or bot administrator can lock or unlock a doc", 403)
-            if row["locked"] and not self.admin(who):
+            if (row["locked"] or row["id"] == constitution_id(c)) and not self.locker(who):
+                # the constitution is people's even if someone unlocked it: by its recorded id, not only its lock
                 raise Problem("locked", "This doc is locked: only an owner or bot administrator can change it", 403)
             mine_only = body.own_version_only and row["updated_by_id"] != who.actor
             partial = body.body is not None and (body.section is not None or body.append)
@@ -797,6 +829,8 @@ class Docs:
                 text = H.librarian_text(text)
             archived = int(body.archived) if body.archived is not None else row["archived"]
             path = clean_path(body.path) if body.path is not None else row["path"]
+            if not archived:  # a doc that stays or becomes active at the reserved path is checked, moved or not
+                reserved(c, path, row["id"], who.actor)
             if not archived and (path.casefold() != row["path"].casefold() or row["archived"]):
                 path = self.free_path(c, path, own=row["id"])
             changed = (title, text, path, archived) != (row["title"], row["body"], row["path"], row["archived"])
@@ -852,8 +886,8 @@ class Docs:
     def remove_index_source(self, c, source, actor):
         """An archived source leaves the cached index in the same transaction."""
         row = c.execute("SELECT rowid AS rid,* FROM docs WHERE path='_librarian/index.md' AND archived=0").fetchone()
-        if not row or row["id"] == source["id"]:
-            return
+        if not row or row["id"] in (source["id"], constitution_id(c)):
+            return  # the constitution is people's, wherever a person moved it
         reused = c.execute(
             "SELECT 1 FROM docs WHERE path=? COLLATE NOCASE AND archived=0 AND id!=?", (source["path"], source["id"])
         ).fetchone()
@@ -928,7 +962,7 @@ class Docs:
 
         def work(c):
             row = self.get_row(c, doc_id)
-            if row["locked"] and not self.admin(who):
+            if (row["locked"] or row["id"] == constitution_id(c)) and not self.locker(who):
                 raise Problem("locked", "This doc is locked: only an owner or bot administrator can change it", 403)
             old = c.execute(
                 "SELECT * FROM doc_versions WHERE doc_id=? AND version=?", (doc_id, body.version)
@@ -942,6 +976,7 @@ class Docs:
                 path = row["path"]
             if row["archived"]:  # restoring an archived doc: its path may have been taken since
                 path = self.free_path(c, path, own=doc_id, unique=True)
+            reserved(c, path, doc_id, who.actor)  # a restore leaves it active where it lands
             if (old["title"], old["body"], path, 0) == (row["title"], row["body"], row["path"], row["archived"]):
                 return {"doc": self.doc_view(c, row)}
             c.execute(

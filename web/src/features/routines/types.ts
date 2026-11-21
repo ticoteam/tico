@@ -224,6 +224,30 @@ export interface OrgRule {
   updated_at?: string;
   suggested_by?: string | null;
   created_at?: string;
+  /** Checked exactly (backend/org_rules.py exact_check_in): an allow list or a dollar cap on one action. */
+  exact_check?: ExactCheck | null;
+  /** A clerk's draft: added only by its OK on its "Make this a rule" task, whose id only that task's readers get. */
+  bound?: boolean;
+  clerk_task?: string | null;
+}
+export type ExactCheck =
+  | { kind: 'allow_list'; action: string; field: string; values: string[] }
+  | { kind: 'max_usd'; action: string; field: string; max_usd: number };
+/** One version of a rule as the audit log keeps it: the rule before and after a change. */
+export interface RuleVersion {
+  id: string;
+  created_at: string;
+  actor: string;
+  before: Partial<OrgRule> | null;
+  after: Partial<OrgRule> | null;
+}
+/** A rule's history (GET /api/v2/rules/{id}/history): its versions, newest first, and its holds from the last 30 days,
+    each a page with its own cursor. */
+export interface RuleHistory {
+  versions: RuleVersion[];
+  versions_next?: string | null;
+  holds: RuleHold[];
+  holds_next?: string | null;
 }
 /** A stage rule: When (event, timer), If (cond, jev: the decision model's question), Then. */
 export interface StageRule {

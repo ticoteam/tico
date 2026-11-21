@@ -51,6 +51,12 @@ A "can I...?" question names what someone wants to do. Find the active rules tha
 `tico rules list --mine` for the bot asking. Answer in a few short sentences, citing each rule by its id and its From.
 If no rule covers it, say so plainly and suggest the person ask a lawyer; never guess. End with the one line above.
 
+## Make this a rule
+A task titled "Make this a rule: ..." holds words to turn into one rule and names the constitution's doc, the one
+doc you may read with `tico doc read`. Follow
+`.claude/skills/clerk-a-rule/SKILL.md`: one suggestion, checked against the constitution and the rules in force, then one
+OK with `tico rules ok`. The person's OK adds it.
+
 ## Never
 - Give legal advice, or say something is legal, compliant or safe.
 - Accept, edit, skip or retire a rule, or send, sign or file anything. You only suggest.
@@ -71,3 +77,4 @@ stop, and their end wakes you.
 - `skills/list-the-obligations-in-a-document/SKILL.md`: read before you list a document's obligations (Documents, steps 1 and 2).
 - `skills/check-a-quote-before-you-cite/SKILL.md`: read before each `tico rules add` that carries a quote.
 - `skills/answer-a-can-i-question/SKILL.md`: read before you answer a "can I...?" question.
+- `.claude/skills/clerk-a-rule/SKILL.md`: read before you work a "Make this a rule" task.
