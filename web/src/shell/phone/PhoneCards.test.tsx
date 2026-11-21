@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data';
+import { useCards } from '@/kit/Popover';
 import { arrangementFor } from '@/shell/arrangement';
 import { Frame } from '@/shell/Frame';
 import { Sheet } from '@/shell/Sheet';
@@ -133,6 +134,19 @@ describe('PhoneCards', () => {
     }
   });
 
+  // #4820: a page the frame draws knows it is on a phone from its first render, before the html attribute is written
+  it("gives the page the window's mode from its first render", () => {
+    width(390);
+    delete document.documentElement.dataset.layout;
+    const seen: boolean[] = [];
+    const Page = () => {
+      seen.push(useCards());
+      return null;
+    };
+    render(<Frame tico={<p>Tico</p>} menu={<p>Menu</p>} page={<Page />} arrangement="page" />);
+    expect(seen[0]).toBe(true);
+  });
+
   it('a chat that opens comes up as its own card', () => {
     const { rerender } = render(cards());
     rerender(cards({ chat: true }));
@@ -153,6 +167,14 @@ describe('PhoneCards', () => {
     fireEvent.click(screen.getByRole('link', { name: 'Approve' }));
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(document.querySelector('.phone')?.getAttribute('data-card')).toBe('none');
+  });
+
+  // #4820: a decision docked at the page's bottom sends the resting cards (the chat's lip, Tico's bar) off at once, so
+  // it is whole from its first frame; a card the person raises over it still moves as usual
+  it('a docked decision sends the resting cards below the screen without their spring', () => {
+    const resting = rule('.phone:has(>.pg [data-dock] .askcard)>.ly:not(.is-up):not(.is-behind)');
+    expect(resting).toContain('--ty:calc(100% + 48px)');
+    expect(resting).toContain('transition:none');
   });
 
   it("a page opened from Tico's card (a tracked task) tucks Tico, and Back brings it up again", async () => {

@@ -4,6 +4,7 @@ import { PhoneCards, type PhoneCardsProps } from '@/shell/phone';
 import { Dot } from '@/tico/dot';
 import { useArrangement } from './arrangement';
 import { Icon } from '@/kit/Icon';
+import { CardsContext } from '@/kit/Popover';
 import { C, foldOf, forwardFor, layout, modeFor, press, specOf, TICO_MARK, type Arrangement, type ArrangementSpec, type Saved, type SheetId, type SheetLayout } from './layout';
 import { keepOne, useSheetMemory, withFold, withWidth, withoutWidth } from './memory';
 import { SheetContext, type SheetControls } from './Sheet';
@@ -88,7 +89,8 @@ function useWindowMode() {
     window.addEventListener('resize', on);
     return () => window.removeEventListener('resize', on);
   }, []);
-  useEffect(() => {
+  // before the first paint: what reads it (useCards: a phone's dock, its sheets) draws the phone from the first frame
+  useLayoutEffect(() => {
     document.documentElement.dataset.layout = s.mode;
   }, [s.mode]);
   return s;
@@ -113,7 +115,17 @@ interface Placed {
 }
 
 function Sheets(p: FrameProps & { arr: Arrangement }) {
-  const { width, mode } = useWindowMode();
+  const win = useWindowMode();
+  // what the shell draws reads its mode in render (useCards), not the html attribute it writes after
+  return (
+    <CardsContext value={win.mode === 'cards'}>
+      <Drawn {...p} win={win} />
+    </CardsContext>
+  );
+}
+
+function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWindowMode> }) {
+  const { width, mode } = p.win;
   const [saved, update] = useSheetMemory();
   const [draft, setDraft] = useState<Saved | null>(null);
   /* the sheet opened by its edge, for this arrangement only */

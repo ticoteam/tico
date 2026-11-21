@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useLocation } from '@tanstack/react-router';
-import { useEffect, useState, useSyncExternalStore, type CSSProperties, type MouseEvent } from 'react';
+import { useEffect, useState, type CSSProperties, type MouseEvent } from 'react';
 import type { CalendarOccurrence, Call, GetConfigResponse } from '@/api/schema';
 import { refusal, run } from '@/actions';
 import { configQuery, meQuery, useActor, useDirectory, type Directory } from '@/data';
@@ -145,18 +145,8 @@ export function joinNow(o: CalendarOccurrence, e?: MouseEvent): boolean {
   return true;
 }
 
-const subscribeLayout = (f: () => void) => {
-  const o = new MutationObserver(f);
-  o.observe(document.documentElement, { attributes: true, attributeFilter: ['data-layout'] });
-  return () => o.disconnect();
-};
-/** A phone's cards (the shell sets html[data-layout]): the call is one card, the bar is small. */
-export const useCards = () =>
-  useSyncExternalStore(
-    subscribeLayout,
-    () => document.documentElement.dataset.layout === 'cards',
-    () => false,
-  );
+/** A phone's cards: the call is one card, the bar is small. */
+export { useCards } from '@/kit/Popover';
 
 /** Someone on a call as the faces draw them. `level` is their voice now, while they talk. */
 export interface InCall {

@@ -38,6 +38,8 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
 
 /* the framed body: the open page or Details, then the answer on a phone */
 .tv-view{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;position:relative}
+/* the answer holds the bottom from the first frame, under a page still loading too */
+.tv-view>.dock{margin-top:auto}
 /* a page's bones while it is read: a heading and lines, as the frame's page would sit */
 .tv-bones{display:grid;align-content:start;gap:var(--s-3);padding:var(--s-6)}
 
