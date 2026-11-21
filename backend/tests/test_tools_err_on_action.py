@@ -122,6 +122,37 @@ def test_the_tools_owner_defines_a_tool_from_the_catalog_only_never_an_address_o
     assert post(api, "api-tools", {"name": "Acme CRM", "base_url": "https://crm.acme.example"})["id"]
 
 
+def test_the_tools_owner_never_shares_a_login_with_every_agent_nor_itself(api):
+    vault(api)
+    site = post(api, "website-tools", {"sites": ["app.acme.example"]})["id"]
+    account = post(api, f"website-tools/{site}/accounts", {"password": "acme-synthetic-pass-01"})["id"]
+    put(api, "page-owners/tools", {"bot": "ops"})
+    run = turn_of(api, "ops")  # Ana gave the Tools Owner this task
+    access = f"website-tools/{site}/accounts/{account}/access/"
+    assert put(api, access + "bots", {"on": True}, run, expected=403)["error"]["code"] == "forbidden"
+    put(api, access + "bot:ops", {"on": True}, run, expected=403)
+    assert put(api, access + "bot:cpo", {"on": True}, run)["on"] is True
+    assert put(api, access + "bots", {"on": True})["on"] is True  # Ana's own tap
+
+
+def test_the_tools_owner_registers_an_agents_mcp_server_only_from_the_catalog_before_botops_hears(api):
+    vault(api)
+    active_botops(api)
+    put(api, "page-owners/tools", {"bot": "ops"})
+    run = turn_of(api, "ops")
+    entry = {"service": "acme", "can": ["read"], "env": "ACME_TOKEN", "mcp": {"url": "https://mcp.acme.example/mcp"}}
+    assert register(api, "cpo", run, entry, expected=403)["error"]["code"] == "catalog_only"
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM bot_tool_requests").fetchone()[0] == 0
+    linear = {
+        "service": "linear",
+        "can": ["read"],
+        "env": "LINEAR_API_KEY",
+        "mcp": {"url": "https://mcp.linear.app/mcp"},
+    }
+    assert register(api, "cpo", run, linear)["task_id"]
+
+
 def test_a_tools_owner_run_a_bot_started_keeps_that_bots_rights(api):
     vault(api)
     tid = tool(api)["id"]

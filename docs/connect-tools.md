@@ -47,8 +47,9 @@ website, webhook, mail). The Tools Owner adds tools from the catalog only, never
      granted is left out, and the run's log says which.
    - From a shell or a chat: `tico tool add <bot> linear --can read,write --env LINEAR_API_KEY --mcp-url https://mcp.linear.app/mcp
      --header 'Authorization: Bearer ${LINEAR_API_KEY}'`. `tico tool update` takes the same three flags. When Tools
-     also grants the bot an MCP tool under the same name, the bot.yaml server is used if its key reached the run, else
-     the granted one, and nothing is reported missing.
+     also grants the bot the same connection (the same variable or address) under that name, the bot.yaml server is used
+     if its key reached the run, else the granted one, and nothing is reported missing; another connection under the
+     same name gets its own (`linear_2`).
 2. **Otherwise a small client or skill in the bot's own repository** (`skills/<service>/SKILL.md`, or a script under
    `software/`) that calls the vendor's REST API with a key from `env`. See [A REST skill](#a-rest-skill) below.
 3. **The credential.** `tico credential request <VAR> --for-bot <bot> ...` opens a card in the chat, or
@@ -294,8 +295,9 @@ webhooks, and tools bots declare in `bot.yaml` that have no API tool yet. Each r
 something is wrong, a pill; a lock means Tico holds the key (the proxy adds it to each call and bots never see it), an
 eye-off that only those listed can see the tool. The list has one row a vendor: Raygun's website login, its MCP token
 and its API key are one **Raygun** row, its pill its worst tool's. The row opens the vendor's page
-(`#/tools/vendor/<vendor>`, one read: `GET /api/v2/tool-vendors/<vendor>`), a card for each tool with its keys at their
-levels, who can use it and its settings, each opening the tool's own page. A vendor with one tool, and anything that is
+(`?tool=vendor:<vendor>`, one read: `GET /api/v2/tool-vendors/<vendor>`), a card for each connection with its kind,
+its default delivery (Proxy-protected, Direct key or Browser session) and who can use it at which level, each opening
+the connection's own page, where its keys and settings are. A vendor with one tool, and anything that is
 no vendor's (a mailbox, a Tico number, Tico's own tools), is its own row under its own name. Search reads tool and
 vendor names. Incoming webhooks and triggers live in Automations, not here.
 

@@ -1601,7 +1601,10 @@ def install(app, store, service):
             if who.role != 'bot' and not app.state.auth.bot_access(c, who, bot)['see']:
                 raise Problem('forbidden', 'This bot is not visible to you', 403)
             row = service.row(c)
-            return access(c, bot, row['org'] if row else store.settings.github_owner)
+            found = access(c, bot, row['org'] if row else store.settings.github_owner)
+        # As the PUT decides for a person: the owner or an admin.
+        found['can_change'] = who.role == 'owner' or (who.role == 'human' and bool(app.state.auth.bot_admin(who)))
+        return found
 
     @app.put(
         '/api/v2/bots/{bot}/repositories',

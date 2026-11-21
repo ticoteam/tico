@@ -419,7 +419,7 @@ function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; a
               </Foot>
             )}
           </Section>
-          <ReposSection slug={slug} name={actor.name} manage={manage} />
+          <ReposSection slug={slug} name={actor.name} />
           <Section
             name="Rules"
             count={rules.data?.length}

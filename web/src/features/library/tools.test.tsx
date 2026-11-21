@@ -1866,21 +1866,20 @@ describe('the Tools page: requests, connections by vendor, find or connect', () 
     from_id: 'bot:b1',
     access: { id, state: 'open', subject: 'bot:b1', subject_name: 'Clerk', resource_type: type, resource_name: name, level: 'read', why: '' },
   });
-  const waiting = (requests: FlowRequest[]) => queryClient.setQueryData(flowQuery.queryKey, { count: requests.length, items: [], requests, task_ids: [] });
+  const waiting = (toolRequests: FlowRequest[]) => queryClient.setQueryData(flowQuery.queryKey, { count: 0, items: [], requests: [], toolRequests, task_ids: [] });
   const raygun = [
     indexRow({ id: 'api:rg', name: 'Raygun API', vendor: 'raygun', vendor_name: 'Raygun', delivery: 'proxy', who_total: 1 }),
     indexRow({ id: 'api:rg-dev', name: 'Raygun dev', vendor: 'raygun', vendor_name: 'Raygun', delivery: 'computer' }),
     indexRow({ id: 'website:rg-site', kind: 'website', name: 'raygun.com', vendor: 'raygun', vendor_name: 'Raygun' }),
   ];
 
-  it('answers the tool requests that wait on you beside the list, and leaves a repository request to Flow', async () => {
+  it('answers the tool requests that wait on you beside the list', async () => {
     serve();
     tools([indexRow({ id: 'api:t1', name: 'Sample API' })]);
-    waiting([accessFor('r1', 'tool', 'Meta Ads'), accessFor('r2', 'repository', 'acme/site')]);
+    waiting([accessFor('r1', 'tool', 'Meta Ads')]);
     open('');
     const requests = await screen.findByRole('region', { name: /^Requests/ });
     expect(within(requests).getByText('Clerk asks for Meta Ads')).toBeTruthy();
-    expect(within(requests).queryByText(/acme\/site/)).toBeNull();
     cleanup();
     // A phone shows the list first: the requests lead it.
     document.documentElement.dataset.layout = 'cards';
@@ -1897,8 +1896,8 @@ describe('the Tools page: requests, connections by vendor, find or connect', () 
             vendor: 'raygun',
             name: 'Raygun',
             rows: [
-              { ...raygun[0], access: [{ subject: 'bot:b1', kind: 'bot', name: 'Clerk', level: 'read', initials: 'C', last_used_at: null }] },
-              { ...raygun[1], access: [] },
+              { ...raygun[0], mcp: false, access_total: 1, access: [{ subject: 'bot:b1', kind: 'bot', name: 'Clerk', level: 'read', initials: 'C', last_used_at: null }] },
+              { ...raygun[1], mcp: true, access_total: 0, access: [] },
               { ...raygun[2], who: [{ kind: 'bot', id: 'b1', name: 'Clerk', initials: 'C' }] },
             ],
           }
@@ -1915,7 +1914,10 @@ describe('the Tools page: requests, connections by vendor, find or connect', () 
     const api = await within(vendor).findByRole('region', { name: /^Raygun API/ });
     expect(within(api).getByText('Proxy-protected')).toBeTruthy();
     expect(within(api).getByText('Clerk')).toBeTruthy();
-    expect(within(within(vendor).getByRole('region', { name: /^Raygun dev/ })).getByText('Direct key')).toBeTruthy();
+    expect(within(api).getByText('Proxied')).toBeTruthy(); // a Read the proxy holds to reads
+    const dev = within(vendor).getByRole('region', { name: /^Raygun dev/ });
+    expect(within(dev).getByText('Direct key')).toBeTruthy();
+    expect(within(dev).getByText('MCP server')).toBeTruthy();
     expect(within(within(vendor).getByRole('region', { name: /^raygun\.com/ })).getByText('Browser session')).toBeTruthy();
     expect(reads(sent)()).not.toContain('/api/v2/api-tools/rg-dev');
   });
@@ -1938,7 +1940,16 @@ describe('the Tools page: requests, connections by vendor, find or connect', () 
     expect(within(ways).getByRole('button', { name: 'Sign in with Linear' })).toBeTruthy();
     expect(within(ways).getByRole('button', { name: 'Sign in on the website' })).toBeTruthy();
     fireEvent.click(within(ways).getByRole('button', { name: 'Paste a key' }));
-    await waitFor(() => expect(writes(sent)).toEqual([{ url: '/api/v2/api-tools', method: 'POST', body: { name: 'Linear', service: 'linear', auth_scheme: 'header:Authorization' } }]));
+    const paste = await screen.findByRole('dialog', { name: 'Paste a Linear key' });
+    expect(writes(sent)).toEqual([]); // nothing is made before the key is sent
+    fireEvent.change(within(paste).getByLabelText('Key'), { target: { value: 'lin_api_made_up_0001' } });
+    fireEvent.click(within(paste).getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(writes(sent)).toEqual([
+        { url: '/api/v2/api-tools', method: 'POST', body: { name: 'Linear', service: 'linear', auth_scheme: 'header:Authorization' } },
+        { url: '/api/v2/api-tools/linear/keys', method: 'POST', body: expect.objectContaining({ value: 'lin_api_made_up_0001' }) },
+      ]),
+    );
     cleanup();
     // The website way opens Add website on the catalog's site; the MCP way Add MCP server on the vendor's address.
     serve((url) => (url === '/api/v2/tool-templates' ? { services: [linear], templates: [] } : undefined));
@@ -1953,13 +1964,12 @@ describe('the Tools page: requests, connections by vendor, find or connect', () 
   it('lists an Everyone tool a person holds nothing on under Everyone, whose page asks for an agent’s access', async () => {
     const sent = serve((url, method) => (method === 'POST' && url === '/api/v2/access-requests' ? { state: 'open' } : undefined));
     queryClient.setQueryData(['directory'], { actors: ACTORS, byId: Object.fromEntries(ACTORS.map((a) => [a.id, a])) });
-    tools([indexRow({ id: 'api:crm', name: 'Acme CRM', requestable: true, delivery: 'proxy', status: { tone: 'idle', text: '' } })]);
+    tools([indexRow({ id: 'api:crm', name: 'Acme CRM', requestable: true, status: { tone: 'idle', text: '' } })]);
     open('');
     expect(await screen.findByRole('button', { name: /^Everyone/ })).toBeTruthy();
     cleanup();
     open('api:crm');
     const tool = await page('Acme CRM');
-    expect(within(tool).getByText('Proxy-protected')).toBeTruthy();
     fireEvent.click(within(tool).getByRole('button', { name: 'Request access' }));
     const dialog = await screen.findByRole('dialog', { name: 'Request access to Acme CRM' });
     fireEvent.click(within(dialog).getByRole('combobox', { name: 'Agent' }));
@@ -1969,5 +1979,20 @@ describe('the Tools page: requests, connections by vendor, find or connect', () 
     fireEvent.click(within(dialog).getByRole('button', { name: 'Request' }));
     await waitFor(() => expect(writes(sent)).toEqual([{ url: '/api/v2/access-requests', method: 'POST', body: { resource: 'tool:crm', level: 'read', for_bot: 'b1' } }]));
     expect(reads(sent)()).not.toContain('/api/v2/api-tools/crm');
+  });
+});
+
+describe('the Tools index', () => {
+  it('reads every page of the index before it groups and searches', async () => {
+    serve((url) =>
+      url === '/api/v2/tool-index?limit=200'
+        ? { rows: [indexRow({ id: 'api:a', name: 'Raygun API', vendor: 'raygun', vendor_name: 'Raygun' })], counts: {}, next: '1' }
+        : url === '/api/v2/tool-index?limit=200&cursor=1'
+          ? { rows: [indexRow({ id: 'api:b', name: 'Raygun dev', vendor: 'raygun', vendor_name: 'Raygun' })], counts: {}, next: null }
+          : undefined,
+    );
+    queryClient.clear();
+    const index = await queryClient.fetchQuery(toolsQuery);
+    expect(index.rows.map((r) => r.id)).toEqual(['api:a', 'api:b']);
   });
 });

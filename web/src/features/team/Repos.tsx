@@ -28,8 +28,10 @@ const LEVELS: Array<{ value: Level; label: string }> = [
 const LEVEL: Record<Level, string> = { read: 'Read', write: 'Write' };
 const MODE: Record<Mode, string> = { own: 'Its own repository', all: 'All ticked repositories', chosen: 'Chosen repositories' };
 
-/** Read for anyone who sees the agent; the editor for whoever manages it. Nothing when the server says no. */
-export function ReposSection({ slug, name, manage }: { slug: string; name: string; manage: boolean }) {
+/** Read for anyone who sees the agent; the editor for whoever the read says may change it (the owner or an admin, as
+    the PUT decides). Nothing when the server says no. Its workflow and repository-making options stay in Settings ›
+    General › Repositories. */
+export function ReposSection({ slug, name }: { slug: string; name: string }) {
   const q = useQuery({ ...agentReposQuery(slug), retry: false });
   const [editing, setEditing] = useState(false);
   const v = q.data;
@@ -39,7 +41,7 @@ export function ReposSection({ slug, name, manage }: { slug: string; name: strin
     <Section
       name="Repositories"
       count={v.effective.length || undefined}
-      actions={manage && <IconButton icon="edit" size="sm" quiet label="Edit repositories" onClick={() => setEditing(true)} />}
+      actions={v.can_change && <IconButton icon="edit" size="sm" quiet label="Edit repositories" onClick={() => setEditing(true)} />}
     >
       <Facts label="Repositories">
         <LabelValue label="Reaches">{v.mode === 'all' ? `${MODE.all}, ${LEVEL[v.all_access]}` : MODE[v.mode]}</LabelValue>
