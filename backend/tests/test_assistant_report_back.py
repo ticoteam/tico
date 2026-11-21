@@ -1,6 +1,6 @@
 """A task the person handed off through their Assistant reports back once in their Assistant chat when it ends
 (backend/task_effects.py `_report_back`): one system line per terminal event with this cycle's note, none when the person
-made the move themselves, none for a call's follow-up, a new Assistant chat when theirs is closed or deleted, only the
+made the move themselves, a new Assistant chat when theirs is closed or deleted, only the
 title for a task they can no longer read, and never at the cost of the move."""
 
 import json
@@ -54,10 +54,8 @@ def test_each_end_reports_once_with_this_cycles_note_as_a_system_line(api):
     [first] = reports(api)
     assert first["sender_id"] == "bot:assistant" and first["recipient_id"] == "human:ben"
     assert first["conversation_id"] == origin
-    assert (
-        first["body"]
-        == f"Back on Draft the launch post: Draft is in the doc. Thanks @ops\n\n[Open task](#/task/{made['id']})"
-    )
+    link = f"[Open task](#/task/{made['id']})"
+    assert first["body"] == f"Back on Draft the launch post:\n{link}\n\nDraft is in the doc. Thanks @ops"
     assert first["refs"]["task"] == made["id"] and first["refs"]["no_mentions"] and first["refs"]["quiet"]
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM jobs WHERE message_id=?", (first["id"],)).fetchone()[0] == 0
@@ -73,27 +71,66 @@ def test_each_end_reports_once_with_this_cycles_note_as_a_system_line(api):
     # Reopened and closed by someone else: the move's own note.
     end(api, made["id"], E.REOPEN, by="human:ana", why="Again")
     end(api, made["id"], E.CLOSED, by="human:ana", why="Not needed after all")
-    bodies = [r["body"].split("\n\n")[0] for r in reports(api)]
+    bodies = [r["body"] for r in reports(api)]
     assert bodies[1:] == [
-        "Draft the launch post ended without a result",
-        "Back on Draft the launch post: Not needed after all",
+        f"Draft the launch post ended without a result\n\n{link}",
+        f"Back on Draft the launch post:\n{link}\n\nNot needed after all",
     ]
     assert len({r["wake_key"] for r in reports(api)}) == 3
 
 
-def test_no_report_when_the_person_closed_it_themselves_or_for_a_call_follow_up(api):
-    (made, followed), _ = handoff(api, "Draft the launch post", "Find the ship date")
+def test_no_report_when_the_person_closed_it_themselves(api):
+    [made], _ = handoff(api)
     end(api, made["id"], E.CLOSED, by="human:ben", why="I did it myself")
+    assert reports(api) == []
+
+
+def test_a_call_follow_up_handed_off_through_the_assistant_reports_back_too(api):
+    [made], _ = handoff(api, "Find the ship date")
     with api.app.state.store.transaction() as c:
         c.execute("PRAGMA defer_foreign_keys=ON")
-        c.execute(
-            "INSERT INTO call_follow_ups(task_id,call_id,bot_id) VALUES(?,?,?)", (followed["id"], "call-1", "ops")
-        )
-        row = E.task(c, followed["id"])
+        c.execute("INSERT INTO call_follow_ups(task_id,call_id,bot_id) VALUES(?,?,?)", (made["id"], "call-1", "ops"))
+        row = E.task(c, made["id"])
         X.say_done(c, row)
-        E.move(c, followed["id"], E.DONE, "bot:ops", "June 3", seen_version=row["version"])
-        c.execute("DELETE FROM call_follow_ups WHERE task_id=?", (followed["id"],))
+        E.move(c, made["id"], E.DONE, "bot:ops", "June 3", seen_version=row["version"])
+        c.execute("DELETE FROM call_follow_ups WHERE task_id=?", (made["id"],))
+    [report] = reports(api)
+    assert report["body"].endswith("\n\nJune 3")
+
+
+def test_a_done_again_after_a_send_back_is_the_note(api):
+    [made], _ = handoff(api)
+    with api.app.state.store.transaction() as c:
+        row = E.task(c, made["id"])
+        rid = c.execute(
+            "SELECT id FROM requirements WHERE stage_id=? AND kind='owner_done' AND withdrawn_at IS NULL",
+            (row["stage_id"],),
+        ).fetchone()[0]
+        # The done again carries the words; the owner's done that follows says none.
+        X.answer(c, row, rid, "again", "bot:ops", "Fixed the intro.")
+        X.answer(c, row, rid, "done", "bot:ops")
+        E.move(c, made["id"], E.DONE, "bot:ops", None, seen_version=row["version"])
+    [report] = reports(api)
+    assert report["body"].endswith("\n\nFixed the intro.")
+
+
+def test_a_bad_create_audit_skips_the_report_and_the_move_still_commits(api):
+    [made], _ = handoff(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE events SET detail='[1]' WHERE action='task.create' AND target=?", (made["id"],))
+    end(api, made["id"], E.DONE, why="Shipped.")
+    with api.app.state.store.read() as c:
+        assert E.task(c, made["id"])["status"] == "done"
     assert reports(api) == []
+
+
+def test_the_link_stays_outside_an_open_fence_and_a_long_note(api):
+    [made], _ = handoff(api)
+    end(api, made["id"], E.DONE, notes="```\n" + "x" * 5000)
+    [report] = reports(api)
+    head, note = report["body"].split("\n\n", 1)
+    assert head == f"Back on Draft the launch post:\n[Open task](#/task/{made['id']})"
+    assert note.startswith("```") and len(note) == 4000
 
 
 def test_a_closed_or_deleted_assistant_room_gives_way_to_a_new_one(api):
@@ -139,10 +176,14 @@ def test_a_report_that_fails_never_undoes_the_move(api, monkeypatch):
     assert reports(api) == []
 
 
-def test_a_task_the_person_can_no_longer_read_is_reported_by_its_title_alone(api):
+def test_a_task_the_person_can_no_longer_read_is_reported_by_its_filed_title_alone(api):
     [made], _ = handoff(api, "Plan the offsite")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET requester_id='human:cara', private=1, readers=NULL WHERE id=?", (made["id"],))
+        c.execute(
+            "UPDATE tasks SET title='Offsite at the lake house', requester_id='human:cara', private=1, readers=NULL "
+            "WHERE id=?",
+            (made["id"],),
+        )
     end(api, made["id"], E.DONE, why="Secret venue picked.")
     [report] = reports(api)
     assert report["body"] == "Plan the offsite has ended" and "task" not in report["refs"]
