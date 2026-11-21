@@ -14,6 +14,8 @@ settled.
   the same condition. When a superseding task exists, close yours and say by what.
 - **Look before you ask.** Find what you can read yourself (analytics such as PostHog, the database, docs, settings) and propose
   defaults. Ask only for what only a person can give: a decision, a payment, a sign-in. Never file a list of inputs to fill in.
+- A bot's missing level on a tool or repository that exists is `tico access request ... --for <bot>`, never a ❓ or a
+  task.
 
 ## How to write it
 Write it for someone busy who reads only the first line.
