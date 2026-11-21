@@ -422,6 +422,7 @@ export interface ThreadListRow {
   me?: { unread?: number; activity?: boolean };
   members?: unknown;
   task_id?: string | null;
+  audience?: string;
   /** Holds an open @ of the viewer: only a fresh list read knows (the sidebar's `attention`). */
   mentioned?: boolean;
 }
@@ -483,12 +484,6 @@ export function patchThreadList<T extends ThreadListRow>(data: ThreadListData<T>
       return mapThreads(data, (t) => (t.id === id ? null : t));
     case 'read':
       return mapThreads(data, (t) => (t.id === id && unreadIn(t) ? { ...t, me: { ...t.me, unread: 0, activity: false } } : t));
-    case 'attention': {
-      // The reader's own attention moved (an @ came or was answered). Whether a task's thread holds an open @ (and so is
-      // listed) is the list's read to say: read it again for a task's thread, a marked one, or one it does not hold.
-      const held = data.pages.flatMap((p) => p.rows).find((t) => t.id === id);
-      return !held || held.task_id || held.mentioned ? null : data;
-    }
     case 'counters':
       if (sub) return data;
       return mapThreads(data, (t) =>
@@ -511,6 +506,20 @@ export function patchThreadList<T extends ThreadListRow>(data: ThreadListData<T>
   }
 }
 
+/**
+ * Whether the list must be read again for `mentioned` (the sidebar's `attention`: a task's thread with an open @ of the
+ * reader is listed, #4762), which only a list read gives. The reader's attention moved (an @ came or was answered) on a
+ * task's thread, a marked one, or one the list does not hold; or a marked thread has new activity, which may be the
+ * reply that answers it (from the CLI, say, where no `attention` reaches this browser first).
+ */
+export function mentionMayHaveMoved<T extends ThreadListRow>(data: ThreadListData<T>, e: ThreadEvent<T>): boolean {
+  const id = e.root_id ?? e.thread_id;
+  if (!id || (e.kind !== 'attention' && e.kind !== 'activity')) return false;
+  const held = data.pages.flatMap((p) => p.rows).find((t) => t.id === id);
+  if (e.kind === 'activity') return !!held?.mentioned;
+  return !held || !!held.task_id || held.audience === 'task' || !!held.mentioned;
+}
+
 /** The list, the open threads' views and Catch up's count, from one frame of the `threads` topic. */
 export function applyThreadEvents(batch: ThreadEvent[]): void {
   let readFirstPage = false;
@@ -520,6 +529,7 @@ export function applyThreadEvents(batch: ThreadEvent[]): void {
       const next = patchThreadList(list, e);
       if (next === null) readFirstPage = true;
       else if (next !== list) queryClient.setQueryData(keys.threads.list(), next);
+      if (mentionMayHaveMoved(next ?? list, e)) readFirstPage = true;
     }
     const id = e.thread_id;
     if (id && e.thread && queryClient.getQueryData(keys.threads.view(id)))

@@ -104,20 +104,32 @@ describe('read-again topics', () => {
     expect(queryClient.getQueryState(['letters'])?.isInvalidated).toBe(true);
   });
 
-  it('read the Threads list again when an @ of the reader comes on a task\'s thread or is answered (#4762)', async () => {
+  describe('a task\'s thread with an open @ of the reader (#4762)', () => {
     const list = (rows: object[]) => ({ pages: [{ rows, next: null }], pageParams: [null] });
-    const attention = (seq: number, id: string) =>
-      FakeEventSource.last.feed(frame(seq, 'threads', { seq, actor: 'human:p1', at: AT, thread_id: id, root_id: id, kind: 'attention' }));
-    queryClient.setQueryData(keys.threads.list(), list([{ id: 'k1', task_id: 'task-1' }]));
-    attention(901, 'k1'); // the @ came: the list reads again and marks the row
-    flushFrame();
-    expect(queryClient.getQueryState(keys.threads.list())?.isInvalidated).toBe(true);
-    await vi.runAllTimersAsync();
-    queryClient.setQueryData(keys.threads.list(), list([{ id: 'k1', task_id: 'task-1', mentioned: true }]));
-    attention(902, 'k1'); // answered: read again, so the mark clears
-    flushFrame();
-    expect(queryClient.getQueryState(keys.threads.list())?.isInvalidated).toBe(true);
-    await vi.runAllTimersAsync();
+    const send = (seq: number, data: object) => FakeEventSource.last.feed(frame(seq, 'threads', { seq, actor: 'human:p1', at: AT, thread_id: 'k1', root_id: 'k1', ...data }));
+    const brief = { id: 'k1', title: 'Choose the venue', audience: 'task', root_id: 'k1', parent_id: null, kind: 'task', last_message_at: AT };
+    const stale = () => queryClient.getQueryState(keys.threads.list())?.isInvalidated;
+
+    it('reads the list again when the first @ arrives on a thread it never held: activity, then attention', async () => {
+      queryClient.setQueryData(keys.threads.list(), list([]));
+      send(901, { kind: 'activity', message_id: 'm1', unread: true, unread_count: 1, counters: { last_seq: 1, last_unread_seq: 1 }, thread: brief });
+      send(902, { kind: 'attention' });
+      flushFrame();
+      expect(stale()).toBe(true);
+      await vi.runAllTimersAsync();
+    });
+
+    it('reads the list again when a marked thread has activity: a reply from elsewhere may have answered it', async () => {
+      queryClient.setQueryData(keys.threads.list(), list([{ ...brief, task_id: 'task-1', mentioned: true, me: { unread: 0 } }]));
+      send(901, { kind: 'activity', message_id: 'm2', unread: false, unread_count: 0, counters: { last_seq: 2, last_unread_seq: 1 }, thread: brief });
+      flushFrame();
+      expect(stale()).toBe(true);
+      await vi.runAllTimersAsync();
+      queryClient.setQueryData(keys.threads.list(), list([{ ...brief, me: { unread: 0 } }]));
+      send(902, { kind: 'activity', message_id: 'm3', unread: false, unread_count: 0, counters: { last_seq: 3, last_unread_seq: 1 }, thread: brief });
+      flushFrame();
+      expect(stale()).toBe(false); // an unmarked thread's activity is patched in place, no read
+    });
   });
 
   it('mark a call and the live and ringing lists stale on a call change in the threads topic', () => {
