@@ -11,7 +11,7 @@ from backend.tests.helpers.api_tools import key, level, tool
 from backend.tests.helpers.assistant import assistant_turn
 from backend.tests.helpers.bot_tools import configure, report
 from backend.tests.helpers.credentials import explicit_only, setup as vault
-from backend.tests.helpers.member_bots import botops  # noqa: F401  (fixture)
+from backend.tests.helpers.member_bots import botops, turn as botops_turn  # noqa: F401  (fixture)
 
 SECRET = "acme-crm-synthetic-0123456789"
 PAGE_ENTRY = {
@@ -95,6 +95,133 @@ def test_the_tools_owner_sets_a_level_with_the_rights_of_the_person_who_asked_an
     assert level(api, tid, "bot:cpo", "none", run)["level"] is None
 
 
+def test_the_tools_owner_defines_a_tool_from_the_catalog_only_never_an_address_of_its_own(api):
+    vault(api)
+    put(api, "page-owners/tools", {"bot": "ops"})
+    run = turn_of(api, "ops")  # Ana gave the Tools Owner this task
+    made = post(api, "api-tools", {"name": "Stripe", "service": "stripe"}, run)
+    assert made["base_url"] == "https://api.stripe.com" and made["delivery"] == "proxy"
+    for body in (
+        {"name": "Acme CRM", "base_url": "https://crm.acme.example"},
+        {"name": "Stripe", "service": "stripe", "base_url": "https://stripe.acme.example"},
+        {"name": "Stripe", "service": "stripe", "check_path": "/v1/customers"},
+    ):
+        refused = post(api, "api-tools", body, run, expected=403)
+        assert refused["error"]["code"] == "catalog_only", body
+    r = api.patch(f"/api/v2/api-tools/{made['id']}", json={"base_url": "https://evil.example"}, headers=headers(run))
+    assert r.status_code == 403 and r.json()["error"]["code"] == "catalog_only", r.text
+    assert api.patch(f"/api/v2/api-tools/{made['id']}", json={"name": "Stripe prod"}, headers=headers(run)).is_success
+    # A person's own address: the agent's change of any part (its check path alone) is judged on the whole result.
+    own = post(api, "api-tools", {"name": "Stripe EU", "service": "stripe", "base_url": "https://eu.stripe.example"})[
+        "id"
+    ]
+    r = api.patch(f"/api/v2/api-tools/{own}", json={"check_path": "/v1/balance"}, headers=headers(run))
+    assert r.status_code == 403 and r.json()["error"]["code"] == "catalog_only", r.text
+    # An MCP server not in the catalog is refused before anything reaches its address.
+    r = api.post(
+        "/api/v2/mcp-tools",
+        json={"name": "Acme", "url": "https://mcp.acme.example/mcp", "auth": "oauth"},
+        headers=headers(run),
+    )
+    assert r.status_code == 403 and r.json()["error"]["code"] == "catalog_only", r.text
+    # Ana herself adds any address.
+    assert post(api, "api-tools", {"name": "Acme CRM", "base_url": "https://crm.acme.example"})["id"]
+
+
+def test_no_agent_shares_a_website_login_only_a_persons_own_tap_does(api):
+    vault(api)
+    site = post(api, "website-tools", {"sites": ["app.acme.example"]})["id"]
+    account = post(api, f"website-tools/{site}/accounts", {"password": "acme-synthetic-pass-01"})["id"]
+    put(api, "page-owners/tools", {"bot": "ops"})
+    run = turn_of(api, "ops")  # Ana gave the Tools Owner this task: her rights
+    access = f"website-tools/{site}/accounts/{account}/access/"
+    for subject in ("bots", "bot:ops", "bot:cpo", "human:cara"):
+        assert put(api, access + subject, {"on": True}, run, expected=403)["error"]["code"] == "forbidden", subject
+    # A login made by an agent is never shared with every agent either.
+    made = api.post(
+        f"/api/v2/website-tools/{site}/accounts",
+        json={"username": "ops@acme.example", "all_bots": True},
+        headers=headers(run),
+    )
+    assert made.status_code == 403, made.text
+    assert put(api, access + "bot:cpo", {"on": True})["on"] is True  # Ana's own tap
+    assert put(api, access + "bots", {"on": True})["on"] is True
+
+
+def test_the_tools_owner_registers_an_agents_mcp_server_only_from_the_catalog_before_botops_hears(api):
+    vault(api)
+    active_botops(api)
+    put(api, "page-owners/tools", {"bot": "ops"})
+    run = turn_of(api, "ops")
+    entry = {"service": "acme", "can": ["read"], "env": "ACME_TOKEN", "mcp": {"url": "https://mcp.acme.example/mcp"}}
+    assert register(api, "cpo", run, entry, expected=403)["error"]["code"] == "catalog_only"
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM bot_tool_requests").fetchone()[0] == 0
+    linear = {
+        "service": "linear",
+        "can": ["read"],
+        "env": "LINEAR_API_KEY",
+        "mcp": {"url": "https://mcp.linear.app/mcp"},
+    }
+    assert register(api, "cpo", run, linear)["task_id"]
+
+
+def test_the_tools_owner_in_its_own_run_adds_or_moves_an_mcp_server_only_from_the_catalog(api):
+    active_botops(api)
+    configure(api, "cpo")
+    put(api, "page-owners/tools", {"bot": "ops"})
+    own = turn_of(api, "ops", requester="bot:ops")  # its own task: no one's rights but its own
+    acme = {"service": "acme", "can": ["read"], "env": "ACME_TOKEN", "mcp": {"url": "https://mcp.acme.example/mcp"}}
+    assert register(api, "cpo", own, acme, expected=403)["error"]["code"] == "catalog_only"
+    machine = runner(api)
+    assign(api, machine, "cpo")
+    linear = {
+        "service": "linear",
+        "can": ["read"],
+        "env": "LINEAR_API_KEY",
+        "mcp": {"url": "https://mcp.linear.app/mcp"},
+    }
+    assert report(api, machine, "cpo", [linear, acme]).status_code == 200
+    ids = {t["service"]: t["id"] for t in get(api, "bots/cpo/tools")["tools"]}
+    moved = api.post(
+        f"/api/v2/bots/cpo/tools/{ids['linear']}/update",
+        json={"mcp": {"url": acme["mcp"]["url"]}},
+        headers=headers(own),
+    )
+    assert moved.status_code == 403 and moved.json()["error"]["code"] == "catalog_only", moved.text
+    # A person's own server off the catalog: the agent changes nothing the runner sends, its headers included.
+    headers_only = {"mcp": {"headers": {"Authorization": "Bearer ${ACME_TOKEN}"}}}
+    moved = api.post(f"/api/v2/bots/cpo/tools/{ids['acme']}/update", json=headers_only, headers=headers(own))
+    assert moved.status_code == 403 and moved.json()["error"]["code"] == "catalog_only", moved.text
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM bot_tool_requests").fetchone()[0] == 0
+
+
+def test_botops_with_a_persons_rights_never_shares_a_login_with_every_agent_nor_gives_itself_a_tool(api, botops):
+    vault(api)
+    site = post(api, "website-tools", {"sites": ["app.acme.example"]})["id"]
+    account = post(api, f"website-tools/{site}/accounts", {"password": "acme-synthetic-pass-02"})["id"]
+    tid = tool(api)["id"]
+    key(api, tid, SECRET)
+    put(api, "page-owners/tools", {"bot": "botops"})  # BotOps owns Tools here
+    run = botops_turn(api, botops, person="ana-test", text="Tidy our logins and tools")["token"]  # with Ana's rights
+    lent = "?on_behalf_of=turn"
+    access = f"website-tools/{site}/accounts/{account}/access/"
+    assert put(api, access + "bots" + lent, {"on": True}, run, expected=403)["error"]["code"] == "forbidden"
+    refused = put(api, f"api-tools/{tid}/access/bot:botops{lent}", {"level": "read"}, run, expected=403)
+    assert "holds none" in refused["error"]["detail"]
+    acme = {"name": "Acme CRM", "base_url": "https://crm.acme.example"}
+    assert post(api, "api-tools" + lent, acme, run, expected=403)["error"]["code"] == "catalog_only"
+    # A key never rides on an agent's add; the catalog's tool without one does.
+    keyed = post(api, "api-tools" + lent, {"name": "Stripe", "service": "stripe", "key": SECRET}, run, expected=422)
+    assert keyed["error"]["code"] == "secret_in_request" and SECRET not in json.dumps(keyed)
+    assert post(api, "api-tools" + lent, {"name": "Stripe", "service": "stripe"}, run)["service"] == "stripe"
+    # An address an agent brings is the catalog's, before anything reaches it: the probe as well as the add.
+    probe = post(api, "mcp-tools/probe" + lent, {"url": "https://mcp.acme.example/mcp"}, run, expected=403)
+    assert probe["error"]["code"] == "catalog_only"
+    assert put(api, f"api-tools/{tid}/access/bot:cpo{lent}", {"level": "read"}, run)["level"] == "read"  # Ana's rights
+
+
 def test_a_tools_owner_run_a_bot_started_keeps_that_bots_rights(api):
     vault(api)
     tid = tool(api)["id"]
@@ -158,6 +285,19 @@ def test_the_assistant_hands_the_tools_owner_the_persons_request_and_it_acts_as_
     assert json.loads(asked["detail"])["helper"] == "bot:tools-owner"
 
 
+def test_a_tool_a_member_sees_by_name_alone_never_hides_an_agents_declared_tool_from_her(api):
+    vault(api)
+    configure(api)
+    key(api, tool(api, service="close-crm")["id"], SECRET)  # Everyone; Cara holds nothing on it
+    machine = runner(api)
+    assign(api, machine, "ops")
+    entry = {"service": "crm-sync", "can": ["read"], "env": "CLOSE_API_KEY"}  # the tool's key's variable
+    assert report(api, machine, "ops", [entry]).status_code == 200
+    rows = {r["id"]: r for r in get(api, "tool-index", "cara-test")["rows"]}
+    assert rows["api:close-crm"]["requestable"] is True
+    assert "declared:crm-sync" in rows
+
+
 def test_a_bots_tools_tab_lists_what_it_can_use_through_grants_one_row_per_service(api):
     vault(api)
     configure(api)
@@ -180,3 +320,30 @@ def test_a_bots_tools_tab_lists_what_it_can_use_through_grants_one_row_per_servi
     # A member who neither manages ops nor may see the tool is not told about it.
     seen = api.get("/api/v2/bots/ops/tools", headers=headers("cara-test"))
     assert seen.status_code != 200 or not any(t.get("granted") for t in seen.json()["tools"])
+
+
+def test_a_confirmed_assistant_act_is_the_persons_own_and_an_unconfirmed_one_is_refused(api):
+    """The person's read-back and yes (`confirmed`) makes the Assistant's act theirs: it may share a login and bring an
+    address outside the catalog; unconfirmed, neither."""
+    from dataclasses import replace
+
+    import pytest
+
+    from backend import tool_access as TA
+    from backend.auth import Identity
+    from backend.store import Problem
+
+    vault(api)
+    site = post(api, "website-tools", {"sites": ["app.acme.example"]})["id"]
+    account = post(api, f"website-tools/{site}/accounts", {"password": "acme-synthetic-pass-03"})["id"]
+    asked = replace(Identity("human:ana", "owner"), via="assistant", task_actor="bot:assistant")
+    yes = replace(asked, confirmed=True)
+    v = api.app.state.vault
+    acme = "https://mcp.acme.example/mcp"
+    with api.app.state.store.read() as c:
+        grant = lambda who: TA.decide(c, who, TA.key(account), "bot:cpo", TA.GRANT, admins=v.admins, auth=v.auth).ok  # noqa: E731
+        assert grant(yes) is True and grant(asked) is False
+    TA.catalog_only(yes, mcp_url=acme)
+    with pytest.raises(Problem) as refused:
+        TA.catalog_only(asked, mcp_url=acme)
+    assert refused.value.code == "catalog_only"

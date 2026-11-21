@@ -165,8 +165,12 @@ def test_null_audience_keeps_the_old_rules(api):
     page = get(api, f"api-tools/{tid}", "ben-test")
     assert page["private"] is False and page["audience"] is None and page["seen_by"] == []
     assert rw in vault_ids(api, "ben-test")
-    get(api, f"api-tools/{tid}", "cara-test", expected=404)  # a member with no grant still does not see it
-    assert "api:" + tid not in index(api, "cara-test")
+    get(api, f"api-tools/{tid}", "cara-test", expected=404)  # a member with no grant still cannot read it
+    # Tools lists it to her by name alone, to ask for an agent's access: no holders, no status, no key.
+    row = index(api, "cara-test")["api:" + tid]
+    assert row["requestable"] is True and row["who"] == [] and row["who_total"] == 0 and row["status"]["text"] == ""
+    assert not row["vendor"] and not row["detail"] and "service" not in row and "delivery" not in row
+    assert "requestable" not in index(api, "ben-test")["api:" + tid]
 
 
 def test_a_bad_audience_is_refused_and_an_unreadable_stored_one_lists_nobody(api):

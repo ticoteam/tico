@@ -67,6 +67,8 @@ SCHEMAS.update(
                 # What All ticked repos covers by configuration, whether GitHub reaches it now or not.
                 "all_ticked": items("s"),
                 "effective": items(ref("RepositoryGrant")),
+                # The reader may change it (PUT): the owner or an admin.
+                "can_change": "b",
             }
         ),
         # Only the options that are on are present.

@@ -384,3 +384,6 @@ html:not([data-layout="cards"]) .rec.is-col .task .row-age{align-self:center;lin
 html:not([data-layout="cards"]) .rec.is-col .task .row-pills,html:not([data-layout="cards"]) .rec.is-col .task .row-pills:empty{display:flex;align-items:center;gap:var(--s-2);padding:0 0 0 var(--s-2h)}
 html:not([data-layout="cards"]) .rec.is-col .task .av-gap{width:0}
 
+
+/* An agent's repositories editor: a chosen repository and its level on one line (Repos.tsx). */
+.repo-pick{display:flex;align-items:center;justify-content:space-between;gap:var(--s-2)}

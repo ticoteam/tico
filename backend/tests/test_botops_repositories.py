@@ -22,6 +22,8 @@ def test_botops_acting_for_a_person_cannot_take_another_bots_access_away(api, bo
     before = effective(api)
     assert before == [{"full_name": "Acme/product", "access": "write"}]
     ana = turn(api, botops, person="ana-test", text="Tidy ops' repositories")
+    # The read says what the save decides: BotOps, here with Ana's rights, may change ops'.
+    assert act(api, ana, "GET", "bots/ops/repositories").json()["can_change"] is True
     # Three tries (as on Oct 15): nothing changes, and Ana gets one card naming what would stop.
     cards = [act(api, ana, "PUT", "bots/ops/repositories", {"mode": "own"}) for _ in range(3)]
     assert all(r.status_code == 200 for r in cards), cards[0].text

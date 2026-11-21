@@ -314,3 +314,19 @@ html:not([data-layout="cards"]) .modal.sk-edit{width:var(--measure)}
 
 /* ---------- Tools: Messages across every address (ToolMessages.tsx) ---------- */
 .lib .msg-find{display:flex;flex-wrap:wrap;gap:var(--s-2);padding:var(--s-1) 0 var(--s-2)}
+/* Tools' requests: the Needs you cards, one under another (tasks.css .flow-requests) */
+.tools .tool-requests{display:flex;flex-direction:column;gap:var(--s-2);padding:var(--s-1) 0 var(--s-3)}
+/* a card never widens the list: its buttons wrap to a second line when the three do not fit */
+.tools .tool-requests,.tools .tool-requests>*{min-width:0}
+.tools .tools-list>.stage{min-width:0;overflow-x:clip}
+.tools .tool-requests .an-row{flex-wrap:wrap}
+:where(html[data-layout="cards"]) .tools .tool-requests{padding:var(--s-1) var(--s-2) var(--s-3)}
+/* Find or connect: the catalog scrolls under its search; the kinds wrap below; a service's ways stack */
+.modal .connect-list{display:flex;flex-direction:column;max-height:280px;overflow:auto;margin:var(--s-1) 0}
+.modal .connect-row{display:flex;align-items:center;width:100%;height:var(--row);padding:0 var(--s-2);border:0;border-radius:var(--r-row);background:none;color:var(--ink);text-align:left;cursor:pointer}
+.modal .connect-row:hover,.modal .connect-row:focus-visible{background:var(--hover)}
+.modal .connect-none{padding:var(--s-2);color:var(--muted)}
+.modal .connect-kinds{display:flex;flex-wrap:wrap;gap:var(--s-1h);padding-top:var(--s-2);border-top:1px solid var(--line)}
+.modal .connect-kind{display:inline-flex;align-items:center;gap:var(--s-1h)}
+.modal .connect-ways{display:grid;gap:var(--s-2)}
+.modal .connect-ways .btn{justify-content:flex-start}

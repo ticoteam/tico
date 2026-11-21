@@ -89,7 +89,8 @@ def test_a_member_sees_only_the_tools_they_hold_and_cannot_manage_them(api):
     level(api, tid, "bot:ops", "read_write")
     rows = lambda token: {r["id"]: r for r in get(api, "tool-index", token)["rows"]}  # noqa: E731 - a lookup used 3 times
     assert "api:" + tid in rows("ben-test")
-    assert "api:" + tid not in rows("cara-test")
+    assert rows("cara-test")["api:" + tid]["requestable"] is True  # its name alone, to ask for access
+    assert rows("cara-test")["api:" + tid]["who"] == []
     get(api, f"api-tools/{tid}", "cara-test", expected=404)
     level(api, tid, "human:cara", "read")
     row = rows("cara-test")["api:" + tid]
@@ -280,3 +281,57 @@ def test_a_key_a_computer_migrates_from_its_files_stays_on_computers(api):
             "WHERE k.env = 'STRIPE_API_KEY'"
         ).fetchone()
     assert (service, delivery) == ("stripe", "computer")
+
+
+def test_a_tool_and_its_first_key_are_one_write_taken_once(api, monkeypatch):
+    setup(api)
+    body = {"name": "Stripe", "service": "stripe", "key": SECRET_RW}
+    send = lambda: api.post("/api/v2/api-tools", json=body, headers=headers() | {"Idempotency-Key": "paste-1"})  # noqa: E731
+    first, again = send(), send()
+    # No key sent, none fingerprinted: a retry across the deploy that added `key` is the same request.
+    plain = api_tools._Receipt(api_tools.ToolCreate(name="Stripe"), omit_none=("key",)).model_dump()
+    assert "key" not in plain
+    assert first.status_code == again.status_code == 200 and first.json()["id"] == again.json()["id"]
+    page = get(api, f"api-tools/{first.json()['id']}")
+    assert [k["access_level"] for k in page["keys"]] == ["read_write"] and SECRET_RW not in json.dumps(page)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM tools WHERE service='stripe'").fetchone()[0] == 1
+
+    # A second connection of the service gets its key in a variable of its own: the plain one stays the first's.
+    second = api.post(
+        "/api/v2/api-tools",
+        json={"name": "Stripe sandbox", "service": "stripe", "key": SECRET_R},
+        headers=headers() | {"Idempotency-Key": "paste-3"},
+    ).json()["id"]
+    envs = [get(api, f"api-tools/{t}")["keys"][0]["env"] for t in (first.json()["id"], second)]
+    assert envs == ["STRIPE_API_KEY", "STRIPE_API_KEY_2"]
+
+    def refused(*_args, **_kw):
+        raise Problem("secret", "Made-up refusal", 422)
+
+    monkeypatch.setattr(api_tools, "add_key", refused)
+    r = api.post(
+        "/api/v2/api-tools", json={**body, "name": "Stripe two"}, headers=headers() | {"Idempotency-Key": "paste-2"}
+    )
+    assert r.status_code == 422
+    with api.app.state.store.read() as c:  # a refused key makes no tool
+        assert c.execute("SELECT count(*) FROM tools WHERE service='stripe'").fetchone()[0] == 2
+
+
+def test_an_agent_never_brings_a_tools_first_key(api):
+    """A key is a person's own paste: refused on an agent's add, with a person's rights or not, and BotOps' body
+    check names it as a secret on this route; the catalog's tool without one still goes."""
+    from dataclasses import replace
+
+    from backend import botops_act
+    from backend.auth import Identity
+
+    setup(api)
+    vault = api.app.state.vault
+    lent = replace(Identity("human:ana", "owner"), via="assistant")
+    body = api_tools.ToolCreate(name="Stripe", service="stripe", key=SECRET_RW)
+    with api.app.state.store.transaction() as c, pytest.raises(Problem) as refused:
+        api_tools.create_tool(c, lent, body, vault.admins, vault)
+    assert refused.value.code == "secret_in_request" and SECRET_RW not in str(refused.value.detail)
+    assert botops_act.secret_in_request("POST", "api-tools", {"name": "Stripe", "key": "x"}) == "key"
+    assert botops_act.secret_in_request("POST", "api-tools", {"name": "Stripe", "service": "stripe"}) is None

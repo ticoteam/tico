@@ -613,10 +613,22 @@ export interface MailItem {
   received_at: string;
 }
 
+/** Every page of the index (its `next` cursor), so the list groups and searches all of it. */
 export const toolsQuery = queryOptions({
   queryKey: ['tools', 'index'],
-  queryFn: () => api.get<ToolIndex>('/api/v2/tool-index?limit=200'),
+  queryFn: async (): Promise<ToolIndex> => {
+    const first = await api.get<ToolIndex>('/api/v2/tool-index?limit=200');
+    let rows = first.rows;
+    let next = first.next;
+    for (let page = 0; next && page < INDEX_PAGES; page++) {
+      const more = await api.get<ToolIndex>(`/api/v2/tool-index?limit=200&cursor=${enc(String(next))}`);
+      rows = [...rows, ...more.rows];
+      next = more.next;
+    }
+    return { ...first, rows, next: null };
+  },
 });
+const INDEX_PAGES = 20;
 
 /** After GitHub's return: Tools read again, and the index as the server has it now. */
 export async function rereadTools(): Promise<ToolIndex> {
@@ -632,6 +644,39 @@ export const apiToolQuery = (id: string) =>
     queryKey: ['tools', 'api', id],
     queryFn: () => api.get<ApiTool>(`/api/v2/api-tools/${enc(id)}`),
   });
+
+/** A connection on a vendor's page (GET /api/v2/tool-vendors/{vendor}), a summary: an API tool's comes with who can
+    use it at which level (the first few, `access_total` all) and whether it is an MCP server; the rest is its own page.
+    Under the index's key, so whatever reads Tools again reads the vendors too. */
+export type VendorRow = ToolIndexRow & {
+  access?: ApiTool['access'];
+  access_total?: number;
+  mcp?: boolean;
+};
+export const vendorQuery = (vendor: string) =>
+  queryOptions({
+    queryKey: ['tools', 'index', 'vendor', vendor],
+    queryFn: () => api.get<{ vendor: string; name: string; rows: VendorRow[] }>(`/api/v2/tool-vendors/${enc(vendor)}`),
+  });
+
+/** A service Find or connect offers (backend/tool_services.py `catalog`): how a pasted key goes on a call, the site a
+    person signs in to, and the vendor's MCP server where it has one. */
+export interface CatalogService {
+  id: string;
+  name: string;
+  auth_scheme: string;
+  site: string;
+  mcp_url: string;
+}
+export const catalogQuery = queryOptions({
+  queryKey: ['tools', 'catalog'],
+  queryFn: () => api.get<{ services?: CatalogService[] }>('/api/v2/tool-templates').then((r) => r.services ?? []),
+  staleTime: Infinity,
+});
+
+/** A person asks for an agent's level on a tool: granted at once when it can be, else a card to whoever can grant it. */
+export const requestAccess = (body: { resource: string; level: 'read' | 'read_write'; for_bot: string; why?: string }) =>
+  api.post<{ state?: string }>('/api/v2/access-requests', body);
 
 export const websiteToolQuery = (id: string) =>
   queryOptions({
@@ -740,8 +785,11 @@ export interface ApiAdd {
   base_url?: string;
   auth_scheme: string;
   check_path?: string;
+  /** Its first key, stored with it in one write: a refused key makes no tool. */
+  key?: string;
 }
-export const addApiTool = (body: ApiAdd) => made(api.post<{ id: string }>('/api/v2/api-tools', body));
+/** `idempotencyKey`: one per attempt the person makes, so sending again never makes a second tool. */
+export const addApiTool = (body: ApiAdd, idempotencyKey?: string) => made(api.post<{ id: string }>('/api/v2/api-tools', body, { idempotencyKey }));
 
 /** A login: a shared one for every agent, or one person's or agent's own (`holder`). No password: signed in by hand. */
 export interface LoginAdd {
@@ -761,6 +809,9 @@ export const replaceLogin = (tool: string, account: string, change: WebsiteAccou
     [['tools', 'website', tool]],
   );
 
+/** Who may use a tool changed: the list's faces and the vendors' access lists (under the index's key) read again. */
+const whoChanged = () => void queryClient.invalidateQueries({ queryKey: toolsQuery.queryKey });
+
 export function setAccess(tool: string, subject: string, level: 'read' | 'read_write' | 'none') {
   return write<unknown>({
     key: ['tools', 'api', tool],
@@ -771,7 +822,7 @@ export function setAccess(tool: string, subject: string, level: 'read' | 'read_w
         access: level === 'none' ? cur.access.filter((a) => a.subject !== subject) : cur.access.map((a) => (a.subject === subject ? { ...a, level } : a)),
       },
     send: (idempotencyKey) => api.put(`/api/v2/api-tools/${enc(tool)}/access/${enc(subject)}`, { level }, { idempotencyKey }),
-  });
+  }).finally(whoChanged);
 }
 
 /* Changing a tool. Each reads the tool (and the list, whose name and status it shows) again once the server agrees. */
@@ -1172,7 +1223,7 @@ export const setAccountAccess = (tool: string, account: string, subject: string,
         a.id !== account ? a : subject === 'bots' ? { ...a, all_bots: on } : on ? a : { ...a, access: a.access.filter((p) => p.subject !== subject) },
       ),
     (idempotencyKey) => api.put<WebsiteAccountAccessSet>(`${site(tool)}/accounts/${enc(account)}/access/${enc(subject)}`, { on }, { idempotencyKey }),
-  );
+  ).finally(whoChanged);
 
 /* An outgoing webhook. */
 

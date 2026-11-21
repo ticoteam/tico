@@ -16,8 +16,8 @@ run is never a problem: it puts no tool under Needs you (Tools marks a proxied t
 A tool also holds Settings, its non-secret values (a host, a region, a project id), each delivered as a variable to
 every run that holds a level on the tool (backend/tool_settings.py). Tools lists one row a vendor (`vendor` on a row,
 `tool_services.vendor_of`: the tool's `service`, which a person may set, else its name, its keys' variables or its
-address), and `GET /api/v2/tool-vendors/{vendor}` answers a vendor's page in one read: its rows, an API tool's with its
-keys, levels and settings. Mailboxes, Tico's numbers and addresses and Tico's own tools have no vendor.
+address), and `GET /api/v2/tool-vendors/{vendor}` answers a vendor's page in one read: its rows, an API tool's with who
+holds which level and whether it is an MCP server. Mailboxes, Tico's numbers and addresses and Tico's own tools have no vendor.
 
 A check is one authenticated GET to the tool's `check_path` (its known service's when it has none:
 tool_services.check_path_for) with each stored key: 2xx is Working, 403 Works (limited) (the vendor knows the key, the
@@ -585,9 +585,10 @@ def _person(subject, name):
     return {"kind": kind, "id": H.actor_id(subject), "name": name, "initials": _initials(name)}
 
 
-def access_rows(c, who, tool_id, admins, auth=None):
-    """Who can use the tool: one row per subject with an effective grant, its level and last use. Anyone but an
-    administrator (or the Tools page's owner bot, `tools_reader`) sees only their own row and the grants they made."""
+def access_rows(c, who, tool_id, admins, auth=None, usage=True):
+    """Who can use the tool: one row per subject with an effective grant, its level and (`usage`) last use. Anyone but
+    an administrator (or the Tools page's owner bot, `tools_reader`) sees only their own row and the grants they made.
+    A summary (a vendor's page) leaves the uses out: no `last_used_at`, nothing read from the call history."""
     from . import names
 
     admin = _admin(c, who, admins) or tools_reader(c, who)
@@ -610,14 +611,20 @@ def access_rows(c, who, tool_id, admins, auth=None):
     label = names.lookup(c, set(found))
     used = {}
     marks = ",".join("?" * len(keys))
-    for row in c.execute(
-        f"SELECT actor, bot, used_at FROM credential_uses WHERE credential_id IN ({marks})", list(keys)
+    for row in (
+        c.execute(f"SELECT actor, bot, used_at FROM credential_uses WHERE credential_id IN ({marks})", list(keys))
+        if usage
+        else ()
     ):
         subject = "bot:" + row["bot"] if row["bot"] else row["actor"]
         if row["used_at"] > used.get(subject, ""):
             used[subject] = row["used_at"]
-    for row in c.execute(
-        "SELECT actor, bot, max(created_at) AS at FROM tool_calls WHERE tool_id=? GROUP BY actor, bot", (tool_id,)
+    for row in (
+        c.execute(
+            "SELECT actor, bot, max(created_at) AS at FROM tool_calls WHERE tool_id=? GROUP BY actor, bot", (tool_id,)
+        )
+        if usage
+        else ()
     ):
         subject = "bot:" + row["bot"] if row["bot"] else row["actor"]
         if (row["at"] or "") > used.get(subject, ""):
@@ -627,11 +634,19 @@ def access_rows(c, who, tool_id, admins, auth=None):
     out = []
     for subject, level in found.items():
         name = label.get(subject) or H.actor_id(subject)
-        row = {"subject": subject, **_person(subject, name), "level": level, "last_used_at": used.get(subject)}
-        # Read on a computer tool is held to reads by the proxy; with no API address nothing can, and the row says so.
+        row = {"subject": subject, **_person(subject, name), "level": level}
+        if usage:
+            row["last_used_at"] = used.get(subject)
+        # Read on a computer tool is held to reads by the proxy when only a Read and write key holds it; with no API
+        # address nothing can, and the row says so. A Read key of its own goes to the run as it is.
         if on_computers and level == "read" and subject.startswith("bot:"):
-            if any(computer_way(c, k, subject) == "unenforced" for k in keys.values() if k["ciphertext"] is not None):
+            ways = {computer_way(c, k, subject) for k in keys.values() if k["ciphertext"] is not None}
+            if "unenforced" in ways:
                 row["read_not_enforced"] = True
+            if "proxy" in ways:
+                row["proxied_read"] = True
+        elif not on_computers and level == "read":
+            row["proxied_read"] = True
         out.append(row)
     return sorted(out, key=lambda r: (r["kind"] != "person", r["name"].lower()))
 
@@ -1240,6 +1255,8 @@ class ToolCreate(Contract):
     base_url: str = Field(default="", max_length=300)
     auth_scheme: str = Field(default="", max_length=80)
     check_path: str = Field(default="", max_length=300)
+    # Its first key (Read and write), stored with the tool in one write: a refused key makes no tool.
+    key: SecretStr | None = Field(default=None, min_length=1, max_length=100_000)
 
 
 class ToolUpdate(Contract):
@@ -1283,11 +1300,15 @@ class AccessSet(Contract):
 class _Receipt:
     """What `Vault.change` fingerprints for a body with a key value: the value itself (keyed HMAC, never stored)."""
 
-    def __init__(self, body, **extra):
-        self.body, self.extra = body, extra
+    def __init__(self, body, omit_none=(), **extra):
+        self.body, self.omit_none, self.extra = body, omit_none, extra
 
     def model_dump(self):
         out = self.body.model_dump() if self.body is not None else {}
+        # A field a later version added, left out when not sent: a retry across that deploy fingerprints the same.
+        for name in self.omit_none:
+            if out.get(name) is None:
+                out.pop(name, None)
         for name, value in list(out.items()):
             if isinstance(value, SecretStr):
                 out[name] = value.get_secret_value()
@@ -1341,10 +1362,14 @@ def _clean(fields):
     return out
 
 
-def create_tool(c, who, body, admins):
+def create_tool(c, who, body, admins, vault=None):
     TA.require(c, who, TA.tool(), action=TA.CREATE, admins=admins)
-    fields = _clean(body.model_dump())
+    if body.key is not None and (TA.acting_agent(who) or getattr(who, "via", "")):
+        # A value is a person's own to paste (plan P4): never an agent's, with anyone's rights or its own.
+        raise Problem("secret_in_request", "A key goes in through a person's own paste in Tools, never an agent", 422)
+    fields = _clean(body.model_dump(exclude={"key"}))
     service = TS.match(service=fields["service"], name=fields["name"])
+    TA.catalog_only(who, service, fields)
     known = TS.defaults(service)
     # A known service's check path belongs to its own address: a tool given another address gets none by default.
     own = not fields["base_url"] or fields["base_url"] == known.get("base_url")
@@ -1366,6 +1391,18 @@ def create_tool(c, who, body, admins):
         tool,
     )
     H.event(c, who.actor, "tool.created", tool["id"], {"service": tool["service"], "delivery": tool["delivery"]})
+    if body.key is not None:
+        # Its own variable: another connection of the service (Stripe prod, Stripe sandbox) may hold the plain one.
+        base = (
+            TS.defaults(tool["service"]).get("env")
+            or re.sub(r"[^A-Z0-9]+", "_", tool["id"].upper()).strip("_") + "_API_KEY"
+        )
+        base = "_" + base if base[0].isdigit() else base
+        env, n = base, 1
+        while c.execute("SELECT 1 FROM credentials WHERE env=? LIMIT 1", (env,)).fetchone():
+            n += 1
+            env = f"{base}_{n}"
+        add_key(c, who, vault, tool["id"], KeyCreate(name="Key", value=body.key, env=env))
     return _tool_view(tool_row(c, tool["id"]))
 
 
@@ -1395,6 +1432,9 @@ def update_tool(c, who, tool_id, body, admins, auth=None):
             access_requests.settled(c, who, resource_type="tool", resource_id=tool_id, via="everyone-reads")
     fields = {k: v for k, v in _clean(asked).items()}
     merged = tool | fields
+    # What the tool reaches after the change, whole: an agent's change of any part leaves only the catalog's.
+    if any(merged[k] != tool[k] for k in (*TA.ADDRESS_FIELDS, "service")):
+        TA.catalog_only(who, merged["service"], {k: merged[k] for k in TA.ADDRESS_FIELDS})
     if merged["delivery"] == "proxy" and not merged["base_url"]:
         raise Problem("delivery", f"Set {tool['name']}'s address before moving it to the proxy", 422)
     if merged["delivery"] == "computer" and _field(tool, "mcp_oauth"):
@@ -1878,15 +1918,31 @@ def _index_row(id, kind, name, status_, href, *, detail="", way="", who=(), who_
     }
 
 
-def _api_rows(c, who, admins, view):
+def _api_rows(c, who, admins, view, access=False):
     admin = _admin(c, who, admins)
+    person = who.role in ("owner", "human") and not who.support
     out = []
     for tool in c.execute("SELECT * FROM tools WHERE kind='api' ORDER BY lower(name), id").fetchall():
         if not (admin and tool["audience"] is None) and not visible(c, who, tool, admins, view.auth):
+            if person and tool["audience"] is None:
+                # An Everyone tool a person holds nothing on: its name and id alone, so they can ask for an agent's
+                # access to it. No service, vendor, address or delivery: nothing about how it is set up.
+                out.append(
+                    _index_row(
+                        "api:" + tool["id"],
+                        "api",
+                        tool["name"],
+                        {"tone": "idle", "text": ""},
+                        "#/tools/api/" + tool["id"],
+                        needs_you=False,
+                        vendor="",
+                        requestable=True,
+                    )
+                )
             continue
         keys = _keys(c, tool["id"])
         state = state_of(c, tool, keys)
-        people = access_rows(c, who, tool["id"], admins, view.auth)
+        people = access_rows(c, who, tool["id"], admins, view.auth, usage=False)
         if who.role in ("owner", "human"):
             # A bot listed is one the reader may see (the same rule every list of bots follows).
             bots = {r["id"] for r in people if r["kind"] == "bot"}
@@ -1916,6 +1972,8 @@ def _api_rows(c, who, admins, view):
                 private=tool["audience"] is not None,
             )
         )
+        if access:  # a vendor's page: who holds it at which level (no use times), and whether it is an MCP server
+            out[-1].update(access=people, mcp=bool(_field(tool, "mcp_url")))
     return out
 
 
@@ -2105,16 +2163,17 @@ def _website_rows(c, who, auth, admins):
     return website_tools.index_rows(c, who, auth, admins)
 
 
-def index_rows(c, who, auth, settings, admins):
+def index_rows(c, who, auth, settings, admins, access=False):
     """Every Tools row the reader may see, in list order: API tools, website tools, mail and numbers, the company's connections,
     declared tools."""
     from . import connections as CN
 
     view = CN.view(c, auth, who, settings)
-    rows = _api_rows(c, who, admins, view)
+    rows = _api_rows(c, who, admins, view, access)
     covered = {r["service"] for r in rows if r.get("service")}
-    # A tool the reader may not see covers nothing: the list reads as if it did not exist.
-    shown = {r["id"][len("api:") :] for r in rows}
+    # A tool the reader may not see, or sees by name alone (`requestable`), covers nothing: its keys' variables are not
+    # the reader's to know, and the list reads as if it did not exist.
+    shown = {r["id"][len("api:") :] for r in rows if not r.get("requestable")}
     envs = {
         r[0]
         for r in c.execute("SELECT env, tool_id FROM credentials WHERE tool_id IS NOT NULL AND env<>''")
@@ -2143,17 +2202,17 @@ BUILT_IN_VENDORS = {"github": "github", "slack": "slack"}
 
 def vendor_page(c, who, auth, settings, admins, vendor):
     """`GET /api/v2/tool-vendors/{vendor}`: everything the reader may see of one vendor, as its Tools rows, each API
-    tool's with its keys, who can use it at which level and its settings (`detail`). A vendor with nothing the reader
-    may see is a 404, as a tool is."""
+    tool's with who can use it at which level (at most WHO_MAX, `access_total` all of them) and whether it is an MCP
+    server. Its keys, settings, checks and calls are its own page's (`detail`). A vendor with nothing the reader may see
+    is a 404, as a tool is."""
     vendor = str(vendor or "").strip().lower()
-    rows = [r for r in index_rows(c, who, auth, settings, admins) if vendor and r.get("vendor") == vendor]
+    rows = [r for r in index_rows(c, who, auth, settings, admins, access=True) if vendor and r.get("vendor") == vendor]
     if not rows:
         raise Problem("not_found", "No such vendor", 404)
     out = []
     for row in rows[:INDEX_LIMIT_MAX]:
         if row["kind"] == "api":
-            page = detail(c, who, row["id"][len("api:") :], admins, auth)
-            row = row | {k: page[k] for k in ("tool", "keys", "access", "settings", "can_manage")}
+            row = row | {"access": row["access"][:WHO_MAX], "access_total": len(row["access"])}
         out.append(row)
     return {"vendor": vendor, "name": TS.vendor_name(vendor), "rows": out}
 
@@ -2225,12 +2284,12 @@ def install(app, store, auth, settings):
         **api_v2(
             "Tools",
             "getToolVendor",
-            "One vendor's page: its rows on Tools (website logins, MCP servers, API tools, its connections), an API tool's with its keys (never a value), who can use it at which level and its settings",
+            "One vendor's page: its rows on Tools (website logins, MCP servers, API tools, its connections), an API tool's with who can use it at which level (access, at most 8; access_total) and mcp, whether it is an MCP server. A tool's keys and settings are on GET /api/v2/api-tools/{id}",
             "ToolVendor",
         ),
     )
     def tool_vendor(request: Request, vendor: str):
-        """One vendor's page on Tools: its website logins, MCP servers, API tools (keys, levels, settings) and the
+        """One vendor's page on Tools: its website logins, MCP servers, API tools (who holds which level) and the
         connections that are its, as the reader may see them."""
         with store.read_transaction() as c:
             return vendor_page(c, request.state.identity, auth, settings, vault().admins, vendor)
@@ -2250,7 +2309,12 @@ def install(app, store, auth, settings):
 
     @app.post("/api/v2/api-tools")
     def create_api_tool(request: Request, body: ToolCreate):
-        return change(request, body, manager, lambda c: create_tool(c, request.state.identity, body, vault().admins))
+        return change(
+            request,
+            _Receipt(body, omit_none=("key",)),
+            manager,
+            lambda c: create_tool(c, request.state.identity, body, vault().admins, vault()),
+        )
 
     def setter(c, w):
         if w.role != "owner":  # the owner may change Who can see it (update_tool says what else)

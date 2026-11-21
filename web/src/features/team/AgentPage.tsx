@@ -17,6 +17,7 @@ import type { Tab } from './actions';
 import { ComputerPage } from './ComputerPage';
 import { bareId, historyOf, modelLine, runFigures, startOfWeek, teamOf, type HistLine } from './model';
 import { ModelPicker } from './ModelPicker';
+import { ReposSection } from './Repos';
 import { CopiesSection, CopyFacts, CopyPick, useCanMakeCopy } from './Copies';
 import { ArchiveDialog, CredentialDialog, WorksForDialog } from './dialogs';
 import { FilesSection } from './Files';
@@ -418,6 +419,7 @@ function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; a
               </Foot>
             )}
           </Section>
+          <ReposSection slug={slug} name={actor.name} />
           <Section
             name="Rules"
             count={rules.data?.length}

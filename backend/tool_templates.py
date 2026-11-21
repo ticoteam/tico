@@ -1058,8 +1058,9 @@ def set_template(c: Any, who: Any, vault: Any, tool_id: Any, value: Any) -> Any:
 
 
 def listing() -> Any:
-    """The known templates, for the Add flow and the Tools chat's key drop."""
+    """The known templates, for the Add flow and the Tools chat's key drop, and the catalog Find or connect searches."""
     return {
+        "services": TS.catalog(),
         "templates": [
             {
                 "id": tid,
@@ -1070,7 +1071,7 @@ def listing() -> Any:
                 "ways": spec["ways"],
             }
             for tid, spec in TS.TEMPLATES.items()
-        ]
+        ],
     }
 
 

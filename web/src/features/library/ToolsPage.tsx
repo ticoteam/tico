@@ -3,24 +3,30 @@ import { useState } from 'react';
 import { refusal, run } from '@/actions';
 import type { ApiTool, ToolIndexRow, WebsiteTool } from '@/api/schema';
 import { meQuery, useActors, useDirectory } from '@/data';
-import { Button } from '@/kit/Button';
+import { Button, FillContext } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
 import { Field, Search } from '@/kit/Field';
+import { Icon } from '@/kit/Icon';
+import { Link } from '@/kit/Link';
 import { IconButton } from '@/kit/IconButton';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { useCards } from '@/kit/Popover';
 import { Row } from '@/kit/Row';
+import { Segmented } from '@/kit/Segmented';
+import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
 import { GithubConnection } from '@/features/start/exports';
+import { RequestCard } from '@/features/task/exports';
+import { flowQuery, type FlowRequest } from '@/features/tasks/exports';
 import { BrowserDialog } from '@/features/team/exports';
 import { FilterRow, ListAndItem, PageMore, Section } from '@/pagekinds';
-import { AddAccountDialog, AddDialog, AddMenu, ReplaceLoginDialog, type Adding } from './AddTool';
+import { AddAccountDialog, AddDialog, ConnectDialog, ReplaceLoginDialog, type Adding } from './AddTool';
 import { CodeDialog, Confirm, EditApiDialog, ExpiryDialog, PasteDialog, RevealDialog, SettingDialog, SitesDialog } from './ToolDialogs';
 import { Face, Held, idsAndNames, KindTile, More, OwnerButton, press, when } from './parts';
-import { apiToolQuery, teamsQuery, toolsQuery, vaultQuery, websiteToolQuery, type StoredKey } from './queries';
+import { apiToolQuery, catalogQuery, teamsQuery, toolsQuery, vaultQuery, vendorQuery, websiteToolQuery, type StoredKey, type VendorRow } from './queries';
 import { AddressOne, CompanyAddress } from './ToolLetters';
 import { EmailView, hasWho, InboxView, KeyView, MailboxView, MessagesView, NumbersView, ServiceView, subjectOf, WebhookView, WhoMenu } from './ToolMore';
 import { MayFacts, useSending } from './ToolSettings';
@@ -31,11 +37,21 @@ import './library.css';
 
 export { KIND } from './ToolShell';
 
-/* Tools (tools.js toolsScreen, detail): the list of tools, In use then Available, beside the open one. Every tool is
-   one page (ToolShell.tsx ToolPage): what it is, how it connects, who may use it, what it can do, recent use. A lock
-   means Tico holds the key. A key is only ever sent, never shown: its row shows a mask. */
+/* Tools (tools.js toolsScreen, detail): the requests that wait on you, the tools by vendor (In use, Unassigned, and the
+   Everyone tools a person may ask for), and Find or connect. Every tool is one page (ToolShell.tsx ToolPage): what it
+   is, how it connects, who may use it, what it can do, recent use; a vendor's page holds its connections, each with its
+   own access list. A lock means Tico holds the key. A key is only ever sent, never shown: its row shows a mask. */
 
 const held = (r: ToolIndexRow) => r.kind === 'api' && r.delivery === 'proxy';
+
+/** How a connection reaches agents by default, as configured: Tico adds the key to each call, the key goes to the run,
+    or a browser Tico signs in. Nothing for a kind that is none of these, nor for a tool listed by name alone. */
+export const deliveryOf = (r: { kind: string; delivery?: string | null; requestable?: boolean }) =>
+  r.requestable ? null : r.kind === 'website' ? 'Browser session' : r.kind === 'api' ? (r.delivery === 'proxy' ? 'Proxy-protected' : 'Direct key') : null;
+
+/** A Read the proxy holds to reads, as the run really gets it (`proxied_read`, backend/api_tools.py access_rows). */
+const Proxied = () => <span className="row-ctx">Proxied</span>;
+
 const host = (url: string) => url.replace(/^https?:\/\//, '').split('/')[0];
 
 /** The rows the filter keeps: one kind, and (with `needs`) only those that need someone. */
@@ -49,8 +65,32 @@ export interface Entry {
   lock: boolean;
   inUse: boolean;
   problem: string | null;
+  /** An Everyone tool the reader holds nothing on: they may ask for an agent's access to it. */
+  requestable?: boolean;
 }
-const toolEntry = (r: ToolIndexRow): Entry => ({ id: r.id, name: r.name, kind: r.kind, lock: held(r), inUse: r.who_total > 0, problem: bad(r) });
+const toolEntry = (r: ToolIndexRow): Entry => ({ id: r.id, name: r.name, kind: r.kind, lock: held(r), inUse: r.who_total > 0, problem: bad(r), requestable: !!r.requestable });
+
+/** One row a vendor: two or more of a vendor's tools are one row that opens its page (`vendor:<id>`); a lone one stays
+    itself. Only the rows given are grouped, so a row the reader may not see never joins one. */
+export function byVendor(rows: ToolIndexRow[]): Entry[] {
+  const of = new Map<string, ToolIndexRow[]>();
+  for (const r of rows) if (r.vendor) of.set(r.vendor, [...(of.get(r.vendor) ?? []), r]);
+  const out: Entry[] = [];
+  for (const [vendor, list] of of) {
+    if (list.length < 2) continue;
+    const kinds = new Set(list.map((r) => r.kind));
+    out.push({
+      id: `vendor:${vendor}`,
+      name: list[0]?.vendor_name || vendor,
+      kind: kinds.size === 1 ? (list[0]?.kind ?? 'api') : 'key',
+      lock: list.some(held),
+      inUse: list.some((r) => r.who_total > 0),
+      problem: list.map(bad).find(Boolean) ?? null,
+      requestable: list.every((r) => r.requestable),
+    });
+  }
+  return [...out, ...rows.filter((r) => !r.vendor || (of.get(r.vendor)?.length ?? 0) < 2).map(toolEntry)];
+}
 /** A stored key no tool holds: its own row, a Key, in use while it is given to someone. */
 const keyEntry = (k: StoredKey): Entry => ({ id: `key:${k.id}`, name: k.name, kind: 'key', lock: k.stored, inUse: k.grants.length > 0, problem: k.stored ? null : 'No value' });
 /** Something wrong first, then by name. */
@@ -81,10 +121,13 @@ export function ToolsPage({ search }: { search: ToolsSearch }) {
       (!w || [k.name, k.env, k.source].some((x) => (x ?? '').toLowerCase().includes(w))) &&
       (!who || hasWho(k.grants.map((g) => g.subject), who, teams, same)),
   );
-  const shown = [...rows.map(toolEntry), ...keys.map(keyEntry)].sort(order);
+  const shown = [...byVendor(rows), ...keys.map(keyEntry)].sort(order);
   const cards = useCards();
   const open = search.tool;
   const [adding, setAdding] = useState<Adding | null>(null);
+  const [finding, setFinding] = useState(false);
+  // Needs you, the one queue, filtered to tools: a key card, a key proposal, an agent's access request for a tool.
+  const requests = toolRequests(useQuery(flowQuery).data?.requests);
   const kinds = [...new Set([...all.map((r) => r.kind as string), ...(loose.length ? ['key'] : [])])].sort((a, b) => (KIND[a] ?? a).localeCompare(KIND[b] ?? b));
   const filter = (change: { kind?: string; needs?: boolean }) => void press('tools.filter', change);
   const filterWho = (next?: string) => void press('tools.filterWho', next ? { who: next } : {});
@@ -141,18 +184,13 @@ export function ToolsPage({ search }: { search: ToolsSearch }) {
               <WhoMenu who={who} teams={teams} people={whoList} onPick={filterWho} />
             </Menu>
             {/* A wide list's head has the plus; a phone's has Add, its one filled button (tools.js phone). */}
-            <AddMenu
-              trigger={
-                cards ? (
-                  <Button variant="primary" aria-label="Add tool" data-phone>
-                    Add
-                  </Button>
-                ) : (
-                  <IconButton icon="plus" label="Add tool" />
-                )
-              }
-              onPick={setAdding}
-            />
+            {cards ? (
+              <Button variant="primary" aria-label="Add tool" data-phone onClick={() => setFinding(true)}>
+                Add
+              </Button>
+            ) : (
+              <IconButton icon="plus" label="Add tool" onClick={() => setFinding(true)} />
+            )}
           </>
         }
         more={
@@ -164,8 +202,15 @@ export function ToolsPage({ search }: { search: ToolsSearch }) {
           </PageMore>
         }
         open={!!open}
-        state={!all.length && !loose.length ? 'empty' : 'ready'}
-        empty={{ title: 'No tools yet', action: <AddMenu trigger={<Button variant="primary">Add tool</Button>} onPick={setAdding} /> }}
+        state={!all.length && !loose.length && !requests.length ? 'empty' : 'ready'}
+        empty={{
+          title: 'No tools yet',
+          action: (
+            <Button variant="primary" onClick={() => setFinding(true)}>
+              Add tool
+            </Button>
+          ),
+        }}
         search={
           <>
             <Search label="Find a tool" value={words} onValueChange={setWords} placeholder="Find a tool" wide />
@@ -174,13 +219,19 @@ export function ToolsPage({ search }: { search: ToolsSearch }) {
         }
         list={
           <div className="tools-list">
+            {/* A phone shows the list until a tool opens: the requests come first in it. */}
+            {cards && requests.length > 0 && <Requests items={requests} />}
             {group(
               'In use',
-              shown.filter((e) => e.inUse),
+              shown.filter((e) => e.inUse && !e.requestable),
             )}
             {group(
-              'Available',
-              shown.filter((e) => !e.inUse),
+              'Unassigned',
+              shown.filter((e) => !e.inUse && !e.requestable),
+            )}
+            {group(
+              'Everyone',
+              shown.filter((e) => e.requestable),
             )}
             {!shown.length && <Empty title="Nothing matches" />}
           </div>
@@ -194,12 +245,44 @@ export function ToolsPage({ search }: { search: ToolsSearch }) {
                 <span className="grow" />
                 <OwnerButton page="tools" />
               </header>
+              <div className="conv-body tool-body" data-scroll>
+                {/* a phone has them atop the list */}
+                {cards ? null : requests.length ? <Requests items={requests} /> : <Empty title="No requests" />}
+              </div>
             </section>
           )
         }
       />
+      {finding && (
+        <ConnectDialog
+          onClose={() => setFinding(false)}
+          onKind={(k) => {
+            setFinding(false);
+            setAdding(k);
+          }}
+        />
+      )}
       {adding && <AddDialog adding={adding} onClose={() => setAdding(null)} />}
     </>
+  );
+}
+
+/** The requests Tools answers: a key card, a key proposal, and an agent's access request for a tool (not a repository). */
+const toolRequests = (items: readonly FlowRequest[] = []) => items.filter((it) => it.kind !== 'access' || it.access?.resource_type === 'tool');
+
+/** What waits on you about tools, each answered in its card (the Needs you request cards); the first card's button is the
+    page's one filled button. */
+function Requests({ items }: { items: readonly FlowRequest[] }) {
+  return (
+    <Section name="Requests" count={items.length} target="tools:requests">
+      <div className="tool-requests">
+        {items.map((it, i) => (
+          <FillContext key={it.id} value={i === 0}>
+            <RequestCard it={it} />
+          </FillContext>
+        ))}
+      </div>
+    </Section>
   );
 }
 
@@ -216,6 +299,8 @@ function Tool({ id, row, problem }: { id: string; row: ToolIndexRow | undefined;
   const kind = at > 0 ? id.slice(0, at) : id;
   const key = at > 0 ? id.slice(at + 1) : '';
   const mailbox = (row as { mailbox_id?: string } | undefined)?.mailbox_id;
+  if (kind === 'vendor' && key) return <VendorView vendor={key} />;
+  if (kind === 'api' && row?.requestable) return <RequestView id={key} row={row} />;
   if (kind === 'api') return <ApiToolView id={key} row={row} />;
   if (kind === 'website') return <WebsiteView id={key} row={row} />;
   if (kind === 'key' && key) return <KeyView cid={key} />;
@@ -228,6 +313,154 @@ function Tool({ id, row, problem }: { id: string; row: ToolIndexRow | undefined;
   if (kind === 'messages') return <MessagesView />;
   if (kind === 'webhook' && key) return <WebhookView id={key} row={row} />;
   return <PlainView row={row} kind={kind} problem={problem} />;
+}
+
+/* ---------------------------------------------------------------- a vendor's connections */
+
+/** A vendor's page (`vendor:<id>`): each connection the reader may see, with its kind, delivery and state and its own
+    access list. Add connection offers the catalog's ways in for the vendor, never anything from its other tools. */
+function VendorView({ vendor }: { vendor: string }) {
+  const q = useQuery(vendorQuery(vendor));
+  const known = useQuery(catalogQuery).data?.some((s) => s.id === vendor);
+  const [connecting, setConnecting] = useState(false);
+  const [adding, setAdding] = useState<Adding | null>(null);
+  const name = q.data?.name ?? vendor;
+  return (
+    <ToolPage
+      name={name}
+      kind="vendor"
+      q={q}
+      target={`tool:vendor:${vendor}`}
+      bare
+      fill={
+        known && (
+          <Button variant="primary" onClick={() => setConnecting(true)}>
+            Add connection
+          </Button>
+        )
+      }
+    >
+      {q.data?.rows.map((r) => (
+        <Connection key={r.id} row={r} />
+      ))}
+      {connecting && (
+        <ConnectDialog
+          vendor={vendor}
+          onClose={() => setConnecting(false)}
+          onKind={(k) => {
+            setConnecting(false);
+            setAdding(k);
+          }}
+        />
+      )}
+      {adding && <AddDialog adding={adding} onClose={() => setAdding(null)} />}
+    </ToolPage>
+  );
+}
+
+/** One connection on its vendor's page: what it is, how it reaches agents, its state, and who may use it at which level. */
+function Connection({ row }: { row: VendorRow }) {
+  const delivery = deliveryOf(row);
+  const who =
+    row.access?.map((a) => (
+      <WhoRow key={a.subject} actor={a.kind === 'finance' ? null : a.subject} name={a.name} level={a.level} right={a.proxied_read && <Proxied />} />
+    )) ?? row.who.map((w) => <WhoRow key={w.id} actor={w.kind === 'group' ? null : w.id} name={w.name} />);
+  const more = (row.access_total ?? row.who_total) - who.length;
+  return (
+    <Section
+      name={row.name}
+      count={(row.access_total ?? row.who_total) || undefined}
+      target={`tool-conn:${row.id}`}
+      actions={
+        <Link className="ib ib-sm" href={toolHref(row.id)} aria-label={`Open ${row.name}`} title={`Open ${row.name}`}>
+          <Icon name="arrow" />
+        </Link>
+      }
+    >
+      <Facts>
+        <LabelValue label="Kind">{row.mcp ? KIND.mcp : (KIND[row.kind] ?? row.kind)}</LabelValue>
+        {row.detail && (
+          <LabelValue label="Address">
+            <Code>{row.detail}</Code>
+          </LabelValue>
+        )}
+        {delivery && <LabelValue label="Default delivery">{delivery}</LabelValue>}
+        <LabelValue label="State">{bad(row) ? <Pill>{bad(row)}</Pill> : row.status.text || 'Not yet'}</LabelValue>
+      </Facts>
+      {who}
+      {more > 0 && (
+        <Link className="verb" href={toolHref(row.id)}>
+          {`${more} more`}
+        </Link>
+      )}
+    </Section>
+  );
+}
+
+/* ---------------------------------------------------------------- an Everyone tool the reader may ask for */
+
+/** An Everyone tool a person holds nothing on: its name alone, and Request access for an agent. */
+function RequestView({ id, row }: { id: string; row: ToolIndexRow }) {
+  const [asking, setAsking] = useState(false);
+  return (
+    <ToolPage
+      name={row.name}
+      kind="api"
+      row={row}
+      target={`tool:api:${id}`}
+      bare
+      fill={
+        <Button variant="primary" onClick={() => setAsking(true)}>
+          Request access
+        </Button>
+      }
+    >
+      {asking && <RequestDialog tool={id} name={row.name} onClose={() => setAsking(false)} />}
+    </ToolPage>
+  );
+}
+
+/** Which agent, at which level, and why: the request goes to whoever can grant it (granted at once when it can be). */
+function RequestDialog({ tool, name, onClose }: { tool: string; name: string; onClose: () => void }) {
+  const agents = useActors().filter((a) => a.kind === 'agent');
+  const [agent, setAgent] = useState('');
+  const [level, setLevel] = useState<'read' | 'read_write'>('read');
+  const [why, setWhy] = useState('');
+  const [busy, setBusy] = useState(false);
+  const ask = async () => {
+    setBusy(true);
+    const r = await run('tools.requestAccess', { tool, agent, level, why: why.trim() || undefined }, { via: 'click' });
+    setBusy(false);
+    toast(r.ok ? { text: r.did ?? 'Asked', name } : refusal(r, 'Not asked'));
+    if (r.ok) onClose();
+  };
+  return (
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title={`Request access to ${name}`}
+      actions={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" busy={busy} disabled={!agent || busy} onClick={() => ask()}>
+            Request
+          </Button>
+        </>
+      }
+    >
+      <Select label="Agent" options={agents.map((a) => ({ value: a.id, label: a.name }))} value={agent} onValueChange={setAgent} />
+      <Segmented
+        label="Level"
+        options={[
+          { value: 'read', label: 'Read' },
+          { value: 'read_write', label: 'Read and write' },
+        ]}
+        value={level}
+        onValueChange={setLevel}
+      />
+      <Field label="Why" value={why} onValueChange={setWhy} placeholder="Optional" />
+    </Dialog>
+  );
 }
 
 /* ---------------------------------------------------------------- an API or MCP tool */
@@ -315,6 +548,7 @@ function ApiToolView({ id, row }: { id: string; row: ToolIndexRow | undefined })
                 </LabelValue>
               )}
               {!t.keys.length && !mcp?.signed_in_at && <LabelValue label="Connected">Not yet</LabelValue>}
+              <LabelValue label="Default delivery">{deliveryOf({ kind: 'api', delivery: t.tool.delivery })}</LabelValue>
               {!mcp && t.keys.length > 0 && <LabelValue label="Key goes in">{t.tool.auth_scheme}</LabelValue>}
               {last && (
                 <LabelValue label="Checked">
@@ -362,6 +596,7 @@ function ApiToolView({ id, row }: { id: string; row: ToolIndexRow | undefined })
           name={a.name}
           at={a.last_used_at}
           level={a.level}
+          right={a.proxied_read && <Proxied />}
           onLevel={manage && !a.fixed ? (level) => void press('tools.setAccess', { tool: id, subject: a.subject, level }) : undefined}
         />
       ))}
@@ -534,6 +769,7 @@ function WebsiteView({ id, row }: { id: string; row: ToolIndexRow | undefined })
               Authenticator <Held />
             </LabelValue>
           )}
+          {t && <LabelValue label="Default delivery">{deliveryOf({ kind: 'website' })}</LabelValue>}
           {t?.host && (
             <LabelValue label="Runs on">
               {t.host.label} <Dim>{t.host.online ? 'Online' : 'Offline'}</Dim>
