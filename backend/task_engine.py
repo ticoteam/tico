@@ -313,6 +313,14 @@ def rides_with_filer(conn: "sqlite3.Connection", task_id: str, stage_id: str) ->
     return conn.execute(_FILER_IN, (stage_id, task_id)).fetchone() is not None
 
 
+# The open tasks in a stage that could hold a slot: not snoozed, not blocked.
+_IN_STAGE_COUNT = (
+    "SELECT COUNT(*) FROM tasks t WHERE t.pipeline_id IS NOT NULL AND t.stage_id=? AND t.status='open' "
+    "AND NOT EXISTS (SELECT 1 FROM snoozes s WHERE s.task_id = t.id AND s.ended_at IS NULL) "
+    f"AND NOT {task_depends.BLOCKED % 't'}"
+)
+
+
 def has_room(conn: "sqlite3.Connection", stage_row: Row, extra: int = 0, task_row: Row | None = None) -> bool:
     """A stage has room when it has no limit, or fewer of its tasks hold a slot than its limit. A task holds a slot
     while it is open, not snoozed and not blocked by a task it depends on (task_depends), unless it waits only on a person's OK or answer (`waiting_on.slots`): bots keep
@@ -324,12 +332,9 @@ def has_room(conn: "sqlite3.Connection", stage_row: Row, extra: int = 0, task_ro
         return True
     if task_row and rides_with_filer(conn, str(task_row["id"]), str(stage_row["id"])):
         return True
-    everyone = conn.execute(
-        "SELECT COUNT(*) FROM tasks t WHERE t.pipeline_id IS NOT NULL AND t.stage_id=? AND t.status='open' "
-        "AND NOT EXISTS (SELECT 1 FROM snoozes s WHERE s.task_id = t.id AND s.ended_at IS NULL) "
-        f"AND NOT {task_depends.BLOCKED % 't'}",
-        (stage_row["id"],),
-    ).fetchone()[0]
+    from . import read_cache
+
+    everyone = read_cache.one(conn, _IN_STAGE_COUNT, (stage_row["id"],))[0]  # once a snapshot for each stage
     if everyone + extra < limit:
         return True  # room even if every task held a slot: no task's waits are read
     from . import waiting_on
@@ -1890,6 +1895,10 @@ def move_on_past_own_snooze(conn: "sqlite3.Connection", task_id: str, why: str, 
     return True
 
 
+# Whether a task filed this one.
+FILED_SQL = "SELECT 1 FROM links WHERE to_task_id=?"
+
+
 def not_held_by_hand(conn: "sqlite3.Connection", row: Row) -> bool:
     """A person's request (one a person asked for that no task filed, as C8 reads it) on its first visit, in a by-hand
     stage whose "a person's request moves on" setting is on (`requests_move_on`: Product's Ideas): the person already
@@ -1904,7 +1913,9 @@ def not_held_by_hand(conn: "sqlite3.Connection", row: Row) -> bool:
         return False
     if not is_human(row.get("requester_id")):
         return False
-    return not conn.execute("SELECT 1 FROM links WHERE to_task_id=?", (row["id"],)).fetchone()
+    from . import read_cache
+
+    return not read_cache.one(conn, FILED_SQL, (row["id"],))  # primed for many tasks by waiting_on.prime
 
 
 def fill_open_slots(conn: "sqlite3.Connection", stage_ids: Sequence[str] | None = None) -> list[str]:
@@ -2372,11 +2383,14 @@ def refusal_line(rule: Row, line: str) -> str:
     return f"{said} (rule {rule['id']})"
 
 
-def unsnooze(conn: "sqlite3.Connection", task_id: str, by: str, why: str | None = None) -> Row:
+def unsnooze(
+    conn: "sqlite3.Connection", task_id: str, by: str, why: str | None = None, *, consequence: str | None = None
+) -> Row:
     """End a task's snooze. Its end is not a change either: no wake is written here, and the ladder's count and level
     are as they were. The task is due at once, and the never-stuck check wakes whoever has the turn on its next pass,
     as the next try (at level `person` nobody is woken: it is back in that person's Needs you). It can leave the stage
-    one over its limit."""
+    one over its limit. `consequence` names the act that ends it by itself (an answer, a done, a reply): its history
+    row says so, so it is not a second decision of whoever acted."""
     H = _h()
     row = task(conn, task_id)
     if not row:
@@ -2387,7 +2401,16 @@ def unsnooze(conn: "sqlite3.Connection", task_id: str, by: str, why: str | None 
     ts = H.now()
     _end_snooze(conn, row["snooze"], by, ts)
     conn.execute("UPDATE visits SET next_try_at=? WHERE id=?", (ts, row["visit"]["id"]))
-    _event(conn, task_id, by, "unsnooze", row["snooze"].get("until_at"), None, why)
+    _event(
+        conn,
+        task_id,
+        by,
+        "unsnooze",
+        row["snooze"].get("until_at"),
+        None,
+        why,
+        {"consequence": consequence} if consequence else None,
+    )
     _sync_wait(conn, task_id)
     return _task(conn, task_id)
 

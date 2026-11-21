@@ -583,8 +583,13 @@ def of(
     shut: tuple[str, ...] | None = (asked_out,) if asked_out else None
     for standing in unmet:
         requirement = standing.requirement
-        # An ask's wait counts from when it was asked (a page's version, once Jev looked), else when the stage began.
-        since = standing.since or (requirement["created_at"] if requirement.get("visit_id") else entered)
+        # An ask's wait counts from when it was asked (a page's version, once Jev looked), else when the stage began,
+        # or when its requirement was added to the stage, if later.
+        since = standing.since or (
+            requirement["created_at"]
+            if requirement.get("visit_id")
+            else max(str(entered), str(requirement.get("created_at") or ""))
+        )
         line = standing.line or standing.name
         if requirement["kind"] == "ok" and requirement.get("visit_id") and _bound(conn, requirement["id"]):
             # A bound OK's line may name what it is for: what the task waits on goes to everyone who reads the task,
@@ -613,7 +618,8 @@ def of(
         elif standing.state == R.WAITING:
             # An OK or an answer waits on whoever it names: a person, or a bot that was named to approve. One that names
             # nobody, or a person who left (`person_of` skips them), is the task's person's. A page naming several
-            # approvers is asked of each of them (`asked_of`). One given to someone waits on them from the give.
+            # approvers is asked of each of them (`asked_of`). One given to someone, or asked again after a send back,
+            # waits from then.
             since = max(since or "", R.given_at(conn, requirement, str(visit["id"])) or "") or None
             everyone = asked_of(conn, row, standing)
             if R.shared(requirement):
@@ -658,10 +664,11 @@ def of(
     # A task blocked by one it depends on waits on that alone (below): no room in the next stage is read for it.
     blockers = task_depends.blockers(conn, str(row["id"]))
     if by_hand and not unmet and not blockers and E.not_held_by_hand(conn, row):
-        # A person's request is not held by hand: it waits for room in the next stage (never_stuck._requests).
+        # A person's request is not held by hand: it waits for room in the next stage (never_stuck._requests). No task
+        # filed it, so it rides with no filer: the stage's room is the same for every such request (one read a stage).
         ahead = E.next_stage(conn, row)
         name = ahead["name"] if ahead else "the next stage"
-        full = bool(ahead) and not E.has_room(conn, ahead, task_row=row)
+        full = bool(ahead) and not E.has_room(conn, ahead)
         line = f"No room in {name}" if full else f"Moving to {name}"
         out.append(Wait(ROOM, ahead["id"] if ahead else None, line, None, entered))
     elif by_hand:
@@ -1009,6 +1016,21 @@ def prime(conn: "sqlite3.Connection", task_ids: Iterable[str], *, slim: bool = F
     R.prime(conn, rows)
     task_wakes.prime_holds(conn, ids)  # each task's worktree wait and held run: a bot's turn may be Paused on it
     task_depends.prime(conn, ids)  # the tasks each depends on that are still open
+    # Whether a task filed each person's request in a by-hand stage that moves requests on (task_engine.not_held_by_hand).
+    requests = [
+        str(row["id"])
+        for row in rows
+        if row["stage"].get("by_hand") and row["stage"].get("requests_move_on") and is_human(row.get("requester_id"))
+    ]
+    if requests:
+        filed = {
+            str(found[0])
+            for found in conn.execute(
+                "SELECT DISTINCT to_task_id FROM links WHERE to_task_id IN (SELECT value FROM json_each(?))",
+                (json.dumps(requests),),
+            )
+        }
+        read_cache.prime(conn, E.FILED_SQL, {(task_id,): (1,) if task_id in filed else None for task_id in requests})
     question_marks.prime_on_tasks(conn, ids)  # each task's open ❓ (`of` asks question_marks.on_task of each)
     # "Can this bot run" for each bot whose turn a task may be: its owner, or its pipeline's manager.
     bots: list[str] = []

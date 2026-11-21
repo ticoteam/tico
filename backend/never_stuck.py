@@ -455,7 +455,8 @@ def _requests(conn: "sqlite3.Connection") -> int:
         if not row or not E.not_held_by_hand(conn, row) or R.unmet(conn, row):
             continue
         nxt = E.next_stage(conn, row)
-        if not nxt or nxt["kind"] != "work" or not E.has_room(conn, nxt, task_row=row) or E.shut_out(conn, row, nxt):
+        # A request no task filed rides with no filer (E.not_held_by_hand), so the stage's room is one read for all.
+        if not nxt or nxt["kind"] != "work" or not E.has_room(conn, nxt) or E.shut_out(conn, row, nxt):
             continue
         E.move(conn, row["id"], nxt["id"], SYSTEM, seen_version=row.get("version"))
         moved += 1

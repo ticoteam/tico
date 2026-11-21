@@ -239,3 +239,60 @@ def test_taking_back_an_ok_that_moved_the_task_is_one_decision(api):
 
 
 WEEK2 = "2030-02-04"
+
+
+def test_an_answer_that_ends_an_agents_snooze_is_one_decision_and_a_person_unsnoozing_is_another(api):
+    store = api.app.state.store
+    task_id = post(api, "tasks", {"owner": "ops", "title": "Price the plan", "body": "Today."})["id"]
+    with store.transaction() as c:
+        asked = X.ok_ask(c, task_id, "bot:ops", "ana", "OK the price?")["requirement_id"]
+        version = E.task(c, task_id)["version"]
+        E.snooze(c, task_id, "bot:ops", "Waiting for Ana", seen_version=version)
+        A.answer(c, task_id, asked, ANA, "ok")  # ends the agent's snooze by itself
+        assert not E.task(c, task_id)["snooze"]
+        E.snooze(c, task_id, "bot:ops", "Waiting for the bank", seen_version=E.task(c, task_id)["version"])
+        E.unsnooze(c, task_id, ANA, "Go on")  # her own decision
+        c.execute(
+            "UPDATE history_events SET created_at=? WHERE subject_id=? AND actor_id=? AND kind <> 'move'",
+            (f"{WEEK3}T10:00:00.000000Z", task_id, ANA),
+        )
+    [week] = rows(api, f"SELECT decisions FROM human_decisions_weekly WHERE week='{WEEK3}'", "ana-test")
+    assert week == {"decisions": 2}
+
+
+def test_an_ok_added_to_the_stage_later_waits_from_when_it_was_added(c, time_machine):
+    from backend import waiting_on as W
+
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    time_machine.shift(timedelta(hours=2))
+    added = X.requirement(c, E.task(c, task_id)["stage_id"], "ok", person="human:ben", line="Ben signs off")
+    [head] = [w for w in W.waiting_on(c, task_id) if w.requirement_id == added]
+    assert (head.who, H.parse_ts(head.since)) == ("human:ben", START + timedelta(hours=2))
+
+
+WEEK3 = "2030-03-04"
+
+
+def test_a_messages_task_is_read_from_its_refs_as_the_server_reads_it():
+    """human_touches_v names a message's task (and its parent's) as hubdb.refs_task_id does, whatever shape the refs."""
+    import sqlite3
+
+    from backend import sql as S
+
+    shapes = [
+        {"task": "t1"},
+        {"task": " t1 "},
+        {"task": ["", "t1"]},
+        {"task": [" ", 7, "t1", "t2"]},
+        {"task": ""},
+        {"task": [""], "task_id": "t2"},
+        {"task_id": ["", "t2"]},
+        {"task": 5},
+        {},
+    ]
+    conn = sqlite3.connect(":memory:")
+    for refs in shapes:
+        [got] = conn.execute(
+            f"SELECT {S._refs_task_sql('m')} FROM (SELECT ? AS refs) m", (json.dumps(refs),)
+        ).fetchone()
+        assert got == H.refs_task_id(refs), refs
