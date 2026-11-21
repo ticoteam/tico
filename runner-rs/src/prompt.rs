@@ -510,6 +510,8 @@ fn parts(
     } else {
         put(&mut lines, Part::Standing, "Add a visual (chart, table, diagram, mockup, screenshot, clip or recording) to a reply when it makes the answer clearer, never for a plain answer, and keep the text answer complete on its own.".into());
     }
+    // Every turn, page turns and harnesses that skip AGENTS.md included: act on what can be undone, ask only for real controls.
+    put(&mut lines, Part::Standing, "Take reversible or protective steps yourself (including closing finished admin chores) and log a short note. Ask a person to approve an action only for spend over budget, new payees or bank changes, outgoing sends, signatures, legal commitments, irreversible actions, or security; asking for an essential missing fact is fine.".into());
     // A path on the bot's own disk opens for nobody else: 231 of 4,132 thread messages named one, none attached it.
     if !make_page {
         let here = conversation["id"].as_str().unwrap_or("<conversation>");
@@ -777,6 +779,21 @@ mod tests {
             false,
         );
         assert!(built.contains(&block) && !built.contains("SECRET"));
+    }
+
+    #[test]
+    fn every_turn_is_told_to_act_on_reversible_steps() {
+        for attempt in [
+            json!({"id": "a", "bot": "ops"}),
+            json!({"id": "a", "bot": "ops", "make_page": {"task": {"id": "t1"}}}),
+            json!({"id": "a", "bot": "designer", "config": {"runtime": "cursor"}}),
+        ] {
+            let built = prompt(&attempt, &Names::from_config(None), None, false);
+            assert!(
+                built.contains("Take reversible or protective steps yourself"),
+                "{built}"
+            );
+        }
     }
 
     #[test]

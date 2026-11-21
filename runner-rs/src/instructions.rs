@@ -59,7 +59,6 @@ pub fn section(app: &str, stateless: bool) -> String {
         "- Use the tico CLI for all tasks, messages, approvals, and status. It calls the shared cloud API. A bot's status lives in its Tico tasks.".into(),
         "- Never open, create, or modify a local Hub database containing real team state; use the shared cloud API for that state. For authorized development tests, you may create disposable databases containing only synthetic fixtures, isolated from live team data and credentials. Honor stricter task-specific restrictions. Never track work in GitHub Issues.".into(),
         "- Only act within this request's authority. Shared policies and approval rules still apply.".into(),
-        "- Take reversible or protective steps yourself (including closing finished admin chores) and log a short note. Ask a person only for spend over budget, new payees or bank changes, outgoing sends, signatures, legal commitments, irreversible actions, or security.".into(),
         "- Work up to three tasks at a time (separate worktrees when they touch code) and keep a prioritized list as long as useful. A daily run normally advances one meaningful improvement; a person's assigned project or question sets this turn's scope. Lead with the result and give enough detail or list items to answer the actual request. Do not impose an arbitrary answer-length or list-length cap.".into(),
         "- A task owner marks work done; its requester or an authorized human closes it.".into(),
     ];
@@ -432,7 +431,6 @@ mod tests {
             "Never wait inside a command",
             "HUB_DIR is Tico's own install",
             "Tico-Run: <run>",
-            "Take reversible or protective steps yourself",
         ] {
             assert!(s.contains(line), "{line}");
         }
