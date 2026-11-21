@@ -485,7 +485,7 @@ def install(app, store):
                 reconnect_tasks.called(c, tool_id, status)  # Key rejected opens its Reconnect task, Working ends it
             rule_links.record(c, gate)  # the write's rule check, in the same transaction as its row (in a savepoint)
 
-    def gated(subject, tool_id, name, method, body, calls, key, unread):
+    def gated(subject, tool_id, name, method, body, calls, key, unread, hinted):
         """The write's rule check, or None for a retry under an Idempotency-Key whose event is already logged (read
         first: no judge call, no second event). `unread`: a POST over the gate's 1 MB limit that no parse read, so
         whether it only reads is unknown: recorded unchecked, never judged or counted as a write."""
@@ -498,7 +498,10 @@ def install(app, store):
             if unread:
                 found = rule_links.unchecked(subject, subject, link, 'tool_call', 'too_large')
             else:
-                output = rule_links.proxy_output(name, method, body, calls)
+                # Calls that may write go first, so the calls the check reads (CALLS_READ) never leave one out.
+                output = rule_links.proxy_output(
+                    name, method, body, calls, lambda call: bool(mcp_write(hinted, [call], GATE_READ_ONLY))
+                )
                 found = rule_links.check_as(
                     store, getattr(app.state, 'judge', None), subject, subject, '', link, 'tool_call', output
                 )
@@ -645,8 +648,8 @@ def install(app, store):
                 await log(413, 'refused', 'Request body over 25 MB')
                 return refused(413, 'too_large', 'A tool call sends at most 25 MB.')
             chunks.append(chunk)
-        # Read authorization parses a Read caller's POST whatever its size, as before; the gate reads it only up to its
-        # 1 MB limit (`gate_calls`), and a larger one is not parsed for it at all.
+        # Read authorization parses a Read caller's POST whatever its size, as before; other POSTs are parsed up to 1 MB.
+        # What the gate takes of that parse is `gate_calls`, below.
         small = total <= rule_links.MAX_JUDGED
         calls = rpc_calls(b''.join(chunks)) if method == 'POST' and (small or ready['reads_only']) else None
         if ready['reads_only'] and method == 'POST':
@@ -700,6 +703,7 @@ def install(app, store):
                 gate_calls,
                 idem if 0 < len(idem) <= 200 else '',
                 unread,
+                hinted,
             )
         client = httpx.AsyncClient(
             transport=getattr(app.state, 'tool_proxy_transport', None),

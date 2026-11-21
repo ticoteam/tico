@@ -383,3 +383,11 @@ def test_a_large_mcp_batch_is_read_up_to_its_first_calls():
     read = L.proxy_output("Close CRM", "POST", None, calls).split("\n")
     assert read[1] == f"(the first {L.CALLS_READ} of {L.CALLS_READ + 10} MCP calls)"
     assert read[2:] == [f"MCP tools/call tool_{n}" for n in range(L.CALLS_READ)]  # calls 0-49, in order
+
+
+def test_a_write_after_many_reads_in_one_batch_still_reaches_the_check():
+    reads = [("tools/call", {"name": f"search_{n}"}) for n in range(60)]
+    batch = [*reads, ("tools/call", {"name": "delete_issue"})]
+    read = L.proxy_output("Close CRM", "POST", None, batch, lambda call: call[1]["name"] == "delete_issue")
+    lines = read.split("\n")
+    assert lines[2] == "MCP tools/call delete_issue" and lines[3:] == [f"MCP tools/call search_{n}" for n in range(49)]

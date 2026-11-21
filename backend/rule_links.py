@@ -78,12 +78,19 @@ def _name(value: Any, pattern: re.Pattern[str] = NAME) -> str | None:
     return text if pattern.fullmatch(text) and not text.lower().startswith("tpx1") else None
 
 
-def proxy_output(tool_name: str, method: str, body: bytes | None, calls: Any = None) -> str:
+def proxy_output(
+    tool_name: str, method: str, body: bytes | None, calls: Any = None, writes: Callable[[Any], bool] | None = None
+) -> str:
     """What the check reads of a proxied write, names only: the tool's name and the HTTP method; for MCP calls (`calls`,
     tool_proxy.rpc_calls) each call's method and tool name; for a JSON object body its top-level key names. Never a
-    value, the path, the query or a header. `body` is None when it is not read (over MAX_JUDGED)."""
+    value, the path, the query or a header. `body` is None when it is not read (over MAX_JUDGED). `writes(call)`: whether
+    a call may write; those are read first when a batch holds more than CALLS_READ."""
     lines = [f"{method} to {tool_name}"]
     every: list[tuple[Any, Any]] = calls or []
+    if writes and len(every) > CALLS_READ:
+        # The calls that may write (`writes`) first, in their order, then the rest: a long run of reads never pushes a
+        # write out of the calls the check reads.
+        every = [call for call in every if writes(call)] + [call for call in every if not writes(call)]
     listed = every[:CALLS_READ]  # a batch of any size is classified in full; the check reads its first CALLS_READ
     if len(every) > CALLS_READ:
         lines.append(f"(the first {CALLS_READ} of {len(every)} MCP calls)")
