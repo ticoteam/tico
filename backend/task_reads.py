@@ -340,7 +340,13 @@ def brief(c, rows, visible_sql="1", viewer=None):
     seen: dict[str, str | None] = {}
     turn_bots = {str(H.actor_id(h.who)) for h in heads.values() if h and h.state == W.BOT and h.who}
     machines = cloud_machines.states(c, turn_bots) if turn_bots else {}
+    from . import paid_renders
+
+    cards = paid_renders.cards(c)  # paid shots to reconcile: a card's own line, apart from its turn and status
     for row in rows:
+        reconcile = W.reconcile_of(c, row["id"], cards)
+        if reconcile:
+            row["reconcile"] = reconcile
         turn = turns.get(row["id"])
         head = heads.get(row["id"])
         line = status_line(
@@ -606,10 +612,13 @@ def run_moved(c: "sqlite3.Connection", attempt_id: str) -> None:
         _send(c, [tid], "run")
 
 
-def status_moved(c: "sqlite3.Connection", bots: Iterable[str] | None, tasks: Iterable[str] = ()) -> None:
+def status_moved(
+    c: "sqlite3.Connection", bots: Iterable[str] | None, tasks: Iterable[str] = (), kind: str = "status"
+) -> None:
     """What decides whether these agents can run changed (a cloud machine's state, a hold, a computer assigned, placed or
     revoked): every open task one of them owns or that waits on one of them (an ask), and `tasks`, is sent again, once
-    per transaction (`_send`). None is every agent (a company-wide hold): one `bulk` change."""
+    per transaction (`_send`). None is every agent (a company-wide hold): one `bulk` change. `kind` "shots": its paid
+    shots to reconcile moved (backend/paid_renders.py), so an open task view reads its waits again."""
     from .store import H
 
     if bots is None:
@@ -626,7 +635,7 @@ def status_moved(c: "sqlite3.Connection", bots: Iterable[str] | None, tasks: Ite
             (actors,),
         )
     ]
-    _send(c, [*found, *tasks], "status")
+    _send(c, [*found, *tasks], kind)
 
 
 def comment_rights(c, auth, who, task_id):

@@ -1166,14 +1166,15 @@ def task_view(
     hidden = hidden_filed(conn, row, viewer, visible_sql)
     shown: Callable[[str], bool] = lambda task_id: task_id not in hidden
     raw_waits = W.of(conn, row, standings=standings) if live else []
-    waits = [W.view(wait, shown) for wait in raw_waits]
+    said_waits = W.with_shots(conn, task_id, raw_waits)  # with paid shots to reconcile, keys and names: Details
+    waits = [W.view(wait, shown) for wait in said_waits]
     answers = R.newest_answers(conn, visit["id"]) if live else {}
     works = bool(viewer) and can_work(conn, str(viewer), row)
     to_leave = [_leave_entry(conn, row, standing, answers, viewer, hidden, works) for standing in standings]
     if live:
         to_leave.extend(_decided(conn, task_id, visit["id"], viewer))
     following = E.next_stage(conn, row) if live else None
-    ready = bool(waits) and all(wait["state"] == W.ROOM for wait in waits)
+    ready = W.all_met(raw_waits)
     held = E.shut_out(conn, row, following) if following and ready else None
     for wait in waits:
         if held and wait["state"] == W.ROOM:
@@ -1219,8 +1220,8 @@ def task_view(
     )
     # A page several people approve is each approver's turn: `viewer` sees it as theirs (waiting_on.head_for).
     # `turn_for`: the person the read is for (waiting_on.turn_viewer), apart from `viewer`, who decides access.
-    head = W.head_for(raw_waits, turn_for or viewer)
-    turn = waits[raw_waits.index(head)] if head else None
+    head = W.head_for(raw_waits, turn_for or viewer)  # the workflow's turn: the run header's, never a shot's
+    turn = waits[said_waits.index(head)] if head else None
     run = (
         task_reads.live_runs(conn, {task_id: head.who}).get(task_id)
         if head and head.state == W.BOT and head.who

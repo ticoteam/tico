@@ -69,7 +69,8 @@ class Agent:
             return 202, {"id": "vid_" + key[-6:]}, ""
 
         who = SimpleNamespace(actor="bot:ops", attempt_id=run["id"])
-        paid_renders.send(self.api.app.state.store, who, {"prompt": "Opening shot, kitchen"}, "opening", submit)
+        shot = paid_renders.shot_of({"prompt": "Opening shot, kitchen"}, "opening")
+        paid_renders.send(self.api.app.state.store, who, shot, submit)
 
     def inputs(self, run):
         return [m["id"] for m in post(self.api, f"attempts/{run['id']}/inputs", {}, self.machine["token"])["messages"]]

@@ -95,6 +95,9 @@ class Wait:
     href: str | None = None
     share: tuple[str, ...] | None = None
     shared: bool = False  # an ask of one approver of a page several people approve (`of`); never leaves the server
+    shots: tuple[tuple[str, str], ...] | None = (
+        None  # (key, name) of each paid shot it asks to reconcile (`with_shots`)
+    )
 
 
 # What a reader who may not open a task this one filed is told of it (`unnamed`).
@@ -142,6 +145,10 @@ def view(wait: Wait, shown: Callable[[str], bool]) -> Row:
         del out["share"]
     else:
         out["share"] = list(out["share"])
+    if out["shots"] is None:
+        del out["shots"]
+    else:
+        out["shots"] = [{"key": key, "name": name} for key, name in out["shots"]]
     return out
 
 
@@ -1057,6 +1064,37 @@ def all_met(waits: list[Wait]) -> bool:
     return bool(waits) and all(wait.state == ROOM for wait in waits)
 
 
+def reconcile_of(conn: "sqlite3.Connection", task_id: str, cards: Mapping[str, list[Row]]) -> Row | None:
+    """A card row's paid shots to reconcile, apart from its turn and status line: {who, line} ("Reconcile N shots", the
+    person it waits on), done and closed cards too; None with none. `cards` is paid_renders.cards."""
+    shots = cards.get(str(task_id))
+    row = E.task(conn, str(task_id)) if shots else None
+    if not shots or not row:
+        return None
+    from . import paid_renders
+
+    return {"who": person_for(conn, row), "line": paid_renders.line(shots)}
+
+
+def with_shots(
+    conn: "sqlite3.Connection", task_id: str, waits: Sequence[Wait], cards: Mapping[str, list[Row]] | None = None
+) -> list[Wait]:
+    """`waits` as the card's reads and Needs you show them: with its paid shots to reconcile, a wait on the card's
+    person to check Gateway usage and mark them reconciled (backend/paid_renders.py), first among people's asks. Never
+    in `of`: whose turn it is, wakes, Late and moves never see it, so it holds up no agent and no stage. `cards` is
+    paid_renders.cards for a list's reads; one card reads its own. A card that ended shows it too, while it has any."""
+    from . import paid_renders
+
+    shots = cards.get(str(task_id)) if cards is not None else paid_renders.unsettled(conn, str(task_id))
+    row = E.task(conn, str(task_id)) if shots else None
+    if not shots or not row:
+        return list(waits)
+    keys = tuple((str(shot["key"]), str(shot["name"])) for shot in shots)
+    line, since = paid_renders.line(shots), shots[-1]["since"]
+    wait = Wait(PERSON, person_for(conn, row), line, paid_renders.WAIT + str(task_id), since, ask=True, shots=keys)
+    return sorted([wait, *waits], key=lambda found: _ORDER[found.state])
+
+
 def _visit_id(row: Row) -> str | None:
     visit: Row = row.get("visit") or {}
     return str(visit["id"]) if visit.get("id") else None
@@ -1186,7 +1224,7 @@ def _held_tasks(conn: "sqlite3.Connection") -> set[str]:
     return out | set(task_wakes.worktree_holds(conn))
 
 
-def candidates(conn: "sqlite3.Connection", person: str) -> list[str]:
+def candidates(conn: "sqlite3.Connection", person: str, shots: bool = False) -> list[str]:
     """The open tasks that can put something in `person`'s Needs you, in id order: every task `needs_by_person` would
     list for them, and others it reads to be sure. A task reaches a person in one of these ways (`of`,
     `needs_by_person`):
@@ -1201,7 +1239,9 @@ def candidates(conn: "sqlite3.Connection", person: str) -> list[str]:
     - nobody it names can act, so it falls to its person (`person_for`), and they are on its ladder: they own or manage
       its pipeline, are the first person above its manager bot, are the company's person, or ask for or read it;
     - for the company's person, a cause they fix first (`Wait.fix`, Connect GitHub);
-    - for the owner or the Admin who stands in (`admin_person`), a page whose approvers have all gone.
+    - for the owner or the Admin who stands in (`admin_person`), a page whose approvers have all gone;
+    - with `shots`, a paid shot on it whose outcome is unknown waits on its person (`with_shots`,
+      backend/paid_renders.py).
 
     Most people own or manage no pipeline, so only their own rows are read, by index. Someone whose ladder reaches a
     pipeline reads a few columns of each of its open tasks, and works out in full only those that may fall to them."""
@@ -1317,6 +1357,10 @@ def candidates(conn: "sqlite3.Connection", person: str) -> list[str]:
                 ).fetchall()
             }
     found |= _ladder_tasks(conn, person, company, pipelines, stage_asks)
+    from . import paid_renders
+
+    # Few, and worked out in full: `_lists` keeps this person's. A card that ended still asks (`with_shots`).
+    shot_cards = sorted(paid_renders.cards(conn)) if shots else []
     if stages:
         visits |= {
             str(row[0])
@@ -1333,15 +1377,28 @@ def candidates(conn: "sqlite3.Connection", person: str) -> list[str]:
                 _listed(visits),
             ).fetchall()
         }
+    if shot_cards:
+        shot_cards = [
+            str(row[0])
+            for row in conn.execute(
+                "SELECT id FROM tasks WHERE pipeline_id IS NOT NULL AND id IN (SELECT value FROM json_each(?))",
+                _listed(shot_cards),
+            )
+        ]
     if not found:
-        return []
-    return [
-        str(row[0])
-        for row in conn.execute(
-            _OPEN_SQL.replace("ORDER BY", "AND t.id IN (SELECT value FROM json_each(?)) ORDER BY") % "t.id",
-            _listed(found),
-        ).fetchall()
-    ]
+        return shot_cards
+    return sorted(
+        {
+            *shot_cards,
+            *(
+                str(row[0])
+                for row in conn.execute(
+                    _OPEN_SQL.replace("ORDER BY", "AND t.id IN (SELECT value FROM json_each(?)) ORDER BY") % "t.id",
+                    _listed(found),
+                ).fetchall()
+            ),
+        }
+    )
 
 
 def _dicts(cursor: "sqlite3.Cursor") -> list[Row]:
@@ -1425,6 +1482,7 @@ def needs(
     *,
     own_work: bool = False,
     among: Callable[[list[str]], list[str]] | None = None,
+    shots: bool = False,
 ) -> list[Row]:
     """Needs you, for one person, oldest first: only what someone asks of them. Each OK or answer that names them is its
     own entry (`kind` "ask"). A task whose own work is theirs, with nothing asked of them, is not listed: it lives in
@@ -1453,10 +1511,10 @@ def needs(
     they reach the person from outside the candidates."""
     if not is_human(person):
         return []
-    found = candidates(conn, person)
+    found = candidates(conn, person, shots)
     if among is not None:
         found = among(found)
-    return _lists(conn, found, person, snoozed=snoozed, own_work=own_work).get(person, [])
+    return _lists(conn, found, person, snoozed=snoozed, own_work=own_work, shots=shots).get(person, [])
 
 
 def needs_by_person(conn: "sqlite3.Connection") -> dict[str, list[Row]]:
@@ -1546,11 +1604,13 @@ def _lists(
     *only_people: str,
     snoozed: str = "hide",
     own_work: bool = False,
+    shots: bool = False,
 ) -> dict[str, list[Row]]:
     """Needs you from these open tasks (in id order), for every person, or only for `only_people`: each task's waits
     are worked out whoever they are for, and only the chosen people's entries are kept. An ask a person snoozed for
     themselves is left out of their list (`snoozed` "hide"), listed with its `snoozed_until` ("keep"), or the only kind
-    listed ("only")."""
+    listed ("only"). `shots`: the list a person is shown, with paid shots to reconcile (`with_shots`); never a count
+    or budget the engine weighs."""
     only: Any = set(only_people) if only_people else _Everyone()
     snoozes = ask_snoozes(conn, *only_people)
     out: dict[str, list[Row]] = {}
@@ -1559,13 +1619,16 @@ def _lists(
     fixers: dict[str, str | None] = {}
     # Every open ❓, which the people's ❓ items below read anyway: each task's waits then take theirs from it.
     question_marks.open_rows(conn)
+    from . import paid_renders
+
+    cards = paid_renders.cards(conn) if shots else {}
     read = prime(conn, task_ids)
     for task_id in task_ids:
         row = read[str(task_id)] if str(task_id) in read else E.task(conn, task_id)
         if row is None:  # the query lists only tasks on the engine
             raise LookupError(f"task {task_id} is not on the engine")
         standings = R.standings(conn, row) if row.get("visit") else []
-        waits = listed(of(conn, row, seen, standings), row)
+        waits = listed(with_shots(conn, task_id, of(conn, row, seen, standings), cards), row)
         held = next((s for s in standings if pr_conflicts.held(s)), None)
         asks: dict[str, Row] = {str(s.requirement["id"]): s.requirement for s in standings}
         people = sorted({str(wait.who) for wait in waits if wait.state == PERSON and wait.who and wait.who in only})

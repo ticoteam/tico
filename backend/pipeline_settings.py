@@ -1307,11 +1307,16 @@ def _write_pipeline(conn: "sqlite3.Connection", record: Row, existing: Row | Non
         record["factory_id"],
     ]
     if existing:
+        from . import paid_renders
+
+        held = paid_renders.pipeline_holders(conn, str(existing["id"]))  # its owner or manager may be who they wait on
         conn.execute(
             "UPDATE pipelines SET name=?, goal=?, prefix=?, manager_id=?, owner_id=?, private=?, factory_id=?, "
             "settings_version = settings_version + 1, updated_at=? WHERE id=?",
             (*values, ts, existing["id"]),
         )
+        for task_id, before in held.items():
+            paid_renders.holder_moved(conn, task_id, before)
         return str(existing["id"])
     pid = record["id"] or H.new_id()
     conn.execute(

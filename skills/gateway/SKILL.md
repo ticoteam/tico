@@ -89,9 +89,12 @@ overwritten), beside a sidecar `.json`, and the answer gives its seconds and cos
 save it then. A video costs by the second at the catalog's price (`tico gateway catalog video`), held when it starts and
 charged when it ends. Ask for a video only when a picture will not do. Name each shot with `--shot`: the same shot
 is made once (asking again answers the same job), and one the Gateway never confirmed is never sent again; it is
-refused with `reconcile_shot`, which names every unknown shot of your task. Then ask the task's person with your
-normal question: "Reconcile shot NAME: check Gateway usage before re-rendering". Never render that shot again under
-another name to get around it.
+refused with `reconcile_shot`, which names every unknown shot of your task. You need not ask anyone: the card shows
+its person "Reconcile N shots" until they check Gateway usage and mark them reconciled. Carry on without the shot, and
+never render it again under another name to get around it. Only the person marks them reconciled, never you.
+
+A reconciled shot is refused with `shot_reconciled`: render it again only under a new shot name, and only if the
+person wants it.
 
 Images and videos are refused with `video_budget_reached` when the company's Video production budget is at its
 cutoff; say so and carry on without.

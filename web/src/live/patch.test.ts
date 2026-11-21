@@ -68,6 +68,41 @@ describe('tasks', () => {
     }
   });
 
+  it('read an open task’s waits again when a paid shot to reconcile comes, when who it waits on moves, and when it goes', async () => {
+    const detail = ['tasks', 'detail', 't1'];
+    const shot = { state: 'person', who: 'human:p1', line: 'Reconcile 1 shot: Intro', requirement_id: 'paid_render:t1', shots: ['shot_a'] };
+    let server: unknown[] = [];
+    const reads: (() => void)[] = [];
+    const read = () => {
+      const waits = [...server];
+      return new Promise((done) => reads.push(() => done({ ...task('t1'), waits })));
+    };
+    queryClient.setQueryData(detail, { ...task('t1'), waits: [] });
+    const seen = new QueryObserver(queryClient, { queryKey: detail, queryFn: read, staleTime: Infinity });
+    const stop = seen.subscribe(() => {});
+    const waits = () => queryClient.getQueryData<{ waits: unknown[] }>(detail)?.waits;
+    try {
+      server = [shot];
+      FakeEventSource.last.feed(taskFrame(901, task('t1', { version: 1 }), 'shots'));
+      flushFrame();
+      await act(() => reads.splice(0).forEach((go) => go()));
+      expect(waits()).toEqual([shot]);
+      // another person now has the card: an ordinary update reads the shot's wait again, with who it waits on
+      server = [{ ...shot, who: 'human:p2' }];
+      FakeEventSource.last.feed(taskFrame(902, task('t1', { version: 2, owner_id: 'human:p2' })));
+      flushFrame();
+      await act(() => reads.splice(0).forEach((go) => go()));
+      expect(waits()).toEqual([{ ...shot, who: 'human:p2' }]);
+      server = [];
+      FakeEventSource.last.feed(taskFrame(903, task('t1', { version: 2 }), 'shots'));
+      flushFrame();
+      await act(() => reads.splice(0).forEach((go) => go()));
+      expect(waits()).toEqual([]);
+    } finally {
+      stop();
+    }
+  });
+
   it('read a task’s children again when one of them is gone from the reader', () => {
     const parent = ['tasks', 'detail', 't1'];
     queryClient.setQueryData(parent, { ...task('t1'), children: [{ id: 't2', status: 'open', role: 'review' }] });

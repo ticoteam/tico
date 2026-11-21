@@ -15,7 +15,7 @@ import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { useCards } from '@/kit/Popover';
-import { LatePill } from '@/kit/Pill';
+import { LatePill, Pill } from '@/kit/Pill';
 import { TaskRow } from '@/kit/Row';
 import { Segmented } from '@/kit/Segmented';
 import { ValueButton } from '@/kit/ValueButton';
@@ -395,7 +395,7 @@ function Card({ t, p, me, picked, onPick }: { t: TaskItem; p: Pipeline; me: stri
     <>
       <span className="card-title">{t.title}</span>
       <span className="card-foot">
-        {(onPick || line || t.stuck || t.late || t.blocks?.length || t.email_send) && (
+        {(onPick || line || t.stuck || t.late || t.blocks?.length || t.email_send || t.reconcile) && (
           <span className="card-marks">
             {onPick ? (
               <Pick on={!!picked} />
@@ -406,6 +406,8 @@ function Card({ t, p, me, picked, onPick }: { t: TaskItem; p: Pipeline; me: stri
               </>
             )}
             {t.late && <LatePill />}
+            {/* Paid shots to reconcile (backend/paid_renders.py): their own mark, apart from the turn and status line. */}
+            {t.reconcile && <Pill>{t.reconcile.line}</Pill>}
             <Blocks t={t} />
             <TaskSend send={t.email_send} />
           </span>
