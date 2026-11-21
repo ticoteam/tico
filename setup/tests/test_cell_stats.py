@@ -1252,6 +1252,7 @@ def test_a_full_disk_still_pushes_and_prunes(box, monkeypatch):
     def full(*a, **k):
         raise OSError(28, "No space left on device")
 
+    cs._write_private(box.path(cs.QUEUE), {"items": []})  # a saved queue the tick rewrites
     monkeypatch.setattr(cs, "_write_private", full)
     out = io.StringIO()
     assert cs.push(box, out=out) == 0

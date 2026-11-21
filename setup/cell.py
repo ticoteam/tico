@@ -351,7 +351,7 @@ CORES = "opt/tico-cell"
 CORE_DIR_RE = re.compile(r"core-(v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.]+)?)")
 UNIT_DIR = "etc/systemd/system"
 FRESH_S = 3600  # a core folder this new may be a running update's; a leftover .prune-* this old is not
-PRUNE_S = 120  # seconds of image removals per prune; the next one goes on
+PRUNE_S = 30  # seconds one prune may take (an update waits for its own); the next one goes on
 DB_FILES = ("hub.sqlite", "hub.sqlite-wal", "hub.sqlite-shm")
 STOPPED = ("", "exited", "created", "dead")  # container states in which nothing has the database open
 # Each company's updater (setup/cell_updater.py): this port on its default network's gateway address, nowhere else.
@@ -3193,9 +3193,9 @@ class Cell:
                 else:
                     ready = self.wait_healthy(c, started, args.timeout) if running else 0
                 return self.answer(c, ready, changed)
-            if not pending and self.short_of_space(slug):
-                self.prune_quietly({args.version})  # room for the snapshot, made while the company still serves
+            self.make_room(slug, args.version, pending)
             self.pull(args.version)
+            self.make_room(slug, args.version, pending)  # the pull may have taken the room
             try:
                 self.ensure_stopped(slug)
                 # An update still pending keeps its release and snapshot: the database has not moved on since.
@@ -3232,10 +3232,18 @@ class Cell:
         err.extra = {"version": c["version"]}
         return err
 
+    def make_room(self, slug: str, target: str, pending) -> None:
+        """Before an update stops the server: `prune` (keeping `target`) when its snapshot would not fit."""
+        if not pending and self.short_of_space(slug):
+            self.prune_quietly({target})
+
     def short_of_space(self, slug: str) -> int:
         """Bytes a snapshot of the company's database would still need on this disk (0: it fits with SNAPSHOT_SPARE)."""
         data = self.dir(slug) / "data"
-        size = sum(os.lstat(data / n).st_size for n in DB_FILES if os.path.isfile(data / n))
+        size = 0
+        for n in DB_FILES:
+            with contextlib.suppress(OSError):  # the server's WAL and SHM come and go
+                size += os.lstat(data / n).st_size
         with contextlib.suppress(OSError):
             return max(0, size + SNAPSHOT_SPARE - self.system.free_bytes(str(data)))
         return 0
@@ -3300,7 +3308,8 @@ class Cell:
                 def needed(v: str) -> bool:
                     return v in in_use or _release_key(v) > newest
 
-                images, cores = self.prune_images(needed), self.prune_cores(needed)
+                deadline = self.system.monotonic() + PRUNE_S
+                cores, images = self.prune_cores(needed, deadline), self.prune_images(needed, deadline)
         except CellError as e:
             if e.code != "busy":
                 raise
@@ -3318,20 +3327,36 @@ class Cell:
                     out.add(s.get("to"))
         return out
 
+    def cores_in_use(self) -> set[str]:
+        """The core folders some process runs in (its working directory under /opt/tico-cell)."""
+        out = set()
+        with contextlib.suppress(OSError):
+            for proc in (self.host / "proc").iterdir():
+                with contextlib.suppress(OSError):
+                    cwd = Path(os.readlink(proc / "cwd")).parts  # ("/", "opt", "tico-cell", "core-v…", …)
+                    if cwd[1:3] == tuple(CORES.split("/")) and len(cwd) > 3:
+                        out.add(cwd[3])
+        return out
+
     def prune_quietly(self, keep: set[str] = frozenset()) -> None:
         """`prune` where its failure must not fail the command that asked for it (update, snapshot)."""
         with contextlib.suppress(Exception):
             self.prune(keep=keep)
 
-    def prune_images(self, needed) -> int:
-        r = self.system.run(["docker", "images", SERVER_IMAGE, "--format", "{{.Tag}}"], timeout=60)
-        removed, deadline = 0, self.system.monotonic() + PRUNE_S
+    def prune_images(self, needed, deadline: float) -> int:
+        def left() -> float:
+            return deadline - self.system.monotonic()
+
+        removed = 0
+        if left() < 1:
+            return removed
+        r = self.system.run(["docker", "images", SERVER_IMAGE, "--format", "{{.Tag}}"], timeout=left())
         for tag in sorted(set(r.stdout.split()) if not r.returncode else ()):
-            if VERSION_RE.fullmatch(tag) and not needed(tag) and self.system.monotonic() < deadline:
-                removed += not self.system.run(["docker", "rmi", f"{SERVER_IMAGE}:{tag}"], timeout=60).returncode
+            if VERSION_RE.fullmatch(tag) and not needed(tag) and left() >= 1:
+                removed += not self.system.run(["docker", "rmi", f"{SERVER_IMAGE}:{tag}"], timeout=left()).returncode
         return removed
 
-    def prune_cores(self, needed) -> int:
+    def prune_cores(self, needed, deadline: float) -> int:
         base = self.host / CORES
         try:
             entries = sorted(base.iterdir())
@@ -3342,12 +3367,6 @@ class Cell:
             with contextlib.suppress(OSError):
                 if p.is_symlink():
                     held.add(Path(os.readlink(p)).name)
-        with contextlib.suppress(OSError):
-            for proc in (self.host / "proc").iterdir():
-                with contextlib.suppress(OSError):
-                    cwd = Path(os.readlink(proc / "cwd")).parts  # ("/", "opt", "tico-cell", "core-v…", …)
-                    if cwd[1:3] == tuple(CORES.split("/")) and len(cwd) > 3:
-                        held.add(cwd[3])
         with contextlib.suppress(OSError):
             for unit in [*(self.host / UNIT_DIR).glob("tico-*.service"), *(self.host / UNIT_DIR).glob("tico-*.d/*")]:
                 held |= {f"core-{v}" for v in CORE_DIR_RE.findall(_read(unit))}
@@ -3361,7 +3380,14 @@ class Cell:
                 continue
             age = now - st.st_mtime
             m = CORE_DIR_RE.fullmatch(p.name)
-            if m and p.name not in held and age > FRESH_S and not needed(m[1]):
+            if (
+                m
+                and p.name not in held
+                and age > FRESH_S
+                and not needed(m[1])
+                and self.system.monotonic() < deadline
+                and p.name not in self.cores_in_use()  # read again at each: a command may have just started in it
+            ):
                 gone = base / f".prune-{p.name}.{os.getpid()}"
                 try:
                     os.rename(p, gone)  # gone from core-v* at once: a half-removed folder never looks installed

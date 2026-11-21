@@ -1751,7 +1751,8 @@ def run_debug(box: Box, cfg: dict, pending: list[dict], started: float, queue_pa
         post_result(box, cfg, item_id, result)
         done += 1
     if left or queue_path.exists():
-        _write_private(queue_path, {"items": left})
+        with contextlib.suppress(OSError):  # a full disk: the requests are lost, the tick (and its prune) goes on
+            _write_private(queue_path, {"items": left})
     return {"ran": done, "left": len(left)}
 
 
