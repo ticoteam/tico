@@ -535,6 +535,8 @@ class SettingsAdmin:
         self.validate_template(body.template)
         if body.template == H.AGENT_OPS_SLUG:
             body = body.model_copy(update={"slug": H.AGENT_OPS_SLUG})  # one Agent Ops: never a second under -2
+        elif body.slug == H.AGENT_OPS_SLUG:
+            raise Problem("duplicate", "That slug is Agent Ops'", 409)  # held for the built-in, made or not
         if not body.slug:
             body = body.model_copy(update={"slug": self.pick_slug(c, body.display_name)})
         if body.template and "shared" not in body.model_fields_set:
@@ -787,6 +789,8 @@ class SettingsAdmin:
             if H.bot(c, H.FLEET_MAINTAINER) or H.resolve_bot(c, H.AGENT_OPS_SLUG):
                 raise Problem("duplicate", "This company has its Agent Ops already", 409)
             body = body.model_copy(update={"slug": H.AGENT_OPS_SLUG})
+        elif body.slug == H.AGENT_OPS_SLUG:
+            raise Problem("duplicate", "That slug is Agent Ops'", 409)  # held for the built-in, made or not
         if not body.slug and (asked := self._bot_being_set_up(c, body.template)):
             # Agent Ops left the slug out while working a bot's own "Set up" task: that bot is the one asked for, so it
             # answers (`created: false`, below) and no second one is made under a -2 slug.

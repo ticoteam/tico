@@ -972,7 +972,7 @@ def default_delegable(method, path, body=None, query=None, resolve=None):
     """Whether an Agent Ops call with no explicit `on_behalf_of` acts as the person who asked: only the routes Agent Ops
     may do or propose for a person, and never its own plumbing or its own messages. `resolve` names a bot route by its
     id (`by_id`)."""
-    path = by_id(normalize(path), resolve)
+    path = normalize(path)
     if (
         path
         and str(method).upper() in ("GET", "POST")
@@ -981,7 +981,7 @@ def default_delegable(method, path, body=None, query=None, resolve=None):
         return classify(method, path, body) == "do"
     if path and any(m == str(method).upper() and p.fullmatch(path) for m, p in THREADS):
         return classify(method, path, body) == "do"
-    if not path or OWN.fullmatch(path):
+    if not path or OWN.fullmatch(by_id(path, resolve)):  # its own routes by the bot's id; the rest as sent
         return False
     mine = str((query or {}).get("mine", "")).lower() in ("1", "true", "yes", "on")
     if path == API + "rules" and str(method).upper() == "GET" and mine:

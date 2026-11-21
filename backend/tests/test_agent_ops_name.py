@@ -19,6 +19,7 @@ from backend.store import H
 from backend import models as M
 from backend.tests.helpers.api import assign, get, headers, post, put, runner
 from backend.tests.helpers.template_renames import employees_file
+from backend.tests.helpers.member_bots import agent_ops, turn  # noqa: F401  (the fixture)
 from clients import catalog
 from runner_support import catalog_job
 
@@ -246,6 +247,61 @@ def test_only_the_renamed_cards_exact_old_title_reads_the_new_name():
     assert D.renamed({"template": "botops", "title": "Fleet Fixer"})["title"] == "Fleet Fixer"
     assert "title" not in D.renamed({"template": "botops"})  # no default title for a row that had none
     assert D.renamed({"template": "bookkeeper"}) == {"template": "finance-owner"}
+
+
+def test_a_held_slug_moves_to_the_first_free_one_even_before_the_built_in_exists(company):
+    with company.transaction() as c:
+        for bot, slug in (("mine", "agent-ops"), ("two", "agent-ops-2"), ("agent-ops-3", "helper")):
+            c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES(?,?,?,'active')", (bot, slug, bot.title()))
+        _migrate(c)
+        assert (H.bot(c, "mine")["slug"], H.bot(c, "mine")["display_name"]) == ("agent-ops-4", "Mine")
+        moved = c.execute("SELECT detail FROM events WHERE action='bot.renamed' AND target='mine'").fetchone()
+        assert json.loads(moved["detail"])["to"] == "agent-ops-4"
+
+
+def test_a_registry_bot_whose_id_is_agent_ops_keeps_it_and_the_built_in_keeps_its_old_slug(company):
+    with company.transaction() as c:
+        H.sync_registry(c, {"botops": {"display_name": "BotOps", "status": "active"}}, [])
+        H.sync_registry(c, {"agent-ops": {"display_name": "Ops", "status": "active"}}, [])
+        _migrate(c)
+        assert H.bot(c, "agent-ops")["slug"] == "agent-ops"  # not moved for nothing
+        assert not c.execute("SELECT 1 FROM events WHERE action='bot.renamed' AND target='agent-ops'").fetchone()
+        assert H.bot(c, "botops")["slug"] == "botops"  # no slug may name another bot's id
+        kept = c.execute("SELECT detail FROM events WHERE action='bot.slug_kept' AND target='botops'").fetchone()
+        assert json.loads(kept["detail"])["slug"] == "botops"
+
+
+def test_only_the_agent_ops_template_takes_its_slug_made_or_not(api):
+    other = {"display_name": "Ops", "slug": "agent-ops", "model": "hermes-profile", "harness": "hermes"}
+    post(api, "bots", {**other, "effort": "as-configured"}, expected=409)
+    post(api, "bots/register", {"slug": "agent-ops", "display_name": "Ops"}, expected=409)
+    with api.app.state.store.read() as c:
+        assert H.resolve_bot(c, "agent-ops") is None and H.bot(c, "botops") is None
+
+
+def test_a_claimed_turn_names_the_old_template_too(api, agent_ops):
+    with api.app.state.store.transaction() as c:
+        BS.update(c, "botops", {"template": "agent-ops"})
+    assert turn(api, agent_ops)["config"]["template"] == "botops"
+    (row,) = [a for a in get(api, "runners/assignments", token=agent_ops["token"]) if a["bot"] == "botops"]
+    assert row["config"]["template"] == json.loads(row["config_json"])["template"] == "botops"
+
+
+def test_a_route_is_classified_as_sent_and_resolved_only_for_its_own_routes():
+    lookup = {"register": "0195c3a2-custom"}.get  # a bot whose slug happens to be a route's word
+    for method, path in (("POST", "/api/v2/bots/register"), ("GET", "/api/v2/bots/register")):
+        assert agent_ops_act.default_delegable(method, path, {}, resolve=lookup) is agent_ops_act.default_delegable(
+            method, path, {}
+        )
+
+
+def test_a_malformed_manifest_name_fails_the_check_plainly(tmp_path):
+    from clients import preflight
+
+    (tmp_path / "bot.yaml").write_text("name: [agent-ops]\n")
+    report = preflight.Report("agent-ops")
+    preflight.check_manifest(report, "agent-ops", tmp_path)
+    assert report.counts["FAIL"] == 1
 
 
 def _picked(c, choice):
