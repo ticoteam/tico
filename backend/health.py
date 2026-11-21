@@ -2857,6 +2857,25 @@ def _claimed_oks_check(c):
     return check
 
 
+def _page_approvers_check(c):
+    """A page approval whose approvers have all gone (waiting_on.unanswerable_pages) is asked of the owner or an Admin
+    instead: one line for the owner and Admins, until someone names who approves it now. None when there is none."""
+    from . import waiting_on
+
+    gone = waiting_on.unanswerable_pages(c)
+    if not gone:
+        return None
+    fallback = waiting_on.admin_person(c)
+    whom = H.actor_name(c, fallback) if fallback else "nobody"
+    names = _listing([str(r.get("line") or "A page") for r in gone[:5]])
+    return _check(
+        "page_approvers",
+        "Page approvers",
+        "warn",
+        f"{names}: nobody named can approve, so {whom} is asked. Name who approves in the pipeline's stage.",
+    )
+
+
 def _prime_claims(c, settings=None):
     """What the claim check reads (execution._claim_refusal) for every bot and every computer the page checks, read once
     in set queries (claim_loads.read) and handed to each check the page makes, so the page makes a few statements
@@ -3957,6 +3976,8 @@ def view(c, who, settings, auth, github, config, filing=False):
     checks.append(_never_stuck_check(c, None if full else auth.task_sql(c, who)))
     if full:
         checks.append(_claimed_oks_check(c))
+        if page_approvers := _page_approvers_check(c):
+            checks.append(page_approvers)
 
     checks.extend(_aged_pr_checks(c, who, auth, full, kind))
 

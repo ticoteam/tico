@@ -733,8 +733,12 @@ def _may(
         if standing.state == R.WAITING and not R.outside(standing.on):
             out += ["ok", "no"]  # not while it is held on Jev or back with the owner (validate_gate.held)
     # A page is answered once Jev has looked: by whom it waits on, or any person when it names nobody (answers).
+    # A page naming several approvers is any one of theirs (waiting_on.asked_of).
     if kind == "page" and standing.state == R.WAITING and not R.outside(standing.on):
-        if viewer == standing.on or (standing.on is None and human):
+        from . import waiting_on as W
+
+        asked_of = W.asked_of(conn, row, standing)
+        if viewer in asked_of or (not asked_of and human and not R.shared(requirement)):
             out += ["ok", "no"]
     # Give: whoever it waits on, whoever asked it, or someone who works the task (may_handle_ask); the owner's own work
     # is given by someone who works the task, which reassigns it.
@@ -1015,7 +1019,12 @@ def ask_shown(conn: "sqlite3.Connection", row: Row, requirement: Row) -> Row:
     is what was asked (waiting_on.ask_version)."""
     from . import task_requirements as R
 
-    page = _page_of(conn, row["visit"]["id"], requirement) if requirement["kind"] == "page" else None
+    page = None
+    if requirement["kind"] == "page":
+        # The submission the answer is written against (task_requirements.page_for): this visit's, or the one an OK
+        # brought back from Merge.
+        found, _ = R.page_for(conn, row, requirement)
+        page = _page_of(conn, str(found["visit_id"]) if found else row["visit"]["id"], requirement)
     return {
         "kind": requirement["kind"],
         "line": R.approval_line(requirement),

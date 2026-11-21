@@ -16,7 +16,7 @@ from backend.tests.helpers.api import get, headers, post
 from backend.tests.helpers.files import turn
 from backend.tests.helpers.page_requirement import _say
 
-ANA, OPS = X.ANA, "bot:ops"
+ANA, BEN, OPS = X.ANA, "human:ben", "bot:ops"
 SPEC = "<h1>Export spec</h1><p>Rows export as CSV.</p>"
 
 
@@ -391,6 +391,75 @@ def test_unlinking_a_spec_removes_it_from_the_approval_set(api):
     entry = _entry(api, row["id"])
     assert entry["shows"] == [f"page:{first['file_id']}@1"]
     assert _approve(api, row["id"], entry, 1).status_code == 200
+
+
+def _page_entry(api, tid):
+    with api.app.state.store.transaction() as c:
+        return next(e for e in H.task_view(c, tid, ANA)["to_leave"] if e["kind"] == "page")
+
+
+def _shared_set(api, row):
+    """Two Specs on the task's approval, both judged, approved by Ana or Ben (requirements.person_ids)."""
+    first = _write(api, row["id"], SPEC, "ana-test")
+    second = _attach_second_spec(api, row)
+    _all_verdicts(api, row["id"])
+    rid = _page_entry(api, row["id"])["requirement_id"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE requirements SET person_id=?, person_ids=? WHERE id=?", (ANA, json.dumps([ANA, BEN]), rid))
+    return first, second, rid
+
+
+def _decide(api, row, value, token="ana-test"):
+    entry = _page_entry(api, row["id"])
+    approval = entry["approval"]
+    body = {
+        "value": value,
+        "note": "Fix it",
+        "page_version": approval["page_version"],
+        "visit_id": approval["visit_id"],
+    }
+    return post(api, f"tasks/{row['id']}/asks/{entry['requirement_id']}/answer", body, token)
+
+
+def _asked(api, row):
+    from backend import waiting_on as W
+
+    with api.app.state.store.transaction() as c:
+        task = E.task(c, row["id"])
+        (standing,) = [s for s in R.standings(c, task) if s.requirement["kind"] == "page"]
+        return standing.state, W.asked_of(c, task, standing) if standing.state == R.WAITING else []
+
+
+def test_a_shared_send_back_covers_its_whole_submission_and_a_new_version_of_one_page_asks_both(api):
+    from backend import task_pages as P
+    from backend.blobs import Blobs
+    from backend.tests.helpers.page_requirement import _page
+
+    store = api.app.state.store
+    store.blobs = store.blobs or Blobs(store.settings)
+    _, row = _flow(api)
+    _, second, rid = _shared_set(api, row)
+    _decide(api, row, "no")
+    assert _asked(api, row) == (R.NOT_MET, [])
+    with store.transaction() as c:
+        _page(c, store, "<h1>Another spec, v2</h1>", fid=second["file_id"])
+        P.attach(c, row["id"], rid, f"page:{second['file_id']}@2", ANA, add=True)
+    _all_verdicts(api, row["id"])
+    assert _asked(api, row) == (R.WAITING, [ANA, BEN])
+
+
+def test_a_page_dropped_after_a_shared_ok_takes_the_ok_away(api):
+    from backend import page_links as L
+
+    _, row = _flow(api)
+    _, second, _ = _shared_set(api, row)
+    with api.app.state.store.transaction() as c:
+        X.requirement(c, "approvals-spec", "owner_done", position=1)  # keeps the task in Spec after the OK
+    _decide(api, row, "ok", "ben-test")
+    assert _asked(api, row)[0] == R.MET
+    with api.app.state.store.transaction() as c:
+        L.unlink(c, second["file_id"], "task:" + row["id"], "Spec", ANA)
+    assert _asked(api, row) == (R.WAITING, [ANA, BEN])
 
 
 def test_every_spec_version_is_checked_before_the_set_can_be_approved(api):

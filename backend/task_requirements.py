@@ -178,7 +178,7 @@ def _rows(cursor: "sqlite3.Cursor") -> list[Row]:
 
 
 def _loaded(row: Row) -> Row:
-    for key in ("settings", "shows"):
+    for key in ("settings", "shows", "person_ids"):
         value = row.get(key)
         if isinstance(value, str):
             try:
@@ -312,9 +312,42 @@ def newest_answers(conn: "sqlite3.Connection", visit_id: str) -> dict[str, Row]:
 
 
 def person_of(conn: "sqlite3.Connection", requirement: Row, visit_id: str) -> str | None:
-    """Who a requirement waits on in one visit: the person it was last given to (a `give` answer that is not undone,
-    on a kind a give steers), else the person or bot it names. A person who left or was removed is skipped: with
-    nobody left, it is None, and the task's person takes it (`waiting_on.person_for`)."""
+    """Who a requirement waits on in one visit: the first of `people_of`. With nobody left, it is None, and the task's
+    person takes it (`waiting_on.person_for`)."""
+    found = people_of(conn, requirement, visit_id)
+    return found[0] if found else None
+
+
+def approvers(requirement: Row) -> tuple[str, ...]:
+    """Everyone a requirement names to answer it: a page's `person_ids` when it lists several, else its one
+    `person_id`, else nobody."""
+    listed: object = requirement.get("person_ids")
+    if isinstance(listed, str):
+        try:
+            listed = json.loads(listed)
+        except ValueError:
+            listed = None
+    if requirement.get("kind") == "page" and isinstance(listed, list) and listed:
+        return tuple(dict.fromkeys(str(found) for found in cast("list[object]", listed) if found))
+    return (str(requirement["person_id"]),) if requirement.get("person_id") else ()
+
+
+def shared(requirement: Row) -> bool:
+    """Whether a page names a list of approvers (`person_ids`), several or, once all were taken off, none: the first
+    answer of any of them settles it, and with none who can act it is the owner's or an Admin's
+    (waiting_on.asked_of)."""
+    return requirement.get("kind") == "page" and requirement.get("person_ids") is not None
+
+
+def named(requirement: Row) -> bool:
+    """Whether an OK or a page names who answers it: a person or bot, or a list of approvers (`shared`)."""
+    return bool(requirement.get("person_id")) or shared(requirement)
+
+
+def people_of(conn: "sqlite3.Connection", requirement: Row, visit_id: str) -> list[str]:
+    """Everyone a requirement waits on in one visit, in the order it names them: the person it was last given to (a
+    `give` answer that is not undone, on a kind a give steers), else each of its `approvers`, a person or a bot. A
+    person who left, was removed or cannot sign in is skipped. A page naming several is answered by whichever of them answers first."""
     gives = (
         [
             row
@@ -325,10 +358,13 @@ def person_of(conn: "sqlite3.Connection", requirement: Row, visit_id: str) -> st
         else []
     )
     given = gives[-1]["notes"] if gives else None  # the newest: answers are oldest first
-    for found in (str(given) if given else None, requirement.get("person_id")):
-        if found and (not str(found).startswith("human:") or active_person(conn, found)):
-            return str(found)
-    return None
+
+    def acts(found: str) -> bool:
+        return not found.startswith("human:") or active_person(conn, found)
+
+    if given and acts(str(given)):
+        return [str(given)]
+    return [found for found in approvers(requirement) if acts(found)]
 
 
 _FILED = (
@@ -669,7 +705,16 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
             pages = P.current_pages(conn, str(page["visit_id"]), requirement["id"])
     if not pages or linked.keys() != {str(p["file_id"]) for p in pages}:
         return Standing(requirement, NOT_MET, task.get("owner_id"), "No page attached")
-    results = [_one_page(conn, task, requirement, answer, page) for page in pages]
+    # A decision on a page several people approve is for the whole submission it was given on, an OK carried back
+    # from Merge too: any page added, dropped or at a new version since asks every approver again.
+    whole = {str(p["file_id"]): int(p["version"]) for p in pages} if shared(requirement) else None
+    if whole is not None and answer:
+        decided = (
+            _newest_signoff(conn, task["visit"]["id"], requirement) if _reviews_new(requirement, answer) else answer
+        )
+        if not decided or P.answer_pages(conn, str(task["id"]), decided) != whole:
+            answer = None
+    results = [_one_page(conn, task, requirement, answer, page, whole) for page in pages]
     # Work owed to the writer or decision model comes before asking a person to decide the complete set.
     result = next((r for r in results if r.state == NOT_MET), None)
     result = result or next((r for r in results if r.on == JEV and not r.met), None)
@@ -701,7 +746,12 @@ def _pages_read(task: Row, document: str, pages: list[Row], results: list[Standi
 
 
 def _one_page(
-    conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None, submitted: Row | None = None
+    conn: "sqlite3.Connection",
+    task: Row,
+    requirement: Row,
+    answer: Row | None,
+    submitted: Row | None = None,
+    whole: dict[str, int] | None = None,
 ) -> Standing:
     """A page attached to this visit (task_pages), Jev's verdict on it (page_verdicts), then the named person's OK of that
     exact version when the requirement names one or is people only. An answer counts only for the page version it was given on,
@@ -720,13 +770,18 @@ def _one_page(
     visit_id = task["visit"]["id"]
     owner = task.get("owner_id")
     page, carried = page_for(conn, task, requirement)
+    if carried and whole is not None:
+        from . import task_pages as P
+
+        if P.answer_pages(conn, str(task["id"]), carried) != whole:
+            carried = None  # an OK of another submission than every page submitted now (`_page`)
     page = submitted or page
     if not page:
         return Standing(requirement, NOT_MET, owner, "No page attached")
     settings: Row = requirement.get("settings") or {}
     if settings.get("at_head") and json.loads(page["item_versions"] or "{}") != F.heads(conn, task["id"]):
         return Standing(requirement, NOT_MET, owner, STALE_REVIEW)
-    signoff = bool(requirement.get("person_id") or people_only(requirement)) and not settings.get("at_head")
+    signoff = bool(named(requirement) or people_only(requirement)) and not settings.get("at_head")
     if signoff and answer and _reviews_new(requirement, answer):
         answer = _newest_signoff(conn, visit_id, requirement)  # a bot's review of new commits is not the OK
     answer = answer or carried
@@ -775,7 +830,7 @@ def _one_page(
     if answer and answer["answer"] == "no":
         notes = (answer.get("notes") or "").strip()
         line = f"Sent back: {notes}" if notes else "Sent back"
-        if requirement.get("person_id") or people_only(requirement):
+        if named(requirement) or people_only(requirement):
             document = document_of(requirement)
             line = sentences(line, DOCUMENT_OK_HINT.format(document=document) if document else PAGE_OK_HINT)
         return Standing(requirement, NOT_MET, owner, line)
@@ -784,7 +839,7 @@ def _one_page(
     reasons = " ".join(str((verdict or {}).get("reasons") or "").split())
     if said is None:
         return Standing(requirement, WAITING, JEV, "Decision model is checking")
-    oks_anyway = bool(requirement.get("person_id") or people_only(requirement))
+    oks_anyway = bool(named(requirement) or people_only(requirement))
     # Jev's verdict on a spec predicts nothing a person decides (task #351: specs it passed were sent back 49% of the
     # time, those it was unsure of 36%), so on a Spec page it never gates: a missing part goes to the person as its line.
     gates = jev_gates(requirement)
@@ -809,9 +864,9 @@ def _one_page(
             return held
     person = person_of(conn, requirement, visit_id)
     back = _sent_back(conn, visit_id, requirement["id"]) if oks_anyway else None
-    if back and not requirement.get("person_id"):
+    if back and not named(requirement):
         person = person or str(back["by_id"])  # the person who sent it back is asked again, by Tico, not by the bot
-    if lapsed_by and not requirement.get("person_id") and lapsed_by.startswith("human:"):
+    if lapsed_by and not named(requirement) and lapsed_by.startswith("human:"):
         person = person or (lapsed_by if active_person(conn, lapsed_by) else None)
     if lapsed_ok:
         lapsed = sentence(_since_ok(conn, task, lapsed_ok, person)) + " "
@@ -870,8 +925,9 @@ def _one_page(
 
 def _same_code_ok(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row, page: Row) -> bool:
     """Whether `answer`, given on an earlier version of the page now attached, is a person's OK that still holds: the
-    same file (another page is another thing to OK), and the linked PRs' newest commits the ones it was given at."""
-    if document_of(requirement):
+    same file (another page is another thing to OK), and the linked PRs' newest commits the ones it was given at. Never
+    on a page several people approve: each new version asks all of them again."""
+    if document_of(requirement) or shared(requirement):
         return False
     if answer["answer"] != "ok" or not str(answer["by_id"]).startswith("human:"):
         return False
@@ -918,7 +974,7 @@ def ok_kept(conn: "sqlite3.Connection", task: Row, requirement: Row, page: Row) 
     of the same page on this visit, at the commits the PRs are at now (`_same_code_ok`), as `_page` counts it. None when
     the requirement is not a person's OK, or no OK carries. task_pages.attach says so on the task and to the bot."""
     settings: Row = requirement.get("settings") or {}
-    if settings.get("at_head") or not (requirement.get("person_id") or people_only(requirement)):
+    if settings.get("at_head") or not (named(requirement) or people_only(requirement)):
         return None
     visit_id = task["visit"]["id"]
     answer = newest_answers(conn, visit_id).get(requirement["id"])
@@ -947,7 +1003,7 @@ def approval_line(requirement: Row) -> str:
 def jev_gates(requirement: Row) -> bool:
     """Whether the decision model's not met sends a page back to its owner: everywhere but a Spec a person approves,
     where it only shows the person the part that is missing (`_page`)."""
-    oks_anyway = bool(requirement.get("person_id") or people_only(requirement))
+    oks_anyway = bool(named(requirement) or people_only(requirement))
     return not (oks_anyway and (document_of(requirement) == "Spec" or _check_of(requirement) == "spec"))
 
 
@@ -1046,7 +1102,7 @@ REVIEWER_SQL = (
 NEW_REVIEWED_SQL = (
     "SELECT a.by_id, a.heads, r.person_id FROM answers a JOIN visits v ON v.id = a.visit_id "
     "JOIN requirements r ON r.id = a.requirement_id WHERE v.task_id=? AND r.kind='page' AND a.answer='ok' "
-    "AND a.undone_at IS NULL AND a.heads IS NOT NULL AND (r.who_oks = 'people_only' OR r.person_id IS NOT NULL)"
+    "AND a.undone_at IS NULL AND a.heads IS NOT NULL AND (r.who_oks = 'people_only' OR r.person_id IS NOT NULL OR r.person_ids IS NOT NULL)"
 )
 # What the bot that wrote the newest review is asked when commits came after it, before a person OKs a page that is not
 # a review (QA's page). It does so DELTA_ROUNDS times a visit at most: after that the person is asked, told
@@ -1168,10 +1224,30 @@ def page_for(conn: "sqlite3.Connection", task: Row, requirement: Row) -> tuple[R
     from . import task_pages as P
 
     page = P.current(conn, task["visit"]["id"], requirement["id"])
-    if page or not (requirement.get("person_id") or people_only(requirement)):
+    if page or not (named(requirement) or people_only(requirement)):
         return page, None
     ok = _carried_ok(conn, task, requirement)
-    return (P.current(conn, str(ok["visit_id"]), requirement["id"]), ok) if ok else (None, None)
+    if not ok:
+        return None, None
+    return P.current(conn, str(ok["visit_id"]), requirement["id"]) or _submitted_for(conn, task, requirement, ok), ok
+
+
+def _submitted_for(conn: "sqlite3.Connection", task: Row, requirement: Row, ok: Row) -> Row | None:
+    """The page an OK given on pages brought back from Merge was for: its visit has none of its own, so the visit they
+    were submitted on, found by the page versions the OK covered (task_pages.answer_pages). A second return from
+    Merge then reads them again."""
+    from . import task_pages as P
+
+    for file_id, version in P.answer_pages(conn, str(task["id"]), ok).items():
+        found = conn.execute(
+            "SELECT p.visit_id FROM requirement_pages p JOIN visits v ON v.id = p.visit_id WHERE v.task_id=? "
+            "AND p.requirement_id=? AND p.file_id=? AND p.version=? ORDER BY p.created_at DESC LIMIT 1",
+            (task["id"], requirement["id"], file_id, version),
+        ).fetchone()
+        page = P.current(conn, str(found[0]), requirement["id"]) if found else None
+        if page:
+            return page
+    return None
 
 
 def _carried_ok(conn: "sqlite3.Connection", task: Row, requirement: Row) -> Row | None:

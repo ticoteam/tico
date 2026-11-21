@@ -758,6 +758,25 @@ def test_commits_after_review_2_are_reviewed_by_a_bot_before_the_person_is_asked
     assert E.task(c, row["id"])["stage"]["name"] != "QA"
 
 
+def test_a_shared_pre_release_takes_the_review_it_asked_an_agent_for_then_either_person(c, store):
+    """A page several people approve still takes the agent's read of new commits it asked for: only the person's
+    decision that settles it must be their own click (requirements.person_ids)."""
+    row, rid = _in_qa(c, store)
+    c.execute("UPDATE requirements SET person_id=?, person_ids=? WHERE id=?", (ANA, json.dumps([ANA, BEN]), rid))
+    _push(c, "acme/app", 45, "dce5a62aa000")
+    _pre_release(c, store, row, "unsure", "Can't tell")
+    assert (_f2(c, row).state, _f2(c, row).on) == (R.WAITING, REVIEWER)
+    _bot(c, row, rid, REVIEWER, "ok", "No blockers\nRead dce5a62: sign() fixed, the tests cover 0.")
+    from backend import waiting_on as W
+
+    standing = _f2(c, row)
+    assert W.asked_of(c, E.task(c, row["id"]), standing) == [ANA, BEN]
+    with _refused("own click"):
+        A.answer(c, row["id"], rid, BEN, "ok")
+    A.answer(c, row["id"], rid, BEN, "ok", own_click=True)
+    assert E.task(c, row["id"])["stage"]["name"] != "QA"
+
+
 def test_a_reviewers_note_keeps_its_verdict_line_apart_for_the_review_screen():
     # Task #389: an 18-line note of commits and commands sat above Notes on a phone. The first line is the verdict,
     # kept on its own; the rest is one line after it, which the review screen folds behind More.
@@ -1027,6 +1046,84 @@ def test_an_ok_brought_back_from_merge_is_not_carried_to_a_newer_version(c, stor
     standing = _f2(c, row)
     assert not standing.met and standing.line == "Pre-release"
     assert R.page_for(c, E.task(c, row["id"]), R.get(c, rid))[0]["version"] == 2
+
+
+def test_a_shared_ok_brought_back_from_merge_holds_only_for_its_whole_submission(api):
+    """A page several people approve (requirements.person_ids): an OK of two pages carried back from Merge does not
+    approve the one page left once the other was unlinked there, and the card asks for that page with the key the
+    answer is written against."""
+    from backend import page_links as L
+
+    store = api.app.state.store
+    store.blobs = store.blobs or Blobs(store.settings)
+    stages = (
+        {
+            "name": "QA",
+            "owner": WRITER,
+            "requirements": [
+                {
+                    "kind": "page",
+                    "line": "QA report",
+                    "who_oks": "people_only",
+                    "person": ANA,
+                    "settings": {"document": "QA report"},
+                },
+                {"kind": "owner_done"},
+            ],
+        },
+        {
+            "name": "Merge",
+            "owner": WRITER,
+            "on_enter": {"act": "github.queue"},
+            "requirements": [{"kind": "owner_done"}],
+        },
+    )
+    with store.transaction() as c:
+        for slug in ("writer", "manager"):
+            X.bot(c, slug)
+        rid = X.pipeline(c, "eng", "Engineering", stages, manager="bot:manager")["requirements"]["QA"][0]
+        c.execute("UPDATE requirements SET person_ids=? WHERE id=?", (json.dumps([ANA, BEN]), rid))
+        row = X.new_task(c, ANA, "Absolute value", "eng", assignee=WRITER)
+        _link_pr(c, row["id"], "acme/app", 45, "62de57f623fc")
+        files = []
+        for text in ("<p>Report A</p>", "<p>Report B</p>"):
+            fid, _ = _page(c, store, text)
+            seen = E.task(c, row["id"])["version"]
+            _say(c, P.attach(c, row["id"], rid, "page:" + fid, WRITER, seen_version=seen, add=True), "met")
+            files.append(fid)
+        A.answer(c, row["id"], rid, BEN, "ok", own_click=True)
+        assert _named(c, row, "QA report").met
+        done_id = next(r["id"] for r in R.for_visit(c, E.task(c, row["id"])["visit"]) if r["kind"] == "owner_done")
+        _bot(c, row, done_id, WRITER, "done")
+        assert E.task(c, row["id"])["stage"]["name"] == "Merge"
+        L.unlink(c, files[1], "task:" + row["id"], "QA report", ANA)
+        mark = c.execute("SELECT COALESCE(MAX(seq), 0) FROM changes").fetchone()[0]
+        E.move(c, row["id"], "QA", ANA, "The queue dropped it")
+        told = {r[0] for r in c.execute("SELECT subject_id FROM changes WHERE seq>? AND topic='needs'", (mark,))}
+        assert {ANA, BEN} <= told, "the ask the move back opens reaches both approvers' Needs you"
+        assert not _named(c, row, "QA report").met
+    read = api.get(f"/api/v2/tasks/{row['id']}", headers=headers("ben-test")).json()["task"]
+    (entry,) = [e for e in read["to_leave"] if e["requirement_id"] == rid]
+    approval = entry["approval"]
+    assert (approval["file_id"], approval["version"], approval["visit_id"]) == (files[0], 1, read["visit_id"])
+    key = {"page_version": f"{files[0]}@1", "visit_id": approval["visit_id"]}
+    ok = api.post(
+        f"/api/v2/tasks/{row['id']}/asks/{rid}/answer", json={"value": "ok", **key}, headers=headers("ben-test")
+    )
+    assert ok.status_code == 200, ok.text
+    with store.transaction() as c:
+        assert _named(c, row, "QA report").met
+        _bot(c, row, done_id, WRITER, "done")
+        assert E.task(c, row["id"])["stage"]["name"] == "Merge"
+        E.move(c, row["id"], "QA", ANA, "The queue dropped it again")
+    read = api.get(f"/api/v2/tasks/{row['id']}", headers=headers("ben-test")).json()["task"]
+    (entry,) = [e for e in read["to_leave"] if e["requirement_id"] == rid]
+    assert entry["met"], "a second return from Merge reads the A@1 the OK was given on"
+
+
+def _named(c, row, name):
+    (standing,) = [s for s in R.standings(c, E.task(c, row["id"])) if s.name == name]
+    return standing
 
 
 def _bodies(c, row):

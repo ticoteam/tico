@@ -43,11 +43,12 @@ stages        id, pipeline_id, position, kind (work|done|closed), name, purpose,
               on_enter (json), created_at, updated_at, retired_at
               every pipeline has exactly one done stage and one closed stage, after its work stages
 requirements  id, stage_id | visit_id (exactly one), kind, source, condition, settings (json), can_push_past (0|1),
-              who_oks (none|people_only|people_with_exceptions), person_id, added_by_id, by_bot (0|1),
-              line, shows (json), position, created_at, withdrawn_at
+              who_oks (none|people_only|people_with_exceptions), person_id, person_ids (json), added_by_id,
+              by_bot (0|1), line, shows (json), position, created_at, withdrawn_at
               kind: owner_done | ok | page | item | linked_done
               source and condition on an item only (github: pr_open | checks_pass | pr_merged | in_release)
-              person_id only on ok and page (C29).
+              person_id only on ok and page (C29). person_ids only on a page: the people who may each approve it,
+              person_id the first of them; the first answer, OK or send back, settles it for all of them.
               unique (visit_id, added_by_id) where by_bot = 1 and withdrawn_at is null and not settings.bound (C15)
 visits        id, task_id, stage_id, entered_at,
               entered_how (new|met|pushed_past|back|closed|reopened),
@@ -260,6 +261,7 @@ def get(conn, requirement_id) -> dict | None
 def newest_answers(conn, visit_id) -> dict[str, dict]
 def person_of(conn, requirement, visit_id) -> str | None   # who it waits on: the newest give, else person_id; never
                                                            # a person who left
+def people_of(conn, requirement, visit_id) -> list[str]    # everyone it waits on: a page's person_ids who can act
 def active_person(conn, actor) -> bool            # a person who is here and can act: in humans, not left or hidden
                                                   # on the roster, sign-in not turned off (`sign_in: false`)
 def steers(kind, value) -> bool                   # no / give on an ok or a page
@@ -508,7 +510,7 @@ The record `read` gives and `save` takes. Keys are the column names. `settings_v
  "retired_at", "done": {"id", "name"}, "closed": {"id", "name"},
  "stages": [{"id", "name", "purpose", "owner", "by_hand", "task_limit", "expected_minutes", "expected_bots_only",
              "on_enter", "requirements": [{"id", "kind", "settings", "can_push_past", "who_oks", "person_id",
-                                           "line"}]}]}
+                                           "person_ids" (a page several people approve), "line"}]}]}
 ```
 
 - `on_enter` is `{}`, `{"file_into": "<pipeline id>"}` (refused until phase 2: "Filing into a pipeline comes with the

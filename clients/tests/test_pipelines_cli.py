@@ -606,9 +606,19 @@ def test_requirements_are_listed_added_changed_and_removed_on_their_stage():
             "line": "Brief",
             "who_oks": "people_only",
             "person_id": "human:ana",
+            "person_ids": None,
             "settings": {"rubric": "Short"},
         }
     ]
+    with pytest.raises(ValueError, match="Only a document approval names a list"):
+        P.requirement_update(Api(), {"requirement": "r1", "person": "me, human:ben"})
+    document = {"kind": "page", "settings": {"document": "Spec"}}
+    listed = P._requirement_fields(Api(), {"person": "me, human:ben"}, dict(document))
+    assert (listed["person_id"], listed["person_ids"]) == ("human:ana", ["human:ana", "human:ben"])
+    shared = P._requirement_fields(Api(), {"person": "me"}, {**document, "person_ids": ["human:ana", "human:ben"]})
+    assert shared["person_ids"] == ["human:ana"], "a page naming a list stays a list of one"
+    with pytest.raises(ValueError, match="--person names someone"):
+        P.requirement_update(Api(), {"requirement": "r1", "person": " , "})
     api = Api()
     P.requirement_add(api, {"stage": "engineering-build", "kind": "item", "source": "github", "condition": "pr_merged"})
     _, body = saved(api)
@@ -866,3 +876,10 @@ def test_stage_add_with_a_pick_setting_and_no_bots_asks_for_the_bots():
     with pytest.raises(APIError, match="--pick-from") as refused:
         P.stage_add(api, {"pipeline": "engineering", "name": "Review 2", "prefer": "new"})
     assert "not both" not in refused.value.detail and api.writes() == []
+
+
+def test_person_refuses_nobody_and_a_list_on_anything_but_a_document_approval():
+    with pytest.raises(ValueError, match="--person names someone"):
+        P._requirement_fields(Api(), {"person": ","}, {"kind": "page", "settings": {"document": "Spec"}})
+    with pytest.raises(ValueError, match="Only a document approval names a list"):
+        P._requirement_fields(Api(), {"person": "me,human:ben"}, {"kind": "page", "settings": {}})

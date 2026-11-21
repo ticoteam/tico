@@ -175,6 +175,7 @@ def register(
         hands_over: bool = False,
         ask: bool = False,
         late: bool = False,
+        first: Callable[..., bool] | None = None,
     ) -> None:
         """`also(c, params)`: actors the write reaches besides the task's people and `to` (an answer's asker). `late`:
         under rules that only warn, the write goes first and its check right after; its call says where its words went
@@ -188,6 +189,7 @@ def register(
             "hands_over": hands_over,
             "ask": ask,
             "late": late,
+            "first": first,
         }
 
     def carry(c: Any, who: Any, task_id: str, gate: Any, text: Any, version: Any) -> tuple[Any, Any]:
@@ -206,9 +208,14 @@ def register(
         operation: str,
         params: Any = None,
         ingest: Any = None,
+        replaying: bool = False,
     ) -> dict[str, Any]:
         """The write inside the store's write, through its verdict: held, nothing is written but the hold."""
         spec = writes[operation]
+        # Refuses before any hold could keep the write, and a replay of one that must not wait (Send anyway); True
+        # for a direct human action the rule gate never holds.
+        if spec["first"] and spec["first"](c, who, task_id, body, params or {}, verdict, replaying):
+            return spec["call"](c, who, task_id, body, None, params or {}, ingest) or {}
         replay: dict[str, Any] = {
             "task": task_id,
             "body": body.model_dump(mode="json", by_alias=True),
@@ -272,7 +279,8 @@ def register(
                 if row and getattr(body, "version", None) is not None:
                     body = body.model_copy(update={"version": row["version"]})
                 decided = org_rule_check.decided(gate)
-                return answer(c, who, task_id, **gated(c, who, task_id, body, decided, operation, data.get("params")))
+                done = gated(c, who, task_id, body, decided, operation, data.get("params"), replaying=True)
+                return answer(c, who, task_id, **done)
 
             def audience(c: Any, bot: Any, data: Any) -> Any:
                 body = spec["model"].model_validate(data["body"])
@@ -858,6 +866,22 @@ def register(
     def answer_said(body: Any) -> list[tuple[str, Any]]:
         return [("Note", body.note)]
 
+    def answer_first(c: Any, who: Any, task_id: str, body: Any, params: Any, verdict: Any, replaying: bool) -> bool:
+        """An OK, or any answer on a page several people approve, is the person's own click: refused before the rule
+        check could hold it as a write to send later. A page several people approve is settled by its first answer,
+        in this write: an approver's own click is a direct human action, which no rule gates (True: the write skips
+        the rule gate), and Send anyway never replays a person's answer to one."""
+        asked = requirement_on(c, task_id, params["requirement_id"])
+        refused = task_asks.refuses_ok_by(c, who, asked, body.value)
+        if refused:
+            raise Problem("ok_not_yours", refused, 403)
+        if not task_asks.shared_page(c, asked):
+            return False
+        if replaying and str(getattr(who, "actor", "")).startswith("human:"):
+            # A person's decision is settled in its own write; an agent's read of new commits goes the rule path.
+            raise Problem("task_requirement", task_asks.SHARED_NOT_HELD, 409)
+        return task_asks.own_click(who)
+
     def answer_call(c: Any, who: Any, task_id: str, body: Any, gate: Any, params: Any, ingest: Any) -> Any:
         from . import files
 
@@ -865,9 +889,6 @@ def register(
             return files.page_refs_readable(c, auth, who, refs)  # pyright: ignore[reportUnknownMemberType]
 
         asked = requirement_on(c, task_id, params["requirement_id"])
-        refused = task_asks.refuses_ok_by(c, who, asked, body.value)
-        if refused:
-            raise Problem("ok_not_yours", refused, 403)
         # A warned answer carries the line in its own notes, with or without a note of its own: answering never needs
         # the right to edit the task.
         note = task_rule_gate.warn_on(gate, body.note) if body.note else org_rule_check.warn_line(gate) or body.note
@@ -894,7 +915,7 @@ def register(
         ).fetchone()
         return [found[0]] if found and found[0] else []
 
-    says("task_ask_answer", M.TaskAskAnswer, answer_said, answer_call, also=asker)
+    says("task_ask_answer", M.TaskAskAnswer, answer_said, answer_call, also=asker, first=answer_first)
 
     @app.post(
         "/api/v2/tasks/{tid}/asks/{requirement_id}/answer",

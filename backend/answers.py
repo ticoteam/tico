@@ -135,7 +135,7 @@ def _may_answer(
             _refuse(conn, by, "task_requirement", "Only the owner, the manager or a person says it is done", task_id)
         return
     if kind == "page":
-        _may_answer_page(conn, by, row, requirement, value, notes)
+        _may_answer_page(conn, by, row, requirement, value, notes, own_click=own_click)
         return
     person = R.person_of(conn, requirement, row["visit"]["id"])
     if value not in (OK, NO):
@@ -180,6 +180,7 @@ def _may_answer_page(
     notes: str | None,
     *,
     stale: bool = False,
+    own_click: bool = False,
 ) -> None:
     """A page takes ok or no, and only once Jev has looked and it waits on someone: the person it names after Jev passed
     it, a person deciding what Jev was unsure of or could not check, or the manager bot deciding what Jev was unsure of
@@ -187,26 +188,38 @@ def _may_answer_page(
     task_id = row["id"]
     if value not in (OK, NO):
         _refuse(conn, by, "task_requirement", "A page takes ok or no. To change it, attach a new version.", task_id)
-    if value == OK:
-        from . import task_asks
+    from . import task_asks
 
-        if task_asks.acting_for_people(by):
-            _refuse(conn, by, "task_requirement", task_asks.NOT_YOURS, task_id)
+    if value == OK and task_asks.acting_for_people(by):
+        _refuse(conn, by, "task_requirement", task_asks.NOT_YOURS, task_id)
+    if R.shared(requirement) and is_human(by) and not own_click and not stale:
+        # Its first answer settles it for every approver: only an approver's own click in Tico gives it. An agent's
+        # review of new commits it was asked for (`R.asked_to_review`) settles nothing, and is written as before.
+        _refuse(conn, by, "task_requirement", task_asks.SHARED_OWN, task_id)
     newest = R.newest_answers(conn, row["visit"]["id"]).get(requirement["id"])
     standing = R.standing(conn, row, requirement, newest)
     person = standing.on
-    if stale and person == R.JEV and (requirement.get("person_id") or R.people_only(requirement)):
+    # Everyone it is asked of, read now inside this write: a page naming several approvers takes the first answer of
+    # any of them (waiting_on.asked_of), and the next version is asked of them all again.
+    asked = W.asked_of(conn, row, standing) if standing.state == R.WAITING else []
+    if stale and person == R.JEV and (R.named(requirement) or R.people_only(requirement)):
         # The approver can refresh a stale key while the Decision model checks the new submission.
         visit = row["visit"]["id"]
-        person = R.person_of(conn, requirement, visit)
-        if not requirement.get("person_id") and (back := R.last_sent_back(conn, requirement["id"], visit_id=visit)):
+        asked = W.asked_of(conn, row, R.Standing(requirement, R.WAITING, R.person_of(conn, requirement, visit)))
+        if not R.named(requirement) and (back := R.last_sent_back(conn, requirement["id"], visit_id=visit)):
             sender = str(back["by_id"] or "")
             if is_human(sender) and R.active_person(conn, sender):
-                person = person or sender
+                asked = asked or [sender]
     elif standing.state != R.WAITING or R.outside(person):
+        first = str(newest["by_id"]) if newest and newest["answer"] in (OK, NO) else None
+        if standing.state != R.WAITING and first and first != by and R.shared(requirement):
+            _refuse(conn, by, "task_requirement", f"{_name(conn, first)} already answered this", task_id)
         _refuse(conn, by, "task_requirement", f"{R.name_of(requirement)} is not waiting on anyone", task_id)
-    if by != person and not (person is None and is_human(by)):
-        _refuse(conn, by, "task_requirement", f"This is asked of {_name(conn, person)}", task_id)
+    # Nobody named is any person's, except on a page several people approve: with neither its approvers nor the
+    # owner or an Admin able to act, it waits (Health says so).
+    if by not in asked and not (not asked and is_human(by) and not R.shared(requirement)):
+        whom = W.names_of(conn, asked) if asked else _name(conn, None)
+        _refuse(conn, by, "task_requirement", f"This is asked of {whom}", task_id)
     if value == NO and not (notes or "").strip():
         _refuse(conn, by, "task_why", "Say what to change", task_id)
     if value == OK and standing.line.startswith(R.DECIDE) and not (notes or "").strip():
@@ -277,8 +290,13 @@ def _page_version(
         if not readable and not _deciding_bot(conn, by, row, requirement):
             _refuse(conn, by, "task_requirement", "This approval is unavailable", row["id"])
     expected = P.version_key(pages)
-    if keyed and is_human(by) and document and value == OK and page_version in (None, ""):
+    # A page several people approve settles on the first answer, OK or send back, so each answer names the version it
+    # was given on: an answer to one version never settles the next one.
+    shared = R.shared(requirement) and value in (OK, NO)
+    if keyed and is_human(by) and ((document and value == OK) or shared) and page_version in (None, ""):
         _refuse(conn, by, "task_requirement", f"{APPROVE_SHOWN}: send its page_version", row["id"])
+    if keyed and is_human(by) and shared and not visit_id:
+        _refuse(conn, by, "task_requirement", f"{APPROVE_SHOWN}: send its visit_id", row["id"])
     stale_visit = bool(visit_id) and visit_id != _part(row, "visit").get("id")
     if stale_visit or (page_version not in (None, "") and (not page or str(page_version) != expected)):
         if not document:

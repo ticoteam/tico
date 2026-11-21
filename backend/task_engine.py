@@ -570,6 +570,9 @@ def _open_visit(conn: "sqlite3.Connection", task_id: str, stage_id: str, how: st
         "VALUES (?,?,?,?,?,?,?)",
         (visit_id, task_id, stage_id, ts, how, ts, H.shift(ts, seconds=FIRST_TRY_S)),
     )
+    from . import waiting_on
+
+    waiting_on.tell_asked(conn, {"id": visit_id, "stage_id": stage_id})  # a shared page's approvers: a new ask
     return visit_id
 
 
@@ -580,6 +583,9 @@ def _close_visit(conn: "sqlite3.Connection", visit: Row, how: str, by: str, why:
         "UPDATE visits SET left_at=?, how=?, by_id=?, why=? WHERE id=? AND left_at IS NULL",
         (ts, how, str(by), why, visit["id"]),
     )
+    from . import waiting_on
+
+    waiting_on.tell_asked(conn, visit)  # a shared page's approvers: the ask leaves their Needs you
     if how != "met":
         conn.execute(
             "UPDATE requirements SET withdrawn_at=? WHERE visit_id=? AND withdrawn_at IS NULL",
@@ -2031,6 +2037,9 @@ def changed(conn: "sqlite3.Connection", task_id: str, by: str) -> None:
     row = task(conn, task_id)
     if row and row["status"] == "open":
         _reset_ladder(conn, row["visit"], _h().now(), by)
+        from . import waiting_on
+
+        waiting_on.tell_asked(conn, row["visit"])
 
 
 def person_spoke(conn: "sqlite3.Connection", task_id: str, by: str) -> None:
