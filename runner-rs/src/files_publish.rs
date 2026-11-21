@@ -2,7 +2,7 @@
 //! clients/bot_files.py; docs/files.md).
 //!
 //! The folders are `files: {publish: [...]}` (the attempt's config, else bot.yaml), else `reports/` and
-//! `artifacts/`. What goes is decided here: allowed types, 25 MB at most, no credential-like names, no symbolic
+//! `artifacts/`. What goes is decided here: any work file but a program, 25 MB at most, no credential-like names, no symbolic
 //! or hard links, nothing outside the checkout. Each upload is a row in an outbox in the runner's state database
 //! keyed by bot, path and content digest; the key is also the request's idempotency key, so a retry lands once.
 //! A file that could not go is reported as not synced, never shown with a link that opens nothing.
@@ -40,6 +40,7 @@ pub const GIVE_UP_AFTER: i64 = 20;
 pub const UPLOAD_TIMEOUT: u64 = 120;
 pub const MAX_BYTES: u64 = 25 * 1024 * 1024;
 pub const DEFAULT_FOLDERS: &[&str] = &["reports", "artifacts"];
+/// Known types: a hidden name (`.x`) goes only with one of these (bot_files.TYPES).
 pub const TYPES: &[&str] = &[
     ".mp4",
     ".webm",
@@ -73,6 +74,50 @@ pub const TYPES: &[&str] = &[
     ".jpeg",
     ".gif",
     ".webp",
+];
+/// Programs, installers and scripts a computer runs: never published (bot_files.EXECUTABLE).
+pub const EXECUTABLE: &[&str] = &[
+    ".app",
+    ".apk",
+    ".appimage",
+    ".bat",
+    ".bin",
+    ".cmd",
+    ".com",
+    ".command",
+    ".cpl",
+    ".deb",
+    ".dll",
+    ".dmg",
+    ".dylib",
+    ".elf",
+    ".exe",
+    ".hta",
+    ".ipa",
+    ".jar",
+    ".lnk",
+    ".msi",
+    ".msp",
+    ".mpkg",
+    ".pif",
+    ".pkg",
+    ".ps1",
+    ".psm1",
+    ".reg",
+    ".rpm",
+    ".run",
+    ".scr",
+    ".sh",
+    ".bash",
+    ".zsh",
+    ".csh",
+    ".ksh",
+    ".so",
+    ".sys",
+    ".vbe",
+    ".vbs",
+    ".wsf",
+    ".wsh",
 ];
 
 pub const TABLES: &str = "
@@ -127,14 +172,8 @@ pub fn check_name(name: &str) -> Result<String, String> {
             "{base} looks like a credential, so it is never published"
         ));
     }
-    if !TYPES.contains(&ext.as_str()) {
-        let mut sorted = TYPES.to_vec();
-        sorted.sort();
-        return Err(format!(
-            "{} files are not published. Allowed types: {}",
-            if ext.is_empty() { &base } else { &ext },
-            sorted.join(", ")
-        ));
+    if EXECUTABLE.contains(&ext.as_str()) {
+        return Err(format!("{base} is a program, so it is never published"));
     }
     Ok(base)
 }
@@ -860,12 +899,12 @@ mod tests {
         assert!(check_name("api_keys.csv")
             .unwrap_err()
             .contains("looks like a credential"));
-        assert!(check_name("tool.exe")
-            .unwrap_err()
-            .starts_with(".exe files are not published. Allowed types: .csv, .doc"));
-        assert!(check_name("Makefile")
-            .unwrap_err()
-            .starts_with("Makefile files are not published"));
+        assert_eq!(
+            check_name("tool.exe").unwrap_err(),
+            "tool.exe is a program, so it is never published"
+        );
+        assert_eq!(check_name("captions.srt").unwrap(), "captions.srt");
+        assert_eq!(check_name("Makefile").unwrap(), "Makefile");
         assert_eq!(check_size(0).unwrap_err(), "An empty file is not published");
         assert_eq!(
             check_size(26 * 1024 * 1024).unwrap_err(),

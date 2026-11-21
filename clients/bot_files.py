@@ -1,11 +1,15 @@
 """What a bot may publish as a file, checked the same way by the hub, the runner and `tico file`.
 
+The rule people have: any work file goes, whatever its type. Only secrets (credential-like names) and programs a
+computer runs (EXECUTABLE) are refused.
+
 Pure stdlib. The server repeats every rule here (backend/files.py): this module is what lets the
 client refuse early, with a reason, before any bytes are sent. See docs/files.md.
 """
 
 import hashlib
 import io
+import mimetypes
 import os
 import posixpath
 import re
@@ -31,6 +35,7 @@ DOCUMENTS = (
 )
 DEFAULT_FOLDERS = ("reports/", "artifacts/")
 
+# The content type each common extension is stored with; any other file goes as the platform guesses it.
 TYPES = {
     ".mp4": "video/mp4",
     ".webm": "video/webm",
@@ -67,7 +72,15 @@ TYPES = {
     ".svg": "image/svg+xml",
     ".m4v": "video/x-m4v",
     ".aac": "audio/aac",
+    ".srt": "application/x-subrip",
+    ".vtt": "text/vtt",
 }
+# Programs, installers and scripts a computer runs: never published, whatever else the file is.
+EXECUTABLE = frozenset(
+    ".app .apk .appimage .bat .bin .cmd .com .command .cpl .deb .dll .dmg .dylib .elf .exe .hta .ipa .jar "
+    ".lnk .msi .msp .mpkg .pif .pkg .ps1 .psm1 .reg .rpm .run .scr .sh .bash .zsh .csh .ksh .so .sys .vbe .vbs "
+    ".wsf .wsh".split()
+)
 KINDS = {
     ".mp4": "video",
     ".webm": "video",
@@ -130,9 +143,9 @@ def check_name(name):
     if CREDENTIAL_NAME.search(base) or base.lower().startswith(".env"):
         raise Refused(f"{base} looks like a credential, so it is never published")
     suffix = Path(base).suffix.lower()
-    if suffix not in TYPES:
-        raise Refused(f"{suffix or base} files are not published. Allowed types: " + ", ".join(sorted(TYPES)))
-    return base, TYPES[suffix]
+    if suffix in EXECUTABLE:
+        raise Refused(f"{base} is a program, so it is never published")
+    return base, TYPES.get(suffix) or mimetypes.guess_type(base)[0] or "application/octet-stream"
 
 
 def is_media(name):
@@ -185,7 +198,7 @@ def local_file(root, rel, extra_types=()):
     """(real path, relative posix name) of a file inside `root` a bot may publish, or Refused.
 
     Refuses a path that leaves the root, any symlink on the way, anything that is not a regular
-    file, a hard-linked file, a credential-like name, a type outside the list and a file over the size cap.
+    file, a hard-linked file, a credential-like name, a program and a file over the size cap.
     """
     root = Path(root).resolve()
     text = str(rel)
