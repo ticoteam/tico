@@ -94,6 +94,7 @@ function RoutineView({ id, onClose }: { id: string; onClose: () => void }) {
           </LabelValue>
           {r.updated_at && <LabelValue label="Changed">{fmtDate(r.updated_at)}</LabelValue>}
         </Facts>
+        {r.created_by_id && <Made id={r.created_by_id} via={r.created_via} />}
         {limiting && <LimitEditor routine={r} onDone={() => setLimiting(false)} />}
         {r.hold && <HoldLine routine={r} held={r.hold.held} dropped={r.hold.dropped} />}
       </section>
@@ -345,6 +346,16 @@ function LimitEditor({ routine, onDone }: { routine: Routine; onDone: () => void
 function Runner({ id }: { id: string | null | undefined }) {
   const name = useName(id);
   return <span>{name || 'An agent'}</span>;
+}
+
+/** Who made it: the person or agent it names, and how when Agent Ops, the Assistant or a token made it. An id the
+   directory does not know is shown as it is. */
+function Made({ id, via }: { id: string; via?: string }) {
+  const named = useName(id);
+  const name = id === 'keeper' ? 'Tico' : named || id;
+  const who =
+    via === 'botops' ? `Agent Ops for ${name}` : via === 'assistant' ? `${name}'s Assistant` : via === 'token' ? `${name} with a token` : name;
+  return <p className="made">{`Made by ${who}`}</p>;
 }
 
 function Runs({ id }: { id: string }) {

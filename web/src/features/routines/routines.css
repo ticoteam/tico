@@ -76,6 +76,7 @@
 
 /* ---------- a panel: facts, then short lists ---------- */
 .rr .inst{max-width:var(--measure);margin-bottom:var(--s-2);color:var(--ink-2);white-space:pre-wrap}
+.rr .made{margin:var(--s-2) 0 0;color:var(--ink-2)}
 .rr :is(.prun,.pjob,.hold){margin:0 calc(-1 * var(--s-2))}
 .rr .prun{grid-template-columns:calc(var(--s-18) + var(--s-3)) minmax(0,1fr) auto;column-gap:var(--s-2h)}
 .rr .run-at{white-space:nowrap;font-variant-numeric:tabular-nums}

@@ -560,6 +560,9 @@ DEVELOPER_TOOLS = frozenset(
         "tico_doc_search",
         "tico_bot_app_view",
         "tico_bot_app_shot",
+        # Agents make and read the automations they may change; the server checks the rights on every save.
+        "tico_automation_get",
+        "tico_automation_create",
         # Onboarding switches its routines on; the Release Owner tags releases.
         "tico_automation_list",
         "tico_automation_update",

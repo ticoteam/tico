@@ -40,6 +40,7 @@ def test_a_person_asks_and_agent_ops_saves_off_unless_asked_on(api, agent_ops):
     err, made = mcp(api, "tico_automation_create", flow(), attempt["token"])
     assert not err, made
     assert made["enabled"] is False and made["can_edit"] is True and made["owner_id"] == "person:cara"
+    assert made["created_by_id"] == "human:cara" and made["created_via"] == "botops"
     assert [(v["n"], v["status"]) for v in get(api, f"automations/{made['id']}/versions", "cara-test")["versions"]] == [
         (1, "active")
     ]
@@ -150,6 +151,7 @@ def test_a_bot_asks_and_agent_ops_proposes_where_that_bot_may_not_change(api, ag
     assert not err and own["can_edit"] is True and own["enabled"] is False, own  # its own: saved, off by default
     on = post(api, f"automations/{proposed['id']}/versions/1/restore", {})  # Ana's Turn on
     assert on["enabled"] is True and on["version"] == 1
+    assert on["created_by_id"] == "bot:finance" and on["created_via"] == "botops"
     assert get(api, f"automations/{proposed['id']}/versions?status=pending")["versions"] == []
     assert [r["actor"] for r in audit_rows(api, proposed["id"])] == ["human:ana"]
 

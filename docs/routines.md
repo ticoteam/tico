@@ -30,8 +30,14 @@ An install that had routines moved them once, on the upgrade to Automations; see
 
   For an event, the trigger is `{"type": "event", "name": "meeting.ready"}`; for a webhook,
   `{"type": "webhook", "id": "<trigger id>"}` (`tico trigger list` shows the ids). A new automation is saved on
-  unless the flow sends `"enabled": false`. What Agent Ops or Assistant drafts is saved off and waits for a person to
-  turn it on.
+  unless the flow sends `"enabled": false`. An agent may make and turn on an automation for an owner whose automations it
+  may change (its own, or those of agents it manages); without that right the hub refuses it with a 403. Two requests
+  save a proposal instead (off, version 1 pending, for a person to turn on): Agent Ops for a bot that may not change
+  that owner's automations, and a request from someone who may change them whose flow sets a task model or compaction they may not set
+  (a person who may change it and may set that model approves it). Agent Ops saves what it makes off unless the request
+  said to turn it on; an Assistant Message routine must omit `enabled` or send false, and, unless it is a proposal,
+  its person's card click turns it on.
+  An agent's tool profile only decides which tools it is offered; the server checks rights on every save.
 
 ## Before a due date
 
