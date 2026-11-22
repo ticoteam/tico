@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -79,8 +80,10 @@ def test_a_failed_or_partial_read_keeps_the_old_env_and_fails_loudly(tmp_path, m
         "printf 'TICO_JOIN_URL=https://t.example.com\\nTICO_JOIN_CODE=\\nTICO_JOIN_LABEL=build-1\\n'",
         "printf 'TICO_JOIN_URL=https://t.example.com\\nTICO_JOIN_CODE=a b\\nTICO_JOIN_LABEL=build-1\\n'",
         "printf 'TICO_JOIN_URL=t.example.com\\nTICO_JOIN_CODE=abc\\nTICO_JOIN_LABEL=build-1\\n'",
+        "printf 'TICO_JOIN_URL=https://t.example.com/path\\nTICO_JOIN_CODE=abc\\nTICO_JOIN_LABEL=build-1\\n'",
+        "printf 'TICO_JOIN_URL=https://t.example.com\\nTICO_JOIN_CODE=abc.def\\nTICO_JOIN_LABEL=build-1\\n'",
     ],
-    ids=["aws-failed", "empty-code", "malformed-assignment", "not-a-url"],
+    ids=["aws-failed", "empty-code", "malformed-assignment", "not-a-url", "url-with-a-path", "code-charset"],
 )
 def test_a_runner_rejoin_whose_join_settings_cannot_be_read_keeps_the_running_runner(tmp_path, monkeypatch, aws):
     root, bin_dir = tmp_path / "runner", tmp_path / "bin"
@@ -107,3 +110,39 @@ def test_a_runner_rejoin_whose_join_settings_cannot_be_read_keeps_the_running_ru
     assert run.returncode == 1 and "could not read the join settings in /tico/r/join" in run.stderr
     assert (root / ".env").read_text() == "TICO_RUNNER_TOKEN=keep\n" and not (tmp_path / "docker.log").exists()
     assert not (root / "join.env").exists()
+
+
+def test_join_values_the_installer_takes_pass_the_rejoin_guard(tmp_path, monkeypatch):
+    root, bin_dir = tmp_path / "runner", tmp_path / "bin"
+    monkeypatch.setattr(contract, "RUNNER_DIR", str(root))
+    root.mkdir()
+    bin_dir.mkdir()
+    join = runner_setup.join_env("https://t.example.com:8443", "AbC_12-x", "Ana's build 1")
+    (tmp_path / "join").write_text(join)
+    stubs = {"aws": f"cat {tmp_path}/join", "docker": f'echo "$@" >> {tmp_path}/docker.log', "curl": "exit 22"}
+    for name, body in stubs.items():
+        (bin_dir / name).write_text(f"#!/bin/sh\n{body}\n")
+        (bin_dir / name).chmod(0o755)
+    script = runner_setup.bootstrap_script(
+        os_family="al2023", tag="latest", env_param=("/tico/r/join", "us-west-2"), rejoin=True
+    )
+    script = "set -eu\n" + script[script.index(f"mkdir -p {root}") :]
+    run = subprocess.run(
+        ["bash", "-c", script],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"},
+    )
+    # Past the guard: the old runner is replaced, and only the stand-in download fails.
+    assert "could not read the join settings" not in run.stderr and "could not download" in run.stderr
+    assert (tmp_path / "docker.log").read_text().startswith("rm -f tico-runner")
+
+
+def test_the_rejoin_guard_holds_to_the_installers_own_checks():
+    script = (Path(runner_setup.__file__).resolve().parent.parent / "scripts" / "install.sh").read_text()
+    for key, flag in (
+        ("TICO_JOIN_URL", "RUNNER_URL"),
+        ("TICO_JOIN_CODE", "RUNNER_CODE"),
+        ("TICO_JOIN_LABEL", "RUNNER_LABEL"),
+    ):
+        assert f"printf '%s' \"${flag}\" | grep -Eq '{runner_setup.INSTALLER_JOIN_CHECKS[key]}'" in script, key
