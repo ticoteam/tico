@@ -1173,36 +1173,31 @@ systems are `entity_external_refs`, one per (system, type, id, connection), writ
 the caller still sees that entity, a record on another entity is refused without naming it, and a record erased at its
 owner's request is not written again on its connection, '' being its own (one erased before connections, on any).
 
-**A Jira issue's state** is read through its own connection: `GET <base URL>/rest/api/3/issue/<key>` with the key of
-someone allowed to use the tool (`api_tools.key_for`): the owner of the task holding the issue's primary link, then the
-owners of the other tasks linking it, then whoever linked it. The key never leaves the read. `item_metadata.fields`
-holds `state` (open, or closed when Jira's status category is done), `status`, `category`, `summary`, `updated` (Jira's
-stamp) and `connection_id`; an issue is never final, since issues reopen. Push first: a Jira webhook to any trigger
-(`jira:issue_*` with `issue.key` and `issue.self`) marks each linked copy of the issue on a connection serving that site
-due, and the heartbeat's item metadata step reads it within a minute; the payload names the issue and is not trusted for
-its state. The backstop reads an issue an open task links when its metadata is missing or an hour old, at most 50 a pass.
-A read nobody may make, or that Jira refuses, keeps the metadata as it was with `read_error` and is tried again after 5
-minutes.
+**A Jira issue's state** is read through its connection, and only a company-wide one (a tool whose audience is
+Everyone): `GET <base URL>/rest/api/3/issue/<key>` with the tool's read key, else its read and write key. No one's own
+access is borrowed; a private tool's issues are never read. `item_metadata.fields` holds `state` (open, or closed when
+Jira's status category is done), `status`, `category`, `summary`, `updated` (Jira's stamp) and `connection_id`, shown to
+whoever sees the task; an issue is never final, since issues reopen. Push first: a trigger bound to the connection
+(`tico trigger update <id> --connection-id <tool id>`) takes Jira's webhook, and a `jira:issue_*` event marks that
+connection's linked copy of the issue due; the payload only names the issue, one that does not read as an issue event
+is ignored, and the delivery's answer and log say nothing about it. The heartbeat's own `jira_items` step reads what is
+due, missing, or an hour old, at most 10 issues per connection and 30 seconds of reading a pass. A read clears the due
+mark only when it is the mark the read began under, so a webhook that lands mid-read is read next pass. A read Jira
+refuses keeps the metadata as it was with `read_error` and is tried again after 5 minutes. An issue moved to another
+project gets a new key: a task filed for the old key keeps it, and one filed for the new key shows as a duplicate to
+merge.
 
 #### Intake
 
-`POST /api/v2/inbound/items` (`tico task intake jira issue PROJ-12 --connection <tool id> --title ... --owner ...`,
-MCP `tico_task_intake`): an outside item is ready for work. In one write it finds the task whose primary link is that
-item, or files one (the caller's ordinary create, with its checks and defaults; the item, not the title, makes it one
-task) linked to the item as its primary link; the partial unique index `task_links_primary_item` makes a second primary
-task impossible, so two intakes at once give one task. A task found closed or done is reopened by Tico: ready after a
-withdrawal resumes the same task, whoever closed it. The caller must be allowed to use the connection. `updated_at` is
-when the item last changed outside as the event saw it: one older than what the last read saw (`fields.updated`), or no
-newer than the last intake acted on (`fields.intake_updated`), answers `stale: true` and changes nothing, so a late or
-repeated ready never reopens a settled task. `POST /api/v2/inbound/tasks` (service keys) keeps its own contract: it
-cannot carry tool access and keys on the caller's own id, not an outside item.
-
-**Closed outside.** When a read sees a primary link's item turn closed, the task's owner is asked once to settle the
-task or keep it: a person by a ❓ on the task's chat from the task's bot (else the bot that filed it, else Agent Ops),
-a bot by Tico's instructions on the task, which wake it. The item turning open again takes the ❓ back
-(`cleared_reason` withdrawn). A secondary link closing asks nobody: its state shows on the link. A merge moves an item's
-primary link to the kept task; a deleted task restored after another task was filed for its item gets its link back as
-a secondary one.
+Find-or-create is the ordinary create: `POST /api/v2/tasks` with `primary_link` (`jira:issue:PROJ-12@<tool id>` or the
+issue's URL; `tico task create --primary-link ...`, MCP `tico_task_create`). The org rule check and ask ingest run as
+for any create; then, in the same write, a task already holding that item's primary link comes back (`found: true`)
+as it is, with nothing filed, reopened or moved, and the checks only filing needs (the owner's cap, reach) are skipped.
+Otherwise the task is filed in its pipeline's first stage and linked to the item as its primary link (the item, not the
+title, makes it one task). The partial unique index `task_links_primary_item` makes a second primary task impossible,
+so two creates at once give one task. A merge moves the primary link to the kept task (with the exact
+connection-scoped row); a deleted task restored after another task was filed for its item gets its link back as a
+secondary one.
 
 ### Modules
 
@@ -1213,8 +1208,7 @@ a secondary one.
 - `never_stuck.py`: the check, the ladder, Late, filling open slots.
 - `item_sources/github.py`: the GitHub source. PR and release metadata, the 5-minute GitHub read, webhook
   intake, its conditions and its one action, queue.
-- `item_sources/jira.py`: Jira issue links, their state read through each issue's connection, and the Jira webhook.
-- `item_intake.py`: create-or-find intake by an item's primary link, and the owner's ask when that item closes outside.
+- `item_sources/jira.py`: Jira issue links, their state read through a company-wide connection, and the Jira webhook.
 - `item_metadata.py`: the saved metadata of every source's items, per connection, and what waits on it.
 - `source_actions.py`: a source's actions on entering a stage (act), their undo, and the retries.
 - `stage_effects.py`: file a linked task, queue and dequeue PRs, undo.

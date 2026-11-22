@@ -3,8 +3,9 @@
 A trigger is a named address. Anything that can send an HTTP POST (a payment service, a form,
 a deploy, a script) posts to it, and every automation on that webhook runs with the request's body
 (backend/automations.py `on_webhook`). Rules (backend/rules.py) see the same call as `webhook.received`.
-The trigger itself does nothing else: no model wakes unless an automation or a rule listens. A Jira issue event also
-marks the issue it names to be read again through its connection (backend/item_sources/jira.py `webhook`).
+The trigger itself does nothing else: no model wakes unless an automation or a rule listens. A trigger bound to a
+connection (`connection_id`, a Jira tool) also marks the issue a Jira event names to be read again through that
+connection (backend/item_sources/jira.py `webhook`); the delivery's answer and log say nothing of it.
 
 The address carries its own secret, so a sender needs no Tico account: `POST
 /api/v2/hooks/<id>/<secret>`, or `POST /api/v2/hooks/<id>` with `Authorization: Bearer <secret>`.
@@ -126,6 +127,9 @@ class TriggerUpdate(Contract):
     hourly: Optional[int] = None
     keep_days: Optional[int] = None
     unheard: Optional[str] = Field(default=None, max_length=10)
+    # The connection (a tool's id) the trigger belongs to: its Jira issue events refresh that connection's issues. ''
+    # unbinds it.
+    connection_id: Optional[str] = Field(default=None, max_length=200)
 
 
 def digest(secret: str) -> str:
@@ -278,6 +282,7 @@ def summary(c, settings, t, since=None):
         "hourly": hourly_of(t),
         "keep_days": t["keep_days"],
         "unheard": t["unheard"],
+        "connection_id": t["connection_id"],
         "automations": used,
     }
 
@@ -416,6 +421,11 @@ def update(c, who, settings, vault, trigger_id, body):
         if body.unheard not in UNHEARD:
             raise Problem("trigger", "unheard is log or note", 422)
         sets["unheard"] = body.unheard
+    if body.connection_id is not None:
+        bound = body.connection_id.strip()
+        if bound and not c.execute("SELECT 1 FROM tools WHERE id=?", (bound,)).fetchone():
+            raise Problem("trigger", f"No connection {bound}: a connection is a tool's id", 422)
+        sets["connection_id"] = bound
     if body.preset is not None and body.preset != effective_preset(found):
         if body.preset not in P.PRESETS:
             raise Problem("trigger", "A preset is one of: " + ", ".join(P.PRESETS), 422)
@@ -695,11 +705,20 @@ def _route(c, found, delivery, type_, via, body, headers, auth):
             },
         )
     from . import automations
-    from .item_sources import jira
 
-    # A Jira issue event names an issue: each copy a task links on a connection serving its site is read again
-    # through that connection on the next pass (backend/item_sources/jira.py `webhook`); the payload is not trusted.
-    results = results + jira.webhook(c, payload)
+    if found["connection_id"]:
+        # A Jira issue event to a trigger bound to a connection: that connection's linked copy of the issue is read
+        # again on the next pass (backend/item_sources/jira.py `webhook`). Nothing of it reaches the answer or the
+        # log, so a sender learns nothing of what is linked; a payload it cannot read changes nothing.
+        from .item_sources import jira
+
+        c.execute("SAVEPOINT trigger_item")
+        try:
+            jira.webhook(c, found["connection_id"], payload)
+            c.execute("RELEASE trigger_item")
+        except Exception:  # noqa: BLE001 - the delivery stands whatever the refresh mark did
+            c.execute("ROLLBACK TO trigger_item")
+            c.execute("RELEASE trigger_item")
     # An automation on the webhook (a routine on `webhook._tico` included) runs on every call it hears.
     results = results + automations.on_webhook(c, trigger_id, found["name"], type_, delivery, payload, shown)
     return fired, results
@@ -853,7 +872,7 @@ def receive(
     )
     fired, results = _route(c, found, delivery, type_, via, body, headers, auth)
     _log(c, trigger_id, delivery, sender, body, len(fired), "accepted", type=type_, via=via, results=results, at=at)
-    if not _acted(fired, results):
+    if not _acted(fired, results) and not found["connection_id"]:  # a bound trigger is heard by its connection
         _unheard(c, found, delivery, type_)
     return Received("accepted", 202, delivery, None, tasks=len(fired), rules=results, type=type_)
 

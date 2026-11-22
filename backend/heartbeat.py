@@ -270,24 +270,28 @@ def _engine_github(ctx: Context) -> Any:
 
 def item_metadata(ctx: Context) -> tuple[str, bool]:
     # The 5-minute re-read of the items open tasks wait on, GitHub's PRs and releases (backend/item_sources/github.py
-    # `refresh`): a webhook GitHub never sent, or one Tico missed, still reaches the task. Then the Jira issues tasks
-    # link that a webhook marked due, never read, or not read for an hour, each through its own connection
-    # (backend/item_sources/jira.py `refresh`).
-    changed = 0
+    # `refresh`): a webhook GitHub never sent, or one Tico missed, still reaches the task.
     github = _engine_github(ctx)
-    if github is not None:
-        from .item_sources import github as GS
+    if github is None:
+        return "No GitHub app", True
+    from .item_sources import github as GS
 
-        changed += GS.refresh(ctx.store, github)
+    changed = GS.refresh(ctx.store, github)
+    return (f"{changed} items changed", False) if changed else ("Nothing due", True)
+
+
+def jira_items(ctx: Context) -> tuple[str, bool]:
+    # The Jira issues tasks link that a webhook marked due, were never read, or not read for an hour, each through its
+    # company-wide connection (backend/item_sources/jira.py `refresh`): a step of its own, capped per connection and in
+    # time, so GitHub's step and Jira's never hold up or fail each other.
     app: Any = getattr(ctx, "app", None)
     vault: Any = getattr(getattr(app, "state", None), "vault", None)
-    if vault is not None:
-        from .item_sources import jira as JS
+    if vault is None:
+        return "No credential vault", True
+    from .item_sources import jira as JS
 
-        changed += JS.refresh(ctx.store, vault)
-    if changed:
-        return f"{changed} items changed", False
-    return ("Nothing due", True) if github is not None or vault is not None else ("No GitHub app", True)
+    changed = JS.refresh(ctx.store, vault)
+    return (f"{changed} issues changed", False) if changed else ("Nothing due", True)
 
 
 def source_actions(ctx: Context) -> tuple[str, bool]:
@@ -437,6 +441,16 @@ STEPS = [
         MINUTE,
         item_metadata,
         failure="item_metadata",
+        capture="scheduler",
+        outside=True,
+    ),
+    Step(
+        "jira_items",
+        "Jira issue metadata",
+        "poll",
+        MINUTE,
+        jira_items,
+        failure="jira_items",
         capture="scheduler",
         outside=True,
     ),

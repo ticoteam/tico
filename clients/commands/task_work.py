@@ -518,33 +518,6 @@ def task_link(api, args):
 
 
 @tool(
-    "tico_task_intake",
-    "An outside item is ready for work (a Jira issue): find the task filed for it, reopening it when it is closed, or "
-    "file one linked to it. Calling again for the same item gives the same task, never a second. You must be allowed "
-    "to use its connection (the tool's id). updated_at is when the item last changed there: an older event changes "
-    "nothing (stale).",
-    {
-        "connection_id": _s("The connection (tool id) the item came through"),
-        "source": _s("The item's source", enum=["jira"]),
-        "item_type": _s("The item's type", enum=["issue"]),
-        "key": _s("The item's key, like PROJ-12"),
-        "title": _s("The task's title, when this files it"),
-        "message": _s("The first message on its chat, when this files it"),
-        "owner": _s("Who does it, when this files it: a bot slug, a person id, or `me`"),
-        "pipeline": _s("The pipeline it goes in, when this files it: its id"),
-        "stage": _s("The stage it goes to after the first, when this files it: its id or name"),
-        "updated_at": _s("When the item last changed outside, ISO-8601 with a timezone"),
-    },
-    required=("connection_id", "source", "item_type", "key"),
-    writes=True,
-)
-def task_intake(api, args):
-    fields = ("connection_id", "source", "item_type", "key", "title", "message", "owner", "pipeline", "stage")
-    body = {name: args[name] for name in (*fields, "updated_at") if args.get(name)}
-    return api.post("inbound/items", body, key=_key(args))
-
-
-@tool(
     "tico_task_unlink",
     "Take a link off a task: a pull request closed without merging that another PR replaces, so PR open reads the "
     "one that is left. Name the link by its URL or its id.",

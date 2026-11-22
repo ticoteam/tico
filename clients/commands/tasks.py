@@ -107,6 +107,10 @@ def task_context(api, args):
             "items": {"type": "string"},
             "description": "URLs to attach: a pull request, an issue, a document",
         },
+        "primary_link": _s(
+            "The outside item this task is for: jira:issue:PROJ-12@<connection tool id>, or its URL. When a task "
+            "already holds it, that task comes back (found: true) and nothing new is filed"
+        ),
         "goal_id": _s("The goal this task serves (tico_goal_list); optional"),
         "human": _s("Its Human: a person or `me`"),
         "after": {
@@ -146,6 +150,7 @@ def task_create(api, args):
         "labels",
         "top",
         "links",
+        "primary_link",
         "request_id",
         "number",
         "check_model",
@@ -1517,11 +1522,5 @@ TASK = (
         ),
         example="tico task link T1 https://github.com/acme/app/pull/12 --title 'Fix PR'",
         run=_link,
-    ),
-    Command(
-        "task intake",
-        "an outside item is ready: find the task filed for it, or file one linked to it",
-        args=(Arg("connection_id", flag="--connection", metavar="TOOL_ID"),),
-        example="tico task intake jira issue PROJ-12 --connection tool_jira --title 'Fix the export' --owner builder",
     ),
 )

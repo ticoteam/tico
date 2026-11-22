@@ -464,7 +464,7 @@ def _without_gone_records(c, table, row):
 
 def _primary_free(c, table, row):
     """A deleted task's primary link to an outside item comes back as a plain typed link when another task was filed for
-    that item meanwhile (backend/item_intake.py): one task holds an item's primary link, and the link is kept."""
+    that item meanwhile (POST /api/v2/tasks `primary_link`): one task holds an item's primary link, and the link is kept."""
     if table != "task_links" or not row.get("is_primary") or not row.get("source"):
         return row
     taken = c.execute(

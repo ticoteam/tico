@@ -20,6 +20,7 @@ from . import goals as G
 from .auth import Identity
 from .onboarding import AGENT_OPS
 from . import rooms
+from . import item_sources as IS
 from .store import H, Problem, encode
 from . import bot_settings as BS
 from . import (
@@ -33,7 +34,7 @@ from . import (
     task_followers_routes,
 )
 from .api_contract import ASK_REFUSED
-from .api_answers.tasks import ItemIntakeResult, TaskDetail, TaskResult, TaskRunModelResult
+from .api_answers.tasks import TaskDetail, TaskResult, TaskRunModelResult
 
 from . import models as M
 from .api_contract import api_v2
@@ -482,6 +483,17 @@ def register_core(
         for a bot wakes it; `wake_refs` go on that wake (an auto dream's release policy, backend/dream_auto.py)."""
         source = who
         actual_bot = source.task_actor or (source.actor if source.role == "bot" else "")
+        # Find-or-create (docs/dev/pipelines-v3.md "Intake"): a create naming its outside item's primary link returns
+        # the task already holding it, after the same rule check, and files nothing; the checks that only filing needs
+        # (the owner's cap, reach) are skipped for it. The item, not the title, makes it one task.
+        primary = found = None
+        if body.primary_link:
+            try:
+                primary = IS.primary_of(c, body.primary_link)
+            except ValueError as error:
+                raise Problem("primary_link", str(error), 422) from None
+            found = IS.primary_task(c, primary[0])
+            same = lambda _c, _task_id: False  # another item's task with this title is other work
         if body.from_private:
             # Older clients' name for `private: false` from a private task's run.
             body = body.model_copy(update={"private": False, "from_private": False})
@@ -523,9 +535,11 @@ def register_core(
             if body.visibility == "public":
                 raise Problem("meeting_audience", meeting_audience.REFUSAL, 409)
             body = body.model_copy(update={"private": True})
-        task_caps.check(c, who.actor, owner)  # the first hub check on a send (CONTRACT §1): nothing is written
+        if not found:
+            task_caps.check(c, who.actor, owner)  # the first hub check on a send (CONTRACT §1): nothing is written
         # A bot's task for a teammate out of its reach, or its question to one (docs/reach.md), is refused next.
-        reach.check(c, who, owner, "task", task_id=parent_id)
+        if not found:
+            reach.check(c, who, owner, "task", task_id=parent_id)
         asked_agent_ops = None
         if request_id and who.via == "assistant":
             # The Assistant handing a helper (Agent Ops, the Strategy Owner, the Librarian; assistant.HELPERS) what the
@@ -540,7 +554,8 @@ def register_core(
         # A subtask for a person under a private task with no person on it, filed by the bot that owns it, makes them
         # its reader.
         reach_to = privacy.reach_for(c, source, owner, H.task(c, parent_id) if parent_id else None)
-        auth.require_bot_contact(c, who, owner, task_id=parent_id, kind="task")
+        if not found:
+            auth.require_bot_contact(c, who, owner, task_id=parent_id, kind="task")
         # A subtask is the shape that parks the filer as `waiting` and makes it care when the
         # other one finishes. A bot set to `tasks` has opted out of that on both sides: it does
         # not wait, and its own completions are quiet, so parking on one would wait for ever.
@@ -611,6 +626,19 @@ def register_core(
             if ingest:
                 ask_ingest.skipped(c, ingest, "held")
             return org_rule_check.answer(rule_gate)
+        if found:
+            if ingest:
+                ask_ingest.skipped(c, ingest, "not_applied")
+            try:
+                auth.task(c, who, found)
+            except Problem:
+                raise Problem("primary_link", "A task you cannot see already holds this item", 409) from None
+            held = H.task(c, found)
+            return {
+                "task": task_view(held, c, visible_sql=auth.task_sql(c, who), who=who),
+                "found": True,
+                **org_rule_check.answer(rule_gate),
+            }
         public_warning = ""
         if rule_gate and rule_gate.get("warn"):
             approved = exact_approval(c, who.actor)
@@ -799,6 +827,10 @@ def register_core(
             c.execute("UPDATE tasks SET request_id=? WHERE id=?", (inherited_request or request_id, row["id"]))
         for url in body.links:
             H.task_link(c, who.actor, row["id"], url, mover=True, plain_when_unsure=True)
+        if primary:
+            # The item this task is filed for: its primary link (the partial unique index keeps it one task's).
+            H.task_link(c, who.actor, row["id"], primary[1], item=primary[0], mover=True)
+            IS.claim(c, row["id"], primary[0])
         # A bot's finding on a pipeline task's own pull request is that task's review verdict, not a person's task.
         H.review_finding_route(c, who.actor, row["id"], row["owner_id"])
         # The parent it was filed under is a relation written here too, and reads back first.
@@ -846,7 +878,7 @@ def register_core(
             **({"private_readers": row["private_readers"]} if row.get("private_readers") else {}),
         }
 
-    def cap_before_preflight(request, who, owner_ref, parent_ref=None):
+    def cap_before_preflight(request, who, owner_ref, parent_ref=None, primary_link=None):
         """The task cap (CONTRACT §1) and reach (docs/reach.md) before any LLM preflight: a refused send spends no
         judgment and writes nothing. A retry whose Idempotency-Key already has a saved answer is not checked: `mutate`
         replays that answer."""
@@ -857,6 +889,8 @@ def register_core(
         with store.read() as c:
             if store.saved(c, who, request.url.path, request.headers.get("idempotency-key")):
                 return
+            if primary_link and _held_item(c, primary_link):
+                return  # it returns the task holding the item: nothing is sent to the owner
             original = auth.target(c, who, owner_ref, need="write")
             owner = auth.target(c, who, route(c, who.actor, original), need="write")
             task_caps.check(c, who.actor, owner)
@@ -884,7 +918,7 @@ def register_core(
             # with its own rights, and is its requester (who filed it).
             who = Identity(who.task_actor, "bot", runner_id=who.runner_id, attempt_id=who.attempt_id, agent=who.agent)
             request.state.identity = who
-        cap_before_preflight(request, who, body.owner, body.parent)
+        cap_before_preflight(request, who, body.owner, body.parent, body.primary_link)
         rc = rule_check(
             who,
             "task_create",
@@ -908,51 +942,12 @@ def register_core(
             ),
         )
 
-    @app.post(
-        "/api/v2/inbound/items",
-        **api_v2(
-            "Tasks",
-            "intakeItem",
-            "An outside item ready for work (a Jira issue): finds the task whose primary link is that item, reopening it "
-            "when it is closed, or files one with that link, in one write; a stale event changes nothing. The caller "
-            "must be allowed to use the item's connection (docs/dev/pipelines-v3.md, Intake)",
-            ItemIntakeResult,
-        ),
-    )
-    def intake_item(request: Request, body: M.ItemIntake):
-        """Not POST /api/v2/inbound/tasks: that route takes only a service key, keyed by (key, the system's own id), and
-        a service key may use no tool. An intake keys on the outside item and its caller must hold the connection."""
-        from . import item_intake
-
-        who = request.state.identity
-        cap_before_preflight(request, who, body.owner)
-
-        def work(c):
-            def create():
-                # The item is what makes it one task: two items' tasks may share a title and an owner.
-                made = task_create(
-                    c,
-                    who,
-                    M.TaskCreate(title=body.title, body=body.body, owner=body.owner, pipeline=body.pipeline),
-                    same=lambda _c, _task_id: False,
-                )
-                return made["task"]["id"]
-
-            done = item_intake.intake(
-                c,
-                who.actor,
-                (body.source, body.item_type, body.key, body.connection_id),
-                title=body.title,
-                updated_at=body.updated_at,
-                create=create,
-                see=lambda row: auth.task(c, who, row["id"]),
-                stage=body.stage,
-            )
-            row = H.task(c, done["task_id"]) if done["task_id"] else None
-            view = task_view(row, c, visible_sql=auth.task_sql(c, who), who=who) if row else None
-            return {"task": view, "created": done["created"], "resumed": done["resumed"], "stale": done["stale"]}
-
-        return mutate(request, body, work)
+    def _held_item(c, primary_link):
+        """Whether a task already holds the primary link a create names (a link it cannot read is the create's error)."""
+        try:
+            return IS.primary_task(c, IS.primary_of(c, primary_link)[0]) is not None
+        except ValueError:
+            return False
 
     def handoff_receipt(who):
         """Who reads back a task the person's own Assistant turn filed (privacy.as_the_person): the person, when it is

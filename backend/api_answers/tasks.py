@@ -405,6 +405,8 @@ class TaskList(TypedDict):
 @answer
 class TaskResult(TypedDict):
     task: Task
+    # A create with a primary link that a task already held: that task, and nothing new filed.
+    found: NotRequired[bool]
     private_readers: NotRequired[str]
     answer_id: NotRequired[str | None]
 
@@ -713,17 +715,6 @@ class InboundTaskResult(TypedDict):
     task: InboundTaskResultTask | None
     created: bool
     changed: bool
-
-
-@answer
-class ItemIntakeResult(TypedDict):
-    """POST /api/v2/inbound/items: the task whose primary link is the item (None when a stale event found none), and
-    whether this call filed it, reopened it, or changed nothing because the event was stale."""
-
-    task: Task | None
-    created: bool
-    resumed: bool
-    stale: bool
 
 
 @answer

@@ -210,6 +210,9 @@ class TaskCreate(Contract):
     labels: list[str] = Field(default_factory=list, max_length=20)
     top: bool = False
     links: list[str] = Field(default_factory=list, max_length=20)
+    # The outside item it is filed for (backend/item_sources), `<source>:<type>:<key>@<connection>` or its URL: a task
+    # that already holds that item's primary link comes back instead (`found`), and nothing new is filed.
+    primary_link: str | None = Field(default=None, min_length=1, max_length=2000)
     request_id: ID | None = None
     # An imported task's own number (a mover's).
     number: TaskNumber | None = None
@@ -3469,24 +3472,6 @@ class InboundTask(Contract):
     due: str | None = None
     close: bool = False
     note: str | None = Field(default=None, max_length=200_000)
-
-
-class ItemIntake(Contract):
-    """An outside item ready for work (POST /api/v2/inbound/items, backend/item_intake.py): the task whose primary link
-    is that item is found, or filed with that link. `title` is needed only when the call files the task; `message`,
-    `owner`, `pipeline` and `stage` are used only then. `updated_at`: when the item last changed outside, as this event
-    saw it; an event older than what Tico has seen changes nothing (`stale`)."""
-
-    connection_id: str = Field(default="", max_length=200)  # the tool the item came through
-    source: str = Field(min_length=1, max_length=40)  # jira
-    item_type: str = Field(min_length=1, max_length=40)  # issue
-    key: str = Field(min_length=1, max_length=200)  # PROJ-12
-    title: str | None = Field(default=None, min_length=1, max_length=300)
-    body: Text | None = Field(default=None, validation_alias=AliasChoices("message", "body"))
-    owner: ID | None = None
-    pipeline: ID | None = None
-    stage: str | None = Field(default=None, min_length=1, max_length=120)
-    updated_at: str | None = Field(default=None, max_length=40)
 
 
 class RuleCreate(Contract):

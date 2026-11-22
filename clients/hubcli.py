@@ -715,6 +715,12 @@ def parser():
     s.add_argument("--label", action="append", help="a label (repeat, or comma-separate); a project is a label")
     s.add_argument("--top", action="store_true", help="put it at the top of the owner's queue")
     s.add_argument("--link", action="append", help="a URL to attach (a pull request, an issue, a document)")
+    s.add_argument(
+        "--primary-link",
+        dest="primary_link",
+        help="the outside item it is for (jira:issue:PROJ-12@<tool id>, or its URL): a task already holding it comes "
+        "back instead, and nothing new is filed",
+    )
     s.add_argument("--goal", help="the goal this task serves (tico goal list); optional")
     s.add_argument("--after", action="append", help="a task it merges after (repeat for more): Merge waits for it")
     s.add_argument(

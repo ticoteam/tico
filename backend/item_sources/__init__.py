@@ -1,6 +1,6 @@
 # pyright: strict
 """Sources: places outside Tico a task can wait on or link to (docs/dev/pipelines-v3.md "Sources and items"). One module
-each, named in SOURCES: GitHub (`github.py`) and Jira (`jira.py`, links only so far).
+each, named in SOURCES: GitHub (`github.py`) and Jira (`jira.py`: links and their state).
 
 A source module has `SOURCE` (its id), `NAME`, `ITEMS` (its item types) and `CONDITIONS` (what a requirement of kind
 `item` can ask of one of its items), `match_link(url)` (the item a link is), optionally `match_key(item_type, text)` (an
@@ -174,3 +174,38 @@ def parse_ref(conn: sqlite3.Connection, text: str) -> tuple[str, str, str, str]:
     if getattr(module, "site", None) and not connection.strip():
         raise ValueError(f"A {source_id} item is one connection's: add @<connection id>")
     return source_id, item_type, spelled, connection.strip()
+
+
+def primary_of(conn: sqlite3.Connection, text: str) -> tuple[tuple[str, str, str, str], str]:
+    """(item, URL to link) of a task create's primary link (POST /api/v2/tasks `primary_link`): the item as `parse_ref`
+    reads it, linked by its URL when given as one, else by the page its source names for it (`item_url`, Jira's).
+    ValueError, saying what is wrong, for anything else."""
+    item = parse_ref(conn, text)
+    text = text.strip()
+    if text.startswith(("http://", "https://")):
+        return item, text
+    module = source(item[0])
+    item_url: Callable[[sqlite3.Connection, str, str, str], str] | None = getattr(module, "item_url", None)
+    if item_url is None:
+        raise ValueError(f"Name a {item[0]} item by its URL")
+    return item, item_url(conn, item[1], item[2], item[3])
+
+
+def primary_task(conn: sqlite3.Connection, item: tuple[str, str, str, str]) -> str | None:
+    """The id of the task holding the item's primary link (the partial unique index task_links_primary_item lets one
+    task hold it), whatever its status, or None."""
+    found = conn.execute(
+        "SELECT task_id FROM task_links WHERE is_primary=1 AND source=? AND item_type=? AND item_key=? "
+        "AND connection_id=?",
+        item,
+    ).fetchone()
+    return str(found[0]) if found else None
+
+
+def claim(conn: sqlite3.Connection, task_id: str, item: tuple[str, str, str, str]) -> None:
+    """Make the task's link to the item its primary link. IntegrityError when another task holds it."""
+    conn.execute(
+        "UPDATE task_links SET is_primary=1 WHERE task_id=? AND source=? AND item_type=? AND item_key=? "
+        "AND connection_id=?",
+        (task_id, *item),
+    )
