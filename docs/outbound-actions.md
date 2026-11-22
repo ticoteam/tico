@@ -126,11 +126,12 @@ backend/release_closeout.py queues the Jira side of a released task filed for a 
 once every merged PR of the task is in an actual release tag (the In a release reading of saved releases, no new
 GitHub call), the task's forward or done move out of its Release visit queues a `transition` to `Done` (Jira's default
 Done status name) and one `comment` naming each tag with its GitHub release link, as Tico itself, with occurrence keys
-`closeout:<task>:<repo>@<newest tag>:jira:<operation>` (the newest release holding its merges; none is queued when a
-newer release was announced for the task already, so a reopen or a removed PR adds nothing). Both carry `closeout:
+`closeout:<task>:<repo>@<newest tag>:jira:<operation>` (the newest release holding its merges; none is queued when one
+published at the same time or later was announced for the task already, so a reopen or a removed PR adds nothing).
+Only Tico itself may queue a `closeout:` key (422 for anyone else). Both carry `closeout:
 true`, the issue's saved Ready and the `done` target in their payload: the sender reads the issue right before the
-write, and while it is withdrawn, gone or closed in another Done status it waits an hour and tries again (not counted
-as a retry). Each is on its own: one refused is logged (`closeout.skipped`) and the other goes. A record integration
+write, and while it is withdrawn, gone (404, at the read or the write) or closed in another Done status it waits an
+hour and tries again (not counted as a retry, so the retry cap never ends it). Each is on its own: one refused is logged (`closeout.skipped`) and the other goes. A record integration
 with a shared write key is the administrator's explicit opt-in for Tico to keep linked issues in step, and a close-out
 also needs a merged PR in a real release tag. No Slack reply in the task's thread yet: it comes back when Slack sends
 move into this queue, where org rules and privacy apply to every send.

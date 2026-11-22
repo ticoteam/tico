@@ -1200,7 +1200,8 @@ link filed without `primary_status` has no saved Ready, and every To Do status c
 pauses for a withdrawal. Anything but active when the task leaves Release freezes the close-out: nothing is queued,
 and the visit is kept (`detail.pending`) so the Jira pass keeps reading the issue of the Done task (as it does while a
 close-out Jira write has not ended; the sender itself holds a write whose issue was withdrawn since, an hour at a
-time, until it is back). A task with more than one primary Jira link (after a merge) closes none out, and its owner is
+time, until it is back; the issue closed in another Done status than Tico's own target asks the owner even then). A
+task with more than one primary Jira link (after a merge) closes none out, and its owner is
 asked once; a merge also drops the saved Ready of the link it moves, which then never pauses (merges of tasks filed
 for Jira issues are rare). The close-out sends no Slack reply until Slack sends move into the outbound gate. After each
 answered read, a non-active standing asks the task's owner (a person; else its bot's manager, then the company's

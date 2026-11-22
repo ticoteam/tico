@@ -286,7 +286,8 @@ def test_a_read_error_after_a_404_keeps_the_pause(company, gh, jira):
         assert stage(c, task_id) == "Done" and actions(c, task_id) == {}
 
 
-def test_a_reopen_adding_a_pr_already_released_queues_nothing_new(company, gh, jira):
+@pytest.mark.parametrize("v1_at", ["2026-01-01T00:00:00.000000Z", "2026-11-10T00:00:00.000000Z"])  # older, or a tie
+def test_a_reopen_adding_a_pr_already_released_queues_nothing_new(company, gh, jira, v1_at):
     task_id = to_release(company, gh)
     with company.transaction() as c:
         filed(c, task_id)
@@ -300,12 +301,12 @@ def test_a_reopen_adding_a_pr_already_released_queues_nothing_new(company, gh, j
     sha = gh.merge(REPO, 2)
     with company.transaction() as c:
         seen(c, gh, 2)
-        F.save_release(c, REPO, {"tag": "v1.0.0", "commit_sha": sha, "published_at": "2026-01-01T00:00:00.000000Z"}, 1)
+        F.save_release(c, REPO, {"tag": "v1.0.0", "commit_sha": sha, "published_at": v1_at}, 1)
         old = next(r for r in F.releases(c, REPO, prereleases=True) if r["tag"] == "v1.0.0")
         F.save_included(c, old["id"], sha, True)
         assert RC.close_out(c, task_id, visit) == 0
         assert len(actions(c, task_id)) == 2
-        # PR 1 (in the newest, v2.0.0) is removed: the newest release now is v1.0.0, older than the one announced.
+        # PR 1 (in the newest, v2.0.0) is removed: the newest release now is v1.0.0, no newer than the one announced.
         c.execute("DELETE FROM task_links WHERE task_id=? AND number=1", (task_id,))
         assert RC.close_out(c, task_id, visit) == 0
         assert len(actions(c, task_id)) == 2
@@ -313,7 +314,12 @@ def test_a_reopen_adding_a_pr_already_released_queues_nothing_new(company, gh, j
 
 @pytest.mark.parametrize(
     ("status", "category", "why"),
-    [("Backlog", "new", "withdrawn"), ("Won't Do", "done", "closed in Jira as Won't Do"), (None, "", "no longer")],
+    [
+        ("Backlog", "new", "withdrawn"),
+        ("Won't Do", "done", "closed in Jira as Won't Do"),
+        (None, "", "no longer"),
+        ("write 404", "new", "no longer"),  # Ready at the read, gone by the write
+    ],
 )
 def test_a_close_out_write_waits_while_the_issue_is_withdrawn_gone_or_closed_otherwise_then_resumes(
     company, gh, jira, monkeypatch, status, category, why
@@ -329,6 +335,9 @@ def test_a_close_out_write_waits_while_the_issue_is_withdrawn_gone_or_closed_oth
 
     def call(method, url, headers, params, seconds=10.0, body=None, most=None):
         sent.append(method)
+        if method == "POST" and issue["status"] == "write 404":
+            sent.remove("POST")  # refused: nothing was written
+            return JS.Reply(404, {"errorMessages": ["Issue does not exist"]})
         if method == "POST":
             return JS.Reply(204 if url.endswith("/transitions") else 201, {"id": "10001"})
         if url.endswith("/transitions"):
@@ -337,11 +346,14 @@ def test_a_close_out_write_waits_while_the_issue_is_withdrawn_gone_or_closed_oth
             return JS.Reply(200, {"comments": [], "total": 0})
         if issue["status"] is None:
             return JS.Reply(404, {"errorMessages": ["Issue does not exist"]})
-        found = {"name": issue["status"], "statusCategory": {"key": issue["category"]}}
+        name = "Ready" if issue["status"] == "write 404" else issue["status"]
+        found = {"name": name, "statusCategory": {"key": issue["category"]}}
         return JS.Reply(200, {"fields": {"status": found, "updated": "2026-11-21T10:00:00.000+0000"}})
 
     monkeypatch.setattr(OJ, "_connect", lambda store, row, write=True: (f"https://{HOST}", {}, {}))
     monkeypatch.setattr(JS, "call", call)
+    with company.transaction() as c:  # nine counted rejections already (rate limits): a pause still never fails it
+        c.execute("UPDATE outbound_actions SET attempts=? WHERE task_id=?", (OA.MAX_SAFE_RETRIES - 1, task_id))
     for _ in range(12):  # past MAX_SAFE_RETRIES: a paused write never uses them up
         with company.transaction() as c:
             c.execute("UPDATE outbound_actions SET next_attempt_at=? WHERE state='queued'", (H.now(),))
@@ -358,6 +370,45 @@ def test_a_close_out_write_waits_while_the_issue_is_withdrawn_gone_or_closed_oth
     while (claimed := OA.claim(company)) is not None:
         assert OA.attempt(company, claimed) == "done"
     assert sent.count("POST") == 2
+
+
+def test_closed_as_anything_but_done_after_the_close_out_asks_the_owner(company, gh, jira):
+    task_id = to_release(company, gh)
+    with company.transaction() as c:
+        filed(c, task_id)
+    released(company, gh)
+    jira.read("Done", "done")  # Tico's own Done: nobody is asked
+    with company.transaction() as c:
+        assert c.execute("SELECT COUNT(*) FROM requirements WHERE line LIKE ?", (f"{ISSUE} %",)).fetchone()[0] == 0
+    jira.read("Won't Do", "done")  # closed some other way while the writes wait: the owner hears once
+    jira.read("Won't Do", "done")
+    with company.transaction() as c:
+        lines = [r[0] for r in c.execute("SELECT line FROM requirements WHERE line LIKE ?", (f"{ISSUE} %",))]
+        assert len(lines) == 1 and lines[0].startswith(f"{ISSUE} was closed in Jira (Won't Do)")
+
+
+def test_only_tico_queues_a_close_out_key(company, gh, jira):
+    task_id = to_release(company, gh)
+    with company.transaction() as c:
+        filed(c, task_id)
+        with pytest.raises(OA.Problem) as refused:
+            OA.enqueue(
+                c,
+                None,
+                actor="bot:release",
+                channel="jira",
+                operation="comment",
+                destination=ISSUE,
+                occurrence_key=f"closeout:{task_id}:{REPO}@v9.9.9:jira:comment",
+                payload={"body": "Released."},
+                metadata={"published_at": "2099-01-01T00:00:00.000000Z"},
+                connection_id=TOOL,
+                task_id=task_id,
+            )
+        assert refused.value.status == 422
+    released(company, gh)  # nothing suppresses the real close-out
+    with company.transaction() as c:
+        assert set(actions(c, task_id)) == {"transition", "comment"}
 
 
 def test_a_create_retried_across_the_upgrade_hashes_as_before():

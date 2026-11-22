@@ -161,11 +161,12 @@ def _newest(conn: "sqlite3.Connection", releases: list[tuple[str, str]]) -> tupl
 
 
 def _announced(conn: "sqlite3.Connection", task_id: str) -> str:
-    """When the newest release a close-out of the task already announced was published ('' for none)."""
+    """When the newest release a close-out of the task already announced was published ('' for none): Tico's own rows
+    only (outbound_actions reserves the prefix for it)."""
     found = conn.execute(
         "SELECT MAX(json_extract(metadata, '$.published_at')) FROM outbound_actions "
-        "WHERE occurrence_key >= ? AND occurrence_key < ?",
-        (f"{KEY_PREFIX}{task_id}:", f"{KEY_PREFIX}{task_id};"),
+        "WHERE occurrence_key >= ? AND occurrence_key < ? AND actor=?",
+        (f"{KEY_PREFIX}{task_id}:", f"{KEY_PREFIX}{task_id};", _h().TICO_ACTOR),
     ).fetchone()
     return str(found[0] or "") if found else ""
 
@@ -219,9 +220,9 @@ def close_out(conn: "sqlite3.Connection", task_id: str, visit_id: str, links: li
     if detail.pop("pending", None):
         _save_detail(conn, link, detail)
     repo, tag, published = _newest(conn, releases)
-    announced = _announced(conn, task_id)
-    if announced and published and announced > published:
-        return 0  # a newer release was announced already: this one (a PR removed since) says nothing new
+    announced, at = H.parse_ts(_announced(conn, task_id)), H.parse_ts(published)
+    if announced is not None and at is not None and announced >= at:
+        return 0  # announced already, or a newer one: this one (a replay, a PR removed since) says nothing new
     named = f"{repo}@{tag}"
     ref = named if len(named) <= 200 else hashlib.sha256(named.encode()).hexdigest()[:16]
     base = f"{KEY_PREFIX}{task_id}:{ref}"
@@ -260,7 +261,7 @@ def _skipped(conn: "sqlite3.Connection", task_id: str, what: str, why: object) -
 
 
 def _ask_once(conn: "sqlite3.Connection", task_id: str, link: Row, why: str, line: str) -> None:
-    """Ask the task's owner `line` once for `why` (kept on the link as `detail.told`)."""
+    """Ask the task's owner `line` once for `why` (kept on the link as `detail.told` once asked)."""
     from . import owner_asks
 
     H = _h()
@@ -269,8 +270,8 @@ def _ask_once(conn: "sqlite3.Connection", task_id: str, link: Row, why: str, lin
     if why in told:
         return
     task: Row | None = H.task(conn, task_id)
-    owner_asks.ask(conn, task_id, owner_asks.people_for(conn, task), line, title=line, body=str(link["url"]))
-    _save_detail(conn, link, {**detail, "told": [*told, why]})
+    if owner_asks.ask(conn, task_id, owner_asks.people_for(conn, task), line, title=line, body=str(link["url"])):
+        _save_detail(conn, link, {**detail, "told": [*told, why]})
 
 
 # ----------------------------------------------------------------------------- withdrawn or closed outside
@@ -310,8 +311,9 @@ def _watch(conn: "sqlite3.Connection", key: str, connection_id: str, gone: bool)
         if detail.get("pending"):
             close_out(conn, task_id, str(detail["pending"]))
         return
-    if detail.get("asked") == state or (state == "closed" and closed_out(conn, task_id)):
-        return  # asked about this standing already, or Tico's own close-out closed it
+    ours = str(fields.get("status") or "").casefold() == DONE_STATUS.casefold() and closed_out(conn, task_id)
+    if detail.get("asked") == state or (state == "closed" and ours):
+        return  # asked about this standing already, or Tico's own close-out closed it (any other Done status asks)
     line = LINES[state].format(key=key, status=fields.get("status") or "")
     people = owner_asks.people_for(conn, task)
     found = owner_asks.ask(conn, task_id, people, line, title=line, body=str(link["url"]))

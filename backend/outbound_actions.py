@@ -60,6 +60,7 @@ STALE = 120  # seconds an `attempting` row may hold its claim before recovery lo
 SWEEP = 60.0  # the longest the worker sleeps: recovery and reconciling run at most this often
 MAX_SAFE_RETRIES = 10  # safe rejections (rate limits) before a row is failed
 SUBJECT = "outbound:"
+RESERVED = "closeout:"  # occurrence keys only Tico itself queues (backend/release_closeout.py), so none can suppress it
 ENDED = ("done", "failed", "canceled")  # terminal: the payload is wiped
 OPEN = ("waiting_approval", "queued", "blocked")  # a person may cancel these; an unknown one may have gone
 AUDIENCES = ("internal", "external")
@@ -381,6 +382,8 @@ def enqueue(
     ):
         if len(str(value or "")) > most:
             raise Problem("validation", f"{name} is at most {most} characters", 422)
+    if key.startswith(RESERVED) and actor != H.TICO_ACTOR:
+        raise Problem("validation", f"Occurrence keys starting {RESERVED!r} are Tico's own", 422)
     found = c.execute("SELECT * FROM outbound_actions WHERE occurrence_key=?", (key,)).fetchone()
     if found:
         return dict(found), False
@@ -779,7 +782,7 @@ def attempt(store: Any, claimed: Claimed) -> str:
         return "unknown"
     with store.transaction() as c:
         if isinstance(answer, SafeRejection):
-            if row["attempts"] >= MAX_SAFE_RETRIES:
+            if answer.counted and row["attempts"] >= MAX_SAFE_RETRIES:
                 error = f"{answer.error} after {row['attempts']} attempts"
                 if settle(c, row, "failed", error=error, token=claimed.token):
                     return "failed"
@@ -929,6 +932,14 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
         """The owner or an admin, as a person (auth.bot_admin)."""
         return who.role in ("owner", "human") and bool(auth.bot_admin(who))
 
+    def reads(c: Any, who: Any, task: Any) -> bool:
+        """Whether `who`, as the request reads (its task actor and attempt kept), reads the task: auth.task_row."""
+        try:
+            auth.task_row(c, who, task)
+        except Problem:
+            return False
+        return True
+
     def visible(c: Any, who: Any, row: Any) -> bool:
         """Whoever queued it, the owner or an admin, the parties to its OK (task_asks.party: the person asked), and the
         person asked about its unknown outcome."""
@@ -940,11 +951,8 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
                 "SELECT 1 FROM requirements WHERE id=? AND person_id=?", (row["owner_ask_id"], who.actor)
             ).fetchone()
         )
-        from . import auth as _auth
-
-        auth_module: Any = _auth
         task = H.task(c, row["task_id"]) if asked and row["task_id"] else None
-        if asked and (not row["task_id"] or (task and auth_module.actor_reads_task(c, who.actor, task))):
+        if asked and (not row["task_id"] or (task and reads(c, who, task))):
             return True  # the person asked about its unknown outcome (`ask_owner`), while they still read its task
         found = task_asks.grant(c, row["approval_id"]) if row["approval_id"] else None
         return bool(found) and task_asks.party(c, who.actor, found)

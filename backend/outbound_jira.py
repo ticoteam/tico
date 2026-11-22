@@ -381,6 +381,8 @@ def dispatch(store: Any, row: Any) -> Any:
         raise RuntimeError("Jira could not be reached" + (" (timed out)" if late else "")) from None
     if reply.status == 429:
         return OA.SafeRejection(reply.retry_after or RETRY_S, "Jira answered 429")
+    if closeout and reply.status == 404:  # the issue went between the read and the write: nothing written, it waits
+        return OA.SafeRejection(PAUSED_S, "Jira no longer shows the issue: waiting until it is back", counted=False)
     if reply.status in REFUSALS:
         raise OA.Refused(f"Jira refused the {row['operation']} ({reply.status})")
     if not 200 <= reply.status < 300:
