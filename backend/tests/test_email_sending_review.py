@@ -410,6 +410,32 @@ def test_cutover_reports_uncertain_delivery_once_and_withdraws_an_unused_ok(inbo
             ).fetchone()[0]
             == 1
         )
+        for sql in (S._CUTOVER_EXISTS, S._CUTOVER_BATCH):
+            assert c.execute(sql).fetchone() is None
+            scans = [
+                row[3] for row in c.execute("EXPLAIN QUERY PLAN " + sql) if row[3].startswith("SCAN outbound_actions")
+            ]
+            assert scans == ["SCAN outbound_actions USING INDEX outbound_email_cutover"]
+
+
+def test_email_lease_is_released_when_the_permit_refuses(inbox, monkeypatch):
+    autonomous(inbox)
+    queued = queue(inbox)
+    store, auth = inbox.app.state.store, inbox.app.state.auth
+
+    def refuse(c, row, found):
+        assert row["state"] == "dispatching" and row["lease_id"]
+        return False
+
+    monkeypatch.setattr(S, "_permit", refuse)
+    with store.transaction() as c:
+        assert S._lease(c, auth, BOX, S.SERVER, permit=True) is None
+        row = c.execute(
+            "SELECT state,claim_token,provider_attempted_at FROM outbound_actions WHERE id=?", (queued["id"],)
+        )
+        assert tuple(row.fetchone()) == ("queued", None, None)
+        leased = S._lease(c, auth, BOX, S.SERVER)
+        assert (leased["id"], leased["state"]) == (queued["id"], "dispatching")
 
 
 def test_one_hundred_waiting_approvals_do_not_starve_a_due_send(inbox):

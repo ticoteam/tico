@@ -357,6 +357,7 @@ migrate the database and then fail its health check, and the old image cannot re
 stops the server (Litestream runs inside it), puts the snapshot back through a temporary file, clears Litestream's tracking directory so it does not take the restored file for a break (a readable copy of the migrated database stays beside it in a `hub.sqlite.failed-update-*` folder) and starts
 the old image. Changes made between the snapshot and the rollback are not in it. Across outbound channels, a send
 completed after the snapshot can lose its receipt and be sent again if the restored queue still has it pending.
+Email sends share this rollback behavior across the move to the outbound queue.
 The update status says which snapshot was taken and whether it was restored (`snapshot`, `restored`, and the message).
 If the snapshot cannot be taken the
 update does not go ahead. The restore runs in a one-off container (`docker compose run`); if it runs over its time limit,

@@ -1379,7 +1379,7 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
                 position = cursors.decode_cursor(cursor.removeprefix("scan:"), cursor_key())
             elif cursor:
                 at = get(c, cursor)
-                if at and (is_admin or at["actor"] == who.actor) and (at["channel"] != "slack" or visible(c, who, at)):
+                if at and (is_admin or at["actor"] == who.actor) and visible(c, who, at):
                     position = (at["created_at"], cursor)
             if position:
                 sql += " AND (created_at,id)<(?,?)"

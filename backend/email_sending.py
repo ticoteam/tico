@@ -434,7 +434,11 @@ def warm(c, row):
 
 def audience(c, recipients):
     domains = access.company_domains(c)
-    return "internal" if domains and all(access.inside(address, domains) for address in recipients) else "external"
+    return (
+        "internal"
+        if domains and recipients and all(access.inside(address, domains) for address in recipients)
+        else "external"
+    )
 
 
 def own_writing(row):
@@ -1522,8 +1526,9 @@ def _lease(c, auth, mailbox, runner_id, *, permit=False, lease=True):
         token = OE.claim(c, row, now, runner_id, dump(found), audience(c, json.loads(row["recipients"])))
         if not token:
             continue
-        leased = {**dict(row), "lease_id": token}
+        leased = OE.get(c, row["id"])
         if permit and not _permit(c, leased, found):
+            OE.release(c, leased)
             continue
         moved(c, row["id"])
         return leased
@@ -1628,13 +1633,21 @@ def _finish(c, row, status, message="", detail="", *, thread_id="") -> str | Non
     return receipt_id
 
 
+_CUTOVER_ROWS = (
+    "FROM outbound_actions INDEXED BY outbound_email_cutover "
+    "WHERE channel='email' AND json_extract(metadata,'$.cutover_unconfirmed')=1 ORDER BY id"
+)
+_CUTOVER_EXISTS = f"SELECT 1 {_CUTOVER_ROWS} LIMIT 1"
+_CUTOVER_BATCH = f"SELECT * FROM outbound_email WHERE id IN (SELECT id {_CUTOVER_ROWS} LIMIT 100) ORDER BY id"
+
+
 def _report_cutover(store):
     """Finish the approval and automation bookkeeping for old sends whose provider answer was lost."""
     with store.read() as c:
-        if not c.execute("SELECT 1 FROM outbound_email WHERE cutover_unconfirmed=1 LIMIT 1").fetchone():
+        if not c.execute(_CUTOVER_EXISTS).fetchone():
             return
     with store.transaction(durable=True, notify=True) as c:
-        rows = c.execute("SELECT * FROM outbound_email WHERE cutover_unconfirmed=1 ORDER BY id LIMIT 100").fetchall()
+        rows = c.execute(_CUTOVER_BATCH).fetchall()
         for row in rows:
             OE.update(c, row["id"], cutover_unconfirmed=None)
             settle_automation(c, row, "unknown", row["detail"])

@@ -27,6 +27,7 @@ def up(conn):
                    'reply_to_id',s.reply_to_id, 'approval_task_id',s.approval_task_id,
                    'classification',json(s.classification), 'runner_id',s.runner_id, 'checked_at',s.checked_at,
                    'finished_at',CASE WHEN s.state='dispatching' THEN ? ELSE s.finished_at END,
+                   'cutover_attempted_at',CASE WHEN s.state='dispatching' THEN s.provider_attempted_at END,
                    'cutover_unconfirmed',CASE WHEN s.state='dispatching' THEN 1 END
                ),
                s.decision, CASE s.state WHEN 'pending' THEN 'queued' WHEN 'dispatching' THEN 'unknown'
@@ -43,8 +44,12 @@ def up(conn):
     )
     # The live queue owns the only copy of the frozen MIME, so its normal wipe also removes migrated content.
     conn.execute("UPDATE email_sends SET raw='' WHERE raw<>''")
+    for name in ("dispatch", "mailbox", "actor", "day", "pacing", "operation", "waiting"):
+        conn.execute(f"DROP INDEX email_sends_{name}")
+    # Email accounting includes legacy attempts without marking them as attempts made by the shared queue.
+    attempted_at = "coalesce(provider_attempted_at,json_extract(metadata,'$.cutover_attempted_at'))"
     conn.execute(
-        """
+        f"""
         CREATE VIEW outbound_email AS
         SELECT id, destination AS mailbox, actor,
                json_extract(metadata,'$.bot') AS bot,
@@ -68,7 +73,7 @@ def up(conn):
                policy_decision AS decision,
                CASE state WHEN 'queued' THEN 'pending' WHEN 'attempting' THEN 'dispatching'
                           WHEN 'done' THEN 'sent' ELSE state END AS state,
-               state AS queue_state, created_at, send_after, claimed_at, provider_attempted_at,
+               state AS queue_state, created_at, send_after, claimed_at, {attempted_at} AS provider_attempted_at,
                json_extract(metadata,'$.runner_id') AS runner_id,
                json_extract(metadata,'$.finished_at') AS finished_at,
                json_extract(receipt,'$.message_id') AS provider_message_id,
@@ -83,8 +88,8 @@ def up(conn):
         ("mailbox", "destination, created_at DESC, id DESC"),
         ("dispatch", "state, send_after"),
         ("waiting", "destination, state, json_extract(metadata,'$.checked_at')"),
-        ("day", "substr(coalesce(provider_attempted_at,claimed_at,created_at),1,10), state"),
-        ("pacing", "destination, coalesce(provider_attempted_at,claimed_at) DESC"),
+        ("day", f"substr(coalesce({attempted_at},claimed_at,created_at),1,10), state"),
+        ("pacing", f"destination, coalesce({attempted_at},claimed_at) DESC"),
         ("automation", "json_extract(metadata,'$.automation_action_id')"),
     ):
         unique = "UNIQUE " if name == "key" else ""

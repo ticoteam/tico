@@ -429,6 +429,7 @@ EMAIL_CUTOVER_STATES = {
     "declined": "blocked",
 }
 EMAIL_CREATED = "2026-11-21T12:00:00.000000Z"
+EMAIL_ATTEMPTED = "2026-11-22T00:01:00.000000Z"
 EMAIL_DUE = "2026-11-22T18:00:00.000000Z"
 
 
@@ -447,7 +448,7 @@ def seed_old_email(c, prior):
             prior,
             EMAIL_CREATED,
             EMAIL_DUE,
-            EMAIL_CREATED if prior in ("dispatching", "sent", "unknown") else None,
+            EMAIL_ATTEMPTED if prior == "dispatching" else EMAIL_CREATED if prior in ("sent", "unknown") else None,
             EMAIL_CREATED if prior == "dispatching" else None,
             "old-lease" if prior == "dispatching" else "",
             "gmail-id" if prior == "sent" else None,
@@ -459,6 +460,7 @@ def seed_old_email(c, prior):
 
 
 def assert_email_cutover(c, cutover_at):
+    assert all(index["origin"] != "c" for index in c.execute("PRAGMA index_list(email_sends)"))
     for prior, state in EMAIL_CUTOVER_STATES.items():
         sid = "old-email-" + prior
         old = c.execute("SELECT state, raw FROM email_sends WHERE id=?", (sid,)).fetchone()
@@ -480,6 +482,9 @@ def assert_email_cutover(c, cutover_at):
         if prior == "dispatching":
             assert row["provider_attempted_at"] is None and row["claim_token"] is None
             assert meta["finished_at"] == cutover_at and meta["cutover_unconfirmed"] == 1
+            assert meta["cutover_attempted_at"] == EMAIL_ATTEMPTED
+            projected = c.execute("SELECT claimed_at,provider_attempted_at FROM outbound_email WHERE id=?", (sid,))
+            assert tuple(projected.fetchone()) == (EMAIL_CREATED, EMAIL_ATTEMPTED)
         if prior in ("sent", "unknown"):
             assert row["provider_attempted_at"] == EMAIL_CREATED
         if prior == "sent":

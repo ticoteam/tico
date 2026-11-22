@@ -129,6 +129,22 @@ def test_email_claims_and_frozen_content_belong_to_the_mailbox_gate(api, store):
     assert row_of(store, "leased-mail")["state"] == "attempting"
 
 
+def test_outbound_list_treats_private_email_cursors_as_missing(api, store, fake):
+    visible, _ = add(store)
+    earlier = H.shift(visible["created_at"], seconds=-60)
+    with store.transaction() as c:
+        c.execute(
+            "INSERT INTO outbound_actions(id,channel,audience,operation,destination,occurrence_key,actor,"
+            "state,send_after,next_attempt_at,created_at,updated_at) VALUES("
+            "'private-mail','email','external','send','ops@acme.example','email:send:private-mail','bot:ops','done',?,?,?,?)",
+            (earlier, earlier, earlier, earlier),
+        )
+    first = get(api, "outbound-actions?cursor=missing")
+    assert [row["id"] for row in first["items"]] == [visible["id"]]
+    assert get(api, "outbound-actions?cursor=private-mail") == first
+    assert get(api, f"outbound-actions?cursor={visible['id']}")["items"] == []
+
+
 def test_the_same_claim_replayed_after_its_attempt_calls_nothing(store, fake):
     row, _ = add(store)
     claimed = OA.claim(store)
