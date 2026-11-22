@@ -1212,7 +1212,7 @@ def clear_value(c: sqlite3.Connection, actor: str, entity_id: str, key: str, val
 
 def kept(c: sqlite3.Connection, entity_id: str) -> str:
     """The entity `entity_id` is now: itself, or the one it was merged into (up to five merges)."""
-    return _follow(c, [entity_id])[0]
+    return follow_merges(c, [entity_id])[0]
 
 
 def unmerged(c: sqlite3.Connection, actor: str, entity_id: str) -> str | None:
@@ -1221,7 +1221,7 @@ def unmerged(c: sqlite3.Connection, actor: str, entity_id: str) -> str | None:
     row = _one(c, "SELECT status FROM entities WHERE id = ?", (entity_id,))
     if row is None or row["status"] != "merged" or not visible_entity(c, actor, entity_id):
         return None
-    return _follow(c, [entity_id])[0]
+    return follow_merges(c, [entity_id])[0]
 
 
 def set_status(
