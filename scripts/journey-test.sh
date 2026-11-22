@@ -145,7 +145,7 @@ esac
 WORK="$(mktemp -d)"
 DIR="$WORK/install"
 mkdir -p "$DIR" "$WORK/releases/download"
-RESULTS=() STATE_ID="" FAILED=0 SEED_THREAD="" SEED_TASK="" SEED_CONVERSATION="" CAND_READY=0 AGENT_OPS_NAMED=0
+RESULTS=() STATE_ID="" FAILED=0 SEED_THREAD="" SEED_TASK="" SEED_CONVERSATION="" CAND_READY=0 AGENT_OPS_NAMED=0 AGENT_OPS_WAS=""
 REFUSED=journey-refused-$RUN   # the candidate's one-off start on the previous release's data (fresh-start)
 
 dc() { docker compose -p "$PROJECT" --project-directory "$DIR" "$@"; }
@@ -221,13 +221,19 @@ agent_ops_ready() { get operations | json 'sys.exit(0 if d["machines"][0]["readi
 agent_ops_ready_since() {  # a readiness report newer than $1 that finds Agent Ops ready
   [[ "$(sql "SELECT coalesce(max(readiness_at),'') FROM runner_states")" > "$1" ]] && agent_ops_ready
 }
-unname_agent_ops() {
-  dc exec -T server python - <<'PY'
-import sqlite3
+stored_agent_ops_name() {
+  sql "SELECT coalesce(json_extract(COALESCE(NULLIF(extra, ''), '{}'), '$.name'), '') FROM bot_settings WHERE bot_id = 'botops'"
+}
+unname_agent_ops() {  # Agent Ops' stored name back to what the v0.6.200 install had ($1; empty: none)
+  dc exec -T server python - "$1" <<'PY'
+import sqlite3, sys
 c = sqlite3.connect("/data/hub.sqlite")
+was = sys.argv[1]
 c.execute(
-    "UPDATE bot_settings SET extra = json_remove(extra, '$.name'), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"
-    " WHERE bot_id = 'botops' AND json_valid(extra)"
+    ("UPDATE bot_settings SET extra = json_set(extra, '$.name', ?)," if was else
+     "UPDATE bot_settings SET extra = json_remove(extra, '$.name'),")
+    + " updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE bot_id = 'botops' AND json_valid(extra)",
+    (was,) if was else (),
 )
 c.commit()
 PY
@@ -399,17 +405,20 @@ step_seed() {
     dc exec -T server python - --into /data/hub.sqlite < scripts/make_upgrade_fixture.py || { say "could not add the fixture rows"; return 1; }
   fi
   if [ "$(server_tag)" = v0.6.200 ]; then
-    # v0.6.200 seeds Agent Ops with no name in its config while its template's bot.yaml names its slug, so a v0.6.200
-    # runner never finds the checkout ready ("Configuration differs from server"). Later servers send the slug as the
-    # name (backend/execution.py assigned); this release's seed gets it written in, and the step after the upgrade
-    # takes it out again, so the candidate server's own fallback is what the old runner's readiness rests on.
+    # v0.6.200 seeds Agent Ops with no name, or its id botops as its name, while its template's bot.yaml names its slug
+    # agent-ops, so a v0.6.200 runner never finds the checkout ready ("Configuration differs from server"). Later
+    # servers send the slug as the name (backend/execution.py assigned); this release's seed gets it written in, and the
+    # step after the upgrade puts the install's own value back, so the candidate server's fallback is what the old
+    # runner's readiness rests on.
+    AGENT_OPS_WAS="$(stored_agent_ops_name)" || { say "could not read v0.6.200's Agent Ops name"; return 1; }
     AGENT_OPS_NAMED="$(dc exec -T server python - <<'PY'
 import sqlite3
 c = sqlite3.connect("/data/hub.sqlite")
 n = c.execute(
     "UPDATE bot_settings SET extra = json_set(COALESCE(NULLIF(extra, ''), '{}'), '$.name',"
     " (SELECT slug FROM bots WHERE id = 'botops')), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"
-    " WHERE bot_id = 'botops' AND json_extract(COALESCE(NULLIF(extra, ''), '{}'), '$.name') IS NULL"
+    " WHERE bot_id = 'botops'"
+    " AND COALESCE(json_extract(COALESCE(NULLIF(extra, ''), '{}'), '$.name'), '') IN ('', 'botops')"
 ).rowcount
 c.commit()
 print(n)
@@ -578,15 +587,15 @@ step_old_runner() {
   # The update moved the server only; the computer still runs the previous release's runner, and its `hub`.
   [ "$(docker inspect --format '{{.Config.Image}}' "$RUNNER" | sed 's/.*://')" = "$PREV" ] || { say "the runner is not on $PREV"; return 1; }
   if [ "$AGENT_OPS_NAMED" = 1 ]; then
-    # The name the v0.6.200 seed wrote in goes, so only the candidate server's fallback names Agent Ops. The restarted
-    # $PREV runner probes afresh; its report after the restart must find Agent Ops ready.
-    unname_agent_ops || { say "could not take out the seed's Agent Ops name"; return 1; }
-    [ -z "$(sql "SELECT coalesce(json_extract(COALESCE(NULLIF(extra, ''), '{}'), '$.name'), '') FROM bot_settings WHERE bot_id = 'botops'")" ] ||
-      { say "Agent Ops still has a stored name"; return 1; }
+    # The name the v0.6.200 seed wrote in goes back to the install's own (none, or botops), so only the candidate
+    # server's fallback names Agent Ops. The restarted $PREV runner probes afresh; its report after the restart must
+    # find Agent Ops ready.
+    unname_agent_ops "$AGENT_OPS_WAS" || { say "could not take out the seed's Agent Ops name"; return 1; }
+    [ "$(stored_agent_ops_name)" = "$AGENT_OPS_WAS" ] || { say "Agent Ops' stored name is not back to '$AGENT_OPS_WAS'"; return 1; }
     docker rm -f "$RUNNER" >/dev/null 2>&1   # stopped first: no report of its own lands after the mark below
     local before; before="$(sql "SELECT coalesce(max(readiness_at),'') FROM runner_states")"
     start_runner "$PREV" --code "" || return 1
-    retry 180 agent_ops_ready_since "$before" || { say "Agent Ops with no stored name is not ready on the $PREV runner against $CAND"; return 1; }
+    retry 180 agent_ops_ready_since "$before" || { say "Agent Ops with stored name '$AGENT_OPS_WAS' is not ready on the $PREV runner against $CAND"; return 1; }
   fi
   task="$(new_task "Acme pricing page")" || return 1
   ask old worktree="$task" || return 1
