@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from backend import email_sending as S
-from backend import task_asks
+from backend import mailbox_access, outside_intake, task_asks
 from backend.store import H, Problem
 from backend.tests.helpers.api import assign, claim, headers, post, ready, runner, setup_attempt  # noqa: F401
 from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
@@ -257,6 +257,43 @@ def test_due_send_is_dispatched_once_with_a_receipt_and_audit(inbox):
     assert [{k: f[k] for k in ("name", "sha256")} for f in receipt["attachments"]] == [
         {"name": "proof.pdf", "sha256": S.digest(b"proof")}
     ]
+
+
+@pytest.mark.parametrize("reason", ["id-only", "different-thread", "feed-disabled"])
+def test_gmail_send_stays_sent_without_an_outside_receipt(inbox, fake_gmail, reason):
+    autonomous(inbox)
+    store = inbox.app.state.store
+    with store.transaction() as c:
+        box = mailbox_access.row_by_address(c, BOX)
+        for thread, message in (("thread", "inbound"), ("other-thread", "other-inbound")):
+            assert outside_intake.save_message(
+                c,
+                channel="gmail",
+                connection_id=box["id"],
+                owner_id=box["person_id"],
+                source_thread_id=thread,
+                source_message_id=message,
+                sender=CONTACT,
+                title="Question",
+                body="Reply",
+            )
+    queued = queue(inbox, reply_to_id="inbound", thread_id="thread")
+
+    confirmation = {"id": "sent-reply"}
+    if reason != "id-only":
+        confirmation["threadId"] = "other-thread" if reason == "different-thread" else "thread"
+    if reason == "feed-disabled":
+        with store.transaction() as c:
+            mailbox_access.set_feeds_directory(c, "human:ana", box["id"], False)
+    fake_gmail.send_answer = (200, confirmation)
+    fake_gmail.add(BOX, "sent-reply", thread=confirmation.get("threadId", "thread"), sender=BOX, labels=("SENT",))
+    assert len(dispatch(inbox)) == 1
+
+    with store.read() as c:
+        assert not c.execute("SELECT 1 FROM messages WHERE source_message_id='sent-reply'").fetchone()
+        assert tuple(
+            c.execute("SELECT state,provider_message_id,raw FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
+        ) == ("sent", "sent-reply", "")
 
 
 def test_permission_revoked_before_dispatch_sends_nothing(inbox):

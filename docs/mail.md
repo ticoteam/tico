@@ -47,6 +47,9 @@ The inbox owner can release or drop held runs in the Conversation intake routine
 changes require access to the inbox. Saved arrivals stay held while the inbox is stopped, shared, or lacks an active
 owner. They resume when the inbox has an eligible owner and go to triage if overdue.
 
+When Gmail confirms a send on an existing outside thread and the mailbox feeds the Directory, Tico stores a receipt
+in that thread with Gmail's message ID and, when available, its timestamp.
+
 ## Organizing live
 
 With Whole Workspace, use `tico email archive|unarchive|mark-read|mark-unread|star|unstar|important|not-important|

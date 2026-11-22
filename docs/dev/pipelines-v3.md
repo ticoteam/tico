@@ -547,12 +547,13 @@ change), but the note is handed on, so the next stage and the person who OKs QA 
 - After 3 snoozes by a bot in one stage, the next goes to the manager bot. A bot can't put a task off forever.
 - To wait for a customer, use `tico task snooze` with `--wait-thread-id`, `--wait-sender`, `--wait-after-seq`
   and `--until`. Choose a root outside thread, an outside participant, and an outbound message in that thread.
-  Gmail sends through Tico add a receipt to an existing outside thread. Use the receipt's global sequence or use
-  `--wait-provider-reply-id` with its saved Gmail message ID. Bots must choose a fallback within 30 days. A reply
-  from that sender in the same root thread and on the same connection ends the wait as intake saves the reply.
-  The visit starts again at zero tries and the bot whose turn it is
-  wakes now. If the reply arrived first, the snooze is refused. Customer waits are exempt from the bot snooze
-  count and stage snooze rules. A person can end the wait early with Unsnooze or Run now. A move to another open
+  Gmail sends through Tico add a receipt when Gmail confirms the outside thread and the mailbox feeds the Directory.
+  Use the receipt's global sequence or `--wait-provider-reply-id` with its saved Gmail message ID. Bots must choose
+  a fallback within 30 days. A reply from that sender on the same root thread and connection ends the wait if its
+  Gmail timestamp is later than the send's. If either timestamp is missing, Tico compares local message sequences.
+  Tico resets the visit's tries to zero and wakes the bot whose turn it is. If a matching reply is already saved,
+  the snooze is refused. Customer waits are exempt from the bot snooze count and stage snooze rules.
+  A person can end the wait early with Unsnooze or Run now. A move to another open
   stage ends the wait and makes the task due. The agent can set the wait again if a reply is still needed.
 
 ### Handoff: Product to Engineering

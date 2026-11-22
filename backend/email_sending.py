@@ -1585,12 +1585,14 @@ def _outcome(c, row, status, detail=""):
         finance_delivery.outcome(c, dict(row), status, detail)
 
 
-def _record_outside_send(c, row, message, thread_id):
+def _outside_send_thread(c, row, thread_id):
     from . import outside_intake
 
+    if not thread_id or (row["thread_id"] and thread_id != row["thread_id"]):
+        return None
     box = access.row_by_address(c, row["mailbox"])
-    if not box:
-        return
+    if not box or not access.feeds_directory(c, box):
+        return None
     connection = box["id"]
     thread = H.conversation(c, outside_intake.conversation_id("gmail", connection, thread_id))
     if (
@@ -1600,7 +1602,15 @@ def _record_outside_send(c, row, message, thread_id):
         or thread["deleted_at"]
         or not thread["entity_id"]
     ):
+        return None
+    return thread
+
+
+def _record_outside_send(c, row, message, thread_id, provider_timestamp_ms):
+    thread = _outside_send_thread(c, row, thread_id)
+    if not thread:
         return
+    connection = thread["connection_id"]
     if c.execute(
         "SELECT 1 FROM messages WHERE connection_id=? AND source_message_id=?", (connection, message)
     ).fetchone():
@@ -1612,7 +1622,7 @@ def _record_outside_send(c, row, message, thread_id):
         "Sent an email in Gmail.",
         thread,
         "say",
-        {},
+        {"provider_timestamp_ms": provider_timestamp_ms} if provider_timestamp_ms is not None else {},
         None,
         None,
         outside=("gmail", connection, message),
@@ -1620,7 +1630,7 @@ def _record_outside_send(c, row, message, thread_id):
     )
 
 
-def _finish(c, row, status, message="", detail="", *, thread_id=""):
+def _finish(c, row, status, message="", detail="", *, thread_id="", provider_timestamp_ms=None):
     finished = c.execute(
         # `send_after` ends no earlier than now: a send held past its undo window is still shown once it ended.
         "UPDATE email_sends SET state=?,provider_message_id=?,detail=?,finished_at=?,raw='',"
@@ -1630,7 +1640,7 @@ def _finish(c, row, status, message="", detail="", *, thread_id=""):
     if not finished.rowcount:
         return
     if status == "sent" and thread_id:
-        _record_outside_send(c, row, message, thread_id)
+        _record_outside_send(c, row, message, thread_id, provider_timestamp_ms)
     moved(c, row["id"])
     H.event(c, row["actor"], "email." + status, row["id"], {"mailbox": row["mailbox"], "provider_message_id": message})
     settle_automation(c, row, status, detail, message)
@@ -1713,11 +1723,26 @@ def drain(store, auth, limit=20, budget=None):
                 break
             if not row:
                 break
-            status, message, detail, thread_id = gmail_live.send(mailbox, token, row["raw"], row["thread_id"])
+            status, message, detail, thread_id, provider_timestamp_ms = gmail_live.send(
+                mailbox, token, row["raw"], row["thread_id"]
+            )
+            if status == "sent" and thread_id and provider_timestamp_ms is None:
+                with store.read() as c:
+                    outside_thread = _outside_send_thread(c, row, thread_id)
+                if outside_thread:
+                    provider_timestamp_ms = gmail_live.sent_timestamp_ms(mailbox, token, message, thread_id)
             with store.transaction(durable=True, notify=True) as c:
                 current = c.execute("SELECT * FROM email_sends WHERE id=?", (row["id"],)).fetchone()
                 if current and current["state"] == "dispatching" and current["lease_id"] == row["lease_id"]:
-                    _finish(c, current, status, message, detail, thread_id=thread_id)
+                    _finish(
+                        c,
+                        current,
+                        status,
+                        message,
+                        detail,
+                        thread_id=thread_id,
+                        provider_timestamp_ms=provider_timestamp_ms,
+                    )
             sent += status == "sent"
     return sent
 

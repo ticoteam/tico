@@ -528,7 +528,7 @@ def task_reassign(api, args):
         "until": _s("An ISO-8601 date (the start of that day, Pacific) or date-time with a zone"),
         "why": WHY,
         "version": VERSION,
-        "wait_thread_id": _s("The thread ID the reply must be in or under"),
+        "wait_thread_id": _s("The root outside thread ID. The reply must be on that same root thread."),
         "wait_sender": _s("The expected sender's participant ID"),
         "wait_after_seq": {"type": "integer", "minimum": 1, "description": "The outbound message's global sequence"},
         "wait_provider_reply_id": _s("The saved outbound message's provider ID"),

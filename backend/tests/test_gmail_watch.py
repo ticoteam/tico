@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 import time_machine
 
-from backend import automations, drains, gmail_watch, google_workspace, outside_intake, threads
+from backend import automations, drains, gmail_live, gmail_watch, google_workspace, outside_intake, threads
 from backend import mailbox_access as MA
 from backend.entities import store as ES
 from backend.store import H
@@ -130,7 +130,11 @@ def test_intake_commits_before_the_cursor_and_replay_returns_the_same_run(watche
     store = api.app.state.store
     with store.transaction() as c:
         ES.upsert(c, "human:ana", "person", match={"email": "person@customer.example"})
-    gmail.add(BOX, "first", thread="support", epoch=epoch(T0), labels=("INBOX", "Tico Intake"), headers=DMARC_PASS)
+    raw = gmail.add(
+        BOX, "first", thread="support", epoch=epoch(T0), labels=("INBOX", "Tico Intake"), headers=DMARC_PASS
+    )
+    sent_ms = epoch(T0) * 1000 + 125
+    raw["internalDate"] = str(sent_ms)
     box = box_row(api)
     original = automations.queue_intake
 
@@ -162,8 +166,35 @@ def test_intake_commits_before_the_cursor_and_replay_returns_the_same_run(watche
             body="Replay",
         )
         assert same == run["id"]
-        assert c.execute("SELECT count(*) FROM messages WHERE source_message_id='first'").fetchone()[0] == 1
+        [saved] = c.execute("SELECT refs FROM messages WHERE source_message_id='first'").fetchall()
+        assert json.loads(saved["refs"])["provider_timestamp_ms"] == sent_ms
         assert c.execute("SELECT count(*) FROM automation_runs WHERE trigger_ref LIKE 'intake:%'").fetchone()[0] == 1
+
+
+def test_intake_does_not_use_the_date_header_as_provider_time(watched, monkeypatch):
+    api, gmail, _ = watched
+    check(api, T0)
+    gmail.add(
+        BOX,
+        "header-only",
+        thread="support",
+        epoch=epoch(T0),
+        labels=("INBOX", "Tico Intake"),
+        headers={"Date": "Mon, 16 Nov 2026 12:00:00 +0000"},
+    )
+
+    def without_provider_time(url, **kwargs):
+        status, found = gmail(url, **kwargs)
+        if url.partition("?")[0].endswith("/messages/header-only"):
+            found.pop("internalDate", None)
+        return status, found
+
+    monkeypatch.setattr(gmail_live, "gmail_call", without_provider_time)
+
+    assert check(api, T0 + timedelta(minutes=2)) == 1
+    with api.app.state.store.read() as c:
+        [saved] = c.execute("SELECT refs FROM messages WHERE source_message_id='header-only'").fetchall()
+        assert "provider_timestamp_ms" not in json.loads(saved["refs"])
 
 
 def test_intake_arrivals_survive_a_full_hold_and_a_stale_claim(watched):

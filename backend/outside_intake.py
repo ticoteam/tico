@@ -137,6 +137,7 @@ def from_gmail(c: sqlite3.Connection, box: dict[str, Any], message: SimpleNamesp
             title=str(message.subject or ""),
             body=str(message.body or ""),
             verified_id=sender if _verified_from(message, sender) else "",
+            provider_timestamp_ms=cast("int | None", message.provider_timestamp_ms),
         )
     return True
 
@@ -153,6 +154,7 @@ def save_message(
     title: str,
     body: str,
     verified_id: str = "",
+    provider_timestamp_ms: int | None = None,
 ) -> str | None:
     """Save the message and its intake run in the adapter's write transaction. A replay returns the run."""
     from . import automations, task_engine
@@ -193,7 +195,16 @@ def save_message(
     else:
         thread_store._with_participants(c, root, [actor])
     message = hub._write_message(
-        c, actor, None, body, root, "say", {}, None, None, outside=(channel, connection_id, source_message_id)
+        c,
+        actor,
+        None,
+        body,
+        root,
+        "say",
+        {"provider_timestamp_ms": provider_timestamp_ms} if provider_timestamp_ms is not None else {},
+        None,
+        None,
+        outside=(channel, connection_id, source_message_id),
     )
     payload["message_id"] = message["id"]
     task_engine.customer_replied(c, message, root)

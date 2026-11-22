@@ -131,6 +131,7 @@ def _message(item: Json, labels: dict[str, str], domains: list[str], known: bool
         msg_id=item["id"],
         thread_id=item["thread_id"],
         epoch=item["epoch"],
+        provider_timestamp_ms=item.get("provider_timestamp_ms"),
         date=item["date"],
         from_addr=sender,
         from_header=item["from_header"],
@@ -191,7 +192,7 @@ class Reader:
     def item(self, mid: str) -> Json | None:
         """The message as Gmail has it now, or None when it was deleted meanwhile."""
         try:
-            return cast("Json", _gmail("message")(self.c, self.address, mid))
+            return cast("Json", _gmail("message")(self.c, self.address, mid, include_provider_time=True))
         except Problem as gone:
             if gone.status == 404:
                 return None

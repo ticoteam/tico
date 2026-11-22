@@ -2329,14 +2329,24 @@ def customer_wait_anchor(
     return H.message_view(conn, anchor)
 
 
+# A delayed intake write can give older Gmail mail a higher local sequence.
+_CUSTOMER_REPLY_IS_LATER = (
+    "coalesce(json_extract(reply.refs,'$.provider_timestamp_ms') > "
+    "json_extract(anchor.refs,'$.provider_timestamp_ms'), reply.seq > {anchor_seq})"
+)
+
+
 def _customer_already_replied(conn: "sqlite3.Connection", thread_id: str, sender: str, after: int) -> bool:
     return (
         conn.execute(
-            "SELECT 1 FROM conversations c JOIN messages m ON m.conversation_id=c.id "
+            "SELECT 1 FROM conversations c JOIN messages reply ON reply.conversation_id=c.id "
+            "LEFT JOIN messages anchor ON anchor.seq=? "
             "WHERE c.id=? AND c.parent_id IS NULL AND c.deleted_at IS NULL AND c.connection_id<>'' "
-            "AND m.sender_id=? AND m.seq>? AND m.direction='inbound' "
-            "AND m.connection_id=c.connection_id AND m.deleted_at IS NULL LIMIT 1",
-            (thread_id, sender, after),
+            "AND reply.sender_id=? AND reply.direction='inbound' "
+            "AND reply.connection_id=c.connection_id AND reply.deleted_at IS NULL AND "
+            + _CUSTOMER_REPLY_IS_LATER.format(anchor_seq="?")
+            + " LIMIT 1",
+            (after, thread_id, sender, after),
         ).fetchone()
         is not None
     )
@@ -2359,9 +2369,10 @@ def customer_replied(conn: "sqlite3.Connection", reply: Row, thread: Row) -> Non
     ):
         return
     waiting = conn.execute(
-        "SELECT task_id, id FROM snoozes WHERE wait_thread_id=? AND ended_at IS NULL "
-        "AND wait_sender=? AND wait_after_seq<?",
-        (thread["id"], sender, reply["seq"]),
+        "SELECT s.task_id, s.id FROM snoozes s LEFT JOIN messages anchor ON anchor.seq=s.wait_after_seq "
+        "LEFT JOIN messages reply ON reply.seq=? WHERE s.wait_thread_id=? AND s.ended_at IS NULL "
+        "AND s.wait_sender=? AND " + _CUSTOMER_REPLY_IS_LATER.format(anchor_seq="s.wait_after_seq"),
+        (reply["seq"], thread["id"], sender),
     ).fetchall()
     for task_id, snooze_id in waiting:
         row = task(conn, str(task_id))
