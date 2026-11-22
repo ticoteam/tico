@@ -21,6 +21,7 @@ grant or revoke on it. A computer is nobody here: the server reads and acts on m
 
 import json
 import sqlite3
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from .store import H, Problem
@@ -348,6 +349,17 @@ def mailboxes_for(c, who, min_level="read"):
             }
         )
     out.sort(key=lambda box: (box["address"] != own, box["address"]))
+    return out
+
+
+def directory_mailboxes(c: sqlite3.Connection, who: str, ids: Iterable[str]) -> list[str]:
+    """Which requested mailbox IDs feed Contacts and are readable by this actor."""
+    p, facts = principal(c, who), _Facts(c)
+    out: list[str] = []
+    for mailbox_id in ids:
+        row = row_by_id(c, mailbox_id)
+        if row and feeds_directory(c, row) and _level(facts, p, row["address"], row) != "none":
+            out.append(mailbox_id)
     return out
 
 

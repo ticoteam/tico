@@ -65,6 +65,7 @@ LIST_FILTERS = frozenset(
         "exact",
         "link",
         "entity",
+        "claimable",
     }
 )
 # `on_behalf_of`, read by the Agent Ops middleware (above).
@@ -82,6 +83,41 @@ def unknown_filters(names):
             f"Unknown filter: {', '.join(unknown)}.{hints} Filters: {', '.join(sorted(LIST_FILTERS))}.",
             422,
         )
+
+
+def claimable_match(c, auth, who):
+    """The reader's team work or public Support work whose assignee is absent or off."""
+    from . import people
+    from .task_requirements import active_person
+
+    reader = auth.run_viewer(c, who)
+    actor = reader.actor
+    if reader.role not in ("owner", "human") or not active_person(c, actor):
+        return "0", ()
+    roster = views.roster(c, shared=True)
+    person = people.person(actor.removeprefix("human:"), roster) or {}
+    hidden = teammate_access.Known(c, reader, auth).people
+    team = person.get("team")
+    members = teammate_access.group_member_actors(c, team, roster) if team else set()
+    members = sorted(members - hidden)
+
+    # Outside working hours is async. Only a current, explicit off setting counts as off.
+    off = [
+        "human:" + row[0]
+        for row in c.execute(
+            "SELECT id FROM humans WHERE availability='off' "
+            "AND (COALESCE(availability_until,'')='' OR availability_until>?)",
+            (H.now(),),
+        )
+        if "human:" + row[0] not in hidden
+    ]
+    return (
+        "tasks.owner_id IN (SELECT value FROM json_each(?)) OR (tasks.private=0 AND "
+        "EXISTS (SELECT 1 FROM pipelines p WHERE p.id=tasks.pipeline_id AND p.preset='support' "
+        "AND p.retired_at IS NULL AND p.private=0) AND (COALESCE(tasks.assignee_id,'')='' OR "
+        "tasks.assignee_id IN (SELECT value FROM json_each(?))))",
+        (json.dumps(members), json.dumps(off)),
+    )
 
 
 def register(app, auth, mutate, rule_check, rule_target, store, task_filters, task_idents, visible_tasks):
@@ -102,6 +138,8 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 "through that connection. A Jira item always names its connection",
                 "entity": "A Contacts entity (an id, email or domain you can see; a merged one is the one it went "
                 "into): only the tasks for it. One you cannot see is refused (422 entity)",
+                "claimable": "The person's team work and public Support work with no assignee or an off assignee. "
+                "Use a full read because team membership and availability can change independently of tasks",
             },
         ),
     )
@@ -142,6 +180,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
         exact: bool = False,
         link: str | None = None,
         entity: str | None = None,
+        claimable: bool = False,
     ):
         """Tasks this reader may read. `pipeline` and `stage` (ids) keep a pipeline's or a stage's tasks;
         `waiting_on` (a person or a bot) keeps the open tasks with a wait on them (waiting_on.py: a person's or a
@@ -170,6 +209,8 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 raise Problem("counts", "counts is stage", 422)
             if counts and changed_after is not None:
                 raise Problem("counts", "counts is a full read's: not with changed_after", 422)
+            if claimable and changed_after is not None:
+                raise Problem("claimable", "claimable needs a full read", 422)
             owner, requester, filters = task_filters(
                 c,
                 owner=owner,
@@ -211,6 +252,8 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 filters["match"] = match.sql
             if link is not None:
                 filters["match"] = [*filters.get("match", ()), linked_to(c, link)]
+            if claimable:
+                filters["match"] = [*filters.get("match", ()), claimable_match(c, auth, who)]
             if entity is not None:
                 from . import page_links
                 from .entities import store as ES

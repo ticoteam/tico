@@ -3567,8 +3567,12 @@ def read_in(
         # decides what this viewer may see (a private event is Busy).
         picked.append(("calendar", row, {"calendar": row["ref"], "id": row["subject_id"], "kind": row["kind"]}))
     for row in by_topic.get("setup", []):
-        # Which setup area may have moved, never what is in it: the page reads GET /api/v2/setup/gaps again.
-        picked.append(("setup", row, {"area": row["subject_id"]}))
+        # Which area may have moved. Its lists apply the caller's access when they read again.
+        entry = {"area": row["subject_id"]}
+        if row["subject_id"] == "availability":
+            # The signal goes to every reader of a claimable list, regardless of whose availability changed.
+            entry["actor"] = None
+        picked.append(("setup", row, entry))
     for row in by_topic.get("screen", []):
         # Only while the Assistant still waits on it: a stream that comes back later never replays an old move.
         asked = screens.event(row["ref"], who.actor) if screens is not None else None

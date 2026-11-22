@@ -41,15 +41,38 @@ export function dispatch(channel: string, batch: unknown[]): void {
 const REFETCH_GAP_MS = 1000;
 const refetchedAt = new Map<string, number>();
 const trailing = new Map<string, ReturnType<typeof setTimeout>>();
+let pendingRefetch = new WeakSet<Promise<unknown>>();
 
-function refetchSoon(key: QueryKey): void {
+function refetchAfterRead(key: QueryKey): void {
+  const cache = queryClient.getQueryCache();
+  for (const q of cache.findAll({ queryKey: key })) {
+    const filters = { queryKey: q.queryKey, exact: true };
+    const pending = q.state.fetchStatus !== 'idle' && q.promise;
+    if (!pending) {
+      void queryClient.invalidateQueries(filters);
+      continue;
+    }
+    // Invalidation alone can be cleared by the first reply. Let that read settle, then invalidate again.
+    void queryClient.invalidateQueries({ ...filters, refetchType: 'none' });
+    if (pendingRefetch.has(pending)) continue;
+    const waiting = pendingRefetch;
+    waiting.add(pending);
+    const settled = () => {
+      if (waiting === pendingRefetch && cache.get(q.queryHash) === q) refetchAfterRead(q.queryKey);
+    };
+    void pending.then(settled, settled);
+  }
+}
+
+function refetchSoon(key: QueryKey, afterRead = false): void {
   const id = JSON.stringify(key);
   if (trailing.has(id)) return;
   const wait = (refetchedAt.get(id) ?? -Infinity) + REFETCH_GAP_MS - Date.now();
   const go = () => {
     trailing.delete(id);
     refetchedAt.set(id, Date.now());
-    void queryClient.invalidateQueries({ queryKey: key, refetchType: 'active' }, { cancelRefetch: false });
+    if (afterRead) refetchAfterRead(key);
+    else void queryClient.invalidateQueries({ queryKey: key, refetchType: 'active' }, { cancelRefetch: false });
   };
   if (wait <= 0) return go();
   // Stale now, so a page opened meanwhile reads it; what is on screen reads once the gap has passed.
@@ -58,11 +81,11 @@ function refetchSoon(key: QueryKey): void {
 }
 
 /** For a topic that only signals: the keys each event makes stale. Returns the unsubscribe. */
-export function onRefetch<E = LiveEvent>(topic: Topic, keysFor: (event: E) => QueryKey[]): () => void {
+export function onRefetch<E = LiveEvent>(topic: Topic, keysFor: (event: E) => QueryKey[], afterRead = false): () => void {
   return onTopic<E>(topic, (batch) => {
     const seen = new Map<string, QueryKey>();
     for (const e of batch) for (const k of keysFor(e)) seen.set(JSON.stringify(k), k);
-    for (const k of seen.values()) refetchSoon(k);
+    for (const k of seen.values()) refetchSoon(k, afterRead);
   });
 }
 
@@ -70,6 +93,7 @@ export function resetPatchState(): void {
   for (const t of trailing.values()) clearTimeout(t);
   trailing.clear();
   refetchedAt.clear();
+  pendingRefetch = new WeakSet();
 }
 
 // ---------------------------------------------------------------- tasks
@@ -88,7 +112,7 @@ export interface TaskRow {
   lane?: string;
   snoozed?: boolean;
 }
-/** GET /api/v2/tasks: `cursor` is "<change number>.<access tag>" (backend/task_reads.py cursor). */
+/** GET /api/v2/tasks: `cursor` starts with the change number (backend/task_reads.py). */
 export interface TaskList<T extends TaskRow = TaskRow> {
   tasks: T[];
   cursor?: string;
@@ -215,8 +239,10 @@ export function patchTaskList<T extends TaskRow>(
 }
 
 function patchTasks(batch: TaskEvent[]): void {
-  if (batch.some((e) => e.bulk)) {
-    void queryClient.invalidateQueries({ queryKey: ['tasks'] }, { cancelRefetch: false });
+  const bulk = batch.some((e) => e.bulk);
+  if (bulk) {
+    void queryClient.invalidateQueries({ queryKey: ['tasks'], predicate: (q) => q.queryKey[1] !== 'flow' }, { cancelRefetch: false });
+    refetchSoon(['tasks', 'flow'], true);
     batch = batch.filter((e) => !e.bulk);
   }
   if (!batch.length) return;
@@ -225,6 +251,15 @@ function patchTasks(batch: TaskEvent[]): void {
     const { list, unsure } = patchTaskList(data, batch, key[2] as Record<string, unknown> | undefined);
     if (list !== data) queryClient.setQueryData(key, list);
     if (unsure) refetchSoon(key);
+  }
+  // Flow needs the server's claimability, relationship names and page boundaries.
+  for (const [key, data] of queryClient.getQueriesData<{ pages: TaskList[] }>({ queryKey: ['tasks', 'flow'] })) {
+    const params = key[2] as Record<string, unknown>;
+    if (!bulk && (!data || batch.some((e) => {
+      const id = e.id ?? e.task_id;
+      const held = data.pages.some((page) => (e.seq == null || e.seq > listSeq(page)) && page.tasks.some((task) => task.id === id));
+      return held || (!!e.task && !statusOnly(e) && taskMatches(e.task, params) !== false);
+    }))) refetchSoon(key, true);
   }
   const last = new Map<string, TaskEvent>();
   // A relation (a sub-task filed or taken off) on any event of the batch, not only its last: a later update of the same
@@ -595,11 +630,13 @@ export function installPatchers(): void {
   onTopic<TaskEvent>('tasks', patchSends);
   onTopic<MessageEvent>('messages', patchMessages);
   onRefetch('calendar', () => [['calendar']]);
-  onRefetch('setup', () => [['setup']]);
+  onRefetch<{ area?: string }>('setup', (e) => e.area === 'availability' ? [] : [['setup']]);
+  onRefetch<{ area?: string }>('setup', (e) =>
+    e.area === 'availability' ? [['tasks', 'flow', { claimable: 'true' }]] : [], true);
   // A letter out changed: Tools' mailing address reads its list again.
   onRefetch('letters', () => [['letters']]);
   // What waits on the person changed: Flow's list and the start page's read again.
-  onRefetch('needs', () => [['flow'], ['needs']]);
+  onRefetch('needs', () => [['flow'], ['needs']], true);
   onTopic<BotEvent>('bots', patchDirectory);
   onTopic<ThreadEvent>('threads', applyThreadEvents);
   // An agent added, archived or brought back.

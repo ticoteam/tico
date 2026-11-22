@@ -1,4 +1,3 @@
-import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { FlowMark } from '@/kit/FlowMark';
@@ -8,7 +7,7 @@ import { toast } from '@/kit/Toast';
 import { answered } from './answered';
 import { failedToast, reasonOf, tabAddress } from './model';
 import { Face } from './parts';
-import { waitingQuery, type TaskData } from './queries';
+import { useWaitingTasks, type TaskData } from './queries';
 import './ask.css';
 
 /* One ask card (master plan P1): whatever waits on a person draws in this one frame, its body by its kind. One line
@@ -92,7 +91,7 @@ export const Docked = ({ dock, children }: { dock: boolean; children: ReactNode 
     the answer, in Flow, the next task that waits on the person opens (`nextUp`, picked before answering: the answered
     row leaves the list at once); outside Flow the open task's page decides, not once the person has moved on. */
 export function useAnswering(t: Pick<TaskData, 'id'>, flow: boolean) {
-  const waiting = useQuery({ ...waitingQuery, enabled: flow });
+  const { rows } = useWaitingTasks(flow);
   const navigate = useNavigate();
   const [error, setError] = useState('');
   const here = useRef(true);
@@ -103,7 +102,6 @@ export function useAnswering(t: Pick<TaskData, 'id'>, flow: boolean) {
     };
   }, []);
   const nextUp = () => {
-    const rows = waiting.data ?? [];
     const i = rows.findIndex((w) => w.id === t.id);
     return (i >= 0 ? (rows[i + 1] ?? rows[i - 1]) : rows[0]) ?? null;
   };

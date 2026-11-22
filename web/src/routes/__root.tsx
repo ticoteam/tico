@@ -11,7 +11,7 @@ import { AssetRecovery, DesktopMove, PlanLock } from '@/features/notices/exports
 import { StartScreen, useStartGate } from '@/features/start/routing';
 import { SUPPORT_CHAT, supportUnreadQuery } from '@/features/support/routing';
 import { TaskChat } from '@/features/task/exports';
-import { filtersOf, flowGroups, flowQuery, pipelinesQuery, pipelineTasksQuery, roadmapPipeline, validateTasksSearch, type TaskItem } from '@/features/tasks/routing';
+import { filtersOf, flowCountQuery, flowQuery, pipelinesQuery, pipelineTasksQuery, roadmapPipeline, useFlowCountRefresh, useFlowGroups, validateTasksSearch, type TaskItem } from '@/features/tasks/routing';
 import { teammateAccessQuery, validateTeamSearch, whoHref } from '@/features/team/routing';
 import { ChatSheet, MenuThreads, MessagePick } from '@/features/threads/exports';
 import { asksOf, catchUpQuery, threadListQuery, type Asks } from '@/features/threads/routing';
@@ -135,6 +135,8 @@ function Root() {
   useMotionRoot();
   useTheme();
   const gate = useStartGate();
+  const me = useQuery(meQuery);
+  useFlowCountRefresh(!gate.screen && me.isSuccess);
   useDesktopReports(gate.screen === 'signin' || gate.screen === 'signed-out');
   const callWindow = useLocation({ select: (l) => isCallWindow(l.pathname, l.searchStr) });
   if (gate.screen) return <StartScreen screen={gate.screen} error={gate.error} retry={gate.retry} busy={gate.busy} />;
@@ -165,11 +167,11 @@ function useDesktopReports(signedOut: boolean) {
   }, [on, callLive]);
   const me = useQuery({ ...meQuery, enabled: on });
   const config = useQuery({ ...configQuery, enabled: on });
-  const flow = useQuery({ ...flowQuery, enabled: on && me.isSuccess });
+  const flow = useQuery({ ...flowCountQuery, enabled: on && me.isSuccess });
   const signedIn = me.isSuccess && config.isFetched ? true : signedOut ? false : null;
   const name = config.data?.company_name || config.data?.app_name || '';
   const email = me.data?.email ?? '';
-  const needs = flow.data?.count;
+  const needs = flow.data;
   const files = config.data?.visual_origin;
   useEffect(() => {
     if (on) reportToDesktop({ signedIn, name, email, needs, filesOrigin: files });
@@ -433,7 +435,7 @@ function AppMenu({ note }: { note: ReactNode }) {
   const reveal = useLocation({ select: (l) => word((l.search as Record<string, unknown>).team) });
   const [access, setAccess] = useState<MenuTeam | null>(null);
   const { data: pipelines } = useQuery(pipelinesQuery);
-  const { data: flow } = useQuery({ ...flowQuery, select: (data) => data.count });
+  const { data: flow } = useQuery(flowCountQuery);
   const { data: support } = useQuery({ ...supportUnreadQuery, enabled: badgesEnabled });
   const companies = useCompanies();
   const [calling, setCalling] = useState(false);
@@ -546,8 +548,8 @@ function AccountRows({ me, email }: { me: MenuMate; email: string }) {
 /* The phone's menu lip: the company and the Flow count, from the same reads as the menu itself. */
 function PhoneMenuLip() {
   const { data: config } = useQuery(configQuery);
-  const { data: flow } = useQuery(flowQuery);
-  return <MenuLip company={config?.company_name || config?.app_name || ''} flow={some(flow?.count)} />;
+  const { data: flow } = useQuery(flowCountQuery);
+  return <MenuLip company={config?.company_name || config?.app_name || ''} flow={some(flow)} />;
 }
 
 /* The phone's call lip: mute without opening the call. */
@@ -735,16 +737,17 @@ function ListFace({ id }: { id: string | null }) {
   return id ? <Avatar decorative kind={who?.kind ?? (id.startsWith('bot:') ? 'agent' : 'person')} name={who?.name ?? (id.startsWith('bot:') ? 'Agent' : 'Person')} hue={who?.hue} live={who?.working} size={22} /> : null;
 }
 
-/* Beside an open task, in the menu's place (pages/1-tasks/more.js flowList): every task that waits on you, by pipeline
-   and stage, the open one chosen. The pick goes to a pipeline's board, Flow (pressed) back to Tasks, and Close folds
+/* Beside an open task, in the menu's place (pages/1-tasks/more.js flowList): every task that waits on you, by relationship,
+   the open one chosen. The pick goes to a pipeline's board, Flow (pressed) back to Tasks, and Close folds
    the list to the menu's icons. */
 function TaskList({ open }: { open: string }) {
   const { data: flow } = useQuery(flowQuery);
+  const { data: count } = useQuery(flowCountQuery);
   const { data: pipes = [] } = useQuery(pipelinesQuery);
   const [shut, setShut] = useState<ReadonlySet<string>>(new Set());
   const flip = (key: string) => setShut((was) => (was.has(key) ? new Set([...was].filter((k) => k !== key)) : new Set(was).add(key)));
   const router = useRouter();
-  const groups = flowGroups(flow?.items ?? [], pipes);
+  const groups = useFlowGroups(flow?.items ?? []);
   return (
     <Sheet kind="list" label="Flow">
       <header className="li-head">
@@ -766,7 +769,7 @@ function TaskList({ open }: { open: string }) {
         <span className="grow" />
         <span className="li-play is-on">
           <FlowMark play live />
-          <b>{flow?.count ? `Flow · ${flow.count}` : 'Flow'}</b>
+          <b>{count ? `Flow · ${count}` : 'Flow'}</b>
         </span>
         <IconButton icon="close" label="Exit Flow" quiet onClick={() => leaveFlow(router)} />
       </header>
@@ -777,13 +780,7 @@ function TaskList({ open }: { open: string }) {
             <div className="li-sec">
               <h2 className="sec-name">
                 <FoldButton
-                  name={
-                    <>
-                      {g.pipe}
-                      <Icon name="chevron" className="sec-sep" />
-                      {g.stage}
-                    </>
-                  }
+                  name={g.name}
                   count={g.items.length}
                   open={!shut.has(g.key)}
                   onToggle={() => flip(g.key)}
@@ -822,7 +819,7 @@ function TaskList({ open }: { open: string }) {
    enters Flow, and Close folds the list to the menu's icons. */
 function PipelineList({ pipeline, open, onClose }: { pipeline: string; open: string; onClose: () => void }) {
   const me = useQuery(meQuery).data?.id;
-  const { data: flow } = useQuery(flowQuery);
+  const { data: flow } = useQuery(flowCountQuery);
   const { data: pipes } = useQuery(pipelinesQuery);
   const p = pipes?.find((x) => x.id === pipeline);
   const { data: page } = useQuery({ ...pipelineTasksQuery(pipeline, filtersOf(validateTasksSearch(boardSearch(pipeline)))), enabled: !!p });
@@ -851,7 +848,7 @@ function PipelineList({ pipeline, open, onClose }: { pipeline: string; open: str
         <span className="grow" />
         <Link to="/flow" className="li-play" aria-pressed={false} aria-label="Flow" title="Flow">
           <FlowMark play />
-          {flow?.count ? <b>{flow.count}</b> : null}
+          {flow ? <b>{flow}</b> : null}
         </Link>
         <IconButton icon="close" label="Close the list" quiet onClick={onClose} />
       </header>

@@ -6,6 +6,7 @@ from copy import deepcopy
 import os
 import re
 from datetime import timezone
+from math import ceil
 from typing import Literal
 
 import yaml
@@ -1949,7 +1950,11 @@ def _briefs(c, ids, visible, viewer=None):
         return {}
     rows = H.tasks(c, ids=sorted(ids), limit=None, order="finished", visible=visible)
     task_reads.brief(c, rows, visible, viewer)
-    return {row["id"]: {k: row.get(k) for k in BRIEF_FIELDS} for row in rows}
+    briefs = {row["id"]: {k: row.get(k) for k in BRIEF_FIELDS} for row in rows}
+    for row in rows:
+        if entity_id := row.get("entity_id"):
+            briefs[row["id"]]["entity_id"] = entity_id
+    return briefs
 
 
 def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
@@ -2289,9 +2294,17 @@ def needs_kinds(items):
     return counts
 
 
-def needs_plate_count(items):
-    """The one count on the Tasks badge: the length of the list."""
-    return len(items)
+def flow_count(items):
+    """Flow shows one row per task and one per request. A paused group shows as its first task."""
+    tasks, requests = set(), 0
+    for item in items:
+        if item["kind"] in REQUEST_KINDS:
+            requests += 1
+        elif tids := item.get("task_ids"):
+            tasks.add(tids[0])
+        elif tid := item.get("task_id"):
+            tasks.add(tid)
+    return len(tasks) + requests
 
 
 def needs_actor(it, me):
@@ -3567,7 +3580,7 @@ def install_views(app, store, auth, mutate, task_view):
         **api_v2(
             "Needs you",
             "getNeedsYou",
-            "What waits on the caller (kind task, ask, paused or question, oldest first), with its `version` and `count`; count=true for the number alone, version=<held> answers `unchanged` without items while it holds, ids=<comma list> only those items and their `positions`, limit=<n> (at most 200) a page with `next` to pass as cursor=<next> for the one after it (cut from the build that gave the first page while it is held, about 30 s; a cursor from an older version starts again from the top, with `restart`); without limit or cursor, the whole list",
+            "What waits on the caller (kind task, ask, paused or question, oldest first), with its `version` and `count`; count=true for the counts alone (`count` for all items and `flow_count` for distinct Flow task rows plus requests), version=<held> answers `unchanged` without items while it holds, ids=<comma list> only those items and their `positions`, limit=<n> (at most 200) a page with `next` to pass as cursor=<next> for the one after it (cut from the build that gave the first page while it is held, about 30 s; a cursor from an older version starts again from the top, with `restart`); without limit or cursor, the whole list",
             "NeedsYou",
         ),
     )
@@ -3594,6 +3607,8 @@ def install_views(app, store, auth, mutate, task_view):
         return await needs_lane.run(request.app, needs_answer, who, count, ids, version, limit, cursor)
 
     def needs_answer(who, count, ids, version, limit, cursor):
+        from . import ask_snoozes
+
         held = needs_cache.of(app)
         viewer = needs_cache.viewer(who)
         if cursor and not count and ids is None:
@@ -3613,13 +3628,20 @@ def install_views(app, store, auth, mutate, task_view):
         began = needs_cache.begin()
         with store.read_transaction() as c:
             if count:
+                # Both reads treat a snooze as active only until its deadline. Sample before either
+                # read so a deadline reached during the count still leaves time to refresh it.
+                at = H.parse_ts(H.now())
+                end = H.parse_ts(ask_snoozes.next_end(c, who))
                 items = needs_items(c, auth, who, count_only=True)
-                return {"actor": who.actor, "count": len(items)}
+                return {
+                    "actor": who.actor,
+                    "count": len(items),
+                    "flow_count": flow_count(items),
+                    "snooze_refresh_in_ms": max(1, ceil((end - at).total_seconds() * 1000)) if end and at else None,
+                }
             items = needs_shown(c, auth, who)
             current = needs_marks(items)[1]
             # When an ask this person snoozed comes back: the page reads the list again then (backend/ask_snoozes.py).
-            from . import ask_snoozes
-
             woken = {"snoozed_until": ask_snoozes.next_end(c, who)}
         counts = {}  # the page counts, worked out by the first page, kept for the next ones
         held.keep(viewer, current, items, woken["snoozed_until"], began, counts)

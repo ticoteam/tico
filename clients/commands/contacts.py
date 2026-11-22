@@ -107,6 +107,24 @@ def contacts_find(api, args):
 
 
 @tool(
+    "tico_contacts_names",
+    "Read the current names of up to 100 Contacts entities by ID. Hidden and unknown IDs are omitted.",
+    {
+        "ids": {
+            "type": "array",
+            "description": "Exact entity IDs",
+            "items": {"type": "string", "minLength": 1},
+            "minItems": 1,
+            "maxItems": 100,
+        }
+    },
+    required=("ids",),
+)
+def contacts_names(api, args):
+    return api.post("entities/names", {"ids": args["ids"]})
+
+
+@tool(
     "tico_contacts_get",
     "One entity as you see it: its values with source and age, its links, external records and your notes. "
     "A reference that two entities match returns both, marked ambiguous.",
@@ -503,6 +521,12 @@ CONTACTS = (
         "entities of one type you can see, by name, status or a link to us",
         args=(Arg("as_text", flag="--text", action="store_true", local=True, help="one line per entity, not JSON"),),
         example="tico contacts find organization --owner me --sort next",
+    ),
+    Command(
+        "contacts names",
+        "current names for up to 100 visible entity IDs",
+        args=(Arg("ids", metavar="ID", nargs="+", action="store"),),
+        example="tico contacts names organization/acme organization/acme-supply",
     ),
     Command(
         "contacts get",

@@ -13,7 +13,7 @@ import shlex
 from fastapi import Request
 
 from . import hubdb as H
-from . import task_relations, threads, views
+from . import task_relations, teammate_access, threads, views
 from .store import Problem
 from .api_contract import api_v2
 
@@ -41,19 +41,30 @@ def install(app, store, auth):
 
 def show(c, auth, who, ref):
     kind, item = resolve(c, auth, who, ref)
+    known = teammate_access.Known(c, auth.run_viewer(c, who), auth)
 
     def see(task_id):
         return bool(views._readable_task_ids(c, auth.task_sql(c, who), [task_id]))
 
     if kind == "task":
-        made_by, created, cause = item["requester_id"], item["created_at"], task_cause(c, item, see)
-        title, siblings, stops = item["title"] or "", *siblings_and_stops(c, item, cause)
+        made_by = known.task(item)["requester_id"]
+        created, cause = item["created_at"], task_cause(c, who, item, see)
+        title = item["title"] or ""
+        siblings, stops = siblings_and_stops(c, item, cause)
         task_id = item["id"]
+        source_task = item
     else:  # a message: resolve answers one of the two or refuses
-        made_by, created, title, task_id = item["sender_id"], item["created_at"], (item["body"] or "")[:80], None
-        row = H.task(c, H.message_task_id(item)) if H.message_task_id(item) else None
-        cause = task_cause(c, row, see) if row else {"type": "message", "conversation_id": item["conversation_id"]}
+        made_by = known.name(item["sender_id"], item["conversation_id"])
+        created, title, task_id = item["created_at"], (item["body"] or "")[:80], None
+        source_task = H.task(c, H.message_task_id(item)) if H.message_task_id(item) else None
+        cause = (
+            task_cause(c, who, source_task, see)
+            if source_task
+            else {"type": "message", "conversation_id": item["conversation_id"]}
+        )
         siblings, stops = {"days": WINDOW_DAYS, "made": 0, "open": 0}, stops_for(c, cause, None)
+    if cause["type"] == "person":
+        cause["person"] = known.task(source_task)["requester_id"]
     return {
         "ref": ref,
         "kind": kind,
@@ -99,7 +110,7 @@ def notice_refs(c, task):
     return {}
 
 
-def task_cause(c, task, see):
+def task_cause(c, who, task, see):
     """What made the task: an automation's run (its routine's marker, or the notice that opened it), an org rule, the
     parent task it was filed under, or a bot's own filing. `see(task_id)` says whether the caller may read a task; a parent
     the caller cannot read is named without its title or id."""
@@ -107,6 +118,10 @@ def task_cause(c, task, see):
     occurrence = (task.get("occurrence") or "").split(":", 1)[0]
     automation = occurrence or refs.get("automation")
     if automation:
+        from . import automations
+
+        if not automations.may_reference(c, who, automation):
+            return {"type": "automation", "name": "an automation"}
         found = automation_info(c, automation)
         return {"type": "automation", **found, "run": refs.get("automation_run")}
     if refs.get("rule"):
@@ -147,6 +162,8 @@ def siblings_and_stops(c, task, cause):
     if cause["type"] in ("automation", "rule"):
         made = set()
         key = "automation" if cause["type"] == "automation" else "rule"
+        if not cause.get("id"):
+            return {"days": WINDOW_DAYS, "made": 0, "open": 0}, []
         for row in c.execute(
             "SELECT refs FROM messages WHERE created_at>=? AND refs LIKE ? ORDER BY created_at LIMIT 5000",
             (since, f'%"{key}": "{cause["id"]}"%'),

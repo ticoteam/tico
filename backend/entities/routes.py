@@ -13,9 +13,10 @@ from fastapi import Request
 from pydantic import Field
 
 from backend import threads
-from backend.api_answers.contacts import ContactsActivityHistory, ContactsRecordResult
+from backend.api_answers.contacts import ContactsActivityHistory, ContactsNamesResult, ContactsRecordResult
 from backend.api_contract import api_v2
 from backend.entities import store as ES
+from backend.entities import visible as V
 from backend.models import Contract
 from backend.store import Problem
 
@@ -29,6 +30,10 @@ if TYPE_CHECKING:
     from backend.store import Store
 
 SOURCE = "hub"  # what an entity value's source says when the Contacts tools wrote it; the source_id is the actor
+
+
+class ContactsNames(Contract):
+    ids: list[Annotated[str, Field(min_length=1)]] = Field(min_length=1, max_length=100)
 
 
 class ContactsUpsert(Contract):
@@ -370,6 +375,23 @@ def install(
             if detail:
                 seen_owners(c, request, cast("list[dict[str, Any]]", page["rows"]))
             return page
+
+    @app.post(
+        "/api/v2/entities/names",
+        **api_v2(
+            "Contacts",
+            "getContactsNames",
+            "Current names for up to 100 entity IDs the caller can see",
+            ContactsNamesResult,
+            idempotency="This read needs no key. It checks current access on every call.",
+        ),
+    )
+    def contacts_names(request: Request, body: ContactsNames) -> ContactsNamesResult:
+        caller(request)
+        ids = list(dict.fromkeys(body.ids))
+        with cast("AbstractContextManager[sqlite3.Connection]", store.read_transaction()) as c:
+            actor = reader(c, request)
+            return {"names": ES.seen_entities(c, V.reader(c, actor, entity_ids=ids), ids)}
 
     @app.get("/api/v2/entities/card")
     def contacts_card(request: Request, ref: str):

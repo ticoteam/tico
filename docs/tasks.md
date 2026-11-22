@@ -237,11 +237,23 @@ notices to a person (an automation on hold, legal mail, a held webhook, a rule t
 are the person's task with Agent Ops' question on it; the Strategy Owner's asks are its own tasks with its question, which
 Agent Ops asks for it while it cannot run. The question goes when the task moves on.
 
-`GET /api/v2/needs-you` returns the list; `?count=true` returns its one number (beside Flow in the Tasks header; the sidebar shows Flow's mark while it is above 0, and a phone's Flow tab turns jade).
+`GET /api/v2/needs-you` returns the list. With `?count=true`, `count` is the number of Needs you items and `flow_count`
+counts each task row once, plus each request. The Flow header and sidebar show `flow_count`.
+The count response gives `snooze_refresh_in_ms` for the next snoozed ask in server time, or null. The shell refreshes
+the count and any open Needs you lists at that deadline and at least every five minutes.
 
-When Flow (the screen that walks the list one ask at a time) opens, it orders the items by a hidden score that the
-screen never shows. The score is worked out then, not on a timer, from the task alone, never from who is looking. Flow
-shows no suggestion, pick or note: a person reads the ask and presses the button.
+Flow opens on **Mine**, with your Needs you tasks grouped by relationship and requests in their own cards. **All**
+shows your team's open work and public Support tasks with no assignee or an assignee who is off. Tasks without a
+visible relationship appear under **Other**. Each row shows whose turn it is or what it waits on. Open **Why
+here** for its origin. Open **Snoozed** or **Done** to see that shelf, or hide both via **Hide archive**. Mine's shelves
+show your own tasks. Its Snoozed shelf also shows asks you snoozed in Needs you. An ask returns to Mine when its
+snooze ends, or sooner if you choose Unsnooze. Flow opens one task at a time, and task changes follow the usual permissions.
+
+The same All scope is available via `GET /api/v2/tasks?status=open&claimable=true`, `tico task list --status open
+--claimable`, or `tico_task_list` with `claimable: true` and `status: ["open"]`.
+Flow reads group names separately from Contacts for the entity IDs on its pages. Use `POST /api/v2/entities/names`
+with up to 100 IDs in `ids`, `tico contacts names <id>...`, or `tico_contacts_names` with `ids`.
+Each call checks the caller's current access. Changes to availability refresh open claimable lists.
 
 Flow no longer suggests rules at All done. Rules people added there before keep binding their page check: Jev still
 asks each of the next page judged at that check, as one more yes/no part beside the check's own. To add a rule now,

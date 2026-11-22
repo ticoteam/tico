@@ -388,6 +388,7 @@ def test_every_filter_the_list_takes_still_answers(api):
         "exact": "true",
         "link": "github:pr:acme/app%231",
         "entity": "acme.example",
+        "claimable": "true",
         "on_behalf_of": "default",
     }
     assert set(values) == task_list_routes.LIST_FILTERS | {"on_behalf_of"}
@@ -402,6 +403,166 @@ def test_the_filter_list_is_what_the_route_declares(api):
 
     route = next(r for r in api.app.routes if getattr(r, "path", "") == "/api/v2/tasks" and "GET" in r.methods)
     assert {p.alias for p in route.dependant.query_params} == task_list_routes.LIST_FILTERS
+
+
+def test_claimable_pages_include_team_and_unstaffed_support_only(api):
+    post(api, "groups", {"name": "Sales", "add": {"people": ["ben", "cara"]}})
+    support = post(api, "pipelines/service-desk", {"name": "Service desk", "stages": [{"name": "Inbox"}]})["pipeline"]
+
+    def made(title, owner="ana", **kw):
+        made = post(
+            api,
+            "tasks",
+            {"title": title, "body": "Please review.", "owner": owner, "private": False, **kw},
+        )
+        assert "id" in made, made
+        return made["id"]
+
+    team = made("Send the draft", "ben")
+    made("Send the receipt")
+    unassigned = made("Review the ticket", pipeline=support["id"])
+    claimed = made("Reply to the customer", pipeline=support["id"])
+    private = made("Check a private ticket", pipeline=support["id"], private=True)
+    with api.app.state.store.transaction() as c:
+        restrict(c, "ops", people=["ana"])
+        c.execute("UPDATE pipelines SET preset='support' WHERE id=?", (support["id"],))
+        c.execute("UPDATE tasks SET assignee_id=NULL WHERE id IN (?,?)", (unassigned, private))
+        c.execute("UPDATE task_move_guards SET open=1, task_id=? WHERE id=1", (unassigned,))
+        c.execute("UPDATE tasks SET owner_id=NULL WHERE id=?", (unassigned,))
+        c.execute("UPDATE task_move_guards SET open=0, task_id=NULL WHERE id=1")
+        c.execute("UPDATE tasks SET assignee_id='human:ana' WHERE id=?", (claimed,))
+        who = api.app.state.store.settings.test_identities["cara-test"]
+        assert api.app.state.auth.unreadable_bots(c, who)
+
+    query = "/api/v2/tasks?claimable=true&status=open&limit=1&counts=stage"
+    first = api.get(query, headers=headers("cara-test"))
+    assert first.status_code == 200, first.text
+    page = first.json()
+    assert page["counts"]["total"] == 2
+    assert page["tasks"][0]["entity_id"] == ""
+    second = api.get(f"{query}&after={page['next_after']}", headers=headers("cara-test")).json()
+    assert {page["tasks"][0]["id"], second["tasks"][0]["id"]} == {team, unassigned}
+
+    store, auth = api.app.state.store, api.app.state.auth
+    reader = store.settings.test_identities["cara-test"]
+
+    def set_availability(value):
+        with store.read() as c:
+            before = E.latest(c)
+        response = api.put("/api/v2/humans/ana/availability", json={"availability": value}, headers=headers())
+        assert response.status_code == 200, response.text
+        with store.read() as c:
+            [(seq, topic, event)] = E.read(c, auth, reader, before, topics=("setup",))[0]
+        assert seq > before and topic == "setup" and event["area"] == "availability"
+        assert event["actor"] is None and set(event) == {"seq", "actor", "at", "area"}
+
+    set_availability("off")
+    full = "claimable=true&status=open"
+    now = tasks(api, full, "cara-test")
+    assert {t["id"] for t in now["tasks"]} == {team, claimed, unassigned}
+    assert (
+        get(api, f"tasks?{full}&changed_after={now['cursor']}", "cara-test", expected=422)["error"]["code"]
+        == "claimable"
+    )
+
+    set_availability(None)
+    assert {t["id"] for t in tasks(api, full, "cara-test")["tasks"]} == {team, unassigned}
+    with store.transaction() as c:
+        c.execute("UPDATE humans SET availability='off', availability_until='2000-01-01T00:00:00Z' WHERE id='ana'")
+    assert {t["id"] for t in tasks(api, full, "cara-test")["tasks"]} == {team, unassigned}
+
+
+def test_task_lists_briefs_and_events_keep_relationship_ids_without_names(api):
+    from backend import mailbox_access, task_list_routes
+    from backend.entities import store as entities
+
+    store, auth = api.app.state.store, api.app.state.auth
+    with store.transaction() as c:
+        entity = entities.upsert(c, "human:ana", "organization", match={"name": "Acme Shop"})["id"]
+        box = mailbox_access.ensure_mailbox(c, "ana@acme.example", person_id="ana", created_by="human:ana")
+        entities.add_source(c, "human:ana", entity, "mailbox", box["id"], visibility="restricted")
+    post(api, "groups", {"name": "Sales", "add": {"people": ["ben", "cara"]}})
+    made = post(api, "tasks", {"title": "Confirm the order", "body": "Please.", "owner": "ben", "entity": entity})
+    task_id = made.get("task", made)["id"]
+    post(api, f"tasks/{task_id}/asks", {"to": "ben", "line": "OK the order?", "kind": "ok"})
+
+    _, _, task_views, _ = task_list_routes.readers(auth)
+    with store.transaction() as c:
+        cursor = E.latest(c)
+        c.execute("UPDATE tasks SET title='Confirm the revised order' WHERE id=?", (task_id,))
+    who = store.settings.test_identities["ben-test"]
+    with store.read() as c:
+        [(_, _, event)] = E.read(c, auth, who, cursor, topics=("tasks",), task_views=task_views)[0]
+
+    rows = [
+        *tasks(api, f"ids={task_id}&brief=true", "ben-test")["tasks"],
+        *tasks(api, f"ids={task_id}&claimable=true", "ben-test")["tasks"],
+        get(api, f"tasks/{task_id}", "ben-test")["task"],
+        get(api, "needs-you?limit=1", "ben-test")["items"][0]["task"],
+        event["task"],
+    ]
+    assert len(rows) == 5
+    assert all(row["entity_id"] == entity and "entity_name" not in row for row in rows)
+
+
+def test_contacts_names_reads_current_visibility_and_caps_the_batch(api):
+    from backend import mailbox_access
+    from backend.entities import store as entities
+    from backend.tests.helpers.mcp import call
+
+    store = api.app.state.store
+    with store.transaction() as c:
+        visible, private, merged, deleted = (
+            entities.upsert(c, "human:ana", "organization", match={"name": label})["id"]
+            for label in ("Acme Shop", "Acme Services", "Acme Supply", "Acme Partners")
+        )
+        box = mailbox_access.ensure_mailbox(c, "ana@acme.example", person_id="ana", created_by="human:ana")
+        entities.add_source(c, "human:ana", private, "mailbox", box["id"], visibility="restricted")
+        c.execute("UPDATE entities SET status='merged', merged_into_id=? WHERE id=?", (visible, merged))
+        c.execute("UPDATE entities SET deleted_at=? WHERE id=?", (H.now(), deleted))
+        grant = mailbox_access.grant(c, "human:ana", box["id"], "person", "ben", "read")
+
+    def lookup(ids):
+        return api.post("/api/v2/entities/names", json={"ids": ids}, headers={"Authorization": "Bearer ben-test"})
+
+    ids = [visible, private, merged, deleted, "missing", visible]
+    response = lookup(ids)
+    assert response.status_code == 200 and "no-store" in response.headers["cache-control"]
+    assert response.json() == {"names": {visible: "Acme Shop", private: "Acme Services"}}
+    with store.transaction() as c:
+        mailbox_access.revoke(c, "human:ana", box["id"], grant["id"])
+    assert lookup(ids).json() == {"names": {visible: "Acme Shop"}}
+    assert call(api, "tico_contacts_names", {"ids": ids}, token="ben-test") == (
+        False,
+        {"names": {visible: "Acme Shop"}},
+    )
+    page = [visible, *(f"missing-{i}" for i in range(99))]
+    assert lookup(page).json() == {"names": {visible: "Acme Shop"}}
+    assert lookup([*page, private]).status_code == 422
+
+
+def test_contacts_names_rechecks_an_expiring_finance_grant(api, time_machine):
+    from backend.finance import actions as finance
+    from backend.finance.store import contacts, ledger
+    from backend.tests.helpers.finance_fixtures import AT, OWNER, act, spend
+
+    time_machine.move_to(AT, tick=False)
+    until = "2026-10-15T13:00:00.000000Z"
+    with api.app.state.store.transaction() as c:
+        finance.setup(c, OWNER, AT)
+        vendor = contacts.create(c, ledger.book(c).id, {"name": "Acme Vendor", "kind": "vendor"}, AT, OWNER)
+        spend(c, "6100", 500, vendor=vendor)
+        assert (
+            act(c, OWNER, "view_grant", {"subject": "human:cara", "what": "expenses", "expires_at": until}).status
+            == "committed"
+        )
+
+    def names():
+        return post(api, "entities/names", {"ids": [vendor]}, token="cara-test")["names"]
+
+    assert names() == {vendor: "Acme Vendor"}
+    time_machine.move_to(until, tick=False)
+    assert names() == {}
 
 
 def test_a_task_asking_the_reader_names_its_visit_so_needs_you_reads_that_one_ask_by_id(api):

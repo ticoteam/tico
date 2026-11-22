@@ -825,7 +825,8 @@ export const waitingTasksQuery = queryOptions({
   queryKey: ['needs', 'tasks'],
   queryFn: async ({ signal }) => {
     try {
-      return (await needsYouItems(signal)).map((i) => i.task_id ?? i.task?.id).filter((x): x is string => !!x);
+      const items = await needsYouItems(signal);
+      return items.map((i) => i.task_id ?? i.task?.id).filter((x): x is string => !!x);
     } catch {
       return [];
     }

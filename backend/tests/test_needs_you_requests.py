@@ -67,7 +67,11 @@ def test_needs_you_lists_each_request_only_to_someone_who_may_settle_it_and_its_
     assert [r["key"] for r in mine["key_drop"]["key_drop"]["rows"]] == ["JIRA_LOGIN"]
     assert PASSWORD not in str(mine) and OLD not in str(mine)
     assert set(requests(api, "ben-test")) == {"access"}  # the key card and the proposal are Ana's
-    assert get(api, "needs-you?count=true", "ana-test")["count"] >= 3
+    task = post(api, "tasks", {"owner": "ben", "title": "Review the invoice", "body": "Please."})
+    for line in ("Approve the amount?", "Approve the payee?"):
+        post(api, f"tasks/{task['id']}/asks", {"to": "ana", "line": line, "kind": "ok"})
+    counts = get(api, "needs-you?count=true", "ana-test")
+    assert counts["count"] == 5 and counts["flow_count"] == 4
 
     # Cara can settle none of them: she sees none, and each action refuses her.
     assert requests(api, "cara-test") == {}

@@ -1077,7 +1077,12 @@ class Auth:
         if who.role not in ("owner", "human", "bot"):
             return "0"
         hidden = ["bot:" + slug for slug in sorted(self.unreadable_bots(c, who) if unreadable is None else unreadable)]
-        clear = ("NOT (owner_id IN %s OR requester_id IN %s)" % ((A.qlist(hidden),) * 2)) if hidden else "1"
+        # An unassigned company task has no owner to hide.
+        clear = (
+            "NOT (coalesce(owner_id,'') IN %s OR coalesce(requester_id,'') IN %s)" % ((A.qlist(hidden),) * 2)
+            if hidden
+            else "1"
+        )
         from .task_rights import subjects, private_subjects
 
         inherited_private = A.qlist(sorted(private_subjects(c, who.actor)))

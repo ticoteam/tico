@@ -279,6 +279,8 @@ cause (the automation that opened it, the org rule that asked for it, the parent
 it), how many items that cause made in the last seven days and how many are still open, and up to three commands that
 would stop the source: turn an automation off, retire a rule, close what a bot filed, pause the bot, or file a task for
 Agent Ops to fix the bot's source. Each command is a `tico` line you can run as it is. A ref you cannot read is `404`.
+The filer is shown under the same teammate visibility rules as the task or conversation.
+An automation you cannot open appears as “an automation”, with its details, counts and commands omitted.
 
 `tico needs-you show [--kind task|ask|paused|question]` (`GET /api/v2/needs-you/summary`) gives the same count as
 Needs you, split by kind and by the bot that put each item there, with this week's and older counts. Use it first when

@@ -1,5 +1,5 @@
 import { QueryClientProvider, QueryObserver } from '@tanstack/react-query';
-import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
+import { createMemoryHistory, createRootRouteWithContext, createRouter, Outlet, RouterProvider } from '@tanstack/react-router';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -7,11 +7,13 @@ import { ActionsRoot } from '@/actions';
 import { keys, queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
 // eslint-disable-next-line no-restricted-imports -- the test hands the page a stream event, as the shell's startLive does
-import { dispatch, installPatchers } from '@/live/patch';
+import { dispatch, installPatchers, resetPatchState } from '@/live/patch';
+import { follow, resetFollows } from '@/live/follow';
+import { Route as flowRoute } from '@/routes/flow.index';
 import { dragTo } from '@/test/drag';
 import { ArchivedSections } from './Archived';
 import { FlowPage } from './FlowPage';
-import { flowQuery, listParams, pipelinesQuery, refreshLoaded, type Pipeline, type TaskItem } from './queries';
+import { flowCountQuery, flowListParams, flowListQuery, flowQuery, listParams, pipelinesQuery, refreshLoaded, STATUS_BACKSTOP_MS, useFlowCountRefresh, type Pipeline, type TaskItem } from './queries';
 import { TasksPage } from './TasksPage';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
@@ -28,16 +30,21 @@ function serve(reply: (url: string, method: string) => Reply | Promise<Reply>) {
 }
 
 function show(node: ReactNode, at: string) {
+  const flow = at.split('?')[0] === '/flow';
   // The shell's ActionsRoot lends the router to the action layer: a view action (Filter, View) runs through it.
-  const root = createRootRoute({
-    component: () => (
-      <>
-        <ActionsRoot dot={() => null} fold={() => undefined} />
-        {node}
-      </>
-    ),
+  const root = createRootRouteWithContext<{ queryClient: typeof queryClient }>()({
+    component: function TestShell() {
+      useFlowCountRefresh(flow);
+      return (
+        <>
+          <ActionsRoot dot={() => null} fold={() => undefined} />
+          {flow ? <Outlet /> : node}
+        </>
+      );
+    },
   });
-  const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: [at] }) });
+  const routeTree = flow ? root.addChildren([flowRoute.update({ getParentRoute: () => root, id: '/flow', path: '/flow', component: () => node } as never)]) : root;
+  const router = createRouter({ routeTree, context: { queryClient }, history: createMemoryHistory({ initialEntries: [at] }) });
   render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
@@ -91,11 +98,14 @@ beforeAll(() => {
 });
 beforeEach(() => {
   posts = [];
+  resetPatchState();
+  resetFollows();
   localStorage.clear();
   queryClient.clear();
   queryClient.setQueryData(['me'], { id: ME, email: '', role: 'person', slug: null });
   queryClient.setQueryData(['directory'], { actors: [], byId: {} });
   queryClient.setQueryData(['tags'], []);
+  queryClient.setQueryData(flowCountQuery.queryKey, { count: 0, wakeAt: null });
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -610,14 +620,286 @@ describe('Tasks: more of the page @s0 @s9 @s10', () => {
 describe('Flow @s5 @s112', () => {
   const item = { id: 'a1', number: 7, title: 'Approve the copy', pipeline_id: 'eng', stage_id: 's2', owner_id: null, late: false, stuck: false, since: ago(5) };
 
-  it('a row opens the task in Flow, under its pipeline and stage', async () => {
-    serve(() => ({ status: 200, body: {} }));
-    queryClient.setQueryData(pipelinesQuery.queryKey, [PIPE]);
-    queryClient.setQueryData(['flow'], { count: 1, items: [item] });
+  it('groups Mine by relationship across pipelines and keeps work without a relationship together', async () => {
+    serve(() => ({ status: 200, body: { names: { 'organization/acme': 'Acme', 'organization/acme-partners': 'Acme' } } }));
+    const entity = { entity_id: 'organization/acme' };
+    queryClient.setQueryData(['flow'], { count: 4, items: [
+      { ...item, ...entity, reason: 'Needs your approval' },
+      { ...item, ...entity, id: 'a2', number: 8, title: 'Check the delivery', pipeline_id: 'support', stage_id: 'inbox' },
+      { ...item, ...entity, entity_id: 'organization/acme-partners', id: 'a3', number: 9, title: 'Sign the lease' },
+      { ...item, id: 'a4', number: 10, title: 'Review the agenda' },
+    ] });
     show(<FlowPage />, '/flow');
     const row = await screen.findByTitle('Approve the copy');
     expect(row.closest('a')?.getAttribute('href')).toBe('/flow/7');
-    expect(screen.getByRole('region', { name: 'Engineering, Doing' })).toBeTruthy();
+    expect(within(row).getByText('Needs your approval')).toBeTruthy();
+    const acme = await screen.findAllByRole('region', { name: 'Acme' });
+    expect(acme).toHaveLength(2);
+    expect(within(acme[0]!).getByTitle('Check the delivery')).toBeTruthy();
+    expect(within(acme[1]!).getByTitle('Sign the lease')).toBeTruthy();
+    expect(posts).toEqual([{ url: '/api/v2/entities/names', body: { ids: ['organization/acme', 'organization/acme-partners'] } }]);
+    expect(within(screen.getByRole('region', { name: 'Other' })).getByTitle('Review the agenda')).toBeTruthy();
+  });
+
+  it('switches to claimable work, explains a row on demand and folds and hides the archive', async () => {
+    queryClient.setQueryData(['flow'], { count: 1, items: [item] });
+    const reads: string[] = [];
+    const relationship = { entity_id: 'organization/acme' };
+    const active = task('a2', 8, 'Help with the order', 's1', { ...relationship });
+    const snoozed = task('a3', 9, 'Send the quote', 's1', { ...relationship, snoozed: true });
+    const done = task('a4', 10, 'Send the form', 'sd', { ...relationship, status: 'done' });
+    serve((url) => {
+      reads.push(url);
+      if (url.endsWith('/entities/names')) return { status: 200, body: { names: { [relationship.entity_id]: 'Acme' } } };
+      if (url.includes('/origins/')) return { status: 200, body: { cause: { type: 'automation', name: 'Support intake' } } };
+      if (url.includes('claimable=true')) {
+        const p = new URL(url, 'http://localhost').searchParams;
+        return { status: 200, body: { tasks: [p.get('snoozed') === 'only' ? snoozed : p.get('status') === 'done' ? done : active] } };
+      }
+      return { status: 200, body: { items: [] } };
+    });
+    show(<FlowPage />, '/flow');
+    expect(await screen.findByTitle('Approve the copy')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Mine' }).getAttribute('aria-current')).toBe('page');
+    expect(reads).toEqual([]);
+
+    fireEvent.click(screen.getByRole('link', { name: 'All' }));
+    expect((await screen.findByTitle('Help with the order')).getAttribute('href')).toBe('/task/8');
+    expect(screen.queryByTitle('Approve the copy')).toBeNull();
+    expect(screen.getByRole('link', { name: 'All' }).getAttribute('aria-current')).toBe('page');
+    expect(await screen.findByRole('region', { name: 'Acme' })).toBeTruthy();
+    expect(reads).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Why here for Help with the order' }));
+    expect(await within(await screen.findByRole('dialog', { name: 'Why here' })).findByText('Support intake')).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Why here' }), { key: 'Escape' });
+
+    expect(screen.getByRole('button', { name: 'Snoozed' }).getAttribute('aria-expanded')).toBe('false');
+    expect(screen.getByRole('button', { name: 'Done' }).getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(screen.getByRole('button', { name: 'Snoozed' }));
+    expect(await within(screen.getByRole('region', { name: 'Snoozed' })).findByTitle('Send the quote')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    expect(await within(screen.getByRole('region', { name: 'Done' })).findByTitle('Send the form')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Hide archive' }));
+    expect(screen.queryByRole('region', { name: 'Snoozed' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Done' })).toBeNull();
+    fireEvent.click(screen.getByRole('link', { name: 'Mine' }));
+    expect(await screen.findByTitle('Approve the copy')).toBeTruthy();
+  });
+
+  it('opens All independently of Needs you and keeps later pages when a task is completed live', async () => {
+    queryClient.removeQueries({ queryKey: flowCountQuery.queryKey });
+    const active = task('a1', 7, 'Approve the copy', 's1');
+    let done = false;
+    let reads = 0;
+    let needsReads = 0;
+    serve((url) => {
+      const search = new URL(url, 'http://localhost').searchParams;
+      if (search.has('count')) return { status: 200, body: { count: 3, flow_count: 2 } };
+      if (!search.has('claimable')) {
+        needsReads += 1;
+        return { status: 503, body: {} };
+      }
+      reads += 1;
+      return {
+        status: 200,
+        body: search.has('after')
+          ? { tasks: [task('a3', 9, 'Review the agenda', 's1')], cursor: done ? '2.read' : '1.read' }
+          : { tasks: [...(done ? [] : [active]), task('a2', 8, 'Check the totals', 's1')], next_after: 'page-2', cursor: done ? '2.read' : '1.read' },
+      };
+    });
+    show(<FlowPage />, '/flow?view=all');
+    expect(await screen.findByTitle('Approve the copy')).toBeTruthy();
+    expect(await screen.findByText('Flow · 2')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+    expect(await screen.findByTitle('Review the agenda')).toBeTruthy();
+    done = true;
+    act(() => dispatch('tasks', [{ seq: 2, id: active.id, kind: 'update', task: { ...active, status: 'done', version: 2 } }]));
+    await waitFor(() => expect(screen.queryByTitle('Approve the copy')).toBeNull());
+    expect(screen.getByTitle('Check the totals')).toBeTruthy();
+    expect(screen.getByTitle('Review the agenda')).toBeTruthy();
+    expect(reads).toBe(4);
+    expect(needsReads).toBe(0);
+  });
+
+  it('removes a reassigned task from Mine’s Snoozed shelf on a live event', async () => {
+    const held = task('a3', 9, 'Send the quote', 's1', { owner_id: ME, snoozed: true });
+    let reassigned = false;
+    serve((url) => {
+      if (url.includes('snoozed=only')) return { status: 200, body: { tasks: reassigned ? [] : [held], cursor: '1.read' } };
+      return { status: 200, body: { items: [] } };
+    });
+    show(<FlowPage />, '/flow');
+    fireEvent.click(await screen.findByRole('button', { name: 'Snoozed' }));
+    expect(await screen.findByTitle('Send the quote')).toBeTruthy();
+    reassigned = true;
+    act(() => dispatch('tasks', [{ seq: 2, id: held.id, kind: 'update', task: { ...held, owner_id: 'human:teammate', version: 2 } }]));
+    await waitFor(() => expect(screen.queryByTitle('Send the quote')).toBeNull());
+  });
+
+  it('refreshes All after a task completes during its first read', async () => {
+    const active = task('a1', 7, 'Approve the copy', 's1');
+    let finishFirst: ((reply: Reply) => void) | undefined;
+    let reads = 0;
+    serve(() => {
+      reads += 1;
+      if (reads > 1) return { status: 200, body: { tasks: [], cursor: '2.read' } };
+      return new Promise((resolve) => { finishFirst = resolve; });
+    });
+    show(<FlowPage />, '/flow?view=all');
+    await waitFor(() => expect(finishFirst).toBeDefined());
+    await act(async () => {
+      dispatch('tasks', [{ seq: 2, id: active.id, kind: 'update', task: { ...active, status: 'done', version: 2 } }]);
+      finishFirst?.({ status: 200, body: { tasks: [active], cursor: '1.read' } });
+    });
+    expect(await screen.findByText('No work to claim')).toBeTruthy();
+    expect(reads).toBe(2);
+  });
+
+  it('puts a revoked relationship under Other when Contacts is read again', async () => {
+    const related = { ...item, entity_id: 'organization/acme-shop' };
+    const shelf = task('a3', 9, 'Send the quote', 's1', { owner_id: ME, snoozed: true, entity_id: related.entity_id });
+    let visible = true;
+    let taskReads = 0;
+    serve((url) => {
+      if (url.endsWith('/entities/names')) return { status: 200, body: { names: visible ? { [related.entity_id]: 'Acme Shop' } : {} } };
+      if (url.includes('/tasks?')) {
+        taskReads++;
+        return { status: 200, body: { tasks: [shelf] } };
+      }
+      if (url.includes('/needs-you?limit=')) {
+        taskReads++;
+        return { status: 200, body: { items: [{ kind: 'task', id: 'n1', task: related }] } };
+      }
+      return { status: 200, body: { items: [] } };
+    });
+    show(<FlowPage />, '/flow');
+    expect(await screen.findByText('Acme Shop')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Snoozed' }));
+    await waitFor(() => expect(screen.getAllByText('Acme Shop')).toHaveLength(2));
+    visible = false;
+    await act(() => queryClient.invalidateQueries({ queryKey: ['contacts', 'names'] }));
+    await waitFor(() => expect(screen.queryByText('Acme Shop')).toBeNull());
+    expect(within(screen.getAllByRole('region', { name: 'Other' })[0]!).getByTitle('Approve the copy')).toBeTruthy();
+    expect(within(screen.getAllByRole('region', { name: 'Other' })[1]!).getByTitle('Send the quote')).toBeTruthy();
+    expect(taskReads).toBe(2);
+  });
+
+  it('refreshes claimable work when availability changes', async () => {
+    const held = task('a1', 7, 'Help with the order', 's1');
+    let off = true;
+    serve((url) => ({
+      status: 200,
+      body: url.includes('claimable=true') ? { tasks: off ? [held] : [] } : { items: [] },
+    }));
+    show(<FlowPage />, '/flow?view=all');
+    expect(await screen.findByTitle('Help with the order')).toBeTruthy();
+    off = false;
+    act(() => dispatch('setup', [{ area: 'availability' }]));
+    expect(await screen.findByText('No work to claim')).toBeTruthy();
+  });
+
+  it('marks cached Flow pages stale when the all-task subscription ends', async () => {
+    vi.useFakeTimers();
+    try {
+      const queryKey = flowListQuery(flowListParams(undefined, 'open')).queryKey;
+      queryClient.setQueryData(queryKey, { pages: [{ tasks: [], cursor: '1.read' }], pageParams: [null] });
+      const stop = follow({ allTasks: true });
+      stop();
+      expect(queryClient.getQueryState(queryKey)?.isInvalidated).toBe(false);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(queryClient.getQueryState(queryKey)?.isInvalidated).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('brings back an ask from Mine’s Snoozed shelf even when someone else owns the task', async () => {
+    const ask = {
+      id: 'ask:pay',
+      kind: 'ask',
+      line: 'Approve the transfer',
+      since: ago(5),
+      snoozed_until: '2099-01-01T00:00:00Z',
+      task: { ...item, owner_id: 'human:teammate' },
+    };
+    let snoozed = true;
+    serve((url, method) => {
+      if (method === 'POST' && url.endsWith('/needs-you/unsnooze')) {
+        snoozed = false;
+        return { status: 200, body: {} };
+      }
+      if (url.endsWith('/needs-you/snoozed')) return { status: 200, body: { items: snoozed ? [ask] : [] } };
+      if (url.includes('/needs-you?limit=')) return { status: 200, body: { items: snoozed ? [] : [ask] } };
+      return { status: 200, body: url.includes('/tasks?') ? { tasks: [] } : { count: +!snoozed } };
+    });
+    show(<FlowPage />, '/flow');
+    fireEvent.click(await screen.findByRole('button', { name: 'Snoozed' }));
+    const shelf = screen.getByRole('region', { name: 'Snoozed' });
+    expect(await within(shelf).findByTitle('Approve the transfer')).toBeTruthy();
+    fireEvent.click(within(shelf).getByRole('button', { name: 'Unsnooze' }));
+    expect(await screen.findByTitle('Approve the copy')).toBeTruthy();
+    await waitFor(() => expect(within(shelf).queryByTitle('Approve the transfer')).toBeNull());
+    expect(posts).toEqual([{ url: '/api/v2/needs-you/unsnooze', body: { id: ask.id } }]);
+  });
+
+  it('refreshes Mine and its Snoozed shelf at the API’s next expiry', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+    try {
+      queryClient.removeQueries({ queryKey: flowCountQuery.queryKey });
+      const expiry = 65_000;
+      const until = new Date(Date.now() - 60_000).toISOString(); // the browser clock is ahead
+      const ask = { id: 'ask:pay', kind: 'ask', line: 'Approve the transfer', snoozed_until: until, task: item };
+      let countdowns = 0;
+      serve((url) => {
+        const snoozed = performance.now() < expiry;
+        if (url.includes('count=true')) {
+          countdowns++;
+          return { status: 200, body: { flow_count: +!snoozed, snooze_refresh_in_ms: snoozed ? (countdowns === 1 ? 60_000 : expiry - performance.now()) : null } };
+        }
+        if (url.endsWith('/needs-you/snoozed')) return { status: 200, body: { items: snoozed ? [ask] : [], next: snoozed ? until : null } };
+        if (url.includes('/needs-you?limit=')) return { status: 200, body: { items: snoozed ? [] : [ask], snoozed_until: snoozed ? until : null } };
+        return { status: 200, body: url.includes('/tasks?') ? { tasks: [] } : { flow_count: +!snoozed } };
+      });
+      show(<FlowPage />, '/flow');
+      await vi.waitFor(() => expect(screen.getByRole('button', { name: 'Snoozed' })).toBeTruthy());
+      fireEvent.click(screen.getByRole('button', { name: 'Snoozed' }));
+      const shelf = within(screen.getByRole('region', { name: 'Snoozed' }));
+      await vi.waitFor(() => expect(shelf.getByTitle('Approve the transfer')).toBeTruthy());
+      expect(screen.queryByTitle('Approve the copy')).toBeNull();
+      await act(() => vi.advanceTimersByTimeAsync(60_000));
+      expect(countdowns).toBe(2);
+      expect(shelf.getByTitle('Approve the transfer')).toBeTruthy();
+      await act(() => vi.advanceTimersByTimeAsync(5_000));
+      await vi.waitFor(() => {
+        expect(screen.getByTitle('Approve the copy')).toBeTruthy();
+        expect(shelf.queryByTitle('Approve the transfer')).toBeNull();
+      });
+      expect(posts).toEqual([]);
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
+  });
+
+  it('refreshes the badge on All at expiry and on the five-minute backstop', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+    try {
+      queryClient.removeQueries({ queryKey: flowCountQuery.queryKey });
+      let count = 0;
+      serve((url) => url.includes('count=true')
+        ? { status: 200, body: { flow_count: ++count, snooze_refresh_in_ms: count === 1 ? 60_000 : null } }
+        : { status: 200, body: { tasks: [] } });
+      show(<FlowPage />, '/flow?view=all');
+      await vi.waitFor(() => expect(screen.getByText('Flow · 1')).toBeTruthy());
+      await act(() => vi.advanceTimersByTimeAsync(60_000));
+      await vi.waitFor(() => expect(screen.getByText('Flow · 2')).toBeTruthy());
+      await act(() => vi.advanceTimersByTimeAsync(STATUS_BACKSTOP_MS));
+      await vi.waitFor(() => expect(screen.getByText('Flow · 3')).toBeTruthy());
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
   });
 
   it('reads every page of what waits on you, starting over when the list moved between pages', async () => {

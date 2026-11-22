@@ -68,6 +68,7 @@ def _places(c: sqlite3.Connection) -> tuple[str, dict[str, str]]:
 def seed(b: Any) -> None:  # backend.demo_seed.Builder
     b.at(days=5)
     fill(b.call, b.write, lambda: b.at(days=2))
+    b.call("POST", f"tasks/{b.tasks['proc-led-quote']}", {"entity": "lumenparts.example"})
 
 
 def _noop() -> None:

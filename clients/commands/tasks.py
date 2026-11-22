@@ -801,6 +801,10 @@ def _first_stage_picks(api, pipeline):
             "(jira:issue:PROJ-12@<tool id>, github:pr:acme/app#7) or its URL"
         ),
         "entity": _s("Only tasks for this Contacts entity: its id, email or domain"),
+        "claimable": {
+            "type": "boolean",
+            "description": "Only your team's work and public Support work with no assignee or an off assignee",
+        },
         "exact": {
             "type": "boolean",
             "default": False,
@@ -827,6 +831,8 @@ def task_list(api, args):
             more["role"] = args["role"]
     if args.get("brief"):
         more["brief"] = "true"
+    if args.get("claimable"):
+        more["claimable"] = "true"
     if args.get("exact"):
         more["exact"] = "true"
 

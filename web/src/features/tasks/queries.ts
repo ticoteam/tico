@@ -1,6 +1,7 @@
-import { infiniteQueryOptions, queryOptions, type InfiniteData, type QueryKey } from '@tanstack/react-query';
+import { infiniteQueryOptions, queryOptions, useQueries, useQuery, type InfiniteData, type QueryKey } from '@tanstack/react-query';
+import { useEffect } from 'react';
 import { api } from '@/api/client';
-import type { NeedsYouItem, TagCreate, TagResult, TagUpdate } from '@/api/schema';
+import type { ContactsNamesResult, NeedsYouItem, TagCreate, TagResult, TagUpdate } from '@/api/schema';
 import type {
   FactoryMap,
   PipelineSettings,
@@ -12,6 +13,7 @@ import type {
   TaskRequesterList,
   Task,
   TaskList,
+  Origin,
   TaskManyResult,
   TaskMoveResult,
   Tag,
@@ -98,7 +100,7 @@ export type TaskItem = Pick<
   Task,
   'id' | 'number' | 'title' | 'status' | 'pipeline_id' | 'stage_id' | 'owner_id' | 'labels' | 'late' | 'turn' | 'updated_at' | 'version'
 > &
-  Partial<Pick<Task, 'stuck' | 'stage_since' | 'snoozed' | 'created_at' | 'due_at' | 'visibility' | 'blocks' | 'email_send' | 'status_line' | 'reconcile'>>;
+  Partial<Pick<Task, 'stuck' | 'stage_since' | 'snoozed' | 'created_at' | 'due_at' | 'visibility' | 'blocks' | 'email_send' | 'status_line' | 'reconcile' | 'entity_id'>>;
 
 /** The cache's shape for a list: the server's page, kept as is so the stream's patches apply (live/patch.ts). */
 export interface TaskPage {
@@ -656,40 +658,145 @@ export interface FlowItem {
   /** What its ask is about, when the server lets this person read it (Needs you `about`): a page ask's page title, a
       Finance OK's payee and amount. The row shows it in place of the task's title. */
   about?: string;
+  entity_id?: string;
+  reason?: string;
 }
 
 /** An approval that waits on the person, always with the requirement it answers. */
 export type ApprovalItem = FlowItem & { ask: NonNullable<FlowItem['ask']> & { requirement: string } };
 
-/** One of Flow's sections: a pipeline's stage and its tasks that wait on you. */
-export interface FlowGroup {
-  key: string;
-  pipe: string;
-  stage: string;
-  items: FlowItem[];
-}
+const FLOW_PAGE = 100; // The Contacts names read accepts up to 100 IDs.
 
-/** Sections in pipeline order, then stage order: "Engineering › QA". */
-export function flowGroups(items: readonly FlowItem[], pipelines: readonly Pipeline[]): FlowGroup[] {
-  const out = new Map<string, FlowGroup>();
-  const rank = (it: FlowItem) => {
-    const pi = pipelines.findIndex((p) => p.id === it.pipeline_id);
-    const si = pi < 0 ? -1 : (pipelines[pi]?.stages.findIndex((s) => s.id === it.stage_id) ?? -1);
-    return (pi < 0 ? 999 : pi) * 1000 + (si < 0 ? 999 : si);
-  };
-  for (const it of [...items].sort((a, b) => rank(a) - rank(b))) {
-    const key = `${it.pipeline_id}:${it.stage_id}`;
+export function useFlowGroups(items: readonly FlowItem[], pages: readonly (readonly Pick<FlowItem, 'entity_id'>[])[] = [items]) {
+  const seen = new Set<string>();
+  const batches: string[][] = [];
+  for (const page of pages) {
+    const ids = [];
+    for (const { entity_id: id } of page) {
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      ids.push(id);
+    }
+    // Mine collects all Needs you pages before deduplicating tasks.
+    ids.sort();
+    for (let start = 0; start < ids.length; start += FLOW_PAGE) batches.push(ids.slice(start, start + FLOW_PAGE));
+  }
+  const reads = useQueries({ queries: batches.map((ids) => queryOptions({
+    queryKey: ['contacts', 'names', ids] as const,
+    queryFn: ({ signal }) => api.post<ContactsNamesResult>('/api/v2/entities/names', { ids }, { signal }),
+    staleTime: 0,
+    gcTime: 0,
+    refetchInterval: STATUS_BACKSTOP_MS,
+    refetchOnWindowFocus: true,
+  })) });
+  const names = new Map(reads.flatMap((read) => read.isSuccess && !read.isFetching ? Object.entries(read.data.names) : []));
+  const out = new Map<string, { key: string; name: string; items: FlowItem[] }>();
+  for (const it of items) {
+    const id = it.entity_id ?? '';
+    const name = names.get(id);
+    const key = name ? id : '';
     let g = out.get(key);
     if (!g) {
-      const p = pipelines.find((x) => x.id === it.pipeline_id);
-      const s = p?.stages.find((x) => x.id === it.stage_id) ?? (p?.done?.id === it.stage_id ? p?.done : null);
-      g = { key, pipe: p?.name ?? 'Tasks', stage: s?.name ?? 'Open', items: [] };
+      g = { key, name: name || 'Other', items: [] };
       out.set(key, g);
     }
     g.items.push(it);
   }
   return [...out.values()];
 }
+
+export function flowTask(t: TaskItem): FlowItem {
+  return {
+    id: t.id,
+    number: t.number ?? null,
+    title: t.title,
+    pipeline_id: t.pipeline_id,
+    stage_id: t.stage_id,
+    owner_id: t.owner_id,
+    late: !!t.late,
+    stuck: !!t.stuck,
+    since: t.stage_since ?? t.updated_at,
+    blocks: t.blocks,
+    entity_id: t.entity_id,
+    reason: t.turn?.line,
+  };
+}
+
+/** Mine's history is the person's tasks. All uses the same scope on each shelf as on its open list. */
+export const flowListParams = (owner: string | undefined, shelf: 'open' | 'snoozed' | 'done'): Record<string, string | number> => ({
+  ...(owner === undefined ? { claimable: 'true' } : { owner, exact: 'true' }),
+  status: shelf === 'done' ? 'done' : 'open',
+  ...(shelf === 'snoozed' && { snoozed: 'only' }),
+  ...(shelf === 'done' && { sort: 'finished' }),
+  limit: FLOW_PAGE,
+  brief: 'true',
+});
+
+export const flowListQuery = (params: ReturnType<typeof flowListParams>) => infiniteQueryOptions({
+  // The list patcher refetches Flow's loaded pages for relevant task events.
+  queryKey: ['tasks', 'flow', params] as const,
+  initialPageParam: null as string | null,
+  queryFn: ({ pageParam, signal }) =>
+    api.get<TaskPage>(`/api/v2/tasks?${query(pageParam ? { ...params, after: pageParam } : params)}`, { signal }),
+  getNextPageParam: (page) => page.next_after ?? undefined,
+  staleTime: STATUS_BACKSTOP_MS,
+  refetchInterval: STATUS_BACKSTOP_MS,
+});
+
+const flowCountStatusQuery = queryOptions({
+  queryKey: ['flow', 'count'] as const,
+  queryFn: async ({ signal }) => {
+    const read = await api.get<{ flow_count: number; snooze_refresh_in_ms?: number | null }>('/api/v2/needs-you?count=true', { signal });
+    return {
+      count: read.flow_count,
+      wakeAt: read.snooze_refresh_in_ms == null ? null : performance.now() + read.snooze_refresh_in_ms,
+    };
+  },
+});
+
+export const flowCountQuery = queryOptions({
+  ...flowCountStatusQuery,
+  select: ({ count }) => count,
+});
+
+/** One timer for the shared count and the corresponding Needs you lists. */
+export function useFlowCountRefresh(enabled: boolean) {
+  const { data, dataUpdatedAt } = useQuery({ ...flowCountStatusQuery, enabled });
+  const wakeAt = data?.wakeAt;
+  useEffect(() => {
+    if (!enabled) return;
+    // Rearm after every server count read, even when it reports the same deadline.
+    const delay = wakeAt == null ? STATUS_BACKSTOP_MS : Math.min(STATUS_BACKSTOP_MS, Math.max(0, wakeAt - performance.now()));
+    let timer: ReturnType<typeof setTimeout>;
+    const refresh = () => {
+      timer = setTimeout(refresh, STATUS_BACKSTOP_MS);
+      void queryClient.invalidateQueries({ queryKey: ['flow'] });
+      void queryClient.invalidateQueries({ queryKey: ['needs'] });
+    };
+    timer = setTimeout(refresh, delay);
+    return () => clearTimeout(timer);
+  }, [enabled, wakeAt, dataUpdatedAt]);
+}
+
+export const flowSnoozedAsksQuery = queryOptions({
+  queryKey: ['flow', 'snoozed'] as const,
+  queryFn: ({ signal }) => api.get<{ items: (NeedsYouItem & { snoozed_until: string })[] }>('/api/v2/needs-you/snoozed', { signal }),
+});
+
+export async function unsnoozeFlowAsk(id: string) {
+  await write({
+    key: flowQuery.queryKey,
+    wait: true,
+    optimistic: (current: Flow | undefined) => current,
+    send: (idempotencyKey) => api.post('/api/v2/needs-you/unsnooze', { id }, { idempotencyKey }),
+  });
+  void queryClient.invalidateQueries({ queryKey: ['needs'] });
+}
+
+export const flowOriginQuery = (id: string) => queryOptions({
+  queryKey: ['flow', 'origin', id] as const,
+  queryFn: ({ signal }) => api.get<Origin>(`/api/v2/origins/${encodeURIComponent(id)}`, { signal }),
+});
 
 /** An access request, key card or key-drop proposal that waits on the person (Needs you `access`, `key`, `key_drop`):
     no task holds it, so Flow draws its card above the tasks and it is answered there. */
@@ -712,10 +819,8 @@ export interface Flow {
   asks?: { id: string; kind: 'question' | 'ask'; by: string; pipeline: string | null; href: string | null }[];
 }
 
-type NeedsRow = Awaited<ReturnType<typeof needsYouItems>>[number];
-
 /** One Needs-you row on a task, as Flow lists it. */
-const flowItemOf = (it: NeedsRow, t: NonNullable<NeedsRow['task']>): FlowItem => ({
+const flowItemOf = (it: NeedsYouItem, t: NonNullable<NeedsYouItem['task']>): FlowItem => ({
   id: t.id,
   number: t.number,
   title: t.title,
@@ -726,6 +831,8 @@ const flowItemOf = (it: NeedsRow, t: NonNullable<NeedsRow['task']>): FlowItem =>
   stuck: !!t.stuck,
   since: it.since ?? t.stage_since ?? new Date().toISOString(),
   blocks: t.blocks,
+  entity_id: t.entity_id,
+  reason: it.line || t.turn?.line,
   ...(it.ask && { ask: { kind: it.ask.kind, by: it.ask.asked_by ?? null, shows: it.ask.shows ?? [], line: it.line, requirement: it.ask.requirement_id } }),
   ...(it.about && { about: it.about }),
   // Paid shots to reconcile (backend/paid_renders.py): no ask to show, so the row says so beside the task's title.
@@ -744,7 +851,8 @@ export const flowQuery = queryOptions({
     const approvals = new Map<string, ApprovalItem>();
     const requests: FlowRequest[] = [];
     const asks: NonNullable<Flow['asks']> = [];
-    for (const it of await needsYouItems()) {
+    const needs = await needsYouItems();
+    for (const it of needs) {
       // whose it is, as the server's needs_actor reads it (backend/views.py): a ❓'s agent; an ask's asker, else, for an OK
       // the stage asks for, the task's owner, then who asked for the task, whichever is an agent
       const task = it.task as (typeof it.task & { requester_id?: string | null }) | undefined;

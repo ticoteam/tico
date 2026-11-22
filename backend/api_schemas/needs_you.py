@@ -147,7 +147,14 @@ SCHEMAS.update(
                         "then (POST /api/v2/needs-you/snooze)",
                     },
                 ),
-                obj({"actor": "s", "count": "i"}),
+                obj(
+                    {"actor": "s", "count": "i"},
+                    flow_count={"type": "integer", "description": "Distinct task rows plus requests in Flow"},
+                    snooze_refresh_in_ms={
+                        "type": ["integer", "null"],
+                        "description": "Server-calculated milliseconds until the next snoozed ask returns, or null",
+                    },
+                ),
             ]
         },
         "FlowOpinions": obj(
@@ -198,6 +205,7 @@ SCHEMAS.update(
                 "owner_id": "n",
                 "assignee_id": "n",
                 "requester_id": "n",
+                "entity_id": "s",
                 "due_at": "n",
                 "turn": {"oneOf": [ref("TaskWait"), {"type": "null"}]},
                 "late": {"oneOf": [obj({"since": "s", "level": {"enum": ["told", "person"]}}), {"type": "null"}]},
