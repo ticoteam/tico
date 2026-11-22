@@ -809,6 +809,16 @@ def usage_result(c: Any, runner_id: str, sid: str, body: "UsageResult") -> Any:
         schedule.update(
             failures=0, read_at=now, next_at=H.shift(now, seconds=USAGE_EVERY + random.randint(0, USAGE_JITTER))
         )
+        if not superseded and request.get("state") == "requested":  # a new read, not a replayed answer
+            from . import login_holds
+
+            LH: Any = login_holds
+            login: str = LH.subscription_login(sid)
+            held: dict[str, Any] = LH.get(c, "", login, "claude")
+            # Only a read asked after the refusal: one already out says nothing of the plan since.
+            if held and LH.payment(held.get("error")) and request["requested_at"] >= (held.get("since") or ""):
+                # The plan answers again (it was paid): its next turn tries it now rather than at the next wait's end.
+                LH.try_now(c, "", login, "claude", now)
     else:
         failures = (schedule.get("failures") or 0) + 1
         wait = _backoff(failures)

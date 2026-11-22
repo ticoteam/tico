@@ -25,6 +25,11 @@ SCHEMAS['ModelSubscription'] = obj(
         'status': {'enum': ['new', 'working', 'needs_reconnect']},
         'status_detail': 's',
         'status_at': 'n',
+        'problem': {
+            'type': 'string',
+            'description': 'What a person must fix on a plan that still counts, in a few words ("Payment past due"), '
+            'else empty',
+        },
         'preview': 's',
         'revision': 'i',
         'computers': items({'type': 'string'}),

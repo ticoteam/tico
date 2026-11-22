@@ -61,12 +61,14 @@ CLASS_WORDS = {
 
 
 def is_limit(text, now=None):
-    """Whether an error's text says the provider's usage limit was hit, however the rest of it is worded. A model at
-    capacity or a Tico Gateway code is not (login_holds.capacity, clients/gateway.py): they have their own waits."""
+    """Whether an error's text says the provider's usage limit was hit, however the rest of it is worded, or that it
+    refused the plan for its billing (login_holds.payment): both are the login's, held there for every bot on it. A
+    model at capacity or a Tico Gateway code is not (login_holds.capacity, clients/gateway.py): they have their own
+    waits."""
     text = str(text or "")
     if not text or gateway.run_code(text) or login_holds.capacity(text):
         return False
-    return bool(LIMIT_RE.search(text) or login_holds.reset_from_text(text, now or H.now()))
+    return bool(LIMIT_RE.search(text) or login_holds.payment(text) or login_holds.reset_from_text(text, now or H.now()))
 
 
 def error_class(text):

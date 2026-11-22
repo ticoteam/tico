@@ -185,7 +185,7 @@ function KeyDialog({ kind, label, onClose }: { kind: string; label: string; onCl
 
 const usedWords = (s: Subscription) => {
   const u = s.usage;
-  if (s.status === 'needs_reconnect') return null;
+  if (s.status === 'needs_reconnect' || s.problem) return null;
   if (u?.used_pct != null) return `${Math.round(u.used_pct)}% of the ${u.window === 'week' ? 'week' : '5 hours'}`;
   if (u?.cost_usd_month != null) return `${usd(u.cost_usd_month)} this month`;
   return null;
@@ -236,12 +236,13 @@ function SubRow({ s, open, owned }: { s: Subscription; open: boolean; owned: boo
   const words = usedWords(s);
   const agents = s.agents ?? [];
   const out = s.status === 'needs_reconnect';
+  const fix = out ? 'Sign in again' : s.problem;
   const row = (
     <Link
       to="/settings/$section"
       params={{ section: 'agents' }}
       search={open ? {} : { open: s.id }}
-      className={out ? 'row g-fsub is-bad' : 'row g-fsub'}
+      className={fix ? 'row g-fsub is-bad' : 'row g-fsub'}
       data-target={`subscription:${s.id}`}
       aria-expanded={open}
       title={s.name}
@@ -254,9 +255,9 @@ function SubRow({ s, open, owned }: { s: Subscription; open: boolean; owned: boo
         {s.in_use_on.length ? `${s.in_use_on.length} ${s.in_use_on.length === 1 ? 'computer' : 'computers'}` : 'Not in use'}
       </span>
       <span className="fs-n">{agents.length > 0 ? `${agents.length} ${agents.length === 1 ? 'agent' : 'agents'}` : ''}</span>
-      {out ? (
+      {fix ? (
         <span className="fs-use is-out">
-          <Word>Sign in again</Word>
+          <Word>{fix}</Word>
         </span>
       ) : (
         <span className={words ? 'fs-use' : 'fs-use is-none'}>
@@ -325,9 +326,10 @@ type Adding = { sign: 'claude_login' | 'codex_login' } | { key: string; label: s
 // A plan's kind, as its chip names it; anything else is a key.
 const PLAN: Partial<Record<Subscription['kind'], string>> = { claude_login: 'Claude', claude_token: 'Claude', codex_login: 'ChatGPT' };
 
-/** Folded, the section is one line: the fix for an expired sign-in, a quiet chip for each kind, then Add. */
+/** Folded, the section is one line: the fix for an expired sign-in or a plan past due, a quiet chip for each kind, then
+    Add. */
 function Chips({ list }: { list: Subscription[] }) {
-  const bad = list.find((s) => s.status === 'needs_reconnect');
+  const bad = list.find((s) => s.status === 'needs_reconnect') ?? list.find((s) => s.problem);
   const kinds = [...new Set(list.flatMap((s) => (PLAN[s.kind] && s !== bad ? [PLAN[s.kind] as string] : [])))];
   const keys = list.filter((s) => !PLAN[s.kind]).length;
   const chip = (label: string, n = 1) => (
@@ -342,7 +344,7 @@ function Chips({ list }: { list: Subscription[] }) {
         <span className="fs-bad">
           <span className="pill pill-flag fs-chip" title={bad.label}>
             <Icon name="alert" />
-            {`${bad.name} expired`}
+            {bad.status === 'needs_reconnect' ? `${bad.name} expired` : `${bad.name}: ${bad.problem}`}
           </span>
         </span>
       )}

@@ -1126,6 +1126,50 @@ def _plan_usage(c, sub, runtime, ctx):
     return _reason("Waiting for a computer to report")
 
 
+def payment_item(c, sid):
+    """The one Needs-you task for the person who holds a plan the provider refused for its billing (its owner, else who
+    added it), and its id; None when nobody can be asked. The plan's login hold keeps it and closes it once a turn works
+    on the plan again (login_holds.clear)."""
+    from . import login_holds, person_asks
+
+    sub = row(c, sid)
+    if not sub:
+        return None
+    person = sub.get("owner_id") or sub["added_by"]
+    if not person or not person_asks.is_human(person):
+        return None
+    plan = f"{(KINDS.get(sub['kind']) or {}).get('runtime', '').capitalize()} plan {sub['name']}".strip()
+    body = (
+        f"The provider refused the {plan}: payment past due. Every agent on it waits.\n\n"
+        f"Pay or renew at {login_holds.BILLING_URL}. Tico tries the plan again every "
+        f"{login_holds.PAYMENT_WAIT // 60} minutes and lets the agents go once it works."
+    )
+    try:
+        return person_asks.task_for(
+            c,
+            H.TICO_ACTOR,
+            f"Pay for the {plan}",
+            body,
+            person,
+            question=f"Can you pay for the {plan}?",
+            why=person_asks.first_sentence(body),
+            asker=person_asks.agent_ops(),
+            deduplicate=False,  # one per plan already: its login hold keeps the item it filed
+        )["id"]
+    except H.Refused:
+        return None
+
+
+def problem(c, sub):
+    """What a person must fix on a plan that still counts, in a few words, or "": a payment past due, while the
+    provider's refusal holds its login (login_holds.payment)."""
+    from . import login_holds
+
+    runtime = (KINDS.get(sub["kind"]) or {}).get("runtime", "")
+    hold = login_holds.get(c, "", login_holds.subscription_login(sub["id"]), runtime) if runtime else {}
+    return "Payment past due" if hold and login_holds.payment(hold.get("error")) else ""
+
+
 def view(c, sub, ctx=None):
     """A subscription as Settings > Models lists it: no value, a preview, its status, the computers given it."""
     from . import claude_login, subscription_refresh as SR
@@ -1144,6 +1188,7 @@ def view(c, sub, ctx=None):
         "status": sub["status"],
         "status_detail": sub["status_detail"],
         "status_at": sub["status_at"],
+        "problem": problem(c, sub),
         "preview": sub["preview"],
         "revision": sub["revision"],
         "computers": list(dict.fromkeys(computers)),
@@ -1797,7 +1842,12 @@ def remove(c, settings, who, sid, confirm=False):
         done = _restart(c, settings, runner_id, runtime)
         stopped, reset = stopped + done["stopped"], reset + done["sessions_reset"]
     c.execute("DELETE FROM model_subscriptions WHERE id=?", (sid,))
-    from . import claude_login
+    from . import claude_login, login_holds
+
+    runtime = (KINDS.get(sub["kind"]) or {}).get("runtime", "")
+    if runtime and login_holds.get(c, "", login_holds.subscription_login(sid), runtime):
+        # Its hold goes with it, and a payment item it filed closes: nothing can run on it to clear them.
+        login_holds.clear(c, "", login_holds.subscription_login(sid), runtime, how="moot", note="The plan was removed.")
 
     claude_login.drop(c, sid)
     if sub["credential_id"]:

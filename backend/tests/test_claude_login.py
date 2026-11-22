@@ -663,3 +663,25 @@ def test_the_plans_next_in_line_are_read_once_per_poll_and_are_the_ones_each_pla
         shared = CL._Line(c)
         assert {sid for sid in plans if sid in shared} == expected
     assert picks == ["claude"]
+
+
+def test_a_usage_read_that_works_tries_a_plan_past_due_at_once(api):
+    """A plan the provider refused for its billing answers a usage read again once it is paid: its next turn tries it
+    now (login_holds.try_now) rather than at the end of its wait."""
+    from backend import login_holds
+    from backend.tests.helpers.login_holds import PAST_DUE
+
+    setup(api)
+    company(api)
+    sid = add(api, "claude_login", full(), name=None)["id"]
+    m = computer(api)
+    give(api, m, "claude", sid)
+    login = login_holds.subscription_login(sid)
+    with api.app.state.store.transaction() as c:
+        login_holds.record(c, "", login, "claude", H.now(), error=PAST_DUE)
+    [job] = poll(api, m)["usage"]
+    read = {"id": job["id"], "state": "succeeded", "seven_day": {"used_percent": 40, "resets_at": at(days=3)}}
+    post(api, f"runner-claude-logins/{sid}/usage", read, m["token"])
+    with api.app.state.store.read() as c:
+        hold = login_holds.get(c, "", login, "claude")
+        assert hold and hold["until"] <= H.now() and hold["cut"] > H.now()

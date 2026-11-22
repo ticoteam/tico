@@ -49,6 +49,9 @@ LIVE_JOB = ("leased", "running")
 CAPACITY_WAIT = 120  # seconds held after a temporary model-capacity refusal
 CAPACITY_KIND = "temporary model capacity"
 REFUSED_KIND = "refused the request"
+PAYMENT_KIND = "payment past due"
+PAYMENT_WAIT = 600  # seconds between tries of a plan the provider refused for its billing: back soon after it is paid
+BILLING_URL = "https://claude.ai/settings/billing"
 
 # A provider out of capacity for the moment (runner-rs/src/hosts/mod.rs capacity_re): "Selected model is at capacity.
 # Please try a different model.", "overloaded_error", HTTP 503, "rate limited, try again in 20s". Quota or billing words
@@ -78,6 +81,17 @@ _RESET_RE = re.compile(
 )
 # An API's own words with a timestamp: "Your usage window resets at 2026-10-19T00:00:00Z".
 _WINDOW_RE = re.compile(r"usage window resets at (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)", re.I)
+
+
+# A plan the provider refuses for its billing, not its usage: Claude Code's "Claude Code can't use your Claude
+# subscription, usually because a payment is past due · Pay or renew at https://claude.ai/settings/billing". Every turn
+# on that login fails the same way until someone pays, whichever bot runs it, so it holds the login, never the bot.
+_PAYMENT_RE = re.compile(r"can.?t use your claude subscription|payment is past due", re.I)
+
+
+def payment(notice):
+    """Whether a notice says the provider refused the plan for its billing (a payment past due)."""
+    return bool(_PAYMENT_RE.search(str(notice or "")))
 
 
 # A provider turning the request down: the turn may carry the login's limit, but this line is what stopped it.
@@ -301,6 +315,9 @@ def record(
     `until`: the end the caller worked out itself (the Gateway's waits, `gateway_until`), in place of a reset or the
     backoff; `named` when that end is one the provider gave, as a reset is."""
     old = get(c, runner_id, profile, runtime)
+    if payment(error) and until is None:
+        # Not the usage backoff: the plan works again the moment it is paid, so it is tried again soon.
+        until = H.shift(hit, seconds=PAYMENT_WAIT)
     busy = capacity(error) and until is None
     if busy:
         reset = H.shift(hit, seconds=CAPACITY_WAIT)
@@ -353,15 +370,23 @@ def record(
     }
     if old.get("cut") and keep:
         hold["cut"] = old["cut"]
+    if old.get("item"):
+        hold["item"] = old["item"]  # the plan owner's one Needs-you item (model_subscriptions.payment_refused)
     _save(c, hold)
     return hold
 
 
-def clear(c, runner_id, profile, runtime):
-    """A turn worked on the login: it is no longer held (kept as history)."""
-    holds.release(
-        c, holds.LOGIN_LIMIT, "login", _login(runner_id, profile, runtime), actor=H.TICO_ACTOR, how="probe_passed"
-    )
+def clear(
+    c, runner_id, profile, runtime, how="probe_passed", note="The plan works again, so Tico released the agents on it."
+):
+    """A turn worked on the login: it is no longer held (kept as history). A plan refused for its billing closes its
+    owner's Needs-you item with `note`."""
+    item = get(c, runner_id, profile, runtime).get("item")
+    holds.release(c, holds.LOGIN_LIMIT, "login", _login(runner_id, profile, runtime), actor=H.TICO_ACTOR, how=how)
+    if item:
+        from . import bot_stops
+
+        bot_stops.close_item(c, item, note)
 
 
 def try_now(c, runner_id, profile, runtime, now=None):
@@ -527,6 +552,9 @@ def turn_steps(c, attempt_id, runtime, result):
         steps[0][2] = True
     if limited:
         steps[-1][2] = True
+        said = str(field(result, "text") or "")
+        if not steps[-1][1] and payment(said):
+            steps[-1][1] = said  # a runner that named the billing refusal only in the turn's summary
     return steps
 
 
@@ -564,6 +592,8 @@ def window(notice):
     """Which kind of limit a notice is: an API key's quota or billing refusal, or the plan's usage window."""
     from .execution import BILLING_LIMIT_RE
 
+    if payment(notice):
+        return PAYMENT_KIND
     if gateway.out_of_credit(notice):
         return "Tico models paused, out of credit"
     if gateway.rate_limited(notice):
@@ -659,6 +689,8 @@ def failure_line(result):
     what = (
         "model capacity"
         if kind == CAPACITY_KIND
+        else PAYMENT_KIND
+        if kind == PAYMENT_KIND
         else "quota"
         if src.get("billing")
         else "request refused"
@@ -674,6 +706,23 @@ def failure_line(result):
     if src.get("model"):
         parts.append(f"model {src['model']}")
     return f"failed: {what} ({', '.join(parts)})"
+
+
+def payment_words(c, src, retry=""):
+    """The status line of a bot whose plan the provider refused for its billing, naming the plan: "The Claude plan
+    ana@acme.example can't be used: payment past due. Pay or renew at https://claude.ai/settings/billing. Retrying at
+    20:15 UTC." """
+    profile = str(src.get("profile") or "")
+    runtime = str(src.get("runtime") or "")
+    name = ""
+    if profile.startswith(SUBSCRIPTION):
+        found = c.execute("SELECT name FROM model_subscriptions WHERE id=?", (profile[len(SUBSCRIPTION) :],)).fetchone()
+        name = found[0] if found else ""
+    plan = (
+        f"The {runtime.capitalize()} plan {name}".rstrip() if name else f"This computer's {runtime.capitalize()} login"
+    )
+    again = f" Retrying at {retry[11:16]} UTC." if len(retry) >= 16 else ""
+    return f"{plan} can't be used: payment past due. Pay or renew at {BILLING_URL}.{again}"
 
 
 def label(src, at="", primary_until=""):
@@ -740,12 +789,14 @@ def after_turn(
     hop_profile = body.profile_used if body.fallback and body.profile_used is not None else profile
     claimed = (c.execute("SELECT created_at FROM attempts WHERE id=?", (attempt_id,)).fetchone() or [""])[0] or ""
     kept = {}
-    from .model_subscriptions import handed
+    from .model_subscriptions import handed, row
 
     for n, (rt, notice, limited) in enumerate(steps):
         # A step signed in with a company subscription met its limit (or worked) on that subscription, wherever it
         # runs; any other step on the computer's own login.
         given = handed(c, attempt_id, rt)
+        if given and not row(c, given["subscription_id"]):
+            continue  # a plan removed while the turn ran: its hold went with it (model_subscriptions.remove)
         last = n == len(steps) - 1
         on_gateway = gateway_notice(notice) or (n == 0 and primary_gateway) or (last and ended_gateway)
         if subscriptions_only and not given and not on_gateway:
@@ -772,6 +823,14 @@ def after_turn(
             else:
                 reset = reset_from_text(notice, hit) or (body.limit_resets_at if last else None)
                 hold = record(c, runner_id, login, rt, hit, reset, attempt_id, bot, error=notice or "")
+                if given and payment(notice) and not hold.get("item"):
+                    # A plan refused for its billing: its owner gets one Needs-you item, however many bots wait on it.
+                    from .model_subscriptions import payment_item
+
+                    item = payment_item(c, given["subscription_id"])
+                    if item:
+                        hold = {**hold, "item": item}
+                        _save(c, hold)
             if last:
                 # The login the turn ended on: the one its bot waits for (for_attempt), when a turn held two.
                 hold = {**hold, "ended": True}
