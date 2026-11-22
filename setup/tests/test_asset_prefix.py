@@ -297,6 +297,8 @@ def test_a_hub_plan_names_the_backup_user_from_name_as_setup_creates_it():
     )
     assert code == 0, out
     assert "IAM user hub-backup-acme allowed" in out and "hub-backup-tico-example-com allowed" not in out
+    # A new install's bucket ends in the id it gets on the real run, not in the account id.
+    assert "S3 bucket hub-backup-tico-example-com-<install id> in" in out and "<account>" not in out
 
 
 def test_hub_backup_storage_takes_name_and_otherwise_the_saved_one(monkeypatch):

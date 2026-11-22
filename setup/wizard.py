@@ -658,7 +658,8 @@ def plan_lines(s: Settings, zone: dnsmod.Zone | None, records: list[dnsmod.Recor
     if s.backup == "aws":
         add("Backups: create the backup storage on AWS")
         if owned.strict(s.asset_prefix):
-            names = awsmod.Names(s.asset_prefix, s.install_id)
+            # A dry run of a new install has no id yet; its bucket name ends in the one the real run makes.
+            names = awsmod.Names(s.asset_prefix, s.install_id or "<install id>")
             L += [
                 f"       - {x}"
                 for x in bk.aws_plan_lines(
