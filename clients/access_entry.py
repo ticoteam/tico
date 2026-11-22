@@ -289,7 +289,9 @@ def clean(entry):
         raise EntryError("service is a short name such as posthog or google-calendar (lowercase, digits, - and _)")
     can = entry.get("can")
     can = [can] if isinstance(can, str) else can
-    if not isinstance(can, list) or not can:
+    if service == "slack" and can in (None, []):
+        can = []  # a Slack entry may leave `can` out: it reads and posts (backend/slack_bots.py need)
+    elif not isinstance(can, list) or not can:
         raise EntryError("can lists what the bot may do, at least one verb: read, draft, post, act, use, send, write")
     verbs = []
     for verb in can[: MAX_CAN + 1]:
@@ -356,7 +358,8 @@ def clean(entry):
         result["identity"] = identity
     if entry.get("mcp") not in (None, {}, ""):
         result["mcp"] = clean_mcp(entry["mcp"], env)
-    result["can"] = verbs
+    if verbs or service != "slack":
+        result["can"] = verbs
     result.update(kept)
     if env:
         result["env"] = env

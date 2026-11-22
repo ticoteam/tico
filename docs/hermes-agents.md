@@ -237,8 +237,9 @@ write it.
 
 A Tools request goes to the external bot as a task. Configure the service in that Hermes profile's `config.yaml`,
 or the OpenClaw profile's tool or skill, then report its complete current declarations with `tico_tool_report`
-(`tico tool report '<JSON array>'` from the CLI). Each entry names the service, capabilities and scope; never include
-credential values. An empty list reports that all declarations were removed. Tico shows these declarations and the
+(`tico tool report '<JSON array>'` from the CLI). Each entry names the service, its `can` verbs and scope, and still lists
+`can` even for Slack, which a runner's bot.yaml may leave out (it then reads and posts); never include credential values.
+An empty list reports that all declarations were removed. Tico shows these declarations and the
 profile's heartbeat separately; a declaration alone does not prove that the service works.
 
 `tico agent pair show <code>` previews a pending pairing without replacing any credential. The Pair dialog shows the

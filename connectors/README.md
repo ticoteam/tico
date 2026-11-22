@@ -90,7 +90,7 @@ all, and which mailbox it may act as, is the `access:` block in its own `employe
     # the Slack channel list
     $HUB/connectors/slack.py channels
 
-    # post (only with `post` in your Slack tools entry, to a listed channel with posting on)
+    # post (only on a Slack tools entry with no `can` or with `post` in it, to a listed channel with posting on)
     $HUB/connectors/slack.py post --channel '#agents' --text 'Shipped 3 doc updates.'
     printf '%s\n' "$BODY" | $HUB/connectors/slack.py post --channel '#marketing' --text -
 
@@ -101,6 +101,9 @@ A refusal is an answer, not an obstacle. If Tico says the channel is not on the 
 employee lacks `post` access, or the channel is externally shared, do not work around it: put the
 draft on the task and, if it really needs to change, ask the owner.
 
+A Slack entry with no `can` reads, posts and DMs; write `can: [read]` to keep an agent read-only. Posting also
+needs the channel on the list with posting on.
+
 Every post is a message in the bot's room in Tico, and Tico records what was sent.
 
 ## DMs
@@ -110,7 +113,7 @@ to the bot it is for, which wakes and answers in the same thread (`docs/slack-ga
 
 **What a bot may do.** DM one person on the company's roster who may sign in to Tico and has a Slack account Tico
 knows. The DM is the bot's message to that person in Tico, which the gateway copies into their Slack DM unless they
-keep bot messages in Tico. It needs `post` in the bot's Slack tools entry and is at most 3,800 characters.
+keep bot messages in Tico. It needs the bot's Slack tools entry to allow posting (no `can`, or `post` in it) and is at most 3,800 characters.
 
 ```bash
 $HUB/connectors/slack.py dm --to cara@acme.example --text 'Pricing doc is live.'

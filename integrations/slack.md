@@ -9,7 +9,7 @@ credentials:
 declared_as: |
   - service: slack
     identity: the company workspace
-    can: [read]                     # add `post` to write to channels and DM people
+    can: [read]                     # leave `can` out to read, post and DM; `[read]` keeps the bot read-only
     channels: [marketing]           # optional: read these too, on top of the channels that list this bot as a reader
     dms: false                      # optional: no files from DMs
 writes: allowed
@@ -60,20 +60,21 @@ The bot is the one the run's `HUB_TOKEN` belongs to; `--as` is accepted and igno
 
 Tico checks each of these, not the connector:
 
-- Reading needs `service: slack` with `read` in `tools:`. `history` reads the channels on that entry's `channels:`
+- Reading needs a `service: slack` entry in `tools:` with no `can` or with `read` in it; write `can: [read]` to keep an
+  agent read-only. `history` reads the channels on that entry's `channels:`
   list and any channel whose list entry names the bot as a reader. Screening runs on what comes back: a warning
   line heads it, and a likely prompt injection is held.
 - A file someone shared shows as a `[file F...] name` line in `history` and a message routed from Slack.
   `file --id` downloads it under the same read rules: a channel the bot may read, or a DM unless `dms: false`. It
   needs the app's `files:read` scope; without it Slack sends its sign-in page, and `file` says so. By default the
   file goes to a private folder of the bot's own user under the temp folder, never into the repository.
-- Posting needs `post` in `can`, a bot past onboarding, and the channel on the Slack channel list
+- Posting needs the entry with no `can` or with `post` in `can`, a bot past onboarding, and the channel on the Slack channel list
   (Settings > Tools > Slack) with posting on, as it is unless an owner or admin turned it off. Slack Connect
   channels are refused: posting there is an outbound send. Text over 3,800 characters is refused (what Slack gets whole, with the bot's footer). The org's rules
   check the text; a held post is sent only when a person chooses Send anyway.
 - A post shows in the bot's room in Tico too, and in Slack with `(sent from <bot>)`.
-- A DM goes to one person on the company's roster who may sign in to Tico and has a Slack account Tico knows. It
-  is the bot's message to them in Tico, which the gateway copies into their Slack DM, unless they keep bot messages
+- A DM needs the same entry as a post and goes to one person on the company's roster who may sign in to Tico and has
+  a Slack account Tico knows. It is the bot's message to them in Tico, which the gateway copies into their Slack DM, unless they keep bot messages
   in Tico; the same reach rules as any bot message apply.
 - DMs people send the bot reach it as messages through the gateway; there is no inbox to poll.
 - Nothing from a mailbox goes into Slack. A refusal is an answer: put the draft on the task and,
