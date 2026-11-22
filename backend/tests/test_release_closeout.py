@@ -1,5 +1,5 @@
 """Release close-out of a task filed for a Jira issue (backend/release_closeout.py): its merge proven in an actual
-release tag queues the Jira transition to Done, one release comment and a reply in the task's Slack thread, each once;
+release tag queues the Jira transition to Done and one release comment, each once (no Slack reply yet);
 a Jira issue withdrawn mid-work or closed outside Tico freezes the close-out behind ONE owner ask, taken back when the
 issue is back in Ready; an external outbound action whose outcome stays unknown asks its owner once
 (backend/owner_asks.py). GitHub is backend/tests/helpers/fake_github.py and Jira a fake answer at the pass's sender;
@@ -14,7 +14,6 @@ from backend import outbound_actions as OA
 from backend import task_calls as TC
 from backend import task_engine as E
 from backend import release_closeout as RC
-from backend import slack_bots as SB
 from backend.item_sources import claim
 from backend.item_sources import github as F
 from backend.item_sources import jira as JS
@@ -26,7 +25,6 @@ from backend.tests.helpers.release_cut import REPO, engineering, new, seen, stag
 HOST = "acme.atlassian.net"
 TOOL = "tool-jira-acme"
 ISSUE = "HM-12"
-THREAD = "https://acme.slack.com/archives/C0BUGS123/p1763700000123456?thread_ts=1763700000.000100&cid=C0BUGS123"
 
 
 @pytest.fixture
@@ -39,8 +37,7 @@ def gh():
 
 @pytest.fixture
 def jira(company, monkeypatch):
-    """A Jira site that is a record integration with a shared read and write key, the #bugs channel on the Slack
-    list with posting on, and every bot declaring Slack post access. `jira.status` is what the pass reads next."""
+    """A Jira site that is a record integration with a shared read and write key. `jira.read` runs one Jira pass."""
     now = H.now()
     with company.transaction() as c:
         c.execute(
@@ -53,12 +50,6 @@ def jira(company, monkeypatch):
             "access_level) VALUES ('cred-jira', 'Jira key', 'api_key', X'00', ?, ?, 'human:ana', ?, 'read_write')",
             (now, now, TOOL),
         )
-        c.execute(
-            "INSERT INTO slack_channels (key, channel_id, name, post, created_at, updated_at) "
-            "VALUES ('bugs', 'C0BUGS123', 'bugs', 1, ?, ?)",
-            (now, now),
-        )
-    monkeypatch.setattr(SB, "slack_entry", lambda c, settings, bot: {"service": "slack", "can": ["read", "post"]})
 
     class Jira:
         status = ("Ready", "new")
@@ -88,16 +79,12 @@ def jira(company, monkeypatch):
     return Jira()
 
 
-def filed(c, task_id, slack=True, private=False, ready="Ready"):
-    """The task's primary link to HM-12 filed in `ready` (as find-or-create makes it with `primary_status`), and its
-    originating Slack thread."""
-    H.task_link(c, "human:ana", task_id, f"https://{HOST}/browse/{ISSUE}", item=("jira", "issue", ISSUE, TOOL))
-    claim(c, task_id, ("jira", "issue", ISSUE, TOOL))
+def filed(c, task_id, ready="Ready", issue=ISSUE):
+    """The task's primary link to `issue` filed in `ready` (as find-or-create makes it with `primary_status`)."""
+    H.task_link(c, "human:ana", task_id, f"https://{HOST}/browse/{issue}", item=("jira", "issue", issue, TOOL))
+    claim(c, task_id, ("jira", "issue", issue, TOOL))
     if ready:
         RC.remember_ready(c, task_id, ready)
-    if slack:
-        H.task_link(c, "human:ana", task_id, THREAD)
-    c.execute("UPDATE tasks SET private=? WHERE id=?", (int(private), task_id))
 
 
 def actions(c, task_id):
@@ -105,10 +92,6 @@ def actions(c, task_id):
         str(r["operation"]): dict(r)
         for r in c.execute("SELECT * FROM outbound_actions WHERE task_id=? ORDER BY created_at", (task_id,))
     }
-
-
-def replies(c):
-    return [dict(r) for r in c.execute("SELECT * FROM slack_posts ORDER BY created_at")]
 
 
 def asks(c, task_id):
@@ -135,7 +118,7 @@ def released(company, gh, tag="v1.0.0", minutes=20):
     F.refresh(company, gh, H.shift(H.now(), minutes=minutes))
 
 
-def test_a_release_queues_the_jira_done_comment_and_slack_reply_once(company, gh, jira):
+def test_a_release_queues_the_jira_done_and_comment_once(company, gh, jira):
     task_id = to_release(company, gh)
     with company.transaction() as c:
         filed(c, task_id)
@@ -148,44 +131,36 @@ def test_a_release_queues_the_jira_done_comment_and_slack_reply_once(company, gh
         assert json.loads(found["transition"]["payload"])["to"] == "Done" and found["transition"]["state"] == "queued"
         link = f"https://github.com/{REPO}/releases/tag/v1.0.0"
         assert f"Released in v1.0.0: {link}" in found["comment"]["payload"]
-        [reply] = replies(c)
-        assert (reply["channel"], reply["thread_ts"], reply["bot"]) == ("C0BUGS123", "1763700000.000100", "release")
-        assert reply["text"] == f"Released in v1.0.0: {link}"
-        refs = c.execute("SELECT refs FROM messages WHERE id=?", (reply["message_id"],)).fetchone()[0]
-        assert json.loads(refs)["task"] == task_id  # the gateway checks the task's privacy at delivery
-        assert all(
-            json.loads(r["payload"])["closeout"] and json.loads(r["payload"])["ready"] == "Ready"
-            for r in found.values()
-        )
+        frozen = [json.loads(r["payload"]) for r in found.values()]
+        assert all(p["closeout"] and p["ready"] == "Ready" and p["done"] == "Done" for p in frozen)
+        assert c.execute("SELECT COUNT(*) FROM slack_posts").fetchone()[0] == 0  # no Slack reply yet
         # A replay of every trigger adds nothing: the move, the close-out itself, the release read again.
         visit = release_visit(c, task_id)
         assert RC.moved(c, task_id, visit) == 0 and RC.close_out(c, task_id, visit) == 0
     released(company, gh, tag="v1.0.1", minutes=40)
     with company.transaction() as c:
-        assert len(actions(c, task_id)) == 2 and len(replies(c)) == 1
+        assert len(actions(c, task_id)) == 2
 
 
-def test_no_slack_thread_or_a_private_task_no_reply(company, gh, jira):
+def test_a_task_with_two_primary_jira_links_closes_neither_out_and_asks_once(company, gh, jira):
     task_id = to_release(company, gh)
     with company.transaction() as c:
-        filed(c, task_id, slack=False)
+        filed(c, task_id)
+        filed(c, task_id, issue="HM-13")  # as a merge of two tasks filed for Jira issues leaves it
     released(company, gh)
-    other = to_release(company, gh, number=2)
     with company.transaction() as c:
-        filed_on = c.execute("SELECT id FROM task_links WHERE task_id=? AND is_primary=1", (task_id,)).fetchone()
-        c.execute("UPDATE task_links SET is_primary=0, item_key='HM-1' WHERE id=?", (filed_on[0],))
-        filed(c, other, private=True)
-    released(company, gh, tag="v1.1.0", minutes=40)
-    with company.transaction() as c:
-        assert set(actions(c, task_id)) == {"transition", "comment"} and set(actions(c, other)) == {
-            "transition",
-            "comment",
-        }
-        assert replies(c) == []
-        assert "closeout.skipped" in [r[0] for r in c.execute("SELECT action FROM events WHERE target=?", (other,))]
+        assert stage(c, task_id) == "Done" and actions(c, task_id) == {}
+        assert RC.close_out(c, task_id, release_visit(c, task_id)) == 0
+        skipped = [r[0] for r in c.execute("SELECT action FROM events WHERE target=?", (task_id,))]
+        assert skipped.count("closeout.skipped") == 2
+        filed_for = c.execute(
+            "SELECT COUNT(*) FROM requirements WHERE added_by_id=? AND line LIKE 'This task is filed for 2 Jira%'",
+            (H.TICO_ACTOR,),
+        ).fetchone()[0]
+        assert filed_for == 1  # asked once
 
 
-def test_a_failed_transition_neither_blocks_nor_repeats_the_comment_or_reply(company, gh, jira):
+def test_a_failed_transition_neither_blocks_nor_repeats_the_comment(company, gh, jira):
     task_id = to_release(company, gh)
     with company.transaction() as c:
         filed(c, task_id)
@@ -196,7 +171,7 @@ def test_a_failed_transition_neither_blocks_nor_repeats_the_comment_or_reply(com
         assert RC.close_out(c, task_id, release_visit(c, task_id)) == 0
         after = actions(c, task_id)
         assert after["transition"]["state"] == "failed" and after["comment"]["state"] == "queued"
-        assert after["comment"]["id"] == found["comment"]["id"] and len(after) == 2 and len(replies(c)) == 1
+        assert after["comment"]["id"] == found["comment"]["id"] and len(after) == 2
 
 
 def test_only_leaving_release_closes_out(company, gh, jira):
@@ -215,7 +190,7 @@ def test_only_leaving_release_closes_out(company, gh, jira):
         seen(c, gh, 2)
         E.advance(c, task_id)
         assert stage(c, task_id) == "Sign off"  # PR 2 still open
-        assert actions(c, task_id) == {} and replies(c) == []
+        assert actions(c, task_id) == {}
 
 
 def test_withdrawn_mid_work_freezes_the_close_out_behind_one_ask_and_ready_again_resumes_the_same_task(
@@ -230,14 +205,14 @@ def test_withdrawn_mid_work_freezes_the_close_out_behind_one_ask_and_ready_again
     released(company, gh)
     with company.transaction() as c:
         assert stage(c, task_id) == "Release"  # held by the ask
-        assert actions(c, task_id) == {} and replies(c) == []
+        assert actions(c, task_id) == {}
         [(person, line, withdrawn)] = asks(c, task_id)
         assert H.is_human(person) and line.startswith(f"{ISSUE} left Ready in Jira (Backlog)") and not withdrawn
     jira.read("Ready")
     with company.transaction() as c:
         [(_, _, withdrawn)] = asks(c, task_id)
         assert withdrawn and stage(c, task_id) == "Done"
-        assert set(actions(c, task_id)) == {"transition", "comment"} and len(replies(c)) == 1
+        assert set(actions(c, task_id)) == {"transition", "comment"}
         assert c.execute("SELECT COUNT(*) FROM task_links WHERE is_primary=1").fetchone()[0] == 1  # the same task
 
 
@@ -260,7 +235,7 @@ def test_an_ok_never_unfreezes_only_jira_does_even_after_done(company, gh, jira)
         assert actions(c, task_id) == {}
     jira.read("Ready")  # the Done task's issue is still read; back in Ready runs the close-out it missed
     with company.transaction() as c:
-        assert set(actions(c, task_id)) == {"transition", "comment"} and len(replies(c)) == 1
+        assert set(actions(c, task_id)) == {"transition", "comment"}
 
 
 def test_closed_outside_asks_once_per_standing_and_a_reopen_takes_it_back(company, jira):
@@ -286,7 +261,7 @@ def test_closed_outside_asks_once_per_standing_and_a_reopen_takes_it_back(compan
 def test_with_no_saved_ready_a_to_do_status_never_pauses(company, gh, jira):
     task_id = to_release(company, gh)
     with company.transaction() as c:
-        filed(c, task_id, slack=False, ready=None)  # filed before primary_status existed
+        filed(c, task_id, ready=None)  # filed before primary_status existed
     jira.read("Backlog")
     released(company, gh)
     with company.transaction() as c:
@@ -296,7 +271,7 @@ def test_with_no_saved_ready_a_to_do_status_never_pauses(company, gh, jira):
 def test_a_read_error_after_a_404_keeps_the_pause(company, gh, jira):
     task_id = to_release(company, gh)
     with company.transaction() as c:
-        filed(c, task_id, slack=False)
+        filed(c, task_id)
     jira.read("Ready")
     jira.read(None)  # 404
     jira.read("timeout")  # tells nothing: still gone
@@ -329,31 +304,68 @@ def test_a_reopen_adding_a_pr_already_released_queues_nothing_new(company, gh, j
         old = next(r for r in F.releases(c, REPO, prereleases=True) if r["tag"] == "v1.0.0")
         F.save_included(c, old["id"], sha, True)
         assert RC.close_out(c, task_id, visit) == 0
-        assert len(actions(c, task_id)) == 2 and len(replies(c)) == 1
+        assert len(actions(c, task_id)) == 2
+        # PR 1 (in the newest, v2.0.0) is removed: the newest release now is v1.0.0, older than the one announced.
+        c.execute("DELETE FROM task_links WHERE task_id=? AND number=1", (task_id,))
+        assert RC.close_out(c, task_id, visit) == 0
+        assert len(actions(c, task_id)) == 2
 
 
-def test_a_close_out_write_is_refused_when_the_issue_was_withdrawn_before_it_went(company, gh, jira, monkeypatch):
+@pytest.mark.parametrize(
+    ("status", "category", "why"),
+    [("Backlog", "new", "withdrawn"), ("Won't Do", "done", "closed in Jira as Won't Do"), (None, "", "no longer")],
+)
+def test_a_close_out_write_waits_while_the_issue_is_withdrawn_gone_or_closed_otherwise_then_resumes(
+    company, gh, jira, monkeypatch, status, category, why
+):
     from backend import outbound_jira as OJ
 
     task_id = to_release(company, gh)
     with company.transaction() as c:
-        filed(c, task_id, slack=False)
+        filed(c, task_id)
     released(company, gh)
     sent: list[str] = []
+    issue = {"status": status, "category": category}
 
     def call(method, url, headers, params, seconds=10.0, body=None, most=None):
         sent.append(method)
-        status = {"name": "Backlog", "statusCategory": {"key": "new"}}
-        return JS.Reply(200, {"fields": {"status": status, "updated": "2026-11-21T10:00:00.000+0000"}})
+        if method == "POST":
+            return JS.Reply(204 if url.endswith("/transitions") else 201, {"id": "10001"})
+        if url.endswith("/transitions"):
+            return JS.Reply(200, {"transitions": [{"id": "31", "name": "Finish", "to": {"name": "Done"}}]})
+        if url.endswith("/comment"):
+            return JS.Reply(200, {"comments": [], "total": 0})
+        if issue["status"] is None:
+            return JS.Reply(404, {"errorMessages": ["Issue does not exist"]})
+        found = {"name": issue["status"], "statusCategory": {"key": issue["category"]}}
+        return JS.Reply(200, {"fields": {"status": found, "updated": "2026-11-21T10:00:00.000+0000"}})
 
     monkeypatch.setattr(OJ, "_connect", lambda store, row, write=True: (f"https://{HOST}", {}, {}))
     monkeypatch.setattr(JS, "call", call)
-    while (claimed := OA.claim(company)) is not None:
-        assert OA.attempt(company, claimed) == "failed"
+    for _ in range(12):  # past MAX_SAFE_RETRIES: a paused write never uses them up
+        with company.transaction() as c:
+            c.execute("UPDATE outbound_actions SET next_attempt_at=? WHERE state='queued'", (H.now(),))
+        while (claimed := OA.claim(company)) is not None:
+            assert OA.attempt(company, claimed) == "requeued"
     with company.transaction() as c:
-        assert {r["state"] for r in actions(c, task_id).values()} == {"failed"}
-        assert all("withdrawn in Jira" in r["last_error"] for r in actions(c, task_id).values())
-    assert set(sent) == {"GET"}  # read, never written
+        rows = actions(c, task_id).values()
+        assert {r["state"] for r in rows} == {"queued"} and all(why in r["last_error"] for r in rows)
+        assert all(r["next_attempt_at"] > H.shift(H.now(), minutes=50) for r in rows)
+    assert "POST" not in sent
+    issue.update(status="Ready", category="new")  # back in Ready: both go by themselves
+    with company.transaction() as c:
+        c.execute("UPDATE outbound_actions SET next_attempt_at=? WHERE state='queued'", (H.now(),))
+    while (claimed := OA.claim(company)) is not None:
+        assert OA.attempt(company, claimed) == "done"
+    assert sent.count("POST") == 2
+
+
+def test_a_create_retried_across_the_upgrade_hashes_as_before():
+    from backend import models as M
+
+    assert "primary_link" not in M.TaskFile(title="Ship it").model_dump()
+    assert "primary_status" not in M.TaskFile(title="Ship it").model_dump()
+    assert M.TaskFile(title="x", primary_link="jira:issue:HM-1@t").model_dump()["primary_link"] == "jira:issue:HM-1@t"
 
 
 def test_an_unknown_outcome_asks_its_owner_once_looks_up_hourly_and_settling_takes_the_ask_back(
@@ -361,7 +373,7 @@ def test_an_unknown_outcome_asks_its_owner_once_looks_up_hourly_and_settling_tak
 ):
     task_id = to_release(company, gh)
     with company.transaction() as c:
-        filed(c, task_id, slack=False)
+        filed(c, task_id)
     released(company, gh)
     looked: list[str] = []
     adapter = OA.ADAPTERS["jira"]

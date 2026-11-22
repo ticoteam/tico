@@ -92,10 +92,12 @@ LIST_FIELDS = (
 
 # ----------------------------------------------------------------------------------------------- adapter interface
 class SafeRejection(NamedTuple):
-    """The provider refused without acting (a rate limit): tried again after `retry_after` seconds."""
+    """The provider refused without acting (a rate limit): tried again after `retry_after` seconds. `counted` False
+    for a wait the adapter chose (the record is paused outside), which never uses up MAX_SAFE_RETRIES."""
 
     retry_after: float
     error: str = "rate limited"
+    counted: bool = True
 
 
 class Settled(NamedTuple):
@@ -788,7 +790,7 @@ def attempt(store: Any, claimed: Claimed) -> str:
                 TABLE,
                 row["id"],
                 "queued",
-                attempts=row["attempts"],
+                attempts=row["attempts"] if answer.counted else max(0, int(row["attempts"]) - 1),
                 error=answer.error,
                 due_at=H.shift(H.now(), seconds=max(0.0, float(answer.retry_after))),
                 extra={"provider_attempted_at": None, "updated_at": H.now()},
@@ -938,8 +940,11 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
                 "SELECT 1 FROM requirements WHERE id=? AND person_id=?", (row["owner_ask_id"], who.actor)
             ).fetchone()
         )
+        from . import auth as _auth
+
+        auth_module: Any = _auth
         task = H.task(c, row["task_id"]) if asked and row["task_id"] else None
-        if asked and (not row["task_id"] or (task and H.task_private_readable(c, who.actor, task))):
+        if asked and (not row["task_id"] or (task and auth_module.actor_reads_task(c, who.actor, task))):
             return True  # the person asked about its unknown outcome (`ask_owner`), while they still read its task
         found = task_asks.grant(c, row["approval_id"]) if row["approval_id"] else None
         return bool(found) and task_asks.party(c, who.actor, found)

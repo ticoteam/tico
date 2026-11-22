@@ -264,6 +264,15 @@ class TaskFile(TaskCreate):
     # to another To Do status pauses the task's release close-out (backend/release_closeout.py).
     primary_status: str | None = Field(default=None, min_length=1, max_length=100)
 
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+        """As the request's idempotency hash reads it: `primary_link` and `primary_status` left out when absent, so a
+        create retried across the upgrade that added them hashes as it did."""
+        out = super().model_dump(**kwargs)
+        for name in ("primary_link", "primary_status"):
+            if out.get(name) is None:
+                out.pop(name, None)
+        return out
+
 
 class TaskRunModel(Contract):
     """A task's own model (backend/task_run_models.py). An absent `model` keeps the task's and changes only the

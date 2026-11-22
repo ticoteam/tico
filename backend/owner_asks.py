@@ -36,17 +36,20 @@ def _engine() -> Any:
 
 
 def people_for(conn: "sqlite3.Connection", task: Row | None, actor: str = "") -> list[str]:
-    """Whom to ask, in order, each a person who is here and can read the task: its owner, then the outbound gate's
-    people for its owner bot (or `actor` when there is no task): the bot's manager, then the company's default person.
-    Empty when nobody can: nobody is asked then."""
+    """Whom to ask, in order, each a person who is here and reads the task as GET /api/v2/tasks/{id} does (privacy and
+    the bot-activity rule, auth.actor_reads_task): its owner, then the outbound gate's people for its owner bot (or
+    `actor` when there is no task): the bot's manager, then the company's default person. Empty when nobody can:
+    nobody is asked then."""
     from . import outbound_actions as OA
     from . import task_requirements as R
+    from . import auth as _auth
 
     H = _h()
     owner = str((task or {}).get("owner_id") or "")
     first = [owner] if H.is_human(owner) and R.active_person(conn, owner) else []
     people = list(dict.fromkeys(first + OA._people_for(conn, owner or actor)))  # pyright: ignore[reportPrivateUsage]
-    return [p for p in people if task is None or H.task_private_readable(conn, p, task)]
+    auth: Any = _auth
+    return [p for p in people if task is None or auth.actor_reads_task(conn, p, task)]
 
 
 def _ask_on(conn: "sqlite3.Connection", task_id: str, person: str, line: str) -> str | None:

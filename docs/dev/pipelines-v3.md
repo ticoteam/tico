@@ -1199,7 +1199,10 @@ active in an In Progress category status or in its Ready status (the status it w
 link filed without `primary_status` has no saved Ready, and every To Do status counts as active for it: it never
 pauses for a withdrawal. Anything but active when the task leaves Release freezes the close-out: nothing is queued,
 and the visit is kept (`detail.pending`) so the Jira pass keeps reading the issue of the Done task (as it does while a
-close-out Jira write has not ended; the sender itself refuses a write whose issue was withdrawn since). After each
+close-out Jira write has not ended; the sender itself holds a write whose issue was withdrawn since, an hour at a
+time, until it is back). A task with more than one primary Jira link (after a merge) closes none out, and its owner is
+asked once; a merge also drops the saved Ready of the link it moves, which then never pauses (merges of tasks filed
+for Jira issues are rare). The close-out sends no Slack reply until Slack sends move into the outbound gate. After each
 answered read, a non-active standing asks the task's owner (a person; else its bot's manager, then the company's
 default person; only someone who can read the task) a people-only OK on the task (backend/owner_asks.py), one per
 standing: a new standing replaces the ask. That is how the owner hears of it; no answer unfreezes anything. Putting

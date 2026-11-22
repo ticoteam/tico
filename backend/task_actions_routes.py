@@ -958,9 +958,10 @@ def register_core(
             if org_rule_check.holds(rc) or saved_retry(request, who) or held
             else ask_ingest.preflight(store, app.state.judge, request.state.identity, body.owner, body.title, body.body)
         )
-        # A retry of a create sent before `primary_link` or `primary_status` existed hashed the body without them.
-        unset = {name for name in ("primary_link", "primary_status") if getattr(body, name) is None}
-        legacy = body.model_dump(exclude=unset) if unset else None
+        # The hash leaves both out when absent (M.TaskFile.model_dump), as before they existed; a create saved while
+        # only `primary_link` existed hashed it as null.
+        plain = body.primary_link is None and body.primary_status is None
+        legacy = {**body.model_dump(), "primary_link": None} if plain else None
 
         def attempt(ingest, judged):
             return ask_ingest.judged(

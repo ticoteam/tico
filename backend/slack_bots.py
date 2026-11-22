@@ -293,15 +293,10 @@ def recipient(c: Any, to: str) -> dict[str, Any]:
 
 
 # ----------------------------------------------------------------------------- the post
-def queue_post(
-    c: Any, bot: str, entry: dict[str, Any], thread_ts: str, text: str, task_id: str | None = None
-) -> dict[str, Any]:
-    """A bot's post: a message in its room, so people see what it said, and the outbox row the gateway sends. A post
-    about a task (`task_id`) carries it, so the gateway checks the task's privacy when it delivers."""
+def queue_post(c: Any, bot: str, entry: dict[str, Any], thread_ts: str, text: str) -> dict[str, Any]:
+    """A bot's post: a message in its room, so people see what it said, and the outbox row the gateway sends."""
     room: Row = _mod("rules")._bot_room(c, bot)
-    refs: Row = {"slack_post": {"channel": entry["id"], "name": entry["name"], "thread_ts": thread_ts}}
-    if task_id:
-        refs["task"] = task_id
+    refs = {"slack_post": {"channel": entry["id"], "name": entry["name"], "thread_ts": thread_ts}}
     message: dict[str, Any] = H._write_message(
         c, H.bot_actor(bot), room.get("owner_id") or H.TICO_ACTOR, text, room, "say", refs, None, None
     )
