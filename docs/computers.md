@@ -281,7 +281,9 @@ Signing a saved subscription in again is **Reconnect**, and asks first when runn
 **Owner** is the person whose plan it is. Whoever adds a plan is its owner, unless an owner or admin names another active
 person in the company, now or later. A plan is for its owner's own bots, not shared ones; the sign-in step says so. Owners
 and admins add, edit, reconnect and remove them in **Settings > Models**. The person who added a plan or API key can
-also remove it there. The list shows each name, kind, owner, status, computers and usage.
+also remove it there. Default names use the owner's display name, as in **Ana's Claude plan** or **Ana's ChatGPT
+plan**, and fall back to **Claude plan** or **ChatGPT plan**. The list shows the plan's usage to all members, its
+account email to its owner and admins, and only the agents each viewer can read.
 
 Give a computer at most one subscription per tool (Claude Code, Codex). One subscription can be given to many computers.
 Every bot on that computer then runs that tool on it. A bot with no fallback of its own, or whose named fallback is another
@@ -356,8 +358,8 @@ such button.
 
 #### Full Claude logins
 
-A Claude plan connected with `claude auth login --claudeai` is a full login, as Orca and t3code use: it is named by its
-account's email, and is one plan per account in the company (connecting the same account again reconnects that plan).
+A Claude plan connected with `claude auth login --claudeai` is a full login, as Orca and t3code use. There is one plan
+per account in the company. Connecting the same account again reconnects that plan.
 A setup-token plan reconnected this way becomes a full login and keeps its owner, computers and history; pasting a
 setup-token into a full login's Reconnect turns it back. It is offered only from a Linux computer, since a Mac keeps the
 login in its Keychain, and runs only on computers whose runner says `claude_login_v1`.

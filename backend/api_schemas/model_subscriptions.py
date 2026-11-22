@@ -30,7 +30,7 @@ SCHEMAS['ModelSubscription'] = obj(
             'description': 'What a person must fix on a plan that still counts, in a few words ("Payment past due"), '
             'else empty',
         },
-        'preview': 's',
+        'preview': {'type': 'string', 'description': 'For a plan, empty unless the viewer owns it or is an admin'},
         'revision': 'i',
         'computers': items({'type': 'string'}),
         'usage': {
@@ -63,10 +63,11 @@ SCHEMAS['ModelSubscription'] = obj(
         'in_use_on': items({'type': 'string'}),
         'agents': {
             **items(obj({'id': 's', 'name': 's', 'fallback': 'b'}, required=['id', 'name', 'fallback'])),
-            'description': "The bots it serves, by name: those on a computer given it (from a person's plans, the "
-            'computers using it now) whose turns, tasks or named fallback run its runtime; `fallback` when only '
-            'the fallback does',
+            'description': "The bots it serves that the viewer can read, by name: those on a computer given it "
+            "(from a person's plans, the computers using it now) whose turns, tasks or named fallback run its "
+            'runtime; `fallback` when only the fallback does',
         },
+        'expired': 'b',
         'reconnect_by': 'n',
     },
     required=[
@@ -78,6 +79,7 @@ SCHEMAS['ModelSubscription'] = obj(
         'status',
         'status_detail',
         'status_at',
+        'expired',
         'preview',
         'revision',
         'computers',

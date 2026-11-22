@@ -105,11 +105,15 @@ def test_a_chatgpt_plan_connects_on_the_codex_sign_in(api):
     setup(api)
     company(api)
     m = computer(api)
-    login = post(api, "model-subscriptions/connect", {"kind": "codex_login", "name": "ChatGPT"})
-    assert login["runtime"] == "codex"
+    login = post(api, "model-subscriptions/connect", {"kind": "codex_login", "owner_id": "ben"})
+    assert (login["runtime"], login["name"]) == ("codex", "Ben's ChatGPT plan")
+    pasted = post(api, "model-subscriptions", {"kind": "codex_login", "secret": codex_file(), "owner_id": "ben"})
+    assert pasted["name"] == login["name"]
     assert send(api, m, login, codex_file())["state"] == "done"
     saved = get(api, "model-subscriptions")["subscriptions"]
-    assert [(s["kind"], s["preview"]) for s in saved] == [("codex_login", "ana@acme.example")]
+    assert [(s["kind"], s["name"], s["preview"], s["owner_id"]) for s in saved if s["id"] != pasted["id"]] == [
+        ("codex_login", "Ben's ChatGPT plan 2", "ana@acme.example", "human:ben")
+    ]
 
 
 def test_reconnect_asks_before_the_sign_in_when_runs_would_restart_and_replaces_the_value(api):
@@ -350,19 +354,17 @@ def test_a_plan_added_with_no_name_is_named_after_its_plan_and_numbered_from_the
     company(api)
     m = computer(api)
     first = post(api, "model-subscriptions/connect", {"kind": "claude_token"})
-    assert first["name"] == "Claude" and first["waking"] is False
+    assert first["name"] == "Ana's Claude plan" and first["waking"] is False
     # Asked again with no name (a reloaded page): the same sign-in, under the name it was given.
     assert post(api, "model-subscriptions/connect", {"kind": "claude_token"})["id"] == first["id"]
     assert send(api, m, first)["state"] == "done"
     second = post(api, "model-subscriptions/connect", {"kind": "claude_token"})
-    assert second["name"] == "Claude 2"
+    assert second["name"] == "Ana's Claude plan 2"
     assert send(api, m, second, OTHER)["state"] == "done"
-    # A ChatGPT sign-in has no name yet: it takes its account email once saved.
-    assert post(api, "model-subscriptions/connect", {"kind": "codex_login"})["name"] == ""
     # A pasted key with no name gets its provider's; one given is kept.
     key = post(api, "model-subscriptions", {"kind": "anthropic_key", "secret": "sk-ant-api03-" + "k" * 40})
     named = post(api, "model-subscriptions", {"kind": "claude_token", "secret": TOKEN, "name": " Team Max "})
     assert (key["name"], named["name"]) == ("Anthropic API", "Team Max")
     saved = [s for s in get(api, "model-subscriptions")["subscriptions"] if s["kind"] == "claude_token"]
-    assert sorted(s["name"] for s in saved) == ["Claude", "Claude 2", "Team Max"]
+    assert sorted(s["name"] for s in saved) == ["Ana's Claude plan", "Ana's Claude plan 2", "Team Max"]
     assert {s["owner_id"] for s in saved} == {"human:ana"}

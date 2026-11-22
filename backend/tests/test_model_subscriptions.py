@@ -3,6 +3,7 @@ on that computer (backend/model_subscriptions.py)."""
 
 import json
 from datetime import datetime, timedelta, timezone
+from importlib import import_module
 
 import pytest
 
@@ -10,7 +11,7 @@ from backend import login_holds
 from backend import model_subscriptions as MS
 from backend.auth import Identity
 from backend.store import H, Problem, encode
-from backend.tests.helpers.api import assign, claim, get, headers, post, runner
+from backend.tests.helpers.api import assign, claim, get, headers, post, restrict, runner, unrelated_task_managers
 from backend.tests.helpers.credentials import setup
 from backend import bot_settings as BS
 from backend.tests.helpers.model_subscriptions import OTHER, TOKEN, add, codex_file, company, give, machine, on
@@ -1804,16 +1805,58 @@ def test_each_subscription_lists_the_bots_it_serves_and_marks_those_that_only_fa
         config["fallback"] = {"harness": "claude", "model": "claude-sonnet-5-5"}
         BS.write(c, "cpo", config)
         MS._status(c, plan, "needs_reconnect", "expired")
+        unrelated_task_managers(c, cpo)
+        restrict(c, cpo, see={"everyone": True}, read={"people": ["ana"]})
     assert agents()[plan] == {ops: False, cpo: True}
+    member_rows = {s["id"]: s for s in listed(api, "cara-test")}
+    assert ops in {a["id"] for a in member_rows[plan]["agents"]}
+    assert all(a["id"] != cpo for s in member_rows.values() for a in s["agents"])
 
 
-def test_a_chatgpt_plan_added_with_no_name_takes_its_login_email(api):
-    """A plan added with no name is named for its account where Tico knows it: a ChatGPT login's email. A Claude token
-    names none, so it is named for its plan."""
+def test_a_plan_default_uses_its_owner_and_only_the_owner_and_admins_see_its_preview(api):
     setup(api)
     company(api)
-    assert add(api, "codex_login", codex_file(), name=None)["name"] == "ana@acme.example"
-    assert add(api, name=None)["name"] == "Claude"
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE humans SET name='Casey' WHERE id='cara'")
+    plan = post(
+        api, "model-subscriptions", {"kind": "codex_login", "secret": codex_file(), "owner_id": "cara"}, "ben-test"
+    )
+    assert plan["name"] == "Casey's ChatGPT plan" and plan["expired"] is False
+    assert listed(api, "ben-test")[0]["preview"] == "ana@acme.example"
+    post(api, "access/humans/ben", {"role": "member"})
+    [member] = listed(api, "ben-test")
+    assert member["preview"] == "" and member["usage"] == plan["usage"] and member["can_remove"]
+    assert listed(api, "cara-test")[0]["preview"] == "ana@acme.example"
+    assert listed(api)[0]["preview"] == "ana@acme.example"
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE humans SET name=email WHERE id='ana'")
+    assert add(api, name=None)["name"] == "Claude plan"
+
+
+def test_the_migration_renames_email_defaults_without_touching_custom_or_ownerless_plans(api):
+    migration = import_module("backend.migrations.20261122215020_plan_display_names")
+    email = "account@acme.example"
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE humans SET name=NULL WHERE id='ben'")
+        c.executemany(
+            "INSERT INTO model_subscriptions(id,name,kind,preview,owner_id,added_by,sealed,created_at,updated_at) "
+            "VALUES(?,?,?,?,?,'human:ana','', '2026-11-20','2026-11-21')",
+            [
+                ("a", email, "claude_login", email, "human:ana"),
+                ("b", email + " 2", "claude_login", email, "human:ana"),
+                ("c", email, "codex_login", email, "human:ben"),
+                ("custom", email + " team", "codex_login", email, "human:ana"),
+                ("taken", " ANA'S CLAUDE PLAN ", "claude_login", email, "human:ana"),
+                ("ownerless", email, "codex_login", email, ""),
+                ("token", email, "claude_token", email, ""),
+            ],
+        )
+        before = H._rows(c.execute("SELECT * FROM model_subscriptions ORDER BY id"))
+        migration.up(c)
+        names = {"a": "Ana's Claude plan 2", "b": "Ana's Claude plan 3", "c": "ChatGPT plan"}
+        assert H._rows(c.execute("SELECT * FROM model_subscriptions ORDER BY id")) == [
+            row | {"name": names.get(row["id"], row["name"])} for row in before
+        ]
 
 
 def test_a_chatgpt_login_signs_in_every_turns_commands_on_its_computer(api):
