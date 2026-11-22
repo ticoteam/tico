@@ -1200,6 +1200,11 @@ def clear_value(c: sqlite3.Connection, actor: str, entity_id: str, key: str, val
     return bool(rows)
 
 
+def kept(c: sqlite3.Connection, entity_id: str) -> str:
+    """The entity `entity_id` is now: itself, or the one it was merged into (up to five merges)."""
+    return _follow(c, [entity_id])[0]
+
+
 def unmerged(c: sqlite3.Connection, actor: str, entity_id: str) -> str | None:
     """The entity `entity_id` was merged into, when it names a merged-away entity the reader sees through the kept one;
     else None. A write that names a merged-away id is refused with this, never carried over to the kept entity."""
@@ -1229,7 +1234,9 @@ def set_status(
     due = str(next_step_due or "").strip()
     if due:
         try:
-            date.fromisoformat(due)
+            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", due):
+                raise ValueError(due)
+            due = date.fromisoformat(due).isoformat()  # sorted as text by what's next
         except ValueError:
             _refuse(c, actor, "kind", "next_step_due needs a date as YYYY-MM-DD")
     said = {

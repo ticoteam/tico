@@ -1037,9 +1037,13 @@ def register_core(
         for none. One the caller cannot see is refused, as any Contacts write is."""
         if not ref:
             return ""
+        from . import page_links
         from .entities import store as ES
 
-        return ES.target(c, who.actor, ref)
+        reader = page_links.entity_reader(c, auth, who)  # the effective reader, as page reads use
+        if reader is None:
+            raise Problem("not_found", "Entity not found", 404)
+        return ES.target(c, reader, ref)
 
     def task_update_one(c, caller, tid, body, rule=None):
         """`POST /api/v2/tasks/{tid}`: field edits only (H.task_update). Where the task is and who has it change by

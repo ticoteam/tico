@@ -7,7 +7,7 @@ with the same Idempotency-Key lands once.
 Every path is under /api/v2/entities, not /api/v2/directory, which is the people directory's (SSO and SCIM)."""
 
 import sqlite3
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Annotated, Any, cast
 
 from fastapi import Request
 from pydantic import Field
@@ -68,7 +68,7 @@ class ContactsStatus(Contract):
     status: str = Field("", max_length=100)
     next_step: str = Field("", max_length=500)
     next_step_due: str = Field("", max_length=10)  # YYYY-MM-DD
-    flags: list[str] = Field(default_factory=list, max_length=20)
+    flags: list[Annotated[str, Field(max_length=100)]] = Field(default_factory=list, max_length=20)
 
 
 class ContactsOwner(Contract):
@@ -208,7 +208,7 @@ def install(
             return str(who.actor)
         kind, _, ident = owner.partition(":")
         if kind == "human" and ident:
-            return owner
+            return owner if H.human(c, ident) else None  # pyright: ignore[reportUnknownMemberType]
         if kind == "bot" and ident:
             bot = cast("dict[str, Any] | None", H.resolve_bot(c, ident))  # pyright: ignore[reportUnknownMemberType]
             if bot is None:
@@ -226,11 +226,25 @@ def install(
         return ES.target(c, actor, ref)
 
     def still_seen(actor: str, result: dict[str, Any]) -> dict[str, Any]:
-        """A write's answer (a retry's too) is shown only while its entity is one the caller still sees."""
+        """A write's answer (a retry's too) is shown only while its entity is one the caller still sees, and is not
+        merged away since: a replay never answers through the merge."""
         with read() as c:
+            unmerged(c, actor, str(result["entity"]))
             if not ES.visible_entity(c, actor, str(result["entity"])):
                 raise Problem("not_found", "No entity that you can see", 404)
         return result
+
+    def seen_owners(c: sqlite3.Connection, request: Request, items: list[dict[str, Any]]) -> None:
+        """A bot owner shows only to a reader who may see that bot; to anyone else the owner is hidden (None)."""
+        who, answers = request.state.identity, cast("dict[str, bool]", {})
+        for item in items:
+            owner = str(item.get("owner") or "")
+            if owner.startswith("bot:"):
+                if owner not in answers:
+                    access = cast("dict[str, Any]", auth.bot_access(c, who, owner[4:]))  # pyright: ignore[reportUnknownMemberType]
+                    answers[owner] = bool(access["see"])
+                if not answers[owner]:
+                    item["owner"] = None
 
     def page_error(error: ValueError) -> Problem:
         return Problem("validation", str(error), 422)
@@ -297,7 +311,7 @@ def install(
                     empty: dict[str, Any] = {"rows": [], "next": None, "count": 0, "approximate": False}
                     return empty
             try:
-                return ES.find(
+                page = ES.find(
                     c,
                     actor,
                     type_key,
@@ -312,6 +326,9 @@ def install(
                 )
             except ValueError as error:
                 raise page_error(error) from None
+            if detail:
+                seen_owners(c, request, cast("list[dict[str, Any]]", page["rows"]))
+            return page
 
     @app.get("/api/v2/entities/card")
     def contacts_card(request: Request, ref: str):
@@ -327,6 +344,7 @@ def install(
             body = ES.card(c, actor, found[0]["id"])
             if body is not None:
                 with_document_files(c, request, body)
+                seen_owners(c, request, [body])
         if body is None:
             raise Problem("not_found", f"No entity {ref} that you can see", 404)
         trace(request, found[0]["id"])

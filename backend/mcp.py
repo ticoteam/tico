@@ -401,6 +401,14 @@ def task_dry_run(c, auth, who, body):
             IS.primary_of(c, body.primary_link)
         except ValueError as error:
             problems.append(str(error))
+    if getattr(body, "entity", None):
+        # The Contacts entity, resolved as the create does (its effective reader, one visible match).
+        from . import page_links
+        from .entities import store as ES
+
+        reader = page_links.entity_reader(c, auth, who)
+        if reader is None or len(ES.get(c, reader, body.entity)) != 1:
+            problems.append(f"No one entity {body.entity} that you can see; name it by id")
     title, text = str(body.title or "").strip(), str(body.body or "")
     pipeline_id = getattr(body, "pipeline", None) or GENERAL
     pipeline = pipeline_settings.read(c, pipeline_id)

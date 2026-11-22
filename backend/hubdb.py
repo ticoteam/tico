@@ -5395,6 +5395,19 @@ def task_update(
             refuse(conn, actor, "private", private_pipelines.STAYS_PRIVATE)
         if private:
             refuse_shared_assistant(conn, actor, *task_parties(row), task=task_id)
+            if conn.execute(
+                "SELECT 1 FROM page_links l JOIN bot_files f ON f.id=l.page_id "
+                "WHERE f.task_id=? AND l.role='memory' AND l.target LIKE 'entity:%'",
+                (task_id,),
+            ).fetchone():
+                # An entity's memory page is read by everyone who sees the entity (pages.shared_memory).
+                refuse(
+                    conn,
+                    actor,
+                    "task_memory_page",
+                    "A page on this task is an entity's memory page, read by everyone who sees it; unlink it first",
+                    task=task_id,
+                )
     # The same owner sent in another form (`cmo` for `bot:cmo`) is no reassignment.
     if owner is not None and resolve_actor(conn, owner) == row["owner_id"]:
         owner = None

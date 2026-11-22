@@ -503,12 +503,14 @@ class Pages:
 
                     page_rights(c, self.auth, who, ident)
             elif kind == "entity":
-                # Link and unlink resolve alike; an unlink may name the exact entity a kept link stores.
-                found = page_links.entity_target(c, who, ident, stored=remove)
-                if found is None:
-                    raise Problem("not_found", "Entity not found", 404)
-                selected = found
-                if not remove and chosen_role == "memory":
+                # Link and unlink resolve alike; an unlink tries the exact entity a link stores, then its kept one.
+                found = page_links.entity_targets(c, self.auth, who, ident, stored=remove)
+                selected = found[0]
+                if remove:
+                    selected = next((t for t in found if page_links.unlink(c, fid, t, chosen_role, who.actor)), "")
+                    if not selected:
+                        raise Problem("not_found", "No such link on this page", 404)
+                elif chosen_role == "memory":
                     self.shared_memory(c, row)
             elif not remove:
                 if kind == "bot":
@@ -526,7 +528,9 @@ class Pages:
                     other = self.rows(c, [ident]).get(ident)
                     if not other or not self.files.visible(c, who, other, {}):
                         raise Problem("not_found", "Page not found", 404)
-            if remove:
+            if remove and kind == "entity":
+                changed = True  # taken off above
+            elif remove:
                 changed = page_links.unlink(c, fid, selected, chosen_role, who.actor)
             else:
                 changed = page_links.link(c, fid, selected, chosen_role, who.actor)
@@ -539,7 +543,21 @@ class Pages:
             )
             return {"page": self.view(c, who, row, self.page_of(row), {}, include_audience=True)}
 
-        return self.files.write(request, who, {"id": fid, "target": target, "role": role}, work)
+        result = self.files.write(request, who, {"id": fid, "target": target, "role": role}, work)
+        if not remove and target.startswith("entity:"):
+            # A replayed answer names the entity: only while the caller still sees it.
+            with self.store.read() as c:
+                page_links.entity_targets(c, self.auth, who, target[7:])
+        return result
+
+    @staticmethod
+    def memory_of(c, fid):
+        """Whether the page is an entity's memory page (page_links_memory)."""
+        return bool(
+            c.execute(
+                "SELECT 1 FROM page_links WHERE page_id=? AND role='memory' AND target LIKE 'entity:%'", (fid,)
+            ).fetchone()
+        )
 
     @staticmethod
     def shared_memory(c, row):
@@ -618,6 +636,10 @@ class Pages:
         before = c.execute("SELECT audience FROM pages WHERE file_id=?", (row["id"],)).fetchone()[0]
         if before == value:
             return
+        if value is not None and self.memory_of(c, row["id"]):
+            raise Problem(
+                "conflict", "It's an entity's memory page, read by everyone who sees it; unlink it first", 409
+            )
         now = H.now()
         c.execute("UPDATE pages SET audience=?,updated_at=? WHERE file_id=?", (value, now, row["id"]))
         from . import counsel

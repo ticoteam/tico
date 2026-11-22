@@ -460,7 +460,12 @@ def _without_gone_records(c, table, row):
         if row.get(col) and not c.execute("SELECT 1 FROM entities WHERE id=?", (row[col],)).fetchone()
     ]
     # tasks.entity_id is NOT NULL: no entity is ''.
-    return {**row, **dict.fromkeys(gone, "" if table == "tasks" else None)} if gone else row
+    row = {**row, **dict.fromkeys(gone, "" if table == "tasks" else None)} if gone else row
+    if table == "tasks" and row.get("entity_id"):
+        from .entities import store as ES
+
+        row = {**row, "entity_id": ES.kept(c, row["entity_id"])}  # merged since: the entity it went into
+    return row
 
 
 def _primary_free(c, table, row):

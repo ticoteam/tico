@@ -211,16 +211,22 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 filters["match"] = match.sql
             if link is not None:
                 filters["match"] = [*filters.get("match", ()), linked_to(c, link)]
+            moved = False
             if entity is not None:
+                from . import page_links
                 from .entities import store as ES
 
                 # One the reader cannot see lists nothing, as one that is not there does.
-                found = ES.get(c, who.actor, entity)
-                if len(found) > 1:
-                    raise Problem("entity", f"More than one entity matches {entity}; name one by id", 422)
+                reader = page_links.entity_reader(c, auth, who)
+                entities = ES.get(c, reader, entity) if reader is not None else []
+                if len(entities) > 1:
+                    raise Problem("ambiguous", f"More than one entity matches {entity}; name one by id", 409)
                 # tasks.entity_id<>'' lets the partial index tasks_entity serve it; nothing seen is a literal false.
-                fragment = ("tasks.entity_id=? AND tasks.entity_id<>''", (found[0]["id"],)) if found else ("0", ())
+                chosen = str(entities[0]["id"]) if entities else ""
+                fragment = ("tasks.entity_id=? AND tasks.entity_id<>''", (chosen,)) if chosen else ("0", ())
                 filters["match"] = [*filters.get("match", ()), fragment]
+                # An entity id merged since now lists its kept entity's tasks: a changes read starts over.
+                moved = bool(chosen) and chosen != entity and ES.kept(c, entity) == chosen
             if after is not None:
                 if changed_after is not None or offset:
                     raise Problem("after", "after is a page's start: not with changed_after or offset", 422)
@@ -269,7 +275,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                                 row.pop(field, None)
 
             if changed_after is not None:
-                found = reads.changed(c, changed_after, visible_sql)
+                found = None if moved else reads.changed(c, changed_after, visible_sql)
                 changed_ids = reads.around(c, found[0]) if found else []
                 if found is None or len(changed_ids) > reads.CAP:
                     return {

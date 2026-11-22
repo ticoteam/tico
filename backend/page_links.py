@@ -116,6 +116,10 @@ def prime(c: Any, rows: Iterable[Any]) -> None:
     read_cache.prime_rows(c, WRITERS_SQL, {(fid,): value for fid, value in writers.items()})
     targets = {str(r["target"]) for found in links.values() for r in found}
     _prime_targets(c, targets)
+    # The entity targets of the whole list: the first reader's check reads them all at once (_entities).
+    read_cache.value(c, ("page_link_entity_targets",), _no_ids, shared=True).update(
+        t[7:] for t in targets if t.startswith("entity:")
+    )
     _prime_approvals(c, (r for found in links.values() for r in found))
     actors = targets | {str(v["actor"]) for found in writers.values() for v in found}
     known: dict[str, str] = cast(Callable[..., dict[str, str]], names.lookup)(c, actors)
@@ -183,7 +187,7 @@ def links_of(c: Any, auth: Any, who: Any, page_id: str) -> list[dict[str, Any]]:
     targets = {str(r["target"]) for r in rows}
     _prime_targets(c, targets)
     _prime_approvals(c, rows)
-    known = _names(c, {t for t in targets if t.startswith(("bot:", "human:"))}) | _entities(c, who, targets)
+    known = _names(c, {t for t in targets if t.startswith(("bot:", "human:"))}) | _entities(c, auth, who, targets)
     out: list[dict[str, Any]] = []
     approvals: dict[str, dict[str, int]] = {}
     for r in rows:
@@ -244,31 +248,64 @@ def _target_name(c: Any, auth: Any, who: Any, target: str, known: dict[str, str]
     return None
 
 
-def _entities(c: Any, who: Any, targets: Iterable[str]) -> dict[str, str]:
-    """{entity:<id>: name} for the entity targets the reader sees under the Contacts read rule: one read for them all,
-    with the reader built once a snapshot. A link kept on a merged-away entity is hidden until unmerge."""
-    ids = sorted({t[7:] for t in targets if t.startswith("entity:")})
+def _no_ids() -> set[str]:
+    return set()
+
+
+def _no_names() -> dict[str, str | None]:
+    return {}
+
+
+def entity_reader(c: Any, auth: Any, who: Any) -> str | None:
+    """The actor whose Contacts grants an entity check uses: the request's effective reader (auth.run_viewer: the
+    person a shared Assistant run reads as); None for nobody, who sees no entity."""
+    viewer = auth.run_viewer(c, who)
+    return None if viewer.role == "none" else str(viewer.actor)
+
+
+def _entities(c: Any, auth: Any, who: Any, targets: Iterable[str]) -> dict[str, str]:
+    """{entity:<id>: name} for the entity targets the reader sees under the Contacts read rule. One read a request: the
+    first check covers every entity target the snapshot's page list holds (prime) with these, and later ones are
+    answered from it. A link kept on a merged-away entity is hidden until unmerge."""
+    ids = {t[7:] for t in targets if t.startswith("entity:")}
     if not ids:
         return {}
     from .entities import store as ES
     from .entities import visible as V
 
-    actor = str(who.actor)
-    reader = read_cache.value(c, ("page_link_entity_reader", actor), lambda: V.reader(c, actor), shared=True)
-    return {"entity:" + i: name for i, name in ES.seen_entities(c, reader, ids).items()}
+    actor = entity_reader(c, auth, who)
+    seen = read_cache.value(c, ("page_link_entities", actor), _no_names, shared=True)
+    missing = (ids | read_cache.value(c, ("page_link_entity_targets",), _no_ids, shared=True)) - seen.keys()
+    if missing:
+        found: dict[str, str] = {}
+        if actor is not None:
+            reader = read_cache.value(c, ("page_link_entity_reader", actor), lambda: V.reader(c, actor), shared=True)
+            found = ES.seen_entities(c, reader, sorted(missing))
+        seen.update({i: found.get(i) for i in missing})
+    return {"entity:" + i: name for i in ids if (name := seen.get(i)) is not None}
 
 
-def entity_target(c: Any, who: Any, ref: str, *, stored: bool = False) -> str | None:
-    """The entity:<id> target a reference names for this reader: an id, email or domain, a merged-away id answering
-    with its kept entity. With `stored` (an unlink), an entity's own id names its stored target as it is, so a link kept
-    on a merged-away entity can be taken off by anyone who sees the entity it went into. None when none shows."""
+def entity_targets(c: Any, auth: Any, who: Any, ref: str, *, stored: bool = False) -> list[str]:
+    """The entity:<id> targets a reference names for this reader, most exact first: an id, email or domain, a
+    merged-away id answering with its kept entity. With `stored` (an unlink), an entity's own id names its stored
+    target first and then its kept entity's, so a link kept on a merged-away entity, or one a merge moved, can be taken
+    off by anyone who sees the entity it went into. 404 when none shows, 409 when several match."""
     from .entities import store as ES
 
-    actor = str(who.actor)
+    actor = entity_reader(c, auth, who)
+    missing = Problem("not_found", "Entity not found", 404)
+    if actor is None:
+        raise missing
     if stored and c.execute("SELECT 1 FROM entities WHERE id=?", (ref,)).fetchone():
-        return "entity:" + ref if ES.visible_entity(c, actor, ref) else None
+        if not ES.visible_entity(c, actor, ref):
+            raise missing
+        return list(dict.fromkeys(["entity:" + ref, "entity:" + ES.kept(c, ref)]))
     found = ES.get(c, actor, ref)
-    return "entity:" + str(found[0]["id"]) if len(found) == 1 else None
+    if len(found) > 1:
+        raise Problem("ambiguous", f"More than one entity matches {ref}; name one by id", 409)
+    if not found:
+        raise missing
+    return ["entity:" + str(found[0]["id"])]
 
 
 def may_write(c: Any, auth: Any, who: Any, row: Any) -> bool:
@@ -343,16 +380,32 @@ def visible_filters(
     role_only = bool(role and not linked)
     if linked.startswith("entity:"):
         # A reference resolves as a link does: an email or domain, a merged-away id as its kept entity.
-        found = entity_target(c, who, linked[7:])
-        if found is None:
+        try:
+            (linked,) = entity_targets(c, auth, who, linked[7:])
+        except Problem as exc:
+            if exc.status != 404:
+                raise
             yield ["0"], []
             return
-        linked = found
     where, args = filters(linked, role, writer, check_role_target=role_only)
+    if role_only and role_name(role) != role_name(role, "entity:"):
+        # An entity's memory pages: every entity target of that role checked in one read before the rows are scanned.
+        _entities(
+            c,
+            auth,
+            who,
+            [
+                r[0]
+                for r in c.execute(
+                    "SELECT DISTINCT target FROM page_links WHERE role=? AND target LIKE 'entity:%'",
+                    (role_name(role, "entity:"),),
+                )
+            ],
+        )
 
     @cache
     def readable(target: str) -> bool:
-        known = _names(c, {target}) if target.startswith("human:") else _entities(c, who, {target})
+        known = _names(c, {target}) if target.startswith("human:") else _entities(c, auth, who, {target})
         return _target_name(c, auth, who, target, known) is not None
 
     if any(not readable(target) for target in (linked, writer) if target):

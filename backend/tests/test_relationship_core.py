@@ -206,3 +206,42 @@ def test_a_restored_task_whose_entity_was_erased_names_none(api):
     post(api, f"tasks/{task['id']}/restore", {})
     with api.app.state.store.read() as c:
         assert c.execute("SELECT entity_id FROM tasks WHERE id=?", (task["id"],)).fetchone()[0] == ""
+
+
+def test_a_link_comes_off_by_its_old_id_after_a_merge_moved_it_and_a_memory_page_stays_shared(api):
+    acme, dup = org(api, "acme.example", "Acme"), org(api, "acme-old.example", "Acme Old")
+    memory = page(api)
+    post(api, f"pages/{memory}/links", {"target": f"entity:{dup}", "role": "memory"})
+    narrowed = api.patch(f"/api/v2/pages/{memory}", json={"audience": {"people": ["ana"]}}, headers=headers())
+    assert narrowed.status_code == 409  # read by everyone who sees the entity
+    with api.app.state.store.transaction() as c:
+        ES.merge(c, ANA, acme, dup)  # acme had none: the link moved to acme
+    gone = {"target": f"entity:{dup}", "role": "memory"}
+    assert api.delete(f"/api/v2/pages/{memory}/links", params=gone, headers=headers()).status_code == 200
+    assert get(api, f"pages?linked=entity:{acme}&role=memory")["pages"] == []
+    again = api.delete(f"/api/v2/pages/{memory}/links", params=gone, headers=headers())
+    assert again.status_code == 404  # nothing matched is never a silent 200
+
+
+def test_status_and_owner_inputs_are_strict_and_a_replay_never_answers_through_a_merge(api):
+    acme, dup = org(api, "acme.example", "Acme"), org(api, "acme-old.example", "Acme Old")
+    assert post(api, "entities/status", {"ref": acme, "version": 0, "next_step_due": "20261201"}, expected=422)
+    assert post(api, "entities/owner", {"ref": acme, "owner": "human:nobody"}, expected=404)
+    body = {"ref": dup, "version": 0, "status": "lead"}
+    post(api, "entities/status", body, key="status-once")
+    with api.app.state.store.transaction() as c:
+        ES.merge(c, ANA, acme, dup)
+    replay = post(api, "entities/status", body, key="status-once", expected=409)["error"]
+    assert replay["code"] == "merged"
+
+
+def test_a_task_restored_after_its_entity_merged_names_the_kept_entity_and_dry_run_checks_it(api):
+    acme, dup = org(api, "acme.example", "Acme"), org(api, "acme-old.example", "Acme Old")
+    task = post(api, "tasks", {"owner": "ops", "title": "Send the renewal", "entity": dup})
+    post(api, f"tasks/{task['id']}/delete", {})
+    with api.app.state.store.transaction() as c:
+        ES.merge(c, ANA, acme, dup)
+    post(api, f"tasks/{task['id']}/restore", {})
+    assert [t["id"] for t in get(api, f"tasks?status=all&entity={acme}")["tasks"]] == [task["id"]]
+    checked = post(api, "tasks/dry-run", {"owner": "ops", "title": "Call them", "entity": "nobody.example"})
+    assert checked["ok"] is False
