@@ -169,6 +169,31 @@ def test_one_find_and_only_at_the_top():
     refused(flow({**find, "limit": 0}), "limit")
 
 
+SCHEDULE = {"type": "schedule", "cron": "0 8 * * *", "tz": "UTC"}
+TOGETHER = {"id": "new", "type": "find", "source": "mail", "together": True, "limit": 100}
+DIGEST = {"id": "sort", "type": "bot_turn", "bot": "ops", "prompt": "Sort these: {{ item.items }}"}
+
+
+def test_a_together_find_saves_only_on_a_schedule_with_one_bot_turn_that_reads_the_list():
+    check(flow(TOGETHER, DIGEST, act("off") | {"enabled": False}, trigger=SCHEDULE))
+    turn_at = "step sort"
+    for bad, where, words in [
+        (flow(TOGETHER, DIGEST), "step new", "schedule"),
+        (flow(TOGETHER, DIGEST, trigger=SCHEDULE, batch={"times": ["08:00"]}), "step new", "batch"),
+        (flow({**TOGETHER, "source": "prs"}, DIGEST, trigger=SCHEDULE), "step new", "mail, tasks or docs"),
+        (flow({**TOGETHER, "together": "yes"}, DIGEST, trigger=SCHEDULE), "step new", "true or false"),
+        (flow(act("first"), TOGETHER, DIGEST, trigger=SCHEDULE), "step new", "first step"),
+        (flow(TOGETHER, DIGEST, {**DIGEST, "id": "again"}, trigger=SCHEDULE), "step new", "one bot_turn"),
+        (flow(TOGETHER, act("tell"), trigger=SCHEDULE), "step new", "one bot_turn"),
+        (flow(TOGETHER, {**DIGEST, "prompt": "Sort {{item.subject}}"}, trigger=SCHEDULE), turn_at, "item.items"),
+        (flow(TOGETHER, {**DIGEST, "prompt": "x" * 8000 + "{{item.items}}"}, trigger=SCHEDULE), turn_at, "8000"),
+        (flow(TOGETHER, {**DIGEST, "together": True}, trigger=SCHEDULE), turn_at, "together is on a find"),
+    ]:
+        with pytest.raises(Invalid) as caught:
+            check(bad)
+        assert str(caught.value).startswith(f"{where}: ") and words in str(caught.value), str(caught.value)
+
+
 @pytest.mark.parametrize(
     "step, words",
     [

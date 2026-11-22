@@ -5,7 +5,8 @@ method of `services`, so a test hands in fakes and the hub hands in the real thi
 
 A run is a list of threads. A thread is where one item is in the flow: the outputs it has gathered and a cursor,
 the forks it took (`trail`) and the next step in that list. Paths never rejoin and a `paths` step ends its list, so
-that cursor is the whole position. A run starts with one thread; a `find` replaces it with one per item.
+that cursor is the whole position. A run starts with one thread; a `find` replaces it with one per item (with
+`together`, one for all the items it took).
 
 A thread stops when its list ends, a filter rule ends it (`next` end, or `to` a destination), a fork has no
 path or a step fails. A listening's run also says which of its items a step delivered (`delivery`): one where a step
@@ -365,7 +366,9 @@ def _step(flow, state, thread, services):
             _record(state, thread, step, "skipped")
             return
         run = RUN[step["type"]]
-        fresh = _fresh(state, thread, step)
+        # What an earlier send delivered (`delivered`) is read only on a listening's runs, so it never skips another
+        # automation's step.
+        fresh = _fresh(state, thread, step) if (flow.get("trigger") or {}).get("type") == "listening" else None
         if fresh is not None:
             # A listening item back from a run where this step delivered it goes only to the steps that missed it.
             thread["ids"] = fresh
@@ -627,6 +630,8 @@ def _turn_label(thread):
     the find ("item 2"). None when the thread is not a find item's."""
     if thread["item"] is None:
         return None
+    if thread.get("found"):
+        return items_words(len(thread["found"]))
     value = thread["value"] if isinstance(thread["value"], dict) else {}
     own = " ".join(str(value.get("title") or value.get("subject") or value.get("tag") or "").split())
     return own or f"item {thread['item'] + 1}"
@@ -690,6 +695,9 @@ def _turn_outputs(started):
 
 def _turn(flow, state, thread, step, services, who, prompt, wait):
     started = _start(flow, state, thread, step, services, who, prompt, wait)
+    if thread.get("found"):
+        # A together find's items are handed off only once its task started (automations._found_done).
+        thread["settled"] = started is not None and not started.get("held")
     if started is None:
         # The cap stops spending, not the run: later filters, decisions and actions still go.
         _record(state, thread, step, "spend_cap")
@@ -891,6 +899,8 @@ def _reads(steps, name, destinations=None):
     used = re.compile(r"(?<![A-Za-z0-9_.-])" + re.escape(name) + r"\.")
     destinations = destinations or {}
     for step in steps:
+        if step.get("enabled", True) is False:  # a step turned off never runs, so it reads nothing
+            continue
         if step.get("type") == "paths":
             nested = [p.get("steps") or [] for p in step.get("paths") or []]
             if any(_reads(s, name, destinations) for s in nested + [(step.get("otherwise") or {}).get("steps") or []]):
@@ -914,9 +924,10 @@ def _reads(steps, name, destinations=None):
 def _find(flow, state, thread, step, services):
     values = values_of(state, thread)
     idle = {"idle_hours": step["idle_hours"]} if step.get("idle_hours") else {}
-    items = list(
-        services.find(step["source"], F.render(step.get("query") or "", values), step.get("limit", 20), **idle)
-    )
+    items = list(services.find(step["source"], F.render(step.get("query") or "", values), _limit(step), **idle))
+    if step.get("together"):
+        _together(flow, state, thread, step, items, values)
+        return
     _record(state, thread, step, "ok", {"count": len(items), "items": [_brief(item) for item in items]})
     state["empty"] = not items
     place = next(n for n, t in enumerate(state["threads"]) if t is thread)
@@ -927,6 +938,64 @@ def _find(flow, state, thread, step, services):
 
 
 ITEM_TEXT = 500  # what the run log keeps of each found item's text; the item's own steps read all of it
+FIT_MARGIN = 1000  # what a together find leaves free under MAX_PROMPT for what the turn's service adds to the prompt
+TOO_LONG = "The oldest item does not fit the prompt"
+MAIL_KEEPS = ("from", "subject", "date", "snippet", "mailbox", "id")  # a mail as a together find's list holds it
+
+
+def _limit(step):
+    """How many items a find takes: its `limit`, else 20, or MAX_FIND for a together find."""
+    return step.get("limit", F.MAX_FIND if step.get("together") else 20)
+
+
+def _together(flow, state, thread, step, items, values):
+    """A find with `together`: one thread whose item is `{"items": [...], "count": n}`, the items taken oldest first
+    while the bot turn's whole prompt stays under MAX_PROMPT less FIT_MARGIN. The rest stay new for the next run.
+    `found` holds the (time, id) of each item taken, which the find watermark follows."""
+    turn = next(s for s in flow["steps"] if s["type"] == "bot_turn" and s.get("enabled", True) is not False)
+    taken = []
+    for item in items:
+        more = taken + [_compact(item, step["source"])]
+        prompt = F.render_prompt(turn["prompt"], {**values, "item": {"items": more, "count": len(more)}}, cap=10**9)
+        if len(prompt) >= F.MAX_PROMPT - FIT_MARGIN:
+            break
+        taken = more
+    kept = items[: len(taken)]
+    if items and not kept:
+        # Its prompt with the oldest item alone is too long: no turn, and the items wait for a shorter prompt.
+        _record(state, thread, step, "failed", {"count": 0, "together": True, "error": TOO_LONG})
+        thread["state"] = FAILED
+        return
+    _record(state, thread, step, "ok", {"count": len(kept), "items": [_brief(i) for i in kept], "together": True})
+    state["empty"] = not kept
+    place = next(n for n, t in enumerate(state["threads"]) if t is thread)
+    if not kept:
+        del state["threads"][place]
+        return
+    state["threads"][place] = {
+        **_thread(0, {"items": taken, "count": len(taken)}, thread["outputs"], thread["trail"], thread["next"]),
+        "found": [[str(i.get("at") or ""), str(i.get("id") or "")] for i in kept],
+    }
+
+
+def _compact(item, source):
+    """A found item as a together find's list holds it: a mail's headers and snippet, each text cut to ITEM_TEXT."""
+    if source == "mail" and isinstance(item, dict):
+        item = {k: item[k] for k in MAIL_KEEPS if k in item}
+    return _brief(item)
+
+
+def items_words(n):
+    return f"{n} item" if n == 1 else f"{n} items"
+
+
+def together_count(state):
+    """How many items a together find handed its bot turn, or None when the run had no together find."""
+    record = next(
+        (s for s in state.get("steps") or [] if s.get("type") == "find" and (s.get("outputs") or {}).get("together")),
+        None,
+    )
+    return None if record is None else int(record["outputs"].get("count") or 0)
 
 
 def _brief(item):

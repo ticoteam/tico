@@ -543,6 +543,63 @@ def test_one_item_failing_fails_the_run_but_the_others_run():
     assert run["status"] == "failed" and len(services.acted) == 2
 
 
+def test_a_together_find_hands_one_turn_the_oldest_items_that_fit_and_leaves_the_rest():
+    mail = [
+        {
+            "mailbox": "ana@acme.example",
+            "id": f"m{n:02d}",
+            "thread": "t1",
+            "from": "billing@acme.example",
+            "subject": f"Invoice {n:02d}",
+            "snippet": "x" * 2000,
+            "date": "Wed, 28 Oct 2026",
+            "at": f"2026-10-28T08:{n:02d}:00.000000Z",
+        }
+        for n in range(60)
+    ]
+    services = Services(items=mail)
+    f = flow(
+        {"id": "f", "type": "find", "source": "mail", "together": True, "limit": 100},
+        {"id": "t", "type": "bot_turn", "bot": "ops", "prompt": "Sort these. " + "y" * 7000 + " {{item.items}}"},
+    )
+    run = E.execute(f, {}, services)
+    taken = run["steps"][0]["outputs"]["count"]
+    assert 1 < taken < 60 and run["status"] == "ok"
+    assert [turn["who"] for turn in services.turns] == ["bot:ops"]  # one turn for them all
+    prompt = services.turns[0]["prompt"]
+    assert len(prompt) < F.MAX_PROMPT - E.FIT_MARGIN
+    assert f"Invoice {taken - 1:02d}" in prompt and f"Invoice {taken:02d}" not in prompt  # oldest first, the rest left
+    assert '"thread"' not in prompt and "x" * (E.ITEM_TEXT + 1) not in prompt  # each item compact
+    (thread,) = run["threads"]
+    assert thread["found"] == [[m["at"], m["id"]] for m in mail[:taken]]
+    assert thread["value"]["count"] == taken and E.together_count(run) == taken
+
+
+def test_a_together_find_whose_oldest_item_does_not_fit_starts_no_turn():
+    item = {k: k[0] * 2000 for k in ("from", "subject", "snippet", "date", "mailbox", "id")} | {"at": "2026-10-28"}
+    services = Services(items=[item])
+    # Each spelling of the index is its own data block, so the one item is quoted a dozen times.
+    prompt = "Sort {{item.items}} " + " ".join("{{item.items." + "0" * n + "}}" for n in range(1, 12))
+    f = flow(
+        {"id": "f", "type": "find", "source": "mail", "together": True},
+        {"id": "t", "type": "bot_turn", "bot": "ops", "prompt": prompt},
+    )
+    run = E.execute(f, {}, services)
+    assert services.turns == [] and statuses(run) == [("f", "failed")] and run["status"] == "failed"
+    assert "does not fit" in run["steps"][0]["outputs"]["error"]
+
+
+def test_a_turn_turned_off_steps_read_after_it_does_not_wait():
+    services = Services(items=[{"id": "m1", "at": "2026-10-28"}])
+    f = flow(
+        {"id": "f", "type": "find", "source": "mail", "together": True},
+        {"id": "t", "type": "bot_turn", "bot": "ops", "prompt": "Sort {{item.items}}"},
+        {"id": "post", "type": "action", "do": "post_update", "args": {}, "enabled": False},
+    )
+    run = E.execute(f, {}, services)
+    assert [turn["wait"] for turn in services.turns] == [False] and run["status"] == "ok"
+
+
 # ---------------------------------------------------------------------------------------------- on/off and status
 def test_a_step_turned_off_is_skipped():
     services = Services()

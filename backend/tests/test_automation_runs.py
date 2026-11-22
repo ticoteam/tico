@@ -837,6 +837,167 @@ def test_a_failed_item_is_tried_again_once_then_passed_over_and_counted(api):
     assert get(api, f"automations/{aid}/runs")["daily"][0]["dropped"] == 1
 
 
+# ---------------------------------------------------------------------------------------------- together
+DIGEST = [
+    {**FIND, "together": True, "limit": 2},
+    {"id": "sort", "type": "bot_turn", "bot": "ops", "prompt": "Sort these: {{item.items}}"},
+]
+DAILY = {"type": "schedule", "cron": "0 8 * * *", "tz": "UTC"}
+
+
+def tasks_titled(api, *titles):
+    for title in titles:
+        post(api, "tasks", {"owner": "ops", "title": f"Acme batch {title}", "body": "x"})
+
+
+def found_mark(api, aid):
+    return automations._mark(sql(api, "SELECT found_since FROM automations WHERE id=?", (aid,))[0]["found_since"])
+
+
+def test_a_together_find_hands_one_task_the_items_it_took_and_the_next_run_the_rest(api, monkeypatch):
+    from backend import automation_overview
+
+    prompts, start = [], automations.HubServices.start_turn
+
+    def spy(self, who, prompt, ctx, wait):
+        prompts.append(prompt)
+        return start(self, who, prompt, ctx, wait)
+
+    monkeypatch.setattr(automations.HubServices, "start_turn", spy)
+    aid = make(api, DIGEST, trigger=DAILY)
+    tasks_titled(api, "one", "two", "three")
+    run = post(api, f"automations/{aid}/run", {})["run"]
+    assert [(s["id"], s["status"], s["outputs"].get("count")) for s in run["steps"]] == [
+        ("look", "ok", 2),
+        ("sort", "ok", None),
+    ]
+    assert len(sql(api, "SELECT id FROM tasks WHERE title='Test · 2 items'")) == 1
+    assert "Acme batch one" in prompts[0] and "Acme batch two" in prompts[0] and "three" not in prompts[0]
+    assert run["summary"] == "2 items"
+    state = run_row(api, run["id"])["state"]
+    assert automation_overview.outcome("ok", state, {"steps": DIGEST}) == "2 items"
+    run = post(api, f"automations/{aid}/run", {})["run"]  # the item left over, then nothing new
+    assert run["steps"][0]["outputs"]["count"] == 1 and sql(api, "SELECT id FROM tasks WHERE title='Test · 1 item'")
+    assert post(api, f"automations/{aid}/run", {})["run"]["steps"][0]["outputs"]["count"] == 0
+
+
+def test_a_together_turn_the_spend_cap_stops_leaves_its_items_new_with_no_try(api):
+    aid = make(api, DIGEST, trigger=DAILY, spend_cap={"per_30m": 0})
+    tasks_titled(api, "one", "two")
+    before = found_mark(api, aid)
+    for _ in range(3):  # however often: never counted as a failure, never passed over
+        run = post(api, f"automations/{aid}/run", {})["run"]
+        assert [(s["status"], s["outputs"].get("count")) for s in run["steps"]] == [("ok", 2), ("spend_cap", None)]
+    assert found_mark(api, aid) == before and before["tried"] == {}
+
+
+def test_a_failed_together_turn_counts_a_try_for_each_item_then_passes_them_over(api, monkeypatch):
+    def down(self, *args):
+        raise RuntimeError("no such bot")
+
+    monkeypatch.setattr(automations.HubServices, "start_turn", down)
+    aid = make(api, DIGEST, trigger=DAILY)
+    tasks_titled(api, "one", "two")
+    assert post(api, f"automations/{aid}/run", {})["run"]["steps"][1]["status"] == "failed"
+    assert sorted(found_mark(api, aid)["tried"].values()) == [1, 1]  # one try for each item, by its id
+    counts = [post(api, f"automations/{aid}/run", {})["run"]["steps"][0]["outputs"]["count"] for _ in range(2)]
+    assert counts == [2, 0] and found_mark(api, aid)["tried"] == {}
+    assert get(api, f"automations/{aid}/runs")["daily"][0]["dropped"] == 2
+
+
+def test_run_now_while_a_together_run_is_unfinished_is_refused_as_already_running(api):
+    aid = make(api, DIGEST, trigger=DAILY)
+    assert queued(api, aid)
+    assert post(api, f"automations/{aid}/run", {}, expected=409)["error"]["code"] == "already_running"
+    assert len(sql(api, "SELECT id FROM automation_runs WHERE automation_id=?", (aid,))) == 1
+    assert not any(day.get("dropped") for day in get(api, f"automations/{aid}/runs")["daily"])
+
+
+def test_a_batch_never_moves_the_watermark_past_an_item_it_did_not_take(api):
+    """A and B each failed once and C finished past them: a batch that takes only A leaves B for the next one."""
+    aid = make(api, [{**DIGEST[0], "limit": 1}, DIGEST[1]], trigger=DAILY)
+    tasks_titled(api, "A", "B", "C")
+    rows = sql(api, "SELECT id, title FROM tasks WHERE title LIKE 'Acme batch %' ORDER BY title")
+    ids = {r["title"][-1]: r["id"] for r in rows}
+    at = {k: H.shift(H.now(), seconds=n + 1) for n, k in enumerate("ABC")}
+    with api.app.state.store.transaction() as c:
+        for k, tid in ids.items():
+            c.execute("UPDATE tasks SET created_at=? WHERE id=?", (at[k], tid))
+        mark = {"at": "", "id": "", "done": [[at["C"], ids["C"]]], "tried": {ids["A"]: 1, ids["B"]: 1}}
+        c.execute("UPDATE automations SET found_since=? WHERE id=?", (json.dumps(mark), aid))
+    taken = [
+        [i["title"] for i in post(api, f"automations/{aid}/run", {})["run"]["steps"][0]["outputs"]["items"]]
+        for _ in range(3)
+    ]
+    assert taken == [["Acme batch A"], ["Acme batch B"], []]
+
+
+def test_a_batch_dropped_after_its_task_started_is_not_handed_off_again(api, monkeypatch):
+    start = automations.HubServices.start_turn
+
+    def dropped(self, *args):
+        started = start(self, *args)
+        put_on_hold(api, aid)
+        assert post(api, f"automations/{aid}/held", {"action": "drop"})["moved"] == 1
+        return started
+
+    monkeypatch.setattr(automations.HubServices, "start_turn", dropped)
+    aid = make(api, DIGEST, trigger=DAILY)
+    tasks_titled(api, "one", "two")
+    rid = queued(api, aid)
+    hub(api).drain()
+    assert run_row(api, rid)["status"] == "skipped"
+    monkeypatch.setattr(automations.HubServices, "start_turn", start)
+    assert post(api, f"automations/{aid}/run", {})["run"]["steps"][0]["outputs"]["count"] == 0
+    assert len(sql(api, "SELECT id FROM tasks WHERE title LIKE 'Test · %'")) == 1
+
+
+def test_a_batch_given_up_after_its_turn_started_or_was_capped_counts_no_try(api):
+    aid = make(api, DIGEST, trigger=DAILY)
+    tasks_titled(api, "one", "two")
+    rows = sql(api, "SELECT id, created_at FROM tasks WHERE title LIKE 'Acme batch %' ORDER BY created_at")
+    found = [[r["created_at"], r["id"]] for r in rows]
+    thread = {"item": 0, "value": {"items": [], "count": 2}, "state": "ready", "found": found}
+    with api.app.state.store.transaction() as c:  # the tick gives up on a run from its last save (`_fail`)
+        automations._found_done(c, aid, {"threads": [{**thread, "settled": False}]}, ended=True)
+    assert found_mark(api, aid)["tried"] == {}  # capped: the items stay new, no try
+    before = found_mark(api, aid)
+    with api.app.state.store.transaction() as c:  # done with no turn started: not handed off
+        automations._found_done(c, aid, {"threads": [{**thread, "state": "done"}]})
+    assert found_mark(api, aid) == before
+    with api.app.state.store.transaction() as c:
+        automations._found_done(c, aid, {"threads": [{**thread, "settled": True}]}, ended=True)
+    assert (found_mark(api, aid)["at"], found_mark(api, aid)["id"]) == tuple(found[-1])  # handed off: done
+
+
+def test_a_batch_run_by_hand_with_a_listening_sample_still_hands_its_items_to_a_task(api):
+    aid = make(api, DIGEST, trigger=DAILY)
+    tasks_titled(api, "one", "two")
+    sample = {"input": {"listening": {"items": [{"id": "x"}], "delivered": {"x": ["sort"]}}}}
+    run = post(api, f"automations/{aid}/run", sample)["run"]
+    assert [s["status"] for s in run["steps"]] == ["ok", "ok"]  # a replay's `delivered` is a listening run's alone
+    assert len(sql(api, "SELECT id FROM tasks WHERE title='Test · 2 items'")) == 1
+    assert post(api, f"automations/{aid}/run", {})["run"]["steps"][0]["outputs"]["count"] == 0
+
+
+def test_run_now_is_refused_while_a_run_of_an_earlier_together_version_is_unfinished(api):
+    aid = make(api, DIGEST, trigger=DAILY)
+    rid = queued(api, aid)
+    put_on_hold(api, aid)  # the batch's run waits, held
+    patch(api, aid, {"steps": [DIGEST[1] | {"prompt": "Sweep"}]})  # the live version has no together find
+    assert run_row(api, rid)["status"] == "held"
+    assert post(api, f"automations/{aid}/run", {}, expected=409)["error"]["code"] == "already_running"
+
+
+def test_a_batch_run_by_hand_with_a_due_sample_opens_its_own_task(api):
+    aid = make(api, DIGEST, trigger=DAILY)
+    sample = {"input": {"due": {"due_on": "2027-01-31"}}}
+    for title in ("one", "two"):
+        tasks_titled(api, title)
+        assert post(api, f"automations/{aid}/run", sample)["run"]["steps"][0]["outputs"]["count"] == 1
+    assert len(sql(api, "SELECT id FROM tasks WHERE title LIKE 'Test · %'")) == 2
+
+
 def test_an_automation_that_finds_runs_one_at_a_time(api):
     aid = make(api, [FIND])
     first = queued(api, aid)
