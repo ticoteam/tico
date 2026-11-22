@@ -79,7 +79,6 @@ body.is-dragging .shell-place{pointer-events:none}
 .phone>.pg>.shell-trail+*{flex:1;min-height:0;height:auto}
 .phone:has(>.pg>.shell-trail){--top:calc(var(--sat) + 57px + var(--ctl))}
 /* a call's card takes the screen: the trail heads it as it heads a page */
-.phone.is-call>.ly-chat>.full:has(>.shell-trail){display:flex;flex-direction:column}
 .phone.is-call>.ly-chat>.full>.shell-trail{flex:none;height:calc(env(safe-area-inset-top,0px) + var(--ctl));padding:calc(env(safe-area-inset-top,0px)) var(--s-4) 0}
 .phone.is-call>.ly-chat>.full>.shell-trail+*{flex:1;min-height:0;height:auto}
 /* the Agent bar's one line to a question that waits on you, wherever it lives (routes/__root.tsx OwnerBar) */

@@ -387,7 +387,14 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
         tico={p.tico}
         menu={p.menu}
         chat={call ? undefined : p.chat}
-        call={call ? trailed(p.page) : undefined}
+        call={
+          call ? (
+            <>
+              {p.trail ? <Trail parts={p.trail} direct /> : null}
+              {p.page}
+            </>
+          ) : undefined
+        }
         tucked={tucked || lip}
         chatKey={owner?.address}
         onCardChange={onCard}

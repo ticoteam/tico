@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query';
-import { createMemoryHistory, createRootRoute, createRoute, createRouter, Link, Outlet, RouterProvider } from '@tanstack/react-router';
+import { createBrowserHistory, createMemoryHistory, createRootRoute, createRoute, createRouter, Link, Outlet, RouterProvider } from '@tanstack/react-router';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
@@ -146,9 +146,10 @@ const QA = { id: 'bot:qa', kind: 'agent', name: 'QA Owner', slug: 'qa', team: 'E
 const people = (...actors: { id: string }[]) =>
   queryClient.setQueryData(['directory'], { actors, byId: Object.fromEntries(actors.flatMap((a) => [[a.id, a], [a.id.slice(a.id.indexOf(':') + 1), a]])) });
 
-function show(at: string) {
+function show(at: string, browser = false) {
   const page = createRoute({ getParentRoute: () => root, path: '/', component: () => <main className="pane page"><h1>Home</h1></main> });
   const call = createRoute({ getParentRoute: () => root, path: '/call/$room', component: () => <main className="pane cw">call page</main> });
+  const calendar = createRoute({ getParentRoute: () => root, path: '/calendar', component: () => <main className="pane page"><h1>Calendar page</h1></main> });
   const task = createRoute({ getParentRoute: () => root, path: '/flow/$task', component: () => <main className="pane page"><h1>A task</h1></main> });
   const flow = createRoute({ getParentRoute: () => root, path: '/flow', component: () => <main className="pane page"><h1>Flow page</h1></main> });
   const editor = createRoute({ getParentRoute: () => root, path: '/tasks/$pipeline/edit', component: () => <main className="pane page"><h1>Edit pipeline</h1></main> });
@@ -165,7 +166,11 @@ function show(at: string) {
   });
   const open = createRoute({ getParentRoute: () => root, path: '/tasks/$pipeline/$task', component: () => <main className="pane page"><h1>An open task</h1></main> });
   const finance = createRoute({ getParentRoute: () => root, path: '/company/finance', component: () => <main className="pane page"><h1>Finance</h1></main> });
-  const router = createRouter({ routeTree: root.addChildren([page, call, task, flow, editor, board, open, finance]), context: { queryClient }, history: createMemoryHistory({ initialEntries: [at] }) });
+  const router = createRouter({ routeTree: root.addChildren([page, call, calendar, task, flow, editor, board, open, finance]),
+    context: { queryClient },
+    // the window's own history where a test needs what the phone's cards push onto it (shell/phone PhoneCards)
+    history: browser ? (window.history.replaceState(null, '', at), createBrowserHistory()) : createMemoryHistory({ initialEntries: [at] }),
+  });
   render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
@@ -319,20 +324,29 @@ describe('the root', () => {
   });
 
   it('tells the call’s side when Tico’s chat shows beside it: Tico open and on, not folded, not off', async () => {
+    // wide enough for Tico, the call and its side side by side
+    Object.defineProperty(window, 'innerWidth', { value: 1440, configurable: true });
+    window.dispatchEvent(new Event('resize'));
     localStorage.clear();
-    show('/call/abc');
-    expect(await screen.findByText('the call alone')).toBeTruthy(); // Tico folds by default on a call
-    fireEvent.keyDown(document, { key: 'j', metaKey: true });
-    expect(await screen.findByText('Tico beside the call')).toBeTruthy();
-    cleanup();
-    power.now = { available: false };
-    try {
+    const open = async () => {
       show('/call/abc');
-      await screen.findByText(/the call alone|Tico beside the call/);
-      expect(screen.queryByText('Tico beside the call')).toBeNull(); // open, but off: the sheet says so, not the chat
+      expect(await screen.findByText('the call alone')).toBeTruthy(); // Tico folds by default on a call
+      fireEvent.keyDown(document, { key: 'j', metaKey: true });
+      await waitFor(() => expect(document.querySelector('.shell-place[data-sheet="tico"]')?.hasAttribute('data-shut')).toBe(false));
+    };
+    try {
+      await open();
+      expect(await screen.findByText('Tico beside the call')).toBeTruthy();
+      cleanup();
+      localStorage.clear();
+      power.now = { available: false };
+      await open(); // open, but off: the sheet says so, not the chat
+      expect(screen.getByText('the call alone')).toBeTruthy();
     } finally {
       power.now = undefined;
       localStorage.clear();
+      Object.defineProperty(window, 'innerWidth', { value: 1024, configurable: true });
+      window.dispatchEvent(new Event('resize'));
     }
   });
 
@@ -348,6 +362,29 @@ describe('the root', () => {
       expect(within(trail as HTMLElement).getByRole('link', { name: 'Calendar' }).getAttribute('href')).toBe('/calendar');
       expect(within(trail as HTMLElement).getByRole('link', { name: 'Fernhill' }).getAttribute('href')).toBe('/');
     } finally {
+      Object.defineProperty(window, 'innerWidth', { value: 1024, configurable: true });
+      window.dispatchEvent(new Event('resize'));
+    }
+  });
+
+  it('on a phone, the call card’s Calendar goes to the calendar, also when the call was opened from it', async () => {
+    Object.defineProperty(window, 'innerWidth', { value: 390, configurable: true });
+    window.dispatchEvent(new Event('resize'));
+    try {
+      const router = show('/calendar', true);
+      expect((await screen.findAllByText('Calendar page')).length).toBeGreaterThan(0);
+      await act(() => router.navigate({ to: '/call/$room', params: { room: 'abc' } }));
+      expect((await screen.findAllByText('call page')).length).toBeGreaterThan(0);
+      const trail = await waitFor(() => {
+        const t = document.querySelector<HTMLElement>('.ly-chat .shell-trail');
+        if (!t) throw new Error('no trail on the call card');
+        return t;
+      });
+      fireEvent.click(within(trail).getByRole('link', { name: 'Calendar' }));
+      await waitFor(() => expect(router.state.location.pathname).toBe('/calendar'));
+    } finally {
+      cleanup();
+      window.history.replaceState(null, '', '/');
       Object.defineProperty(window, 'innerWidth', { value: 1024, configurable: true });
       window.dispatchEvent(new Event('resize'));
     }

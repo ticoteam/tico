@@ -364,7 +364,7 @@ function useTrailParts(path: string, who: string): TrailPart[] {
   const name = useDirectory((d) => (who ? (d.byId[who] ?? d.byId[`human:${who}`])?.name : undefined));
   const head = usePageName();
   // a call's title comes with its data, after the route has drawn: read from the call itself, not its head
-  const room = /^(?:\/next)?\/call\/([^/]+)/.exec(path)?.[1];
+  const room = /^\/call\/([^/]+)/.exec(path)?.[1];
   const call = useQuery({ ...callQuery(room ? decodeURIComponent(room) : ''), enabled: !!room, select: (c) => c.title });
   const page = room ? call.data || head : head;
   return trailOf(path, { company: config?.company_name || config?.app_name || '', pipelines, who: name, page });

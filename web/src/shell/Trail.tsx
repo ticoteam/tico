@@ -128,12 +128,13 @@ export const useTrail = () => use(TrailContext);
 
 /* The trail on the frame's ground, over the sheets (on a phone, over the page): "TIDY › Tasks › Legal › <task>".
    A part goes where the menu would; when the step before in history is that very page, it goes back to it instead,
-   so a board comes back with its filters and place. */
-export function Trail({ parts }: { parts: readonly TrailPart[] }) {
+   so a board comes back with its filters and place. `direct`: on a card that is a step in history of its own (a
+   phone's call), going back would only lower the card, so every part goes where it says. */
+export function Trail({ parts, direct = false }: { parts: readonly TrailPart[]; direct?: boolean }) {
   const router = useRouter();
   useEffect(() => watchSteps(router), [router]);
   const back = (e: MouseEvent, to: string) => {
-    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0 || !stepBackIs(router, to)) return;
+    if (direct || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0 || !stepBackIs(router, to)) return;
     e.preventDefault();
     router.history.back();
   };
