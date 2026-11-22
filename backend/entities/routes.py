@@ -7,7 +7,7 @@ with the same Idempotency-Key lands once.
 Every path is under /api/v2/entities, not /api/v2/directory, which is the people directory's (SSO and SCIM)."""
 
 import sqlite3
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Annotated, Any, cast
 
 from fastapi import Request
 from pydantic import Field
@@ -60,6 +60,22 @@ class ContactsMerge(Contract):
 
 class ContactsUnmerge(Contract):
     drop: str
+
+
+class ContactsStatus(Contract):
+    ref: str  # the entity's id, as its card gave it with the status_version
+    version: int = Field(
+        ge=0, le=2**53
+    )  # the status_version read with it (tico contacts get); a stale one is refused, 409
+    status: str = Field("", max_length=100)
+    next_step: str = Field("", max_length=500)
+    next_step_due: str = Field("", max_length=10)  # YYYY-MM-DD
+    flags: list[Annotated[str, Field(max_length=100)]] = Field(default_factory=list, max_length=20)
+
+
+class ContactsOwner(Contract):
+    ref: str
+    owner: str = Field("", max_length=200)  # human:<id> or bot:<id or slug>; "" for none
 
 
 class ContactsNoteCreate(Contract):
@@ -184,6 +200,90 @@ def install(
             if link.get("other_type") in ES.NOT_CONTACTS:
                 link["file"] = shown.get(str(link["other_id"]))
 
+    def teammate(c: sqlite3.Connection, request: Request, owner: str) -> str | None:
+        """An owner as stored: `me`, human:<id>, or bot:<id or slug> resolved to its id when the caller may see that bot.
+        None for no such teammate, and for a bot the caller may not see, alike."""
+        from backend import hubdb as H
+
+        who = viewer(c, request)
+        if who is None:
+            return None
+        if owner == "me":
+            return str(who.actor)
+        kind, _, ident = owner.partition(":")
+        if kind == "human" and ident:
+            return owner if H.human(c, ident) and person_seen(c, who, owner) else None  # pyright: ignore[reportUnknownMemberType]
+        if kind == "bot" and ident:
+            bot = cast("dict[str, Any] | None", H.resolve_bot(c, ident))  # pyright: ignore[reportUnknownMemberType]
+            if bot is None:
+                return None
+            access = cast("dict[str, Any]", auth.bot_access(c, who, bot["id"]))  # pyright: ignore[reportUnknownMemberType]
+            return f"bot:{bot['id']}" if access["see"] else None
+        return None
+
+    def viewer(c: sqlite3.Connection, request: Request) -> Any:
+        """The request's effective reader (auth.run_viewer: the person a shared Assistant run acts for); None for
+        nobody. Bot visibility for owners is checked as them."""
+        found = auth.run_viewer(c, request.state.identity)  # pyright: ignore[reportUnknownMemberType]
+        return None if found.role == "none" else found  # pyright: ignore[reportUnknownMemberType]
+
+    def person_seen(c: sqlite3.Connection, who: Any, person: str) -> bool:
+        """Whether the effective reader may see this person (teammate access, as the people directory checks)."""
+        from backend import teammate_access as TA
+
+        return cast("bool", TA.can(c, who, "see", person, auth)) is True  # pyright: ignore[reportUnknownMemberType]
+
+    def reader(c: sqlite3.Connection, request: Request) -> str:
+        """Whose Contacts grants a status or owner write is checked by: the request's effective reader
+        (auth.run_viewer, as page and task paths use). Nobody finds no entity."""
+        from backend import page_links
+
+        found = page_links.entity_reader(c, auth, request.state.identity)
+        if found is None:
+            raise Problem("not_found", "No entity that you can see", 404)
+        return found
+
+    def unmerged(c: sqlite3.Connection, actor: str, ref: str) -> str:
+        """The entity a status or owner write names. A merged-away id is refused (409), never carried to the entity it
+        went into, so a write meant for one entity never lands on another."""
+        kept = ES.unmerged(c, actor, ref)
+        if kept:
+            raise Problem("merged", f"{ref} is merged into {kept}; read that one", 409, extra={"merged_into": kept})
+        return ES.target(c, actor, ref)
+
+    def still_seen(request: Request, result: dict[str, Any]) -> dict[str, Any]:
+        """A write's answer (a retry's too) is shown only while its entity is one the caller still sees, and is not
+        merged away since: a replay never answers through the merge. An owner answer is the owner now, as the caller
+        may see it now."""
+        with read() as c:
+            actor = reader(c, request)
+            unmerged(c, actor, str(result["entity"]))
+            if not ES.visible_entity(c, actor, str(result["entity"])):
+                raise Problem("not_found", "No entity that you can see", 404)
+            if "owner" in result:
+                result = {"entity": result["entity"], "owner": ES.owner_of(c, str(result["entity"]))}
+                seen_owners(c, request, [result])
+            elif "status_version" in result:
+                result = {"entity": result["entity"], **ES.relationship(c, str(result["entity"]))}
+        return result
+
+    def seen_owners(c: sqlite3.Connection, request: Request, items: list[dict[str, Any]]) -> None:
+        """A bot or person owner shows only to a reader who may see them; to anyone else the owner is hidden (None)."""
+        who, answers = viewer(c, request), cast("dict[str, bool]", {})
+        for item in items:
+            owner = str(item.get("owner") or "")
+            if owner.startswith(("bot:", "human:")):
+                if owner not in answers:
+                    if who is None:
+                        answers[owner] = False
+                    elif owner.startswith("bot:"):
+                        access = cast("dict[str, Any]", auth.bot_access(c, who, owner[4:]))  # pyright: ignore[reportUnknownMemberType]
+                        answers[owner] = bool(access["see"])
+                    else:
+                        answers[owner] = owner == str(who.actor) or person_seen(c, who, owner)
+                if not answers[owner]:
+                    item["owner"] = None
+
     def page_error(error: ValueError) -> Problem:
         return Problem("validation", str(error), 422)
 
@@ -232,15 +332,26 @@ def install(
         after: str | None = None,
         limit: int | None = None,
         detail: bool = False,
+        owner: str | None = None,
+        sort: str = "name",
     ):
-        """A page of one type's entities you can see, by name, status or a link to us (customer_of). Page with `next`.
-        `detail` adds each row's organization, owner and the sources you can see it is known from (the Contacts list)."""
-        actor = caller(request)
+        """A page of one type's entities you can see, by name, status, owner (`me`, human:<id> or bot:<id>) or a link to
+        us (customer_of). Page with `next`. `sort=next` orders by the next step's due date, soonest first and none last,
+        each row with its relationship status: what's next across your accounts is `owner=me&sort=next`. `detail` adds
+        each row's organization, owner and the sources you can see it is known from (the Contacts list). Read as the
+        request's effective reader (a shared Assistant run: the person it acts for; `me` is them too)."""
+        caller(request)
         with read() as c:
+            actor = reader(c, request)
             if not ES.type_exists(c, type_key) or type_key in ES.NOT_CONTACTS:
                 raise Problem("not_found", f"No contact type {type_key}; see tico contacts types", 404)
+            if owner is not None:
+                owner = teammate(c, request, owner)
+                if owner is None:  # no teammate you can see: nobody's rows
+                    empty: dict[str, Any] = {"rows": [], "next": None, "count": 0, "approximate": False}
+                    return empty
             try:
-                return ES.find(
+                page = ES.find(
                     c,
                     actor,
                     type_key,
@@ -250,16 +361,22 @@ def install(
                     after=after,
                     limit=limit or 50,
                     detail=detail,
+                    owner=owner,
+                    sort=sort,
                 )
             except ValueError as error:
                 raise page_error(error) from None
+            if detail:
+                seen_owners(c, request, cast("list[dict[str, Any]]", page["rows"]))
+            return page
 
     @app.get("/api/v2/entities/card")
     def contacts_card(request: Request, ref: str):
         """One entity as you see it: its values with source and age, its links, external records, and your notes. A
-        reference two entities match returns both, and says so."""
-        actor = caller(request)
+        reference two entities match returns both, and says so. Read as the request's effective reader."""
+        caller(request)
         with read() as c:
+            actor = reader(c, request)
             found = ES.get(c, actor, ref)
             if not found:
                 raise Problem("not_found", f"No entity {ref} that you can see", 404)
@@ -268,6 +385,7 @@ def install(
             body = ES.card(c, actor, found[0]["id"])
             if body is not None:
                 with_document_files(c, request, body)
+                seen_owners(c, request, [body])
         if body is None:
             raise Problem("not_found", f"No entity {ref} that you can see", 404)
         trace(request, found[0]["id"])
@@ -276,8 +394,9 @@ def install(
     @app.get("/api/v2/entities/rules")
     def contacts_rules(request: Request, ref: str, action: str | None = None, as_bot: str | None = None):
         """The rules that apply to an entity, with their paths. Rules arrive in track 5, so none apply yet."""
-        actor = caller(request)
+        caller(request)
         with read() as c:
+            actor = reader(c, request)
             found = ES.get(c, actor, ref)
             if not found:
                 raise Problem("not_found", f"No entity {ref} that you can see", 404)
@@ -292,8 +411,9 @@ def install(
         request: Request, ref: str, attribute: str | None = None, after: str | None = None, limit: int | None = None
     ):
         """Past values of an entity's fields, newest first (one field with `attribute`). Page with `next`."""
-        actor = caller(request)
+        caller(request)
         with read() as c:
+            actor = reader(c, request)
             found = resolve(c, actor, ref)
             if found is None:
                 raise Problem("ambiguous", f"More than one entity matches {ref}; name one by id", 409)
@@ -447,6 +567,54 @@ def install(
         """Reverse the last merge of a dropped entity, named by its own id (a merged reference resolves to the kept one)."""
         actor = caller(request)
         return mutate(request, body, lambda c: {"unmerged": ES.unmerge(c, actor, body.drop)})
+
+    @app.post("/api/v2/entities/status")
+    def contacts_status(request: Request, body: ContactsStatus):
+        """A relationship's status, next step, its due date and flags, written together; each is replaced and an empty
+        one cleared. `version` is the status_version you read: when someone wrote it since, nothing changes and the
+        answer is 409 with the version it has now, to read and write again."""
+        actor = caller(request)
+
+        def work(c: sqlite3.Connection):
+            entity_id = unmerged(c, reader(c, request), body.ref)
+            if entity_id != body.ref:
+                raise Problem("validation", "Name the entity by its id, the one you read its status_version with", 422)
+            written = ES.set_status(
+                c,
+                actor,
+                entity_id,
+                body.version,
+                status=body.status,
+                next_step=body.next_step,
+                next_step_due=body.next_step_due,
+                flags=body.flags,
+                reader=reader(c, request),
+            )
+            if written is None:
+                now = ES.relationship(c, entity_id)["status_version"]
+                raise Problem(
+                    "status_changed",
+                    f"The status changed since you read it (version {now} now); read it again",
+                    409,
+                    extra={"status_version": now},
+                )
+            return {"entity": entity_id, **written}
+
+        return still_seen(request, mutate(request, body, work))
+
+    @app.post("/api/v2/entities/owner")
+    def contacts_owner(request: Request, body: ContactsOwner):
+        """Name the teammate who owns an entity: a person (human:<id>) or a bot (bot:<id>), or "" for none."""
+        actor = caller(request)
+
+        def work(c: sqlite3.Connection):
+            entity_id = unmerged(c, reader(c, request), body.ref)
+            owner = teammate(c, request, body.owner) if body.owner else ""
+            if owner is None:
+                raise Problem("not_found", f"No teammate {body.owner} that you can see", 404)
+            return {"entity": entity_id, "owner": ES.set_owner(c, actor, entity_id, owner, reader(c, request))}
+
+        return still_seen(request, mutate(request, body, work))
 
     @app.post("/api/v2/entities/notes")
     def contacts_note(request: Request, body: ContactsNoteCreate):

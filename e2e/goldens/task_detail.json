@@ -275,6 +275,7 @@
       "documents": [],
       "done_at": "<time>",
       "due_at": null,
+      "entity_id": "",
       "external_requesters": 0,
       "filed": [],
       "filed_by": null,

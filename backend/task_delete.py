@@ -64,7 +64,7 @@ TASK_KEYS = {
 }
 # Columns naming a Directory record that may be gone by the time the task comes back (erased or purged since): a restore
 # clears each one whose record is gone and keeps the rest of the row.
-DIRECTORY_REFS = {"matters": ("party_entity_id", "place_id", "product_id")}
+DIRECTORY_REFS = {"matters": ("party_entity_id", "place_id", "product_id"), "tasks": ("entity_id",)}
 # Rows that are work done on the task: any one of them refuses the run.
 TASK_WORK = (
     "attempts",
@@ -459,7 +459,13 @@ def _without_gone_records(c, table, row):
         for col in DIRECTORY_REFS.get(table, ())
         if row.get(col) and not c.execute("SELECT 1 FROM entities WHERE id=?", (row[col],)).fetchone()
     ]
-    return {**row, **dict.fromkeys(gone)} if gone else row
+    # tasks.entity_id is NOT NULL: no entity is ''.
+    row = {**row, **dict.fromkeys(gone, "" if table == "tasks" else None)} if gone else row
+    if table == "tasks" and row.get("entity_id"):
+        from .entities import store as ES
+
+        row = {**row, "entity_id": ES.kept(c, row["entity_id"])}  # merged since: the entity it went into
+    return row
 
 
 def _primary_free(c, table, row):
@@ -556,6 +562,7 @@ def restore_tasks(c, ids, actor=None):
             if number is not None and c.execute("SELECT 1 FROM tasks WHERE number=?", (number,)).fetchone():
                 task["number"] = None
                 unlinked.setdefault(e["task_id"], []).append("number")
+            task = _without_gone_records(c, "tasks", task)  # an entity erased meanwhile is named no more
             # Open and in no stage, as any new row: the engine places it once its thread and links are back.
             _insert(c, "tasks", {**task, "status": "open"}, skip=(*LINKS, *PLACED[1:]))
         messages = []

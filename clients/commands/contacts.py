@@ -84,6 +84,12 @@ def contacts_describe(api, args):
         "link": _s("A link to us, like customer_of"),
         "after": _s("The next the last page gave"),
         "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+        "owner": _s("Only these owners' entities: me, human:<id> or bot:<id>"),
+        "sort": {
+            "type": "string",
+            "enum": ["name", "next"],
+            "description": "name (default), or next: soonest next step due first, each with its relationship status",
+        },
     },
     required=("type",),
 )
@@ -95,6 +101,8 @@ def contacts_find(api, args):
         link=args.get("link"),
         after=args.get("after"),
         limit=args.get("limit"),
+        owner=args.get("owner"),
+        sort=args.get("sort"),
     )
 
 
@@ -214,6 +222,49 @@ def contacts_merge(api, args):
 )
 def contacts_unmerge(api, args):
     return api.post("entities/unmerge", {"drop": args["drop"]}, key=_key(args))
+
+
+@tool(
+    "tico_contacts_status",
+    "Set a relationship's status, next step, its due date and flags together. Each is replaced; one left out is "
+    "cleared. Name the entity by its id and send the relationship.status_version you read with it (tico_contacts_get): "
+    "when someone wrote it since, nothing changes and the answer is 409 status_changed; read it again. An id merged "
+    "into another is refused (409 merged). Only facts every reader may see.",
+    {
+        "ref": _s("The entity's id, as tico_contacts_get gave it"),
+        "version": {"type": "integer", "minimum": 0, "description": "The relationship.status_version you read"},
+        "status": _s("Where it stands, in a word or two: lead, active, at risk"),
+        "next_step": _s("The one next thing to do"),
+        "next_step_due": _s("YYYY-MM-DD the next step is due"),
+        "flags": {"type": "array", "items": {"type": "string"}, "description": "Short markers: vip, billing issue"},
+    },
+    required=("ref", "version"),
+    writes=True,
+)
+def contacts_status(api, args):
+    body = _clean(
+        {
+            "ref": args["ref"],
+            "version": args["version"],
+            "status": args.get("status"),
+            "next_step": args.get("next_step"),
+            "next_step_due": args.get("next_step_due"),
+            "flags": args.get("flags"),
+        }
+    )
+    return api.post("entities/status", body, key=_key(args))
+
+
+@tool(
+    "tico_contacts_owner",
+    "Name the teammate who owns an entity (a relationship's owner): me, human:<id> or bot:<id or slug>; an empty one "
+    "clears it. An id merged into another is refused (409 merged).",
+    {"ref": CONTACTS_REF, "owner": _s("me, human:<id>, bot:<id>, or empty for none")},
+    required=("ref", "owner"),
+    writes=True,
+)
+def contacts_owner(api, args):
+    return api.post("entities/owner", {"ref": args["ref"], "owner": args["owner"]}, key=_key(args))
 
 
 @tool(
@@ -437,7 +488,7 @@ CONTACTS = (
         "contacts find",
         "entities of one type you can see, by name, status or a link to us",
         args=(Arg("as_text", flag="--text", action="store_true", local=True, help="one line per entity, not JSON"),),
-        example="tico contacts find company --link customer_of",
+        example="tico contacts find organization --owner me --sort next",
     ),
     Command(
         "contacts get",
@@ -492,6 +543,23 @@ CONTACTS = (
         "contacts unmerge",
         "reverse the last merge of a dropped entity, named by its own id",
         example="tico contacts unmerge dup-acme",
+    ),
+    Command(
+        "contacts status",
+        "set a relationship's status, next step, due date and flags together, with the version you read",
+        args=(
+            Arg("ref", metavar="ID"),
+            Arg("version", metavar="VERSION", type=int),
+            Arg("next_step_due", flag="--due", metavar="DATE"),
+            Arg("flags", flag="--flag", action="append", metavar="FLAG"),
+        ),
+        example="tico contacts status organization/acme 3 --status active --next-step 'Send the renewal' --due 2026-12-01",
+    ),
+    Command(
+        "contacts owner",
+        "name the teammate who owns an entity: me, human:<id> or bot:<id>; '' clears it",
+        args=(Arg("ref", metavar=_ID),),
+        example="tico contacts owner acme.com me",
     ),
     Command(
         "contacts history",

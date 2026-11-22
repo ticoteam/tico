@@ -71,7 +71,17 @@ MOVES = {
         "SELECT s.id FROM entity_sources s WHERE s.entity_id = :drop AND NOT EXISTS (SELECT 1 FROM entity_sources k "
         "WHERE k.entity_id = :keep AND k.source_type = s.source_type AND k.source_id = s.source_id)"
     ),
+    "tasks": "SELECT id FROM tasks WHERE entity_id = :drop",
 }
+# The pages linked to the dropped entity (page_links names it as a target, entity:<id>). A related link moves unless the
+# kept entity links that page too; the memory link moves only when the kept entity has none (one memory page each).
+# What stays, stays with the merged row, so unmerge puts back exactly what moved.
+PAGE_LINK_MOVES = (
+    "SELECT p.id FROM page_links p WHERE p.target = :drop_target AND ("
+    "(p.role = 'related' AND NOT EXISTS (SELECT 1 FROM page_links k WHERE k.target = :keep_target "
+    "AND k.role = 'related' AND k.page_id = p.page_id)) OR "
+    "(p.role = 'memory' AND NOT EXISTS (SELECT 1 FROM page_links k WHERE k.target = :keep_target AND k.role = 'memory')))"
+)
 # A single-value field the kept entity lacks moves; one it has stays on the merged row (which redirects to the kept one).
 Row = dict[str, Any]  # one row as a read returns it: column name to value
 
@@ -173,11 +183,12 @@ def _attribute(c: sqlite3.Connection, actor: str, type_key: str, key: str) -> Ro
     return row
 
 
-def _live(c: sqlite3.Connection, actor: str, entity_id: str) -> Row:
-    """The entity a write names, when the writer can see it. One it cannot see is not found, the same as one that is not
-    there, so a write never confirms that a hidden entity exists."""
+def _live(c: sqlite3.Connection, actor: str, entity_id: str, reader: str | None = None) -> Row:
+    """The entity a write names, when the writer can see it (or `reader`, the request's effective reader, when the
+    caller names one). One it cannot see is not found, the same as one that is not there, so a write never confirms that
+    a hidden entity exists."""
     row = _one(c, "SELECT * FROM entities WHERE id = ?", (entity_id,))
-    if row is None or not V.visible(c, actor, entity_id):
+    if row is None or not V.visible(c, reader or actor, entity_id):
         _refuse(c, actor, "not_found", f"no entity {entity_id}")
     if row["status"] == "merged":
         _refuse(c, actor, "merged", f"{entity_id} is merged into {row['merged_into_id']}; write to that one")
@@ -1190,6 +1201,120 @@ def clear_value(c: sqlite3.Connection, actor: str, entity_id: str, key: str, val
     return bool(rows)
 
 
+def kept(c: sqlite3.Connection, entity_id: str) -> str:
+    """The entity `entity_id` is now: itself, or the one it was merged into (up to five merges)."""
+    return _follow(c, [entity_id])[0]
+
+
+def unmerged(c: sqlite3.Connection, actor: str, entity_id: str) -> str | None:
+    """The entity `entity_id` was merged into, when it names a merged-away entity the reader sees through the kept one;
+    else None. A write that names a merged-away id is refused with this, never carried over to the kept entity."""
+    row = _one(c, "SELECT status FROM entities WHERE id = ?", (entity_id,))
+    if row is None or row["status"] != "merged" or not visible_entity(c, actor, entity_id):
+        return None
+    return _follow(c, [entity_id])[0]
+
+
+def set_status(
+    c: sqlite3.Connection,
+    actor: str,
+    entity_id: str,
+    version: int,
+    *,
+    status: str = "",
+    next_step: str = "",
+    next_step_due: str = "",
+    flags: Sequence[str] = (),
+    reader: str | None = None,
+) -> Row | None:
+    """Writes a relationship's status, next step, its due date and flags together, as `version` (the entity's
+    status_version the writer read) becomes the next one. Each is replaced: an empty one is cleared. None when the
+    version is not the entity's now (someone else wrote it since): nothing is written, and the caller reads it again.
+    The entity is named by its own id; a merged-away one is refused (_live), never its kept entity. `reader` is whose
+    Contacts grants see it (the effective reader); the writer gate is the actor's."""
+    _writer(c, actor)
+    ent = _live(c, actor, entity_id, reader)
+    due = str(next_step_due or "").strip()
+    if due:
+        try:
+            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", due):
+                raise ValueError(due)
+            due = date.fromisoformat(due).isoformat()  # sorted as text by what's next
+        except ValueError:
+            _refuse(c, actor, "kind", "next_step_due needs a date as YYYY-MM-DD")
+    said = {
+        "status": str(status or "").strip(),
+        "next_step": str(next_step or "").strip(),
+        "flags": list(dict.fromkeys(str(flag).strip() for flag in flags if str(flag).strip())),
+    }
+    if (
+        c.execute(
+            "UPDATE entities SET relationship_status = ?, next_step_due = ?, status_version = status_version + 1, "
+            "updated_at = ? WHERE id = ? AND status_version = ?",
+            (json.dumps(said, sort_keys=True), due or None, H.now(), ent["id"], int(version)),
+        ).rowcount
+        == 0
+    ):
+        return None
+    return relationship(c, ent["id"])
+
+
+def relationship(c: sqlite3.Connection, entity_id: str) -> Row:
+    """An entity's relationship status as set_status keeps it, with the status_version a writer sends back."""
+    row = _one(c, "SELECT relationship_status, next_step_due, status_version FROM entities WHERE id = ?", (entity_id,))
+    assert row is not None  # the caller read the entity
+    return _status_of(row)
+
+
+def _status_of(row: Row) -> Row:
+    try:
+        said = json.loads(row["relationship_status"] or "{}")
+    except ValueError:
+        said = {}
+    said = cast(dict[str, Any], said) if isinstance(said, dict) else {}
+    return {
+        "status": said.get("status") or None,
+        "next_step": said.get("next_step") or None,
+        "next_step_due": row["next_step_due"],
+        "flags": list(said.get("flags") or []),
+        "status_version": row["status_version"],
+    }
+
+
+def set_owner(c: sqlite3.Connection, actor: str, entity_id: str, owner: str, reader: str | None = None) -> str | None:
+    """Names the teammate who owns an entity (a relationship's owner): human:<id> or bot:<id>, or '' for none. The
+    caller resolved a bot by id as one it may see. The writer must see the entity, as for any Directory write, and a
+    merged-away one is refused (_live). `reader` is whose Contacts grants see it. Returns the owner."""
+    _writer(c, actor)
+    ent = _live(c, actor, entity_id, reader)
+    kind, _, ident = str(owner or "").strip().partition(":")
+    if not kind:
+        owner_type, owner_id = None, None
+    elif kind == "human" and c.execute("SELECT 1 FROM humans WHERE id = ?", (ident,)).fetchone():
+        owner_type, owner_id = "human", ident
+    elif kind == "bot" and c.execute("SELECT 1 FROM bots WHERE id = ? AND state <> 'archived'", (ident,)).fetchone():
+        owner_type, owner_id = "bot", ident
+    else:
+        _refuse(c, actor, "kind", "an owner is a person (human:<id>) or a bot (bot:<id>) on the team")
+    c.execute(
+        "UPDATE entities SET owner_type = ?, owner_id = ?, updated_at = ? WHERE id = ?",
+        (owner_type, owner_id, H.now(), ent["id"]),
+    )
+    return _owner({"owner_type": owner_type, "owner_id": owner_id})
+
+
+def owner_of(c: sqlite3.Connection, entity_id: str) -> str | None:
+    """An entity's owner as stored (human:<id> or bot:<id>), or None. The caller checks the reader sees the entity."""
+    row = _one(c, "SELECT owner_type, owner_id FROM entities WHERE id = ?", (entity_id,))
+    return _owner(row) if row else None
+
+
+def seen_entities(c: sqlite3.Connection, r: V.Reader, ids: Iterable[str]) -> dict[str, str]:
+    """{id: name} of the entities among `ids` the reader sees that are not merged away: what a page link to an entity
+    shows. A merged-away one is hidden until unmerge, whatever the kept entity shows. One read for all of them."""
+    return {str(row["id"]): str(row["name"]) for row in _visible_rows(c, r, list(ids)) if row["status"] != "merged"}
+
+
 def entity_facts(c: sqlite3.Connection, ids: Iterable[str]) -> dict[str, Row]:
     """Each entity's type and, for an organization, its kind (the scope terms type: and kind: read these)."""
     rows = _rows(
@@ -1251,11 +1376,15 @@ def merge(c: sqlite3.Connection, actor: str, keep_id: str, drop_id: str) -> str:
                 f"UPDATE {table} SET entity_id = :keep WHERE id = :id", [{"keep": keep_id, "id": i} for i in ids]
             )
             tables[table] = ids
+    _tasks_moved(c, tables.get("tasks", []), keep_id)
     values = [row[0] for row in c.execute(VALUE_MOVES, params)]
     if values:
         c.executemany(
             "UPDATE entity_values SET entity_id = :keep WHERE id = :id", [{"keep": keep_id, "id": i} for i in values]
         )
+    targets = {"drop_target": f"entity:{drop_id}", "keep_target": f"entity:{keep_id}"}
+    pages = [row[0] for row in c.execute(PAGE_LINK_MOVES, targets)]
+    c.executemany("UPDATE page_links SET target = :keep_target WHERE id = :id", [{**targets, "id": i} for i in pages])
     links = _rows(
         c,
         "SELECT id, from_entity_id, to_entity_id FROM entity_links WHERE (from_entity_id = :drop OR to_entity_id = :drop) "
@@ -1299,7 +1428,7 @@ def merge(c: sqlite3.Connection, actor: str, keep_id: str, drop_id: str) -> str:
             _id("merge"),
             drop_id,
             keep_id,
-            json.dumps({"tables": tables, "values": values, "links": moved_links}, sort_keys=True),
+            json.dumps({"tables": tables, "values": values, "links": moved_links, "pages": pages}, sort_keys=True),
             json.dumps(prior, sort_keys=True),
             _actor_kind(actor) or "",
             _actor_id(actor) or "",
@@ -1308,6 +1437,16 @@ def merge(c: sqlite3.Connection, actor: str, keep_id: str, drop_id: str) -> str:
     )
     _refresh_self_keys(c, keep_id)
     return keep_id
+
+
+def _tasks_moved(c: sqlite3.Connection, ids: Sequence[str], entity_id: str) -> None:
+    """A task a merge or unmerge moved is a changed task: its version and updated_at advance, so an edit read before is
+    refused as stale and an updated_since reader sees it."""
+    c.execute(
+        "UPDATE tasks SET version = version + 1, updated_at = ? WHERE id IN (SELECT value FROM json_each(?)) "
+        "AND entity_id = ?",
+        (H.now(), json.dumps(list(ids)), entity_id),
+    )
 
 
 def unmerge(c: sqlite3.Connection, actor: str, drop_id: str) -> str:
@@ -1335,11 +1474,20 @@ def unmerge(c: sqlite3.Connection, actor: str, drop_id: str) -> str:
             f"UPDATE {table} SET entity_id = :drop WHERE id = :id AND entity_id = :keep",
             [{**back, "id": i} for i in ids],
         )
+    _tasks_moved(c, moved["tables"].get("tasks", []), drop_id)
     if moved["values"]:
         c.executemany(
             "UPDATE entity_values SET entity_id = :drop WHERE id = :id AND entity_id = :keep",
             [{**back, "id": i} for i in moved["values"]],
         )
+    # A page link goes back while it still names the kept entity (a merge logged before page links moved has none).
+    c.executemany(
+        "UPDATE OR IGNORE page_links SET target = :drop_target WHERE id = :id AND target = :keep_target",
+        [
+            {"drop_target": f"entity:{drop_id}", "keep_target": f"entity:{keep_id}", "id": i}
+            for i in moved.get("pages", [])
+        ],
+    )
     # A link goes back only while its ends are still the ones the merge gave it.
     c.executemany(
         "UPDATE entity_links SET from_entity_id = :from_id, to_entity_id = :to_id, updated_at = :now "
@@ -1397,6 +1545,9 @@ ERASE_STATEMENTS: tuple[tuple[str, str], ...] = (
     ("entity_external_refs", "DELETE FROM entity_external_refs WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
     ("entity_sources", "DELETE FROM entity_sources WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
     ("entity_watches", "DELETE FROM entity_watches WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
+    # A task stays; it only stops naming the erased entity, and the entity's page links go (the pages stay).
+    ("tasks", "UPDATE tasks SET entity_id = '' WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
+    ("page_links", "DELETE FROM page_links WHERE target IN (SELECT 'entity:' || value FROM json_each(:ids))"),
     ("market_figures", "DELETE FROM market_figures WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
     # A matter (backend/risk.py) stays with its task; it only stops naming the erased party, place or product.
     (
@@ -1438,6 +1589,14 @@ ERASE_STATEMENTS: tuple[tuple[str, str], ...] = (
         "DELETE FROM entity_merges WHERE entity_id IN (SELECT value FROM json_each(:ids)) "
         "OR into_entity_id IN (SELECT value FROM json_each(:ids))",
     ),
+)
+# A task's history keeps the entity ids it was for (kind entity_id); an erased one is scrubbed from it, the row stays.
+TASK_HISTORY_OF_ERASED = (
+    "UPDATE history_events SET "
+    "old = CASE WHEN old IN (SELECT value FROM json_each(:ids)) THEN NULL ELSE old END, "
+    "new = CASE WHEN new IN (SELECT value FROM json_each(:ids)) THEN NULL ELSE new END "
+    "WHERE subject_type = 'task' AND kind = 'entity_id' "
+    "AND (old IN (SELECT value FROM json_each(:ids)) OR new IN (SELECT value FROM json_each(:ids)))"
 )
 # The history of the erased entities and of their links. Run after those rows are deleted (see erase_rows).
 HISTORY_OF_ERASED = (
@@ -1653,6 +1812,9 @@ def erase_rows(c: sqlite3.Connection, actor: str, entity_id: str, reason: str) -
     # After the entities and links are gone: the history trigger (migration 20261108045025) allows a row of a subject that
     # no longer exists, and only those, so the history of live entities stays append-only.
     if "history_events" in tables:
+        scrubbed = c.execute(TASK_HISTORY_OF_ERASED, params).rowcount
+        if scrubbed:
+            removed["task_history"] = scrubbed
         count = c.execute(HISTORY_OF_ERASED, params).rowcount
         if count:
             removed["history_events"] = count
@@ -1830,11 +1992,17 @@ def find(
     after: str | None = None,
     limit: int = LIMIT,
     detail: bool = False,
+    owner: str | None = None,
+    sort: str = "name",
 ) -> dict[str, Any]:
-    """A page of one type's visible entities, by name (a prefix), status, or a self link key (customer_of; a person also
-    matches by the organization they work at). Keyset
-    paged on (name_key, id): `after` is the `next` the last page gave. The count stops at COUNT_CAP and says so.
-    `detail` adds what the Directory page's list shows: each row's organization, owner and the sources it is known from."""
+    """A page of one type's visible entities, by name (a prefix), status, owner (human:<id> or bot:<id>), or a self link
+    key (customer_of; a person also matches by the organization they work at). Keyset paged on (name_key, id), or with
+    sort `next` on the next step's due date (none last), then name: `after` is the `next` the last page gave. A `next`
+    row carries its relationship status (status, next step, due, flags, status_version). The count stops at COUNT_CAP
+    and says so. `detail` adds what the Directory page's list shows: each row's organization, owner and the sources it
+    is known from."""
+    if sort not in ("name", "next"):
+        raise ValueError("sort is name or next")
     r = V.reader(c, who)
     limit = _limit(limit)
     cl, cparams = V.clause(r)
@@ -1847,6 +2015,10 @@ def find(
     if status:
         where.append("e.status = ?")
         args.append(status)
+    if owner is not None:
+        kind, _, ident = str(owner).partition(":")
+        where.append("e.owner_type = ? AND e.owner_id = ?")
+        args += [kind, ident]
     if link:
         # A person matches through the organization they work at, too: Jane at a customer is one of our customers' people.
         ocl, oparams = V.clause(r, "o")
@@ -1857,25 +2029,45 @@ def find(
             f"AND o.status <> 'merged' AND (' ' || o.self_link_keys || ' ') LIKE ? AND {ocl})))"
         )
         args += [f"% {link} %", json.dumps(list(WORKS_AT)), _today(), f"% {link} %", *oparams]
+    # Sorted by the next step's due date, a row with none comes last (its key is past any date).
+    keys = "COALESCE(e.next_step_due, '9999-12-31'), e.name_key, e.id" if sort == "next" else "e.name_key, e.id"
     if after:
-        name_key, row_id = _decode(after)
-        where.append("(e.name_key, e.id) > (?, ?)")
-        args += [name_key, row_id]
+        start = _decode(after)
+        if not isinstance(start, list) or len(cast(list[Any], start)) != (3 if sort == "next" else 2):
+            raise ValueError("after is the next a page of this sort gave")
+        where.append(f"({keys}) > ({', '.join('?' * len(cast(list[Any], start)))})")
+        args += cast(list[Any], start)
     condition = " AND ".join(where)
     rows = _rows(
-        c, f"SELECT e.* FROM entities e WHERE {condition} ORDER BY e.name_key, e.id LIMIT ?", [*args, limit + 1]
+        c,
+        f"SELECT e.* FROM entities e WHERE {condition} ORDER BY {keys} LIMIT ?",
+        [*args, limit + 1],
     )
     more = len(rows) > limit
     rows = rows[:limit]
     total = _count(
-        c, f"SELECT count(*) FROM (SELECT 1 FROM entities e WHERE {condition} LIMIT ?)", [*args, COUNT_CAP + 1]
+        c,
+        f"SELECT count(*) FROM (SELECT 1 FROM entities e WHERE {condition} LIMIT ?)",
+        [*args, COUNT_CAP + 1],
     )
     shown = [brief(row) for row in rows]
+    if sort == "next":
+        for row, item in zip(rows, shown, strict=True):
+            item["relationship"] = _status_of(row)
     if detail:
         _list_detail(c, r, rows, shown)
+    last = rows[-1] if rows else {}
     return {
         "rows": shown,
-        "next": _encode([rows[-1]["name_key"], rows[-1]["id"]]) if more and rows else None,
+        "next": (
+            _encode(
+                [last["next_step_due"] or "9999-12-31", last["name_key"], last["id"]]
+                if sort == "next"
+                else [last["name_key"], last["id"]]
+            )
+            if more and rows
+            else None
+        ),
         "count": min(total, COUNT_CAP),
         "approximate": total > COUNT_CAP,
     }
@@ -2177,6 +2369,7 @@ def card(c: sqlite3.Connection, who: str, entity_id: str) -> dict[str, Any] | No
         "summary": ent["summary"],
         "links_to_us": (ent["self_link_keys"] or "").split(),
         **detail,
+        "relationship": _status_of(ent),
         "values": values,
         "links": links,
         "refs": refs,

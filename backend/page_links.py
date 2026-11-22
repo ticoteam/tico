@@ -23,16 +23,24 @@ WRITERS_SQL = (
 )
 
 
-def role_name(role: str) -> str:
+def role_name(role: str, target: str = "") -> str:
+    """A link's role as stored: writer, related, an entity's memory, or a task document's name (which may be Memory)."""
     said = role.strip()
-    return said.lower() if said.lower() in ("writer", "related") else task_documents.canonical(said)
+    if said.lower() in ("writer", "related") or (said.lower() == "memory" and target.startswith("entity:")):
+        return said.lower()
+    return task_documents.canonical(said)
 
 
 def _target(target: str, role: str) -> tuple[str, str]:
     kind, sep, ident = target.partition(":")
-    if not sep or not ident or kind not in ("task", "bot", "human", "goal", "page"):
-        raise Problem("validation", "A link target is task:, bot:, human:, goal: or page: followed by its id", 422)
-    if role not in ("writer", "related") and kind != "task":
+    if not sep or not ident or kind not in ("task", "bot", "human", "goal", "page", "entity"):
+        raise Problem(
+            "validation", "A link target is task:, bot:, human:, goal:, page: or entity: followed by its id", 422
+        )
+    if kind == "entity":
+        if role not in ("related", "memory"):
+            raise Problem("validation", "An entity's page is related or its memory", 422)
+    elif role not in ("writer", "related") and kind != "task":
         raise Problem("validation", "Document roles require a task target", 422)
     if role == "writer" and kind not in ("bot", "human"):
         raise Problem("validation", "A writer is a bot or a person", 422)
@@ -40,8 +48,17 @@ def _target(target: str, role: str) -> tuple[str, str]:
 
 
 def link(c: Any, page_id: str, target: str, role: str, by: str) -> bool:
-    role = role_name(role)
+    role = role_name(role, target)
     _target(target, role)
+    if (
+        role == "memory"
+        and target.startswith("entity:")
+        and c.execute(
+            "SELECT 1 FROM page_links WHERE target=? AND role='memory' AND page_id<>?", (target, page_id)
+        ).fetchone()
+    ):
+        # One memory page per entity (page_links_memory): find it with the list's linked and role filters.
+        raise Problem("conflict", "This entity already has a memory page", 409)
     return (
         c.execute(
             "INSERT OR IGNORE INTO page_links(id,page_id,target,role,created_by,created_at) VALUES(?,?,?,?,?,?)",
@@ -52,7 +69,7 @@ def link(c: Any, page_id: str, target: str, role: str, by: str) -> bool:
 
 
 def unlink(c: Any, page_id: str, target: str, role: str, by: str) -> bool:
-    role = role_name(role)
+    role = role_name(role, target)
     _target(target, role)
     if (
         role == "writer"
@@ -74,7 +91,7 @@ def pages_for(c: Any, target: str, role: str | None = None) -> list[str]:
     sql = "SELECT DISTINCT page_id FROM page_links WHERE target=?"
     if role is not None:
         sql += " AND role=?"
-        params.append(role_name(role))
+        params.append(role_name(role, target))
     return [r[0] for r in c.execute(sql + " ORDER BY page_id", params)]
 
 
@@ -99,6 +116,10 @@ def prime(c: Any, rows: Iterable[Any]) -> None:
     read_cache.prime_rows(c, WRITERS_SQL, {(fid,): value for fid, value in writers.items()})
     targets = {str(r["target"]) for found in links.values() for r in found}
     _prime_targets(c, targets)
+    # The entity targets of the whole list: the first reader's check reads them all at once (_entities).
+    read_cache.value(c, ("page_link_entity_targets",), _no_ids, shared=True).update(
+        t[7:] for t in targets if t.startswith("entity:")
+    )
     _prime_approvals(c, (r for found in links.values() for r in found))
     actors = targets | {str(v["actor"]) for found in writers.values() for v in found}
     known: dict[str, str] = cast(Callable[..., dict[str, str]], names.lookup)(c, actors)
@@ -166,7 +187,7 @@ def links_of(c: Any, auth: Any, who: Any, page_id: str) -> list[dict[str, Any]]:
     targets = {str(r["target"]) for r in rows}
     _prime_targets(c, targets)
     _prime_approvals(c, rows)
-    known = _names(c, {t for t in targets if t.startswith(("bot:", "human:"))})
+    known = _names(c, {t for t in targets if t.startswith(("bot:", "human:"))}) | _entities(c, auth, who, targets)
     out: list[dict[str, Any]] = []
     approvals: dict[str, dict[str, int]] = {}
     for r in rows:
@@ -209,6 +230,8 @@ def _target_name(c: Any, auth: Any, who: Any, target: str, known: dict[str, str]
             goal: Any = read_cache.one(c, "SELECT * FROM goals WHERE id=?", (ident,))
             if goal and cast(Callable[..., Any], goal_routes.readable_goals)(c, auth, who, [goal]):
                 return str(goal["title"])
+        if kind == "entity":
+            return known.get(target)  # _entities: seen and not merged away
         if kind == "page":
             from . import files
 
@@ -223,6 +246,62 @@ def _target_name(c: Any, auth: Any, who: Any, target: str, known: dict[str, str]
         if exc.status not in (403, 404):
             raise
     return None
+
+
+def _no_ids() -> set[str]:
+    return set()
+
+
+def _no_names() -> dict[str, str | None]:
+    return {}
+
+
+def entity_reader(c: Any, auth: Any, who: Any) -> str | None:
+    """The actor whose Contacts grants an entity check uses: the request's effective reader (auth.run_viewer: the
+    person a shared Assistant run reads as); None for nobody, who sees no entity."""
+    viewer = auth.run_viewer(c, who)
+    return None if viewer.role == "none" else str(viewer.actor)
+
+
+def _entities(c: Any, auth: Any, who: Any, targets: Iterable[str]) -> dict[str, str]:
+    """{entity:<id>: name} for the entity targets the reader sees under the Contacts read rule. One read a request: the
+    first check covers every entity target the snapshot's page list holds (prime) with these, and later ones are
+    answered from it. A link kept on a merged-away entity is hidden until unmerge."""
+    ids = {t[7:] for t in targets if t.startswith("entity:")}
+    if not ids:
+        return {}
+    from .entities import store as ES
+    from .entities import visible as V
+
+    actor = entity_reader(c, auth, who)
+    seen = read_cache.value(c, ("page_link_entities", actor), _no_names, shared=True)
+    missing = (ids | read_cache.value(c, ("page_link_entity_targets",), _no_ids, shared=True)) - seen.keys()
+    if missing:
+        found: dict[str, str] = {}
+        if actor is not None:
+            reader = read_cache.value(c, ("page_link_entity_reader", actor), lambda: V.reader(c, actor), shared=True)
+            found = ES.seen_entities(c, reader, sorted(missing))
+        seen.update({i: found.get(i) for i in missing})
+    return {"entity:" + i: name for i in ids if (name := seen.get(i)) is not None}
+
+
+def entity_target(c: Any, auth: Any, who: Any, ref: str) -> str:
+    """The entity:<id> target a reference names for this reader, for a link, an unlink and the linked= filter alike:
+    an id, email or domain the reader sees, a merged-away id answering with its kept entity (so a link a merge moved
+    comes off by the old id). A link kept on a merged-away entity is nobody's to take off until unmerge: it is hidden,
+    and that entity's own row no longer says who may see it. 404 when none shows, 409 when several match."""
+    from .entities import store as ES
+
+    actor = entity_reader(c, auth, who)
+    missing = Problem("not_found", "Entity not found", 404)
+    if actor is None:
+        raise missing
+    found = ES.get(c, actor, ref)
+    if len(found) > 1:
+        raise Problem("ambiguous", f"More than one entity matches {ref}; name one by id", 409)
+    if not found:
+        raise missing
+    return "entity:" + str(found[0]["id"])
 
 
 def may_write(c: Any, auth: Any, who: Any, row: Any) -> bool:
@@ -278,7 +357,7 @@ def filters(
             args.append(linked)
         if role:
             clauses.append("role=?")
-            args.append(role_name(role))
+            args.append(role_name(role, linked))
             if check_role_target:
                 clauses.append("page_link_target_readable(target)")
         where.append("f.id IN (SELECT page_id FROM page_links WHERE " + " AND ".join(clauses) + ")")
@@ -295,17 +374,36 @@ def visible_filters(
 ) -> Generator[tuple[list[str], list[str]]]:
     """Apply target visibility before limiting, ranking or creating a cursor for a result set."""
     role_only = bool(role and not linked)
+    if linked.startswith("entity:"):
+        if not linked[7:].strip():
+            raise Problem("validation", "linked=entity: needs the entity's id, email or domain", 422)
+        # A reference resolves as a link does: an email or domain, a merged-away id as its kept entity.
+        try:
+            linked = entity_target(c, auth, who, linked[7:])
+        except Problem as exc:
+            if exc.status != 404:
+                raise
+            yield ["0"], []
+            return
     where, args = filters(linked, role, writer, check_role_target=role_only)
+
+    def prefetch() -> None:
+        """An entity's memory pages: every entity target of that role checked in one read before the rows are scanned.
+        Run after the filter function is registered, which clears the snapshot's cache."""
+        if role.strip().lower() == "memory":
+            sql = "SELECT DISTINCT target FROM page_links WHERE role='memory' AND target LIKE 'entity:%'"
+            _entities(c, auth, who, [r[0] for r in c.execute(sql)])
 
     @cache
     def readable(target: str) -> bool:
-        known = _names(c, {target}) if target.startswith("human:") else {}
+        known = _names(c, {target}) if target.startswith("human:") else _entities(c, auth, who, {target})
         return _target_name(c, auth, who, target, known) is not None
 
     if any(not readable(target) for target in (linked, writer) if target):
         yield ["0"], []
     elif role_only:
         c.create_function("page_link_target_readable", 1, readable)
+        prefetch()
         try:
             yield where, args
         finally:

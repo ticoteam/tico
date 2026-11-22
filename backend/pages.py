@@ -489,9 +489,10 @@ class Pages:
                 raise Problem("not_found", "Page not found", 404)
             if not page_links.may_write(c, self.auth, who, row):
                 raise Problem("forbidden", "Only page writers change its links", 403)
+            H._writer(c, who.actor, task_id=row["task_id"])
             selected = target
             kind, _, ident = selected.partition(":")
-            chosen_role = page_links.role_name(role)
+            chosen_role = page_links.role_name(role, target)
             if kind == "task":
                 ident = self.auth.resolve_task(c, who, ident)
                 if not remove:
@@ -501,6 +502,13 @@ class Pages:
                     from .task_reads import page_rights
 
                     page_rights(c, self.auth, who, ident)
+            elif kind == "entity":
+                # Link and unlink resolve alike (page_links.entity_target).
+                selected = page_links.entity_target(c, self.auth, who, ident)
+                if remove and not page_links.unlink(c, fid, selected, chosen_role, who.actor):
+                    raise Problem("not_found", "No such link on this page", 404)
+                if not remove and chosen_role == "memory":
+                    self.shared_memory(c, row)
             elif not remove:
                 if kind == "bot":
                     bot = H.resolve_bot(c, ident)
@@ -517,7 +525,9 @@ class Pages:
                     other = self.rows(c, [ident]).get(ident)
                     if not other or not self.files.visible(c, who, other, {}):
                         raise Problem("not_found", "Page not found", 404)
-            if remove:
+            if remove and kind == "entity":
+                changed = True  # taken off above
+            elif remove:
                 changed = page_links.unlink(c, fid, selected, chosen_role, who.actor)
             else:
                 changed = page_links.link(c, fid, selected, chosen_role, who.actor)
@@ -530,7 +540,42 @@ class Pages:
             )
             return {"page": self.view(c, who, row, self.page_of(row), {}, include_audience=True)}
 
-        return self.files.write(request, who, {"id": fid, "target": target, "role": role}, work)
+        result = self.files.write(request, who, {"id": fid, "target": target, "role": role}, work)
+        if not result.get("page"):
+            return result
+        # The page as it is now, as the caller may see it now: a replayed answer never shows a link from back then.
+        with self.store.read() as c:
+            row = self.rows(c, [fid]).get(fid)
+            if not row or not self.files.visible(c, who, row, {}):
+                raise Problem("not_found", "Page not found", 404)
+            return {"page": self.view(c, who, row, self.page_of(row), {}, include_audience=True)}
+
+    @staticmethod
+    def memory_of(c, fid):
+        """Whether the page is an entity's memory page (page_links_memory)."""
+        return bool(
+            c.execute(
+                "SELECT 1 FROM page_links WHERE page_id=? AND role='memory' AND target LIKE 'entity:%'", (fid,)
+            ).fetchone()
+        )
+
+    @staticmethod
+    def shared_memory(c, row):
+        """An entity's one memory page is read by everyone who sees the entity: no narrowed audience, not a chat's file
+        and not on a private task. A page that fewer may read would hold the entity's one memory slot unseen."""
+        from .files import restricted_page_rows
+
+        if (
+            str(row["scope"]).startswith("conversation:")
+            or restricted_page_rows(c, [row["id"]]).get(row["id"])
+            or row["task_id"]
+            and H.task_private(c, H.task(c, row["task_id"]))
+        ):
+            raise Problem(
+                "validation",
+                "An entity's memory page is read by everyone who sees the entity: share it company-wide first",
+                422,
+            )
 
     def unlink_unread(self, c, who, fid, target, role):
         """Take a page the caller may not read off a task whose pages they write (task_reads.page_rights): a page bound
@@ -591,6 +636,10 @@ class Pages:
         before = c.execute("SELECT audience FROM pages WHERE file_id=?", (row["id"],)).fetchone()[0]
         if before == value:
             return
+        if value is not None and self.memory_of(c, row["id"]):
+            raise Problem(
+                "conflict", "It's an entity's memory page, read by everyone who sees it; unlink it first", 409
+            )
         now = H.now()
         c.execute("UPDATE pages SET audience=?,updated_at=? WHERE file_id=?", (value, now, row["id"]))
         from . import counsel
@@ -764,7 +813,12 @@ def install_pages(app, store, auth, files):
 
     @app.post(
         "/api/v2/pages/{fid}/links",
-        **api_v2("Pages", "linkPage", "Link a page to a task, bot, person, goal or page", PageShown),
+        **api_v2(
+            "Pages",
+            "linkPage",
+            "Link a page to a task, bot, person, goal, page or Contacts entity (role memory: its one memory page)",
+            PageShown,
+        ),
     )
     def link_page(request: Request, fid: str, body: PageLink):
         return pages.change_link(request, fid, body.target, body.role)

@@ -12,10 +12,16 @@ A page has its own id (`file-<hex>`), versions and audience. It is linked to wha
 role. A page can have many links, and a task can have many pages: one page can be the Spec of two tasks, and a task can
 have a Spec, a QA report and any number of other pages.
 
-- **Targets:** `task:<id>`, `bot:<id>`, `human:<slug>`, `goal:<id>` or `page:<id>`.
-- **Roles:** `writer` (a page's writers), `related` (the default), or a document name on a task: `Spec`, `QA report`,
-  `Release report`, `Invoice`, or another document name. A task's document is a page linked to that task with the
-  document's name as its role.
+- **Targets:** `task:<id>`, `bot:<id>`, `human:<slug>`, `goal:<id>`, `page:<id>` or `entity:<id>` (a Contacts entity;
+  an email or domain resolves to its id, and only an entity you can see is linked or shown).
+- **Roles:** `writer` (a page's writers), `related` (the default), `memory` on an entity, or a document name on a task:
+  `Spec`, `QA report`, `Release report`, `Invoice`, or another document name. A task's document is a page linked to that
+  task with the document's name as its role.
+- **An entity's memory page.** An entity (an outside party's relationship) has at most one page linked as its `memory`:
+  a second is refused (409). Find it with `tico page list --linked entity:<id> --role memory`; when there is none,
+  publish a page and link it. A memory page is read by everyone who sees the entity: no narrowed audience, not a chat's
+  file, not on a private task (422 otherwise). A merge moves the memory link only when the kept entity has none; a link
+  left on the merged-away entity is hidden until unmerge puts things back.
 - **Who may write a version.** The team owner, a linked writer (a person or an active bot), a party to a linked task
   (a bot: its owner, requester, their managers or delegates, or one who can work it; any bot may comment on a task it
   reads, but that alone does not let it write the task's pages), or someone who may manage the page. Publishing adds the version's author as a linked writer.
@@ -58,7 +64,7 @@ Anyone who may write a page publishes its versions: a person, or a bot as itself
     tico page link file-1 --task T1 --as Spec
     tico page unlink file-1 --task T1 --as Spec
 
-The target is one of `--task`, `--bot`, `--person SLUG`, `--goal` or `--page`. `--as` is the role, `related` when left
+The target is one of `--task`, `--bot`, `--person SLUG`, `--goal`, `--page` or `--entity REF`. `--as` is the role, `related` when left
 out. Unlink takes the same target and role that linked the page. `tico page show ID` includes links and writers in its JSON
 read. `tico page list` narrows by `--linked TARGET` (any role), `--role ROLE` and
 `--writer ACTOR`; the filters combine.
