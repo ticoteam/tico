@@ -385,6 +385,18 @@ def test_closed_as_anything_but_done_after_the_close_out_asks_the_owner(company,
     with company.transaction() as c:
         lines = [r[0] for r in c.execute("SELECT line FROM requirements WHERE line LIKE ?", (f"{ISSUE} %",))]
         assert len(lines) == 1 and lines[0].startswith(f"{ISSUE} was closed in Jira (Won't Do)")
+    jira.read("Done", "done")  # then into Tico's own Done: that question is moot and taken back
+    with company.transaction() as c:
+        found = c.execute("SELECT withdrawn_at FROM requirements WHERE line LIKE ?", (f"{ISSUE} %",)).fetchall()
+        assert [r[0] is not None for r in found] == [True]
+
+
+def test_release_times_compare_as_times_not_text(company, gh):
+    with company.transaction() as c:  # as text "…00Z" sorts after "…00.500000Z", though it is half a second older
+        F.save_release(c, REPO, {"tag": "v-a", "commit_sha": gh.sha(), "published_at": "2026-11-21T10:00:00Z"}, 1)
+        later = {"tag": "v-b", "commit_sha": gh.sha(), "published_at": "2026-11-21T10:00:00.500000Z"}
+        F.save_release(c, REPO, later, 1)
+        assert RC._newest(c, [(REPO, "v-a"), (REPO, "v-b")])[1] == "v-b"
 
 
 def test_only_tico_queues_a_close_out_key(company, gh, jira):

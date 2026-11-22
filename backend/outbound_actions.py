@@ -955,7 +955,12 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
         if asked and (not row["task_id"] or (task and reads(c, who, task))):
             return True  # the person asked about its unknown outcome (`ask_owner`), while they still read its task
         found = task_asks.grant(c, row["approval_id"]) if row["approval_id"] else None
-        return bool(found) and task_asks.party(c, who.actor, found)
+        if not (found and task_asks.party(c, who.actor, found)):
+            return False
+        if not row["task_id"]:
+            return True
+        task = task or H.task(c, row["task_id"])
+        return bool(task) and reads(c, who, task)  # a party to its OK, while the request still reads its task
 
     def one(c: Any, who: Any, oid: str) -> dict[str, Any]:
         row = get(c, oid)

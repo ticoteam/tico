@@ -36,6 +36,7 @@ import hashlib
 import json
 import logging
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import quote
 
@@ -46,6 +47,7 @@ Row = dict[str, Any]
 LOG = logging.getLogger(__name__)
 DONE_STATUS = "Done"  # Jira's default Done status; the transition goes to the status of this name
 KEY_PREFIX = "closeout:"
+_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)  # an unreadable time sorts first
 LINES = {
     "withdrawn": "{key} left Ready in Jira ({status}): keep working on it, or close this task?",
     "closed": "{key} was closed in Jira ({status}): keep working on it, or close this task to settle it?",
@@ -151,24 +153,31 @@ def unfinished(conn: "sqlite3.Connection", task_id: str) -> bool:
 
 def _newest(conn: "sqlite3.Connection", releases: list[tuple[str, str]]) -> tuple[str, str, str]:
     """(repo, tag, published at) of the newest of the releases holding the task's merges (published last)."""
-    found = conn.execute(
+    rows = conn.execute(
         "SELECT r.repo, r.tag, r.published_at FROM github_releases r JOIN json_each(?) j "
-        "ON r.repo = json_extract(j.value, '$[0]') AND r.tag = json_extract(j.value, '$[1]') "
-        "ORDER BY r.published_at DESC, r.tag DESC LIMIT 1",
+        "ON r.repo = json_extract(j.value, '$[0]') AND r.tag = json_extract(j.value, '$[1]')",
         (json.dumps(releases),),
-    ).fetchone()
-    return (str(found[0]), str(found[1]), str(found[2] or "")) if found else (*releases[-1], "")
+    ).fetchall()
+    if not rows:
+        return (*releases[-1], "")
+    # Compared as times, not text: "…00Z" sorts after "…00.500000Z" as text.
+    found = max(rows, key=lambda r: (_h().parse_ts(str(r[2] or "")) or _EPOCH, str(r[1])))
+    return (str(found[0]), str(found[1]), str(found[2] or ""))
 
 
 def _announced(conn: "sqlite3.Connection", task_id: str) -> str:
     """When the newest release a close-out of the task already announced was published ('' for none): Tico's own rows
     only (outbound_actions reserves the prefix for it)."""
-    found = conn.execute(
-        "SELECT MAX(json_extract(metadata, '$.published_at')) FROM outbound_actions "
-        "WHERE occurrence_key >= ? AND occurrence_key < ? AND actor=?",
-        (f"{KEY_PREFIX}{task_id}:", f"{KEY_PREFIX}{task_id};", _h().TICO_ACTOR),
-    ).fetchone()
-    return str(found[0] or "") if found else ""
+    stamps = [
+        str(r[0])
+        for r in conn.execute(
+            "SELECT json_extract(metadata, '$.published_at') FROM outbound_actions "
+            "WHERE occurrence_key >= ? AND occurrence_key < ? AND actor=?",
+            (f"{KEY_PREFIX}{task_id}:", f"{KEY_PREFIX}{task_id};", _h().TICO_ACTOR),
+        )
+        if r[0]
+    ]
+    return max(stamps, key=lambda t: _h().parse_ts(t) or _EPOCH, default="")
 
 
 # ----------------------------------------------------------------------------- the close-out
@@ -312,13 +321,26 @@ def _watch(conn: "sqlite3.Connection", key: str, connection_id: str, gone: bool)
             close_out(conn, task_id, str(detail["pending"]))
         return
     ours = str(fields.get("status") or "").casefold() == DONE_STATUS.casefold() and closed_out(conn, task_id)
-    if detail.get("asked") == state or (state == "closed" and ours):
-        return  # asked about this standing already, or Tico's own close-out closed it (any other Done status asks)
+    if state == "closed" and ours:  # Tico's own close-out closed it (any other Done status asks): a question left over
+        if asked:  # from a "Won't Do" before it is moot now
+            for k in ("ask", "asked"):
+                detail.pop(k, None)
+            _save_detail(conn, link, detail)
+            owner_asks.withdraw(conn, asked, f"{key} is Done in Jira", task_id, advance=False)
+        return
+    if detail.get("asked") == state:
+        return  # asked about this standing already
     line = LINES[state].format(key=key, status=fields.get("status") or "")
     people = owner_asks.people_for(conn, task)
     found = owner_asks.ask(conn, task_id, people, line, title=line, body=str(link["url"]))
     if asked:
         owner_asks.withdraw(conn, asked, "Asked again: Jira changed", task_id, advance=False)
-    detail.update(ask=found[0] if found else "", asked=state)
+    if not found:  # nobody could be asked yet: the next read tries again rather than counting this one as asked
+        if asked:
+            detail.pop("ask", None)
+            detail.pop("asked", None)
+            _save_detail(conn, link, detail)
+        return
+    detail.update(ask=found[0], asked=state)
     _save_detail(conn, link, detail)
-    H.event(conn, H.TICO_ACTOR, "closeout.held", task_id, {"issue": key, "why": state, "asked": bool(found)})
+    H.event(conn, H.TICO_ACTOR, "closeout.held", task_id, {"issue": key, "why": state, "asked": True})
