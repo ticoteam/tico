@@ -1979,11 +1979,8 @@ impl Runner {
 
     async fn stop_host(&self, host: &Host, aid: &str, redactor: Option<&Arc<Redactor>>) {
         if let Host::Codex(codex) = host {
-            if let Some(report) = codex.finish_turn().await {
-                let clean = redactor.map_or(std::borrow::Cow::Borrowed(&report), |r| {
-                    r.scrub_json(&report)
-                });
-                let _ = self.state.append(aid, "diagnostic", &clean);
+            for report in codex.finish_turn(redactor.cloned()).await {
+                let _ = self.state.append(aid, "diagnostic", &report);
             }
         } else {
             host.stop().await;

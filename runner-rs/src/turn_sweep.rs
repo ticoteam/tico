@@ -2,23 +2,13 @@
 //! background job, a dev server, a browser or a busy loop the bot never ended would otherwise run on after the turn,
 //! on a machine other bots share.
 //!
-//! A process is the turn's when any of these holds, from the most exact to the widest:
-//! - its environment carries the turn's mark (`MARK_ENV`), which everything the harness starts inherits, a job that
-//!   `setsid`s, double-forks or `nohup`s itself included (Linux, where `/proc/<pid>/environ` can be read);
-//! - it is in the turn's cgroup: on a cloud machine each harness runs in a scope of its own (crate::turn_limits),
-//!   which nothing leaves without writing to the cgroup tree, so this holds even for a process that cleared its
-//!   environment;
-//! - it is in the process group or session the harness led (hosts::new_group). Neither number is handed to another
-//!   process while one member is left; once none is and a new process holds the leader's old pid, the group is not
-//!   looked at, so it never names some other turn's processes. On a Mac this is all there is.
-//!
-//! A process that carries another turn's mark is never this one's, whatever its group or cgroup. Spared: `keep`
-//! alone (a reaping parent that stays for kept shells) and `keep_trees` with everything under them (the shells a
-//! turn kept on its background wait, which crate::afterwatch watches and ends at the run's time limit). Each is
-//! asked to end (SIGTERM), then killed after a short grace; a few passes catch what one forked meanwhile.
+//! Codex uses the scope where available, an environment mark on Linux, and recorded ancestry
+//! and sessions. Docker reads marks as the bot user while the supervisor verifies and signals
+//! candidates. Claude's sweep also preserves its background-wait shells and their reaper.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -29,10 +19,9 @@ pub const MARK_ENV: &str = "TICO_TURN_MARK";
 const GRACE: Duration = Duration::from_millis(if cfg!(test) { 300 } else { 1000 });
 /// SIGKILL rounds after the grace: each catches what the last one's processes forked before they died.
 const PASSES: usize = 10;
-/// How much of a command line a stopped process is reported with.
-const COMMAND_CHARS: usize = 120;
 /// How many distinct commands the turn's report names.
 const TOP: usize = 5;
+const COMMAND_CHARS: usize = 120;
 
 /// One ended turn: how to know its processes, and what of them stays.
 #[derive(Clone, Debug, Default)]
@@ -42,6 +31,7 @@ pub struct Turn {
     pub groups: Vec<u32>,
     /// The cgroup directories its harness processes ran in.
     pub cgroups: Vec<PathBuf>,
+    pub tracking: Option<Arc<Mutex<Tracking>>>,
     /// Processes that stay, alone.
     pub keep: Vec<u32>,
     /// Processes that stay with everything under them.
@@ -55,93 +45,300 @@ pub struct Stopped {
     pub command: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct Process {
+    pid: u32,
+    start: u64,
+    #[cfg(target_os = "macos")]
+    unique_id: u64,
+}
+
 struct Proc {
+    id: Process,
     ppid: u32,
     pgid: u32,
     sid: Option<u32>,
     zombie: bool,
-    /// The value of its `MARK_ENV`, when its environment can be read and has one.
-    mark: Option<String>,
+    #[cfg(target_os = "macos")]
+    parent_id: u64,
 }
 
-/// Every process this runner can see.
+#[cfg(target_os = "linux")]
+fn process(pid: u32) -> Option<Proc> {
+    let stat = std::fs::read(format!("/proc/{pid}/stat")).ok()?;
+    let fields: Vec<_> = stat
+        .rsplit(|&b| b == b')')
+        .next()?
+        .split(|b| b.is_ascii_whitespace())
+        .filter(|f| !f.is_empty())
+        .collect();
+    let num = |i: usize| {
+        std::str::from_utf8(fields.get(i)?)
+            .ok()?
+            .parse::<u32>()
+            .ok()
+    };
+    Some(Proc {
+        id: Process {
+            pid,
+            start: std::str::from_utf8(fields.get(19)?).ok()?.parse().ok()?,
+        },
+        ppid: num(1)?,
+        pgid: num(2)?,
+        sid: num(3),
+        zombie: matches!(*fields.first()?, b"Z" | b"X"),
+    })
+}
+
 #[cfg(target_os = "linux")]
 fn table() -> HashMap<u32, Proc> {
-    let mut procs = HashMap::new();
-    let prefix = format!("{MARK_ENV}=");
-    for entry in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
-        let Some(pid) = entry
-            .file_name()
-            .to_str()
-            .and_then(|n| n.parse::<u32>().ok())
-        else {
-            continue;
-        };
-        let Ok(stat) = std::fs::read_to_string(entry.path().join("stat")) else {
-            continue;
-        };
-        // After the command's closing paren: state, ppid, pgrp, session.
-        let Some((_, rest)) = stat.rsplit_once(')') else {
-            continue;
-        };
-        let fields: Vec<&str> = rest.split_whitespace().collect();
-        let num = |i: usize| fields.get(i).and_then(|f| f.parse::<u32>().ok());
-        let (Some(ppid), Some(pgid)) = (num(1), num(2)) else {
-            continue;
-        };
-        let mark = std::fs::read(entry.path().join("environ"))
-            .ok()
-            .and_then(|env| {
-                env.split(|b| *b == 0).find_map(|kv| {
-                    std::str::from_utf8(kv)
-                        .ok()?
-                        .strip_prefix(&prefix)
-                        .map(String::from)
-                })
-            });
-        procs.insert(
-            pid,
-            Proc {
-                ppid,
-                pgid,
-                sid: num(3),
-                zombie: fields.first().is_some_and(|s| *s == "Z" || *s == "X"),
-                mark,
-            },
-        );
-    }
-    procs
+    std::fs::read_dir("/proc")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            let pid = entry.file_name().to_str()?.parse().ok()?;
+            Some((pid, process(pid)?))
+        })
+        .collect()
 }
 
-/// Every process this runner can see. No environment: a Mac does not show it to `ps` reliably.
-#[cfg(not(target_os = "linux"))]
-fn table() -> HashMap<u32, Proc> {
-    let mut procs = HashMap::new();
-    let Ok(out) = std::process::Command::new("ps")
-        .args(["-A", "-o", "pid=,ppid=,pgid=,stat="])
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output()
-    else {
-        return procs;
+#[cfg(target_os = "macos")]
+fn process(pid: u32) -> Option<Proc> {
+    // XNU's PROC_PIDT_BSDINFOWITHUNIQID (proc_info_private.h). The unique ID
+    // stays through exec, and an orphan still carries its creator's unique ID.
+    #[repr(C)]
+    struct Info {
+        bsd: libc::proc_bsdinfo,
+        uuid: [u8; 16],
+        unique_id: u64,
+        parent_unique_id: u64,
+        version: i32,
+        original_parent_version: i32,
+        reserved: [u64; 2],
+    }
+    const BSD_INFO_WITH_UNIQUE_ID: i32 = 18;
+    let mut info = std::mem::MaybeUninit::<Info>::uninit();
+    // SAFETY: libproc writes at most the given buffer size. Only use a complete result.
+    let size = std::mem::size_of::<Info>() as i32;
+    let got = unsafe {
+        libc::proc_pidinfo(
+            pid as i32,
+            BSD_INFO_WITH_UNIQUE_ID,
+            1,
+            info.as_mut_ptr().cast(),
+            size,
+        )
     };
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
-        let cols: Vec<&str> = line.split_whitespace().collect();
-        let num = |i: usize| cols.get(i).and_then(|c| c.parse::<u32>().ok());
-        if let (Some(pid), Some(ppid), Some(pgid)) = (num(0), num(1), num(2)) {
-            procs.insert(
-                pid,
-                Proc {
-                    ppid,
-                    pgid,
-                    sid: None,
-                    zombie: cols.get(3).is_some_and(|s| s.starts_with('Z')),
-                    mark: None,
-                },
-            );
+    if got != size {
+        return None;
+    }
+    let info = unsafe { info.assume_init() };
+    let sid = unsafe { libc::getsid(pid as i32) };
+    Some(Proc {
+        id: Process {
+            pid,
+            start: info.bsd.pbi_start_tvsec * 1_000_000 + info.bsd.pbi_start_tvusec,
+            unique_id: info.unique_id,
+        },
+        ppid: info.bsd.pbi_ppid,
+        pgid: info.bsd.pbi_pgid,
+        sid: (sid > 0).then_some(sid as u32),
+        zombie: info.bsd.pbi_status == libc::SZOMB,
+        parent_id: info.parent_unique_id,
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn table() -> HashMap<u32, Proc> {
+    // SAFETY: libproc returns the number of pids, with a null buffer for sizing.
+    let n = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+    let mut pids = vec![0i32; n.max(0) as usize + 64];
+    let bytes = std::mem::size_of_val(pids.as_slice()) as i32;
+    let n = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
+    pids.truncate(n.max(0) as usize);
+    pids.into_iter()
+        .filter(|&pid| pid > 1)
+        .filter_map(|pid| Some((pid as u32, process(pid as u32)?)))
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn marks(turn: &Turn, procs: &HashMap<u32, Proc>) -> HashMap<Process, bool> {
+    use std::os::unix::fs::MetadataExt;
+    if turn.mark.is_empty() {
+        return HashMap::new();
+    }
+    let prefix = format!("{MARK_ENV}=");
+    if let Some((uid, gid)) = crate::isolation::identity().filter(|_| turn.tracking.is_some()) {
+        // Docker has no per-turn systemd scope. Read only the mark as the bot UID,
+        // with a clean environment and a system interpreter, so no bot code is imported.
+        let interpreter = if std::path::Path::new("/usr/local/bin/python3").is_file() {
+            "/usr/local/bin/python3"
+        } else {
+            "/usr/bin/python3"
+        };
+        let out = crate::isolation::std_command_as(Some((uid, gid)), interpreter)
+            .args([
+                "-I",
+                "-S",
+                "-c",
+                r#"
+import os, sys
+prefix, expected = (arg.encode() for arg in sys.argv[1:])
+for pid in os.listdir('/proc'):
+    if not pid.isascii() or not pid.isdecimal():
+        continue
+    try:
+        path = '/proc/' + pid
+        if os.stat(path).st_uid != os.geteuid():
+            continue
+        stat = path + '/stat'
+        with open(stat, 'rb') as f:
+            start = f.read().rsplit(b')', 1)[1].split()[19]
+        with open(path + '/environ', 'rb') as f:
+            mark = next((v for v in f.read().split(b'\0') if v.startswith(prefix)), None)
+        if mark is not None:
+            with open(stat, 'rb') as f:
+                if f.read().rsplit(b')', 1)[1].split()[19] == start:
+                    print(pid, start.decode(), int(mark == prefix + expected))
+    except (OSError, IndexError):
+        pass
+"#,
+                &prefix,
+                &turn.mark,
+            ])
+            .env_clear()
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output();
+        // The helper shares the bot UID. Independently check that its replies can
+        // only authorize signals to this UID, never to the supervisor or a leased UID.
+        let Ok(out) = out else {
+            return HashMap::new();
+        };
+        if !out.status.success() {
+            return HashMap::new();
+        }
+        return String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|line| {
+                let mut fields = line.split_whitespace();
+                let pid = fields.next()?.parse().ok()?;
+                let p = procs.get(&pid)?;
+                let start = fields.next()?.parse::<u64>().ok()?;
+                let ours = match fields.next()? {
+                    "0" => false,
+                    "1" => true,
+                    _ => return None,
+                };
+                (p.id.start == start
+                    && std::fs::metadata(format!("/proc/{pid}")).ok()?.uid() == uid)
+                    .then_some((p.id, ours))
+            })
+            .collect();
+    }
+    let uid = unsafe { libc::geteuid() };
+    procs
+        .values()
+        .filter(|p| !p.zombie)
+        .filter_map(|p| {
+            let dir = PathBuf::from(format!("/proc/{}", p.id.pid));
+            if dir.metadata().ok()?.uid() != uid {
+                return None;
+            }
+            let raw = std::fs::read(dir.join("environ")).ok()?;
+            let mark = raw
+                .split(|b| *b == 0)
+                .find_map(|kv| kv.strip_prefix(prefix.as_bytes()))?;
+            (process(p.id.pid)?.id == p.id).then_some((p.id, mark == turn.mark.as_bytes()))
+        })
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn marks(_: &Turn, _: &HashMap<u32, Proc>) -> HashMap<Process, bool> {
+    HashMap::new()
+}
+
+/// Only live identities can vouch for a group or session. Never carry its numeric ID
+/// across snapshots, and make a fresh tracker for every app-server incarnation.
+#[derive(Debug, Default)]
+pub struct Tracking {
+    members: HashSet<Process>,
+    #[cfg(target_os = "macos")]
+    unique_ids: HashSet<u64>,
+}
+
+impl Tracking {
+    pub fn new(pid: u32) -> Arc<Mutex<Self>> {
+        let mut tracking = Self::default();
+        if let Some(root) = process(pid) {
+            tracking.remember(&root);
+        }
+        Arc::new(Mutex::new(tracking))
+    }
+
+    fn remember(&mut self, p: &Proc) {
+        self.members.insert(p.id);
+        #[cfg(target_os = "macos")]
+        self.unique_ids.insert(p.id.unique_id);
+    }
+
+    fn observe(&mut self, procs: &HashMap<u32, Proc>) {
+        loop {
+            let mut new = Vec::new();
+            let mut groups = HashSet::new();
+            let mut sessions = HashSet::new();
+            for p in procs
+                .values()
+                .filter(|p| !p.zombie && self.members.contains(&p.id))
+            {
+                if process(p.id.pid).is_some_and(|now| {
+                    now.id == p.id && now.pgid == p.pgid && now.sid == p.sid && !now.zombie
+                }) {
+                    groups.insert(p.pgid);
+                    sessions.extend(p.sid);
+                }
+            }
+            for p in procs.values().filter(|p| !self.members.contains(&p.id)) {
+                #[cfg(target_os = "linux")]
+                let descendant = procs.get(&p.ppid).is_some_and(|parent| {
+                    parent.id.start <= p.id.start && self.members.contains(&parent.id)
+                });
+                #[cfg(target_os = "macos")]
+                let descendant = self.unique_ids.contains(&p.parent_id);
+                if descendant
+                    || groups.contains(&p.pgid)
+                    || p.sid.is_some_and(|s| sessions.contains(&s))
+                {
+                    new.push(p);
+                }
+            }
+            if new.is_empty() {
+                break;
+            }
+            for p in new {
+                self.remember(p);
+            }
         }
     }
-    procs
+
+    pub fn sample(tracking: &Mutex<Self>) {
+        let procs = table();
+        tracking.lock().unwrap().observe(&procs);
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn watch(tracking: &Arc<Mutex<Self>>) {
+        let tracking = Arc::downgrade(tracking);
+        tokio::spawn(async move {
+            while let Some(current) = tracking.upgrade() {
+                let _ = tokio::task::spawn_blocking(move || Self::sample(&current)).await;
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        });
+    }
 }
 
 /// The pids in a cgroup and the cgroups under it.
@@ -156,33 +353,67 @@ fn cgroup_pids(dir: &std::path::Path, into: &mut HashSet<u32>) {
     }
 }
 
-/// A process's command line, one line, bounded.
+/// Read the full command line so a credential crossing the display limit is still masked.
+#[cfg(target_os = "linux")]
 fn command_of(pid: u32) -> String {
-    #[cfg(target_os = "linux")]
-    let line = std::fs::read(format!("/proc/{pid}/cmdline"))
+    std::fs::read(format!("/proc/{pid}/cmdline"))
         .ok()
-        .map(|raw| {
-            raw.split(|b| *b == 0)
-                .filter(|a| !a.is_empty())
-                .map(|a| String::from_utf8_lossy(a).into_owned())
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
+        .map(|raw| join_args(raw.split(|b| *b == 0)))
         .filter(|l| !l.is_empty())
         .or_else(|| {
             std::fs::read_to_string(format!("/proc/{pid}/comm"))
                 .ok()
                 .map(|c| c.trim().to_string())
-        });
-    #[cfg(not(target_os = "linux"))]
-    let line = std::process::Command::new("ps")
-        .args(["-ww", "-o", "command=", "-p", &pid.to_string()])
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
-    clip(&line.unwrap_or_default(), COMMAND_CHARS)
+        })
+        .unwrap_or_default()
+}
+
+fn join_args<'a>(args: impl Iterator<Item = &'a [u8]>) -> String {
+    args.filter(|a| !a.is_empty())
+        .map(|a| String::from_utf8_lossy(a).into_owned())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(target_os = "macos")]
+fn command_of(pid: u32) -> String {
+    // KERN_PROCARGS2 returns argc, the executable path, padding, argv, and
+    // possibly the environment. Keep only argc entries from argv.
+    let mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as i32];
+    let mut size = 0;
+    let mut read = |buf: *mut libc::c_void| {
+        // SAFETY: mib has three elements, and buf is null or holds size bytes.
+        unsafe {
+            libc::sysctl(
+                mib.as_ptr().cast_mut(),
+                3,
+                buf,
+                &mut size,
+                std::ptr::null_mut(),
+                0,
+            ) == 0
+        }
+        .then_some(size)
+    };
+    if let Some(n) = read(std::ptr::null_mut()).filter(|n| (4..=1 << 20).contains(n)) {
+        let mut raw = vec![0u8; n];
+        if let Some(n) = read(raw.as_mut_ptr().cast()) {
+            raw.truncate(n);
+            if let Some((argc, argv)) = raw.split_first_chunk::<4>() {
+                if let Some(path_end) = argv.iter().position(|b| *b == 0) {
+                    let tail = &argv[path_end + 1..];
+                    let argc = u32::from_ne_bytes(*argc) as usize;
+                    if let Some(first) = tail.iter().position(|b| *b != 0) {
+                        return join_args(tail[first..].split(|b| *b == 0).take(argc));
+                    }
+                }
+            }
+        }
+    }
+    let mut name = [0; 256];
+    // SAFETY: proc_name writes at most the provided capacity.
+    unsafe { libc::proc_name(pid as i32, name.as_mut_ptr().cast(), name.len() as u32) };
+    String::from_utf8_lossy(name.split(|b| *b == 0).next().unwrap_or_default()).into_owned()
 }
 
 fn clip(text: &str, chars: usize) -> String {
@@ -195,8 +426,14 @@ fn clip(text: &str, chars: usize) -> String {
 }
 
 /// The turn's processes still running, spared ones aside.
-fn leftovers(turn: &Turn) -> Vec<u32> {
+fn leftovers(turn: &Turn) -> Vec<Process> {
     let procs = table();
+    let marks = marks(turn, &procs);
+    let tracked = turn.tracking.as_ref().map(|tracking| {
+        let mut tracking = tracking.lock().unwrap();
+        tracking.observe(&procs);
+        tracking
+    });
     let mut cgrouped = HashSet::new();
     for dir in &turn.cgroups {
         cgroup_pids(dir, &mut cgrouped);
@@ -225,47 +462,85 @@ fn leftovers(turn: &Turn) -> Vec<u32> {
         }
         false
     };
-    let mut found: Vec<u32> = procs
+    let mut found: Vec<Process> = procs
         .iter()
         .filter(|(&pid, p)| {
             if pid <= 1 || pid == me || p.zombie || turn.keep.contains(&pid) {
                 return false;
             }
-            let ours = match &p.mark {
-                Some(mark) => !turn.mark.is_empty() && *mark == turn.mark,
-                None => {
-                    cgrouped.contains(&pid)
-                        || groups.iter().any(|&g| p.pgid == g || p.sid == Some(g))
-                }
-            };
+            let ours = marks.get(&p.id).copied().unwrap_or_else(|| {
+                cgrouped.contains(&pid)
+                    || tracked.as_ref().is_some_and(|t| t.members.contains(&p.id))
+                    || groups.iter().any(|&g| p.pgid == g || p.sid == Some(g))
+            });
             ours && !spared_tree(pid)
         })
-        .map(|(&pid, _)| pid)
+        .map(|(_, p)| p.id)
         .collect();
-    found.sort_unstable();
+    found.sort_unstable_by_key(|p| p.pid);
     found
 }
 
-/// Stops what `turn` left running and returns what it stopped. Blocking: up to about `GRACE` and a few short passes.
-pub fn sweep(turn: &Turn) -> Vec<Stopped> {
-    let mut stopped: Vec<Stopped> = vec![];
-    let mut seen: HashSet<u32> = HashSet::new();
-    let mut note = |pid: u32, stopped: &mut Vec<Stopped>| {
-        if seen.insert(pid) {
-            stopped.push(Stopped {
-                pid,
-                command: command_of(pid),
-            });
+#[cfg(target_os = "linux")]
+fn signal(process_id: Process, signal: i32) -> bool {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    // Open first, then check the start time. If the PID changed before open the check
+    // rejects it, and if it changes after the check the fd still refers to the old process.
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, process_id.pid, 0) };
+    if fd < 0 {
+        return false;
+    }
+    let fd = unsafe { OwnedFd::from_raw_fd(fd as i32) };
+    if !process(process_id.pid).is_some_and(|p| p.id == process_id && !p.zombie) {
+        return false;
+    }
+    unsafe {
+        libc::syscall(
+            libc::SYS_pidfd_send_signal,
+            fd.as_raw_fd(),
+            signal,
+            std::ptr::null::<libc::siginfo_t>(),
+            0,
+        ) == 0
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn signal(process_id: Process, signal: i32) -> bool {
+    // macOS has no pidfd. Revalidate the kernel start time immediately before kill.
+    process(process_id.pid).is_some_and(|p| p.id == process_id && !p.zombie)
+        && unsafe { libc::kill(process_id.pid as i32, signal) == 0 }
+}
+
+fn scrub_command(command: &str, redactor: Option<&crate::redact::Redactor>) -> String {
+    let clean = redactor.map_or(std::borrow::Cow::Borrowed(command), |r| {
+        r.scrub_text(command)
+    });
+    crate::redact::scrub_credentials(&clean, &[])
+}
+
+/// Stops what `turn` left running. Blocking, with a short grace and bounded SIGKILL passes.
+fn sweep(turn: &Turn, redactor: Option<&crate::redact::Redactor>) -> Vec<Stopped> {
+    let mut stopped = Vec::new();
+    let mut seen = HashSet::new();
+    let mut stop = |p: Process, sig| {
+        let command = (!seen.contains(&p)).then(|| command_of(p.pid));
+        if signal(p, sig) {
+            if let Some(command) = command {
+                seen.insert(p);
+                stopped.push(Stopped {
+                    pid: p.pid,
+                    command: clip(&scrub_command(&command, redactor), COMMAND_CHARS),
+                });
+            }
         }
     };
     let first = leftovers(turn);
     if first.is_empty() {
         return stopped;
     }
-    for &pid in &first {
-        note(pid, &mut stopped);
-        // SAFETY: a process of the ended turn, found a moment ago.
-        unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+    for p in first {
+        stop(p, libc::SIGTERM);
     }
     let until = Instant::now() + GRACE;
     while Instant::now() < until {
@@ -279,19 +554,21 @@ pub fn sweep(turn: &Turn) -> Vec<Stopped> {
         if left.is_empty() {
             break;
         }
-        for pid in left {
-            note(pid, &mut stopped);
-            // SAFETY: as above; it outlived its SIGTERM.
-            unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+        for p in left {
+            stop(p, libc::SIGKILL);
         }
         std::thread::sleep(Duration::from_millis(20));
     }
     stopped
 }
 
-/// Stop the leftovers off the async runtime and prepare the diagnostic for the attempt's redactor.
-pub async fn finish(target: Turn, host: &str) -> Option<Value> {
-    let stopped = tokio::task::spawn_blocking(move || sweep(&target))
+/// Stop the leftovers off the async runtime and prepare the diagnostic.
+pub async fn finish(
+    target: Turn,
+    host: &str,
+    redactor: Option<Arc<crate::redact::Redactor>>,
+) -> Option<Value> {
+    let stopped = tokio::task::spawn_blocking(move || sweep(&target, redactor.as_deref()))
         .await
         .ok()?;
     if stopped.is_empty() {
@@ -306,7 +583,7 @@ pub async fn finish(target: Turn, host: &str) -> Option<Value> {
 }
 
 /// What the turn's diagnostics say of a sweep: how many it stopped and its most common commands, each cut short.
-/// The runner scrubs the run's secrets out of the event.
+/// Commands have already been scrubbed in full.
 pub fn report(stopped: &[Stopped]) -> Value {
     let mut counts: Vec<(String, usize)> = vec![];
     for s in stopped {
@@ -336,12 +613,12 @@ pub fn report(stopped: &[Stopped]) -> Value {
     })
 }
 
-/// The program names alone, for the runner's own log, which no redactor reads.
-pub fn programs(stopped: &[Stopped]) -> String {
-    let mut names: Vec<String> = vec![];
+/// The scrubbed program names alone, for the runner's log.
+fn programs(stopped: &[Stopped]) -> String {
+    let mut names = Vec::new();
     for s in stopped {
         let first = s.command.split_whitespace().next().unwrap_or("?");
-        let name = first.rsplit('/').next().unwrap_or(first).to_string();
+        let name = first.rsplit('/').next().unwrap_or(first);
         if !names.contains(&name) {
             names.push(name);
         }
@@ -354,10 +631,7 @@ mod tests {
     use super::*;
 
     fn alive(pid: u32) -> bool {
-        let Some(p) = table().remove(&pid) else {
-            return false;
-        };
-        !p.zombie
+        process(pid).is_some_and(|p| !p.zombie)
     }
 
     fn read_pid(path: &std::path::Path) -> Option<u32> {
@@ -430,8 +704,9 @@ mod tests {
             cgroups: vec![],
             keep: vec![harness_pid, mcp],
             keep_trees: vec![],
+            tracking: None,
         };
-        let stopped = sweep(&turn);
+        let stopped = sweep(&turn, None);
         let gone: Vec<u32> = stopped.iter().map(|s| s.pid).collect();
         let survivors = (
             alive(harness_pid),
@@ -472,8 +747,21 @@ mod tests {
 
     #[tokio::test]
     async fn codex_sweeps_and_reports_leftovers_after_reaping_its_app_server() {
+        exercise_codex_sweep(false).await;
+    }
+
+    #[tokio::test]
+    async fn a_crashed_codex_server_is_swept_before_its_replacement_starts() {
+        exercise_codex_sweep(true).await;
+    }
+
+    async fn exercise_codex_sweep(restart: bool) {
         let dir = std::env::temp_dir().join(format!("turn-sweep-codex-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
+        #[cfg(target_os = "linux")]
+        if let Some((uid, gid)) = crate::isolation::identity() {
+            std::os::unix::fs::lchown(&dir, Some(uid), Some(gid)).unwrap();
+        }
         let pids_file = dir.join("pids.json");
         crate::util::write_script(
             &dir.join("codex"),
@@ -489,9 +777,12 @@ for line in sys.stdin:
         env = msg['params']['config']['shell_environment_policy']['set']
         assert env['TICO_TURN_MARK'] == os.environ['TICO_TURN_MARK'] != 'old-mark'
         pids = [os.getpid()]
-        for detached in ([False, True] if sys.platform == 'linux' else [False]):
-            child = subprocess.Popen(['/bin/sleep', '900'], env=env, start_new_session=detached,
-                                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # A plain tool, a job in a new group of the app-server session, and a
+        # new session like Codex's pipe/PTY executor. On macOS these have no mark.
+        for setup in ({}, {'preexec_fn': lambda: os.setpgid(0, 0)}, {'start_new_session': True}):
+            child = subprocess.Popen(['/bin/sleep', '900'], env=env if sys.platform == 'linux' else {},
+                                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                     **setup)
             pids.append(child.pid)
         with open(os.environ['FAKE_PIDS'], 'w') as f:
             json.dump(pids, f)
@@ -523,24 +814,124 @@ for line in sys.stdin:
         .await
         .unwrap();
         let pids: Vec<u32> = serde_json::from_slice(&std::fs::read(pids_file).unwrap()).unwrap();
-        let report = codex.finish_turn().await;
-        let survivors: Vec<u32> = pids.iter().copied().filter(|&pid| alive(pid)).collect();
-        for &pid in pids
-            .iter()
-            .filter(|pid| report.is_none() || survivors.contains(pid))
-        {
-            // SAFETY: the test's app-server or one of its test jobs, even if the process table cannot see them.
-            unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+        #[cfg(target_os = "linux")]
+        if crate::isolation::enabled() {
+            let err = std::fs::read(format!("/proc/{}/environ", pids[3])).unwrap_err();
+            assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
         }
+        let identities: Vec<_> = pids.iter().map(|&pid| process(pid).unwrap().id).collect();
+        let mut other = crate::isolation::std_command("/bin/sleep")
+            .arg("900")
+            .env(MARK_ENV, "another-turn")
+            .spawn()
+            .unwrap();
+        let before_replacement = if restart {
+            assert!(signal(identities[0], libc::SIGKILL));
+            tokio::time::timeout(Duration::from_secs(3), async {
+                while codex.alive() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            host.start().await.unwrap();
+            pids.iter()
+                .copied()
+                .filter(|&pid| alive(pid))
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        #[cfg(target_os = "linux")]
+        if crate::isolation::enabled() && !restart {
+            assert!(signal(identities[0], libc::SIGKILL));
+            tokio::time::timeout(Duration::from_secs(3), async {
+                while alive(pids[0]) {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+        }
+        let reports = codex.finish_turn(None).await;
+        let survivors: Vec<_> = identities
+            .into_iter()
+            .filter(|&p| signal(p, libc::SIGKILL))
+            .collect();
+        let other_stayed = other.try_wait().unwrap().is_none();
+        let _ = other.kill();
+        let _ = other.wait();
         std::fs::remove_dir_all(dir).unwrap();
+        assert!(
+            before_replacement.is_empty(),
+            "old processes survived replacement: {before_replacement:?}"
+        );
         assert!(survivors.is_empty(), "processes survived: {survivors:?}");
-        let report = report.expect("a cleanup diagnostic");
+        assert!(other_stayed, "another process was stopped");
+        assert_eq!(reports.len(), 1, "{reports:?}");
+        let report = &reports[0];
         assert_eq!(report["leftover_processes"]["count"], pids.len() - 1);
         assert_eq!(
             report["leftover_processes"]["top"],
             json!([{"command": "/bin/sleep 900", "count": pids.len() - 1}])
         );
-        assert!(codex.finish_turn().await.is_none());
+        assert!(codex.finish_turn(None).await.is_empty());
+    }
+
+    #[test]
+    fn a_reused_pid_is_not_signaled() {
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("900")
+            .spawn()
+            .unwrap();
+        let current = process(child.id()).unwrap().id;
+        let stale = Process {
+            start: current.start - 1,
+            ..current
+        };
+        let signaled = signal(stale, libc::SIGKILL);
+        let still_running = child.try_wait().unwrap().is_none();
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(!signaled && still_running);
+    }
+
+    #[test]
+    fn the_diagnostic_masks_known_and_shaped_secrets_across_the_display_limit() {
+        let secret = "synthetic short-prefix long-tail ".repeat(4);
+        let r = crate::redact::Redactor::new(std::slice::from_ref(&secret));
+        let leading = format!("tool {} ", ".".repeat(59));
+        let commands = [
+            (format!("{leading}{secret}end"), Some(&r)),
+            (format!("{leading}token={}", "abcd".repeat(33)), None),
+        ];
+        let stopped: Vec<_> = commands
+            .into_iter()
+            .map(|(cmd, redactor)| Stopped {
+                pid: 42,
+                command: scrub_command(&cmd, redactor),
+            })
+            .collect();
+        let report = report(&stopped).to_string();
+        assert!(!report.contains("synthetic"), "{report}");
+        assert!(!report.contains("abcd"), "{report}");
+        assert!(report.contains(crate::redact::MASK), "{report}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[ignore = "requires the disposable runner container and its production UID and capability split"]
+    async fn docker_codex_sweeps_the_bot_uid_without_supervisor_environ_access() {
+        assert_eq!(std::env::var("TICO_TEST_DISPOSABLE").as_deref(), Ok("1"));
+        assert_eq!(unsafe { libc::geteuid() }, 10002);
+        assert_eq!(crate::isolation::identity(), Some((10003, 10002)));
+        let status = std::fs::read_to_string("/proc/self/status").unwrap();
+        let caps = status
+            .lines()
+            .find_map(|line| line.strip_prefix("CapEff:"))
+            .unwrap();
+        assert_eq!(u64::from_str_radix(caps.trim(), 16).unwrap(), 0xe3);
+        exercise_codex_sweep(false).await;
     }
 
     /// A kept shell stays with what it runs; the reaping parent stays alone.
@@ -570,13 +961,16 @@ for line in sys.stdin:
             .spawn()
             .unwrap();
         let worker = wait_for(&[dir.join("worker.pid")])[0];
-        let stopped = sweep(&Turn {
-            mark,
-            groups: vec![kept.id()],
-            keep: vec![kept.id()],
-            keep_trees: vec![kept.id()],
-            ..Default::default()
-        });
+        let stopped = sweep(
+            &Turn {
+                mark,
+                groups: vec![kept.id()],
+                keep: vec![kept.id()],
+                keep_trees: vec![kept.id()],
+                ..Default::default()
+            },
+            None,
+        );
         let _ = stray.kill();
         let _ = stray.wait();
         let (kept_up, worker_up) = (alive(kept.id()), alive(worker));
@@ -623,11 +1017,14 @@ for line in sys.stdin:
             c.spawn().unwrap()
         };
         let tool = wait_for(&[dir.join("tool.pid")])[0];
-        let stopped = sweep(&Turn {
-            mark: uuid::Uuid::new_v4().to_string(),
-            groups: vec![other.id()],
-            ..Default::default()
-        });
+        let stopped = sweep(
+            &Turn {
+                mark: uuid::Uuid::new_v4().to_string(),
+                groups: vec![other.id()],
+                ..Default::default()
+            },
+            None,
+        );
         let (leader_up, tool_up) = (alive(other.id()), alive(tool));
         // SAFETY: the group this test's harness leads.
         unsafe { libc::kill(-(other.id() as i32), libc::SIGKILL) };

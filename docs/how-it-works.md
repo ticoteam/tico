@@ -549,8 +549,11 @@ Tico keeps using the original login in its own home. It never copies a login int
 copies can rotate apart when the provider refreshes the token.
 
 At the end of a turn, the runner sweeps leftover Claude and Codex processes and records what it stopped in the run's
-diagnostics. It waits for the Codex app-server to exit first, then finds leftovers by process group on macOS and by
-the turn's environment mark in Docker. Claude shells kept on a background wait can keep running.
+diagnostics. It waits for the Codex app-server to be reaped before sweeping, including when it replaces a failed
+app-server. On macOS it tracks the app-server's descendants and their sessions. On Linux it uses the turn scope
+where available. In Docker the bot user reads the turn mark so the supervisor can identify detached jobs.
+If the app-server cannot be reaped within the stop window, the run records incomplete cleanup.
+Claude shells kept on a background wait can keep running.
 
 **Settings → General → Health → Details** counts this company fallback: a limited bot covered by it gets no "has no fallback
 model" finding. When a computer's default login (no subscription) keeps stopping on a usage limit, Health

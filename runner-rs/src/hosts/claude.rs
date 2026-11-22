@@ -1607,10 +1607,11 @@ impl ClaudeHost {
                     .collect(),
                 keep,
                 keep_trees,
+                tracking: None,
             }
         };
         if let Some(report) =
-            crate::turn_sweep::finish(target, &format!("claude[{}]", self.0.bot)).await
+            crate::turn_sweep::finish(target, &format!("claude[{}]", self.0.bot), None).await
         {
             self.emit(event("diagnostic", Some(tid), Some(turn), report));
         }
