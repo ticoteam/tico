@@ -124,3 +124,16 @@ describe('Beside the call @s1046', () => {
     expect(screen.getByText('Left')).toBeTruthy();
   });
 });
+
+describe('a transcript line’s face', () => {
+  it('is a 22 avatar with 22 letters, not a stretched 36 with title-size letters spilling over the name', async () => {
+    queryClient.setQueryData(callQuery(ROOM).queryKey, { id: ROOM, thread_id: 'th1', meeting_id: 'mt9', participants: [], bots: [], state: 'live' } as unknown as Call);
+    queryClient.setQueryData(transcriptQuery('mt9').queryKey, { chunks: [{ seq: 1, speaker: 'human:chris', start_ms: 3_000, text: 'Are they gone?' }], event_id: 4 });
+    show(`/call/${ROOM}`);
+    fireEvent.click(await screen.findByRole('tab', { name: 'Transcript' }));
+    await screen.findByText('Are they gone?');
+    const av = document.querySelector('.ts .face > .av');
+    expect(av?.classList.contains('av-22')).toBe(true);
+    expect(av?.classList.contains('av-x')).toBe(false);
+  });
+});

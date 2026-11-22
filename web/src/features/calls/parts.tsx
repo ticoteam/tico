@@ -80,18 +80,24 @@ export const LiveMark = () => (
   </span>
 );
 
+const AVATAR_SIZES: readonly AvatarSize[] = [16, 22, 28, 36];
+
 /** Someone in a call at any size: a face, a still ring while they speak, a mark when muted (calls.css .face). */
 export function Face({ actor, size, speaking, muted }: { actor: string; size: number; speaking?: boolean; muted?: boolean }) {
   const a = useActor(actor);
   const tico = useTicoBot() === actor;
   const style = { '--f': `${size}px`, '--x': `${size}px` } as CSSProperties;
+  // a kit size draws the kit avatar with its own letter size; only an off-scale tile (44, 96) stretches a 36 (.av-x),
+  // whose letters are the title size, too big for a 22 transcript face
+  const kit = AVATAR_SIZES.find((s) => s === size);
+  const av = kit ? { size: kit } : { size: 36 as const, className: 'av-x' };
   return (
     <span className={speaking ? 'face is-speaking' : 'face'} style={style}>
       {tico ? (
         // Tico's own agent wears Tico's face, the Dot, as it does in Tico's chat (conversation Face)
-        <Avatar kind="agent" name="Tico" size={36} className="av-x" dot={<Dot size={Math.round(size * 0.86)} still />} />
+        <Avatar kind="agent" name="Tico" {...av} dot={<Dot size={Math.round(size * 0.86)} still />} />
       ) : (
-        <Avatar kind={a?.kind ?? kindOf(actor)} name={a?.name ?? bare(actor)} hue={a?.hue} size={36} className="av-x" />
+        <Avatar kind={a?.kind ?? kindOf(actor)} name={a?.name ?? bare(actor)} hue={a?.hue} {...av} />
       )}
       {muted && (
         <i className="face-muted" aria-label="Muted">
