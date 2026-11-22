@@ -217,6 +217,16 @@ def install(
             return f"bot:{bot['id']}" if access["see"] else None
         return None
 
+    def reader(c: sqlite3.Connection, request: Request) -> str:
+        """Whose Contacts grants a status or owner write is checked by: the request's effective reader
+        (auth.run_viewer, as page and task paths use). Nobody finds no entity."""
+        from backend import page_links
+
+        found = page_links.entity_reader(c, auth, request.state.identity)
+        if found is None:
+            raise Problem("not_found", "No entity that you can see", 404)
+        return found
+
     def unmerged(c: sqlite3.Connection, actor: str, ref: str) -> str:
         """The entity a status or owner write names. A merged-away id is refused (409), never carried to the entity it
         went into, so a write meant for one entity never lands on another."""
@@ -225,13 +235,18 @@ def install(
             raise Problem("merged", f"{ref} is merged into {kept}; read that one", 409, extra={"merged_into": kept})
         return ES.target(c, actor, ref)
 
-    def still_seen(actor: str, result: dict[str, Any]) -> dict[str, Any]:
+    def still_seen(request: Request, result: dict[str, Any]) -> dict[str, Any]:
         """A write's answer (a retry's too) is shown only while its entity is one the caller still sees, and is not
-        merged away since: a replay never answers through the merge."""
+        merged away since: a replay never answers through the merge. An owner answer is the owner now, as the caller
+        may see it now."""
         with read() as c:
+            actor = reader(c, request)
             unmerged(c, actor, str(result["entity"]))
             if not ES.visible_entity(c, actor, str(result["entity"])):
                 raise Problem("not_found", "No entity that you can see", 404)
+            if "owner" in result:
+                result = {"entity": result["entity"], "owner": ES.owner_of(c, str(result["entity"]))}
+                seen_owners(c, request, [result])
         return result
 
     def seen_owners(c: sqlite3.Connection, request: Request, items: list[dict[str, Any]]) -> None:
@@ -533,7 +548,7 @@ def install(
         actor = caller(request)
 
         def work(c: sqlite3.Connection):
-            entity_id = unmerged(c, actor, body.ref)
+            entity_id = unmerged(c, reader(c, request), body.ref)
             if entity_id != body.ref:
                 raise Problem("validation", "Name the entity by its id, the one you read its status_version with", 422)
             written = ES.set_status(
@@ -556,7 +571,7 @@ def install(
                 )
             return {"entity": entity_id, **written}
 
-        return still_seen(actor, mutate(request, body, work))
+        return still_seen(request, mutate(request, body, work))
 
     @app.post("/api/v2/entities/owner")
     def contacts_owner(request: Request, body: ContactsOwner):
@@ -564,13 +579,13 @@ def install(
         actor = caller(request)
 
         def work(c: sqlite3.Connection):
-            entity_id = unmerged(c, actor, body.ref)
+            entity_id = unmerged(c, reader(c, request), body.ref)
             owner = teammate(c, request, body.owner) if body.owner else ""
             if owner is None:
                 raise Problem("not_found", f"No teammate {body.owner} that you can see", 404)
             return {"entity": entity_id, "owner": ES.set_owner(c, actor, entity_id, owner)}
 
-        return still_seen(actor, mutate(request, body, work))
+        return still_seen(request, mutate(request, body, work))
 
     @app.post("/api/v2/entities/notes")
     def contacts_note(request: Request, body: ContactsNoteCreate):

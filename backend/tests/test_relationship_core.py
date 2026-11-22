@@ -245,3 +245,21 @@ def test_a_task_restored_after_its_entity_merged_names_the_kept_entity_and_dry_r
     assert [t["id"] for t in get(api, f"tasks?status=all&entity={acme}")["tasks"]] == [task["id"]]
     checked = post(api, "tasks/dry-run", {"owner": "ops", "title": "Call them", "entity": "nobody.example"})
     assert checked["ok"] is False
+
+
+def test_a_deleted_memory_page_frees_the_slot_and_a_retained_link_stays_until_unmerge(api):
+    acme, dup = org(api, "acme.example", "Acme"), org(api, "acme-old.example", "Acme Old")
+    first, second = page(api), page(api, "second.html")
+    post(api, f"pages/{first}/links", {"target": f"entity:{acme}", "role": "memory"})
+    assert api.delete(f"/api/v2/files/{first}", headers=headers()).status_code == 200
+    post(api, f"pages/{second}/links", {"target": f"entity:{acme}", "role": "memory"})  # the slot is free
+
+    third = page(api, "third.html")
+    post(api, f"pages/{third}/links", {"target": f"entity:{dup}", "role": "memory"})
+    with api.app.state.store.transaction() as c:
+        ES.merge(c, ANA, acme, dup)  # acme has a memory page: dup's link stays on dup, hidden
+    kept = {"target": f"entity:{dup}", "role": "memory"}
+    assert api.delete(f"/api/v2/pages/{third}/links", params=kept, headers=headers()).status_code == 404
+    assert get(api, "pages?linked=entity:&role=memory", expected=422)
+    changes = get(api, "tasks?entity=acme.example&changed_after=x", expected=422)
+    assert changes["error"]["code"] == "entity"

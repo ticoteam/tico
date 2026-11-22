@@ -1300,6 +1300,12 @@ def set_owner(c: sqlite3.Connection, actor: str, entity_id: str, owner: str) -> 
     return _owner({"owner_type": owner_type, "owner_id": owner_id})
 
 
+def owner_of(c: sqlite3.Connection, entity_id: str) -> str | None:
+    """An entity's owner as stored (human:<id> or bot:<id>), or None. The caller checks the reader sees the entity."""
+    row = _one(c, "SELECT owner_type, owner_id FROM entities WHERE id = ?", (entity_id,))
+    return _owner(row) if row else None
+
+
 def seen_entities(c: sqlite3.Connection, r: V.Reader, ids: Iterable[str]) -> dict[str, str]:
     """{id: name} of the entities among `ids` the reader sees that are not merged away: what a page link to an entity
     shows. A merged-away one is hidden until unmerge, whatever the kept entity shows. One read for all of them."""

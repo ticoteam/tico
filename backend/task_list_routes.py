@@ -211,7 +211,6 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 filters["match"] = match.sql
             if link is not None:
                 filters["match"] = [*filters.get("match", ()), linked_to(c, link)]
-            moved = False
             if entity is not None:
                 from . import page_links
                 from .entities import store as ES
@@ -225,8 +224,9 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 chosen = str(entities[0]["id"]) if entities else ""
                 fragment = ("tasks.entity_id=? AND tasks.entity_id<>''", (chosen,)) if chosen else ("0", ())
                 filters["match"] = [*filters.get("match", ()), fragment]
-                # An entity id merged since now lists its kept entity's tasks: a changes read starts over.
-                moved = bool(chosen) and chosen != entity and ES.kept(c, entity) == chosen
+                if chosen and chosen != entity and changed_after is not None:
+                    # A changes read follows one entity: what a domain or a merged-away id names may change under it.
+                    raise Problem("entity", "Use the entity's id with changed_after", 422)
             if after is not None:
                 if changed_after is not None or offset:
                     raise Problem("after", "after is a page's start: not with changed_after or offset", 422)
@@ -275,7 +275,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                                 row.pop(field, None)
 
             if changed_after is not None:
-                found = None if moved else reads.changed(c, changed_after, visible_sql)
+                found = reads.changed(c, changed_after, visible_sql)
                 changed_ids = reads.around(c, found[0]) if found else []
                 if found is None or len(changed_ids) > reads.CAP:
                     return {

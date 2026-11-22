@@ -673,6 +673,8 @@ def purge_rows(c, actor, row):
     release_blobs(c, blob_ids, now)
     unindex(c, fid)
     c.execute("UPDATE pages SET replaced_by_id=NULL WHERE replaced_by_id=?", (fid,))
+    # Its links to Contacts entities go, so an entity's one memory slot is free for another page.
+    c.execute("DELETE FROM page_links WHERE page_id=? AND target LIKE 'entity:%'", (fid,))
     from . import counsel
 
     counsel.revoke_page_copies(c, None, fid)

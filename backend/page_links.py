@@ -285,27 +285,23 @@ def _entities(c: Any, auth: Any, who: Any, targets: Iterable[str]) -> dict[str, 
     return {"entity:" + i: name for i in ids if (name := seen.get(i)) is not None}
 
 
-def entity_targets(c: Any, auth: Any, who: Any, ref: str, *, stored: bool = False) -> list[str]:
-    """The entity:<id> targets a reference names for this reader, most exact first: an id, email or domain, a
-    merged-away id answering with its kept entity. With `stored` (an unlink), an entity's own id names its stored
-    target first and then its kept entity's, so a link kept on a merged-away entity, or one a merge moved, can be taken
-    off by anyone who sees the entity it went into. 404 when none shows, 409 when several match."""
+def entity_target(c: Any, auth: Any, who: Any, ref: str) -> str:
+    """The entity:<id> target a reference names for this reader, for a link, an unlink and the linked= filter alike:
+    an id, email or domain the reader sees, a merged-away id answering with its kept entity (so a link a merge moved
+    comes off by the old id). A link kept on a merged-away entity is nobody's to take off until unmerge: it is hidden,
+    and that entity's own row no longer says who may see it. 404 when none shows, 409 when several match."""
     from .entities import store as ES
 
     actor = entity_reader(c, auth, who)
     missing = Problem("not_found", "Entity not found", 404)
     if actor is None:
         raise missing
-    if stored and c.execute("SELECT 1 FROM entities WHERE id=?", (ref,)).fetchone():
-        if not ES.visible_entity(c, actor, ref):
-            raise missing
-        return list(dict.fromkeys(["entity:" + ref, "entity:" + ES.kept(c, ref)]))
     found = ES.get(c, actor, ref)
     if len(found) > 1:
         raise Problem("ambiguous", f"More than one entity matches {ref}; name one by id", 409)
     if not found:
         raise missing
-    return ["entity:" + str(found[0]["id"])]
+    return "entity:" + str(found[0]["id"])
 
 
 def may_write(c: Any, auth: Any, who: Any, row: Any) -> bool:
@@ -379,29 +375,24 @@ def visible_filters(
     """Apply target visibility before limiting, ranking or creating a cursor for a result set."""
     role_only = bool(role and not linked)
     if linked.startswith("entity:"):
+        if not linked[7:].strip():
+            raise Problem("validation", "linked=entity: needs the entity's id, email or domain", 422)
         # A reference resolves as a link does: an email or domain, a merged-away id as its kept entity.
         try:
-            (linked,) = entity_targets(c, auth, who, linked[7:])
+            linked = entity_target(c, auth, who, linked[7:])
         except Problem as exc:
             if exc.status != 404:
                 raise
             yield ["0"], []
             return
     where, args = filters(linked, role, writer, check_role_target=role_only)
-    if role_only and role_name(role) != role_name(role, "entity:"):
-        # An entity's memory pages: every entity target of that role checked in one read before the rows are scanned.
-        _entities(
-            c,
-            auth,
-            who,
-            [
-                r[0]
-                for r in c.execute(
-                    "SELECT DISTINCT target FROM page_links WHERE role=? AND target LIKE 'entity:%'",
-                    (role_name(role, "entity:"),),
-                )
-            ],
-        )
+
+    def prefetch() -> None:
+        """An entity's memory pages: every entity target of that role checked in one read before the rows are scanned.
+        Run after the filter function is registered, which clears the snapshot's cache."""
+        if role.strip().lower() == "memory":
+            sql = "SELECT DISTINCT target FROM page_links WHERE role='memory' AND target LIKE 'entity:%'"
+            _entities(c, auth, who, [r[0] for r in c.execute(sql)])
 
     @cache
     def readable(target: str) -> bool:
@@ -412,6 +403,7 @@ def visible_filters(
         yield ["0"], []
     elif role_only:
         c.create_function("page_link_target_readable", 1, readable)
+        prefetch()
         try:
             yield where, args
         finally:

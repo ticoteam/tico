@@ -503,14 +503,11 @@ class Pages:
 
                     page_rights(c, self.auth, who, ident)
             elif kind == "entity":
-                # Link and unlink resolve alike; an unlink tries the exact entity a link stores, then its kept one.
-                found = page_links.entity_targets(c, self.auth, who, ident, stored=remove)
-                selected = found[0]
-                if remove:
-                    selected = next((t for t in found if page_links.unlink(c, fid, t, chosen_role, who.actor)), "")
-                    if not selected:
-                        raise Problem("not_found", "No such link on this page", 404)
-                elif chosen_role == "memory":
+                # Link and unlink resolve alike (page_links.entity_target).
+                selected = page_links.entity_target(c, self.auth, who, ident)
+                if remove and not page_links.unlink(c, fid, selected, chosen_role, who.actor):
+                    raise Problem("not_found", "No such link on this page", 404)
+                if not remove and chosen_role == "memory":
                     self.shared_memory(c, row)
             elif not remove:
                 if kind == "bot":
@@ -544,11 +541,14 @@ class Pages:
             return {"page": self.view(c, who, row, self.page_of(row), {}, include_audience=True)}
 
         result = self.files.write(request, who, {"id": fid, "target": target, "role": role}, work)
-        if not remove and target.startswith("entity:"):
-            # A replayed answer names the entity: only while the caller still sees it.
-            with self.store.read() as c:
-                page_links.entity_targets(c, self.auth, who, target[7:])
-        return result
+        if not result.get("page"):
+            return result
+        # The page as it is now, as the caller may see it now: a replayed answer never shows a link from back then.
+        with self.store.read() as c:
+            row = self.rows(c, [fid]).get(fid)
+            if not row or not self.files.visible(c, who, row, {}):
+                raise Problem("not_found", "Page not found", 404)
+            return {"page": self.view(c, who, row, self.page_of(row), {}, include_audience=True)}
 
     @staticmethod
     def memory_of(c, fid):
