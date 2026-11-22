@@ -6,9 +6,9 @@ import json
 
 import pytest
 
-from setup import envfile, hosted, state, verify
+from setup import cli, envfile, hosted, state, verify
 from setup.remote import Result
-from setup.tests.fakes import FakeShell
+from setup.tests.fakes import CaptureIO, FakeShell
 from setup.tests.helpers.hosted import DOMAIN, HOSTED, INVITE, ZONE, env_sent, go, link_token, over_ssh
 
 
@@ -150,6 +150,23 @@ def test_a_rerun_without_no_support_keeps_the_servers_support_off():
     again = FakeShell()
     assert go(argv, deps=over_ssh(again))[0] == 0
     assert env_sent(again)["TICO_SUPPORT"] == "off"
+    # The domain typed at the prompt, not given with --domain: still off.
+    prompted, io = FakeShell(), DomainAsked(interactive=True)
+    i = argv.index("--domain")
+    rest = [a for a in argv[:i] + argv[i + 2 :] if a != "--non-interactive"] + ["--skip-dns-wait"]
+    assert cli.main(rest, deps=over_ssh(prompted), io=io) == 0, io.text
+    assert io.asked and env_sent(prompted)["TICO_SUPPORT"] == "off"
+
+
+class DomainAsked(CaptureIO):
+    def __init__(self, interactive=False):
+        super().__init__(interactive)
+        self.asked = []
+
+    def ask(self, question, default="", secret=False):
+        self.asked.append(question)
+        assert len(self.asked) < 20, self.asked
+        return DOMAIN if "domain" in question.lower() else default
 
 
 def test_self_hosted_installs_leave_the_mark_and_the_preset_unset(monkeypatch):

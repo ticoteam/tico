@@ -938,7 +938,10 @@ def run(args, io: IO, deps: Deps) -> int:
         found, found_env = state.load(asked.domain)
         found = state.record(found)
         if not found or not (strict or owned.strict(found.get("asset_prefix", ""))):
-            return asked  # a default-prefix install's prompted domain keeps today's behaviour
+            # A default-prefix install's prompted domain keeps today's behaviour, but never turns Support back on.
+            if found.get("support") == "off":
+                asked.support = "off"
+            return asked
         saved = found
         again = st.from_saved(found, found_env)
         again.cf_token, again.tunnel_token = s.cf_token, s.tunnel_token or again.tunnel_token
