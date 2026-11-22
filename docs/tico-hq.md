@@ -146,8 +146,8 @@ The team writes them with the staff key (`Authorization: Bearer $HQ_STAFF_KEY`):
   (body at most 280 characters, an https link optional); `GET` lists them, `DELETE /v1/staff/notices/{id}` stops one.
 - `POST /v1/staff/known-issues` `{"title": "...", "since": "0.3.50", "ref": "#712", "url": "https://..."}`;
   `POST /v1/staff/known-issues/{id}` `{"fixed_in": "0.3.52"}`; `GET` and `DELETE` as above.
-- `POST /v1/staff/tickets/{id}/fix` `{"ref": "#712"}` links a request to the ticoteam/tico issue or pull request that will fix it
-  (`software/hq-tickets link` in the Support Agent).
+- `POST /v1/staff/tickets/{id}/fix` `{"ref": "#712"}` links a request to the ticoteam/tico issue or pull request
+  that will fix it, for a staff-managed release notice.
 
 **Fixed-in, by itself.** Every 15 minutes a staffed HQ looks at the latest release. When the tag changes it reads the commits since
 the tag it last saw (GitHub's compare API, every page of it; `GITHUB_TOKEN` raises the rate limit, `HQ_COMPARE_URL` points

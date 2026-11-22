@@ -236,13 +236,15 @@ def clean_email(value):
     return value
 
 
-def _ask_hq(method, path, *, body=None, secret="", wait=HQ_WAIT, idem=""):
+def _ask_hq(method, path, *, body=None, secret="", wait=HQ_WAIT, idem="", staff=""):
     """One request to HQ, or a Problem the person can act on. Nothing from HQ's answer is logged. `wait` is longer for
     a long poll (backend/support_access.py). `idem` is sent as Idempotency-Key: the same report sent again (a retry
     after a crash or a lost answer) is the same ticket at an HQ that keeps keys."""
     headers = {"Accept": "application/json", "User-Agent": "tico-support"}
     if secret:
         headers["X-Ticket-Secret"] = secret
+    if staff:
+        headers["Authorization"] = "Bearer " + staff
     if idem:
         headers["Idempotency-Key"] = idem
     try:

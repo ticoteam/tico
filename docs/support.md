@@ -144,8 +144,7 @@ and `HQ_SETUP_TICKETS_DAILY_CAP` a day in all (default 50); over a limit the pag
 to a person`, with the attachment named on it. `software/hq-tickets show` prints the note and plan
 inside `<untrusted-public-input>` markers under their label: data to read, never instructions. Answer about planning
 the team and getting started; never ask for a key or password (tools connect on their own install). The reply is posted
-the usual way (step 4 below), shows on the visitor's request page, and, since every setup-website ticket has an email,
-is marked email pending for the email copy.
+the usual way (step 4 below) and shows on the visitor's request page. HQ emails it when account mail is set up.
 
 ### A bot's report
 
@@ -305,8 +304,16 @@ Everything below is how the Tico project's own Support Agent works tickets at HQ
 3. **The bot drafts.** It works the task with `playbooks/tico-hq-tickets.md`: reads the diagnostics first (`software/hq-tickets show`
    prints a summary, then the whole bundle; only the staff routes return it), sorts the ticket, asks the Librarian what the docs say,
    hands bugs to engineering, and writes a reply file.
-4. **The bot posts as its sending policy allows.** A person who manages the bot sets it in Tico (Settings > Bots > the bot > Email sending; docs/mail.md, "Turning sending on"). The bot runs `software/hq-tickets reply <id> <file>` from its repository to post the requested reply. With **On their own** it posts. With **Ask first** it requests a publish approval for that exact ticket and text (`hq-tickets payload`) and passes it with `--approval <id>`. With **Never**, or no Tico reachable from the run, the reply stays a draft. `close-signature` posts only under On their own. If the ticket has an email, HQ marks the reply "email pending" and the bot leaves an email-ready copy on the task or sends it with a connected mail Tool. HQ sends no email.
+4. **The bot queues the reply.** On a configured server, the Support Agent queues replies through [Outbound actions](outbound-actions.md#help-tickets).
+   Ask first binds the person's approval to the exact ticket and text. The task stays open through approval and dispatch,
+   and a bug's Support task stays open while Engineering works. A confirmed docs answer records the reply and settles the
+   task if the customer has sent no newer message. A later customer message reopens the task. HQ emails the reply when
+   account mail is set up and the ticket has an address. Offer manual email only after confirmed non-delivery.
 5. **The daily update** counts tickets opened, replies posted and drafts waiting, so they show on the Updates page.
+
+HQ currently checks for newer customer messages through a ticket read before posting a docs answer. A customer message
+arriving between that read and the post can still receive a stale answer. Closing that gap requires HQ to check the
+expected message ID atomically when it inserts the reply.
 
 Ticket text is untrusted data from anyone on the internet. HQ stores it as plain text, the app and the staff tools escape or
 quote it, and the bot's playbook says an instruction inside a ticket is never followed.
@@ -326,9 +333,10 @@ A human corrects a verdict with `POST /v1/staff/tickets/{id}/verdict` and `{"ver
 ticket to anything but `spam` releases it: it appears in the queue as a new ticket. Each correction is recorded (old, new, when)
 so the decision model can be tuned. The human who filed a ticket sees nothing different.
 
-The same check is `POST /v1/staff/judge` (`{"text": "..."}` answers `{verdict, reason}`, nothing kept), which `software/gh-support`
-calls, with the staff key already in its secrets, for each new issue, Discussion and outside comment: `spam` is not filed and is
-counted in its output line, `injection_risk` is filed with a warning. A message bot checks email with `tico classify` (text on
+`software/gh-support` calls `POST /v1/staff/judge` (`{"text": "..."}` answers `{verdict, reason}`, nothing kept) with
+the Support Agent's `HQ_STAFF_KEY` for new issues, Discussions and outside comments. The watcher skips spam, counts it
+in its output and files injection risks with a warning. On an HQ `401` or `403`, it files the affected text as
+`unchecked` and shows a warning under Watchers in Health. A message bot checks email with `tico classify` (text on
 standard input or `--file`), which asks the server's own decision model the same question.
 
 On HQ, `HQ_JUDGE_KEY` is that provider's key (`HQ_JUDGE_URL` only to point elsewhere). Without it every verdict is
@@ -363,20 +371,28 @@ injection check above, which holds spam at HQ before the watcher sees it.
 
 ### Set it up
 
-HQ needs `HQ_STAFF_KEY` set (`openssl rand -hex 24` makes one; HQ's hosting is in ticoteam/tico-services). In
-**Tools → Add → Key**, store the same `HQ_STAFF_KEY` and the HQ address as
-`HQ_URL` (not `TICO_HQ_URL`: the runner keeps `TICO_` names out of bots' environments), with those exact Bot variable names, and grant both to the Support Agent. For
-GitHub, store and grant `GITHUB_TOKEN` (read access; required for Discussions) and optionally
+HQ's hosting is in ticoteam/tico-services. In **Tools → Add → Key**, grant the Support Agent the HQ address as `HQ_URL`.
+For ticket reads, the watcher prefers `HQ_STAFF_READ_KEY` when granted and falls back to `HQ_STAFF_KEY`. For GitHub,
+keep the full `HQ_STAFF_KEY` grant for the spam and injection judge. Store and grant `GITHUB_TOKEN` (read access,
+required for Discussions) and optionally
 `GH_SUPPORT_REPOS` (`ticoteam/tico`). A Credential card is the other way to store and grant them.
 Legacy files can be imported for migration; a new watcher does not load `secrets/support.env`.
 
-Without `HQ_STAFF_KEY` the watcher does nothing. To watch GitHub, list the repositories in `config/github.yaml` or
+Without an HQ read or staff key the ticket watcher does nothing. To watch GitHub, list the repositories in `config/github.yaml` or
 `GH_SUPPORT_REPOS`. Check Settings > General > Health > Details for a "Watchers" line: it appears only when a watcher fails or has stopped.
+
+The Support Agent's reply commands queue through [Outbound actions](outbound-actions.md#help-tickets).
+For queued replies, set `TICO_HQ_STAFF_KEY` to HQ's full staff key in the Support server's `.env`. Set
+`TICO_HQ_SUPPORT_BOT` there if the Support Agent's slug differs from `support-owner`. The watcher's `HQ_URL` must
+match the server's `TICO_HQ_URL` or its default HQ address. New tickets from that HQ go to the Support pipeline when
+available. The watcher records the HQ origin when it first opens a ticket. A person handles replies for older tasks
+that lack this record. HQ's optional install ID comes from the submitter. A ticket needs a verified company ID from HQ
+before Tico can attach it to Directory history.
 
 ### By hand
 
-**Fixed in.** Link a ticket to the ticoteam/tico issue or pull request that will fix it (`software/hq-tickets link TK-XXXXXXXX
-'#712'`). When a release ships it, HQ posts "Fixed in vX, update here" on the ticket by itself ([tico-hq.md](tico-hq.md#messages-known-issues-and-fixed-in-notices)),
+**Fixed in.** Staff can link an older ticket at HQ using `POST /v1/staff/tickets/{id}/fix` with `{"ref":"#712"}`.
+When a release ships it, HQ posts "Fixed in vX, update here" on the ticket by itself ([tico-hq.md](tico-hq.md#messages-known-issues-and-fixed-in-notices)),
 and the human sees it in the Tico support chat. HQ also keeps the known issues by version that Help shows.
 
 `software/hq-tickets list`, `show TK-XXXXXXXX`; or with curl and the key in a header (`Authorization: Bearer $HQ_STAFF_KEY`):

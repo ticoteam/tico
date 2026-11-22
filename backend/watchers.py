@@ -20,7 +20,7 @@ from fastapi import Request
 from pydantic import Field
 
 from clients.watchers import LIMITS, MAX_EVENTS
-from . import rooms, run_triggers, screening, support_triage
+from . import rooms, run_triggers, screening, support_hq, support_triage
 from .models import Contract, Slug
 from .store import H, Problem
 
@@ -67,7 +67,7 @@ def live(task):
     return bool(task) and task["status"] != "closed"
 
 
-def _open(c, auth, bot, title, body, owner=None, *, incident=False):
+def _open(c, auth, bot, title, body, owner=None, *, incident=False, help_key=""):
     owner = owner or "bot:" + bot
     conversation = rooms.task_conversation_id(c, auth, owner, H.TICO_ACTOR)
     return H.task_create(
@@ -80,6 +80,7 @@ def _open(c, auth, bot, title, body, owner=None, *, incident=False):
         conversation_id=conversation,
         lint=not owner.startswith("human:"),
         labels=["incident"] if incident else None,
+        pipeline=support_hq.pipeline_for(c, bot, help_key),
     )
 
 
@@ -103,13 +104,17 @@ def _note(c, task, text):
     return task["id"]
 
 
-def deliver(c, auth, bot, event, triage=None):
+def deliver(c, auth, bot, event, triage=None, *, help_event=False):
     """Apply one event. Returns the id of the task it touched, or None when it changed nothing.
 
     `triage(c, event)` is True when the event waits for support triage or screening instead (backend/support_triage.py,
     backend/screening.py); screening may instead give back the event to apply, with a warning line on its body."""
     item = c.execute("SELECT task_id FROM watcher_items WHERE bot=? AND key=?", (bot, event.key)).fetchone()
     task = H.task(c, item["task_id"]) if item else None
+    pending = support_triage.pending(c, bot, event.key)
+    if event.ref.startswith(support_hq.ORIGIN_PREFIX) and (not help_event or event.op != "task" or item or pending):
+        event = event.model_copy(update={"ref": ""})
+    help_key = event.key if help_event else ""
     if (
         event.ref
         and c.execute(
@@ -119,7 +124,7 @@ def deliver(c, auth, bot, event, triage=None):
         return None
     if event.ref:
         c.execute("INSERT INTO watcher_refs VALUES(?,?,?)", (bot, event.key, event.ref))
-    if support_triage.pending(c, bot, event.key):
+    if pending:
         support_triage.later(c, bot, event)  # a note on its task once triage opens it
         return None
     if screening.waiting(c, "watcher", bot, event.key):
@@ -134,12 +139,18 @@ def deliver(c, auth, bot, event, triage=None):
         if waits is True:
             return None
         event = waits or event
-        task = _open(c, auth, bot, event.title or event.key, event.body, incident=event.incident)
+        task = _open(c, auth, bot, event.title or event.key, event.body, incident=event.incident, help_key=help_key)
     elif event.op == "comment":
-        if live(task):
+        if task and live(task):
+            if task["status"] == "done" and help_key and support_hq.watched(c, bot, help_key):
+                _note(c, task, event.text)
+                H.task_move(c, H.TICO_ACTOR, task["id"], "reopen", "The customer wrote again at HQ")
+                return task["id"]
             _wake(c, bot, task, event.text, "watcher")
             return task["id"]
-        task = _open(c, auth, bot, event.title or event.key, event.body or event.text, incident=event.incident)
+        task = _open(
+            c, auth, bot, event.title or event.key, event.body or event.text, incident=event.incident, help_key=help_key
+        )
     else:
         if not live(task):
             return None
@@ -170,7 +181,8 @@ def report(c, auth, runner, body, triage=None):
             if triage and event.op == "task"
             else None
         )
-        touched[event.key] = deliver(c, auth, bot, event, waits) or touched.get(event.key)
+        help_event = body.name == support_triage.WATCHER and event.key.startswith(support_triage.KEY_PREFIX)
+        touched[event.key] = deliver(c, auth, bot, event, waits, help_event=help_event) or touched.get(event.key)
     c.execute(
         "INSERT INTO watcher_runs(bot,name,runner_id,started_at,finished_at,exit_code,timed_out,every,output,events) "
         "VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(bot,name) DO UPDATE SET runner_id=excluded.runner_id,"

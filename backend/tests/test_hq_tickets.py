@@ -12,7 +12,6 @@ import secrets
 import urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
-from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -21,7 +20,6 @@ ROOT = Path(__file__).resolve().parents[2]
 STAFF = "k" * 32
 URL = "https://hq.example"
 SIGNATURE = re.compile(r"hm-[0-9a-f]{12}")
-REF = re.compile(r"#?([0-9]{1,7})")
 
 
 def load(name):
@@ -59,10 +57,11 @@ class Response:
 class StaffHQ:
     """HQ's ticket store and staff routes as an urllib opener. It answers as HQ does: times to the second, `since` is
     strictly after, oldest activity first, a held ticket only in `status=held`, one message id sequence for every ticket,
-    a wrong key `401`, a closed ticket `409`, a field it does not take `422`."""
+    a wrong key `401` and a field it does not take `422`."""
 
     def __init__(self):
-        self.tickets, self.next_message, self.seen, self.verdict = {}, 1, [], ("legit", "judged legit (0.99)")
+        self.tickets, self.next_message, self.seen = {}, 1, []
+        self.verdict = ("legit", "judged legit (0.99)")
 
     @staticmethod
     def now():
@@ -148,6 +147,10 @@ class StaffHQ:
 
     def route(self, method, path, query, body):
         q = {k: v[0] for k, v in query.items()}
+        if method == "POST" and path == "/v1/staff/judge":
+            if set(body or {}) != {"text"}:
+                return 422, {"error": "invalid"}
+            return 200, {"verdict": self.verdict[0], "reason": self.verdict[1]}
         if method == "GET" and path == "/v1/staff/tickets":
             status, since, limit, signature = (
                 q.get("status", ""),
@@ -167,102 +170,27 @@ class StaffHQ:
             ]
             rows.sort(key=lambda t: (t["updated"], t["ticket_id"]))
             return 200, {"tickets": [self.view(t) for t in rows[:limit]]}
-        if method == "POST" and path == "/v1/staff/tickets/by-signature/close":
-            if set(body) != {"signature", "body"}:
-                return 422, {"error": "invalid", "field": "fields"}
-            rows = [t for t in self.tickets.values() if t["signature"] == body["signature"] and not t["held"]]
-            closed = []
-            for t in rows:
-                if t["status"] in ("open", "answered"):
-                    reply = self._message(t["ticket_id"], "staff", body["body"])
-                    t.update(status="closed", updated=self.now(), email_pending=bool(t["email"]) or t["email_pending"])
-                    closed.append({"ticket_id": t["ticket_id"], "reply_id": reply, "email_pending": t["email_pending"]})
-            return 200, {
-                "signature": body["signature"],
-                "closed": closed,
-                "already_closed": sum(1 for t in rows if t["status"] == "closed") - len(closed),
-            }
-        if method == "POST" and path == "/v1/staff/judge":
-            if set(body or {}) != {"text"}:
-                return 422, {"error": "invalid"}
-            return 200, {"verdict": self.verdict[0], "reason": self.verdict[1]}
-        found = re.fullmatch(r"/v1/staff/tickets/(TK-[A-Z2-7]{8})(/reply|/status|/fix)?", path)
+        found = re.fullmatch(r"/v1/staff/tickets/(TK-[A-Z2-7]{8})", path)
         ticket = self.tickets.get(found.group(1)) if found else None
-        if not ticket:
-            return 404, {"error": "not_found"}
-        action = found.group(2)
-        if method == "GET" and not action:
+        if method == "GET" and ticket:
             return 200, self.view(ticket, full=True)
-        if action == "/reply":
-            if set(body) != {"body"} or not str(body["body"]).strip() or len(body["body"]) > 8000:
-                return 422, {"error": "invalid", "field": "body"}
-            if ticket["status"] == "closed":
-                return 409, {"error": "closed"}
-            reply = self._message(ticket["ticket_id"], "staff", body["body"].strip())
-            ticket.update(
-                status="answered", updated=self.now(), email_pending=bool(ticket["email"]) or ticket["email_pending"]
-            )
-            return 200, {
-                "ticket_id": ticket["ticket_id"],
-                "status": "answered",
-                "reply_id": reply,
-                "email_pending": bool(ticket["email"]),
-            }
-        if action == "/status":
-            ticket.update(status=body.get("status") or ticket["status"], updated=self.now())
-            return 200, {
-                "ticket_id": ticket["ticket_id"],
-                "status": ticket["status"],
-                "email_pending": ticket["email_pending"],
-            }
-        if action == "/fix":
-            ref = REF.fullmatch(str(body.get("ref", "")).strip()) if set(body) == {"ref"} else None
-            if not ref or int(ref.group(1)) == 0:
-                return 422, {"error": "invalid", "field": "ref"}
-            ticket.setdefault("refs", set()).add(int(ref.group(1)))
-            return 200, {"ticket_id": ticket["ticket_id"], "refs": sorted(ticket["refs"])}
         return 404, {"error": "not_found"}
 
 
 @pytest.fixture
 def hq():
-    documented(
-        "GET /v1/staff/tickets",
-        "GET /v1/staff/tickets/{id}",
-        "POST /v1/staff/tickets/{id}/reply",
-        "POST /v1/staff/tickets/{id}/status",
-        "POST /v1/staff/tickets/by-signature/close",
-        "POST /v1/staff/tickets/{id}/fix",
-        "POST /v1/staff/judge",
-    )
+    documented("GET /v1/staff/tickets", "GET /v1/staff/tickets/{id}")
     return StaffHQ()
 
 
 @pytest.fixture
-def rig(hq, tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "bot.yaml").write_text("name: support\n")
-    # The bot's sending policy as Tico answers it (GET bots/<slug>/email-sending-policy): a person set On their own.
-    # A mode of None is a Tico the run cannot reach.
-    server = {"mode": "on_their_own"}
-    monkeypatch.setattr(
-        tickets_cli,
-        "tico_get",
-        lambda env, path: (
-            {"effective": {"mode": server["mode"]}}
-            if path == "bots/support/email-sending-policy" and server["mode"]
-            else None
-        ),
-    )
-
+def rig(hq, tmp_path):
     class Rig:
         env = {
-            "HQ_STAFF_KEY": STAFF,
+            "HQ_STAFF_READ_KEY": STAFF,
             "HQ_URL": URL,
             "TICO_WATCHER_STATE": str(tmp_path / "state"),
-            "HUB_BOT": "support",
         }
-        setting = server
         events, lines = [], []
 
         def watch(self, **env):
@@ -311,9 +239,10 @@ def test_watch_opens_a_task_per_new_ticket_once_with_the_text_quoted_as_data(rig
     assert "> It is still empty" in comment["text"]
     assert rig.watch() == []
     # The team's own reply is not news; closing at HQ is, once.
-    assert rig.cli("reply", first, str(Path("bot.yaml")))[0] == 0
+    hq._message(first, "staff", "Try the latest release.")
+    hq.tickets[first].update(status="answered", updated=hq.now())
     assert rig.watch() == []
-    hq.route("POST", f"/v1/staff/tickets/{first}/status", {}, {"status": "closed"})
+    hq.tickets[first].update(status="closed", updated=hq.now())
     (done,) = rig.watch()
     assert done["op"] == "done" and done["key"] == "hq:" + first
     assert rig.watch() == []
@@ -350,14 +279,15 @@ def test_a_setup_website_ticket_is_one_task_with_its_kind_and_its_attachment_sti
 
 def test_a_ticket_already_answered_when_first_seen_is_not_opened(rig, hq):
     tid = hq.file("Old question")
-    hq.route("POST", f"/v1/staff/tickets/{tid}/reply", {}, {"body": "Answered long ago"})
+    hq._message(tid, "staff", "Answered long ago")
+    hq.tickets[tid]["status"] = "answered"
     assert rig.watch() == []
 
 
 def test_without_the_staff_key_watch_is_quiet_and_the_other_commands_say_why(rig, hq):
-    assert rig.watch(HQ_STAFF_KEY="") == []
-    code, text = rig.cli("list", HQ_STAFF_KEY="")
-    assert code == 2 and "HQ_STAFF_KEY is not set" in text
+    assert rig.watch(HQ_STAFF_READ_KEY="") == []
+    code, text = rig.cli("list", HQ_STAFF_READ_KEY="")
+    assert code == 2 and "Set HQ_STAFF_READ_KEY or HQ_STAFF_KEY" in text
     code, text = rig.cli("list", HQ_URL="")
     assert code == 1 and "HQ_URL" in text
     assert hq.seen == []
@@ -368,87 +298,62 @@ def test_list_and_show_read_the_queue_and_the_key_is_never_printed(rig, hq):
     hq.person_writes(tid, "More detail")
     code, text = rig.cli("list")
     assert code == 0 and tid in text and "open" in text and "The board will not load" in text
-    code, text = rig.cli("show", tid)
+    code, text = rig.cli("show", tid, HQ_STAFF_READ_KEY="", HQ_STAFF_KEY=STAFF)
     assert (
         code == 0
         and "> The board will not load" in text
         and "> More detail" in text
         and "email reply pending" not in text
     )
-    code, text = rig.cli("list", HQ_STAFF_KEY="w" * 32)
+    code, text = rig.cli("list", HQ_STAFF_READ_KEY="w" * 32, HQ_STAFF_KEY=STAFF)
     assert code == 1 and "refused the staff key" in text
     everything = text + json.dumps([r.full_url for r in hq.seen]) + "\n".join(rig.lines)
     assert STAFF not in everything and "w" * 32 not in everything
 
 
-@pytest.mark.parametrize("mode", [None, "never"])
-def test_never_or_no_answer_from_tico_keeps_the_draft(rig, hq, tmp_path, mode):
-    rig.setting["mode"] = mode
+def test_reply_requires_an_open_support_task_and_a_reachable_tico(rig, hq, tmp_path):
     tid = hq.file("The board will not load")
     reply = tmp_path / "reply.md"
     reply.write_text("Try the latest release.\n")
     code, text = rig.cli("reply", tid, str(reply))
-    assert code == 1 and "keep the reply as a draft" in text, text
-    assert hq.tickets[tid]["messages"] == [] and hq.seen == []
+    assert code == 1 and "--task" in text
+    code, text = rig.cli("reply", tid, str(reply), "--task", "T1")
+    assert code == 1 and "keep the reply as a draft" in text
+    assert hq.seen == []
 
 
-def test_ask_first_posts_only_on_an_ok_for_exactly_this_reply_and_never_closes_by_signature(
-    rig, hq, tmp_path, monkeypatch
-):
-    rig.setting["mode"] = "ask_first"
-    posts, refuse = [], set()
+def test_signature_only_queues_supplied_tickets_that_carry_it(rig, hq, tmp_path, monkeypatch):
+    sig = "hm-a1b2c3d4e5f6"
+    one = hq.file(f"Health Monitor\nSignature: {sig}")
+    two = hq.file(f"Health Monitor\nSignature: {sig}")
+    other = hq.file("A person's own words")
+    fixed = tmp_path / "fixed.md"
+    fixed.write_text("Update to the latest release.\n")
+    queued = []
 
-    def tico(env, path, body):
-        posts.append((path, body))
-        if path in refuse:
-            raise tickets_cli.TicoFailed("http_409")
-        return {"task_id": "T1", "requirement_id": "r1"} if path.endswith("/oks") else {}
+    def queue(env, path, body):
+        assert path == "outbound-actions"
+        queued.append(body)
+        return {"action": {"id": body["task_id"], "state": "waiting_approval"}}
 
-    monkeypatch.setattr(tickets_cli, "tico_post", tico)
-    tid = hq.file("The board will not load")
-    reply = tmp_path / "reply.md"
-    reply.write_text("Try the latest release.\n")
-    code, text = rig.cli("reply", tid, str(reply))
-    assert code == 1 and "Ask first" in text and "hq-tickets ask" in text and hq.seen == [] and posts == []
-    assert rig.cli("reply", tid, str(reply), "--approval", "a1")[0] == 2
-
-    code, text = rig.cli("ask", tid, str(reply), "--task", "T1", "--to", "ana", "--version", "4")
-    assert code == 0 and "r1" in text and f"hq-tickets reply {tid} {reply} --ok r1" in text, text
-    assert posts[-1] == (
-        "tasks/T1/oks",
-        {
-            "to": "ana",
-            "line": f"Post this reply to {tid}?",
-            "subject": f"hq_reply:{tid}",
-            "content": "Try the latest release.\n",
-            "version": 4,
-        },
-    )
-    assert rig.cli("ask", tid, str(reply), "--task", "T1", "--to", "ana")[0] == 2 and hq.seen == []
-
-    refuse.add("oks/r1/use")  # not given yet, or for other text: Tico refuses and nothing is posted
-    code, text = rig.cli("reply", tid, str(reply), "--ok", "r1")
-    assert code == 1 and "Tico refused" in text and hq.seen == []
-    refuse.clear()
-    code, text = rig.cli("reply", tid, str(reply), "--ok", "r1")
-    assert code == 0 and "posted reply" in text
-    assert posts[-1] == ("oks/r1/use", {"subject": f"hq_reply:{tid}", "content": "Try the latest release.\n"})
-    assert len(hq.seen) == 1
-
-    code, text = rig.cli("close-signature", "hm-a1b2c3d4e5f6", str(reply))
-    assert code == 1 and "keep the reply as a draft" in text and len(hq.seen) == 1
+    monkeypatch.setattr(tickets_cli, "tico_post", queue)
+    cmd = ("close-signature", sig, str(fixed), "--task", f"{one}=T1")
+    assert rig.cli(*cmd, "--task", f"{other}=T3")[0] == 1
+    assert queued == []
+    assert rig.cli(*cmd, "--task", f"{two}=T2")[0] == 0
+    assert [(row["destination"], row["task_id"], row["payload"]) for row in queued] == [
+        (one, "T1", {"body": fixed.read_text()}),
+        (two, "T2", {"body": fixed.read_text()}),
+    ]
+    assert all(req.get_method() == "GET" for req in hq.seen)
 
 
-def test_tico_is_asked_through_its_own_client_as_the_bot(monkeypatch):
-    """The script reads the sending policy and posts OKs with Tico's client (clients/tico.py) from HUB_DIR."""
+def test_tico_is_asked_once_through_its_own_client_as_the_bot(monkeypatch):
     calls = []
 
     class Client:
         def __init__(self, url, token, **options):
             calls.append((url, token, options))
-
-        def get(self, path):
-            return {"path": path}
 
         def post(self, path, body):
             raise type("APIError", (Exception,), {"status": 403})()
@@ -457,72 +362,9 @@ def test_tico_is_asked_through_its_own_client_as_the_bot(monkeypatch):
 
     monkeypatch.setattr(clients.tico, "Client", Client)
     env = {"HUB_API_URL": "https://tico.example", "HUB_TOKEN": "t", "HUB_DIR": str(ROOT)}
-    assert tickets_cli.tico_get(env, "bots/support/email-sending-policy") == {
-        "path": "bots/support/email-sending-policy"
-    }
     with pytest.raises(tickets_cli.TicoFailed, match="forbidden"):
-        tickets_cli.tico_post(env, "oks/r1/use", {})
-    assert calls[-1] == ("https://tico.example", "t", {"timeout": tickets_cli.TICO_POST_TIMEOUT, "retries": 0})
-    assert tickets_cli.tico_get({}, "anything") is None
-    with pytest.raises(tickets_cli.Refused, match="cannot reach Tico"):
-        tickets_cli.tico_post({}, "oks/r1/use", {})
-
-
-def test_a_run_that_does_not_name_its_bot_keeps_the_draft(rig, hq, tmp_path):
-    tid = hq.file("The board will not load")
-    reply = tmp_path / "reply.md"
-    reply.write_text("Try the latest release.\n")
-    code, text = rig.cli("reply", tid, str(reply), HUB_BOT="")
-    assert code == 1 and "HUB_BOT" in text
-    assert hq.tickets[tid]["messages"] == [] and hq.seen == []
-
-
-def test_close_signature_replies_and_closes_every_ticket_with_it(rig, hq, tmp_path):
-    sig = "hm-a1b2c3d4e5f6"
-    body = "[Health Monitor] queue_idle: queued work does not start\n\nSignature: %s\nKind: tico-bug\n" % sig
-    one, two = hq.file(body, email="ana@acme.example"), hq.file(body)
-    hq.file("A person's own words")
-    fixed = tmp_path / "fixed.md"
-    fixed.write_text("Fixed in Tico 0.3.47: queued work starts while its computer has room. Update to 0.3.47.\n")
-    code, text = rig.cli("list", "--signature", sig)
-    assert code == 0 and one in text and two in text and sig in text
-    assert parse_qs(urlsplit(hq.seen[-1].full_url).query) == {"status": ["open"], "limit": ["200"], "signature": [sig]}
-    code, text = rig.cli("close-signature", sig, str(fixed))
-    assert code == 0 and "closed 2 ticket(s)" in text and one in text and two in text
-    assert "email reply is pending" in text
-    assert json.loads(hq.seen[-1].data) == {"signature": sig, "body": fixed.read_text()}
-    for tid in (one, two):
-        assert hq.tickets[tid]["status"] == "closed" and hq.tickets[tid]["messages"][0]["body"] == fixed.read_text()
-    code, text = rig.cli("close-signature", sig, str(fixed))
-    assert code == 0 and "closed 0 ticket(s)" in text and "2 already closed" in text
-    sent = len(hq.seen)
-    assert rig.cli("close-signature", "hm-xyz", str(fixed))[0] == 2
-    code, text = rig.cli("close-signature", sig, str(fixed), HUB_BOT="")
-    assert code == 1 and "HUB_BOT" in text and len(hq.seen) == sent
-
-
-def test_link_names_the_fix_a_release_will_announce(rig, hq):
-    tid = hq.file("The board will not load")
-    code, text = rig.cli("link", tid, "#712")
-    assert code == 0 and text.strip() == f"{tid} gets the fixed-in notice when a release ships #712", text
-    assert json.loads(hq.seen[-1].data) == {"ref": "#712"}
-    code, text = rig.cli("link", tid, "712")
-    assert code == 0 and text.strip().endswith("#712")
-    assert rig.cli("link", tid, "PR-712")[0] == 2
-
-
-def test_on_their_own_posts_the_reply_and_refuses_one_too_long(rig, hq, tmp_path):
-    reply = tmp_path / "reply.md"
-    reply.write_text("Thanks. Try the latest release; the board fix is in it.\n")
-    tid = hq.file("The board will not load", email="ana@acme.example")
-    code, text = rig.cli("reply", tid, str(reply))
-    assert code == 0 and "posted reply 1" in text and tid in text and "email reply is pending" in text
-    (request,) = hq.seen
-    assert (request.get_method(), request.full_url) == ("POST", f"{URL}/v1/staff/tickets/{tid}/reply")
-    assert json.loads(request.data) == {"body": reply.read_text()}
-    assert hq.tickets[tid]["status"] == "answered" and hq.tickets[tid]["messages"][0]["body"].startswith("Thanks. Try")
-    reply.write_text("x" * 8001)
-    assert rig.cli("reply", tid, str(reply))[0] == 1 and len(hq.seen) == 1
+        tickets_cli.tico_post(env, "outbound-actions", {})
+    assert calls == [("https://tico.example", "t", {"timeout": tickets_cli.TICO_POST_TIMEOUT, "retries": 0})]
 
 
 def test_a_setup_ticket_reaches_the_bot_on_the_same_path_marked_as_setup(rig, hq):
@@ -560,8 +402,9 @@ def test_each_verdict_routes_and_the_watcher_files_only_what_it_should(rig, hq):
 
 
 def test_github_threads_get_the_same_verdicts_through_the_staff_judge_route(hq):
+    documented("POST /v1/staff/judge")
     hq.verdict = ("spam", "judged spam (0.95)")
-    judge = gh_support.hq_judge({"HQ_STAFF_KEY": STAFF, "HQ_URL": URL}, hq)
+    judge = gh_support.hq_judge({"HQ_STAFF_KEY": STAFF, "HQ_STAFF_READ_KEY": "read-only", "HQ_URL": URL}, hq)
     assert judge("hello")[0] == "spam"
     (request,) = hq.seen
     assert (request.get_method(), request.full_url, json.loads(request.data)) == (
@@ -569,7 +412,10 @@ def test_github_threads_get_the_same_verdicts_through_the_staff_judge_route(hq):
         URL + "/v1/staff/judge",
         {"text": "hello"},
     )
-    assert gh_support.hq_judge({}, hq)("hello")[0] == "unchecked" and len(hq.seen) == 1  # no key: fails open
+    assert (
+        gh_support.hq_judge({"HQ_STAFF_READ_KEY": STAFF, "HQ_URL": URL}, hq)("hello")[0] == "unchecked"
+        and len(hq.seen) == 1
+    )  # no key: fails open
     assert (
         gh_support.hq_judge({"HQ_STAFF_KEY": "w" * 32, "HQ_URL": URL}, hq)("hello")[0] == "unchecked"
     )  # refused: open

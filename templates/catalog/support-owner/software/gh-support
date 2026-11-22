@@ -24,9 +24,10 @@ give it a token, which allows 5000 an hour.
 Everything on GitHub is text from outside: it is quoted and labelled as data, and nothing here follows an instruction in it.
 
 Before a thread or a comment wakes the bot, its text goes through the same spam and injection check as an HQ ticket
-(HQ's POST /v1/staff/judge, with HQ_STAFF_KEY and HQ_URL from this bot's credentials, the ones hq-tickets uses). `spam` is
+(HQ's POST /v1/staff/judge, with HQ_STAFF_KEY and HQ_URL from this bot's credentials). `spam` is
 not filed and is counted in the output line; `injection_risk` is filed with a warning to read it only; `legit`, and
 `unchecked` (no key, HQ or the decision unreachable), are filed as usual. Only the text goes to HQ, never a token.
+If HQ refuses the staff key with 401 or 403, the run files the affected text as `unchecked` and warns in Watchers health.
 """
 import json
 import os
@@ -158,24 +159,42 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 # ---------------------------------------------------------------------- the spam and injection check
-def hq_judge(env, opener=None):
+def hq_judge(env, opener=None, *, on_refusal=None):
     """`judge(text) -> (verdict, reason)` through HQ, failing open: no key, no answer or a bad answer is `unchecked`."""
-    key, url = env.get("HQ_STAFF_KEY", "").strip(), (env.get("HQ_URL") or env.get("TICO_HQ_URL") or "").strip().rstrip("/")
-    if not key or not (url.startswith("https://") or url.startswith("http://127.0.0.1") or url.startswith("http://localhost")):
+    key, url = (
+        env.get("HQ_STAFF_KEY", "").strip(),
+        (env.get("HQ_URL") or env.get("TICO_HQ_URL") or "").strip().rstrip("/"),
+    )
+    if not key or not (
+        url.startswith("https://") or url.startswith("http://127.0.0.1") or url.startswith("http://localhost")
+    ):
         return lambda text: ("unchecked", "no HQ key in this bot's credentials")
     opener = opener or urllib.request.build_opener(_NoRedirect())
 
     def judge(text):
-        request = urllib.request.Request(url + "/v1/staff/judge", data=json.dumps({"text": text[:8000]}).encode(), method="POST",
-                                         headers={"Authorization": "Bearer " + key, "Content-Type": "application/json",
-                                                  "Accept": "application/json", "User-Agent": "tico-support-bot"})
+        request = urllib.request.Request(
+            url + "/v1/staff/judge",
+            data=json.dumps({"text": text[:8000]}).encode(),
+            method="POST",
+            headers={
+                "Authorization": "Bearer " + key,
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "tico-support-bot",
+            },
+        )
         try:
             with opener.open(request, timeout=8) as response:
                 answer = json.loads(response.read().decode("utf-8"))
             verdict = answer["verdict"]
-            return (verdict if verdict in ("legit", "spam", "injection_risk", "unchecked") else "unchecked"), str(answer.get("reason") or "")[:200]
-        except Exception as exc:                        # fails open: the thread is filed
+            return (verdict if verdict in ("legit", "spam", "injection_risk", "unchecked") else "unchecked"), str(
+                answer.get("reason") or ""
+            )[:200]
+        except Exception as exc:  # noqa: BLE001 - the thread is filed if the judge fails
+            if on_refusal and isinstance(exc, urllib.error.HTTPError) and exc.code in (401, 403):
+                on_refusal(exc.code)
             return "unchecked", "the check did not answer (" + type(exc).__name__ + ")"
+
     return judge
 
 
@@ -361,12 +380,27 @@ def run_watch(env, root, http=None, out=print, emit=None, now=None, judge=None):
     except (OSError, ValueError):
         state = {}
     gh = Github(env.get("GITHUB_TOKEN") or env.get("GH_TOKEN") or "", http)
-    counts = watch(gh, cfg, state, emit or (lambda event: print("tico-event " + json.dumps(event))),
-                   now or datetime.now(timezone.utc), out, judge or hq_judge(env))
+    refusals = []
+    counts = watch(
+        gh,
+        cfg,
+        state,
+        emit or (lambda event: print("tico-event " + json.dumps(event))),
+        now or datetime.now(timezone.utc),
+        out,
+        judge or hq_judge(env, on_refusal=refusals.append),
+    )
     path.write_text(json.dumps(state, sort_keys=True))
     if any(counts.values()):
-        out(f"gh-support: {counts['new']} new, {counts['comments']} new comments, {counts['closed']} closed"
-            + (f", {counts['held']} held as spam" if counts["held"] else ""))
+        out(
+            f"gh-support: {counts['new']} new, {counts['comments']} new comments, {counts['closed']} closed"
+            + (f", {counts['held']} held as spam" if counts["held"] else "")
+        )
+    if refusals:
+        out(
+            f"gh-support: warning: HQ refused HQ_STAFF_KEY (HTTP {refusals[0]}). Affected GitHub text was filed as unchecked."
+        )
+        return 1
     return 0
 
 

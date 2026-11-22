@@ -260,3 +260,7 @@ intake. The server checks the relationship and the sponsor's current access to
 both the entity and the source inbox on each read. Revoking the sponsor's inbox
 grant blocks further reads in an active run. Suggested changes to shared memory
 or status stay in the run's answer for review.
+
+Once the Relationship Worker is assigned to a computer, a matched outside
+arrival queues a turn on that relationship with the inbox owner as its sponsor.
+Replaying the delivery keeps the original turn.

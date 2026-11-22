@@ -1078,6 +1078,8 @@ class SettingsAdmin:
             placement.auto_place(c, self.execution, bot, who.actor)
         finally:
             c.execute("UPDATE bots SET state=? WHERE id=?", (previous, bot))
+        if bot == H.RELATIONSHIP_WORKER:
+            return  # Relationship runs use isolated scratch directories.
         # Branches clone an existing original repository; they never build a separate one.
         branch = shared_bots.source_of(shared_bots.declared(c, bot))
         if not branch and not repository_present(c, bot) and not self.computer_builds_repository(c, bot):

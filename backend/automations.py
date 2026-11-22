@@ -3049,6 +3049,15 @@ class Hub:
                     )
                     if not state.get("recover"):
                         status = _intake_step(c, run["id"], outside_intake.process, *args)
+                        if status == "matched":
+                            app = self.app
+                            status = (
+                                _intake_step(
+                                    c, run["id"], outside_intake.wake_relationship, *args, authority=app.state.auth
+                                )
+                                if app is not None
+                                else "failed"
+                            )
                     if status == "failed" or state.get("recover"):
                         status = _intake_step(c, run["id"], outside_intake.triage, *args, recovery=True)
                         if status == "failed":
