@@ -134,11 +134,11 @@ def test_the_dry_run_masks_the_invite_and_makes_no_link(monkeypatch):
     assert not hosted.link_file(DOMAIN).exists()
 
 
-def test_no_support_only_stops_the_offer_and_keeps_the_presets_support_on():
+def test_no_support_turns_the_presets_support_off():
     code, out = go(
         ["--dry-run", "--target", "aws", "--hosted", "own", "--preset", "recommended", "--no-support", *HOSTED]
     )
-    assert code == 0 and "TICO_SUPPORT=on" in out and "Tico Support on" in out and "TICO_SUPPORT=off" not in out
+    assert code == 0 and "TICO_SUPPORT=off" in out and "Tico Support off" in out
 
 
 def test_self_hosted_installs_leave_the_mark_and_the_preset_unset(monkeypatch):
