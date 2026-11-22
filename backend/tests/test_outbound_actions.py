@@ -147,8 +147,11 @@ def test_outbound_list_treats_private_email_cursors_as_missing(api, store, fake)
     assert get(api, f"outbound-actions?cursor={visible['id']}")["items"] == []
 
 
-def test_unfiltered_admin_outbound_list_uses_the_non_email_index(api, store, fake, monkeypatch):
+@pytest.mark.parametrize("by_state", [False, True])
+def test_admin_outbound_list_uses_a_non_email_index(api, store, fake, monkeypatch, by_state):
     visible, _ = add(store)
+    query = f"outbound-actions?limit=1&state={visible['state']}" if by_state else "outbound-actions?limit=1"
+    index = "outbound_actions_non_email_state" if by_state else "outbound_actions_non_email_created"
     read = store.read
     statements = []
 
@@ -160,11 +163,11 @@ def test_unfiltered_admin_outbound_list_uses_the_non_email_index(api, store, fak
 
     monkeypatch.setattr(store, "read", traced_read)
     with measuring(statements):
-        assert [row["id"] for row in get(api, "outbound-actions?limit=1")["items"]] == [visible["id"]]
+        assert [row["id"] for row in get(api, query)["items"]] == [visible["id"]]
     [sql] = [s for s in statements if "FROM outbound_actions" in s and "ORDER BY created_at DESC, id DESC" in s]
     with read() as c:
         plan = [row[3] for row in c.execute("EXPLAIN QUERY PLAN " + sql)]
-    assert any("USING INDEX outbound_actions_non_email_created" in step for step in plan), plan
+    assert any(f"USING INDEX {index}" in step for step in plan), plan
 
 
 def test_the_same_claim_replayed_after_its_attempt_calls_nothing(store, fake):

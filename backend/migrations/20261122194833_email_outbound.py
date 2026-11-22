@@ -105,3 +105,7 @@ def up(conn):
         "CREATE INDEX outbound_actions_non_email_created ON outbound_actions(created_at DESC, id DESC) "
         "WHERE channel<>'email'"
     )
+    conn.execute(
+        "CREATE INDEX outbound_actions_non_email_state ON outbound_actions(state, created_at DESC, id DESC) "
+        "WHERE channel<>'email'"
+    )

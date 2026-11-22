@@ -446,7 +446,11 @@ def enqueue(
         ):
             tries += 1
             key = f"{base}:{tries}"
-    found = c.execute("SELECT * FROM outbound_actions WHERE occurrence_key=?", (key,)).fetchone()
+    # Look up the channel first, so a refused key never reads an email's frozen MIME.
+    seen = c.execute("SELECT id, channel FROM outbound_actions WHERE occurrence_key=?", (key,)).fetchone()
+    if seen and seen["channel"] == outbound_email.CHANNEL:
+        raise Problem("validation", "Email occurrence keys are reserved", 422)
+    found = c.execute("SELECT * FROM outbound_actions WHERE id=?", (seen["id"],)).fetchone() if seen else None
     if key.startswith(outbound_slack.PREFIX) and (not found or found["channel"] == "slack"):
         raise Problem("validation", "Slack occurrence keys are reserved", 422)
     if key.startswith(outbound_email.PREFIX) and (not found or found["channel"] == outbound_email.CHANNEL):
@@ -1368,7 +1372,13 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
 
         with store.read() as c:
             is_admin = admin(who)
-            index = " INDEXED BY outbound_actions_non_email_created" if is_admin and not (state or channel) else ""
+            index = (
+                " INDEXED BY outbound_actions_non_email_created"
+                if is_admin and not (state or channel)
+                else " INDEXED BY outbound_actions_non_email_state"
+                if is_admin and state and not channel
+                else ""
+            )
             sql = (
                 f"SELECT {fields} FROM outbound_actions{index} WHERE channel<>'email' AND (channel<>'slack' OR EXISTS "
                 "(SELECT 1 FROM messages m WHERE m.id=outbound_actions.id AND m.deleted_at IS NULL))"
