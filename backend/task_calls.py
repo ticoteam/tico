@@ -661,12 +661,13 @@ def task_snooze(
     seen_version: int | str | None = None,
     *,
     mover: bool | None = None,
+    customer_wait: tuple[str, str, int] | None = None,
 ) -> Row:
     """Set a task aside until a date, or with no end. A bot gives a reason."""
     from . import task_engine as E
 
     _open(conn, actor, task_id, mover)
-    return E.snooze(conn, task_id, actor, why, until, seen_version)
+    return E.snooze(conn, task_id, actor, why, until, seen_version, customer_wait=customer_wait)
 
 
 @_task_write()
@@ -675,7 +676,7 @@ def task_unsnooze(conn: "sqlite3.Connection", actor: str, task_id: str, why: str
     from . import task_engine as E
 
     _open(conn, actor, task_id, work=False)
-    return E.unsnooze(conn, task_id, actor, why)
+    return E.unsnooze(conn, task_id, actor, why, manual=True)
 
 
 @_task_write()
@@ -1263,7 +1264,12 @@ def task_view(
         "repositories": repos,
         "next": {"id": following["id"], "name": following["name"]} if following else None,
         "late": late,
-        "snooze": {"until": snooze.get("until_at"), "by": snooze.get("by_id"), "why": snooze.get("why")}
+        "snooze": {
+            "until": snooze.get("until_at"),
+            "by": snooze.get("by_id"),
+            "why": snooze.get("why"),
+            **({"waiting_for_reply": True} if snooze.get("wait_thread_id") else {}),
+        }
         if snooze
         else None,
         "filed_by": filed_by,

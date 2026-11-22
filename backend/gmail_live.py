@@ -216,9 +216,35 @@ def thread(c, mailbox, thread_id):
     )
 
 
-def message(c, mailbox, message_id):
+def _internal_date_ms(raw) -> int | None:
+    """Gmail's millisecond timestamp, independent of the message's Date header."""
+    value = raw.get("internalDate")
+    if type(value) not in (str, int):
+        return None
+    try:
+        ms = int(value)
+    except ValueError:
+        return None
+    return ms if -(2**63) <= ms < 2**63 else None
+
+
+def message(c, mailbox, message_id, *, include_provider_time=False):
     raw = _get(mailbox, "messages/" + urllib.parse.quote(message_id, safe=""), _token(c, mailbox), format="full")
-    return _bounded(_message(raw), OPEN_MAX_BYTES)
+    found = _message(raw)
+    if include_provider_time:
+        found["provider_timestamp_ms"] = _internal_date_ms(raw)
+    return _bounded(found, OPEN_MAX_BYTES)
+
+
+def sent_timestamp_ms(mailbox, token, message_id, thread_id) -> int | None:
+    """Best-effort metadata read after a confirmed send. A read failure cannot undo delivery."""
+    try:
+        raw = _get(
+            mailbox, "messages/" + urllib.parse.quote(message_id, safe=""), token, fields="id,threadId,internalDate"
+        )
+    except Problem:
+        return None
+    return _internal_date_ms(raw) if (raw.get("id"), raw.get("threadId")) == (message_id, thread_id) else None
 
 
 def message_ids(c, mailbox, query, limit=100):
@@ -561,8 +587,8 @@ def _upload_body(raw, meta):
 
 
 def send(mailbox, token, raw, thread_id=""):
-    """Send exactly this frozen MIME once: (state, Gmail message id, detail). Gmail refusing it is `failed` (nothing
-    left); no answer, a server error or an answer without an id is `unknown`, never retried into a second copy."""
+    """Send frozen MIME once and return (state, Gmail message id, detail, confirmed thread id).
+    A provider refusal is failed. Without confirmation, delivery is unknown and is never retried."""
     path = urllib.parse.quote(mailbox, safe="") + "/messages/send"
     if len(raw) <= INLINE_RAW_MAX:
         body = {"raw": raw, **({"threadId": thread_id} if thread_id else {})}
@@ -575,10 +601,16 @@ def send(mailbox, token, raw, thread_id=""):
             UPLOAD + path + "?uploadType=multipart", token=token, body=body, content_type=content_type
         )
     if status in (200, 201) and found.get("id"):
-        return "sent", str(found["id"])[:200], "sent"
+        confirmed = found.get("threadId")
+        return (
+            "sent",
+            str(found["id"])[:200],
+            "sent",
+            confirmed if isinstance(confirmed, str) else "",
+        )
     if 400 <= status < 500:
-        return "failed", "", f"Gmail refused the email (HTTP {status}); nothing was sent"
-    return "unknown", "", "Gmail did not confirm delivery"
+        return "failed", "", f"Gmail refused the email (HTTP {status}); nothing was sent", ""
+    return "unknown", "", "Gmail did not confirm delivery", ""
 
 
 def payload(c, mailbox, message_id):

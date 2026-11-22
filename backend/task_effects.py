@@ -107,7 +107,7 @@ def filed_ended(conn: "sqlite3.Connection", above: Row, by: str) -> Row:
     snooze (backend/answers.py): a snooze a person set is theirs to end, and stays. Returns `above` as it is now."""
     H = _h()
     snoozed: Row | None = above.get("snooze")
-    if not snoozed or not H.is_bot(snoozed.get("by_id")):
+    if not snoozed or snoozed.get("wait_thread_id") or not H.is_bot(snoozed.get("by_id")):
         return above
     from . import task_engine
 

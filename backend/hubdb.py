@@ -2173,6 +2173,7 @@ def _write_message(
     check_cap=False,
     decided=None,
     outside=None,
+    outside_direction="inbound",
 ):
     if actor == "bot:librarian":
         body = librarian_text(body)
@@ -2230,7 +2231,7 @@ def _write_message(
         "expires_at": expires_at,
         "wait_s": wait_s,
         "channel": outside[0] if outside else None,
-        "direction": "inbound" if outside else None,
+        "direction": outside_direction if outside else None,
         "connection_id": outside[1] if outside else "",
         "source_message_id": outside[2] if outside else None,
     }
@@ -6233,7 +6234,7 @@ def task_run_now(conn, actor, task_id):
         # snoozed, the engine holds the run it queues (task_wakes.may_start) and Run now did nothing.
         from . import task_engine
 
-        task_engine.unsnooze(conn, task_id, actor, "Run now", consequence="run_now")
+        task_engine.unsnooze(conn, task_id, actor, "Run now", consequence="run_now", manual=True)
     waiting = None
     try:
         waiting = _one(

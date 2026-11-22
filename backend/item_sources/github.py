@@ -1611,7 +1611,7 @@ def _end_bot_snooze(conn: "sqlite3.Connection", row: Row, why: str) -> bool:
     """End the task's snooze as SYSTEM when a bot set it; a person's snooze stays. True when one ended."""
     E = _engine()
     snoozed: Row = row.get("snooze") or {}
-    if not E.is_bot(snoozed.get("by_id")):
+    if snoozed.get("wait_thread_id") or not E.is_bot(snoozed.get("by_id")):
         return False
     E.unsnooze(conn, str(row["id"]), E.SYSTEM, why)
     return True
@@ -1631,7 +1631,7 @@ def snooze_news(conn: "sqlite3.Connection", task_id: str, what: str, lead: str, 
     if not row or row["status"] != "open" or not row.get("visit"):
         return False
     snoozed: Row = row.get("snooze") or {}
-    if not E.is_bot(snoozed.get("by_id")):
+    if snoozed.get("wait_thread_id") or not E.is_bot(snoozed.get("by_id")):
         return False
     key, *others = (f"{task_id}:{row['visit']['id']}:{WAKE_NEWS}:{w}" for w in (what, *same))
     if any(conn.execute("SELECT 1 FROM messages WHERE wake_key=?", (k,)).fetchone() for k in (key, *others)):
@@ -1706,7 +1706,8 @@ def base_moved(
         return 0
     found = conn.execute(
         "SELECT DISTINCT l.task_id FROM task_links l JOIN tasks t ON t.id = l.task_id "
-        "JOIN snoozes z ON z.task_id = t.id AND z.ended_at IS NULL AND z.by_id LIKE 'bot:%' "
+        "JOIN snoozes z ON z.task_id = t.id AND z.ended_at IS NULL AND z.wait_thread_id IS NULL "
+        "AND z.by_id LIKE 'bot:%' "
         "WHERE l.kind='pr' AND l.state IN ('open','draft') AND lower(l.repo)=? AND t.status='open' "
         "AND t.pipeline_id IS NOT NULL AND coalesce(json_extract(l.detail,'$.base_ref'), ?)=? ORDER BY l.task_id",
         (repo.lower(), default_branch, branch),
@@ -1753,7 +1754,8 @@ def named_pr_done(conn: "sqlite3.Connection", repo: str, number: int, state: str
         return 0
     found = conn.execute(
         "SELECT z.task_id, z.why FROM snoozes z JOIN tasks t ON t.id = z.task_id "
-        "WHERE z.ended_at IS NULL AND z.by_id LIKE 'bot:%' AND t.status='open' AND t.pipeline_id IS NOT NULL "
+        "WHERE z.ended_at IS NULL AND z.wait_thread_id IS NULL AND z.by_id LIKE 'bot:%' "
+        "AND t.status='open' AND t.pipeline_id IS NOT NULL "
         "AND z.why LIKE ? ORDER BY z.task_id",
         (f"%#{int(number)}%",),
     ).fetchall()

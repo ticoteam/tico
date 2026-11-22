@@ -39,6 +39,7 @@ NEXT, DONE, CLOSED, REOPEN = "next", "done", "closed", "reopen"
 LOG = logging.getLogger("tico.task_engine")
 MAX_DEPTH = 5  # sub-tasks nest at most this deep (C20)
 BOT_SNOOZES = 3  # a bot's snoozes in one stage before the manager bot gets the task
+CUSTOMER_WAIT_DAYS = 30
 # Seconds after a change before the never-stuck check looks at the task, and its gap before retrying a run that was cut
 # off. A run that finished is not woken this soon (never_stuck._ladder).
 FIRST_TRY_S = 120
@@ -699,6 +700,7 @@ def _wake_turn(
     refs: Row | None = None,
     trigger: str | None = None,
     source: str | None = None,
+    wake_key: str | None = None,
 ) -> str | None:
     """Tell whoever has the turn in a stage the task just entered, once per visit: the bot the ladder would wake, and
     each other bot an OK or an answer names while it has a turn too (its ask's one wake: task_wakes.ask). A person is
@@ -728,6 +730,7 @@ def _wake_turn(
         refs={**refs, task_wakes.INSTRUCTIONS: True} if instructions else refs,
         trigger=trigger,
         source=source,
+        wake_key=wake_key,
     )
     if instructions and not out:
         task_wakes.keep_instructions(conn, row, instructions)
@@ -1844,7 +1847,7 @@ def own_snooze(row: Row) -> bool:
     idea filed snoozed into Product's Ideas is not: only a person ends that one (idea_checks.filed)."""
     snooze: Row = row.get("snooze") or {}
     owner = row.get("owner_id")
-    if idea_checks.filed_snooze(snooze or None):
+    if snooze.get("wait_thread_id") or idea_checks.filed_snooze(snooze or None):
         return False
     return bool(snooze) and snooze.get("by_id") == owner and is_bot(owner)
 
@@ -2294,6 +2297,94 @@ def _restore_stage(conn: "sqlite3.Connection", by: str, row: Row, work: Sequence
     return first
 
 
+def customer_wait_anchor(
+    conn: "sqlite3.Connection", thread: Row, sender: str, seq: int | None, provider_reply_id: str | None
+) -> Row | None:
+    """Find the id and global sequence of the saved outbound receipt that can anchor this wait."""
+    from .store import Problem
+
+    H = _h()
+    connection = thread.get("connection_id")
+    if not connection or thread.get("parent_id") or thread.get("deleted_at"):
+        raise Problem("task_customer_wait_thread", "Choose a root outside thread on a customer connection", 422)
+    if not sender.startswith("ext:") or sender not in (thread.get("participants") or []):
+        raise Problem("task_customer_wait_sender", "Choose an outside participant of that thread", 422)
+    key = "source_message_id" if provider_reply_id else "seq"
+    return H._one(
+        conn,
+        f"SELECT id, seq FROM messages WHERE {key}=? AND connection_id=? AND conversation_id=? "
+        "AND direction='outbound' AND deleted_at IS NULL AND seq>0",
+        (provider_reply_id or seq, connection, thread["id"]),
+    )
+
+
+# Gmail time accounts for delayed intake. Use local sequence when the timestamps match or one is missing.
+_CUSTOMER_REPLY_IS_LATER = (
+    "coalesce(nullif(json_extract(reply.refs,'$.provider_timestamp_ms'), "
+    "json_extract(anchor.refs,'$.provider_timestamp_ms')) > "
+    "json_extract(anchor.refs,'$.provider_timestamp_ms'), reply.seq > {anchor_seq})"
+)
+
+
+def _customer_already_replied(conn: "sqlite3.Connection", thread_id: str, sender: str, after: int) -> bool:
+    return (
+        conn.execute(
+            "SELECT 1 FROM conversations c JOIN messages reply ON reply.conversation_id=c.id "
+            "LEFT JOIN messages anchor ON anchor.seq=? "
+            "WHERE c.id=? AND c.parent_id IS NULL AND c.deleted_at IS NULL AND c.connection_id<>'' "
+            "AND reply.sender_id=? AND reply.direction='inbound' "
+            "AND reply.connection_id=c.connection_id AND reply.deleted_at IS NULL AND "
+            + _CUSTOMER_REPLY_IS_LATER.format(anchor_seq="?")
+            + " LIMIT 1",
+            (after, thread_id, sender, after),
+        ).fetchone()
+        is not None
+    )
+
+
+def customer_replied(conn: "sqlite3.Connection", reply: Row, thread: Row) -> None:
+    """Authenticated intake passes its saved message and thread before committing."""
+    connection = reply.get("connection_id")
+    sender = str(reply.get("sender_id") or "")
+    if (
+        reply.get("direction") != "inbound"
+        or not connection
+        or not sender.startswith("ext:")
+        or not reply.get("seq")
+        or reply.get("deleted_at")
+        or thread.get("parent_id")
+        or thread.get("deleted_at")
+        or connection != thread.get("connection_id")
+        or reply.get("conversation_id") != thread["id"]
+    ):
+        return
+    waiting = conn.execute(
+        "SELECT s.task_id, s.id FROM snoozes s LEFT JOIN messages anchor ON anchor.seq=s.wait_after_seq "
+        "LEFT JOIN messages reply ON reply.seq=? WHERE s.wait_thread_id=? AND s.ended_at IS NULL "
+        "AND s.wait_sender=? AND " + _CUSTOMER_REPLY_IS_LATER.format(anchor_seq="s.wait_after_seq"),
+        (reply["seq"], thread["id"], sender),
+    ).fetchall()
+    for task_id, snooze_id in waiting:
+        _resume_customer_wait(conn, task_id, snooze_id)
+
+
+def customer_receipt_timestamped(conn: "sqlite3.Connection", thread_id: str, seq: int) -> None:
+    """A newly saved provider timestamp can put an already saved reply after this receipt."""
+    waiting = conn.execute(
+        "SELECT task_id, id, wait_sender FROM snoozes WHERE wait_thread_id=? AND ended_at IS NULL AND wait_after_seq=?",
+        (thread_id, seq),
+    ).fetchall()
+    for task_id, snooze_id, sender in waiting:
+        if _customer_already_replied(conn, thread_id, sender, seq):
+            _resume_customer_wait(conn, task_id, snooze_id)
+
+
+def _resume_customer_wait(conn: "sqlite3.Connection", task_id: str, snooze_id: str) -> None:
+    row = task(conn, task_id)
+    if row and row["status"] == "open" and _part(row, "snooze").get("id") == snooze_id:
+        _resume_snooze(conn, row, SYSTEM, "A customer replied", "customer_reply")
+
+
 def snooze(
     conn: "sqlite3.Connection",
     task_id: str,
@@ -2301,6 +2392,8 @@ def snooze(
     why: str | None = None,
     until: str | None = None,
     seen_version: int | str | None = None,
+    *,
+    customer_wait: tuple[str, str, int] | None = None,
 ) -> Row:
     """Set a task aside until a date, or with no end. A bot gives a reason. While snoozed nothing wakes for it, it is not
     Late, it holds no slot and it leaves Needs you. A snooze is not a change: the ladder's count and level are kept,
@@ -2313,17 +2406,31 @@ def snooze(
     check_version(conn, by, row, seen_version)
     if row["status"] != "open":
         _refuse(conn, by, "task_ended", f"The task is {row['stage']['name']}. Reopen it first.", task_id)
+    if customer_wait:
+        why = why or "Waiting for a customer reply"
     _need_why(conn, by, why, "snooze it", task_id)
     ts = H.now()
     visit = row["visit"]
+    if _part(row, "snooze").get("wait_thread_id"):
+        _keep_customer_wait(conn, row, by)
+    if customer_wait:
+        if not until or until <= ts:
+            _refuse(conn, by, "task_customer_wait_date", "Give a fallback date in the future", task_id)
+        if is_bot(by) and until > H.shift(ts, days=CUSTOMER_WAIT_DAYS):
+            from .store import Problem
+
+            raise Problem("task_customer_wait_date", f"Choose a fallback within {CUSTOMER_WAIT_DAYS} days", 422)
+        if _customer_already_replied(conn, *customer_wait):
+            _refuse(conn, by, "task_customer_replied", "The customer has already replied", task_id)
     # A stage rule on a bot's snooze whose If is fixed conditions only (no model call inside a write) blocks it here;
     # one with a Jev question was asked before the write (task_moves_routes, stage_rules.judge_snooze).
-    blocked = stage_rules_snooze(conn, row, by, why, until)
+    blocked = "" if customer_wait else stage_rules_snooze(conn, row, by, why, until)
     if blocked:
         _refuse(
             conn, by, "task_stage_rule", blocked, task_id, row=row, then=("ask", "file"), version=row.get("version")
         )
-    if is_bot(by) and int(visit.get("bot_snoozes") or 0) >= BOT_SNOOZES:
+    count_snooze = is_bot(by) and not customer_wait
+    if count_snooze and int(visit.get("bot_snoozes") or 0) >= BOT_SNOOZES:
         conn.execute(
             "UPDATE visits SET level='manager', tries=0, next_try_at=? WHERE id=? AND level='owner'", (ts, visit["id"])
         )
@@ -2338,10 +2445,11 @@ def snooze(
         _person_ends_filed(conn, row, by)
         _end_snooze(conn, row["snooze"], by, ts)
     conn.execute(
-        "INSERT INTO snoozes (id, task_id, visit_id, by_id, why, until_at, created_at) VALUES (?,?,?,?,?,?,?)",
-        (H.new_id(), task_id, visit["id"], str(by), why, until, ts),
+        "INSERT INTO snoozes (id, task_id, visit_id, by_id, why, until_at, created_at, "
+        "wait_thread_id, wait_sender, wait_after_seq) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (H.new_id(), task_id, visit["id"], str(by), why, until, ts, *(customer_wait or (None, None, None))),
     )
-    if is_bot(by):
+    if count_snooze:
         conn.execute("UPDATE visits SET bot_snoozes = bot_snoozes + 1 WHERE id=?", (visit["id"],))
     task_wakes.drop(conn, task_id)  # nothing wakes for a snoozed task
     _event(conn, task_id, by, "snooze", None, until, why)
@@ -2366,6 +2474,10 @@ def _person_ends_filed(conn: "sqlite3.Connection", row: Row, by: str) -> None:
         )
 
 
+def _keep_customer_wait(conn: "sqlite3.Connection", row: Row, by: str) -> NoReturn:
+    _refuse(conn, by, "task_customer_wait", "This task is waiting for a customer reply or its fallback date", row["id"])
+
+
 def stage_rules_snooze(conn: "sqlite3.Connection", row: Row, by: str, why: str | None, until: str | None) -> str:
     """The refusal a fixed-condition stage rule gives a bot's snooze of `row` ("" when none): "Rule <name>: <reason>
     (rule <id>)". Jev's rules are not asked here."""
@@ -2385,23 +2497,46 @@ def refusal_line(rule: Row, line: str) -> str:
 
 
 def unsnooze(
-    conn: "sqlite3.Connection", task_id: str, by: str, why: str | None = None, *, consequence: str | None = None
+    conn: "sqlite3.Connection",
+    task_id: str,
+    by: str,
+    why: str | None = None,
+    *,
+    consequence: str | None = None,
+    manual: bool = False,
+    expired_at: str | None = None,
 ) -> Row:
     """End a task's snooze. Its end is not a change either: no wake is written here, and the ladder's count and level
     are as they were. The task is due at once, and the never-stuck check wakes whoever has the turn on its next pass,
     as the next try (at level `person` nobody is woken: it is back in that person's Needs you). It can leave the stage
     one over its limit. `consequence` names the act that ends it by itself (an answer, a done, a reply): its history
-    row says so, so it is not a second decision of whoever acted."""
-    H = _h()
+    row says so, so it is not a second decision of whoever acted. A person can end a customer wait explicitly.
+    Other automatic unsnoozes leave it until its fallback."""
     row = task(conn, task_id)
     if not row:
         _refuse(conn, by, "not-found", "No such task")
     if not row.get("snooze"):
         return row
+    if row["snooze"].get("wait_thread_id") and not (
+        expired_at and row["snooze"].get("until_at") and row["snooze"]["until_at"] <= expired_at
+    ):
+        if not manual:
+            return row
+        if not is_human(by):
+            _keep_customer_wait(conn, row, by)
     _person_ends_filed(conn, row, by)
+    return _resume_snooze(conn, row, by, why, consequence)
+
+
+def _resume_snooze(conn: "sqlite3.Connection", row: Row, by: str, why: str | None, consequence: str | None) -> Row:
+    H = _h()
     ts = H.now()
+    task_id = str(row["id"])
     _end_snooze(conn, row["snooze"], by, ts)
-    conn.execute("UPDATE visits SET next_try_at=? WHERE id=?", (ts, row["visit"]["id"]))
+    if consequence == "customer_reply":
+        _reset_ladder(conn, row["visit"], ts, by)
+    else:
+        conn.execute("UPDATE visits SET next_try_at=? WHERE id=?", (ts, row["visit"]["id"]))
     _event(
         conn,
         task_id,
@@ -2412,7 +2547,15 @@ def unsnooze(
         why,
         {"consequence": consequence} if consequence else None,
     )
-    _sync_wait(conn, task_id)
+    if consequence == "customer_reply":
+        _wake_turn(
+            conn,
+            _task(conn, task_id),
+            why or "",
+            wake_key=f"{task_id}:{row['visit']['id']}:reply:{row['snooze']['id']}",
+        )
+    else:
+        _sync_wait(conn, task_id)
     return _task(conn, task_id)
 
 
@@ -2424,7 +2567,8 @@ RELEASE_SEEN = "release-snoozes-seen"
 # it.
 _RELEASE_WAITS = (
     "SELECT z.task_id FROM snoozes z JOIN tasks t ON t.id = z.task_id "
-    "WHERE z.ended_at IS NULL AND z.by_id LIKE 'bot:%' AND t.status = 'open' AND t.pipeline_id IS NOT NULL "
+    "WHERE z.ended_at IS NULL AND z.wait_thread_id IS NULL AND z.by_id LIKE 'bot:%' "
+    "AND t.status = 'open' AND t.pipeline_id IS NOT NULL "
     "AND EXISTS (SELECT 1 FROM requirements r WHERE r.stage_id = t.stage_id AND r.withdrawn_at IS NULL "
     "AND json_extract(r.settings, '$.with_release')) "
     "AND EXISTS (SELECT 1 FROM task_links tl WHERE tl.source = 'github' AND tl.item_type = 'pr' "

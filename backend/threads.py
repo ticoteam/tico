@@ -1330,8 +1330,8 @@ def _record(c, message, conv):
             message.get("created_at") or _now(),
         ),
     )
-    if message.get("direction") == "inbound":
-        return {}  # outside text is provenance, without mentions, deliveries or outgoing webhooks
+    if message.get("direction") in ("inbound", "outbound"):
+        return {}  # outside mail is history, without mentions, deliveries or outgoing webhooks
     thread = thread_row(c, conv["id"]) if conv else None
     if thread is None:
         return {}

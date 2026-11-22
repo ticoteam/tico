@@ -79,6 +79,11 @@ def _verified_from(message: SimpleNamespace, sender: str) -> bool:
     return False
 
 
+def conversation_id(channel: str, connection_id: str, source_thread_id: str) -> str:
+    key = json.dumps([channel, connection_id, source_thread_id])
+    return str(uuid.uuid5(uuid.NAMESPACE_OID, key))
+
+
 def eligible_owner(c: sqlite3.Connection, box: dict[str, Any] | None) -> str:
     if not box or box["status"] != "active" or box["kind"] != "personal":
         return ""
@@ -132,6 +137,7 @@ def from_gmail(c: sqlite3.Connection, box: dict[str, Any], message: SimpleNamesp
             title=str(message.subject or ""),
             body=str(message.body or ""),
             verified_id=sender if _verified_from(message, sender) else "",
+            provider_timestamp_ms=cast("int | None", message.provider_timestamp_ms),
         )
     return True
 
@@ -148,9 +154,10 @@ def save_message(
     title: str,
     body: str,
     verified_id: str = "",
+    provider_timestamp_ms: int | None = None,
 ) -> str | None:
     """Save the message and its intake run in the adapter's write transaction. A replay returns the run."""
-    from . import automations
+    from . import automations, task_engine
 
     if not c.in_transaction:
         raise ValueError("Conversation intake requires the adapter's write transaction")
@@ -167,8 +174,7 @@ def save_message(
             payload["suggested"] = entities.suggested_sender(c, f"human:{owner_id}", sender)
         return str(queue.queue_intake(c, connection_id, owner_id, ref, payload))
 
-    key = json.dumps([channel, connection_id, source_thread_id])
-    thread_id = str(uuid.uuid5(uuid.NAMESPACE_OID, key))
+    thread_id = conversation_id(channel, connection_id, source_thread_id)
     root = thread_store.thread_row(c, thread_id)
     if root and (root["deleted_at"] or not root["entity_id"]):
         return None  # a replay or later arrival cannot reopen a deleted or erased conversation
@@ -189,9 +195,19 @@ def save_message(
     else:
         thread_store._with_participants(c, root, [actor])
     message = hub._write_message(
-        c, actor, None, body, root, "say", {}, None, None, outside=(channel, connection_id, source_message_id)
+        c,
+        actor,
+        None,
+        body,
+        root,
+        "say",
+        {"provider_timestamp_ms": provider_timestamp_ms} if provider_timestamp_ms is not None else {},
+        None,
+        None,
+        outside=(channel, connection_id, source_message_id),
     )
     payload["message_id"] = message["id"]
+    task_engine.customer_replied(c, message, root)
     return str(queue.queue_intake(c, connection_id, owner_id, ref, payload))
 
 

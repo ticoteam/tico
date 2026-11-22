@@ -78,6 +78,7 @@ class TaskSnoozeView(TypedDict):
     until: str | None
     by: str
     why: str | None
+    waiting_for_reply: NotRequired[bool]
 
 
 @answer

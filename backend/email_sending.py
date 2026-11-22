@@ -1585,17 +1585,67 @@ def _outcome(c, row, status, detail=""):
         finance_delivery.outcome(c, dict(row), status, detail)
 
 
-def _finish(c, row, status, message="", detail=""):
-    c.execute(
+def _outside_send_thread(c, row, thread_id):
+    from . import outside_intake
+
+    if not thread_id or (row["thread_id"] and thread_id != row["thread_id"]):
+        return None
+    box = access.row_by_address(c, row["mailbox"])
+    if not box or not access.feeds_directory(c, box):
+        return None
+    connection = box["id"]
+    thread = H.conversation(c, outside_intake.conversation_id("gmail", connection, thread_id))
+    if (
+        not thread
+        or thread["connection_id"] != connection
+        or thread["parent_id"]
+        or thread["deleted_at"]
+        or not thread["entity_id"]
+    ):
+        return None
+    return thread
+
+
+def _record_outside_send(c, row, message, thread_id) -> str | None:
+    thread = _outside_send_thread(c, row, thread_id)
+    if not thread:
+        return None
+    connection = thread["connection_id"]
+    if c.execute(
+        "SELECT 1 FROM messages WHERE connection_id=? AND source_message_id=?", (connection, message)
+    ).fetchone():
+        return None
+    receipt = H._write_message(
+        c,
+        row["actor"],
+        None,
+        "Sent an email in Gmail.",
+        thread,
+        "say",
+        {},
+        None,
+        None,
+        outside=("gmail", connection, message),
+        outside_direction="outbound",
+    )
+    return receipt["id"]
+
+
+def _finish(c, row, status, message="", detail="", *, thread_id="") -> str | None:
+    finished = c.execute(
         # `send_after` ends no earlier than now: a send held past its undo window is still shown once it ended.
         "UPDATE email_sends SET state=?,provider_message_id=?,detail=?,finished_at=?,raw='',"
-        "send_after=max(send_after,?) WHERE id=?",
+        "send_after=max(send_after,?) WHERE id=? AND state<>'sent'",
         (status, message, detail, H.now(), H.now(), row["id"]),
     )
+    if not finished.rowcount:
+        return None
+    receipt_id = _record_outside_send(c, row, message, thread_id) if status == "sent" and thread_id else None
     moved(c, row["id"])
     H.event(c, row["actor"], "email." + status, row["id"], {"mailbox": row["mailbox"], "provider_message_id": message})
     settle_automation(c, row, status, detail, message)
     _outcome(c, row, status, detail)
+    return receipt_id
 
 
 # inbox -> when the drain last reached it (monotonic): the inbox waiting longest goes first. One small entry per
@@ -1612,7 +1662,7 @@ def drain(store, auth, limit=20, budget=None):
     first in the next pass."""
     import time
 
-    from . import drains, gmail_live, google_tokens
+    from . import drains, gmail_live, google_tokens, task_engine
 
     if store.settings.rehearsal or store.settings.demo:
         return 0
@@ -1674,11 +1724,24 @@ def drain(store, auth, limit=20, budget=None):
                 break
             if not row:
                 break
-            status, message, detail = gmail_live.send(mailbox, token, row["raw"], row["thread_id"])
+            status, message, detail, thread_id = gmail_live.send(mailbox, token, row["raw"], row["thread_id"])
+            receipt_id = None
             with store.transaction(durable=True, notify=True) as c:
                 current = c.execute("SELECT * FROM email_sends WHERE id=?", (row["id"],)).fetchone()
                 if current and current["state"] == "dispatching" and current["lease_id"] == row["lease_id"]:
-                    _finish(c, current, status, message, detail)
+                    receipt_id = _finish(c, current, status, message, detail, thread_id=thread_id)
+            # An interrupted metadata read leaves the confirmed send and its receipt saved.
+            if receipt_id:
+                provider_timestamp_ms = gmail_live.sent_timestamp_ms(mailbox, token, message, thread_id)
+                if provider_timestamp_ms is not None:
+                    with store.transaction(notify=True) as c:
+                        receipt = c.execute(
+                            "UPDATE messages SET refs=json_set(refs,'$.provider_timestamp_ms',?) "
+                            "WHERE id=? AND deleted_at IS NULL RETURNING conversation_id, seq",
+                            (provider_timestamp_ms, receipt_id),
+                        ).fetchone()
+                        if receipt:
+                            task_engine.customer_receipt_timestamped(c, receipt["conversation_id"], receipt["seq"])
             sent += status == "sent"
     return sent
 

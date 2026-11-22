@@ -28,6 +28,7 @@ from . import task_rule_gate as _task_rule_gate
 from . import stage_rules as _stage_rules
 from . import task_engine as _task_engine
 from . import task_privacy as _task_privacy
+from . import thread_api as _thread_api
 from .store import H as _H
 from .store import Problem
 from . import store as _store_module
@@ -46,6 +47,7 @@ task_rule_gate: Any = _task_rule_gate
 stage_rules: Any = _stage_rules
 task_engine: Any = _task_engine
 privacy: Any = _task_privacy
+thread_api: Any = _thread_api
 store_module: Any = _store_module
 
 # One bulk move takes at most this many tasks (`POST /api/v2/tasks/move`): a board's stage of a few hundred, in one write.
@@ -704,28 +706,80 @@ def register(
         return ask_ingest.judged(store, [ingest] if ingest else [], lambda: work(request, tid, body, call))
 
     # ------------------------------------------------------------------ set aside, hand back
-    def snooze_call(c: Any, who: Any, task_id: str, body: Any, gate: Any, params: Any, ingest: Any) -> Any:
+    def customer_wait(c: Any, who: Any, task_id: str, body: M.TaskSnooze) -> tuple[str, str, int] | None:
+        if not body.wait_thread_id or not body.wait_sender:
+            return None
+        missing = Problem("not_found", "Outbound message not found in that thread", 404)
+        bot = H.is_bot(who.actor)
+        if bot:
+            task = H.task(c, task_id)
+            if not task or not H.task_can_work(c, who.actor, task):
+                raise missing
+            try:
+                H._writer(c, who.actor, task_id=task_id)
+            except H.Refused:
+                raise missing from None
+            # A receipt can park work for the same relationship without granting inbox access.
+            thread = H.conversation(c, body.wait_thread_id)
+            if (
+                not thread
+                or thread["audience"] != "entity"
+                or not thread["entity_id"]
+                or thread["entity_id"] != task.get("entity_id")
+            ):
+                raise missing
+        else:
+            thread = auth.conversation(c, who, body.wait_thread_id)
+        try:
+            anchor = task_engine.customer_wait_anchor(
+                c, thread, body.wait_sender, body.wait_after_seq, body.wait_provider_reply_id
+            )
+        except Problem:
+            if bot:
+                raise missing from None
+            raise
+        if not anchor:
+            raise missing
+        if not bot:
+            try:
+                thread_api.require_message_read(c, auth, who, H.message(c, anchor["id"]))
+            except Problem:
+                raise missing from None
+        return body.wait_thread_id, body.wait_sender, int(anchor["seq"])
+
+    def snooze_call(c: Any, who: Any, task_id: str, body: M.TaskSnooze, gate: Any, params: Any, ingest: Any) -> Any:
         setup_live.refuse_snooze_once_live(c, task_id)  # a seat's setup task waits for its go-live, not after it
+        wait = customer_wait(c, who, task_id, body)
         why, version = carry(c, who, task_id, gate, body.why, body.version)
         until = parse_until(body.until)
-        done = H.task_snooze(c, who.actor, task_id, why, until, version, mover=mover(c, who) or None)
+        done = H.task_snooze(
+            c, who.actor, task_id, why, until, version, mover=mover(c, who) or None, customer_wait=wait
+        )
         return {"note": done["note"]} if done.get("note") else None
 
-    says("task_snooze", M.TaskSnooze, lambda body: [("Why", body.why)], snooze_call)
+    def snooze_first(
+        c: Any, who: Any, task_id: str, body: M.TaskSnooze, params: Any, verdict: Any, replaying: bool
+    ) -> bool:
+        if not replaying and org_rule_check.holds(verdict):
+            customer_wait(c, who, task_id, body)  # a hold can save the request for replay before snooze_call runs
+        return False
+
+    says("task_snooze", M.TaskSnooze, lambda body: [("Why", body.why)], snooze_call, first=snooze_first)
 
     @app.post(
         "/api/v2/tasks/{tid}/snooze",
         **api_v2(
             "Tasks",
             "snoozeTask",
-            "Set a task aside in its stage, with a why, until `until` (an ISO-8601 date or date-time) or with none (on ice): no wakes, no Late, and off Needs you until then",
+            "Set a task aside in its stage, with a why, until `until` (an ISO-8601 date or date-time) or with none (on ice). With a root outside thread, sender, and outbound anchor, a reply can end the snooze before its fallback date",
             TaskResult,
         ),
     )
     def task_snooze(request: Request, tid: str, body: M.TaskSnooze):
         """Set a task aside in its stage until a date, or with none."""
         until = parse_until(body.until)  # a bad date is refused before anything is checked
-        snooze_rules(request, tid, body, until)
+        if not body.wait_thread_id:
+            snooze_rules(request, tid, body, until)
         return checked(request, tid, body, "task_snooze")
 
     def snooze_rules(request: Request, tid: str, body: Any, until: Any) -> None:
