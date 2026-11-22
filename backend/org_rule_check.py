@@ -68,6 +68,7 @@ import sqlite3
 import threading
 import weakref
 from types import SimpleNamespace
+from typing import Any, NamedTuple
 
 from clients import judge as J
 from . import bot_settings as BS
@@ -155,6 +156,13 @@ AUDIENCE = {}
 PATH = contextvars.ContextVar("org_rule_path", default="")
 CHECK_FAILED = "The rule check could not run, so nothing was written. Try again."
 SUMMARY_RULES, SUMMARY_CHARS, SUMMARY_NAMES = 3, 200, 10  # a hold summary's rule previews, their length, its names
+
+
+class ReplayPreparation(NamedTuple):
+    """Ask-ingest verdict and optional inputs read before the replay's write transaction."""
+
+    ingest: Any
+    inputs: Any
 
 
 def replayer(operation, prepare=None, audience=None):
@@ -2972,7 +2980,11 @@ def send(c, who, hold_id, nonce, ingest=None, table=None, check=None, auth=None,
     # by the rule's editor or an Admin, recorded as one (`org_rule_hold.waived`, with `decided_by`).
     waived = "org_rule_hold.waived" if hold.get("check_kind") == "structured" else ""
     _decide(c, who, hold, "sent", waived)
-    result = fn(c, bot, hold, stored.get("replay") or {}, ingest, gate)
+    replay = stored.get("replay") or {}
+    if isinstance(ingest, ReplayPreparation):
+        result = fn(c, bot, hold, replay, ingest.ingest, gate, ingest.inputs)
+    else:
+        result = fn(c, bot, hold, replay, ingest, gate)
     return {"hold": view_hold(c, who, _hold(c, hold_id), "reviewer"), "result": result}
 
 
@@ -3577,7 +3589,7 @@ def install(app, store, auth, mutate):
 
         return ask_ingest.judged(
             store,
-            ingest,
+            ingest.ingest if isinstance(ingest, ReplayPreparation) else ingest,
             lambda: mutate(
                 request, body, lambda c: send(c, who, hold_id, body.nonce, ingest, table, check, auth, audience)
             ),

@@ -1171,7 +1171,8 @@ serves stays a plain link. A task holds one typed row per item, whatever URL nam
 becomes that row, or goes, once the site has a connection. `item_metadata` rows, metadata reads, the task lookups and the due reads all key on the connection, so two Jira sites'
 `PROJ-12` never read, wake or move each other's tasks. At most one task holds an item's primary link
 (`task_links.is_primary`, the task an intake made for it). `GET /api/v2/tasks?link=jira:issue:PROJ-12@<tool id>` (or the
-item's URL; `tico task list --link`) finds the tasks that link one item; a Jira item always names its connection.
+item's URL; `tico task list --link`) finds the tasks that link one item. Use the typed reference with
+`@<tool id>` when several connections can serve the URL.
 
 A connection id is a tool's name, not a secret: links, records and SQL show it to anyone who reads them; using the
 tool (calling it with its key) needs access to it. Once outside references name a tool its base URL (scheme and host in
@@ -1202,6 +1203,18 @@ or whose answer is not an issue's, keeps the metadata as it was with `read_error
 issue moved to another project gets a new key: a task filed for the old key keeps it, and one filed for the new key
 shows as a duplicate to merge.
 
+**A Close opportunity** uses the same record integration and shared-key rules. Configure a Close CRM API
+tool at `https://api.close.com` with Close's Basic authentication and mark it as holding records. One hostname
+serves every Close account, so use `close:opportunity:oppo_X@<tool id>` for a primary link or pick the tool when
+attaching a secondary URL if there is more than one record integration. With a single integration, the URL
+`https://api.close.com/api/v1/opportunity/oppo_X/` identifies the item by itself.
+
+The heartbeat's `close_items` step reads opportunities linked by open tasks every five minutes, with the
+same per-connection pass cap and request deadline as Jira. The saved fields include the status label and type,
+value in cents with its currency and period, and lead id. Won and lost map to `state: closed`. Active maps to
+`state: open`. The opportunity stays eligible for rereads so it can reopen.
+[Retrieve an opportunity](https://developer.close.com/api/resources/opportunities/get)
+
 #### Withdrawn or closed outside
 
 Jira's last definitive standing of a task's primary issue alone decides whether its release close-out may run
@@ -1222,12 +1235,16 @@ standing: a new standing replaces the ask. That is how the owner hears of it; no
 the issue back in Jira does: active again takes the ask back (the same task moves on) and runs a pending close-out.
 Secondary links are informational.
 
+A primary Close opportunity that is won or lost uses the same people-only owner ask. One ask covers the
+closure and Tico withdraws it if the opportunity becomes active again. The owner decides whether to settle
+the Tico task. A failed read keeps the last known state and asks nothing new.
+
 #### Intake
 
-Find-or-create is the ordinary create: `POST /api/v2/tasks` with `primary_link`, a Jira issue for now
-(`jira:issue:PROJ-12@<tool id>` or the issue's URL; `tico task create --primary-link ...`, MCP `tico_task_create`),
-and optionally `primary_status`, the status the issue is filed in (its Ready, `--primary-status`).
-Only a record integration's issue can be named (a hidden or missing tool answers the same). The org rule check runs
+Find-or-create is the ordinary create. Send `POST /api/v2/tasks` with `primary_link` (`tico task create --primary-link ...`,
+MCP `tico_task_create`). Use a Jira issue (`jira:issue:PROJ-12@<tool id>`), a Close opportunity
+(`close:opportunity:oppo_X@<tool id>`), or its URL. For Jira, `primary_status` can name the issue's Ready status.
+The item must use a record integration. A hidden or missing tool answers the same. The org rule check runs
 as for any create. Then, in the same write, a task the caller may read that already holds that
 item's primary link comes back (`found: true`) as it is, with nothing filed, reopened or moved, and the steps only
 filing needs (ask ingest's judgment, the owner's cap, reach) are skipped. A task the caller may not read is never named:
@@ -1238,6 +1255,10 @@ give one task. The dry run (`POST /api/v2/tasks/dry-run`) checks only the primar
 `--primary-link` is refused. A merge moves the
 primary link to the kept task (with the exact connection-scoped row); a deleted task restored after another task was
 filed for its item gets its link back as a secondary one.
+
+A new Close task defaults to the visible Contacts entity recorded as `system=close`, `external_type=lead`,
+and the opportunity's lead id on the same connection. The caller can supply `entity` explicitly. An ordinary
+create makes a bounded lookup when the connection has lead mappings and the opportunity has yet to be read.
 
 #### Routing
 
@@ -1288,6 +1309,7 @@ on. The end is computed at read: nothing rewrites the row.
 - `item_sources/github.py`: the GitHub source. PR and release metadata, the 5-minute GitHub read, webhook
   intake, its conditions and its one action, queue.
 - `item_sources/jira.py`: Jira issue links, and their state read through a record integration.
+- `item_sources/close.py` handles Close opportunity links and lead matching through a record integration.
 - `item_metadata.py`: the saved metadata of every source's items, per connection, and what waits on it.
 - `source_actions.py`: a source's actions on entering a stage (act), their undo, and the retries.
 - `stage_effects.py`: file a linked task, queue and dequeue PRs, undo.

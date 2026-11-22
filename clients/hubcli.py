@@ -722,13 +722,13 @@ def parser():
     s.add_argument(
         "--primary-link",
         dest="primary_link",
-        help="the outside item it is for (jira:issue:PROJ-12@<tool id>, or its URL): a task already holding it comes "
-        "back instead, and nothing new is filed",
+        help="the outside item it is for (jira:issue:PROJ-12@<tool id>, close:opportunity:oppo_X@<tool id>, or its URL). "
+        "A task already holding the link comes back with found=true",
     )
     s.add_argument(
         "--primary-status",
         dest="primary_status",
-        help="with --primary-link: the item's status as it is filed (the Jira Ready status); a move to another To Do "
+        help="the Ready status of a Jira --primary-link at filing. A move to another To Do "
         "status pauses the release close-out",
     )
     s.add_argument("--goal", help="the goal this task serves (tico goal list); optional")

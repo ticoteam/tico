@@ -3547,7 +3547,7 @@ def task_link(
                 refuse(conn, actor, "connection", str(error))
             outside = None
     if connection_id and not outside:
-        refuse(conn, actor, "connection", "a connection names where an outside item came from: link a Jira issue")
+        refuse(conn, actor, "connection", "a connection is for a Jira issue or Close opportunity link")
     if wake_once is not None and (kind != "pr" or not app):
         refuse(
             conn, actor, "kind", "a one-shot wake needs a pull request link in the connected GitHub App's organization"

@@ -23,6 +23,7 @@ from . import rooms
 from . import routing
 from . import task_requirements
 from . import item_sources as IS
+from .item_sources import close as close_items
 from .store import H, Problem, encode
 from . import bot_settings as BS
 from . import (
@@ -491,7 +492,17 @@ def register_core(
         return not level or bool(level["read"])
 
     def task_create(
-        c, who, body, lint=True, ingest=None, same=None, rule=None, wake_refs=None, judged=True, routed_to=None
+        c,
+        who,
+        body,
+        lint=True,
+        ingest=None,
+        same=None,
+        rule=None,
+        wake_refs=None,
+        judged=True,
+        routed_to=None,
+        close_read=None,
     ):
         """`POST /api/v2/tasks`: the task is made and put in the first stage of its pipeline (H.task_create). A task
         for a bot wakes it; `wake_refs` go on that wake (an auto dream's release policy, backend/dream_auto.py).
@@ -526,6 +537,8 @@ def register_core(
                 primary, held_by = IS.lookup(c, body.primary_link)
             except ValueError as error:
                 raise Problem("primary_link", str(error), 422) from None
+            if getattr(body, "primary_status", None) and primary[0][0] != "jira":
+                raise Problem("primary_status", "primary_status is for a Jira primary link", 422)
             found = held_by if held_by and _readable_task(c, who, held_by) else None
             hidden = bool(held_by) and not found
             if not held_by and not judged:
@@ -550,7 +563,14 @@ def register_core(
             # Nothing is filed (the item's task comes back, or the create is refused as filed): no one is picked.
             body, unassigned = body.model_copy(update={"owner": who.actor}), False
         elif routed:
-            work = routing.prepare(c, who, body, parent_id, actual_bot, *routed_inputs(c, who, body, parent_id))
+            work = routing.prepare(
+                c,
+                who,
+                body,
+                parent_id,
+                actual_bot,
+                *routed_inputs(c, who, body, parent_id, primary[0] if primary else None, close_read),
+            )
             person = routed_to
             if not person or not task_requirements.active_person(c, person):
                 raise Problem("route", "The person routing picked can no longer take it: send it again", 409)
@@ -690,7 +710,9 @@ def register_core(
             ask_ingest.skipped(c, ingest, "not_applied")
         if body.goal_id and not G.goal(c, body.goal_id):
             raise Problem("not_found", "Unknown goal", 404)
-        entity_id = routed_entity if routed else for_entity(c, who, getattr(body, "entity", None))
+        entity_id = (
+            routed_entity if routed else entity_for_create(c, who, body, primary[0] if primary else None, close_read)
+        )
         if routed and not body.pipeline:
             # Made only now, past every return that files nothing.
             body = body.model_copy(update={"pipeline": routing.support_pipeline(c)})
@@ -970,7 +992,8 @@ def register_core(
         # A routed create's person is picked first (a saved retry's answer comes back without one), so the cap, reach
         # and the org rule check below are for them.
         saved = saved_retry(request, who)
-        routed_to = None if saved else routed_preview(who, body)
+        close_read = prefetch_close(body) if not saved and body.route else None
+        routed_to = None if saved else routed_preview(who, body, close_read)
         cap_before_preflight(request, who, routed_to or body.owner, body.parent, body.primary_link, body.request_id)
         rc = (
             None
@@ -991,6 +1014,8 @@ def register_core(
         # skips ask ingest's call.
         with store.read() as c:
             held = bool(body.primary_link) and _held_item(c, who, body.primary_link) is not None
+        if not (saved or held or body.route or org_rule_check.holds(rc)):
+            close_read = prefetch_close(body)
         ingest = (
             None
             if org_rule_check.holds(rc) or saved_retry(request, who) or held
@@ -1009,7 +1034,14 @@ def register_core(
                     request,
                     body,
                     lambda c: task_create(
-                        c, request.state.identity, body, ingest=ingest, rule=rc, judged=judged, routed_to=routed_to
+                        c,
+                        request.state.identity,
+                        body,
+                        ingest=ingest,
+                        rule=rc,
+                        judged=judged,
+                        routed_to=routed_to,
+                        close_read=close_read,
                     ),
                     receipt=handoff_receipt(request.state.identity),
                     retry_body=lambda _c, _result: legacy,
@@ -1019,12 +1051,27 @@ def register_core(
         try:
             return attempt(ingest, not held or org_rule_check.holds(rc))  # a held create is never judged
         except ClaimGone:  # the task holding the item went before the write: judge the filing, then file it
+            if not body.route:
+                close_read = prefetch_close(body)
             judged = ask_ingest.preflight(
                 store, app.state.judge, request.state.identity, body.owner, body.title, body.body
             )
             return attempt(judged, True)
 
-    def routed_preview(who, body):
+    def prefetch_close(body):
+        if body.entity or not body.primary_link or body.primary_status:
+            return None
+        ref = body.primary_link.strip()
+        if not (ref.startswith("close:") or close_items.match_link(ref)):
+            return None
+        with store.read() as c:
+            try:
+                item, _ = IS.primary_of(c, ref)
+            except ValueError:
+                return None
+        return close_items.prefetch(store, app.state.vault, item)
+
+    def routed_preview(who, body, close_read=None):
         """The person a `route: true` create goes to, picked before the org rule check so the check judges that
         recipient; the write files the task as theirs. None when nothing would be routed: no route, or a primary
         link a task already holds (that task comes back). A refusal that must be recorded is left to the write."""
@@ -1043,8 +1090,12 @@ def register_core(
                 if body.request_id and not handoff and who.via != "assistant":
                     who = delegated_identity(c, who, body.request_id, new_task=True)
                 parent_id = auth.resolve_task(c, who, body.parent) if body.parent else None
+                try:
+                    item = IS.primary_of(c, body.primary_link)[0] if body.primary_link else None
+                except ValueError:
+                    return None
                 return routing.person_for_create(
-                    c, who, body, parent_id, actual_bot, *routed_inputs(c, who, body, parent_id)
+                    c, who, body, parent_id, actual_bot, *routed_inputs(c, who, body, parent_id, item, close_read)
                 )
             except H.Refused:
                 return None
@@ -1052,13 +1103,13 @@ def register_core(
                 H.DELEGATION.set(lent)  # the write lends it again, under its own transaction
                 H.CLOSE_PROBE.reset(probe)
 
-    def routed_inputs(c, who, body, parent_id):
+    def routed_inputs(c, who, body, parent_id, item, close_read):
         """(entity id, readable-task SQL) routing reads for a routed create: the entity as the effective reader sees it
         (for_entity), and the tasks that reader may read (auth.task_sql). An unreadable parent is its normal 404 first,
         before any privacy refusal can say it exists."""
         if parent_id:
             auth.task(c, who, parent_id)
-        entity_id = for_entity(c, who, getattr(body, "entity", None))
+        entity_id = entity_for_create(c, who, body, item, close_read)
         return entity_id, auth.task_sql(c, auth.run_viewer(c, who))
 
     def _held_item(c, who, primary_link):
@@ -1087,16 +1138,23 @@ def register_core(
 
     def rule_prepare_task(store_, bot, replay):
         body = replay.get("body") or {}
-        return ask_ingest.preflight(
+        ingest = ask_ingest.preflight(
             store_, app.state.judge, bot, body.get("owner"), body.get("title"), body.get("body")
         )
+        close_read = prefetch_close(M.TaskFile.model_validate(body))
+        return org_rule_check.ReplayPreparation(ingest, close_read) if close_read else ingest
 
     @org_rule_check.replayer("task_create", prepare=rule_prepare_task)
-    def rule_replay_task(c, bot, hold, replay, ingest, gate=None):
+    def rule_replay_task(c, bot, hold, replay, ingest, gate=None, close_read=None):
         if (replay.get("body") or {}).get("route"):
             raise Problem("route", ROUTED_HELD, 422)  # routed creates are never held; one from before is not sent
         return task_create(
-            c, bot, M.TaskFile.model_validate(replay["body"]), ingest=ingest, rule=org_rule_check.decided(gate)
+            c,
+            bot,
+            M.TaskFile.model_validate(replay["body"]),
+            ingest=ingest,
+            rule=org_rule_check.decided(gate),
+            close_read=close_read,
         )
 
     @app.post("/api/v2/tasks/dry-run", **api_v2("Tasks", "checkTask", "The checks a create would fail; writes nothing"))
@@ -1121,6 +1179,15 @@ def register_core(
         if reader is None:
             raise Problem("not_found", "Entity not found", 404)
         return ES.target(c, reader, ref)
+
+    def entity_for_create(c, who, body, item, close_read):
+        ref = getattr(body, "entity", None)
+        if ref or not item or item[0] != close_items.SOURCE:
+            return for_entity(c, who, ref)
+        from . import page_links
+
+        reader = page_links.entity_reader(c, auth, who)
+        return (close_items.entity(c, reader, item, close_read) or "") if reader else ""
 
     def task_update_one(c, caller, tid, body, rule=None):
         """`POST /api/v2/tasks/{tid}`: field edits only (H.task_update). Where the task is and who has it change by

@@ -134,8 +134,8 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 "exact": "true: an owner or requester that names nobody answers 422, never the list without that "
                 "filter (a client asking for one person's tasks must not get every task)",
                 "link": "<source>:<type>:<key>[@<connection_id>] (jira:issue:PROJ-12@tool_1, github:pr:acme/app#7) or "
-                "the item's URL (a Jira link takes its site's connection): only the tasks linking that outside item "
-                "through that connection. A Jira item always names its connection",
+                "the item's URL: only the tasks linking that item through that connection. Use a typed reference "
+                "with @<connection_id> for a Jira or Close URL served by several connections",
                 "entity": "A Contacts entity (an id, email or domain you can see; a merged one is the one it went "
                 "into): only the tasks for it. One you cannot see is refused (422 entity)",
                 "claimable": "The person's team work and public Support work with no assignee or an off assignee. "

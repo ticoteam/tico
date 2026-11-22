@@ -403,40 +403,17 @@ def fields_of(answer: object, connection_id: str) -> Row | None:
 def save_issue(
     conn: "sqlite3.Connection", key: str, connection_id: str, fields: Row, version: int, due_seen: str = ""
 ) -> bool:
-    """Save what a read saw of an issue at `version` (newest wins, item_metadata.save) and clear a failed read's marks.
-    The due mark is cleared only when it is still `due_seen`, the one the read began under: a newer mark stays. Whether
-    it was saved."""
+    """Save the issue's read and clear the due mark the read began under."""
     from .. import item_metadata as IM
 
-    scoped = "source=? AND item_type=? AND item_key=? AND connection_id=?"
-    item = (SOURCE, ISSUE, key, connection_id)
-    found = conn.execute(f"SELECT due_at FROM item_metadata WHERE {scoped}", item).fetchone()
-    due_now = str(found[0] or "") if found else ""
-    if not IM.save(conn, SOURCE, ISSUE, key, fields, version, connection_id=connection_id):
-        return False
-    after = conn.execute(f"SELECT due_at FROM item_metadata WHERE {scoped}", item).fetchone()[0]
-    # A tie at the same version keeps or sets its own mark (item_metadata.save); else a mark newer than the read's stays.
-    kept = after or (due_now if due_now and due_now != due_seen else None)
-    conn.execute(f"UPDATE item_metadata SET read_error=NULL, refused_at=NULL, due_at=? WHERE {scoped}", (kept, *item))
-    return True
+    return IM.save_read(conn, (SOURCE, ISSUE, key, connection_id), fields, version, due_seen)
 
 
 def failed(conn: "sqlite3.Connection", key: str, connection_id: str, why: str) -> None:
-    """A read that could not be made or that Jira refused: the metadata stays as it was, the reason is kept, and the
-    issue is tried again after RETRY_S."""
-    H = _h()
-    now = H.now()
-    found = conn.execute(
-        "UPDATE item_metadata SET read_error=?, refused_at=?, updated_at=? WHERE source=? AND item_type=? "
-        "AND item_key=? AND connection_id=?",
-        (why[:300], now, now, SOURCE, ISSUE, key, connection_id),
-    )
-    if found.rowcount == 0:
-        conn.execute(
-            "INSERT INTO item_metadata (id, source, item_type, item_key, connection_id, fields, metadata_version, "
-            "read_error, refused_at, created_at, updated_at) VALUES (?,?,?,?,?,'{}',0,?,?,?,?)",
-            (H.new_id(), SOURCE, ISSUE, key, connection_id, why[:300], now, now, now),
-        )
+    """Keep the most recent good read, and wait before trying again."""
+    from .. import item_metadata as IM
+
+    IM.failed_read(conn, (SOURCE, ISSUE, key, connection_id), why)
     LOG.info("Reading %s failed: %s", ref(key, connection_id), why)
 
 

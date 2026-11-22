@@ -257,13 +257,13 @@ class TaskCreate(Contract):
 class TaskFile(TaskCreate):
     """POST /api/v2/tasks and its dry run (not an upload's form): a task create that may name its outside item."""
 
-    # The outside item it is filed for (backend/item_sources), `jira:issue:<key>@<connection>` or its URL: a task that
-    # already holds that item's primary link comes back instead (`found`), and nothing new is filed.
+    # The outside item it is filed for: `jira:issue:<key>@<connection>`, `close:opportunity:<id>@<connection>` or
+    # its URL. A task that already holds its primary link comes back instead (`found`).
     primary_link: str | None = Field(default=None, min_length=1, max_length=2000)
-    # With `primary_link`: the item's status when it was filed, as the source names it (Jira: the Ready status). A move
+    # With a Jira primary link: the Jira Ready status when filed. A move
     # to another To Do status pauses the task's release close-out (backend/release_closeout.py).
     primary_status: str | None = Field(default=None, min_length=1, max_length=100)
-    # The Contacts entity it is for (an outside party's relationship): an id, email or domain you can see.
+    # The Contacts entity it is for: an id, email or domain you can see. Defaults to the known Close lead's entity.
     entity: str | None = Field(default=None, min_length=1, max_length=500)
     # Work that needs a person, with no owner named: Tico routes it (backend/routing.py), to the Support pipeline when
     # none is named. Tagged `urgent`, nobody async takes it.
@@ -751,7 +751,7 @@ class TaskLink(Contract):
     kind: Literal["session"] | None = None
     # A pull request link: true wakes the owner once when its checks finish, it is reviewed or it ships; false disarms.
     wake_once: bool | None = None
-    # A link to an outside item (a Jira issue): the connection (a tool's id) it came through, so the same key in two
+    # A link to a Jira issue or Close opportunity: the connection (a tool's id) it came through, so the same key in two
     # connections is two items (backend/item_sources).
     connection_id: str | None = Field(default=None, max_length=200)
 

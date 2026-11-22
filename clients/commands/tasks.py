@@ -108,15 +108,15 @@ def task_context(api, args):
             "description": "URLs to attach: a pull request, an issue, a document",
         },
         "primary_link": _s(
-            "The outside item this task is for: jira:issue:PROJ-12@<connection tool id>, or its URL. When a task "
-            "already holds it, that task comes back (found: true) and nothing new is filed"
+            "The outside item this task is for (jira:issue:PROJ-12@<tool id>, close:opportunity:oppo_X@<tool id>, "
+            "or its URL). A task already holding the link comes back with found=true"
         ),
         "primary_status": _s(
-            "With primary_link: the item's status as it is filed (the Jira Ready status). A move to another To Do "
+            "The Ready status of a Jira primary_link at filing. A move to another To Do "
             "status pauses the task's release close-out"
         ),
         "goal_id": _s("The goal this task serves (tico_goal_list); optional"),
-        "entity": _s("The Contacts entity it is for (an outside party): its id, email or domain; optional"),
+        "entity": _s("The Contacts entity's id, email or domain. Defaults to the known Close lead's entity"),
         "route": {
             "type": "boolean",
             "description": "Work that needs a person, with no owner: Tico gives it to who helped last, its owner, "

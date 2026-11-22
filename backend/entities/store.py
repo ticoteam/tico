@@ -2466,11 +2466,20 @@ def verified_sender(
         return None
     if channel == "gmail":
         return _sender_match(c, actor, [("email", provider_id)])
+    return verified_external_ref(c, actor, channel, connection_id, "sender", provider_id)
+
+
+def verified_external_ref(
+    c: sqlite3.Connection, actor: str, system: str, connection_id: str, external_type: str, provider_id: str
+) -> str | None:
+    """Resolve a provider-verified record on its connection to a visible, current entity."""
+    if not provider_id:
+        return None
     row = _one(
         c,
         "SELECT entity_id FROM entity_external_refs WHERE system=? AND connection_id=? "
-        "AND external_type='sender' AND external_id=? AND status='active'",
-        (channel, connection_id, provider_id),
+        "AND external_type=? AND external_id=? AND status='active'",
+        (system, connection_id, external_type, provider_id),
     )
     if row is None:
         return None
