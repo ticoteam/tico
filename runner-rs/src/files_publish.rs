@@ -1095,7 +1095,7 @@ mod tests {
         let dir = checkout();
         let state = State::open(&dir.join("state")).unwrap();
         state.with(|c| c.execute_batch(TABLES)).unwrap();
-        let scratch = crate::sessions::MakePageScratch::new("make-1").unwrap();
+        let scratch = crate::sessions::TurnScratch::make_page("make-1").unwrap();
         let path = scratch.0.clone();
         std::fs::create_dir(path.join("reports")).unwrap();
         std::fs::write(

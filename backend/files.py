@@ -411,12 +411,23 @@ def page_audience_visible(c, auth, who, row, cache):
     return True
 
 
-def file_visible(c, auth, who, row, cache):
+def file_visible(c, auth, who, row, cache) -> bool:
     """Whether `who` may know this file exists: its scope's visibility, or a person's pin of it to the Dashboard or a
     team page they see (backend/cards.py widened), and never a runner's. A private task's file is never widened, except
     to the Rules Owner run a person asked to read it (asked_to_read)."""
     if who.role not in ("owner", "human", "bot"):
         return False
+    from . import relationship_runs
+
+    if who.actor == relationship_runs.ACTOR:
+        bound = auth.relationship_scope(c, who)
+        if not bound or not relationship_runs.page_matches(c, bound, row):
+            return False
+        try:
+            sponsor = auth.identity_for_actor(c, bound.sponsor)
+        except Problem:
+            return False
+        return file_visible(c, auth, sponsor, row, cache)
     # A page's own audience and its pins are read as the request sees (auth.run_viewer: a run of the shared Assistant in
     # a person's own chat as that person); its task, below, by the run's principal.
     reader = auth.run_viewer(c, who)
@@ -605,7 +616,13 @@ def version_refusal(c, auth, who, row, number, v):
     """The check that refuses `who` version `number` of the file `row` (`v`, its `stored_version`, None when there is
     none), or None when they may read its bytes: the one read check Files.serve makes, for every caller that hands
     those bytes on. Checks run in serve's order and the first refusal is named."""
-    if not page_audience_visible(c, auth, auth.run_viewer(c, who), row, {}):  # as file_visible reads it
+    from . import relationship_runs
+
+    relationship = who.actor == relationship_runs.ACTOR
+    if relationship:
+        if not file_visible(c, auth, who, row, {}):
+            return "file_fence"
+    elif not page_audience_visible(c, auth, auth.run_viewer(c, who), row, {}):  # as file_visible reads it
         return "audience"
     if v and not page_blob_visible(c, auth, who, v["blob_id"]):
         return "blob_fence"
@@ -616,7 +633,7 @@ def version_refusal(c, auth, who, row, number, v):
         if not scan or not privacy.blob_readable(c, privacy.actor(who), v["blob_id"]):
             return "scan"
     else:
-        if not file_visible(c, auth, who, row, {}):
+        if not relationship and not file_visible(c, auth, who, row, {}):
             return "file_fence"
         if asked_to_read(c, who, row["id"]) and not asked_to_read(c, who, row["id"], number):
             return "rules_read"  # the Rules Owner's read names one version of it
@@ -979,21 +996,30 @@ def page_ref_denials(c, auth, who, refs):
     ids = page_references(refs, c)
     if not ids:
         return {}
-    pages, cache = restricted_page_rows(c, ids), {}
+    from . import relationship_runs, teammate_access
+
+    relationship = who.actor == relationship_runs.ACTOR
+    pages = page_rows(c, ids) if relationship else restricted_page_rows(c, ids)
+    cache = {}
+    bound = relationship_runs.scope(c, who.attempt_id) if relationship and not auth else None
+    sponsor = teammate_access._viewer_for(c, bound.sponsor) if bound else None
+
+    def visible(row):
+        if auth:
+            return file_visible(c, auth, who, row, cache)
+        if relationship:
+            return (
+                sponsor is not None
+                and relationship_runs.page_matches(c, bound, row)
+                and page_audience_visible(c, None, sponsor, row, cache)
+            )
+        return page_audience_visible(c, None, who, row, cache)
 
     deleted = deleted_page_refs(c, ids)
     return {
         fid: "A deleted page" if fid in deleted else "A page you can't open"
         for fid in ids
-        if fid in deleted
-        or (
-            fid in pages
-            and not (
-                file_visible(c, auth, who, pages[fid], cache)
-                if auth
-                else page_audience_visible(c, auth, who, pages[fid], cache)
-            )
-        )
+        if fid in deleted or (fid in pages and not visible(pages[fid]))
     }
 
 

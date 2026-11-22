@@ -66,6 +66,16 @@ def enqueue(conn, message):
     recipient = message.get("recipient_id")
     if not wanted(message.get("sender_id"), recipient, message.get("refs")) or not _has_table(conn, "jobs"):
         return None
+    from . import relationship_runs
+
+    if recipient == relationship_runs.ACTOR:
+        room = conn.execute(
+            "SELECT id,room_key FROM conversations WHERE id=?", (message.get("conversation_id"),)
+        ).fetchone()
+        if not relationship_runs.queued_scope(
+            relationship_runs.BOT, {**message, "refs": _refs(message["refs"])}, dict(room) if room else None
+        ):
+            return None
     if conn.execute("SELECT " + external_bot_sql("?"), (recipient,)).fetchone()[0]:
         return None
     conn.execute(
@@ -83,10 +93,13 @@ def enqueue(conn, message):
 def enqueue_stored(conn, message_id):
     """`enqueue` for a message already in `messages`, read back by id: for a writer that inserts rows in bulk."""
     row = conn.execute(
-        "SELECT id,sender_id,recipient_id,refs,created_at FROM messages WHERE id=?", (message_id,)
+        "SELECT id,sender_id,recipient_id,refs,created_at,conversation_id FROM messages WHERE id=?", (message_id,)
     ).fetchone()
     return (
-        enqueue(conn, dict(zip(("id", "sender_id", "recipient_id", "refs", "created_at"), row, strict=True)))
+        enqueue(
+            conn,
+            dict(zip(("id", "sender_id", "recipient_id", "refs", "created_at", "conversation_id"), row, strict=True)),
+        )
         if row
         else None
     )

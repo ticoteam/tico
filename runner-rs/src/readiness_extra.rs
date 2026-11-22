@@ -36,6 +36,7 @@ pub const OPTIONAL: &[&str] = &[
     // Sent once GET config says readiness_browser (runner.rs); a hub rolled back since then refuses it until the next
     // config answer.
     "browser",
+    "relationship_lanes",
 ];
 
 // ------------------------------------------------------------------------------------- credential grants

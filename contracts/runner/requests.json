@@ -141,6 +141,12 @@
      "title": "Goals",
      "type": "boolean"
     },
+    "harness": {
+     "default": "",
+     "maxLength": 100,
+     "title": "Harness",
+     "type": "string"
+    },
     "mail_request": {
      "anyOf": [
       {
@@ -2701,6 +2707,18 @@
      "maxItems": 50,
      "title": "Recent Errors",
      "type": "array"
+    },
+    "relationship_lanes": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Relationship Lanes"
     },
     "runtimes": {
      "additionalProperties": {

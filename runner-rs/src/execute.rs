@@ -310,6 +310,9 @@ fn thread_runtime(runtime: &str, harness: &str) -> String {
 
 /// The provider thread this turn continues (clients/sessions.py session_key).
 pub fn session_key(attempt: &Value) -> String {
+    if crate::sessions::relationship_claim(attempt) {
+        return format!("relationship-run:{}", text_of(&attempt["id"]));
+    }
     // A shared page starts without any earlier private Assistant session's content.
     if attempt["make_page"]["task"].is_object() {
         return format!("make-page:{}", text_of(&attempt["id"]));
@@ -373,9 +376,20 @@ fn task_private(task: &Value) -> bool {
 /// and no process reused or kept. Decided by the task, not the session key, since `session: bot` keys every turn "bot".
 /// Make page also starts and stops its provider process within the request's scratch lifetime.
 pub fn stateless_chat(attempt: &Value) -> bool {
-    attempt["make_page"]["task"].is_object()
+    crate::sessions::relationship_claim(attempt)
+        || attempt["make_page"]["task"].is_object()
         || crate::continuity::stateless(&attempt["config"])
             && text_of(&attempt["task"]["id"]).is_empty()
+}
+
+fn uses_turn_user(
+    harness: &crate::harness_tools::Capabilities,
+    gateway: bool,
+    pool_available: bool,
+    separation: crate::gateway_relay::Separation,
+) -> bool {
+    (harness.isolated_user && pool_available)
+        || (gateway && separation == crate::gateway_relay::Separation::Isolated)
 }
 
 /// The epoch that moves when this turn's thread is cleared, and the conversation it is recorded for: the bot's shared
@@ -2362,15 +2376,17 @@ impl Runner {
         let fresh_chat = voice_call || stateless_chat(&attempt);
         // A person's own Assistant chat runs in a copy removed when it ends (crate::sessions::PersonalCopy), so no process
         // is kept for it: one would outlive the folder it works in.
-        let personal_claim = crate::sessions::personal_claim(&attempt);
+        let relationship = crate::sessions::relationship_claim(&attempt);
+        let personal_claim = crate::sessions::personal_claim(&attempt) || relationship;
         let personal = personal_claim && !attempt["make_page"]["task"].is_object();
         let owner = format!("{bot}\n{key}");
         let effort = Some(text_of(&config["reasoning_effort"])).filter(|e| !e.is_empty());
         let model = Some(text_of(&config["model"])).filter(|m| !m.is_empty());
         let mut execution_path: PathBuf = crate::sessions::local_path(&self.config, &bot, &config);
+        let mut vault = Vault::default();
+        // A canceled turn drops its scratch before the vault can return its UID.
         let mut place: Option<crate::sessions::Place> = None;
         let mut skipped: Vec<String> = vec![];
-        let mut vault = Vault::default();
         #[cfg(test)]
         {
             vault.relay = tests::RUN_RELAY.with(|relay| relay.borrow_mut().take());
@@ -2461,12 +2477,11 @@ impl Runner {
                 subscription: None,
             });
             let ctx = EnvContext { url: &self.config.url(), projects_dir: &self.config.projects_dir(), state_dir: &self.state.directory };
-            // A turn runs as its own leased OS user when its model is a Tico model (required) or when a harness it may
-            // run on keeps no owner-only state shared across turns (`isolated_user`, optional: a runner with no pool
-            // runs it as `bot`). Harnesses whose sign-in files are 0600 in the bot's home run as `bot`; with them a
-            // turn can still enter every bot's checkout, as can the runner's own git (SECURITY.md).
-            let own_user = |r: &str, h: &str| crate::harness_tools::caps(r, h).isolated_user;
-            if crate::hosts::pi::is_gateway(model.as_deref()) || (own_user(&runtime, &text_of(&config["harness"])) && crate::turn_users::available()) {
+            // Only the Gateway and harnesses that can sign in without the shared home can use a leased UID.
+            let harness = crate::harness_tools::caps(&runtime, &text_of(&config["harness"]));
+            let separation = crate::gateway_relay::separation();
+            let isolated = uses_turn_user(&harness, crate::hosts::pi::is_gateway(model.as_deref()), crate::turn_users::available(), separation);
+            if isolated {
                 // The user and relay this conversation's kept pi runs with (hosts/pi.rs Pool), when it has one.
                 // Only a turn that stays on the kept pi takes it: reclaim removes it from the pool, so any other turn
                 // would drop its lease. Left in the pool, idle eviction releases it the normal way.
@@ -2474,8 +2489,7 @@ impl Runner {
                 let kept = if runtime == "pi" && session_runtime == runtime && !fresh_chat && !personal { self.pi.reclaim(&owner) } else { None };
                 if let Some(held) = kept {
                     (vault.turn_user, vault.relay) = (held.user, held.relay);
-                } else if crate::gateway_relay::separation() != crate::gateway_relay::Separation::TrustGroup {
-                    // A cloud machine has no turn-user pool (no isolation): its Gateway turn runs on the relay alone.
+                } else {
                     let taken = self.during_drain(&aid, self.take_turn_user(&attempt, &flags, crate::turn_users::Lease::take)).await;
                     vault.turn_user = Some(taken.map_err(|e| self.lease_failed(&aid, e, &mut drove))?);
                 }
@@ -2484,7 +2498,6 @@ impl Runner {
             let own = if p.disposable && !personal_claim { crate::client::Client::new(&self.config.url(), &token, 10, 0).ok() } else { None };
             let own_tokens = crate::gitcred::TokenCache::new();
             let (client, tokens) = own.as_ref().map_or((&self.client, &*self.tokens), |c| (c, &own_tokens));
-            let separation = crate::gateway_relay::separation();
             // Three independent asks at once: the turn's credentials (over connections the runner keeps for them), its
             // GitHub token and its Gateway key. Each is applied below in the order it always was.
             let (built, granted, pinned) = tokio::join!(
@@ -2500,7 +2513,7 @@ impl Runner {
                 crate::gateway_relay::prefetch(&self.client, &attempt, separation),
             );
             env = built.map_err(Fail::runtime)?;
-            if attempt["make_page"]["task"].is_object() {
+            if relationship || attempt["make_page"]["task"].is_object() {
                 // Captured in base_env too, so every fallback keeps the same disposable workspace.
                 for key in ["HUB_WORKSPACE", "TICO_PROJECTS_DIR"] {
                     env.insert(key.into(), execution_path.display().to_string());
@@ -2566,7 +2579,14 @@ impl Runner {
                 return Err(Fail::runtime(why));
             }
             base_env = Some(env.clone());
-            let turn_identity = vault.for_model(&mut env, model.as_deref(), own_user(&runtime, &text_of(&config["harness"]))).map_err(Fail::runtime)?;
+            let turn_identity = vault.for_model(&mut env, model.as_deref(), isolated).map_err(Fail::runtime)?;
+            if relationship {
+                // The model's normal identity can use the directory. The attempt owns its lifetime.
+                if let Some((uid, gid)) = turn_identity.or_else(crate::isolation::identity) {
+                    std::os::unix::fs::lchown(&execution_path, Some(uid), Some(gid))
+                        .map_err(|e| Fail::runtime(format!("cannot hand over relationship scratch directory: {e}")))?;
+                }
+            }
             let pairs: Vec<(String, String)> = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
             // Always a masker, even with no secrets yet: a website login typed mid-turn (browser/) is added to it.
             redactor = Some(redact::for_turn(&pairs, &vault.values).unwrap_or_else(|| Arc::new(Redactor::new(&[]))));
@@ -2753,12 +2773,14 @@ impl Runner {
             let own = tx.clone();
             // Every turn's checkouts get their own groups, so a leased turn of another bot cannot enter them; a leased
             // turn is given exactly these (crate::checkout_groups).
-            let paths = p.granted_paths();
-            let gids = crate::checkout_groups::gate(paths.clone()).await;
-            if let Some((uid, _)) = turn_identity {
-                crate::checkout_groups::grant(uid, &gids);
-                self.turn_git(&mut vault, &mut env, &paths, !personal_claim)?;
-                crate::turn_users::share_workspace(paths).await.map_err(Fail::runtime)?;
+            if !relationship {
+                let paths = p.granted_paths();
+                let gids = crate::checkout_groups::gate(paths.clone()).await;
+                if let Some((uid, _)) = turn_identity {
+                    crate::checkout_groups::grant(uid, &gids);
+                    self.turn_git(&mut vault, &mut env, &paths, !personal_claim)?;
+                    crate::turn_users::share_workspace(paths).await.map_err(Fail::runtime)?;
+                }
             }
             if personal_claim {
                 crate::gitcred::without_credentials(&mut env);
@@ -2773,7 +2795,9 @@ impl Runner {
                 // Names this attempt's harness scopes, so a kill at the limit is told as such (crate::turn_limits).
                 env.insert(crate::turn_limits::SCOPE_ENV.into(), crate::turn_limits::scope_key(&aid));
             }
-            let made = if session_runtime != runtime {
+            let made = if session_runtime != runtime && relationship {
+                Host::Antigravity(AntigravityHost::new(&execution_path.join(".antigravity"), vec!["agy".into()], tx))
+            } else if session_runtime != runtime {
                 let make = |home: &Path, _: &Env| AntigravityHost::new(home, vec!["agy".into()], tx.clone());
                 // A fresh stateless chat turn starts a new process, never the last one's (warm.rs discard).
                 if fresh_chat || personal {
@@ -3301,7 +3325,7 @@ impl Runner {
         }
         // A Tico fallback needs the turn's relay; without one it is left out and the primary's outcome stands.
         pending = crate::gateway_relay::admit(pending, vault.relay.is_some());
-        if self.drain.returning(&aid) {
+        if relationship || self.drain.returning(&aid) {
             pending = None;
         }
         if let (Some(until), None, true) = (&held, &pending, ran.is_ok()) {
@@ -3822,7 +3846,7 @@ impl Runner {
             }
             if let Host::Pi(pi) = h {
                 // A primary pi on a leased user is kept with that user and its relay; a fallback's never is.
-                let held = if fallback.is_none() {
+                let held = if fallback.is_none() && !relationship {
                     crate::hosts::pi::Held {
                         user: vault.turn_user.take(),
                         relay: vault.relay.take(),
@@ -3869,8 +3893,15 @@ impl Runner {
         // reply, the changes, the result) before it is sent back.
         let refreshed = crate::model_subscriptions::finish(&mut vault.subscriptions);
         mask(&aid, &mut redactor, &mut vault, refreshed);
-        let user = vault.turn_user.take();
-        let _ = tokio::task::spawn_blocking(move || drop(user)).await;
+        let scratch = if relationship {
+            place
+                .as_mut()
+                .and_then(crate::sessions::Place::take_scratch)
+        } else {
+            None
+        };
+        let cleanup = (scratch, vault.turn_user.take());
+        let _ = tokio::task::spawn_blocking(move || drop(cleanup)).await;
         // What the next turn on the primary session is told: that this one was cut off, or that a side session ran.
         if host.is_some() && (side_run || fallback.is_some() || drove.outcome == "interrupted") {
             let kept = if side_run || fallback.is_some() {
@@ -3894,7 +3925,7 @@ impl Runner {
         let mut committed_secret = false;
         if let Some(r) = &redactor {
             reply = r.scrub_text(&reply).into_owned();
-            if host.is_some() {
+            if host.is_some() && !relationship {
                 let tree = scrub_changes(r, &execution_path, &started_at).await;
                 mark("scrubbed", &aid);
                 let mut stamps: Vec<(String, String)> = vec![];
@@ -8943,6 +8974,83 @@ for line in sys.stdin:
             );
             std::fs::remove_dir_all(dir).ok();
         }
+    }
+
+    #[test]
+    fn relationship_turn_identity_preserves_harness_sign_in() {
+        use crate::gateway_relay::Separation::{Isolated, NoRelay, TrustGroup};
+        for (runtime, harness) in [
+            ("claude", "claude"),
+            ("codex", "codex"),
+            ("gemini", "gemini"),
+            ("gemini", "antigravity"),
+            ("musecode", "musecode"),
+            ("grok", "grok"),
+            ("cursor", "cursor"),
+        ] {
+            let caps = crate::harness_tools::caps(runtime, harness);
+            assert!(!uses_turn_user(&caps, false, true, Isolated), "{harness}");
+        }
+        let pi = crate::harness_tools::caps("pi", "pi");
+        assert!(uses_turn_user(&pi, false, true, Isolated));
+        assert!(!uses_turn_user(&pi, false, false, NoRelay));
+        assert!(uses_turn_user(&pi, true, false, Isolated));
+        assert!(!uses_turn_user(&pi, true, false, TrustGroup));
+    }
+
+    #[tokio::test]
+    async fn relationship_turns_take_distinct_lanes_sessions_and_scratch() {
+        let (runner, dir) = runner_at("http://127.0.0.1:1", "relationship-scratch");
+        let bot = crate::sessions::RELATIONSHIP_WORKER;
+        let mut checkout = None;
+        let lost = AtomicBool::new(false);
+        let mut paths = Vec::new();
+        let mut places = Vec::new();
+        for (id, lane) in [("first", "entity:north"), ("second", "entity:south")] {
+            let attempt = json!({"id": id, "bot": bot, "lane": lane, "config": {"session": "bot"}});
+            assert_eq!(crate::sessions::turn_lane(&attempt), lane);
+            assert_eq!(session_key(&attempt), format!("relationship-run:{id}"));
+            assert!(stateless_chat(&attempt));
+            let place = runner.enter_lanes(&attempt, &lost).await.unwrap();
+            assert!(!place.has_checkout());
+            checkout.get_or_insert_with(|| runner.lanes.checkout(bot).try_lock_owned().unwrap());
+            let path = place.execution_path.clone();
+            assert_eq!(
+                path,
+                runner
+                    .state
+                    .directory
+                    .join("tmp/relationship-runs")
+                    .join(id)
+            );
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(path.parent().unwrap())
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o711
+            );
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+            assert!(!path.join("result").exists());
+            std::fs::write(path.join("result"), id).unwrap();
+            paths.push(path);
+            places.push(place);
+        }
+        assert_ne!(paths[0], paths[1]);
+        drop(places.remove(0));
+        assert!(!paths[0].exists());
+        assert_eq!(
+            std::fs::read_to_string(paths[1].join("result")).unwrap(),
+            "second"
+        );
+        drop(places);
+        assert!(paths.iter().all(|path| !path.exists()));
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[tokio::test]

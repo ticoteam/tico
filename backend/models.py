@@ -1435,6 +1435,7 @@ class MailSettingsUpdate(Contract):
 class BotReadiness(GoalReadiness):
     ready: bool
     runtime: str = Field(default="", max_length=100)
+    harness: str = Field(default="", max_length=100)
     model: str = Field(default="", max_length=200)
     # The runner's checkout path lets Health name the exact clone destination on that computer.
     repository: str = Field(default="", max_length=2000)
@@ -1573,6 +1574,7 @@ class StructuredReadiness(Contract):
     disk_cleanup: DiskCleanupReadiness | None = None
     # Bots run as their own user here (runner-rs/src/isolation.rs), so a Tico model may run (backend/models_preset.py).
     isolated: bool | None = None
+    relationship_lanes: bool | None = None
     # Not isolated, but a Tico cloud machine: one company's trust group, whose Tico models run on the runner's relay
     # alone (runner-rs/src/cloud_machine.rs). Sent only once the config answer says `readiness_trust`.
     trust: Literal["cloud_machine"] | None = None

@@ -233,3 +233,30 @@ Only if it cannot be found on this computer or the host refuses it twice. The ne
 
 **Where did temporary assignments go?**
 They were removed in 0.3.41. Per-task sessions do the same job: give the bot the task, and it gets its own session.
+
+
+## Relationship turns
+
+A company uses one hidden Relationship Worker. Its owner assigns it to a computer
+with a ready harness. The worker needs no checkout. Turns for a single
+relationship run in queue order in its `entity:<id>` lane, including when the
+oldest turn is waiting to retry. Other relationships can run at the same time
+within the computer's turn limit. Every turn starts a fresh provider
+session in an attempt-specific scratch directory that is removed after the turn
+finishes. On Docker with a turn UID pool, pi and the Gateway use a leased UID
+and a fresh home. Claude Code, Codex, Gemini and other harnesses without leased
+user support run as the shared bot user so they can use the computer's saved
+sign-in. These turns have mode-0700 scratch and the same OS trust level as
+ordinary bot turns. Without a pool, turns that can run on the computer use its
+ordinary bot identity. The worker receives its own granted model keys.
+At claim time Tico checks readiness for the selected harness and the current
+Gateway connection or worker key grant when the model requires one. Work stays
+queued while those requirements are missing.
+
+The wake names the relationship's readable memory page and up to 25 open tasks
+the person who started it can currently read, newest first. It counts up to
+100 additional readable open tasks and shows `100+` at that limit. A wake can also name an outside thread from
+intake. The server checks the relationship and the sponsor's current access to
+both the entity and the source inbox on each read. Revoking the sponsor's inbox
+grant blocks further reads in an active run. Suggested changes to shared memory
+or status stay in the run's answer for review.

@@ -256,7 +256,7 @@ pub fn compact_at_set(value: &Value) -> Option<i64> {
 
 #[derive(Clone, Debug, Default)]
 pub struct Settings {
-    /// Only a Gateway harness receives its turn's leased OS identity.
+    /// A leased OS identity for a harness that can use it.
     pub identity: Option<(u32, u32)>,
     pub cwd: String,
     pub model: Option<String>,

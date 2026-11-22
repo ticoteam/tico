@@ -733,6 +733,9 @@ impl Runner {
         if crate::fallback::server_takes_browser() {
             readiness_doc["browser"] = crate::browser::readiness();
         }
+        if crate::fallback::server_takes_relationship_lanes() {
+            readiness_doc["relationship_lanes"] = json!(true);
+        }
         if full {
             // A low workspace volume starts the safe clean-up in the background; its last run is reported.
             let keep = vec![
@@ -1261,6 +1264,12 @@ impl Runner {
         }
         let (state, workspace) = (self.state.directory.clone(), self.config.projects_dir());
         let _ = tokio::task::spawn_blocking(move || {
+            let root = crate::sessions::TurnScratch::relationship_root(&state);
+            if let Err(e) = crate::sessions::TurnScratch::sweep_relationships(&root) {
+                log(&format!(
+                    "Tico runner: cannot clear old relationship scratch: {e}"
+                ));
+            }
             crate::checkout_groups::initialize(&state);
             crate::checkout_groups::gate_workspace(&workspace);
         })

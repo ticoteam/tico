@@ -44,9 +44,13 @@ executable = "agy"
 [variants.antigravity.capabilities]
 tool_events = true
 persistent_session = true
-readiness = false
 mcp_unsupported = "it reads MCP servers only from a config file in the operator's home, which Tico does not touch (the operator's own servers would reach every bot)"
 resume_command = "antigravity --resume"
 
 [variants.antigravity.capabilities.sign_in_status]
-check = "none"
+check = "command"
+args = ["models"]
+not_ready = "please sign in"
+ready_detail = "Antigravity signed in"
+missing_detail = "Antigravity sign-in required"
+timeout_s = 10

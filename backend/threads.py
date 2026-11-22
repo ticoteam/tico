@@ -544,9 +544,21 @@ def denial(c, v, row):
     from .task_privacy import actor as principals
 
     index = sources(c)
+    root = root_of(c, row)
+    from . import relationship_runs
+
+    if v.actor == relationship_runs.ACTOR:
+        bound = v.auth.relationship_scope(c, v.who) if v.auth else None
+        if not bound or not root:
+            return _MISSING
+        if root["id"] != bound.room:
+            task_id = row.get("task_id") or root.get("task_id")
+            if task_id and not relationship_runs.task_matches(c, bound, {"id": task_id}):
+                return _MISSING
+            sponsor = relationship_runs.source_viewer(c, v.auth, bound, root)
+            return denial(c, Viewer(v.auth, sponsor), row) if sponsor else _MISSING
     if not index.conversation_readable(principals(v.who), row["id"]):
         return _MISSING
-    root = root_of(c, row)
     if root.get("audience") not in AUDIENCES:
         return _legacy_denial(c, v, row, root, index)
     audience = audience_of(root)
@@ -555,10 +567,10 @@ def denial(c, v, row):
         return _MISSING
     if audience == "task":
         return None
+    if audience == "entity":
+        return None if v.is_person and _entity_readable(c, v, root) else _MISSING
     if v.is_bot:
         return _bot_denial(c, v, row, root, audience)
-    if audience == "entity":
-        return None if _entity_readable(c, v, root) else _MISSING
     if not v.is_person:
         return _MISSING
     # A meeting's chat is read by whoever reads the meeting (live_privacy, checked above).
@@ -635,8 +647,6 @@ def _bot_denial(c, v, row, root, audience):
     agent (agent token) never gets company or team standing read: there only its participation counts."""
     from .auth import _own_ask_to_a_person
 
-    if audience == "entity":
-        return _MISSING
     if v.runner_turn and _bot_grant(c, v, row):
         return None
     if _bot_standing(c, v, root, audience) or _own_ask_to_a_person(v.who, row):
@@ -824,7 +834,8 @@ def readable_before_deletion(c, v, message):
     tombstone shown, else the quiet hidden row. The per-message check, run on the row as it stands."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     message = dict(message)
-    if legacy_hidden(c, v, message):
+    v = _message_viewer(c, v, message)
+    if v is None or legacy_hidden(c, v, message):
         return False
     if message.get("restricted") == 0 and "restricted" in message:
         return True
@@ -839,6 +850,41 @@ def readable_before_deletion(c, v, message):
         return False
 
 
+def _message_viewer(c, v, message):
+    from . import relationship_runs, task_privacy
+
+    if v.actor != relationship_runs.ACTOR:
+        return v
+    bound = v.auth.relationship_scope(c, v.who) if v.auth else None
+    if not bound or not thread_readable(c, v, message["conversation_id"]):
+        return None
+    root = root_of(c, message["conversation_id"])
+    if not root:
+        return None
+    if root["id"] == bound.room:
+        return v
+    sponsor = relationship_runs.source_viewer(c, v.auth, bound, root)
+    if not sponsor:
+        return None
+    reader = Viewer(v.auth, sponsor)
+    if message.get("restricted") != 0:
+        principal = task_privacy.actor(v.who)
+        refs = H._json(message.get("refs"), {}) or {}
+        if (
+            not task_privacy.page_message_readable(c, principal, refs)
+            or not task_privacy.reply_pages_readable(c, principal, message)
+            or not task_privacy.run_pages_readable(c, principal, refs)
+        ):
+            return None
+        try:
+            for tid in task_privacy.message_tasks(c, message, current=True):
+                if not relationship_runs.task_matches(c, bound, {"id": tid}) or not _task_readable(c, reader, tid):
+                    return None
+        except Problem:
+            return None
+    return reader
+
+
 def message_readable(c, v, message, *, thread_checked=False):
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     message = dict(message)
@@ -846,7 +892,8 @@ def message_readable(c, v, message, *, thread_checked=False):
         return False
     if not thread_checked and not thread_readable(c, v, message["conversation_id"]):
         return False
-    if legacy_hidden(c, v, message):
+    v = _message_viewer(c, v, message)
+    if v is None or legacy_hidden(c, v, message):
         return False
     if message.get("restricted") == 0 and "restricted" in message:
         return True
@@ -1161,6 +1208,10 @@ def readable_ids(c, v, ids):
     ids = [i for i in dict.fromkeys(ids) if i]
     if not ids:
         return set()
+    from . import relationship_runs
+
+    if v.actor == relationship_runs.ACTOR:
+        return {cid for cid in ids if thread_readable(c, v, cid)}
     out = set()
     for start in range(0, len(ids), 500):
         part = ids[start : start + 500]

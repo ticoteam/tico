@@ -8,7 +8,7 @@ import re
 import sqlite3
 import stat
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
@@ -24,6 +24,9 @@ from . import read_cache
 from . import report_managers
 from .store import H, Problem, digest
 from . import bot_settings as BS
+
+if TYPE_CHECKING:
+    from . import relationship_runs
 
 # Loopback sign-in for an environment with no identity proxy in front of it.
 # Cookies are shared across ports on one host, so each install names its own; the bare name is
@@ -446,7 +449,7 @@ class Auth:
         except Problem:
             return ""
 
-    def owner_identity(self, c):
+    def owner_identity(self, c: Any) -> Identity:
         pid = self.owner_id(c)
         if not pid:
             raise Problem(
@@ -770,6 +773,10 @@ class Auth:
                     "human:" + row["id"], "owner" if email == self.owner_email else "human", email=email, via_proxy=True
                 )
             validate_identity(c, who)
+            from . import relationship_runs
+
+            if who.actor == relationship_runs.ACTOR:
+                relationship_runs.gate(c, self, who, path, method)
             if who.support:
                 from . import support_access
 
@@ -867,6 +874,7 @@ class Auth:
             "updates-owner",
             "automations-owner",
             H.TOOLS_OWNER,
+            H.RELATIONSHIP_WORKER,
         )
 
     def bot_manager(self, c, who, slug, operator=None, config: Any = False):
@@ -1076,6 +1084,14 @@ class Auth:
         self.task_snapshot(c)
         if who.role not in ("owner", "human", "bot"):
             return "0"
+        from . import relationship_runs
+
+        if who.actor == relationship_runs.ACTOR:
+            bound = self.relationship_scope(c, who)
+            if not bound:
+                return "0"
+            sponsor = self.task_sql(c, self.identity_for_actor(c, bound.sponsor))
+            return f"({sponsor}) AND ({relationship_runs.task_sql(c, bound)})"
         hidden = ["bot:" + slug for slug in sorted(self.unreadable_bots(c, who) if unreadable is None else unreadable)]
         # An unassigned company task has no owner to hide.
         clear = (
@@ -1178,7 +1194,7 @@ class Auth:
             who.role == "human" and (who.support == "app" or who.email.lower() in self.bot_admins)
         )
 
-    def identity_for_actor(self, c, actor):
+    def identity_for_actor(self, c: Any, actor: str) -> Identity:
         """Rebuild a human identity for deferred work without elevating its permissions."""
         human = H.human(c, H.actor_id(actor)) if str(actor).startswith("human:") else None
         if not human or standing(c, human["id"]):
@@ -1343,7 +1359,7 @@ class Auth:
                 pass
         self.conversation(c, who, message["conversation_id"])
 
-    def conversation(self, c, who, conversation_id, *, write=False):
+    def conversation(self, c: Any, who: Identity, conversation_id: str, *, write: bool = False) -> dict[str, Any]:
         """The conversation (thread) row, when `who` reads it; else 404, since an unreadable thread is never
         confirmed to exist. Who reads is C1 in backend/threads.py."""
         self.domain(who)
@@ -1394,10 +1410,27 @@ class Auth:
             via=who.via,
         )
 
-    def run_viewer(self, c, who):
+    def relationship_scope(self, c: Any, who: Identity) -> "relationship_runs.Scope | None":
+        from . import relationship_runs
+
+        if who.actor != relationship_runs.ACTOR or not who.attempt_id:
+            return None
+        self.task_snapshot(c)
+
+        def checked():
+            bound = relationship_runs.scope(c, who.attempt_id)
+            return bound if relationship_runs.claimable(c, self, bound) else None
+
+        return read_cache.value(c, ("relationship_read_scope", who.attempt_id), checked, shared=True)
+
+    def run_viewer(self, c: Any, who: "Identity") -> "Identity":
         """Whom a lease of the shared Assistant reads as, in either form (its own run, or a person's own chat as them):
         the person whose own chat it is (rooms.run_scope), by their own rights; nobody (NOBODY: reads nothing, never the
         Assistant itself) when that person is gone. Anyone else reads as themselves."""
+        from . import relationship_runs
+
+        if who.actor == relationship_runs.ACTOR:
+            return who if self.relationship_scope(c, who) else NOBODY
         if not (who.attempt_id and H.assistant_actor(c) in (who.actor, who.task_actor)):
             return who
         kind, person = rooms.run_scope(c, who.attempt_id)
@@ -1416,7 +1449,13 @@ class Auth:
         self.domain(who)
         if not row:
             raise Problem("not_found", "Task not found", 404)
-        from . import counsel
+        from . import counsel, relationship_runs, task_privacy
+
+        if who.actor == relationship_runs.ACTOR:
+            bound = self.relationship_scope(c, who)
+            if not bound or not relationship_runs.task_matches(c, bound, row):
+                raise Problem("not_found", "Task not found", 404)
+            return self.task_row(c, self.identity_for_actor(c, bound.sponsor), row)
 
         copied = counsel.page_copies(c).get(row["id"])
         if (
@@ -1425,8 +1464,6 @@ class Auth:
             and not counsel.page_copy_readable(c, copied, self.run_viewer(c, who), self)
         ):
             raise Problem("not_found", "Task not found", 404)
-        from . import task_privacy
-
         # As the request reads (task_privacy.actor): a lease of the shared Assistant, in either form, as its run's person.
         principals = task_privacy.actor(who)
         if who.role not in ("owner", "human", "bot") or not task_privacy.principals_read(c, principals, row):

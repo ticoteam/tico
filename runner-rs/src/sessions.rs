@@ -1649,23 +1649,69 @@ pub struct Place {
     pub personal: bool,
     /// The turn is a person's: it goes first for the checkout and never waits for its worktree.
     person: bool,
-    // Fields drop in this order: the copy goes while the lane and the checkout are still held.
+    // Disposable files go while the lane and the checkout are still held.
     _copy: Option<PersonalCopy>,
+    _scratch: Option<TurnScratch>,
     _lane: OwnedMutexGuard<()>,
     checkout: Option<OwnedMutexGuard<()>>,
-    _scratch: Option<MakePageScratch>,
 }
 
 /// Outside every checkout and scan root; all outcomes, including a canceled future, discard the turn's files.
-pub(crate) struct MakePageScratch(pub PathBuf);
+pub(crate) struct TurnScratch(pub PathBuf);
 
-impl MakePageScratch {
-    pub(crate) fn new(attempt: &str) -> Result<Self, String> {
-        let scratch = Self(
-            std::env::temp_dir().join(format!("tico-make-page-{}", uuid::Uuid::new_v4().simple())),
-        );
-        std::fs::create_dir(&scratch.0)
+pub(crate) const RELATIONSHIP_RUNS: &str = "relationship-runs";
+
+impl TurnScratch {
+    pub(crate) fn relationship_root(state: &Path) -> PathBuf {
+        let parent = if crate::isolation::enabled() {
+            crate::isolation::turn_dir()
+        } else {
+            state.join("tmp")
+        };
+        parent.join(RELATIONSHIP_RUNS)
+    }
+
+    pub(crate) fn sweep_relationships(root: &Path) -> Result<(), String> {
+        crate::repo_safety::outside_installation(root)?;
+        match std::fs::remove_dir_all(root) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    fn relationship(root: &Path, attempt: &str) -> Result<Self, String> {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        if !slug_ok(attempt) {
+            return Err("invalid relationship attempt id".into());
+        }
+        let path = root.join(attempt);
+        crate::repo_safety::outside_installation(&path)?;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o711)
+            .create(root)
+            .and_then(|()| {
+                if crate::isolation::enabled() {
+                    crate::isolation::keep_supervisor_directory(root, 0o711)
+                } else {
+                    std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o711))
+                }
+            })
+            .map_err(|e| format!("cannot prepare runner scratch root: {e}"))?;
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&path)
+            .map_err(|e| format!("cannot create turn scratch directory: {e}"))?;
+        Ok(Self(path))
+    }
+
+    pub(crate) fn make_page(attempt: &str) -> Result<Self, String> {
+        let path =
+            std::env::temp_dir().join(format!("tico-make-page-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir(&path)
             .map_err(|e| format!("cannot create Make page scratch directory: {e}"))?;
+        let scratch = Self(path);
         std::fs::write(
             scratch.0.join(crate::files_publish::MAKE_PAGE_ORIGIN),
             attempt,
@@ -1675,13 +1721,15 @@ impl MakePageScratch {
     }
 }
 
-impl Drop for MakePageScratch {
+impl Drop for TurnScratch {
     fn drop(&mut self) {
         if let Err(e) = std::fs::remove_dir_all(&self.0) {
-            log(&format!(
-                "Tico runner: cannot remove Make page scratch directory {}: {e}",
-                self.0.display()
-            ));
+            if e.kind() != std::io::ErrorKind::NotFound {
+                log(&format!(
+                    "Tico runner: cannot remove turn scratch directory {}: {e}",
+                    self.0.display()
+                ));
+            }
         }
     }
 }
@@ -1692,6 +1740,14 @@ impl Drop for MakePageScratch {
 pub fn personal_claim(attempt: &Value) -> bool {
     truthy(attempt.get("personal"))
 }
+
+pub fn relationship_claim(attempt: &Value) -> bool {
+    attempt["lane"]
+        .as_str()
+        .is_some_and(|lane| lane.starts_with("entity:"))
+}
+
+pub const RELATIONSHIP_WORKER: &str = "relationship-worker";
 
 /// A personal turn's own copy of the bot's checkout (`personal` on the claim: the Assistant in a person's own room). One
 /// Assistant serves the whole company, so nothing such a turn writes may reach the checkout every other person's turn
@@ -1782,6 +1838,10 @@ impl Drop for PersonalCopy {
 }
 
 impl Place {
+    pub(crate) fn take_scratch(&mut self) -> Option<TurnScratch> {
+        self._scratch.take()
+    }
+
     /// The folders a leased turn user is given, for the primary harness and any fallback alike: the turn's own, the bot's
     /// checkout and the task's set-up worktrees; a person's own chat its PersonalCopy alone, never the shared checkout.
     pub fn granted_paths(&self) -> Vec<PathBuf> {
@@ -1825,9 +1885,10 @@ impl Runner {
         let bot = text_of(&attempt["bot"]);
         let lane = turn_lane(attempt);
         let make_page = attempt["make_page"]["task"].is_object();
+        let relationship = relationship_claim(attempt);
         let legacy_meeting = lane.starts_with(LEGACY_MEETING_LANE);
         // A person's own Assistant chat, a task's turn there included, works in its PersonalCopy, never a worktree.
-        let personal = personal_claim(attempt) && !make_page;
+        let personal = personal_claim(attempt) && !make_page && !relationship;
         let task = if !slug_ok(&bot) || make_page || personal {
             String::new()
         } else if legacy_meeting {
@@ -1841,7 +1902,7 @@ impl Runner {
         let person = crate::drive::from_person(&attempt["message"]);
         let lane_guard = hold(self.lanes.lane(&bot, &lane), lost).await?;
         // A task turn skips its refresh of the checkout while a person waits for it.
-        let checkout = if make_page {
+        let checkout = if make_page || relationship {
             None
         } else if task.is_empty() {
             Some(self.lanes.hold_checkout(&bot, person, lost).await?)
@@ -1849,7 +1910,12 @@ impl Runner {
             self.lanes.try_checkout(&bot)
         };
         let scratch = if make_page {
-            Some(MakePageScratch::new(&text_of(&attempt["id"]))?)
+            Some(TurnScratch::make_page(&text_of(&attempt["id"]))?)
+        } else if relationship {
+            Some(TurnScratch::relationship(
+                &TurnScratch::relationship_root(&self.state.directory),
+                &text_of(&attempt["id"]),
+            )?)
         } else {
             None
         };
@@ -1881,13 +1947,13 @@ impl Runner {
             session_path: None,
             add_dirs: vec![],
             rules_digest: String::new(),
-            disposable: legacy_meeting || make_page || personal,
+            disposable: legacy_meeting || make_page || personal || relationship,
             personal,
             person,
             _copy: None,
+            _scratch: scratch,
             _lane: lane_guard,
             checkout,
-            _scratch: scratch,
         })
     }
 

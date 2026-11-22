@@ -2700,7 +2700,7 @@ mod tests {
         );
         assert!(
             agy.capabilities.persistent_session
-                && !agy.capabilities.readiness
+                && agy.capabilities.readiness
                 && agy.capabilities.mcp_transports.is_empty()
         );
         let typo = BUILT_IN[0]

@@ -196,7 +196,9 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
 
     if problem := login_upgrade(row, readiness, bot=bot):
         return verdict(False, problem, "Update the runner in Settings > Computers")
-    # A harness the runner does not report on (`readiness = false`, Antigravity) has no row to judge.
+    # A variant reports readiness on its bot's row. The runtime's computer row describes the default CLI.
+    if harness and runtime_of(harness) != harness:
+        return verdict(None, label + " has no computer-wide readiness report for " + harness)
     if readiness.get("schema_version") != 1 or harness_caps(harness, runtime).get("readiness") is False:
         return verdict(None, label + " does not report its AI tools; update it to check")
     if not state.get("installed"):

@@ -7,8 +7,8 @@ Install and authenticate Google's `agy` CLI on the assigned computer.
 The current computer uses Antigravity's existing Google account sign-in. Its
 global settings are not changed by Tico. A Gemini API key alone does not select
 Antigravity's API-key provider; follow Google's CLI settings documentation if
-switching that authentication mode. Preflight checks the executable; a real
-run verifies authentication.
+switching that authentication mode. Readiness finds `agy` and checks sign-in
+with `agy models` before the runner claims work.
 
 The runner keeps a separate NDJSON process per bot, human, conversation, session
 epoch, model, and effort. Idle processes expire after 15 minutes; the cache is

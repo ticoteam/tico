@@ -18,6 +18,7 @@ from . import (
     org_turns,
     check_models,
     claude_login,
+    credentials,
     learned,
     rooms,
     rules as wake_rule_engine,
@@ -37,6 +38,7 @@ from . import (
 )
 from . import runner_online
 from . import task_privacy as privacy
+from . import relationship_runs
 from . import task_text_keys
 from . import task_reads
 from . import (
@@ -59,7 +61,7 @@ from . import (
 )
 from .auth import Identity
 from .batch_work import isolated, report, shared_check, shared_scope, storage_error
-from .harnesses import bot_keyed, reports_tool_calls
+from .harnesses import bot_key, bot_keyed, reports_tool_calls, resolve_harness
 from .run_diagnostics import HANDED_BACK, LAPSED, RESTART_TEXT, UNSTARTED_CATEGORIES, clean_stop_reported
 from . import holds, lifecycle
 from . import run_diagnostics as RD
@@ -357,11 +359,13 @@ def job_lane(c, bot, config, message, conversation):
     """The lane a queued message would run in (clients/sessions.py). `config` is the bot's followed config, the one
     its runner keys sessions on. A subtask's turn runs in its session root's lane, so it and its parent's turns take
     turns in one session."""
+    bound = relationship_runs.queued_scope(bot, message, conversation)
     return sessions.lane(
         config,
         bot,
         session_task_id(c, bot, config, work_task_id(message, conversation)),
         conversation["id"] if conversation else None,
+        entity_id=bound.entity if bound else None,
     )
 
 
@@ -2470,6 +2474,16 @@ def claim_refusal(
     return why, config
 
 
+def relationship_readiness(ready):
+    # An isolated runner still needs its turn-user pool for the Gateway relay.
+    if (
+        ready.get("isolated") is True
+        and (ready.get("runtimes", {}).get(models_preset.GATEWAY_RUNTIME) or {}).get("turn_user") != "own"
+    ):
+        return {**ready, "isolated": False}
+    return ready
+
+
 def _claim_refusal(
     c,
     settings,
@@ -2498,6 +2512,11 @@ def _claim_refusal(
         return why, None
     if bot in held_bots and "maintaining" not in ignore_refusals:
         return "maintaining", None
+    relationship = bot == relationship_runs.BOT
+    if relationship:
+        if ready.get("relationship_lanes") is not True:
+            return "readiness_unknown", None
+        ready = relationship_readiness(ready)
     try:
         config = json.loads(config_json)
     except (ValueError, TypeError):
@@ -2511,7 +2530,7 @@ def _claim_refusal(
     record = loads.record if loads is not None else providers.load(c, settings)
     filled = providers.fill(record, config)
     # A runtime this computer's subscription signs in needs no sign-in here (backend/model_subscriptions.py).
-    covers = model_subscriptions.covered_runtimes(c, runner, filled, loads)
+    covers = {} if relationship else model_subscriptions.covered_runtimes(c, runner, filled, loads)
     ready = model_subscriptions.covered(ready, covers)
     # Its plans here ran out and the computer does not fall back to the Gateway: it waits for a plan, as if the
     # company's choice did not run the Gateway before sign-in (backend/models_preset.py plans_out). Read the same way
@@ -2529,6 +2548,14 @@ def _claim_refusal(
         if why not in ignore_refusals:
             return why, None
     check = bot_readiness(ready, bot)
+    if relationship:
+        if waits or gateway_connection.is_tico(filled.get("model")):
+            if not gateway_connection.has_run_key(c, settings):
+                return "gateway_disconnected", None
+        elif (key := bot_key({**filled, "fallback": {}})) and not credentials.relationship_has_model_key(c, key):
+            return "model_key_missing", None
+        if (check.get("runtime"), check.get("harness")) != (filled.get("runtime"), resolve_harness(filled)):
+            return "readiness_unknown", None
     if waits:
         # Its subscription is not signed in on this computer yet: the turn runs on the Gateway instead
         # (backend/models_preset.py), so the missing sign-in is the one problem that doesn't hold it. Its checkout,
@@ -2536,7 +2563,7 @@ def _claim_refusal(
         if bot not in (ready.get("bots") or {}) and "readiness_unknown" not in ignore_refusals:
             return "readiness_unknown", None
         if "not_ready" not in ignore_refusals and (
-            check.get("repository_present") is not True
+            (not relationship and check.get("repository_present") is not True)
             or check.get("configuration_valid") is not True
             or ((ready.get("runtimes") or {}).get(models_preset.GATEWAY_RUNTIME) or {}).get("installed") is not True
         ):
@@ -2742,6 +2769,20 @@ def scoped_sql():
         "NOT EXISTS(SELECT 1 FROM bot_control sc WHERE sc.bot=j.bot_id AND sc.claim_task IS NOT NULL "
         f"AND coalesce({task_sql},'')<>sc.claim_task AND NOT EXISTS(SELECT 1 FROM task_relations sr "
         f"WHERE sr.from_task={task_sql} AND sr.to_task=sc.claim_task AND sr.kind='parent'))"
+    )
+
+
+def relationship_queue_head_sql():
+    """A held or interrupted relationship wake still precedes the rest of its lane."""
+    entity = f"$.{relationship_runs.REF}.entity"
+    return (
+        f"(j.bot_id<>'{relationship_runs.BOT}' OR NOT EXISTS("
+        "SELECT 1 FROM jobs older JOIN messages om ON om.id=older.message_id "
+        "WHERE older.bot_id=j.bot_id AND older.state IN ('queued','leased','running','input','uncertain') "
+        # Job rowids preserve insertion order when two notices have the same time and no message sequence.
+        "AND (older.created_at,coalesce(om.seq,0),older.rowid)<(j.created_at,coalesce(m.seq,0),j.rowid) "
+        "AND om.sender_id=m.sender_id AND om.recipient_id=m.recipient_id "
+        f"AND json_extract(om.refs,'{entity}')=json_extract(m.refs,'{entity}')))"
     )
 
 
@@ -3265,16 +3306,18 @@ CLAIM_CONFIG_SQL = (
 
 def queued_jobs_sql(bots=None):
     """A bot's queued jobs in the order its claim takes them, each with whether the interrupted-work fence and a claim
-    scope let it through. With `bots`, the same rows for all of them at once (prime_claimables)."""
+    scope let it through and whether it is first in its relationship lane. With `bots`, the same rows for all of them
+    at once (prime_claimables)."""
     return (
         f"SELECT j.*,m.sender_id,{H.in_person_name_sql()} person_sent,{unfenced_sql()} free,{scoped_sql()} in_scope,"
-        f"{task_quarantine.free_sql(queued_task_sql())} quarantine_free FROM jobs j "
+        f"{task_quarantine.free_sql(queued_task_sql())} quarantine_free,{relationship_queue_head_sql()} lane_head "
+        "FROM jobs j "
         "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
         f"WHERE j.bot_id{'=?' if bots is None else ' IN (' + ','.join('?' * len(bots)) + ')'} "
         "AND j.state='queued' AND j.held=0 "
         # A turn refused while its full Claude login was being refreshed waits for the new token (claude_login.gap).
         f"AND NOT {claude_login.PARKED_SQL} "
-        f"ORDER BY j.redirect DESC,CASE WHEN {H.in_person_name_sql()} THEN 0 ELSE 1 END,j.created_at,j.id"
+        f"ORDER BY j.redirect DESC,CASE WHEN {H.in_person_name_sql()} THEN 0 ELSE 1 END,j.created_at,lane_head DESC,j.id"
     )
 
 
@@ -3478,6 +3521,8 @@ def job_reason(c, settings, runner, job, followed, ready, busy, live, loads):
         return "scoped"
     if not job["free"]:
         return "uncertain" if job["quarantine_free"] else holds.TASK_QUARANTINE
+    if not job["lane_head"]:
+        return "lane_held"
     if claim_waiting(c, job, loads):
         return holds.CLAIM_HELD
     return job_refusal(c, job, followed, ready, busy, live, runner=runner, loads=loads) or (
@@ -3938,7 +3983,11 @@ class Execution:
                     'repository': runner_repository(c, self.store.settings, row['bot'], configs.get, app, homes),
                     'mail_agent': bool(P.inbox_person(row['bot'], people)),
                     # The runtimes its own or its team's subscription signs in: no sign-in needed here for them.
-                    **model_subscriptions.assignment_fields(c, runner, config),
+                    **(
+                        model_subscriptions.assignment_fields(c, runner, config)
+                        if row["bot"] != relationship_runs.BOT
+                        else {}
+                    ),
                 }
             )
         return result
@@ -4676,7 +4725,7 @@ class Execution:
             # A job its wake preset holds waits for its release (backend/wake_presets.py tick).
             f"WHERE j.state='queued' AND j.held=0 AND j.bot_id IN ({marks}) AND a.runner_id=? "
             f"AND {lifecycle.claim_message_sql()} "
-            f"AND {unfenced_sql()} AND {scoped_sql()} "
+            f"AND {unfenced_sql()} AND {scoped_sql()} AND {relationship_queue_head_sql()} "
             # A turn refused while its full Claude login was being refreshed waits for the new token (claude_login.gap).
             f"AND NOT {claude_login.PARKED_SQL} "
             + ("AND j.id=? " if job_id is not None else "")
@@ -5205,7 +5254,7 @@ class Execution:
         record = providers.load(c, self.store.settings)
         config = providers.fill(record, followed)
         voice_reply = False
-        subscribed = None
+        subscribed = [] if row["bot_id"] == relationship_runs.BOT else None
         if live_ref and call_sessions.is_voice(c, live_ref.get("meeting_id")):
             spec = call_sessions.model_spec(handed[1])
             if voice_call and spec and not call_sessions.accepts_runner(spec, caps):
@@ -5244,6 +5293,11 @@ class Execution:
                 c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (row["id"],))
                 return {"attempt": None, "dropped": True}
         lane = job_lane(c, row["bot_id"], followed, msg, conv)
+        relationship = relationship_runs.queued_scope(row["bot_id"], msg, conv)
+        if row["bot_id"] == relationship_runs.BOT and not relationship_runs.claimable(c, self.auth, relationship):
+            c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (row["id"],))
+            H.event(c, H.TICO_ACTOR, "job.suppress", row["id"], {"reason": "relationship_unreadable"})
+            return {"attempt": None, "dropped": True}
         token = secrets.token_urlsafe(32)
         until = H.shift(H.now(), seconds=self.store.settings.lease_seconds)
         woke, source = run_triggers.of_message(msg)
@@ -5331,6 +5385,8 @@ class Execution:
         # The company's models choice: the Gateway while the bot's subscription is not signed in here, and the
         # Gateway as its last fallback, on a computer that can run it (backend/models_preset.py).
         here = readiness_document(runner["readiness"])
+        if relationship:
+            here = relationship_readiness(here)
         # The computer's subscription for this runtime signs the turn in, so a missing or
         # refused sign-in here does not move it to the Gateway (backend/model_subscriptions.py).
         if subscribed is None:
@@ -5367,6 +5423,8 @@ class Execution:
         # A stateless bot (the Rules Owner): its runner starts each task fresh, reads and keeps no memory (hubdb.stateless).
         if H.stateless(followed):
             config = {**config, "stateless": True}
+        if relationship:
+            config = {**config, "stateless": True, "fallback": {"off": True}}
         gateway_connection.hand_out(c, aid, config)
         # The room's recent page. The runner forwards only what arrived since the bot last
         # answered; the bot reads further back itself with `tico conversation show` when it wants to. The
@@ -5384,14 +5442,19 @@ class Execution:
             else c.execute("SELECT epoch FROM session_epochs WHERE conversation_id=?", (root_id,)).fetchone()
         )
         bot_who = Identity("bot:" + row["bot_id"], "bot", attempt_id=aid)
-        history = privacy.page(
-            c,
-            bot_who,
-            conv["id"],
-            limit=HISTORY_PAGE * 2,
-            since=epoch["updated_at"] if epoch else None,
-        )["messages"]
-        history = lane_history(c, row["bot_id"], followed, history, conv, lane)[-HISTORY_PAGE:]
+        if relationship:
+            if context := relationship_runs.wake_context(c, self.auth, bot_who, relationship):
+                msg = {**msg, "body": msg["body"] + "\n\n" + context}
+            history = [msg]
+        else:
+            history = privacy.page(
+                c,
+                bot_who,
+                conv["id"],
+                limit=HISTORY_PAGE * 2,
+                since=epoch["updated_at"] if epoch else None,
+            )["messages"]
+            history = lane_history(c, row["bot_id"], followed, history, conv, lane)[-HISTORY_PAGE:]
         if card_slot.of(row):
             # The bot's own work waiting for its own run (the card's next turn, a comment) is not read in this one.
             waiting = card_slot.pending(c, row["bot_id"], [m["id"] for m in history])
@@ -5534,7 +5597,7 @@ class Execution:
         # Quiet notes ride along with whatever woke the bot: every note waiting for this bot, each with when it was
         # sent, so the run can tell yesterday's from this morning's.
         notes = []
-        if getattr(body, "next_run", False) and not check and not scope and not making_page and not voice_call:
+        if getattr(body, "next_run", False) and not (check or scope or making_page or voice_call or relationship):
             from . import bot_to_bot
             from . import threads
 
@@ -5567,7 +5630,7 @@ class Execution:
 
         deferred = (
             ""
-            if making_page or voice_call
+            if making_page or voice_call or relationship
             else delivery.summary(
                 delivery.carried(
                     c,
@@ -5592,7 +5655,7 @@ class Execution:
         if making_page:
             # Receipts outlive the lease and must retain the person whose rights admitted this request.
             c.execute("UPDATE attempts SET acting_person=? WHERE id=?", (acting.actor, aid))
-        mail_levels = mailbox_access.levels_for(c, acting or ("bot:" + row["bot_id"]))
+        mail_levels = {} if relationship else mailbox_access.levels_for(c, acting or ("bot:" + row["bot_id"]))
         subscriptions = model_subscriptions.hand_out(c, aid, subscribed)
         parked = c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (row["bot_id"],)).fetchone()
         from .chat_goals import current
@@ -5603,7 +5666,7 @@ class Execution:
         if making_page:
             history = [msg]
         chat_goal = current(c, conv["id"])
-        if chat_goal and (making_page or chat_goal["bot"] != row["bot_id"]):
+        if chat_goal and (making_page or relationship or chat_goal["bot"] != row["bot_id"]):
             # Another bot's turn in the room (the requester answering) works without the owner's goal.
             chat_goal = None
         # Runner wire names (backend/runner_wire.py): the stored text beside the decoded values, as runners read them.
@@ -5685,12 +5748,12 @@ class Execution:
                     ),
                     "task": wire_task,
                     **({"github_repository": github_repository} if github_repository else {}),
-                    **({"continue_thread": continue_thread} if continue_thread else {}),
+                    **({"continue_thread": continue_thread} if continue_thread and not relationship else {}),
                     # A job the release policy let go to continue the bot's latest session (runner-rs forks it).
                     **({"fork_thread": fork_thread} if fork_thread else {}),
                     # A job the release policy let go to run in a session of its own (session `fresh`).
                     **({"fresh_session": True} if fresh_session else {}),
-                    **({"source_continuation": source} if source else {}),
+                    **({"source_continuation": source} if source and not relationship else {}),
                     # The task's set-up worktrees on this computer, added to its session (runner-rs/src/sessions.rs).
                     "worktrees": worktrees.attached(c, task["id"], who.runner_id, row["bot_id"]) if task else [],
                     "history": history,
@@ -5698,10 +5761,10 @@ class Execution:
                     # What the person's chat bot has learned, read now: a deleted entry is gone from this turn
                     # (backend/learned.py; rendered by runner-rs/src/prompt.rs). Outside their own chat only
                     # `strategy`, the team's live strategy, which every turn carries (backend/strategy.py).
-                    "learned": learned.for_turn(c, self.store.settings, conv, row["bot_id"]),
+                    "learned": {} if relationship else learned.for_turn(c, self.store.settings, conv, row["bot_id"]),
                     # What changed in Finance for whoever this turn is for: the person in their own Assistant turn, else the
                     # bot (backend/finance/brief.py). Standing lines in the prompt, so a resumed thread gets them when they change.
-                    "finance": finance_brief.for_turn(c, (acting or bot_who).actor),
+                    "finance": None if relationship else finance_brief.for_turn(c, (acting or bot_who).actor),
                     "task_context": task_context.for_turn(c, self.auth, acting or bot_who, make_page_task or task),
                     **({"make_page": {"task": runner_wire.task(make_page_task)}} if making_page else {}),
                     # place "updates": the recent updates that person may read and open, read now as them
@@ -6527,7 +6590,7 @@ class Execution:
             or not self.current_owner(c, who, attempt)
         ):
             return None
-        if attempt["state"] != "running":
+        if attempt["state"] != "running" or attempt["bot_id"] == relationship_runs.BOT:
             return {"messages": []}
         # A comment its author took back mid-turn (H.task_comment_delete) still started the turn: read its row,
         # whose words are already gone, so the turn keeps polling. Its follow-ups are read the normal way below.
