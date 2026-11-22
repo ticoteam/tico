@@ -417,6 +417,75 @@ def schema(path):
     return rows(path, "SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
 
 
+EMAIL_CUTOVER_STATES = {
+    "waiting_approval": "waiting_approval",
+    "pending": "queued",
+    "dispatching": "unknown",
+    "sent": "done",
+    "blocked": "blocked",
+    "canceled": "canceled",
+    "failed": "failed",
+    "unknown": "unknown",
+    "declined": "blocked",
+}
+EMAIL_CREATED = "2026-11-21T12:00:00.000000Z"
+EMAIL_DUE = "2026-11-22T18:00:00.000000Z"
+
+
+def seed_old_email(c, prior):
+    sid = "old-email-" + prior
+    c.execute(
+        "INSERT INTO email_sends(id,mailbox,actor,bot,via,content_sha256,idempotency_key,recipients,attachments,"
+        "subject,body_sha256,raw,draft_id,thread_id,reply_to_id,approval_id,classification,decision,state,"
+        "created_at,send_after,provider_attempted_at,claimed_at,lease_id,provider_message_id,finished_at,operation_key) "
+        "VALUES (?,'ops@acme.example','bot:ops','ops','finance',?,?,'[\"a@vendor.example\"]','[]','Update',"
+        "'body','frozen-mime','','thread','original','old-ok','{}','{}',?,?,?,?,?,?,?,?,?)",
+        (
+            sid,
+            "hash-" + sid,
+            "key-" + sid,
+            prior,
+            EMAIL_CREATED,
+            EMAIL_DUE,
+            EMAIL_CREATED if prior in ("dispatching", "sent", "unknown") else None,
+            EMAIL_CREATED if prior == "dispatching" else None,
+            "old-lease" if prior == "dispatching" else "",
+            "gmail-id" if prior == "sent" else None,
+            EMAIL_CREATED if prior not in ("waiting_approval", "pending", "dispatching") else None,
+            "op-" + sid,
+        ),
+    )
+    return sid
+
+
+def assert_email_cutover(c, cutover_at):
+    for prior, state in EMAIL_CUTOVER_STATES.items():
+        sid = "old-email-" + prior
+        old = c.execute("SELECT state, raw FROM email_sends WHERE id=?", (sid,)).fetchone()
+        assert tuple(old) == (prior, "")
+        row = c.execute("SELECT * FROM outbound_actions WHERE id=?", (sid,)).fetchone()
+        assert (row["channel"], row["state"], row["occurrence_key"]) == ("email", state, f"email:send:{sid}")
+        assert (row["destination"], row["actor"], row["approval_id"]) == ("ops@acme.example", "bot:ops", "old-ok")
+        assert row["send_after"] == row["next_attempt_at"] == EMAIL_DUE
+        meta = json.loads(row["metadata"])
+        assert (meta["recipients"], meta["subject"], meta["content_sha256"]) == (
+            ["a@vendor.example"],
+            "Update",
+            "hash-" + sid,
+        )
+        if prior in ("waiting_approval", "pending"):
+            assert json.loads(row["payload"]) == {"raw": "frozen-mime"}
+        else:
+            assert row["payload"] == ""
+        if prior == "dispatching":
+            assert row["provider_attempted_at"] is None and row["claim_token"] is None
+            assert meta["finished_at"] == cutover_at and meta["cutover_unconfirmed"] == 1
+        if prior in ("sent", "unknown"):
+            assert row["provider_attempted_at"] == EMAIL_CREATED
+        if prior == "sent":
+            assert json.loads(row["receipt"]) == {"message_id": "gmail-id"}
+
+
 def test_the_pending_migrations_apply_in_any_order(company, tmp_path, monkeypatch):
     """Migrations merge in any order and an install may be anywhere between two releases, so the files this company
     has not run must give the same database whichever runs first (CLAUDE.md, Conventions)."""
@@ -424,6 +493,7 @@ def test_the_pending_migrations_apply_in_any_order(company, tmp_path, monkeypatc
     pending = [m for m in migrations.files() if m.version not in applied]
     # Compare data as well as schema when this cutover is among the pending files.
     slack_cutover = any(m.version.endswith("_slack_outbound") for m in pending)
+    email_cutover = any(m.version.endswith("_email_outbound") for m in pending)
     slack_states = {
         "ready": "queued",
         "retry": "queued",
@@ -444,6 +514,9 @@ def test_the_pending_migrations_apply_in_any_order(company, tmp_path, monkeypatc
         with closing(sqlite3.connect(path, isolation_level=None)) as c:
             c.row_factory = sqlite3.Row
             c.execute("PRAGMA foreign_keys=ON")
+            if email_cutover:
+                for state in EMAIL_CUTOVER_STATES:
+                    seed_old_email(c, state)
             if slack_cutover:
                 mids = [r[0] for r in c.execute("SELECT id FROM messages ORDER BY id LIMIT ?", (len(slack_states),))]
                 for mid, state in zip(mids, slack_states, strict=True):
@@ -465,6 +538,8 @@ def test_the_pending_migrations_apply_in_any_order(company, tmp_path, monkeypatc
                 except Exception as exc:
                     pytest.fail(f"Migration {migration.path.name} fails on a running company when run {name}: {exc!r}")
             assert c.execute("PRAGMA foreign_key_check").fetchall() == [], f"{name}: rows refer to missing rows"
+            if email_cutover:
+                assert_email_cutover(c, cutover_at)
             if slack_cutover:
                 assert not c.execute("PRAGMA foreign_key_list(slack_posts)").fetchall()
                 for mid, prior in zip(mids, slack_states, strict=True):
@@ -490,6 +565,30 @@ def test_the_pending_migrations_apply_in_any_order(company, tmp_path, monkeypatc
     assert results[0][0] == results[1][0], "The schema depends on the order the pending migrations ran in"
     assert not changes(results[0][1], results[1][1])
     assert not changes(migrated(company.before), results[0][1]), "The pending migrations changed the company"
+
+
+def test_email_cutover_keeps_operation_receipts_bound_to_the_original_request(company, tmp_path):
+    from backend import email_sending
+    from backend.store import Problem
+
+    path = tmp_path / "pre-email.db"
+    shutil.copy(company.db, path)
+    pending = {migration.version: migration for migration in migrations.files()}
+    with closing(sqlite3.connect(path, isolation_level=None)) as c:
+        c.row_factory = sqlite3.Row
+        migrations._run(c, pending["20261118234339_email_send_tasks"])
+        migrations._run(c, pending["20261121073005_email_operation_requests"])
+        sid = seed_old_email(c, "sent")
+        actor, operation, mailbox = "bot:ops", "op-" + sid, "ops@acme.example"
+        c.execute("UPDATE email_sends SET task_id='case', approval_task_id='ok-task' WHERE id=?", (sid,))
+        c.execute("INSERT INTO email_send_operations VALUES(?,?,?,?)", (actor, operation, sid, "request-hash"))
+        cutover = next(m for version, m in pending.items() if version.endswith("_email_outbound"))
+        migrations._run(c, cutover)
+        found = email_sending.receipt(c, actor, operation, mailbox, "request-hash")
+        assert (found["id"], found["state"], found["provider_message_id"]) == (sid, "sent", "gmail-id")
+        assert (found["task_id"], found["approval_task_id"]) == ("case", "ok-task")
+        with pytest.raises(Problem, match="different email content"):
+            email_sending.receipt(c, actor, operation, mailbox, "changed-request")
 
 
 REMOVED = ("growth-manager", "legal-owner", "feature-owner")  # live seat bots' templates in the fixture

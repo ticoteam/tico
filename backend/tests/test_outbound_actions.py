@@ -100,6 +100,35 @@ def test_a_worker_whose_claim_lapsed_cannot_call_the_provider(store, fake):
     assert OA.attempt(store, second) == "done" and fake.calls == [row["id"]]
 
 
+def test_email_claims_and_frozen_content_belong_to_the_mailbox_gate(api, store):
+    now = H.now()
+    with store.transaction() as c:
+        c.executemany(
+            "INSERT INTO outbound_actions(id,channel,audience,operation,destination,occurrence_key,payload,"
+            "state,send_after,next_attempt_at,created_at,updated_at,claimed_at,claim_token,provider_attempted_at) "
+            "VALUES(?,'email','external','send','ops@acme.example',?,json_object('raw','private'),?,?,?,?,?,?,?,?)",
+            [
+                ("queued-mail", "email:send:queued-mail", "queued", now, now, now, now, None, None, None),
+                ("leased-mail", "email:send:leased-mail", "attempting", now, now, now, now, now, "email-lease", None),
+            ],
+        )
+    assert OA.next_due(store) is None
+    assert OA.claim(store) is None
+    assert OA.recover(store, later(OA.STALE + 1)) == 0
+    assert OA.attempt(store, OA.Claimed("leased-mail", "email-lease")) == "lost"
+    assert api.get("/api/v2/outbound-actions?channel=email", headers=headers()).json()["items"] == []
+    for suffix in ("", "/cancel", "/confirm-sent", "/approve"):
+        path = "/api/v2/outbound-actions/queued-mail" + suffix
+        response = (
+            api.post(path, json={"shown_hash": "unseen"} if suffix == "/approve" else {}, headers=headers())
+            if suffix
+            else api.get(path, headers=headers())
+        )
+        assert response.status_code == 404, response.text
+    assert row_of(store, "queued-mail")["state"] == "queued"
+    assert row_of(store, "leased-mail")["state"] == "attempting"
+
+
 def test_the_same_claim_replayed_after_its_attempt_calls_nothing(store, fake):
     row, _ = add(store)
     claimed = OA.claim(store)
