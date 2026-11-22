@@ -2810,7 +2810,12 @@ def connected(c, vault, settings, who, login_id, body):
             )
         except Problem as problem:
             # A fixed word for the history: never the value, nor what the provider said about it.
-            state, message, category = "failed", model_login.redact(problem.detail), "value_refused"
+            state, category = "failed", "value_refused"
+            message = (
+                "Work started during sign-in. Tico kept the previous credential. Reconnect again to confirm the restart."
+                if problem.code == "confirm_restart"
+                else model_login.redact(problem.detail)
+            )
     c.execute(
         "UPDATE model_logins SET state=?, message=?, url='', user_code='', pending_code=NULL, lines='[]', "
         "updated_at=? WHERE id=?",

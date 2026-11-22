@@ -46,6 +46,12 @@ const GIVE_UP_MS = 5 * 60_000;
 
 // ---------------------------------------------------------------- a sign-in to Claude or Codex, one tap
 
+function cancelLiveSignIn(login: SignIn | null) {
+  if (login?.runner_id && login.id && LIVE_SIGN_IN.includes(login.state ?? 'requested')) {
+    return run('settings.cancelSignIn', { computer: login.runner_id, login: login.id }, { via: 'click' });
+  }
+}
+
 function SignInDialog({ kind, subscription, onClose }: { kind: SignInKind; subscription?: string; onClose: () => void }) {
   const qc = useQueryClient();
   const [login, setLogin] = useState<SignIn | null>(null);
@@ -58,6 +64,7 @@ function SignInDialog({ kind, subscription, onClose }: { kind: SignInKind; subsc
   const [secret, setSecret] = useState('');
   const [code, setCode] = useState('');
   const [tries, setTries] = useState(0);
+  const startedLogin = useRef<SignIn | 'dismissed' | null>(null);
   // Both timers here (connect again every 3 s while the computer wakes, then the 2 s follow) stop when the dialog
   // closes (unmounted), wait while the tab is hidden, and end after 5 minutes.
   const visible = useVisible();
@@ -74,15 +81,21 @@ function SignInDialog({ kind, subscription, onClose }: { kind: SignInKind; subsc
         // A request already sent can queue a sign-in after the dialog's deadline.
         setStarting(true);
         void run('settings.connect', input, { via: 'click' }).then((r) => {
+          const got = r.ok ? (r.out as SignIn | null | undefined) ?? null : null;
+          if (startedLogin.current === 'dismissed') {
+            void cancelLiveSignIn(got);
+            return;
+          }
           setStarting(false);
           if (!r.ok && r.error === 'confirm_restart' && !confirmed) {
             return setRestart(reasonIn(r) ?? 'Running work will restart');
           }
           if (!r.ok) return setError({ message: reasonIn(r) ?? "Couldn't start", code: r.error });
-          const got = (r.out as SignIn | null | undefined) ?? null;
           if (!got) return setError({ message: 'No computer can sign in yet', code: 'offline' });
-          if (got.id) setLogin(got);
-          else if (got.waking) setTries((n) => n + 1);
+          if (got.id) {
+            startedLogin.current = got;
+            setLogin(got);
+          } else if (got.waking) setTries((n) => n + 1);
           else setError({ message: got.message ?? 'No computer can sign in yet', code: 'offline' });
         });
       },
@@ -110,11 +123,11 @@ function SignInDialog({ kind, subscription, onClose }: { kind: SignInKind; subsc
     toast({ text: `${now.name ?? 'Subscription'} connected`, kind: 'done' });
     onClose();
   }, [state, now.name, qc, onClose]);
-  const cancelLogin = runner && lid && LIVE_SIGN_IN.includes(state)
-    ? () => run('settings.cancelSignIn', { computer: runner, login: lid }, { via: 'click' })
-    : null;
   const stop = () => {
-    if (!pasting) void cancelLogin?.();
+    const started = startedLogin.current;
+    if (started === 'dismissed') return;
+    startedLogin.current = 'dismissed';
+    if (!pasting) void cancelLiveSignIn(login ? now : started);
     onClose();
   };
   const timedOut = late && !starting && state !== 'done';
@@ -129,10 +142,13 @@ function SignInDialog({ kind, subscription, onClose }: { kind: SignInKind; subsc
           : null);
   const hostWarning = now.not_yours ? `Credential passes through someone else's computer${now.computer ? ` (${now.computer})` : ''}` : null;
   const signingIn = state === 'waiting' ? undefined : `Signing in${now.computer ? ` on ${now.computer}` : ''}`;
-  const offerPaste = error ? error.code === 'offline' : state !== 'done' && (!!hostWarning || !!ended);
+  const offerPaste = error
+    ? error.code === 'offline' || error.code === 'runner_version'
+    : state !== 'done' && (!!hostWarning || !!ended);
   const switchToPaste = async () => {
-    if (cancelLogin) {
-      const r = await cancelLogin();
+    const cancellation = cancelLiveSignIn(now);
+    if (cancellation) {
+      const r = await cancellation;
       const answer = r.out as SignIn | undefined;
       if (!r.ok || !answer?.state || LIVE_SIGN_IN.includes(answer.state)) {
         setCancelError(reasonIn(r) ?? "Couldn't cancel the sign-in");

@@ -160,6 +160,11 @@ def test_reconnect_rechecks_runs_that_started_during_sign_in(api, approve_restar
 
     result = send(api, m, login, OTHER)
     assert result["state"] == ("done" if approve_restart else "failed")
+    if not approve_restart:
+        seen = get(api, f"computers/{m['runner_id']}/logins/{login['id']}")
+        assert seen["message"] == (
+            "Work started during sign-in. Tico kept the previous credential. Reconnect again to confirm the restart."
+        )
     saved = get(api, "model-subscriptions")["subscriptions"][0]
     assert saved["preview"].endswith((OTHER if approve_restart else TOKEN)[-4:])
     with api.app.state.store.read() as c:

@@ -321,13 +321,13 @@ describe('Settings › Agents', () => {
     expect(await screen.findByText('Work plan connected')).toBeTruthy();
   });
 
-  it('carries restart approval into paste when the confirmed sign-in cannot start', async () => {
+  it.each(['offline', 'runner_version'])('carries restart approval into paste when sign-in returns %s', async (code) => {
     const catalog = { kinds: [], subscriptions: [plan] };
     queryClient.setQueryData(subscriptionsQuery.queryKey, catalog);
     serve((url, method) => {
       if (url.endsWith('/connect')) {
         const approved = (sent.at(-1)?.body as { confirm?: boolean }).confirm;
-        return approved ? { status: 409, body: { error: { code: 'offline', detail: 'No computer can sign in' } } } : restart;
+        return approved ? { status: 409, body: { error: { code, detail: 'No computer can sign in' } } } : restart;
       }
       if (method === 'POST') return ok(plan);
       return ok(catalog);
@@ -394,6 +394,26 @@ describe('Settings › Agents', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('cancels a sign-in queued after the dialog was dismissed', async () => {
+    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [], subscriptions: [plan] });
+    let finishStart!: (reply: Reply) => void;
+    const pending = new Promise<Reply>((resolve) => { finishStart = resolve; });
+    const connect = '/api/v2/model-subscriptions/connect';
+    const cancel = '/api/v2/computers/r1/logins/login-1/cancel';
+    serve((url) => {
+      if (url === connect) return pending;
+      if (url === cancel) return ok({ state: 'canceled' });
+    });
+    show(<SettingsPage section="agents" open={plan.id} />, '/settings/agents?open=plan-1');
+    fireEvent.click(await screen.findByRole('button', { name: 'Reconnect' }));
+    await waitFor(() => expect(sent.map(({ url }) => url)).toEqual([connect]));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog', { name: 'Reconnect Claude plan' })).toBeNull();
+    await act(async () => { finishStart(ok({ id: 'login-1', runner_id: 'r1', state: 'requested' })); });
+    expect(sent.map(({ url }) => url)).toEqual([connect, cancel]);
   });
 
   it.each(['member', 'admin'])('shows Add and Reconnect according to the %s role', async (role) => {
