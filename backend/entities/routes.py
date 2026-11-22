@@ -67,6 +67,17 @@ class ContactsNoteCreate(Contract):
     evidence_id: str | None = None
 
 
+class ContactsExternalRef(Contract):
+    ref: str
+    system: str = Field(max_length=100)
+    external_type: str = Field(max_length=100)
+    external_id: str = Field(max_length=500)
+    connection_id: str = Field("", max_length=200)
+    url: str = Field("", max_length=2000)
+    revision: str = Field("", max_length=200)
+    status: str = "active"
+
+
 class ContactsOption(Contract):
     key: str
     label: str
@@ -444,6 +455,31 @@ def install(
             entity_id = ES.target(c, actor, body.ref)
             note_id = ES.note(c, actor, entity_id, body.body, audience=body.audience, evidence_id=body.evidence_id)
             return {"id": note_id, "entity": entity_id}
+
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/entities/external-refs")
+    def contacts_external_ref(request: Request, body: ContactsExternalRef):
+        """Record that an entity is a record in another system (a CRM account, a Jira customer), through a connection
+        (a tool's id; empty for none). Saving the same record again updates it; one already on another entity is
+        refused. `status` gone keeps the pointer but takes it off the card."""
+        actor = caller(request)
+
+        def work(c: sqlite3.Connection):
+            entity_id = ES.target(c, actor, body.ref)
+            row = ES.external_ref(
+                c,
+                actor,
+                entity_id,
+                body.system,
+                body.external_type,
+                body.external_id,
+                connection_id=body.connection_id,
+                url=body.url,
+                revision=body.revision,
+                status=body.status,
+            )
+            return {**row, "entity": entity_id}
 
         return mutate(request, body, work)
 

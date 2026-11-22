@@ -826,6 +826,63 @@ def add_source(
     return entity_id
 
 
+EXTERNAL_REF_STATUSES = ("active", "gone")  # gone: the record no longer exists outside (a card shows active ones)
+
+
+def external_ref(
+    c: sqlite3.Connection,
+    actor: str,
+    entity_id: str,
+    system: object,
+    external_type: object,
+    external_id: object,
+    *,
+    connection_id: str = "",
+    url: str = "",
+    revision: str = "",
+    status: str = "active",
+) -> Row:
+    """Record that an entity is a record in another system: (connection, system, type, id), the connection being the
+    tool it came through ('' for none). Saving the same record again updates its url, revision and status and answers
+    the same row, so a retry or a resync lands once. A record already on another entity is refused, naming it: the two
+    are one party, so merge them. Two connections may hold the same id as two records."""
+    _writer(c, actor)
+    _live(c, actor, entity_id)
+    system = _required(c, actor, system, "system")
+    kind = _required(c, actor, external_type, "record type")
+    external = _required(c, actor, external_id, "record id")
+    connection_id = str(connection_id or "").strip()
+    if status not in EXTERNAL_REF_STATUSES:
+        _refuse(c, actor, "kind", f"a record's status is {' or '.join(EXTERNAL_REF_STATUSES)}")
+    if connection_id and not c.execute("SELECT 1 FROM tools WHERE id = ?", (connection_id,)).fetchone():
+        _refuse(c, actor, "connection", f"no connection {connection_id}: a connection is a tool's id")
+    key = (system, kind, external, connection_id)
+    where = "system = ? AND external_type = ? AND external_id = ? AND connection_id = ?"
+    have = _one(c, f"SELECT * FROM entity_external_refs WHERE {where}", key)
+    now = H.now()
+    if have is None:
+        c.execute(
+            "INSERT INTO entity_external_refs (id, entity_id, connection_id, system, external_type, external_id, url, "
+            "revision, synced_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (_id("xref"), entity_id, connection_id, system, kind, external, url.strip(), revision.strip(), now, status),
+        )
+    elif have["entity_id"] != entity_id:
+        _refuse(
+            c,
+            actor,
+            "conflict",
+            f"{system} {kind} {external} is already {have['entity_id']}'s record; merge the two if they are one",
+        )
+    else:
+        c.execute(
+            "UPDATE entity_external_refs SET url = ?, revision = ?, status = ?, synced_at = ? WHERE id = ?",
+            (url.strip(), revision.strip(), status, now, have["id"]),
+        )
+    found = _one(c, f"SELECT * FROM entity_external_refs WHERE {where}", key)
+    assert found is not None
+    return found
+
+
 # Rule sources: the organizations that impose external rules. rule_sources retired into entities (migration
 # 20261108044824): a rule source is an organization whose properties.rule_source says what it was (its kind, creator
 # and creation time, and the id rule_sources gave it, which is the entity's own id for a new one).
@@ -2073,8 +2130,8 @@ def card(c: sqlite3.Connection, who: str, entity_id: str) -> dict[str, Any] | No
     # The records this entity is in other systems (a CRM record, a repository): a pointer, shown with the entity.
     refs = _rows(
         c,
-        "SELECT system, external_type, external_id, url, synced_at FROM entity_external_refs "
-        "WHERE entity_id = ? AND status = 'active' ORDER BY system, external_type, external_id LIMIT 50",
+        "SELECT system, external_type, external_id, connection_id, url, synced_at FROM entity_external_refs "
+        "WHERE entity_id = ? AND status = 'active' ORDER BY system, external_type, external_id, connection_id LIMIT 50",
         (me,),
     )
     notes = [

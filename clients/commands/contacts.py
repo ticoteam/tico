@@ -262,6 +262,40 @@ def contacts_note(api, args):
 
 
 @tool(
+    "tico_contacts_record",
+    "Record that an entity is a record in another system (a CRM account, a Jira customer): system, record type and id, "
+    "with the connection (tool id) it came through. Saving the same record again updates it, never a second copy; one "
+    "already on another entity is refused, naming it. status gone takes it off the card.",
+    {
+        "ref": CONTACTS_REF,
+        "system": _s("The other system, like jira or hubspot"),
+        "external_type": _s("The record's type there, like customer or company"),
+        "external_id": _s("The record's id there"),
+        "connection_id": _s("The connection (tool id) the record came through; empty for none"),
+        "url": _s("A link to the record"),
+        "revision": _s("The record's revision or updated stamp there"),
+        "status": {"type": "string", "enum": ["active", "gone"]},
+    },
+    required=("ref", "system", "external_type", "external_id"),
+    writes=True,
+)
+def contacts_record(api, args):
+    body = _clean(
+        {
+            "ref": args["ref"],
+            "system": args["system"],
+            "external_type": args["external_type"],
+            "external_id": args["external_id"],
+            "connection_id": args.get("connection_id"),
+            "url": args.get("url"),
+            "revision": args.get("revision"),
+            "status": args.get("status"),
+        }
+    )
+    return api.post("entities/external-refs", body, key=_key(args))
+
+
+@tool(
     "tico_contacts_attribute_add",
     "Add an attribute to an entity type. Its description is required; a select or status needs its options; "
     "an owner of connection:<id> makes the field that connection's.",
@@ -469,6 +503,15 @@ CONTACTS = (
         "a note on an entity; --audience me keeps it to you",
         args=(Arg("ref", metavar=_ID), Arg("evidence_id", flag="--evidence", metavar="EVIDENCE_ID")),
         example="tico contacts note acme.com 'Renewal in March' --audience me",
+    ),
+    Command(
+        "contacts record",
+        "record that an entity is a record in another system, through a connection",
+        args=(
+            Arg("ref", metavar=_ID),
+            Arg("connection_id", flag="--connection", metavar="TOOL_ID"),
+        ),
+        example="tico contacts record acme.com jira customer 10042 --connection tool_jira",
     ),
     Group("contacts type", "add an entity type"),
     Command(
