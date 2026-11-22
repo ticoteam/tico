@@ -153,10 +153,11 @@ def automation_template(api, args):
     "turn on an automation for an owner whose automations it may change (its own, or those of agents it "
     "manages); without that right the save is refused (403). Two requests save a proposal instead (off, "
     "version 1 pending, for a person to turn on): Agent Ops for a bot that may not change that owner's "
-    "automations, and a request from someone who may change them whose flow sets a task model they may not "
-    "set (a person who may change it and may set that model approves it). Agent Ops saves off unless "
-    "`enabled` is sent. In Assistant chat a Message routine saves off and must omit `enabled` or send false "
-    "(true is refused with 403 confirm_required); its person's card click turns it on, and a chooser without "
+    "automations, and a request from someone who may change them whose flow sets a task model or compaction "
+    "they may not set (a person who may change it and may set that model approves it). Agent Ops saves off "
+    "unless `enabled` is sent. In Assistant chat a Message routine saves off and must omit `enabled` or send "
+    "false (true is refused with 403 confirm_required); unless it is a proposal, its person's card click turns "
+    "it on, and a chooser without "
     "a mode defaults to Draft there. Any other caller sends `choose.mode` (draft or reply) with a chooser. "
     "Use reply only when the person explicitly asks for replies and the inbox permits sending.",
     {k: v for k, v in _AUTO_FIELDS.items()},

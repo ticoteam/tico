@@ -61,3 +61,5 @@ def test_an_edit_keeps_how_it_was_made_and_no_request_can_set_it(api):
     edited = patch(api, aid, {"trigger": EVENING, "summary": "Evenings"})  # a new version
     assert edited["version"] == 2 and edited["created_via"] == "token" and edited["created_by_id"] == "human:ana"
     assert "created_via" not in get(api, f"automations/{aid}/versions")["versions"][0]["flow"]
+    back = post(api, f"automations/{aid}/versions/1/restore", {})
+    assert back["created_via"] == "token" and back["created_by_id"] == "human:ana"
