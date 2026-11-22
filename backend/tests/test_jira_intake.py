@@ -311,7 +311,7 @@ def test_a_read_past_its_deadline_ends_itself(api, jira):
 
     jira.set("acme.atlassian.net", "PROJ-33", "To Do", "new", "2026-11-21T10:00:00.000+0000")
     with pytest.raises(TimeoutError):  # the thread's own GET stops at the deadline: a stalled answer holds no place
-        JS._get("https://acme.atlassian.net/rest/api/3/issue/PROJ-33", {}, {}, time.monotonic() - 1)
+        JS._call("GET", "https://acme.atlassian.net/rest/api/3/issue/PROJ-33", {}, {}, time.monotonic() - 1)
 
 
 def test_a_claim_on_a_task_the_caller_cannot_read_is_refused_without_naming_it(api, jira):

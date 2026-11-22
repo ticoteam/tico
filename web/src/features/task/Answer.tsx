@@ -15,7 +15,7 @@ import { AskCard, Docked, useAnswering } from './AskCard';
 import { HeldDecision, isRuleReview } from './Held';
 import { StoppedDecision } from './Stopped';
 import { followSend } from './sending';
-import { addressesOf, answerKey, decisionShownQuery, emailSendQuery, sendStateQuery, type AnswerKey, type BoundRule, type TaskData } from './queries';
+import { addressesOf, answerKey, decisionShownQuery, emailSendQuery, sendStateQuery, type AnswerKey, type BoundAction, type BoundRule, type TaskData } from './queries';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 
 /* The decision (plan/approvals.html): one box wherever a request waits on the person. It names the thing, who asks and
@@ -118,7 +118,7 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
   const approve = useAction('task.approve');
   const request = useAction('task.requestChanges');
   const { error, setError, here, nextUp, refused, moveOn } = useAnswering(t, flow);
-  const shown = useQuery(decisionShownQuery(t.id, r.requirement_id, t.version, emailOf(r)));
+  const shown = useQuery(decisionShownQuery(t.id, r.requirement_id, t.version, emailOf(r), !!r.shows?.some((s) => s.startsWith('outbound:'))));
   const { name, effect, send, recipients, files } = useNamed(t, r);
   const [asking, setAsking] = useState(false);
   const [note, setNote] = useState('');
@@ -238,6 +238,7 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
       }
     >
       {!asking && preview?.rule && <RuleShown rule={preview.rule} />}
+      {!asking && preview?.action && <ActionShown action={preview.action} />}
       {!asking && files.length > 0 && (
         <span className="askcard-files">
           {files.map((f) => (
@@ -301,6 +302,29 @@ function RuleShown({ rule }: { rule: BoundRule }) {
             </>
           )}
         </LabelValue>
+      </Facts>
+    </div>
+  );
+}
+
+const PAYLOAD_LABELS: Record<string, string> = { to: 'Status', body: 'Text' };
+
+/** The outbound action an OK lets go, exactly as it was asked: where it goes, what it does, and its payload's words. */
+function ActionShown({ action }: { action: BoundAction }) {
+  // The site an action is for (Jira's) is shown with its destination: `HM-12` alone does not say which Jira.
+  const { site, ...rest } = action.payload;
+  const fields = Object.entries(rest).map(([k, v]) => [k, typeof v === 'string' ? v : JSON.stringify(v)] as const);
+  return (
+    <div className="askcard-rule" data-target={`outbound:${action.channel}`}>
+      <Facts label="The action">
+        <LabelValue label="Channel">{action.channel}</LabelValue>
+        <LabelValue label="Action">{action.operation}</LabelValue>
+        <LabelValue label="Where">{typeof site === 'string' && site ? `${site} ${action.destination}` : action.destination}</LabelValue>
+        {fields.map(([k, v]) => (
+          <LabelValue key={k} label={PAYLOAD_LABELS[k] ?? k}>
+            <span className="askcard-text">{v}</span>
+          </LabelValue>
+        ))}
       </Facts>
     </div>
   );

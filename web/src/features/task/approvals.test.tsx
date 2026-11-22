@@ -793,6 +793,51 @@ describe('a rule to add', () => {
   });
 });
 
+describe('an outbound action', () => {
+  const frozen = { channel: 'jira', operation: 'comment', destination: 'HM-12', payload: { body: 'Released in v1.2.\n\nThanks!', site: 'acme.atlassian.net' } };
+  const actionTask = () => task({ title: 'Comment on HM-12', to_leave: [req({ line: 'Send this jira comment?', shows: ['outbound:a1'] })] });
+  const ok = (content: unknown) => (url: string) =>
+    url.endsWith('/api/v2/oks/r1') ? { body: { requirement_id: 'r1', subject: 'outbound:a1', content, shown_hash: 'h-action', standing: 'waiting' } } : null;
+
+  it('shows the frozen action and its words, and Approve sends what was shown @approvals', async () => {
+    shown = actionTask();
+    reply = ok(frozen);
+    show(<TaskChat task="12" />, '/tasks/p1/12');
+    const box = await decision();
+    const facts = await within(box).findByRole('group', { name: 'The action' });
+    const pairs = [...facts.querySelectorAll('.fact')].map((f) => [f.firstElementChild?.textContent, f.lastElementChild?.textContent]);
+    expect(pairs).toEqual([
+      ['Channel', 'jira'],
+      ['Action', 'comment'],
+      ['Where', 'acme.atlassian.net HM-12'],
+      ['Text', 'Released in v1.2.\n\nThanks!'],
+    ]);
+    fireEvent.click(await ready(box));
+    await waitFor(() => expect(sent.at(-1)?.url).toBe('/api/v2/tasks/t1/asks/r1/ok'));
+    expect(sent.at(-1)?.body).toMatchObject({ shown_hash: 'h-action' });
+  });
+
+  it('keeps Approve off until the action has loaded whole @approvals', async () => {
+    shown = actionTask();
+    const { payload: _p, ...partial } = frozen;
+    reply = ok(partial);
+    show(<TaskChat task="12" />, '/tasks/p1/12');
+    const box = await decision();
+    expect(await within(box).findByText('Part of it did not load')).toBeTruthy();
+    expect(within(box).getByRole('button', { name: 'Approve' })).toHaveProperty('disabled', true);
+    expect(within(box).queryByRole('group', { name: 'The action' })).toBeNull();
+  });
+
+  it('keeps Approve off when the action has no preview at all @approvals', async () => {
+    shown = actionTask();
+    reply = (url) => (url.endsWith('/api/v2/oks/r1') ? { status: 404, body: { error: { code: 'not_found' } } } : null);
+    show(<TaskChat task="12" />, '/tasks/p1/12');
+    const box = await decision();
+    expect(await within(box).findByText('Part of it did not load')).toBeTruthy();
+    expect(within(box).getByRole('button', { name: 'Approve' })).toHaveProperty('disabled', true);
+  });
+});
+
 describe('an email waiting to send', () => {
   const titled = 'Send: Re: Notice of claim → Dana Ruiz <dana@example.test> +1';
 

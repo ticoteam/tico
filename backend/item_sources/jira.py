@@ -23,6 +23,10 @@ when it is sent) over the name's lookup, connecting, TLS and the answer, and at 
 A read that saves clears the due mark only when it is the mark the read began under: a mark made while the read was
 out survives for the next pass. A read Jira refuses keeps the metadata as it was, with `read_error` and `refused_at`,
 and is tried again after RETRY_S. The key never leaves the read: it is not logged, stored or put in an error.
+
+Writes (a transition, a comment) go only through the outbound gate's Jira sender (backend/outbound_jira.py), through the
+same record integrations with a shared read and write key (`connect` with `write`, `writable`) and the same bounded
+`call`.
 """
 
 import json
@@ -31,7 +35,7 @@ import re
 import threading
 import time
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 from urllib.parse import quote, urlsplit
 
 from . import Condition, Item, hosts
@@ -120,6 +124,7 @@ INTEGRATION = (
     "AND tl.delivery <> 'computer' AND tl.created_by NOT LIKE 'bot:%'"
 )
 SHARED_KEY = "k.ciphertext IS NOT NULL AND k.kind <> 'login' AND COALESCE(k.holder, '') = ''"
+WRITE_KEY = "AND k.access_level = 'read_write'"  # a write goes only with a read and write key
 
 
 def integrations(conn: "sqlite3.Connection", connection_id: str | None = None) -> dict[str, str]:
@@ -171,13 +176,13 @@ class Unreadable(Exception):
     """A read that cannot be made or that Jira refused; its words go in `read_error`, never a key."""
 
 
-def request(
-    conn: "sqlite3.Connection", vault: Any, key: str, connection_id: str
+def connect(
+    conn: "sqlite3.Connection", vault: Any, connection_id: str, *, write: bool = False, agent: str = "Tico-item-read"
 ) -> tuple[str, dict[str, str], dict[str, str]]:
-    """(url, headers, query) of the read of one issue with the connection's shared key (`integration`): its read key,
-    else its read and write key. Unreadable when the connection is gone or no longer a record integration with a shared
-    key, has no https API address, or uses a key template. Runs in a write transaction: decrypting may reseal the key in
-    place."""
+    """(API address, headers, query) of a call through the connection's shared key (`integration`): for a read its read
+    key, else its read and write key; for a write (`write`) only a read and write key. Unreadable when the connection is
+    gone or no longer a record integration with such a key, has no https API address, or uses a key template. Runs in a
+    write transaction: decrypting may reseal the key in place."""
     from .. import tool_services as _tool_services
 
     TS: Any = _tool_services
@@ -191,13 +196,10 @@ def request(
         raise Unreadable(f"{tool['name']} has no https API address")
     if "auth_template" in tool.keys() and tool["auth_template"]:
         raise Unreadable(f"{tool['name']} uses a key template; Tico reads Jira with one key")
-    credential = conn.execute(
-        f"SELECT k.* FROM credentials k JOIN tools tl ON tl.id = k.tool_id WHERE tl.id=? AND {INTEGRATION} "
-        f"AND {SHARED_KEY} ORDER BY k.access_level <> 'read', k.created_at, k.id LIMIT 1",
-        (connection_id,),
-    ).fetchone()
+    credential = key_of(conn, connection_id, write=write)
     if credential is None:
-        raise Unreadable(f"{tool['name']} is not a record integration with a shared company key")
+        kind = "read and write key" if write else "key"
+        raise Unreadable(f"{tool['name']} is not a record integration with a shared company {kind}")
     secret = str(vault.cipher.decrypt(conn, credential))
     service = cast("dict[str, Any]", TS.SERVICES.get(tool["service"]) or {})
     username = str(credential["username"] or service.get("username") or "")
@@ -206,8 +208,30 @@ def request(
     except ValueError:
         raise Unreadable(f"{tool['name']} has an auth scheme Tico does not know") from None
     headers, params = auth
-    url = f"{base}/rest/api/3/issue/{quote(key)}"
-    return url, {**headers, "Accept": "application/json", "User-Agent": "Tico-item-read"}, {**params, "fields": FIELDS}
+    return base, {**headers, "Accept": "application/json", "User-Agent": agent}, params
+
+
+def key_of(conn: "sqlite3.Connection", connection_id: str, *, write: bool = False) -> Any:
+    """The shared key `connect` uses on a record integration: for a read its read key first, else its read and write
+    key; for a write (`write`) only a read and write key, the oldest. None when it has none."""
+    return conn.execute(
+        f"SELECT k.* FROM credentials k JOIN tools tl ON tl.id = k.tool_id WHERE tl.id=? AND {INTEGRATION} "
+        f"AND {SHARED_KEY} {WRITE_KEY if write else ''} ORDER BY k.access_level <> 'read', k.created_at, k.id LIMIT 1",
+        (connection_id,),
+    ).fetchone()
+
+
+def writable(conn: "sqlite3.Connection", connection_id: str) -> bool:
+    """Whether a record integration (`integration`) holds a shared read and write key: what a write needs."""
+    return integration(conn, connection_id) and key_of(conn, connection_id, write=True) is not None
+
+
+def request(
+    conn: "sqlite3.Connection", vault: Any, key: str, connection_id: str
+) -> tuple[str, dict[str, str], dict[str, str]]:
+    """(url, headers, query) of the read of one issue with the connection's shared key (`connect`)."""
+    base, headers, params = connect(conn, vault, connection_id)
+    return f"{base}/rest/api/3/issue/{quote(key)}", headers, {**params, "fields": FIELDS}
 
 
 class Busy(Exception):
@@ -219,19 +243,45 @@ def busy() -> bool:
         return _in_flight[0] >= MAX_IN_FLIGHT
 
 
+class Reply(NamedTuple):
+    """Jira's answer to one call: its status, the JSON answer (None when it is not JSON or was cut off), the seconds its
+    Retry-After asks for, and whether the answer was longer than MAX_BODY (`cut`: its body is then None)."""
+
+    status: int
+    body: object
+    retry_after: float | None = None
+    cut: bool = False
+
+
 def send(url: str, headers: dict[str, str], params: dict[str, str], seconds: float = TIMEOUT_S) -> tuple[int, object]:
-    """One GET (`_get`) with one deadline, `seconds` (at most TIMEOUT_S), over all of it: the name's lookup, connecting,
-    TLS and the answer. It runs on a thread of its own that ends itself at the deadline (`_get` closes its client), and
-    the caller stops waiting then too (`_wait`); the thread counts against MAX_IN_FLIGHT until it ends. (status, the
-    JSON answer or None); raises when the call failed or ran out of time, Busy when MAX_IN_FLIGHT reads are out."""
+    """One GET (`call`): (status, the JSON answer or None)."""
+    reply = call("GET", url, headers, params, seconds)
+    return reply.status, reply.body
+
+
+def call(
+    method: str,
+    url: str,
+    headers: dict[str, str],
+    params: dict[str, str],
+    seconds: float = TIMEOUT_S,
+    body: object = None,
+    most: int | None = None,
+) -> Reply:
+    """One call (`_call`; a write sends `body` as JSON, and `most` bytes of the answer are read, MAX_BODY by default)
+    with one deadline, `seconds` (at most TIMEOUT_S), over all of
+    it: the name's lookup, connecting, TLS and the answer. It runs on a thread of its own that ends itself at the
+    deadline (`_call` closes its client), and the caller stops waiting then too (`_wait`); the thread counts against
+    MAX_IN_FLIGHT until it ends. Raises when the call failed or ran out of time, Busy (before anything is sent) when
+    MAX_IN_FLIGHT calls are out."""
     wait = min(seconds, TIMEOUT_S)
     ends = time.monotonic() + wait
-    answers: list[tuple[int, object]] = []
+    answers: list[Reply] = []
     errors: list[BaseException] = []
 
     def run() -> None:
         try:
-            answers.append(_get(url, headers, params, ends))
+            answers.append(_call(method, url, headers, params, ends, body, most))
         except BaseException as error:  # noqa: BLE001 - handed to the caller, which raises it
             errors.append(error)
         finally:
@@ -242,7 +292,7 @@ def send(url: str, headers: dict[str, str], params: dict[str, str], seconds: flo
         if _in_flight[0] >= MAX_IN_FLIGHT:
             raise Busy()
         _in_flight[0] += 1
-    worker = threading.Thread(target=run, name="jira-read", daemon=True)
+    worker = threading.Thread(target=run, name=f"jira-{method.lower()}", daemon=True)
     worker.start()
     _wait(worker, wait)
     if answers:
@@ -253,13 +303,37 @@ def send(url: str, headers: dict[str, str], params: dict[str, str], seconds: flo
 
 
 def _wait(worker: threading.Thread, seconds: float) -> None:
-    """Wait for a read's thread at most `seconds` (tests stand in for the clock here)."""
+    """Wait for a call's thread at most `seconds` (tests stand in for the clock here)."""
     worker.join(seconds)
 
 
-def _get(url: str, headers: dict[str, str], params: dict[str, str], ends: float) -> tuple[int, object]:
-    """One GET to a public https address, pinned to the IP it resolved to, no redirects, no proxy from the environment,
-    at most MAX_BODY read, all of it before `ends` (time.monotonic): as egress.post bounds its calls, a timer closes the
+def _retry_after(value: str | None) -> float | None:
+    """Retry-After in seconds (a number of seconds or an HTTP date), None when absent or unreadable."""
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        from email.utils import parsedate_to_datetime
+
+        return max(0.0, parsedate_to_datetime(value).timestamp() - time.time())
+    except (TypeError, ValueError):
+        return None
+
+
+def _call(
+    method: str,
+    url: str,
+    headers: dict[str, str],
+    params: dict[str, str],
+    ends: float,
+    body: object = None,
+    most: int | None = None,
+) -> Reply:
+    """One call to a public https address, pinned to the IP it resolved to, no redirects, no proxy from the environment,
+    at most `most` bytes (MAX_BODY) read, all of it before `ends` (time.monotonic): as egress.post bounds its calls, a timer closes the
     client at the deadline, which ends a read blocked on a socket, and the answer stops being read past it."""
     import httpx
 
@@ -267,30 +341,37 @@ def _get(url: str, headers: dict[str, str], params: dict[str, str], ends: float)
 
     egress: Any = _egress
     late = TimeoutError("Jira took too long to answer")
+    limit = MAX_BODY if most is None else most
     parts = egress.check(url)
     address = egress.address_for(parts, budget=max(ends - time.monotonic(), 0.001))
     pinned = httpx.URL(url, params=params or None).copy_with(host=address)
     host = str(parts.hostname) + (f":{parts.port}" if parts.port else "")
+    sent = {**headers, "Host": host}
+    content = None
+    if body is not None:
+        content = json.dumps(body).encode()
+        sent["Content-Type"] = "application/json"
     with httpx.Client(timeout=TIMEOUT_S, follow_redirects=False, trust_env=False, transport=TRANSPORT) as client:
         timer = threading.Timer(max(ends - time.monotonic(), 0.001), client.close)
         timer.daemon = True
         timer.start()
         try:
             with client.stream(
-                "GET", pinned, headers={**headers, "Host": host}, extensions={"sni_hostname": parts.hostname}
+                method, pinned, headers=sent, content=content, extensions={"sni_hostname": parts.hostname}
             ) as response:
-                body = b""
+                got = b""
                 for chunk in response.iter_bytes():
-                    body += chunk
-                    if len(body) > MAX_BODY or time.monotonic() > ends:
+                    got += chunk
+                    if len(got) > limit or time.monotonic() > ends:
                         break
                 if time.monotonic() > ends:
                     raise late
+                cut = len(got) > limit
                 try:
-                    answer: object = json.loads(body)
+                    answer: object = None if cut else json.loads(got)
                 except ValueError:
                     answer = None
-                return response.status_code, answer
+                return Reply(response.status_code, answer, _retry_after(response.headers.get("retry-after")), cut)
         except Exception as error:
             if time.monotonic() > ends and error is not late:
                 raise late from error

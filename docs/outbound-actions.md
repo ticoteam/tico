@@ -3,8 +3,8 @@
 The outbound gate is one queue for the sends and outside writes Tico makes for a company: a Jira transition or
 comment, and later texts and webhook calls. Code in `backend/outbound_actions.py`; table `outbound_actions`.
 
-No channel has a sender yet: the first adapter is Jira, after the Jira connection lands. Email and Slack keep their own
-paths (`email_sends`, `slack_posts`) until the planned consolidation step.
+Jira is the first channel with a sender (below). Email and Slack keep their own paths (`email_sends`, `slack_posts`)
+until the planned consolidation step.
 
 ## Queue an action
 
@@ -14,7 +14,7 @@ from backend import outbound_actions
 row, created = outbound_actions.enqueue(
     c, settings,
     actor="bot:release-owner", channel="jira", operation="transition", destination="HM-12",
-    occurrence_key="release:v1.2:HM-12:done",
+    connection_id=jira_tool_id, occurrence_key="release:v1.2:HM-12:done",
     payload={"to": "Done"},
     metadata={"release": "v1.2"},
 )
@@ -46,8 +46,9 @@ anew by the channel's adapter.
 
 1. **The floor**, which only tightens: the company's Never for the channel and audience, and a Contacts rule
    (backend/entities/rules.py) on the destination that blocks (Never) or escalates (Ask first).
-2. **The default** for the channel and audience: the company's setting, else On its own (`on_their_own`) inside the
-   company and Ask first (`ask_first`) outside it. Relationship-level overrides come later.
+2. **The default** for the channel and audience: the company's setting, else the channel's own default (Jira: On its
+   own), else On its own (`on_their_own`) inside the company and Ask first (`ask_first`) outside it. Relationship-level
+   overrides come later.
 
 An audience the adapter cannot tell is external. Ask first waits on one OK (backend/task_asks.py, subject
 `outbound:<id>`) bound to the frozen action, asked of the bot's manager when that is a person who is here and the bot
@@ -87,6 +88,32 @@ action, and otherwise asleep until the next row is due. At most once a minute, a
 claims, cancels actions whose OK was sent back, and makes a few provider lookups for unknown rows. Sleep when idle stays up for a row in flight or due within 15 minutes and wakes for a later
 one. A rehearsal copy never runs the worker, and a dev copy empties the table.
 
+## Jira
+
+`backend/outbound_jira.py`. Destination: the issue key (`HM-12`); `connection_id`: the Jira connection, which must be a
+record integration (an Everyone API tool an administrator marked as holding records, on one Jira site) with a shared
+read and write key: the same rule, key lookup and deadline-bounded call as the background reads
+(backend/item_sources/jira.py). The bot (or person) queuing it must hold Read and write on the exact key a write goes with (the
+oldest read and write key; a grant a person passed on to their bot is stored at no more than their own); Tico itself always may. The connection's Jira site is
+frozen into the payload (`site`), so an OK shows and binds it with the key, and an attempt on another site is blocked. Anything else is refused at enqueue and blocked at an attempt, so a grant taken back stops a queued action.
+While an action to it may still go or is unknown, the connection's base URL and sites cannot move to another site
+(tool_services.referenced). The audience is external,
+but a record write is bookkeeping, not a message to people, so `jira` goes On its own until the company sets
+`jira:external` to Ask first or Never.
+
+| operation | payload | the write |
+|---|---|---|
+| `transition` | `{"to": "Done"}` | the transition Jira offers from the issue's status whose target status is `to`; none offered is a certain refusal |
+| `comment` | `{"body": "text"}` (at most 30,000 characters) | a comment, blank lines making paragraphs, ending with the action's marker `[tico:<10 hex of sha256(occurrence_key)>]` as its own last paragraph |
+
+Before the write it asks whether the effect is already there (the issue already in the status; a comment among the
+newest 100, read 20 at a time (up to 2 MiB a page) and in halves when a page is too long, whose last paragraph is one text node that is
+exactly the marker; a comment or node that cannot be read, or one comment still too long alone, makes the lookup fail): found, the action is done with no write (`"already": true` in the receipt). Reconcile
+uses the same lookup to settle an unknown row done; a row it cannot prove stays unknown for the owner. A 429 is a safe
+rejection after its Retry-After (else a minute), as is anything that fails before the write, a lookup answer cut off
+or not the shape asked for included. Jira's 400, 401, 403 or
+404 to the write is a certain refusal; any other answer, or none, is unknown.
+
 ## Adding a channel
 
 Register an `Adapter(channel, prepare, dispatch, reconcile=None)`:
@@ -97,3 +124,7 @@ Register an `Adapter(channel, prepare, dispatch, reconcile=None)`:
   error)`; it raises `Refused` for a certain refusal, anything else for unknown.
 - `reconcile(store, row)`, where the provider can be asked, answers `Settled(state, receipt, error)` with state done or
   failed, or None when its record cannot tell.
+- `defaults`, optional: the channel's own choice per audience when the company set none.
+- `freeze(c, connection_id, destination)`, optional: fields frozen into the payload at enqueue (what an OK shows).
+
+Import the module at the end of `backend/outbound_actions.py`, so it registers whenever the gate is loaded.

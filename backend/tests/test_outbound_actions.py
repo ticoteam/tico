@@ -2,7 +2,7 @@
 attempt before any provider call, unknown never retried on its own, safe rejections requeued, one policy checked at
 enqueue and again at dispatch, and one OK from the person asked.
 
-No channel ships an adapter yet: a fake `webhook` adapter stands in for a provider."""
+A fake `webhook` adapter stands in for a provider (Jira's own is tested in test_outbound_jira.py)."""
 
 import json
 
@@ -379,11 +379,11 @@ def test_enqueue_bounds_what_a_list_shows(store, fake):
     assert refused.value.status == 422 and "destination" in refused.value.detail
 
 
-def test_no_channel_ships_yet_so_every_action_is_refused(store):
-    assert OA.ADAPTERS == {}
+def test_a_channel_with_no_sender_is_refused(store):
+    assert "webhook" not in OA.ADAPTERS and "jira" in OA.ADAPTERS
     with pytest.raises(OA.Problem) as refused:
         add(store)
-    assert refused.value.status == 422 and "no sender" in refused.value.detail
+    assert refused.value.status == 422 and "no sender" in refused.value.detail and "jira" in refused.value.detail
 
 
 def test_a_late_safe_rejection_ends_an_unknown_row_failed(store, fake):

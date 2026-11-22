@@ -256,21 +256,31 @@ export interface BoundRule {
   exact_check: { kind: 'allow_list'; action: string; field: string; values: string[] } | { kind: 'max_usd'; action: string; field: string; max_usd: number } | null;
 }
 
+/** An outbound action's OK as it was asked (backend/outbound_actions.py `content`): the frozen action, exactly. */
+export interface BoundAction {
+  channel: string;
+  operation: string;
+  destination: string;
+  payload: Record<string, unknown>;
+}
+
 /** What the decision binds Approve to (plan/approvals.html): the hash of exactly what was shown. An OK's own preview
     (GET /api/v2/oks/{rid}) gives it, or an email's (GET /api/v2/email/sends/{sid}, which the Email tab reads too).
     A stage's own OK has no grant (404): `hash` is null and Approve answers with the page version. `complete` is false
     when part of what it shows did not load, and Approve stays off. Read again at each new version of the task, so a
     change while it is open shows. `send` is the email the requirement shows: a stage's own OK that shows one is as
-    complete as that email's preview, so Approve never sends an email the person could not read. */
-export const decisionShownQuery = (task: string, rid: string, version: number, send?: string | null) =>
+    complete as that email's preview, so Approve never sends an email the person could not read. `outbound`: the
+    requirement shows an outbound action, whose OK always has a preview: without one (404) nothing is complete. */
+export const decisionShownQuery = (task: string, rid: string, version: number, send?: string | null, outbound = false) =>
   queryOptions({
-    queryKey: [...keys.tasks.detail(task), 'shown', rid, version, send ?? null] as const,
-    queryFn: async ({ signal }): Promise<{ hash: string | null; complete: boolean; rule?: BoundRule }> => {
+    queryKey: [...keys.tasks.detail(task), 'shown', rid, version, send ?? null, outbound] as const,
+    queryFn: async ({ signal }): Promise<{ hash: string | null; complete: boolean; rule?: BoundRule; action?: BoundAction }> => {
       const shown = await api.get<OkPreview>(`/api/v2/oks/${enc(rid)}`, { signal }).catch((e: unknown) => {
         if (e instanceof ApiError && e.status === 404) return null;
         throw e;
       });
       if (!shown) {
+        if (outbound) return { hash: null, complete: false };
         if (!send) return { hash: null, complete: true };
         const mail = await queryClient.fetchQuery({ ...emailSendQuery(task, send), staleTime: 0 });
         return { hash: null, complete: mail.preview_complete };
@@ -280,6 +290,20 @@ export const decisionShownQuery = (task: string, rid: string, version: number, s
         const rule = shown.content as BoundRule | null;
         const whole = !!rule && typeof rule.text === 'string' && !!rule.who && !!rule.with && Array.isArray(rule.where) && !!rule.if_broken && 'reviewer' in rule && 'exact_check' in rule;
         return { hash: whole ? shown.shown_hash : null, complete: whole, ...(whole && { rule }) };
+      }
+      // An outbound action's OK binds the frozen action: Approve waits until its channel, operation, destination and
+      // payload are all there to show.
+      if (shown.subject.startsWith('outbound:')) {
+        const action = shown.content as BoundAction | null;
+        const whole =
+          !!action &&
+          typeof action.channel === 'string' &&
+          typeof action.operation === 'string' &&
+          typeof action.destination === 'string' &&
+          !!action.payload &&
+          typeof action.payload === 'object' &&
+          !Array.isArray(action.payload);
+        return { hash: whole ? shown.shown_hash : null, complete: whole, ...(whole && { action }) };
       }
       if (!shown.subject.startsWith('email_send:')) return { hash: shown.shown_hash, complete: true };
       const mail = await queryClient.fetchQuery({ ...emailSendQuery(task, shown.subject.slice(11)), staleTime: 0 });
