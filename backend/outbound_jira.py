@@ -10,8 +10,8 @@ background reads. Jira is an outside system, so the audience is external; the ch
 
 - **Once.** Before the write, the adapter asks whether its effect is already there: the issue already in the status, or
   a comment carrying the action's marker (`marker`, the last line of every comment it writes). Found, it is done with
-  no write; `reconcile` uses the same lookup to settle an unknown row done. Only Jira's 404 for the issue settles one
-  failed: nothing landed on an issue Jira does not have.
+  no write; `reconcile` uses the same lookup to settle an unknown row done, and nothing else settles one: a row it
+  cannot prove stays unknown for the owner (Jira's 404 also means the key cannot see the issue).
 - **Answers.** 429 is a safe rejection (Retry-After, else a minute). Anything that fails before the write (the key, a
   lookup Jira did not answer) is safe too: nothing was sent. Jira's 400, 401, 403 or 404 to a write is a certain
   refusal; any other answer, or none, is unknown.
@@ -238,17 +238,14 @@ def dispatch(store: Any, row: Any) -> Any:
 
 
 def reconcile(store: Any, row: Any) -> "OA.Settled | None":
-    """An unknown row settled from Jira's own record: done when its effect is there (`_found`), failed when Jira has no
-    such issue (404), else None (no record of it proves nothing: the attempt may still land)."""
+    """An unknown row settled from Jira's own record: done when its effect is there (`_found`), else None. No record of
+    it proves nothing (the attempt may still land, and Jira's 404 also means the key cannot see the issue), so it waits
+    for the owner's confirm-sent."""
     payload = _payload(str(row["operation"]), json.loads(row["payload"] or "{}"))
     try:
         on = _connect(store, row)
         found = _found(on, row, payload)
-    except JS.Unreadable:
-        return None
-    except _Answer as exc:
-        if exc.reply.status == 404:
-            return OA.Settled("failed", error="Jira has no such issue (404)")
+    except (JS.Unreadable, _Answer):
         return None
     return OA.Settled("done", {**found, "reconciled": True}) if found else None
 

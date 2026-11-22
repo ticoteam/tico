@@ -173,6 +173,16 @@ def test_a_comment_whose_answer_was_lost_is_found_by_its_marker_and_settled_done
     assert len(jira.comments["HM-12"]) == 1 and len(jira.writes) == 1
 
 
+def test_an_unknown_comment_on_an_issue_jira_no_longer_shows_stays_unknown_for_the_owner(api, jira):
+    jira.status["HM-12"] = "In Progress"
+    jira.lose = True
+    row = _queue(api, jira.tool, "comment", {"body": "Released."})
+    assert _attempt(api) == "unknown"
+    del jira.status["HM-12"]  # Jira's 404: gone, or the key no longer sees it; neither proves the comment didn't land
+    OA.reconcile_pass(_store(api))
+    assert _row(api, row["id"])["state"] == "unknown"
+
+
 def test_a_429_requeues_the_write_after_its_retry_after(api, jira):
     jira.status["HM-12"] = "To Do"
     jira.answer = (429, {"Retry-After": "30"})

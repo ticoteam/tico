@@ -104,7 +104,7 @@ but a record write is bookkeeping, not a message to people, so `jira` goes On it
 
 Before the write it asks whether the effect is already there (the issue already in the status; a comment among the
 newest 100 carrying the marker): found, the action is done with no write (`"already": true` in the receipt). Reconcile
-uses the same lookup to settle an unknown row done; only Jira's 404 for the issue settles one failed. A 429 is a safe
+uses the same lookup to settle an unknown row done; a row it cannot prove stays unknown for the owner. A 429 is a safe
 rejection after its Retry-After (else a minute), as is anything that fails before the write. Jira's 400, 401, 403 or
 404 to the write is a certain refusal; any other answer, or none, is unknown.
 
