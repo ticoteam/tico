@@ -9,7 +9,7 @@ a wake while a pass runs asks for one more pass after it, never a second one bes
 A pass has a short elapsed-time `Budget` (BUDGET seconds): once it is spent the pass claims no new run, action or email,
 and the worker starts its next pass at once, so the queue keeps draining as fast as before. A call already started
 finishes on the worker within its own timeout. The rows' own claims and leases (automation_runs.claimed_at,
-automation_mail_actions.claimed_at and tries, email_sends.lease_id and permits) stay the guard against doing a row twice,
+automation_mail_actions.claimed_at and tries, outbound_actions.claim_token and permits) stay the guard against doing a row twice,
 across a restart too, and their upkeep (runs cut off, expired Gmail action leases, a run that waited a day) stays on the
 loop, in `automations.tick`, whatever the workers are doing.
 

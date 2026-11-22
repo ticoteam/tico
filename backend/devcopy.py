@@ -196,7 +196,7 @@ EMPTY = (
     "pending_subscription_fallbacks",
     "subscription_connects",
     # A frozen outbox, its operation receipts and preview proofs can authorize delivery on the source only.
-    "email_sends",
+    "email_sends",  # the legacy email audit from before cutover
     "email_send_operations",
     "email_send_previews",
     "email_legacy_automations",

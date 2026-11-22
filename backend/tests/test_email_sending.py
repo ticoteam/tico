@@ -117,12 +117,12 @@ def test_reply_and_address_checks_ask_gmail_and_wait_while_it_does_not_answer(in
     mail_facts.forget()
     fake_gmail.down.add(BOX)
     with inbox.app.state.store.read() as c:
-        before = c.execute("SELECT count(*) FROM email_sends").fetchone()[0]
+        before = c.execute("SELECT count(*) FROM outbound_email").fetchone()[0]
     with pytest.raises(Problem) as waited:
         queue(inbox, raw=mime(body="A reply", In_Reply_To="<inbound@vendor.example>"), reply_to_id="inbound")
     assert waited.value.retryable
     with inbox.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM email_sends").fetchone()[0] == before
+        assert c.execute("SELECT count(*) FROM outbound_email").fetchone()[0] == before
 
 
 def test_a_gmail_refusal_is_not_remembered_as_a_fact_and_the_send_waits(inbox, fake_gmail, monkeypatch):
@@ -138,7 +138,7 @@ def test_a_gmail_refusal_is_not_remembered_as_a_fact_and_the_send_waits(inbox, f
         queue(inbox, raw=mime(body="To a known sender"))
     assert waited.value.retryable
     with inbox.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM email_sends WHERE state='blocked'").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM outbound_email WHERE state='blocked'").fetchone()[0] == 0
     fake_gmail.refused.clear()
     assert "new_address" not in queue(inbox, raw=mime(body="To a known sender"))["decision"]["reasons"]
 
@@ -164,11 +164,11 @@ def test_mail_tico_composes_is_queued_while_gmail_is_down_and_decided_when_it_an
     store, auth = inbox.app.state.store, inbox.app.state.auth
     assert S.drain(store, auth) == 0  # Gmail still down: it waits, nothing is sent or asked
     with store.read() as c:
-        assert c.execute("SELECT state FROM email_sends WHERE id=?", (queued["id"],)).fetchone()[0] == "pending"
+        assert c.execute("SELECT state FROM outbound_email WHERE id=?", (queued["id"],)).fetchone()[0] == "pending"
     fake_gmail.down.clear()
     S.drain(store, auth)
     with store.read() as c:
-        row = c.execute("SELECT state,decision FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
+        row = c.execute("SELECT state,decision FROM outbound_email WHERE id=?", (queued["id"],)).fetchone()
     assert row["state"] == "waiting_approval" and "new_address" in json.loads(row["decision"])["reasons"]
 
 
@@ -194,7 +194,7 @@ def test_never_blocks_an_approved_send_at_dispatch(inbox):
     policy(inbox, mode="never")
     assert dispatch(inbox) == []
     with inbox.app.state.store.read() as c:
-        row = c.execute("SELECT * FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
+        row = c.execute("SELECT * FROM outbound_email WHERE id=?", (queued["id"],)).fetchone()
         assert row["state"] == "blocked" and "never" in json.loads(row["decision"])["reasons"]
 
 
@@ -205,7 +205,7 @@ def test_an_ok_from_the_preview_releases_the_frozen_send_and_is_used(inbox):
     approved(inbox, queued)
     assert len(dispatch(inbox) + dispatch(inbox)) == 1  # the first pass lets it go, a later one sends it
     with inbox.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM email_sends WHERE id=?", (queued["id"],)).fetchone()[0] == "sent"
+        assert c.execute("SELECT state FROM outbound_email WHERE id=?", (queued["id"],)).fetchone()[0] == "sent"
         assert task_asks.standing(c, queued["approval_id"]) == task_asks.USED
 
 
@@ -223,7 +223,7 @@ def test_undo_pending_restart_cancel_and_no_recall(inbox, tmp_path):
     assert dispatch(inbox) == []  # inside its undo window
     # A fresh database connection sees the durable queue, without any worker memory.
     with sqlite3.connect(inbox.app.state.store.settings.db_path) as c:
-        assert c.execute("SELECT state FROM email_sends WHERE id=?", (queued["id"],)).fetchone()[0] == "pending"
+        assert c.execute("SELECT state FROM outbound_email WHERE id=?", (queued["id"],)).fetchone()[0] == "pending"
         with sqlite3.connect(tmp_path / "restarted.db") as target:
             c.backup(target)
     from dataclasses import replace
@@ -239,7 +239,7 @@ def test_undo_pending_restart_cancel_and_no_recall(inbox, tmp_path):
     assert response["send"]["state"] == "canceled"
     assert dispatch(inbox) == []
     with inbox.app.state.store.transaction() as c:
-        c.execute("UPDATE email_sends SET state='sent' WHERE id=?", (queued["id"],))
+        c.execute("UPDATE outbound_actions SET state='done' WHERE id=?", (queued["id"],))
     response = inbox.post("/api/v2/email/sends/" + queued["id"] + "/cancel", json={}, headers=headers())
     assert response.status_code == 409
 
@@ -285,7 +285,7 @@ def test_gmail_confirmation_commits_before_a_failed_timestamp_lookup(inbox, fake
     def check_receipt():
         with store.read() as c:
             send = c.execute(
-                "SELECT state,provider_message_id,raw FROM email_sends WHERE id=?", (queued["id"],)
+                "SELECT state,provider_message_id,raw FROM outbound_email WHERE id=?", (queued["id"],)
             ).fetchone()
             assert tuple(send) == ("sent", "sent-reply", "")
             receipt = c.execute(
@@ -347,7 +347,7 @@ def test_gmail_send_stays_sent_without_an_outside_receipt(inbox, fake_gmail, rea
     with store.read() as c:
         assert not c.execute("SELECT 1 FROM messages WHERE source_message_id='sent-reply'").fetchone()
         assert tuple(
-            c.execute("SELECT state,provider_message_id,raw FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
+            c.execute("SELECT state,provider_message_id,raw FROM outbound_email WHERE id=?", (queued["id"],)).fetchone()
         ) == ("sent", "sent-reply", "")
 
 
@@ -358,7 +358,7 @@ def test_permission_revoked_before_dispatch_sends_nothing(inbox):
         c.execute("DELETE FROM mailbox_accesses WHERE grantee_type='bot' AND grantee_id='ops'")
     assert dispatch(inbox) == []
     with inbox.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM email_sends WHERE id=?", (queued["id"],)).fetchone()[0] != "sent"
+        assert c.execute("SELECT state FROM outbound_email WHERE id=?", (queued["id"],)).fetchone()[0] != "sent"
 
 
 def test_external_agent_revocation_blocks_its_pending_send(inbox):
@@ -379,7 +379,7 @@ def test_external_agent_revocation_blocks_its_pending_send(inbox):
         c.execute("UPDATE agents SET revoked_at=? WHERE bot='ops'", (H.now(),))
     assert dispatch(inbox) == []
     with inbox.app.state.store.read() as c:
-        result = json.loads(c.execute("SELECT decision FROM email_sends WHERE id=?", (queued["id"],)).fetchone()[0])
+        result = json.loads(c.execute("SELECT decision FROM outbound_email WHERE id=?", (queued["id"],)).fetchone()[0])
     assert "agent_revoked" in result["reasons"]
 
 
@@ -393,7 +393,7 @@ def test_caps_reserve_concurrent_dispatches_including_unknown_results(inbox, cap
     CURRENT["fake"].send_answer = (503, {})  # Gmail never confirms the first: its result is unknown
     assert len(dispatch(inbox)) == 1
     with inbox.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM email_sends WHERE id=?", (first["id"],)).fetchone()[0] == "unknown"
+        assert c.execute("SELECT state FROM outbound_email WHERE id=?", (first["id"],)).fetchone()[0] == "unknown"
     assert dispatch(inbox) == []  # the unknown one still counts against the cap
 
 
@@ -418,7 +418,7 @@ def test_bounces_suppress_only_attempted_recipients_and_admin_can_restore(inbox)
     autonomous(inbox)
     queued = queue(inbox)
     with inbox.app.state.store.transaction() as c:
-        c.execute("UPDATE email_sends SET state='sent' WHERE id=?", (queued["id"],))
+        c.execute("UPDATE outbound_actions SET state='done' WHERE id=?", (queued["id"],))
         S.record_bounces(c, BOX, "mailer-daemon@vendor.example", "Final-Recipient: rfc822; " + CONTACT)
     blocked = queue(inbox, raw=mime(body="Another email"))
     assert "bounce_suppression" in blocked["decision"]["reasons"]
@@ -458,7 +458,7 @@ def test_new_automation_uses_the_same_approval_queue_and_never_bypasses_never(in
         )["mail_action"]
     M.drain_workspace_mail(inbox.app.state.store)
     with inbox.app.state.store.read() as c:
-        queued = S.public(c.execute("SELECT * FROM email_sends WHERE automation_action_id=?", (action,)).fetchone())
+        queued = S.public(c.execute("SELECT * FROM outbound_email WHERE automation_action_id=?", (action,)).fetchone())
         assert c.execute("SELECT state FROM automation_mail_actions WHERE id=?", (action,)).fetchone()[0] == (
             "waiting_send"
         )
@@ -504,7 +504,8 @@ def test_a_bot_at_ask_first_cannot_send_without_approval(inbox):
     assert dispatch(inbox) == [] and dispatch(inbox) == []
     with inbox.app.state.store.read() as c:
         assert (
-            c.execute("SELECT state FROM email_sends WHERE id=?", (queued["id"],)).fetchone()[0] == "waiting_approval"
+            c.execute("SELECT state FROM outbound_email WHERE id=?", (queued["id"],)).fetchone()[0]
+            == "waiting_approval"
         )
 
 
@@ -515,8 +516,8 @@ def test_a_bot_managers_message_approves_nothing(inbox):
     assert inbox.get("/api/v2/email/sends/" + queued["id"], headers=headers()).json()["preview_complete"]
     note = post(inbox, "chat/ops", {"text": "Send it " + queued["id"]})
     with inbox.app.state.store.transaction() as c:
-        c.execute("UPDATE email_sends SET approval_id=? WHERE id=?", (note["id"], queued["id"]))
-        row = c.execute("SELECT * FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
+        c.execute("UPDATE outbound_actions SET approval_id=? WHERE id=?", (note["id"], queued["id"]))
+        row = c.execute("SELECT * FROM outbound_email WHERE id=?", (queued["id"],)).fetchone()
         assert not S.approved(c, inbox.app.state.auth, row, S.effective(c, BOX, "ops"))
     assert dispatch(inbox) == [] and dispatch(inbox) == []
 
@@ -614,7 +615,7 @@ def test_an_approved_send_waits_for_its_matters_not_before_as_it_stands_when_it_
     approved(inbox, early)
     assert dispatch(inbox) == []
     with inbox.app.state.store.transaction() as c:
-        row = c.execute("SELECT state,send_after FROM email_sends WHERE id=?", (held["id"],)).fetchone()
+        row = c.execute("SELECT state,send_after FROM outbound_email WHERE id=?", (held["id"],)).fetchone()
         assert row["state"] == "pending" and row["send_after"] < S.not_before(c, case)  # the undo deadline, apart
         c.execute("DELETE FROM matter_dates WHERE task_id=?", (other,))  # cleared after the OK
     _not_before(inbox, case, later)  # moved later after the OK
@@ -739,13 +740,13 @@ def test_a_send_still_to_go_is_canceled_when_its_case_or_its_ok_task_closes(inbo
         H.task_close(c, "human:ana", case, "Settled.")
         H.task_close(c, "human:ana", alone["approval_task_id"], "Not this one.")
         for queued in (allowed, alone):
-            gone = c.execute("SELECT state,detail,raw FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
+            gone = c.execute("SELECT state,detail,raw FROM outbound_email WHERE id=?", (queued["id"],)).fetchone()
             assert tuple(gone) == ("canceled", S.TASK_CLOSED, "")
     with pytest.raises(Problem, match="was closed"):
         queue(inbox, raw=mime(body="Too late."), actor="bot:ops", task_id=case)
     with inbox.app.state.store.read() as c:
         assert (
-            c.execute("SELECT count(*) FROM email_sends WHERE state IN ('pending','waiting_approval')").fetchone()[0]
+            c.execute("SELECT count(*) FROM outbound_email WHERE state IN ('pending','waiting_approval')").fetchone()[0]
             == 0
         )
     assert dispatch(inbox) == []
@@ -763,7 +764,7 @@ def test_a_send_whose_case_was_closed_before_the_close_canceled_sends_never_goes
             H.task_close(c, "human:ana", case, "Settled.")
     assert dispatch(inbox) == []
     with inbox.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM email_sends WHERE id=?", (queued["id"],)).fetchone()[0] == "canceled"
+        assert c.execute("SELECT state FROM outbound_email WHERE id=?", (queued["id"],)).fetchone()[0] == "canceled"
 
 
 def test_a_send_back_on_the_case_holds_it_until_the_next_version_asks_again(inbox):
@@ -782,12 +783,14 @@ def test_a_send_back_on_the_case_holds_it_until_the_next_version_asks_again(inbo
         H.task_answer(c, "human:ana", case, first["approval_id"], "no", "Say the date.")
     assert dispatch(inbox) == [] and dispatch(inbox) == []
     with inbox.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM email_sends WHERE id=?", (first["id"],)).fetchone()[0] == "waiting_approval"
+        assert (
+            c.execute("SELECT state FROM outbound_email WHERE id=?", (first["id"],)).fetchone()[0] == "waiting_approval"
+        )
         assert (H.task(c, case)["status"], H.task(c, case)["stage_id"]) == ("open", row["stage_id"])
     second = queue(inbox, raw=mime(body="Version two, with the date."), actor="bot:ops", draft_id="r-1", task_id=case)
     with inbox.app.state.store.read() as c:
         assert task_asks.standing(c, second["approval_id"]) == task_asks.WAITING
-        assert c.execute("SELECT state FROM email_sends WHERE id=?", (first["id"],)).fetchone()[0] == "canceled"
+        assert c.execute("SELECT state FROM outbound_email WHERE id=?", (first["id"],)).fetchone()[0] == "canceled"
         assert (H.task(c, case)["status"], H.task(c, case)["stage_id"]) == ("open", row["stage_id"])
 
 
@@ -813,7 +816,7 @@ def test_a_draft_id_beside_a_callers_own_mime_replaces_nothing(inbox, monkeypatc
     other = post(inbox, "email/sends", body)["send"]
     assert other["id"] != first["id"] and other["draft_id"] == ""  # never stored where revisions are found
     with inbox.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM email_sends WHERE id=?", (first["id"],)).fetchone()[0] != "canceled"
+        assert c.execute("SELECT state FROM outbound_email WHERE id=?", (first["id"],)).fetchone()[0] != "canceled"
 
 
 def test_an_ok_asked_again_under_a_changed_approval_rule_never_lets_the_case_move_on(inbox):
@@ -831,7 +834,7 @@ def test_an_ok_asked_again_under_a_changed_approval_rule_never_lets_the_case_mov
     policy(inbox, who_can_ok="named_people", approvers=["ben"])
     assert dispatch(inbox) == []
     with inbox.app.state.store.read() as c:
-        again = c.execute("SELECT approval_id FROM email_sends WHERE id=?", (first["id"],)).fetchone()[0]
+        again = c.execute("SELECT approval_id FROM outbound_email WHERE id=?", (first["id"],)).fetchone()[0]
         assert again != first["approval_id"] and task_asks.grant(c, again)["asked_of_id"] == "human:ben"
         assert task_asks.standing(c, first["approval_id"]) == task_asks.WITHDRAWN
         assert (H.task(c, case)["status"], H.task(c, case)["stage_id"]) == ("open", row["stage_id"])
@@ -845,7 +848,10 @@ def test_a_send_queued_before_keys_named_the_case_is_found_only_for_its_case(inb
     first = queue(inbox, raw=mime(body="The records."), actor="bot:ops", task_id=one)
     with inbox.app.state.store.transaction() as c:  # as an older server keyed it
         legacy = S.digest(S.dump([BOX, first["content_sha256"], [CONTACT]]))
-        c.execute("UPDATE email_sends SET idempotency_key=? WHERE id=?", (legacy, first["id"]))
+        c.execute(
+            "UPDATE outbound_actions SET metadata=json_set(metadata,'$.idempotency_key',?) WHERE id=?",
+            (legacy, first["id"]),
+        )
     assert queue(inbox, raw=mime(body="The records."), actor="bot:ops", task_id=one)["id"] == first["id"]
     assert queue(inbox, raw=mime(body="The records."), actor="bot:ops", task_id=two)["id"] != first["id"]
     taskless = queue(inbox, raw=mime(body="The records."), actor="bot:ops")
@@ -874,7 +880,7 @@ def test_requeuing_a_verified_draft_is_a_new_send_that_retires_every_older_one(i
     with pytest.raises(Problem, match="cannot send"):
         send("Version three.", actor="human:cara")
     with inbox.app.state.store.transaction() as c:
-        states = dict(c.execute("SELECT id,state FROM email_sends").fetchall())
+        states = dict(c.execute("SELECT id,state FROM outbound_email").fetchall())
         assert (states[first["id"]], states[other["id"]], states[second["id"]]) == (
             "canceled",
             "waiting_approval",
@@ -882,10 +888,12 @@ def test_requeuing_a_verified_draft_is_a_new_send_that_retires_every_older_one(i
         )
         assert task_asks.standing(c, first["approval_id"]) == task_asks.WITHDRAWN
         assert task_asks.task_of(c, second["approval_id"]) == case
-        c.execute("UPDATE email_sends SET draft_id='r-1' WHERE id=?", (other["id"],))  # older data: two of one draft
+        c.execute(
+            "UPDATE outbound_actions SET metadata=json_set(metadata,'$.draft_id','r-1') WHERE id=?", (other["id"],)
+        )  # older data: two of one draft
     third = send("Version three.")
     with inbox.app.state.store.read() as c:
-        states = dict(c.execute("SELECT id,state FROM email_sends").fetchall())
+        states = dict(c.execute("SELECT id,state FROM outbound_email").fetchall())
         assert (states[other["id"]], states[second["id"]], states[third["id"]]) == (
             "canceled",
             "canceled",
@@ -978,8 +986,8 @@ def test_a_held_send_whose_lookup_fails_never_holds_up_due_mail(inbox, monkeypat
     monkeypatch.setattr(S, "_original", lookup)
     assert len(dispatch(inbox)) == 1
     with inbox.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM email_sends WHERE id=?", (due["id"],)).fetchone()[0] == "sent"
-        assert c.execute("SELECT state FROM email_sends WHERE id=?", (held["id"],)).fetchone()[0] == "pending"
+        assert c.execute("SELECT state FROM outbound_email WHERE id=?", (due["id"],)).fetchone()[0] == "sent"
+        assert c.execute("SELECT state FROM outbound_email WHERE id=?", (held["id"],)).fetchone()[0] == "pending"
 
 
 def test_an_approver_who_cannot_read_the_case_is_asked_apart_and_sees_none_of_its_files(inbox):
@@ -1121,7 +1129,7 @@ def test_each_move_of_a_send_reaches_its_tasks_on_the_stream_and_their_rows(inbo
 
     with store.transaction() as c:  # the undo window is over
         c.execute(
-            "UPDATE email_sends SET created_at=?,send_after=? WHERE id=?",
+            "UPDATE outbound_actions SET created_at=?,send_after=? WHERE id=?",
             (H.shift(H.now(), minutes=-5), H.shift(H.now(), minutes=-3), queued["id"]),
         )
     before = latest()
@@ -1134,7 +1142,10 @@ def test_each_move_of_a_send_reaches_its_tasks_on_the_stream_and_their_rows(inbo
     assert detail.get("task", detail)["email_send"] == moved[case]
     assert set(moved[case]) == {"id", "state", "send_after", "finished_at", "detail", "not_before"}  # never the email
     with store.transaction() as c:  # a day after it ended, the case no longer shows it
-        c.execute("UPDATE email_sends SET finished_at=? WHERE id=?", (H.shift(H.now(), hours=-25), queued["id"]))
+        c.execute(
+            "UPDATE outbound_actions SET metadata=json_set(metadata,'$.finished_at',?) WHERE id=?",
+            (H.shift(H.now(), hours=-25), queued["id"]),
+        )
     assert listed()[case] is None
 
 
@@ -1147,7 +1158,7 @@ def test_never_refuses_and_names_the_setting(inbox):
     queued = queue(inbox, actor="bot:ops", reply_to_id="inbound", thread_id="thread")
     assert queued["state"] == "blocked" and "never" in queued["decision"]["reasons"]
     with inbox.app.state.store.read() as c:
-        detail = c.execute("SELECT detail FROM email_sends WHERE id=?", (queued["id"],)).fetchone()[0]
+        detail = c.execute("SELECT detail FROM outbound_email WHERE id=?", (queued["id"],)).fetchone()[0]
     assert "never (bot setting)" in detail
 
 
@@ -1167,7 +1178,7 @@ def test_a_gmail_hiccup_reading_the_thread_stops_a_bots_send_as_retryable(inbox,
     response = inbox.post("/api/v2/email/sends", json=message, headers=headers(attempt["token"]))
     assert response.status_code == 502 and response.json()["error"]["retryable"], response.text
     with inbox.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM email_sends").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM outbound_email").fetchone()[0] == 0
 
 
 def workspace(monkeypatch, answer):
@@ -1207,7 +1218,7 @@ def test_the_server_sends_a_workspace_inboxs_mail_itself_once(inbox, monkeypatch
     assert call["token"] == "fixture-token" and call["url"].endswith(BOX.replace("@", "%40") + "/messages/send")
     assert call["body"] == {"raw": mime(In_Reply_To="<inbound@vendor.example>"), "threadId": "thread"}
     with store.read() as c:
-        row = c.execute("SELECT * FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
+        row = c.execute("SELECT * FROM outbound_email WHERE id=?", (queued["id"],)).fetchone()
     assert (row["state"], row["runner_id"], row["raw"]) == (state, S.SERVER, "")
     assert row["provider_message_id"] == ("gmail-1" if state == "sent" else "")
     assert S.drain(store, auth) == 0 and len(calls) == 1  # never a second copy
@@ -1227,7 +1238,7 @@ def test_a_failing_workspace_key_leaves_the_email_pending(inbox, monkeypatch):
     monkeypatch.setattr(GW, "mint", refused)  # the key fails after the email was queued
     assert S.drain(inbox.app.state.store, inbox.app.state.auth) == 0 and calls == []
     with inbox.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM email_sends WHERE id=?", (queued["id"],)).fetchone()[0] == "pending"
+        assert c.execute("SELECT state FROM outbound_email WHERE id=?", (queued["id"],)).fetchone()[0] == "pending"
 
 
 def test_a_mailbox_no_server_credential_covers_fails_its_email_with_why(inbox, monkeypatch):
@@ -1239,7 +1250,7 @@ def test_a_mailbox_no_server_credential_covers_fails_its_email_with_why(inbox, m
     monkeypatch.setattr(GW, "authority", lambda c, mailbox: "legacy")  # the key and the grant are gone
     assert S.drain(inbox.app.state.store, inbox.app.state.auth) == 0 and calls == []
     with inbox.app.state.store.read() as c:
-        row = c.execute("SELECT state,detail FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
+        row = c.execute("SELECT state,detail FROM outbound_email WHERE id=?", (queued["id"],)).fetchone()
     assert row["state"] == "failed" and "covers" in row["detail"]
 
 
@@ -1281,7 +1292,7 @@ def test_the_server_sends_a_personal_grant_s_mail_from_its_own_grant(inbox, monk
     assert [call["token"] for call in calls] == ["ya29.own"]
     assert google.calls[-1]["grant_type"] == "refresh_token" and google.calls[-1]["scope"] == GC.G + "gmail.modify"
     with store.read() as c:
-        row = c.execute("SELECT state,runner_id FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
+        row = c.execute("SELECT state,runner_id FROM outbound_email WHERE id=?", (queued["id"],)).fetchone()
     assert tuple(row) == ("sent", S.SERVER)
 
 
@@ -1295,7 +1306,7 @@ def test_a_read_only_personal_grant_fails_its_due_email_without_asking_google(in
     store, auth = inbox.app.state.store, inbox.app.state.auth
     assert S.drain(store, auth) == 0 and calls == [] and len(google.calls) == asked
     with store.read() as c:
-        row = c.execute("SELECT state,detail FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
+        row = c.execute("SELECT state,detail FROM outbound_email WHERE id=?", (queued["id"],)).fetchone()
     assert row["state"] == "failed" and "read only" in row["detail"]
 
 
@@ -1360,7 +1371,7 @@ def test_a_drain_leases_no_new_email_once_its_budget_is_spent(inbox, monkeypatch
     budget = drains.Budget(0.75)
     assert S.drain(store, auth, budget=budget) == 2 and budget.spent  # leased at 0 s and 0.5 s, none at 1 s
     with store.read() as c:
-        states = [c.execute("SELECT state FROM email_sends WHERE id=?", (i,)).fetchone()[0] for i in ids]
+        states = [c.execute("SELECT state FROM outbound_email WHERE id=?", (i,)).fetchone()[0] for i in ids]
     assert states == ["sent", "sent", "pending"]
     assert S.drain(store, auth, budget=drains.Budget(5)) == 1
     assert S.drain(store, auth, budget=drains.Budget(5)) == 0 and len(calls) == 3  # each once, never twice
@@ -1382,7 +1393,10 @@ def test_an_email_the_write_will_not_queue_is_found_before_the_rule_check_and_a_
     with inbox.app.state.store.transaction() as c:
         snap = S.snapshot(legacy, BOX)
         old_key = S.digest(S.dump([BOX, snap["content_sha256"], snap["recipients"]]))
-        c.execute("UPDATE email_sends SET idempotency_key=? WHERE content_sha256=?", (old_key, snap["content_sha256"]))
+        c.execute(
+            "UPDATE outbound_actions SET metadata=json_set(metadata,'$.idempotency_key',?) WHERE json_extract(metadata,'$.content_sha256')=?",
+            (old_key, snap["content_sha256"]),
+        )
     with inbox.app.state.store.read() as c:
         assert S.duplicate(c, auth, "bot:ops", S.Enqueue(mailbox=BOX, raw=legacy))
     with pytest.raises(Problem) as raced, inbox.app.state.store.transaction() as c:

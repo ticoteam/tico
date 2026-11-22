@@ -43,7 +43,7 @@ def _queue(store, body="Thanks for the update."):
 
 
 def _row(c, sid):
-    return c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone()
+    return c.execute("SELECT * FROM outbound_email WHERE id=?", (sid,)).fetchone()
 
 
 def _pass(store):
@@ -198,5 +198,5 @@ def test_an_ok_of_one_email_lets_no_other_email_go(store):
     _ok(store, first)
     second = _queue(store, body="A different reply.")
     with store.transaction() as c:
-        c.execute("UPDATE email_sends SET approval_id=? WHERE id=?", (first["approval_id"], second["id"]))
+        c.execute("UPDATE outbound_actions SET approval_id=? WHERE id=?", (first["approval_id"], second["id"]))
         assert not S.approved(c, store.auth, _row(c, second["id"]), S.effective(c, BOX, "ops"))

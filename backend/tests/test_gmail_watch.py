@@ -780,11 +780,11 @@ def test_bounces_known_sender_and_the_directory_are_fed_and_no_row_keeps_a_body(
     store = api.app.state.store
     with store.transaction() as c:
         c.execute(
-            "INSERT INTO email_sends(id,mailbox,actor,bot,via,content_sha256,idempotency_key,recipients,attachments,"
-            "subject,body_sha256,raw,draft_id,thread_id,reply_to_id,approval_id,classification,decision,state,"
-            "created_at,send_after) VALUES('s1',?,'human:ana','','','h','k1','[\"gone@vendor.example\"]','[]','Hi',"
-            "'b','','','','','','{}','{}','sent',?,?)",
-            (BOX, H.now(), H.now()),
+            "INSERT INTO outbound_actions(id,channel,audience,operation,destination,occurrence_key,"
+            "actor,metadata,state,send_after,next_attempt_at,created_at,updated_at) "
+            "VALUES('s1','email','external','send',?,'email:send:s1','human:ana',"
+            "json_object('recipients',json_array('gone@vendor.example'),'idempotency_key','k1'),'done',?,?,?,?)",
+            (BOX, H.now(), H.now(), H.now(), H.now()),
         )
     gmail.add(BOX, "wrote-before", sender=BOX, to=["jane@client.example"], labels=("SENT",), epoch=epoch(T0) - 7200)
     gmail.add(

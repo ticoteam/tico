@@ -34,7 +34,7 @@ from typing import Any, Callable, Literal, NamedTuple, cast
 from fastapi import Request
 from pydantic import Field
 
-from . import background, outbound_slack
+from . import background, outbound_email, outbound_slack
 from . import outbox as _O
 from . import task_asks
 from .api_contract import api_v2
@@ -429,6 +429,8 @@ def enqueue(
             raise Problem("validation", f"{name} is at most {most} characters", 422)
     if key.startswith(RESERVED) and actor != H.TICO_ACTOR:
         raise Problem("validation", f"Occurrence keys starting {RESERVED!r} are Tico's own", 422)
+    if channel == outbound_email.CHANNEL:
+        raise Problem("validation", "Queue email through /api/v2/email/sends", 422)
     if channel == support_hq.CHANNEL:
         destination = destination.strip()
         payload = {**payload, "body": support_hq.reply_body(payload.get("body"))}
@@ -446,6 +448,8 @@ def enqueue(
     found = c.execute("SELECT * FROM outbound_actions WHERE occurrence_key=?", (key,)).fetchone()
     if key.startswith(outbound_slack.PREFIX) and (not found or found["channel"] == "slack"):
         raise Problem("validation", "Slack occurrence keys are reserved", 422)
+    if key.startswith(outbound_email.PREFIX) and (not found or found["channel"] == outbound_email.CHANNEL):
+        raise Problem("validation", "Email occurrence keys are reserved", 422)
     if found:
         if channel == support_hq.CHANNEL and found["task_id"] != task_id:
             raise Problem("conflict", "This Help reply belongs to another task", 409)
@@ -780,8 +784,8 @@ def reconcile_pass(store: Any, limit: int = 100) -> int:
 
 
 def _scope(slack: bool) -> str:
-    # The Socket Mode gateway holds the Slack token in its own process.
-    return "channel='slack'" if slack else "channel<>'slack'"
+    # The Slack gateway and the server's email drain own their work and use their own dispatch checks.
+    return "channel='slack'" if slack else "channel NOT IN ('slack','email')"
 
 
 def claim(store: Any, now: str | None = None, *, slack: bool = False) -> Claimed | None:
@@ -814,7 +818,7 @@ def next_due(store: Any) -> float | None:
     """Seconds until the next queued row may go (0 when one may now), or None when none is queued."""
     with store.read() as c:
         at = c.execute(
-            "SELECT min(max(next_attempt_at, send_after)) FROM outbound_actions WHERE state='queued' AND channel<>'slack'"
+            f"SELECT min(max(next_attempt_at, send_after)) FROM outbound_actions WHERE state='queued' AND {_scope(False)}"
         ).fetchone()[0]
     when = H.parse_ts(at) if at else None
     return None if when is None else max(0.0, when.timestamp() - time.time())
@@ -893,6 +897,8 @@ def _permit(
         if not found:
             return "lost"  # the claim lapsed, or this claim already made its attempt: nothing is called
         row = dict(found)
+        if row["channel"] == outbound_email.CHANNEL:
+            return "lost"
         if gateway is not None and row["channel"] == "slack":
             if adopted := outbound_slack.adopt_legacy(c, row):
                 return adopted
@@ -1048,7 +1054,7 @@ def retire_pass(store: Any, limit: int = 500) -> int:
         rows = [
             dict(r)
             for r in c.execute(
-                "SELECT * FROM outbound_actions WHERE state='waiting_approval' AND approval_id<>'' "
+                "SELECT * FROM outbound_actions WHERE channel<>'email' AND state='waiting_approval' AND approval_id<>'' "
                 "ORDER BY updated_at LIMIT ?",
                 (limit,),
             )
@@ -1177,6 +1183,8 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
     def visible(c: Any, who: Any, row: Any) -> bool:
         """Whoever queued it, the owner or an admin, the parties to its OK (task_asks.party: the person asked), and the
         person asked about its unknown outcome."""
+        if row["channel"] == outbound_email.CHANNEL:
+            return False  # Email has its own mailbox access and exact-content approval endpoints.
         if row["channel"] == "slack":
             if row["actor"] != who.actor and not admin(who):
                 return False
@@ -1352,7 +1360,7 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
 
         with store.read() as c:
             sql = (
-                f"SELECT {fields} FROM outbound_actions WHERE (channel<>'slack' OR EXISTS "
+                f"SELECT {fields} FROM outbound_actions WHERE channel<>'email' AND (channel<>'slack' OR EXISTS "
                 "(SELECT 1 FROM messages m WHERE m.id=outbound_actions.id AND m.deleted_at IS NULL))"
             )
             args: list[Any] = []
@@ -1445,8 +1453,10 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
 
         def work(c: Any) -> Any:
             row = get(c, oid)
-            task_id = approval_tasks(c, [row["approval_id"]]).get(row["approval_id"]) if row else None
-            if not row or not task_id:
+            if not row or row["channel"] == outbound_email.CHANNEL:
+                raise Problem("not_found", "No such outbound action waiting for an OK", 404)
+            task_id = approval_tasks(c, [row["approval_id"]]).get(row["approval_id"])
+            if not task_id:
                 raise Problem("not_found", "No such outbound action waiting for an OK", 404)
             auth.task(c, who, task_id)
             task_asks.give_ok(

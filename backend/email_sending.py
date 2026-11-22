@@ -1,4 +1,4 @@
-"""The one email send gate and durable undo queue: every send, by a person, a bot, an automation or the calendar.
+"""The email send gate and durable undo window on the outbound queue: every send, by a person, a bot, an automation or the calendar.
 
 The server freezes MIME content before approval and dispatch and decides every send here, a computer's mail tool only
 queues it (POST /api/v2/email/sends). One sending policy applies, its DEFAULTS when nothing is saved: company, inbox and
@@ -25,6 +25,7 @@ from urllib.parse import quote
 from pydantic import Field
 
 from . import mailbox_access as access
+from . import outbound_email as OE
 from . import rule_links
 from . import task_asks
 from .models import Contract, Empty
@@ -121,11 +122,7 @@ def record_bounces(c, mailbox, sender, body):
         return
     for address in set(re.findall(r"(?:Final|Original)-Recipient:\s*rfc822;\s*([^\s<>;]+@[^\s<>;]+)", body, re.I)):
         address = address.lower()
-        if c.execute(
-            "SELECT 1 FROM email_sends WHERE mailbox=? AND state IN ('sent','unknown') "
-            "AND EXISTS (SELECT 1 FROM json_each(recipients) WHERE value=?) LIMIT 1",
-            (mailbox, address),
-        ).fetchone():
+        if OE.reached(c, mailbox, address, unconfirmed=True):
             c.execute(
                 "INSERT OR IGNORE INTO email_suppressed_recipients VALUES(?,?,?,?)",
                 (mailbox, address, "delivery_status", H.now()),
@@ -417,11 +414,7 @@ def resolve_reply(c, mailbox, snap, supplied_reply="", supplied_thread=""):
 
 def known(c, mailbox, address):
     """Whether this inbox knows `address`: Tico sent it mail, or (in Gmail) it wrote to the inbox or the inbox to it."""
-    if c.execute(
-        "SELECT 1 FROM email_sends WHERE mailbox=? AND state='sent' "
-        "AND EXISTS (SELECT 1 FROM json_each(recipients) WHERE value=?) LIMIT 1",
-        (mailbox, address),
-    ).fetchone():
+    if OE.reached(c, mailbox, address):
         return True
     from . import mail_facts
 
@@ -437,6 +430,11 @@ def warm(c, row):
         for address in json.loads(row["recipients"]):
             if not known(c, row["mailbox"], address):
                 break  # the decision stops at the first unknown address too
+
+
+def audience(c, recipients):
+    domains = access.company_domains(c)
+    return "internal" if domains and all(access.inside(address, domains) for address in recipients) else "external"
 
 
 def own_writing(row):
@@ -574,8 +572,8 @@ def decision(c, auth, row, *, dispatch=False, wait_for_gmail=False):
         ):
             blocked.append("reply_loop")
         if c.execute(
-            "SELECT 1 FROM email_sends WHERE mailbox=? AND reply_to_id=? AND id<>? "
-            "AND state IN ('pending','dispatching','sent','unknown') LIMIT 1",
+            "SELECT 1 FROM outbound_email WHERE mailbox=? AND reply_to_id=? AND id<>? "
+            "AND queue_state IN ('queued','attempting','done','unknown') LIMIT 1",
             (row["mailbox"], row["reply_to_id"], row["id"]),
         ).fetchone():
             blocked.append("already_replied")
@@ -604,15 +602,15 @@ def decision(c, auth, row, *, dispatch=False, wait_for_gmail=False):
             ("company_daily_cap", "1=1", ()),
         ):
             count = c.execute(
-                "SELECT count(*) FROM email_sends WHERE " + clause + " AND id<>? "
-                "AND state IN ('sent','dispatching','unknown') AND substr(coalesce(provider_attempted_at,claimed_at,created_at),1,10)=?",
+                "SELECT count(*) FROM outbound_email WHERE " + clause + " AND id<>? "
+                "AND queue_state IN ('done','attempting','unknown') AND substr(coalesce(provider_attempted_at,claimed_at,created_at),1,10)=?",
                 (*params, row["id"], day),
             ).fetchone()[0]
             if count >= policy[field]:
                 blocked.append(field)
         last = c.execute(
-            "SELECT max(coalesce(provider_attempted_at,claimed_at)) FROM email_sends WHERE mailbox=? AND id<>? "
-            "AND state IN ('sent','dispatching','unknown')",
+            "SELECT max(coalesce(provider_attempted_at,claimed_at)) FROM outbound_email WHERE mailbox=? AND id<>? "
+            "AND queue_state IN ('done','attempting','unknown')",
             (row["mailbox"], row["id"]),
         ).fetchone()[0]
         if last and last > H.shift(H.now(), seconds=-policy["pacing_seconds"]):
@@ -670,7 +668,7 @@ ENDED_REACH_DAYS = 7  # how far back an ended send's own window (`send_after`) m
 def for_tasks(c, ids):
     """{task id: the newest of its sends still open or ended in the last SHOWN_ENDED_HOURS, as TASK_FIELDS}, for the
     tasks among `ids` that a send belongs to (`task_id`) or whose OK it sits on (`approval_task_id`). Read by state and
-    window (the email_sends_dispatch index), so a page of tasks reads only the sends that may be shown, however many
+    window (the outbound_email_dispatch index), so a page of tasks reads only the sends that may be shown, however many
     the company has sent."""
     ids = list(dict.fromkeys(i for i in ids if i))
     if not ids:
@@ -682,15 +680,15 @@ def for_tasks(c, ids):
     # An open send's matter dates come in the same read (DATES_SQL): its not before, on its own case's row.
     rows = c.execute(
         f"SELECT task_id,approval_task_id,{fields},created_at,s.rowid AS n,{DATES_SQL} AS dates,mailbox,bot "
-        "FROM email_sends s "
-        f"WHERE state IN ({','.join('?' * len(OPEN_STATES))}) AND {mine} "
-        f"UNION ALL SELECT task_id,approval_task_id,{fields},created_at,rowid AS n,NULL,mailbox,bot FROM email_sends "
-        f"WHERE state IN ({','.join('?' * len(ENDED_STATES))}) AND send_after>=? AND finished_at>=? AND {mine}",
+        "FROM outbound_email s "
+        f"WHERE queue_state IN ({','.join('?' * len(OPEN_STATES))}) AND {mine} "
+        f"UNION ALL SELECT task_id,approval_task_id,{fields},created_at,rowid AS n,NULL,mailbox,bot FROM outbound_email "
+        f"WHERE queue_state IN ({','.join('?' * len(ENDED_STATES))}) AND send_after>=? AND finished_at>=? AND {mine}",
         (
-            *OPEN_STATES,
+            *(OE.STATES.get(state, state) for state in OPEN_STATES),
             *ids,
             *ids,
-            *ENDED_STATES,
+            *(OE.STATES.get(state, state) for state in ENDED_STATES),
             H.shift(now, days=-ENDED_REACH_DAYS),
             H.shift(now, hours=-SHOWN_ENDED_HOURS),
             *ids,
@@ -736,7 +734,8 @@ def held_changed(c, task_id):
     """A matter's dates changed (backend/risk.py): when a send of its case is still to go, the case's row is sent again
     (a `tasks` change, kind email_send), so the day it is held for reads right everywhere."""
     if c.execute(
-        "SELECT 1 FROM email_sends WHERE task_id=? AND state IN ('waiting_approval','pending') LIMIT 1", (task_id,)
+        "SELECT 1 FROM outbound_email WHERE task_id=? AND queue_state IN ('waiting_approval','queued') LIMIT 1",
+        (task_id,),
     ).fetchone():
         c.execute(
             "INSERT INTO changes(topic,kind,subject_id,created_at) VALUES('tasks','email_send',?,?)", (task_id, H.now())
@@ -747,7 +746,7 @@ def moved(c, sid):
     """A send's state moved: one `tasks` change for the task it belongs to and one for the task its OK sits on, so
     every open list, board and task view is sent those tasks again with the send's new `email_send` (backend/events.py
     streams them) instead of reading the send again and again."""
-    row = c.execute("SELECT task_id,approval_task_id FROM email_sends WHERE id=?", (sid,)).fetchone()
+    row = c.execute("SELECT task_id,approval_task_id FROM outbound_email WHERE id=?", (sid,)).fetchone()
     if not row:
         return
     now = H.now()
@@ -801,10 +800,7 @@ def request_approval(c, auth, row, policy, why="Asked again", renew=False):
         why=why,
         renew=renew,
     )
-    c.execute(
-        "UPDATE email_sends SET approval_id=?,approval_task_id=? WHERE id=?",
-        (asked["requirement_id"], asked["task_id"], row["id"]),
-    )
+    OE.update(c, row["id"], approval_id=asked["requirement_id"], approval_task_id=asked["task_id"])
 
 
 def asks_on(c, auth, actor, person, task):
@@ -844,7 +840,7 @@ def ok_given(c, grant, ctx):
     inbox's rule now, and was shown the whole email (`seen`). Checked again before it is sent (`approved`)."""
     auth = getattr(ctx, "auth", None)
     sid = str(grant["subject"]).removeprefix(SUBJECT)
-    row = c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone()
+    row = OE.get(c, sid)
     if not row or row["state"] not in ACTIVE:
         raise Problem("state", "This email is no longer waiting to send", 409)
     if auth is None or not can_ok(
@@ -884,11 +880,11 @@ def existing(c, auth, actor, body, operation_key="", request=None, draft_verifie
     else:
         # Without a verified draft, the same email for the same case (or with none) is the same send.
         key = digest(dump([mailbox, snap["content_sha256"], snap["recipients"], task_id or "no task"]))
-        old = c.execute("SELECT * FROM email_sends WHERE idempotency_key=?", (key,)).fetchone()
+        old = c.execute("SELECT * FROM outbound_email WHERE idempotency_key=?", (key,)).fetchone()
         if not old:
             # Keyed before keys named the case: the same send only for the same case, or with none for both.
             legacy = digest(dump([mailbox, snap["content_sha256"], snap["recipients"]]))
-            hit = c.execute("SELECT * FROM email_sends WHERE idempotency_key=?", (legacy,)).fetchone()
+            hit = c.execute("SELECT * FROM outbound_email WHERE idempotency_key=?", (legacy,)).fetchone()
             old = hit if hit and (hit["task_id"] or None) == (task_id or None) else None
     return {
         "operation_key": operation_key,
@@ -967,15 +963,21 @@ def enqueue(
             remember(c, actor, operation_key, old["id"], asked)
         return public(old)
     if old:
-        c.execute("UPDATE email_sends SET idempotency_key=? WHERE id=?", ("retired:" + old["id"], old["id"]))
+        OE.update(c, old["id"], idempotency_key="retired:" + old["id"])
     if (
         c.execute(
-            "SELECT count(*) FROM email_sends WHERE state IN ('pending','waiting_approval','dispatching')"
+            "SELECT count(*) FROM outbound_email WHERE queue_state IN ('queued','waiting_approval','attempting')"
         ).fetchone()[0]
         >= 1000
     ):
         raise Problem("queue_full", "The email queue is full", 429)
-    if c.execute("SELECT coalesce(sum(length(raw)),0) FROM email_sends").fetchone()[0] + len(raw) > 128 * 1024 * 1024:
+    if (
+        c.execute(
+            "SELECT coalesce(sum(length(raw)),0) FROM outbound_email WHERE queue_state IN ('queued','waiting_approval','attempting')"
+        ).fetchone()[0]
+        + len(raw)
+        > 128 * 1024 * 1024
+    ):
         raise Problem("queue_full", "The email queue content limit is reached", 429)
     groups = snap["recipient_headers"]
     checks = {**classification, "copied": sorted(set(groups["cc"]) | set(groups["bcc"]))}
@@ -1039,9 +1041,7 @@ def enqueue(
     if row["state"] == "blocked":
         text = (gate or {}).get("held", {}).get("text") if found.get("held") else ""
         row.update(raw="", finished_at=now, detail=text or why(found))
-    c.execute(
-        "INSERT INTO email_sends(" + ",".join(row) + ") VALUES(" + ",".join("?" for _ in row) + ")", tuple(row.values())
-    )
+    OE.insert(c, row, audience=audience(c, snap["recipients"]))
     if operation_key:
         remember(c, actor, operation_key, ident, asked)
     if row["state"] == "waiting_approval" and not found["approved"]:
@@ -1064,7 +1064,7 @@ def enqueue(
         )
     H.event(c, actor, "email.queued", ident, {"mailbox": mailbox, "state": row["state"]})
     moved(c, ident)
-    return public(c.execute("SELECT * FROM email_sends WHERE id=?", (ident,)).fetchone())
+    return public(OE.get(c, ident))
 
 
 def in_company_zone(ts):
@@ -1174,7 +1174,7 @@ def receipt(c, actor, operation_key, mailbox, asked, content_sha256=None):
     operation queued nothing yet. Another request under the same operation id is refused. A receipt written before
     requests were bound is matched by the content its send froze (`content_sha256`; None: not known yet)."""
     prior = c.execute(
-        "SELECT s.*,o.request_sha256 FROM email_send_operations o JOIN email_sends s ON s.id=o.send_id "
+        "SELECT s.*,o.request_sha256 FROM email_send_operations o JOIN outbound_email s ON s.id=o.send_id "
         "WHERE o.actor=? AND o.operation_key=?",
         (actor, operation_key),
     ).fetchone()
@@ -1199,9 +1199,8 @@ def remember(c, actor, operation_key, sid, request_sha256):
 
 def retire(c, row, why):
     """A send still to go that will not go: canceled with `why`, its frozen copy cleared and its OK withdrawn."""
-    c.execute(
-        "UPDATE email_sends SET state='canceled',detail=?,finished_at=?,raw='' WHERE id=?", (why, H.now(), row["id"])
-    )
+    if not OE.finish(c, row, "canceled", detail=why):
+        return
     settle_automation(c, row, "canceled", why)
     if row["approval_id"]:
         task_asks.withdraw(c, row["approval_id"], why)
@@ -1214,7 +1213,7 @@ def task_closed(c, task_id):
     canceled in the same write, approved or not, never sent when its time comes. Not when the close is the OK's own
     task ending because that OK was taken back (task_asks.withdraw revokes it first): the send is asked again."""
     for row in c.execute(
-        "SELECT * FROM email_sends s WHERE state IN ('waiting_approval','pending') AND (task_id=? OR (approval_task_id=? "
+        "SELECT * FROM outbound_email s WHERE queue_state IN ('waiting_approval','queued') AND (task_id=? OR (approval_task_id=? "
         "AND NOT EXISTS (SELECT 1 FROM ok_grants g WHERE g.requirement_id=s.approval_id AND g.revoked_at IS NOT NULL)))",
         (task_id, task_id),
     ).fetchall():
@@ -1229,7 +1228,7 @@ def revised(c, mailbox, draft_id):
     if not draft_id:
         return []
     return c.execute(
-        "SELECT * FROM email_sends WHERE state IN ('waiting_approval','pending') AND mailbox=? AND draft_id=? "
+        "SELECT * FROM outbound_email WHERE queue_state IN ('waiting_approval','queued') AND mailbox=? AND draft_id=? "
         "ORDER BY rowid DESC",
         (mailbox, draft_id),
     ).fetchall()
@@ -1401,7 +1400,7 @@ def classify(app, store, snap, review=None):
 def _queued(c, mailbox, lease=True):
     """The sends `_lease` decides in its next pass over this inbox: the waiting ones it reconciles, and the due ones."""
     rows = c.execute(
-        "SELECT * FROM email_sends WHERE mailbox=? AND state='waiting_approval' ORDER BY checked_at,rowid LIMIT 100",
+        "SELECT * FROM outbound_email WHERE mailbox=? AND queue_state='waiting_approval' ORDER BY checked_at,rowid LIMIT 100",
         (mailbox,),
     ).fetchall()
     if lease:
@@ -1415,7 +1414,7 @@ def _due(c, mailbox, now, limit):
     deadline). A held send never takes the place of one that is due."""
     held, args = held_clause(now)
     return c.execute(
-        "SELECT s.* FROM email_sends s WHERE s.mailbox=? AND s.state='pending' AND s.send_after<=? AND NOT "
+        "SELECT s.* FROM outbound_email s WHERE s.mailbox=? AND s.queue_state='queued' AND s.send_after<=? AND NOT "
         + held
         + " ORDER BY s.created_at,s.rowid LIMIT ?",
         (mailbox, now, *args, limit),
@@ -1441,25 +1440,20 @@ def _lease(c, auth, mailbox, runner_id, *, permit=False, lease=True):
     now = H.now()
     # Only an issued permit can have reached a provider; an abandoned claim is safe to lease again.
     for stale in c.execute(
-        "SELECT * FROM email_sends WHERE mailbox=? AND state='dispatching' AND claimed_at<? LIMIT 100",
+        "SELECT * FROM outbound_email WHERE mailbox=? AND queue_state='attempting' AND claimed_at<? LIMIT 100",
         (mailbox, H.shift(now, minutes=-5)),
     ).fetchall():
         if stale["provider_attempted_at"]:
-            c.execute(
-                "UPDATE email_sends SET state='unknown',detail=?,finished_at=?,raw='' WHERE id=?",
-                (UNCONFIRMED, now, stale["id"]),
-            )
+            if not OE.finish(c, stale, "unknown", detail=UNCONFIRMED):
+                continue
             settle_automation(c, stale, "unknown")
             _outcome(c, stale, "unknown", UNCONFIRMED)
         else:
-            c.execute(
-                "UPDATE email_sends SET state='pending',runner_id=NULL,claimed_at=NULL,lease_id='' WHERE id=?",
-                (stale["id"],),
-            )
+            OE.release(c, stale)
         moved(c, stale["id"])
     # Rotate approval reconciliation independently of due sends; a waiting prefix cannot starve delivery.
     waiting = c.execute(
-        "SELECT * FROM email_sends WHERE mailbox=? AND state='waiting_approval' ORDER BY checked_at,rowid LIMIT 100",
+        "SELECT * FROM outbound_email WHERE mailbox=? AND queue_state='waiting_approval' ORDER BY checked_at,rowid LIMIT 100",
         (mailbox,),
     ).fetchall()
     due = _due(c, mailbox, now, 1000) if lease else []
@@ -1471,7 +1465,7 @@ def _lease(c, auth, mailbox, runner_id, *, permit=False, lease=True):
             # Its case was closed (before the close canceled its sends too): it never goes.
             retire(c, row, TASK_CLOSED)
             continue
-        c.execute("UPDATE email_sends SET checked_at=? WHERE id=?", (now, row["id"]))
+        OE.update(c, row["id"], checked_at=now)
         found = decision(c, auth, row)
         rid = row["approval_id"]
         bound = task_asks.grant(c, rid) if rid else None
@@ -1482,7 +1476,7 @@ def _lease(c, auth, mailbox, runner_id, *, permit=False, lease=True):
             # ask replaces this one once it is written (task_asks.ask_ok), so the case never moves on in between;
             # nothing here withdraws it.
             if row["state"] != "waiting_approval":
-                c.execute("UPDATE email_sends SET state='waiting_approval' WHERE id=?", (row["id"],))
+                OE.wait_for_approval(c, row["id"], row["decision"])
                 moved(c, row["id"])
             continue
         if standing in (task_asks.SENT_BACK, task_asks.WITHDRAWN):
@@ -1491,20 +1485,15 @@ def _lease(c, auth, mailbox, runner_id, *, permit=False, lease=True):
             reason = "approval_declined" if standing == task_asks.SENT_BACK else "approval_withdrawn"
             found["outcome"], found["reasons"] = "blocked", [reason]
         if found["outcome"] == "blocked":
-            c.execute(
-                # A send held past its undo window ends now: `send_after` too, so its task still shows how it ended
-                # (for_tasks reads ended sends by it).
-                "UPDATE email_sends SET state='blocked',decision=?,detail=?,finished_at=?,raw='',"
-                "send_after=max(send_after,?) WHERE id=?",
-                (dump(found), why(found), now, now, row["id"]),
-            )
+            if not OE.finish(c, row, "blocked", detail=why(found), decision=dump(found), extend_window=True):
+                continue
             settle_automation(c, row, "blocked", why(found))
             if bound:
                 task_asks.withdraw(c, rid, "The email was not sent: " + why(found))
             moved(c, row["id"])
             continue
         if found["outcome"] == "ask":
-            c.execute("UPDATE email_sends SET state='waiting_approval',decision=? WHERE id=?", (dump(found), row["id"]))
+            OE.wait_for_approval(c, row["id"], dump(found))
             if row["state"] != "waiting_approval":
                 moved(c, row["id"])
             # An OK that no longer lets it go (its giver may not approve it now), or an ask whose person may not, is
@@ -1521,30 +1510,23 @@ def _lease(c, auth, mailbox, runner_id, *, permit=False, lease=True):
                 request_approval(c, auth, row, found["policy"], why_again or "Asked again", renew=bool(bound))
             continue
         if row["state"] == "waiting_approval":
-            c.execute(
-                "UPDATE email_sends SET state='pending',send_after=?,decision=? WHERE id=?",
-                (H.shift(now, seconds=found["policy"]["undo_seconds"]), dump(found), row["id"]),
-            )
+            OE.queue(c, row["id"], H.shift(now, seconds=found["policy"]["undo_seconds"]), dump(found))
             moved(c, row["id"])
             continue
         if max(row["send_after"], H.shift(row["created_at"], seconds=found["policy"]["undo_seconds"])) > now:
             continue
         found = decision(c, auth, row, dispatch=True)
         if found["outcome"] != "allow":
-            c.execute("UPDATE email_sends SET decision=?,detail=? WHERE id=?", (dump(found), why(found), row["id"]))
+            OE.update(c, row["id"], decision=dump(found), detail=why(found))
             continue
-        token = H.new_id()
-        c.execute(
-            # `send_after` becomes when it went: a send held past its undo window for weeks is still shown once sent
-            # (for_tasks reads ended sends by it).
-            "UPDATE email_sends SET state='dispatching',decision=?,runner_id=?,claimed_at=?,lease_id=?,send_after=? "
-            "WHERE id=?",
-            (dump(found), runner_id, now, token, now, row["id"]),
-        )
+        token = OE.claim(c, row, now, runner_id, dump(found), audience(c, json.loads(row["recipients"])))
+        if not token:
+            continue
+        leased = {**dict(row), "lease_id": token}
+        if permit and not _permit(c, leased, found):
+            continue
         moved(c, row["id"])
-        if permit:
-            _permit(c, row, found)
-        return {**dict(row), "lease_id": token}
+        return leased
     return None
 
 
@@ -1559,11 +1541,13 @@ def _asked_of(c, rid):
 def _permit(c, row, found):
     """The one write after which a provider may have the email: a lost answer from here on is unknown. The OK that let
     it go is used in this same write, so it lets nothing else go."""
-    c.execute("UPDATE email_sends SET provider_attempted_at=?,decision=? WHERE id=?", (H.now(), dump(found), row["id"]))
+    if not OE.permit(c, row, dump(found)):
+        return False
     if found["approved"]:
         # Claimed here, before the provider is called; its task ends with the provider's answer (`_finish`).
         task_asks.use(c, row["approval_id"], SUBJECT + row["id"], content(row), row["actor"])
     H.event(c, row["actor"], "email.dispatch", row["id"], {"mailbox": row["mailbox"]})
+    return True
 
 
 UNCONFIRMED = "The connector did not confirm delivery"
@@ -1632,13 +1616,9 @@ def _record_outside_send(c, row, message, thread_id) -> str | None:
 
 
 def _finish(c, row, status, message="", detail="", *, thread_id="") -> str | None:
-    finished = c.execute(
-        # `send_after` ends no earlier than now: a send held past its undo window is still shown once it ended.
-        "UPDATE email_sends SET state=?,provider_message_id=?,detail=?,finished_at=?,raw='',"
-        "send_after=max(send_after,?) WHERE id=? AND state<>'sent'",
-        (status, message, detail, H.now(), H.now(), row["id"]),
-    )
-    if not finished.rowcount:
+    if row["state"] == "sent" or not OE.finish(
+        c, row, status, message=message, detail=detail, thread_id=thread_id, extend_window=True
+    ):
         return None
     receipt_id = _record_outside_send(c, row, message, thread_id) if status == "sent" and thread_id else None
     moved(c, row["id"])
@@ -1646,6 +1626,24 @@ def _finish(c, row, status, message="", detail="", *, thread_id="") -> str | Non
     settle_automation(c, row, status, detail, message)
     _outcome(c, row, status, detail)
     return receipt_id
+
+
+def _report_cutover(store):
+    """Finish the approval and automation bookkeeping for old sends whose provider answer was lost."""
+    with store.read() as c:
+        if not c.execute("SELECT 1 FROM outbound_email WHERE cutover_unconfirmed=1 LIMIT 1").fetchone():
+            return
+    with store.transaction(durable=True, notify=True) as c:
+        rows = c.execute("SELECT * FROM outbound_email WHERE cutover_unconfirmed=1 ORDER BY id LIMIT 100").fetchall()
+        for row in rows:
+            OE.update(c, row["id"], cutover_unconfirmed=None)
+            settle_automation(c, row, "unknown", row["detail"])
+            rid = row["approval_id"]
+            if rid and task_asks.standing(c, rid) != task_asks.USED:
+                task_asks.withdraw(c, rid, row["detail"])
+            _outcome(c, row, "unknown", row["detail"])
+            H.event(c, row["actor"], "email.unknown", row["id"], {"mailbox": row["mailbox"]})
+            moved(c, row["id"])
 
 
 # inbox -> when the drain last reached it (monotonic): the inbox waiting longest goes first. One small entry per
@@ -1666,11 +1664,12 @@ def drain(store, auth, limit=20, budget=None):
 
     if store.settings.rehearsal or store.settings.demo:
         return 0
+    _report_cutover(store)
     with store.read() as c:
         boxes = [
             r[0]
             for r in c.execute(
-                "SELECT DISTINCT mailbox FROM email_sends WHERE state IN ('waiting_approval','pending','dispatching')"
+                "SELECT DISTINCT mailbox FROM outbound_email WHERE queue_state IN ('waiting_approval','queued','attempting')"
             ).fetchall()
         ]
     boxes.sort(key=lambda box: _SERVED.get(box, 0.0))
@@ -1703,7 +1702,7 @@ def drain(store, auth, limit=20, budget=None):
                 idle = (
                     token is None
                     and not c.execute(
-                        "SELECT 1 FROM email_sends WHERE mailbox=? AND state IN ('waiting_approval','dispatching') LIMIT 1",
+                        "SELECT 1 FROM outbound_email WHERE mailbox=? AND queue_state IN ('waiting_approval','attempting') LIMIT 1",
                         (mailbox,),
                     ).fetchone()
                 )
@@ -1727,7 +1726,7 @@ def drain(store, auth, limit=20, budget=None):
             status, message, detail, thread_id = gmail_live.send(mailbox, token, row["raw"], row["thread_id"])
             receipt_id = None
             with store.transaction(durable=True, notify=True) as c:
-                current = c.execute("SELECT * FROM email_sends WHERE id=?", (row["id"],)).fetchone()
+                current = OE.get(c, row["id"])
                 if current and current["state"] == "dispatching" and current["lease_id"] == row["lease_id"]:
                     receipt_id = _finish(c, current, status, message, detail, thread_id=thread_id)
             # An interrupted metadata read leaves the confirmed send and its receipt saved.
@@ -2178,14 +2177,14 @@ def install(app, store, auth, mutate):
     def sends(request: Request, mailbox: str, pending: bool = False, cursor: str = "", limit: int = 50):
         with store.read() as c:
             address = inbox(c, mailbox, request.state.identity)
-            sql, args = "SELECT * FROM email_sends WHERE mailbox=?", [address]
+            sql, args = "SELECT * FROM outbound_email WHERE mailbox=?", [address]
             if pending:
-                sql += " AND state IN ('pending','waiting_approval')"
+                sql += " AND queue_state IN ('queued','waiting_approval')"
             if cursor:
-                sql += " AND rowid<(SELECT rowid FROM email_sends WHERE id=?)"
+                sql += " AND (created_at,id)<(SELECT created_at,id FROM outbound_email WHERE id=?)"
                 args.append(cursor)
             cap = min(100, max(1, limit))
-            rows = c.execute(sql + " ORDER BY rowid DESC LIMIT ?", (*args, cap + 1)).fetchall()
+            rows = c.execute(sql + " ORDER BY created_at DESC,id DESC LIMIT ?", (*args, cap + 1)).fetchall()
             out, spent = [], 0
             for row in rows[:cap]:
                 item = public(row)
@@ -2208,7 +2207,7 @@ def install(app, store, auth, mutate):
             return False
 
     def preview_row(c, request, sid):
-        row = c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone()
+        row = OE.get(c, sid)
         if not row:
             raise Problem("not_found", "Send not found", 404)
         if request.state.identity.actor != row["actor"] and not can_ok(
@@ -2340,19 +2339,19 @@ def install(app, store, auth, mutate):
             }
 
         def work(c):
-            row = c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone()
+            row = OE.get(c, sid)
             if not row or not can_cancel(c, request.state.identity, row):
                 raise Problem("forbidden", "Only the sender, its manager or an inbox admin cancels a send", 403)
             if row["state"] == "canceled":
                 return {"send": public(row), **kept(row)}
             if row["state"] not in ("pending", "waiting_approval"):
                 raise Problem("state", "This email can no longer be canceled; delivered email cannot be recalled", 409)
-            c.execute("UPDATE email_sends SET state='canceled',raw='',finished_at=? WHERE id=?", (H.now(), sid))
+            OE.finish(c, row, "canceled", detail=row["detail"])
             moved(c, sid)
             settle_automation(c, row, "canceled")
             if row["approval_id"]:
                 task_asks.withdraw(c, row["approval_id"], "The email was canceled.")
             H.event(c, request.state.identity.actor, "email.canceled", sid, {})
-            return {"send": public(c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone()), **kept(row)}
+            return {"send": public(OE.get(c, sid)), **kept(row)}
 
         return mutate(request, Empty(), work, durable=True)
