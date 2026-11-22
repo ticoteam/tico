@@ -177,6 +177,7 @@ for row in sqlite3.connect("file:/data/hub.sqlite?mode=ro", uri=True).execute(sy
 }
 
 cleanup() {
+  cat "$WORK/stderr" >&2 2>/dev/null   # a step stopped mid-way (killed, or exited) still shows what it said on stderr
   [ "$KEEP" = 1 ] && { echo "journey: kept the stack (docker compose -p $PROJECT --project-directory $DIR ...), $RUNNER and volume $RUNNER_VOLUME"; return; }
   docker rm -f "$RUNNER" "$SWAP_HELPER" "$RELEASE_SERVER" "$REGISTRY_NAME" "$REFUSED" >/dev/null 2>&1
   dc down -v >/dev/null 2>&1
@@ -199,7 +200,8 @@ start_runner() {  # image tag, then the join arguments: as docker/runner.compose
   docker rm -f "$RUNNER" >/dev/null 2>&1
   docker run -d --name "$RUNNER" --restart unless-stopped --network "$NET" -e OPENAI_API_KEY=journey-fake -v "$RUNNER_VOLUME:/home/runner" \
     --user 0 --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add KILL --cap-add SETGID --cap-add SETUID \
-    --security-opt no-new-privileges:true "$RUNNER_IMAGE:$tag" join --url http://server:8765 "$@" --label "Journey runner" >/dev/null || return 1
+    --security-opt no-new-privileges:true "$RUNNER_IMAGE:$tag" join --url http://server:8765 "$@" --label "Journey runner" >/dev/null ||
+    { say "the runner container did not start ($RUNNER_IMAGE:$tag): Docker's error is above"; return 1; }
   # The fake harness: a `codex` on the runner's PATH that speaks the app-server protocol. The runner finds it, the
   # OPENAI_API_KEY given above satisfies its sign-in check, and no model or network is involved. The mode is set
   # before the copy: root here has no FOWNER, so it cannot chmod a file that keeps the host user as owner.
@@ -721,7 +723,7 @@ step_backup() {
     fi
   fi
   # Its own project, network and MinIO.
-  TICO_IMAGE="$SERVER_IMAGE" TICO_TAG="$CAND" docker/backup-test.sh > "$WORK/backup.log" 2>&1 || { tail -n 15 "$WORK/backup.log" | sed 's/^/    /'; return 1; }
+  TICO_IMAGE="$SERVER_IMAGE" TICO_TAG="$CAND" docker/backup-test.sh > "$WORK/backup.log" 2>&1 || { tail -n 15 "$WORK/backup.log" | sed 's/^/    /'; say "docker/backup-test.sh failed: $(tail -n 3 "$WORK/backup.log" | tr '\n' ' ')"; return 1; }
 }
 
 # ---------------------------------------------------------------------------------------------- run
@@ -731,11 +733,18 @@ run_step() {  # label function; after a failure the rest are skipped
   printf '==> %s\n' "$label"
   if [ "$FAILED" = 1 ]; then RESULTS+=("$label|SKIP|0"); return; fi
   : > "$WORK/said"
-  if "$fn"; then RESULTS+=("$label|PASS|$((SECONDS - start))")
+  # The step's stderr goes to a file and is printed when the step ends: what Docker, curl or Python said about a failure
+  # (a container that did not start, a response that was not JSON) reaches the summary even when the step said nothing.
+  local ok=0 why
+  "$fn" 2> "$WORK/stderr" && ok=1
+  cat "$WORK/stderr" >&2; cp "$WORK/stderr" "$WORK/step.err"; : > "$WORK/stderr"
+  if [ "$ok" = 1 ]; then RESULTS+=("$label|PASS|$((SECONDS - start))")
   else
     RESULTS+=("$label|FAIL|$((SECONDS - start))"); FAILED=1
     # The container logs below push the step's own lines out of the release gate's tail: the summary repeats them.
-    WHY+=("$label: $(tail -n 5 "$WORK/said" | tr '\n' ' ' | cut -c1-600)")
+    why="$(tail -n 5 "$WORK/said" | tr '\n' ' ' | cut -c1-400)"
+    [ ! -s "$WORK/step.err" ] || why="$why| stderr: $(grep -v '^[[:space:]]*$' "$WORK/step.err" | uniq | tail -n 3 | tr '\n' ' ' | cut -c1-400)"
+    WHY+=("$label: ${why:-no message captured}")
     failure_logs
   fi
 }
@@ -788,7 +797,7 @@ if [ "$FAST" = 0 ]; then
 fi
 
 if [ "${#WHY[@]}" -gt 0 ]; then
-  printf '\nWhy it failed (the step'"'"'s own lines; nothing after the colon: it failed with no message):\n'
+  printf '\nWhy it failed (the step'"'"'s own lines, then the last of its stderr):\n'
   printf '  %s\n' "${WHY[@]}"
 fi
 printf '\n%-60s %-6s %s\n' STEP RESULT SECONDS

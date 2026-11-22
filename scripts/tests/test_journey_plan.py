@@ -72,3 +72,13 @@ def test_a_failed_step_says_why_above_the_step_table(tmp_path):
     why = result.stdout.split('\nWhy it failed')[1].split('\nSTEP')[0]
     assert 'install v0.6.208 (bundle, auth none): could not download the v0.6.208 bundle' in why
     assert why in '\n'.join(result.stdout.splitlines()[-40:])
+
+
+def test_a_reason_only_on_stderr_reaches_the_summary(tmp_path):
+    """A step can fail on what Docker, curl or Python printed to stderr without a line of its own (a runner container
+    that did not start, a response that was not JSON): the summary carries the last of the step's stderr too."""
+    result, _ = run_journey(tmp_path, 'v0.6.208')
+    why = result.stdout.split('\nWhy it failed')[1].split('\nSTEP')[0]
+    assert "stderr: curl: (37) Couldn't open file" in why
+    assert why.count('curl: (37)') == 1  # repeated lines once
+    assert why in '\n'.join(result.stdout.splitlines()[-40:])
