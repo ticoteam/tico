@@ -28,6 +28,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from datetime import timezone
+from functools import partial
 from typing import Any, Callable, NamedTuple, cast
 
 from fastapi import Request
@@ -318,7 +319,9 @@ def request_approval(c: Any, row: Any, *, renew: bool = False) -> bool:
                 c,
                 _asker(row),
                 person,
-                f"Send this {row['channel']} {row['operation']}?",
+                "May I send this text message?"
+                if row["channel"] in outbound_sms.SERVICES
+                else f"Send this {row['channel']} {row['operation']}?",
                 shows=[SUBJECT + row["id"]],
                 subject=SUBJECT + row["id"],
                 content=content(row),
@@ -555,11 +558,15 @@ def ask_owner(c: Any, row: Any) -> None:
     task = H.task(c, row["task_id"]) if row["task_id"] else None
     people = owner_asks.people_for(c, task, row["actor"])
     what = f"{row['channel']} {row['operation']} on {row['destination']}"[:200]
+    provider = row["channel"]
+    if provider in outbound_sms.SERVICES:
+        what = f"text to {row['destination']}"
+        provider = "Twilio" if provider == "sms" else "Close"
     made = owner_asks.ask(
         c,
         None,
         people,
-        f"Tico can't tell whether its {what} went through: check {row['channel']}, and confirm it in Tico if it did.",
+        f"Tico can't tell whether its {what} went through: check {provider}, and confirm it in Tico if it did.",
         title=f"Check a {what}",
         body=f"Outbound action {row['id']} (/api/v2/outbound-actions/{row['id']}). If it went: "
         f"`tico outbound confirm-sent {row['id']}`. Tico never sends it again on its own.",
@@ -1247,7 +1254,7 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
 
 
 # The channels that ship. Each module imports this one only inside its functions, so either may be imported first.
-from . import outbound_jira
+from . import outbound_jira, outbound_sms
 
 register(
     Adapter(
@@ -1259,3 +1266,13 @@ register(
         freeze=outbound_jira.freeze,
     )
 )
+
+for _channel in outbound_sms.SERVICES:
+    register(
+        Adapter(
+            _channel,
+            partial(outbound_sms.prepare, channel=_channel),
+            outbound_sms.dispatch,
+            freeze=outbound_sms.freeze if _channel == "sms" else None,
+        )
+    )

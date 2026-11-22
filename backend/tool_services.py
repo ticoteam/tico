@@ -28,6 +28,13 @@ from .slugs import slugify
 
 AUTH_SCHEME = re.compile(r"^(bearer|basic_user|basic_password|header:[A-Za-z0-9-]{1,60}|query:[A-Za-z0-9_.-]{1,60})$")
 
+# Background adapters use only an administrator's opt-in and company keys without a personal holder.
+RECORD_INTEGRATION = (
+    "tl.audience IS NULL AND COALESCE(tl.kind, 'api') = 'api' AND tl.record_owner <> '' "
+    "AND tl.delivery <> 'computer' AND tl.created_by NOT LIKE 'bot:%'"
+)
+SHARED_KEY = "k.ciphertext IS NOT NULL AND k.kind <> 'login' AND COALESCE(k.holder, '') = ''"
+
 
 def _s(name, base_url, check_path="", auth="bearer", env="", aliases=(), username="", headers=None, rejected=(401,)):
     return {

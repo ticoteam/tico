@@ -214,7 +214,7 @@ def _visible_rows(c: sqlite3.Connection, r: V.Reader, ids: Sequence[str]) -> lis
     )
 
 
-def _follow(c: sqlite3.Connection, ids: Iterable[str]) -> list[str]:
+def follow_merges(c: sqlite3.Connection, ids: Iterable[str]) -> list[str]:
     """Each id, or the entity it was merged into (a merged row answers with the kept one, up to five merges)."""
     out: list[str] = []
     for entity_id in ids:
@@ -1978,7 +1978,7 @@ def get(c: sqlite3.Connection, who: str, ref: object) -> list[Row]:
             row[0]
             for row in c.execute("SELECT DISTINCT entity_id FROM entity_external_refs WHERE external_id = ?", (text,))
         ]
-    return _visible_rows(c, r, _follow(c, list(dict.fromkeys(ids))))
+    return _visible_rows(c, r, follow_merges(c, list(dict.fromkeys(ids))))
 
 
 def find(
@@ -2293,14 +2293,14 @@ def self_summary(c: sqlite3.Connection, who: str) -> dict[str, Any] | None:
 def visible_entity(c: sqlite3.Connection, who: str, entity_id: str) -> bool:
     """Whether `who` sees the entity `entity_id` names, as `card` does: a merged one is the one it was merged into, an
     erased one is gone, a hidden one is not seen."""
-    return bool(_visible_rows(c, V.reader(c, who), _follow(c, [entity_id])))
+    return bool(_visible_rows(c, V.reader(c, who), follow_merges(c, [entity_id])))
 
 
 def card(c: sqlite3.Connection, who: str, entity_id: str) -> dict[str, Any] | None:
     """An entity as its reader sees it: its visible values (with source and age), its current links to visible entities,
     and its notes the reader may read. None when the entity does not show."""
     r = V.reader(c, who)
-    found = _visible_rows(c, r, _follow(c, [entity_id]))
+    found = _visible_rows(c, r, follow_merges(c, [entity_id]))
     if not found:
         return None
     ent = found[0]
@@ -2402,7 +2402,7 @@ def history(
     """Past values, newest first, keyset paged on (active_until, id): one field's when an attribute is named, else every
     field's the reader may see. None when the entity, or the named field, does not show to the reader."""
     r = V.reader(c, who)
-    shown = _visible_rows(c, r, _follow(c, [entity_id]))
+    shown = _visible_rows(c, r, follow_merges(c, [entity_id]))
     if not shown:
         return None
     me = shown[0]
@@ -2476,7 +2476,7 @@ def run_lookups(c: sqlite3.Connection, attempt_id: str) -> list[str]:
             (attempt_id,),
         )
     ]
-    return _follow(c, ids)
+    return follow_merges(c, ids)
 
 
 def identifier_entities(c: sqlite3.Connection, pairs: Iterable[tuple[str, str]]) -> dict[tuple[str, str], list[str]]:
@@ -2499,7 +2499,7 @@ def identifier_entities(c: sqlite3.Connection, pairs: Iterable[tuple[str, str]])
                 (kind, json.dumps(chunk)),
             ):
                 found.setdefault((kind, row["normalized_value"]), []).append(row["entity_id"])
-    return {key: _follow(c, ids) for key, ids in found.items()}
+    return {key: follow_merges(c, ids) for key, ids in found.items()}
 
 
 def company_visible(c: sqlite3.Connection, ids: Iterable[str]) -> set[str]:

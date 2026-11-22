@@ -41,7 +41,7 @@ SCOPE_HEADS = ("entity", "type", "kind", "self", "link", "channel")
 # The channels a rule may name, and the channel each outbound operation goes out on. Every other write (a chat message,
 # a comment, a task) is chat. `email` is the Directory's own action name for a mail.
 CHANNELS = ("chat", "email", "sms", "call", "letter")
-CHANNEL_OF = {"mail": "email", "email": "email", "sms": "sms", "call": "call", "letter": "letter"}
+CHANNEL_OF = {"mail": "email", "email": "email", "sms": "sms", "close_sms": "sms", "call": "call", "letter": "letter"}
 
 
 class ScopeError(ValueError):
@@ -117,7 +117,12 @@ def _binds(c: sqlite3.Connection, who: str, row: dict[str, Any]) -> bool:
 
 
 def _matches(
-    c: sqlite3.Connection, scope: Sequence[tuple[str, ...]], reached: dict[str, Any], me: str | None
+    c: sqlite3.Connection,
+    scope: Sequence[tuple[str, ...]],
+    reached: dict[str, Any],
+    me: str | None,
+    *,
+    follow_merges: bool,
 ) -> set[str]:
     """The entities the scope names that the walk reached."""
     found: set[str] = set()
@@ -135,7 +140,7 @@ def _matches(
             found |= set(S.linked_to(c, me, term[1]))
         else:
             found |= set(S.linked_to(c, term[2], term[1]))
-    return found & set(reached)
+    return (set(S.follow_merges(c, found)) if follow_merges else found) & set(reached)
 
 
 def _nearest(ids: set[str], reached: dict[str, Any]) -> str | None:
@@ -156,7 +161,7 @@ def _judge(
         if channels and channel not in channels:
             return "skip", None, ""
         toward = [term for term in scope if term[0] != "channel"]
-        hit = _nearest(_matches(c, toward, reached, me), reached) if toward else None
+        hit = _nearest(_matches(c, toward, reached, me, follow_merges=channel == "sms"), reached) if toward else None
         if toward and hit is None:
             return "skip", None, ""
         if row["applies_when"]:
@@ -199,8 +204,9 @@ def rules_for(
     starts = list(dict.fromkeys([*targets, *S.contact_entities(c, contacts)]))
     if me is not None and me not in starts:
         starts.append(me)
-    reached, truncated = S.walk(c, starts, WALK_DEPTH)
     channel = channel_of(action)
+    # A contact merge must carry an SMS restriction to the kept entity.
+    reached, truncated = S.walk(c, S.follow_merges(c, starts) if channel == "sms" else starts, WALK_DEPTH)
     judged = [(row, *_judge(c, who, row, reached, me, channel)) for row in _structured(c)]
     ids = {str(step[k]) for _, _, hit, _ in judged if hit for step in reached[hit] for k in ("from", "to")}
     ids |= {hit for _, _, hit, _ in judged if hit}
