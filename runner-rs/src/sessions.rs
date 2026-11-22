@@ -1659,16 +1659,46 @@ pub struct Place {
 /// Outside every checkout and scan root; all outcomes, including a canceled future, discard the turn's files.
 pub(crate) struct TurnScratch(pub PathBuf);
 
+pub(crate) const RELATIONSHIP_RUNS: &str = "relationship-runs";
+
 impl TurnScratch {
+    pub(crate) fn relationship_root(state: &Path) -> PathBuf {
+        let parent = if crate::isolation::enabled() {
+            crate::isolation::turn_dir()
+        } else {
+            state.join("tmp")
+        };
+        parent.join(RELATIONSHIP_RUNS)
+    }
+
+    pub(crate) fn sweep_relationships(root: &Path) -> Result<(), String> {
+        crate::repo_safety::outside_installation(root)?;
+        match std::fs::remove_dir_all(root) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
     fn relationship(root: &Path, attempt: &str) -> Result<Self, String> {
-        use std::os::unix::fs::DirBuilderExt;
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
         if !slug_ok(attempt) {
             return Err("invalid relationship attempt id".into());
         }
         let path = root.join(attempt);
         crate::repo_safety::outside_installation(&path)?;
-        std::fs::create_dir_all(root)
-            .map_err(|e| format!("cannot create runner scratch root: {e}"))?;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o711)
+            .create(root)
+            .and_then(|()| {
+                if crate::isolation::enabled() {
+                    crate::isolation::keep_supervisor_directory(root, 0o711)
+                } else {
+                    std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o711))
+                }
+            })
+            .map_err(|e| format!("cannot prepare runner scratch root: {e}"))?;
         std::fs::DirBuilder::new()
             .mode(0o700)
             .create(&path)
@@ -1808,6 +1838,10 @@ impl Drop for PersonalCopy {
 }
 
 impl Place {
+    pub(crate) fn take_scratch(&mut self) -> Option<TurnScratch> {
+        self._scratch.take()
+    }
+
     /// The folders a leased turn user is given, for the primary harness and any fallback alike: the turn's own, the bot's
     /// checkout and the task's set-up worktrees; a person's own chat its PersonalCopy alone, never the shared checkout.
     pub fn granted_paths(&self) -> Vec<PathBuf> {
@@ -1878,13 +1912,8 @@ impl Runner {
         let scratch = if make_page {
             Some(TurnScratch::make_page(&text_of(&attempt["id"]))?)
         } else if relationship {
-            let temp = if crate::isolation::enabled() {
-                crate::isolation::turn_dir()
-            } else {
-                self.state.directory.join("tmp")
-            };
             Some(TurnScratch::relationship(
-                &temp.join("relationship-runs"),
+                &TurnScratch::relationship_root(&self.state.directory),
                 &text_of(&attempt["id"]),
             )?)
         } else {

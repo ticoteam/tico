@@ -242,7 +242,9 @@ with a ready harness. The worker needs no checkout. Turns for a single
 relationship wait in its `entity:<id>` lane. Other relationships can run at the
 same time within the computer's turn limit. Every turn starts a fresh provider
 session in an attempt-specific scratch directory that is removed after the turn
-finishes.
+finishes. Strong per-run isolation requires the Docker runner with its turn UID
+pool enabled. Without that pool, including on Mac, turns run as the runner's
+user in mode-0700 scratch directories and share the ordinary bot trust level.
 
 The turn can open tasks and memory pages belonging to its relationship when the
 person who started it can read them. An intake wake can also grant the thread it

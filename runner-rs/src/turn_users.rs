@@ -332,6 +332,8 @@ impl Pool {
         // Restore owner-only workspace files to bot for the next turn. Sweep the whole shared home too:
         // leaving an inode owned by this UID there would give its next borrower owner rights.
         sweep(&self.home, uid, Some((self.bot, self.gid)))?;
+        let relationship_root = crate::isolation::turn_dir().join(crate::sessions::RELATIONSHIP_RUNS);
+        sweep_relationship_user(&relationship_root, uid).map_err(|e| e.to_string())?;
         for path in [
             PathBuf::from("/tmp"),
             PathBuf::from("/var/tmp"),
@@ -346,6 +348,24 @@ impl Pool {
         }
         Ok(())
     }
+}
+
+fn sweep_relationship_user(root: &Path, uid: u32) -> std::io::Result<()> {
+    let entries = match std::fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    for entry in entries {
+        let path = entry?.path();
+        // Inspect only the children of the supervisor-owned root. Other UIDs may still be writing in theirs.
+        match std::fs::symlink_metadata(&path) {
+            Ok(info) if info.is_dir() && info.uid() == uid => std::fs::remove_dir_all(path)?,
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn processes(uid: u32) -> Result<Vec<i32>, String> {
@@ -555,6 +575,24 @@ fn walk(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relationship_sweeps_remove_only_the_released_users_scratch_then_clear_startup_leftovers() {
+        let dir = std::env::temp_dir().join(format!("tico-scratch-{}", uuid::Uuid::new_v4()));
+        let root = dir.join(crate::sessions::RELATIONSHIP_RUNS);
+        let scratch = root.join("interrupted-attempt");
+        let uid = unsafe { libc::geteuid() };
+        std::fs::create_dir_all(&scratch).unwrap();
+        std::fs::write(scratch.join("result"), "old turn").unwrap();
+        sweep_relationship_user(&root, uid + 1).unwrap();
+        assert!(scratch.exists());
+        sweep_relationship_user(&root, uid).unwrap();
+        assert!(!scratch.exists());
+        std::fs::create_dir(&scratch).unwrap();
+        crate::sessions::TurnScratch::sweep_relationships(&root).unwrap();
+        assert!(!root.exists());
+        std::fs::remove_dir(dir).unwrap();
+    }
 
     /// The supervisor keeps an owner-only sidecar in a bot's `.git` (gitlocks.rs `tico-lock-recovery`); the share,
     /// run as the bot, cannot open it. On Nov 9 every turn on a new hosted company's Bot computer stopped with

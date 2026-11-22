@@ -382,6 +382,10 @@ pub fn stateless_chat(attempt: &Value) -> bool {
             && text_of(&attempt["task"]["id"]).is_empty()
 }
 
+fn isolated_turn(relationship: bool, harness_can_isolate: bool, pool_available: bool) -> bool {
+    pool_available && (relationship || harness_can_isolate)
+}
+
 /// The epoch that moves when this turn's thread is cleared, and the conversation it is recorded for: the bot's shared
 /// thread moves with any of its direct chats' Clear (`bot_session_epoch`, recorded bot-wide as ""), every other thread
 /// with its own conversation's (`session_epoch`). None from a Hub that sends neither.
@@ -2373,9 +2377,10 @@ impl Runner {
         let effort = Some(text_of(&config["reasoning_effort"])).filter(|e| !e.is_empty());
         let model = Some(text_of(&config["model"])).filter(|m| !m.is_empty());
         let mut execution_path: PathBuf = crate::sessions::local_path(&self.config, &bot, &config);
+        let mut vault = Vault::default();
+        // A canceled turn drops its scratch before the vault can return its UID.
         let mut place: Option<crate::sessions::Place> = None;
         let mut skipped: Vec<String> = vec![];
-        let mut vault = Vault::default();
         #[cfg(test)]
         {
             vault.relay = tests::RUN_RELAY.with(|relay| relay.borrow_mut().take());
@@ -2466,13 +2471,14 @@ impl Runner {
                 subscription: None,
             });
             let ctx = EnvContext { url: &self.config.url(), projects_dir: &self.config.projects_dir(), state_dir: &self.state.directory };
-            // A turn runs as its own leased OS user when its model is a Tico model (required) or when a harness it may
-            // run on keeps no owner-only state shared across turns (`isolated_user`, optional: a runner with no pool
-            // runs it as `bot`). Harnesses whose sign-in files are 0600 in the bot's home run as `bot`; with them a
-            // turn can still enter every bot's checkout, as can the runner's own git (SECURITY.md).
-            let own_user = |r: &str, h: &str| crate::harness_tools::caps(r, h).isolated_user;
-            let isolated = !relationship && own_user(&runtime, &text_of(&config["harness"]));
-            if crate::hosts::pi::is_gateway(model.as_deref()) || (isolated && crate::turn_users::available()) {
+            // Gateway requires a private user on Docker. With a pool, relationship turns always lease one
+            // and ordinary turns lease one when the harness supports it.
+            let isolated = isolated_turn(
+                relationship,
+                crate::harness_tools::caps(&runtime, &text_of(&config["harness"])).isolated_user,
+                crate::turn_users::available(),
+            );
+            if crate::hosts::pi::is_gateway(model.as_deref()) || isolated {
                 // The user and relay this conversation's kept pi runs with (hosts/pi.rs Pool), when it has one.
                 // Only a turn that stays on the kept pi takes it: reclaim removes it from the pool, so any other turn
                 // would drop its lease. Left in the pool, idle eviction releases it the normal way.
@@ -3884,8 +3890,13 @@ impl Runner {
         // reply, the changes, the result) before it is sent back.
         let refreshed = crate::model_subscriptions::finish(&mut vault.subscriptions);
         mask(&aid, &mut redactor, &mut vault, refreshed);
-        let user = vault.turn_user.take();
-        let _ = tokio::task::spawn_blocking(move || drop(user)).await;
+        let scratch = if relationship {
+            place.as_mut().and_then(crate::sessions::Place::take_scratch)
+        } else {
+            None
+        };
+        let cleanup = (scratch, vault.turn_user.take());
+        let _ = tokio::task::spawn_blocking(move || drop(cleanup)).await;
         // What the next turn on the primary session is told: that this one was cut off, or that a side session ran.
         if host.is_some() && (side_run || fallback.is_some() || drove.outcome == "interrupted") {
             let kept = if side_run || fallback.is_some() {
@@ -3909,7 +3920,7 @@ impl Runner {
         let mut committed_secret = false;
         if let Some(r) = &redactor {
             reply = r.scrub_text(&reply).into_owned();
-            if host.is_some() {
+            if host.is_some() && !relationship {
                 let tree = scrub_changes(r, &execution_path, &started_at).await;
                 mark("scrubbed", &aid);
                 let mut stamps: Vec<(String, String)> = vec![];
@@ -8960,6 +8971,14 @@ for line in sys.stdin:
         }
     }
 
+    #[test]
+    fn relationship_turn_identity_depends_on_the_pool_even_for_shared_user_harnesses() {
+        assert!(isolated_turn(true, false, true));
+        assert!(!isolated_turn(true, true, false));
+        assert!(!isolated_turn(false, false, true));
+        assert!(isolated_turn(false, true, true));
+    }
+
     #[tokio::test]
     async fn relationship_turns_take_distinct_lanes_sessions_and_scratch() {
         let (runner, dir) = runner_at("http://127.0.0.1:1", "relationship-scratch");
@@ -8986,6 +9005,10 @@ for line in sys.stdin:
                     .join(id)
             );
             use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(path.parent().unwrap()).unwrap().permissions().mode() & 0o777,
+                0o711
+            );
             assert_eq!(
                 std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
                 0o700
