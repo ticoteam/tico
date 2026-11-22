@@ -590,6 +590,53 @@ def test_module_entrypoint_requeues_a_slack_429(gateway, hub, monkeypatch):
         assert row["next_attempt_at"] == H.shift(gateway.clock(), seconds=17)
 
 
+def test_a_delayed_permit_requeues_until_slack_audience_evidence_is_fresh(gateway, hub, monkeypatch):
+    mid = routed_reply(gateway, hub)
+    gateway.mirror()
+    attempt = OA.attempt_result
+
+    def delay_permit(*args, **kwargs):
+        gateway.clock.advance(G.POST_EVIDENCE_SECONDS)
+        return attempt(*args, **kwargs)
+
+    monkeypatch.setattr(OA, "attempt_result", delay_permit)
+    gateway.deliver()
+    with hub.read() as c:
+        row = OA.get(c, mid)
+        assert row["state"] == "queued" and row["provider_attempted_at"] is None
+    assert not gateway.slack.posts
+
+    monkeypatch.setattr(OA, "attempt_result", attempt)
+    gateway.clock.now = row["next_attempt_at"]
+    assert [post["state"] for post in gateway.deliver()] == ["sent"]
+
+
+@pytest.mark.parametrize("thread_edit", [True, False], ids=["withdraw-on-edit", "reject-stale-revision"])
+def test_a_thread_edit_before_the_permit_stops_the_queued_slack_copy(gateway, hub, monkeypatch, thread_edit):
+    from backend import threads
+
+    mid = routed_reply(gateway, hub)
+    gateway.mirror()
+    evidence = gateway.post_evidence
+
+    def edit_before_permit(channel):
+        result = evidence(channel)
+        with hub.transaction() as c:
+            if thread_edit:
+                threads.edit_message(c, "bot:legal", mid, "Updated reply.")
+                assert OA.get(c, mid)["state"] == "canceled"
+            else:
+                c.execute("UPDATE messages SET revision=revision+1 WHERE id=?", (mid,))
+        return result
+
+    monkeypatch.setattr(gateway, "post_evidence", edit_before_permit)
+    gateway.deliver()
+    with hub.read() as c:
+        row = OA.get(c, mid)
+        assert row["state"] == "canceled" and row["provider_attempted_at"] is None and not row["payload"]
+    assert not gateway.slack.posts
+
+
 @pytest.mark.parametrize("code", ["internal_error", "fatal_error", "unknown_error"])
 def test_slack_errors_that_may_have_posted_stay_unknown(gateway, hub, code):
     mid = routed_reply(gateway, hub)
@@ -836,6 +883,33 @@ def test_a_muted_bot_stays_in_tico_unless_the_person_is_talking_to_it_in_slack(g
     gateway.mirror()
     posts = {r["message_id"]: r["state"] for r in rows(hub, f"SELECT * FROM ({OS.POSTS})")}
     assert posts == {answer: "queued", later: "queued", muted: "canceled", other: "queued"}
+
+
+@pytest.mark.parametrize(("setting", "value"), [("slack_muted_bots", ["legal"]), ("notify_slack_bot_messages", False)])
+@pytest.mark.parametrize("active", [False, True], ids=["unprompted", "active-in-slack"])
+def test_slack_rate_limit_retry_rechecks_copy_preferences(gateway, hub, setting, value, active):
+    if active:
+        mid = routed_reply(gateway, hub)
+        gateway.mirror()
+    else:
+        link_task_requester(hub)
+        with hub.transaction() as c:
+            mid = H.say(c, "bot:legal", "human:ana", "Weekly contract digest.")["id"]
+        gateway.originate()
+    gateway.slack.failures.append(G.SlackError("chat.postMessage", "ratelimited", retry_after=17))
+    assert [post["state"] for post in gateway.deliver()] == ["rate_limited"]
+    with hub.transaction() as c:
+        raw = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
+        for person in raw["people"]:
+            if person["id"] == "ana":
+                person[setting] = value
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(raw),))
+
+    gateway.clock.advance(17)
+    assert [post["state"] for post in gateway.deliver()] == ["sent" if active else "canceled"]
+    with hub.read() as c:
+        assert OA.get(c, mid)["attempts"] == (2 if active else 1)
+    assert len(gateway.slack.posts) == int(active)
 
 
 def test_routing_counts_against_the_senders_daily_cap_and_over_it_the_assistant_gets_the_message(gateway, hub):

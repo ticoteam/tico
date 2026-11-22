@@ -280,18 +280,70 @@ def test_slack_release_permit_checks_for_slack_connect_after_the_jira_read(compa
 
     gateway, task_id, _, channel = released_slack
     live = JS.call
+    info = gateway.slack.conversations_info
+    calls = []
 
     def share_channel(*args, **kwargs):
+        assert not company.writer.queue
+        calls.append("jira")
         result = live(*args, **kwargs)
         monkeypatch.setitem(CHANNELS, channel, {**CHANNELS[channel], "is_ext_shared": True})
         return result
 
+    def slack_info(channel):
+        assert not company.writer.queue
+        calls.append("slack")
+        return info(channel)
+
     monkeypatch.setattr(JS, "call", share_channel)
+    monkeypatch.setattr(gateway.slack, "conversations_info", slack_info)
     gateway.deliver()
     with company.read() as c:
         row = actions(c, task_id)["post"]
         assert row["state"] == "blocked" and "Slack Connect" in row["last_error"]
         assert row["provider_attempted_at"] is None
+    assert calls == ["jira", "slack"] and not gateway.slack.posts
+
+
+@pytest.mark.parametrize("existing", [False, True], ids=["new-rule", "new-version"])
+def test_release_slack_rechecks_rules_changed_during_the_jira_read(company, released_slack, monkeypatch, existing):
+    from backend import org_rule_check as OR, org_rules
+    from backend.auth import Auth, Identity
+    from backend.tests.helpers.org_rule_check import COLOR, Judge
+
+    gateway, task_id, _, _ = released_slack
+    auth = Auth(company)
+    owner = Identity("human:ana", "owner", email="ana@acme.example")
+    gateway._judge = Judge(company, {COLOR: "Released in v1.0.0"})
+    rule = {"kind": "internal", "text": COLOR, "who": {"everyone": True}, "with": {}, "if_broken": "block"}
+    if existing:
+        with company.transaction() as c:
+            saved = org_rules.add_rule(c, auth, owner, {**rule, "text": "Keep other details private."})
+
+    live = JS.call
+
+    def change_rule(*args, **kwargs):
+        result = live(*args, **kwargs)
+        with company.transaction() as c:
+            if existing:
+                org_rules.edit_rule(c, auth, owner, saved["id"], {"version": saved["version"], "text": COLOR})
+            else:
+                org_rules.add_rule(c, auth, owner, rule)
+        return result
+
+    monkeypatch.setattr(JS, "call", change_rule)
+    gateway.deliver()
+    with company.read() as c:
+        row = actions(c, task_id)["post"]
+        assert row["state"] == "queued" and row["attempts"] == 0 and row["provider_attempted_at"] is None
+    assert not gateway.slack.posts
+
+    monkeypatch.setattr(JS, "call", live)
+    gateway.clock = lambda: row["next_attempt_at"]
+    gateway.deliver()
+    OR.settle_parts()
+    with company.read() as c:
+        assert actions(c, task_id)["post"]["state"] == "blocked"
     assert not gateway.slack.posts
 
 

@@ -184,7 +184,9 @@ def queue(
         "destination": channel,
         "occurrence_key": key if key is not None else _post_key(c, mid),
         "actor": H.bot_actor(bot) if bot else H.TICO_ACTOR,
-        "payload": json.dumps({"text": text}) if text and not error else "",
+        "payload": json.dumps({"text": text, "source_revision": int(message.get("revision") or 0)})
+        if text and not error
+        else "",
         "metadata": json.dumps({"thread_ts": thread_ts, "recipient_actor": recipient}),
         "state": "canceled" if error else "queued",
         "send_after": at,

@@ -156,9 +156,10 @@ hour and tries again (not counted as a retry, so the retry cap never ends it). E
 with a shared write key is the administrator's explicit opt-in for Tico to keep linked issues in step, and a close-out
 also needs a merged PR in a real release tag. A public task with an eligible bot also gets a reply in its oldest
 linked Slack thread in the configured workspace. The gateway checks that the task still has one primary Jira issue.
-The gateway reads Jira before taking its send permit, then rechecks the live Slack audience, Jira target, Slack thread,
-task privacy and org-rule audience inside the permit. A withdrawn, missing, or differently closed issue defers the same action.
-A changed org-rule audience triggers another check. Send anyway resumes the held action through
+The gateway reads Jira, then fetches Slack audience evidence before taking its send permit. The permit checks the
+evidence's age and result, the Jira target, the Slack thread, task privacy and the org-rule audience and versions.
+A withdrawn, missing, or differently closed issue defers the same action. Changed org rules or recipients trigger
+another check. Send anyway resumes the held action through
 the same dispatch checks. A settled Slack send records a `slack.post` event.
 Its independent occurrence key is
 `closeout:<task>:<repo>@<newest tag>:slack`. The gateway rechecks the task's privacy, thread, bot posting access and
@@ -170,7 +171,9 @@ Channel posts, automation replies and the gateway's conversation copies use `out
 id as the action id and reserve the `slack:post:` key namespace. Existing action keys still resolve. The Slack routes
 apply their normal posting gates.
 The gateway checks the live Slack destination before issuing a durable permit. It checks current task privacy, the
-DM recipient's identity and read access, and an automation's inbox send switch under that same permit write.
+DM recipient's identity and read access, the source message revision, and an automation's inbox send switch under
+that same permit write. Automatic copies also respect Slack notification and mute settings unless the recipient is
+active in the Slack conversation.
 
 A verified internal post goes at once without an approval or undo window, subject to the company's Never policy.
 Internal Slack policy accepts On its own or Never. External Slack policy is always Never. A temporary audience lookup

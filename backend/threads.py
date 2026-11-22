@@ -4525,6 +4525,7 @@ def _revise(c, message, actor, *, body=None, deleted=False, revision=None, purge
             H.recount(c, [message.get("sender_id"), message.get("recipient_id")])
     else:
         c.execute("UPDATE messages SET body=?, edited_at=?, revision=? WHERE id=?", (body, now, new, message["id"]))
+        H._withdraw_queued_comment_copies(c, message["id"], redact=False)
         warnings = _remention(c, {**message, "body": body, "revision": new}, now)
         _rewrite_copies(c, message, body)
         reopened = []
