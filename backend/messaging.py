@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import Request
 
+from . import outbound_slack as OS
 from . import mailbox_access
 from .api_contract import api_v2, error
 from .mail import live_message_public, visible_addresses
@@ -356,22 +357,31 @@ def install_messaging(app, store, auth):
                         tuple(slack_ids),
                     )
                 ]
-                posts = [
-                    {
-                        "channel": row["channel"],
-                        "thread_ts": row["thread_ts"],
-                        "text": row["text"],
-                        "state": row["state"],
-                        "created_at": row["created_at"],
-                        "error": row["error"],
-                        "url": _slack_link(team_url, row["channel"], row["slack_ts"] or row["thread_ts"]),
-                    }
-                    for row in c.execute(
-                        f"SELECT * FROM slack_posts WHERE bot=? AND channel IN ({marks}) "
-                        "ORDER BY created_at DESC LIMIT 20",
-                        (bot, *slack_ids),
+                from .thread_api import require_message_read
+
+                for row in c.execute(
+                    f"SELECT * FROM ({OS.POSTS}) WHERE bot=? AND channel IN ({marks}) "
+                    "ORDER BY created_at DESC LIMIT 20",
+                    (bot, *slack_ids),
+                ):
+                    message = H.message(c, row["message_id"])
+                    if not message:
+                        continue
+                    try:
+                        require_message_read(c, auth, who, message)
+                    except Problem:
+                        continue
+                    posts.append(
+                        {
+                            "channel": row["channel"],
+                            "thread_ts": row["thread_ts"],
+                            "text": row["text"],
+                            "state": OS.status(row),
+                            "created_at": row["created_at"],
+                            "error": row["error"],
+                            "url": _slack_link(team_url, row["channel"], row["slack_ts"] or row["thread_ts"]),
+                        }
                     )
-                ]
             return {
                 "bot": found,
                 "source": source,

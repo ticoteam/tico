@@ -111,7 +111,6 @@ CONVERSATION_WORK = (
 # Delivery bookkeeping for the messages: kept with them.
 MESSAGE_ROWS = (
     ("message_assets", "message_id"),
-    ("slack_posts", "message_id"),
     ("slack_digests", "message_id"),
     ("update_queue", "message_id"),
     ("task_file_reviews", "comment_id"),
@@ -337,12 +336,19 @@ def delete_tasks(c, ids, apply=False, actor=None, keep_work=False):
         )
     actor = actor or H.TICO_ACTOR
     now = H.now()
-    from . import task_engine
+    from . import outbound_slack, task_engine
 
     task_engine.on_delete(c, ids, actor)  # a deleted task's snooze ends: nothing waits for its date
     relations = {tid: TR.snapshot_rows(c, tid) for tid in ids}
     for tid in ids:
         rows, convs, msgs, pointers = _snapshot(c, tid, relations[tid])
+        post_ids = set(_column(c, "SELECT id FROM outbound_actions WHERE channel='slack' AND id IN ({})", msgs))
+        post_ids.update(_column(c, "SELECT message_id FROM slack_posts WHERE message_id IN ({})", msgs))
+        post_ids.update(
+            r[0] for r in c.execute("SELECT id FROM outbound_actions WHERE channel='slack' AND task_id=?", (tid,))
+        )
+        for mid in post_ids:
+            outbound_slack.withdraw(c, mid)
         if tid in kept:
             for table in ("conversations", "messages", *{t for t, _ in MESSAGE_ROWS + CONVERSATION_ROWS}):
                 rows.pop(table, None)

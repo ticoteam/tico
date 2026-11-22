@@ -164,8 +164,10 @@ def _connect(store: Any, row: Any, *, write: bool = True) -> Connection:
     """(API address, headers, query) through the connection's shared key (its read and write key for a write); Unreadable
     when it no longer has one."""
     vault = _oa().vault()
-    if vault is None:
-        raise RuntimeError("No credential vault")
+    if vault is None or getattr(vault, "store", store) is not store:
+        from .credentials import Vault
+
+        vault = Vault(store)
     connection_id = str(row["connection_id"])
     with store.transaction() as c:
         # The actor's level on the very key this write goes with, read in the same transaction that picks it: a key
@@ -280,6 +282,23 @@ def paused(fields: dict[str, Any], raw: dict[str, Any]) -> str:
     if state == "closed" and str(fields.get("status") or "").casefold() != str(raw.get("done") or "").casefold():
         return f"The issue was closed in Jira as {fields.get('status')}: waiting until it is back"
     return "The issue was withdrawn in Jira: waiting until it is back in Ready" if state == "withdrawn" else ""
+
+
+def closeout_read(store: Any, target: dict[str, Any]) -> Any:
+    """The same live status read and withdrawal test used by the Jira sender, using its read connection."""
+    OA = _oa()
+    try:
+        reason = paused(_fields(_connect(store, target, write=False), target), target)
+        if not reason:
+            return None
+    except _Answer as exc:
+        wait = PAUSED_S if exc.reply.status == 404 else exc.reply.retry_after or RETRY_S
+        return OA.SafeRejection(wait, "Waiting for the release issue in Jira", counted=False)
+    except JS.Busy:
+        return OA.SafeRejection(BUSY_S, "Waiting for Jira calls to become available", counted=False)
+    except Exception:  # noqa: BLE001 - a read that cannot confirm Jira's status must never allow a post
+        return OA.SafeRejection(RETRY_S, "Waiting for the release issue in Jira", counted=False)
+    return OA.SafeRejection(PAUSED_S, reason, counted=False)
 
 
 def _found(

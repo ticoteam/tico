@@ -455,3 +455,21 @@ def test_a_sent_back_ok_stops_the_action_without_asking_again(store, fake):
     assert OA.retire_pass(store) == 1
     after = row_of(store, waiting["id"])
     assert (after["state"], after["payload"]) == ("canceled", "")
+
+
+def test_slack_policy_rejects_unsupported_settings(api):
+    path = "/api/v2/outbound-actions/policy"
+    got = api.get(path, headers=headers()).json()
+    assert got["effective"]["slack:internal"] == "on_their_own"
+    assert got["effective"]["slack:external"] == "never"
+    for key, choice in (
+        ("slack:internal", "ask_first"),
+        ("slack:external", "ask_first"),
+        ("slack:external", "on_their_own"),
+    ):
+        reply = api.put(path, json={"settings": {key: choice}}, headers=headers())
+        assert reply.status_code == 422
+    gated = api.put(path, json={"settings": {"slack:internal": "never"}}, headers=headers())
+    assert gated.status_code == 200 and gated.json()["effective"]["slack:internal"] == "never"
+    reset = api.put(path, json={"settings": {"slack:internal": None}}, headers=headers())
+    assert reset.json()["effective"]["slack:internal"] == "on_their_own"

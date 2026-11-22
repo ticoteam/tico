@@ -693,6 +693,7 @@ def check_as(
     most_calls=None,
     parts=True,
     first_only=False,
+    matched_rules: list[tuple[str, int]] | None = None,
 ):
     """Check one output held as `principal` (a person or a bot). `sender` is who made it and `via` the route
     (`checked_as` reads both from an identity). `place`: the write's place, or a function of (c, principal,
@@ -700,7 +701,8 @@ def check_as(
     nothing is checked (no rule matches, checks are off, no principal). Only the judge being out (a timeout, an error
     or a malformed answer from it, the breaker, no engine, the budget) is a verdict marked unchecked; any other
     failure raises a 503 `Problem` (`CHECK_FAILED`), so the write fails. `skip`: (rule id, version) pairs already
-    decided (Send anyway asks only the rules changed or added since its hold); the verdict's `matched` is every pair that matched, to check again inside the write. `origin`:
+    decided (Send anyway asks only the rules changed or added since its hold); the verdict's `matched` is every pair that
+    matched, to check again inside the write. `matched_rules` also receives those pairs when every rule was skipped. `origin`:
     where an outside message came from (`inbound`), kept on the verdict and its hold. `late`: the write may be saved
     before its check (`deferred`): when every rule it meets only warns and the verdict is not cached, nothing is asked
     now, and the verdict says so (`late`), for `apply` to queue the one check to run right after the write.
@@ -721,6 +723,8 @@ def check_as(
             where = _place_now(c, place, author, recipients)
             rules = _rule_rows(R.matching(c, author, recipients, where))
             matched = sorted((r["id"], r["version"]) for r in rules)
+            if matched_rules is not None:
+                matched_rules.extend(matched)
             skip = {tuple(x) for x in skip or ()}
             rules = [r for r in rules if (r["id"], r["version"]) not in skip]
             if not rules:

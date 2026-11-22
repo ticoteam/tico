@@ -61,7 +61,6 @@ STREAM = "/api/v2/events"  # an open stream says nothing about a person being th
 # Outgoing sends: a row waiting for its next try (`next_attempt_at`, NULL = now) keeps the server up only when that try is
 # near; one Svix-style retry ten hours away must not. `sending` always does.
 SENDS = {
-    "slack_posts": "state IN ('ready','retry','rate_limited')",
     "webhook_sends": "state IN ('ready')",
     "personal_alerts": "state='pending'",
 }

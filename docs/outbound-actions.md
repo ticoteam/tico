@@ -1,9 +1,10 @@
 # Outbound actions
 
-The outbound gate queues Jira transitions and comments, Twilio texts, Close texts and Help replies. See
-`backend/outbound_actions.py` and the `outbound_actions` table.
+The outbound gate queues Jira transitions and comments, Twilio and Close texts, Help replies, and Slack posts,
+replies and DMs.
+See `backend/outbound_actions.py` and the `outbound_actions` table.
 
-Email and Slack use `email_sends` and `slack_posts` until their planned consolidation.
+Email keeps its own queue, `email_sends`. The Slack gateway sends the Slack channel of the shared queue.
 
 ## Queue an action
 
@@ -36,7 +37,11 @@ Only a bot (or Tico itself) queues. The same `occurrence_key` always answers the
 characters), so every action fits on a list page. `metadata` is
 the caller's own record: kept, shown in the detail, never acted on.
 
-An action is seen by whoever queued it, the owner and admins, and the person asked to OK it.
+An action is seen by whoever queued it, the owner and admins, and the person asked to OK it. Slack status uses
+the existing Slack post endpoint. Slack actions can also be listed with `tico outbound list --channel slack` or
+opened by id through the outbound API by the bot that queued them or
+an admin who can read its Tico message. Follow `next_cursor` until it is empty. A page can have no readable
+items and still have a continuation.
 
 ## The policy
 
@@ -88,8 +93,8 @@ A bot that is onboarding, paused or archived queues nothing, and its queued acti
 
 ## The worker
 
-One thread per server (`start`, restarted by the scheduler's tick), rung by each commit that queues or approves an
-action, and otherwise asleep until the next row is due. At most once a minute, after its due row, it recovers stale
+One thread per server (`start`, restarted by the scheduler's tick) handles actions for every channel except Slack.
+A commit that queues or approves an action wakes its worker. The Slack gateway owns Slack claims and recovery. At most once a minute, after its due row, it recovers stale
 claims, cancels actions whose OK was sent back, and makes a few provider lookups for unknown rows. Sleep when idle stays up for a row in flight or due within 15 minutes and wakes for a later
 one. A rehearsal copy never runs the worker, and a dev copy empties the table.
 
@@ -149,8 +154,36 @@ true`, the issue's saved Ready and the `done` target in their payload: the sende
 write, and while it is withdrawn, gone (404, at the read or the write) or closed in another Done status it waits an
 hour and tries again (not counted as a retry, so the retry cap never ends it). Each is on its own: one refused is logged (`closeout.skipped`) and the other goes. A record integration
 with a shared write key is the administrator's explicit opt-in for Tico to keep linked issues in step, and a close-out
-also needs a merged PR in a real release tag. No Slack reply in the task's thread yet: it comes back when Slack sends
-move into this queue, where org rules and privacy apply to every send.
+also needs a merged PR in a real release tag. A public task with an eligible bot also gets a reply in its oldest
+linked Slack thread in the configured workspace. The gateway checks that the task still has one primary Jira issue.
+The gateway reads Jira, then fetches Slack audience evidence before taking its send permit. The permit checks the
+evidence's age and result, the Jira target, the Slack thread, task privacy and the org-rule audience and versions.
+A withdrawn, missing, or differently closed issue defers the same action. Changed org rules or recipients trigger
+another check. Send anyway resumes the held action through
+the same dispatch checks. A settled Slack send records a `slack.post` event.
+Its independent occurrence key is
+`closeout:<task>:<repo>@<newest tag>:slack`. The gateway rechecks the task's privacy, thread, bot posting access and
+org rules at dispatch.
+
+## Slack
+
+Channel posts, automation replies and the gateway's conversation copies use `outbound_actions` with the Tico message
+id as the action id and reserve the `slack:post:` key namespace. Existing action keys still resolve. The Slack routes
+apply their normal posting gates.
+The gateway checks the live Slack destination before issuing a durable permit. It checks current task privacy, the
+DM recipient's identity and read access, the source message revision, and an automation's inbox send switch under
+that same permit write. Automatic copies also respect Slack notification and mute settings unless the recipient is
+active in the Slack conversation.
+
+A verified internal post goes at once without an approval or undo window, subject to the company's Never policy.
+Internal Slack policy accepts On its own or Never. External Slack policy is always Never. A temporary audience lookup
+failure or Slack rate limit defers the action. A rate limit on the post itself clears the attempt marker and preserves
+Slack's Retry-After. Slack errors that may have posted leave the action unknown. A confirmed post keeps its Slack
+timestamp in the receipt and the frozen text in history. Redaction wipes the history text.
+[Slack post errors](https://docs.slack.dev/reference/methods/chat.postMessage/#errors)
+
+The gateway's two-way thread bridge and its direct routing and hold notices use their existing delivery paths.
+See [Slack gateway recovery](slack-gateway.md#recovery) for the cutover and the status query.
 
 ## SMS
 

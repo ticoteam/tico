@@ -5,7 +5,7 @@ The API process holds no Slack token (config.slack_credentials); the Slack gatew
 gateway: with it off, every route here answers 503 and says what to start.
 
     GET  /api/v2/slack/history       a channel's messages: the gateway asks Slack (backend/slack_requests.py)
-    POST /api/v2/slack/posts         a post in a listed channel: a message in the bot's room plus a `slack_posts` row,
+    POST /api/v2/slack/posts         a post in a listed channel: a message in the bot's room plus an outbound action,
                                      which the gateway's `deliver` sends
     GET  /api/v2/slack/posts/{id}    where that post, or a DM, is: queued, sent (with its link), canceled or failed
     POST /api/v2/slack/dms           a DM to a person: the bot's message to them in Tico, which the gateway copies into
@@ -37,6 +37,7 @@ from fastapi import Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from . import outbound_slack as OS
 from . import hubdb as _H
 from . import org_rule_check as _OR
 from . import slack_channels as _SC
@@ -81,7 +82,6 @@ HISTORY_WAIT, FILE_WAIT = 60.0, 150.0
 # rows on a few workers (slack_requests.WORKERS), so past this many more would only queue: 503 `slack_busy` instead.
 MAX_WAITS, BUSY_RETRY_SECONDS = 16, 5
 BUSY = "Tico is already waiting on Slack for many bots; try again in a few seconds."
-TS_RE = r"^\d{6,12}\.\d{1,6}$"
 FILE_RE = re.compile(r"^F[A-Z0-9]{6,}$")
 OFF = {"no", "false", "off", "0"}
 # `channels:` words that mean every channel. A channel named all is written `#all`, which is a channel.
@@ -92,7 +92,7 @@ class SlackPost(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     channel: str = Field(min_length=1, max_length=200)
     text: str = Field(max_length=50_000)
-    thread_ts: str | None = Field(default=None, pattern=TS_RE)
+    thread_ts: str | None = Field(default=None, pattern=OS.TS_RE)
 
 
 class SlackDM(BaseModel):
@@ -293,35 +293,90 @@ def recipient(c: Any, to: str) -> dict[str, Any]:
 
 
 # ----------------------------------------------------------------------------- the post
-def queue_post(c: Any, bot: str, entry: dict[str, Any], thread_ts: str, text: str) -> dict[str, Any]:
+def queue_post(
+    c: Any,
+    bot: str,
+    entry: dict[str, Any],
+    thread_ts: str,
+    text: str,
+    *,
+    task_id: str | None = None,
+    occurrence_key: str | None = None,
+) -> dict[str, Any]:
     """A bot's post: a message in its room, so people see what it said, and the outbox row the gateway sends."""
+    if occurrence_key:
+        existing = c.execute(
+            "SELECT id, channel, task_id FROM outbound_actions WHERE occurrence_key=?", (occurrence_key,)
+        ).fetchone()
+        if existing:
+            if existing["channel"] != OS.CHANNEL or existing["task_id"] != task_id:
+                OS.conflict(existing["id"])
+            return {"message_id": existing["id"], "created": False}
     room: Row = _mod("rules")._bot_room(c, bot)
-    refs = {"slack_post": {"channel": entry["id"], "name": entry["name"], "thread_ts": thread_ts}}
+    refs: Row = {"slack_post": {"channel": entry["id"], "name": entry["name"], "thread_ts": thread_ts}}
+    if task_id:
+        refs["task"] = task_id
     message: dict[str, Any] = H._write_message(
         c, H.bot_actor(bot), room.get("owner_id") or H.TICO_ACTOR, text, room, "say", refs, None, None
     )
-    now = H.now()
-    c.execute(
-        "INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created_at,updated_at,recipient_actor) "
-        "VALUES(?,?,?,?,?,'ready',?,?,?)",
-        (message["id"], entry["id"], thread_ts, bot, text, now, now, message.get("recipient_id")),
-    )
+    OS.queue(c, message, bot, entry["id"], thread_ts, text, recipient=message.get("recipient_id"), key=occurrence_key)
+    if occurrence_key:
+        return {"message_id": message["id"], "created": True}
     return {"message_id": message["id"], "state": "ready", "channel": entry["id"], "name": entry["name"]}
 
 
-@OR.replayer("slack_post")
+def _post_audience(c: Any, _bot: Any, _replay: Any) -> list[str]:
+    return OR.company(c)
+
+
+@OR.replayer("slack_post", audience=_post_audience)
 def replay_post(c: Any, bot: Any, hold: Any, replay: dict[str, Any], ingest: Any, gate: Any = None) -> dict[str, Any]:
     """Send anyway for a held post: queued again as the bot, if its channel is still listed with posting on."""
     slug = str(hold["author"]).removeprefix("bot:")
+    need(c, slug, slack_entry(c, None, slug), "post")
+    not_onboarding(c, slug)
+    if action_id := replay.get("closeout_id"):
+        from . import outbound_actions as OA
+
+        action = OA.get(c, action_id)
+        if (
+            not action
+            or action["channel"] != OS.CHANNEL
+            or action["actor"] != hold["author"]
+            or not action["occurrence_key"].startswith(OA.RESERVED)
+            or action["state"] != "blocked"
+            or OA.content(action)["payload"].get("text") != replay.get("text")
+        ):
+            raise Problem("conflict", "The held release reply changed or is no longer pending", 409)
+        postable(c, None, action["destination"])
+        now = H.now()
+        review = {
+            "people": sorted(set(OR.company(c)) - {action["actor"]}),
+            "rules": sorted(OR.current_matched(c, hold)),
+            "warning": OR.warn_line(gate),
+        }
+        c.execute(
+            "UPDATE outbound_actions SET state='queued', last_error='', next_attempt_at=?, updated_at=?, "
+            "metadata=json_set(metadata,'$._tico',json_patch(coalesce(json_extract(metadata,'$._tico'),'{}'),"
+            "json_object('slack_rule_review',json(?)))) WHERE id=?",
+            (now, now, json.dumps(review), action_id),
+        )
+        path = c.execute("PRAGMA database_list").fetchone()[2]
+        OA.after_commit(c, lambda: OS.ring(path))
+        return {"message_id": action_id, "state": "ready"}
     entry = postable(c, None, str(replay.get("channel") or ""))  # the list is in the database: no settings needed
     return queue_post(c, slug, entry, str(replay.get("thread_ts") or ""), OR.warned_text(gate, replay["text"]))
 
 
-def post_state(c: Any, who: Any, mid: str) -> dict[str, Any]:
+def post_state(c: Any, auth: Any, who: Any, mid: str) -> dict[str, Any]:
     message = H.message(c, mid)
     if not message or message.get("sender_id") != who.actor:
         raise Problem("not_found", "No such post or DM from this bot", 404)
-    row = c.execute("SELECT * FROM slack_posts WHERE message_id=?", (mid,)).fetchone()
+    from . import thread_api
+
+    reader: Any = thread_api
+    reader.require_message_read(c, auth, who, message)
+    row = c.execute(f"SELECT * FROM ({OS.POSTS}) WHERE message_id=?", (mid,)).fetchone()
     if not row:
         return {"message_id": mid, "state": "queued"}
     url = c.execute("SELECT value FROM registry_metadata WHERE key='slack_workspace_url'").fetchone()
@@ -329,7 +384,7 @@ def post_state(c: Any, who: Any, mid: str) -> dict[str, Any]:
 
     return {
         "message_id": mid,
-        "state": row["state"],
+        "state": OS.status(row),
         "channel": row["channel"],
         "thread_ts": row["thread_ts"],
         "slack_ts": row["slack_ts"],
@@ -435,6 +490,12 @@ def install(
             entry = postable(c, settings, body.channel)
             gateway_up(c)
         text, thread_ts = check_text(body.text), body.thread_ts or ""
+
+        def work(c: Any, gate: Any) -> dict[str, Any]:
+            need(c, bot, slack_entry(c, settings, bot), "post")
+            not_onboarding(c, bot)
+            return queue_post(c, bot, postable(c, settings, entry["id"]), thread_ts, OR.warned_text(gate, text))
+
         return checked_write(
             request,
             body,
@@ -442,7 +503,7 @@ def install(
             "slack_post",
             text,
             OR.company,
-            lambda c, gate: queue_post(c, bot, entry, thread_ts, OR.warned_text(gate, text)),  # pyright: ignore[reportUnknownLambdaType, reportUnknownArgumentType]
+            work,
             {"channel": entry["id"], "thread_ts": thread_ts, "text": text},
             context={"slack_channel": entry["channel"]},
         )
@@ -451,7 +512,7 @@ def install(
     def slack_post_state(request: Request, mid: str) -> dict[str, Any]:
         who, _ = bot_of(request)
         with store.read() as c:
-            return post_state(c, who, mid)
+            return post_state(c, auth, who, mid)
 
     @app.post("/api/v2/slack/dms")
     def slack_dm(request: Request, body: SlackDM) -> Any:

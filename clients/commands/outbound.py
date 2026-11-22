@@ -84,12 +84,13 @@ def outbound_cancel(api, args):
     "Confirm an outbound action whose outcome is unknown went out (it is done), from what you found at the provider. "
     "A person's own call, never made for them. A new action (new occurrence_key) is safe only once the original "
     "attempt provably can no longer act; no record at the provider is not proof.",
-    {"id": _s("Outbound action id")},
+    {"id": _s("Outbound action id"), "slack_ts": _s("The Slack message timestamp, if confirming a Slack post")},
     required=("id",),
     writes=True,
 )
 def outbound_confirm_sent(api, args):
-    return api.post(f"outbound-actions/{quote(str(args['id']), safe='')}/confirm-sent", {}, key=_key(args))
+    body = {"slack_ts": args["slack_ts"]} if args.get("slack_ts") else {}
+    return api.post(f"outbound-actions/{quote(str(args['id']), safe='')}/confirm-sent", body, key=_key(args))
 
 
 @tool(
@@ -105,7 +106,8 @@ def outbound_policy(api, args):
 @tool(
     "tico_outbound_policy_set",
     "Set the company's outbound policy by '<channel>:<audience>': on_their_own, ask_first or never; null goes back "
-    "to the default (on_their_own inside, ask_first outside). The owner's or an admin's, as themselves.",
+    "to the channel default. Slack accepts on_their_own or never inside and never outside. "
+    "The owner's or an admin's, as themselves.",
     {"settings": {"type": "object", "description": "The settings to change"}},
     required=("settings",),
     writes=True,

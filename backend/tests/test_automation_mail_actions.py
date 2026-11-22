@@ -100,7 +100,9 @@ def test_a_slack_reply_delivered_after_the_switch_went_off_is_held_as_a_draft_ta
     G.Gateway(store, slack).deliver()
     assert slack.posts == []
     with store.read() as c:
-        held = dict(c.execute("SELECT state, error FROM slack_posts").fetchone())
+        held = dict(
+            c.execute("SELECT state, last_error AS error FROM outbound_actions WHERE channel='slack'").fetchone()
+        )
         task = c.execute("SELECT owner_id, title FROM tasks WHERE title LIKE 'Draft reply:%'").fetchone()
         state = json.loads(c.execute("SELECT saved_state FROM automation_runs WHERE id='run_s'").fetchone()[0])
     assert held == {"state": "canceled", "error": "send_off"} and dict(task) == {

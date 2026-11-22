@@ -169,7 +169,8 @@ Timestamps are ISO-8601 UTC text (`2026-09-15T21:40:12.931675Z`); compare them w
 | `automations` | `id, name, owner_id, trigger_type, enabled, builtin, flow, version, created_at, created_by_id, updated_at, deleted_at` | a routine or automation. `trigger_type` says what starts it; `flow` holds its steps as JSON; `version` is the current version in `automation_versions` |
 | `automation_runs` | `id, automation_id, version, trigger_ref, started_at, finished_at, status, cost, saved_state, claimed_at, wake_at, chain` | one run of an automation. `status` is its outcome ([Status and state columns](status-and-state.md)); `state` is its saved JSON working data, not a step; `version` is the automation version it ran |
 | `events` | `created_at, actor, action, target, detail` | the audit log; `action` such as `task.create`, `sql.query` |
-| `slack_posts` | `message_id, bot, state, attempts, next_attempt_at, slack_ts, created_at, updated_at` | Owner-only outbound queue status for messages the Owner may read; message text, destination and raw errors are hidden. Join `messages` and filter `json_extract(messages.refs, '$.task')` for one task. Other callers receive no rows. |
+| `outbound_actions` | `id, channel, state, attempts, next_attempt_at, created_at, updated_at` | The owner sees Slack actions for messages they can read. The action id equals the Tico message id. |
+| `slack_posts` | `message_id, bot, state, attempts, next_attempt_at, slack_ts, created_at, updated_at` | The owner can read legacy Slack rows for messages they can read. New actions have a canceled dedupe row here. Read their delivery state in `outbound_actions`. |
 | `refusals` | `created_at, actor, rule, detail, severity` | the rule a bot broke |
 | `meetings` | `id, title, owner, recorded_by, transcript_readable, notes, created_at, updated_at` | your notes; every team meeting |
 | `meeting_items` | `id, meeting_id, section, text, detail, quote, at_ms, status, created_by, updated_by, pushed_at, result_ref, created_at, updated_at` | a meeting's action items; `section`: doc, task, feature (older rows may say decision or question); `status`: proposed, pushed, dismissed; `result_ref` is the Tico task a push made. Visible exactly where its meeting is ([Meetings](meetings.md), What a meeting turns into) |
@@ -383,9 +384,9 @@ From a bot: `tico sql "SELECT ..." --param me=bot:seo`. From Ana's Mac: `scripts
 For a task's Slack notification status (Owner only):
 
 ```sql
-SELECT p.message_id, p.state, p.created_at
-FROM slack_posts p JOIN messages m ON m.id = p.message_id
-WHERE json_extract(m.refs, '$.task') = :task_id;
+SELECT p.id, p.state, p.created_at
+FROM outbound_actions p JOIN messages m ON m.id = p.id
+WHERE p.channel = 'slack' AND json_extract(m.refs, '$.task') = :task_id;
 ```
 
 No rows means no visible queued post for that task. `slack_events` and the other gateway

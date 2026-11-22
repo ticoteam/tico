@@ -417,11 +417,26 @@ def schema(path):
     return rows(path, "SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
 
 
-def test_the_pending_migrations_apply_in_any_order(company, tmp_path):
+def test_the_pending_migrations_apply_in_any_order(company, tmp_path, monkeypatch):
     """Migrations merge in any order and an install may be anywhere between two releases, so the files this company
     has not run must give the same database whichever runs first (CLAUDE.md, Conventions)."""
     applied = {r["version"] for r in rows(company.db, "SELECT version FROM schema_migrations")}
     pending = [m for m in migrations.files() if m.version not in applied]
+    # Compare data as well as schema when this cutover is among the pending files.
+    slack_cutover = any(m.version.endswith("_slack_outbound") for m in pending)
+    slack_states = {
+        "ready": "queued",
+        "retry": "queued",
+        "rate_limited": "queued",
+        "sending": "unknown",
+        "uncertain": "unknown",
+        "sent": "done",
+        "canceled": "canceled",
+        "failed": "failed",
+    }
+    retry_at = "2026-11-21T15:00:00.000000Z"
+    cutover_at = "2026-11-22T15:00:00.000000Z"
+    monkeypatch.setattr(H, "now", lambda: cutover_at)
     results = []
     for name, order in (("oldest first", pending), ("newest first", pending[::-1])):
         path = tmp_path / (name.replace(" ", "-") + ".db")
@@ -429,12 +444,48 @@ def test_the_pending_migrations_apply_in_any_order(company, tmp_path):
         with closing(sqlite3.connect(path, isolation_level=None)) as c:
             c.row_factory = sqlite3.Row
             c.execute("PRAGMA foreign_keys=ON")
+            if slack_cutover:
+                mids = [r[0] for r in c.execute("SELECT id FROM messages ORDER BY id LIMIT ?", (len(slack_states),))]
+                for mid, state in zip(mids, slack_states, strict=True):
+                    c.execute(
+                        "INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created_at,updated_at,"
+                        "next_attempt_at,slack_ts,error) VALUES(?,'C0ACME','','botops','Release update',?,"
+                        "'2026-11-21','2026-11-21',?,?,?)",
+                        (
+                            mid,
+                            state,
+                            retry_at if state in ("retry", "rate_limited") else None,
+                            "1700000001.000100" if state == "sent" else None,
+                            "Kept in Tico by their Slack settings" if state == "canceled" else None,
+                        ),
+                    )
             for migration in order:
                 try:
                     migrations._run(c, migration)
                 except Exception as exc:
                     pytest.fail(f"Migration {migration.path.name} fails on a running company when run {name}: {exc!r}")
             assert c.execute("PRAGMA foreign_key_check").fetchall() == [], f"{name}: rows refer to missing rows"
+            if slack_cutover:
+                assert not c.execute("PRAGMA foreign_key_list(slack_posts)").fetchall()
+                for mid, prior in zip(mids, slack_states, strict=True):
+                    old = c.execute("SELECT state,text FROM slack_posts WHERE message_id=?", (mid,)).fetchone()
+                    assert tuple(old) == (prior, "Release update")
+                    found = c.execute("SELECT * FROM outbound_actions WHERE id=?", (mid,)).fetchone()
+                    assert found["state"] == slack_states[prior] and found["occurrence_key"] == f"slack:post:{mid}"
+                    assert not found["provider_attempted_at"]
+                    if prior in ("ready", "retry", "rate_limited", "sending"):
+                        assert found["send_after"] == H.shift(cutover_at, minutes=2)
+                    else:
+                        assert found["send_after"] == "2026-11-21"
+                    if prior in ("rate_limited", "retry"):
+                        assert found["next_attempt_at"] == retry_at
+                    if prior == "canceled":
+                        assert found["last_error"] == "Kept in Tico by their Slack settings"
+                    if prior == "sent":
+                        assert json.loads(found["receipt"]) == {"ts": "1700000001.000100"}
+                        assert json.loads(found["metadata"])["_tico"]["sent_text"] == "Release update"
+                    if prior in ("canceled", "sent", "failed"):
+                        assert not found["payload"]
         results.append((schema(path), seen(path)))
     assert results[0][0] == results[1][0], "The schema depends on the order the pending migrations ran in"
     assert not changes(results[0][1], results[1][1])
@@ -442,6 +493,58 @@ def test_the_pending_migrations_apply_in_any_order(company, tmp_path):
 
 
 REMOVED = ("growth-manager", "legal-owner", "feature-owner")  # live seat bots' templates in the fixture
+
+
+@pytest.mark.parametrize("state", ["ready", "sent", "canceled"])
+def test_slack_cutover_preserves_history_and_fences_pre_cutover_trash(company, tmp_path, state):
+    path = tmp_path / "pre-slack.db"
+    shutil.copy(company.db, path)
+    pending = {migration.version: migration for migration in migrations.files()}
+    before = "20261122001930_outbound_actions"
+    cutover = "20261122144410_slack_outbound"
+    with closing(sqlite3.connect(path, isolation_level=None)) as c:
+        c.row_factory = sqlite3.Row
+        migrations._run(c, pending[before])
+        mid = c.execute("SELECT id FROM messages LIMIT 1").fetchone()[0]
+        key = f"slack:post:{mid}"
+        c.execute(
+            "INSERT INTO outbound_actions (id,channel,audience,operation,destination,occurrence_key,"
+            "send_after,next_attempt_at,created_at,updated_at) "
+            "VALUES ('old-jira','jira','external','comment','ACME-1',?,'now','now','now','now')",
+            (key,),
+        )
+        c.execute(
+            "INSERT INTO slack_posts (message_id,channel,thread_ts,bot,text,state,created_at,updated_at,slack_ts) "
+            "VALUES (?,'C0ACME','','botops','Actually sent','sent','now','now','1700000001.000100')",
+            (mid,),
+        )
+        trash = {
+            "message_id": "trashed-post",
+            "channel": "C0ACME",
+            "thread_ts": "",
+            "bot": "botops",
+            "text": "Old draft",
+            "state": state,
+            "slack_ts": "1700000002.000100" if state == "sent" else None,
+            "attempts": None,
+            "created": "now",
+            "updated": "now",
+        }
+        c.execute(
+            "INSERT INTO task_trash (task_id,deleted_at,deleted_by,rows) VALUES ('trashed-task','now','keeper',?)",
+            (json.dumps({"rows": {"slack_posts": [trash]}}),),
+        )
+        migrations._run(c, pending[cutover])
+        assert c.execute("SELECT id FROM outbound_actions WHERE occurrence_key=?", (key,)).fetchone()[0] == "old-jira"
+        sent = c.execute("SELECT * FROM outbound_actions WHERE id=?", (mid,)).fetchone()
+        assert sent["occurrence_key"] != key and json.loads(sent["metadata"])["_tico"]["sent_text"] == "Actually sent"
+        found = c.execute(
+            "SELECT state,attempts,payload,receipt FROM outbound_actions WHERE id='trashed-post'"
+        ).fetchone()
+        assert tuple(found)[:3] == ("done" if state == "sent" else "canceled", 0, "")
+        assert json.loads(found["receipt"]).get("ts") == trash["slack_ts"]
+        legacy = c.execute("SELECT state,error,text FROM slack_posts WHERE message_id='trashed-post'").fetchone()
+        assert tuple(legacy) == ("canceled", "outbound", "")
 
 
 def test_a_bot_whose_template_the_new_release_no_longer_ships_keeps_working(company, tmp_path):

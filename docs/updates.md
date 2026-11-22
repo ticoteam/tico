@@ -355,8 +355,10 @@ Before it switches the server image, the updater takes a consistent SQLite snaps
 server container) into `/data/snapshots/pre-update-<version>-<time>.sqlite` and keeps the last three. A new version can
 migrate the database and then fail its health check, and the old image cannot read a newer schema, so a rollback also
 stops the server (Litestream runs inside it), puts the snapshot back through a temporary file, clears Litestream's tracking directory so it does not take the restored file for a break (a readable copy of the migrated database stays beside it in a `hub.sqlite.failed-update-*` folder) and starts
-the old image. Changes made between the snapshot and the rollback are not in it. The update status says which snapshot
-was taken and whether it was restored (`snapshot`, `restored`, and the message). If the snapshot cannot be taken the
+the old image. Changes made between the snapshot and the rollback are not in it. Across outbound channels, a send
+completed after the snapshot can lose its receipt and be sent again if the restored queue still has it pending.
+The update status says which snapshot was taken and whether it was restored (`snapshot`, `restored`, and the message).
+If the snapshot cannot be taken the
 update does not go ahead. The restore runs in a one-off container (`docker compose run`); if it runs over its time limit,
 stopping the command does not stop that container, so the updater says `uncertain` and starts the old server only once
 no one-off container of the server is still running (one that was created but never started is removed). Until then the
@@ -368,6 +370,10 @@ it (`docker stop <id>`) lets the updater go on. The restore copies the migrated 
 end. Stopped before that rename, `/data/hub.sqlite` is the migrated database without its newest commits (the `-wal`
 file is already removed; those commits are in the folder's `recovery.sqlite`), so check which one it is before the
 server is used.
+
+Upgrade the Slack gateway with the server when Slack posts move to the outbound queue. An older gateway can fail to
+restart against the upgraded database. While it keeps running, it can ignore the new Slack **Never** policy and
+leave new Slack posts queued until the gateway is upgraded.
 
 After a successful update the updater replaces itself, so updater fixes reach existing installs. It pulls the new updater
 image and starts a short-lived container (`tico-updater-swap`) from it, which recreates the `updater` service,

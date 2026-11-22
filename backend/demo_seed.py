@@ -1026,10 +1026,9 @@ class Builder:
                 "INSERT INTO slack_threads(channel,thread_ts,bot,conversation_id,created_at,last_routed_at) VALUES(?,?,?,?,?,?)",
                 ("CDEMOTEAM1", timestamp, "support-owner", conv["id"], H.now(), H.now()),
             )
-            c.execute(
-                "INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
-                (message["id"], "CDEMOTEAM1", timestamp, "support-owner", D.SLACK["draft"], "ready", H.now(), H.now()),
-            )
+            from . import outbound_slack
+
+            outbound_slack.queue(c, message, "support-owner", "CDEMOTEAM1", timestamp, D.SLACK["draft"])
 
         self.write(work)
 
