@@ -68,9 +68,7 @@ def is_limit(text, now=None):
     text = str(text or "")
     if not text or gateway.run_code(text) or login_holds.capacity(text):
         return False
-    return bool(
-        LIMIT_RE.search(text) or login_holds.payment(text) or login_holds.reset_from_text(text, now or H.now())
-    )
+    return bool(LIMIT_RE.search(text) or login_holds.payment(text) or login_holds.reset_from_text(text, now or H.now()))
 
 
 def error_class(text):

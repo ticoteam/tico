@@ -669,7 +669,7 @@ def test_a_usage_read_that_works_tries_a_plan_past_due_at_once(api):
     """A plan the provider refused for its billing answers a usage read again once it is paid: its next turn tries it
     now (login_holds.try_now) rather than at the end of its wait."""
     from backend import login_holds
-    from backend.tests.test_plan_payment import PAST_DUE
+    from backend.tests.helpers.login_holds import PAST_DUE
 
     setup(api)
     company(api)

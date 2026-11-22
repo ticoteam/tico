@@ -5,6 +5,12 @@ from backend.tests.helpers.api import assign, get, headers, post, runner
 
 
 CLAUDE = "You've hit your session limit · resets 2:40am (UTC)"
+# Claude Code's refusal of a plan for its billing (login_holds.payment), as a Tico Team plan met it on Nov 21.
+PAST_DUE = (
+    "Model error: Claude Code can't use your Claude subscription, usually because a payment is past due · Pay or "
+    "renew at https://claude.ai/settings/billing (if you just paid, try again shortly), or use an Anthropic API key "
+    "instead"
+)
 
 
 def limit(api, machine, attempt, errors=(CLAUDE,), **extra):

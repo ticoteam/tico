@@ -1133,7 +1133,9 @@ def payment_item(c, sid):
     from . import login_holds, person_asks
 
     sub = row(c, sid)
-    person = sub and (sub.get("owner_id") or sub["added_by"])
+    if not sub:
+        return None
+    person = sub.get("owner_id") or sub["added_by"]
     if not person or not person_asks.is_human(person):
         return None
     plan = f"{(KINDS.get(sub['kind']) or {}).get('runtime', '').capitalize()} plan {sub['name']}".strip()

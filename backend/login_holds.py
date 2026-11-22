@@ -715,7 +715,9 @@ def payment_words(c, src, retry=""):
     if profile.startswith(SUBSCRIPTION):
         found = c.execute("SELECT name FROM model_subscriptions WHERE id=?", (profile[len(SUBSCRIPTION) :],)).fetchone()
         name = found[0] if found else ""
-    plan = f"The {runtime.capitalize()} plan {name}".rstrip() if name else f"This computer's {runtime.capitalize()} login"
+    plan = (
+        f"The {runtime.capitalize()} plan {name}".rstrip() if name else f"This computer's {runtime.capitalize()} login"
+    )
     again = f" Retrying at {retry[11:16]} UTC." if len(retry) >= 16 else ""
     return f"{plan} can't be used: payment past due. Pay or renew at {BILLING_URL}.{again}"
 

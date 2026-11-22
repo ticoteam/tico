@@ -811,10 +811,12 @@ def usage_result(c: Any, runner_id: str, sid: str, body: "UsageResult") -> Any:
         )
         from . import login_holds
 
-        held = login_holds.get(c, "", login_holds.subscription_login(sid), "claude")
-        if held and login_holds.payment(held.get("error")):
+        LH: Any = login_holds
+        login: str = LH.subscription_login(sid)
+        held: dict[str, Any] = LH.get(c, "", login, "claude")
+        if held and LH.payment(held.get("error")):
             # The plan answers again (it was paid): its next turn tries it now rather than at the next wait's end.
-            login_holds.try_now(c, "", login_holds.subscription_login(sid), "claude", now)
+            LH.try_now(c, "", login, "claude", now)
     else:
         failures = (schedule.get("failures") or 0) + 1
         wait = _backoff(failures)

@@ -7,14 +7,8 @@ from backend import model_subscriptions as MS
 from backend.store import H
 from backend.tests.helpers.api import claim, get, post
 from backend.tests.helpers.credentials import setup
-from backend.tests.helpers.login_holds import at
+from backend.tests.helpers.login_holds import PAST_DUE, at
 from backend.tests.helpers.model_subscriptions import add, company, give, machine, on
-
-PAST_DUE = (
-    "Model error: Claude Code can't use your Claude subscription, usually because a payment is past due · Pay or "
-    "renew at https://claude.ai/settings/billing (if you just paid, try again shortly), or use an Anthropic API key "
-    "instead"
-)
 
 
 def refused(api, m, turn):
