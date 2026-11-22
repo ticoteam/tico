@@ -80,6 +80,19 @@ def outbound_cancel(api, args):
 
 
 @tool(
+    "tico_outbound_resolve",
+    "Settle an outbound action whose outcome is unknown, from what you found at the provider: sent true (done) or "
+    "false (failed; it is never sent again on its own). A person's call.",
+    {"id": _s("Outbound action id"), "sent": {"type": "boolean", "description": "Whether it went"}},
+    required=("id", "sent"),
+    writes=True,
+)
+def outbound_resolve(api, args):
+    path = f"outbound-actions/{quote(str(args['id']), safe='')}/resolve"
+    return api.post(path, {"sent": bool(args["sent"])}, key=_key(args))
+
+
+@tool(
     "tico_outbound_policy",
     "The company's outbound policy by '<channel>:<audience>' (audience internal or external): on_their_own, "
     "ask_first or never, and the channels Tico can send on.",
@@ -119,6 +132,16 @@ CLI = (
     Command("outbound list", "outbound actions, newest first", example="tico outbound list --state unknown"),
     Command("outbound show", "one outbound action", example="tico outbound show 0b5e"),
     Command("outbound cancel", "cancel an action that has not gone", example="tico outbound cancel 0b5e"),
+    Command(
+        "outbound resolve",
+        "settle an unknown outcome: it went, or it did not",
+        args=(
+            Arg("sent", "--sent", action="store_const", const=True),
+            Arg("sent", "--not-sent", action="store_const", const=False),
+        ),
+        one_of=(("sent",),),
+        example="tico outbound resolve 0b5e --sent",
+    ),
     Command("outbound policy", "the company's outbound policy", example="tico outbound policy"),
     Command(
         "outbound policy-set",

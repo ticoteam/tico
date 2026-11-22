@@ -26,6 +26,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
+from datetime import timezone
 from typing import Any, Callable, NamedTuple
 
 from fastapi import Request
@@ -94,8 +95,8 @@ class SafeRejection(NamedTuple):
 
 
 class Settled(NamedTuple):
-    """What an adapter's reconcile found: `state` one of done, failed, unknown, or `queued` when the provider certainly
-    never had it (safe to try again)."""
+    """What an adapter's reconcile found in the provider's own record: `state` done or failed (anything else leaves
+    the row unknown, for a person)."""
 
     state: str
     receipt: dict[str, Any] | None = None
@@ -230,9 +231,9 @@ def _asker(row) -> str:
     return row["actor"] if H.is_bot(row["actor"]) else H.TICO_ACTOR
 
 
-def request_approval(c, row) -> None:
+def request_approval(c, row, *, renew=False) -> None:
     """Ask a person for an OK of this exact action, on a task of its own. The same content asked again is the same
-    ask."""
+    ask, unless `renew`: the old OK no longer lets it go (whoever gave it left), so a new one is asked."""
     asked = task_asks.ask_ok(
         c,
         _asker(row),
@@ -242,6 +243,7 @@ def request_approval(c, row) -> None:
         subject=SUBJECT + row["id"],
         content=content(row),
         matter=row["task_id"],
+        renew=renew,
     )
     c.execute("UPDATE outbound_actions SET approval_id=? WHERE id=?", (asked["requirement_id"], row["id"]))
 
@@ -262,9 +264,11 @@ def _when(value) -> str | None:
     """An ISO time in the stored spelling (H.now's, which sorts), None for none; a Problem when it is not a time."""
     if not value:
         return None
-    if H.parse_ts(value) is None:
+    at = H.parse_ts(value)
+    if at is None:
         raise Problem("validation", "send_after is an ISO time, e.g. 2026-11-22T09:00:00Z", 422)
-    return H.shift(value, seconds=0)
+    at = at.replace(tzinfo=timezone.utc) if at.tzinfo is None else at.astimezone(timezone.utc)
+    return at.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 
 def enqueue(
@@ -397,22 +401,19 @@ def settle(c, row, state, *, receipt=None, error="", token=None) -> bool:
     return True
 
 
+RESOLVED = ("done", "failed")  # what a reconcile may settle an unknown row as
+
+
 def apply(c, seen, found: "Settled | None") -> None:
-    """A reconcile's finding for the unknown row `seen`, written only while the row is still as it was read. `queued`
-    puts a row the provider never had back in line (marker cleared); nothing found moves it to the back of the line."""
-    now = H.now()
-    guard = "WHERE id=? AND state='unknown' AND updated_at=?"
-    if found is None or found.state == "unknown":
-        c.execute(f"UPDATE outbound_actions SET updated_at=? {guard}", (now, seen["id"], seen["updated_at"]))
-        return
-    if found.state == "queued":
-        moved = c.execute(
-            "UPDATE outbound_actions SET state='queued',provider_attempted_at=NULL,next_attempt_at=?,updated_at=? "
-            + guard,
-            (now, now, seen["id"], seen["updated_at"]),
-        ).rowcount
-        if moved:
-            _after_commit(c, ring)
+    """A reconcile's finding for the unknown row `seen`, written only while the row is still as it was read: done or
+    failed, from the provider's own record. Nothing else moves an unknown row on its own, least of all back in line:
+    the worker that made the attempt may still reach the provider. What it cannot settle goes to the back of the
+    line."""
+    if found is None or found.state not in RESOLVED:
+        c.execute(
+            "UPDATE outbound_actions SET updated_at=? WHERE id=? AND state='unknown' AND updated_at=?",
+            (H.now(), seen["id"], seen["updated_at"]),
+        )
         return
     row = get(c, seen["id"])
     if row and row["state"] == "unknown" and row["updated_at"] == seen["updated_at"]:
@@ -546,7 +547,7 @@ def _permit(store, claimed: Claimed) -> dict[str, Any] | str:
                 extra={"updated_at": H.now()},
                 token=claimed.token,
             )
-            request_approval(c, row)
+            request_approval(c, row, renew=bool(row["approval_id"]))
             return "waiting_approval"
         now = H.now()
         fenced = c.execute(
@@ -657,6 +658,11 @@ class OutboundActionCreate(Contract):
 
 class OutboundApprove(Contract):
     shown_hash: str = Field(min_length=1, max_length=200)
+
+
+class OutboundResolve(Contract):
+    sent: bool
+    """What the person found at the provider: it went (done) or it did not (failed; never sent again on its own)"""
 
 
 class OutboundPolicyUpdate(Contract):
@@ -808,7 +814,13 @@ def install(app, store, auth, mutate):
         if state and state not in STATES:
             raise Problem("validation", f"state is one of {', '.join(STATES)}", 422)
         cap = min(100, max(1, limit))
-        fields = ",".join((*LIST_FIELDS, "policy_decision"))
+        fields = ",".join(
+            (
+                *(f for f in LIST_FIELDS if f != "last_error"),
+                "substr(last_error,1,300) AS last_error",
+                "policy_decision",
+            )
+        )
         with store.read() as c:
             sql, args = f"SELECT {fields} FROM outbound_actions WHERE 1=1", []
             if not admin(who):
@@ -831,7 +843,7 @@ def install(app, store, auth, mutate):
             for r in rows[:cap]:
                 item = public(c, r, tasks=tasks)
                 size = len(_dump(item))
-                if items and spent + size > LIST_BYTES:
+                if spent + size > LIST_BYTES:
                     break
                 items.append(item)
                 spent += size
@@ -913,3 +925,31 @@ def install(app, store, auth, mutate):
             return {"action": public(c, get(c, oid)), "created": False}
 
         return mutate(request, Empty(), work, durable=True)
+
+    @app.post(
+        "/api/v2/outbound-actions/{oid}/resolve",
+        **api_v2(
+            "Outbound actions",
+            "resolveOutboundAction",
+            "Settle an action whose outcome is unknown, from what a person found: sent or not sent",
+            OutboundActionResult,
+        ),
+    )
+    def resolve(request: Request, oid: str, body: OutboundResolve):
+        who = request.state.identity
+        if who.role not in ("owner", "human"):
+            raise Problem("forbidden", "A person settles an unknown outcome, from what they found at the provider", 403)
+
+        def work(c):
+            row = one(c, who, oid)
+            if row["state"] != "unknown":
+                raise Problem("state", f"This action is {row['state']}, not unknown", 409)
+            name = H.actor_name(c, who.actor)
+            if body.sent:
+                settle(c, row, "done", receipt={"confirmed_by": who.actor})
+            else:
+                settle(c, row, "failed", error=f"Not sent, {name} found")
+            H.event(c, who.actor, "outbound.resolved", oid, {"sent": body.sent})
+            return {"action": public(c, get(c, oid)), "created": False}
+
+        return mutate(request, body, work, durable=True)

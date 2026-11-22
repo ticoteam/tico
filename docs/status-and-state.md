@@ -502,9 +502,9 @@ CHECK. NOT NULL, default `queued`. One send or outside write through the outboun
 Transitions (`backend/outbound_actions.py`): insert `queued`, `waiting_approval` or `blocked` (the policy);
 `waiting_approval` to `queued` on the OK; `queued` to `attempting` on claim; `attempting` to `done`, `failed`,
 `unknown`, `blocked` or `waiting_approval` (the policy checked again), or back to `queued` (a safe rejection, or a stale
-claim never attempted); a stale claim that was attempted goes to `unknown`; `unknown` to `queued` only when its adapter
-proves the provider never had it, else to whatever the adapter finds; `waiting_approval`, `queued`, `blocked` or
-`unknown` to `canceled` by a person.
+claim never attempted); a stale claim that was attempted goes to `unknown`; `unknown` to `done` or `failed` from the
+provider's own record (the adapter's reconcile) or a person's word (`resolve`), never back to `queued`;
+`waiting_approval`, `queued`, `blocked` or `unknown` to `canceled` by a person.
 
 ## Outside the stable set
 

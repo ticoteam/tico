@@ -119,15 +119,19 @@ def test_a_crash_after_the_attempt_is_unknown_and_never_requeued(store, fake):
     assert OA.claim(store, H.shift(future, days=1)) is None and fake.calls == [row["id"]]
 
 
-def test_a_reconcile_that_finds_it_never_went_puts_it_back_in_line(store, fake):
+def test_an_unknown_row_never_goes_back_in_line_and_a_person_settles_it(api, store, fake):
+    """Sol S12: the worker that made the attempt may still reach the provider, so nothing requeues an unknown row: a
+    reconcile settles only from the provider's record, and otherwise a person says what they found."""
     row, _ = add(store)
     fake.answers = [RuntimeError("connection reset")]
     assert OA.attempt(store, OA.claim(store)) == "unknown"
-    fake.found = OA.Settled("queued")
+    fake.found = OA.Settled("queued")  # "no record of it" proves nothing about a paused worker
     OA.reconcile_pass(store)
-    after = row_of(store, row["id"])
-    assert (after["state"], after["provider_attempted_at"]) == ("queued", None)
-    assert OA.attempt(store, OA.claim(store, later(1))) == "done"
+    assert row_of(store, row["id"])["state"] == "unknown" and OA.claim(store, later(3600)) is None
+    path = f"/api/v2/outbound-actions/{row['id']}/resolve"
+    assert api.post(path, json={"sent": True}, headers=headers("ben-test")).status_code == 404  # not his to say
+    settled = api.post(path, json={"sent": True}, headers=headers()).json()["action"]
+    assert settled["state"] == "done" and fake.calls == [row["id"]]
 
 
 def test_a_crash_before_the_attempt_is_requeued(store, fake):
@@ -178,6 +182,15 @@ def make_ben_ops_manager(store):
         c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='ops'")
 
 
+def ben_leaves(store):
+    with store.transaction() as c:
+        people = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
+        for person in people["people"]:
+            if person["id"] == "ben":
+                person["hidden"] = True
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(people),))
+
+
 def test_the_person_asked_sees_the_action_and_one_ok_survives_a_safe_retry(api, store, fake):
     make_ben_ops_manager(store)
     row, _ = add(store, destination="https://partner.example/hook")  # outside: Ask first, of Ops's manager
@@ -210,12 +223,7 @@ def test_a_used_ok_whose_giver_left_does_not_carry_a_retry(store, fake):
         task_asks.give_ok(c, "human:ben", rid, shown, own_click=True, ctx=task_asks.Context())
     fake.answers = [OA.SafeRejection(0, "ratelimited")]
     assert OA.attempt(store, OA.claim(store)) == "requeued"
-    with store.transaction() as c:  # Ben leaves the company
-        people = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
-        for person in people["people"]:
-            if person["id"] == "ben":
-                person["hidden"] = True
-        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(people),))
+    ben_leaves(store)
     assert OA.attempt(store, OA.claim(store, later(1))) == "waiting_approval"
     assert fake.calls == [row["id"]]
 
@@ -255,3 +263,41 @@ def test_sleep_waits_for_a_held_action_and_stays_up_for_one_in_flight(store, fak
     OA.claim(store)
     with store.read() as c:
         assert sleep_idle.busy(c, now) == "send_pending"
+
+
+def test_an_offset_send_after_is_stored_in_utc(store, fake):
+    with store.transaction() as c:
+        row, _ = OA.enqueue(
+            c,
+            store.settings,
+            actor="bot:ops",
+            channel="webhook",
+            operation="post",
+            destination="inside:ops",
+            occurrence_key="tz",
+            payload={},
+            send_after="2026-11-22T09:00:00-08:00",
+        )
+    assert row["send_after"] == "2026-11-22T17:00:00.000000Z"
+
+
+def test_an_ok_whose_giver_left_before_the_attempt_is_asked_again_of_someone_here(store, fake):
+    make_ben_ops_manager(store)
+    row, _ = add(store, destination="https://partner.example/hook")
+    with store.transaction() as c:
+        rid = OA.get(c, row["id"])["approval_id"]
+        shown = task_asks.show(c, "human:ben", rid, OA.content(row), own_click=True)
+        task_asks.give_ok(c, "human:ben", rid, shown, own_click=True, ctx=task_asks.Context())
+    ben_leaves(store)
+    assert OA.attempt(store, OA.claim(store)) == "waiting_approval" and fake.calls == []
+    with store.read() as c:
+        again = OA.get(c, row["id"])["approval_id"]
+        assert again != rid and task_asks.grant(c, again)["asked_of_id"] == "human:ana"
+
+
+def test_a_list_row_carries_a_bounded_error(api, store, fake):
+    row, _ = add(store)
+    fake.answers = [OA.SafeRejection(3600, "x" * 5000)]
+    OA.attempt(store, OA.claim(store))
+    item = get(api, "outbound-actions")["items"][0]
+    assert item["id"] == row["id"] and len(item["last_error"]) == 300

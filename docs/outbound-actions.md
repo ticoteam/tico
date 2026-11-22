@@ -29,10 +29,11 @@ Or over the API, CLI or MCP:
 | `GET /api/v2/outbound-actions/{id}` | one, with its payload and the `shown_hash` its OK sends back |
 | `POST /api/v2/outbound-actions/{id}/approve` | the person asked OKs it, by their own click in Tico |
 | `POST /api/v2/outbound-actions/{id}/cancel` | cancel one that has not gone, or whose outcome is unknown |
+| `POST /api/v2/outbound-actions/{id}/resolve` | a person settles an unknown outcome: `{"sent": true}` or false (`tico outbound resolve`) |
 | `GET`/`PUT /api/v2/outbound-actions/policy` | the company's policy (`tico outbound policy`, `policy-set`) |
 
 Only a bot (or Tico itself) queues. The same `occurrence_key` always answers the action it already made. A
-`task_id` must be a task the bot reads, a `connection_id` a tool it may see, `send_after` an ISO time. `metadata` is
+`task_id` must be a task the bot reads, a `connection_id` a tool it may see, `send_after` an ISO time (stored in UTC). `metadata` is
 the caller's own record: kept, shown in the detail, never acted on.
 
 An action is seen by whoever queued it, the owner and admins, and the person asked to OK it.
@@ -64,9 +65,9 @@ default person.
 - **Answers.** A receipt is `done`. A safe rejection (a rate limit with Retry-After) is requeued in one write that
   clears `provider_attempted_at` and sets `next_attempt_at`; the OK it used carries the retry only while whoever gave
   it may still give it. A certain refusal is `failed`. Anything else is `unknown`.
-- **Unknown.** Never sent again on its own. The adapter reconciles where the provider can be asked (outside any
-  transaction); when it proves the provider never had it, the row goes back in line. Otherwise it is logged and waits
-  for a person, who may cancel it.
+- **Unknown.** Never sent again on its own, never put back in line: the worker that made the attempt may still reach
+  the provider. The adapter's reconcile (outside any transaction) may settle it done or failed from the provider's own
+  record; otherwise it is logged and a person settles it (`resolve`: sent or not sent) or cancels it.
 
 `payload` is wiped when an action is done, failed or canceled; `metadata` and `receipt` stay. Rows are never pruned.
 
@@ -85,4 +86,5 @@ Register an `Adapter(channel, prepare, dispatch, reconcile=None)`:
   answers `(audience, destination)`; a Problem blocks it.
 - `dispatch(store, row)` makes the one provider call and answers a receipt dict or `SafeRejection(retry_after,
   error)`; it raises `Refused` for a certain refusal, anything else for unknown.
-- `reconcile(store, row)`, where the provider can be asked, answers `Settled(state, receipt, error)` or None.
+- `reconcile(store, row)`, where the provider can be asked, answers `Settled(state, receipt, error)` with state done or
+  failed, or None when its record cannot tell.
