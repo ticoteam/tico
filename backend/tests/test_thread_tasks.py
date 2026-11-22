@@ -32,6 +32,8 @@ def test_a_repeated_task_is_refused_with_the_task_it_repeats(api):
     first = post(
         api, f"threads/messages/{message_id}/task", {"title": "Ship pricing", "owner": "ops"}, token="ben-test"
     )
+    # Filed as POST /api/v2/tasks files any task (a TaskFile), naming no outside item.
+    assert first["title"] == "Ship pricing"
     again = api.post(
         f"/api/v2/threads/messages/{message_id}/task",
         json={"title": "Ship pricing", "owner": "ops"},
