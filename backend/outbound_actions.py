@@ -57,7 +57,7 @@ SWEEP = 60.0  # the longest the worker sleeps: recovery and reconciling run at m
 MAX_SAFE_RETRIES = 10  # safe rejections (rate limits) before a row is failed
 SUBJECT = "outbound:"
 ENDED = ("done", "failed", "canceled")  # terminal: the payload is wiped
-OPEN = ("waiting_approval", "queued", "blocked", "unknown")  # a person may cancel these
+OPEN = ("waiting_approval", "queued", "blocked")  # a person may cancel these; an unknown one may have gone
 AUDIENCES = ("internal", "external")
 # The policy's choices, spelled as the email policy spells them (backend/email_sending.py MODES): strictest last.
 CHOICES = ("on_their_own", "ask_first", "never")
@@ -259,6 +259,11 @@ def request_approval(c, row, *, renew=False) -> bool:
             c.execute("RELEASE outbound_ask")
             continue
         c.execute("RELEASE outbound_ask")
+        old = row["approval_id"]
+        if old and old != asked["requirement_id"]:
+            # The OK it replaces ends with it: taken back when unused, its task closed when it was used.
+            task_asks.withdraw(c, old, "Asked again")
+            task_asks.not_done(c, old, "Asked again")
         c.execute("UPDATE outbound_actions SET approval_id=? WHERE id=?", (asked["requirement_id"], row["id"]))
         return True
     return False
@@ -327,6 +332,8 @@ def enqueue(
         raise Problem("validation", f"Tico has no sender for {channel!r} (it sends: {known})", 422)
     after = _when(send_after)
     audience, destination = adapter.prepare(c, settings, actor, str(destination or "").strip(), payload)
+    if len(str(destination or "")) > 500:
+        raise Problem("validation", "destination is at most 500 characters", 422)
     audience = audience if audience in AUDIENCES else "external"
     policy = decide(c, actor=actor, channel=channel, audience=audience, destination=destination)
     state = {"on_their_own": "queued", "ask_first": "waiting_approval", "never": "blocked"}[policy["choice"]]
@@ -565,6 +572,9 @@ def _permit(store, claimed: Claimed) -> dict[str, Any] | str:
             return "blocked"
         approval = _approval(c, row)
         if policy["choice"] == "ask_first" and approval is None:
+            if not request_approval(c, row, renew=bool(row["approval_id"])):  # filed while the claim still holds
+                settle(c, row, "blocked", error=NOBODY_TO_ASK, token=claimed.token)
+                return "blocked"
             O.finish(
                 c,
                 TABLE,
@@ -576,9 +586,6 @@ def _permit(store, claimed: Claimed) -> dict[str, Any] | str:
                 extra={"updated_at": H.now()},
                 token=claimed.token,
             )
-            if not request_approval(c, row, renew=bool(row["approval_id"])):
-                settle(c, get(c, row["id"]), "blocked", error=NOBODY_TO_ASK)
-                return "blocked"
             return "waiting_approval"
         now = H.now()
         fenced = c.execute(
@@ -603,7 +610,8 @@ def attempt(store, claimed: Claimed) -> str:
         answer = ADAPTERS[row["channel"]].dispatch(store, row)
     except Refused as exc:
         with store.transaction() as c:
-            settle(c, row, "failed", error=str(exc)[:300], token=claimed.token)
+            if not settle(c, row, "failed", error=str(exc)[:300], token=claimed.token):
+                return "failed" if late_answer(c, row, "failed", error=str(exc)[:300]) else "lost"
         return "failed"
     except Exception as exc:  # noqa: BLE001  (the provider may have acted: unknown, never tried again on its own)
         with store.transaction() as c:
@@ -628,23 +636,20 @@ def attempt(store, claimed: Claimed) -> str:
             )
             return "requeued"
         if not settle(c, row, "done", receipt=dict(answer or {}), token=claimed.token):
-            return "done" if late_receipt(c, row, dict(answer or {})) else "lost"
+            return "done" if late_answer(c, row, "done", receipt=dict(answer or {})) else "lost"
     return "done"
 
 
-def late_receipt(c, row, receipt) -> bool:
-    """The provider's receipt for an attempt whose claim was cleared meanwhile (stale recovery made it unknown, and a
-    person may have said it was not sent, or canceled it). The receipt is evidence it went: it wins. Matched by the
-    row and its attempt marker, so a later attempt's row is never touched. True when written."""
+def late_answer(c, row, state, *, receipt=None, error="") -> bool:
+    """The provider's definite answer (done, or a certain refusal) for an attempt whose claim stale recovery cleared,
+    leaving the row unknown: it settles the row. Matched by the row and its attempt marker, so a later attempt's row
+    is never touched. True when written."""
     now = get(c, row["id"])
-    if not now or now["provider_attempted_at"] != row["provider_attempted_at"]:
+    if not now or now["state"] != "unknown" or now["provider_attempted_at"] != row["provider_attempted_at"]:
         return False
-    if now["state"] not in ("unknown", "failed", "canceled"):
-        return False
-    was = now["state"]
-    settle(c, now, "done", receipt={**receipt, "late": True, "was": was})
-    H.event(c, H.TICO_ACTOR, "outbound.late_receipt", row["id"], {"was": was})
-    return True
+    return settle(
+        c, now, state, receipt={**(receipt or {}), "late": True} if receipt is not None else None, error=error
+    )
 
 
 def step(store, now=None) -> bool:
@@ -705,11 +710,6 @@ class OutboundActionCreate(Contract):
 
 class OutboundApprove(Contract):
     shown_hash: str = Field(min_length=1, max_length=200)
-
-
-class OutboundResolve(Contract):
-    sent: bool
-    """What the person found at the provider: it went (done) or it did not (failed; never sent again on its own)"""
 
 
 class OutboundPolicyUpdate(Contract):
@@ -952,7 +952,7 @@ def install(app, store, auth, mutate):
         **api_v2(
             "Outbound actions",
             "cancelOutboundAction",
-            "Cancel an action that has not gone (or whose outcome is unknown): whoever queued it, the owner or an admin",
+            "Cancel an action that has not gone: whoever queued it, the owner or an admin",
             OutboundActionResult,
         ),
     )
@@ -965,6 +965,12 @@ def install(app, store, auth, mutate):
                 raise Problem("not_found", "No such outbound action", 404)
             if row["state"] == "canceled":
                 return {"action": public(c, row), "created": False}
+            if row["state"] == "unknown":
+                raise Problem(
+                    "state",
+                    "It may have gone: confirm it went, or queue a new action (a new occurrence_key) if it did not",
+                    409,
+                )
             if row["state"] not in OPEN:
                 raise Problem("state", f"This action is {row['state']}: it can no longer be canceled", 409)
             settle(c, row, "canceled", error=f"Canceled by {H.actor_name(c, who.actor)}")
@@ -974,29 +980,25 @@ def install(app, store, auth, mutate):
         return mutate(request, Empty(), work, durable=True)
 
     @app.post(
-        "/api/v2/outbound-actions/{oid}/resolve",
+        "/api/v2/outbound-actions/{oid}/confirm-sent",
         **api_v2(
             "Outbound actions",
-            "resolveOutboundAction",
-            "Settle an action whose outcome is unknown, from what a person found: sent or not sent",
+            "confirmOutboundActionSent",
+            "A person confirms an action whose outcome is unknown went out: it is done",
             OutboundActionResult,
         ),
     )
-    def resolve(request: Request, oid: str, body: OutboundResolve):
+    def confirm_sent(request: Request, oid: str):
         who = request.state.identity
         if who.role not in ("owner", "human"):
-            raise Problem("forbidden", "A person settles an unknown outcome, from what they found at the provider", 403)
+            raise Problem("forbidden", "A person confirms it went, from what they found at the provider", 403)
 
         def work(c):
             row = one(c, who, oid)
             if row["state"] != "unknown":
                 raise Problem("state", f"This action is {row['state']}, not unknown", 409)
-            name = H.actor_name(c, who.actor)
-            if body.sent:
-                settle(c, row, "done", receipt={"confirmed_by": who.actor})
-            else:
-                settle(c, row, "failed", error=f"Not sent, {name} found")
-            H.event(c, who.actor, "outbound.resolved", oid, {"sent": body.sent})
+            settle(c, row, "done", receipt={"confirmed_by": who.actor})
+            H.event(c, who.actor, "outbound.confirmed_sent", oid, {})
             return {"action": public(c, get(c, oid)), "created": False}
 
-        return mutate(request, body, work, durable=True)
+        return mutate(request, Empty(), work, durable=True)

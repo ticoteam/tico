@@ -26,6 +26,8 @@ class Fake:
         self.calls, self.answers, self.found = [], [], None
 
     def prepare(self, c, settings, actor, destination, payload):
+        if destination.startswith("long:"):  # the provider's own spelling of it is much longer
+            destination = "inside:" + "x" * 600
         return ("internal" if destination.startswith("inside:") else "external"), destination
 
     def dispatch(self, store, row):
@@ -130,9 +132,11 @@ def test_an_unknown_row_never_goes_back_in_line_and_a_person_settles_it(api, sto
     fake.found = OA.Settled("queued")  # "no record of it" proves nothing about a paused worker
     OA.reconcile_pass(store)
     assert row_of(store, row["id"])["state"] == "unknown" and OA.claim(store, later(3600)) is None
-    path = f"/api/v2/outbound-actions/{row['id']}/resolve"
-    assert api.post(path, json={"sent": True}, headers=headers("ben-test")).status_code == 404  # not his to say
-    settled = api.post(path, json={"sent": True}, headers=headers()).json()["action"]
+    cancel = api.post(f"/api/v2/outbound-actions/{row['id']}/cancel", json={}, headers=headers())
+    assert cancel.status_code == 409  # it may have gone: nobody says it did not
+    path = f"/api/v2/outbound-actions/{row['id']}/confirm-sent"
+    assert api.post(path, json={}, headers=headers("ben-test")).status_code == 404  # not his to say
+    settled = api.post(path, json={}, headers=headers()).json()["action"]
     assert settled["state"] == "done" and fake.calls == [row["id"]]
 
 
@@ -231,18 +235,16 @@ def test_the_person_asked_sees_the_action_and_one_ok_survives_a_safe_retry(api, 
     assert "payload" not in listed[0] and "metadata" not in listed[0] and listed[0]["approval_task_id"]
 
 
-def test_a_used_ok_whose_giver_left_does_not_carry_a_retry(store, fake):
-    make_ben_ops_manager(store)
-    row, _ = add(store, destination="https://partner.example/hook")
-    with store.transaction() as c:
-        rid = OA.get(c, row["id"])["approval_id"]
-        shown = task_asks.show(c, "human:ben", rid, OA.content(row), own_click=True)
-        task_asks.give_ok(c, "human:ben", rid, shown, own_click=True, ctx=task_asks.Context())
+def test_a_used_ok_whose_giver_left_does_not_carry_a_retry_and_its_task_closes(store, fake):
+    row, rid = approved_by_ben(store)
     fake.answers = [OA.SafeRejection(0, "ratelimited")]
     assert OA.attempt(store, OA.claim(store)) == "requeued"
     ben_leaves(store)
     assert OA.attempt(store, OA.claim(store, later(1))) == "waiting_approval"
     assert fake.calls == [row["id"]]
+    with store.read() as c:
+        assert OA.get(c, row["id"])["approval_id"] != rid
+        assert H.task(c, task_asks.task_of(c, rid))["status"] != "open"  # the superseded OK's task ended
 
 
 def test_only_a_bot_queues_and_only_an_admin_sets_the_policy(api, fake):
@@ -320,20 +322,35 @@ def test_a_list_row_carries_a_bounded_error(api, store, fake):
     assert item["id"] == row["id"] and len(item["last_error"]) == 300
 
 
-def test_a_late_receipt_beats_a_persons_not_sent(store, fake):
-    row, _ = add(store)
+def stalled(store, answer):
+    """The worker stalls in the provider call and is taken for dead (the row goes unknown), then the answer comes."""
 
-    def meanwhile():  # the worker stalls in the call: it is taken for dead and a person says it did not go
+    def meanwhile():
         OA.recover(store, later(OA.STALE + 1))
-        with store.transaction() as c:
-            OA.settle(c, OA.get(c, row["id"]), "failed", error="Not sent, Ana found")
-        return {"provider_id": "p-late"}
+        return answer
 
-    fake.answers = [meanwhile]
+    return meanwhile
+
+
+def test_a_late_receipt_settles_an_unknown_row_done(store, fake):
+    row, _ = add(store)
+    fake.answers = [stalled(store, {"provider_id": "p-late"})]
     assert OA.attempt(store, OA.claim(store)) == "done"
     after = row_of(store, row["id"])
-    receipt = json.loads(after["receipt"])
-    assert after["state"] == "done" and receipt["provider_id"] == "p-late" and receipt["was"] == "failed"
+    assert after["state"] == "done" and json.loads(after["receipt"]) == {"provider_id": "p-late", "late": True}
+
+
+def test_a_late_certain_refusal_settles_an_unknown_row_failed(store, fake):
+    row, _ = add(store)
+    fake.answers = [stalled(store, OA.Refused("no such issue"))]
+    assert OA.attempt(store, OA.claim(store)) == "failed"
+    assert row_of(store, row["id"])["state"] == "failed"
+
+
+def test_the_destination_the_adapter_resolves_is_bounded_too(store, fake):
+    with pytest.raises(OA.Problem) as refused:
+        add(store, destination="long:x")
+    assert refused.value.status == 422
 
 
 def test_an_unknown_outcome_leaves_its_ok_task_open_until_it_is_settled(api, store, fake):
@@ -343,7 +360,7 @@ def test_an_unknown_outcome_leaves_its_ok_task_open_until_it_is_settled(api, sto
     with store.read() as c:
         task = task_asks.task_of(c, rid)
         assert H.task(c, task)["status"] == "open"
-    api.post(f"/api/v2/outbound-actions/{row['id']}/resolve", json={"sent": True}, headers=headers())
+    api.post(f"/api/v2/outbound-actions/{row['id']}/confirm-sent", json={}, headers=headers())
     with store.read() as c:
         assert H.task(c, task)["status"] == "done"
 
@@ -360,3 +377,10 @@ def test_enqueue_bounds_what_a_list_shows(store, fake):
     with pytest.raises(OA.Problem) as refused:
         add(store, destination="inside:" + "x" * 600)
     assert refused.value.status == 422 and "destination" in refused.value.detail
+
+
+def test_no_channel_ships_yet_so_every_action_is_refused(store):
+    assert OA.ADAPTERS == {}
+    with pytest.raises(OA.Problem) as refused:
+        add(store)
+    assert refused.value.status == 422 and "no sender" in refused.value.detail

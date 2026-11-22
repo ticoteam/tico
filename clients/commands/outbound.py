@@ -69,8 +69,8 @@ def outbound_show(api, args):
 
 @tool(
     "tico_outbound_cancel",
-    "Cancel an outbound action that has not gone: waiting for an OK, queued, blocked, or unknown (it may have gone; "
-    "cancel says it must not be tried again). Whoever queued it, the owner or an admin.",
+    "Cancel an outbound action that has not gone: waiting for an OK, queued or blocked. Whoever queued it, the owner "
+    "or an admin. An unknown one may have gone: it is not canceled.",
     {"id": _s("Outbound action id")},
     required=("id",),
     writes=True,
@@ -80,16 +80,15 @@ def outbound_cancel(api, args):
 
 
 @tool(
-    "tico_outbound_resolve",
-    "Settle an outbound action whose outcome is unknown, from what you found at the provider: sent true (done) or "
-    "false (failed; it is never sent again on its own). A person's call.",
-    {"id": _s("Outbound action id"), "sent": {"type": "boolean", "description": "Whether it went"}},
-    required=("id", "sent"),
+    "tico_outbound_confirm_sent",
+    "Confirm an outbound action whose outcome is unknown went out (it is done), from what you found at the provider. "
+    "A person's call. If it did not go, queue a new action with a new occurrence_key.",
+    {"id": _s("Outbound action id")},
+    required=("id",),
     writes=True,
 )
-def outbound_resolve(api, args):
-    path = f"outbound-actions/{quote(str(args['id']), safe='')}/resolve"
-    return api.post(path, {"sent": bool(args["sent"])}, key=_key(args))
+def outbound_confirm_sent(api, args):
+    return api.post(f"outbound-actions/{quote(str(args['id']), safe='')}/confirm-sent", {}, key=_key(args))
 
 
 @tool(
@@ -133,14 +132,9 @@ CLI = (
     Command("outbound show", "one outbound action", example="tico outbound show 0b5e"),
     Command("outbound cancel", "cancel an action that has not gone", example="tico outbound cancel 0b5e"),
     Command(
-        "outbound resolve",
-        "settle an unknown outcome: it went, or it did not",
-        args=(
-            Arg("sent", "--sent", action="store_const", const=True),
-            Arg("sent", "--not-sent", action="store_const", const=False),
-        ),
-        one_of=(("sent",),),
-        example="tico outbound resolve 0b5e --sent",
+        "outbound confirm-sent",
+        "confirm an action whose outcome is unknown went out",
+        example="tico outbound confirm-sent 0b5e",
     ),
     Command("outbound policy", "the company's outbound policy", example="tico outbound policy"),
     Command(

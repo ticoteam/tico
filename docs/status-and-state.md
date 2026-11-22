@@ -495,16 +495,16 @@ CHECK. NOT NULL, default `queued`. One send or outside write through the outboun
 - `attempting`: claimed by the worker; once `provider_attempted_at` is set the provider may have it.
 - `done`: the provider confirmed it; the payload is wiped.
 - `failed`: the provider refused it for good, or safe retries ran out; the payload is wiped.
-- `unknown`: the provider may have it and nobody could confirm; never sent again on its own.
+- `unknown`: the provider may have it and nobody could confirm; never sent again on its own, never canceled.
 - `blocked`: the policy says Never, or the channel's checks refuse it; the payload is kept for a person to read.
-- `canceled`: a person canceled it before it went, or after an unknown outcome; the payload is wiped.
+- `canceled`: a person canceled it before it went; the payload is wiped.
 
 Transitions (`backend/outbound_actions.py`): insert `queued`, `waiting_approval` or `blocked` (the policy);
 `waiting_approval` to `queued` on the OK; `queued` to `attempting` on claim; `attempting` to `done`, `failed`,
 `unknown`, `blocked` or `waiting_approval` (the policy checked again), or back to `queued` (a safe rejection, or a stale
 claim never attempted); a stale claim that was attempted goes to `unknown`; `unknown` to `done` or `failed` from the
-provider's own record (the adapter's reconcile) or a person's word (`resolve`), never back to `queued`;
-`waiting_approval`, `queued`, `blocked` or `unknown` to `canceled` by a person.
+provider (the adapter's reconcile, or the attempt's own late answer) or to `done` on a person's word (`confirm-sent`),
+never back to `queued` and never canceled; `waiting_approval`, `queued` or `blocked` to `canceled` by a person.
 
 ## Outside the stable set
 
