@@ -31,11 +31,12 @@ class OutboundAction(TypedDict):
     last_error: str
     created_at: str
     updated_at: str
-    metadata: dict[str, Any]
-    """Kept for later lookups after the payload is wiped"""
     policy_decision: dict[str, Any]
     """{choice, why, floor} as the last check read it"""
-    receipt: dict[str, Any]
+    metadata: NotRequired[dict[str, Any]]
+    """The caller's own record, kept after the payload is wiped (detail only)"""
+    receipt: NotRequired[dict[str, Any]]
+    """The provider's receipt (detail only)"""
     payload: NotRequired[dict[str, Any] | None]
     """The frozen content (detail only); null once the action ended"""
 
@@ -68,4 +69,4 @@ class OutboundPolicy(TypedDict):
     """What applies, by "<channel>:<audience>\" (the setting, else on_their_own inside and ask_first outside)"""
     choices: list[Choice]
     channels: list[str]
-    """The channels Tico has a sender for"""
+    """The channels Tico has a sender for (none yet: Jira is first)"""

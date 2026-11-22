@@ -16,17 +16,17 @@ STATES = ["waiting_approval", "queued", "attempting", "done", "failed", "unknown
 
 @tool(
     "tico_outbound_send",
-    "Queue an outbound action through Tico's gate (today: channel slack, an internal post as a bot to a listed "
-    "channel). The company's policy decides: queued (goes now), waiting_approval (a person OKs it) or blocked (the "
-    "reason in last_error). The same occurrence_key always answers the action it made, so a retry never sends twice. "
-    "Never route around a block.",
+    "Queue an outbound action through Tico's gate, as the bot you are. The company's policy decides: queued (goes "
+    "now), waiting_approval (a person OKs it) or blocked (the reason in last_error). The same occurrence_key always "
+    "answers the action it made, so a retry never sends twice. Never route around a block. tico_outbound_policy lists "
+    "the channels Tico can send on.",
     {
-        "channel": _s("The channel: slack"),
-        "destination": _s("Where it goes: a Slack channel id or #name on the channel list"),
-        "occurrence_key": _s("Stable key for this one action, e.g. release:v1.2:slack-reply"),
-        "payload": {"type": "object", "description": "What is sent; Slack: {bot, text, thread_ts?}"},
-        "operation": _s("What it does, e.g. post or reply (default send)"),
-        "metadata": {"type": "object", "description": "Kept after the payload is wiped: what it is for"},
+        "channel": _s("A channel tico_outbound_policy lists"),
+        "destination": _s("Where it goes, in the channel's own terms"),
+        "occurrence_key": _s("Stable key for this one action, e.g. release:v1.2:jira-done"),
+        "payload": {"type": "object", "description": "What is sent, in the channel's shape"},
+        "operation": _s("What it does, e.g. comment or transition (default send)"),
+        "metadata": {"type": "object", "description": "Your own record of what it is for; kept, never acted on"},
         "connection_id": _s("The connection (tool) it goes through, when there is one"),
         "task": TASK_ID,
         "send_after": _s("Not before this ISO time"),
@@ -81,16 +81,24 @@ def outbound_cancel(api, args):
 
 @tool(
     "tico_outbound_policy",
-    "Read or set the company's outbound policy by '<channel>:<audience>' (audience internal or external): "
-    "on_their_own, ask_first or never; null goes back to the default (on_their_own inside, ask_first outside). "
-    "Setting it is the owner's or an admin's, as themselves.",
-    {"settings": {"type": "object", "description": "Settings to change; omit to read"}},
-    writes=True,
+    "The company's outbound policy by '<channel>:<audience>' (audience internal or external): on_their_own, "
+    "ask_first or never, and the channels Tico can send on.",
+    {},
 )
 def outbound_policy(api, args):
-    if args.get("settings") is not None:
-        return api.call("PUT", "outbound-actions/policy", {"settings": args["settings"]}, key=_key(args))
     return api.get("outbound-actions/policy")
+
+
+@tool(
+    "tico_outbound_policy_set",
+    "Set the company's outbound policy by '<channel>:<audience>': on_their_own, ask_first or never; null goes back "
+    "to the default (on_their_own inside, ask_first outside). The owner's or an admin's, as themselves.",
+    {"settings": {"type": "object", "description": "The settings to change"}},
+    required=("settings",),
+    writes=True,
+)
+def outbound_policy_set(api, args):
+    return api.call("PUT", "outbound-actions/policy", {"settings": args["settings"]}, key=_key(args))
 
 
 # `tico outbound ...` (clients/cli_spec.py): each leaf's flags come from its tool's schema.
@@ -106,16 +114,16 @@ CLI = (
             Arg("payload", "--payload", type=json.loads, metavar="JSON"),
             Arg("metadata", "--metadata", type=json.loads, metavar="JSON"),
         ),
-        example='tico outbound send --channel slack --to "#release" --key v1.2:reply '
-        '--payload \'{"bot": "ops", "text": "Shipped"}\'',
+        example="tico outbound send --channel jira --to HM-12 --key v1.2:jira-done --payload '{\"to\": \"Done\"}'",
     ),
     Command("outbound list", "outbound actions, newest first", example="tico outbound list --state unknown"),
     Command("outbound show", "one outbound action", example="tico outbound show 0b5e"),
     Command("outbound cancel", "cancel an action that has not gone", example="tico outbound cancel 0b5e"),
+    Command("outbound policy", "the company's outbound policy", example="tico outbound policy"),
     Command(
-        "outbound policy",
-        "read or set the company's outbound policy",
-        args=(Arg("settings", type=json.loads, metavar="JSON"),),
-        example='tico outbound policy --settings \'{"slack:external": "never"}\'',
+        "outbound policy-set",
+        "set the company's outbound policy",
+        args=(Arg("settings", "--settings", type=json.loads, metavar="JSON"),),
+        example='tico outbound policy-set --settings \'{"jira:external": "never"}\'',
     ),
 )

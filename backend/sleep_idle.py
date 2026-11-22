@@ -63,7 +63,6 @@ STREAM = "/api/v2/events"  # an open stream says nothing about a person being th
 SENDS = {
     "slack_posts": "state IN ('ready','retry','rate_limited')",
     "webhook_sends": "state IN ('ready')",
-    "outbound_actions": "state='queued'",
     "personal_alerts": "state='pending'",
 }
 NO_KEY = "Connect the Tico Gateway in Settings > Models first: Sleep when idle asks Tico with its key."
@@ -250,8 +249,8 @@ def later_sends(c, at):
             ).fetchone()
             if row and row[0] and (found := epoch(row[0])):
                 out.append(found)
-    # A queued email due later (its undo window, or its matter's not before) wakes the server to go.
-    later = [t for t in email_due(c) if t > at + SOON]
+    # A queued email due later (its undo window, or its matter's not before), or an outbound action, wakes the server.
+    later = [t for t in email_due(c) + outbound_due(c) if t > at + SOON]
     if later:
         out.append(min(later))
     return out
@@ -270,6 +269,17 @@ def email_due(c):
         0.0 if r[0] == "dispatching" else epoch(max(r[1], email_sending.latest_bound((r[2] or "").split(",")))) or 0.0
         for r in rows
     ]
+
+
+def outbound_due(c):
+    """When each queued outbound action may go (backend/outbound_actions.py): its retry time or its hold, whichever is
+    later; now for one being attempted."""
+    if not table(c, "outbound_actions"):
+        return []
+    rows = c.execute(
+        "SELECT state, max(next_attempt_at, send_after) FROM outbound_actions WHERE state IN ('queued','attempting')"
+    ).fetchall()
+    return [0.0 if r[0] == "attempting" else epoch(r[1]) or 0.0 for r in rows]
 
 
 def online_computer(c):
@@ -304,7 +314,7 @@ def busy(c, at):
             ).fetchone()
         ):
             return "send_pending"
-    if any(t <= at + SOON for t in email_due(c)):
+    if any(t <= at + SOON for t in email_due(c) + outbound_due(c)):
         return "send_pending"
     if (times := routine_times(c, at)) and times[0] <= at + SOON:
         return "routine_due"

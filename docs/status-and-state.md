@@ -492,12 +492,11 @@ CHECK. NOT NULL, default `queued`. One send or outside write through the outboun
 
 - `waiting_approval`: the policy asks first; a person's OK bound to the frozen content lets it go.
 - `queued`: due at `next_attempt_at` (and not before `send_after`).
-- `attempting`: claimed by the worker; once `provider_attempted_at` is set the provider may have it. With no claim it
-  was handed to another sender (Slack's gateway), which settles it.
+- `attempting`: claimed by the worker; once `provider_attempted_at` is set the provider may have it.
 - `done`: the provider confirmed it; the payload is wiped.
 - `failed`: the provider refused it for good, or safe retries ran out; the payload is wiped.
 - `unknown`: the provider may have it and nobody could confirm; never sent again on its own.
-- `blocked`: the policy says Never (or Slack Connect at send time); the payload is kept for a person to read.
+- `blocked`: the policy says Never, or the channel's checks refuse it; the payload is kept for a person to read.
 - `canceled`: a person canceled it before it went, or after an unknown outcome; the payload is wiped.
 
 Transitions (`backend/outbound_actions.py`): insert `queued`, `waiting_approval` or `blocked` (the policy);

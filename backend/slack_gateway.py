@@ -64,7 +64,6 @@ from typing import Any
 
 from . import background
 from . import hubdb as H
-from . import outbound_actions
 from . import outbound_http
 from . import people as P
 from . import task_privacy as privacy
@@ -726,7 +725,6 @@ class Gateway:
                     "UPDATE slack_posts SET state='uncertain',error=?,updated_at=? WHERE message_id=?",
                     ("gateway restarted while sending", self.clock(), row["message_id"]),
                 )
-                outbound_actions.from_message(c, row["message_id"])
         if rows:
             LOG.warning("%d post(s) were mid-flight at the last stop and are now uncertain", len(rows))
         self.bridge.recover()
@@ -2007,7 +2005,6 @@ class Gateway:
                         "WHERE message_id=? AND state IN ('ready','rate_limited')",
                         (outside, self.clock(), post["message_id"]),
                     )
-                    outbound_actions.from_message(c, post["message_id"])
                     continue
                 message = H.message(c, post["message_id"])
                 if not privacy.public_message(c, message):
@@ -2072,8 +2069,6 @@ class Gateway:
                     "UPDATE slack_posts SET state=?,slack_ts=?,error=?,next_attempt_at=?,updated_at=? WHERE message_id=?",
                     (state, slack_ts, error, next_attempt, self.clock(), post["message_id"]),
                 )
-                # A post an outbound action handed off (backend/outbound_actions.py) settles that action in this write.
-                outbound_actions.from_message(c, post["message_id"])
                 H.event(
                     c,
                     "bot:" + post["bot"] if post["bot"] else H.TICO_ACTOR,

@@ -1,32 +1,31 @@
 """The outbound gate: one queue for every send and outside write (docs/outbound-actions.md).
 
-A row is one action on one channel (`slack`, later `jira`, `email`, `sms`, `webhook`): where it goes, its frozen
-`payload` (wiped once the row ends) and the `metadata` kept for later lookups. `enqueue` is the one way in, idempotent on
-`occurrence_key`. One policy (`decide`) sets the row's first state and is checked again before every attempt.
+A row is one action on one channel: where it goes, its frozen `payload` (wiped once the row ends) and the caller's
+`metadata` (kept, never read by the server). `enqueue` is the one way in, idempotent on `occurrence_key`. A channel
+sends only through its registered adapter; none ships yet (Jira is first), so tests register a fake one.
 
-- **Policy.** A floor that only tightens (the company's Never for the channel and audience, a bounced email address, a
-  Contacts rule that blocks or escalates), then the default for the channel and audience: the company's setting, else
-  On its own inside the company and Ask first outside it. Ask first waits on a person's OK bound to the frozen content
-  (backend/task_asks.py, subject `outbound:<id>`).
+- **Policy.** `decide` runs at enqueue and again before every attempt: a floor that only tightens (the company's Never
+  for the channel and audience, a Contacts rule that blocks or escalates), then the default for the channel and audience
+  (the company's setting, else On its own inside and Ask first outside). Ask first waits on one OK bound to the frozen
+  content (backend/task_asks.py, subject `outbound:<id>`).
 - **Lease.** The worker claims a due row through backend/outbox.py (`queued` to `attempting`, with a claim token).
-- **Fence.** Before any provider call, ONE write under that token stamps `provider_attempted_at` and uses the OK. A
-  worker whose claim lapsed finds no row to stamp and calls nothing.
+- **Fence.** Before any provider call, ONE durable write under that token, and only while `provider_attempted_at` is
+  still empty, stamps it and uses the OK. A worker whose claim lapsed, or a replay of the same claim, calls nothing.
 - **Stale claims.** A row still `attempting` past STALE goes back to `queued` only when it was never attempted; one
-  that was is `unknown` (in the same transaction), never sent again on its own.
-- **Answers.** An adapter returns a receipt (done), `HandedOff` (another sender owns it now and settles it), a
-  `SafeRejection` (requeued with the marker cleared and `next_attempt_at` set from Retry-After), raises `Refused`
-  (failed) or raises anything else (unknown). An unknown row is reconciled by its adapter where it can look; otherwise
-  an outside send gets one owner ask, an internal one a log line.
-- **Wake.** A commit that queues a row rings the worker; a slow sweep (SWEEP) is the backstop and does the
-  reconciling.
+  that was is `unknown` (first, in the same transaction), never sent again on its own.
+- **Answers.** An adapter returns a receipt (done) or a `SafeRejection` (requeued with the marker cleared and
+  `next_attempt_at` from Retry-After), raises `Refused` (failed), or raises anything else (unknown). An unknown row is
+  reconciled by its adapter where the provider can be asked; otherwise it is logged and waits for a person.
+- **Wake.** A commit that queues a row rings the worker, which otherwise sleeps until the next row is due (at most
+  SWEEP, the backstop that also recovers and reconciles).
 
-Rows are never pruned while unresolved: nothing here deletes a row.
+Rows are never pruned: nothing here deletes a row.
 """
 
 import json
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, NamedTuple
 
 from fastapi import Request
@@ -53,18 +52,37 @@ TABLE = O.Table(
     token="claim_token",
 )
 STALE = 120  # seconds an `attempting` row may hold its claim before recovery looks at it
-SWEEP = 60.0  # the backstop: recovery, reconciling and a look for due rows without a ring
+SWEEP = 60.0  # the longest the worker sleeps: recovery and reconciling run at most this often
 MAX_SAFE_RETRIES = 10  # safe rejections (rate limits) before a row is failed
 SUBJECT = "outbound:"
 ENDED = ("done", "failed", "canceled")  # terminal: the payload is wiped
 OPEN = ("waiting_approval", "queued", "blocked", "unknown")  # a person may cancel these
 AUDIENCES = ("internal", "external")
-CHANNELS = ("slack", "jira", "email", "sms", "webhook")
 # The policy's choices, spelled as the email policy spells them (backend/email_sending.py MODES): strictest last.
 CHOICES = ("on_their_own", "ask_first", "never")
 DEFAULTS = {"internal": "on_their_own", "external": "ask_first"}
 POLICY_KEY = "outbound_policy"
-WORDS = {"slack": "Slack post", "jira": "Jira update", "email": "email", "sms": "text", "webhook": "webhook call"}
+LIST_BYTES = 128 * 1024  # a list page stops before this many bytes of rows
+LIST_FIELDS = (
+    "id",
+    "connection_id",
+    "channel",
+    "audience",
+    "operation",
+    "destination",
+    "occurrence_key",
+    "actor",
+    "state",
+    "attempts",
+    "send_after",
+    "next_attempt_at",
+    "provider_attempted_at",
+    "approval_id",
+    "task_id",
+    "last_error",
+    "created_at",
+    "updated_at",
+)
 
 
 # ----------------------------------------------------------------------------------------------- adapter interface
@@ -75,18 +93,12 @@ class SafeRejection(NamedTuple):
     error: str = "rate limited"
 
 
-class HandedOff(NamedTuple):
-    """The action went to another durable sender (Slack's gateway): it settles the row later (`settle_from`)."""
-
-    receipt: dict[str, Any]
-
-
 class Settled(NamedTuple):
-    """What an adapter's reconcile found: `state` one of done, failed, canceled, blocked, unknown, or `queued` when the
-    provider certainly never had it (safe to try again)."""
+    """What an adapter's reconcile found: `state` one of done, failed, unknown, or `queued` when the provider certainly
+    never had it (safe to try again)."""
 
     state: str
-    receipt: dict[str, Any] = {}
+    receipt: dict[str, Any] | None = None
     error: str = ""
 
 
@@ -94,25 +106,22 @@ class Refused(Exception):
     """The provider certainly did not act and will not on a retry: the row is failed."""
 
 
-class LostClaim(Exception):
-    """The worker's claim lapsed before the handoff: nothing was handed off."""
-
-
-@dataclass
+@dataclass(frozen=True)
 class Adapter:
-    """One channel's sender. `prepare(c, settings, actor, destination, payload)` checks an action at enqueue and
-    answers (audience, destination) with the destination resolved; an audience it cannot tell is external.
-    `dispatch(store, row)` makes the one provider call. `reconcile(c, row)`, where the provider can be asked, answers
-    a `Settled` or None (cannot tell yet)."""
+    """One channel's sender, each called outside any database transaction except `prepare`:
+
+    - `prepare(c, settings, actor, destination, payload)` checks an action (at enqueue, and again at each attempt) and
+      answers (audience, destination); an audience it cannot tell is external. A Problem refuses (blocks) it.
+    - `dispatch(store, row)` makes the one provider call: a receipt dict or a SafeRejection, or it raises.
+    - `reconcile(store, row)`, where the provider can be asked: a Settled, or None when it cannot tell."""
 
     channel: str
     prepare: Callable[..., tuple[str, str]]
     dispatch: Callable[..., Any]
     reconcile: Callable[..., "Settled | None"] | None = None
-    extra: dict[str, Any] = field(default_factory=dict)
 
 
-ADAPTERS: dict[str, Adapter] = {}
+ADAPTERS: dict[str, Adapter] = {}  # no channel ships yet: the first is Jira
 
 
 def register(adapter: Adapter) -> Adapter:
@@ -128,46 +137,25 @@ def company_policy(c) -> dict[str, str]:
     return {k: v for k, v in stored.items() if v in CHOICES} if isinstance(stored, dict) else {}
 
 
-def _strictest(*choices: str) -> str:
-    return max(choices, key=CHOICES.index)
-
-
-def _floor(c, actor, channel, destination, metadata) -> tuple[str, str]:
-    """(choice, why) of what may only tighten: a bounced address, a Contacts rule. ("on_their_own", "") when none."""
-    address = destination.strip().lower()
-    if channel == "email" and "@" in address:
-        mailbox = str(metadata.get("mailbox") or "").strip().lower()
-        if c.execute(
-            "SELECT 1 FROM email_suppressed_recipients WHERE address=? AND (?='' OR mailbox=?) LIMIT 1",
-            (address, mailbox, mailbox),
-        ).fetchone():
-            return "never", "The address bounced: it is on the suppression list"
-    from . import org_rule_check
-
-    contacts = [address] if "@" in address or address.startswith("+") else []
-    verdict = org_rule_check.structured_check(
-        c, actor or H.TICO_ACTOR, channel, targets=list(metadata.get("targets") or []), contacts=contacts
-    )
-    if verdict and verdict["outcome"] == "held":
-        effects = {rule["effect"] for rule in verdict["held"]}
-        why = "; ".join(str(rule["text"]) for rule in verdict["held"])[:300]
-        return ("never" if "block" in effects else "ask_first"), why
-    return "on_their_own", ""
-
-
-def decide(c, *, actor, channel, audience, destination, metadata=None) -> dict[str, Any]:
+def decide(c, *, actor, channel, audience, destination) -> dict[str, Any]:
     """The policy for one action now: {"choice", "why", "floor"}. The floor only tightens; the default is the company's
     setting for the channel and audience, else DEFAULTS. Enqueue and every attempt read it the same way."""
     company = company_policy(c).get(f"{channel}:{audience}")
     if company == "never":
         return {"choice": "never", "why": f"The company never sends {channel} to {audience} audiences", "floor": True}
-    floor, why = _floor(c, actor, channel, destination, metadata or {})
     default = company or DEFAULTS[audience]
-    choice = _strictest(default, floor)
-    if choice != default:
-        return {"choice": choice, "why": why, "floor": True}
+    from . import org_rule_check
+
+    address = str(destination or "").strip().lower()
+    contacts = [address] if "@" in address or address.startswith("+") else []
+    verdict = org_rule_check.structured_check(c, actor or H.TICO_ACTOR, channel, contacts=contacts)
+    if verdict and verdict["outcome"] == "held":
+        floor = "never" if any(rule["effect"] == "block" for rule in verdict["held"]) else "ask_first"
+        if CHOICES.index(floor) > CHOICES.index(default):
+            why = "; ".join(str(rule["text"]) for rule in verdict["held"])[:300]
+            return {"choice": floor, "why": why, "floor": True}
     source = "the company's setting" if company else "the default"
-    return {"choice": choice, "why": f"{source} for {channel} to {audience} audiences", "floor": False}
+    return {"choice": default, "why": f"{source} for {channel} to {audience} audiences", "floor": False}
 
 
 # ---------------------------------------------------------------------------------------------------------- rows
@@ -197,65 +185,59 @@ def content(row) -> dict[str, Any]:
     }
 
 
-def public(c, row, *, payload=False) -> dict[str, Any]:
-    out = {
-        k: row[k]
-        for k in (
-            "id",
-            "connection_id",
-            "channel",
-            "audience",
-            "operation",
-            "destination",
-            "occurrence_key",
-            "actor",
-            "state",
-            "attempts",
-            "send_after",
-            "next_attempt_at",
-            "provider_attempted_at",
-            "approval_id",
-            "task_id",
-            "last_error",
-            "created_at",
-            "updated_at",
-        )
-    }
-    out["metadata"] = _load(row["metadata"], {})
+def approval_tasks(c, approval_ids) -> dict[str, str]:
+    """{requirement id: the task its OK is on}, in one read (task_asks.task_of for many)."""
+    ids = [i for i in dict.fromkeys(approval_ids) if i]
+    if not ids:
+        return {}
+    found = c.execute(
+        f"SELECT r.id, v.task_id FROM requirements r JOIN visits v ON v.id = r.visit_id "
+        f"WHERE r.id IN ({','.join('?' * len(ids))})",
+        ids,
+    ).fetchall()
+    return {str(r[0]): str(r[1]) for r in found}
+
+
+def public(c, row, *, full=False, tasks=None) -> dict[str, Any]:
+    """The row as the API shows it. `full` (one action's detail) adds the metadata, receipt and payload."""
+    out = {k: row[k] for k in LIST_FIELDS}
     out["policy_decision"] = _load(row["policy_decision"], {})
-    out["receipt"] = _load(row["receipt"], {})
-    out["approval_task_id"] = task_asks.task_of(c, row["approval_id"]) if row["approval_id"] else None
-    if payload:
+    if tasks is None:
+        tasks = approval_tasks(c, [row["approval_id"]])
+    out["approval_task_id"] = tasks.get(row["approval_id"])
+    if full:
+        out["metadata"] = _load(row["metadata"], {})
+        out["receipt"] = _load(row["receipt"], {})
         out["payload"] = _load(row["payload"], None)
     return out
 
 
 def _person_for(c, actor) -> str:
-    """Who is asked about an action: the person who made it, a bot's manager when that is a person, else the
-    company's default person."""
-    if H.is_human(actor):
-        return actor
+    """Who is asked to OK an action: a bot's manager when that is a person who is here, else the company's default
+    person."""
+    from . import task_requirements as R
+
     if H.is_bot(actor):
         from . import ask_ingest
 
         manager = ask_ingest.manager_of(c, actor)[0]
-        if manager and H.is_human(manager):
+        if manager and H.is_human(manager) and R.active_person(c, manager):
             return manager
     return H.human_actor(H.default_human(c))
 
 
 def _asker(row) -> str:
-    return row["actor"] if H.is_bot(row["actor"]) or H.is_human(row["actor"]) else H.TICO_ACTOR
+    return row["actor"] if H.is_bot(row["actor"]) else H.TICO_ACTOR
 
 
 def request_approval(c, row) -> None:
-    """Ask a person for an OK of this exact action (one OK bound to its content), on a task of its own filed under the
-    row's task when there is one. The same content asked again is the same ask."""
+    """Ask a person for an OK of this exact action, on a task of its own. The same content asked again is the same
+    ask."""
     asked = task_asks.ask_ok(
         c,
         _asker(row),
         _person_for(c, row["actor"]),
-        f"Send this {WORDS.get(row['channel'], row['channel'])}?",
+        f"Send this {row['channel']} {row['operation']}?",
         shows=[SUBJECT + row["id"]],
         subject=SUBJECT + row["id"],
         content=content(row),
@@ -274,6 +256,15 @@ def _after_commit(c, fn) -> None:
         fn()
     else:
         hooks.append(fn)
+
+
+def _when(value) -> str | None:
+    """An ISO time in the stored spelling (H.now's, which sorts), None for none; a Problem when it is not a time."""
+    if not value:
+        return None
+    if H.parse_ts(value) is None:
+        raise Problem("validation", "send_after is an ISO time, e.g. 2026-11-22T09:00:00Z", 422)
+    return H.shift(value, seconds=0)
 
 
 def enqueue(
@@ -302,12 +293,12 @@ def enqueue(
         return dict(found), False
     adapter = ADAPTERS.get(channel)
     if adapter is None:
-        known = ", ".join(sorted(ADAPTERS)) or "none"
-        raise Problem("validation", f"Tico has no sender for {channel!r} yet (it sends: {known})", 422)
+        known = ", ".join(sorted(ADAPTERS)) or "none yet"
+        raise Problem("validation", f"Tico has no sender for {channel!r} (it sends: {known})", 422)
+    after = _when(send_after)
     audience, destination = adapter.prepare(c, settings, actor, str(destination or "").strip(), payload)
     audience = audience if audience in AUDIENCES else "external"
-    metadata = {**(metadata or {}), "actor": actor}
-    policy = decide(c, actor=actor, channel=channel, audience=audience, destination=destination, metadata=metadata)
+    policy = decide(c, actor=actor, channel=channel, audience=audience, destination=destination)
     state = {"on_their_own": "queued", "ask_first": "waiting_approval", "never": "blocked"}[policy["choice"]]
     now = H.now()
     row = {
@@ -320,10 +311,10 @@ def enqueue(
         "occurrence_key": key,
         "actor": actor,
         "payload": _dump(payload),
-        "metadata": _dump(metadata),
+        "metadata": _dump(metadata or {}),
         "policy_decision": _dump(policy),
         "state": state,
-        "send_after": send_after or now,
+        "send_after": after or now,
         "next_attempt_at": now,
         "task_id": task_id,
         "last_error": policy["why"] if state == "blocked" else "",
@@ -331,15 +322,15 @@ def enqueue(
         "updated_at": now,
     }
     c.execute(f"INSERT INTO outbound_actions({','.join(row)}) VALUES({','.join('?' * len(row))})", tuple(row.values()))
-    row = get(c, row["id"])
-    assert row is not None
+    made = get(c, row["id"])
+    assert made is not None
     if state == "waiting_approval":
-        request_approval(c, row)
-        row = get(c, row["id"]) or row
+        request_approval(c, made)
+        made = get(c, made["id"]) or made
     elif state == "queued":
         _after_commit(c, ring)
-    H.event(c, actor or H.TICO_ACTOR, "outbound.queued", row["id"], {"channel": channel, "state": state})
-    return row, True
+    H.event(c, actor or H.TICO_ACTOR, "outbound.queued", made["id"], {"channel": channel, "state": state})
+    return made, True
 
 
 # --------------------------------------------------------------------------------------------------- approvals
@@ -349,36 +340,28 @@ def ok_given(c, grant, ctx=None) -> None:
     row = get(c, str(grant["subject"]).removeprefix(SUBJECT))
     if not row or row["state"] != "waiting_approval":
         raise Problem("state", "This action is no longer waiting for an OK", 409)
+    now = H.now()
     c.execute(
         "UPDATE outbound_actions SET state='queued',next_attempt_at=?,updated_at=? WHERE id=? AND state='waiting_approval'",
-        (H.now(), H.now(), row["id"]),
+        (now, now, row["id"]),
     )
     _after_commit(c, ring)
 
 
-def _approved(c, row) -> bool:
-    """Whether the row's OK lets this attempt go, using it when it is still unused. An OK this same row already used
-    (an attempt the provider safely refused, now tried again) still holds: it was for this action, which never
-    happened."""
+def _approval(c, row) -> str | None:
+    """What the row's OK allows now, writing nothing: "use" (given, not used yet), "used" (this same row used it on an
+    attempt the provider safely refused, and whoever gave it may still give it), or None."""
     rid = row["approval_id"]
     found = task_asks.grant(c, rid) if rid else None
     if not found or found["subject"] != SUBJECT + row["id"]:
-        return False
+        return None
     if found.get("used_at"):
-        return found["content_hash"] == task_asks.content_hash(content(row)) and found["used_by_id"] == _asker(row)
-    if not task_asks.passes(c, rid, SUBJECT + row["id"], content(row), _asker(row)):
-        return False
-    task_asks.use(c, rid, SUBJECT + row["id"], content(row), _asker(row))
-    return True
+        same = found["content_hash"] == task_asks.content_hash(content(row)) and found["used_by_id"] == _asker(row)
+        return "used" if same and task_asks.claimed_problem(c, rid, authority=True) is None else None
+    return "use" if task_asks.passes(c, rid, SUBJECT + row["id"], content(row), _asker(row)) else None
 
 
 # ------------------------------------------------------------------------------------------------------- settling
-def _close_unknown_ask(c, row, why) -> None:
-    task = _load(row["metadata"], {}).get("unknown_task")
-    if task:
-        H.attempt(c, H.task_close, H.TICO_ACTOR, task, why)
-
-
 def settle(c, row, state, *, receipt=None, error="", token=None) -> bool:
     """Write an outcome: done, failed, canceled, blocked or unknown. Ended rows lose their payload and keep their
     metadata. With `token`, only while that claim still holds the row. True when written."""
@@ -407,93 +390,33 @@ def settle(c, row, state, *, receipt=None, error="", token=None) -> bool:
         task_asks.not_done(c, rid, why)
     elif rid:
         task_asks.not_done(c, rid, why)
-    if row["state"] == "unknown" and state != "unknown":
-        _close_unknown_ask(c, row, f"It resolved as {state}.")
     O.note(TABLE.name, state, row["id"], channel=row["channel"])
-    adapter = ADAPTERS.get(row["channel"])
-    if state == "unknown" and (adapter is None or adapter.reconcile is None):
-        fresh = get(c, row["id"])
-        if fresh:
-            unresolved(c, fresh)  # nothing can look it up: the owner ask (outside) or a log line (inside) now
+    if state == "unknown":
+        LOG.warning("outbound action %s (%s) has an unknown outcome", row["id"], row["channel"])
+        H.event(c, H.TICO_ACTOR, "outbound.unknown", row["id"], {"channel": row["channel"]})
     return True
 
 
-def unresolved(c, row) -> None:
-    """An unknown outcome nothing can reconcile: an outside action gets one owner ask, an internal one a log line.
-    Either happens once per row."""
-    meta = _load(row["metadata"], {})
-    if meta.get("unknown_noted"):
-        return
-    meta["unknown_noted"] = H.now()
-    if row["audience"] == "external":
-        from . import person_asks
-
-        words = WORDS.get(row["channel"], row["channel"])
-        task = person_asks.task_for(
-            c,
-            H.TICO_ACTOR,
-            f"Check whether a {words} went out",
-            f"Tico tried a {words} ({row['operation']} to {row['destination']}) and could not confirm it went out. "
-            "Check with the other side; cancel the action in Tico if it did not, so nobody thinks it did.",
-            _person_for(c, row["actor"]),
-            question=f"Did this {words} go out?",
-            why="Tico could not confirm it.",
-        )
-        meta["unknown_task"] = task["id"]
-    else:
-        LOG.warning("outbound action %s (%s) has an unknown outcome", row["id"], row["channel"])
-    c.execute("UPDATE outbound_actions SET metadata=? WHERE id=?", (_dump(meta), row["id"]))
-    H.event(c, H.TICO_ACTOR, "outbound.unknown", row["id"], {"channel": row["channel"], "audience": row["audience"]})
-
-
-def hand_off(c, row, receipt) -> bool:
-    """In the adapter's handoff transaction: the row stays `attempting` with its claim released and the receipt saved,
-    so the sender it went to settles it and recovery leaves it alone. Only while the claim `row` carries still holds."""
-    return (
-        c.execute(
-            "UPDATE outbound_actions SET claimed_at=NULL,claim_token=NULL,receipt=?,updated_at=? "
-            "WHERE id=? AND state='attempting' AND claim_token=? AND provider_attempted_at IS NOT NULL",
-            (_dump({**_load(row["receipt"], {}), **receipt}), H.now(), row["id"], row["claim_token"]),
-        ).rowcount
-        == 1
-    )
-
-
-def apply(c, row, found: "Settled | None") -> None:
-    """A reconcile's finding, written: `queued` puts a row the provider never had back in line (marker cleared)."""
-    if found is None or found.state == row["state"]:
-        if row["state"] == "unknown":
-            unresolved(c, row)
-            c.execute("UPDATE outbound_actions SET updated_at=? WHERE id=?", (H.now(), row["id"]))  # its turn is over
+def apply(c, seen, found: "Settled | None") -> None:
+    """A reconcile's finding for the unknown row `seen`, written only while the row is still as it was read. `queued`
+    puts a row the provider never had back in line (marker cleared); nothing found moves it to the back of the line."""
+    now = H.now()
+    guard = "WHERE id=? AND state='unknown' AND updated_at=?"
+    if found is None or found.state == "unknown":
+        c.execute(f"UPDATE outbound_actions SET updated_at=? {guard}", (now, seen["id"], seen["updated_at"]))
         return
     if found.state == "queued":
         moved = c.execute(
-            "UPDATE outbound_actions SET state='queued',provider_attempted_at=NULL,claimed_at=NULL,claim_token=NULL,"
-            "next_attempt_at=?,updated_at=? WHERE id=? AND (state='unknown' OR (state='attempting' AND claimed_at IS NULL))",
-            (H.now(), H.now(), row["id"]),
+            "UPDATE outbound_actions SET state='queued',provider_attempted_at=NULL,next_attempt_at=?,updated_at=? "
+            + guard,
+            (now, now, seen["id"], seen["updated_at"]),
         ).rowcount
         if moved:
-            if row["state"] == "unknown":
-                _close_unknown_ask(c, row, "Tico found it was never sent and tries again.")
             _after_commit(c, ring)
         return
-    settle(c, row, found.state, receipt=found.receipt, error=found.error)
-    if found.state == "unknown":
-        fresh = get(c, row["id"])
-        if fresh:
-            unresolved(c, fresh)  # the provider cannot tell either
-
-
-def settle_from(c, action_id) -> None:
-    """A sender the action was handed to has an answer (Slack's gateway, in the transaction that records it): the row
-    settles from it now. Rows it does not know are left as they are."""
-    row = get(c, action_id) if action_id else None
-    adapter = ADAPTERS.get(row["channel"]) if row else None
-    if not row or not adapter or not adapter.reconcile or row["state"] not in ("attempting", "unknown"):
-        return
-    if row["state"] == "attempting" and row["claim_token"]:
-        return  # a worker still holds it: its own answer settles it
-    apply(c, row, adapter.reconcile(c, row))
+    row = get(c, seen["id"])
+    if row and row["state"] == "unknown" and row["updated_at"] == seen["updated_at"]:
+        settle(c, row, found.state, receipt=found.receipt, error=found.error)
 
 
 # ------------------------------------------------------------------------------------------------------ the worker
@@ -526,28 +449,31 @@ def recover(store, now=None) -> int:
 
 
 def reconcile_pass(store, limit=100) -> int:
-    """Rows waiting on an answer whose adapter can look (handed off, or unknown), oldest look first: each is settled
-    from what it finds. An unknown row it could not settle moves to the back (`apply` stamps it), so old unknowns take
-    turns and never crowd out the rows still in flight."""
-    looked = 0
+    """Unknown rows whose adapter can ask the provider, the least recently looked at first. Each adapter call runs
+    outside any transaction; what it found is written only while the row is still as it was read (`apply`)."""
     channels = [name for name, adapter in ADAPTERS.items() if adapter.reconcile]
     if not channels:
         return 0
-    marks = ",".join("?" * len(channels))
     with store.read() as c:
-        ids = [
-            r[0]
+        rows = [
+            dict(r)
             for r in c.execute(
-                f"SELECT id FROM outbound_actions WHERE channel IN ({marks}) AND (state='unknown' OR "
-                "(state='attempting' AND claimed_at IS NULL)) ORDER BY updated_at LIMIT ?",
+                f"SELECT * FROM outbound_actions WHERE state='unknown' AND channel IN ({','.join('?' * len(channels))}) "
+                "ORDER BY updated_at LIMIT ?",
                 (*channels, limit),
             )
         ]
-    for action_id in ids:
+    for row in rows:
+        reconcile = ADAPTERS[row["channel"]].reconcile
+        assert reconcile is not None
+        try:
+            found = reconcile(store, row)
+        except Exception:  # noqa: BLE001  (a lookup that fails tells nothing: the row stays unknown)
+            LOG.warning("outbound action %s: reconcile failed", row["id"], exc_info=True)
+            found = None
         with store.transaction() as c:
-            settle_from(c, action_id)
-        looked += 1
-    return looked
+            apply(c, row, found)
+    return len(rows)
 
 
 def claim(store, now=None) -> Claimed | None:
@@ -566,34 +492,49 @@ def claim(store, now=None) -> Claimed | None:
     return None
 
 
-def attempt(store, claimed: Claimed) -> str:
-    """Check the policy again, make the fenced write, call the adapter once and record its answer. Returns what
-    happened (for logs and tests)."""
-    with store.transaction() as c:
+def next_due(store) -> float | None:
+    """Seconds until the next queued row may go (0 when one may now), or None when none is queued."""
+    with store.read() as c:
+        at = c.execute(
+            "SELECT min(max(next_attempt_at, send_after)) FROM outbound_actions WHERE state='queued'"
+        ).fetchone()[0]
+    when = H.parse_ts(at) if at else None
+    return None if when is None else max(0.0, when.timestamp() - time.time())
+
+
+def _permit(store, claimed: Claimed) -> dict[str, Any] | str:
+    """Everything before the provider call, in one durable transaction: the policy and the adapter's checks again
+    (the audience derived anew), then the fenced write, which needs this claim and an empty `provider_attempted_at`,
+    with the OK used in that same write. The row to dispatch, or what happened instead."""
+    with store.transaction(durable=True) as c:
         found = c.execute(
-            "SELECT * FROM outbound_actions WHERE id=? AND state='attempting' AND claim_token=?",
+            "SELECT * FROM outbound_actions WHERE id=? AND state='attempting' AND claim_token=? "
+            "AND provider_attempted_at IS NULL",
             (claimed.id, claimed.token),
         ).fetchone()
         if not found:
-            return "lost"  # the claim lapsed: nothing is called
+            return "lost"  # the claim lapsed, or this claim already made its attempt: nothing is called
         row = dict(found)
         adapter = ADAPTERS.get(row["channel"])
-        meta = _load(row["metadata"], {})
-        policy = decide(
-            c,
-            actor=row["actor"],
-            channel=row["channel"],
-            audience=row["audience"],
-            destination=row["destination"],
-            metadata=meta,
-        )
-        if adapter is None or policy["choice"] == "never":
-            why = policy["why"] if adapter else f"No sender for {row['channel']}"
-            c.execute("UPDATE outbound_actions SET policy_decision=? WHERE id=?", (_dump(policy), row["id"]))
-            settle(c, row, "blocked", error=why, token=claimed.token)
+        try:
+            if adapter is None:
+                raise Problem("validation", f"Tico has no sender for {row['channel']!r}", 422)
+            audience, _ = adapter.prepare(c, store.settings, row["actor"], row["destination"], content(row)["payload"])
+        except Problem as exc:
+            settle(c, row, "blocked", error=exc.detail, token=claimed.token)
             return "blocked"
-        approved = _approved(c, row) if row["approval_id"] else False
-        if policy["choice"] == "ask_first" and not approved:
+        audience = audience if audience in AUDIENCES else "external"
+        policy = decide(
+            c, actor=row["actor"], channel=row["channel"], audience=audience, destination=row["destination"]
+        )
+        c.execute(
+            "UPDATE outbound_actions SET audience=?,policy_decision=? WHERE id=?", (audience, _dump(policy), row["id"])
+        )
+        if policy["choice"] == "never":
+            settle(c, row, "blocked", error=policy["why"], token=claimed.token)
+            return "blocked"
+        approval = _approval(c, row)
+        if policy["choice"] == "ask_first" and approval is None:
             O.finish(
                 c,
                 TABLE,
@@ -602,36 +543,40 @@ def attempt(store, claimed: Claimed) -> str:
                 attempts=row["attempts"],
                 error="",
                 due_at=row["next_attempt_at"],
-                extra={"policy_decision": _dump(policy), "updated_at": H.now()},
+                extra={"updated_at": H.now()},
                 token=claimed.token,
             )
-            request_approval(c, get(c, row["id"]))
+            request_approval(c, row)
             return "waiting_approval"
         now = H.now()
         fenced = c.execute(
-            "UPDATE outbound_actions SET provider_attempted_at=?,attempts=attempts+1,policy_decision=?,updated_at=? "
-            "WHERE id=? AND state='attempting' AND claim_token=?",
-            (now, _dump(policy), now, row["id"], claimed.token),
+            "UPDATE outbound_actions SET provider_attempted_at=?,attempts=attempts+1,updated_at=? "
+            "WHERE id=? AND state='attempting' AND claim_token=? AND provider_attempted_at IS NULL",
+            (now, now, row["id"], claimed.token),
         ).rowcount
         if not fenced:
             return "lost"
-        row = get(c, row["id"])
-    assert row is not None
+        if approval == "use":
+            task_asks.use(c, row["approval_id"], SUBJECT + row["id"], content(row), _asker(row))
+        return get(c, row["id"]) or row
+
+
+def attempt(store, claimed: Claimed) -> str:
+    """The permit (`_permit`), then the one adapter call, then its answer recorded under the same claim. Returns
+    what happened (for logs and tests)."""
+    row = _permit(store, claimed)
+    if isinstance(row, str):
+        return row
     try:
-        answer = adapter.dispatch(store, row)
-    except LostClaim:
-        return "lost"
+        answer = ADAPTERS[row["channel"]].dispatch(store, row)
     except Refused as exc:
         with store.transaction() as c:
             settle(c, row, "failed", error=str(exc)[:300], token=claimed.token)
         return "failed"
     except Exception as exc:  # noqa: BLE001  (the provider may have acted: unknown, never tried again on its own)
-        LOG.warning("outbound action %s: %s", row["id"], type(exc).__name__)
         with store.transaction() as c:
             settle(c, row, "unknown", error=f"{type(exc).__name__}: {exc}"[:300], token=claimed.token)
         return "unknown"
-    if isinstance(answer, HandedOff):
-        return "handed_off"
     with store.transaction() as c:
         if isinstance(answer, SafeRejection):
             if row["attempts"] >= MAX_SAFE_RETRIES:
@@ -673,11 +618,12 @@ def _loop(store, halt):
         seen = BELL.rung
         try:
             worked = step(store)
+            due = None if worked else next_due(store)
         except Exception:
             LOG.exception("outbound actions step failed")
-            worked = False
+            worked, due = False, None
         if not worked:
-            BELL.wait(seen, SWEEP)
+            BELL.wait(seen, SWEEP if due is None else min(SWEEP, max(0.05, due)))
 
 
 def start(store) -> None:
@@ -694,87 +640,6 @@ def ensure() -> None:
 
 def stop() -> None:
     _workers.stop()
-
-
-# --------------------------------------------------------------------------------------------- the Slack adapter
-def _slack_prepare(c, settings, actor, destination, payload):
-    """An internal post as a bot, to a channel on the Slack channel list with posting on (backend/slack_bots.py). The
-    gateway asks Slack again before it posts: a channel shared outside the workspace since is refused there."""
-    from . import slack_bots as SB
-
-    bot = (H.resolve_bot(c, str(payload.get("bot") or "")) or {}).get("id")
-    if not bot:
-        raise Problem("validation", "A Slack post names the bot it posts as (payload.bot)", 422)
-    if H.is_human(actor):
-        raise Problem("forbidden", "A bot queues its own Slack posts; people post in Slack themselves", 403)
-    if H.is_bot(actor) and actor != H.bot_actor(bot):
-        raise Problem("forbidden", "A bot posts to Slack as itself", 403)
-    payload["bot"] = bot
-    payload["text"] = SB.check_text(str(payload.get("text") or ""))
-    payload["thread_ts"] = str(payload.get("thread_ts") or "")
-    if H.is_bot(actor) and settings is not None:
-        SB.need(c, bot, SB.slack_entry(c, settings, bot), "post")
-        SB.not_onboarding(c, bot)
-    entry = SB.postable(c, settings, destination)
-    return "internal", entry["id"]
-
-
-def _slack_dispatch(store, row):
-    """Hand the post to the gateway's outbox (slack_posts, sent by backend/slack_gateway.py) in one transaction with
-    the handoff mark, so the post exists exactly when the row says it was handed off. The message carries the row and
-    its occurrence key; the gateway settles the row from its sent or uncertain result."""
-    from . import slack_bots as SB
-
-    payload = _load(row["payload"], {})
-    try:
-        with store.transaction() as c:
-            entry = SB.postable(c, store.settings, row["destination"])
-            post = SB.queue_post(
-                c,
-                payload["bot"],
-                entry,
-                payload.get("thread_ts") or "",
-                payload["text"],
-                refs={"outbound_action": row["id"], "occurrence_key": row["occurrence_key"]},
-            )
-            if not hand_off(c, row, {"message_id": post["message_id"], "channel": entry["id"]}):
-                raise LostClaim(row["id"])
-    except Problem as exc:
-        raise Refused(exc.detail) from None
-    return HandedOff({"message_id": post["message_id"]})
-
-
-def _slack_reconcile(c, row):
-    """The gateway's answer for the post this row handed off. No handoff recorded means none happened (the post and
-    the mark commit together): safe to try again."""
-    mid = _load(row["receipt"], {}).get("message_id")
-    if not mid:
-        return Settled("queued")
-    post = c.execute("SELECT state,slack_ts,error FROM slack_posts WHERE message_id=?", (mid,)).fetchone()
-    if not post:
-        return Settled("failed", error="The Slack post is gone")
-    state, error = post["state"], str(post["error"] or "")
-    if state == "sent":
-        return Settled("done", {"slack_ts": post["slack_ts"]})
-    if state == "uncertain":
-        return Settled("unknown", error=error or "Slack did not confirm the post")
-    if state == "failed":
-        return Settled("failed", error=error)
-    if state == "canceled":
-        # Shared outside the workspace since it was queued: held, not dropped.
-        return Settled("blocked" if "Slack Connect" in error else "canceled", error=error)
-    return None  # ready, sending, rate limited: the gateway still has it
-
-
-register(Adapter("slack", _slack_prepare, _slack_dispatch, _slack_reconcile))
-
-
-def from_message(c, message_id) -> None:
-    """The gateway recorded a post's outcome (in its own transaction): the outbound row it came from settles now."""
-    message = H.message(c, message_id) or {}
-    action = (message.get("refs") or {}).get("outbound_action")
-    if action:
-        settle_from(c, action)
 
 
 # ---------------------------------------------------------------------------------------------------------- the API
@@ -801,11 +666,13 @@ class OutboundPolicyUpdate(Contract):
 
 def policy_view(c) -> dict[str, Any]:
     stored = company_policy(c)
-    effective = {f"{ch}:{aud}": stored.get(f"{ch}:{aud}") or DEFAULTS[aud] for ch in CHANNELS for aud in AUDIENCES}
-    return {"settings": stored, "effective": effective, "choices": list(CHOICES), "channels": sorted(ADAPTERS)}
+    channels = sorted(ADAPTERS)
+    effective = {f"{ch}:{aud}": stored.get(f"{ch}:{aud}") or DEFAULTS[aud] for ch in channels for aud in AUDIENCES}
+    return {"settings": stored, "effective": effective, "choices": list(CHOICES), "channels": channels}
 
 
 def install(app, store, auth, mutate):
+    from . import api_tools
     from .api_answers.outbound_actions import (
         OutboundActionDetail,
         OutboundActionList,
@@ -813,16 +680,20 @@ def install(app, store, auth, mutate):
         OutboundPolicy,
     )
 
-    def _admin(c, who) -> bool:
+    def admin(who) -> bool:
         """The owner or an admin, as a person (auth.bot_admin)."""
         return who.role in ("owner", "human") and bool(auth.bot_admin(who))
 
-    def _visible(c, who, row) -> bool:
-        return row["actor"] == who.actor or _admin(c, who)
+    def visible(c, who, row) -> bool:
+        """Whoever queued it, the owner or an admin, and the parties to its OK (task_asks.party: the person asked)."""
+        if row["actor"] == who.actor or admin(who):
+            return True
+        found = task_asks.grant(c, row["approval_id"]) if row["approval_id"] else None
+        return bool(found) and task_asks.party(c, who.actor, found)
 
     def one(c, who, oid):
         row = get(c, oid)
-        if not row or not _visible(c, who, row):
+        if not row or not visible(c, who, row):
             raise Problem("not_found", "No such outbound action", 404)
         return row
 
@@ -853,16 +724,17 @@ def install(app, store, auth, mutate):
 
         who = request.state.identity
         require_person(who)
+        if not admin(who):
+            raise Problem("forbidden", "Only the owner or an admin sets the outbound policy", 403)
         for key, value in body.settings.items():
             channel, _, audience = key.partition(":")
-            if channel not in CHANNELS or audience not in AUDIENCES:
-                raise Problem("validation", f"{key!r} is not <channel>:<audience> ({', '.join(CHANNELS)})", 422)
+            if channel not in ADAPTERS or audience not in AUDIENCES:
+                known = ", ".join(sorted(ADAPTERS)) or "none yet"
+                raise Problem("validation", f"{key!r} is not <channel>:<audience> (channels: {known})", 422)
             if value is not None and value not in CHOICES:
                 raise Problem("validation", f"{value!r} is not one of {', '.join(CHOICES)}", 422)
 
         def work(c):
-            if not _admin(c, who):
-                raise Problem("forbidden", "Only the owner or an admin sets the outbound policy", 403)
             stored = company_policy(c)
             for key, value in body.settings.items():
                 if value is None:
@@ -883,14 +755,25 @@ def install(app, store, auth, mutate):
         **api_v2(
             "Outbound actions",
             "createOutboundAction",
-            "Queue an outbound action through the gate; the same occurrence_key answers the existing one",
+            "Queue an outbound action through the gate (a bot); the same occurrence_key answers the existing one",
             OutboundActionResult,
         ),
     )
     def create(request: Request, body: OutboundActionCreate):
         who = request.state.identity
+        bot = who.role == "bot" and H.is_bot(who.actor)
+        if not (bot or who.actor == H.TICO_ACTOR):
+            raise Problem("forbidden", "A bot queues outbound actions; a person sends or approves them in Tico", 403)
 
         def work(c):
+            task_id = None
+            if body.task_id:
+                task_id = auth.resolve_task(c, who, body.task_id)
+                auth.task(c, who, task_id)
+            if body.connection_id:
+                vault = getattr(app.state, "vault", None)
+                if not api_tools.visible(c, who, body.connection_id, vault.admins if vault else (), auth):
+                    raise Problem("not_found", "No such connection", 404)
             row, created = enqueue(
                 c,
                 auth.settings,
@@ -902,10 +785,10 @@ def install(app, store, auth, mutate):
                 payload=dict(body.payload),
                 metadata=body.metadata,
                 connection_id=body.connection_id,
-                task_id=body.task_id,
+                task_id=task_id,
                 send_after=body.send_after,
             )
-            if not _visible(c, who, row):
+            if row["actor"] != who.actor:
                 raise Problem("conflict", "This occurrence_key belongs to another action", 409)
             return {"action": public(c, row), "created": created}
 
@@ -916,7 +799,7 @@ def install(app, store, auth, mutate):
         **api_v2(
             "Outbound actions",
             "listOutboundActions",
-            "Outbound actions you made (all of them for the owner or an admin), newest first",
+            "Outbound actions you queued (all of them for the owner or an admin), newest first, byte capped",
             OutboundActionList,
         ),
     )
@@ -925,9 +808,10 @@ def install(app, store, auth, mutate):
         if state and state not in STATES:
             raise Problem("validation", f"state is one of {', '.join(STATES)}", 422)
         cap = min(100, max(1, limit))
+        fields = ",".join((*LIST_FIELDS, "policy_decision"))
         with store.read() as c:
-            sql, args = "SELECT * FROM outbound_actions WHERE 1=1", []
-            if not _admin(c, who):
+            sql, args = f"SELECT {fields} FROM outbound_actions WHERE 1=1", []
+            if not admin(who):
                 sql += " AND actor=?"
                 args.append(who.actor)
             if state:
@@ -942,8 +826,17 @@ def install(app, store, auth, mutate):
                     sql += " AND (created_at<? OR (created_at=? AND id<?))"
                     args += [at[0], at[0], cursor]
             rows = c.execute(sql + " ORDER BY created_at DESC, id DESC LIMIT ?", (*args, cap + 1)).fetchall()
-            items = [public(c, r) for r in rows[:cap]]
-            return {"items": items, "next_cursor": items[-1]["id"] if len(rows) > cap and items else None}
+            tasks = approval_tasks(c, [r["approval_id"] for r in rows[:cap]])
+            items, spent = [], 0
+            for r in rows[:cap]:
+                item = public(c, r, tasks=tasks)
+                size = len(_dump(item))
+                if items and spent + size > LIST_BYTES:
+                    break
+                items.append(item)
+                spent += size
+            more = len(items) < len(rows)
+            return {"items": items, "next_cursor": items[-1]["id"] if more and items else None}
 
     @app.get(
         "/api/v2/outbound-actions/{oid}",
@@ -956,14 +849,18 @@ def install(app, store, auth, mutate):
     )
     def detail(request: Request, oid: str):
         who = request.state.identity
-        with store.transaction() as c:
+        with store.read() as c:
+            row = one(c, who, oid)
+            if row["state"] != "waiting_approval" or not row["approval_id"]:
+                return {"action": public(c, row, full=True), "shown_hash": None}
+        with store.transaction() as c:  # the person is shown what an OK binds: recorded (task_asks.show)
             row = one(c, who, oid)
             shown = None
             if row["state"] == "waiting_approval" and row["approval_id"]:
                 shown = task_asks.show(
                     c, who.actor, row["approval_id"], content(row), own_click=task_asks.own_click(who)
                 )
-            return {"action": public(c, row, payload=True), "shown_hash": shown}
+            return {"action": public(c, row, full=True), "shown_hash": shown}
 
     @app.post(
         "/api/v2/outbound-actions/{oid}/approve",
@@ -980,7 +877,7 @@ def install(app, store, auth, mutate):
 
         def work(c):
             row = get(c, oid)
-            task_id = task_asks.task_of(c, row["approval_id"]) if row and row["approval_id"] else None
+            task_id = approval_tasks(c, [row["approval_id"]]).get(row["approval_id"]) if row else None
             if not row or not task_id:
                 raise Problem("not_found", "No such outbound action waiting for an OK", 404)
             auth.task(c, who, task_id)
@@ -996,7 +893,7 @@ def install(app, store, auth, mutate):
         **api_v2(
             "Outbound actions",
             "cancelOutboundAction",
-            "Cancel an action that has not gone (or whose outcome is unknown): whoever made it, the owner or an admin",
+            "Cancel an action that has not gone (or whose outcome is unknown): whoever queued it, the owner or an admin",
             OutboundActionResult,
         ),
     )
@@ -1004,7 +901,9 @@ def install(app, store, auth, mutate):
         who = request.state.identity
 
         def work(c):
-            row = one(c, who, oid)
+            row = get(c, oid)
+            if not row or not (row["actor"] == who.actor or admin(who)):
+                raise Problem("not_found", "No such outbound action", 404)
             if row["state"] == "canceled":
                 return {"action": public(c, row), "created": False}
             if row["state"] not in OPEN:
