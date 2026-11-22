@@ -70,6 +70,7 @@ CHOICES = ("on_their_own", "ask_first", "never")
 DEFAULTS = {"internal": "on_their_own", "external": "ask_first"}
 POLICY_KEY = "outbound_policy"
 LIST_BYTES = 128 * 1024  # a list page stops before this many bytes of rows
+VISIBILITY_FIELDS = "id,channel,actor,task_id,approval_id,metadata"
 LIST_FIELDS = (
     "id",
     "connection_id",
@@ -1183,8 +1184,6 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
     def visible(c: Any, who: Any, row: Any) -> bool:
         """Whoever queued it, the owner or an admin, the parties to its OK (task_asks.party: the person asked), and the
         person asked about its unknown outcome."""
-        if row["channel"] == outbound_email.CHANNEL:
-            return False  # Email has its own mailbox access and exact-content approval endpoints.
         if row["channel"] == "slack":
             if row["actor"] != who.actor and not admin(who):
                 return False
@@ -1216,10 +1215,19 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
         task = task or H.task(c, row["task_id"])
         return bool(task) and reads(c, who, task)  # a party to its OK, while the request still reads its task
 
-    def one(c: Any, who: Any, oid: str) -> dict[str, Any]:
-        row = get(c, oid)
-        if not row or not visible(c, who, row):
+    def one(c: Any, who: Any, oid: str, *, own_or_admin: bool = False) -> dict[str, Any]:
+        # Email has its own mailbox access and exact-content approval endpoints.
+        access = c.execute(
+            f"SELECT {VISIBILITY_FIELDS} FROM outbound_actions WHERE id=? AND channel<>'email'", (oid,)
+        ).fetchone()
+        if (
+            not access
+            or (own_or_admin and access["actor"] != who.actor and not admin(who))
+            or not visible(c, who, access)
+        ):
             raise Problem("not_found", "No such outbound action", 404)
+        row = get(c, oid)
+        assert row is not None  # the visibility check and payload read share a transaction
         return row
 
     @app.get(
@@ -1359,12 +1367,13 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
             return b"outbound\0" + cast(bytes, visuals.key_for(app, store.settings))
 
         with store.read() as c:
+            is_admin = admin(who)
+            index = " INDEXED BY outbound_actions_non_email_created" if is_admin and not (state or channel) else ""
             sql = (
-                f"SELECT {fields} FROM outbound_actions WHERE channel<>'email' AND (channel<>'slack' OR EXISTS "
+                f"SELECT {fields} FROM outbound_actions{index} WHERE channel<>'email' AND (channel<>'slack' OR EXISTS "
                 "(SELECT 1 FROM messages m WHERE m.id=outbound_actions.id AND m.deleted_at IS NULL))"
             )
             args: list[Any] = []
-            is_admin = admin(who)
             if not is_admin:
                 sql += " AND actor=?"
                 args.append(who.actor)
@@ -1378,7 +1387,10 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
             if cursor.startswith("scan:"):
                 position = cursors.decode_cursor(cursor.removeprefix("scan:"), cursor_key())
             elif cursor:
-                at = get(c, cursor)
+                at = c.execute(
+                    f"SELECT {VISIBILITY_FIELDS},created_at FROM outbound_actions WHERE id=? AND channel<>'email'",
+                    (cursor,),
+                ).fetchone()
                 if at and (is_admin or at["actor"] == who.actor) and visible(c, who, at):
                     position = (at["created_at"], cursor)
             if position:
@@ -1421,7 +1433,7 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
     def detail(request: Request, oid: str) -> Any:
         who = request.state.identity
         auth.domain(who)
-        with store.read() as c:
+        with store.read_transaction() as c:
             row = one(c, who, oid)
             waiting = row["state"] == "waiting_approval" and row["approval_id"]
             if not waiting:
@@ -1452,16 +1464,15 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
         ctx = task_asks.Context(auth, auth.settings, who, app)
 
         def work(c: Any) -> Any:
-            row = get(c, oid)
-            if not row or row["channel"] == outbound_email.CHANNEL:
-                raise Problem("not_found", "No such outbound action waiting for an OK", 404)
-            task_id = approval_tasks(c, [row["approval_id"]]).get(row["approval_id"])
+            row = c.execute(
+                "SELECT approval_id FROM outbound_actions WHERE id=? AND channel<>'email'", (oid,)
+            ).fetchone()
+            approval_id = row["approval_id"] if row else ""
+            task_id = approval_tasks(c, [approval_id]).get(approval_id)
             if not task_id:
                 raise Problem("not_found", "No such outbound action waiting for an OK", 404)
             auth.task(c, who, task_id)
-            task_asks.give_ok(
-                c, who.actor, row["approval_id"], body.shown_hash, own_click=task_asks.own_click(who), ctx=ctx
-            )
+            task_asks.give_ok(c, who.actor, approval_id, body.shown_hash, own_click=task_asks.own_click(who), ctx=ctx)
             return {"action": public(c, get(c, oid)), "created": False}
 
         return mutate(request, body, work, durable=True)
@@ -1479,9 +1490,7 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
         who = request.state.identity
 
         def work(c: Any) -> Any:
-            row = get(c, oid)
-            if not row or not (row["actor"] == who.actor or admin(who)) or not visible(c, who, row):
-                raise Problem("not_found", "No such outbound action", 404)
+            row = one(c, who, oid, own_or_admin=True)
             if row["channel"] == outbound_slack.CHANNEL and outbound_slack.adopt_legacy(c, row):
                 row = get(c, oid)
                 assert row is not None

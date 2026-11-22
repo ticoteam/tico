@@ -5,6 +5,7 @@ enqueue and again at dispatch, and one OK from the person asked.
 A fake `webhook` adapter stands in for a provider (Jira's own is tested in test_outbound_jira.py)."""
 
 import json
+from contextlib import contextmanager
 from dataclasses import replace
 
 import pytest
@@ -13,6 +14,7 @@ from backend import outbound_actions as OA
 from backend import sleep_idle
 from backend import task_asks
 from backend.store import H
+from backend.tests.helpers.statement_scope import measuring, recorder
 from backend.tests.helpers.tasks_board import api, get, headers  # noqa: F401  (fixture)
 
 
@@ -143,6 +145,26 @@ def test_outbound_list_treats_private_email_cursors_as_missing(api, store, fake)
     assert [row["id"] for row in first["items"]] == [visible["id"]]
     assert get(api, "outbound-actions?cursor=private-mail") == first
     assert get(api, f"outbound-actions?cursor={visible['id']}")["items"] == []
+
+
+def test_unfiltered_admin_outbound_list_uses_the_non_email_index(api, store, fake, monkeypatch):
+    visible, _ = add(store)
+    read = store.read
+    statements = []
+
+    @contextmanager
+    def traced_read():
+        with read() as c:
+            c.set_trace_callback(recorder(statements))
+            yield c
+
+    monkeypatch.setattr(store, "read", traced_read)
+    with measuring(statements):
+        assert [row["id"] for row in get(api, "outbound-actions?limit=1")["items"]] == [visible["id"]]
+    [sql] = [s for s in statements if "FROM outbound_actions" in s and "ORDER BY created_at DESC, id DESC" in s]
+    with read() as c:
+        plan = [row[3] for row in c.execute("EXPLAIN QUERY PLAN " + sql)]
+    assert any("USING INDEX outbound_actions_non_email_created" in step for step in plan), plan
 
 
 def test_the_same_claim_replayed_after_its_attempt_calls_nothing(store, fake):

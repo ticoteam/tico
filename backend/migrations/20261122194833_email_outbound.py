@@ -101,3 +101,7 @@ def up(conn):
         "CREATE INDEX outbound_email_cutover ON outbound_actions(id) "
         "WHERE channel='email' AND json_extract(metadata,'$.cutover_unconfirmed')=1"
     )
+    conn.execute(
+        "CREATE INDEX outbound_actions_non_email_created ON outbound_actions(created_at DESC, id DESC) "
+        "WHERE channel<>'email'"
+    )
