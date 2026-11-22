@@ -366,7 +366,8 @@ def _step(flow, state, thread, services):
             _record(state, thread, step, "skipped")
             return
         run = RUN[step["type"]]
-        # What an earlier send delivered (`delivered`) is a listening's alone: a sample's never skips a step.
+        # What an earlier send delivered (`delivered`) is read only on a listening's runs, so it never skips another
+        # automation's step.
         fresh = _fresh(state, thread, step) if (flow.get("trigger") or {}).get("type") == "listening" else None
         if fresh is not None:
             # A listening item back from a run where this step delivered it goes only to the steps that missed it.
