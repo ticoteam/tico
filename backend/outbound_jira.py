@@ -196,15 +196,22 @@ def _issue(row: Any) -> str:
     return f"/rest/api/3/issue/{quote(str(row['destination']))}"
 
 
+# Atlassian Document Format's inline nodes: a paragraph holds only these.
+INLINE = frozenset(
+    {"text", "hardBreak", "mention", "emoji", "date", "status", "inlineCard", "mediaInline", "placeholder"}
+)
+
+
 def _nodes(value: object, *, inline: bool = False) -> list[dict[str, object]]:
     """A node list whose every node is an object with a type, and every text node has its text; `inline`: none holds
-    content of its own (a paragraph's children). Else _Unreadable."""
+    content of its own and each is an inline kind (a paragraph's children). Else _Unreadable."""
     if not isinstance(value, list):
         raise _Unreadable("A comment on the issue has no readable body")
     nodes: list[dict[str, object]] = []
     for node in cast("list[object]", value):
         got = cast("dict[str, object]", node) if isinstance(node, dict) else {}
-        bad = not isinstance(got.get("type"), str) or (inline and "content" in got)
+        kind = got.get("type")
+        bad = not isinstance(kind, str) or (inline and (kind not in INLINE or "content" in got))
         if bad or (got.get("type") == "text" and not isinstance(got.get("text"), str)):
             raise _Unreadable("A comment on the issue has a node that cannot be read")
         nodes.append(got)

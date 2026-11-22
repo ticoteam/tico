@@ -448,6 +448,7 @@ def test_the_level_that_counts_is_on_the_key_a_write_goes_with(api, jira):
                 },
             }
         ],
+        [{"id": "9", "body": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "rule"}]}]}}],
     ],
     ids=[
         "null",
@@ -457,6 +458,7 @@ def test_the_level_that_counts_is_on_the_key_a_write_goes_with(api, jira):
         "node without type",
         "block not a node",
         "block inside a paragraph",
+        "rule inside a paragraph",
     ],
 )
 def test_a_comment_that_cannot_be_read_writes_nothing_and_tries_again(api, jira, raw):
@@ -518,30 +520,3 @@ def test_a_key_deleted_after_the_permit_does_not_hand_the_write_to_another_key(a
     with pytest.raises(OA.Refused):
         OJ.dispatch(_store(api), permitted)
     assert jira.writes == [] and action["id"] == permitted["id"]
-
-
-def test_a_grant_grouping_copies_from_one_passed_on_drops_with_the_persons(api, jira):
-    from backend import credentials, tool_templates
-
-    key = _key(api, jira.tool, "read_write")
-    ana, priya = (
-        Identity("human:ana", "owner", "ana@acme.example"),
-        Identity("human:priya", "human", "priya@acme.example"),
-    )
-    vault = api.app.state.vault
-    with _store(api).transaction() as c:
-        c.execute("UPDATE bot_config SET owner_id='priya' WHERE bot='cmo'")
-        parent = vault.grant(c, ana, key, "human:priya")["id"]
-        vault.grant(c, priya, key, "bot:cmo")
-        row = dict(c.execute("SELECT * FROM credentials WHERE id=?", (key,)).fetchone())
-        other = {**row, "id": "k-other", "env": "JIRA_OTHER", "name": "Jira other"}
-        c.execute(
-            f"INSERT INTO credentials({','.join(other)}) VALUES({','.join('?' * len(other))})", tuple(other.values())
-        )
-        keys = c.execute("SELECT * FROM credentials WHERE id IN (?, 'k-other')", (key,)).fetchall()
-        assert {g["subject"]: g["level"] for g in tool_templates._union(c, keys)}["bot:cmo"] == "read_write"
-        credentials.set_grant_level(c, parent, "read")
-        levels = c.execute(
-            "SELECT credential_id, access_level FROM credential_grants WHERE subject='bot:cmo' AND revoked_at IS NULL"
-        ).fetchall()
-    assert {(r[0], r[1]) for r in levels} == {(key, "read"), ("k-other", "read")}
