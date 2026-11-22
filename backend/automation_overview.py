@@ -16,6 +16,7 @@ signed in, as GET /api/v2/heartbeat is."""
 import json
 from datetime import timedelta
 
+from . import automation_engine as E
 from . import automation_flow as F
 from .store import H, Problem
 from .api_contract import api_v2
@@ -285,7 +286,8 @@ def outcome(status, state, flow):
         step = _find(flow.get("steps"), done[-1].get("id")) or {}
         return DONE_WORDS.get(step.get("do") or (done[-1].get("outputs") or {}).get("do"), "Done")
     capped = sum(s.get("status") == "spend_cap" for s in steps)
-    return "Spend cap" if capped else "Done"
+    together = E.together_count(state or {})
+    return "Spend cap" if capped else E.items_words(together) if together else "Done"
 
 
 def run_row(run, row, flow):

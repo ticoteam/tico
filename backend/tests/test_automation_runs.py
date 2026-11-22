@@ -837,6 +837,82 @@ def test_a_failed_item_is_tried_again_once_then_passed_over_and_counted(api):
     assert get(api, f"automations/{aid}/runs")["daily"][0]["dropped"] == 1
 
 
+# ---------------------------------------------------------------------------------------------- together
+DIGEST = [
+    {**FIND, "together": True, "limit": 2},
+    {"id": "sort", "type": "bot_turn", "bot": "ops", "prompt": "Sort these: {{item.items}}"},
+]
+DAILY = {"type": "schedule", "cron": "0 8 * * *", "tz": "UTC"}
+
+
+def tasks_titled(api, *titles):
+    for title in titles:
+        post(api, "tasks", {"owner": "ops", "title": f"Acme batch {title}", "body": "x"})
+
+
+def found_mark(api, aid):
+    return automations._mark(sql(api, "SELECT found_since FROM automations WHERE id=?", (aid,))[0]["found_since"])
+
+
+def test_a_together_find_hands_one_task_the_items_it_took_and_the_next_run_the_rest(api, monkeypatch):
+    from backend import automation_overview
+
+    prompts, start = [], automations.HubServices.start_turn
+
+    def spy(self, who, prompt, ctx, wait):
+        prompts.append(prompt)
+        return start(self, who, prompt, ctx, wait)
+
+    monkeypatch.setattr(automations.HubServices, "start_turn", spy)
+    aid = make(api, DIGEST, trigger=DAILY)
+    tasks_titled(api, "one", "two", "three")
+    run = post(api, f"automations/{aid}/run", {})["run"]
+    assert [(s["id"], s["status"], s["outputs"].get("count")) for s in run["steps"]] == [
+        ("look", "ok", 2),
+        ("sort", "ok", None),
+    ]
+    assert len(sql(api, "SELECT id FROM tasks WHERE title='Test · 2 items'")) == 1
+    assert "Acme batch one" in prompts[0] and "Acme batch two" in prompts[0] and "three" not in prompts[0]
+    assert run["summary"] == "2 items"
+    state = run_row(api, run["id"])["state"]
+    assert automation_overview.outcome("ok", state, {"steps": DIGEST}) == "2 items"
+    run = post(api, f"automations/{aid}/run", {})["run"]  # the item left over, then nothing new
+    assert run["steps"][0]["outputs"]["count"] == 1 and sql(api, "SELECT id FROM tasks WHERE title='Test · 1 item'")
+    assert post(api, f"automations/{aid}/run", {})["run"]["steps"][0]["outputs"]["count"] == 0
+
+
+def test_a_together_turn_the_spend_cap_stops_leaves_its_items_new_with_no_try(api):
+    aid = make(api, DIGEST, trigger=DAILY, spend_cap={"per_30m": 0})
+    tasks_titled(api, "one", "two")
+    before = found_mark(api, aid)
+    for _ in range(3):  # however often: never counted as a failure, never passed over
+        run = post(api, f"automations/{aid}/run", {})["run"]
+        assert [(s["status"], s["outputs"].get("count")) for s in run["steps"]] == [("ok", 2), ("spend_cap", None)]
+    assert found_mark(api, aid) == before and before["tried"] == {}
+
+
+def test_a_failed_together_turn_counts_a_try_for_each_item_then_passes_them_over(api, monkeypatch):
+    def down(self, *args):
+        raise RuntimeError("no such bot")
+
+    monkeypatch.setattr(automations.HubServices, "start_turn", down)
+    aid = make(api, DIGEST, trigger=DAILY)
+    tasks_titled(api, "one", "two")
+    assert post(api, f"automations/{aid}/run", {})["run"]["steps"][1]["status"] == "failed"
+    assert sorted(found_mark(api, aid)["tried"].values()) == [1, 1]  # one try for each item, by its id
+    counts = [post(api, f"automations/{aid}/run", {})["run"]["steps"][0]["outputs"]["count"] for _ in range(2)]
+    assert counts == [2, 0] and found_mark(api, aid)["tried"] == {}
+    assert get(api, f"automations/{aid}/runs")["daily"][0]["dropped"] == 2
+
+
+def test_run_now_while_a_together_run_is_unfinished_is_refused_as_already_running(api):
+    aid = make(api, DIGEST, trigger=DAILY)
+    assert queued(api, aid)
+    assert post(api, f"automations/{aid}/run", {}, expected=409)["error"]["code"] == "already_running"
+    assert len(sql(api, "SELECT id FROM automation_runs WHERE automation_id=?", (aid,))) == 1
+    assert not any(day.get("dropped") for day in get(api, f"automations/{aid}/runs")["daily"])
+
+
 def test_an_automation_that_finds_runs_one_at_a_time(api):
     aid = make(api, [FIND])
     first = queued(api, aid)

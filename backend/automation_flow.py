@@ -39,6 +39,7 @@ ACTIONS = (
 )
 OPS = ("is", "is_not", ">=", "<=", "contains", "matches")
 SOURCES = ("mail", "tasks", "prs", "docs")
+TOGETHER_SOURCES = ("mail", "tasks", "docs")  # the finds whose items may go to one bot turn as a list (`together`)
 MAX_PATHS = 10  # paths in one fork
 MAX_DEPTH = 3  # forks inside forks
 MAX_STEPS = 100  # every step in the flow, nested ones included
@@ -501,6 +502,7 @@ def _check_step(step, where, seen, depth, counts, targets=frozenset()):
             where,
             f"limit is 1 to {MAX_FIND}",
         )
+        _need(isinstance(step.get("together", False), bool), where, "together is true or false")
     elif kind == "bot_turn":
         _need(
             isinstance(step.get("bot"), str) and re.fullmatch(r"(bot:)?[a-z0-9][a-z0-9._-]{0,63}", step["bot"]),
@@ -565,6 +567,44 @@ def _check_steps(steps, where, seen, depth, counts, targets=frozenset()):
             f"step {step['id']}",
             "a choose step is the last step in its list",
         )
+
+
+def together(flow):
+    """The flow's find with `together: true`, whose items go to its one bot turn as a list, or None."""
+    return next(
+        (s for s in flow.get("steps") or [] if isinstance(s, dict) and s.get("type") == "find" and s.get("together")),
+        None,
+    )
+
+
+def _check_together(flow):
+    """A together find hands every item it takes to one bot turn, so only one shape runs it: a schedule (no batch
+    times), the find on and first, then one bot turn whose prompt reads {{item.items}} and leaves room for the list."""
+    find = together(flow)
+    if find is None:
+        return
+    where = f"step {find['id']}"
+    _need(find["source"] in TOGETHER_SOURCES, where, "together is for a mail, tasks or docs find")
+    _need(flow["trigger"]["type"] == "schedule", where, "together runs on a schedule trigger")
+    _need(flow.get("batch") is None, where, "together runs at its schedule's times: leave out batch")
+    on = [s for s in flow["steps"] if s.get("enabled", True) is not False]
+    _need(bool(on) and on[0] is find, where, "a together find is on and the first step")
+    _need(
+        len(on) == 2 and on[1]["type"] == "bot_turn",
+        where,
+        "a together find is followed by one bot_turn and nothing else",
+    )
+    turn = on[1]
+    _need(
+        any(m.group(1) == "item.items" for m in templating.PLACEHOLDER.finditer(turn["prompt"])),
+        f"step {turn['id']}",
+        "after a together find, the prompt reads {{item.items}}",
+    )
+    _need(
+        len(turn["prompt"]) <= MAX_TEXT,
+        f"step {turn['id']}",
+        f"after a together find, the prompt is at most {MAX_TEXT} characters, so the items fit",
+    )
 
 
 def _check_choose(choose, where, targets):
@@ -656,6 +696,7 @@ def check(flow):
     targets = _check_destinations(flow["destinations"]) if flow.get("destinations") is not None else frozenset()
     counts = [0, False, flow["trigger"]["type"]]  # steps so far, a find seen, the trigger (for a paths `by`)
     _check_steps(flow.get("steps", []), "steps", set(), 0, counts, targets)
+    _check_together(flow)
     _need(
         not (owner.startswith("group:") and next(choosing(flow.get("steps")), None)),
         "steps",
@@ -927,7 +968,10 @@ STEP_WORDS = {
     "default, mode: draft or reply}`, last in its list) the turn answers `{to, body}`: the body is saved as a draft "
     "or sent as the reply to the message (never templated), then the chosen destination's actions run. A malformed "
     "answer, a spend cap or a held webhook runs `default` with no reply",
-    "find": "pulls items from a source since the last run; the steps after it run once per item. At most one, at the top",
+    "find": "pulls items from a source since the last run; the steps after it run once per item. At most one, at the "
+    "top. With `together: true` (on a schedule, no `batch`; source mail, tasks or docs; then one `bot_turn` whose "
+    "prompt reads the placeholder `item.items`, at most 8000 characters) the bot turn runs once per run on the new "
+    "items since the last run, oldest first, up to `limit` (100 when left out) and what fits its prompt",
     "bot_turn": "a task for a bot with the prompt; the bot runs it in its own session",
     "paths": "named paths tested in order; the first whose conditions hold runs. Nothing follows a paths step in its "
     "list. In a listening, `by: tag` or `by: item` runs the paths once per tag or per item, read as `item.tag`, "

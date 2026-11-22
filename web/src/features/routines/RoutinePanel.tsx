@@ -55,6 +55,7 @@ function RoutineView({ id, onClose }: { id: string; onClose: () => void }) {
   if (board && item) return <BoardItemEditor key={`${item.part}:${item.at ?? ''}`} routine={r} board={board} it={item} onDone={() => setItem(null)} onClose={onClose} />;
   const on = r.enabled !== false && !r.paused;
   const step = stepOf(r);
+  const together = r.steps?.find((s) => s.type === 'find' && s.together === true);
   const tmp = r.id.startsWith('tmp:');
   return (
     <SidePanel
@@ -84,6 +85,7 @@ function RoutineView({ id, onClose }: { id: string; onClose: () => void }) {
       <section className="rail-sec">
         <Facts label="About">
           <LabelValue label="Trigger">{triggerWords(r.trigger)}</LabelValue>
+          {together && <LabelValue label="Batch">{`Once per run, for new ${String(together.source)} since the last run`}</LabelValue>}
           <LabelValue label="Does">
             <Face id={step?.bot ?? r.owner_id} />
             <Runner id={step?.bot ?? r.owner_id} />

@@ -2053,29 +2053,43 @@ def _found_done(c, aid, state, ended=False):
     """Move the automation's `find` watermark past the items finished in order. An item still being worked stops it
     (the next run finds it again if this one stops). An item whose thread failed, or that a run ended without
     finishing (`ended`), stops it too and is found again by the next run, once: failing again it is passed over and
-    counted as dropped. Items finished past a stop are kept in `done`, so the retry never repeats them."""
+    counted as dropped. Items finished past a stop are kept in `done`, so the retry never repeats them. A together
+    find's thread holds all its items (`found`), each counted on its own; its turn stopped by the spend cap (done, not
+    `settled`) leaves them new with no try counted."""
     found = c.execute("SELECT found_since FROM automations WHERE id=?", (aid,)).fetchone()
     mark = _mark(found[0] if found else "")
     finished = {p: True for p in mark["done"]}
     for thread in (t for t in state.get("threads") or [] if t.get("item") is not None and not t.get("split")):
         value = thread.get("value") if isinstance(thread.get("value"), dict) else {}
-        place, ident = (str(value.get("at") or ""), str(value.get("id") or "")), str(value.get("id") or "")
-        if thread["state"] == E.DONE:
-            mark["tried"].pop(ident, None)
-            finished[place] = True
+        places = [(str(at), str(ident)) for at, ident in thread.get("found") or []] or [
+            (str(value.get("at") or ""), str(value.get("id") or ""))
+        ]
+        if thread["state"] == E.DONE and thread.get("found") and not thread.get("settled"):
+            for place in places:
+                finished.setdefault(place, False)
+        elif thread["state"] == E.DONE:
+            for place in places:
+                mark["tried"].pop(place[1], None)
+                finished[place] = True
         elif thread["state"] == E.FAILED or ended:
             if not thread.get("counted"):  # once per thread, however often the run is saved
                 thread["counted"] = True
-                tries = int(mark["tried"].get(ident) or 0) + 1
-                if tries >= ITEM_TRIES:
-                    mark["tried"].pop(ident, None)
-                    thread["passed_over"] = True
-                    _count(c, aid, "dropped")
-                else:
-                    mark["tried"][ident] = tries
-            finished[place] = bool(thread.get("passed_over"))
+                over = []
+                for _, ident in places:
+                    tries = int(mark["tried"].get(ident) or 0) + 1
+                    if tries >= ITEM_TRIES:
+                        mark["tried"].pop(ident, None)
+                        over.append(ident)
+                        _count(c, aid, "dropped")
+                    else:
+                        mark["tried"][ident] = tries
+                thread["passed_over"] = over
+            over = thread.get("passed_over")  # True on a run saved before it held ids
+            for place in places:
+                finished[place] = over is True or place[1] in (over or ())
         else:
-            finished.setdefault(place, False)
+            for place in places:
+                finished.setdefault(place, False)
     cursor = (mark["at"], mark["id"])
     for place in sorted(finished):
         if place <= cursor:
@@ -2103,7 +2117,10 @@ def _held(c, aid, rid):
     ):
         for thread in json.loads(row[0] or "{}").get("threads") or []:
             if thread.get("item") is not None and not thread.get("split") and isinstance(thread.get("value"), dict):
-                out.add(str(thread["value"].get("id")))
+                if thread.get("found"):
+                    out.update(str(ident) for _, ident in thread["found"])
+                else:
+                    out.add(str(thread["value"].get("id")))
     return out
 
 
@@ -3712,8 +3729,8 @@ def page(rows, limit, offset, cap):
 
 
 def _summary(state):
-    """A few words for the run's row: what a listening's run did not deliver, else where it failed, else the paths it
-    took, else what the cap stopped."""
+    """A few words for the run's row: what a listening's run did not deliver, else where it failed, else how many items
+    a together find took, the paths it took and what the cap stopped."""
     steps = state.get("steps") or []
     found = state.get("delivery")
     if isinstance(found, dict) and found.get("missed"):
@@ -3730,7 +3747,12 @@ def _summary(state):
         dict.fromkeys(str(s["outputs"].get("path")) for s in steps if s["type"] == "paths" and s["outputs"].get("path"))
     )
     capped = sum(s["status"] == "spend_cap" for s in steps)
-    words = (["path " + ", ".join(taken)] if taken else []) + ([f"{capped} stopped by the spend cap"] if capped else [])
+    together = E.together_count(state)
+    words = (
+        ([E.items_words(together)] if together else [])
+        + (["path " + ", ".join(taken)] if taken else [])
+        + ([f"{capped} stopped by the spend cap"] if capped else [])
+    )
     return "; ".join(words)[:120] or None
 
 
@@ -4211,6 +4233,9 @@ def install(app, store, auth, mutate):
                 raise Problem("readonly", "This built-in shows work Tico runs itself; it has nothing to run", 409)
             if _hold_row(c, aid):
                 raise Problem("on_hold", "The automation is on hold: release or drop its held runs first", 409)
+            if F.together(flow) and _held_by_find(c, row):
+                # Two runs would hand the same new items to two turns: a together find runs one at a time.
+                raise Problem("already_running", "Already running", 409)
             if not _approved(c, row) and (blocked := _stamp_blocked(c, auth, who, flow)):
                 raise Problem(
                     "forbidden",
