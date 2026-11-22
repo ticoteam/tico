@@ -32,17 +32,28 @@ def test_granted_matches_effective_grant_for_every_credential_and_subject():
         }, subject
 
 
-def test_a_grant_passed_on_by_a_person_is_never_at_more_than_theirs():
+def test_the_migration_lowers_a_grant_passed_on_above_its_givers():
+    from pathlib import Path
+
     c = sqlite3.connect(":memory:")
-    c.row_factory = sqlite3.Row
     c.execute(
         "CREATE TABLE credential_grants(id TEXT PRIMARY KEY, credential_id TEXT, subject TEXT, revoked_at TEXT, "
         "parent_id TEXT, access_level TEXT NOT NULL DEFAULT 'read_write')"
     )
-    c.execute("CREATE TABLE bot_config(bot TEXT PRIMARY KEY, owner_id TEXT)")
-    c.execute("INSERT INTO bot_config VALUES('ops','ben')")
-    c.execute("INSERT INTO credential_grants VALUES('p','k','human:ben',NULL,NULL,'read')")
-    c.execute("INSERT INTO credential_grants VALUES('g','k','bot:ops',NULL,'p','read_write')")
-    assert effective_grant(c, "k", "bot:ops")["access_level"] == "read"
-    c.execute("UPDATE credential_grants SET access_level='read_write' WHERE id='p'")
-    assert effective_grant(c, "k", "bot:ops")["access_level"] == "read_write"
+    c.executemany(
+        "INSERT INTO credential_grants(id,parent_id,access_level) VALUES(?,?,?)",
+        [
+            ("p-read", None, "read"),
+            ("c-up", "p-read", "read_write"),
+            ("p-rw", None, "read_write"),
+            ("c-ok", "p-rw", "read_write"),
+        ],
+    )
+    migration = next(Path(__file__).resolve().parents[1].glob("migrations/*_delegated_grants_at_most_their_parent.sql"))
+    c.executescript(migration.read_text())
+    assert dict(c.execute("SELECT id, access_level FROM credential_grants")) == {
+        "p-read": "read",
+        "c-up": "read",
+        "p-rw": "read_write",
+        "c-ok": "read_write",
+    }

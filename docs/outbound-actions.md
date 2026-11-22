@@ -93,8 +93,8 @@ one. A rehearsal copy never runs the worker, and a dev copy empties the table.
 `backend/outbound_jira.py`. Destination: the issue key (`HM-12`); `connection_id`: the Jira connection, which must be a
 record integration (an Everyone API tool an administrator marked as holding records, on one Jira site) with a shared
 read and write key: the same rule, key lookup and deadline-bounded call as the background reads
-(backend/item_sources/jira.py). The bot (or person) queuing it must hold Read and write on that connection (a grant a
-person passed on to their bot is never at more than their own); Tico itself always may. The connection's Jira site is
+(backend/item_sources/jira.py). The bot (or person) queuing it must hold Read and write on the exact key a write goes with (the
+oldest read and write key; a grant a person passed on to their bot is stored at no more than their own); Tico itself always may. The connection's Jira site is
 frozen into the payload (`site`), so an OK shows and binds it with the key, and an attempt on another site is blocked. Anything else is refused at enqueue and blocked at an attempt, so a grant taken back stops a queued action.
 While an action to it may still go or is unknown, the connection's base URL and sites cannot move to another site
 (tool_services.referenced). The audience is external,
@@ -107,8 +107,8 @@ but a record write is bookkeeping, not a message to people, so `jira` goes On it
 | `comment` | `{"body": "text"}` (at most 30,000 characters) | a comment, blank lines making paragraphs, ending with the action's marker `[tico:<10 hex of sha256(occurrence_key)>]` as its own last paragraph |
 
 Before the write it asks whether the effect is already there (the issue already in the status; a comment among the
-newest 100, read 20 at a time and in halves when a page is too long, whose last paragraph is one text node that is
-exactly the marker; a comment that cannot be read, or one still too long alone, makes the lookup fail): found, the action is done with no write (`"already": true` in the receipt). Reconcile
+newest 100, read 20 at a time (up to 2 MiB a page) and in halves when a page is too long, whose last paragraph is one text node that is
+exactly the marker; a comment or node that cannot be read, or one comment still too long alone, makes the lookup fail): found, the action is done with no write (`"already": true` in the receipt). Reconcile
 uses the same lookup to settle an unknown row done; a row it cannot prove stays unknown for the owner. A 429 is a safe
 rejection after its Retry-After (else a minute), as is anything that fails before the write, a lookup answer cut off
 or not the shape asked for included. Jira's 400, 401, 403 or

@@ -196,11 +196,7 @@ def connect(
         raise Unreadable(f"{tool['name']} has no https API address")
     if "auth_template" in tool.keys() and tool["auth_template"]:
         raise Unreadable(f"{tool['name']} uses a key template; Tico reads Jira with one key")
-    credential = conn.execute(
-        f"SELECT k.* FROM credentials k JOIN tools tl ON tl.id = k.tool_id WHERE tl.id=? AND {INTEGRATION} "
-        f"AND {SHARED_KEY} {WRITE_KEY if write else ''} ORDER BY k.access_level <> 'read', k.created_at, k.id LIMIT 1",
-        (connection_id,),
-    ).fetchone()
+    credential = key_of(conn, connection_id, write=write)
     if credential is None:
         kind = "read and write key" if write else "key"
         raise Unreadable(f"{tool['name']} is not a record integration with a shared company {kind}")
@@ -215,15 +211,19 @@ def connect(
     return base, {**headers, "Accept": "application/json", "User-Agent": agent}, params
 
 
+def key_of(conn: "sqlite3.Connection", connection_id: str, *, write: bool = False) -> Any:
+    """The shared key `connect` uses on a record integration: for a read its read key first, else its read and write
+    key; for a write (`write`) only a read and write key, the oldest. None when it has none."""
+    return conn.execute(
+        f"SELECT k.* FROM credentials k JOIN tools tl ON tl.id = k.tool_id WHERE tl.id=? AND {INTEGRATION} "
+        f"AND {SHARED_KEY} {WRITE_KEY if write else ''} ORDER BY k.access_level <> 'read', k.created_at, k.id LIMIT 1",
+        (connection_id,),
+    ).fetchone()
+
+
 def writable(conn: "sqlite3.Connection", connection_id: str) -> bool:
     """Whether a record integration (`integration`) holds a shared read and write key: what a write needs."""
-    return integration(conn, connection_id) and bool(
-        conn.execute(
-            f"SELECT 1 FROM credentials k JOIN tools tl ON tl.id = k.tool_id WHERE tl.id=? AND {INTEGRATION} "
-            f"AND {SHARED_KEY} {WRITE_KEY}",
-            (connection_id,),
-        ).fetchone()
-    )
+    return integration(conn, connection_id) and key_of(conn, connection_id, write=True) is not None
 
 
 def request(
@@ -266,8 +266,10 @@ def call(
     params: dict[str, str],
     seconds: float = TIMEOUT_S,
     body: object = None,
+    most: int | None = None,
 ) -> Reply:
-    """One call (`_call`; a write sends `body` as JSON) with one deadline, `seconds` (at most TIMEOUT_S), over all of
+    """One call (`_call`; a write sends `body` as JSON, and `most` bytes of the answer are read, MAX_BODY by default)
+    with one deadline, `seconds` (at most TIMEOUT_S), over all of
     it: the name's lookup, connecting, TLS and the answer. It runs on a thread of its own that ends itself at the
     deadline (`_call` closes its client), and the caller stops waiting then too (`_wait`); the thread counts against
     MAX_IN_FLIGHT until it ends. Raises when the call failed or ran out of time, Busy (before anything is sent) when
@@ -279,7 +281,7 @@ def call(
 
     def run() -> None:
         try:
-            answers.append(_call(method, url, headers, params, ends, body))
+            answers.append(_call(method, url, headers, params, ends, body, most))
         except BaseException as error:  # noqa: BLE001 - handed to the caller, which raises it
             errors.append(error)
         finally:
@@ -322,10 +324,16 @@ def _retry_after(value: str | None) -> float | None:
 
 
 def _call(
-    method: str, url: str, headers: dict[str, str], params: dict[str, str], ends: float, body: object = None
+    method: str,
+    url: str,
+    headers: dict[str, str],
+    params: dict[str, str],
+    ends: float,
+    body: object = None,
+    most: int | None = None,
 ) -> Reply:
     """One call to a public https address, pinned to the IP it resolved to, no redirects, no proxy from the environment,
-    at most MAX_BODY read, all of it before `ends` (time.monotonic): as egress.post bounds its calls, a timer closes the
+    at most `most` bytes (MAX_BODY) read, all of it before `ends` (time.monotonic): as egress.post bounds its calls, a timer closes the
     client at the deadline, which ends a read blocked on a socket, and the answer stops being read past it."""
     import httpx
 
@@ -333,6 +341,7 @@ def _call(
 
     egress: Any = _egress
     late = TimeoutError("Jira took too long to answer")
+    limit = MAX_BODY if most is None else most
     parts = egress.check(url)
     address = egress.address_for(parts, budget=max(ends - time.monotonic(), 0.001))
     pinned = httpx.URL(url, params=params or None).copy_with(host=address)
@@ -353,11 +362,11 @@ def _call(
                 got = b""
                 for chunk in response.iter_bytes():
                     got += chunk
-                    if len(got) > MAX_BODY or time.monotonic() > ends:
+                    if len(got) > limit or time.monotonic() > ends:
                         break
                 if time.monotonic() > ends:
                     raise late
-                cut = len(got) > MAX_BODY
+                cut = len(got) > limit
                 try:
                     answer: object = None if cut else json.loads(got)
                 except ValueError:

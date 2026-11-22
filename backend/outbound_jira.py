@@ -43,7 +43,8 @@ DEFAULTS = {"external": "on_their_own", "internal": "on_their_own"}
 MAX_STATUS = 100
 MAX_COMMENT = 30_000  # Jira's own limit is 32,767 characters; the marker goes after it
 COMMENTS_LOOKED_AT = 100  # the newest comments searched for the marker
-COMMENTS_PAGE = 20  # read a page at a time, so a page of long comments stays under MAX_BODY
+COMMENTS_PAGE = 20  # read a page at a time, halved while a page is cut off
+COMMENTS_READ = 2 * 1024 * 1024  # bytes of a comments page read: one long comment, escaped, still fits
 RETRY_S = 60.0  # a safe rejection without its own wait
 BUSY_S = 5.0
 AGENT = "Tico-outbound"
@@ -107,17 +108,26 @@ def prepare(
     site = cast("dict[str, Any]", payload).get("site") if isinstance(payload, dict) else None
     if site is not None and site != JS.integrations(c, connection_id).get(connection_id):
         raise Problem("connection_sites", f"The connection is no longer on {site}, the site this action was for", 409)
-    if actor != H.TICO_ACTOR:
-        from . import api_tools as _api_tools
-
-        tools: Any = _api_tools
-        if tools.subject_level(c, connection_id, actor) != "read_write":
-            raise Problem(
-                "forbidden",
-                "Writing to Jira through this connection needs Read and write on it: ask for it in Tools",
-                403,
-            )
+    if actor != H.TICO_ACTOR and _level(c, connection_id, actor) != "read_write":
+        raise Problem(
+            "forbidden", "Writing to Jira through this connection needs Read and write on it: ask for it in Tools", 403
+        )
     return "external", key
+
+
+def _level(c: Any, connection_id: str, actor: str) -> str | None:
+    """`actor`'s level on the exact key a write through the connection goes with (JS.key_of, as JS.connect picks it):
+    read_write only with a grant at Read and write on that key; read, or None for no grant on it."""
+    from . import api_tools as _api_tools
+    from . import credentials as _credentials
+
+    tools: Any = _api_tools
+    vault: Any = _credentials
+    key = JS.key_of(c, connection_id, write=True)
+    grant = vault.effective_grant(c, key["id"], tools.subject_of(c, actor)) if key is not None else None
+    if grant is None:
+        return None
+    return "read" if grant["access_level"] == "read" else "read_write"
 
 
 def freeze(c: Any, connection_id: str, destination: str) -> dict[str, Any]:
@@ -155,11 +165,11 @@ def _connect(store: Any, row: Any, *, write: bool = True) -> Connection:
         return JS.connect(c, vault, str(row["connection_id"]), write=write, agent=AGENT)
 
 
-def _get(on: Connection, path: str, query: dict[str, str] | None = None) -> dict[str, object]:
-    """One lookup under the issue: Jira's JSON object, _Answer for anything but 2xx, _Unreadable for an answer cut off or
-    not an object."""
+def _get(on: Connection, path: str, query: dict[str, str] | None = None, most: int | None = None) -> dict[str, object]:
+    """One lookup under the issue (at most `most` bytes of answer read, JS.MAX_BODY by default): Jira's JSON object,
+    _Answer for anything but 2xx, _Unreadable for an answer cut off or not an object."""
     base, headers, params = on
-    reply = JS.call("GET", f"{base}{path}", headers, {**params, **(query or {})}, JS.TIMEOUT_S)
+    reply = JS.call("GET", f"{base}{path}", headers, {**params, **(query or {})}, JS.TIMEOUT_S, most=most)
     if not 200 <= reply.status < 300:
         raise _Answer(reply)
     if reply.cut:
@@ -181,19 +191,29 @@ def _issue(row: Any) -> str:
     return f"/rest/api/3/issue/{quote(str(row['destination']))}"
 
 
-def _marked(comment: dict[str, Any], mark: str) -> bool:
-    """Whether a comment's last paragraph is one text node that is exactly `mark`. _Unreadable when the comment has no
-    readable body (a document whose content is a list): that tells nothing either way."""
-    body = comment.get("body")
-    content = cast("dict[str, object]", body).get("content") if isinstance(body, dict) else None
-    if not isinstance(content, list):
+def _nodes(value: object) -> list[dict[str, object]]:
+    """A node list whose every node is an object with a type, and every text node has its text; else _Unreadable."""
+    if not isinstance(value, list):
         raise _Unreadable("A comment on the issue has no readable body")
-    blocks = cast("list[object]", content)
-    last = cast("dict[str, object]", blocks[-1]) if blocks and isinstance(blocks[-1], dict) else {}
-    inner = last.get("content")
-    nodes = cast("list[object]", inner) if isinstance(inner, list) else []
-    node = cast("dict[str, object]", nodes[0]) if len(nodes) == 1 and isinstance(nodes[0], dict) else {}
-    return last.get("type") == "paragraph" and node.get("type") == "text" and node.get("text") == mark
+    nodes: list[dict[str, object]] = []
+    for node in cast("list[object]", value):
+        got = cast("dict[str, object]", node) if isinstance(node, dict) else {}
+        if not isinstance(got.get("type"), str) or (got.get("type") == "text" and not isinstance(got.get("text"), str)):
+            raise _Unreadable("A comment on the issue has a node that cannot be read")
+        nodes.append(got)
+    return nodes
+
+
+def _marked(comment: dict[str, Any], mark: str) -> bool:
+    """Whether a comment's last paragraph is one text node that is exactly `mark`. _Unreadable when its body, its last
+    block or any node of that block cannot be read: that tells nothing either way."""
+    body = comment.get("body")
+    blocks = _nodes(cast("dict[str, object]", body).get("content") if isinstance(body, dict) else None)
+    if not blocks or blocks[-1].get("type") != "paragraph":
+        return False
+    inner = blocks[-1].get("content", [])
+    nodes = _nodes(inner)
+    return len(nodes) == 1 and nodes[0].get("type") == "text" and nodes[0].get("text") == mark
 
 
 def _comment(on: Connection, row: Any) -> dict[str, Any] | None:
@@ -206,7 +226,7 @@ def _comment(on: Connection, row: Any) -> dict[str, Any] | None:
         size = min(size, COMMENTS_LOOKED_AT - start)
         query = {"orderBy": "-created", "startAt": str(start), "maxResults": str(size)}
         try:
-            answer = _get(on, _issue(row) + "/comment", query)
+            answer = _get(on, _issue(row) + "/comment", query, COMMENTS_READ)
         except _Cut:
             if size == 1:
                 raise

@@ -86,7 +86,7 @@ from . import tool_templates
 from . import default_read
 from . import reconnect_tasks
 from . import tool_access as TA
-from .credentials import CredentialWrite, administrator, effective_grant, may_remove, owned
+from .credentials import CredentialWrite, administrator, effective_grant, may_remove, owned, set_grant_level
 from .models import AccessAudience, Contract
 from .store import H, Problem, encode
 from .api_contract import api_v2
@@ -1946,7 +1946,7 @@ def _set_level(c, who, vault, tool, tool_id, subject, level):
             _revoke(c, who, key["id"], subject)
     if target is not None:
         grant = vault.grant(c, who, target["id"], subject)
-        c.execute("UPDATE credential_grants SET access_level=? WHERE id=?", (level, grant["id"]))
+        set_grant_level(c, grant["id"], level)
     H.event(c, who.actor, "tool.access_set", tool_id, {"subject": subject, "level": level})
 
 
@@ -1969,7 +1969,7 @@ def _set_template_level(c, who, vault, tool, subject, level, keys):
             _revoke(c, who, key["id"], subject)
     for key in targets.values():
         grant = vault.grant(c, who, key["id"], subject)
-        c.execute("UPDATE credential_grants SET access_level=? WHERE id=?", (level, grant["id"]))
+        set_grant_level(c, grant["id"], level)
     H.event(c, who.actor, "tool.access_set", tool["id"], {"subject": subject, "level": level})
     return {"subject": subject, "level": subject_level(c, tool["id"], subject)}
 

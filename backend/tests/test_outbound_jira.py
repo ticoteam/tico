@@ -348,42 +348,93 @@ def test_the_jira_sender_may_be_imported_first():
     assert done.returncode == 0, done.stderr[-2000:]
 
 
-def test_a_bot_given_a_key_by_a_person_who_only_reads_it_does_not_write(api, jira):
+def _enqueue_as(api, actor, connection, key):
+    with _store(api).transaction() as c:
+        return OA.enqueue(
+            c,
+            _store(api).settings,
+            actor=actor,
+            channel="jira",
+            operation="comment",
+            destination="HM-12",
+            occurrence_key=key,
+            payload={"body": "x"},
+            connection_id=connection,
+        )
+
+
+def test_a_bot_given_a_key_by_a_person_who_only_reads_it_holds_it_at_read_and_does_not_write(api, jira):
+    from backend import credentials, tool_templates
+
     jira.status["HM-12"] = "To Do"
     key = _key(api, jira.tool, "read_write")
-    with _store(api).transaction() as c:  # Ben reads it; he passes his grant on to cmo, his bot
-        c.execute("UPDATE bot_config SET owner_id='ben' WHERE bot='cmo'")
-        now = H.now()
-        c.execute(
-            "INSERT INTO credential_grants(id,credential_id,subject,granted_by,created_at,access_level) "
-            "VALUES('g-ben',?,'human:ben','human:ana',?,'read')",
-            (key, now),
-        )
-        c.execute(
-            "INSERT INTO credential_grants(id,credential_id,subject,granted_by,parent_id,created_at) "
-            "VALUES('g-cmo',?,'bot:cmo','human:ben','g-ben',?)",
-            (key, now),
-        )
+    ana, ben = Identity("human:ana", "owner", "ana@acme.example"), Identity("human:priya", "human", "priya@acme.example")
+    vault = api.app.state.vault
+    with _store(api).transaction() as c:  # Priya (no administrator) reads it; she passes it on to cmo, her bot
+        c.execute("UPDATE bot_config SET owner_id='priya' WHERE bot='cmo'")
+        credentials.set_grant_level(c, vault.grant(c, ana, key, "human:priya")["id"], "read")
+        child = vault.grant(c, ben, key, "bot:cmo")
+        stored = c.execute(
+            "SELECT parent_id, access_level FROM credential_grants WHERE id=?", (child["id"],)
+        ).fetchone()
+    assert stored["parent_id"] and stored["access_level"] == "read"  # stored at no more than his
     with pytest.raises(OA.Problem) as refused:
-        with _store(api).transaction() as c:
-            OA.enqueue(
-                c,
-                _store(api).settings,
-                actor="bot:cmo",
-                channel="jira",
-                operation="comment",
-                destination="HM-12",
-                occurrence_key="cmo",
-                payload={"body": "x"},
-                connection_id=jira.tool,
-            )
+        _enqueue_as(api, "bot:cmo", jira.tool, "cmo")
+    assert refused.value.status == 403
+    # Grouping an account's keys gives each holder every variable at its stored level: cmo's stays Read.
+    with _store(api).transaction() as c:
+        row = dict(c.execute("SELECT * FROM credentials WHERE id=?", (key,)).fetchone())
+        other = {**row, "id": "k-other", "env": "JIRA_OTHER", "name": "Jira other"}
+        c.execute(
+            f"INSERT INTO credentials({','.join(other)}) VALUES({','.join('?' * len(other))})", tuple(other.values())
+        )
+        keys = c.execute("SELECT * FROM credentials WHERE id IN (?, 'k-other')", (key,)).fetchall()
+        made = {g["subject"]: g["level"] for g in tool_templates._union(c, keys)}
+    assert made["bot:cmo"] == "read"
+
+
+def test_a_persons_grant_lowered_to_read_lowers_what_their_bots_hold_from_it(api, jira):
+    from backend import credentials
+
+    key = _key(api, jira.tool, "read_write")
+    ana, ben = Identity("human:ana", "owner", "ana@acme.example"), Identity("human:priya", "human", "priya@acme.example")
+    vault = api.app.state.vault
+    with _store(api).transaction() as c:
+        c.execute("UPDATE bot_config SET owner_id='priya' WHERE bot='cmo'")
+        parent = vault.grant(c, ana, key, "human:priya")["id"]
+        child = vault.grant(c, ben, key, "bot:cmo")["id"]
+        level = lambda: c.execute("SELECT access_level FROM credential_grants WHERE id=?", (child,)).fetchone()[0]  # noqa: E731
+        assert level() == "read_write"
+        credentials.set_grant_level(c, parent, "read")
+        assert level() == "read"
+
+
+def test_the_level_that_counts_is_on_the_key_a_write_goes_with(api, jira):
+    jira.status["HM-12"] = "To Do"
+    key = _key(api, jira.tool, "read_write")
+    with _store(api).transaction() as c:  # a second write key (left by a cleared template); cmo holds only that one
+        row = dict(c.execute("SELECT * FROM credentials WHERE id=?", (key,)).fetchone())
+        newer = {**row, "id": "k-newer", "name": "Jira write 2", "created_at": H.shift(row["created_at"], seconds=60)}
+        c.execute(
+            f"INSERT INTO credentials({','.join(newer)}) VALUES({','.join('?' * len(newer))})", tuple(newer.values())
+        )
+    _grant(api, "k-newer", "bot:cmo")
+    with pytest.raises(OA.Problem) as refused:
+        _enqueue_as(api, "bot:cmo", jira.tool, "cmo")
     assert refused.value.status == 403
 
 
 @pytest.mark.parametrize(
     "raw",
-    [[None], [{"id": "9"}], [{"id": "9", "body": {"type": "doc"}}]],
-    ids=["null", "no body", "body without content"],
+    [
+        [None],
+        [{"id": "9"}],
+        [{"id": "9", "body": {"type": "doc"}}],
+        [{"id": "9", "body": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text"}]}]}}],
+        [{"id": "9", "body": {"type": "doc", "content": [{"type": "paragraph", "content": [{"text": "x"}]}]}}],
+        [{"id": "9", "body": {"type": "doc", "content": [None]}}],
+    ],
+    ids=["null", "no body", "body without content", "text without text", "node without type", "block not a node"],
 )
 def test_a_comment_that_cannot_be_read_writes_nothing_and_tries_again(api, jira, raw):
     jira.status["HM-12"] = "To Do"
@@ -407,9 +458,10 @@ def test_long_comments_are_read_in_smaller_pages_and_one_too_long_writes_nothing
     jira.comments["HM-12"] = [
         {"id": str(i), "body": {"type": "doc", "version": 1, "content": [long]}} for i in range(18)
     ]
+    monkeypatch.setattr(OJ, "COMMENTS_READ", 512 * 1024)
     _queue(api, jira.tool, "comment", {"body": "Hi."})
-    assert _attempt(api) == "done" and len(jira.writes) == 1  # 20 of them pass MAX_BODY; 10 at a time do not
-    monkeypatch.setattr(JS, "MAX_BODY", 1000)
+    assert _attempt(api) == "done" and len(jira.writes) == 1  # 20 of them pass the cap; 10 at a time do not
+    monkeypatch.setattr(OJ, "COMMENTS_READ", 1000)
     row = _queue(api, jira.tool, "comment", {"body": "Again."}, key="k2")
     assert _attempt(api) == "requeued" and len(jira.writes) == 1
     assert "too long" in _row(api, row["id"])["last_error"]
