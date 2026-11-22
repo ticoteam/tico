@@ -18,7 +18,7 @@ import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from types import ModuleType
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 SOURCES = ("github", "jira")
@@ -109,7 +109,7 @@ def hosts(base_url: object, sites: object) -> set[str]:
         listed: object = json.loads(str(sites or "[]"))
     except ValueError:
         listed = []
-    names = [str(site) for site in listed] if isinstance(listed, list) else []  # pyright: ignore[reportUnknownVariableType]
+    names: list[str] = [str(site) for site in cast("list[object]", listed)] if isinstance(listed, list) else []
     return {_host(str(base_url or "")), *(_host(name) for name in names)} - {""}
 
 

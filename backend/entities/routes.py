@@ -121,7 +121,7 @@ def install(
     app: "FastAPI",
     store: "Store",
     auth: "Auth",
-    mutate: "Callable[..., Any]",
+    mutate: "Callable[[Request, Contract, Callable[[sqlite3.Connection], Any]], Any]",
 ) -> None:
     def read() -> "AbstractContextManager[sqlite3.Connection]":
         # The store's read connection, typed for the Directory's functions (as heartbeat.py types its transaction).
