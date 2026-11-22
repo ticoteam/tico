@@ -435,6 +435,9 @@ export const editSubscription = (id: string, name: string, owner?: string) =>
 export const addSubscription = (kind: string, secret: string, name?: string) =>
   api.post<{ id: string; name?: string }>('/api/v2/model-subscriptions', { kind, secret, ...(name ? { name } : {}) });
 
+export const replaceSubscriptionSecret = (id: string, secret: string, confirm?: boolean) =>
+  api.post<ModelSubscription>(`/api/v2/model-subscriptions/${enc(id)}`, { secret, confirm });
+
 /** A sign-in on a computer (backend/model_login.py). No `id` and `waking`: its computer is starting; ask again. */
 export interface SignIn {
   id?: string;
@@ -452,8 +455,11 @@ export interface SignIn {
 
 export const LIVE_SIGN_IN = ['requested', 'starting', 'waiting', 'finishing'];
 
-export const startSignIn = (kind: 'claude_login' | 'codex_login') =>
-  api.post<SignIn | null>('/api/v2/model-subscriptions/connect', { kind });
+export const SIGN_IN_KINDS = ['claude_token', 'claude_login', 'codex_login'] as const;
+export type SignInKind = (typeof SIGN_IN_KINDS)[number];
+
+export const startSignIn = (input: { kind: SignInKind } | { subscription: string; confirm?: boolean }) =>
+  api.post<SignIn | null>('/api/v2/model-subscriptions/connect', input);
 
 /** One read of a sign-in under way. Not a query: its answer holds the provider's one-time code and page, which stay
     in the dialog's state (polled with `poll` from @/lib), never the query cache. */

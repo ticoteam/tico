@@ -34,6 +34,7 @@ import {
   sleepQuery,
   subscriptionsQuery,
   type SignIn,
+  type SignInKind,
   type Subscription,
 } from './queries';
 
@@ -44,10 +45,14 @@ const GIVE_UP_MS = 5 * 60_000;
 
 // ---------------------------------------------------------------- a sign-in to Claude or Codex, one tap
 
-function SignInDialog({ kind, onClose }: { kind: 'claude_login' | 'codex_login'; onClose: () => void }) {
+function SignInDialog({ kind, subscription, onClose }: { kind: SignInKind; subscription?: string; onClose: () => void }) {
   const qc = useQueryClient();
   const [login, setLogin] = useState<SignIn | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [restart, setRestart] = useState<string | null>(null);
+  const [confirmed, setConfirmed] = useState(false);
+  const [pasting, setPasting] = useState(false);
+  const [secret, setSecret] = useState('');
   const [code, setCode] = useState('');
   const [tries, setTries] = useState(0);
   // Both timers here (connect again every 3 s while the computer wakes, then the 2 s follow) stop when the dialog
@@ -59,12 +64,16 @@ function SignInDialog({ kind, onClose }: { kind: 'claude_login' | 'codex_login';
     return () => clearTimeout(t);
   }, []);
   useEffect(() => {
-    if (late || !visible || login || error) return;
+    if (late || !visible || login || error || restart || pasting) return;
     let gone = false;
     const timer = setTimeout(
       () => {
-        void run('settings.connect', { kind }, { via: 'click' }).then((r) => {
+        const input = subscription ? { subscription, ...(confirmed && { confirm: true }) } : { kind };
+        void run('settings.connect', input, { via: 'click' }).then((r) => {
           if (gone) return;
+          if (!r.ok && r.error === 'confirm_restart' && !confirmed) {
+            return setRestart(reasonIn(r) ?? 'Running work will restart');
+          }
           if (!r.ok) return setError(reasonIn(r) ?? "Couldn't start");
           const got = (r.out as SignIn | null | undefined) ?? null;
           if (!got) return setError('No computer can sign in yet');
@@ -79,7 +88,7 @@ function SignInDialog({ kind, onClose }: { kind: 'claude_login' | 'codex_login';
       gone = true;
       clearTimeout(timer);
     };
-  }, [kind, tries, late, visible, login, error]);
+  }, [kind, subscription, confirmed, restart, pasting, tries, late, visible, login, error]);
   // The follow: every 2 s while it runs, paused while the tab is hidden. Its answers (the provider's one-time code and
   // page) stay in this state, never the query cache.
   const [follow, setFollow] = useState<SignIn | null>(null);
@@ -87,9 +96,9 @@ function SignInDialog({ kind, onClose }: { kind: 'claude_login' | 'codex_login';
   const lid = login?.id;
   const over = !!follow?.state && !LIVE_SIGN_IN.includes(follow.state);
   useEffect(() => {
-    if (!runner || !lid || late || !visible || over) return;
+    if (!runner || !lid || late || !visible || over || pasting) return;
     return poll((signal) => readSignIn(runner, lid, signal), setFollow, (a) => LIVE_SIGN_IN.includes(a.state ?? 'requested'), 2000);
-  }, [runner, lid, late, visible, over]);
+  }, [runner, lid, late, visible, over, pasting]);
   const now = { ...login, ...follow } as SignIn;
   const state = now.state ?? (login ? 'starting' : 'requested');
   const finished = useRef(false);
@@ -100,8 +109,11 @@ function SignInDialog({ kind, onClose }: { kind: 'claude_login' | 'codex_login';
     toast({ text: `${now.name ?? 'Subscription'} connected`, kind: 'done' });
     onClose();
   }, [state, now.name, qc, onClose]);
+  const cancelLogin = () => {
+    if (!pasting && runner && lid && LIVE_SIGN_IN.includes(state)) void run('settings.cancelSignIn', { computer: runner, login: lid }, { via: 'click' });
+  };
   const stop = () => {
-    if (login?.id && login.runner_id && LIVE_SIGN_IN.includes(state)) void run('settings.cancelSignIn', { computer: login.runner_id, login: login.id }, { via: 'click' });
+    cancelLogin();
     onClose();
   };
   const ended =
@@ -110,36 +122,73 @@ function SignInDialog({ kind, onClose }: { kind: 'claude_login' | 'codex_login';
       ? (now.message ?? 'The sign-in did not finish')
       : state === 'expired' || (late && state !== 'done')
         ? 'The sign-in ran out of time'
-        : null);
+        : state === 'canceled'
+          ? 'Sign-in canceled'
+          : null);
   const send = () => {
     if (!login?.id || !login.runner_id) return;
     void act('settings.signInCode', { computer: login.runner_id, login: login.id, code: code.trim() });
+  };
+  const codex = kind === 'codex_login';
+  const label = codex ? 'ChatGPT plan' : 'Claude plan';
+  const paste = async (confirm?: boolean) => {
+    const r = await run('settings.pastePlan', { kind: codex ? 'codex_login' : 'claude_token', subscription, secret: secret.trim(), confirm }, { via: 'click' });
+    if (r.ok) {
+      toast({ text: `${now.name || label} connected`, kind: 'done' });
+      onClose();
+    } else if (r.error === 'confirm_restart' && !confirm) {
+      setRestart(reasonIn(r) ?? 'Running work will restart');
+    } else {
+      setRestart(null);
+      setError(reasonIn(r) ?? "Couldn't save");
+    }
+  };
+  const confirmRestart = () => {
+    if (pasting) return paste(true);
+    setRestart(null);
+    setConfirmed(true);
   };
   return (
     <Dialog
       open
       onOpenChange={(o) => !o && stop()}
-      title={kind === 'codex_login' ? 'Connect Codex' : 'Connect Claude'}
+      alert={!!restart}
+      title={restart ? 'Restart runs?' : `${subscription ? 'Reconnect' : 'Connect'} ${label}`}
       description={
-        ended ??
-        (state === 'waiting' && now.url
-          ? 'Approve it on the sign-in page. It lands here when you do.'
-          : `Starting the sign-in${now.computer ? ` on ${now.computer}` : ''}`)
+        restart ?? (pasting ? error : ended ?? (state === 'waiting' ? undefined : `Signing in${now.computer ? ` on ${now.computer}` : ''}`))
       }
       actions={
         <>
           <Button variant="quiet" onClick={stop}>
-            {ended ? 'Close' : 'Cancel'}
+            {ended && !pasting && !restart ? 'Close' : 'Cancel'}
           </Button>
-          {!ended && now.url && (
+          {restart ? (
+            <Button variant="primary" onClick={confirmRestart}>Reconnect</Button>
+          ) : pasting ? (
+            <Button variant="primary" disabled={!secret.trim()} onClick={() => paste()}>{subscription ? 'Reconnect' : 'Connect'}</Button>
+          ) : ended ? (
+            <Button
+              onClick={() => {
+                cancelLogin();
+                setError(null);
+                setPasting(true);
+              }}
+            >
+              Paste instead
+            </Button>
+          ) : now.url && (
             <a className="btn btn-fill" href={now.url} target="_blank" rel="noreferrer">
-              Open page
+              Open {codex ? 'ChatGPT' : 'Claude'}
             </a>
           )}
         </>
       }
     >
-      {!ended && now.accepts_code && (
+      {pasting && !restart && (
+        <Field label={codex ? 'auth.json' : 'Setup token'} type="password" value={secret} onValueChange={setSecret} autoComplete="off" autoFocus />
+      )}
+      {!pasting && !restart && !ended && now.code && <LabelValue label="Code">{now.code}</LabelValue>}
+      {!pasting && !restart && !ended && now.accepts_code && (
         <div className="set-add">
           <Field label="Code from the page" value={code} onValueChange={setCode} autoComplete="off" />
           <Button disabled={!code.trim()} onClick={send}>
@@ -234,6 +283,7 @@ function EditSubDialog({ s, owned, onClose }: { s: Subscription; owned: boolean;
 function SubRow({ s, open, owned }: { s: Subscription; open: boolean; owned: boolean }) {
   const [confirm, setConfirm] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
   const words = usedWords(s);
   const agents = s.agents ?? [];
   const out = s.status === 'needs_reconnect';
@@ -290,10 +340,12 @@ function SubRow({ s, open, owned }: { s: Subscription; open: boolean; owned: boo
         )}
       </Facts>
       <Foot open>
+        {isPlanKind(s.kind) && <Verb onClick={() => setReconnecting(true)}>Reconnect</Verb>}
         <Verb onClick={() => setEditing(true)}>Edit</Verb>
         <Verb onClick={() => void act('settings.refreshUsage', { subscription: s.id })}>Check use</Verb>
         {s.can_remove !== false && <Verb onClick={() => setConfirm(true)}>Remove</Verb>}
       </Foot>
+      {reconnecting && isPlanKind(s.kind) && <SignInDialog kind={s.kind} subscription={s.id} onClose={() => setReconnecting(false)} />}
       {editing && <EditSubDialog s={s} owned={owned} onClose={() => setEditing(false)} />}
       <Dialog
         open={confirm}
@@ -322,10 +374,11 @@ function SubRow({ s, open, owned }: { s: Subscription; open: boolean; owned: boo
   );
 }
 
-type Adding = { sign: 'claude_login' | 'codex_login' } | { key: string; label: string } | null;
+type Adding = { sign: SignInKind } | { key: string; label: string } | null;
 
 // A plan's kind, as its chip names it; anything else is a key.
 const PLAN: Partial<Record<Subscription['kind'], string>> = { claude_login: 'Claude', claude_token: 'Claude', codex_login: 'ChatGPT' };
+const isPlanKind = (kind: Subscription['kind']): kind is SignInKind => kind in PLAN;
 
 /** Folded, the section is one line: the fix for an expired sign-in or a plan past due, a quiet chip for each kind, then
     Add. */
@@ -399,17 +452,17 @@ export function Agents({ open }: { open?: string }) {
   const v = subs.data;
   if (!v) return null;
   const list = v.subscriptions as Subscription[];
-  const signIns = v.kinds.filter((k) => k.kind === 'claude_login' || k.kind === 'codex_login');
-  const keys = v.kinds.filter((k) => !k.connect && k.kind !== 'claude_login' && k.kind !== 'codex_login');
+  const signIns = v.kinds.filter((k) => k.connect);
+  const keys = v.kinds.filter((k) => !k.connect);
   const owned = new Set<string>(v.kinds.filter((k) => k.owned).map((k) => k.kind));
   const add = (
     <Menu trigger={<Button icon="plus">Add</Button>}>
       {signIns.map((k) => (
-        <MenuItem key={k.kind} label={k.kind === 'codex_login' ? 'Codex' : 'Claude'} meta="Sign in" onSelect={() => setAdding({ sign: k.kind as 'claude_login' | 'codex_login' })} />
+        <MenuItem key={k.kind} label={k.label} meta="Sign in" onSelect={() => isPlanKind(k.kind) && setAdding({ sign: k.kind })} />
       ))}
       {signIns.length > 0 && keys.length > 0 && <MenuRule />}
       {keys.map((k) => (
-        <MenuItem key={k.kind} label={k.label} meta="Key" onSelect={() => setAdding({ key: k.kind, label: k.secret_label || k.label })} />
+        <MenuItem key={k.kind} label={k.label.replace(/ API key$/, ' key')} meta="Paste" onSelect={() => setAdding({ key: k.kind, label: k.secret_label || k.label })} />
       ))}
     </Menu>
   );

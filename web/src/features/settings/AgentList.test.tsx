@@ -21,6 +21,7 @@ import {
   providersQuery,
   stoppedRunsQuery,
   subscriptionsQuery,
+  type Subscription,
 } from './queries';
 import { SettingsPage, hitHref } from './SettingsPage';
 
@@ -227,6 +228,78 @@ describe('Settings › Agents', () => {
     fireEvent.click(screen.getByRole('button', { name: /Subscriptions and keys/ }));
     expect(await screen.findByTitle('Plan s1')).toBeTruthy();
     expect(screen.queryByText('2 keys')).toBeNull();
+  });
+
+  it('adds Claude from the kinds the server lists and offers a setup token when Connect is offline', async () => {
+    const catalog = {
+      kinds: [{ kind: 'claude_token' as const, label: 'Claude plan', runtime: 'claude' as const, secret_label: 'Setup token', help: '', owned: true, connect: true }],
+      subscriptions: [],
+    };
+    queryClient.setQueryData(subscriptionsQuery.queryKey, catalog);
+    serve((url, method) => {
+      if (method === 'GET') return url === '/api/v2/model-subscriptions' ? ok(catalog) : undefined;
+      if (url.endsWith('/connect')) return { status: 409, body: { error: { code: 'offline', detail: 'No computer can sign in' } } };
+      return ok({ id: 'plan-1' });
+    });
+    show(<SettingsPage section="agents" />, '/settings/agents');
+    fireEvent.click(await screen.findByRole('button', { name: 'Add' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Claude plan/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Paste instead' }));
+    expect(sent).toEqual([{ url: '/api/v2/model-subscriptions/connect', method: 'POST', body: { kind: 'claude_token' } }]);
+    fireEvent.change(screen.getByLabelText('Setup token'), { target: { value: 'sk-ant-test-token' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+    await waitFor(() => expect(sent.at(-1)).toEqual({
+      url: '/api/v2/model-subscriptions',
+      method: 'POST',
+      body: { kind: 'claude_token', secret: 'sk-ant-test-token' },
+    }));
+  });
+
+  const plan: Subscription = {
+    id: 'plan-1', kind: 'claude_login', label: 'Claude plan', name: 'Work plan',
+    in_use_on: [], computers: [], owner_id: 'human:p1', owner_name: 'Ana Test', added_by: 'human:p1', added_by_name: 'Ana Test',
+    status: 'needs_reconnect', status_at: null, status_detail: '', runtime: 'claude', preview: '', usage: null,
+    order: null, revision: 1, created_at: '', updated_at: '',
+  };
+  const restart = { status: 409, body: { error: { code: 'confirm_restart', detail: '2 running runs will stop and start again', running: 2 } } };
+
+  it('reconnects the selected plan only after confirming the restart', async () => {
+    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [], subscriptions: [plan] });
+    const url = '/api/v2/model-subscriptions/connect';
+    serve((path) => {
+      if (path !== url) return;
+      if ((sent.at(-1)?.body as { confirm?: boolean } | undefined)?.confirm) {
+        return ok({ id: 'login-1', runner_id: 'r1', state: 'waiting', url: 'https://example.test/sign-in' });
+      }
+      return restart;
+    });
+    show(<SettingsPage section="agents" open={plan.id} />, '/settings/agents?open=plan-1');
+    fireEvent.click(await screen.findByRole('button', { name: 'Reconnect' }));
+    const ask = await screen.findByRole('alertdialog', { name: 'Restart runs?' });
+    expect(ask.textContent).toContain(restart.body.error.detail);
+    expect(sent).toEqual([{ url, method: 'POST', body: { subscription: plan.id } }]);
+    fireEvent.click(within(ask).getByRole('button', { name: 'Reconnect' }));
+    expect(await screen.findByRole('link', { name: 'Open Claude' })).toBeTruthy();
+    expect(sent.at(-1)).toEqual({ url, method: 'POST', body: { subscription: plan.id, confirm: true } });
+  });
+
+  it('pasting during Reconnect updates the same plan and waits for restart approval', async () => {
+    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [], subscriptions: [plan] });
+    const url = `/api/v2/model-subscriptions/${plan.id}`;
+    serve((path, method) => {
+      if (path.endsWith('/connect')) return { status: 409, body: { error: { code: 'offline', detail: 'No computer can sign in' } } };
+      if (path === url && method === 'POST') return sent.filter((s) => s.url === url).length > 1 ? ok(plan) : restart;
+      if (path === '/api/v2/model-subscriptions') return ok({ kinds: [], subscriptions: [plan] });
+    });
+    show(<SettingsPage section="agents" open={plan.id} />, '/settings/agents?open=plan-1');
+    fireEvent.click(await screen.findByRole('button', { name: 'Reconnect' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Paste instead' }));
+    fireEvent.change(screen.getByLabelText('Setup token'), { target: { value: 'sk-ant-replacement-token' } });
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Reconnect' }));
+    const ask = await screen.findByRole('alertdialog', { name: 'Restart runs?' });
+    expect(sent.at(-1)).toEqual({ url, method: 'POST', body: { secret: 'sk-ant-replacement-token' } });
+    fireEvent.click(within(ask).getByRole('button', { name: 'Reconnect' }));
+    await waitFor(() => expect(sent.at(-1)).toEqual({ url, method: 'POST', body: { secret: 'sk-ant-replacement-token', confirm: true } }));
   });
 
   it('a plan the provider refused for its billing says so, folded and in its row @s709', async () => {

@@ -33,11 +33,11 @@ admin turns it on. When every plan given to a computer for a tool is at its limi
 login of its own, its bots wait for the first plan to reset unless that switch is on; with it on they run on Tico
 Gateway meanwhile. The line under the computer's plan picker says which: "on the Gateway" or "waiting".
 
-1. Open **Settings → Models** and click **Add subscription**.
+1. Open **Settings → Agents**, then click **Add** beside **Subscriptions and keys**.
 2. Tap **Claude plan** or **ChatGPT plan**. The sign-in starts at once on one of the company's computers. With none
-   online, Tico starts the company's cloud computer first and the sheet says **Starting your computer**.
+   online, Tico starts the company's cloud computer first when one is available.
 3. Tap **Open Claude** or **Open ChatGPT** and sign in with the account that has the plan. Claude's page hands back a
-   code: paste it in the sheet (a pasted code is sent by itself). For ChatGPT, copy the code the sheet shows and enter it
+   code: paste it in the sheet and click **Send code**. For ChatGPT, copy the code the sheet shows and enter it
    on ChatGPT's page. The sheet closes once Tico has saved the result, and the list shows the new row.
 4. Open **Settings → Computers** and pick the subscription in the computer's **Claude Code** or **Codex** column.
 
@@ -52,10 +52,10 @@ A plan the person adds later joins on its own, and one given to someone else lea
 never part of a person's plans. The line under the picker says which plan is in use and why ("On Plan 2 · Plan 1 at its
 limit until Fri 09:00"); `tico subscription list` shows the same for agents.
 
-The plan defaults to a name like *Ana's Claude plan* and its owner is the person who signed in. Change either
-under the row's **⋯ → Edit**. An API key is its own small form: the key and, if you like, a name. **Paste instead**,
-behind the sign-in, is the fallback when no computer can run it: the token from `claude setup-token`, or Codex's
-`auth.json` (pasted, or picked with **Choose auth.json**). **Reconnect** is the same sheet from step 2.
+The plan defaults to a name like *Ana's Claude plan* and its owner is the person who signed in; change either
+under the row's **Edit** action. When a sign-in cannot run, **Paste instead** takes the token from
+`claude setup-token` or the contents of Codex's `auth.json`. Open a saved plan's row and click **Reconnect** to
+sign in again or paste a replacement. If running work would restart, Tico asks for confirmation.
 
 Switching a computer's subscription stops that tool's running tasks on that computer and starts them again, and every
 session of that tool there starts fresh. When tasks are running, Tico asks first and says how many. Removing a
