@@ -263,3 +263,36 @@ def test_a_deleted_memory_page_frees_the_slot_and_a_retained_link_stays_until_un
     assert get(api, "pages?linked=entity:&role=memory", expected=422)
     changes = get(api, "tasks?entity=acme.example&changed_after=x", expected=422)
     assert changes["error"]["code"] == "entity"
+
+
+def test_keyed_replays_answer_the_current_state(api):
+    acme = org(api, "acme.example", "Acme")
+    first = {"ref": acme, "version": 0, "status": "lead"}
+    post(api, "entities/status", first, key="status-key")
+    post(api, "entities/status", {"ref": acme, "version": 1, "status": "active"})
+    replayed = post(api, "entities/status", first, key="status-key")
+    assert (replayed["status"], replayed["status_version"]) == ("active", 2)
+
+    post(api, "entities/owner", {"ref": acme, "owner": "me"}, key="owner-key")
+    post(api, "entities/owner", {"ref": acme, "owner": ""})
+    assert post(api, "entities/owner", {"ref": acme, "owner": "me"}, key="owner-key")["owner"] is None
+
+    memory = page(api)
+    link = {"target": f"entity:{acme}", "role": "related"}
+    post(api, f"pages/{memory}/links", link, key="link-key")
+    api.delete(f"/api/v2/pages/{memory}/links", params=link, headers=headers())
+    shown = post(api, f"pages/{memory}/links", link, key="link-key")["page"]["links"]
+    assert all(not item["target"].startswith("entity:") for item in shown)
+
+
+def test_a_changes_read_by_entity_needs_its_visible_id_and_stops_when_access_goes(api):
+    acme = org(api, "acme.example", "Acme")
+    post(api, "tasks", {"owner": "ops", "title": "Send the renewal", "entity": acme})
+    cursor = get(api, f"tasks?entity={acme}", token="ben-test")["cursor"]
+    assert get(api, f"tasks?entity={acme}&changed_after={cursor}", token="ben-test")["tasks"] is not None
+    assert get(api, f"tasks?entity=&changed_after={cursor}", token="ben-test", expected=422)
+    with api.app.state.store.transaction() as c:
+        box = MA.ensure_mailbox(c, "ana@acme.example", person_id="ana", created_by=ANA)
+        ES.add_source(c, ANA, acme, "mailbox", box["id"], visibility="restricted")  # ben no longer sees Acme
+    lost = get(api, f"tasks?entity={acme}&changed_after={cursor}", token="ben-test", expected=422)
+    assert lost["error"]["code"] == "entity"

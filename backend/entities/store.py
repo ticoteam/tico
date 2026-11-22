@@ -183,11 +183,12 @@ def _attribute(c: sqlite3.Connection, actor: str, type_key: str, key: str) -> Ro
     return row
 
 
-def _live(c: sqlite3.Connection, actor: str, entity_id: str) -> Row:
-    """The entity a write names, when the writer can see it. One it cannot see is not found, the same as one that is not
-    there, so a write never confirms that a hidden entity exists."""
+def _live(c: sqlite3.Connection, actor: str, entity_id: str, reader: str | None = None) -> Row:
+    """The entity a write names, when the writer can see it (or `reader`, the request's effective reader, when the
+    caller names one). One it cannot see is not found, the same as one that is not there, so a write never confirms that
+    a hidden entity exists."""
     row = _one(c, "SELECT * FROM entities WHERE id = ?", (entity_id,))
-    if row is None or not V.visible(c, actor, entity_id):
+    if row is None or not V.visible(c, reader or actor, entity_id):
         _refuse(c, actor, "not_found", f"no entity {entity_id}")
     if row["status"] == "merged":
         _refuse(c, actor, "merged", f"{entity_id} is merged into {row['merged_into_id']}; write to that one")
@@ -1224,13 +1225,15 @@ def set_status(
     next_step: str = "",
     next_step_due: str = "",
     flags: Sequence[str] = (),
+    reader: str | None = None,
 ) -> Row | None:
     """Writes a relationship's status, next step, its due date and flags together, as `version` (the entity's
     status_version the writer read) becomes the next one. Each is replaced: an empty one is cleared. None when the
     version is not the entity's now (someone else wrote it since): nothing is written, and the caller reads it again.
-    The entity is named by its own id; a merged-away one is refused (_live), never its kept entity."""
+    The entity is named by its own id; a merged-away one is refused (_live), never its kept entity. `reader` is whose
+    Contacts grants see it (the effective reader); the writer gate is the actor's."""
     _writer(c, actor)
-    ent = _live(c, actor, entity_id)
+    ent = _live(c, actor, entity_id, reader)
     due = str(next_step_due or "").strip()
     if due:
         try:
@@ -1278,12 +1281,12 @@ def _status_of(row: Row) -> Row:
     }
 
 
-def set_owner(c: sqlite3.Connection, actor: str, entity_id: str, owner: str) -> str | None:
+def set_owner(c: sqlite3.Connection, actor: str, entity_id: str, owner: str, reader: str | None = None) -> str | None:
     """Names the teammate who owns an entity (a relationship's owner): human:<id> or bot:<id>, or '' for none. The
     caller resolved a bot by id as one it may see. The writer must see the entity, as for any Directory write, and a
-    merged-away one is refused (_live). Returns the owner."""
+    merged-away one is refused (_live). `reader` is whose Contacts grants see it. Returns the owner."""
     _writer(c, actor)
-    ent = _live(c, actor, entity_id)
+    ent = _live(c, actor, entity_id, reader)
     kind, _, ident = str(owner or "").strip().partition(":")
     if not kind:
         owner_type, owner_id = None, None

@@ -224,9 +224,10 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 chosen = str(entities[0]["id"]) if entities else ""
                 fragment = ("tasks.entity_id=? AND tasks.entity_id<>''", (chosen,)) if chosen else ("0", ())
                 filters["match"] = [*filters.get("match", ()), fragment]
-                if chosen and chosen != entity and changed_after is not None:
-                    # A changes read follows one entity: what a domain or a merged-away id names may change under it.
-                    raise Problem("entity", "Use the entity's id with changed_after", 422)
+                if changed_after is not None and (not chosen or chosen != entity):
+                    # A changes read follows one visible entity by its id: an alias, a merged-away id, or one the
+                    # reader no longer sees could change under it. The client reads in full instead.
+                    raise Problem("entity", "Use the entity's id, one you see, with changed_after", 422)
             if after is not None:
                 if changed_after is not None or offset:
                     raise Problem("after", "after is a page's start: not with changed_after or offset", 422)

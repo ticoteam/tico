@@ -64,7 +64,9 @@ class ContactsUnmerge(Contract):
 
 class ContactsStatus(Contract):
     ref: str  # the entity's id, as its card gave it with the status_version
-    version: int = Field(ge=0)  # the status_version read with it (tico contacts get); a stale one is refused, 409
+    version: int = Field(
+        ge=0, le=2**53
+    )  # the status_version read with it (tico contacts get); a stale one is refused, 409
     status: str = Field("", max_length=100)
     next_step: str = Field("", max_length=500)
     next_step_due: str = Field("", max_length=10)  # YYYY-MM-DD
@@ -203,7 +205,9 @@ def install(
         None for no such teammate, and for a bot the caller may not see, alike."""
         from backend import hubdb as H
 
-        who = request.state.identity
+        who = viewer(c, request)
+        if who is None:
+            return None
         if owner == "me":
             return str(who.actor)
         kind, _, ident = owner.partition(":")
@@ -216,6 +220,12 @@ def install(
             access = cast("dict[str, Any]", auth.bot_access(c, who, bot["id"]))  # pyright: ignore[reportUnknownMemberType]
             return f"bot:{bot['id']}" if access["see"] else None
         return None
+
+    def viewer(c: sqlite3.Connection, request: Request) -> Any:
+        """The request's effective reader (auth.run_viewer: the person a shared Assistant run acts for); None for
+        nobody. Bot visibility for owners is checked as them."""
+        found = auth.run_viewer(c, request.state.identity)  # pyright: ignore[reportUnknownMemberType]
+        return None if found.role == "none" else found  # pyright: ignore[reportUnknownMemberType]
 
     def reader(c: sqlite3.Connection, request: Request) -> str:
         """Whose Contacts grants a status or owner write is checked by: the request's effective reader
@@ -247,16 +257,22 @@ def install(
             if "owner" in result:
                 result = {"entity": result["entity"], "owner": ES.owner_of(c, str(result["entity"]))}
                 seen_owners(c, request, [result])
+            elif "status_version" in result:
+                result = {"entity": result["entity"], **ES.relationship(c, str(result["entity"]))}
         return result
 
     def seen_owners(c: sqlite3.Connection, request: Request, items: list[dict[str, Any]]) -> None:
         """A bot owner shows only to a reader who may see that bot; to anyone else the owner is hidden (None)."""
-        who, answers = request.state.identity, cast("dict[str, bool]", {})
+        who, answers = viewer(c, request), cast("dict[str, bool]", {})
         for item in items:
             owner = str(item.get("owner") or "")
             if owner.startswith("bot:"):
                 if owner not in answers:
-                    access = cast("dict[str, Any]", auth.bot_access(c, who, owner[4:]))  # pyright: ignore[reportUnknownMemberType]
+                    access = (
+                        cast("dict[str, Any]", auth.bot_access(c, who, owner[4:]))  # pyright: ignore[reportUnknownMemberType]
+                        if who is not None
+                        else {"see": False}
+                    )
                     answers[owner] = bool(access["see"])
                 if not answers[owner]:
                     item["owner"] = None
@@ -560,6 +576,7 @@ def install(
                 next_step=body.next_step,
                 next_step_due=body.next_step_due,
                 flags=body.flags,
+                reader=reader(c, request),
             )
             if written is None:
                 now = ES.relationship(c, entity_id)["status_version"]
@@ -583,7 +600,7 @@ def install(
             owner = teammate(c, request, body.owner) if body.owner else ""
             if owner is None:
                 raise Problem("not_found", f"No teammate {body.owner} that you can see", 404)
-            return {"entity": entity_id, "owner": ES.set_owner(c, actor, entity_id, owner)}
+            return {"entity": entity_id, "owner": ES.set_owner(c, actor, entity_id, owner, reader(c, request))}
 
         return still_seen(request, mutate(request, body, work))
 
