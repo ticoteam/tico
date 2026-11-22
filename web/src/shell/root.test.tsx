@@ -3,7 +3,7 @@ import { createBrowserHistory, createMemoryHistory, createRootRoute, createRoute
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { ApiError } from '@/api/client';
+import { ApiError, api } from '@/api/client';
 import { queryClient } from '@/data/query-client';
 import { Route as root } from '@/routes/__root';
 import { Route as landingRoute } from '@/routes/index';
@@ -89,8 +89,9 @@ vi.mock('@/features/library/routing', () => ({ useFileOpen: () => false, takeHel
 vi.mock('@/features/tasks/routing', async () => {
   const real = await vi.importActual<typeof TasksRouting>('@/features/tasks/routing');
   return {
-  // the real grouping: the open task's list draws Flow's sections from it
-  flowGroups: real.flowGroups,
+  useFlowGroups: real.useFlowGroups,
+  useFlowCountRefresh: real.useFlowCountRefresh,
+  flowCountQuery: real.flowCountQuery,
   // the real address checks: the list beside a task reads its pipeline with the filters its board had
   filtersOf: real.filtersOf,
   validateTasksSearch: real.validateTasksSearch,
@@ -209,6 +210,7 @@ beforeEach(() => {
   gate.setup = false;
   catchUpRead.mockClear();
   queryClient.clear();
+  queryClient.setQueryData(['flow', 'count'], { count: 4, wakeAt: null });
   forgetPlaces();
   for (const k of Object.keys(lists)) delete lists[k];
   for (const k of Object.keys(owners)) delete owners[k];
@@ -666,14 +668,21 @@ describe('an open task', () => {
   const item = (n: number, title: string, stage: string, late = false) => ({ id: `t${n}`, number: n, title, pipeline_id: 'eng', stage_id: stage, owner_id: 'bot:qa', late, stuck: false, since: '2026-11-18T09:00:00Z' });
   afterEach(() => at(1024));
 
-  it('in Flow has what waits on you in the menu’s place, by pipeline and stage, the open task chosen @s135', async () => {
+  it('in Flow groups what waits on you by relationship, with the open task chosen @s135', async () => {
     at(1600);
     people(MAYA, QA);
     queryClient.setQueryData(['pipelines'], [{ id: 'eng', name: 'Engineering', stages: [{ id: 'review', name: 'Review' }, { id: 'qa', name: 'QA' }], done: null }]);
-    queryClient.setQueryData(['flow'], { count: 3, items: [item(7, 'Bulk edit stock', 'qa', true), item(5, 'Rate fallback', 'review'), item(9, 'Postal codes', 'qa')] });
+    const acme = { entity_id: 'organization/acme' };
+    const lookup = vi.spyOn(api, 'post').mockResolvedValue({ names: { [acme.entity_id]: 'Acme' } });
+    queryClient.setQueryData(['flow'], { count: 3, items: [
+      { ...item(7, 'Bulk edit stock', 'qa', true), ...acme },
+      item(5, 'Rate fallback', 'review'),
+      { ...item(9, 'Postal codes', 'inbox'), pipeline_id: 'support', ...acme },
+    ] });
     show('/flow/7');
     const list = await screen.findByRole('navigation', { name: 'Flow' });
-    expect(within(list).getAllByRole('button', { name: /Engineering/ }).map((b) => b.textContent)).toEqual(['EngineeringReview1', 'EngineeringQA2']);
+    expect((await within(list).findByRole('button', { name: /Acme/ })).textContent).toBe('Acme2');
+    expect(within(list).getByRole('button', { name: /Other/ }).textContent).toBe('Other1');
     const open = within(list).getByRole('link', { name: /Bulk edit stock/ });
     expect(open.classList.contains('is-on')).toBe(true);
     expect(open.getAttribute('href')).toBe('/flow/7');
@@ -681,12 +690,13 @@ describe('an open task', () => {
     expect(within(list).getByRole('link', { name: /Postal codes/ }).classList.contains('is-on')).toBe(false);
     // it says it is Flow, plainly
     expect(within(list).getByRole('button', { name: 'Flow' })).toBeTruthy();
-    expect(within(list).getByText('Flow · 3')).toBeTruthy();
+    expect(within(list).getByText('Flow · 4')).toBeTruthy();
     expect(within(list).getByRole('button', { name: 'Exit Flow' }).getAttribute('title')).toBe('Exit Flow');
     expect(await screen.findByText('task chat')).toBeTruthy();
-    // a stage's name folds its rows
-    fireEvent.click(within(list).getByRole('button', { name: /EngineeringQA/ }));
+    fireEvent.click(within(list).getByRole('button', { name: /Acme/ }));
     expect(within(list).queryByRole('link', { name: /Postal codes/ })).toBeNull();
+    expect(within(list).getByRole('link', { name: /Rate fallback/ })).toBeTruthy();
+    lookup.mockRestore();
   });
 
   it('opened from a thread, keeps that thread beside it in place of the task’s own chat (plan/layers.html)', async () => {
@@ -806,7 +816,7 @@ describe('a task opened from a board', () => {
     const router = await board();
     await act(() => router.navigate({ to: '/flow/$task', params: { task: '9' } }));
     const list = await screen.findByRole('navigation', { name: 'Flow' });
-    expect(within(list).getByText('Flow · 3')).toBeTruthy();
+    expect(within(list).getByText('Flow · 4')).toBeTruthy();
     fireEvent.click(within(list).getByRole('button', { name: 'Exit Flow' }));
     expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
     expect(router.state.location.search).toEqual({ owner: 'bot:qa' });
@@ -844,11 +854,31 @@ describe('the desktop app', () => {
     await waitFor(() => expect(t.companies.reportSelf).toHaveBeenCalledWith({ name: 'Fernhill', email: 'maya@example.com', signedOut: false }));
     await waitFor(() => expect(t.setBadge).toHaveBeenLastCalledWith(4));
     expect(t.setFilesOrigin).toHaveBeenCalledWith('https://files.example.com');
-    act(() => queryClient.setQueryData(['flow'], { count: 9, items: [] }));
+    act(() => queryClient.setQueryData(['flow', 'count'], { count: 9, wakeAt: null }));
     await waitFor(() => expect(t.setBadge).toHaveBeenLastCalledWith(9));
-    act(() => queryClient.setQueryData(['flow'], { count: 0, items: [] }));
+    act(() => queryClient.setQueryData(['flow', 'count'], { count: 0, wakeAt: null }));
     await waitFor(() => expect(t.setBadge).toHaveBeenLastCalledWith(0));
     expect(t.companies.reportSelf).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes the Dock and shell Flow badges at snooze expiry outside Flow', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+    const t = fakeDesktop();
+    queryClient.setQueryData(['flow', 'count'], { count: 4, wakeAt: 60_000 });
+    const read = vi.spyOn(api, 'get').mockResolvedValue({ flow_count: 5, snooze_refresh_in_ms: null });
+    try {
+      show('/');
+      await vi.waitFor(() => expect(t.setBadge).toHaveBeenLastCalledWith(4));
+      expect(document.querySelector('.nav-flow')?.textContent).toBe('4');
+      await act(() => vi.advanceTimersByTimeAsync(60_000));
+      await vi.waitFor(() => expect(t.setBadge).toHaveBeenLastCalledWith(5));
+      expect(document.querySelector('.nav-flow')?.textContent).toBe('5');
+      expect(read).toHaveBeenCalledWith('/api/v2/needs-you?count=true', expect.anything());
+    } finally {
+      cleanup();
+      read.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it('signed out: the badge clears and the company row keeps its name and email, marked signed out', async () => {

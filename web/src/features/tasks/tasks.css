@@ -133,13 +133,13 @@ html[data-layout="cards"] .stage-fold a{min-height:var(--ctl);display:inline-fle
 .rq-form{display:grid;gap:var(--s-3)}
 
 
-/* Flow on a phone: a pipeline's name over its stages (list.css .pipe); the stages under it are named smaller */
-.pipe+.pipe{margin-top:var(--s-2h);padding-top:var(--s-2);border-top:1px solid var(--line)}
-.pipe-head{height:44px;display:flex;align-items:center;gap:var(--s-2);padding:0 var(--s-1) 0 var(--page-x);position:sticky;top:0;z-index:var(--z-stick);background:var(--surface)}
-.pipe-head h2{font-family:var(--font-text);font-size:var(--t-md);font-weight:var(--w-title);line-height:1}
-.pipe .stage+.stage{margin-top:var(--s-0);padding-top:0;border-top:0}
-.pipe .stage-head{top:44px}
-.pipe .stage-head .sec-name{font-size:var(--t-sm);font-weight:var(--w-strong);color:var(--ink-2)}
+.flow-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center}
+.flow-reason{align-self:center;max-width:24ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-sm);color:var(--muted)}
+.flow-why{display:grid;gap:var(--s-2);max-width:min(36ch,85vw);padding:var(--s-3);border-radius:var(--r-card);background:var(--raised);box-shadow:var(--lift-3)}
+.flow-archive{margin-top:var(--s-3)}
+.flow-archive .stage .stage-head{padding-inline-start:calc(var(--page-x) + var(--s-2))}
+.flow-shelf-state{padding-inline-start:var(--page-x);color:var(--muted)}
+:where(html[data-layout="cards"]) .flow-reason{max-width:none;white-space:normal}
 
 /* Flow's requests (FlowPage Requests): each card on the page's edge, one under another */
 .flow-requests{display:flex;flex-direction:column;gap:var(--s-2);padding:var(--s-1) var(--page-x) var(--s-3)}

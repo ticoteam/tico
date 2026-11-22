@@ -9,6 +9,12 @@ from ._base import answer
 
 
 @answer
+class ContactsNamesResult(TypedDict):
+    names: dict[str, str]
+    """Requested entity IDs visible to the caller, mapped to their current names"""
+
+
+@answer
 class ContactsRecordResult(TypedDict):
     id: str
     """The record's id in Tico"""

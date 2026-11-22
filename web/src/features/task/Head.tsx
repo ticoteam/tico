@@ -19,7 +19,7 @@ import { whoHref } from '@/features/team/routing';
 import { DETAILS, earlierStages, failedToast, reasonOf, refusalOf, tabAddress, type Refusal } from './model';
 import { FlowMark } from '@/kit/FlowMark';
 import { Face, Go, Mark } from './parts';
-import { retiredStagesQuery, waitingQuery, type TaskData } from './queries';
+import { retiredStagesQuery, useWaitingTasks, type TaskData } from './queries';
 import { TaskStatus } from './StatusLine';
 
 /* The head's controls: the where line (pipeline › stage pick, owner pick, time in the stage, Late), Flow's previous
@@ -243,15 +243,14 @@ export function OwnerPick({ t }: { t: TaskData }) {
 
 /** Flow's order: the tasks that wait on the person, and where Flow goes once this one is off their hands. */
 function useFlowOrder(t: TaskData, enabled = true) {
-  const waiting = useQuery({ ...waitingQuery, enabled });
+  const { rows, read } = useWaitingTasks(enabled);
   const navigate = useNavigate();
-  const rows = waiting.data ?? [];
   const i = rows.findIndex((w) => w.id === t.id);
   const next = () => {
     const to = rows[i + 1] ?? rows[i - 1];
     void navigate(to ? { to: tabAddress(to, undefined, true).to as never } : { to: '/flow' as never });
   };
-  return { rows, i, next, read: waiting.isSuccess };
+  return { rows, i, next, read };
 }
 
 /** Flow's previous and next: the tasks that wait on the person, in Flow's order. */

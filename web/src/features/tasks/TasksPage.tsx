@@ -29,7 +29,7 @@ import { SelectBar, StageMenu } from './many';
 import { NewTask } from './NewTask';
 import { Blocks, Face, FlowButton, isPending, markOf, Movable, StoppedMark, taskHref, waitsOnMe } from './parts';
 import {
-  flowQuery,
+  flowCountQuery,
   isFiltered,
   listParams,
   loadMore,
@@ -294,7 +294,7 @@ function HeadActions({ pipeline, view, search, onNew }: { pipeline: string; view
 }
 
 function OpenFlowButton() {
-  const { data = 0 } = useQuery({ ...flowQuery, select: (flow) => flow.count });
+  const { data = 0 } = useQuery(flowCountQuery);
   return <FlowButton on={false} count={data} />;
 }
 

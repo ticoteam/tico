@@ -131,6 +131,10 @@ def set_availability(conn: Any, by: str, pid: str, value: str | None, until: str
         raise Problem("not_found", "Person not found", 404)
     conn.execute("UPDATE humans SET availability=?, availability_until=? WHERE id=?", (value or "", until, pid))
     H.event(conn, by, "person.availability", "human:" + pid, {"availability": value, "until": until})
+    conn.execute(
+        "INSERT INTO changes(topic,kind,subject_id,created_at) VALUES('setup','availability','availability',?)",
+        (_stamp(at),),
+    )
     after = person_row(conn, pid)
     assert after is not None  # the row updated above
     return view(conn, after, at)

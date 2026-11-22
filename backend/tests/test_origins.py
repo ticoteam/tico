@@ -5,6 +5,7 @@ import shlex
 from backend import hubdb as H
 from backend.tests.helpers.api import get, headers, post, setup_attempt  # noqa: F401
 from backend.tests.helpers.automation_api import make  # noqa: F401
+from backend.tests.helpers.teammate_access import NOBODY, acme, set_access
 
 
 def test_a_bot_filed_task_names_the_bot_and_stop_commands_parse_and_the_payload_is_small(api):
@@ -56,6 +57,30 @@ def test_an_automation_or_parent_task_is_named_with_a_stop_that_parses(api):
     assert origin["siblings"]["made"] == 1
 
 
+def test_a_task_and_its_message_hide_an_automation_the_reader_cannot_see(api):
+    made = make(api)
+    aid = made["automation"]["id"] if "automation" in made else made["id"]
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, "human:ana", "Review the public ticket", "x", "human:ben", private=False)
+        c.execute("UPDATE tasks SET occurrence=? WHERE id=?", (aid + ":2026-11-03", task["id"]))
+        message = H.say(
+            c,
+            "human:ana",
+            "human:ben",
+            "The ticket is ready to review.",
+            refs={"task": task["id"], "automation": aid, "automation_run": "run-hidden"},
+        )
+    get(api, f"automations/{aid}", "ben-test", expected=403)
+    for ref in (task["id"], message["id"]):
+        path = f"origins/{ref}"
+        visible = get(api, path)
+        assert visible["cause"]["id"] == aid and visible["cause"]["name"] == "Morning check"
+        hidden = get(api, path, "ben-test")
+        assert hidden["cause"] == {"type": "automation", "name": "an automation"}
+        assert hidden["siblings"] == {"days": 7, "made": 0, "open": 0} and hidden["stop"] == []
+        assert aid not in str(hidden) and "run-hidden" not in str(hidden)
+
+
 def test_an_item_the_caller_cannot_read_is_a_404_with_no_text_and_a_hidden_parent_is_not_named(api):
     r = api.get("/api/v2/origins/zzzzzzzzzzzz", headers=headers("ben-test"))
     assert r.status_code == 404
@@ -81,3 +106,17 @@ def test_an_item_the_caller_cannot_read_is_a_404_with_no_text_and_a_hidden_paren
     origin = get(api, "origins/" + child["id"], "ben-test")
     assert origin["cause"] == {"type": "parent_task", "id": None, "title": "a task you can no longer see"}
     assert "Ana private parent" not in api.get("/api/v2/origins/" + child["id"], headers=headers("ben-test")).text
+
+
+def test_an_origin_names_a_hidden_filer_only_to_task_parties(acme):
+    api, _ = acme
+    set_access(api, "humans/eve", see=NOBODY, read=NOBODY, write=NOBODY)
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, "human:eve", "Review the public ticket", "x", "human:cara", private=False)
+    path = "origins/" + task["id"]
+    hidden = get(api, path, "fay-test")
+    assert hidden["made_by"] == {"actor": "", "name": ""}
+    assert hidden["cause"] == {"type": "person", "person": ""}
+    shown = get(api, path, "cara-test")
+    assert shown["made_by"]["actor"] == shown["cause"]["person"] == "human:eve"
+    assert shown["made_by"]["name"]

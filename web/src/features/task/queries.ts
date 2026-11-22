@@ -1,8 +1,8 @@
-import { keepPreviousData, queryOptions, type QueryKey } from '@tanstack/react-query';
+import { keepPreviousData, queryOptions, useQuery, type QueryKey } from '@tanstack/react-query';
 import { ApiError, api } from '@/api/client';
 import type { OkPreview, PagePublished, PageShown, PipelineSettingsResult, PublishPageBody, TaskDetail, TaskDetailChild, TaskFileList, TaskLinkView, TaskRequirement, TaskResult } from '@/api/schema';
 import { keys, meQuery, queryClient, quietRoot, write } from '@/data';
-import { flowQuery, pipelinesQuery } from '@/features/tasks/routing';
+import { flowQuery, pipelinesQuery, useFlowGroups } from '@/features/tasks/routing';
 import type { FileLibrary, FileSearch, ReconcileTaskShotsBody, ReconcileTaskShotsResponse, TaskFileResult, TaskFileView } from '@/api/schema';
 
 /* One open task: its detail (GET /api/v2/tasks/{tid}, kept current by the stream under keys.tasks.detail), the files
@@ -109,10 +109,14 @@ export const retiredStagesQuery = (id: string) =>
 
 /** The tasks that wait on the person, in Flow's order: Flow's next and previous. The same read as Flow's list (GET
     /api/v2/needs-you, one of the slowest), so a task opened from Flow does not read it a second time. */
-export const waitingQuery = queryOptions({
-  ...flowQuery,
-  select: ({ items }) => items.map(({ id, number, pipeline_id }) => ({ id, number, pipeline_id })),
-});
+export function useWaitingTasks(enabled: boolean) {
+  const waiting = useQuery({ ...flowQuery, enabled });
+  const groups = useFlowGroups(enabled ? waiting.data?.items ?? [] : []);
+  return {
+    rows: groups.flatMap((g) => g.items.map(({ id, number, pipeline_id }) => ({ id, number, pipeline_id }))),
+    read: waiting.isSuccess,
+  };
+}
 
 /* ---------------------------------------------------------------- writes */
 

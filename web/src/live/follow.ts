@@ -53,7 +53,8 @@ function scope(): StreamScope {
 setScopeSource(scope);
 
 function fed(scope: FollowScope): QueryKey[] {
-  if ('allTasks' in scope || 'party' in scope) return [['tasks', 'list']];
+  if ('allTasks' in scope) return [['tasks', 'list'], ['tasks', 'flow']];
+  if ('party' in scope) return [['tasks', 'list']];
   if ('task' in scope) return [['tasks', 'detail', scope.task]];
   if ('conversation' in scope) return [['thread', scope.conversation]];
   if ('thread' in scope) return [['thread', scope.thread]];

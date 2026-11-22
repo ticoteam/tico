@@ -20,7 +20,7 @@ Every read asks the SQL clause this module builds, so a list, a count, a search,
 
 import json
 import sqlite3
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -74,27 +74,33 @@ def _feeds(c: sqlite3.Connection, mailbox_id: str) -> bool:
     return bool(MA.feeds_directory(c, MA.row_by_id(c, mailbox_id)))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
 
 
-def _mailboxes(c: sqlite3.Connection, r: Reader, fin: object) -> tuple[str, ...]:
+def _mailboxes(c: sqlite3.Connection, r: Reader, fin: object, ids: Sequence[str] | None) -> tuple[str, ...]:
+    if ids is not None:
+        return tuple(MA.directory_mailboxes(c, r.actor, ids)) if ids else ()
     feeding = [str(m["id"]) for m in _mailbox_rows(c, r.actor) if m.get("id") and _feeds(c, str(m["id"]))]
     return tuple(sorted(feeding))
 
 
-def _finance_book(c: sqlite3.Connection, r: Reader, fin: tuple[FC.Ctx, Any] | None) -> tuple[str, ...] | None:
+def _finance_book(
+    c: sqlite3.Connection, r: Reader, fin: tuple[FC.Ctx, Any] | None, ids: Sequence[str] | None
+) -> tuple[str, ...] | None:
     if fin is None:
         return ()
     ctx, view = fin
     if view.everything:
         return None
-    ids = [
-        row[0] for row in c.execute("SELECT DISTINCT source_id FROM entity_sources WHERE source_type = 'finance_book'")
-    ]
+    if ids is None:
+        ids = [
+            row[0]
+            for row in c.execute("SELECT DISTINCT source_id FROM entity_sources WHERE source_type = 'finance_book'")
+        ]
     if not ids:
         return ()
     named = named_all_time(ctx, view, ids)
     return tuple(sorted(contact for contact, shown in named.items() if shown))
 
 
-def _note_me(c: sqlite3.Connection, r: Reader, fin: object) -> tuple[str, ...]:
+def _note_me(c: sqlite3.Connection, r: Reader, fin: object, ids: Sequence[str] | None) -> tuple[str, ...]:
     return (r.key,) if r.key else ()
 
 
@@ -106,16 +112,32 @@ CHECKERS: dict[str, Callable[..., tuple[str, ...] | None]] = {
 }
 
 
-def reader(c: sqlite3.Connection, who: str) -> Reader:
+def _restricted_sources(c: sqlite3.Connection, entity_ids: Sequence[str]) -> dict[str, list[str]]:
+    out: dict[str, list[str]] = {}
+    for kind, source in c.execute(
+        "SELECT DISTINCT s.source_type,s.source_id FROM entity_sources s "
+        "WHERE s.entity_id IN (SELECT value FROM json_each(?)) AND s.visibility='restricted' "
+        "AND NOT EXISTS (SELECT 1 FROM entity_sources public WHERE public.entity_id=s.entity_id AND public.visibility='company')",
+        (json.dumps(entity_ids),),
+    ):
+        out.setdefault(str(kind), []).append(str(source))
+    return out
+
+
+def reader(c: sqlite3.Connection, who: str, *, entity_ids: Sequence[str] | None = None) -> Reader:
+    """Build current grants, optionally for a read limited to these entity IDs."""
     actor = str(who or "").strip()
     key = actor_key(c, actor)
     # Tico is the system writing for no one (ingest, Heartbeat steps): it reads as the system does.
     if actor in (SYSTEM, TICO_ACTOR):
         return Reader(actor, key, system=True, sensitive=True, grants={t: None for t in CHECKERS})
-    fin = _finance(c, actor)
+    sources = _restricted_sources(c, entity_ids) if entity_ids is not None else None
+    fin = _finance(c, actor) if sources is None or sources.get("finance_book") else None
     sensitive = bool(fin and fin[1].everything)
+    subject = Reader(actor, key, False, sensitive, {})
     grants = {
-        source_type: check(c, Reader(actor, key, False, sensitive, {}), fin) for source_type, check in CHECKERS.items()
+        source_type: check(c, subject, fin, None if sources is None else sources.get(source_type, ()))
+        for source_type, check in CHECKERS.items()
     }
     return Reader(actor, key, system=False, sensitive=sensitive, grants=grants)
 

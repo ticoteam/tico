@@ -120,6 +120,20 @@ def test_it_comes_back_at_its_time_with_nothing_run(api):
     assert get(api, "needs-you/snoozed", token="ben-test")["items"] == []
 
 
+def test_count_reports_the_next_expiry_in_server_time(api, monkeypatch):
+    _, item = ask_ben(api)
+    now = at()
+    until = H.shift(now, seconds=60)
+    monkeypatch.setattr(H, "now", lambda: now)
+    post(api, "needs-you/snooze", {"id": item, "until": until}, token="ben-test")
+    read = get(api, "needs-you?count=true", token="ben-test")
+    assert read["snooze_refresh_in_ms"] == 60_000
+    assert get(api, "needs-you?count=true", token="ana-test")["snooze_refresh_in_ms"] is None
+    monkeypatch.setattr(H, "now", lambda: until)
+    after = get(api, "needs-you?count=true", token="ben-test")
+    assert after["snooze_refresh_in_ms"] is None and after["flow_count"] == read["flow_count"] + 1
+
+
 def test_given_to_someone_else_the_ask_is_in_their_list(api):
     """The snooze is Ben's alone: given to Cara, the ask is hers to answer at once."""
     task, item = ask_ben(api)

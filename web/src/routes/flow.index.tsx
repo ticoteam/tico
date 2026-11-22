@@ -1,10 +1,11 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { FlowPage, FlowPending } from '@/features/tasks/exports';
-import { flowQuery, pipelinesQuery } from '@/features/tasks/routing';
+import { flowQuery } from '@/features/tasks/routing';
 
-/** Flow: what waits on the person, across every pipeline. */
 export const Route = createFileRoute('/flow/')({
-  loader: ({ context: { queryClient: qc } }) => Promise.all([qc.ensureQueryData(flowQuery), qc.ensureQueryData(pipelinesQuery)]),
+  validateSearch: (s: Record<string, unknown>): { view?: 'all' } => (s.view === 'all' ? { view: 'all' } : {}),
+  loaderDeps: ({ search }) => ({ all: search.view === 'all' }),
+  loader: ({ context: { queryClient }, deps }) => deps.all ? undefined : queryClient.ensureQueryData(flowQuery),
   pendingComponent: FlowPending,
   component: FlowPage,
 });

@@ -1321,9 +1321,12 @@ def owner_of(c: sqlite3.Connection, entity_id: str) -> str | None:
 
 
 def seen_entities(c: sqlite3.Connection, r: V.Reader, ids: Iterable[str]) -> dict[str, str]:
-    """{id: name} of the entities among `ids` the reader sees that are not merged away: what a page link to an entity
-    shows. A merged-away one is hidden until unmerge, whatever the kept entity shows. One read for all of them."""
-    return {str(row["id"]): str(row["name"]) for row in _visible_rows(c, r, list(ids)) if row["status"] != "merged"}
+    """Names of visible entities for page links and task groups, in one read. Deletion and merge hide the original."""
+    return {
+        str(row["id"]): str(row["name"])
+        for row in _visible_rows(c, r, list(ids))
+        if row["status"] != "merged" and row["deleted_at"] is None
+    }
 
 
 def entity_facts(c: sqlite3.Connection, ids: Iterable[str]) -> dict[str, Row]:
