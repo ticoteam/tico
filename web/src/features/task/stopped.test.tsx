@@ -135,6 +135,16 @@ describe("a stopped agent's notice", () => {
     expect(within(await decision()).getByRole('button', { name: 'Release' })).toBeTruthy();
   });
 
+  it('shows no Release once the notice is closed, even before the task is read again', async () => {
+    reply = (url) =>
+      url.endsWith('/api/v2/tasks/t1') || url.includes('/api/v2/tasks/%2312')
+        ? { body: { task: task({ status: 'closed' }), runs: [], children: [], can_comment: true, mover: true, stopped_agent: task().stopped_agent } }
+        : null;
+    show(<TaskChat task="12" />, '/tasks/p1/12');
+    await screen.findByLabelText('Chat with Me');
+    expect(screen.queryByRole('button', { name: 'Release' })).toBeNull();
+  });
+
   it('shows nothing on a task that is no notice', async () => {
     released = true; // the task read names no stopped agent
     show(<TaskChat task="12" />, '/tasks/p1/12');

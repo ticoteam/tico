@@ -702,11 +702,19 @@ def test_an_auto_dream_never_waits_on_a_person_and_one_that_never_ran_is_closed(
         assert c.execute("SELECT outcome FROM stage_rule_marks WHERE mark='m1'").fetchone()[0] == "dropped"
     with api.app.state.store.transaction() as c:
         assert DA.close_stale(c, now() + timedelta(hours=DA.STALE_HOURS - 1)) == []
-        # One that ran is kept, whatever its age: it did get its turn.
-        c.execute("UPDATE attempts SET task_id=? WHERE id=(SELECT id FROM attempts LIMIT 1)", (row["id"],))
+        later = now() + timedelta(hours=DA.STALE_HOURS + 1)
+        # One with a turn inside the window is kept: a run started then, or a reopen (any change to the task).
+        recent = DA.stamp(now() + timedelta(hours=2))
+        c.execute(
+            "UPDATE attempts SET task_id=?, created_at=? WHERE id=(SELECT id FROM attempts LIMIT 1)",
+            (row["id"], recent),
+        )
         assert c.execute("SELECT count(*) FROM attempts WHERE task_id=?", (row["id"],)).fetchone()[0] == 1
-        assert DA.close_stale(c, now() + timedelta(hours=DA.STALE_HOURS + 1)) == []
+        assert DA.close_stale(c, later) == []
         c.execute("UPDATE attempts SET task_id=NULL WHERE task_id=?", (row["id"],))
+        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (recent, row["id"]))
+        assert DA.close_stale(c, later) == []
+        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (row["updated_at"], row["id"]))
         # The never-stuck pass closes it, whether or not the Dream step runs.
         never_stuck.check(c, DA.stamp(now() + timedelta(hours=DA.STALE_HOURS + 1)))
         assert H.task(c, row["id"])["status"] == "closed"

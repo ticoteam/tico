@@ -53,7 +53,8 @@ export function Decision({ t, flow, dock = false, onAsking, email, requirement }
   if (!r && !asked) {
     if (typeof email === 'string') return null;
     if (isRuleReview(t)) return <HeldDecision t={t} flow={flow} dock={dock} />;
-    return t.stopped_agent ? <StoppedDecision t={t} flow={flow} dock={dock} /> : null;
+    // Only while the notice is open: Tico's own release closes it, and the stream says so before the task is read again.
+    return t.stopped_agent && t.status === 'open' ? <StoppedDecision t={t} flow={flow} dock={dock} /> : null;
   }
   const box = r ? (
     <Answer key={`${t.id}:${r.requirement_id}`} t={t} r={r} flow={flow} onAsking={onAsking} hold={(x, sending = false) => setHeld(x && { r: x, sending })} />
