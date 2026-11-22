@@ -324,3 +324,64 @@ def test_an_assistant_acting_for_a_person_writes_status_and_owner_with_that_pers
     post(api, "entities/owner", {"ref": acme, "owner": "bot:ops"})  # Ana sees ops
     replayed = post(api, "entities/owner", {"ref": acme, "owner": "me"}, token=token, key="cara-owner")
     assert replayed["owner"] is None  # Cara may not see ops: the owner is hidden from him
+
+
+def test_an_assistants_contacts_reads_and_me_are_the_persons_own(api):
+    from backend.tests.helpers.assistant import assistant_turn
+
+    caras, anas = org(api, "c.example", "Caras"), org(api, "a.example", "Anas")
+    with api.app.state.store.transaction() as c:
+        for person, entity in (("cara", caras), ("ana", anas)):
+            box = MA.ensure_mailbox(c, f"{person}@acme.example", person_id=person, created_by=f"human:{person}")
+            ES.add_source(c, f"human:{person}", entity, "mailbox", box["id"], visibility="restricted")
+    post(api, "entities/owner", {"ref": anas, "owner": "human:cara"})
+    post(api, "entities/status", {"ref": anas, "version": 0, "next_step": "Secret", "next_step_due": "2026-12-01"})
+    _r, attempt = assistant_turn(api, "cara-test", text="What's next on my accounts?")
+    token = attempt["token"]
+    post(api, "entities/owner", {"ref": caras, "owner": "me"}, token=token)
+    post(
+        api,
+        "entities/status",
+        {"ref": caras, "version": 0, "next_step": "Call", "next_step_due": "2026-12-02"},
+        token=token,
+    )
+    mine = get(api, "entities/find/organization?owner=me&sort=next", token=token)["rows"]
+    assert [(r["id"], r["relationship"]["next_step"]) for r in mine] == [(caras, "Call")]  # Anas is hidden from Cara
+    assert get(api, f"entities/card?ref={caras}", token=token)["owner"] == "human:cara"
+    assert get(api, f"entities/card?ref={anas}", token=token, expected=404)
+
+
+def test_a_hidden_person_is_never_assigned_filtered_by_or_shown_as_owner(api):
+    from backend.tests.helpers.teammate_access import set_access
+
+    acme = org(api, "acme.example", "Acme")
+    post(api, "entities/owner", {"ref": acme, "owner": "human:ben"})
+    only_ana = {"people": ["ana"]}
+    set_access(api, "humans/ben", see=only_ana, read=only_ana, write=only_ana)
+    assert post(api, "entities/owner", {"ref": acme, "owner": "human:ben"}, token="cara-test", expected=404)
+    assert get(api, "entities/find/organization?owner=human:ben", token="cara-test")["rows"] == []
+    assert get(api, f"entities/card?ref={acme}", token="cara-test")["owner"] is None
+    assert get(api, f"entities/card?ref={acme}")["owner"] == "human:ben"
+
+
+def test_a_task_list_by_an_unseen_or_ambiguous_entity_is_refused(api):
+    assert get(api, "tasks?entity=nobody.example", expected=422)["error"]["code"] == "entity"
+    with api.app.state.store.transaction() as c:
+        for domain in ("one.example", "two.example"):
+            ES.upsert(c, ANA, "organization", match={"domain": domain}, name="Twin")
+    assert get(api, "tasks?entity=Twin", expected=409)["error"]["code"] == "ambiguous"
+    assert get(api, "tasks?entity=Twin&changed_after=x", expected=422)["error"]["code"] == "entity"
+
+
+def test_erasing_an_entity_scrubs_it_from_task_history(api):
+    from backend.entities import erase as ER
+
+    acme = org(api, "acme.example", "Acme")
+    task = post(api, "tasks", {"owner": "ops", "title": "Send the renewal", "entity": acme})
+    with api.app.state.store.transaction() as c:
+        ER.erase(c, ANA, acme, "request")
+    with api.app.state.store.read() as c:
+        held = c.execute(
+            "SELECT count(*) FROM history_events WHERE subject_id=? AND (old=? OR new=?)", (task["id"], acme, acme)
+        ).fetchone()[0]
+    assert held == 0

@@ -347,7 +347,11 @@ def test_exact_refuses_a_requester_that_names_nobody_and_the_tracker_reads_only_
 def test_every_filter_the_list_takes_still_answers(api):
     from backend import task_list_routes
 
+    from backend.entities import store as ES
+
     made = post(api, "tasks", {"owner": "ben", "title": "Draft the agenda", "body": "Please."})
+    with api.app.state.store.transaction() as c:  # the entity filter names one the reader sees
+        ES.upsert(c, "human:ana", "organization", match={"domain": "acme.example"}, name="Acme")
     cursor = tasks(api, ACTIVE)["cursor"]
     values = {
         "owner": "ben",

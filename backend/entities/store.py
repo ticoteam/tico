@@ -1590,6 +1590,14 @@ ERASE_STATEMENTS: tuple[tuple[str, str], ...] = (
         "OR into_entity_id IN (SELECT value FROM json_each(:ids))",
     ),
 )
+# A task's history keeps the entity ids it was for (kind entity_id); an erased one is scrubbed from it, the row stays.
+TASK_HISTORY_OF_ERASED = (
+    "UPDATE history_events SET "
+    "old = CASE WHEN old IN (SELECT value FROM json_each(:ids)) THEN NULL ELSE old END, "
+    "new = CASE WHEN new IN (SELECT value FROM json_each(:ids)) THEN NULL ELSE new END "
+    "WHERE subject_type = 'task' AND kind = 'entity_id' "
+    "AND (old IN (SELECT value FROM json_each(:ids)) OR new IN (SELECT value FROM json_each(:ids)))"
+)
 # The history of the erased entities and of their links. Run after those rows are deleted (see erase_rows).
 HISTORY_OF_ERASED = (
     "DELETE FROM history_events WHERE (subject_type = 'market_entity' AND subject_id IN (SELECT value FROM json_each(:ids))) "
@@ -1804,6 +1812,9 @@ def erase_rows(c: sqlite3.Connection, actor: str, entity_id: str, reason: str) -
     # After the entities and links are gone: the history trigger (migration 20261108045025) allows a row of a subject that
     # no longer exists, and only those, so the history of live entities stays append-only.
     if "history_events" in tables:
+        scrubbed = c.execute(TASK_HISTORY_OF_ERASED, params).rowcount
+        if scrubbed:
+            removed["task_history"] = scrubbed
         count = c.execute(HISTORY_OF_ERASED, params).rowcount
         if count:
             removed["history_events"] = count

@@ -101,7 +101,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 "the item's URL (a Jira link takes its site's connection): only the tasks linking that outside item "
                 "through that connection. A Jira item always names its connection",
                 "entity": "A Contacts entity (an id, email or domain you can see; a merged one is the one it went "
-                "into): only the tasks for it. One you cannot see lists none",
+                "into): only the tasks for it. One you cannot see is refused (422 entity)",
             },
         ),
     )
@@ -215,19 +215,21 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 from . import page_links
                 from .entities import store as ES
 
-                # One the reader cannot see lists nothing, as one that is not there does.
                 reader = page_links.entity_reader(c, auth, who)
                 entities = ES.get(c, reader, entity) if reader is not None else []
+                exact = len(entities) == 1 and str(entities[0]["id"]) == entity
+                if changed_after is not None and not exact:
+                    # A changes read follows one visible entity by its id: an alias (one entity or several), a
+                    # merged-away id, or one the reader no longer sees could change under it. The client reads in full.
+                    raise Problem("entity", "Use the entity's id, one you see, with changed_after", 422)
+                if not entities:
+                    # Refused, not an empty list with a cursor: a cache of nothing would outlive a later grant.
+                    raise Problem("entity", f"No entity {entity} that you can see", 422)
                 if len(entities) > 1:
                     raise Problem("ambiguous", f"More than one entity matches {entity}; name one by id", 409)
-                # tasks.entity_id<>'' lets the partial index tasks_entity serve it; nothing seen is a literal false.
-                chosen = str(entities[0]["id"]) if entities else ""
-                fragment = ("tasks.entity_id=? AND tasks.entity_id<>''", (chosen,)) if chosen else ("0", ())
+                # tasks.entity_id<>'' lets the partial index tasks_entity serve it.
+                fragment = ("tasks.entity_id=? AND tasks.entity_id<>''", (str(entities[0]["id"]),))
                 filters["match"] = [*filters.get("match", ()), fragment]
-                if changed_after is not None and (not chosen or chosen != entity):
-                    # A changes read follows one visible entity by its id: an alias, a merged-away id, or one the
-                    # reader no longer sees could change under it. The client reads in full instead.
-                    raise Problem("entity", "Use the entity's id, one you see, with changed_after", 422)
             if after is not None:
                 if changed_after is not None or offset:
                     raise Problem("after", "after is a page's start: not with changed_after or offset", 422)

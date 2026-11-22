@@ -212,7 +212,7 @@ def install(
             return str(who.actor)
         kind, _, ident = owner.partition(":")
         if kind == "human" and ident:
-            return owner if H.human(c, ident) else None  # pyright: ignore[reportUnknownMemberType]
+            return owner if H.human(c, ident) and person_seen(c, who, owner) else None  # pyright: ignore[reportUnknownMemberType]
         if kind == "bot" and ident:
             bot = cast("dict[str, Any] | None", H.resolve_bot(c, ident))  # pyright: ignore[reportUnknownMemberType]
             if bot is None:
@@ -226,6 +226,12 @@ def install(
         nobody. Bot visibility for owners is checked as them."""
         found = auth.run_viewer(c, request.state.identity)  # pyright: ignore[reportUnknownMemberType]
         return None if found.role == "none" else found  # pyright: ignore[reportUnknownMemberType]
+
+    def person_seen(c: sqlite3.Connection, who: Any, person: str) -> bool:
+        """Whether the effective reader may see this person (teammate access, as the people directory checks)."""
+        from backend import teammate_access as TA
+
+        return cast("bool", TA.can(c, who, "see", person, auth)) is True  # pyright: ignore[reportUnknownMemberType]
 
     def reader(c: sqlite3.Connection, request: Request) -> str:
         """Whose Contacts grants a status or owner write is checked by: the request's effective reader
@@ -262,18 +268,19 @@ def install(
         return result
 
     def seen_owners(c: sqlite3.Connection, request: Request, items: list[dict[str, Any]]) -> None:
-        """A bot owner shows only to a reader who may see that bot; to anyone else the owner is hidden (None)."""
+        """A bot or person owner shows only to a reader who may see them; to anyone else the owner is hidden (None)."""
         who, answers = viewer(c, request), cast("dict[str, bool]", {})
         for item in items:
             owner = str(item.get("owner") or "")
-            if owner.startswith("bot:"):
+            if owner.startswith(("bot:", "human:")):
                 if owner not in answers:
-                    access = (
-                        cast("dict[str, Any]", auth.bot_access(c, who, owner[4:]))  # pyright: ignore[reportUnknownMemberType]
-                        if who is not None
-                        else {"see": False}
-                    )
-                    answers[owner] = bool(access["see"])
+                    if who is None:
+                        answers[owner] = False
+                    elif owner.startswith("bot:"):
+                        access = cast("dict[str, Any]", auth.bot_access(c, who, owner[4:]))  # pyright: ignore[reportUnknownMemberType]
+                        answers[owner] = bool(access["see"])
+                    else:
+                        answers[owner] = owner == str(who.actor) or person_seen(c, who, owner)
                 if not answers[owner]:
                     item["owner"] = None
 
@@ -331,9 +338,11 @@ def install(
         """A page of one type's entities you can see, by name, status, owner (`me`, human:<id> or bot:<id>) or a link to
         us (customer_of). Page with `next`. `sort=next` orders by the next step's due date, soonest first and none last,
         each row with its relationship status: what's next across your accounts is `owner=me&sort=next`. `detail` adds
-        each row's organization, owner and the sources you can see it is known from (the Contacts list)."""
-        actor = caller(request)
+        each row's organization, owner and the sources you can see it is known from (the Contacts list). Read as the
+        request's effective reader (a shared Assistant run: the person it acts for; `me` is them too)."""
+        caller(request)
         with read() as c:
+            actor = reader(c, request)
             if not ES.type_exists(c, type_key) or type_key in ES.NOT_CONTACTS:
                 raise Problem("not_found", f"No contact type {type_key}; see tico contacts types", 404)
             if owner is not None:
@@ -364,9 +373,10 @@ def install(
     @app.get("/api/v2/entities/card")
     def contacts_card(request: Request, ref: str):
         """One entity as you see it: its values with source and age, its links, external records, and your notes. A
-        reference two entities match returns both, and says so."""
-        actor = caller(request)
+        reference two entities match returns both, and says so. Read as the request's effective reader."""
+        caller(request)
         with read() as c:
+            actor = reader(c, request)
             found = ES.get(c, actor, ref)
             if not found:
                 raise Problem("not_found", f"No entity {ref} that you can see", 404)
@@ -384,8 +394,9 @@ def install(
     @app.get("/api/v2/entities/rules")
     def contacts_rules(request: Request, ref: str, action: str | None = None, as_bot: str | None = None):
         """The rules that apply to an entity, with their paths. Rules arrive in track 5, so none apply yet."""
-        actor = caller(request)
+        caller(request)
         with read() as c:
+            actor = reader(c, request)
             found = ES.get(c, actor, ref)
             if not found:
                 raise Problem("not_found", f"No entity {ref} that you can see", 404)
@@ -400,8 +411,9 @@ def install(
         request: Request, ref: str, attribute: str | None = None, after: str | None = None, limit: int | None = None
     ):
         """Past values of an entity's fields, newest first (one field with `attribute`). Page with `next`."""
-        actor = caller(request)
+        caller(request)
         with read() as c:
+            actor = reader(c, request)
             found = resolve(c, actor, ref)
             if found is None:
                 raise Problem("ambiguous", f"More than one entity matches {ref}; name one by id", 409)
