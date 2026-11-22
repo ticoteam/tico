@@ -44,6 +44,7 @@
     "heartbeat.request.capabilities[]=\"memory_tidy_keep_v1\"": "today's runner never sends it (runner-rs/src/lanes.rs CAPABILITIES); the server keeps the value for 0.6.x runners",
     "heartbeat.request.readiness.trust": "runner-rs/src/readiness.rs trust_field: sent only once GET config says readiness_trust (fallback.rs server_takes_trust)",
     "heartbeat.request.readiness.relationship_lanes": "runner-rs/src/runner.rs sends it once GET config says readiness_relationship_lanes",
+    "heartbeat.request.readiness.bots.*.harness": "runner-rs/src/readiness.rs sends it only for the relationship worker, once GET config says readiness_relationship_lanes (fallback.rs server_takes_relationship_lanes)",
     "heartbeat.request.readiness.browser": "runner-rs/src/runner.rs: sent only once GET config says readiness_browser (fallback.rs server_takes_browser)",
     "heartbeat.request.readiness.disk_cleanup": "runner-rs/src/readiness_extra.rs OPTIONAL: an older server's 422 drops this field for ten minutes; it reports only what the computer already cleaned",
     "heartbeat.request.readiness.runtimes.*.weekly": "runner-rs/src/profiles.rs for_server: a window's origin and subscription_id are sent only once the heartbeat answer says subscription_usage_sources (runner.rs)",

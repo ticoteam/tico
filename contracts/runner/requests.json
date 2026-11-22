@@ -141,6 +141,12 @@
      "title": "Goals",
      "type": "boolean"
     },
+    "harness": {
+     "default": "",
+     "maxLength": 100,
+     "title": "Harness",
+     "type": "string"
+    },
     "mail_request": {
      "anyOf": [
       {

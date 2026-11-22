@@ -25,6 +25,7 @@ ACTOR = "bot:" + BOT
 REF = "relationship_run"
 WAKE_TASK_LIMIT = 25
 WAKE_OMITTED_LIMIT = 100
+WAKE_SCAN_LIMIT = 250  # open tasks read at most per claim, readable or not
 ROW_ID = r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"
 FILE_ID = r"file-[0-9a-f]{24}"
 READ = re.compile(
@@ -219,11 +220,13 @@ def wake_context(c: Connection, auth: "Auth", who: "Identity", bound: Scope) -> 
 
     ids: list[str] = []
     omitted = 0
+    scanned = 0
     task_row = cast(Callable[..., object], auth.task_row)
     for row in c.execute(
-        "SELECT * FROM tasks WHERE entity_id=? AND status='open' ORDER BY created_at DESC,id DESC",
-        (bound.entity,),
+        "SELECT * FROM tasks WHERE entity_id=? AND status='open' ORDER BY created_at DESC,id DESC LIMIT ?",
+        (bound.entity, WAKE_SCAN_LIMIT),
     ):
+        scanned += 1
         try:
             task_row(c, who, dict(row))
         except Problem as exc:
@@ -237,6 +240,8 @@ def wake_context(c: Connection, auth: "Auth", who: "Identity", bound: Scope) -> 
             if omitted == WAKE_OMITTED_LIMIT:
                 break
     if ids:
-        remaining = f"{omitted}+" if omitted == WAKE_OMITTED_LIMIT else str(omitted)
-        context.append("Open tasks " + ", ".join(ids) + (f" ({remaining} more)." if omitted else "."))
+        more = omitted == WAKE_OMITTED_LIMIT or scanned == WAKE_SCAN_LIMIT  # stopped early: there may be more
+        remaining = f"{omitted}+" if more else str(omitted)
+        tail = f" ({remaining} more)." if omitted else (" (more may exist)." if more else ".")
+        context.append("Open tasks " + ", ".join(ids) + tail)
     return " ".join(context)

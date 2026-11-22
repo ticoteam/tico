@@ -521,3 +521,30 @@ def test_relationship_wake_names_only_records_the_sponsor_can_open_at_claim(api,
     assert page in body
     assert body.endswith("Open tasks " + ", ".join(reversed(open_ids[-25:])) + f" ({remaining} more).")
     assert all(ident not in body for ident in (other_page, revoked, closed, other, *open_ids[:-25]))
+
+
+def test_relationship_wake_reads_a_bounded_number_of_open_tasks(api, monkeypatch):
+    monkeypatch.setattr(runs, "WAKE_SCAN_LIMIT", 4)
+    store, auth = api.app.state.store, api.app.state.auth
+    with store.transaction() as c:
+        owner = auth.owner_identity(c)
+        north = entities.upsert(c, owner.actor, "organization", name="North", match={})["id"]
+        c.execute("UPDATE entity_sources SET visibility='company' WHERE entity_id=?", (north,))
+        runs.enqueue(c, auth, auth.identity_for_actor(c, "human:cara"), north, "Find the open work")
+    for index in range(6):
+        post(
+            api,
+            "tasks",
+            {
+                "title": f"Open {index}",
+                "body": "Review",
+                "owner": "ana",
+                "entity": north,
+                "private": True,
+                "readers": ["cara"],
+            },
+        )
+    machine = worker(api)
+    heartbeat(api, machine)
+    body = claim(api, machine, runs.BOT)["message"]["body"]
+    assert "(more may exist)." in body and body.count("Open tasks") == 1
