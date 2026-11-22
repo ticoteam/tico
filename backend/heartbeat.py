@@ -281,9 +281,9 @@ def item_metadata(ctx: Context) -> tuple[str, bool]:
 
 
 def jira_items(ctx: Context) -> tuple[str, bool]:
-    # The Jira issues tasks link that a webhook marked due, were never read, or not read for an hour, each through its
-    # record integration (backend/item_sources/jira.py `refresh`): a step of its own after the merge queue's, capped per
-    # connection and in time, so GitHub's steps and Jira's never hold up or fail each other.
+    # The Jira issues open tasks link, read every 5 minutes (one marked due first) through each record integration
+    # (backend/item_sources/jira.py `refresh`): a step of its own after the merge queue's, capped per connection and in
+    # time, so GitHub's steps and Jira's never hold up or fail each other.
     app: Any = getattr(ctx, "app", None)
     vault: Any = getattr(getattr(app, "state", None), "vault", None)
     if vault is None:

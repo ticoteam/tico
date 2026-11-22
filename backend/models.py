@@ -210,9 +210,6 @@ class TaskCreate(Contract):
     labels: list[str] = Field(default_factory=list, max_length=20)
     top: bool = False
     links: list[str] = Field(default_factory=list, max_length=20)
-    # The outside item it is filed for (backend/item_sources), `<source>:<type>:<key>@<connection>` or its URL: a task
-    # that already holds that item's primary link comes back instead (`found`), and nothing new is filed.
-    primary_link: str | None = Field(default=None, min_length=1, max_length=2000)
     request_id: ID | None = None
     # An imported task's own number (a mover's).
     number: TaskNumber | None = None
@@ -255,6 +252,14 @@ class TaskCreate(Contract):
             if not re.match(r"^review\s+[12](?:\s*:|$)", self.title.strip(), re.I):
                 self.title = "Review 1: " + self.title
         return self
+
+
+class TaskFile(TaskCreate):
+    """POST /api/v2/tasks and its dry run (not an upload's form): a task create that may name its outside item."""
+
+    # The outside item it is filed for (backend/item_sources), `jira:issue:<key>@<connection>` or its URL: a task that
+    # already holds that item's primary link comes back instead (`found`), and nothing new is filed.
+    primary_link: str | None = Field(default=None, min_length=1, max_length=2000)
 
 
 class TaskRunModel(Contract):

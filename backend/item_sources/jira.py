@@ -16,17 +16,13 @@ always be reopened, so it is never final.
 Background reads go only through a record integration (`integration`): an API tool for everyone that an administrator
 marked as holding records (`tools.record_owner`), not one a bot keeps for itself, with a shared company API key (no
 sign-in, no holder): its read key when it has one, else its read and write key, sent as a GET. Nothing else is read.
-How a read comes about:
-- Push: a Jira issue event to a trigger bound to the connection (backend/triggers.py) marks that connection's linked
-  copy of the issue due (`webhook`), writing a due row for one not read yet. The payload only names the issue; a
-  payload that does not read as one is ignored.
-- The pass (the heartbeat's `jira_items` step, after the merge queue's, `refresh`): marked issues first, then those an
-  open task links whose metadata is missing or older than REREAD_S (a slow backstop), at most PER_CONNECTION per
-  connection and PASS_BUDGET_S of reading a pass, each request within TIMEOUT_S end to end.
-A read that saves clears the due mark only when it is the mark the read began under: a webhook's mark made while the
-read was out survives for the next pass. A read Jira refuses keeps the metadata as it was, with `read_error` and
-`refused_at`, and is tried again after RETRY_S. The key never leaves the read: it is not logged, stored or put in an
-error.
+The pass (the heartbeat's `jira_items` step, after the merge queue's, `refresh`) reads issues marked due first, then
+those an open task links whose metadata is missing or older than REREAD_S (every 5 minutes), at most PER_CONNECTION per
+connection and PASS_BUDGET_S of reading a pass. Each request has one deadline (TIMEOUT_S, or what is left of the pass
+when it is sent) over the name's lookup, connecting, TLS and the answer, and at most MAX_IN_FLIGHT are out at once.
+A read that saves clears the due mark only when it is the mark the read began under: a mark made while the read was
+out survives for the next pass. A read Jira refuses keeps the metadata as it was, with `read_error` and `refused_at`,
+and is tried again after RETRY_S. The key never leaves the read: it is not logged, stored or put in an error.
 """
 
 import json
@@ -50,7 +46,7 @@ SOURCE, ISSUE = "jira", "issue"
 NAME = "Jira"
 ITEMS = {ISSUE: Item(ISSUE, "Issue")}
 CONDITIONS: dict[str, Condition] = {}
-REREAD_S = 3600  # the backstop: an issue an open task links is read again when its metadata is older than this
+REREAD_S = 300  # an issue an open task links is read again when its metadata is older than this
 RETRY_S = 300  # a read Jira refused, or that could not be made, is tried again after this
 PER_CONNECTION = 10  # reads of one connection's issues in one pass
 PASS_BUDGET_S = 30.0  # no read starts after a pass has spent this long reading
@@ -102,8 +98,8 @@ SITE = re.compile(r"^[a-z0-9-]+\.atlassian\.net$")  # a Jira Cloud site, as ISSU
 
 def jira_site(base_url: object, sites: object) -> str | None:
     """The one Jira Cloud site a tool is on: its base URL and every site on one `<site>.atlassian.net` host, else None.
-    The one endpoint check behind a primary link (item_sources.primary_of), a trigger's binding and the background reads,
-    all through `integrations`."""
+    The one endpoint check behind a primary link (item_sources.primary_of) and the background reads, both through
+    `integrations`."""
     on = hosts(base_url, sites)
     host = next(iter(on)) if len(on) == 1 else ""
     return host if SITE.match(host) else None
@@ -112,65 +108,6 @@ def jira_site(base_url: object, sites: object) -> str | None:
 def ref(key: str, connection_id: str) -> str:
     """An issue as item_sources.parse_ref reads it: `jira:issue:PROJ-12@<tool id>`."""
     return f"{SOURCE}:{ISSUE}:{key}@{connection_id}"
-
-
-# ----------------------------------------------------------------------------- push: a webhook names an issue
-
-
-def webhook(conn: "sqlite3.Connection", connection_id: str, payload: object) -> int:
-    """A call to a trigger bound to `connection_id`: when it is a Jira issue event (`webhookEvent` jira:issue_*, with
-    `issue.key`), that connection's linked copy of the issue is marked due. How many were marked (0 or 1); anything that
-    is not such an event marks nothing."""
-    from .. import item_metadata as IM
-
-    body = cast("dict[str, object]", payload) if isinstance(payload, dict) else {}
-    issue = body.get("issue")
-    event = body.get("webhookEvent")
-    if not isinstance(event, str) or not event.startswith("jira:issue_") or not isinstance(issue, dict):
-        return 0
-    named = cast("dict[str, object]", issue).get("key")
-    key = match_key(ISSUE, named) if isinstance(named, str) else None
-    if not key or not IM.linked(conn, SOURCE, ISSUE, key, connection_id):
-        return 0
-    if IM.get(conn, SOURCE, ISSUE, key, connection_id) is None:
-        # Not read yet (a first read may be out): a row at version 0, never read and due, so the mark is there for the
-        # read to find, and any read replaces it.
-        now = _h().now()
-        conn.execute(
-            "INSERT INTO item_metadata (id, source, item_type, item_key, connection_id, fields, metadata_version, "
-            "due_at, created_at, updated_at) VALUES (?,?,?,?,?,'{}',0,?,?,?)",
-            (_h().new_id(), SOURCE, ISSUE, key, connection_id, now, now, now),
-        )
-    else:
-        IM.mark_due(conn, SOURCE, ISSUE, key, connection_id)
-    return 1
-
-
-EVENT = re.compile(r"^jira:[a-z_]{1,60}$")
-
-
-def bound_body(body: bytes, *, stored: bool = False) -> bytes:
-    """What a trigger bound to a Jira connection keeps and hands on of a call (backend/triggers.py): `webhookEvent`
-    (`jira:<event>`) and `issue.key` (a Jira key), each only when it reads as one, as JSON; else `{}`. A body kept
-    earlier (`stored`: a replay, a recovery) is used only when it is already that, so one kept before the binding is no
-    Jira event."""
-    try:
-        payload: object = json.loads(body)
-    except (ValueError, RecursionError):
-        payload = None
-    data = cast("dict[str, object]", payload) if isinstance(payload, dict) else {}
-    issue = data.get("issue")
-    named = cast("dict[str, object]", issue).get("key") if isinstance(issue, dict) else None
-    key = match_key(ISSUE, named) if isinstance(named, str) and len(named) <= 255 else None
-    event = data.get("webhookEvent")
-    kept: Row = {
-        **({"webhookEvent": event} if isinstance(event, str) and EVENT.match(event) else {}),
-        **({"issue": {"key": key}} if key else {}),
-    }
-    slim = json.dumps(kept).encode()
-    if stored and body != slim:
-        return b"{}"
-    return slim
 
 
 # ----------------------------------------------------------------------------- the pass: reads through the connection
@@ -187,8 +124,7 @@ SHARED_KEY = "k.ciphertext IS NOT NULL AND k.kind <> 'login' AND COALESCE(k.hold
 
 def integrations(conn: "sqlite3.Connection", connection_id: str | None = None) -> dict[str, str]:
     """{tool id: Jira site} of the record integrations on one Jira site (`jira_site`) with a shared key, or of the one
-    `connection_id` names: the tools Tico reads issues through, a trigger may be bound to (backend/triggers.py), and a
-    primary link may name (item_sources.primary_of)."""
+    `connection_id` names: the tools Tico reads issues through, and a primary link may name (item_sources.primary_of)."""
     one = "AND tl.id=? " if connection_id is not None else ""
     found: dict[str, str] = {}
     for tool_id, base_url, sites in conn.execute(
@@ -284,16 +220,18 @@ def busy() -> bool:
 
 
 def send(url: str, headers: dict[str, str], params: dict[str, str], seconds: float = TIMEOUT_S) -> tuple[int, object]:
-    """One GET (`_get`) with one deadline over all of it, the name's lookup, connecting, TLS and the answer: it runs on
-    a thread of its own, and after `seconds` (at most TIMEOUT_S) the caller stops waiting (`_wait`) and its answer, if
-    one ever comes, is dropped; the thread counts against MAX_IN_FLIGHT until it ends. (status, the JSON answer or
-    None); raises when the call failed or ran out of time, Busy when MAX_IN_FLIGHT reads are out."""
+    """One GET (`_get`) with one deadline, `seconds` (at most TIMEOUT_S), over all of it: the name's lookup, connecting,
+    TLS and the answer. It runs on a thread of its own that ends itself at the deadline (`_get` closes its client), and
+    the caller stops waiting then too (`_wait`); the thread counts against MAX_IN_FLIGHT until it ends. (status, the
+    JSON answer or None); raises when the call failed or ran out of time, Busy when MAX_IN_FLIGHT reads are out."""
+    wait = min(seconds, TIMEOUT_S)
+    ends = time.monotonic() + wait
     answers: list[tuple[int, object]] = []
     errors: list[BaseException] = []
 
     def run() -> None:
         try:
-            answers.append(_get(url, headers, params))
+            answers.append(_get(url, headers, params, ends))
         except BaseException as error:  # noqa: BLE001 - handed to the caller, which raises it
             errors.append(error)
         finally:
@@ -306,7 +244,6 @@ def send(url: str, headers: dict[str, str], params: dict[str, str], seconds: flo
         _in_flight[0] += 1
     worker = threading.Thread(target=run, name="jira-read", daemon=True)
     worker.start()
-    wait = min(seconds, TIMEOUT_S)
     _wait(worker, wait)
     if answers:
         return answers[0]
@@ -320,32 +257,46 @@ def _wait(worker: threading.Thread, seconds: float) -> None:
     worker.join(seconds)
 
 
-def _get(url: str, headers: dict[str, str], params: dict[str, str]) -> tuple[int, object]:
+def _get(url: str, headers: dict[str, str], params: dict[str, str], ends: float) -> tuple[int, object]:
     """One GET to a public https address, pinned to the IP it resolved to, no redirects, no proxy from the environment,
-    at most MAX_BODY read."""
+    at most MAX_BODY read, all of it before `ends` (time.monotonic): as egress.post bounds its calls, a timer closes the
+    client at the deadline, which ends a read blocked on a socket, and the answer stops being read past it."""
     import httpx
 
     from .. import egress as _egress
 
     egress: Any = _egress
+    late = TimeoutError("Jira took too long to answer")
     parts = egress.check(url)
-    address = egress.address_for(parts, budget=TIMEOUT_S)
+    address = egress.address_for(parts, budget=max(ends - time.monotonic(), 0.001))
     pinned = httpx.URL(url, params=params or None).copy_with(host=address)
     host = str(parts.hostname) + (f":{parts.port}" if parts.port else "")
     with httpx.Client(timeout=TIMEOUT_S, follow_redirects=False, trust_env=False, transport=TRANSPORT) as client:
-        with client.stream(
-            "GET", pinned, headers={**headers, "Host": host}, extensions={"sni_hostname": parts.hostname}
-        ) as response:
-            body = b""
-            for chunk in response.iter_bytes():
-                body += chunk
-                if len(body) > MAX_BODY:
-                    break
-            try:
-                answer: object = json.loads(body)
-            except ValueError:
-                answer = None
-            return response.status_code, answer
+        timer = threading.Timer(max(ends - time.monotonic(), 0.001), client.close)
+        timer.daemon = True
+        timer.start()
+        try:
+            with client.stream(
+                "GET", pinned, headers={**headers, "Host": host}, extensions={"sni_hostname": parts.hostname}
+            ) as response:
+                body = b""
+                for chunk in response.iter_bytes():
+                    body += chunk
+                    if len(body) > MAX_BODY or time.monotonic() > ends:
+                        break
+                if time.monotonic() > ends:
+                    raise late
+                try:
+                    answer: object = json.loads(body)
+                except ValueError:
+                    answer = None
+                return response.status_code, answer
+        except Exception as error:
+            if time.monotonic() > ends and error is not late:
+                raise late from error
+            raise
+        finally:
+            timer.cancel()
 
 
 def fields_of(answer: object, connection_id: str) -> Row | None:
@@ -447,6 +398,9 @@ def refresh(
                 failed(conn, key, connection_id, why)
             continue
         version = version_now()
+        left = PASS_BUDGET_S - (clock() - started)  # again, just before it is sent: preparing it took time
+        if left <= 0:
+            break
         try:
             status, answer = call(url, headers, params, left)
         except Busy:

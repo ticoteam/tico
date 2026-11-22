@@ -3,9 +3,7 @@
 A trigger is a named address. Anything that can send an HTTP POST (a payment service, a form,
 a deploy, a script) posts to it, and every automation on that webhook runs with the request's body
 (backend/automations.py `on_webhook`). Rules (backend/rules.py) see the same call as `webhook.received`.
-The trigger itself does nothing else: no model wakes unless an automation or a rule listens. A trigger bound to a
-connection (`connection_id`, a Jira tool) also marks the issue a Jira event names to be read again through that
-connection (backend/item_sources/jira.py `webhook`); the delivery's answer and log say nothing of it.
+The trigger itself does nothing else: no model wakes unless an automation or a rule listens.
 
 The address carries its own secret, so a sender needs no Tico account: `POST
 /api/v2/hooks/<id>/<secret>`, or `POST /api/v2/hooks/<id>` with `Authorization: Bearer <secret>`.
@@ -127,9 +125,6 @@ class TriggerUpdate(Contract):
     hourly: Optional[int] = None
     keep_days: Optional[int] = None
     unheard: Optional[str] = Field(default=None, max_length=10)
-    # The connection (a tool's id) the trigger belongs to: its Jira issue events refresh that connection's issues. ''
-    # unbinds it.
-    connection_id: Optional[str] = Field(default=None, max_length=200)
 
 
 def digest(secret: str) -> str:
@@ -282,7 +277,6 @@ def summary(c, settings, t, since=None):
         "hourly": hourly_of(t),
         "keep_days": t["keep_days"],
         "unheard": t["unheard"],
-        "connection_id": t["connection_id"],
         "automations": used,
     }
 
@@ -316,7 +310,7 @@ def create(c, who, settings, body):
         "created_by=excluded.created_by,updated_at=excluded.updated_at,deleted_at=NULL,signing_secret=NULL,"
         "preset='none',consumer='automations',type_from='',hourly=NULL,keep_days="
         + str(KEEP_DAYS)
-        + ",unheard='log',unheard_noted=NULL,connection_id=''",
+        + ",unheard='log',unheard_noted=NULL",
         (trigger_id, body.name.strip(), "webhook", digest(secret), who.actor, now, now),
     )
     H.event(c, who.actor, "trigger.created", trigger_id, {"name": body.name.strip()})
@@ -421,18 +415,6 @@ def update(c, who, settings, vault, trigger_id, body):
         if body.unheard not in UNHEARD:
             raise Problem("trigger", "unheard is log or note", 422)
         sets["unheard"] = body.unheard
-    if body.connection_id is not None:
-        from .item_sources import jira
-
-        bound = body.connection_id.strip()
-        if bound and not jira.integration(c, bound):
-            raise Problem(
-                "trigger",
-                "A trigger is bound only to a record integration: an API tool for everyone, marked as holding records, "
-                "with a shared company key",
-                422,
-            )
-        sets["connection_id"] = bound
     if body.preset is not None and body.preset != effective_preset(found):
         if body.preset not in P.PRESETS:
             raise Problem("trigger", "A preset is one of: " + ", ".join(P.PRESETS), 422)
@@ -713,19 +695,6 @@ def _route(c, found, delivery, type_, via, body, headers, auth):
         )
     from . import automations
 
-    if found["connection_id"]:
-        # A Jira issue event to a trigger bound to a connection: that connection's linked copy of the issue is read
-        # again on the next pass (backend/item_sources/jira.py `webhook`). Nothing of it reaches the answer or the
-        # log, so a sender learns nothing of what is linked; a payload it cannot read changes nothing.
-        from .item_sources import jira
-
-        c.execute("SAVEPOINT trigger_item")
-        try:
-            jira.webhook(c, found["connection_id"], payload)
-            c.execute("RELEASE trigger_item")
-        except Exception:  # noqa: BLE001 - the delivery stands whatever the refresh mark did
-            c.execute("ROLLBACK TO trigger_item")
-            c.execute("RELEASE trigger_item")
     # An automation on the webhook (a routine on `webhook._tico` included) runs on every call it hears.
     results = results + automations.on_webhook(c, trigger_id, found["name"], type_, delivery, payload, shown)
     return fired, results
@@ -791,14 +760,6 @@ def receive(
     at = received_at or H.now()
     preset = effective_preset(found)
     delivery = delivery_id or sender or P.body_id(preset, body) or P.fallback_id(headers, body, at)
-    signed_body, signed_headers = body, headers
-    if found["connection_id"]:
-        # A trigger bound to a Jira connection keeps, logs, refuses and hands on only the event's name and the issue's
-        # key, with signature headers hidden: the rest of Jira's payload is the connection's, read through it. The
-        # signature is checked on the bytes as sent, which no trigger reader sees.
-        from .item_sources import jira
-
-        body, headers = jira.bound_body(body, stored=recovering), P.redacted(headers)
     if preset in P.HQ_CHECKED:
         # Tico HQ checked this call with the provider's key (spec §3.4), so the install takes it only over its own relay.
         # This address never takes one: the install holds no key to check it with, whatever the headers say.
@@ -834,7 +795,7 @@ def receive(
                 recovering=recovering,
             )
         key = vault.cipher.unseal(c, sealed_as(trigger_id), found["signing_secret"])
-        ok, why = P.verify(preset, signed_headers, signed_body, key, H.parse_ts(at).timestamp())
+        ok, why = P.verify(preset, headers, body, key, H.parse_ts(at).timestamp())
         if not ok:
             return _refused(
                 c, found, delivery, body, headers, at, 401, "signature", why, via, secret, recovering=recovering
@@ -887,7 +848,7 @@ def receive(
     )
     fired, results = _route(c, found, delivery, type_, via, body, headers, auth)
     _log(c, trigger_id, delivery, sender, body, len(fired), "accepted", type=type_, via=via, results=results, at=at)
-    if not _acted(fired, results) and not found["connection_id"]:  # a bound trigger is heard by its connection
+    if not _acted(fired, results):
         _unheard(c, found, delivery, type_)
     return Received("accepted", 202, delivery, None, tasks=len(fired), rules=results, type=type_)
 
@@ -939,12 +900,7 @@ def replay(c, who, auth, trigger_id, delivery):
         "INSERT INTO trigger_seen(trigger_id,delivery,seen_at,replay) VALUES(?,?,?,1)", (trigger_id, again, H.now())
     )
     headers = json.loads(stored["headers"] or "{}")
-    body = bytes(stored["body"])
-    if found["connection_id"]:
-        from .item_sources import jira
-
-        body = jira.bound_body(body, stored=True)  # a body kept before the binding is no Jira event
-    fired, results = _route(c, found, again, stored["type"], stored["via"], body, headers, auth)
+    fired, results = _route(c, found, again, stored["type"], stored["via"], bytes(stored["body"]), headers, auth)
     _log(
         c,
         trigger_id,
@@ -1227,10 +1183,6 @@ def install(app, settings, store, auth, mutate):
                     c, request.state.identity, settings, getattr(request.app.state, "vault", None), trigger_id, body
                 )
             },
-            # A retry of a change sent before `connection_id` existed hashed the body without it.
-            retry_body=lambda _c, _result: (
-                body.model_dump(exclude={"connection_id"}) if body.connection_id is None else None
-            ),
         )
 
     @app.post(

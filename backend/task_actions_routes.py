@@ -496,7 +496,7 @@ def register_core(
         # named: the create is refused as already filed, after every check a filing makes. The item, not the title,
         # makes it one task.
         primary = found = None
-        if body.primary_link:
+        if getattr(body, "primary_link", None):  # only a JSON create's (M.TaskFile): never an upload's form
             try:
                 primary, held_by = IS.lookup(c, body.primary_link)
             except ValueError as error:
@@ -927,7 +927,7 @@ def register_core(
     @app.post(
         "/api/v2/tasks", **api_v2("Tasks", "createTask", "Create a task", TaskResult, responses={"422": ASK_REFUSED})
     )
-    def create_task(request: Request, body: M.TaskCreate):
+    def create_task(request: Request, body: M.TaskFile):
         who = request.state.identity
         if who.via == "botops" and who.role == "bot" and H.is_bot(who.task_actor) and who.task_actor != who.actor:
             # Agent Ops filing for a bot that asked it: a bot's request lends nothing, so Agent Ops files the task as itself,
@@ -967,7 +967,7 @@ def register_core(
             )
 
         try:
-            return attempt(ingest, not held)
+            return attempt(ingest, not held or org_rule_check.holds(rc))  # a held create is never judged
         except ClaimGone:  # the task holding the item went before the write: judge the filing, then file it
             judged = ask_ingest.preflight(
                 store, app.state.judge, request.state.identity, body.owner, body.title, body.body
@@ -1007,11 +1007,11 @@ def register_core(
     @org_rule_check.replayer("task_create", prepare=rule_prepare_task)
     def rule_replay_task(c, bot, hold, replay, ingest, gate=None):
         return task_create(
-            c, bot, M.TaskCreate.model_validate(replay["body"]), ingest=ingest, rule=org_rule_check.decided(gate)
+            c, bot, M.TaskFile.model_validate(replay["body"]), ingest=ingest, rule=org_rule_check.decided(gate)
         )
 
     @app.post("/api/v2/tasks/dry-run", **api_v2("Tasks", "checkTask", "The checks a create would fail; writes nothing"))
-    def task_dry_run(request: Request, body: M.TaskCreate):
+    def task_dry_run(request: Request, body: M.TaskFile):
         """The checks a create would fail, nothing written and no refusal counted."""
         from .mcp import task_dry_run as check
 

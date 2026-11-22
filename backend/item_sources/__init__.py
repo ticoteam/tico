@@ -188,12 +188,11 @@ def primary_of(conn: sqlite3.Connection, text: str) -> tuple[tuple[str, str, str
     from . import jira
 
     refusal = "A primary link is a Jira issue of a record integration: jira:issue:<key>@<connection>, or its URL"
-    usable = jira.integrations(conn)
     text = text.strip()
     if text.startswith(("http://", "https://")):
         found = match_link(text, PRIMARY_SOURCES)
         host = jira.site(text) if found else None
-        on = [tool_id for tool_id, site in sorted(usable.items()) if site == host]
+        on = [tool_id for tool_id, site in sorted(jira.integrations(conn).items()) if site == host]
         if not found or len(on) != 1:
             raise ValueError(refusal)
         return (*found, on[0]), text
@@ -201,7 +200,8 @@ def primary_of(conn: sqlite3.Connection, text: str) -> tuple[tuple[str, str, str
         item = parse_ref(conn, text)
     except ValueError:
         raise ValueError(refusal) from None
-    if item[0] not in PRIMARY_SOURCES or item[3] not in usable:
+    usable = jira.integrations(conn, item[3]) if item[0] in PRIMARY_SOURCES and item[3] else {}
+    if item[3] not in usable:
         raise ValueError(refusal)
     return item, f"https://{usable[item[3]]}/browse/{item[2]}"
 

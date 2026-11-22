@@ -111,19 +111,13 @@ def trigger_show(api, args):
             "enum": ["log", "note"],
             "description": "note: tell the maker, at most hourly, when no automation or rule acted; log: only log it",
         },
-        "connection_id": _s(
-            "The connection (a Jira tool's id) the trigger belongs to: its Jira issue events refresh that connection's "
-            "linked issues; empty unbinds it"
-        ),
     },
     required=("id",),
     writes=True,
 )
 def trigger_update(api, args):
     body = {
-        k: args[k]
-        for k in ("name", "preset", "type_from", "hourly", "keep_days", "unheard", "connection_id")
-        if args.get(k) is not None
+        k: args[k] for k in ("name", "preset", "type_from", "hourly", "keep_days", "unheard") if args.get(k) is not None
     }
     return _as_person(api).post(f"triggers/{args['id']}", body, key=_key(args))["trigger"]
 

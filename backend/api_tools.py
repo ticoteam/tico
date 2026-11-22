@@ -1639,7 +1639,6 @@ def delete_tool(c, who, tool_id, admins, kind="api"):
     c.execute("DELETE FROM tool_checks WHERE tool_id=?", (tool_id,))
     c.execute("DELETE FROM tool_oauth_states WHERE tool_id=?", (tool_id,))
     c.execute("DELETE FROM tools WHERE id=?", (tool_id,))
-    c.execute("UPDATE triggers SET connection_id='' WHERE connection_id=?", (tool_id,))  # a trigger it had is unbound
     reconnect_tasks.gone(c, tool_id)
     from . import key_grants
 

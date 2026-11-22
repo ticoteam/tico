@@ -1,8 +1,8 @@
 """Jira read side and find-or-create (docs/dev/pipelines-v3.md "Outside items", "Intake"): a linked issue's state is read
-only through a company-wide connection's own key and saved per connection; a trigger bound to a connection marks its
-issue due and ignores what it cannot read; a webhook's mark made during a read survives it; a create naming an item's
-primary link returns the task holding it, after the same rule check, and two creates at once file one task; a merge
-keeps the primary link with the kept task."""
+only through a record integration's shared key, every 5 minutes, and saved per connection; a due mark made during a read
+survives it; a read past its deadline ends and lets go its place; a create naming an item's primary link returns the
+task holding it, after the same rule check, and two creates at once file one task; a merge keeps the primary link with
+the kept task."""
 
 import base64
 import ipaddress
@@ -31,7 +31,7 @@ TOKENS = {
 
 class FakeJira:
     """Jira Cloud at the network edge: each site's issues, answered to GET /rest/api/3/issue/<key> with that site's key.
-    `during` runs while a read is out (a webhook landing mid-read)."""
+    `during` runs while a read is out (a due mark landing mid-read, a read that hangs)."""
 
     def __init__(self):
         self.issues: dict[tuple[str, str], dict] = {}
@@ -132,7 +132,7 @@ def test_an_issues_state_is_read_only_through_a_company_wide_connection_and_save
     }
     assert (b["fields"]["state"], b["fields"]["status"], b["fields"]["connection_id"]) == ("closed", "Done", beta)
     assert a["final_at"] is None and b["final_at"] is None  # an issue can always be reopened
-    assert _refresh(api) == 0  # fresh: nothing is read again until the backstop or a webhook
+    assert _refresh(api) == 0  # fresh: nothing is read again for 5 minutes, unless marked due
 
     # Nothing but a record integration with a shared key is read: unmarked, or a bot's own key on a computer.
     for change, undo in (
@@ -148,47 +148,19 @@ def test_an_issues_state_is_read_only_through_a_company_wide_connection_and_save
     assert _patch_tool(api, acme, {"record_owner": ""}, token="cara-test", expected=403)  # an administrator's mark
 
 
-def test_a_trigger_bound_to_a_connection_marks_its_issue_due_and_ignores_what_it_cannot_read(api, jira):
-    acme, beta = jira.tools["acme.atlassian.net"], jira.tools["beta.atlassian.net"]
-    jira.set("acme.atlassian.net", "PROJ-9", "To Do", "new", "2026-11-21T10:00:00.000+0000")
-    jira.set("beta.atlassian.net", "PROJ-9", "To Do", "new", "2026-11-21T10:00:00.000+0000")
-    _create(api, f"jira:issue:PROJ-9@{acme}")
-    _create(api, f"jira:issue:PROJ-9@{beta}")
-    _refresh(api)
-    made = post(api, "triggers", {"name": "Jira"})["trigger"]
-    assert post(api, f"triggers/{made['id']}", {"connection_id": acme})["trigger"]["connection_id"] == acme
-    assert post(api, f"triggers/{made['id']}", {"connection_id": "tool_nope"}, expected=422)
-
-    jira.set("acme.atlassian.net", "PROJ-9", "In Review", "indeterminate", "2026-11-21T10:05:00.000+0000")
-    event = {"webhookEvent": "jira:issue_updated", "issue": {"key": "PROJ-9", "fields": {"status": {}}}}
-    r = hook(api, made["url"], body=json.dumps(event).encode(), headers={"Idempotency-Key": "j1"})
-    assert r.status_code == 202 and r.json().get("rules") in (None, 0, []), r.text
-    assert _meta(api, "PROJ-9", acme)["due_at"] is not None
-    assert _meta(api, "PROJ-9", beta)["due_at"] is None  # the trigger is the acme connection's only
-    assert _refresh(api) == 1
-    assert _meta(api, "PROJ-9", acme)["fields"]["status"] == "In Review"
-
-    # Payloads that do not read as an issue event are accepted and change nothing.
-    for n, junk in enumerate(
-        (b"[1, 2]", b'{"webhookEvent": 7}', b'{"webhookEvent": "jira:issue_x", "issue": {"key": 9}}')
-    ):
-        assert hook(api, made["url"], body=junk, headers={"Idempotency-Key": f"bad{n}"}).status_code == 202
-    assert _meta(api, "PROJ-9", acme)["due_at"] is None
-
-
-def test_a_webhook_mark_made_while_a_read_is_out_survives_it(api, jira):
+def test_a_due_mark_made_while_a_read_is_out_survives_it(api, jira):
     acme = jira.tools["acme.atlassian.net"]
     jira.set("acme.atlassian.net", "PROJ-3", "To Do", "new", "2026-11-21T10:00:00.000+0000")
     _create(api, f"jira:issue:PROJ-3@{acme}")
     _refresh(api)
     _due(api, "PROJ-3", acme)
 
-    def webhook_lands():
+    def mark_lands():
         jira.during = None
         with api.app.state.store.transaction() as c:
             c.execute("UPDATE item_metadata SET due_at='2999-01-01T00:00:00Z' WHERE item_key='PROJ-3'")
 
-    jira.during = webhook_lands
+    jira.during = mark_lands
     assert _refresh(api) == 1
     assert _meta(api, "PROJ-3", acme)["due_at"] == "2999-01-01T00:00:00Z"  # read again on the next pass
     assert _refresh(api) == 1 and _meta(api, "PROJ-3", acme)["due_at"] is None
@@ -284,46 +256,13 @@ def test_a_merge_into_a_task_linking_the_url_through_another_connection_keeps_th
     assert (kept, acme, 1) in rows and (kept, "jira-acme-2", 0) in rows and (filed, acme, 0) in rows
 
 
-def test_a_trigger_binds_only_to_a_record_integration_and_loses_its_binding_with_it(api, jira):
-    acme = jira.tools["acme.atlassian.net"]
-    plain = post(api, "api-tools", {"name": "Plain Jira", "base_url": "https://gamma.atlassian.net"})["id"]
-    made = post(api, "triggers", {"name": "Jira"})["trigger"]
-    assert post(api, f"triggers/{made['id']}", {"connection_id": plain}, expected=422)["error"]["code"] == "trigger"
-    post(api, f"triggers/{made['id']}", {"connection_id": acme})
-    post(api, f"triggers/{made['id']}/delete", {})
-    again = post(api, "triggers", {"name": "Jira"})["trigger"]  # the same id made again starts unbound
-    assert again["id"] == made["id"] and again.get("connection_id", "") == ""
-    post(api, f"triggers/{made['id']}", {"connection_id": acme})
-    r = api.delete(f"/api/v2/api-tools/{acme}", headers=headers("ana-test"))
-    assert r.status_code == 200, r.text
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT connection_id FROM triggers WHERE id=?", (made["id"],)).fetchone()[0] == ""
-
-
-def test_a_webhook_during_the_first_read_is_kept(api, jira):
-    acme = jira.tools["acme.atlassian.net"]
-    jira.set("acme.atlassian.net", "PROJ-13", "To Do", "new", "2026-11-21T10:00:00.000+0000")
-    _create(api, f"jira:issue:PROJ-13@{acme}")
-    assert _meta(api, "PROJ-13", acme) is None  # never read
-    event = json.dumps({"webhookEvent": "jira:issue_updated", "issue": {"key": "PROJ-13"}})
-
-    def webhook_lands():
-        jira.during = None
-        with api.app.state.store.transaction() as c:
-            JS.webhook(c, acme, json.loads(event))
-
-    jira.during = webhook_lands
-    assert _refresh(api) == 1
-    assert _meta(api, "PROJ-13", acme)["due_at"] is not None  # the push is read on the next pass
-
-
 def test_marked_issues_are_read_before_stale_ones_and_a_bad_answer_is_retried_alone(api, jira, monkeypatch):
     acme = jira.tools["acme.atlassian.net"]
     for key in ("PROJ-21", "PROJ-22", "PROJ-23"):
         jira.set("acme.atlassian.net", key, "To Do", "new", "2026-11-21T10:00:00.000+0000")
         _create(api, f"jira:issue:{key}@{acme}", title=key)
     _refresh(api)
-    with api.app.state.store.transaction() as c:  # all three an hour stale; PROJ-23 marked by a webhook
+    with api.app.state.store.transaction() as c:  # all three stale; PROJ-23 marked due
         c.execute("UPDATE item_metadata SET read_at='2000-01-01T00:00:00Z'")
         IM.mark_due(c, "jira", "issue", "PROJ-23", acme)
     with api.app.state.store.read() as c:
@@ -340,22 +279,39 @@ def test_a_read_still_out_at_its_deadline_fails_alone_and_holds_its_place_until_
     for key in ("PROJ-31", "PROJ-32"):
         jira.set("acme.atlassian.net", key, "To Do", "new", "2026-11-21T10:00:00.000+0000")
         _create(api, f"jira:issue:{key}@{acme}", title=key)
-    stuck, workers = threading.Event(), []
-    jira.during = lambda: stuck.wait(30)  # Jira never answers (a lookup, connect or TLS that hangs)
-    monkeypatch.setattr(JS, "_wait", lambda worker, seconds: workers.append((worker, seconds)))  # the deadline passes
+    entered, stuck, workers = threading.Event(), threading.Event(), []
+
+    def hangs():  # Jira never answers (a lookup, connect or TLS that hangs)
+        entered.set()
+        stuck.wait(30)
+
+    def deadline(worker, seconds):  # the read reached Jira; then its deadline passes
+        assert entered.wait(30)
+        workers.append((worker, seconds))
+
+    jira.during = hangs
+    monkeypatch.setattr(JS, "_wait", deadline)
     monkeypatch.setattr(JS, "MAX_IN_FLIGHT", 1)
     try:
         assert _refresh(api) == 0
-        assert len(jira.seen) == 1  # the timed-out read is still out: no second read starts
+        assert len(jira.seen) == 1 and JS.busy()  # the timed-out read is still out: no second read starts
     finally:
         stuck.set()
         for worker, _ in workers:
             worker.join(30)
-    assert [seconds for _, seconds in workers] == [JS.TIMEOUT_S]
+    assert [seconds for _, seconds in workers] == [JS.TIMEOUT_S] and not JS.busy()  # it ended, and let go its place
     timed_out = [
-        key for key in ("PROJ-31", "PROJ-32") if "timed out" in ((_meta(api, key, acme) or {}).get("read_error") or "")
+        k for k in ("PROJ-31", "PROJ-32") if "timed out" in ((_meta(api, k, acme) or {}).get("read_error") or "")
     ]
-    assert len(timed_out) == 1 and not JS.busy()
+    assert len(timed_out) == 1
+
+
+def test_a_read_past_its_deadline_ends_itself(api, jira):
+    import time
+
+    jira.set("acme.atlassian.net", "PROJ-33", "To Do", "new", "2026-11-21T10:00:00.000+0000")
+    with pytest.raises(TimeoutError):  # the thread's own GET stops at the deadline: a stalled answer holds no place
+        JS._get("https://acme.atlassian.net/rest/api/3/issue/PROJ-33", {}, {}, time.monotonic() - 1)
 
 
 def test_a_claim_on_a_task_the_caller_cannot_read_is_refused_without_naming_it(api, jira):
@@ -413,54 +369,39 @@ def test_only_a_tool_on_one_jira_site_is_an_integration(api, jira):
     post(api, f"api-tools/{other}/keys", body)
     _patch_tool(api, other, {"record_owner": "outside"})
     assert _create(api, f"jira:issue:PROJ-51@{other}", expected=422)["error"]["code"] == "primary_link"
-    made = post(api, "triggers", {"name": "Records"})["trigger"]
-    assert post(api, f"triggers/{made['id']}", {"connection_id": other}, expected=422)["error"]["code"] == "trigger"
     with api.app.state.store.read() as c:
         assert set(JS.integrations(c)) == set(jira.tools.values())
 
 
-def test_marked_issues_go_first_across_connections(api, jira):
+def test_issues_are_read_every_five_minutes_and_marked_ones_go_first_across_connections(api, jira):
     acme, beta = jira.tools["acme.atlassian.net"], jira.tools["beta.atlassian.net"]
+    jira.set("acme.atlassian.net", "PROJ-71", "To Do", "new", "2026-11-21T10:00:00.000+0000")
+    jira.set("beta.atlassian.net", "PROJ-72", "To Do", "new", "2026-11-21T10:00:00.000+0000")
     _create(api, f"jira:issue:PROJ-71@{acme}", title="A")
     _create(api, f"jira:issue:PROJ-72@{beta}", title="B")
-    with api.app.state.store.transaction() as c:  # acme's never read; beta's marked by a webhook
-        JS.webhook(c, beta, {"webhookEvent": "jira:issue_updated", "issue": {"key": "PROJ-72"}})
-    with api.app.state.store.read() as c:
-        assert [key for key, _, _ in JS.due_reads(c, "2026-11-22T00:00:00Z")] == ["PROJ-72", "PROJ-71"]
-
-
-def test_a_jira_bound_trigger_keeps_only_the_event_and_the_issue_key(api, jira):
-    acme = jira.tools["acme.atlassian.net"]
-    made = post(api, "triggers", {"name": "Jira"})["trigger"]
-    post(api, f"triggers/{made['id']}", {"connection_id": acme})
-    event = {"webhookEvent": "jira:issue_updated", "issue": {"key": "PROJ-81", "fields": {"summary": "Secret plan"}}}
-    hook(api, made["url"], body=json.dumps(event).encode(), headers={"Idempotency-Key": "k1"})
-    with api.app.state.store.read() as c:
-        kept = c.execute("SELECT body FROM trigger_bodies WHERE trigger_id=?", (made["id"],)).fetchone()[0]
-    assert json.loads(kept) == {"webhookEvent": "jira:issue_updated", "issue": {"key": "PROJ-81"}}
-
-
-def test_a_jira_bound_trigger_refuses_and_replays_only_the_event_and_the_issue_key(api, jira):
-    acme = jira.tools["acme.atlassian.net"]
-    _create(api, f"jira:issue:PROJ-91@{acme}")
-    made = post(api, "triggers", {"name": "Jira"})["trigger"]
-    event = {"webhookEvent": "jira:issue_updated", "issue": {"key": "PROJ-91", "fields": {"summary": "Secret plan"}}}
-    full = json.dumps(event).encode()
-    assert hook(api, made["url"], body=full, headers={"Idempotency-Key": "before"}).status_code == 202  # unbound
-    post(api, f"triggers/{made['id']}", {"connection_id": acme, "hourly": 2})
-    post(api, f"triggers/{made['id']}/deliveries/before/replay", {})  # kept before the binding: no Jira event
-    assert (_meta(api, "PROJ-91", acme) or {}).get("due_at") is None
-
-    assert hook(api, made["url"], body=full, headers={"Idempotency-Key": "first"}).status_code == 202
-    assert hook(api, made["url"], body=full, headers={"Idempotency-Key": "second"}).status_code == 429  # refused
-    with api.app.state.store.read() as c:
-        kept = dict(c.execute("SELECT delivery, body FROM trigger_bodies WHERE trigger_id=?", (made["id"],)).fetchall())
-    slim = {"webhookEvent": "jira:issue_updated", "issue": {"key": "PROJ-91"}}
-    assert json.loads(kept["first"]) == slim and json.loads(kept["second"]) == slim
+    _refresh(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE item_metadata SET due_at=NULL WHERE item_key='PROJ-91'")
-    post(api, f"triggers/{made['id']}/deliveries/first/replay", {})  # kept since the binding: its event runs again
-    assert _meta(api, "PROJ-91", acme)["due_at"] is not None
+        c.execute("UPDATE item_metadata SET read_at='2026-11-21T23:56:00Z'")  # four minutes before the pass below
+    with api.app.state.store.read() as c:
+        assert JS.due_reads(c, "2026-11-22T00:00:00Z") == []
+        assert {key for key, _, _ in JS.due_reads(c, "2026-11-22T00:02:00Z")} == {"PROJ-71", "PROJ-72"}  # six
+    with api.app.state.store.transaction() as c:  # beta's marked due
+        IM.mark_due(c, "jira", "issue", "PROJ-72", beta)
+    with api.app.state.store.read() as c:
+        assert [key for key, _, _ in JS.due_reads(c, "2026-11-22T00:02:00Z")] == ["PROJ-72", "PROJ-71"]
+
+
+def test_an_upload_takes_no_primary_link(api, jira):
+    acme = jira.tools["acme.atlassian.net"]
+    _create(api, f"jira:issue:PROJ-73@{acme}")
+    made = api.post(
+        "/api/v2/uploads/tasks",
+        data={"owner": "ben", "title": "With a file", "body": "x", "primary_link": f"jira:issue:PROJ-73@{acme}"},
+        files={"files": ("a.txt", b"hello", "text/plain")},
+        headers=headers("ana-test"),
+    )
+    assert made.status_code == 422, made.text
+    assert len(_links(api, "PROJ-73")) == 1
 
 
 def test_only_a_tool_everyone_sees_holds_records(api, jira):

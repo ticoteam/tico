@@ -1174,26 +1174,21 @@ the caller still sees that entity, a record on another entity is refused without
 owner's request is not written again on its connection, '' being its own (one erased before connections, on any).
 
 **A Jira issue's state** is read in the background only through a record integration: an API tool for everyone on one
-Jira Cloud site (`<site>.atlassian.net`, the same check a typed `jira:issue:KEY@<tool id>` reference and a trigger's
-binding make) that an administrator marked as holding records (only a tool everyone sees can be marked; making it
-Only listed clears the mark) (`record_owner` outside or tico; `tico tool edit <id> --record-owner
-outside`), not one a bot keeps for itself, with a shared company API key (no sign-in, no holder). Tico sends
-`GET <base URL>/rest/api/3/issue/<key>?fields=status,updated` with that key; nothing else is read without someone
-asking, and no one's own access is borrowed. `item_metadata.fields` holds `state` (open, or closed when Jira's status
-category is done), `status`, `category`, `updated` (Jira's stamp) and `connection_id`; no summary is fetched, and the
-task API returns the link rows only. An issue is never final, since issues reopen. Push first: a trigger bound to the
-integration (`tico trigger update <id> --connection-id <tool id>`; only a record integration can be bound, deleting the
-tool unbinds it, and a deleted trigger made again starts unbound) takes Jira's webhook, and a `jira:issue_*` event
-marks that connection's linked copy of the issue due, writing a due row for an issue not read yet; the payload only
-names the issue, one that does not read as an issue event is ignored, the trigger keeps, logs, refuses and hands on only the
-event's name and the issue's key, from the moment the call arrives, with signature headers hidden (a body kept before
-the binding is replayed as no Jira event), and the delivery's answer and log say nothing about it. The heartbeat's own `jira_items` step, after the merge queue's, reads marked issues first (across connections), then those
-missing or an hour old, at most 10 per connection and 30 seconds of reading a pass; each request has one deadline (10
-seconds, or what is left of the pass) over the lookup, connecting, TLS and the answer: it runs on a thread of its own,
-dropped at the deadline, and at most 2 such threads are out at once (one that timed out counts until it ends). A read clears the due mark only when it is the mark the read began under, so a webhook that lands mid-read is
-read next pass. A read Jira refuses, or whose answer is not an issue's, keeps the metadata as it was with
-`read_error` and is tried again after 5 minutes. An issue moved to another project gets a new key: a task filed for the
-old key keeps it, and one filed for the new key shows as a duplicate to merge.
+Jira Cloud site (`<site>.atlassian.net`, the same check a primary link makes) that an administrator marked as holding
+records (`record_owner` outside or tico; `tico tool edit <id> --record-owner outside`; only a tool everyone sees can be
+marked, and making it Only listed clears the mark), not one a bot keeps for itself, with a shared company API key (no
+sign-in, no holder). Tico sends `GET <base URL>/rest/api/3/issue/<key>?fields=status,updated` with that key; nothing
+else is read without someone asking, and no one's own access is borrowed. `item_metadata.fields` holds `state` (open,
+or closed when Jira's status category is done), `status`, `category`, `updated` (Jira's stamp) and `connection_id`; no
+summary is fetched, and the task API returns the link rows only. An issue is never final, since issues reopen. There
+is no Jira webhook yet: the heartbeat's own `jira_items` step, after the merge queue's, reads the issues open tasks link
+every 5 minutes (one marked due first, across connections), at most 10 per connection and 30 seconds of reading a pass.
+Each request has one deadline (10 seconds, or what is left of the pass when it is sent) over the lookup, connecting,
+TLS and the answer, and at most 2 are out at once (one that timed out counts until its thread ends). A read clears the
+due mark only when it is the mark the read began under, so a mark made mid-read is read next pass. A read Jira refuses,
+or whose answer is not an issue's, keeps the metadata as it was with `read_error` and is tried again after 5 minutes. An
+issue moved to another project gets a new key: a task filed for the old key keeps it, and one filed for the new key
+shows as a duplicate to merge.
 
 #### Intake
 
@@ -1220,7 +1215,7 @@ filed for its item gets its link back as a secondary one.
 - `never_stuck.py`: the check, the ladder, Late, filling open slots.
 - `item_sources/github.py`: the GitHub source. PR and release metadata, the 5-minute GitHub read, webhook
   intake, its conditions and its one action, queue.
-- `item_sources/jira.py`: Jira issue links, their state read through a record integration, and the Jira webhook.
+- `item_sources/jira.py`: Jira issue links, and their state read through a record integration.
 - `item_metadata.py`: the saved metadata of every source's items, per connection, and what waits on it.
 - `source_actions.py`: a source's actions on entering a stage (act), their undo, and the retries.
 - `stage_effects.py`: file a linked task, queue and dequeue PRs, undo.
