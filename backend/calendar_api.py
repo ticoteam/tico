@@ -434,16 +434,33 @@ def _settings_of(c: Any, cal: Row) -> Row:
     if cal["type"] != "human":
         zone = _map(cal.get("row")).get("time_zone") or "UTC"
         return {"time_zone": zone, "work_starts": None, "work_ends": None, "work_days": None}
-    human = _map(cal.get("row"))
-    zone = human.get("time_zone")
+    return work_settings(_map(cal.get("row")), effective_zone(c, cal))
+
+
+def effective_zone(c: Any, cal: Row, live: bool = True) -> str | None:
+    """A person's zone as Calendar reads it: their saved one, else their Google calendar's (one Google call an hour),
+    else UTC. With `live` false no Google call is made: a Google zone not held from the last hour is None (unknown)."""
+    zone = _map(cal.get("row")).get("time_zone")
     if not zone and cal["home"] == "google":
-        zone = _google_zone(c, cal["email"])
-    return work_settings(human, zone)
+        if live:
+            zone = _google_zone(c, cal["email"])
+        else:
+            held = _ZONES.get(cal["email"])
+            if not held or held[0] <= clock.monotonic():
+                return None
+            zone = held[1]
+    return str(zone or "UTC")
+
+
+def person_zone(c: Any, pid: str) -> str | None:
+    """`effective_zone` of a person by id, with no Google call (routing reads it inside a write): None when unknown."""
+    cal = _person(c, pid)
+    return effective_zone(c, cal, live=False) if cal else "UTC"
 
 
 def work_settings(human: Row, zone: str | None = None) -> Row:
     """A person's effective working hours from their `humans` row: what they saved, else Calendar's defaults (weekdays,
-    WORK_STARTS to WORK_ENDS), in their saved zone, else `zone`, else UTC. No Google call: routing reads it in a write."""
+    WORK_STARTS to WORK_ENDS), in their saved zone, else `zone` (`effective_zone`'s), else UTC."""
     return {
         "time_zone": human.get("time_zone") or zone or "UTC",
         "work_starts": human.get("work_starts") or WORK_STARTS,
@@ -453,8 +470,7 @@ def work_settings(human: Row, zone: str | None = None) -> Row:
 
 
 def working_at(human: Row, at: datetime, zone: str | None = None) -> bool:
-    """Whether `at` is inside the person's effective working hours (`work_settings`), in their saved zone, else
-    `zone`, else UTC."""
+    """Whether `at` is inside the person's effective working hours (`work_settings`) in `zone`."""
     return bool(_working(work_settings(human, zone), at, at + timedelta(seconds=1)))
 
 

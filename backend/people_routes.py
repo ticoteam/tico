@@ -329,7 +329,7 @@ def register_profile(app, auth, delegated_identity, mutate, settings, store, vis
                 or not teammate_access.can(c, who, "see", "human:" + pid, auth)
             ):
                 raise Problem("not_found", "Person not found", 404)
-            return routing.view(row, routing.now())
+            return routing.view(c, row, routing.now())
 
     @app.put(
         "/api/v2/humans/{pid}/availability",

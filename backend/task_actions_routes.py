@@ -94,6 +94,9 @@ def filed_for(c, who, person, message_id):
     return person
 
 
+ROUTED_HELD = "Held by a company rule; file it without route or assign someone"
+
+
 def register_core(
     app,
     assistant_direct,
@@ -492,9 +495,9 @@ def register_core(
     ):
         """`POST /api/v2/tasks`: the task is made and put in the first stage of its pipeline (H.task_create). A task
         for a bot wakes it; `wake_refs` go on that wake (an auto dream's release policy, backend/dream_auto.py).
-        `routed_to`: the person the route's org rule check judged as the recipient of a `route: true` create."""
+        `routed_to`: the person the route's org rule check judged as the recipient of a `route: true` create; a
+        routed create the check judged for nobody is refused (409), never filed to someone it did not judge."""
         source = who
-        sent = body  # the request as the caller sent it: a hold keeps it, so Send anyway routes again
         actual_bot = source.task_actor or (source.actor if source.role == "bot" else "")
         if body.from_private:
             # Older clients' name for `private: false` from a private task's run.
@@ -548,8 +551,8 @@ def register_core(
             body, unassigned = body.model_copy(update={"owner": who.actor}), False
         elif routed:
             work = routing.prepare(c, who, body, parent_id, actual_bot)
-            person = routed_to or routing.choose(c, work, routing.now())[0]
-            if not task_requirements.active_person(c, person):
+            person = routed_to
+            if not person or not task_requirements.active_person(c, person):
                 raise Problem("route", "The person routing picked can no longer take it: send it again", 409)
             body, unassigned, routed_entity = body.model_copy(update={"owner": person}), False, work.entity_id
         if unassigned:
@@ -646,12 +649,14 @@ def register_core(
                 c,
                 rule,
                 rule_create_text(body),
-                {"body": (sent if routed else body).model_dump(mode="json", by_alias=True)},
+                {"body": body.model_dump(mode="json", by_alias=True)},
             )
             if rule
             else None
         )
         if rule_gate and rule_gate.get("held"):
+            if routed:
+                raise Problem("route", ROUTED_HELD, 422)  # no hold: Send anyway could pick someone it never judged
             if ingest:
                 ask_ingest.skipped(c, ingest, "held")
             return org_rule_check.answer(rule_gate)
@@ -962,8 +967,10 @@ def register_core(
             who = Identity(who.task_actor, "bot", runner_id=who.runner_id, attempt_id=who.attempt_id, agent=who.agent)
             request.state.identity = who
         # A create carrying a person's request reads the item as that person, at the write: its cap is checked as ever.
-        cap_before_preflight(request, who, body.owner, body.parent, body.primary_link, body.request_id)
-        routed_to = routed_preview(who, body)
+        # A routed create's person is picked first (a saved retry's answer comes back without one), so the cap, reach
+        # and the org rule check below are for them.
+        routed_to = None if saved_retry(request, who) else routed_preview(who, body)
+        cap_before_preflight(request, who, routed_to or body.owner, body.parent, body.primary_link, body.request_id)
         rc = rule_check(
             who,
             "task_create",
@@ -973,6 +980,8 @@ def register_core(
                 *(org_rule_check.company(c) if rule_public(body) else []),
             ],
         )
+        if getattr(body, "route", False) and org_rule_check.holds(rc):
+            raise Problem("route", ROUTED_HELD, 422)
         # A write the rule check holds, a saved retry, or a create whose item a task already holds (nothing is filed)
         # skips ask ingest's call.
         with store.read() as c:
@@ -1061,6 +1070,8 @@ def register_core(
 
     @org_rule_check.replayer("task_create", prepare=rule_prepare_task)
     def rule_replay_task(c, bot, hold, replay, ingest, gate=None):
+        if (replay.get("body") or {}).get("route"):
+            raise Problem("route", ROUTED_HELD, 422)  # routed creates are never held; one from before is not sent
         return task_create(
             c, bot, M.TaskFile.model_validate(replay["body"]), ingest=ingest, rule=org_rule_check.decided(gate)
         )

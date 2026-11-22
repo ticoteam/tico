@@ -20,7 +20,7 @@ from backend.tests.helpers.api import headers, post
 from backend.tests.helpers.company import bot
 from backend.tests.test_jira_intake import _create, jira  # noqa: F401
 
-START = datetime(2030, 1, 7, 17, 0, tzinfo=timezone.utc)  # a Monday, 09:00 in the company's zone (Pacific)
+START = datetime(2030, 1, 7, 10, 0, tzinfo=timezone.utc)  # a Monday, inside Calendar's default hours (UTC)
 TITLES = itertools.cycle(["Acme", "Globex", "Initech", "Umbrella", "Hooli", "Stark", "Wayne", "Wonka", "Soylent"])
 
 
@@ -114,6 +114,9 @@ def test_routing_is_refused_where_the_first_stage_is_not_the_assignees(app):
             )
     refused = _route(app, expected=422, pipeline="ops")
     assert "first stage" in json.dumps(refused)
+    with _db(app) as c:  # held by the assignee but moved by hand: no timer would ever look at it
+        c.execute("UPDATE stages SET owner='assignee', by_hand=1 WHERE id='ops-run'")
+    assert "moved by hand" in json.dumps(_route(app, expected=422, pipeline="ops"))
 
 
 def test_everyone_off_goes_to_the_inbox_fallback(app):
@@ -160,7 +163,7 @@ def test_private_work_is_not_routed(app):
     assert "Private tasks aren't routed" in json.dumps(refused)
     made = post(app, "tasks", {"title": "Contract review for Acme", "owner": "ben", "private": True})
     parent = (made.get("task") or made)["id"]
-    under = _route(app, expected=422, parent=parent)  # private by its parent
+    under = _route(app, expected=422, parent=parent, private=False)  # its owner would read the private parent
     assert "Private tasks aren't routed" in json.dumps(under)
     with _db(app) as c:
         assert not c.execute("SELECT 1 FROM pipelines WHERE preset='support'").fetchone()  # nothing was made
@@ -198,13 +201,14 @@ def test_the_dry_run_names_the_person_routing_would_pick(app):
 def test_availability_ends_at_read_and_working_hours_decide(app):
     with _db(app) as c:
         ben = routing.person_row(c, "ben")
-        assert routing.effective(ben, START) == "on"
-        assert routing.effective(ben, datetime(2030, 1, 6, 0, 0, tzinfo=timezone.utc)) == "async"  # Sunday midnight
-        shown = routing.set_availability(c, "human:ben", "ben", "off", "2030-01-07T18:00:00Z", START)
+        assert routing.effective(c, ben, START) == "on"
+        assert routing.effective(c, ben, datetime(2030, 1, 6, 12, 0, tzinfo=timezone.utc)) == "async"  # a Sunday
+        shown = routing.set_availability(c, "human:ben", "ben", "off", "2030-01-07T11:00:00Z", START)
         assert shown["availability"] == "off" and shown["from"] == "set"
         ben = routing.person_row(c, "ben")
-    assert routing.effective(ben, START + timedelta(minutes=59)) == "off"
-    later = routing.view(ben, START + timedelta(hours=2))
+    with _db(app) as c:
+        assert routing.effective(c, ben, START + timedelta(minutes=59)) == "off"
+        later = routing.view(c, ben, START + timedelta(hours=2))
     assert (later["availability"], later["set"], later["from"]) == ("on", None, "working_hours")
     assert ben["availability"] == "off"  # nothing rewrote the row: the end is computed at read
 
@@ -222,6 +226,16 @@ def test_a_tag_added_to_a_quiet_task_is_noticed(app, time_machine):
         T.sweep(c)
     wakes = _wakes(app, "bot:ops")
     assert len(wakes) == 1 and _title(app, task_id) in wakes[0]
+
+
+def test_both_support_timers_on_one_task_give_its_manager_one_wake(app, time_machine):
+    _support(app, manager_id="bot:ops")
+    task_id = _route(app, labels=["urgent"], private=False)
+    time_machine.move_to(START + timedelta(hours=25), tick=False)  # a day quiet and urgent: both rules match
+    with _db(app) as c:
+        T.sweep(c)
+    wakes = _wakes(app, "bot:ops")
+    assert len(wakes) == 1 and wakes[0].count(_title(app, task_id)) == 1
 
 
 def _wakes(api, manager):

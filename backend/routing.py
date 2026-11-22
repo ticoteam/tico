@@ -4,8 +4,9 @@
 A person's availability is `on`, `async` or `off` (`humans.availability`). They set their own, an admin sets anyone's;
 `availability_until` ends a set value, and past it the derived value applies again, computed at read with no timer.
 Nothing set (or ended) comes from their effective Calendar working hours (calendar_api.work_settings: what they saved,
-else Calendar's weekday defaults, in their saved zone, else the company's (`company_zone`); no Google call): on inside
-them, async outside.
+else Calendar's weekday defaults) in Calendar's zone for them (calendar_api.effective_zone): on inside them, async
+outside. No Google call is made in a write: a Google zone not already held from the last hour is unknown, and the
+person is on.
 
 `choose` runs once, when work needs a person: `POST /api/v2/tasks` with `route: true` picks the person before the task
 is made, and the task is then filed with them as owner and assignee, so every send check, stage entry and create hook
@@ -14,7 +15,7 @@ runs once against the real recipient. The first of:
 1. the recent helper: the newest person who worked another task of the same relationship (`tasks.entity_id`) in the
    last RECENT_HOURS (its history, or comments on it; company-visible tasks only), and is on;
 2. the relationship's owner (`entities.owner_*`) when a person: on, or async when the work is not urgent;
-3. anyone on in that owner's roster team, fewest open tasks first;
+3. anyone on in that owner's roster team, the first by id;
 4. the inbox fallback: the pipeline's manager, else its owner, when a person, else the company's person
    (waiting_on.company_person).
 
@@ -61,20 +62,16 @@ def _stamp(at: datetime) -> str:
 
 
 # ----------------------------------------------------------------------------- availability
-def company_zone() -> str:
-    """The zone a person with none saved is read in: the company's (updates.ZONE, where the company keeps its calendar:
-    its week, its daily updates). Tico has no other company time zone setting; UTC when that one is unset."""
-    from . import updates as _updates
-
-    updates: Any = _updates  # untyped module
-    return str(getattr(updates, "ZONE", "") or "UTC")
-
-
-def from_hours(person: Row, at: datetime) -> str:
-    """On inside the person's effective working hours, async outside."""
+def from_hours(conn: Any, person: Row, at: datetime) -> str:
+    """On inside the person's effective working hours, in Calendar's zone for them (calendar_api.effective_zone, the
+    function Calendar reads); async outside. A Google zone Calendar would have to ask Google for now is unknown: then
+    the person is on."""
     from . import calendar_api
 
-    return ON if calendar_api.working_at(person, at, company_zone()) else ASYNC
+    zone = calendar_api.person_zone(conn, str(person["id"]))
+    if zone is None:
+        return ON
+    return ON if calendar_api.working_at(person, at, zone) else ASYNC
 
 
 def _set_now(person: Row, at: datetime) -> str:
@@ -86,17 +83,17 @@ def _set_now(person: Row, at: datetime) -> str:
     return chosen if until is None or until > at else ""
 
 
-def effective(person: Row, at: datetime) -> str:
+def effective(conn: Any, person: Row, at: datetime) -> str:
     """on, async or off now: the set value while it lasts, else from working hours."""
-    return _set_now(person, at) or from_hours(person, at)
+    return _set_now(person, at) or from_hours(conn, person, at)
 
 
-def view(person: Row, at: datetime) -> Row:
+def view(conn: Any, person: Row, at: datetime) -> Row:
     """What the API answers for one person."""
     chosen = _set_now(person, at)
     return {
         "person": "human:" + str(person["id"]),
-        "availability": chosen or from_hours(person, at),
+        "availability": chosen or from_hours(conn, person, at),
         "set": chosen or None,
         "until": person.get("availability_until") if chosen else None,
         "from": "set" if chosen else "working_hours",
@@ -136,7 +133,7 @@ def set_availability(conn: Any, by: str, pid: str, value: str | None, until: str
     H.event(conn, by, "person.availability", "human:" + pid, {"availability": value, "until": until})
     after = person_row(conn, pid)
     assert after is not None  # the row updated above
-    return view(after, at)
+    return view(conn, after, at)
 
 
 # ----------------------------------------------------------------------------- choose
@@ -218,7 +215,7 @@ def choose(conn: Any, work: Work, at: datetime) -> tuple[str, str]:
     def state(actor: str) -> str:
         if actor not in states:
             person = person_row(conn, actor.removeprefix("human:"))
-            states[actor] = effective(person, at) if person else OFF
+            states[actor] = effective(conn, person, at) if person else OFF
         return states[actor]
 
     def may_take(actor: str | None) -> bool:
@@ -250,14 +247,7 @@ def choose(conn: Any, work: Work, at: datetime) -> tuple[str, str]:
             and eligible("human:" + str(p["id"]), False)
         ]
         if mates:
-            load = dict(
-                conn.execute(
-                    f"SELECT owner_id, COUNT(*) FROM tasks WHERE status='open' AND owner_id IN ({','.join('?' * len(mates))}) "
-                    "GROUP BY owner_id",
-                    mates,
-                ).fetchall()
-            )
-            return min(mates, key=lambda a: (int(load.get(a) or 0), a)), "team"
+            return min(mates), "team"  # the first by id: a stable order, no other work read
     pipe: Row = (task_engine.pipeline(conn, work.pipeline_id) or {}) if work.pipeline_id else {}
     for actor in (pipe.get("manager_id"), pipe.get("owner_id"), waiting_on.company_person(conn)):
         if may_take(actor):
@@ -290,6 +280,8 @@ def prepare(conn: Any, who: Any, body: Any, parent_id: str | None, actual_bot: s
     parent: Row | None = H.task(conn, parent_id) if parent_id else None
     pipe: Row = (task_engine.pipeline(conn, pipeline_id) or {}) if pipeline_id else {}
     task_privacy: Any = _task_privacy  # untyped module
+    if parent and H.task_private(conn, parent):
+        raise Problem("route", PRIVATE_REFUSAL, 422)  # its owner would read the private task above it
     if getattr(body, "from_private", False):  # older clients' name for `private: false` (app.task_create)
         body = body.model_copy(update={"private": False, "from_private": False})
     elif body.private is None and task_privacy.private_execution(conn, who):
@@ -319,6 +311,8 @@ def first_stage_refusal(conn: Any, pipeline_id: str) -> str:
     work = task_engine.main_work(task_engine.stages(conn, pipeline_id)) if pipe and not pipe.get("retired_at") else []
     if not pipe or not work:
         return f"No pipeline {pipeline_id}"
+    if work[0].get("by_hand"):
+        return f"A routed task goes in a pipeline whose first stage is timed; {pipe['name']}'s is moved by hand"
     if work[0].get("owner") != "assignee":
         return (
             f"A routed task goes in a pipeline whose first stage the task's assignee holds; {pipe['name']}'s does not"

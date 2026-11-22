@@ -17,8 +17,8 @@ Then:
 
 - `tell_manager`: the pipeline's manager is told. All of one manager's matches go in one wake, "Stage rules: N tasks",
   and a manager gets one such wake an hour at most: what matches meanwhile waits for the next. A match of Urgent
-  support waits (backend/routing.py) wakes its manager in the same pass, once, with only the urgent tasks; it does not
-  use up the manager's hour. A rule with a tag condition marks whether the task had the tag, so adding it is noticed. A task already listed as
+  support waits (backend/routing.py) wakes its manager in the same pass, in its one wake of that pass: with
+  everything waiting when its hour is open, else only the urgent tasks, which do not use up its hour. A rule with a tag condition marks whether the task had the tag, so adding it is noticed. A task already listed as
   Late on this visit is not listed again.
 - `tell_owner`: the task's owner is told, on the task.
 - `move_back`: the task goes back to `then_params.stage` with no owner, through the wake rules' task move
@@ -143,9 +143,11 @@ def sweep(conn: Any, at: str | None = None) -> dict[str, int]:
                     if manager and _urgent_rule(rule):
                         now.add(manager)
     for manager in sorted(now):
-        if _wake_manager(conn, manager, at, _mod("stage_rules").URGENT_SUPPORT):
+        # One wake per manager per pass: everything waiting when its hour is open, else only the urgent tasks.
+        only = "" if not _had_hour(conn, manager, at) else _mod("stage_rules").URGENT_SUPPORT
+        if _wake_manager(conn, manager, at, only):
             done["wakes"] += 1
-    done["wakes"] += flush(conn, at)
+    done["wakes"] += flush(conn, at, skip=now)
     return done
 
 
@@ -329,12 +331,24 @@ def _manager(conn: Any, task: Row) -> str | None:
 
 
 # ----------------------------------------------------------------------------- the managers' wakes
-def flush(conn: Any, at: str | None = None) -> int:
-    """One wake per manager with tells waiting, unless it had one in the last hour. Returns the wakes sent."""
+def _had_hour(conn: Any, manager: str, at: str) -> bool:
+    """Whether the manager had a routine wake in the last hour (an urgent wake does not use up its hour)."""
+    since = H.shift(at, hours=-BATCH_HOURS)
+    return (
+        conn.execute(
+            "SELECT 1 FROM stage_rule_marks WHERE manager_id=? AND told_at > ? AND rule_id <> ? LIMIT 1",
+            (manager, since, _mod("stage_rules").URGENT_SUPPORT),
+        ).fetchone()
+        is not None
+    )
+
+
+def flush(conn: Any, at: str | None = None, skip: set[str] | None = None) -> int:
+    """One wake per manager with tells waiting, unless it had one in the last hour or was woken in this pass (`skip`).
+    Returns the wakes sent."""
     at = str(at or H.now())
     if not H._has_table(conn, "stage_rule_marks"):
         return 0
-    since = H.shift(at, hours=-BATCH_HOURS)
     sent = 0
     managers: list[str] = [
         r[0]
@@ -344,11 +358,7 @@ def flush(conn: Any, at: str | None = None) -> int:
         ).fetchall()
     ]
     for manager in managers:
-        # An urgent wake (Urgent support waits, `sweep`) does not use up the manager's hour.
-        if conn.execute(
-            "SELECT 1 FROM stage_rule_marks WHERE manager_id=? AND told_at > ? AND rule_id <> ? LIMIT 1",
-            (manager, since, _mod("stage_rules").URGENT_SUPPORT),
-        ).fetchone():
+        if manager in (skip or set()) or _had_hour(conn, manager, at):
             continue
         if _wake_manager(conn, manager, at):
             sent += 1

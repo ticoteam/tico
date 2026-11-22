@@ -1232,31 +1232,37 @@ filed for its item gets its link back as a secondary one.
 Work that needs a person, with no owner named, is filed with `route: true` (`tico task create --route`, MCP
 `tico_task_create`), optionally with `entity` (the relationship). Tico picks the person before anything is written
 (`routing.person_for_create`), and the task is filed as theirs, owner and assignee, so the cap, reach, contact checks,
-stage entry and create hooks all run once for them; the org rule check judges that person as the recipient, and a
-held create keeps the request as sent, so Send anyway routes again. A primary link a readable task already holds
-returns that task before anything is routed. Refused (422): with an owner, with a live meeting, private work
-(explicitly, under a private parent, in a private pipeline or by the filer's private default: "Private tasks aren't
-routed; assign someone who can see it"), in a pipeline whose first stage is not the task's assignee's, when nobody
+stage entry and create hooks all run once for them; the cap, reach and the org rule check judge that person as the
+recipient, before the write. A routed create a company rule would hold is refused, never held ("Held by a company
+rule; file it without route or assign someone"), so Send anyway never picks someone the check did not judge; a write
+that would route a create the check judged for nobody (a primary link's claim gone meanwhile) is refused 409, send it
+again. A saved retry's answer comes back without routing; a primary link a readable task already holds returns that
+task before anything is routed. Refused (422): with an owner, with a live meeting, private work
+(explicitly, under a private parent even with `private: false`, in a private pipeline or by the filer's private
+default: "Private tasks aren't routed; assign someone who can see it"), in a pipeline whose first stage is not the
+task's assignee's or is moved by hand, when nobody
 can sign in, or when a stage rule holds the person out on entry (nothing is filed). With no pipeline it goes on the company's
 Support pipeline (preset `support`), made the first time a routed task is filed: one work stage, Open, held by the
 task's assignee and not by hand. Its default rules give overdue waits to its manager (the General Manager): Support
 waits (24 h quiet, in the hourly batch) and Urgent support waits (1 h quiet on a task tagged `urgent`: the manager is
-woken in the same pass, once, with only the urgent tasks, and keeps its hour for the rest). A timer rule with a tag
+woken in the same pass, in its one wake of that pass: everything waiting when its hour is open, else only the urgent
+tasks, which do not use up its hour). A timer rule with a tag
 condition marks whether the task had the tag, so a tag added to a quiet task is noticed. A retired Support is not made again: routed work then goes to General. The dry run names the
 person routing would pick.
 
 The pick is the first of: the newest person who worked another recent company-visible task of the relationship (its
 history or comments, the last 48 hours, at most 20 tasks) and is on, not counting the filer; the relationship's owner
 (`entities.owner_*`) when on, or async and the work is not tagged `urgent`; anyone on in that owner's roster team,
-fewest open tasks first; else the inbox fallback, the pipeline's manager or owner when a person, else the company's
+the first by id; else the inbox fallback, the pipeline's manager or owner when a person, else the company's
 person (`waiting_on.company_person`). Every one, the fallback included, must be an active person.
 
 A person's availability (`humans.availability`: on, async or off; `availability_until` ends it) is theirs to set, or any
 admin's: `PUT /api/v2/humans/{id}/availability` (`tico human availability-set`, MCP `tico_human_availability_set`), read
 with `GET` by whoever may see them on the team chart (`tico human availability`). Unset or ended, it comes from their
-effective Calendar working hours (`calendar_api.work_settings`: saved, else weekdays 08:00-18:00, in their saved zone
-else the company's zone, `updates.ZONE`, the one its week and daily updates use; Tico has no other company time zone
-setting): on inside them, async outside. The end is computed at read: nothing rewrites the row.
+effective Calendar working hours (`calendar_api.work_settings`: saved, else weekdays 08:00-18:00) in Calendar's zone
+for them (`calendar_api.effective_zone`: saved, else their Google calendar's, else UTC): on inside them, async outside.
+Routing makes no Google call inside a write: a Google zone not held from the last hour is unknown, and the person is
+on. The end is computed at read: nothing rewrites the row.
 
 ### Modules
 
