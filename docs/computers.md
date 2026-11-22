@@ -52,7 +52,7 @@ A plan the person adds later joins on its own, and one given to someone else lea
 never part of a person's plans. The line under the picker says which plan is in use and why ("On Plan 2 · Plan 1 at its
 limit until Fri 09:00"); `tico subscription list` shows the same for agents.
 
-The plan is named after itself (*Claude*, then *Claude 2*) and its owner is the person who signed in; change either
+The plan defaults to a name like *Ana's Claude plan* and its owner is the person who signed in. Change either
 under the row's **⋯ → Edit**. An API key is its own small form: the key and, if you like, a name. **Paste instead**,
 behind the sign-in, is the fallback when no computer can run it: the token from `claude setup-token`, or Codex's
 `auth.json` (pasted, or picked with **Choose auth.json**). **Reconnect** is the same sheet from step 2.

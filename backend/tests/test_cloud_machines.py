@@ -4036,7 +4036,7 @@ def test_a_sign_in_makes_the_shared_machine_when_the_company_has_none_and_runs_o
     setup(cloud.api)
     company(cloud.api)
     asked = _connect(cloud)
-    assert (asked["id"], asked["waking"], asked["name"]) == ("", True, "Claude")
+    assert (asked["id"], asked["waking"], asked["name"]) == ("", True, "Ana's Claude plan")
     assert cloud.tick() == ["create"] and cloud.hq.calls[-1][1] == CM.SHARED
     assert _connect(cloud)["waking"] is True  # still on its way: no second machine
     assert cloud.tick(10) == ["create"]
@@ -4044,7 +4044,12 @@ def test_a_sign_in_makes_the_shared_machine_when_the_company_has_none_and_runs_o
     _beat(cloud, up["token"])
     login = _connect(cloud)
     assert login["id"] and login["waking"] is False and login["runner_id"] == up["runner_id"]
+    assert login["name"] == asked["name"]
     assert [row["id"] for row in get(cloud.api, "runner-logins", up["token"])["logins"]] == [login["id"]]
+    sent = post(cloud.api, f"runner-logins/{login['id']}/subscription", {"value": TOKEN}, token=up["token"])
+    assert sent["state"] == "done"
+    [saved] = get(cloud.api, "model-subscriptions")["subscriptions"]
+    assert saved["name"] == asked["name"]
 
 
 def test_a_sign_in_starts_the_stopped_shared_machine_and_holds_it_on_until_it_ends(cloud):

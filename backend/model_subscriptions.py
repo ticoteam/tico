@@ -94,6 +94,7 @@ from .api_contract import api_v2
 
 STATUSES = ("new", "working", "needs_reconnect")
 MAX_SUBSCRIPTIONS = 200
+MAX_NAME = 80
 MAX_VALUE = 64 * 1024
 
 # What each kind is, the name a new one gets when the person gives none (`default_name`), the runtime it signs in, and
@@ -181,7 +182,7 @@ class SubscriptionWrite(Contract):
     plan defaults to whoever adds it; an API key has none). `confirm` accepts that a reconnect stops and restarts the
     live runs on every computer given it."""
 
-    name: str | None = Field(default=None, max_length=80)
+    name: str | None = Field(default=None, max_length=MAX_NAME)
     owner_id: str | None = Field(default=None, max_length=120)
     kind: str | None = Field(default=None, max_length=40)
     secret: SecretStr | None = Field(default=None, max_length=MAX_VALUE)
@@ -195,7 +196,7 @@ class SubscriptionConnect(Contract):
     restarts the live runs on every computer given it."""
 
     kind: str | None = Field(default=None, max_length=40)
-    name: str | None = Field(default=None, max_length=80)
+    name: str | None = Field(default=None, max_length=MAX_NAME)
     owner_id: str | None = Field(default=None, max_length=120)
     subscription: str | None = Field(default=None, max_length=80)
     confirm: bool = False
@@ -1647,7 +1648,9 @@ def default_name(c, kind, owner=""):
         display_name = ((person or {}).get("name") or "").strip()
         base = spec["label"]
         if display_name and "@" not in display_name:
-            base = f"{display_name}'s {base}"
+            ending = f"'s {base}"
+            owner_limit = MAX_NAME - len(ending) - len(f" {MAX_SUBSCRIPTIONS}")
+            base = display_name[:owner_limit].rstrip() + ending
     taken = {r["name"].strip().lower() for r in c.execute("SELECT name FROM model_subscriptions")}
     n, name = 1, base
     while name.lower() in taken:
