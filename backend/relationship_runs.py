@@ -24,6 +24,7 @@ BOT = _hubdb.RELATIONSHIP_WORKER
 ACTOR = "bot:" + BOT
 REF = "relationship_run"
 WAKE_TASK_LIMIT = 25
+WAKE_OMITTED_LIMIT = 100
 ROW_ID = r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"
 FILE_ID = r"file-[0-9a-f]{24}"
 READ = re.compile(
@@ -233,6 +234,9 @@ def wake_context(c: Connection, auth: "Auth", who: "Identity", bound: Scope) -> 
             ids.append(str(row["id"]))
         else:
             omitted += 1
+            if omitted == WAKE_OMITTED_LIMIT:
+                break
     if ids:
-        context.append("Open tasks " + ", ".join(ids) + (f" ({omitted} more)." if omitted else "."))
+        remaining = f"{omitted}+" if omitted == WAKE_OMITTED_LIMIT else str(omitted)
+        context.append("Open tasks " + ", ".join(ids) + (f" ({remaining} more)." if omitted else "."))
     return " ".join(context)

@@ -94,6 +94,16 @@ def relationship_model_key(row):
     return not row['tool_id'] and row['kind'] in ('api_key', 'token') and row['env'] in providers.RUNTIME_KEY_NAMES
 
 
+def relationship_has_model_key(c, env):
+    explicit = explicitly_granted(c, 'bot:' + H.RELATIONSHIP_WORKER)
+    return bool(explicit) and any(
+        row['id'] in explicit and relationship_model_key(row)
+        for row in c.execute(
+            'SELECT id,env,kind,tool_id FROM credentials WHERE env=? AND ciphertext IS NOT NULL', (env,)
+        )
+    )
+
+
 def refuse_reserved(env, stored=''):
     """A credential arrives in a bot's turn under its variable; Tico's own and the computer's names are refused, since a
     run given one would lose it (runner-rs/src/env.rs). One stored under such a name before the rule is

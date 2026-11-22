@@ -500,6 +500,21 @@ fn logins(
 /// One probe result per runtime and login: (runtime, profile name, "" for the computer's own login).
 pub type Rows = BTreeMap<(String, String), Map<String, Value>>;
 
+fn assigned_variants(assignments: &[Value]) -> BTreeMap<String, crate::harness_tools::Variant> {
+    assignments
+        .iter()
+        .filter_map(|entry| {
+            let config = &entry["config"];
+            crate::harness_tools::variant(
+                &text_of(&config["runtime"]),
+                &text_of(&config["harness"]),
+            )
+            .filter(|variant| variant.capabilities.readiness)
+            .map(|variant| (variant.id.clone(), variant))
+        })
+        .collect()
+}
+
 /// What a probe reads besides the sign-in state: the runtimes the bots use, the logins used on each with the folder and
 /// sharing its environment is built from, each runtime's bot-key sign-in (read from the bots' grants), the config
 /// entries that pick the logins (`profiles`, `default_profile`, `bot_profiles`), and the server's word on a data problem
@@ -507,6 +522,10 @@ pub type Rows = BTreeMap<(String, String), Map<String, Value>>;
 pub fn probe_inputs(config: &Config, assignments: &[Value], computer_logins: bool) -> String {
     let mut parts = vec![
         format!("computer_logins={computer_logins}"),
+        format!(
+            "variants={:?}",
+            assigned_variants(assignments).keys().collect::<Vec<_>>()
+        ),
         format!(
             "server_takes_data_problem={}",
             crate::fallback::server_takes_data_problem()
@@ -579,6 +598,33 @@ pub async fn probe_all(
             .await;
             rows.insert((runtime.clone(), name), row);
         }
+    }
+    let path = std::env::var("PATH").unwrap_or_default();
+    for (id, variant) in assigned_variants(assignments) {
+        let exe = which(&variant.executable, &path);
+        let (authenticated, detail) = match &exe {
+            Some(exe) => {
+                sign_in_state(
+                    &id,
+                    &variant.capabilities,
+                    exe,
+                    sign,
+                    client,
+                    assignments,
+                    None,
+                    None,
+                )
+                .await
+            }
+            None => ("missing", format!("{} CLI is not on PATH", variant.name)),
+        };
+        rows.insert(
+            (id, String::new()),
+            Map::from_iter([
+                ("authenticated".into(), json!(authenticated)),
+                ("detail".into(), json!(detail)),
+            ]),
+        );
     }
     (rows, inputs)
 }
@@ -695,6 +741,7 @@ pub fn runtime_report(
     rows: &Rows,
 ) -> Map<String, Value> {
     let mut report = Map::new();
+    let variants = assigned_variants(assignments);
     for runtime in crate::harness_tools::runtimes() {
         let runtime = runtime.as_str();
         let used = logins(config, assignments, computer_logins, runtime);
@@ -769,7 +816,15 @@ pub fn runtime_report(
             ""
         };
         let own = crate::profiles::windows_for_server(own_name, runtime);
-        let row = computer_row(targets, own, computer_logins);
+        let mut row = computer_row(targets, own, computer_logins);
+        for id in variants
+            .keys()
+            .filter(|id| crate::harness_tools::runtime_of(id) == runtime)
+        {
+            if let Some(variant) = rows.get(&(id.clone(), String::new())) {
+                row["variants"][id] = Value::Object(variant.clone());
+            }
+        }
         report.insert(runtime.into(), row);
     }
     report
@@ -915,6 +970,8 @@ pub async fn preflight(
         let bot = text_of(&entry["bot"]);
         let expected = &entry["config"];
         let runtime = text_of(&expected["runtime"]);
+        let harness = text_of(&expected["harness"]);
+        let variant = crate::harness_tools::variant(&runtime, &harness);
         let caps = crate::harness_tools::caps_of(expected);
         let known = crate::harness_tools::runtimes().contains(&runtime);
         let path = crate::sessions::local_path(config, &bot, expected);
@@ -1023,14 +1080,18 @@ pub async fn preflight(
             problems.push(NO_RUNTIME.into());
         } else if !known {
             problems.push("Unsupported runtime".into());
-        } else if !caps.readiness {
-            // A variant with its own executable and sign-in, which the runtime's row does not prove; the real turn
-            // checks the sign-in, as preflight makes no model call.
-            if let Some(v) = crate::harness_tools::variant(&runtime, &text_of(&expected["harness"]))
-            {
-                if which(&v.executable, &std::env::var("PATH").unwrap_or_default()).is_none() {
-                    problems.push(format!("{} CLI is not on PATH", v.name));
-                }
+        } else if let Some(variant) = variant {
+            let probe = &runtimes.get(&runtime).unwrap_or(&Value::Null)["variants"][&harness];
+            sign_in = json!(probe["authenticated"].as_str().unwrap_or("unknown"));
+            if caps.readiness && sign_in != "ready" {
+                problems.push(
+                    probe["detail"]
+                        .as_str()
+                        .map(String::from)
+                        .unwrap_or_else(|| {
+                            format!("{} sign-in has not been checked", variant.name)
+                        }),
+                );
             }
         } else if runtimes
             .get(&runtime)
@@ -1145,6 +1206,14 @@ pub async fn preflight(
         row.insert("bot".into(), json!(bot));
         row.insert("repository".into(), json!(path.to_string_lossy()));
         row.insert("runtime".into(), json!(runtime));
+        row.insert(
+            "harness".into(),
+            json!(if harness.is_empty() {
+                &runtime
+            } else {
+                &harness
+            }),
+        );
         row.insert("profile".into(), json!(profile_name));
         row.insert("sign_in".into(), sign_in);
         if let Some(problem) = data_problem {
@@ -1178,6 +1247,8 @@ pub fn document(
             let mut row = row.clone();
             if let Some(r) = row.as_object_mut() {
                 r.remove("profiles");
+                // The heartbeat carries the variant's sign-in on each assigned bot's row.
+                r.remove("variants");
                 // Where bots run as their own user, whether this tool's turns also each run as their own leased user
                 // ("own") or share the bot user ("bot"), which can enter every bot's checkout (`isolated_user`).
                 if crate::isolation::enabled() && crate::fallback::server_takes_turn_user() {
@@ -1211,6 +1282,11 @@ pub fn document(
         }
         if out.get("sign_in") == Some(&json!("rejected")) {
             out.insert("sign_in".into(), json!("failed"));
+        }
+        if row["bot"] == crate::sessions::RELATIONSHIP_WORKER
+            && crate::fallback::server_takes_relationship_lanes()
+        {
+            out.insert("harness".into(), row["harness"].clone());
         }
         let capability = &runtimes
             .get(&text_of(&row["runtime"]))
@@ -1829,6 +1905,52 @@ pub(crate) mod probe_tests {
         let before = std::env::var("PATH").unwrap_or_default();
         std::env::set_var("PATH", format!("{}:{before}", bin.display()));
         (log, before)
+    }
+
+    #[tokio::test]
+    async fn antigravity_preflight_requires_its_own_sign_in() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = PATH_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let (_, before) = fake_runtimes(&root, "1.0.0");
+        let agy = root.join("bin/agy");
+        let config = Config {
+            path: root.join("runner.json"),
+            data: Map::new(),
+        };
+        let sign = SignIn::new(&root);
+        let client = Client::new("http://localhost:1", "", 1, 0).unwrap();
+        let assignment = json!({"bot": crate::sessions::RELATIONSHIP_WORKER,
+            "config": {"runtime": "gemini", "harness": "antigravity"}});
+        let assignments = [assignment];
+        let mut reports = vec![];
+        for output in [
+            "Please sign in to view available models.",
+            "Available models",
+        ] {
+            std::fs::write(
+                &agy,
+                format!("#!/bin/sh\n[ \"$1\" = models ] || exit 1\necho '{output}'\n"),
+            )
+            .unwrap();
+            std::fs::set_permissions(&agy, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let (rows, _) =
+                probe_all(&config, &sign, &client, &assignments, true, &Rows::new()).await;
+            let runtimes = runtime_report(&config, &sign, &assignments, true, &rows);
+            reports.push(
+                preflight(&config, &sign, &assignments, &runtimes, true)
+                    .await
+                    .remove(0),
+            );
+        }
+        std::env::set_var("PATH", before);
+        std::fs::remove_dir_all(root).unwrap();
+
+        assert_eq!(reports[0]["ready"], false);
+        assert_eq!(reports[0]["sign_in"], "missing");
+        assert_eq!(reports[1]["ready"], true);
+        assert_eq!(reports[1]["sign_in"], "ready");
     }
 
     #[test]

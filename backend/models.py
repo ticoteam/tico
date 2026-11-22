@@ -1435,6 +1435,7 @@ class MailSettingsUpdate(Contract):
 class BotReadiness(GoalReadiness):
     ready: bool
     runtime: str = Field(default="", max_length=100)
+    harness: str = Field(default="", max_length=100)
     model: str = Field(default="", max_length=200)
     # The runner's checkout path lets Health name the exact clone destination on that computer.
     repository: str = Field(default="", max_length=2000)

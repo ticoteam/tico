@@ -1132,13 +1132,13 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None, skip=frozens
             )
             if claimable is None:
                 continue  # the claim's check for this bot raised: Health names that check instead
-            refused, first, person = claimable
+            refused, first, person = claimable[:3]
             if slug in busy and refused in (None, 'lane_held'):
                 # Keep claim priority for age checks; only use oldest-job diagnostics when
                 # that free-lane job is actually refused.
                 diagnostic = _claimable(c, settings, where[0], slug, limits, oldest=True, loads=loads)
                 if diagnostic and diagnostic[0] and diagnostic[0] != "lane_held":
-                    refused, first, person = diagnostic
+                    refused, first, person = diagnostic[:3]
             # Only fenced work is left: the interrupted run holds it, not the running turn, so that is the reason.
             refused, first, person = _fenced_queue_reason(row, refused, first, person)
             # A running turn only explains this queue when it holds the queued lane. Free task
@@ -1328,6 +1328,8 @@ HELD = {
     "sign_in_rejected": ("Its model sign-in was rejected on {computer}", COMPUTERS),
     # The computer read a plan's sign-in as ready, and no plan signs it in now (execution.signed_in_by_lapsed_plan).
     "sign_in_missing": ("Its model is not signed in on {computer}", COMPUTERS),
+    "gateway_disconnected": ("Reconnect the Tico AI Gateway to start relationship turns", COMPUTERS),
+    "model_key_missing": ("Grant the relationship worker an API key for its model in Credentials", COMPUTERS),
     "login_upgrade": (
         "Update {computer} to use one login per AI tool; its bots wait without changing accounts",
         COMPUTERS,

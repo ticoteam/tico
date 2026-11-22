@@ -249,10 +249,13 @@ user support run as the shared bot user so they can use the computer's saved
 sign-in. These turns have mode-0700 scratch and the same OS trust level as
 ordinary bot turns. Without a pool, turns that can run on the computer use its
 ordinary bot identity. The worker receives its own granted model keys.
+At claim time Tico checks readiness for the selected harness and the current
+Gateway connection or worker key grant when the model requires one. Work stays
+queued while those requirements are missing.
 
 The wake names the relationship's readable memory page and up to 25 open tasks
-the person who started it can currently read, newest first. It counts any
-additional readable open tasks. A wake can also name an outside thread from
+the person who started it can currently read, newest first. It counts up to
+100 additional readable open tasks and shows `100+` at that limit. A wake can also name an outside thread from
 intake. The server checks the relationship and the sponsor's current access to
 both the entity and the source inbox on each read. Revoking the sponsor's inbox
 grant blocks further reads in an active run. Suggested changes to shared memory

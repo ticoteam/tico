@@ -18,6 +18,7 @@ from . import (
     org_turns,
     check_models,
     claude_login,
+    credentials,
     learned,
     rooms,
     rules as wake_rule_engine,
@@ -60,7 +61,7 @@ from . import (
 )
 from .auth import Identity
 from .batch_work import isolated, report, shared_check, shared_scope, storage_error
-from .harnesses import bot_keyed, reports_tool_calls
+from .harnesses import bot_key, bot_keyed, reports_tool_calls, resolve_harness
 from .run_diagnostics import HANDED_BACK, LAPSED, RESTART_TEXT, UNSTARTED_CATEGORIES, clean_stop_reported
 from . import holds, lifecycle
 from . import run_diagnostics as RD
@@ -2547,6 +2548,14 @@ def _claim_refusal(
         if why not in ignore_refusals:
             return why, None
     check = bot_readiness(ready, bot)
+    if relationship:
+        if waits or gateway_connection.is_tico(filled.get("model")):
+            if not gateway_connection.has_run_key(c, settings):
+                return "gateway_disconnected", None
+        elif (key := bot_key({**filled, "fallback": {}})) and not credentials.relationship_has_model_key(c, key):
+            return "model_key_missing", None
+        if (check.get("runtime"), check.get("harness")) != (filled.get("runtime"), resolve_harness(filled)):
+            return "readiness_unknown", None
     if waits:
         # Its subscription is not signed in on this computer yet: the turn runs on the Gateway instead
         # (backend/models_preset.py), so the missing sign-in is the one problem that doesn't hold it. Its checkout,
@@ -2770,7 +2779,8 @@ def relationship_queue_head_sql():
         f"(j.bot_id<>'{relationship_runs.BOT}' OR NOT EXISTS("
         "SELECT 1 FROM jobs older JOIN messages om ON om.id=older.message_id "
         "WHERE older.bot_id=j.bot_id AND older.state IN ('queued','leased','running','input','uncertain') "
-        "AND (older.created_at,om.seq)<(j.created_at,m.seq) "
+        # Job rowids preserve insertion order when two notices have the same time and no message sequence.
+        "AND (older.created_at,coalesce(om.seq,0),older.rowid)<(j.created_at,coalesce(m.seq,0),j.rowid) "
         "AND om.sender_id=m.sender_id AND om.recipient_id=m.recipient_id "
         f"AND json_extract(om.refs,'{entity}')=json_extract(m.refs,'{entity}')))"
     )
@@ -3307,7 +3317,7 @@ def queued_jobs_sql(bots=None):
         "AND j.state='queued' AND j.held=0 "
         # A turn refused while its full Claude login was being refreshed waits for the new token (claude_login.gap).
         f"AND NOT {claude_login.PARKED_SQL} "
-        f"ORDER BY j.redirect DESC,CASE WHEN {H.in_person_name_sql()} THEN 0 ELSE 1 END,j.created_at,j.id"
+        f"ORDER BY j.redirect DESC,CASE WHEN {H.in_person_name_sql()} THEN 0 ELSE 1 END,j.created_at,lane_head DESC,j.id"
     )
 
 

@@ -1,13 +1,17 @@
 import json
 
+import pytest
+
 from backend import (
     bot_settings,
     execution,
+    gateway_connection,
     holds,
     mailbox_access,
     model_subscriptions,
     models_preset,
     outside_intake,
+    providers,
     relationship_runs as runs,
     threads,
 )
@@ -20,12 +24,25 @@ from clients.sessions import entity_lane
 
 
 def worker(api):
+    with api.app.state.store.transaction() as c:
+        config = bot_settings.read(c, runs.BOT)
+        if not config.get("runtime"):
+            bot_settings.write(c, runs.BOT, {**config, "runtime": "claude"})
     machine = runner(api)
     assign(api, machine, runs.BOT)
     return machine
 
 
-def heartbeat(api, machine, *, relationship_lanes=True, authenticated="ready", runtime="claude", turn_user=None):
+def use_runtime(c, runtime):
+    config = {**bot_settings.read(c, runs.BOT), "runtime": runtime, "harness": runtime}
+    if runtime == "gemini":
+        config["model"] = next(row["id"] for row in providers.MODEL_CATALOG if runtime in row["harnesses"])
+    bot_settings.write(c, runs.BOT, config)
+
+
+def heartbeat(
+    api, machine, *, relationship_lanes=True, authenticated="ready", runtime="claude", harness=None, turn_user=None
+):
     return post(
         api,
         "runners/heartbeat",
@@ -42,6 +59,7 @@ def heartbeat(api, machine, *, relationship_lanes=True, authenticated="ready", r
                         "repository_present": False,
                         "configuration_valid": True,
                         "runtime": runtime,
+                        "harness": harness or runtime,
                         "sign_in": "ready",
                     }
                 },
@@ -59,6 +77,14 @@ def memory(api, entity, name):
     fid = post(api, "pages", {"name": name, "text": "<p>Relationship notes</p>"})["page"]["file_id"]
     post(api, f"pages/{fid}/links", {"target": entity_lane(entity), "role": "memory"})
     return fid
+
+
+def assert_queued(api, machine, message, reason):
+    assert claim(api, machine, runs.BOT) is None
+    store = api.app.state.store
+    with store.read_transaction() as c:
+        queue = execution.queued_reasons(c, store.settings, machine["runner_id"], runs.BOT)
+        assert [(job["message_id"], why) for job, why in queue] == [(message, reason)]
 
 
 def test_relationship_worker_claims_independent_lanes_and_reads_only_its_relationship(api, monkeypatch):
@@ -120,8 +146,7 @@ def test_relationship_vault_delivers_only_the_workers_model_grants(api):
     with store.transaction() as c:
         owner = auth.owner_identity(c)
         entity = entities.upsert(c, owner.actor, "organization", name="North", match={})["id"]
-        runs.enqueue(c, auth, owner, entity, "Summarize")
-        bot_settings.write(c, runs.BOT, {**bot_settings.read(c, runs.BOT), "runtime": "gemini", "harness": "gemini"})
+        wake = runs.enqueue(c, auth, owner, entity, "Summarize")
 
     model_key = create_credential(api, name="Gemini model key", env="GEMINI_API_KEY", secret="synthetic-model-key")
     tool_key = create_credential(api)
@@ -132,6 +157,12 @@ def test_relationship_vault_delivers_only_the_workers_model_grants(api):
     machine = worker(api)
     grants = get(api, "runner-credential-grants", machine["token"])["bots"]
     assert grants[runs.BOT] == ["GEMINI_API_KEY"]
+    heartbeat(api, machine, runtime="claude")
+    with store.transaction() as c:
+        use_runtime(c, "gemini")
+    assert_queued(api, machine, wake, "readiness_unknown")
+    heartbeat(api, machine, runtime="gemini", harness="antigravity")
+    assert_queued(api, machine, wake, "readiness_unknown")
     heartbeat(api, machine, runtime="gemini", turn_user="bot")
     attempt = claim(api, machine, runs.BOT)
     assert attempt["config"]["runtime"] == "gemini"
@@ -143,20 +174,51 @@ def test_relationship_vault_delivers_only_the_workers_model_grants(api):
     post(api, f"credentials/{tool_key['id']}/reveal", {}, token=attempt["token"], expected=403)
 
 
-def test_relationship_gateway_waits_for_an_isolated_runners_turn_user_pool(api):
+@pytest.mark.parametrize("runtime,key_env", [("gemini", "GEMINI_API_KEY"), ("pi", "OPENROUTER_API_KEY")])
+def test_relationship_claim_waits_for_a_revoked_model_key(api, runtime, key_env):
+    setup_credentials(api)
     store, auth = api.app.state.store, api.app.state.auth
     with store.transaction() as c:
         owner = auth.owner_identity(c)
         entity = entities.upsert(c, owner.actor, "organization", name="North", match={})["id"]
-        runs.enqueue(c, auth, owner, entity, "Summarize")
+        wake = runs.enqueue(c, auth, owner, entity, "Summarize")
+        use_runtime(c, runtime)
+
+    key = create_credential(api, name="Worker model key", env=key_env, secret="synthetic-model-key")["id"]
+    grant = post(api, f"credentials/{key}/grants", {"subject": runs.ACTOR})["id"]
+    machine = worker(api)
+    heartbeat(api, machine, runtime=runtime)
+    post(api, f"credentials/{key}/grants/{grant}/revoke", {})
+    assert_queued(api, machine, wake, "model_key_missing")
+    post(api, f"credentials/{key}/grants", {"subject": runs.ACTOR})
+    assert claim(api, machine, runs.BOT)["message"]["id"] == wake
+
+
+def test_relationship_gateway_waits_for_a_connection_and_the_turn_user_pool(api, monkeypatch):
+    setup_credentials(api)
+    monkeypatch.delenv(gateway_connection.ENV_KEY, raising=False)
+    store, auth = api.app.state.store, api.app.state.auth
+    with store.transaction() as c:
+        owner = auth.owner_identity(c)
+        entity = entities.upsert(c, owner.actor, "organization", name="North", match={})["id"]
+        wake = runs.enqueue(c, auth, owner, entity, "Summarize")
         bot_settings.write(
             c, runs.BOT, {**bot_settings.read(c, runs.BOT), "runtime": "pi", "model": models_preset.WAITING_MODEL}
         )
+        saved = {"key": "synthetic-gateway-key"}
+        gateway_connection.save(c, api.app.state.vault, owner, saved, H.now(), store.settings)
 
     machine = worker(api)
     heartbeat(api, machine, runtime="pi", turn_user="bot")
     assert claim(api, machine, runs.BOT) is None
     heartbeat(api, machine, runtime="pi", turn_user="own")
+    with store.transaction() as c:
+        gateway_connection.clear(c, owner, H.now(), store.settings)
+    assert_queued(api, machine, wake, "gateway_disconnected")
+    with store.transaction() as c:
+        gateway_connection.save(
+            c, api.app.state.vault, owner, {**saved, "expected_revision": 2}, H.now(), store.settings
+        )
     assert claim(api, machine, runs.BOT)["gateway"] is True
 
 
@@ -377,6 +439,14 @@ def test_relationship_lane_head_in_claim_backoff_does_not_block_other_lanes(api)
     machine = worker(api)
     heartbeat(api, machine)
     with store.transaction() as c:
+        c.execute(
+            "UPDATE jobs SET created_at=(SELECT created_at FROM jobs WHERE message_id=?) WHERE message_id=?",
+            (first, second),
+        )
+        assert [row[0] for row in c.execute("SELECT seq FROM messages WHERE id IN (?,?)", (first, second))] == [
+            None,
+            None,
+        ]
         job = c.execute("SELECT id FROM jobs WHERE message_id=?", (first,)).fetchone()["id"]
         hold = holds.put(
             c,
@@ -404,7 +474,8 @@ def test_relationship_lane_head_in_claim_backoff_does_not_block_other_lanes(api)
     assert claim(api, machine, runs.BOT)["message"]["id"] == first
 
 
-def test_relationship_wake_names_only_records_the_sponsor_can_open_at_claim(api):
+@pytest.mark.parametrize("count,remaining", [(28, "3"), (126, "100+")])
+def test_relationship_wake_names_only_records_the_sponsor_can_open_at_claim(api, count, remaining):
     store, auth = api.app.state.store, api.app.state.auth
     with store.transaction() as c:
         owner = auth.owner_identity(c)
@@ -427,7 +498,7 @@ def test_relationship_wake_names_only_records_the_sponsor_can_open_at_claim(api)
                 "readers": ["cara"],
             },
         )["id"]
-        for index in range(28)
+        for index in range(count)
     ]
     revoked, closed, other = [
         post(
@@ -441,12 +512,12 @@ def test_relationship_wake_names_only_records_the_sponsor_can_open_at_claim(api)
         c.execute("UPDATE tasks SET readers='[]' WHERE id=?", (revoked,))
         c.executemany(
             "UPDATE tasks SET created_at=? WHERE id=?",
-            [(f"2026-01-{index:02d}T00:00:00Z", tid) for index, tid in enumerate(open_ids, 1)],
+            [(H.shift("2026-01-01T00:00:00Z", seconds=index), tid) for index, tid in enumerate(open_ids, 1)],
         )
     post(api, f"tasks/{closed}/move", {"to": "closed", "why": "Already handled."})
     machine = worker(api)
     heartbeat(api, machine)
     body = claim(api, machine, runs.BOT)["message"]["body"]
     assert page in body
-    assert body.endswith("Open tasks " + ", ".join(open_ids[:2:-1]) + " (3 more).")
-    assert all(ident not in body for ident in (other_page, revoked, closed, other, *open_ids[:3]))
+    assert body.endswith("Open tasks " + ", ".join(reversed(open_ids[-25:])) + f" ({remaining} more).")
+    assert all(ident not in body for ident in (other_page, revoked, closed, other, *open_ids[:-25]))

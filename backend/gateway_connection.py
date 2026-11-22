@@ -41,7 +41,7 @@ import time
 from clients import gateway as G
 
 from . import destinations, read_cache
-from .credentials import drop_service, keep_service, kept_record, open_kept
+from .credentials import KEPT, drop_service, keep_service, kept_record, open_kept
 from .store import H, Problem
 
 
@@ -627,17 +627,35 @@ def run_credentials_for(c, vault, settings, who, attempt_id):
     return items
 
 
+def run_base(base):
+    try:
+        return G.safe_base(base)
+    except ValueError:
+        return ""  # an environment URL the key may not go to (the page says so)
+
+
+def has_run_key(c, settings):
+    """Whether the current connection has a key and an address a turn can use."""
+    if _demo(settings):
+        return False
+    record, rows = _snapshot(c)
+    if not run_base(url(c, settings, record)):
+        return False
+    if env_key(settings):
+        return True
+    stored = record.get("key") or ""
+    if not stored.startswith(KEPT):
+        return bool(stored)  # older connections kept their sealed key in the record itself
+    return (rows.get(SECRETS["key"][0]) or {}).get("ciphertext") is not None
+
+
 def run_credentials(c, vault, settings, model):
     """What a run on `model` gets in its environment from the connection: the key and URL for a Tico model with a key
     set, else nothing. Shaped like `GET credential-runtime`'s items."""
     if not is_tico(model):
         return []
     secret, base, _ = target(c, vault, settings)
-    try:
-        base = G.safe_base(base)
-    except ValueError:
-        return []  # an environment URL the key may not go to (the page says so)
-    if not secret:
+    if not secret or not (base := run_base(base)):
         return []
     return [
         {"id": "gateway-key", "name": G.LABEL, "env": RUN_KEY_ENV, "kind": "api_key", "value": secret},
