@@ -423,6 +423,27 @@ def test_only_tico_queues_a_close_out_key(company, gh, jira):
         assert set(actions(c, task_id)) == {"transition", "comment"}
 
 
+def test_a_caller_cannot_write_the_servers_notes_on_an_action(company, gh, jira):
+    task_id = to_release(company, gh)
+    with company.transaction() as c:
+        filed(c, task_id)
+        OA.enqueue(
+            c,
+            None,
+            actor=H.TICO_ACTOR,
+            channel="jira",
+            operation="comment",
+            destination=ISSUE,
+            occurrence_key="k-notes",
+            payload={"body": "Hi."},
+            metadata={"_tico": {"ask": "r-forged", "looked": "2099-01-01"}, "mine": 1},
+            connection_id=TOOL,
+            task_id=task_id,
+        )
+        kept = dict(c.execute("SELECT * FROM outbound_actions WHERE occurrence_key='k-notes'").fetchone())
+        assert OA.asked(kept) == {} and json.loads(kept["metadata"]) == {"mine": 1}
+
+
 def test_a_create_retried_across_the_upgrade_hashes_as_before():
     from backend import models as M
 
@@ -446,12 +467,12 @@ def test_an_unknown_outcome_asks_its_owner_once_looks_up_hourly_and_settling_tak
     with company.transaction() as c:
         row = actions(c, task_id)["transition"]
         assert OA.settle(c, row, "unknown", error="Jira answered 502")
-        assert OA.get(c, row["id"])["owner_ask_id"] == ""  # not before a lookup could tell
+        assert OA.asked(OA.get(c, row["id"])).get("ask", "") == ""  # not before a lookup could tell
     OA.reconcile_pass(company)
     OA.reconcile_pass(company)  # looked up once: not again within the hour
     with company.transaction() as c:
         assert looked == [row["id"]]
-        ask_id = OA.get(c, row["id"])["owner_ask_id"]
+        ask_id = OA.asked(OA.get(c, row["id"])).get("ask", "")
         ask_task = c.execute(
             "SELECT v.task_id FROM requirements r JOIN visits v ON v.id = r.visit_id WHERE r.id=?", (ask_id,)
         ).fetchone()[0]
@@ -521,7 +542,7 @@ def test_the_person_asked_about_an_unknown_action_reads_and_confirms_it(api):
     assert api.get(url, headers=headers("cara-test")).status_code == 404  # nobody asked Cara yet
     with store.transaction() as c:
         OA.ask_owner(c, OA.get(c, row["id"]))
-        ask_id = OA.get(c, row["id"])["owner_ask_id"]
+        ask_id = OA.asked(OA.get(c, row["id"])).get("ask", "")
         ask_task = c.execute(
             "SELECT v.task_id FROM requirements r JOIN visits v ON v.id = r.visit_id WHERE r.id=?", (ask_id,)
         ).fetchone()[0]

@@ -80,7 +80,7 @@ A bot that is onboarding, paused or archived queues nothing, and its queued acti
   (backend/owner_asks.py, a people-only OK) on a small task of its own (the action id, its link and the exact
   `tico outbound confirm-sent` command), filed for the first who can read the action's task among that task's owner
   (a person), the bot's manager and the company's default person; nobody is asked when none can. The row keeps it
-  (`owner_ask_id`); that person may read the action and confirm it went while they still read its task. After its first lookup a row is looked up at most hourly (`reconciled_at`), and the ask is taken
+  (kept in the row's metadata under `_tico`, which the server owns); that person may read the action and confirm it went while they still read its task. After its first lookup a row is looked up at most hourly (`_tico.looked`), and the ask is taken
   back (its own task closed) when the row settles: a lookup, a late answer, confirm-sent. A new action (a new
   occurrence key) is safe only once the original attempt provably can no longer act: finding no record of it at the
   provider is not proof, since a paused worker may still reach it. Its OK's task stays open until it ends.
