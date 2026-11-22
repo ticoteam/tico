@@ -122,8 +122,9 @@ def slack_entry(c: Any, settings: Any, bot: str) -> dict[str, Any]:
 
 
 def need(c: Any, bot: str, entry: dict[str, Any], verb: str) -> None:
-    # No `can` key at all means read and post; an explicit `can:` list is exact (`can: [read]` stays read-only).
-    can: list[Any] = (entry.get("can") or []) if "can" in entry else ["read", "post"]
+    # No `can` (missing, or the empty list a runner reports for it) means read and post; a listed `can:` is exact, so
+    # `can: [read]` stays read-only.
+    can: list[Any] = entry.get("can") or ["read", "post"]
     verbs = [str(v).lower() for v in can]
     if verb not in verbs:
         raise Problem(
