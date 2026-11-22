@@ -169,10 +169,10 @@ export function setRoutineLimit(id: string, per30m: number | null) {
 }
 
 /** When it stops starting new runs: an ISO time, or null for never (PATCH ends_at). A later one restarts an ended one. */
-export function setRoutineEnd(id: string, endsAt: string | null, key: readonly unknown[] = routinesQuery.queryKey, one: readonly unknown[] = routineQuery(id).queryKey) {
+export function setRoutineEnd(id: string, endsAt: string | null) {
   const change = (r: Routine): Routine => ({ ...r, ends_at: endsAt ?? undefined, ended: false });
   return write<Routine>({
-    key: [key as unknown[], one as unknown[]],
+    key: [routinesQuery.queryKey, routineQuery(id).queryKey],
     optimistic: (cur: Routine[] | Routine | undefined) => (Array.isArray(cur) ? mapList(cur, id, change) : cur && change(cur)),
     send: (idempotencyKey) => api.patch<Routine>(`/api/v2/automations/${enc(id)}`, { ends_at: endsAt }, { idempotencyKey }),
   });
@@ -859,13 +859,14 @@ export async function createWatch(name: string, me: string) {
   return made.id;
 }
 
-/** A watch's sources and keep or drop rules live in its trigger; a change sends the trigger whole (and a new name, if
-   given). A new push source's address is in the answer once (`push_addresses`): it goes back to the caller only. */
-export function setWatchTrigger(watch: Routine, trigger: Trigger, name?: string) {
-  const change = (w: Routine): Routine => ({ ...w, trigger, ...(name ? { name } : {}) });
+/** A watch's sources and keep or drop rules live in its trigger; a change sends the trigger whole (and a new name and
+   end, if given). A new push source's address is in the answer once (`push_addresses`): it goes back to the caller only. */
+export function setWatchTrigger(watch: Routine, trigger: Trigger, name?: string, endsAt?: string | null) {
+  const end = endsAt === undefined ? {} : { ends_at: endsAt };
+  const change = (w: Routine): Routine => ({ ...w, trigger, ...(name ? { name } : {}), ...(endsAt === undefined ? {} : { ends_at: endsAt ?? undefined, ended: false }) });
   return write<Routine & { push_addresses?: Record<string, string> | null }>({
     key: [watchQuery(watch.id).queryKey, watchesQuery.queryKey],
     optimistic: (cur: Routine | Routine[] | undefined) => (Array.isArray(cur) ? mapList(cur, watch.id, change) : cur && change(cur)),
-    send: (idempotencyKey) => api.patch(`/api/v2/automations/${enc(watch.id)}`, { trigger, ...(name ? { name } : {}) }, { idempotencyKey }),
+    send: (idempotencyKey) => api.patch(`/api/v2/automations/${enc(watch.id)}`, { trigger, ...(name ? { name } : {}), ...end }, { idempotencyKey }),
   });
 }

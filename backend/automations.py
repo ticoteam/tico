@@ -1658,16 +1658,16 @@ def turn_source(c):
     }
 
 
-def fire(c, kind, payload, ref="", match=None, access=None, only=None):
+def fire(c, kind, payload, ref="", match=None, access=None, only=None, now=None):
     """Queue a run of every enabled automation on a `kind` trigger (or the one `only`) that `match(trigger)` takes,
     that may read what arrived (`access(row)`, its owner's rights now) and whose trigger filters hold; one dropped
     counts toward its day. Returns the queued run ids. Never raises: an automation problem must not undo the write
-    that triggered it."""
+    that triggered it. `now` is the time its end dates are read at, when the caller already decided on one."""
     try:
         chain = CHAIN.get() or _turn_chain(c)
         if len(chain) >= MAX_CHAIN:
             return []
-        queued, now = [], H.now()
+        queued, now = [], now or H.now()
         for row in c.execute(
             "SELECT * FROM automations WHERE deleted_at IS NULL AND enabled=1 AND trigger_type=? "
             + ("AND id=? " if only else "")

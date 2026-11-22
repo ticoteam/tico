@@ -97,7 +97,7 @@ function RoutineView({ id, onClose }: { id: string; onClose: () => void }) {
           </LabelValue>
           {!r.readonly && !r.builtin && !r.wakes && (
             <LabelValue label="Ends">
-              <Ends routine={r} disabled={!r.can_edit || tmp} />
+              <Ends value={r.ends_at} disabled={!r.can_edit || tmp} onChange={(endsAt) => void press('routines.setEnd', { routine: r.id, endsAt })} />
             </LabelValue>
           )}
           {r.updated_at && <LabelValue label="Changed">{fmtDate(r.updated_at)}</LabelValue>}

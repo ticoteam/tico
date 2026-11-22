@@ -312,12 +312,11 @@ export const setEnd = defineAction({
   input: z.strictObject({
     routine: id,
     endsAt: z.nullable(z.string().check(z.maxLength(40), z.regex(/(Z|[+-]\d{2}:\d{2})$/), z.describe('an ISO time with Z or an offset; null for never'))),
-    watch: z.optional(z.boolean()),
   }),
   // A later end turns an ended routine back on, an inbox one included, which only its person's own confirmation may.
   tico: false,
   can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false,
-  run: (_ctx, i) => said(i.watch ? setRoutineEnd(i.routine, i.endsAt, watchesQuery.queryKey, watchQuery(i.routine).queryKey) : setRoutineEnd(i.routine, i.endsAt)),
+  run: (_ctx, i) => said(setRoutineEnd(i.routine, i.endsAt)),
   did: (i) => (i.endsAt === null ? 'Never ends' : 'End date set'),
   target: (i) => ({ kind: 'routine', id: i.routine }),
 });
@@ -1202,6 +1201,7 @@ export const updateWatch = defineAction({
     name: z.optional(name),
     // keep (with a tag) or drop what a sentence describes
     rules: z.optional(z.array(z.strictObject({ do: z.enum(['keep', 'drop'] as const), tag: z.optional(z.string().check(z.maxLength(24))), text: z.string().check(z.minLength(1), z.maxLength(300)) })).check(z.maxLength(20))),
+    endsAt: z.optional(z.nullable(z.string().check(z.maxLength(40), z.regex(/(Z|[+-]\d{2}:\d{2})$/)))),
   }),
   run: (ctx, i) => {
     const w = watchOf(ctx, i.watch);
@@ -1213,7 +1213,7 @@ export const updateWatch = defineAction({
       ...w.trigger,
       ...(i.rules ? { rules: i.rules.map((r) => (r.do === 'drop' ? { do: 'drop', text: r.text.trim() } : { do: 'keep', tag: r.tag?.trim() ?? '', text: r.text.trim() })) } : {}),
     };
-    return said(setWatchTrigger(w, trigger, i.name?.trim())).then(() => undefined);
+    return said(setWatchTrigger(w, trigger, i.name?.trim(), i.endsAt)).then(() => undefined);
   },
   did: () => 'Saved',
   target: (i) => ({ kind: 'watch', id: i.watch }),

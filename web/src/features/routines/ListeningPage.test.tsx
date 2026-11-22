@@ -189,7 +189,7 @@ describe('One watch', () => {
     expect((await run('listening.addSource', { watch: 'w1', kind: 'push', site: 'Support form' }, { via: 'tico' })).ok).toBe(false);
   });
 
-  it('an ended watch says so on its row and page, and Edit sets a later end', async () => {
+  it('an ended watch says so on its row and page, and Edit saves a later end with its other edits', async () => {
     const endsAt = new Date(2026, 10, 29).toISOString();
     const ended = `Ended ${fmtDate(new Date(2026, 10, 28, 12))}`;
     const sent = record((url, method) => (method === 'PATCH' && url.endsWith('/automations/w1') ? ok(watch({ ends_at: new Date(2026, 11, 1).toISOString() })) : nothing()));
@@ -205,8 +205,10 @@ describe('One watch', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Edit watch' });
     fireEvent.click(within(dialog).getByRole('button', { name: /^Ends/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'Monday, November 30' }));
+    expect(sent).toHaveLength(0); // kept in the dialog until Save, so Cancel drops it
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(sent).toHaveLength(1));
-    expect(sent[0]).toMatchObject({ method: 'PATCH', body: { ends_at: new Date(2026, 11, 1).toISOString() } });
+    expect(sent[0]).toMatchObject({ method: 'PATCH', body: { name: 'Mentions of us', ends_at: new Date(2026, 11, 1).toISOString() } });
     await waitFor(() => expect(queryClient.getQueryData<Routine>(watchQuery('w1').queryKey)?.ends_at).toBe(new Date(2026, 11, 1).toISOString()));
   });
 

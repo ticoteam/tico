@@ -12,7 +12,7 @@ from backend import listening as L
 from backend.tests.helpers.api import get, post
 from backend.tests.helpers.automation_api import NOTE_STEP, as_bot, make, patch
 from backend.tests.helpers.automation_runs import sql
-from backend.tests.helpers.listening import item, listening, save, source_id
+from backend.tests.helpers.listening import FakeJudge, item, listening, save, source_id
 
 T0 = datetime(2026, 11, 2, 8, 0, tzinfo=timezone.utc)  # a Monday
 END = "2026-11-03T00:00:00-08:00"  # Tuesday 08:00 UTC: Monday's and Tuesday's 09:00 runs fall either side of it
@@ -136,3 +136,54 @@ def test_a_listening_pass_that_started_before_the_end_admits_nothing_after_it(ap
     assert sql(api, "SELECT next_due_at FROM automations WHERE id=?", (aid,))[0]["next_due_at"] == (
         "2026-11-02T08:00:00.000000Z"
     )
+
+
+def test_a_page_read_does_not_start_once_the_end_comes_mid_pass(api, monkeypatch):
+    pages = [{"id": f"p{n}", "kind": "page", "site": "", "target": f"https://acme.example/{n}"} for n in (1, 2)]
+    with time_machine.travel(at(-0.5), tick=False):
+        listening(api, sources=pages, ends_at="2026-11-02T07:45:00Z")
+    read = []
+    with time_machine.travel(at(-0.4), tick=False) as clock:
+
+        def reader(url):
+            read.append(url)
+            clock.move_to(at(-0.1))  # the end passes while this page is read
+            return {"status": "ok", "text": "Pricing"}
+
+        monkeypatch.setattr(L, "READER", reader)
+        monkeypatch.setattr(L, "CLOCK", lambda: 0.0)  # the pass's own time never runs out here
+        L.run_pass(api.app.state.store, at(-0.4))
+    assert len(read) == 1
+
+
+def test_a_send_admitted_before_the_end_runs_and_moves_its_time_together(api, monkeypatch):
+    with time_machine.travel(at(-0.5), tick=False):
+        aid = listening(api, ends_at="2026-11-02T08:00:01Z")["id"]  # sends at 08:00
+        save(api, source_id(api, aid), [item(1, "A post about standups")])
+    fire = automations.fire
+    with time_machine.travel(T0, tick=False) as clock:
+
+        def late(*args, **kwargs):
+            clock.move_to(at(0.01))  # the end passes between the send's check and its run
+            return fire(*args, **kwargs)
+
+        monkeypatch.setattr(automations, "fire", late)
+        L.run_pass(api.app.state.store, T0)
+    moved = sql(api, "SELECT next_due_at FROM automations WHERE id=?", (aid,))[0]["next_due_at"] > T0.isoformat()
+    assert moved and len(runs(api, aid)) == 1
+
+
+def test_a_scoring_call_made_before_the_end_keeps_its_answer(api):
+    keep = {"do": "keep", "tag": "leads", "text": "A team lead who might use the product"}
+    with time_machine.travel(at(-0.5), tick=False):
+        aid = listening(api, rules=[keep], ends_at="2026-11-02T07:50:00Z")["id"]
+        save(api, source_id(api, aid), [item(1, "A lead asks about standups [r0]")])
+    with time_machine.travel(at(-0.3), tick=False) as clock:
+
+        class Late(FakeJudge):
+            def __call__(self, state, questions, label=None):
+                clock.move_to(at(-0.1))  # the end passes while the call runs
+                return super().__call__(state, questions, label)
+
+        L.run_pass(api.app.state.store, at(-0.3), Late())
+    assert sql(api, "SELECT status FROM listening_items WHERE automation_id=?", (aid,))[0]["status"] == "kept"
