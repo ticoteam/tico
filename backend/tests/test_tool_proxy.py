@@ -1015,11 +1015,11 @@ def test_rule_p_holds_on_every_key_change_and_a_read_holder_never_gets_or_sees_a
 @pytest.mark.parametrize(
     ("service", "base"),
     [
-        ("twilio", "https://api.twilio.com"),
+        ("", "https://api.twilio.com"),
         ("", "https://API.Twilio.com"),
         ("", "https://api.dublin.ie1.twilio.com"),
         ("", "https://preview.messaging.twilio.com"),
-        ("close-crm", "https://api.close.com"),
+        ("", "https://api.close.com"),
         ("", "https://mcp.close.com/mcp"),
     ],
 )

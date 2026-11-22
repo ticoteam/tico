@@ -361,6 +361,25 @@ def test_the_record_integration_and_write_grant_are_required(api, store, vendor)
     assert _row(store, row["id"])["provider_attempted_at"] is None
 
 
+@pytest.mark.parametrize(
+    ("base", "accepted"),
+    [("https://API.Close.com", True), ("https://api.close.com.:443", True), ("https://api.close.com:8443", False)],
+)
+def test_the_queue_takes_the_providers_host_however_spelled_but_only_on_its_own_port(
+    api, store, monkeypatch, base, accepted
+):
+    vendor = _make(api, monkeypatch, "close_sms")
+    _policy(api, vendor)
+    with store.transaction() as c:
+        c.execute("UPDATE tools SET base_url=? WHERE id=?", (base, vendor.tool))
+    if accepted:
+        _queue(store, vendor, f"spelled-{base}")
+    else:
+        with pytest.raises(OA.Problem) as refused:
+            _queue(store, vendor, f"spelled-{base}")
+        assert refused.value.status == 422 and vendor.requests == []
+
+
 def test_twilio_template_uses_its_shared_key_pair_and_freezes_the_account(api, store, monkeypatch):
     vendor = _make(api, monkeypatch, "sms", template=True)
     _policy(api, vendor)

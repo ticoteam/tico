@@ -40,11 +40,8 @@ def _host(url: str) -> str:
 
 
 def provider_of(tool: Any) -> str | None:
-    """The SMS provider a tool talks to ("twilio" or "close-crm"), by its service or its host (any of the provider's own
-    hosts: regional, bulk or MCP), else None."""
-    service = str(tool["service"] or "") if "service" in tool.keys() else ""
-    if service in SERVICES.values():
-        return service
+    """The SMS provider a tool talks to ("twilio" or "close-crm"), by its host only (the provider's own domain or any
+    subdomain: regional, bulk or MCP), else None. Not by service or name, which Tools may infer from a title."""
     host = _host(str(tool["base_url"] or ""))
     for name in SERVICES.values():
         root = _host(str(TS.SERVICES[name]["base_url"])).split(".", 1)[-1]  # twilio.com, close.com
@@ -124,7 +121,10 @@ def _keys(c: Any, channel: str, connection_id: str, actor: str) -> _Keys:
     base = _host(str(TS.SERVICES[service]["base_url"]))
     found = c.execute(f"SELECT tl.* FROM tools tl WHERE tl.id=? AND {RECORD_INTEGRATION}", (connection_id,)).fetchone()
     # The provider's own API host, however its address is spelled (case, trailing dot, an explicit :443).
-    tool: Any = found if found and _host(str(found["base_url"] or "")) == base else None
+    # The provider's own API host on its own port, however the address is spelled (case, trailing dot, :443).
+    parts = urlsplit(str(found["base_url"] or "")) if found else None
+    same = parts is not None and _host(parts.geturl()) == base and parts.port in (None, 443)
+    tool: Any = found if same else None
     keys: list[Any] = (
         c.execute(
             f"SELECT k.* FROM credentials k WHERE k.tool_id=? AND {SHARED_KEY} AND k.access_level='read_write' "
