@@ -490,11 +490,25 @@ def register_core(
         for a bot wakes it; `wake_refs` go on that wake (an auto dream's release policy, backend/dream_auto.py)."""
         source = who
         actual_bot = source.task_actor or (source.actor if source.role == "bot" else "")
+        if body.from_private:
+            # Older clients' name for `private: false` from a private task's run.
+            body = body.model_copy(update={"private": False, "from_private": False})
+        elif body.private is None and privacy.private_execution(c, who):
+            # What a run on private work files is private unless it asks for company-visible (`private: false`).
+            body = body.model_copy(update={"private": True})
+        request_id = body.request_id
+        handoff = who.role == "bot" and who.actor != "bot:" + AGENT_OPS and not who.via
+        if request_id and handoff:
+            request_id = None  # a bot cites the person it is handing on; it never acts as them itself
+        elif request_id and who.via == "assistant":
+            pass  # the person's own words to their Assistant, checked once the owner is known
+        elif request_id:
+            who = delegated_identity(c, who, request_id, new_task=True)
         # Find-or-create (docs/dev/pipelines-v3.md "Intake"): a create naming its outside item's primary link returns
         # the task already holding it, after the same rule check, and files nothing; the checks that only filing needs
         # (the owner's cap, reach) are skipped for it when the caller may read it. One the caller may not read is never
         # named: the create is refused as already filed, after every check a filing makes. The item, not the title,
-        # makes it one task.
+        # makes it one task. Read as whoever the create acts as (a person's own request: that person).
         primary = found = None
         if getattr(body, "primary_link", None):  # only a JSON create's (M.TaskFile): never an upload's form
             try:
@@ -510,20 +524,6 @@ def register_core(
             same = lambda _c, _task_id: False  # another item's task with this title is other work
         else:
             hidden = False
-        if body.from_private:
-            # Older clients' name for `private: false` from a private task's run.
-            body = body.model_copy(update={"private": False, "from_private": False})
-        elif body.private is None and privacy.private_execution(c, who):
-            # What a run on private work files is private unless it asks for company-visible (`private: false`).
-            body = body.model_copy(update={"private": True})
-        request_id = body.request_id
-        handoff = who.role == "bot" and who.actor != "bot:" + AGENT_OPS and not who.via
-        if request_id and handoff:
-            request_id = None  # a bot cites the person it is handing on; it never acts as them itself
-        elif request_id and who.via == "assistant":
-            pass  # the person's own words to their Assistant, checked once the owner is known
-        elif request_id:
-            who = delegated_identity(c, who, request_id, new_task=True)
         parent_id = auth.resolve_task(c, who, body.parent) if body.parent else None
         others = [(auth.resolve_task(c, who, r.task), r.kind) for r in body.relations]
         from .shared_bots import route
@@ -894,7 +894,7 @@ def register_core(
             **({"private_readers": row["private_readers"]} if row.get("private_readers") else {}),
         }
 
-    def cap_before_preflight(request, who, owner_ref, parent_ref=None, primary_link=None):
+    def cap_before_preflight(request, who, owner_ref, parent_ref=None, primary_link=None, request_id=None):
         """The task cap (CONTRACT §1) and reach (docs/reach.md) before any LLM preflight: a refused send spends no
         judgment and writes nothing. A retry whose Idempotency-Key already has a saved answer is not checked: `mutate`
         replays that answer."""
@@ -905,7 +905,7 @@ def register_core(
         with store.read() as c:
             if store.saved(c, who, request.url.path, request.headers.get("idempotency-key")):
                 return
-            if primary_link and _held_item(c, who, primary_link) == "readable":
+            if primary_link and not request_id and _held_item(c, who, primary_link) == "readable":
                 return  # it returns the task holding the item: nothing is sent to the owner
             original = auth.target(c, who, owner_ref, need="write")
             owner = auth.target(c, who, route(c, who.actor, original), need="write")
@@ -934,7 +934,8 @@ def register_core(
             # with its own rights, and is its requester (who filed it).
             who = Identity(who.task_actor, "bot", runner_id=who.runner_id, attempt_id=who.attempt_id, agent=who.agent)
             request.state.identity = who
-        cap_before_preflight(request, who, body.owner, body.parent, body.primary_link)
+        # A create carrying a person's request reads the item as that person, at the write: its cap is checked as ever.
+        cap_before_preflight(request, who, body.owner, body.parent, body.primary_link, body.request_id)
         rc = rule_check(
             who,
             "task_create",

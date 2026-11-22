@@ -16,11 +16,11 @@ from backend import egress
 from backend import hubdb as H
 from backend import item_metadata as IM
 from backend.item_sources import jira as JS
-from backend.tests.helpers.api import headers, post, put
+from backend.tests.helpers.api import claim, headers, post
 from backend.tests.helpers.credentials import setup
 from backend.tests.helpers.mcp import call
+from backend.tests.helpers.member_bots import agent_ops  # noqa: F401 - fixture
 from backend.tests.helpers.org_rule_check import color_rule, ruled  # noqa: F401 - fixture
-from backend.tests.helpers.triggers import hook
 
 PUBLIC = "93.184.215.14"
 TOKENS = {
@@ -414,3 +414,19 @@ def test_only_a_tool_everyone_sees_holds_records(api, jira):
     hidden = _create(api, f"jira:issue:PROJ-95@{acme}", expected=422)["error"]["detail"]
     missing = _create(api, "jira:issue:PROJ-95@no-such-tool", expected=422)["error"]["detail"]
     assert hidden == missing  # a hidden tool answers as a missing one
+
+
+def test_agent_ops_filing_a_persons_request_reads_the_claim_as_that_person(api, jira, agent_ops):  # noqa: F811
+    acme = jira.tools["acme.atlassian.net"]
+    machine = agent_ops
+    held = post(
+        api,
+        "tasks",
+        {"owner": "botops", "title": "Agent Ops' own", "private": True, "primary_link": f"jira:issue:PROJ-96@{acme}"},
+    )
+    held_id = _id(held)
+    post(api, "chat/botops", {"text": "File the Jira issue PROJ-96 for Ben"}, token="cara-test")
+    attempt = claim(api, machine, "botops")
+    body = {"owner": "ben", "title": "PROJ-96", "primary_link": f"jira:issue:PROJ-96@{acme}", "request_id": "turn"}
+    got = post(api, "tasks", body, token=attempt["token"], expected=409)  # Cara cannot read Agent Ops' private task
+    assert got["error"]["detail"] == "This item is already filed" and held_id not in json.dumps(got)
