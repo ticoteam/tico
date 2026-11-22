@@ -332,8 +332,13 @@ def _withdraw_outside(
     asked = str(detail.get("ask") or "")
     if asked:
         owner_asks.withdraw(conn, asked, why, task_id, advance=advance, raise_on_failure=True)
-        detail.pop("ask", None)
-        detail.pop("asked", None)
+        # Advancing the task can write this link's detail (a close-out marker): start from the stored copy.
+        stored = conn.execute("SELECT detail FROM task_links WHERE id=?", (link["id"],)).fetchone()
+        fresh = _detail({"detail": stored[0]}) if stored else dict(detail)
+        fresh.pop("ask", None)
+        fresh.pop("asked", None)
+        detail.clear()
+        detail.update(fresh)
         _save_detail(conn, link, detail)
 
 

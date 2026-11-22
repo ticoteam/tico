@@ -216,6 +216,30 @@ def test_withdrawn_mid_work_freezes_the_close_out_behind_one_ask_and_ready_again
         assert c.execute("SELECT COUNT(*) FROM task_links WHERE is_primary=1").fetchone()[0] == 1  # the same task
 
 
+def test_withdrawing_a_jira_ask_keeps_the_multiple_primary_closeout_ask_once(company, gh, jira):
+    task_id = to_release(company, gh)
+    with company.transaction() as c:
+        filed(c, task_id)
+        filed(c, task_id, ready=None, issue="HM-13")  # a second primary left by a task merge
+    jira.read("Backlog")
+    released(company, gh)
+    with company.transaction() as c:
+        assert stage(c, task_id) == "Release"
+        [(_, line, withdrawn)] = asks(c, task_id)
+        assert line.startswith(f"{ISSUE} left Ready in Jira") and not withdrawn
+
+    jira.read("Ready")
+    with company.transaction() as c:
+        [(_, _, withdrawn)] = asks(c, task_id)
+        assert withdrawn and stage(c, task_id) == "Done"
+        RC.moved(c, task_id, release_visit(c, task_id))  # replay close-out after the withdrawal advanced the task
+        filed_for = c.execute(
+            "SELECT COUNT(*) FROM requirements WHERE added_by_id=? AND line LIKE 'This task is filed for 2 Jira%'",
+            (H.TICO_ACTOR,),
+        ).fetchone()[0]
+        assert filed_for == 1
+
+
 def test_an_ok_never_unfreezes_only_jira_does_even_after_done(company, gh, jira):
     task_id = to_release(company, gh)
     with company.transaction() as c:
