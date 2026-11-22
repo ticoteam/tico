@@ -351,7 +351,8 @@ function Runner({ id }: { id: string | null | undefined }) {
 /** Who made it: the person or agent it names, and how when Agent Ops, the Assistant or a token made it. An id the
    directory does not know is shown as it is. */
 function Made({ id, via }: { id: string; via?: string }) {
-  const name = useName(id) || id;
+  const named = useName(id);
+  const name = id === 'keeper' ? 'Tico' : named || id;
   const who =
     via === 'botops' ? `Agent Ops for ${name}` : via === 'assistant' ? `${name}'s Assistant` : via === 'token' ? `${name} with a token` : name;
   return <p className="made">{`Made by ${who}`}</p>;

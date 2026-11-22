@@ -538,8 +538,8 @@ def _by_agent_ops(who):
 
 def _bot_draft(c, who, flow):
     """A new automation saved off, with version 1 pending, for a person with the change rule to turn on: what Agent Ops
-    makes for a bot that may not make it, and what anyone makes that sets a model its tasks run on which they may not
-    set (a bot's own call is refused, as before). Like a bot's other proposals it writes no audit row until then."""
+    makes for a bot that may not make it, and what a caller who may change the owner's automations makes when it sets a
+    model its tasks run on that they may not set. Like a bot's other proposals it writes no audit row until then."""
     aid = "auto_" + H.new_id()
     row = _save(c, who.actor, aid, {**flow, "enabled": False}, None, audit=False)
     c.execute("UPDATE automation_versions SET status='pending' WHERE automation_id=? AND n=?", (aid, row["version"]))
@@ -3971,14 +3971,15 @@ def install(app, store, auth, mutate):
         **api_v2(
             "Automations",
             "createAutomation",
-            "Save a new automation as version 1; a flow that fails its checks is refused with where and why. An agent may save one for an owner whose automations it may change (its own, or those of agents it manages); without that right the call is refused (403), except that Agent Ops saves a bot's request as a proposal (off, version 1 pending). Agent Ops saves what it makes off unless `enabled` is sent. An Assistant Message routine saves off with action, message_id and needs_confirm; only its person's card click enables it. A chooser without a mode defaults to Draft",
+            "Save a new automation as version 1; a flow that fails its checks is refused with where and why. An agent may save one for an owner whose automations it may change (its own, or those of agents it manages); without that right the call is refused (403). Two requests save a proposal instead (off, version 1 pending, for a person to turn on): Agent Ops for a bot that may not change that owner's automations, and a request from someone who may change them whose flow sets a task model they may not set (a person who may change it and may set that model approves it). Agent Ops saves what it makes off unless `enabled` is sent. An Assistant Message routine must omit `enabled` or send false; it saves off with action, message_id and needs_confirm, and only its person's card click enables it (a chooser without a mode defaults to Draft there). Any other caller sends choose.mode (draft or reply) with a chooser",
             "Automation",
         ),
     )
     def automations_create(request: Request, body: AutomationIn):
-        """Save a new automation as version 1. The caller must be allowed to change an automation of that owner; a bot
-        that may not proposes it instead (off, version 1 pending). What Agent Ops builds is saved off unless `enabled` is
-        sent."""
+        """Save a new automation as version 1. The caller must be allowed to change an automation of that owner, or it is
+        refused (403); the exception is Agent Ops acting for a bot that may not, which saves a proposal (off, version 1
+        pending). A flow that sets a task model the caller may not set is proposed too, when the caller may change the
+        owner's automations. What Agent Ops builds is saved off unless `enabled` is sent."""
         who = request.state.identity
         created_via = _created_via(who)
 

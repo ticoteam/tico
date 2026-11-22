@@ -237,6 +237,7 @@ describe('One routine', () => {
     [{ created_by_id: 'human:me', created_via: 'assistant' }, "Made by Ada Example's Assistant"],
     [{ created_by_id: 'human:me', created_via: 'token' }, 'Made by Ada Example with a token'],
     [{ created_by_id: 'human:gone', created_via: 'token' }, 'Made by human:gone with a token'],
+    [{ created_by_id: 'keeper' }, 'Made by Tico'],
   ])('says who made it and how, and shows an id the directory does not know as it is', async (made, line) => {
     record();
     const p = await openRoutine(made);

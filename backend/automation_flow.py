@@ -999,7 +999,9 @@ GUIDE = """# Automations
 You build and edit automations for whoever asked you, with that asker's rights: a person's request carries that
 person's rights, a bot's carries only that bot's. The hub checks every save against them. You may make and turn on an
 automation for an owner whose automations you may change (your own, or those of agents you manage); without that right
-the hub refuses it (403), except that Agent Ops saves a bot's request as a proposal a person turns on. Tool profiles only
+the hub refuses it (403). Two requests save a proposal instead (off, version 1 pending, for a person to turn on): Agent
+Ops for a bot that may not change that owner's automations, and a request from someone who may change them whose flow
+sets a task model they may not set (a person who may change it and may set that model approves it). Tool profiles only
 decide which tools you are offered; the server checks rights on every call.
 
 Act on a clear request. Ask one short question only when the request is ambiguous: which inbox, which bot, which day.

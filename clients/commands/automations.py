@@ -151,11 +151,14 @@ def automation_template(api, args):
     "tico_automation_create",
     "Save a new automation (version 1); a bad flow is refused on save, with why. An agent may make and "
     "turn on an automation for an owner whose automations it may change (its own, or those of agents it "
-    "manages); without that right the save is refused (403). Agent Ops saves it off unless `enabled` is "
-    "sent, and a bot's request it may not carry out is saved as a proposal for a person to turn on. In "
-    "Assistant chat a Message routine saves off and returns an approval card that only the person's click "
-    "turns on. Choose defaults to Draft; use Reply only when the person explicitly asks for replies and "
-    "the inbox permits sending.",
+    "manages); without that right the save is refused (403). Two requests save a proposal instead (off, "
+    "version 1 pending, for a person to turn on): Agent Ops for a bot that may not change that owner's "
+    "automations, and a request from someone who may change them whose flow sets a task model they may not "
+    "set (a person who may change it and may set that model approves it). Agent Ops saves off unless "
+    "`enabled` is sent. In Assistant chat a Message routine saves off and must omit `enabled` or send false "
+    "(true is refused with 403 confirm_required); its person's card click turns it on, and a chooser without "
+    "a mode defaults to Draft there. Any other caller sends `choose.mode` (draft or reply) with a chooser. "
+    "Use reply only when the person explicitly asks for replies and the inbox permits sending.",
     {k: v for k, v in _AUTO_FIELDS.items()},
     required=("name", "owner", "trigger"),
     writes=True,
