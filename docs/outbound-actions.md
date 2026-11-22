@@ -75,7 +75,12 @@ A bot that is onboarding, paused or archived queues nothing, and its queued acti
 - **Unknown.** Never sent again on its own, never put back in line: the worker that made the attempt may still reach
   the provider. The adapter's reconcile (outside any transaction) may settle it done or failed from the provider's own
   record; the original attempt's own answer arriving after all (matched by the row and its attempt marker) settles it;
-  otherwise it is logged and waits until a person confirms it went. It is never canceled or marked not sent. A new action (a new
+  otherwise it is logged and waits until a person confirms it went. It is never canceled or marked not sent. An
+  external one still unknown after a lookup (at once when its channel has no lookup) asks its owner once
+  (backend/owner_asks.py): an OK on the action's task, asked of the task's owner when a person, else of the people
+  its OK would be asked of (the bot's manager, then the company's default person); on a task that is not open, a
+  small task of its own is filed for it. The row keeps it (`owner_ask_id`), it is looked up at most hourly from then
+  on, and the ask is taken back (its own task closed) when the row settles: a lookup, a late answer, confirm-sent. A new action (a new
   occurrence key) is safe only once the original attempt provably can no longer act: finding no record of it at the
   provider is not proof, since a paused worker may still reach it. Its OK's task stays open until it ends.
 
@@ -113,6 +118,18 @@ uses the same lookup to settle an unknown row done; a row it cannot prove stays 
 rejection after its Retry-After (else a minute), as is anything that fails before the write, a lookup answer cut off
 or not the shape asked for included. Jira's 400, 401, 403 or
 404 to the write is a certain refusal; any other answer, or none, is unknown.
+
+### Release close-out
+
+backend/release_closeout.py queues the Jira side of a released task filed for a Jira issue (its primary link): once
+every merged PR of the task is in an actual release tag (the In a release reading of saved releases, no new GitHub
+call), the task's forward or done move queues a `transition` to `Done` (Jira's default Done status name) and one
+`comment` naming each tag with its GitHub release link, as Tico itself, with occurrence keys
+`closeout:<task>:<repo>@<tag>:jira:<operation>`. The reply in the task's Slack thread (its oldest link to a Slack
+message) goes through the Slack post route's own write (`slack_bots.queue_post`), once by the
+`closeout-slack:<task>:<repo>@<tag>` registry mark. Each is on its own: one refused is logged (`closeout.skipped`)
+and the others go. A primary issue withdrawn, closed or deleted in Jira while the task is open freezes it behind one
+owner ask (docs/dev/pipelines-v3.md "Withdrawn or closed outside").
 
 ## Adding a channel
 

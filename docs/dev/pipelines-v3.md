@@ -1190,6 +1190,17 @@ or whose answer is not an issue's, keeps the metadata as it was with `read_error
 issue moved to another project gets a new key: a task filed for the old key keeps it, and one filed for the new key
 shows as a duplicate to merge.
 
+#### Withdrawn or closed outside
+
+After each read of a task's primary Jira issue, backend/release_closeout.py `watch` judges it: active in an In
+Progress category status or in its Ready status (the first To Do category status read for the task, kept on the link
+as `detail.ready`), withdrawn in another To Do status, closed in a Done category status, gone when Jira answers 404.
+Anything but active, while the task is open and Tico has not closed it out itself, asks the task's owner (a person;
+for a bot's task its manager, then the company's default person) ONE OK on the task (backend/owner_asks.py): "keep
+working on it, or close this task?" ("settle it" when closed). Like any OK it holds the task in its stage, so the
+release close-out is frozen; OK or push past keeps the task and lets the close-out go, closing the task settles it.
+Active again takes the ask back: the same task moves on and its close-out resumes. Secondary links are informational.
+
 #### Intake
 
 Find-or-create is the ordinary create: `POST /api/v2/tasks` with `primary_link`, a Jira issue for now

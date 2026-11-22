@@ -516,7 +516,42 @@ def settle(
     if state == "unknown":
         LOG.warning("outbound action %s (%s) has an unknown outcome", row["id"], row["channel"])
         H.event(c, H.TICO_ACTOR, "outbound.unknown", row["id"], {"channel": row["channel"]})
+        adapter = ADAPTERS.get(row["channel"])
+        if adapter is None or adapter.reconcile is None:
+            ask_owner(c, row)  # nothing can look it up: the owner is asked at once
+    elif row["owner_ask_id"]:
+        from . import owner_asks
+
+        owner_asks.withdraw(c, str(row["owner_ask_id"]), f"It is {state} now", row["task_id"])
     return True
+
+
+UNKNOWN_LOOK_S = 3600  # an unknown row whose owner was asked is looked up at most this often
+
+
+def ask_owner(c: Any, row: Any) -> None:
+    """One ask of the owner for an external action whose outcome stays unknown (backend/owner_asks.py): the action's
+    task's owner, else the people asked for its OK. Taken back when the row settles (`settle`)."""
+    if row["audience"] != "external" or row["owner_ask_id"]:
+        return
+    from . import owner_asks
+
+    task = H.task(c, row["task_id"]) if row["task_id"] else None
+    person = owner_asks.person_for(c, task, row["actor"])
+    if not person:
+        return
+    what = f"{row['channel']} {row['operation']} on {row['destination']}"[:200]
+    asked = owner_asks.ask(
+        c,
+        row["task_id"],
+        person,
+        f"Tico can't tell whether its {what} went through: check {row['channel']}, and confirm it in Tico if it did.",
+        title=f"Check a {what}",
+        body=f"Outbound action {row['id']}: if it went, `tico outbound confirm-sent {row['id']}`. Tico never sends it "
+        "again on its own.",
+    )
+    if asked:
+        c.execute("UPDATE outbound_actions SET owner_ask_id=? WHERE id=?", (asked[0], row["id"]))
 
 
 STOPS = (task_asks.SENT_BACK, task_asks.WITHDRAWN)  # an OK sent back, taken back, or its task closed: it stops
@@ -530,10 +565,12 @@ def apply(c: Any, seen: Any, found: "Settled | None") -> None:
     the worker that made the attempt may still reach the provider. What it cannot settle goes to the back of the
     line."""
     if found is None or found.state not in RESOLVED:
-        c.execute(
+        moved = c.execute(
             "UPDATE outbound_actions SET updated_at=? WHERE id=? AND state='unknown' AND updated_at=?",
             (H.now(), seen["id"], seen["updated_at"]),
-        )
+        ).rowcount
+        if moved:
+            ask_owner(c, get(c, seen["id"]))  # it stays unknown after a look: its owner is asked, once
         return
     row = get(c, seen["id"])
     if row and row["state"] == "unknown" and row["updated_at"] == seen["updated_at"]:
@@ -581,8 +618,9 @@ def recover(store: Any, now: str | None = None) -> int:
 
 
 def reconcile_pass(store: Any, limit: int = 100) -> int:
-    """Unknown rows whose adapter can ask the provider, the least recently looked at first. Each adapter call runs
-    outside any transaction; what it found is written only while the row is still as it was read (`apply`)."""
+    """Unknown rows whose adapter can ask the provider, the least recently looked at first (one whose owner was asked
+    at most every UNKNOWN_LOOK_S). Each adapter call runs outside any transaction; what it found is written only while
+    the row is still as it was read (`apply`)."""
     channels = [name for name, adapter in ADAPTERS.items() if adapter.reconcile]
     if not channels:
         return 0
@@ -591,8 +629,8 @@ def reconcile_pass(store: Any, limit: int = 100) -> int:
             dict(r)
             for r in c.execute(
                 f"SELECT * FROM outbound_actions WHERE state='unknown' AND channel IN ({','.join('?' * len(channels))}) "
-                "ORDER BY updated_at LIMIT ?",
-                (*channels, limit),
+                "AND (owner_ask_id='' OR updated_at<?) ORDER BY updated_at LIMIT ?",
+                (*channels, H.shift(H.now(), seconds=-UNKNOWN_LOOK_S), limit),
             )
         ]
     for row in rows:
