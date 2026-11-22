@@ -3460,12 +3460,35 @@ def worktree_heads(detail):
 
 
 @private_task_write
-def task_link(conn, actor, task_id, url, title=None, kind=None, mover=None, wake_once=None, release_repo=""):
+def task_link(
+    conn,
+    actor,
+    task_id,
+    url,
+    title=None,
+    kind=None,
+    mover=None,
+    wake_once=None,
+    release_repo="",
+    connection_id="",
+    item=None,
+    plain_when_unsure=False,
+):
     """Attach a link to a task.
 
     `wake_once` arms (True) or disarms (False) one wake on a pull request link: the next time its checks
     finish, it gets an approving or change-requesting review, or a release ships it, the task's owner hears
-    once, in the task's conversation. It never changes the task's status (`github.py`)."""
+    once, in the task's conversation. It never changes the task's status (`github.py`).
+
+    A link to an item of a source (backend/item_sources) is stored typed: its source, item type and key. A GitHub PR is
+    one in the connected App's organization; any other source's item is typed whatever the link's kind, with the
+    connection (a `tools` row) it came through: `connection_id`, or for a site source (Jira) the one serving the link's
+    site (item_sources.outside_item). A connection id is a tool's name, not a secret; using the tool needs access. A
+    task holds one typed row per item; linking it again by any URL answers that row. `item` is a stored link's (source,
+    item type, key, connection), copied as it is (a merge); with `item` given as False the link is a plain one.
+    `plain_when_unsure` keeps a link whose connection cannot be chosen (two serve its site) plain instead of refusing
+    it (a task created with links, which cannot name one). A URL a task links through one connection is not linked
+    again through another."""
     _writer(conn, actor, task_id=task_id)
     row = task(conn, task_id)
     if not row:
@@ -3474,6 +3497,9 @@ def task_link(conn, actor, task_id, url, title=None, kind=None, mover=None, wake
     url = str(url or "").strip()
     if kind == "session":
         return _task_session_link(conn, actor, task_id, url, title)
+    connection_id = str(connection_id or "").strip()
+    if connection_id and not _one(conn, "SELECT 1 FROM tools WHERE id=?", (connection_id,)):
+        refuse(conn, actor, "connection", f"no connection {connection_id}: a connection is a tool's id")
     if not re.match(r"^https?://\S+$", url):
         refuse(conn, actor, "kind", "a link is an http(s) URL")
     kind = kind or link_kind(url)
@@ -3483,6 +3509,21 @@ def task_link(conn, actor, task_id, url, title=None, kind=None, mover=None, wake
         kind = "url"
     if kind not in LINK_KINDS:
         refuse(conn, actor, "kind", f"a link is {'|'.join(LINK_KINDS)}, not {kind}")
+    from . import item_sources as IS
+
+    # Another source's item (GitHub's PR is typed below, only in the App's organization): (source, type, key,
+    # connection). A site source's item (Jira's) takes the connection serving its site, or stays a plain link.
+    if item is not None:
+        outside = tuple(item) if item else None
+    else:
+        try:
+            outside = IS.outside_item(conn, url, connection_id, tuple(s for s in IS.SOURCES if s != "github"))
+        except ValueError as error:
+            if not plain_when_unsure or connection_id:
+                refuse(conn, actor, "connection", str(error))
+            outside = None
+    if connection_id and not outside:
+        refuse(conn, actor, "connection", "a connection names where an outside item came from: link a Jira issue")
     if wake_once is not None and (kind != "pr" or not app):
         refuse(
             conn, actor, "kind", "a one-shot wake needs a pull request link in the connected GitHub App's organization"
@@ -3500,6 +3541,28 @@ def task_link(conn, actor, task_id, url, title=None, kind=None, mover=None, wake
             )
         )
         have = next((p for p in candidates if PR.same(p, url)), None)
+    elif outside:
+        # One typed row per item on a task, whatever URL names it; the same URL linked before as a plain link (before
+        # its site had a connection) becomes that item's row.
+        scoped = "source=? AND item_type=? AND item_key=? AND connection_id=?"
+        have = _one(conn, f"SELECT * FROM task_links WHERE task_id=? AND {scoped}", (task_id, *outside))
+        bare = _one(conn, "SELECT * FROM task_links WHERE task_id=? AND url=? AND source IS NULL", (task_id, url))
+        other = (
+            None
+            if have or item is not None
+            else _one(conn, "SELECT 1 FROM task_links WHERE task_id=? AND url=? AND source IS NOT NULL", (task_id, url))
+        )
+        if other:
+            refuse(conn, actor, "connection", "This task already links that URL through another connection")
+        if bare and have:
+            # The plain row of this URL is the item's typed row now: one row per item, findable by `?link=`.
+            conn.execute("DELETE FROM task_links WHERE id=?", (bare["id"],))
+        elif bare:
+            conn.execute(
+                "UPDATE task_links SET source=?,item_type=?,item_key=?,connection_id=?,updated_at=? WHERE id=?",
+                (*outside, now(), bare["id"]),
+            )
+            have = _one(conn, "SELECT * FROM task_links WHERE id=?", (bare["id"],))
     else:
         have = _one(conn, "SELECT * FROM task_links WHERE task_id=? AND url=?", (task_id, url))
     if have:
@@ -3543,7 +3606,13 @@ def task_link(conn, actor, task_id, url, title=None, kind=None, mover=None, wake
         link,
     )
     match = PR_URL.match(url)
-    if kind == "pr" and match:
+    if outside:
+        # The item the link is (no row of this task has it: one that did was returned above).
+        conn.execute(
+            "UPDATE task_links SET source=?,item_type=?,item_key=?,connection_id=? WHERE id=?", (*outside, link["id"])
+        )
+        link = _one(conn, "SELECT * FROM task_links WHERE id=?", (link["id"],))
+    elif kind == "pr" and match:
         conn.execute(
             "UPDATE task_links SET repo=?,number=?,updated_at=? WHERE id=?",
             (match.group(1) + "/" + match.group(2), int(match.group(3)), now(), link["id"]),

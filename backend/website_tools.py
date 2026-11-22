@@ -1108,6 +1108,7 @@ def update_tool(
         sites = clean_sites(body.sites)
         if sites != sites_of(tool):
             fields["sites"] = json.dumps(sites)
+            api_tools.keep_sites(c, tool, tool["base_url"], fields["sites"])
     if body.central_only is not None and int(body.central_only) != int(tool["central_only"]):
         fields["central_only"] = int(body.central_only)
     if fields:

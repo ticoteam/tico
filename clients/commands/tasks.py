@@ -777,6 +777,10 @@ def _first_stage_picks(api, pipeline):
         "pipeline": _s("Only this pipeline's tasks: its id"),
         "stage": _s("Only the tasks in this stage: its id (engineering-build), or its name with pipeline"),
         "waiting_on": _s("Only open tasks waiting on this person or bot: `me`, a human id or a bot slug"),
+        "link": _s(
+            "Only tasks linking this outside item: <source>:<type>:<key>[@<connection_id>] "
+            "(jira:issue:PROJ-12@<tool id>, github:pr:acme/app#7) or its URL"
+        ),
         "exact": {
             "type": "boolean",
             "default": False,
@@ -787,7 +791,7 @@ def _first_stage_picks(api, pipeline):
 def task_list(api, args):
     more = {
         name: args[name]
-        for name in ("sort", "number", "updated_since", "snoozed", "q", "pipeline", "stage")
+        for name in ("sort", "number", "updated_since", "snoozed", "q", "pipeline", "stage", "link")
         if args.get(name)
     }
     if args.get("all") and not args.get("snoozed"):
@@ -1211,6 +1215,8 @@ def _link(client, fields):
         sent["kind"] = fields["kind"]
     if fields.get("wake_once") is not None:  # --no-wake-once sends false, as the hand parser did
         sent["wake_once"] = fields["wake_once"]
+    if fields.get("connection_id"):
+        sent["connection_id"] = fields["connection_id"]
     if fields.get("on_behalf_of"):
         sent["on_behalf_of"] = fields["on_behalf_of"]
     return _call(client, "tico_task_link", sent, unwrapped=True)
@@ -1507,6 +1513,7 @@ TASK = (
             Arg("kind", "--session", action="store_const", const="session"),
             Arg("wake_once", "--wake-once", action="store_const", const=True),
             Arg("wake_once", "--no-wake-once", action="store_const", const=False),
+            Arg("connection_id", flag="--connection", metavar="TOOL_ID"),
         ),
         example="tico task link T1 https://github.com/acme/app/pull/12 --title 'Fix PR'",
         run=_link,

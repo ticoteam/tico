@@ -298,15 +298,24 @@ def _relations(conn: Any, a: Row, b: Row) -> list[tuple[str, str, str]]:
 
 
 def _links(conn: Any, a: Row, b: Row) -> list[Row]:
-    have = {row[0] for row in conn.execute("SELECT url FROM task_links WHERE task_id=?", (b["id"],))}
+    """A's links B lacks: by URL (B's link to it, with its connection, is kept), and a typed one (an outside item) by
+    its item, which B holds once."""
+    columns = "url, connection_id, source, item_type, item_key"
+    have = [tuple(row) for row in conn.execute(f"SELECT {columns} FROM task_links WHERE task_id=?", (b["id"],))]
+    urls = {row[0] for row in have}
+    items = {row[1:] for row in have if row[2] is not None}
     return [
         dict(row)
         for row in conn.execute(
-            "SELECT url, title, kind FROM task_links WHERE task_id=? AND kind NOT IN ('pr','session','worktree') "
-            "ORDER BY created_at",
+            f"SELECT title, kind, {columns} FROM task_links WHERE task_id=? "
+            "AND kind NOT IN ('pr','session','worktree') ORDER BY created_at",
             (a["id"],),
         )
-        if row["url"] not in have
+        if row["url"] not in urls
+        and (
+            row["source"] is None
+            or (row["connection_id"], row["source"], row["item_type"], row["item_key"]) not in items
+        )
     ]
 
 
@@ -444,7 +453,20 @@ def merge(
         TR._insert(conn, actor, from_id, to_id, kind, ts)
         TR._history(conn, actor, from_id, to_id, kind, True, f"from {_num(a)}", at=ts)
     for link in links:
-        H.task_link(conn, actor, b["id"], link["url"], link.get("title"), kind=link["kind"], mover=mover)
+        H.task_link(
+            conn,
+            actor,
+            b["id"],
+            link["url"],
+            link.get("title"),
+            kind=link["kind"],
+            mover=mover,
+            # A's stored link as it is: an outside item keeps its connection whatever the tools say now, a plain link
+            # stays plain.
+            item=(link["source"], link["item_type"], link["item_key"], link["connection_id"])
+            if link["source"]
+            else False,
+        )
     # A's open subtasks go under B before A closes, so the close finds none to close.
     moved: list[str] = []
     for child in _open_children(conn, a["id"]):

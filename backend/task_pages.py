@@ -274,6 +274,7 @@ def release_tags(conn: "sqlite3.Connection", task_id: str) -> list[str]:
     cursor = conn.execute(
         "SELECT r.tag, MIN(r.published_at) FROM task_links tl "
         "JOIN item_metadata f ON f.source = tl.source AND f.item_type = tl.item_type AND f.item_key = tl.item_key "
+        "AND f.connection_id = tl.connection_id "
         "JOIN github_release_commits rc ON rc.commit_sha = json_extract(f.fields, '$.merged_sha') AND rc.included = 1 "
         "JOIN github_releases r ON r.id = rc.release_id WHERE tl.source = 'github' AND tl.item_type = 'pr' "
         "AND (tl.task_id = ?1 OR tl.task_id IN (SELECT l.to_task_id FROM links l WHERE l.from_task_id = ?1)) "

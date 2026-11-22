@@ -891,7 +891,8 @@ def _open_at_head(conn: "sqlite3.Connection", repo: str, sha: str) -> list[int]:
     out: list[int] = []
     for (key,) in conn.execute(
         "SELECT item_key FROM item_metadata WHERE source=? AND json_extract(fields, '$.head_sha')=? "
-        "AND final_at IS NULL AND json_extract(fields, '$.state')='open' AND item_type=? ORDER BY created_at, id",
+        "AND final_at IS NULL AND json_extract(fields, '$.state')='open' AND item_type=? AND connection_id='' "
+        "ORDER BY created_at, id",
         (SOURCE, sha, PR),
     ).fetchall():
         found_repo, number = split_key(str(key))
@@ -2309,7 +2310,7 @@ def runs_checks(conn: "sqlite3.Connection", repo: str) -> bool:
     Tico's own. Read from saved PRs, so it costs no call to GitHub; a repo's first PR has none to go by (C13 then)."""
     prefix = repo.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "#%"
     found = conn.execute(
-        "SELECT 1 FROM item_metadata WHERE source=? AND item_type=? AND item_key LIKE ? ESCAPE '\\' "
+        "SELECT 1 FROM item_metadata WHERE source=? AND item_type=? AND item_key LIKE ? ESCAPE '\\' AND connection_id='' "
         "AND json_extract(fields, '$.checks_state') IN ('pending', 'success', 'failure', 'skipped', 'cancelled') LIMIT 1",
         (SOURCE, PR, prefix),
     ).fetchone()

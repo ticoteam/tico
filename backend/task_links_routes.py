@@ -103,12 +103,15 @@ def register(app, auth, mover, mutate, person_only, settings, store, task_view):
                     mover=mover(c, who),
                     wake_once=body.wake_once,
                     release_repo=settings.release_repo,
+                    connection_id=body.connection_id or "",
                 )
             else:
                 raise Problem("kind", "Send a url to add or remove with a link id", 422)
             return {"links": H.task_links(c, task_id)}
 
-        return mutate(request, body, work)
+        # A retry of a link sent before `connection_id` existed hashed the body without it.
+        legacy = body.model_dump(exclude={"connection_id"}) if body.connection_id is None else None
+        return mutate(request, body, work, retry_body=lambda _c, _result: legacy)
 
     @app.post(
         "/api/v2/tasks/{tid}/relations",

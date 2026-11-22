@@ -826,6 +826,68 @@ def add_source(
     return entity_id
 
 
+EXTERNAL_REF_STATUSES = ("active", "gone")  # gone: the record no longer exists outside (a card shows active ones)
+
+
+def external_ref(
+    c: sqlite3.Connection,
+    actor: str,
+    entity_id: str,
+    system: object,
+    external_type: object,
+    external_id: object,
+    *,
+    connection_id: str = "",
+    url: str = "",
+    revision: str = "",
+    status: str = "active",
+) -> Row:
+    """Record that an entity is a record in another system: (connection, system, type, id), the connection being the
+    tool it came through ('' for none; the caller checks its reader may see it). Saving the same record again updates its
+    url, revision and status and answers the same row, so a retry or a resync lands once. A record already on another
+    entity is refused without naming it (that entity may be hidden from the writer). A record erased at its owner's
+    request is not written again. Two connections may hold the same id as two records."""
+    _writer(c, actor)
+    _live(c, actor, entity_id)
+    system = _required(c, actor, system, "system")
+    if system.lower() == "tico":
+        # Tico's own pointers (a document's file, `document_files`) are written by Tico, never through this.
+        _refuse(c, actor, "kind", "system tico is Tico's own; name the other system the record is in")
+    kind = _required(c, actor, external_type, "record type")
+    external = _required(c, actor, external_id, "record id")
+    connection_id = str(connection_id or "").strip()
+    if status not in EXTERNAL_REF_STATUSES:
+        _refuse(c, actor, "kind", f"a record's status is {' or '.join(EXTERNAL_REF_STATUSES)}")
+    if connection_id and not c.execute("SELECT 1 FROM tools WHERE id = ?", (connection_id,)).fetchone():
+        _refuse(c, actor, "connection", f"no connection {connection_id}: a connection is a tool's id")
+    key = (system, kind, external, connection_id)
+    where = "system = ? AND external_type = ? AND external_id = ? AND connection_id = ?"
+    have = _one(c, f"SELECT * FROM entity_external_refs WHERE {where}", key)
+    now = H.now()
+    if have is None:
+        # Erased records are suppressed by (system, type, id, connection); one erased before records had connections
+        # was hashed by (system, type, id) and stays suppressed on every connection.
+        legacy = "\x1f".join((system, kind, external))
+        scoped = external_suppression(system, kind, external, connection_id)
+        if is_suppressed(c, "external", scoped) or is_suppressed(c, "external", legacy):
+            _refuse(c, actor, "suppressed", "That was erased at its owner's request; it is not created again")
+        c.execute(
+            "INSERT INTO entity_external_refs (id, entity_id, connection_id, system, external_type, external_id, url, "
+            "revision, synced_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (_id("xref"), entity_id, connection_id, system, kind, external, url.strip(), revision.strip(), now, status),
+        )
+    elif have["entity_id"] != entity_id:
+        _refuse(c, actor, "conflict", "That record is already another contact's; merge the two if they are one")
+    else:
+        c.execute(
+            "UPDATE entity_external_refs SET url = ?, revision = ?, status = ?, synced_at = ? WHERE id = ?",
+            (url.strip(), revision.strip(), status, now, have["id"]),
+        )
+    found = _one(c, f"SELECT * FROM entity_external_refs WHERE {where}", key)
+    assert found is not None
+    return found
+
+
 # Rule sources: the organizations that impose external rules. rule_sources retired into entities (migration
 # 20261108044824): a rule source is an organization whose properties.rule_source says what it was (its kind, creator
 # and creation time, and the id rule_sources gave it, which is the entity's own id for a new one).
@@ -1419,6 +1481,12 @@ def _normal_identifier(kind: str, value: object) -> str:
     return text.lower()
 
 
+def external_suppression(system: str, external_type: str, external_id: str, connection_id: str) -> str:
+    """What an erased record's suppression hashes: a versioned tuple, so a record with no connection ('') stays apart
+    from each connection's and from a legacy (system, type, id) hash, which suppressed it on every connection."""
+    return "v2:" + json.dumps([system, external_type, external_id, connection_id], separators=(",", ":"))
+
+
 def _hash_identifier(kind: str, value: object, salt: str) -> str:
     return hmac.new(salt.encode(), f"{kind}\x1f{_normal_identifier(kind, value)}".encode(), hashlib.sha256).hexdigest()
 
@@ -1493,10 +1561,11 @@ def _suppress_identifiers(c: sqlite3.Connection, ids: list[str], reason: str) ->
             params,
         )
     ]
+    # A record is one connection's (system, type, id, connection): erasing it suppresses it on that connection only.
     pairs += [
-        ("external", "\x1f".join(str(part) for part in row))
+        ("external", external_suppression(str(row[0]), str(row[1]), str(row[2]), str(row[3])))
         for row in c.execute(
-            "SELECT system, external_type, external_id FROM entity_external_refs "
+            "SELECT system, external_type, external_id, connection_id FROM entity_external_refs "
             "WHERE entity_id IN (SELECT value FROM json_each(:ids))",
             params,
         )
@@ -2029,6 +2098,12 @@ def self_summary(c: sqlite3.Connection, who: str) -> dict[str, Any] | None:
     }
 
 
+def visible_entity(c: sqlite3.Connection, who: str, entity_id: str) -> bool:
+    """Whether `who` sees the entity `entity_id` names, as `card` does: a merged one is the one it was merged into, an
+    erased one is gone, a hidden one is not seen."""
+    return bool(_visible_rows(c, V.reader(c, who), _follow(c, [entity_id])))
+
+
 def card(c: sqlite3.Connection, who: str, entity_id: str) -> dict[str, Any] | None:
     """An entity as its reader sees it: its visible values (with source and age), its current links to visible entities,
     and its notes the reader may read. None when the entity does not show."""
@@ -2073,8 +2148,8 @@ def card(c: sqlite3.Connection, who: str, entity_id: str) -> dict[str, Any] | No
     # The records this entity is in other systems (a CRM record, a repository): a pointer, shown with the entity.
     refs = _rows(
         c,
-        "SELECT system, external_type, external_id, url, synced_at FROM entity_external_refs "
-        "WHERE entity_id = ? AND status = 'active' ORDER BY system, external_type, external_id LIMIT 50",
+        "SELECT system, external_type, external_id, connection_id, url, synced_at FROM entity_external_refs "
+        "WHERE entity_id = ? AND status = 'active' ORDER BY system, external_type, external_id, connection_id LIMIT 50",
         (me,),
     )
     notes = [

@@ -366,6 +366,14 @@ class TaskLinkView(TypedDict):
     path: NotRequired[str | None]
     detail: NotRequired[str | None]
     """JSON text of the link's own record (a session's thread, a checkout's setup). On the task's own read and its /links only"""
+    source: NotRequired[str | None]
+    """The outside item the link is (backend/item_sources), on the task's own read: its source (github, jira)"""
+    item_type: NotRequired[str | None]
+    item_key: NotRequired[str | None]
+    connection_id: NotRequired[str]
+    """The connection (a tool's id) the item came through; empty for none (GitHub). A name, not a secret"""
+    is_primary: NotRequired[int]
+    """1 on the one task an intake made for this item"""
 
 
 @answer

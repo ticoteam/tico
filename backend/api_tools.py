@@ -1358,11 +1358,36 @@ def _unique_id(c, base):
 
 def _former(c, tid):
     """Whether a grouped tool's key still names `tid` as its old tool (its run address keeps it; an ungroup brings it
-    back), so no new tool takes that id."""
+    back), or an outside reference still names it as its connection (TS.referenced), so no new tool takes that id."""
+    if TS.referenced(c, tid):
+        return True
     try:
         return c.execute("SELECT 1 FROM credentials WHERE former_tool_id=? LIMIT 1", (tid,)).fetchone() is not None
     except sqlite3.OperationalError:
         return False
+
+
+def keep_sites(c, tool, base_url, sites):
+    """409 `connection_sites` when a change would move a tool that outside references name (TS.referenced) to another
+    endpoint (its base URL, scheme and host in any case, its path as written) or other hosts: its items' keys (Jira's
+    `PROJ-7`, a CRM's customer 42) are its old endpoint's, so another one is a new tool."""
+    from urllib.parse import urlsplit
+
+    from . import item_sources as IS
+
+    def endpoint(url):
+        parts = urlsplit(str(url or "").strip())
+        return (parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/"), parts.query)
+
+    before = IS.hosts(_field(tool, "base_url"), _field(tool, "sites"))
+    moved = endpoint(base_url) != endpoint(_field(tool, "base_url")) or IS.hosts(base_url, sites) != before
+    if moved and TS.referenced(c, tool["id"]):
+        raise Problem(
+            "connection_sites",
+            f"{tool['name']} names outside items of {', '.join(sorted(before)) or 'its site'}: add a new tool for "
+            "another site",
+            409,
+        )
 
 
 def _clean(fields):
@@ -1477,6 +1502,7 @@ def update_tool(c, who, tool_id, body, admins, auth=None):
         raise Problem("delivery", f"{tool['name']} signs in: its tokens stay with Tico, so it stays on the proxy", 422)
     if merged == tool:
         return _tool_view(tool_row(c, tool_id))
+    keep_sites(c, tool, merged["base_url"], _field(tool, "sites"))
     c.execute(
         "UPDATE tools SET name=?,service=?,base_url=?,auth_scheme=?,check_path=?,delivery=?,updated_at=? WHERE id=?",
         (

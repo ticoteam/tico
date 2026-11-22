@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any, cast
 from fastapi import Request
 from pydantic import Field
 
+from backend.api_answers.contacts import ContactsRecordResult
+from backend.api_contract import api_v2
 from backend.entities import store as ES
 from backend.models import Contract
 from backend.store import Problem
@@ -65,6 +67,17 @@ class ContactsNoteCreate(Contract):
     body: str
     audience: str = "company"
     evidence_id: str | None = None
+
+
+class ContactsExternalRef(Contract):
+    ref: str
+    system: str = Field(max_length=100)
+    external_type: str = Field(max_length=100)
+    external_id: str = Field(max_length=500)
+    connection_id: str = Field("", max_length=200)
+    url: str = Field("", max_length=2000)
+    revision: str = Field("", max_length=200)
+    status: str = "active"
 
 
 class ContactsOption(Contract):
@@ -446,6 +459,48 @@ def install(
             return {"id": note_id, "entity": entity_id}
 
         return mutate(request, body, work)
+
+    @app.post(
+        "/api/v2/entities/external-refs",
+        **api_v2(
+            "Contacts",
+            "recordEntityExternalRef",
+            "Record that an entity is a record in another system (a CRM account, a Jira customer): system, record type "
+            "and id, through a connection (a tool's id; empty for none). Saving the same record again "
+            "updates its url, revision and status; one already on another entity, or erased at its owner's request, is "
+            "refused. status gone keeps the pointer off the card. The answer names the record and its entity by id only",
+            ContactsRecordResult,
+        ),
+    )
+    def contacts_external_ref(request: Request, body: ContactsExternalRef):
+        """Record that an entity is a record in another system, through a connection. The answer, which is also what a
+        retry is answered with, holds only the record's and the entity's ids, and a retry checks the entity is still
+        one the caller sees."""
+        actor = caller(request)
+
+        def work(c: sqlite3.Connection):
+            entity_id = ES.target(c, actor, body.ref)
+            row = ES.external_ref(
+                c,
+                actor,
+                entity_id,
+                body.system,
+                body.external_type,
+                body.external_id,
+                connection_id=body.connection_id,
+                url=body.url,
+                revision=body.revision,
+                status=body.status,
+            )
+            return {"id": row["id"], "entity": entity_id}
+
+        result = mutate(request, body, work)
+        # A retry answers the saved receipt: it is shown only while its entity, by the id it holds, is one the caller
+        # still sees.
+        with read() as c:
+            if not ES.visible_entity(c, actor, str(result["entity"])):
+                raise Problem("not_found", f"No entity {body.ref} that you can see", 404)
+        return result
 
 
 __all__ = ["install"]

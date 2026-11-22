@@ -71,6 +71,7 @@ tag, run `python3 scripts/build_api_docs.py`; `--check` verifies the guide match
 | Rules | Org rules: what teammates follow (internal) and what someone outside requires (external), with their due dates and sources. |
 | Risk | Risks: tags of kind risk that any task can carry, the matter facts and key dates of each tagged task, and the rules and documents linked to a risk. |
 | Page history | The pages the signed-in person opened in the app in the last 30 days, newest first, kept so Tico knows where they have been. Nobody else reads them; clearing removes the list. |
+| Contacts | People, organizations and places as the caller sees them, and the records each one is in other systems, one per connection. |
 | Products | Our products: kind, status, tax kind, owner, code, the agreement each is sold under and the vendors it depends on. Each is a Contacts Product record company/self owns. |
 | Strategy | The team's strategy: what the owner saves is live at once as the next numbered version; the bets goals serve. |
 | Inbound | Shared company inbound email and SMS for people and agents; reads never consume messages. |

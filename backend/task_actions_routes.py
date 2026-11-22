@@ -798,7 +798,7 @@ def register_core(
         if H.is_human(who.actor) and (request_id or inherited_request):
             c.execute("UPDATE tasks SET request_id=? WHERE id=?", (inherited_request or request_id, row["id"]))
         for url in body.links:
-            H.task_link(c, who.actor, row["id"], url, mover=True)
+            H.task_link(c, who.actor, row["id"], url, mover=True, plain_when_unsure=True)
         # A bot's finding on a pipeline task's own pull request is that task's review verdict, not a person's task.
         H.review_finding_route(c, who.actor, row["id"], row["owner_id"])
         # The parent it was filed under is a relation written here too, and reads back first.
