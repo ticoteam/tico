@@ -258,6 +258,7 @@ pub(super) const HUB_PATHS: &[&str] = &[
     "contacts link-type add",
     "contacts merge",
     "contacts note",
+    "contacts record",
     "contacts rules",
     "contacts self",
     "contacts type",
