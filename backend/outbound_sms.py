@@ -28,25 +28,36 @@ ACCOUNT_SID = re.compile(r"AC[0-9a-fA-F]{32}")
 LEAD_ID = re.compile(r"lead_[a-zA-Z0-9]{1,100}")
 TWILIO_SMS_ID = re.compile(r"(?:SM|MM)[0-9a-fA-F]{32}")
 CLOSE_SMS_ID = re.compile(r"acti_[a-zA-Z0-9]{1,100}")
-TWILIO_MESSAGES = re.compile(r"/2010-04-01/accounts/[^/]+/(?:sms/)?messages(?:\.json|\.xml)?(?:/|$)")
-CLOSE_SMS = re.compile(r"/api/v1/activity/sms(?:\.json)?(?:/|$)")
-SMS_PROXY_REFUSAL = "Queue this text through Outbound actions (tico outbound send)."
+SMS_PROXY_REFUSAL = (
+    "This SMS connection is reserved for Outbound actions: it only reads here. Queue a text with tico outbound send,"
+    " and use another connection for other writes."
+)
 TRANSPORT: Any = None  # tests stand in for the provider at the network edge
 
 
-def is_send_path(base_url: str, method: str, path: str) -> bool:
-    """Whether this request can write to a provider's SMS send resources."""
-    # By host, not by spelling: the proxy forwards any case of the provider's host to the same provider.
-    host = (urlsplit(base_url).hostname or "").rstrip(".")
-    path = re.sub(r"/+", "/", path).rstrip("/").lower()
-    method = method.upper()
-    if host == urlsplit(str(TS.SERVICES["twilio"]["base_url"])).hostname:
-        return method != "GET" and TWILIO_MESSAGES.match(path) is not None
-    return (
-        host == urlsplit(str(TS.SERVICES["close-crm"]["base_url"])).hostname
-        and method in {"POST", "PUT", "PATCH"}
-        and CLOSE_SMS.match(path) is not None
-    )
+def _host(url: str) -> str:
+    return (urlsplit(url).hostname or "").rstrip(".")
+
+
+def provider_of(tool: Any) -> str | None:
+    """The SMS provider a tool talks to ("twilio" or "close-crm"), by its service or its host (any of the provider's own
+    hosts: regional, bulk or MCP), else None."""
+    service = str(tool["service"] or "") if "service" in tool.keys() else ""
+    if service in SERVICES.values():
+        return service
+    host = _host(str(tool["base_url"] or ""))
+    for name in SERVICES.values():
+        root = _host(str(TS.SERVICES[name]["base_url"])).split(".", 1)[-1]  # twilio.com, close.com
+        if host == root or host.endswith("." + root):
+            return name
+    return None
+
+
+def reserved_for_queue(tool: Any, method: str) -> bool:
+    """Whether the Tools proxy must refuse this request: an SMS provider's record integration is reserved for the
+    outbound queue, so through the proxy it only reads (GET, HEAD). No path list to keep up with: every write, MCP call
+    included, goes through the queue's policy, approval and opt-out checks or not at all."""
+    return bool(tool["record_owner"]) and provider_of(tool) is not None and method.upper() not in {"GET", "HEAD"}
 
 
 class _Keys(NamedTuple):
@@ -110,10 +121,10 @@ def _keys(c: Any, channel: str, connection_id: str, actor: str) -> _Keys:
     from . import credentials as _credentials
 
     service = SERVICES[channel]
-    base = TS.SERVICES[service]["base_url"]
-    tool = c.execute(
-        f"SELECT tl.* FROM tools tl WHERE tl.id=? AND tl.base_url=? AND {RECORD_INTEGRATION}", (connection_id, base)
-    ).fetchone()
+    base = _host(str(TS.SERVICES[service]["base_url"]))
+    found = c.execute(f"SELECT tl.* FROM tools tl WHERE tl.id=? AND {RECORD_INTEGRATION}", (connection_id,)).fetchone()
+    # The provider's own API host, however its address is spelled (case, trailing dot, an explicit :443).
+    tool: Any = found if found and _host(str(found["base_url"] or "")) == base else None
     keys: list[Any] = (
         c.execute(
             f"SELECT k.* FROM credentials k WHERE k.tool_id=? AND {SHARED_KEY} AND k.access_level='read_write' "

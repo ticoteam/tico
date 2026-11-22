@@ -416,7 +416,7 @@ def test_header_query_and_twilio_style_schemes_rewrite_only_the_token(api):
             "https://api.twilio.com",
             "basic_password",
             "TWILIO_AUTH_TOKEN",
-            ("POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"),
+            ("POST", "PUT", "PATCH", "DELETE", "OPTIONS"),  # HEAD only reads, as GET
             (
                 "2010-04-01/Accounts/{account}/%4dessages.json",
                 "2010-04-01/Accounts/{account}/Messages/SM123",
@@ -457,8 +457,9 @@ def test_sms_record_integrations_require_the_outbound_queue(api, service, base, 
             if method != "HEAD":
                 assert denied.json()["error"]["code"] == "outbound_required", (method, path)
         assert call(api, "GET", path, token, tid=service).status_code == 200
-    assert call(api, "POST", sibling.format(account=account), token, tid=service).status_code == 200
-    assert [req.method for req in vendor.seen] == ["POST", *(["GET"] * len(paths)), "POST"]
+    # Reserved for the queue: any other write on this connection is refused too, not just the send paths.
+    assert call(api, "POST", sibling.format(account=account), token, tid=service).status_code == 403
+    assert [req.method for req in vendor.seen] == ["POST", *(["GET"] * len(paths))]
 
 
 def test_a_name_that_resolves_to_a_private_address_is_refused_and_nothing_is_sent(api):
@@ -1011,10 +1012,29 @@ def test_rule_p_holds_on_every_key_change_and_a_read_holder_never_gets_or_sees_a
         assert "billing" in api_tools.due(c)
 
 
-@pytest.mark.parametrize("base", ["https://API.Twilio.com", "https://api.twilio.com.", "https://Api.Twilio.Com/"])
-def test_an_sms_send_path_is_recognized_by_host_whatever_its_spelling(base):
+@pytest.mark.parametrize(
+    ("service", "base"),
+    [
+        ("twilio", "https://api.twilio.com"),
+        ("", "https://API.Twilio.com"),
+        ("", "https://api.dublin.ie1.twilio.com"),
+        ("", "https://preview.messaging.twilio.com"),
+        ("close-crm", "https://api.close.com"),
+        ("", "https://mcp.close.com/mcp"),
+    ],
+)
+def test_an_sms_record_integration_only_reads_through_the_proxy(service, base):
     from backend import outbound_sms
 
-    assert outbound_sms.is_send_path(base, "post", "/2010-04-01/Accounts/AC1/Messages.json")
-    assert outbound_sms.is_send_path("https://API.Close.com/", "PUT", "/api/v1/activity/sms/acti_1/")
-    assert not outbound_sms.is_send_path(base, "GET", "/2010-04-01/Accounts/AC1/Messages.json")
+    tool = {"service": service, "base_url": base, "record_owner": "outside"}
+    row = type("Row", (dict,), {"keys": dict.keys})(tool)
+    for method in ("POST", "put", "PATCH", "DELETE", "OPTIONS"):
+        assert outbound_sms.reserved_for_queue(row, method), (base, method)
+    for method in ("GET", "HEAD"):
+        assert not outbound_sms.reserved_for_queue(row, method)
+    plain = type("Row", (dict,), {"keys": dict.keys})({**tool, "record_owner": ""})
+    assert not outbound_sms.reserved_for_queue(plain, "POST")
+    other = type("Row", (dict,), {"keys": dict.keys})(
+        {"service": "", "base_url": "https://eviltwilio.com", "record_owner": "x"}
+    )
+    assert not outbound_sms.reserved_for_queue(other, "POST")
