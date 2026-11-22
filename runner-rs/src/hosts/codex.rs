@@ -3,6 +3,7 @@
 //! what each thread's shell commands see; the operator's own MCP servers are stubbed so they start nothing.
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -317,8 +318,7 @@ impl CodexHost {
             self.stop_and_reap().await.map_err(failed)?;
             let previous = self.0.sweep.lock().unwrap().take();
             if let Some(previous) = previous {
-                let redactor = self.0.sweep_redactor.lock().unwrap().clone();
-                if let Some(report) = turn_sweep::finish(previous, "codex", redactor).await {
+                if let Some(report) = self.sweep_reaped(previous).await {
                     self.0.sweep_reports.lock().unwrap().push(report);
                 }
                 self.prepare_sweep();
@@ -502,6 +502,31 @@ impl CodexHost {
         });
     }
 
+    async fn sweep_reaped(&self, target: turn_sweep::Turn) -> Option<Value> {
+        let mut redactor = self.0.sweep_redactor.lock().unwrap().clone();
+        let home = |key| self.0.env.get(key).filter(|value| !value.is_empty());
+        let codex_home = home("CODEX_HOME")
+            .map(PathBuf::from)
+            .or_else(|| home("HOME").map(|home| PathBuf::from(home).join(".codex")));
+        if let Some(home) = codex_home {
+            // The app-server can refresh the login after startup. Mask the current
+            // credentials before forming or clipping a command-line diagnostic.
+            let secrets = tokio::task::spawn_blocking(move || {
+                let auth = crate::model_subscriptions::read_codex_auth(&home.join("auth.json"))?;
+                Some(crate::model_subscriptions::secrets_in(&auth))
+            })
+            .await
+            .ok()
+            .flatten();
+            if let Some(secrets) = secrets {
+                redactor
+                    .get_or_insert_with(|| Arc::new(Redactor::new(&[])))
+                    .add(&secrets);
+            }
+        }
+        turn_sweep::finish(target, "codex", redactor).await
+    }
+
     pub(crate) async fn finish_turn(&self) -> Vec<Value> {
         let mut reports = std::mem::take(&mut *self.0.sweep_reports.lock().unwrap());
         if self.0.sweep.lock().unwrap().is_none() {
@@ -511,9 +536,8 @@ impl CodexHost {
         let reaped = self.stop_and_reap().await;
         let target = self.0.sweep.lock().unwrap().take();
         if let Some(target) = target {
-            let redactor = self.0.sweep_redactor.lock().unwrap().clone();
             reports.extend(match reaped {
-                Ok(()) => turn_sweep::finish(target, "codex", redactor).await,
+                Ok(()) => self.sweep_reaped(target).await,
                 Err(error) => {
                     Some(json!({"text": format!("Codex process cleanup incomplete. {error}")}))
                 }

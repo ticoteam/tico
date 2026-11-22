@@ -510,19 +510,14 @@ fn clip(text: &str, chars: usize) -> String {
 }
 
 /// The turn's processes still running, spared ones aside.
-fn leftovers(turn: &Turn, mark_error: &mut Option<&'static str>) -> Vec<Process> {
-    let procs = table();
-    let marks = if mark_error.is_some() {
-        HashMap::new()
-    } else {
-        marks(turn, &procs).unwrap_or_else(|error| {
-            *mark_error = Some(error);
-            HashMap::new()
-        })
-    };
+fn leftovers(
+    turn: &Turn,
+    procs: &HashMap<u32, Proc>,
+    marks: &HashMap<Process, bool>,
+) -> Vec<Process> {
     let tracked = turn.tracking.as_ref().map(|tracking| {
         let mut tracking = tracking.lock().unwrap();
-        tracking.observe(&procs);
+        tracking.observe(procs);
         tracking
     });
     let mut cgrouped = HashSet::new();
@@ -610,58 +605,83 @@ fn scrub_command(command: &str, redactor: Option<&crate::redact::Redactor>) -> S
     crate::redact::scrub_credentials(&clean, &[])
 }
 
+fn running(id: Process) -> bool {
+    process(id.pid).is_some_and(|p| p.id == id && !p.zombie)
+}
+
 /// Stops what `turn` left running. Blocking, with a short grace and bounded SIGKILL passes.
 fn sweep(
     turn: &Turn,
     redactor: Option<&crate::redact::Redactor>,
 ) -> (Vec<Stopped>, Option<&'static str>) {
-    let mut stopped = Vec::new();
+    sweep_with_marks(turn, redactor, marks)
+}
+
+fn sweep_with_marks(
+    turn: &Turn,
+    redactor: Option<&crate::redact::Redactor>,
+    mut read_marks: impl FnMut(
+        &Turn,
+        &HashMap<u32, Proc>,
+    ) -> Result<HashMap<Process, bool>, &'static str>,
+) -> (Vec<Stopped>, Option<&'static str>) {
     let mut mark_error = None;
+    let mut known_marks = HashMap::new();
+    let mut scan = || {
+        let procs = table();
+        if mark_error.is_none() {
+            match read_marks(turn, &procs) {
+                // Keep verified identities for escalation even if a later read times out.
+                Ok(found) => known_marks.extend(found),
+                Err(error) => mark_error = Some(error),
+            }
+        }
+        leftovers(turn, &procs, &known_marks)
+    };
+    let mut signaled = Vec::new();
     let mut seen = HashSet::new();
     let mut stop = |p: Process, sig| {
         let command = (!seen.contains(&p)).then(|| command_of(p.pid));
         if signal(p, sig) {
             if let Some(command) = command {
                 seen.insert(p);
-                stopped.push(Stopped {
-                    pid: p.pid,
-                    command: clip(&scrub_command(&command, redactor), COMMAND_CHARS),
-                });
+                signaled.push((p, command));
             }
         }
     };
-    let mut left = leftovers(turn, &mut mark_error);
-    if left.is_empty() {
-        return (stopped, mark_error);
-    }
+    let mut left = scan();
     for &p in &left {
         stop(p, libc::SIGTERM);
     }
     let until = Instant::now() + GRACE;
-    while Instant::now() < until {
+    while !left.is_empty() && Instant::now() < until {
         std::thread::sleep(Duration::from_millis(50));
         // A full scan can read every process's environment. Wait on the known
         // identities first, then look for anything they left behind.
-        if left
-            .iter()
-            .all(|id| !process(id.pid).is_some_and(|p| p.id == *id && !p.zombie))
-        {
-            left = leftovers(turn, &mut mark_error);
+        if !left.iter().copied().any(running) {
+            left = scan();
+        }
+    }
+    if !left.is_empty() {
+        for _ in 0..PASSES {
+            let left = scan();
             if left.is_empty() {
-                return (stopped, mark_error);
+                break;
             }
+            for p in left {
+                stop(p, libc::SIGKILL);
+            }
+            std::thread::sleep(Duration::from_millis(20));
         }
     }
-    for _ in 0..PASSES {
-        let left = leftovers(turn, &mut mark_error);
-        if left.is_empty() {
-            break;
-        }
-        for p in left {
-            stop(p, libc::SIGKILL);
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    let stopped = signaled
+        .into_iter()
+        .filter(|(id, _)| !running(*id))
+        .map(|(id, command)| Stopped {
+            pid: id.pid,
+            command: clip(&scrub_command(&command, redactor), COMMAND_CHARS),
+        })
+        .collect();
     (stopped, mark_error)
 }
 
@@ -952,6 +972,45 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_mark_scan_timeout_preserves_the_job_for_sigkill() {
+        use std::io::{BufRead, BufReader};
+        use std::os::unix::process::ExitStatusExt;
+        use std::process::{Command, Stdio};
+
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "trap '' TERM; echo ready; exec /bin/sleep 900"])
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut ready = String::new();
+        BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        assert_eq!(ready.trim(), "ready");
+        let id = process(child.id()).unwrap().id;
+        let mut scans = 0;
+        let timeout = "Timed out reading Docker turn marks.";
+        let (stopped, error) = sweep_with_marks(&Turn::default(), None, |_, _| {
+            scans += 1;
+            if scans == 1 {
+                Ok(HashMap::from([(id, true)]))
+            } else {
+                Err(timeout)
+            }
+        });
+        let survived = running(id);
+        if survived {
+            let _ = child.kill();
+        }
+        let status = child.wait().unwrap();
+        assert!(!survived);
+        assert_eq!(status.signal(), Some(libc::SIGKILL));
+        assert_eq!(stopped.iter().map(|p| p.pid).collect::<Vec<_>>(), [id.pid]);
+        assert_eq!(error, Some(timeout));
+        assert_eq!(scans, 2);
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn a_marked_job_is_swept_after_its_unsampled_shell_exits() {
@@ -1023,6 +1082,8 @@ for line in sys.stdin:
         assert env['TICO_TURN_MARK'] == os.environ['TICO_TURN_MARK'] != 'old-mark'
         pids = [os.getpid()]
         cwd = os.path.dirname(os.environ['FAKE_PIDS'])
+        with open(os.path.join(os.environ['CODEX_HOME'], 'auth.json'), 'w') as f:
+            json.dump({'tokens': {'refresh_token': os.environ['FAKE_SECRET']}}, f)
         os.mkfifo(os.path.join(cwd, 'hold'))
         # A plain tool, a job in a new group of the app-server session, and a
         # new session like Codex's pipe/PTY executor. On macOS these have no mark.
@@ -1040,24 +1101,22 @@ for line in sys.stdin:
     print(json.dumps({'id': msg['id'], 'result': result}), flush=True)
 "#,
         );
-        let secret = "synthetic credential with a long tail ".repeat(4);
+        let secret = "rt_synthetic_refresh_token_example";
         let env: crate::env::Env = [
             (
                 "PATH".into(),
                 format!("{}:{}", dir.display(), std::env::var("PATH").unwrap()),
             ),
+            ("CODEX_HOME".into(), dir.display().to_string()),
             ("FAKE_PIDS".into(), pids_file.display().to_string()),
-            ("FAKE_SECRET".into(), secret.clone()),
+            ("FAKE_SECRET".into(), secret.into()),
             (MARK_ENV.into(), "old-mark".into()),
         ]
         .into();
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let codex = crate::hosts::codex::CodexHost::on_home(env.clone(), tx, None);
         let host = crate::hosts::Host::Codex(codex.clone());
-        host.set_attempt(
-            "attempt",
-            Some(Arc::new(crate::redact::Redactor::new(&[secret]))),
-        );
+        host.set_attempt("attempt", Some(Arc::new(crate::redact::Redactor::new(&[]))));
         host.start().await.unwrap();
         host.start_thread(
             "ops",
@@ -1130,9 +1189,9 @@ for line in sys.stdin:
             report["leftover_processes"]["top"][0],
             json!({"command": "/bin/sleep 900", "count": 2})
         );
-        let text = report["text"].as_str().unwrap();
+        let text = report.to_string();
         assert!(text.contains(crate::redact::MASK), "{text}");
-        assert!(!text.contains("synthetic"), "{text}");
+        assert!(!text.contains("rt_synthetic"), "{text}");
         assert!(codex.finish_turn().await.is_empty());
     }
 

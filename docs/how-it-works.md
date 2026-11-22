@@ -556,6 +556,8 @@ hidden or cleared mark can escape if it starts a separate session, directly or t
 that links it to the turn exits before the runner records that link. On Linux the runner uses the turn scope where
 available. In Docker the bot user reads the turn mark so the supervisor can identify detached jobs. The run records
 incomplete cleanup if the app-server cannot be reaped within the stop window or the Docker mark reader fails or times out.
+The supervisor can still stop jobs already identified before a mark reader failure. Diagnostics count confirmed exits
+and mask credentials from the current Codex sign-in file.
 Claude shells kept on a background wait can keep running.
 
 **Settings → General → Health → Details** counts this company fallback: a limited bot covered by it gets no "has no fallback

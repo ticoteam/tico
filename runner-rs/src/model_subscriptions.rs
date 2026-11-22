@@ -36,7 +36,7 @@
 //! could read a subscription's home while a turn runs on it, or a running turn's environment.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -773,8 +773,25 @@ fn changed(d: &Delivered) -> Option<String> {
     if d.kind != "codex_login" {
         return None;
     }
-    let now = std::fs::read_to_string(d.file.as_ref()?).ok()?;
-    (now != d.written && !now.trim().is_empty() && now.len() <= MAX_VALUE).then_some(now)
+    let now = read_codex_auth(d.file.as_ref()?)?;
+    (now != d.written).then_some(now)
+}
+
+/// The auth file is writable by the bot. Refuse special files and bound the read.
+pub fn read_codex_auth(path: &Path) -> Option<String> {
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW)
+        .open(path)
+        .ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut auth = String::new();
+    file.take(MAX_VALUE as u64 + 1)
+        .read_to_string(&mut auth)
+        .ok()?;
+    (!auth.trim().is_empty() && auth.len() <= MAX_VALUE).then_some(auth)
 }
 
 /// After the turn (`finish`): send back each ChatGPT login Codex refreshed. The copy this runner kept follows the
