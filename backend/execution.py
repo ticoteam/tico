@@ -8146,7 +8146,9 @@ class Execution:
                             "" if own["until"][:10] == hit[:10] else f" on {own['until'][:10]}"
                         )
                 said = login_holds.label(src, at=hit[11:16], primary_until=primary_until)
-                if login_hold.get("reset") or (
+                if src.get("kind") == login_holds.PAYMENT_KIND:
+                    focus = login_holds.payment_words(c, src, retry)
+                elif login_hold.get("reset") or (
                     not login_hold
                     and body.limit_resets_at
                     and provider_reset(last_limit(c, row["bot_id"]), H.parse_ts(hit))

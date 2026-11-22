@@ -229,6 +229,18 @@ describe('Settings › Agents', () => {
     expect(screen.queryByText('2 keys')).toBeNull();
   });
 
+  it('a plan the provider refused for its billing says so, folded and in its row @s709', async () => {
+    const past = { id: 's1', kind: 'claude_login', name: 'brooke@acme.example', label: 'Claude plan', status: 'working', problem: 'Payment past due', in_use_on: [] };
+    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [], subscriptions: [past as never] });
+    serve(() => ({ status: 200, body: {} }));
+    show(<SettingsPage section="agents" />, '/settings/agents');
+    expect(await screen.findByText('brooke@acme.example: Payment past due')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Subscriptions and keys/ }));
+    const row = await screen.findByTitle('brooke@acme.example');
+    expect(row.className).toContain('is-bad');
+    expect(row.textContent).toContain('Payment past due');
+  });
+
   it('a retired agent can be brought back by its owner @s693', async () => {
     serve(() => ({ status: 200, body: {} }));
     show(<SettingsPage section="agents" />, '/settings/agents');
