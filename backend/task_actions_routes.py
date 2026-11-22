@@ -20,6 +20,8 @@ from . import goals as G
 from .auth import Identity
 from .onboarding import AGENT_OPS
 from . import rooms
+from . import routing
+from . import task_requirements
 from . import item_sources as IS
 from .store import H, Problem, encode
 from . import bot_settings as BS
@@ -90,6 +92,9 @@ def filed_for(c, who, person, message_id):
     if message.get("sender_id") != person:
         raise Problem("from_message", f"That message was not sent by {person}", 403)
     return person
+
+
+ROUTED_HELD = "Held by a company rule; file it without route or assign someone"
 
 
 def register_core(
@@ -485,9 +490,13 @@ def register_core(
         level = auth.bot_accesses(c, them, [H.actor_id(bot)]).get(H.actor_id(bot))
         return not level or bool(level["read"])
 
-    def task_create(c, who, body, lint=True, ingest=None, same=None, rule=None, wake_refs=None, judged=True):
+    def task_create(
+        c, who, body, lint=True, ingest=None, same=None, rule=None, wake_refs=None, judged=True, routed_to=None
+    ):
         """`POST /api/v2/tasks`: the task is made and put in the first stage of its pipeline (H.task_create). A task
-        for a bot wakes it; `wake_refs` go on that wake (an auto dream's release policy, backend/dream_auto.py)."""
+        for a bot wakes it; `wake_refs` go on that wake (an auto dream's release policy, backend/dream_auto.py).
+        `routed_to`: the person the route's org rule check judged as the recipient of a `route: true` create; a
+        routed create the check judged for nobody is refused (409), never filed to someone it did not judge."""
         source = who
         actual_bot = source.task_actor or (source.actor if source.role == "bot" else "")
         if body.from_private:
@@ -533,10 +542,23 @@ def register_core(
         # No owner: a first stage that picks from several picks one as the task arrives (backend/stage_pick.py). The
         # filer stands in as its requester and reach, as for a task a stage files, and it enters with no assignee.
         unassigned = not body.owner
+        # Routed work (backend/routing.py): Tico picks the person now, and the task is filed as theirs (owner and
+        # assignee), so every check below and its entry into the first stage are for them.
+        routed = bool(getattr(body, "route", False))
+        routed_entity = ""
+        if routed and (found or hidden):
+            # Nothing is filed (the item's task comes back, or the create is refused as filed): no one is picked.
+            body, unassigned = body.model_copy(update={"owner": who.actor}), False
+        elif routed:
+            work = routing.prepare(c, who, body, parent_id, actual_bot, *routed_inputs(c, who, body, parent_id))
+            person = routed_to
+            if not person or not task_requirements.active_person(c, person):
+                raise Problem("route", "The person routing picked can no longer take it: send it again", 409)
+            body, unassigned, routed_entity = body.model_copy(update={"owner": person}), False, work.entity_id
         if unassigned:
             from . import stage_pick
 
-            refused = stage_pick.no_owner_refusal(c, body.pipeline)
+            refused = "" if routed else stage_pick.no_owner_refusal(c, body.pipeline)
             if refused:
                 raise Problem("owner", refused, 422)
             body = body.model_copy(update={"owner": who.actor})
@@ -618,29 +640,23 @@ def register_core(
         for other, _ in others:
             auth.task(c, who, other)
         parent = H.task(c, parent_id) if parent_id else None
-        asked_public = body.private is False
-        # Delegation retains the bot's sensitive default and cannot use a person's
-        # explicit-public choice to override either creator or assignee defaults.
-        if actual_bot and body.private is False:
-            body = body.model_copy(update={"private": None})
-        if actual_bot and H.private_tasks_default(c, actual_bot):
-            body = body.model_copy(update={"private": True})
-        defaults = H.private_tasks_default(c, who.actor) or H.private_tasks_default(c, owner)
-        # `private: false` is company-visible under a private parent too, unless a sensitive default keeps a bot's
-        # task private; the parent stays its readers' alone (task_relations shows it as "a private task").
-        public = asked_public and body.private is not True and not (actual_bot and defaults)
-        private = not public and bool(
-            (body.private if body.private is not None else defaults) or parent and H.task_private(c, parent)
-        )
+        body, public, private = privacy.new_task(c, who, body, owner, parent, actual_bot)
         if body.due and (not (parsed := H.parse_ts(body.due)) or parsed.tzinfo is None):
             raise Problem("date", "due must be an ISO-8601 date/time with a timezone", 422)
         # The org rule check (backend/org_rule_check.py), judged before the write: held, nothing is filed.
         rule_gate = (
-            org_rule_check.apply(c, rule, rule_create_text(body), {"body": body.model_dump(mode="json", by_alias=True)})
+            org_rule_check.apply(
+                c,
+                rule,
+                rule_create_text(body),
+                {"body": body.model_dump(mode="json", by_alias=True)},
+            )
             if rule
             else None
         )
         if rule_gate and rule_gate.get("held"):
+            if routed:
+                raise Problem("route", ROUTED_HELD, 422)  # no hold: Send anyway could pick someone it never judged
             if ingest:
                 ask_ingest.skipped(c, ingest, "held")
             return org_rule_check.answer(rule_gate)
@@ -674,7 +690,10 @@ def register_core(
             ask_ingest.skipped(c, ingest, "not_applied")
         if body.goal_id and not G.goal(c, body.goal_id):
             raise Problem("not_found", "Unknown goal", 404)
-        entity_id = for_entity(c, who, getattr(body, "entity", None))  # POST /api/v2/tasks's TaskFile has it
+        entity_id = routed_entity if routed else for_entity(c, who, getattr(body, "entity", None))
+        if routed and not body.pipeline:
+            # Made only now, past every return that files nothing.
+            body = body.model_copy(update={"pipeline": routing.support_pipeline(c)})
         requester_actor = None
         if who.role == "bot" and owner == who.actor and not unassigned and not parent_id and who.attempt_id and private:
             origin = c.execute(
@@ -708,7 +727,8 @@ def register_core(
             H.task_reach(c, who.actor, parent, owner)
         # A bot's task for a person is the bot's own task with its question to them (backend/person_asks.py): Needs you
         # holds only what is asked of a person, so a plain task handed to them would reach no list they are told of.
-        asks_person = ask_ingest.gated(who, settings.assistant_bot) and H.is_human(owner)
+        # Routed work is the person's own task, not a bot's question to them.
+        asks_person = not routed and ask_ingest.gated(who, settings.assistant_bot) and H.is_human(owner)
         # The bot holds it when the person may read its work; else the task stays the person's, with the bot's question.
         holder = who.actor if asks_person and reads_bot(c, owner, who.actor) else owner
         row = H.task_create(
@@ -748,6 +768,9 @@ def register_core(
             asks=owner if asks_person and holder != owner else None,
             entity_id=entity_id,
         )
+        if routed and not (H.task(c, row["id"]) or {}).get("owner_id"):
+            # A stage rule held its person out: routed work always has a named owner, so nothing is filed.
+            raise Problem("route", "The stage's rules held it; routed work needs a named owner", 422)
         c.execute("UPDATE tasks SET acceptance=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
         if asks_person:
             person_asks.ask_on(c, who.actor, row, owner, body.title, person_asks.HANDED_WHY)
@@ -944,13 +967,26 @@ def register_core(
             who = Identity(who.task_actor, "bot", runner_id=who.runner_id, attempt_id=who.attempt_id, agent=who.agent)
             request.state.identity = who
         # A create carrying a person's request reads the item as that person, at the write: its cap is checked as ever.
-        cap_before_preflight(request, who, body.owner, body.parent, body.primary_link, body.request_id)
-        rc = rule_check(
-            who,
-            "task_create",
-            rule_create_text(body),
-            lambda c: [rule_target(c, who, body.owner), *(org_rule_check.company(c) if rule_public(body) else [])],
+        # A routed create's person is picked first (a saved retry's answer comes back without one), so the cap, reach
+        # and the org rule check below are for them.
+        saved = saved_retry(request, who)
+        routed_to = None if saved else routed_preview(who, body)
+        cap_before_preflight(request, who, routed_to or body.owner, body.parent, body.primary_link, body.request_id)
+        rc = (
+            None
+            if saved and getattr(body, "route", False)
+            else rule_check(
+                who,
+                "task_create",
+                rule_create_text(body),
+                lambda c: [
+                    rule_target(c, who, routed_to or body.owner),
+                    *(org_rule_check.company(c) if rule_public(body) else []),
+                ],
+            )
         )
+        if getattr(body, "route", False) and org_rule_check.holds(rc):
+            raise Problem("route", ROUTED_HELD, 422)
         # A write the rule check holds, a saved retry, or a create whose item a task already holds (nothing is filed)
         # skips ask ingest's call.
         with store.read() as c:
@@ -972,7 +1008,9 @@ def register_core(
                 lambda: mutate(
                     request,
                     body,
-                    lambda c: task_create(c, request.state.identity, body, ingest=ingest, rule=rc, judged=judged),
+                    lambda c: task_create(
+                        c, request.state.identity, body, ingest=ingest, rule=rc, judged=judged, routed_to=routed_to
+                    ),
                     receipt=handoff_receipt(request.state.identity),
                     retry_body=lambda _c, _result: legacy,
                 ),
@@ -985,6 +1023,43 @@ def register_core(
                 store, app.state.judge, request.state.identity, body.owner, body.title, body.body
             )
             return attempt(judged, True)
+
+    def routed_preview(who, body):
+        """The person a `route: true` create goes to, picked before the org rule check so the check judges that
+        recipient; the write files the task as theirs. None when nothing would be routed: no route, or a primary
+        link a task already holds (that task comes back). A refusal that must be recorded is left to the write."""
+        if not getattr(body, "route", False):
+            return None
+        with store.read() as c:
+            if body.primary_link and _held_item(c, who, body.primary_link):
+                return None
+            probe = H.CLOSE_PROBE.set(True)  # nothing is written here
+            lent = H.DELEGATION.get()
+            try:
+                actual_bot = who.task_actor or (who.actor if who.role == "bot" else "")
+                # The filer the write acts as (a person's request it carries: that person), as task_create resolves
+                # it, so the helper comes only from tasks they read and the write keeps this same choice.
+                handoff = who.role == "bot" and who.actor != "bot:" + AGENT_OPS and not who.via
+                if body.request_id and not handoff and who.via != "assistant":
+                    who = delegated_identity(c, who, body.request_id, new_task=True)
+                parent_id = auth.resolve_task(c, who, body.parent) if body.parent else None
+                return routing.person_for_create(
+                    c, who, body, parent_id, actual_bot, *routed_inputs(c, who, body, parent_id)
+                )
+            except H.Refused:
+                return None
+            finally:
+                H.DELEGATION.set(lent)  # the write lends it again, under its own transaction
+                H.CLOSE_PROBE.reset(probe)
+
+    def routed_inputs(c, who, body, parent_id):
+        """(entity id, readable-task SQL) routing reads for a routed create: the entity as the effective reader sees it
+        (for_entity), and the tasks that reader may read (auth.task_sql). An unreadable parent is its normal 404 first,
+        before any privacy refusal can say it exists."""
+        if parent_id:
+            auth.task(c, who, parent_id)
+        entity_id = for_entity(c, who, getattr(body, "entity", None))
+        return entity_id, auth.task_sql(c, auth.run_viewer(c, who))
 
     def _held_item(c, who, primary_link):
         """`readable` when a task the caller may read already holds the primary link a create names, `hidden` when one
@@ -1018,6 +1093,8 @@ def register_core(
 
     @org_rule_check.replayer("task_create", prepare=rule_prepare_task)
     def rule_replay_task(c, bot, hold, replay, ingest, gate=None):
+        if (replay.get("body") or {}).get("route"):
+            raise Problem("route", ROUTED_HELD, 422)  # routed creates are never held; one from before is not sent
         return task_create(
             c, bot, M.TaskFile.model_validate(replay["body"]), ingest=ingest, rule=org_rule_check.decided(gate)
         )

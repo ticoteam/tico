@@ -491,6 +491,7 @@ def run(args, who=None):
                 "primary_link",
                 "primary_status",
                 "entity",
+                "route",
             ):
                 fields[field] = getattr(args, field, None)
             return unwrap(hubtools.task_create(client, {k: v for k, v in fields.items() if v is not None}))

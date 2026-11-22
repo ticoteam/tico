@@ -16,6 +16,7 @@ from . import gateway_tiers
 from . import people_remove
 from . import task_privacy as privacy
 from . import rooms
+from . import routing
 from . import teammate_access
 from . import turns as turn_work
 from . import views
@@ -309,6 +310,49 @@ def register_profile(app, auth, delegated_identity, mutate, settings, store, vis
         from . import teammate_access
 
         return teammate_access.can(c, who, "manage", "human:" + pid, auth=auth)
+
+    @app.get(
+        "/api/v2/humans/{pid}/availability",
+        **api_v2("Team chart", "getAvailability", "A person's availability for routed work: on, async or off"),
+    )
+    def person_availability(request: Request, pid: str):
+        who = request.state.identity
+        auth.domain(who)
+        pid = pid.removeprefix("human:")
+        with store.read() as c:
+            row, person = routing.person_row(c, pid), P.person(pid, views.roster(c))
+            # Whom the caller may not see on the team chart is not here for them either (as their photo).
+            if (
+                not row
+                or not person
+                or person.get("hidden")
+                or not teammate_access.can(c, who, "see", "human:" + pid, auth)
+            ):
+                raise Problem("not_found", "Person not found", 404)
+            return routing.view(c, row, routing.now())
+
+    @app.put(
+        "/api/v2/humans/{pid}/availability",
+        **api_v2(
+            "Team chart",
+            "setAvailability",
+            "Set a person's availability (yours, or anyone's as an admin); until ends it, null clears it",
+        ),
+    )
+    def person_availability_set(request: Request, pid: str, body: M.Availability):
+        who = request.state.identity
+        auth.domain(who)
+        pid = pid.removeprefix("human:")
+        if who.role not in ("owner", "human") or not (H.actor_id(who.actor) == pid or auth.bot_admin(who)):
+            raise Problem("forbidden", "You set your own availability; an admin sets anyone's", 403)
+
+        def work(c):
+            person = P.person(pid, views.roster(c))
+            if not person or person.get("hidden"):
+                raise Problem("not_found", "Person not found", 404)
+            return routing.set_availability(c, who.actor, pid, body.availability, body.until, routing.now())
+
+        return mutate(request, body, work)
 
     @app.post("/api/v2/humans/{pid}", **api_v2("Team chart", "updatePerson", "Edit a person's profile or reports_to"))
     def person_update(request: Request, pid: str, body: M.PersonUpdate):

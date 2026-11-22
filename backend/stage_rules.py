@@ -74,6 +74,8 @@ _installed_store = None
 OWNER_ON_TEAM = "sr_owner_on_team"
 REAL_WAIT = "sr_real_wait"
 QUIET_BOT_TASKS = "sr_quiet_bot_tasks"
+URGENT_SUPPORT = "sr_urgent_support"
+SUPPORT_WAITS = "sr_support_waits"
 # What a bot's snooze that its rules refuse is told: a wait that another task ends is a dependency, and a wait on a
 # person is an ask (the spec "A blocked task shows as Blocked, never Snoozed"). A snooze is only "look again on a date".
 BLOCKED = (
@@ -149,6 +151,36 @@ DEFAULTS: list[dict[str, Any]] = [
         "then_params": {},
         "reason": "6 h quiet on the bot's turn",
         "builtin": QUIET_BOT_TASKS,
+    },
+    {
+        # A timer on the Support pipeline (backend/routing.py), every stage of it: routed work quiet for a day, whoever
+        # holds it (a person's included), goes to its manager.
+        "id": SUPPORT_WAITS,
+        "name": "Support waits",
+        "on": (("support", ()),),
+        "event": "timer",
+        "timer": {"kind": "quiet", "hours": 24},
+        "cond": {},
+        "jev": "",
+        "then": "tell_manager",
+        "then_params": {},
+        "reason": "24 h quiet on routed work",
+        "builtin": SUPPORT_WAITS,
+    },
+    {
+        # A timer on the Support pipeline: a task tagged urgent quiet for an hour. Its tell goes to the manager at once,
+        # not in the hourly batch (stage_rule_timers.sweep).
+        "id": URGENT_SUPPORT,
+        "name": "Urgent support waits",
+        "on": (("support", ()),),
+        "event": "timer",
+        "timer": {"kind": "quiet", "hours": 1},
+        "cond": {"label": "urgent"},
+        "jev": "",
+        "then": "tell_manager",
+        "then_params": {},
+        "reason": "1 h quiet on an urgent task",
+        "builtin": URGENT_SUPPORT,
     },
 ]
 # What the engine still does in code, read-only on the Rules page ("in code"). Candidates for later default rules.
@@ -408,22 +440,31 @@ def matches(conn: Any, rule: Any, task_row: Any, *, owner: Any = ..., facts: Any
             return False, ""
         said.append(f"snoozed longer than {hours} h")
     label = cond.get("label")
-    if label:
-        listed_tags: Any = task_row.get("tags") or []
-        tags = {str(cast(dict[str, Any], t).get("name") if isinstance(t, dict) else t).lower() for t in listed_tags}
-        labels = task_row.get("labels_json")
-        if isinstance(labels, str):
-            try:
-                named: Any = json.loads(labels) or []
-                tags |= {str(x).lower() for x in named}
-            except ValueError:
-                pass
-        if str(label).lower() not in tags:
-            return False, ""
+    if label and not _tagged(conn, task_row, str(label)):
+        return False, ""
     if cond.get("requester_person") is not None:
         if bool(cond["requester_person"]) != _core.is_human(task_row.get("requester_id") or ""):
             return False, ""
     return True, "; ".join(said)
+
+
+def _tagged(conn: Any, task_row: Any, key: str) -> bool:
+    """Whether the task carries the tag `key` (case-insensitive): its `task_tags` rows, the one store of a task's
+    labels, read by id; a row not yet written (no id) by the `tags` it carries (`key` or `label`)."""
+    if task_row.get("id"):
+        return (
+            conn.execute(
+                "SELECT 1 FROM task_tags tt JOIN tags g ON g.id = tt.tag_id WHERE tt.task_id = ? AND lower(g.key) = ?",
+                (task_row["id"], key.lower()),
+            ).fetchone()
+            is not None
+        )
+    listed: Any = task_row.get("tags") or []
+    names: set[str] = set()
+    for t in cast(list[Any], listed):
+        tag: dict[str, Any] = cast(dict[str, Any], t) if isinstance(t, dict) else {"key": t}
+        names.add(str(tag.get("key") or tag.get("label") or "").lower())
+    return key.lower() in names
 
 
 def _line(rule: Any, said: str) -> str:
@@ -672,6 +713,8 @@ def _on(conn: Any, targets: Any) -> tuple[str, list[str]] | None:
         ).fetchone()
         if not row:
             continue
+        if not wanted:
+            return str(row[0]), []  # every stage of it
         have = {r[0] for r in conn.execute("SELECT id FROM stages WHERE pipeline_id=?", (row[0],))}
         stages = [s for s in wanted if s in have]
         if stages:

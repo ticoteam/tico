@@ -47,6 +47,25 @@ def as_the_person(who):
     return None
 
 
+def new_task(c, who, body, owner, parent, actual_bot):
+    """(body, public, private) for a task about to be filed (app.task_create): its explicit choice, the filer's and
+    owner's defaults, and a private parent. Delegation retains the bot's sensitive default and cannot use a person's
+    explicit-public choice to override either creator or assignee defaults."""
+    asked_public = body.private is False
+    if actual_bot and body.private is False:
+        body = body.model_copy(update={"private": None})
+    if actual_bot and H.private_tasks_default(c, actual_bot):
+        body = body.model_copy(update={"private": True})
+    defaults = H.private_tasks_default(c, who.actor) or H.private_tasks_default(c, owner)
+    # `private: false` is company-visible under a private parent too, unless a sensitive default keeps a bot's
+    # task private; the parent stays its readers' alone (task_relations shows it as "a private task").
+    public = asked_public and body.private is not True and not (actual_bot and defaults)
+    private = not public and bool(
+        (body.private if body.private is not None else defaults) or parent and H.task_private(c, parent)
+    )
+    return body, public, private
+
+
 def actor(who):
     """Whom a request reads as: its actor, or a person and whom they act as. A lease of the shared Assistant, in either
     form, reads by its run's scope (hubdb.RunPrincipal, rooms.run_scope)."""

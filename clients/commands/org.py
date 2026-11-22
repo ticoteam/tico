@@ -520,6 +520,55 @@ def human_remove(api, args):
     return {"person": "human:" + person["id"], "name": person.get("name"), "left": True, "deleted": deleted}
 
 
+AVAILABILITY = ("on", "async", "off")
+
+
+@tool(
+    "tico_human_availability",
+    "A person's availability for routed work: on, async (takes work that is not urgent) or off; `from` says whether "
+    "they set it (until when) or their working hours decide. Take a person's id, email or exact name; me for yours.",
+    {"human": _s("The person: their id, email or exact name, or me")},
+    required=("human",),
+    audience=REQUESTER,
+)
+def human_availability(api, args):
+    pid = _me_or_person(api, args["human"])
+    return api.get(f"humans/{quote(pid, safe='')}/availability")
+
+
+@tool(
+    "tico_human_availability_set",
+    "Set a person's availability for routed work: on, async (not urgent work) or off; until (ISO-8601 with a zone) "
+    "ends it, then their working hours decide again; clear goes back to working hours now. Your own, or anyone's as "
+    "the owner or an admin.",
+    {
+        "human": _s("The person: their id, email or exact name, or me"),
+        "availability": _s("on, async or off", enum=list(AVAILABILITY)),
+        "until": _s("When it ends: ISO-8601 with a zone"),
+        "clear": _flag("Clear it: their working hours decide"),
+    },
+    required=("human",),
+    writes=True,
+    audience=PEOPLE,
+)
+def human_availability_set(api, args):
+    if bool(args.get("clear")) == bool(args.get("availability")):
+        raise APIError("validation", "Give an availability (on, async or off), or clear", 422)
+    pid = _me_or_person(api, args["human"])
+    body = {"availability": None if args.get("clear") else args["availability"], "until": args.get("until") or None}
+    return api.call("PUT", f"humans/{quote(pid, safe='')}/availability", body, _key(args))
+
+
+def _me_or_person(api, ref):
+    """A person's id: `me` is the caller (a person), else one on the roster by id, email or exact name."""
+    if str(ref).strip().lower() == "me":
+        me = str((api.get("me") or {}).get("actor") or "")
+        if not me.startswith("human:"):
+            raise APIError("forbidden", "me is a person; name the person", 422)
+        return me.removeprefix("human:")
+    return _person(api, ref)["id"]
+
+
 # ----------------------------------------------------------------------------- usage and billing
 USAGE_GROUPS = ("bot", "day", "hour", "routine", "task", "harness", "model", "effort", "subscription")
 
@@ -704,6 +753,17 @@ HUMAN = (
         "human invite",
         "send someone on the roster an invite to sign in (owner and admins)",
         example="tico human invite ben",
+    ),
+    Command(
+        "human availability",
+        "a person's availability for routed work: on, async or off, and whether they set it",
+        example="tico human availability me",
+    ),
+    Command(
+        "human availability-set",
+        "set a person's availability for routed work (yours, or anyone's as an admin)",
+        args=(Arg("availability", "--availability"), Arg("until", "--until"), Arg("clear", default=None)),
+        example="tico human availability-set me --availability async --until 2030-01-01T09:00:00Z",
     ),
     Command(
         "human remove",

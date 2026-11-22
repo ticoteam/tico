@@ -16,7 +16,9 @@ task's last activity, as it would have had the rule always been there.
 Then:
 
 - `tell_manager`: the pipeline's manager is told. All of one manager's matches go in one wake, "Stage rules: N tasks",
-  and a manager gets one such wake an hour at most: what matches meanwhile waits for the next. A task already listed as
+  and a manager gets one such wake an hour at most: what matches meanwhile waits for the next. A match of Urgent
+  support waits (backend/routing.py) wakes its manager in the same pass, in its one wake of that pass: with
+  everything waiting when its hour is open, else only the urgent tasks, which do not use up its hour. A rule with a tag condition marks whether the task had the tag, so adding it is noticed. A task already listed as
   Late on this visit is not listed again.
 - `tell_owner`: the task's owner is told, on the task.
 - `move_back`: the task goes back to `then_params.stage` with no owner, through the wake rules' task move
@@ -125,18 +127,55 @@ def rules(conn: Any) -> list[Row]:
 
 
 def sweep(conn: Any, at: str | None = None) -> dict[str, int]:
-    """One pass over every timer rule, then the managers' batched wakes. Returns counts of what it did."""
+    """One pass over every timer rule, then the managers' batched wakes. A manager told of a match of Urgent support
+    waits is woken now, once, whatever its last wake was; every other manager waits for its hour. Returns counts of
+    what it did."""
     at = str(at or H.now())
     done = {"told": 0, "moved": 0, "wakes": 0}
     found = rules(conn)
+    now: set[str] = set()  # managers with an urgent match this pass
     if found:
         tasks: list[Row] = [dict(r) for r in conn.execute(_TASKS).fetchall()]
         for rule in found:
             for task in tasks:
                 if _in_scope(rule, task):
-                    _judge(conn, rule, task, at, done)
-    done["wakes"] += flush(conn, at)
+                    manager = _judge(conn, rule, task, at, done)
+                    if manager and _urgent_rule(rule):
+                        now.add(manager)
+    for manager in sorted(now):
+        # One wake per manager per pass: everything waiting when its hour is open, else only the urgent tasks.
+        only = "" if not _had_hour(conn, manager, at) else _mod("stage_rules").URGENT_SUPPORT
+        if _wake_manager(conn, manager, at, only):
+            done["wakes"] += 1
+    done["wakes"] += flush(conn, at, skip=now)
     return done
+
+
+def _told_urgently(conn: Any, rule: Row, task: Row, mark: str) -> bool:
+    """Whether this is Support waits on a task Urgent support waits told (or is telling) its manager about in this same
+    quiet period: both read the same start, so the urgent mark is this one with the tag."""
+    SR = _mod("stage_rules")
+    if SR.SUPPORT_WAITS not in (rule.get("id"), rule.get("builtin")):
+        return False
+    base = mark.split("#", 1)[0]
+    return (
+        conn.execute(
+            "SELECT 1 FROM stage_rule_marks WHERE rule_id=? AND task_id=? AND mark IN (?, ?) "
+            "AND outcome IN ('pending', 'told')",
+            (SR.URGENT_SUPPORT, task["id"], base, base + "#urgent"),
+        ).fetchone()
+        is not None
+    )
+
+
+def _support_rule(rule: Row) -> bool:
+    """Support waits or Urgent support waits (backend/routing.py)."""
+    SR = _mod("stage_rules")
+    return bool({SR.SUPPORT_WAITS, SR.URGENT_SUPPORT} & {rule.get("id"), rule.get("builtin")})
+
+
+def _urgent_rule(rule: Row) -> bool:
+    return _mod("stage_rules").URGENT_SUPPORT in (rule.get("id"), rule.get("builtin"))
 
 
 def _in_scope(rule: Row, task: Row) -> bool:
@@ -174,17 +213,29 @@ def _due(conn: Any, rule: Row, task: Row, started: str, at: str) -> bool:
     return float((now - start).total_seconds()) >= seconds
 
 
-def _judge(conn: Any, rule: Row, task: Row, at: str, done: dict[str, int]) -> None:
+def _judge(conn: Any, rule: Row, task: Row, at: str, done: dict[str, int]) -> str | None:
+    """Judge one task under one rule; the manager a tell now waits for, if any."""
     if task.get("auto_dream") and _quiet_rule(rule):
-        return
+        return None
     started = _started(conn, rule, task)
     if not started or not _due(conn, rule, task, started, at):
-        return
+        return None
     mark = f"{task['visit_id']}@{started}"
+    label = str(rule["cond"].get("label") or "")
+    if label and _mod("stage_rules")._tagged(conn, {"id": task["id"]}, label):
+        mark += f"#{label.lower()}"  # a tag added to a task judged without it is judged again
     if conn.execute(
         "SELECT 1 FROM stage_rule_marks WHERE rule_id=? AND task_id=? AND mark=?", (rule["id"], task["id"], mark)
     ).fetchone():
-        return
+        return None
+    if _told_urgently(conn, rule, task, mark):
+        # One quiet period, one tell: Urgent support waits already told the manager about this one.
+        conn.execute(
+            "INSERT OR IGNORE INTO stage_rule_marks(rule_id,task_id,mark,outcome,manager_id,matched_at) "
+            "VALUES(?,?,?,'urgent',NULL,?)",
+            (rule["id"], task["id"], mark, at),
+        )
+        return None
     problem: Any = _mod("store").Problem
     outcome = "no"
     conn.execute("SAVEPOINT stage_rule_timer")
@@ -198,11 +249,12 @@ def _judge(conn: Any, rule: Row, task: Row, at: str, done: dict[str, int]) -> No
         conn.execute("RELEASE stage_rule_timer")
         log.warning("Stage rule %s failed on task %s", rule["id"], task["id"], exc_info=True)
         outcome = "failed"
-    manager = _manager(conn, task) if outcome == "pending" else None
+    manager = _manager(conn, task, own=_support_rule(rule)) if outcome == "pending" else None
     conn.execute(
         "INSERT OR IGNORE INTO stage_rule_marks(rule_id,task_id,mark,outcome,manager_id,matched_at) VALUES(?,?,?,?,?,?)",
         (rule["id"], task["id"], mark, outcome, manager, at),
     )
+    return manager
 
 
 # ----------------------------------------------------------------------------- If
@@ -249,7 +301,10 @@ def _then(conn: Any, rule: Row, task: Row, done: dict[str, int]) -> str:
         _tell_owner(conn, rule, task, said)
         done["told"] += 1
         return "told"
-    outcome = "late" if task.get("late_told_at") else "pending" if _manager(conn, task) else "no_manager"
+    # Late's own mark dedupes a manager's tell only where Late told the manager; the Support timers are routed
+    # work's one manager tell (a person's task Late by its due date is a label alone), so only their marks dedupe them.
+    late = bool(task.get("late_told_at")) and not _support_rule(rule)
+    outcome = "late" if late else "pending" if _manager(conn, task, own=_support_rule(rule)) else "no_manager"
     if outcome != "pending":
         # No manager will hear of it: a task the ladder stopped on asks a person instead (never_stuck.ask_person).
         E, NS = _mod("task_engine"), _mod("never_stuck")
@@ -298,24 +353,37 @@ def _tell_owner(conn: Any, rule: Row, task: Row, said: str) -> None:
     SR.record(conn, task["id"], rule, said, H.TICO_ACTOR, "told", {"to": owner})
 
 
-def _manager(conn: Any, task: Row) -> str | None:
+def _manager(conn: Any, task: Row, own: bool = False) -> str | None:
     """The pipeline's manager, when it may read the task and is not its owner: a manager is not told about its own
-    task, as the engine's own tells to the manager skip it (task_engine._tell_manager)."""
+    task, as the engine's own tells to the manager skip it (task_engine._tell_manager). With `own` (the Support timers,
+    routed work's one overdue tell), a manager who owns the task is told too: the company's person can be both."""
     found = conn.execute("SELECT manager_id FROM pipelines WHERE id=?", (task["pipeline_id"],)).fetchone()
     manager: str | None = found[0] if found else None
-    if not manager or manager == task.get("owner_id"):
+    if not manager or (manager == task.get("owner_id") and not own):
         return None
     row = H.task(conn, task["id"])
     return manager if row and H.task_private_readable(conn, manager, row) else None
 
 
 # ----------------------------------------------------------------------------- the managers' wakes
-def flush(conn: Any, at: str | None = None) -> int:
-    """One wake per manager with tells waiting, unless it had one in the last hour. Returns the wakes sent."""
+def _had_hour(conn: Any, manager: str, at: str) -> bool:
+    """Whether the manager had a routine wake in the last hour (an urgent wake does not use up its hour)."""
+    since = H.shift(at, hours=-BATCH_HOURS)
+    return (
+        conn.execute(
+            "SELECT 1 FROM stage_rule_marks WHERE manager_id=? AND told_at > ? AND rule_id <> ? LIMIT 1",
+            (manager, since, _mod("stage_rules").URGENT_SUPPORT),
+        ).fetchone()
+        is not None
+    )
+
+
+def flush(conn: Any, at: str | None = None, skip: set[str] | None = None) -> int:
+    """One wake per manager with tells waiting, unless it had one in the last hour or was woken in this pass (`skip`).
+    Returns the wakes sent."""
     at = str(at or H.now())
     if not H._has_table(conn, "stage_rule_marks"):
         return 0
-    since = H.shift(at, hours=-BATCH_HOURS)
     sent = 0
     managers: list[str] = [
         r[0]
@@ -325,9 +393,7 @@ def flush(conn: Any, at: str | None = None) -> int:
         ).fetchall()
     ]
     for manager in managers:
-        if conn.execute(
-            "SELECT 1 FROM stage_rule_marks WHERE manager_id=? AND told_at > ? LIMIT 1", (manager, since)
-        ).fetchone():
+        if manager in (skip or set()) or _had_hour(conn, manager, at):
             continue
         if _wake_manager(conn, manager, at):
             sent += 1
@@ -338,15 +404,17 @@ def _named(row: Row) -> str:
     return f"#{row['number']} {row.get('title')}" if row.get("number") else str(row.get("title"))
 
 
-def _wake_manager(conn: Any, manager: str, at: str) -> bool:
-    """One wake, "Stage rules: N tasks", naming every task waiting to be told to this manager, each once. A task that
-    ended, that the manager may no longer read, or that Late listed while it waited is not named."""
+def _wake_manager(conn: Any, manager: str, at: str, only_rule: str = "") -> bool:
+    """One wake, "Stage rules: N tasks", naming every task waiting to be told to this manager (only `only_rule`'s,
+    when given: an urgent wake leaves routine tells for the hour), each once. A task that ended, that the manager may
+    no longer read, or that Late listed while it waited is not named."""
     R, SR = _mod("rules"), _mod("stage_rules")
     pending: list[Any] = conn.execute(
         "SELECT k.rule_id, k.task_id, k.mark, v.late_told_at FROM stage_rule_marks k LEFT JOIN tasks t "
         "ON t.id = k.task_id LEFT JOIN visits v ON v.task_id = k.task_id AND v.left_at IS NULL "
-        "WHERE k.outcome='pending' AND k.manager_id=? ORDER BY k.matched_at, t.number, k.task_id",
-        (manager,),
+        "WHERE k.outcome='pending' AND k.manager_id=? AND (? = '' OR k.rule_id = ?) "
+        "ORDER BY k.matched_at, t.number, k.task_id",
+        (manager, only_rule, only_rule),
     ).fetchall()
     listed: list[tuple[Row, Row]] = []
     outcome: dict[tuple[str, str, str], str] = {}  # each pending row's settling: named, late or dropped
@@ -362,7 +430,7 @@ def _wake_manager(conn: Any, manager: str, at: str) -> bool:
             or _quiet_on_auto_dream(conn, rule, str(task_id))
         ):
             outcome[key] = "dropped"
-        elif late_told_at:
+        elif late_told_at and not _support_rule(rule):
             outcome[key] = "late"  # Late listed it while it waited for this wake: the manager has it already
         else:
             outcome[key] = "named"

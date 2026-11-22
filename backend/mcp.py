@@ -410,7 +410,54 @@ def task_dry_run(c, auth, who, body):
         if reader is None or len(ES.get(c, reader, body.entity)) != 1:
             problems.append(f"No one entity {body.entity} that you can see; name it by id")
     title, text = str(body.title or "").strip(), str(body.body or "")
-    pipeline_id = getattr(body, "pipeline", None) or GENERAL
+    routed = bool(getattr(body, "route", False))  # Tico picks the person (backend/routing.py), as the create does
+    routed_to = None
+    from . import routing
+
+    found = None
+    if routed and getattr(body, "primary_link", None):
+        # A readable task already holding the item comes back, as the create answers (found), with nothing routed.
+        from . import item_sources as IS
+
+        try:
+            held_by = IS.lookup(c, body.primary_link)[1]
+        except ValueError:
+            held_by = None
+        if held_by:
+            try:
+                auth.task(c, who, held_by)
+                found = held_by
+            except Problem:
+                pass
+    if found:
+        return {"ok": not problems, "found": True, "task": found, "problems": problems}
+    if routed:
+        probe = H.CLOSE_PROBE.set(True)  # an unknown entity or parent is a problem here, not a recorded refusal
+        try:
+            from . import page_links
+            from .entities import store as ES
+
+            parent_ref = getattr(body, "parent", None)
+            parent_id = auth.resolve_task(c, who, parent_ref) if parent_ref else None
+            if parent_id:
+                auth.task(c, who, parent_id)  # an unreadable parent is its 404, as the create says
+            reader = page_links.entity_reader(c, auth, who)
+            entity = getattr(body, "entity", None)
+            entity_id = ""
+            if entity:
+                if reader is None:
+                    raise Problem("not_found", "Entity not found", 404)
+                entity_id = str(ES.target(c, reader, entity))
+            actual_bot = who.task_actor or (who.actor if who.role == "bot" else "")
+            routed_to = routing.person_for_create(
+                c, who, body, parent_id, actual_bot, entity_id, auth.task_sql(c, auth.run_viewer(c, who))
+            )
+        except (Problem, H.Refused) as refused:
+            if refused.detail not in problems:
+                problems.append(refused.detail)
+        finally:
+            H.CLOSE_PROBE.reset(probe)
+    pipeline_id = getattr(body, "pipeline", None) or ((routing.support_id(c) or "support") if routed else GENERAL)
     pipeline = pipeline_settings.read(c, pipeline_id)
     general = pipeline_id == GENERAL  # the lints shape asks in General, not another pipeline's tasks
     # The task that files it (`parent`); other relations are notes and never a parent.
@@ -418,14 +465,16 @@ def task_dry_run(c, auth, who, body):
     related_refs = [r.task for r in getattr(body, "relations", None) or [] if r.kind != "parent"]
     # No owner: the pipeline's first stage must pick one, and the filer stands in for the rest of the checks, as the
     # create does (app.task_create).
-    unassigned = not body.owner
+    unassigned = not body.owner and not routed
     if unassigned:
         from . import stage_pick
 
         refused = stage_pick.no_owner_refusal(c, pipeline_id)
         if refused:
             problems.append(refused)
-    target = who.actor if unassigned else H.resolve_actor(c, body.owner)
+    if routed and not routed_to:
+        return {"ok": False, "problems": problems, "warnings": warnings}
+    target = routed_to or (who.actor if unassigned else H.resolve_actor(c, body.owner))
     if target and H.is_bot(target) and not auth.bot_access(c, who, H.actor_id(target))["see"]:
         target = None  # a bot the caller cannot see is not one they can name
     if not target or target == H.TICO_ACTOR:
@@ -514,8 +563,8 @@ def task_dry_run(c, auth, who, body):
                 problems += [f"{p} is not a bot or a person on the roster" for p in people if not H.resolve_actor(c, p)]
         except ValueError as exc:
             problems.append(str(exc))
-    if not pipeline or pipeline.get("retired_at"):
-        problems.append(f"No pipeline {pipeline_id}")
+    if (not pipeline or pipeline.get("retired_at")) and not (routed and not getattr(body, "pipeline", None)):
+        problems.append(f"No pipeline {pipeline_id}")  # routed work's Support pipeline is made by the create
     told = _private_readers_preview(c, auth, who, body, target, pipeline_id) if pipeline and target else None
     return {
         "ok": not problems,
