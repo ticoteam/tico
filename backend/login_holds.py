@@ -816,6 +816,8 @@ def after_turn(
                     c, runner_id, login, rt, hit, None, attempt_id, bot, error=notice or "", until=until, named=True
                 )
             else:
+                if last and not notice and payment(field(body, "text")):
+                    notice = field(body, "text")  # a runner that said it only in the turn's summary
                 reset = reset_from_text(notice, hit) or (body.limit_resets_at if last else None)
                 hold = record(c, runner_id, login, rt, hit, reset, attempt_id, bot, error=notice or "")
                 if given and payment(notice) and not hold.get("item"):

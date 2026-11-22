@@ -5,7 +5,7 @@ everyone back at work once a turn on it works again (Tico Team, Nov 21: a plan p
 from backend import login_holds, run_failures
 from backend import model_subscriptions as MS
 from backend.store import H
-from backend.tests.helpers.api import claim, get, post
+from backend.tests.helpers.api import claim, get, headers, post
 from backend.tests.helpers.credentials import setup
 from backend.tests.helpers.login_holds import PAST_DUE, at
 from backend.tests.helpers.model_subscriptions import add, company, give, machine, on
@@ -117,3 +117,34 @@ def test_only_a_billing_refusal_reads_as_a_payment_past_due():
         login_holds.failure_line({"limit_source": {"runtime": "claude", "kind": login_holds.PAYMENT_KIND}})
         == "failed: payment past due (Claude, primary)"
     )
+
+
+def past_due_plan(api):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    sid = add(api, name="brooke@acme.example")["id"]
+    m = machine(api)
+    give(api, m, "claude", sid)
+    post(api, "chat/ops", {"text": "Bug?"})
+    return sid, m, claim(api, m)
+
+
+def test_a_refusal_said_only_in_the_turns_summary_is_still_the_plans_payment(api):
+    sid, m, turn = past_due_plan(api)
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-summary"}, m["token"])
+    post(api, f"attempts/{turn['id']}/complete", {"outcome": "failed", "last_seq": 0, "text": PAST_DUE}, m["token"])
+    with api.app.state.store.read() as c:
+        hold = login_holds.get(c, "", login_holds.subscription_login(sid), "claude")
+        assert login_holds.payment(hold["error"]) and run_failures.get(c, "ops") == {}
+    assert len(items(api)) == 1
+
+
+def test_removing_a_plan_past_due_closes_its_item(api):
+    sid, m, turn = past_due_plan(api)
+    refused(api, m, turn)
+    assert items(api)[0]["status"] == "open"
+    api.delete(f"/api/v2/model-subscriptions/{sid}?confirm=1", headers=headers()).raise_for_status()
+    with api.app.state.store.read() as c:
+        assert not login_holds.get(c, "", login_holds.subscription_login(sid), "claude")
+    assert items(api)[0]["status"] != "open"

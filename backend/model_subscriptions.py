@@ -1154,6 +1154,7 @@ def payment_item(c, sid):
             question=f"Can you pay for the {plan}?",
             why=person_asks.first_sentence(body),
             asker=person_asks.agent_ops(),
+            deduplicate=False,  # one per plan already: its login hold keeps the item it filed
         )["id"]
     except H.Refused:
         return None
@@ -1841,7 +1842,12 @@ def remove(c, settings, who, sid, confirm=False):
         done = _restart(c, settings, runner_id, runtime)
         stopped, reset = stopped + done["stopped"], reset + done["sessions_reset"]
     c.execute("DELETE FROM model_subscriptions WHERE id=?", (sid,))
-    from . import claude_login
+    from . import claude_login, login_holds
+
+    runtime = (KINDS.get(sub["kind"]) or {}).get("runtime", "")
+    if runtime and login_holds.get(c, "", login_holds.subscription_login(sid), runtime):
+        # Its hold goes with it, and a payment item it filed closes: nothing can run on it to clear them.
+        login_holds.clear(c, "", login_holds.subscription_login(sid), runtime)
 
     claude_login.drop(c, sid)
     if sub["credential_id"]:

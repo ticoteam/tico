@@ -809,14 +809,15 @@ def usage_result(c: Any, runner_id: str, sid: str, body: "UsageResult") -> Any:
         schedule.update(
             failures=0, read_at=now, next_at=H.shift(now, seconds=USAGE_EVERY + random.randint(0, USAGE_JITTER))
         )
-        from . import login_holds
+        if not superseded:
+            from . import login_holds
 
-        LH: Any = login_holds
-        login: str = LH.subscription_login(sid)
-        held: dict[str, Any] = LH.get(c, "", login, "claude")
-        if held and LH.payment(held.get("error")):
-            # The plan answers again (it was paid): its next turn tries it now rather than at the next wait's end.
-            LH.try_now(c, "", login, "claude", now)
+            LH: Any = login_holds
+            login: str = LH.subscription_login(sid)
+            held: dict[str, Any] = LH.get(c, "", login, "claude")
+            if held and LH.payment(held.get("error")):
+                # The plan answers again (it was paid): its next turn tries it now rather than at the next wait's end.
+                LH.try_now(c, "", login, "claude", now)
     else:
         failures = (schedule.get("failures") or 0) + 1
         wait = _backoff(failures)
