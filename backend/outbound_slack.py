@@ -227,10 +227,15 @@ def withdraw(c: Any, message_id: str, *, redact: bool = True) -> None:
     """Cancel an unsent copy. Deletion also wipes the local snapshot of what Slack already had."""
     from . import outbound_actions as OA
 
-    _cancel_pending(c, message_id, "The message was withdrawn")
-    if redact:
-        c.execute("UPDATE slack_posts SET text='' WHERE message_id=? AND text<>''", (message_id,))
     row = OA.get(c, message_id)
+    if row and row["channel"] == CHANNEL and adopt_legacy(c, row):
+        row = OA.get(c, message_id)
+    _cancel_pending(c, message_id, "The message was withdrawn")
+    # An old gateway can still record a 429 for its in-flight copy. That retry must contain no withdrawn text.
+    c.execute(
+        "UPDATE slack_posts SET text='' WHERE message_id=? AND text<>'' AND (? OR state='sending')",
+        (message_id, redact),
+    )
     if not row or row["channel"] != CHANNEL:
         return
     if row["state"] in OA.OPEN or (row["state"] == "attempting" and not row["provider_attempted_at"]):
@@ -241,10 +246,13 @@ def withdraw(c: Any, message_id: str, *, redact: bool = True) -> None:
             "metadata=json_set(json_remove(metadata,'$._tico.sent_text'),'$.redacted',1), updated_at=? WHERE id=?",
             (H.now(), message_id),
         )
-    elif row["state"] == "attempting" and row["provider_attempted_at"]:
+    elif (row["state"] == "attempting" and row["provider_attempted_at"]) or (
+        row["state"] == "unknown" and OA.asked(row).get("slack_legacy", "").startswith("sending:")
+    ):
         # Keep the permitted text for a receipt, but a definite rejection must not retry the old edit.
         c.execute(
-            "UPDATE outbound_actions SET payload=json_remove(payload,'$.text'), updated_at=? "
+            "UPDATE outbound_actions SET payload=json_set(json_remove(payload,'$.text'),'$.sent_text',"
+            "coalesce(json_extract(payload,'$.sent_text'),json_extract(payload,'$.text'))), updated_at=? "
             "WHERE id=? AND payload<>''",
             (H.now(), message_id),
         )
@@ -276,13 +284,11 @@ def adopt_legacy(c: Any, row: dict[str, Any]) -> "AttemptResult | None":
 
     attempts = max(row["attempts"], post["attempts"])
     if state == "queued":
-        rejected = (
-            row["state"] == "unknown"
-            and seen.startswith("sending:")
-            and post["state"] == "rate_limited"
-            and not json.loads(row["metadata"]).get("redacted")
-            and bool(OA.content(row)["payload"].get("text"))
-        )
+        rejected = row["state"] == "unknown" and seen.startswith("sending:") and post["state"] == "rate_limited"
+        if rejected and not OA.content(row)["payload"].get("text"):
+            why = "The message was withdrawn"
+            OA.settle(c, {**row, "attempts": attempts}, "canceled", error=why)
+            return OA.AttemptResult("canceled", error=why)
         if not rejected and row["state"] not in ("queued", "attempting"):
             return None
         if rejected and (ask := OA.asked(row).get("ask")):
@@ -310,7 +316,7 @@ def adopt_legacy(c: Any, row: dict[str, Any]) -> "AttemptResult | None":
         )
         return None
     receipt = {"ts": post["slack_ts"]} if state == "done" and post["slack_ts"] else {}
-    if state == "done":
+    if state == "done" and post["text"]:
         row = {**row, "payload": json.dumps({"sent_text": post["text"]})}
     OA.settle(c, {**row, "attempts": attempts}, state, receipt=receipt, error=error, adopted=True)
     return OA.AttemptResult(state, receipt, error)

@@ -275,18 +275,39 @@ def test_slack_release_permit_checks_local_changes_during_the_live_jira_read(
     assert reads == [None] and gateway.slack.posts == []
 
 
+def test_slack_release_permit_checks_for_slack_connect_after_the_jira_read(company, released_slack, monkeypatch):
+    from backend.tests.helpers.slack_gateway import CHANNELS
+
+    gateway, task_id, _, channel = released_slack
+    live = JS.call
+
+    def share_channel(*args, **kwargs):
+        result = live(*args, **kwargs)
+        monkeypatch.setitem(CHANNELS, channel, {**CHANNELS[channel], "is_ext_shared": True})
+        return result
+
+    monkeypatch.setattr(JS, "call", share_channel)
+    gateway.deliver()
+    with company.read() as c:
+        row = actions(c, task_id)["post"]
+        assert row["state"] == "blocked" and "Slack Connect" in row["last_error"]
+        assert row["provider_attempted_at"] is None
+    assert not gateway.slack.posts
+
+
 def test_slack_release_requeues_if_the_task_becomes_public_after_the_rule_check(company, released_slack, monkeypatch):
     gateway, task_id, _, _ = released_slack
     with company.transaction() as c:
         c.execute("UPDATE tasks SET private=1 WHERE id=?", (task_id,))
-    evidence = gateway.post_evidence
+    closeout_rule = gateway.closeout_rule
 
-    def make_public(channel):
+    def make_public(row, token):
+        result = closeout_rule(row, token)
         with company.transaction() as c:
             c.execute("UPDATE tasks SET private=0 WHERE id=?", (task_id,))
-        return evidence(channel)
+        return result
 
-    monkeypatch.setattr(gateway, "post_evidence", make_public)
+    monkeypatch.setattr(gateway, "closeout_rule", make_public)
     gateway.deliver()
     with company.read() as c:
         row = actions(c, task_id)["post"]

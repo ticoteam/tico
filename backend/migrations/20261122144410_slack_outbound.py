@@ -96,8 +96,8 @@ def up(conn):
                     post["task_id"] = value.strip()
                     break
         _copy(conn, post, hold_until)
-    # Snapshots taken before cutover must still restore. Their delivery receipts and dedupe markers live in the
-    # outbound queue too, where restoring a deleted message cannot replay an unsent post.
+    _keep_legacy(conn)
+    # Both gateways need a dedupe marker when a snapshot puts a deleted message back.
     for task_id, raw in conn.execute(
         "SELECT task_id,rows FROM task_trash WHERE rows LIKE '%\"slack_posts\"%'"
     ).fetchall():
@@ -114,8 +114,20 @@ def up(conn):
                 if before in post:
                     post.setdefault(after, post[before])
             _copy(conn, {**post, "task_id": task_id}, hold_until, trashed=True)
+            conn.execute(
+                "INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,error,created_at,updated_at,"
+                "recipient_actor) VALUES(?,?,?,?,'','canceled','outbound',?,?,?) ON CONFLICT(message_id) DO NOTHING",
+                (
+                    post["message_id"],
+                    post["channel"],
+                    post["thread_ts"],
+                    post["bot"],
+                    post["created_at"],
+                    post["updated_at"],
+                    post.get("recipient_actor"),
+                ),
+            )
         conn.execute("UPDATE task_trash SET rows=? WHERE task_id=?", (json.dumps(snapshot), task_id))
-    _keep_legacy(conn)
     conn.execute(
         "CREATE INDEX outbound_slack_legacy ON outbound_actions(id) "
         "WHERE channel='slack' AND json_extract(metadata,'$._tico.slack_legacy') IS NOT NULL"

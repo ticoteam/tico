@@ -567,6 +567,24 @@ def test_an_unexpected_slack_enqueue_conflict_is_logged_and_refused(slack, caplo
     assert mid in caplog.text and "conflict" in caplog.text
 
 
+def test_cancel_checks_an_old_gateway_claim_before_allowing_cancel(slack):
+    made = call(slack, "POST", "slack/posts", json={"channel": "#general", "text": "Old gateway reply"}).json()
+    mid = made["message_id"]
+    with slack.store.transaction() as c:
+        c.execute(
+            "UPDATE slack_posts SET state='sending',error=NULL,attempts=1,text=? WHERE message_id=?",
+            ("Old gateway reply", mid),
+        )
+    path = f"outbound-actions/{mid}/cancel"
+    assert call(slack, "POST", path, 409, json={}).json()["code"] == "state"
+    with slack.store.transaction() as c:
+        c.execute("UPDATE slack_posts SET state='rate_limited',error='ratelimited' WHERE message_id=?", (mid,))
+    assert call(slack, "POST", path, json={}).json()["action"]["state"] == "canceled"
+    with slack.store.read() as c:
+        old = c.execute("SELECT state,text FROM slack_posts WHERE message_id=?", (mid,)).fetchone()
+        assert tuple(old) == ("canceled", "")
+
+
 def test_generic_outbound_cannot_bypass_slack_post_gates(slack):
     for channel, key in (("slack", "unbound-post"), ("jira", "slack:reserved")):
         call(

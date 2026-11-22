@@ -1936,7 +1936,7 @@ class Gateway:
         return viewer is not None and threads.readable(c, viewer, message)
 
     def post_evidence(self, channel):
-        """Ask Slack about this exact destination immediately before the permit. No database write lock over I/O."""
+        """Ask Slack about this exact destination."""
         try:
             info = self.slack.conversations_info(channel)
             if (
@@ -1996,6 +1996,10 @@ class Gateway:
             return OA.GatewayCheck("external", {}, "canceled", "Recipient no longer reads this thread")
         if automation_actions.slack_held(c, post, message):
             return OA.GatewayCheck("external", {}, "canceled", "send_off")
+        closeout = row["occurrence_key"].startswith(OA.RESERVED)
+        if closeout and target and not isinstance(evidence, OA.GatewayCheck):
+            # Jira can be slow enough for the Slack audience to change before the permit.
+            evidence = self.post_evidence(post["channel"])
         if isinstance(evidence, OA.GatewayCheck):
             return evidence
         if evidence is not None:
@@ -2008,7 +2012,7 @@ class Gateway:
             bot = post["bot"]
             slack_bots.need(c, bot, slack_bots.slack_entry(c, self.settings, bot), "post")
             slack_bots.postable(c, self.settings, post["channel"])
-        if row["occurrence_key"].startswith(OA.RESERVED):
+        if closeout:
             from . import release_closeout
 
             links = release_closeout.primaries(c, row["task_id"])

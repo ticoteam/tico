@@ -1472,6 +1472,9 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
             row = get(c, oid)
             if not row or not (row["actor"] == who.actor or admin(who)) or not visible(c, who, row):
                 raise Problem("not_found", "No such outbound action", 404)
+            if row["channel"] == outbound_slack.CHANNEL and outbound_slack.adopt_legacy(c, row):
+                row = get(c, oid)
+                assert row is not None
             if row["state"] == "canceled":
                 return {"action": public(c, row), "created": False}
             if row["state"] == "unknown":

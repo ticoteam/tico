@@ -495,7 +495,8 @@ def test_the_pending_migrations_apply_in_any_order(company, tmp_path, monkeypatc
 REMOVED = ("growth-manager", "legal-owner", "feature-owner")  # live seat bots' templates in the fixture
 
 
-def test_slack_cutover_keeps_legacy_keys_and_backfills_a_null_trash_attempt_count(company, tmp_path):
+@pytest.mark.parametrize("state", ["ready", "sent", "canceled"])
+def test_slack_cutover_preserves_history_and_fences_pre_cutover_trash(company, tmp_path, state):
     path = tmp_path / "pre-slack.db"
     shutil.copy(company.db, path)
     pending = {migration.version: migration for migration in migrations.files()}
@@ -523,7 +524,8 @@ def test_slack_cutover_keeps_legacy_keys_and_backfills_a_null_trash_attempt_coun
             "thread_ts": "",
             "bot": "botops",
             "text": "Old draft",
-            "state": "ready",
+            "state": state,
+            "slack_ts": "1700000002.000100" if state == "sent" else None,
             "attempts": None,
             "created": "now",
             "updated": "now",
@@ -536,8 +538,13 @@ def test_slack_cutover_keeps_legacy_keys_and_backfills_a_null_trash_attempt_coun
         assert c.execute("SELECT id FROM outbound_actions WHERE occurrence_key=?", (key,)).fetchone()[0] == "old-jira"
         sent = c.execute("SELECT * FROM outbound_actions WHERE id=?", (mid,)).fetchone()
         assert sent["occurrence_key"] != key and json.loads(sent["metadata"])["_tico"]["sent_text"] == "Actually sent"
-        found = c.execute("SELECT state,attempts,payload FROM outbound_actions WHERE id='trashed-post'").fetchone()
-        assert tuple(found) == ("canceled", 0, "")
+        found = c.execute(
+            "SELECT state,attempts,payload,receipt FROM outbound_actions WHERE id='trashed-post'"
+        ).fetchone()
+        assert tuple(found)[:3] == ("done" if state == "sent" else "canceled", 0, "")
+        assert json.loads(found["receipt"]).get("ts") == trash["slack_ts"]
+        legacy = c.execute("SELECT state,error,text FROM slack_posts WHERE message_id='trashed-post'").fetchone()
+        assert tuple(legacy) == ("canceled", "outbound", "")
 
 
 def test_a_bot_whose_template_the_new_release_no_longer_ships_keeps_working(company, tmp_path):

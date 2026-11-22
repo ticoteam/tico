@@ -371,6 +371,10 @@ end. Stopped before that rename, `/data/hub.sqlite` is the migrated database wit
 file is already removed; those commits are in the folder's `recovery.sqlite`), so check which one it is before the
 server is used.
 
+Upgrade the Slack gateway with the server when Slack posts move to the outbound queue. An older gateway can fail to
+restart against the upgraded database. While it keeps running, it can ignore the new Slack **Never** policy and
+leave new Slack posts queued until the gateway is upgraded.
+
 After a successful update the updater replaces itself, so updater fixes reach existing installs. It pulls the new updater
 image and starts a short-lived container (`tico-updater-swap`) from it, which recreates the `updater` service,
 checks that the new one stays running, and moves `TICO_UPDATER_TAG` in `.env` if the install pinned it. If the new

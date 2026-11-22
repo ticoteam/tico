@@ -521,6 +521,28 @@ def test_cutover_keeps_a_later_retry_after_from_the_old_gateway(gateway, hub, pr
         assert OA.get(c, mid)["attempts"] == 2
 
 
+@pytest.mark.parametrize("outcome", ["rate_limited", "sent"])
+def test_edit_adopts_in_flight_legacy_post_and_stops_stale_retries(gateway, hub, outcome):
+    mid = copy_legacy_post(gateway, hub, "ready")
+    ts = "1700000050.000100" if outcome == "sent" else None
+    with hub.transaction() as c:
+        assert claim_legacy_post(c, mid, gateway.clock()) == 1
+        OS.withdraw(c, mid, redact=False)
+        saved = OA.get(c, mid)
+        assert saved["state"] == "unknown" and "text" not in OA.content(saved)["payload"]
+        assert c.execute("SELECT text FROM slack_posts WHERE message_id=?", (mid,)).fetchone()[0] == ""
+        c.execute("UPDATE slack_posts SET state=?,slack_ts=? WHERE message_id=?", (outcome, ts, mid))
+    gateway.clock.advance(121)
+    assert gateway.deliver() == [] and not gateway.slack.posts
+    with hub.transaction() as c:
+        saved = OA.get(c, mid)
+        assert saved["state"] == ("done" if ts else "canceled")
+        assert json.loads(saved["receipt"]).get("ts") == ts
+        assert claim_legacy_post(c, mid, gateway.clock()) == 0
+        if ts:
+            assert OA.asked(saved)["sent_text"] == "Frozen legacy reply"
+
+
 @pytest.mark.parametrize("legacy_state", ["ready", "retry", "rate_limited", "sent"])
 def test_redaction_scrubs_legacy_only_posts_and_preserves_receipts(gateway, hub, legacy_state):
     mid = copy_legacy_post(gateway, hub, legacy_state, migrated=False)
