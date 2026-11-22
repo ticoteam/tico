@@ -384,6 +384,21 @@ step_seed() {
   if [ "$(server_tag)" = "$PREV" ]; then
     dc exec -T server python - --into /data/hub.sqlite < scripts/make_upgrade_fixture.py || { say "could not add the fixture rows"; return 1; }
   fi
+  if [ "$(server_tag)" = v0.6.200 ]; then
+    # v0.6.200 seeds Agent Ops with no name in its config while its template's bot.yaml names its slug, so a v0.6.200
+    # runner never finds the checkout ready ("Configuration differs from server"). Later servers send the slug as the
+    # name (backend/execution.py assigned, test_agent_ops_name.py); this release's seed gets it written in instead.
+    dc exec -T server python - <<'PY' || { say "could not name v0.6.200's Agent Ops"; return 1; }
+import sqlite3
+c = sqlite3.connect("/data/hub.sqlite")
+c.execute(
+    "UPDATE bot_settings SET extra = json_set(COALESCE(NULLIF(extra, ''), '{}'), '$.name',"
+    " (SELECT slug FROM bots WHERE id = 'botops')), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"
+    " WHERE bot_id = 'botops' AND json_extract(COALESCE(NULLIF(extra, ''), '{}'), '$.name') IS NULL"
+)
+c.commit()
+PY
+  fi
   operator="$(get me | json 'd["actor"].split(":",1)[1]')"
   code="$(post enrollments "{\"operator\": \"$operator\"}" | json 'd["code"]')" || return 1
   start_runner "$(server_tag)" --code "$code" || return 1   # the computer runs the server's release
