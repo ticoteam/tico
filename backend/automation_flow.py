@@ -725,11 +725,12 @@ def end_time(value):
     compares with the clock as text."""
     try:
         at = datetime.fromisoformat(value) if isinstance(value, str) else None
-    except ValueError:
-        at = None
-    if at is None or at.tzinfo is None:
+        utc = at.astimezone(timezone.utc) if at and at.tzinfo else None
+    except (ValueError, OverflowError):  # OverflowError: an offset that moves it past year 9999
+        utc = None
+    if utc is None:
         raise Invalid("ends_at: is a time with Z or an offset, such as 2026-12-01T08:00:00Z")
-    return at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    return utc.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 
 def ended(flow, now):

@@ -10,7 +10,7 @@ import time_machine
 from backend import automations
 from backend import listening as L
 from backend.tests.helpers.api import get, post
-from backend.tests.helpers.automation_api import NOTE_STEP, make, patch
+from backend.tests.helpers.automation_api import NOTE_STEP, as_bot, make, patch
 from backend.tests.helpers.automation_runs import sql
 from backend.tests.helpers.listening import item, listening, save, source_id
 
@@ -30,6 +30,7 @@ def test_an_end_date_is_a_future_time_with_an_offset_on_a_routine_that_is_not_bu
     with time_machine.travel(T0, tick=False):
         assert "Z or an offset" in json.dumps(make(api, expected=422, ends_at="2026-11-10"))
         assert "in the future" in json.dumps(make(api, expected=422, ends_at="2026-11-02T07:59:00Z"))
+        assert "Z or an offset" in json.dumps(make(api, expected=422, ends_at="9999-12-31T23:59:59-01:00"))
         made = make(api, ends_at=END)
         assert made["ends_at"] == "2026-11-03T08:00:00.000000Z" and made["version"] == 1 and "ended" not in made
         with api.app.state.store.transaction() as c:
@@ -65,6 +66,7 @@ def test_once_ended_it_turns_on_only_with_a_later_end_and_skips_what_it_missed(a
         shown = get(api, f"automations/{aid}")
         assert shown["ended"] is True and shown["next_run"] is None and shown["enabled"] is True
         assert "set a later one or clear it" in json.dumps(patch(api, aid, {"enabled": True}, expected=422))
+        patch(api, aid, {"enabled": True}, as_bot(api, "finance"), expected=403)  # no rights: not told it ended
         assert "set a later one" in json.dumps(post(api, f"automations/{aid}/versions/1/restore", {}, expected=422))
         assert patch(api, aid, {"name": "Renamed"})["ended"] is True  # the past end stays through other edits
         assert post(api, f"automations/{aid}/run", {})["run"]  # Run now is not admission
@@ -108,3 +110,29 @@ def test_an_ended_listening_takes_scores_and_sends_nothing_and_shows_no_next_sen
         assert shown["listening"]["next_send_at"] is None and shown["next_run"] is None
         with store.read() as c:
             assert L.worst(c) is None and L.trouble(c) == [] and L.stalled(c) == []
+
+
+def test_a_due_routine_back_from_its_end_skips_the_run_that_opened_while_it_was_ended(api):
+    trigger = {"type": "due", "first_due": "2026-11-06", "repeats": "weekly", "open_days": 3, "tz": "UTC"}
+    with time_machine.travel(T0, tick=False):
+        aid = make(api, trigger=trigger, ends_at="2026-11-09T00:00:00Z")["id"]
+    nov12 = datetime(2026, 11, 12, 8, 0, tzinfo=timezone.utc)
+    with time_machine.travel(nov12, tick=False):
+        # Nov 13's run opened Nov 10, while it was ended: it starts again from Nov 20's, which opens Nov 17.
+        assert patch(api, aid, {"ends_at": "2026-12-31T00:00:00Z"})["next_due_at"] == "2026-11-20"
+        automations.tick(api.app.state.store, nov12)
+    assert runs(api, aid) == []
+
+
+def test_a_listening_pass_that_started_before_the_end_admits_nothing_after_it(api):
+    with time_machine.travel(T0 - timedelta(minutes=30), tick=False):
+        aid = listening(api, ends_at="2026-11-02T08:00:00Z")["id"]  # its first send is at 08:00 UTC too
+        save(api, source_id(api, aid), [item(1, "A post about standups")])
+    store = api.app.state.store
+    with time_machine.travel(at(0.5), tick=False):  # the clock is past the end; the pass's own time is not
+        L.run_pass(store, at(-0.01))
+        L.run_pass(store, T0)
+    assert sql(api, "SELECT status FROM listening_items WHERE automation_id=?", (aid,))[0]["status"] == "new"
+    assert sql(api, "SELECT next_due_at FROM automations WHERE id=?", (aid,))[0]["next_due_at"] == (
+        "2026-11-02T08:00:00.000000Z"
+    )

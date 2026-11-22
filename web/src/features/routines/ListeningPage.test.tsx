@@ -4,6 +4,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsRoot, run } from '@/actions';
 import { queryClient } from '@/data';
+import { fmtDate } from '@/lib';
 import { ListeningPage } from './ListeningPage';
 import { validateListeningSearch } from './load';
 import { watchesQuery, watchQuery } from './queries';
@@ -186,6 +187,27 @@ describe('One watch', () => {
     const sources = (sent[1]!.body as { trigger: { sources: unknown[] } }).trigger.sources;
     expect(sources[1]).toMatchObject({ kind: 'github', site: 'github', target: 'acme/widgets', follow: 'releases' });
     expect((await run('listening.addSource', { watch: 'w1', kind: 'push', site: 'Support form' }, { via: 'tico' })).ok).toBe(false);
+  });
+
+  it('an ended watch says so on its row and page, and Edit sets a later end', async () => {
+    const endsAt = new Date(2026, 10, 29).toISOString();
+    const ended = `Ended ${fmtDate(new Date(2026, 10, 28, 12))}`;
+    const sent = record((url, method) => (method === 'PATCH' && url.endsWith('/automations/w1') ? ok(watch({ ends_at: new Date(2026, 11, 1).toISOString() })) : nothing()));
+    queryClient.setQueryData(watchesQuery.queryKey, [watch({ ended: true, ends_at: endsAt })]);
+    queryClient.setQueryData(watchQuery('w1').queryKey, watch({ ended: true, ends_at: endsAt }));
+    const router = show('/company/listening');
+    expect(within(await screen.findByTitle('Mentions of us')).getByText(ended)).toBeTruthy();
+    await router.navigate({ to: '/company/listening', search: { watch: 'w1', tab: 'sources' } });
+    await screen.findByRole('region', { name: 'Sources' });
+    expect(screen.getAllByText(ended).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Edit' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit watch' });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Ends/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Monday, November 30' }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toMatchObject({ method: 'PATCH', body: { ends_at: new Date(2026, 11, 1).toISOString() } });
+    await waitFor(() => expect(queryClient.getQueryData<Routine>(watchQuery('w1').queryKey)?.ends_at).toBe(new Date(2026, 11, 1).toISOString()));
   });
 
   it('with no matches says so in the page, and one that failed has Try again @s540', async () => {

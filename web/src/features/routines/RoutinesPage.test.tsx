@@ -304,6 +304,15 @@ describe('One routine', () => {
     fireEvent.click(within(p).getByRole('button', { name: 'Never' }));
     await waitFor(() => expect(sent).toHaveLength(2));
     expect(sent[1]).toMatchObject({ method: 'PATCH', body: { ends_at: null } });
+    // the end date restarts a routine, an inbox one included: the person's own press, never Tico's
+    expect(await run('routines.setEnd', { routine: 'r1', endsAt: null }, { via: 'tico' })).toMatchObject({ ok: false });
+  });
+
+  it('an open routine is read again once its end time comes', async () => {
+    const sent = record();
+    await openRoutine({ ends_at: new Date(Date.now() + 100).toISOString() });
+    const reads = sent.reads.length;
+    await waitFor(() => expect(sent.reads.some((u, i) => i >= reads && u.includes('/api/v2/automations'))).toBe(true), { timeout: 3000 });
   });
 
   it('runs it with sample input for its trigger, and says when the filters drop it', async () => {

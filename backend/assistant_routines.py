@@ -176,11 +176,13 @@ def prepare(c, settings, who, method, path, body):
         return body, None
     if stopping:
         return body, describe(c, flow, "Turn off", digest(row["flow"]))
+    if A.F.ended(flow, H.now()):  # the card's save would be refused: it turns on a routine that stays ended
+        raise Problem("ended", A.ENDED, 422)
     # A full snapshot prevents a pending enable from silently approving different steps edited in between.
     model = A.AutomationIn if method == "POST" else A.AutomationPatch
     sent = {k: v for k, v in flow.items() if k in model.model_fields}
     if method == "PATCH":
-        sent.update({key: flow.get(key) for key in ("group", "spend_cap", "batch", "destinations")})
+        sent.update({key: flow.get(key) for key in ("group", "spend_cap", "batch", "destinations", "ends_at")})
         if "summary" in body:
             sent["summary"] = body["summary"]
     verb = "Turn on" if flow["enabled"] and not before.get("enabled") else "Update" if flow["enabled"] else "Save"

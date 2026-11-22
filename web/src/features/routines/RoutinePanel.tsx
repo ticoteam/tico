@@ -3,7 +3,6 @@ import { Fragment, useState, type ReactNode } from 'react';
 import { useActors } from '@/data';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
-import { DatePick } from '@/kit/DatePick';
 import { Dialog } from '@/kit/Dialog';
 import { Field } from '@/kit/Field';
 import { IconButton } from '@/kit/IconButton';
@@ -15,11 +14,11 @@ import { fmtDate, fmtMoney } from '@/lib';
 import { SidePanel } from '@/pagekinds';
 import { BoardItemEditor, BoardView, type ItemRef } from './BoardEditor';
 import { routineBoard, takesTemplate } from './board';
-import { Face, HeadSwitch, PanelRead, press, pressOut, RemoveItem, useConfirmRemove, useName, Verb, Word } from './parts';
-import { routineQuery, routinesQuery, runsQuery, versionsQuery } from './queries';
+import { Ends, Face, HeadSwitch, PanelRead, press, pressOut, RemoveItem, useConfirmRemove, useName, Verb, Word } from './parts';
+import { routineQuery, routinesQuery, runsQuery, useEndRefresh, versionsQuery } from './queries';
 import { ApplyTemplate } from './Templates';
 import type { Routine, Trigger, Version } from './types';
-import { endAfter, endedWords, EVERY, eventWords, flowLines, isOn, lastDay, lineDiff, parseSchedule, runLink, runWords, scheduleCron, timeChoices, triggerWords, WEEKDAYS, type Every } from './words';
+import { endedWords, EVERY, eventWords, flowLines, isOn, lineDiff, parseSchedule, runLink, runWords, scheduleCron, timeChoices, triggerWords, WEEKDAYS, type Every } from './words';
 
 /* One routine, as a panel (rules.js routinePanel): its facts, the instruction, the last runs and Run now. Edit turns
    the panel into the editor; `routine:new` opens the editor empty. "⋯" also holds a test run with sample input and its
@@ -43,6 +42,7 @@ function RoutineView({ id, onClose }: { id: string; onClose: () => void }) {
   const [item, setItem] = useState<ItemRef | null>(null);
   const [applying, setApplying] = useState(false);
   const remove = useConfirmRemove();
+  useEndRefresh(r);
   if (!r) {
     return (
       <SidePanel className="rr" title="Routine" onClose={onClose}>
@@ -348,17 +348,6 @@ function LimitEditor({ routine, onDone }: { routine: Routine; onDone: () => void
         </Button>
       </div>
     </div>
-  );
-}
-
-/** Never, or the last day it runs: a picked day ends it at the midnight after, in the viewer's zone. */
-function Ends({ routine, disabled }: { routine: Routine; disabled: boolean }) {
-  const set = (endsAt: string | null) => void press('routines.setEnd', { routine: routine.id, endsAt });
-  return (
-    <>
-      <DatePick label="Ends" labelHidden withTime={false} placeholder="Never" value={routine.ends_at ? lastDay(routine.ends_at) : null} disabled={disabled} onValueChange={(day) => set(endAfter(day))} />
-      {routine.ends_at && !disabled && <Verb onClick={() => set(null)}>Never</Verb>}
-    </>
   );
 }
 

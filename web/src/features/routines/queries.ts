@@ -1,4 +1,5 @@
 import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query';
+import { useEffect } from 'react';
 import { api } from '@/api/client';
 import type { AutomationOverviewRuns, AutomationTemplate, AutomationTemplates } from '@/api/schema';
 import type { Dest } from './board';
@@ -42,6 +43,19 @@ import type {
    Company also reads Listening's stats under `listening`; this feature keeps to its own sub-keys there. */
 
 for (const root of ['routines', 'rules', 'listening']) quietRoot(root);
+
+/** Reads routines and watches again just after `r`'s end time, so a page left open stops showing it On. */
+export function useEndRefresh(r: Pick<Routine, 'ends_at' | 'ended'> | undefined) {
+  const at = r?.ends_at && !r.ended ? r.ends_at : null;
+  useEffect(() => {
+    const wait = at ? Date.parse(at) - Date.now() + 1000 : NaN;
+    if (!(wait > 0 && wait < 2 ** 31)) return; // setTimeout fires at once past 2^31 ms
+    const timer = setTimeout(() => {
+      for (const root of ['routines', 'listening']) void queryClient.invalidateQueries({ queryKey: [root] });
+    }, wait);
+    return () => clearTimeout(timer);
+  }, [at]);
+}
 
 const enc = encodeURIComponent;
 const quiet = { staleTime: QUIET_STALE_MS } as const;
@@ -155,10 +169,10 @@ export function setRoutineLimit(id: string, per30m: number | null) {
 }
 
 /** When it stops starting new runs: an ISO time, or null for never (PATCH ends_at). A later one restarts an ended one. */
-export function setRoutineEnd(id: string, endsAt: string | null) {
+export function setRoutineEnd(id: string, endsAt: string | null, key: readonly unknown[] = routinesQuery.queryKey, one: readonly unknown[] = routineQuery(id).queryKey) {
   const change = (r: Routine): Routine => ({ ...r, ends_at: endsAt ?? undefined, ended: false });
   return write<Routine>({
-    key: [routinesQuery.queryKey, routineQuery(id).queryKey],
+    key: [key as unknown[], one as unknown[]],
     optimistic: (cur: Routine[] | Routine | undefined) => (Array.isArray(cur) ? mapList(cur, id, change) : cur && change(cur)),
     send: (idempotencyKey) => api.patch<Routine>(`/api/v2/automations/${enc(id)}`, { ends_at: endsAt }, { idempotencyKey }),
   });

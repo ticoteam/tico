@@ -132,8 +132,9 @@ def _iso(at):
 
 
 def _ended(row, now):
-    """A listening row (its `flow`) whose end date has passed while it is on: it reads, scores and sends nothing."""
-    return F.ended(json.loads(row["flow"]), now)
+    """A listening row (its `flow`) whose end date has passed while it is on: it reads, scores and sends nothing. Read
+    against the later of `now` (a pass's start) and the clock, since the end may come while a pass runs."""
+    return F.ended(json.loads(row["flow"]), max(now, H.now()))
 
 
 def _has_tables(c):
@@ -958,9 +959,9 @@ def send(store, aid, at, now):
         if not row:
             return None
         row = dict(row)
-        flow = A.flow_of(row)
-        if F.ended(flow, now):  # its send time is kept: a later end date restarts it from now
+        if _ended(row, now):  # its send time is kept: a later end date restarts it from now
             return None
+        flow = A.flow_of(row)
         trigger = flow["trigger"]
         after = _iso(next_send(trigger, at))
         if not row["next_due_at"]:

@@ -440,4 +440,6 @@ def restore_automation(c, who, aid, before):
         )
     if not (automations.may_change(c, who, now_flow) and automations.may_change(c, who, before)):
         raise Problem("forbidden", "you may not change this automation", 403)
+    if automations.F.ended(before, H.now()):
+        raise Problem("ended", automations.ENDED, 422)
     automations._save(c, who.actor, aid, before, now_flow, new_version=True)

@@ -273,18 +273,19 @@ def _save(c, actor, aid, flow, before, *, current=None, summary=None, new_versio
     # scheduler runs even when its first pass comes after it.
     at = datetime.fromisoformat(now.replace("Z", "+00:00"))
     due = _iso(_due(flow["trigger"], at)) if flow["trigger"]["type"] == "schedule" else None
+    # Back on from past its end date: the times it missed while ended are skipped, a due run that opened then too.
+    revived = flow["enabled"] and F.ended(before or {}, now) and not F.ended(flow, now)
     if flow["trigger"]["type"] == "due":
-        due = _due_text(D.start(flow["trigger"], at))
+        due = _due_text(_due_after(flow["trigger"], at) if revived else D.start(flow["trigger"], at))
     if flow["trigger"]["type"] == "listening":
         due = _iso(listening.next_send(flow["trigger"], at))  # its next send time, as a schedule's next run
     if prior:
         # A due time stays through a rename, cap or group change, so the occurrence due now still runs; a new
-        # schedule, or one turned back on or no longer ended, starts from the next time after now: the times it missed
-        # while it was off or ended are skipped.
+        # schedule, or one turned back on or no longer ended, starts from the next time after now.
         again = (
             (before or {}).get("trigger") != flow["trigger"]
             or (flow["enabled"] and not (before or {}).get("enabled"))
-            or (F.ended(before or {}, now) and not F.ended(flow, now))
+            or revived
         )
         c.execute(
             "UPDATE automations SET name=?,owner_id=?,group_id=?,trigger_type=?,enabled=?,builtin=?,flow=?,version=?,"
@@ -3430,6 +3431,14 @@ def tick(store, at=None, drain=True):
     return hub.drain() if hub and drain else 0
 
 
+def _due_after(trigger, at):
+    """The first due day whose run starts after `at`, or None when none is left."""
+    day, zone, open_days = D.start(trigger, at), D.zone_of(trigger), D.open_days_of(trigger)
+    while day and D.fire_at(day, open_days, zone) <= at:
+        day = D.next_after(D.first_due(trigger), trigger["repeats"], day)
+    return day
+
+
 def _due_day(value):
     """The cursor's due day as a date, or None (none left, or not yet set)."""
     return date.fromisoformat(value) if value else None
@@ -4140,8 +4149,6 @@ def install(app, store, auth, mutate):
                 saved=before,
                 aid=aid,
             )
-            if changes.get("enabled") is True and F.ended(flow, H.now()):
-                raise Problem("ended", ENDED, 422)
             from . import assistant_routines
 
             assistant_routines.check_confirmed(c, request, row, flow)
@@ -4196,6 +4203,8 @@ def install(app, store, auth, mutate):
                 return {"id": aid, "pending": n, "can_edit": False}
             _require(c, who, before, "change this automation")
             _require(c, who, flow, "give this automation to " + flow["owner"])
+            if changes.get("enabled") is True and F.ended(flow, H.now()):
+                raise Problem("ended", ENDED, 422)
             warning = None
             if before.get("builtin") and changes.get("enabled") is False:
                 if who.role != "owner":
@@ -4460,9 +4469,9 @@ def install(app, store, auth, mutate):
                 saved=before,
                 aid=aid,
             )
+            _require(c, who, flow, "restore this version")
             if F.ended(flow, H.now()):  # extend or clear the end date first
                 raise Problem("ended", ENDED, 422)
-            _require(c, who, flow, "restore this version")
             # A draft's row already holds the steps its pending version turns on, so nothing of it counts as kept.
             blocked = _stamp_blocked(c, auth, who, flow, before if _approved(c, row) else None)
             if blocked:

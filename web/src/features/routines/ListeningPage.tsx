@@ -5,6 +5,7 @@ import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
 import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
+import { LabelValue } from '@/kit/LabelValue';
 import { IconButton } from '@/kit/IconButton';
 import { Link } from '@/kit/Link';
 import { Pill } from '@/kit/Pill';
@@ -15,8 +16,8 @@ import { MenuItem } from '@/kit/Menu';
 import { fmtDate } from '@/lib';
 import { List, PageMore, Record as RecordPage, Section, type PageTab } from '@/pagekinds';
 import { LISTENING } from './actions';
-import { Face, Find, HeadSwitch, press, pressOut, RemoveItem, Rows, RuleRow, useConfirmRemove, Verb, Word } from './parts';
-import { matchesQuery, runsQuery, sourcesQuery, watchesQuery, watchQuery } from './queries';
+import { Ends, Face, Find, HeadSwitch, press, pressOut, RemoveItem, Rows, RuleRow, useConfirmRemove, Verb, Word } from './parts';
+import { matchesQuery, runsQuery, sourcesQuery, useEndRefresh, watchesQuery, watchQuery } from './queries';
 import type { ListenSource, Match, Routine, WatchSource } from './types';
 import { agentWords, cap, endedWords, isOn, limitsWords, runLink } from './words';
 import './routines.css';
@@ -95,6 +96,8 @@ function WatchRow({ w }: { w: Routine }) {
       <span className="row-fig">
         {on ? (
           limitsWords(w.trigger.limits)
+        ) : w.ended ? (
+          endedWords(w)
         ) : (
           <span className="row-state" title="Paused">
             <Icon name="pause" />
@@ -151,6 +154,7 @@ function WatchPage({ id, tab, match }: { id: string; tab?: 'sources'; match?: st
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState(false);
   const remove = useConfirmRemove();
+  useEndRefresh(w);
   const tabs: readonly PageTab[] = [
     { label: 'Matches', to: LISTENING, search: { watch: id, tab: '' }, target: `tab:matches:${id}` },
     { label: 'Sources', to: LISTENING, search: { watch: id, tab: 'sources' }, target: `tab:sources:${id}` },
@@ -175,6 +179,7 @@ function WatchPage({ id, tab, match }: { id: string; tab?: 'sources'; match?: st
       empty={{ title: 'No matches yet' }}
       actions={
         <>
+          {w.ended && <span className="row-state">{endedWords(w)}</span>}
           <span className="rr-phone" data-phone>
             <HeadSwitch label={w.ended ? endedWords(w) : on ? 'On' : 'Paused'} checked={on} disabled={tmp || !!w.ended} onChange={(next) => void press(next ? 'listening.resume' : 'listening.pause', { watch: id })} />
           </span>
@@ -444,6 +449,9 @@ function WatchSettings({ w, onClose }: { w: Routine; onClose: () => void }) {
     >
       <div className="rr-form">
         <Field label="Name" value={name} onValueChange={setName} />
+        <LabelValue label="Ends">
+          <Ends routine={w} watch />
+        </LabelValue>
         <fieldset className="rr-list">
           <legend>
             Rules
