@@ -42,7 +42,7 @@ key; with no read key it may only make GET, HEAD and OPTIONS calls, and POSTs th
 session's set-up, listings, and `tools/call` of a tool the server's own `tools/list` marks `readOnlyHint`), sends the call on with the vendor's auth, scrubs
 the key out of the answer and logs one row (path and query keys, never values or bodies) on the tool's Activity. A write
 meets the org rules before the key goes in, log-only for now (docs/dev/rules-plan.md, Links). Twilio and Close SMS
-creates on record integrations must go through [Outbound actions](outbound-actions.md#sms). A token
+sends on record integrations must go through [Outbound actions](outbound-actions.md#sms). A token
 is signed by the server, names one tool and one bot, and works only while the run it was made for is leased or running
 (a watcher's while its bot is assigned to that computer, for at most 12 hours); taking the level away stops the next
 call. The proxy sends only to a public https address: it resolves the tool's name at each call, refuses it when any

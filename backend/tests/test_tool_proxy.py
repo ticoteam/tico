@@ -409,19 +409,35 @@ def test_header_query_and_twilio_style_schemes_rewrite_only_the_token(api):
 
 
 @pytest.mark.parametrize(
-    ("service", "base", "scheme", "env", "path"),
+    ("service", "base", "scheme", "env", "methods", "paths", "sibling"),
     [
         (
             "twilio",
             "https://api.twilio.com",
             "basic_password",
             "TWILIO_AUTH_TOKEN",
-            f"2010-04-01/Accounts/AC{'1' * 32}/%4dessages.json",
+            ("POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"),
+            (
+                "2010-04-01/Accounts/{account}/%4dessages.json",
+                "2010-04-01/Accounts/{account}/Messages/SM123",
+                "2010-04-01/Accounts/{account}/SMS/Messages",
+                "2010-04-01//aCCOUNTS/{account}//sMs//mEsSaGeS.JsOn///",
+                "2010-04-01/Accounts/{account}/SMS/Messages.xml/SM123",
+            ),
+            "2010-04-01/Accounts/{account}/MessagesOther",
         ),
-        ("close-crm", "https://api.close.com", "basic_user", "CLOSE_API_KEY", "api/v1/activity/sms/"),
+        (
+            "close-crm",
+            "https://api.close.com",
+            "basic_user",
+            "CLOSE_API_KEY",
+            ("POST", "PUT", "PATCH"),
+            ("api/v1/activity/sms/", "api/v1/activity/sms/acti_draft/", "api//v1/Activity//sMs.JsOn//acti_draft//"),
+            "api/v1/activity/sms_other",
+        ),
     ],
 )
-def test_sms_record_integrations_require_the_outbound_queue(api, service, base, scheme, env, path):
+def test_sms_record_integrations_require_the_outbound_queue(api, service, base, scheme, env, methods, paths, sibling):
     setup(api)
     tool(api, tid=service, name=service, service=service, base=base, scheme=scheme)
     give(api, key(api, service, FULL, env=env), "bot:ops")
@@ -429,14 +445,20 @@ def test_sms_record_integrations_require_the_outbound_queue(api, service, base, 
     token = handed(api, attempt, env)["value"]
     vendor = Vendor()
     api.app.state.tool_proxy_transport = httpx.MockTransport(vendor)
-    assert call(api, "POST", path, token, tid=service).status_code == 200
+    account = "AC" + "1" * 32
+    assert call(api, "POST", paths[0].format(account=account), token, tid=service).status_code == 200
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tools SET record_owner='outside' WHERE id=?", (service,))
-    denied = call(api, "POST", path, token, tid=service)
-    assert denied.status_code == 403 and denied.json()["error"]["code"] == "outbound_required"
-    assert len(vendor.seen) == 1
-    assert call(api, "GET", path, token, tid=service).status_code == 200
-    assert len(vendor.seen) == 2
+    for template in paths:
+        path = template.format(account=account)
+        for method in methods:
+            denied = call(api, method, path, token, tid=service)
+            assert denied.status_code == 403, (method, path)
+            if method != "HEAD":
+                assert denied.json()["error"]["code"] == "outbound_required", (method, path)
+        assert call(api, "GET", path, token, tid=service).status_code == 200
+    assert call(api, "POST", sibling.format(account=account), token, tid=service).status_code == 200
+    assert [req.method for req in vendor.seen] == ["POST", *(["GET"] * len(paths)), "POST"]
 
 
 def test_a_name_that_resolves_to_a_private_address_is_refused_and_nothing_is_sent(api):

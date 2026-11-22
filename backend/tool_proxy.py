@@ -664,10 +664,10 @@ def install(app, store):
         url = tool['base_url'].rstrip('/') + '/' + rest.lstrip('/')
         query = outgoing_query(query, tool, key, auth['query'] if auth else None)
         url += ('?' + query) if query else ''
-        if method == 'POST' and tool.get('record_owner'):
+        if method != 'GET' and tool.get('record_owner'):
             from . import outbound_sms
 
-            if outbound_sms.is_send_path(tool['base_url'], httpx.URL(url).path):
+            if outbound_sms.is_send_path(tool['base_url'], method, httpx.URL(url).path):
                 detail = outbound_sms.SMS_PROXY_REFUSAL
                 await log(403, 'refused', detail)
                 return refused(403, 'outbound_required', detail)

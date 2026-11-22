@@ -30,18 +30,23 @@ ACCOUNT_SID = re.compile(r"AC[0-9a-fA-F]{32}")
 LEAD_ID = re.compile(r"lead_[a-zA-Z0-9]{1,100}")
 TWILIO_SMS_ID = re.compile(r"(?:SM|MM)[0-9a-fA-F]{32}")
 CLOSE_SMS_ID = re.compile(r"acti_[a-zA-Z0-9]{1,100}")
-TWILIO_MESSAGES = re.compile(r"/2010-04-01/Accounts/[^/]+/Messages(?:\.json|\.xml)?", re.IGNORECASE)
+TWILIO_MESSAGES = re.compile(r"/2010-04-01/accounts/[^/]+/(?:sms/)?messages(?:\.json|\.xml)?(?:/|$)")
+CLOSE_SMS = re.compile(r"/api/v1/activity/sms(?:\.json)?(?:/|$)")
 SMS_PROXY_REFUSAL = "Queue this text through Outbound actions (tico outbound send)."
 TRANSPORT: Any = None  # tests stand in for the provider at the network edge
 
 
-def is_send_path(base_url: str, path: str) -> bool:
-    """Whether a POST on this provider's Tools connection would create an SMS."""
+def is_send_path(base_url: str, method: str, path: str) -> bool:
+    """Whether this request can write to a provider's SMS send resources."""
     base = base_url.rstrip("/")
-    path = re.sub(r"/+", "/", path).rstrip("/")
+    path = re.sub(r"/+", "/", path).rstrip("/").lower()
     if base == TS.SERVICES["twilio"]["base_url"]:
-        return TWILIO_MESSAGES.fullmatch(path) is not None
-    return base == TS.SERVICES["close-crm"]["base_url"] and path == "/api/v1/activity/sms"
+        return method != "GET" and TWILIO_MESSAGES.match(path) is not None
+    return (
+        base == TS.SERVICES["close-crm"]["base_url"]
+        and method in {"POST", "PUT", "PATCH"}
+        and CLOSE_SMS.match(path) is not None
+    )
 
 
 class _Keys(NamedTuple):
