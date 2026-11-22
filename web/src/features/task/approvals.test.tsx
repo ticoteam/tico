@@ -827,6 +827,15 @@ describe('an outbound action', () => {
     expect(within(box).getByRole('button', { name: 'Approve' })).toHaveProperty('disabled', true);
     expect(within(box).queryByRole('group', { name: 'The action' })).toBeNull();
   });
+
+  it('keeps Approve off when the action has no preview at all @approvals', async () => {
+    shown = actionTask();
+    reply = (url) => (url.endsWith('/api/v2/oks/r1') ? { status: 404, body: { error: { code: 'not_found' } } } : null);
+    show(<TaskChat task="12" />, '/tasks/p1/12');
+    const box = await decision();
+    expect(await within(box).findByText('Part of it did not load')).toBeTruthy();
+    expect(within(box).getByRole('button', { name: 'Approve' })).toHaveProperty('disabled', true);
+  });
 });
 
 describe('an email waiting to send', () => {

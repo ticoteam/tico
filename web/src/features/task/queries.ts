@@ -269,16 +269,18 @@ export interface BoundAction {
     A stage's own OK has no grant (404): `hash` is null and Approve answers with the page version. `complete` is false
     when part of what it shows did not load, and Approve stays off. Read again at each new version of the task, so a
     change while it is open shows. `send` is the email the requirement shows: a stage's own OK that shows one is as
-    complete as that email's preview, so Approve never sends an email the person could not read. */
-export const decisionShownQuery = (task: string, rid: string, version: number, send?: string | null) =>
+    complete as that email's preview, so Approve never sends an email the person could not read. `outbound`: the
+    requirement shows an outbound action, whose OK always has a preview: without one (404) nothing is complete. */
+export const decisionShownQuery = (task: string, rid: string, version: number, send?: string | null, outbound = false) =>
   queryOptions({
-    queryKey: [...keys.tasks.detail(task), 'shown', rid, version, send ?? null] as const,
+    queryKey: [...keys.tasks.detail(task), 'shown', rid, version, send ?? null, outbound] as const,
     queryFn: async ({ signal }): Promise<{ hash: string | null; complete: boolean; rule?: BoundRule; action?: BoundAction }> => {
       const shown = await api.get<OkPreview>(`/api/v2/oks/${enc(rid)}`, { signal }).catch((e: unknown) => {
         if (e instanceof ApiError && e.status === 404) return null;
         throw e;
       });
       if (!shown) {
+        if (outbound) return { hash: null, complete: false };
         if (!send) return { hash: null, complete: true };
         const mail = await queryClient.fetchQuery({ ...emailSendQuery(task, send), staleTime: 0 });
         return { hash: null, complete: mail.preview_complete };

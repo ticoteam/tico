@@ -118,7 +118,7 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
   const approve = useAction('task.approve');
   const request = useAction('task.requestChanges');
   const { error, setError, here, nextUp, refused, moveOn } = useAnswering(t, flow);
-  const shown = useQuery(decisionShownQuery(t.id, r.requirement_id, t.version, emailOf(r)));
+  const shown = useQuery(decisionShownQuery(t.id, r.requirement_id, t.version, emailOf(r), !!r.shows?.some((s) => s.startsWith('outbound:'))));
   const { name, effect, send, recipients, files } = useNamed(t, r);
   const [asking, setAsking] = useState(false);
   const [note, setNote] = useState('');
