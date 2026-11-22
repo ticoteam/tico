@@ -9,7 +9,7 @@ from backend.entities import store as ES
 from backend.tests.helpers.api import get, headers, post
 from backend.tests.helpers.mcp import call
 from clients import hubcli, remotecli
-from backend.tests.test_directory_tools import Forward
+from backend.tests.helpers.contacts_cli import Forward
 
 ANA = "human:ana"
 
