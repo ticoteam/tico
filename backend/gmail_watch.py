@@ -292,16 +292,18 @@ def check(store: Any, box: Json, budget: Left | None = None) -> int:
     address, now = str(box["address"]), _now()
     watch = box["watching_since_at"]
     if watch is not None and _epoch(str(watch)) is None:
-        # Keep the new start even if Gmail is unavailable during the repair.
+        # Keep the new start even if Gmail is unavailable during the repair. Gmail's times are whole seconds, so the new
+        # start is this second's beginning: a message received later in this same second still counts.
+        start = now[:19] + ".000000Z"
         with store.transaction() as c:
             repaired = c.execute(
                 "UPDATE mailboxes SET watching_since_at=?,catch_up=NULL "
                 "WHERE id=? AND status='active' AND watching_since_at=? AND history_id IS ? AND catch_up IS ?",
-                (now, box["id"], watch, box["history_id"], box["catch_up"]),
+                (start, box["id"], watch, box["history_id"], box["catch_up"]),
             ).rowcount
         if not repaired:
             return 0
-        box = {**box, "watching_since_at": now, "catch_up": None}
+        box = {**box, "watching_since_at": start, "catch_up": None}
     try:
         with store.read() as c:
             messages, state = _gather(c, box, now, budget)

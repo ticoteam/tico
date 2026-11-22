@@ -114,6 +114,17 @@ def test_bad_watch_timestamp_starts_a_new_window_for_catch_up_and_history(watche
     assert heard(api, aid) == ["late-history-new", "ordinary"]
 
 
+def test_a_message_in_the_same_second_as_a_repaired_watch_still_counts(watched):
+    api, gmail, aid = watched
+    assert check(api, T0) == 0
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE mailboxes SET watching_since_at='invalid' WHERE address=?", (BOX,))
+    repaired_at = T0 + timedelta(minutes=3, milliseconds=400)  # Gmail reports this second as a whole number
+    gmail.add(BOX, "same-second", epoch=epoch(repaired_at.replace(microsecond=0)))
+    check(api, repaired_at)
+    assert heard(api, aid) == ["same-second"]
+
+
 def test_intake_commits_before_the_cursor_and_replay_returns_the_same_run(watched, monkeypatch):
     api, gmail, _ = watched
     store = api.app.state.store
