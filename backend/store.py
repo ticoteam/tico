@@ -5,7 +5,6 @@ import heapq
 import logging
 import json
 import os
-import re
 import sqlite3
 import threading
 import time
@@ -1473,11 +1472,6 @@ class Store:
                     from .products import replayed as products_replayed
 
                     result = products_replayed(replay_auth, c, replay_principal, result)
-                if re.fullmatch(r"/api/v2/tasks/[^/]+/links(/[^/]+)?", operation) and isinstance(result, dict):
-                    from .api_tools import shown_connections
-
-                    # A link's connection is shown as the tools' rule says now, not as it did when first answered.
-                    shown_connections(c, replay_principal, replay_auth, result.get("links") or [])
                 result = replayed_refusal(c, replay_principal, result)
                 from .files import readable_page_refs
 

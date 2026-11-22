@@ -32,9 +32,6 @@ SITES = {"tool_a": "https://acme.atlassian.net", "tool_b": "https://beta.atlassi
 NOBODY = '{"people": [], "teams": [], "bots": []}'  # an Only listed tool that lists nobody: only its owner sees it
 
 
-BEN_ONLY = '{"people": ["ben"], "teams": [], "bots": []}'
-
-
 def _tools(api, *ids, audience=None, sites=None):
     with api.app.state.store.transaction() as c:
         for tid in ids:
@@ -199,10 +196,12 @@ def test_a_hidden_tool_is_answered_as_no_connection_and_never_shown(api):
         missing["code"],
         missing["detail"].replace("tool_zz", "X"),
     )
-    _link(api, task, ACME)  # ana sees the tool; the link is typed with it
-    shown = {link["url"]: link for link in get(api, f"tasks/{task}/links", token="ben-test")["links"]}
-    assert shown[ACME]["connection_id"] is None
-    assert get(api, f"tasks/{task}/links")["links"][0]["connection_id"] == "tool_a"
+    _link(api, task, ACME)  # ana sees the tool; the link is typed with it, stored, never shown
+    assert _row(api, task, ACME)["connection_id"] == "tool_a"
+    for token in ("ben-test", "ana-test"):
+        links = get(api, f"tasks/{task}/links", token=token)["links"]
+        assert links and all("connection_id" not in link for link in links)
+        assert all("connection_id" not in link for link in get(api, f"tasks/{task}", token=token)["task"]["links"])
     assert _found(api, "jira:issue:PROJ-7@tool_a", token="ben-test") == "connection"
 
 
@@ -325,24 +324,24 @@ def test_erasing_a_record_suppresses_it_on_its_connection_only(api):
     post(api, "entities/external-refs", {**record, "ref": kim, "connection_id": "tool_b"})
 
 
-def test_a_hidden_tool_is_never_inferred_and_a_replay_shows_the_connection_as_it_is_now(api):
+def test_a_hidden_tool_is_never_inferred_nor_read_back(api):
     _tools(api, "tool_a", audience=NOBODY)
     task = post(api, "tasks", {"owner": "ben", "title": "Ben's ticket", "body": "Please."}, token="ben-test")["id"]
     _link(api, task, ACME, token="ben-test")  # the only connection for acme is hidden from ben: a plain link
     assert _row(api, task, ACME)["source"] is None
+    made = post(
+        api,
+        "tasks",
+        {"owner": "ben", "title": "Filed", "body": "Please.", "links": [BETA.replace("beta", "acme")]},
+        token="ben-test",
+    )["id"]
+    assert [r["source"] for r in _rows(api, made)] == [None]  # nor when a task is created with it
     hidden = _found(api, ACME, token="ben-test")
     r = api.get("/api/v2/tasks", params={"link": ACME}, headers=headers("ben-test"))
     assert hidden == "link" and "tool_a" not in r.text
 
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tools SET audience=? WHERE id='tool_a'", (BEN_ONLY,))
     other = post(api, "tasks", {"owner": "ben", "title": "Another", "body": "Please."}, token="ben-test")["id"]
-    first = post(api, f"tasks/{other}/links", {"url": BETA.replace("beta", "acme")}, token="ben-test", key="k1")
-    assert first["links"][0]["connection_id"] == "tool_a"
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tools SET audience=? WHERE id='tool_a'", (NOBODY,))
-    again = post(api, f"tasks/{other}/links", {"url": BETA.replace("beta", "acme")}, token="ben-test", key="k1")
-    assert again["links"][0]["connection_id"] is None
+    _link(api, other, ACME)  # ana sees it: typed with tool_a
     read = api.post(
         "/api/v2/sql",
         json={"sql": "SELECT connection_id FROM task_links WHERE task_id='%s'" % other},
@@ -355,6 +354,31 @@ def test_a_hidden_tool_is_never_inferred_and_a_replay_shows_the_connection_as_it
         headers=headers("ana-test"),
     )
     assert shown.json()["rows"] == [["tool_a"]]
+
+
+def test_a_referenced_tool_keeps_its_site(api):
+    _tools(api, "tool_a")
+    task = _task(api, "Acme escalation")
+    moved = api.patch("/api/v2/api-tools/tool_a", json={"base_url": "https://beta.atlassian.net"}, headers=headers())
+    assert moved.status_code == 200, moved.text  # nothing names it yet: it may move
+    api.patch("/api/v2/api-tools/tool_a", json={"base_url": "https://acme.atlassian.net"}, headers=headers())
+    _link(api, task, ACME)
+    refused = api.patch("/api/v2/api-tools/tool_a", json={"base_url": "https://beta.atlassian.net"}, headers=headers())
+    assert refused.status_code == 409 and refused.json()["error"]["code"] == "connection_sites"
+    assert _found(api, BETA) == "link"
+
+
+def test_a_record_erased_without_a_connection_stays_apart_from_each_connections(api):
+    _tools(api, "tool_a")
+    with api.app.state.store.transaction() as c:
+        jane = ES.upsert(c, "human:ana", "person", match={"email": "jane@example.test"}, name="Jane")["id"]
+        kim = ES.upsert(c, "human:ana", "person", match={"email": "kim@example.test"}, name="Kim")["id"]
+    record = {"system": "jira", "external_type": "customer", "external_id": "42"}
+    post(api, "entities/external-refs", {**record, "ref": jane})
+    with api.app.state.store.transaction() as c:
+        ER.erase(c, "human:ana", jane, "request")
+    assert post(api, "entities/external-refs", {**record, "ref": kim}, expected=422)["error"]["code"] == "suppressed"
+    post(api, "entities/external-refs", {**record, "ref": kim, "connection_id": "tool_a"})
 
 
 def test_a_merge_copies_a_stored_outside_link_after_its_tool_is_gone(api):

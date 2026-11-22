@@ -106,18 +106,23 @@ def _host(text: str) -> str:
 Visible = Callable[[str], bool]  # whether the caller may see a tool, by id (api_tools.connection_visible)
 
 
+def hosts(base_url: object, sites: object) -> set[str]:
+    """The hosts a tool is on: its base URL's and each of its sites' (`sites` as stored, JSON)."""
+    try:
+        listed: object = json.loads(str(sites or "[]"))
+    except ValueError:
+        listed = []
+    names = [str(site) for site in listed] if isinstance(listed, list) else []  # pyright: ignore[reportUnknownVariableType]
+    return {_host(str(base_url or "")), *(_host(name) for name in names)} - {""}
+
+
 def serving(conn: sqlite3.Connection, host: str, visible: Visible | None = None) -> list[str]:
     """The ids of the tools bound to `host` alone (their base URL and every site on it, and on no other host) that
-    `visible` admits (None: every tool), sorted. A tool on several hosts serves none: its keys could be either site's."""
+    `visible` admits (None: every tool), sorted. A tool on several hosts serves none: its keys could be either site's.
+    A tool's hosts stay as they are once outside references name it (api_tools.keep_sites)."""
     found: list[str] = []
     for tool_id, base_url, sites in conn.execute("SELECT id, base_url, sites FROM tools ORDER BY id").fetchall():
-        try:
-            listed: object = json.loads(sites or "[]")
-        except ValueError:
-            listed = []
-        names = [str(site) for site in listed] if isinstance(listed, list) else []  # pyright: ignore[reportUnknownVariableType]
-        hosts = {_host(str(base_url or "")), *(_host(name) for name in names)} - {""}
-        if hosts == {host} and (visible is None or visible(str(tool_id))):
+        if hosts(base_url, sites) == {host} and (visible is None or visible(str(tool_id))):
             found.append(str(tool_id))
     return found
 

@@ -370,9 +370,6 @@ class TaskLinkView(TypedDict):
     """The outside item the link is (backend/item_sources), on the task's own read: its source (github, jira)"""
     item_type: NotRequired[str | None]
     item_key: NotRequired[str | None]
-    connection_id: NotRequired[str | None]
-    """The connection (a tool's id) the item came through; empty for none (GitHub); null when it is a tool the reader
-    may not see"""
     is_primary: NotRequired[int]
     """1 on the one task an intake made for this item"""
 

@@ -673,10 +673,6 @@ def readers(auth):
             )
         ]
         value["links"] = H.task_links(c, row["id"])
-        if who is not None:
-            from . import api_tools
-
-            api_tools.shown_connections(c, who, auth, value["links"])
         value["children_summary"] = H.children_summary(c, row["id"], visible_sql)
         value["pr_state"] = H.pr_state(value["links"])
         counts = c.execute(

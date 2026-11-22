@@ -1834,10 +1834,18 @@ def connect(
                 if table in tables:
                     masks[table] = {**masks.get(table, {}), **cols_masked}
         if "task_links" in tables:
-            from .api_tools import connection_visible
+            from .api_tools import visible as tool_visible
 
-            # A link's connection (a tool) shows as the tools' rule says; one the caller may not see reads NULL.
-            shown = [tid for (tid,) in c.execute("SELECT id FROM tools") if connection_visible(c, who, auth, tid)]
+            # A link's connection (a tool) shows as the tools' rule says; one the caller may not see reads NULL. The
+            # tool rows are read once and judged as they are.
+            admins = getattr(auth.settings, "credential_admins", ())
+            tools_read = c.execute("SELECT * FROM tools")
+            names = [d[0] for d in tools_read.description]
+            shown = [
+                tool["id"]
+                for tool in (dict(zip(names, found, strict=True)) for found in tools_read.fetchall())
+                if tool_visible(c, who, tool, admins, auth)
+            ]
             masks["task_links"] = {
                 **masks.get("task_links", {}),
                 "connection_id": "CASE WHEN source.connection_id = '' OR source.connection_id IN "

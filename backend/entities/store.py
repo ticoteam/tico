@@ -865,7 +865,8 @@ def external_ref(
         # Erased records are suppressed by (system, type, id, connection); one erased before records had connections
         # was hashed by (system, type, id) and stays suppressed on every connection.
         legacy = "\x1f".join((system, kind, external))
-        if is_suppressed(c, "external", f"{legacy}\x1f{connection_id}") or is_suppressed(c, "external", legacy):
+        scoped = external_suppression(system, kind, external, connection_id)
+        if is_suppressed(c, "external", scoped) or is_suppressed(c, "external", legacy):
             _refuse(c, actor, "suppressed", "That was erased at its owner's request; it is not created again")
         c.execute(
             "INSERT INTO entity_external_refs (id, entity_id, connection_id, system, external_type, external_id, url, "
@@ -1477,6 +1478,12 @@ def _normal_identifier(kind: str, value: object) -> str:
     return text.lower()
 
 
+def external_suppression(system: str, external_type: str, external_id: str, connection_id: str) -> str:
+    """What an erased record's suppression hashes: a versioned tuple, so a record with no connection ('') stays apart
+    from each connection's and from a legacy (system, type, id) hash, which suppressed it on every connection."""
+    return "v2:" + json.dumps([system, external_type, external_id, connection_id], separators=(",", ":"))
+
+
 def _hash_identifier(kind: str, value: object, salt: str) -> str:
     return hmac.new(salt.encode(), f"{kind}\x1f{_normal_identifier(kind, value)}".encode(), hashlib.sha256).hexdigest()
 
@@ -1553,7 +1560,7 @@ def _suppress_identifiers(c: sqlite3.Connection, ids: list[str], reason: str) ->
     ]
     # A record is one connection's (system, type, id, connection): erasing it suppresses it on that connection only.
     pairs += [
-        ("external", "\x1f".join(str(part) for part in row))
+        ("external", external_suppression(str(row[0]), str(row[1]), str(row[2]), str(row[3])))
         for row in c.execute(
             "SELECT system, external_type, external_id, connection_id FROM entity_external_refs "
             "WHERE entity_id IN (SELECT value FROM json_each(:ids))",

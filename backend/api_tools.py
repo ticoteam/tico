@@ -1367,6 +1367,21 @@ def _former(c, tid):
         return False
 
 
+def keep_sites(c, tool, base_url, sites):
+    """409 `connection_sites` when a change would move a tool that outside references name (TS.referenced) to other
+    hosts: its items' keys (Jira's `PROJ-7`) are its old site's, so another site is a new tool."""
+    from . import item_sources as IS
+
+    before = IS.hosts(_field(tool, "base_url"), _field(tool, "sites"))
+    if IS.hosts(base_url, sites) != before and TS.referenced(c, tool["id"]):
+        raise Problem(
+            "connection_sites",
+            f"{tool['name']} names outside items of {', '.join(sorted(before)) or 'its site'}: add a new tool for "
+            "another site",
+            409,
+        )
+
+
 def connection_visible(c, who, auth, tool_id):
     """Whether `who` may know the connection (a tool) `tool_id` exists: the tools' one rule (`visible`)."""
     return bool(tool_id) and bool(visible(c, who, tool_id, getattr(auth.settings, "credential_admins", ()), auth))
@@ -1504,6 +1519,7 @@ def update_tool(c, who, tool_id, body, admins, auth=None):
         raise Problem("delivery", f"{tool['name']} signs in: its tokens stay with Tico, so it stays on the proxy", 422)
     if merged == tool:
         return _tool_view(tool_row(c, tool_id))
+    keep_sites(c, tool, merged["base_url"], _field(tool, "sites"))
     c.execute(
         "UPDATE tools SET name=?,service=?,base_url=?,auth_scheme=?,check_path=?,delivery=?,updated_at=? WHERE id=?",
         (

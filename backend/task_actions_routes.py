@@ -794,8 +794,18 @@ def register_core(
             request_id = (H.DELEGATION.get() or {}).get("cited") or None
         if H.is_human(who.actor) and (request_id or inherited_request):
             c.execute("UPDATE tasks SET request_id=? WHERE id=?", (inherited_request or request_id, row["id"]))
+        from . import api_tools
+
         for url in body.links:
-            H.task_link(c, who.actor, row["id"], url, mover=True)
+            # A Jira link binds only a connection this caller may see (api_tools.connection_visible).
+            H.task_link(
+                c,
+                who.actor,
+                row["id"],
+                url,
+                mover=True,
+                visible=lambda tool_id: api_tools.connection_visible(c, who, auth, tool_id),
+            )
         # A bot's finding on a pipeline task's own pull request is that task's review verdict, not a person's task.
         H.review_finding_route(c, who.actor, row["id"], row["owner_id"])
         # The parent it was filed under is a relation written here too, and reads back first.

@@ -4117,10 +4117,12 @@ def _private_followups(conn, task_id):
 
 
 def task_links(conn, task_id):
+    """A task's links as the API shows them. A link's connection (the tool an outside item came through) is stored and
+    read by Tico, never shown: a tool's id is the tools' visibility rule's to show."""
     from .worktrees import statuses
 
     return [
-        _with_thread(link)
+        {k: v for k, v in dict(_with_thread(link)).items() if k != "connection_id"}
         for link in statuses(
             conn, conn.execute("SELECT * FROM task_links WHERE task_id=? ORDER BY created_at", (task_id,))
         )
