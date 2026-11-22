@@ -53,6 +53,17 @@ PAYMENT_STATUSES = (
     "unknown",
 )
 TRANSFER_STATUSES = ("queued", "submitted", "unknown", "failed", "posted", "canceled")
+# outbound_actions.state (backend/outbound_actions.py): the outbound gate's queue.
+OUTBOUND_ACTION_STATES = (
+    "waiting_approval",
+    "queued",
+    "attempting",
+    "done",
+    "failed",
+    "unknown",
+    "blocked",
+    "canceled",
+)
 GOOGLE_CONNECT_STATUSES = ("signing_in", "finishing", "connected", "disconnected", "failed")
 
 
@@ -107,6 +118,7 @@ COLUMNS = (
     Column("fin_cards", "status", ("active", "frozen", "canceled"), enforce="check"),
     Column("fin_payments", "status", PAYMENT_STATUSES, enforce="check"),
     Column("fin_transfers", "status", TRANSFER_STATUSES, enforce="check"),
+    Column("outbound_actions", "state", OUTBOUND_ACTION_STATES, enforce="check"),
 )
 
 

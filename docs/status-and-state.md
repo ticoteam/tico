@@ -38,6 +38,7 @@ they stay greppable.
 | [`fin_cards.status`](#fin_cardsstatus) | check | refused | `active`, `frozen`, `canceled` |
 | [`fin_payments.status`](#fin_paymentsstatus) | check | refused | `queued`, `sending`, `awaiting_bank_approval`, `submitted`, `settled`, `returned`, `failed`, `canceled`, `unknown` |
 | [`fin_transfers.status`](#fin_transfersstatus) | check | refused | `queued`, `submitted`, `unknown`, `failed`, `posted`, `canceled` |
+| [`outbound_actions.state`](#outbound_actionsstate) | check | refused | `waiting_approval`, `queued`, `attempting`, `done`, `failed`, `unknown`, `blocked`, `canceled` |
 <!-- status-values:end -->
 
 ## How the lists are enforced
@@ -484,6 +485,27 @@ CHECK, with `cancelled` mapped. NOT NULL, default `queued`.
 Transitions (`backend/finance/transfers.py`, `backend/finance/store/banking.py`): `queued` to `submitted` on send
 (`banking.py`); the bank's answer or an error moves it to `posted`, `unknown` or `failed` (`transfers.py`); `unknown` is
 retried or reconciled; a stopped transfer goes to `canceled`.
+
+### outbound_actions.state
+
+CHECK. NOT NULL, default `queued`. One send or outside write through the outbound gate (docs/outbound-actions.md).
+
+- `waiting_approval`: the policy asks first; a person's OK bound to the frozen content lets it go.
+- `queued`: due at `next_attempt_at` (and not before `send_after`).
+- `attempting`: claimed by the worker; once `provider_attempted_at` is set the provider may have it. With no claim it
+  was handed to another sender (Slack's gateway), which settles it.
+- `done`: the provider confirmed it; the payload is wiped.
+- `failed`: the provider refused it for good, or safe retries ran out; the payload is wiped.
+- `unknown`: the provider may have it and nobody could confirm; never sent again on its own.
+- `blocked`: the policy says Never (or Slack Connect at send time); the payload is kept for a person to read.
+- `canceled`: a person canceled it before it went, or after an unknown outcome; the payload is wiped.
+
+Transitions (`backend/outbound_actions.py`): insert `queued`, `waiting_approval` or `blocked` (the policy);
+`waiting_approval` to `queued` on the OK; `queued` to `attempting` on claim; `attempting` to `done`, `failed`,
+`unknown`, `blocked` or `waiting_approval` (the policy checked again), or back to `queued` (a safe rejection, or a stale
+claim never attempted); a stale claim that was attempted goes to `unknown`; `unknown` to `queued` only when its adapter
+proves the provider never had it, else to whatever the adapter finds; `waiting_approval`, `queued`, `blocked` or
+`unknown` to `canceled` by a person.
 
 ## Outside the stable set
 

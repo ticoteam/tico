@@ -86,6 +86,7 @@ EMPTY = (
     "webhook_events",
     "webhook_sends",
     "webhook_attempts",  # outgoing: a copy never sends an event out
+    "outbound_actions",  # the outbound gate's queue: a copy sends nothing and keeps none of its payloads
     "schedules",
     "schedule_config",
     "schedule_occurrences",
