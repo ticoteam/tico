@@ -56,7 +56,8 @@ def pipeline_for(c: Connection, bot: str, key: str) -> str | None:
 
 
 def _staff(settings: Any) -> str:
-    return "" if support.off_reason(settings) else os.environ.get("TICO_HQ_STAFF_KEY", "").strip()
+    key = os.environ.get("TICO_HQ_STAFF_KEY", "").strip()
+    return key if key and settings is not None and not support.off_reason(settings) else ""
 
 
 def _ticket(c: Connection, actor: str, task_id: str | None, key: str | None = None) -> Row | None:
@@ -66,13 +67,15 @@ def _ticket(c: Connection, actor: str, task_id: str | None, key: str | None = No
     support_bot = H.resolve_bot(c, os.environ.get("TICO_HQ_SUPPORT_BOT", "").strip() or "support-owner")
     if not support_bot or support_bot["id"] != bot:
         return None
+    predicate, params = ("w.key=?", (bot, task_id, key)) if key is not None else ("w.key LIKE 'hq:%'", (bot, task_id))
     row = c.execute(
-        "SELECT w.key, coalesce(t.held,0) AS held, json_extract(t.detail,'$.kind') AS kind "
+        "SELECT w.key, json_extract(t.detail,'$.kind') AS kind "
         "FROM watcher_items w LEFT JOIN watcher_triage t ON t.bot=w.bot AND t.key=w.key "
-        "WHERE w.bot=? AND w.task_id=? AND w.key LIKE 'hq:%' AND (? IS NULL OR w.key=?)",
-        (bot, task_id, key, key),
+        f"WHERE w.bot=? AND w.task_id=? AND {predicate}",
+        params,
     ).fetchone()
-    if row and not row["held"] and watched(c, bot, row["key"]):
+    # Ownership is also support_triage's release rule for a locally held ticket.
+    if row and watched(c, bot, row["key"]):
         return dict(row)
     return None
 
@@ -195,9 +198,11 @@ def on_sent(c: Connection, row: Row, receipt: Row) -> None:
     from . import outbound_actions as OA, watchers
 
     task_id = row["task_id"]
-    if not receipt.get("provider_id") or not task_id or not H.task(c, task_id):
+    if not (receipt.get("provider_id") or receipt.get("confirmed_by")) or not task_id or not H.task(c, task_id):
         return
     payload = OA.content(row)["payload"]
+    if not isinstance(payload.get("body"), str):
+        return
     defang = cast("Any", watchers.defang)  # pyright: ignore[reportUnknownMemberType] watcher sanitizes untyped inputs
     recorded = False
     with batch_work.isolated(c, "help_reply_note", row["id"], private=True):
@@ -235,6 +240,9 @@ def _engineering_ready(c: Connection, parent: str, actor: str, child: str | None
 
 def engineering_finished(c: Any, task_id: str) -> None:
     """The issue link and Support-filed subtask identify a bug handed to Engineering."""
+    settings = getattr(c, "settings", None)
+    if not _staff(settings):
+        return
     from . import outbound_actions as OA
 
     row = c.execute(
@@ -246,7 +254,7 @@ def engineering_finished(c: Any, task_id: str) -> None:
         return
     actor, parent = row["requester_id"], row["parent"]
     ticket = _ticket(c, actor, parent)
-    if not ticket or ticket["kind"] not in (None, "bug"):
+    if not ticket:
         return
     task = H.task(c, parent)
     if (
@@ -258,36 +266,25 @@ def engineering_finished(c: Any, task_id: str) -> None:
     ):
         return
     key = f"{FIX_KEY}{origin_ref()}:{ticket['key']}"
-    if (
-        c.execute("SELECT 1 FROM outbound_actions WHERE occurrence_key=?", (key,)).fetchone()
-        or c.execute(
-            "SELECT 1 FROM messages WHERE conversation_id=? AND json_extract(refs,'$.task')=? "
-            "AND json_extract(refs,'$.help_fixed')=1",
-            (task["conversation_id"], parent),
-        ).fetchone()
-    ):
+    if c.execute("SELECT 1 FROM outbound_actions WHERE occurrence_key=?", (key,)).fetchone():
         return
     with batch_work.isolated(c, "help_engineering_reply", parent, private=True):
-        try:
-            OA.enqueue(
-                c,
-                c.settings,
-                actor=actor,
-                channel=CHANNEL,
-                operation="reply",
-                destination=ticket["key"].removeprefix(WATCH_KEY),
-                occurrence_key=key,
-                payload={"body": FIX_REPLY},
-                task_id=parent,
-                system_occurrence=True,
-            )
-        except Problem:
-            pass  # the Support Agent keeps the draft on its task if the gate could not queue it
+        OA.enqueue(
+            c,
+            settings,
+            actor=actor,
+            channel=CHANNEL,
+            operation="reply",
+            destination=ticket["key"].removeprefix(WATCH_KEY),
+            occurrence_key=key,
+            payload={"body": FIX_REPLY},
+            task_id=parent,
+            system_occurrence=True,
+        )
         H.task_comment(
             c,
             H.TICO_ACTOR,
             parent,
             "Engineering reply ready for review:\n\n" + FIX_REPLY,
             wake=False,
-            extra_refs={"help_fixed": True},
         )

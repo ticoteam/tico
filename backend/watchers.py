@@ -111,9 +111,8 @@ def deliver(c, auth, bot, event, triage=None, *, help_event=False):
     backend/screening.py); screening may instead give back the event to apply, with a warning line on its body."""
     item = c.execute("SELECT task_id FROM watcher_items WHERE bot=? AND key=?", (bot, event.key)).fetchone()
     task = H.task(c, item["task_id"]) if item else None
-    if event.ref.startswith(support_hq.ORIGIN_PREFIX) and (
-        not help_event or event.op != "task" or item or support_triage.pending(c, bot, event.key)
-    ):
+    pending = support_triage.pending(c, bot, event.key)
+    if event.ref.startswith(support_hq.ORIGIN_PREFIX) and (not help_event or event.op != "task" or item or pending):
         event = event.model_copy(update={"ref": ""})
     help_key = event.key if help_event else ""
     if (
@@ -125,7 +124,7 @@ def deliver(c, auth, bot, event, triage=None, *, help_event=False):
         return None
     if event.ref:
         c.execute("INSERT INTO watcher_refs VALUES(?,?,?)", (bot, event.key, event.ref))
-    if support_triage.pending(c, bot, event.key):
+    if pending:
         support_triage.later(c, bot, event)  # a note on its task once triage opens it
         return None
     if screening.waiting(c, "watcher", bot, event.key):

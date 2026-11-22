@@ -215,12 +215,17 @@ def decide(c: Any, *, actor: str, channel: str, audience: str, destination: str)
     company = company_policy(c).get(f"{channel}:{audience}")
     if company == "never":
         return {"choice": "never", "why": f"The company never sends {channel} to {audience} audiences", "floor": True}
-    default = company or default_for(channel, audience)
+    choice = company or default_for(channel, audience)
+    source = "the company's setting" if company else "the default"
+    why = f"{source} for {channel} to {audience} audiences"
+    is_floor = False
     adapter = ADAPTERS.get(channel)
     if adapter and adapter.policy_floor:
         floor = adapter.policy_floor(c, actor)
-        if CHOICES.index(floor) > CHOICES.index(default):
-            return {"choice": floor, "why": f"The sender's policy for {channel}", "floor": True}
+        if CHOICES.index(floor) > CHOICES.index(choice):
+            choice, why, is_floor = floor, f"The sender's policy for {channel}", True
+    if choice == "never":
+        return {"choice": choice, "why": why, "floor": is_floor}
     from .entities import rules as DR
 
     address = str(destination or "").strip().lower()
@@ -233,11 +238,10 @@ def decide(c: Any, *, actor: str, channel: str, audience: str, destination: str)
     )
     if verdict and verdict["outcome"] == "held":
         floor = "never" if any(rule["effect"] == "block" for rule in verdict["held"]) else "ask_first"
-        if CHOICES.index(floor) > CHOICES.index(default):
+        if CHOICES.index(floor) > CHOICES.index(choice):
             why = "; ".join(str(rule["text"]) for rule in verdict["held"])[:300]
             return {"choice": floor, "why": why, "floor": True}
-    source = "the company's setting" if company else "the default"
-    return {"choice": default, "why": f"{source} for {channel} to {audience} audiences", "floor": False}
+    return {"choice": choice, "why": why, "floor": is_floor}
 
 
 # ---------------------------------------------------------------------------------------------------------- rows

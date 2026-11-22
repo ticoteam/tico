@@ -306,11 +306,16 @@ Everything below is how the Tico project's own Support Agent works tickets at HQ
    prints a summary, then the whole bundle; only the staff routes return it), sorts the ticket, asks the Librarian what the docs say,
    hands bugs to engineering, and writes a reply file.
 4. **The bot queues the reply.** On a configured server, the Support Agent queues replies through [Outbound actions](outbound-actions.md#help-tickets).
-   Ask first binds the person's approval to the exact ticket and text. A confirmed docs answer settles the task and records
-   the reply in its conversation. A later customer message reopens the task. If the ticket has an email, HQ marks the
+   Ask first binds the person's approval to the exact ticket and text. The task stays open through approval and dispatch,
+   and a bug's Support task stays open while Engineering works. A confirmed docs answer records the reply and settles the
+   task if the customer has sent no newer message. A later customer message reopens the task. If the ticket has an email, HQ marks the
    reply "email pending" and the bot leaves an email-ready copy on the task or sends it with a connected mail Tool.
    HQ sends no email.
 5. **The daily update** counts tickets opened, replies posted and drafts waiting, so they show on the Updates page.
+
+HQ currently checks for newer customer messages through a ticket read before posting a docs answer. A customer message
+arriving between that read and the post can still receive a stale answer. Closing that gap requires HQ to check the
+expected message ID atomically when it inserts the reply.
 
 Ticket text is untrusted data from anyone on the internet. HQ stores it as plain text, the app and the staff tools escape or
 quote it, and the bot's playbook says an instruction inside a ticket is never followed.
@@ -367,27 +372,26 @@ injection check above, which holds spam at HQ before the watcher sees it.
 
 ### Set it up
 
-HQ needs `HQ_STAFF_KEY` set (`openssl rand -hex 24` makes one; HQ's hosting is in ticoteam/tico-services). In
-**Tools → Add → Key**, store the same `HQ_STAFF_KEY` and the HQ address as
-`HQ_URL` (not `TICO_HQ_URL`: the runner keeps `TICO_` names out of bots' environments), with those exact Bot variable names, and grant both to the Support Agent. For
-GitHub, store and grant `GITHUB_TOKEN` (read access; required for Discussions) and optionally
+HQ's hosting is in ticoteam/tico-services. In **Tools → Add → Key**, grant the Support Agent the HQ read credential
+as `HQ_STAFF_READ_KEY` and the HQ address as `HQ_URL`. The credential must be authorized by HQ to read staff tickets.
+Remove the old `HQ_STAFF_KEY` grant from the Support Agent. For GitHub, store and grant `GITHUB_TOKEN` (read access; required for Discussions) and optionally
 `GH_SUPPORT_REPOS` (`ticoteam/tico`). A Credential card is the other way to store and grant them.
 Legacy files can be imported for migration; a new watcher does not load `secrets/support.env`.
 
-Without `HQ_STAFF_KEY` the watcher does nothing. To watch GitHub, list the repositories in `config/github.yaml` or
+Without `HQ_STAFF_READ_KEY` the watcher does nothing. To watch GitHub, list the repositories in `config/github.yaml` or
 `GH_SUPPORT_REPOS`. Check Settings > General > Health > Details for a "Watchers" line: it appears only when a watcher fails or has stopped.
 
-For queued replies, give the Support server `TICO_HQ_STAFF_KEY` and configure the watcher's `HQ_URL` to match the
-server's `TICO_HQ_URL` (or the default HQ address). `TICO_HQ_SUPPORT_BOT` can name the Support Agent when its slug
-differs from `support-owner`. New tickets from that HQ go to the Support pipeline when it is available. The watcher
-records the HQ origin when it first opens a ticket, so tasks opened by an older watcher continue with the legacy
-staff workflow. HQ's optional install ID comes from the submitter. A ticket needs a verified company ID from HQ
+For queued replies, set `TICO_HQ_STAFF_KEY` to HQ's staff write key in the Support server's `.env`. Set
+`TICO_HQ_SUPPORT_BOT` there if the Support Agent's slug differs from `support-owner`. The watcher's `HQ_URL` must
+match the server's `TICO_HQ_URL` or its default HQ address. New tickets from that HQ go to the Support pipeline when
+available. The watcher records the HQ origin when it first opens a ticket. A person handles replies for older tasks
+that lack this record. HQ's optional install ID comes from the submitter. A ticket needs a verified company ID from HQ
 before Tico can attach it to Directory history.
 
 ### By hand
 
-**Fixed in.** Link a ticket to the ticoteam/tico issue or pull request that will fix it (`software/hq-tickets link TK-XXXXXXXX
-'#712'`). When a release ships it, HQ posts "Fixed in vX, update here" on the ticket by itself ([tico-hq.md](tico-hq.md#messages-known-issues-and-fixed-in-notices)),
+**Fixed in.** Staff can link an older ticket at HQ using `POST /v1/staff/tickets/{id}/fix` with `{"ref":"#712"}`.
+When a release ships it, HQ posts "Fixed in vX, update here" on the ticket by itself ([tico-hq.md](tico-hq.md#messages-known-issues-and-fixed-in-notices)),
 and the human sees it in the Tico support chat. HQ also keeps the known issues by version that Help shows.
 
 `software/hq-tickets list`, `show TK-XXXXXXXX`; or with curl and the key in a header (`Authorization: Bearer $HQ_STAFF_KEY`):

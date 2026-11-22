@@ -40,7 +40,9 @@ cursor. Other senders go to a private triage task for the inbox owner with a lin
 The task flags an unverified sender. An authenticated sender without an exact match can get a domain suggestion.
 People need access to both the contact and the inbox to read the thread. Matched arrivals are logged in history,
 which also checks access to the source of each recorded activity.
-Relationship-agent wakes are deferred until relationship run lanes ship. History is available through
+An assigned relationship worker gets a wake for a matched arrival. Its wake waits in the queue while the worker is
+paused. If the thread's relationship changes before the wake is queued, the arrival goes to the inbox owner's triage.
+History is available through
 `tico contacts activity <ref>`, `tico_contacts_activity` in MCP, and `GET /api/v2/entities/activity`.
 The inbox owner can release or drop held runs in the Conversation intake routine or through
 `tico automation held <id> release|drop`. The Automation runs card and audit entries for intake and outside thread

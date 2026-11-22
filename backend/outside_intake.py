@@ -210,6 +210,7 @@ def save_message(
         outside=(channel, connection_id, source_message_id),
     )
     payload["message_id"] = message["id"]
+    payload["entity_id"] = verified
     task_engine.customer_replied(c, message, root)
     return str(queue.queue_intake(c, connection_id, owner_id, ref, payload))
 
@@ -268,30 +269,41 @@ def process(c: sqlite3.Connection, connection_id: str, ref: str, payload: dict[s
     return "matched"
 
 
-def wake_relationship(c: sqlite3.Connection, authority: "Auth", connection_id: str, message_id: str) -> str:
+def wake_relationship(
+    c: sqlite3.Connection,
+    connection_id: str,
+    ref: str,
+    payload: dict[str, Any],
+    started_at: str,
+    *,
+    authority: "Auth",
+) -> str:
     """Only an enrolled worker gets a wake, sponsored by the current owner of the source inbox."""
     from . import relationship_runs
 
-    if not c.execute(
-        "SELECT 1 FROM assignments a JOIN bots b ON b.id=a.bot WHERE a.bot=? AND b.state='active'",
-        (relationship_runs.BOT,),
-    ).fetchone():
-        return "ok"
     root = c.execute(
         "SELECT t.id, t.entity_id FROM messages m JOIN conversations t ON t.id=m.conversation_id "
         "WHERE m.id=? AND m.deleted_at IS NULL AND t.deleted_at IS NULL "
         "AND t.audience='entity' AND t.connection_id=? AND t.entity_id IS NOT NULL",
-        (message_id, connection_id),
+        (payload["message_id"], connection_id),
     ).fetchone()
-    if root:
-        owner = eligible_owner(c, mailboxes.row_by_id(c, connection_id))
-        sponsor = authority.identity_for_actor(c, f"human:{owner}")
-        relationship_runs.enqueue(
-            c,
-            authority,
-            sponsor,
-            root["entity_id"],
-            "Review the new arrival in this relationship's source thread.",
-            thread_id=root["id"],
-        )
+    if not root:
+        return "ok"
+    if root["entity_id"] != payload.get("entity_id"):
+        return triage(c, connection_id, ref, payload, started_at)
+    if not c.execute(
+        "SELECT 1 FROM assignments a JOIN bots b ON b.id=a.bot WHERE a.bot=? AND b.state IN ('active','paused')",
+        (relationship_runs.BOT,),
+    ).fetchone():
+        return "ok"
+    owner = eligible_owner(c, mailboxes.row_by_id(c, connection_id))
+    sponsor = authority.identity_for_actor(c, f"human:{owner}")
+    relationship_runs.enqueue(
+        c,
+        authority,
+        sponsor,
+        root["entity_id"],
+        "Review the new arrival in this relationship's source thread.",
+        thread_id=root["id"],
+    )
     return "ok"

@@ -346,6 +346,7 @@ def waited_body(name, bot, found, body):
 def hand_over(store, row):
     """A ticket that waited past WAIT_HOURS: a task for a person, as a held ticket is, and its copy here removed. With
     no person to give it to, the copy is removed all the same (the ticket stays at HQ) and an event says so."""
+    from . import support_hq
     from .watchers import _open, defang
 
     with store.transaction() as c:
@@ -357,6 +358,10 @@ def hand_over(store, row):
             return None
         person = person_for(c, row["bot"])
         if not person:
+            c.execute(
+                "DELETE FROM watcher_refs WHERE bot=? AND key=? AND ref GLOB ?",
+                (row["bot"], row["key"], support_hq.ORIGIN_PREFIX + "*"),
+            )
             H.event(
                 c,
                 H.TICO_ACTOR,

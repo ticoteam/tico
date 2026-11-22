@@ -99,7 +99,8 @@ The Support Agent can queue `help-ticket` actions for its own open tasks filed b
 Use the HQ ticket ID as the destination and the Support task as `task_id`. The `reply` operation takes `{"body":
 "<reply>"}`. Use `answer` for a docs answer on a ticket triaged as a question, with the same body plus
 `last_message_id` (the latest customer message ID from `hq-tickets show`, or zero for the original request).
-HQ's confirmed receipt records the reply on the task and settles an `answer` through the task's normal Done step.
+HQ's receipt or a person's confirmation via `tico outbound confirm-sent` records the reply on the task and settles an
+`answer` if the task is still open, owned by the Support Agent and has no newer customer message.
 An answer with a newer customer message waits for the Support Agent to read it and queue a fresh answer.
 
 Help replies default to Ask first. The Support Agent's effective sending mode can tighten the outbound policy.
