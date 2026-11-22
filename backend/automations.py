@@ -192,7 +192,7 @@ def view(c, row, who=None, detail=False, chart=None, jobs=None, flow=None):
         out["counts"] = {"today": {"runs": today["runs"] if today else 0, "dropped": today["dropped"] if today else 0}}
     if who is not None:
         out["can_edit"] = may_change(c, who, flow, chart)
-        out["can_pause"] = may_pause(c, who, flow, out["can_edit"])
+        out["can_pause"] = not row["id"].startswith(INTAKE_AUTOMATION) and may_pause(c, who, flow, out["can_edit"])
     return out
 
 
@@ -477,16 +477,32 @@ def may_pause(c, who, flow, can_edit=None):
     return may_change(c, who, flow) if can_edit is None else can_edit
 
 
-def may_see(c, who, flow):
+def _intake_inbox(c, who, aid):
+    from . import mailbox_access
+
+    if who.role not in ("owner", "human"):
+        return None
+    box = mailbox_access.row_by_id(c, aid.removeprefix(INTAKE_AUTOMATION))
+    if not box or mailbox_access.level(c, who.actor, box["address"]) == "none":
+        return None
+    delegate = getattr(who, "task_actor", "")
+    if delegate and mailbox_access.level(c, delegate, box["address"]) == "none":
+        return None
+    return box
+
+
+def may_see(c, who, flow, chart=None, *, aid=""):
     """Seeing follows the change rule."""
-    return may_change(c, who, {**flow, "readonly": False})
+    if aid.startswith(INTAKE_AUTOMATION):
+        return _intake_inbox(c, who, aid) is not None
+    return may_change(c, who, {**flow, "readonly": False}, chart)
 
 
 def may_reference(c, who, aid):
     """A chat message may name automation `aid` (refs.automation) when it exists and `who` may see it: the same rule as
     GET /api/v2/automations/{aid}."""
     row = _row(c, aid) if isinstance(aid, str) else None
-    return bool(row) and may_see(c, who, flow_of(row))
+    return bool(row) and may_see(c, who, flow_of(row), aid=aid)
 
 
 def _seen_if_builtin(c, who, flow):
@@ -499,6 +515,8 @@ def deletable(c, who, aid):
     it before it hands a person a Confirm card for a delete, so no card fails on the tap."""
     row = _row(c, aid)
     if not row:
+        raise Problem("not_found", "No such automation", 404)
+    if aid.startswith(INTAKE_AUTOMATION) and _intake_inbox(c, who, aid) is None:
         raise Problem("not_found", "No such automation", 404)
     if not _seen_if_builtin(c, who, flow_of(row)):
         raise Problem(
@@ -4011,6 +4029,11 @@ def install(app, store, auth, mutate):
         row = _row(c, aid)
         if not row:
             raise Problem("not_found", "No such automation", 404)
+        if aid.startswith(INTAKE_AUTOMATION):
+            if _intake_inbox(c, who, aid) is None:
+                raise Problem("not_found", "No such automation", 404)
+            if rule is may_see:
+                return row
         if not (rule or may_change)(c, who, flow_of(row)):
             raise Problem(
                 "forbidden", f"Only its owner, the people above its owner or its group's lead may {what}", 403
@@ -4057,9 +4080,7 @@ def install(app, store, auth, mutate):
             # reads each one's last run, hold and more), and one past them, which tells the pager there is more.
             flows = ((r, flow_of(r)) for r in rows)
             visible = (
-                (r, flow)
-                for r, flow in flows
-                if AO.shown(flow, hidden) and may_change(c, who, {**flow, "readonly": False}, chart)
+                (r, flow) for r, flow in flows if AO.shown(flow, hidden) and may_see(c, who, flow, chart, aid=r["id"])
             )
             built = (
                 {**view(c, dict(r), who, chart=chart, jobs=jobs, flow=flow), "pending": pending.get(r["id"], 0)}
@@ -4243,6 +4264,8 @@ def install(app, store, auth, mutate):
 
         def work(c):
             row = found(c, who, aid, "change this automation", rule=lambda c, who, flow: True)
+            if aid.startswith(INTAKE_AUTOMATION):
+                raise Problem("readonly", "This built-in shows work Tico runs itself", 409)
             before = flow_of(row)
             changes = body.model_dump(exclude_unset=True)
             summary = changes.pop("summary", None)
@@ -4445,17 +4468,24 @@ def install(app, store, auth, mutate):
         **api_v2(
             "Automations",
             "endAutomationHold",
-            "End the run guard's hold: `release` queues its held runs, oldest first; `drop` skips them. `moved` is how many",
+            "End the run guard's hold: `release` queues its held runs, oldest first; `drop` skips them. "
+            "For conversation intake, only the inbox owner may do this. `moved` is how many",
             "AutomationHeld",
         ),
     )
     def automations_held(request: Request, aid: str, body: HeldAction):
         """End the run guard's hold: `release` queues its held runs, oldest first; `drop` skips them. Whoever may
-        change the automation may do either."""
+        change the automation may do either. For intake, its inbox owner decides."""
         who = request.state.identity
 
         def work(c):
-            row = found(c, who, aid, "release or drop its held runs")
+            if aid.startswith(INTAKE_AUTOMATION):
+                row = found(c, who, aid, rule=may_see)
+                box = _intake_inbox(c, who, aid)
+                if not box or box["person_id"] != H.actor_id(who.actor):
+                    raise Problem("forbidden", "Only the inbox owner may release or drop held intake runs", 403)
+            else:
+                row = found(c, who, aid, "release or drop its held runs")
             n = _unhold(c, aid, who.actor, body.action, _via(who))
             if n is None:
                 raise Problem("not_on_hold", "The automation is not on hold", 409)

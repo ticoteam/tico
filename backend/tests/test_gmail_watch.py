@@ -166,6 +166,37 @@ def test_intake_arrivals_survive_a_full_hold_and_a_stale_claim(watched):
         assert c.execute("SELECT count(*) FROM tasks WHERE occurrence_step='triage'").fetchone()[0] == 2
 
 
+@pytest.mark.parametrize("action, status", [("release", "ok"), ("drop", "skipped")])
+def test_only_inbox_owner_ends_intake_hold_and_visibility_follows_mailbox(api, action, status):
+    store = api.app.state.store
+    with store.transaction() as c:
+        box = MA.ensure_mailbox(c, "ben@acme.example", person_id="ben", created_by="human:ben")
+        rid = automations.queue_intake(c, box["id"], "ben", "intake:held", {"source_message_id": "held"})
+        aid = automations.INTAKE_AUTOMATION + box["id"]
+        automations._hold(c, automations._row(c, aid), "flood")
+
+    def listed(token):
+        rows = get(api, "automations", token=token)["automations"]
+        return aid in {row["id"] for row in rows}
+
+    assert not listed("ana-test")
+    assert listed("ben-test")
+    get(api, f"automations/{aid}/runs", expected=404)
+    assert get(api, f"automations/runs?ids={aid}")["runs"] == []
+    post(api, f"automations/{aid}/held", {"action": action}, expected=404)
+    with store.transaction() as c:
+        MA.grant(c, "human:ben", box["id"], "person", "ana", "read")
+
+    assert listed("ana-test")
+    assert get(api, f"automations/{aid}/runs")["runs"][0]["id"] == rid
+    assert get(api, f"automations/runs?ids={aid}")["runs"][0]["id"] == rid
+    post(api, f"automations/{aid}/held", {"action": action}, expected=403)
+    result = post(api, f"automations/{aid}/held", {"action": action}, token="ben-test")
+    assert result["moved"] == 1 and result["readonly"] and not result["can_edit"]
+    store.automations.drain()
+    assert get(api, f"automations/{aid}/runs", token="ben-test")["runs"][0]["status"] == status
+
+
 def test_intake_failed_step_rolls_back_and_drain_hands_it_to_the_owner(watched, monkeypatch):
     api, gmail, _ = watched
     store = api.app.state.store

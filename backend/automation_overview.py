@@ -180,7 +180,7 @@ def visible(c, who, settings=None):
     out = []
     for r in c.execute("SELECT * FROM automations WHERE deleted_at IS NULL ORDER BY created_at DESC").fetchall():
         flow = AU.flow_of(r)
-        if shown(flow, hidden) and AU.may_change(c, who, {**flow, "readonly": False}, chart):
+        if shown(flow, hidden) and AU.may_see(c, who, flow, chart, aid=r["id"]):
             out.append((dict(r), flow))
     return out
 
