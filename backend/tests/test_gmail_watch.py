@@ -173,6 +173,8 @@ def test_intake_commits_before_the_cursor_and_replay_returns_the_same_run(watche
 
 def test_intake_does_not_use_the_date_header_as_provider_time(watched, monkeypatch):
     api, gmail, _ = watched
+    with api.app.state.store.transaction() as c:
+        ES.upsert(c, "human:ana", "person", match={"email": "person@customer.example"})
     check(api, T0)
     gmail.add(
         BOX,
@@ -180,7 +182,7 @@ def test_intake_does_not_use_the_date_header_as_provider_time(watched, monkeypat
         thread="support",
         epoch=epoch(T0),
         labels=("INBOX", "Tico Intake"),
-        headers={"Date": "Mon, 16 Nov 2026 12:00:00 +0000"},
+        headers={**DMARC_PASS, "Date": "Mon, 16 Nov 2026 12:00:00 +0000"},
     )
 
     def without_provider_time(url, **kwargs):

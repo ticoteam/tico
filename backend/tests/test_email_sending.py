@@ -8,6 +8,7 @@ import pytest
 
 from backend import email_sending as S
 from backend import gmail_live, mailbox_access, outside_intake, task_asks
+from backend.entities import store as ES
 from backend.store import H, Problem
 from backend.tests.helpers.api import assign, claim, headers, post, ready, runner, setup_attempt  # noqa: F401
 from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
@@ -264,6 +265,7 @@ def test_gmail_confirmation_commits_before_a_failed_timestamp_lookup(inbox, fake
     store = inbox.app.state.store
     with store.transaction() as c:
         box = mailbox_access.row_by_address(c, BOX)
+        ES.upsert(c, "human:ana", "person", match={"email": CONTACT})
         assert outside_intake.save_message(
             c,
             channel="gmail",
@@ -274,6 +276,7 @@ def test_gmail_confirmation_commits_before_a_failed_timestamp_lookup(inbox, fake
             sender=CONTACT,
             title="Question",
             body="Reply",
+            verified_id=CONTACT,
         )
     queued = queue(inbox, reply_to_id="inbound", thread_id="thread")
     fake_gmail.send_answer = (200, {"id": "sent-reply", "threadId": "thread"})
@@ -312,6 +315,7 @@ def test_gmail_send_stays_sent_without_an_outside_receipt(inbox, fake_gmail, rea
     store = inbox.app.state.store
     with store.transaction() as c:
         box = mailbox_access.row_by_address(c, BOX)
+        ES.upsert(c, "human:ana", "person", match={"email": CONTACT})
         for thread, message in (("thread", "inbound"), ("other-thread", "other-inbound")):
             assert outside_intake.save_message(
                 c,
@@ -323,7 +327,11 @@ def test_gmail_send_stays_sent_without_an_outside_receipt(inbox, fake_gmail, rea
                 sender=CONTACT,
                 title="Question",
                 body="Reply",
+                verified_id=CONTACT,
             )
+            assert c.execute(
+                "SELECT 1 FROM messages WHERE connection_id=? AND source_message_id=?", (box["id"], message)
+            ).fetchone()
     queued = queue(inbox, reply_to_id="inbound", thread_id="thread")
 
     confirmation = {"id": "sent-reply"}

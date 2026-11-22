@@ -4,6 +4,7 @@ import pytest
 
 from backend import gmail_live, mailbox_access, never_stuck, outside_intake, stage_rules, task_wakes
 from backend import task_engine as E
+from backend.entities import store as ES
 from backend.item_sources import github
 from backend.store import H, digest, encode
 from backend.task_rule_gate import TaskRules
@@ -242,6 +243,7 @@ def _arrive_gmail(conn, box, source_id, timestamp_ms):
         sender=CONTACT,
         title="Question",
         body="Reply",
+        verified_id=CONTACT,
         provider_timestamp_ms=timestamp_ms,
     )
 
@@ -263,6 +265,7 @@ def test_real_gmail_send_anchors_a_wait_that_intake_wakes(inbox, fake_gmail):
     with store.transaction() as conn:
         box = mailbox_access.row_by_address(conn, BOX)
         other_box = mailbox_access.ensure_mailbox(conn, "cara@acme.example", person_id="cara", created_by="human:cara")
+        ES.upsert(conn, X.ANA, "person", match={"email": CONTACT})
         assert _arrive_gmail(conn, box, "inbound", sent_ms - 1000)
         assert _arrive_gmail(conn, other_box, "inbound", sent_ms - 1000)
         thread = conn.execute("SELECT id FROM conversations WHERE connection_id=?", (box["id"],)).fetchone()[0]
@@ -330,6 +333,7 @@ def test_gmail_reply_saved_before_outbound_receipt_uses_provider_order(inbox, fa
     sent_ms = 1_783_368_401_125
     with store.transaction() as conn:
         box = mailbox_access.row_by_address(conn, BOX)
+        ES.upsert(conn, X.ANA, "person", match={"email": CONTACT})
         assert _arrive_gmail(conn, box, "inbound", sent_ms - 1000)
         task = X.new_task(conn, X.ANA, "Follow up")
         thread = outside_intake.conversation_id("gmail", box["id"], "thread")
