@@ -1606,31 +1606,32 @@ def _outside_send_thread(c, row, thread_id):
     return thread
 
 
-def _record_outside_send(c, row, message, thread_id, provider_timestamp_ms):
+def _record_outside_send(c, row, message, thread_id) -> str | None:
     thread = _outside_send_thread(c, row, thread_id)
     if not thread:
-        return
+        return None
     connection = thread["connection_id"]
     if c.execute(
         "SELECT 1 FROM messages WHERE connection_id=? AND source_message_id=?", (connection, message)
     ).fetchone():
-        return
-    H._write_message(
+        return None
+    receipt = H._write_message(
         c,
         row["actor"],
         None,
         "Sent an email in Gmail.",
         thread,
         "say",
-        {"provider_timestamp_ms": provider_timestamp_ms} if provider_timestamp_ms is not None else {},
+        {},
         None,
         None,
         outside=("gmail", connection, message),
         outside_direction="outbound",
     )
+    return receipt["id"]
 
 
-def _finish(c, row, status, message="", detail="", *, thread_id="", provider_timestamp_ms=None):
+def _finish(c, row, status, message="", detail="", *, thread_id="") -> str | None:
     finished = c.execute(
         # `send_after` ends no earlier than now: a send held past its undo window is still shown once it ended.
         "UPDATE email_sends SET state=?,provider_message_id=?,detail=?,finished_at=?,raw='',"
@@ -1638,13 +1639,13 @@ def _finish(c, row, status, message="", detail="", *, thread_id="", provider_tim
         (status, message, detail, H.now(), H.now(), row["id"]),
     )
     if not finished.rowcount:
-        return
-    if status == "sent" and thread_id:
-        _record_outside_send(c, row, message, thread_id, provider_timestamp_ms)
+        return None
+    receipt_id = _record_outside_send(c, row, message, thread_id) if status == "sent" and thread_id else None
     moved(c, row["id"])
     H.event(c, row["actor"], "email." + status, row["id"], {"mailbox": row["mailbox"], "provider_message_id": message})
     settle_automation(c, row, status, detail, message)
     _outcome(c, row, status, detail)
+    return receipt_id
 
 
 # inbox -> when the drain last reached it (monotonic): the inbox waiting longest goes first. One small entry per
@@ -1723,26 +1724,22 @@ def drain(store, auth, limit=20, budget=None):
                 break
             if not row:
                 break
-            status, message, detail, thread_id, provider_timestamp_ms = gmail_live.send(
-                mailbox, token, row["raw"], row["thread_id"]
-            )
-            if status == "sent" and thread_id and provider_timestamp_ms is None:
-                with store.read() as c:
-                    outside_thread = _outside_send_thread(c, row, thread_id)
-                if outside_thread:
-                    provider_timestamp_ms = gmail_live.sent_timestamp_ms(mailbox, token, message, thread_id)
+            status, message, detail, thread_id = gmail_live.send(mailbox, token, row["raw"], row["thread_id"])
+            receipt_id = None
             with store.transaction(durable=True, notify=True) as c:
                 current = c.execute("SELECT * FROM email_sends WHERE id=?", (row["id"],)).fetchone()
                 if current and current["state"] == "dispatching" and current["lease_id"] == row["lease_id"]:
-                    _finish(
-                        c,
-                        current,
-                        status,
-                        message,
-                        detail,
-                        thread_id=thread_id,
-                        provider_timestamp_ms=provider_timestamp_ms,
-                    )
+                    receipt_id = _finish(c, current, status, message, detail, thread_id=thread_id)
+            # An interrupted metadata read leaves the confirmed send and its receipt saved.
+            if receipt_id:
+                provider_timestamp_ms = gmail_live.sent_timestamp_ms(mailbox, token, message, thread_id)
+                if provider_timestamp_ms is not None:
+                    with store.transaction() as c:
+                        c.execute(
+                            "UPDATE messages SET refs=json_set(refs,'$.provider_timestamp_ms',?) "
+                            "WHERE id=? AND deleted_at IS NULL",
+                            (provider_timestamp_ms, receipt_id),
+                        )
             sent += status == "sent"
     return sent
 

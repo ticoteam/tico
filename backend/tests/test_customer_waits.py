@@ -298,10 +298,9 @@ def test_real_gmail_send_anchors_a_wait_that_intake_wakes(inbox, fake_gmail):
     with store.transaction() as conn:
         assert _arrive_gmail(conn, other_box, "second", sent_ms + 1)
         assert _arrive_gmail(conn, box, "older-after-wait", sent_ms - 1)
-        assert _arrive_gmail(conn, box, "same-millisecond", sent_ms)
         assert E.task(conn, task["id"])["snooze"]
         conn.execute("SAVEPOINT reply")
-        assert _arrive_gmail(conn, box, "second", sent_ms + 1)
+        assert _arrive_gmail(conn, box, "second", sent_ms)
         assert E.task(conn, task["id"])["snooze"] is None
         assert task_wakes.queued(conn, task["id"], OWNER)
         conn.execute("ROLLBACK TO reply")
@@ -311,17 +310,21 @@ def test_real_gmail_send_anchors_a_wait_that_intake_wakes(inbox, fake_gmail):
         ).fetchone()
         assert E.task(conn, task["id"])["snooze"]
         assert not task_wakes.queued(conn, task["id"], OWNER)
-        run = _arrive_gmail(conn, box, "second", sent_ms + 1)
-        assert run and _arrive_gmail(conn, box, "second", sent_ms + 1) == run
+        run = _arrive_gmail(conn, box, "second", sent_ms)
+        assert run and _arrive_gmail(conn, box, "second", sent_ms) == run
+        next_task = X.new_task(conn, X.ANA, "Check the same reply")
     with store.read() as conn:
         assert conn.execute(
             "SELECT 1 FROM messages WHERE connection_id=? AND source_message_id='second'", (box["id"],)
         ).fetchone()
         assert E.task(conn, task["id"])["snooze"] is None
         assert task_wakes.queued(conn, task["id"], OWNER)
+    refused = post(inbox, f"tasks/{next_task['id']}/snooze", _gmail_wait(thread, "sent-reply"), expected=409)
+    assert refused["error"] == "task_customer_replied"
 
 
-def test_gmail_reply_saved_before_outbound_receipt_refuses_wait(inbox, fake_gmail, monkeypatch):
+@pytest.mark.parametrize("reply_offset", [0, 1], ids=["tie", "newer"])
+def test_gmail_reply_saved_before_outbound_receipt_uses_provider_order(inbox, fake_gmail, monkeypatch, reply_offset):
     autonomous(inbox)
     store = inbox.app.state.store
     sent_ms = 1_783_368_401_125
@@ -332,22 +335,27 @@ def test_gmail_reply_saved_before_outbound_receipt_refuses_wait(inbox, fake_gmai
         thread = outside_intake.conversation_id("gmail", box["id"], "thread")
     queue(inbox, reply_to_id="inbound", thread_id="thread")
 
-    fake_gmail.send_answer = (200, {"id": "sent-reply", "threadId": "thread", "internalDate": str(sent_ms)})
+    fake_gmail.send_answer = (200, {"id": "sent-reply", "threadId": "thread"})
+    confirmed = fake_gmail.add(BOX, "sent-reply", thread="thread", sender=BOX, to=[CONTACT], labels=("SENT",))
+    confirmed["internalDate"] = str(sent_ms)
 
     def confirmed_send(*args, **kwargs):
-        confirmed = fake_gmail.send(*args, **kwargs)
+        result = fake_gmail.send(*args, **kwargs)
         # The watcher commits the reply before the send worker stores its receipt.
         with store.transaction() as conn:
-            assert _arrive_gmail(conn, box, "early-intake", sent_ms + 1)
-        return confirmed
+            assert _arrive_gmail(conn, box, "early-intake", sent_ms + reply_offset)
+        return result
 
     monkeypatch.setattr(gmail_live, "send_call", confirmed_send)
     assert len(dispatch(inbox)) == 1
 
-    refused = post(inbox, f"tasks/{task['id']}/snooze", _gmail_wait(thread, "sent-reply"), expected=409)
-    assert refused["error"] == "task_customer_replied"
-    with store.read() as conn:
-        assert E.task(conn, task["id"])["snooze"] is None
+    path, wait = f"tasks/{task['id']}/snooze", _gmail_wait(thread, "sent-reply")
+    if reply_offset:
+        assert post(inbox, path, wait, expected=409)["error"] == "task_customer_replied"
+        with store.read() as conn:
+            assert E.task(conn, task["id"])["snooze"] is None
+    else:
+        assert post(inbox, path, wait)["snooze"]["waiting_for_reply"]
 
 
 def test_reply_without_a_matching_wait_only_probes_the_wait_index(c):

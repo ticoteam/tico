@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from backend import email_sending as S
-from backend import mailbox_access, outside_intake, task_asks
+from backend import gmail_live, mailbox_access, outside_intake, task_asks
 from backend.store import H, Problem
 from backend.tests.helpers.api import assign, claim, headers, post, ready, runner, setup_attempt  # noqa: F401
 from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
@@ -257,6 +257,53 @@ def test_due_send_is_dispatched_once_with_a_receipt_and_audit(inbox):
     assert [{k: f[k] for k in ("name", "sha256")} for f in receipt["attachments"]] == [
         {"name": "proof.pdf", "sha256": S.digest(b"proof")}
     ]
+
+
+def test_gmail_confirmation_commits_before_a_failed_timestamp_lookup(inbox, fake_gmail, monkeypatch):
+    autonomous(inbox)
+    store = inbox.app.state.store
+    with store.transaction() as c:
+        box = mailbox_access.row_by_address(c, BOX)
+        assert outside_intake.save_message(
+            c,
+            channel="gmail",
+            connection_id=box["id"],
+            owner_id=box["person_id"],
+            source_thread_id="thread",
+            source_message_id="inbound",
+            sender=CONTACT,
+            title="Question",
+            body="Reply",
+        )
+    queued = queue(inbox, reply_to_id="inbound", thread_id="thread")
+    fake_gmail.send_answer = (200, {"id": "sent-reply", "threadId": "thread"})
+    lookups = []
+
+    def check_receipt():
+        with store.read() as c:
+            send = c.execute(
+                "SELECT state,provider_message_id,raw FROM email_sends WHERE id=?", (queued["id"],)
+            ).fetchone()
+            assert tuple(send) == ("sent", "sent-reply", "")
+            receipt = c.execute(
+                "SELECT direction,refs FROM messages WHERE connection_id=? AND source_message_id=?",
+                (box["id"], "sent-reply"),
+            ).fetchone()
+            assert receipt["direction"] == "outbound"
+            assert "provider_timestamp_ms" not in json.loads(receipt["refs"])
+
+    def gmail_call(url, **kwargs):
+        if "/messages/sent-reply?" in url:
+            lookups.append(url)
+            check_receipt()
+            return 503, {}
+        return fake_gmail(url, **kwargs)
+
+    monkeypatch.setattr(gmail_live, "gmail_call", gmail_call)
+    assert len(dispatch(inbox)) == 1
+    assert len(lookups) == 1
+    check_receipt()
+    assert dispatch(inbox) == []
 
 
 @pytest.mark.parametrize("reason", ["id-only", "different-thread", "feed-disabled"])

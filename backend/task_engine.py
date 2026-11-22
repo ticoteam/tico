@@ -2329,9 +2329,10 @@ def customer_wait_anchor(
     return H.message_view(conn, anchor)
 
 
-# A delayed intake write can give older Gmail mail a higher local sequence.
+# Gmail time accounts for delayed intake. Use local sequence when the timestamps match or one is missing.
 _CUSTOMER_REPLY_IS_LATER = (
-    "coalesce(json_extract(reply.refs,'$.provider_timestamp_ms') > "
+    "coalesce(nullif(json_extract(reply.refs,'$.provider_timestamp_ms'), "
+    "json_extract(anchor.refs,'$.provider_timestamp_ms')) > "
     "json_extract(anchor.refs,'$.provider_timestamp_ms'), reply.seq > {anchor_seq})"
 )
 
