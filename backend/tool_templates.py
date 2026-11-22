@@ -564,10 +564,12 @@ def _union(c: Any, keys: Any) -> Any:
             if not g["subject"].startswith(("bot:", "human:")) or effective_grant(c, key["id"], g["subject"]) is None:
                 continue
             level = _level(key, g)
-            had = holders.setdefault(g["subject"], {"level": level, "envs": set()})
+            had = holders.setdefault(g["subject"], {"level": level, "envs": set(), "parent": g["parent_id"]})
             had["envs"].add(key["env"])
             if level == "read_write":
                 had["level"] = level
+            if not g["parent_id"]:
+                had["parent"] = None  # held directly somewhere: the new grants are direct too
     by_env: dict[str, list[Any]] = {}
     for key in keys:
         if key["ciphertext"] is not None:
@@ -589,10 +591,11 @@ def _union(c: Any, keys: Any) -> Any:
             ):
                 continue
             gid = H.new_id()
+            # One passed on by a person stays theirs (its parent): it ends, and drops to Read, with theirs.
             c.execute(
-                "INSERT INTO credential_grants(id,credential_id,subject,granted_by,created_at,access_level)"
-                " VALUES(?,?,?,?,?,?)",
-                (gid, key["id"], subject, "system", H.now(), had["level"]),
+                "INSERT INTO credential_grants(id,credential_id,subject,granted_by,created_at,access_level,parent_id)"
+                " VALUES(?,?,?,?,?,?,?)",
+                (gid, key["id"], subject, "system", H.now(), had["level"], had["parent"]),
             )
             H.event(c, "system", "credential.granted", key["id"], {"grant": gid, "subject": subject, "why": "grouped"})
             made.append({"id": gid, "subject": subject, "env": env, "level": had["level"]})

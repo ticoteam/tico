@@ -368,7 +368,10 @@ def test_a_bot_given_a_key_by_a_person_who_only_reads_it_holds_it_at_read_and_do
 
     jira.status["HM-12"] = "To Do"
     key = _key(api, jira.tool, "read_write")
-    ana, ben = Identity("human:ana", "owner", "ana@acme.example"), Identity("human:priya", "human", "priya@acme.example")
+    ana, ben = (
+        Identity("human:ana", "owner", "ana@acme.example"),
+        Identity("human:priya", "human", "priya@acme.example"),
+    )
     vault = api.app.state.vault
     with _store(api).transaction() as c:  # Priya (no administrator) reads it; she passes it on to cmo, her bot
         c.execute("UPDATE bot_config SET owner_id='priya' WHERE bot='cmo'")
@@ -397,7 +400,10 @@ def test_a_persons_grant_lowered_to_read_lowers_what_their_bots_hold_from_it(api
     from backend import credentials
 
     key = _key(api, jira.tool, "read_write")
-    ana, ben = Identity("human:ana", "owner", "ana@acme.example"), Identity("human:priya", "human", "priya@acme.example")
+    ana, ben = (
+        Identity("human:ana", "owner", "ana@acme.example"),
+        Identity("human:priya", "human", "priya@acme.example"),
+    )
     vault = api.app.state.vault
     with _store(api).transaction() as c:
         c.execute("UPDATE bot_config SET owner_id='priya' WHERE bot='cmo'")
@@ -433,8 +439,25 @@ def test_the_level_that_counts_is_on_the_key_a_write_goes_with(api, jira):
         [{"id": "9", "body": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text"}]}]}}],
         [{"id": "9", "body": {"type": "doc", "content": [{"type": "paragraph", "content": [{"text": "x"}]}]}}],
         [{"id": "9", "body": {"type": "doc", "content": [None]}}],
+        [
+            {
+                "id": "9",
+                "body": {
+                    "type": "doc",
+                    "content": [{"type": "paragraph", "content": [{"type": "paragraph", "content": []}]}],
+                },
+            }
+        ],
     ],
-    ids=["null", "no body", "body without content", "text without text", "node without type", "block not a node"],
+    ids=[
+        "null",
+        "no body",
+        "body without content",
+        "text without text",
+        "node without type",
+        "block not a node",
+        "block inside a paragraph",
+    ],
 )
 def test_a_comment_that_cannot_be_read_writes_nothing_and_tries_again(api, jira, raw):
     jira.status["HM-12"] = "To Do"
@@ -475,3 +498,50 @@ def test_the_site_is_frozen_into_what_an_ok_shows(api, jira):
     with pytest.raises(OA.Problem) as refused:  # an action naming another site is not for this connection
         _queue(api, jira.tool, "comment", {"body": "Hi.", "site": "beta.atlassian.net"}, key="k-other")
     assert refused.value.status == 409
+
+
+def test_a_key_deleted_after_the_permit_does_not_hand_the_write_to_another_key(api, jira):
+    jira.status["HM-12"] = "To Do"
+    key = _key(api, jira.tool, "read_write")
+    with _store(api).transaction() as c:  # a second, newer write key ops was never given
+        row = dict(c.execute("SELECT * FROM credentials WHERE id=?", (key,)).fetchone())
+        newer = {**row, "id": "k-newer", "name": "Jira write 2", "created_at": H.shift(row["created_at"], seconds=60)}
+        c.execute(
+            f"INSERT INTO credentials({','.join(newer)}) VALUES({','.join('?' * len(newer))})", tuple(newer.values())
+        )
+    action = _queue(api, jira.tool, "comment", {"body": "Hi."})
+    claimed = OA.claim(_store(api))
+    permitted = OA._permit(_store(api), claimed)  # checked on the oldest key, which ops holds
+    assert isinstance(permitted, dict)
+    with _store(api).transaction() as c:  # that key is deleted before the write
+        c.execute("UPDATE credentials SET ciphertext=NULL WHERE id=?", (key,))
+    with pytest.raises(OA.Refused):
+        OJ.dispatch(_store(api), permitted)
+    assert jira.writes == [] and action["id"] == permitted["id"]
+
+
+def test_a_grant_grouping_copies_from_one_passed_on_drops_with_the_persons(api, jira):
+    from backend import credentials, tool_templates
+
+    key = _key(api, jira.tool, "read_write")
+    ana, priya = (
+        Identity("human:ana", "owner", "ana@acme.example"),
+        Identity("human:priya", "human", "priya@acme.example"),
+    )
+    vault = api.app.state.vault
+    with _store(api).transaction() as c:
+        c.execute("UPDATE bot_config SET owner_id='priya' WHERE bot='cmo'")
+        parent = vault.grant(c, ana, key, "human:priya")["id"]
+        vault.grant(c, priya, key, "bot:cmo")
+        row = dict(c.execute("SELECT * FROM credentials WHERE id=?", (key,)).fetchone())
+        other = {**row, "id": "k-other", "env": "JIRA_OTHER", "name": "Jira other"}
+        c.execute(
+            f"INSERT INTO credentials({','.join(other)}) VALUES({','.join('?' * len(other))})", tuple(other.values())
+        )
+        keys = c.execute("SELECT * FROM credentials WHERE id IN (?, 'k-other')", (key,)).fetchall()
+        assert {g["subject"]: g["level"] for g in tool_templates._union(c, keys)}["bot:cmo"] == "read_write"
+        credentials.set_grant_level(c, parent, "read")
+        levels = c.execute(
+            "SELECT credential_id, access_level FROM credential_grants WHERE subject='bot:cmo' AND revoked_at IS NULL"
+        ).fetchall()
+    assert {(r[0], r[1]) for r in levels} == {(key, "read"), ("k-other", "read")}

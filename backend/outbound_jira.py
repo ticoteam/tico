@@ -161,8 +161,13 @@ def _connect(store: Any, row: Any, *, write: bool = True) -> Connection:
     vault = _oa().vault()
     if vault is None:
         raise RuntimeError("No credential vault")
+    connection_id = str(row["connection_id"])
     with store.transaction() as c:
-        return JS.connect(c, vault, str(row["connection_id"]), write=write, agent=AGENT)
+        # The actor's level on the very key this write goes with, read in the same transaction that picks it: a key
+        # deleted since the permit cannot hand the write to another key the actor was never checked on.
+        if write and row["actor"] != H.TICO_ACTOR and _level(c, connection_id, str(row["actor"])) != "read_write":
+            raise _oa().Refused("The bot no longer holds Read and write on the key this Jira write goes with")
+        return JS.connect(c, vault, connection_id, write=write, agent=AGENT)
 
 
 def _get(on: Connection, path: str, query: dict[str, str] | None = None, most: int | None = None) -> dict[str, object]:
@@ -191,14 +196,16 @@ def _issue(row: Any) -> str:
     return f"/rest/api/3/issue/{quote(str(row['destination']))}"
 
 
-def _nodes(value: object) -> list[dict[str, object]]:
-    """A node list whose every node is an object with a type, and every text node has its text; else _Unreadable."""
+def _nodes(value: object, *, inline: bool = False) -> list[dict[str, object]]:
+    """A node list whose every node is an object with a type, and every text node has its text; `inline`: none holds
+    content of its own (a paragraph's children). Else _Unreadable."""
     if not isinstance(value, list):
         raise _Unreadable("A comment on the issue has no readable body")
     nodes: list[dict[str, object]] = []
     for node in cast("list[object]", value):
         got = cast("dict[str, object]", node) if isinstance(node, dict) else {}
-        if not isinstance(got.get("type"), str) or (got.get("type") == "text" and not isinstance(got.get("text"), str)):
+        bad = not isinstance(got.get("type"), str) or (inline and "content" in got)
+        if bad or (got.get("type") == "text" and not isinstance(got.get("text"), str)):
             raise _Unreadable("A comment on the issue has a node that cannot be read")
         nodes.append(got)
     return nodes
@@ -212,7 +219,7 @@ def _marked(comment: dict[str, Any], mark: str) -> bool:
     if not blocks or blocks[-1].get("type") != "paragraph":
         return False
     inner = blocks[-1].get("content", [])
-    nodes = _nodes(inner)
+    nodes = _nodes(inner, inline=True)
     return len(nodes) == 1 and nodes[0].get("type") == "text" and nodes[0].get("text") == mark
 
 
@@ -297,6 +304,8 @@ def dispatch(store: Any, row: Any) -> Any:
         on = _connect(store, row)
     except JS.Unreadable as exc:
         raise OA.Refused(str(exc)) from None
+    except OA.Refused:
+        raise
     except Exception:  # noqa: BLE001 - the key could not be read: nothing was sent
         return OA.SafeRejection(RETRY_S, "The connection's key could not be read")
     try:
