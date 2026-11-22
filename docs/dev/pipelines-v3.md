@@ -1212,7 +1212,7 @@ when more than one tool serves the Close host. With a single tool, looking up th
 
 The heartbeat's `close_items` step reads opportunities linked by open tasks every five minutes, with the
 same per-connection pass cap and request deadline as Jira and its own in-flight limit. A 429 pauses reads on
-that connection for at least five minutes or a longer Retry-After, including lookups during task creation.
+that connection for five minutes or a longer Retry-After up to one hour, including lookups during task creation.
 The saved fields include the status label and type,
 value in cents with its currency and period, and lead id. Won and lost map to `state: closed`. Active maps to
 `state: open`. The opportunity stays eligible for rereads so it can reopen.
@@ -1262,7 +1262,8 @@ filed for its item gets its link back as a secondary one.
 A new Close task defaults to the company-visible Contacts entity recorded as `system=close`, `external_type=lead`,
 and the opportunity's lead id on the same connection, from a successful read in the past five minutes. The
 caller can supply any entity they can read through `entity`. A create can look up a missing or stale read when
-the connection has lead mappings. Tico saves that read when it files the task.
+the connection has lead mappings. A routed create checks that the request can be routed before the lookup,
+then checks the cap, reach and rules for the person it picks. Tico saves the read when it files the task.
 
 #### Routing
 

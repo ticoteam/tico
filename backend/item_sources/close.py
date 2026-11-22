@@ -30,6 +30,7 @@ URL = re.compile(
 FIELDS = "id,status_type,status_label,value,value_currency,value_period,lead_id"
 REREAD_S = 300
 RETRY_S = 300
+MAX_RETRY_S = 3600
 PER_CONNECTION = 10
 PASS_BUDGET_S = 30.0
 RATE_LIMITED = "Close answered 429"
@@ -261,10 +262,7 @@ def save(conn: sqlite3.Connection, read: Reading) -> bool | None:
     refused_at = None
     if read.status == 429 and read.retry_after is not None and read.retry_after > RETRY_S:
         # The normal retry query already adds RETRY_S to the refusal timestamp.
-        try:
-            refused_at = cast(str, H.shift(H.now(), seconds=read.retry_after - RETRY_S))
-        except OverflowError:
-            refused_at = "9999-12-31T23:59:59.999999Z"
+        refused_at = cast(str, H.shift(H.now(), seconds=min(read.retry_after, MAX_RETRY_S) - RETRY_S))
     if not IM.failed_read(conn, read.item, read.error, read.version, refused_at=refused_at):
         return None
     LOG.info("Reading Close opportunity %s on %s failed: %s", read.item[2], read.item[3], read.error)

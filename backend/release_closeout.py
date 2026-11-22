@@ -331,10 +331,10 @@ def _withdraw_outside(
 
     asked = str(detail.get("ask") or "")
     if asked:
+        owner_asks.withdraw(conn, asked, why, task_id, advance=advance, raise_on_failure=True)
         detail.pop("ask", None)
         detail.pop("asked", None)
         _save_detail(conn, link, detail)
-        owner_asks.withdraw(conn, asked, why, task_id, advance=advance)
 
 
 def _ask_outside(

@@ -11,6 +11,7 @@ from backend import egress
 from backend import hubdb as H
 from backend import item_metadata as IM
 from backend import mailbox_access as MA
+from backend import task_engine
 from backend.entities import store as ES
 from backend.item_sources import close as CS
 from backend.item_sources import jira as JS
@@ -18,7 +19,8 @@ from backend.tests.helpers.api import get, post, put
 from backend.tests.helpers.credentials import setup
 from backend.tests.helpers.jira_intake import PUBLIC, _patch_tool
 from backend.tests.helpers.mcp import call
-from backend.tests.helpers.org_rule_check import color_rule, ruled  # noqa: F401 - ruled is a fixture
+from backend.tests.helpers.org_rule_check import COLOR, NEEDLE, color_rule, ruled  # noqa: F401 - ruled is a fixture
+from backend.tests.helpers.org_rules import edit
 
 DEAL = "oppo_one"
 LEAD = "lead_one"
@@ -208,7 +210,7 @@ def test_a_company_task_never_inherits_a_restricted_lead_even_when_the_filer_can
     assert _create(api, _ref(tool, "oppo_explicit"), entity=private)["entity_id"] == private
 
 
-def test_routed_close_task_checks_privacy_rules_and_caps_before_fetching_and_routes_the_live_lead(ruled, close):
+def test_routed_close_task_checks_privacy_before_fetching_and_caps_and_rules_for_the_lead_owner(ruled, close):
     api, _ = ruled
     tool = close.connect("Close Acme")
     entity = _record(api, tool, "Acme")
@@ -216,14 +218,32 @@ def test_routed_close_task_checks_privacy_rules_and_caps_before_fetching_and_rou
     with api.app.state.store.transaction() as c:
         ES.set_owner(c, "human:ana", entity, "human:ben")
         c.execute("UPDATE humans SET availability='on' WHERE id='ben'")
-    color_rule(api)
+        c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='ops'")
+    color_rule(api, **{"with": {"people": ["ben"]}})
     _create(api, _ref(tool), owner=None, route=True, private=True, expected=422)
+    assert close.seen == []
     _create(api, _ref(tool), owner=None, route=True, token="ops-test", body="Our favorite color is gold.", expected=422)
-    put(api, "task-caps", {"sender": "bot:ops", "receiver": "person:ana", "per_day": 0})
+    assert close.seen == [(tool, DEAL)]
+    put(api, "task-caps", {"sender": "bot:ops", "receiver": "person:ben", "per_day": 0})
     capped = _create(api, _ref(tool), owner=None, route=True, token="ops-test", expected=409)
     assert capped["error"] == "task_cap"
-    assert close.seen == []
-    made = _create(api, _ref(tool), owner=None, route=True)
+    assert close.seen == [(tool, DEAL)] * 2
+
+
+@pytest.mark.parametrize("fallback_block", ["cap", "rule"])
+def test_a_fallback_cap_or_rule_cannot_block_routing_to_the_close_lead_owner(ruled, close, fallback_block):
+    api, _ = ruled
+    tool = close.connect("Close Acme")
+    entity = _record(api, tool, "Acme")
+    close.set(tool)
+    with api.app.state.store.transaction() as c:
+        ES.set_owner(c, "human:ana", entity, "human:ben")
+        c.execute("UPDATE humans SET availability='on' WHERE id='ben'")
+    if fallback_block == "cap":
+        put(api, "task-caps", {"sender": "bot:ops", "receiver": "person:ana", "per_day": 0})
+    else:
+        color_rule(api, **{"with": {"people": ["ana"]}})
+    made = _create(api, _ref(tool), owner=None, route=True, token="ops-test", body="Our favorite color is gold.")
     assert (made["entity_id"], made["owner_id"]) == (entity, "human:ben")
     assert close.seen == [(tool, DEAL)] and _refresh(api) == 0
 
@@ -240,6 +260,25 @@ def test_a_held_create_matches_the_close_lead_when_the_owner_releases_it(ruled, 
     sent = post(api, f"rule-holds/{held['id']}/send", {"nonce": view["nonce"]}, token="ben-test")
     assert sent["result"]["task"]["entity_id"] == entity
     assert close.seen == [(tool, DEAL)]
+
+
+def test_a_held_create_checks_the_nonce_and_fresh_rules_before_reading_close(ruled, close):
+    api, judge = ruled
+    tool = close.connect("Close Acme")
+    _record(api, tool, "Acme")
+    close.set(tool)
+    rule = color_rule(api, reviewer="ben")
+    held = _create(api, _ref(tool), token="ops-test", body="Our favorite color is gold.")["held"]
+    path = f"rule-holds/{held['id']}"
+    view = get(api, path, token="ben-test")
+    wrong = post(api, f"{path}/send", {"nonce": "wrong"}, token="ben-test", expected=409)
+    assert wrong["error"]["code"] == "conflict" and close.seen == []
+    revised = COLOR + " Ever."
+    edit(api, rule["id"], {"version": rule["version"], "text": revised})
+    judge.needles[revised] = NEEDLE
+    blocked = post(api, f"{path}/send", {"nonce": view["nonce"]}, token="ben-test", expected=409)
+    assert blocked["error"]["code"] == "rule_changed" and close.seen == []
+    assert get(api, path, token="ben-test")["nonce"] == view["nonce"]
 
 
 def test_a_primary_deal_asks_per_standing_and_withdraws_on_reopen_or_unlink(api, close):
@@ -275,6 +314,25 @@ def test_a_primary_deal_asks_per_standing_and_withdraws_on_reopen_or_unlink(api,
     assert _asks(api, secondary) == []
 
 
+def test_a_failed_close_ask_withdrawal_retries_on_the_next_read(api, close, monkeypatch):
+    tool = close.connect("Close Acme")
+    close.set(tool, status="won")
+    task = _create(api, _ref(tool))["id"]
+    assert _refresh(api) == 1
+    assert _asks(api, task) == [("human:ben", "people_only", 0)]
+
+    def fail_advance(_conn, _task_id):
+        raise RuntimeError("Cannot advance the task")
+
+    close.set(tool)
+    with monkeypatch.context() as patch:
+        patch.setattr(task_engine, "advance", fail_advance)
+        assert _refresh(api, H.shift(H.now(), minutes=6)) == 1
+    assert _asks(api, task) == [("human:ben", "people_only", 0)]
+    assert _refresh(api, H.shift(H.now(), minutes=6)) == 1
+    assert _asks(api, task) == [("human:ben", "people_only", 1)]
+
+
 def test_a_response_from_a_rotated_close_key_is_discarded(api, close):
     tool = close.connect("Close Acme")
     first = _create(api, _ref(tool))["id"]
@@ -294,26 +352,28 @@ def test_a_response_from_a_rotated_close_key_is_discarded(api, close):
     assert _meta(api, tool) is None and _asks(api, first) == []
 
 
-def test_429_pauses_one_close_connection_including_create_lookups(api, close, time_machine):
+@pytest.mark.parametrize(("retry_after", "cooldown"), [("600", 600), ("1e100", 3600)])
+def test_429_pauses_one_close_connection_including_create_lookups(api, close, time_machine, retry_after, cooldown):
     time_machine.move_to("2026-11-22T00:00:00Z", tick=False)
+    cooldown_ends = H.shift(H.now(), seconds=cooldown)
     acme, beta = close.connect("Close Acme"), close.connect("Close Beta")
     _create(api, _ref(acme))
     _create(api, _ref(acme, "oppo_two"))
     _create(api, _ref(beta))
     close.set(beta)
-    close.replies[acme, DEAL] = httpx.Response(429, headers={"Retry-After": "600"})
+    close.replies[acme, DEAL] = httpx.Response(429, headers={"Retry-After": retry_after})
     assert _refresh(api) == 1
     assert set(close.seen) == {(acme, DEAL), (beta, DEAL)}
     assert _meta(api, acme)["read_error"] == "Close answered 429"
     _record(api, acme, "Acme")
     close.set(acme, "oppo_three")
-    time_machine.move_to("2026-11-22T00:06:00Z", tick=False)
+    time_machine.move_to(H.shift(cooldown_ends, seconds=-1), tick=False)
     assert _refresh(api) == 1 and all(key == DEAL for _, key in close.seen)
     assert not _create(api, _ref(acme, "oppo_three"))["entity_id"]
     assert (acme, "oppo_three") not in close.seen
     del close.replies[acme, DEAL]
     close.set(acme)
-    time_machine.move_to("2026-11-22T00:10:01Z", tick=False)
+    time_machine.move_to(H.shift(cooldown_ends, seconds=1), tick=False)
     assert _refresh(api) == 2
     assert (acme, "oppo_three") in close.seen
 

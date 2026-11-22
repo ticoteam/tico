@@ -1019,16 +1019,15 @@ def register_core(
             return result
 
         routed_to = None if saved else routed_preview(who, body)
-        rc = check_for(routed_to)
+        rc = None if body.route else check_for(None)
 
         def lookup_close():
-            nonlocal routed_to, rc
+            nonlocal routed_to
             # A routed preview also checks whether the task can be routed at all, including its privacy.
             read = prefetch_close(body) if not body.route or routed_to else None
             if body.route and read and read.fields:
                 person = routed_preview(who, body, read)
-                if person != routed_to:
-                    rc = check_for(person)
+                if person and person != routed_to:
                     routed_to = person
             return read
 
@@ -1037,6 +1036,8 @@ def register_core(
         with store.read() as c:
             held = bool(body.primary_link) and _held_item(c, who, body.primary_link) is not None
         close_read = None if saved or held or org_rule_check.holds(rc) else lookup_close()
+        if body.route:
+            rc = check_for(routed_to)
         ingest = (
             None
             if org_rule_check.holds(rc) or saved_retry(request, who) or held
@@ -1074,8 +1075,9 @@ def register_core(
         except ClaimGone:  # the task holding the item went before the write: judge the filing, then file it
             if body.route:
                 routed_to = routed_preview(who, body)
-                rc = check_for(routed_to)
             close_read = lookup_close()
+            if body.route:
+                rc = check_for(routed_to)
             judged = ask_ingest.preflight(
                 store, app.state.judge, request.state.identity, body.owner, body.title, body.body
             )
