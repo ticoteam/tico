@@ -4,7 +4,9 @@ import pytest
 
 from backend import never_stuck, outside_intake, stage_rules, task_wakes
 from backend import task_engine as E
-from backend.store import H
+from backend.item_sources import github
+from backend.store import H, digest, encode
+from backend.task_rule_gate import TaskRules
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import post
 from backend.tests.helpers.automation_api import as_bot
@@ -293,3 +295,80 @@ def test_bot_wait_defaults_its_reason_and_only_people_can_end_it_early(api, time
         assert E.unsnooze(conn, task["id"], X.ANA, consequence="answer")["snooze"]
     assert post(api, path + "/unsnooze", {})["snooze"] is None
     assert post(api, path + "/snooze", later)["snooze"]["waiting_for_reply"]
+
+
+def test_ordinary_snooze_replays_a_receipt_from_before_wait_fields(api):
+    store = api.app.state.store
+    with store.transaction() as conn:
+        task = X.new_task(conn, X.ANA, "Follow up")
+    path = f"tasks/{task['id']}/snooze"
+    body = {"until": H.shift(H.now(), days=1), "why": "Check tomorrow"}
+    first = post(api, path, body, key="old-snooze")
+    with store.transaction() as conn:
+        conn.execute(
+            "UPDATE idempotency SET request_hash=? WHERE key='old-snooze'",
+            (digest(encode({**body, "version": None})),),
+        )
+    assert post(api, path, {**body, "wait_thread_id": None}, key="old-snooze") == first
+
+
+def test_snooze_resolves_the_anchor_once_when_rules_let_it_through(api, monkeypatch):
+    store = api.app.state.store
+    with store.transaction() as conn:
+        task = X.new_task(conn, X.ANA, "Follow up")
+        thread = _thread(conn)
+        sent = _message(conn, thread, X.ANA)
+
+    def verdict(rules, who, tid, operation, *args, **kwargs):
+        with store.read() as conn:
+            recipients = rules.audience(conn, who, E.task(conn, tid))
+        return {
+            "outcome": "no_rules",
+            "author": who.actor,
+            "operation": operation,
+            "recipients": sorted(set(recipients) - {who.actor}),
+        }
+
+    looked_up = []
+    resolve = E.customer_wait_anchor
+
+    def anchor(conn, room, sender, seq, provider_id):
+        looked_up.append(seq)
+        return resolve(conn, room, sender, seq, provider_id)
+
+    monkeypatch.setattr(TaskRules, "check", verdict)
+    monkeypatch.setattr(E, "customer_wait_anchor", anchor)
+    wait = {"wait_thread_id": thread, "wait_sender": CUSTOMER, "wait_after_seq": sent["seq"]}
+    assert post(api, f"tasks/{task['id']}/snooze", {**wait, "until": H.shift(H.now(), days=1)})["snooze"]
+    assert looked_up == [sent["seq"]]
+
+
+def test_github_news_skips_customer_waits_before_looking_up_prs_or_turns(c, monkeypatch):
+    task = X.new_task(c, OWNER, "Follow up")
+    tid = task["id"]
+    thread = _thread(c)
+    E.snooze(
+        c,
+        tid,
+        OWNER,
+        "Waiting for a reply on acme/service#42",
+        H.shift(H.now(), days=1),
+        task["version"],
+        customer_wait=(thread, CUSTOMER, _message(c, thread, OWNER)["seq"]),
+    )
+    c.execute(
+        "INSERT INTO task_links(id,task_id,kind,url,state,repo,number,created_at) "
+        "VALUES(?,?,'pr','https://github.com/acme/service/pull/5','open','acme/service',5,?)",
+        (H.new_id(), tid, H.now()),
+    )
+
+    def unexpected(*args):
+        pytest.fail("GitHub news looked up a customer wait's PR or turn")
+
+    monkeypatch.setattr(github, "queues_now", unexpected)
+    monkeypatch.setattr(github, "prs_of", unexpected)
+    monkeypatch.setattr(E, "_turn_of", unexpected)
+    assert not github.snooze_news(c, tid, "checks:acme/service#5", "Checks passed")
+    assert not github.base_moved(c, "acme/service", "main", "a" * 40, default_branch="main")
+    assert not github.named_pr_done(c, "acme/service", 42, "merged")
+    assert E.task(c, tid)["snooze"]["wait_thread_id"] == thread

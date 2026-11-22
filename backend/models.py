@@ -463,6 +463,14 @@ class TaskSnooze(Contract):
     wait_after_seq: int | None = Field(default=None, strict=True, gt=0, le=2**63 - 1)
     wait_provider_reply_id: ID | None = None
 
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+        """Keep the request hash of a snooze retried across the upgrade that adds the wait fields."""
+        out = super().model_dump(**kwargs)
+        for name in ("wait_thread_id", "wait_sender", "wait_after_seq", "wait_provider_reply_id"):
+            if out.get(name) is None:
+                out.pop(name, None)
+        return out
+
     @model_validator(mode="after")
     def customer_wait(self):
         if any((self.wait_thread_id, self.wait_sender, self.wait_after_seq, self.wait_provider_reply_id)) and (

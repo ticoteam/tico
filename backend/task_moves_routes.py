@@ -735,7 +735,7 @@ def register(
     def snooze_first(
         c: Any, who: Any, task_id: str, body: M.TaskSnooze, params: Any, verdict: Any, replaying: bool
     ) -> bool:
-        if verdict:
+        if not replaying and org_rule_check.holds(verdict):
             customer_wait(c, who, body)  # a hold can save the request for replay before snooze_call runs
         return False
 
