@@ -28,7 +28,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from datetime import timezone
-from typing import Any, Callable, NamedTuple, cast
+from typing import Any, Callable, Literal, NamedTuple, cast
 
 from fastapi import Request
 from pydantic import Field
@@ -101,6 +101,12 @@ class SafeRejection(NamedTuple):
     counted: bool = True
 
 
+class DispatchStopped(NamedTuple):
+    """The adapter's final policy check stopped the send and handled the row."""
+
+    state: Literal["blocked", "waiting_approval", "lost"]
+
+
 class Settled(NamedTuple):
     """What an adapter's reconcile found in the provider's own record: `state` done or failed (anything else leaves
     the row unknown, for a person)."""
@@ -121,7 +127,8 @@ class Adapter:
     - `prepare(c, settings, actor, destination, payload, *, operation, connection_id, task_id)` checks an action (at
       enqueue, and again at each attempt) and answers (audience, destination); an audience it cannot tell is external.
       A Problem refuses (blocks) it.
-    - `dispatch(store, row)` makes the one provider call: a receipt dict or a SafeRejection, or it raises.
+    - `dispatch(store, row)` makes the one provider call: a receipt dict or a SafeRejection, or it raises. An adapter
+      that rechecks policy at its final authorization returns DispatchStopped when that check stops the send.
     - `reconcile(store, row)`, where the provider can be asked: a Settled, or None when it cannot tell.
 
     `defaults` are the channel's own policy default per audience, in place of DEFAULTS, until the company sets one (a
@@ -137,6 +144,9 @@ class Adapter:
     reconcile: Callable[..., "Settled | None"] | None = None
     defaults: dict[str, str] = field(default_factory=lambda: dict[str, str]())
     freeze: Callable[..., dict[str, Any]] | None = None
+    approval_prompt: str = ""
+    action_label: Callable[[str], str] | None = None
+    provider_name: str = ""
 
 
 ADAPTERS: dict[str, Adapter] = {}  # each channel's sender, registered at the end of this module
@@ -311,6 +321,8 @@ def request_approval(c: Any, row: Any, *, renew: bool = False) -> bool:
     ask (an ask that is refused is undone and the next person tried). The same content asked again is the same ask,
     unless `renew`: the old OK no longer lets it go (whoever gave it left), so a new one is asked. False when nobody
     may be asked."""
+    adapter = ADAPTERS.get(row["channel"])
+    prompt = adapter.approval_prompt if adapter else ""
     for person in _people_for(c, row["actor"]):
         c.execute("SAVEPOINT outbound_ask")
         try:
@@ -318,7 +330,7 @@ def request_approval(c: Any, row: Any, *, renew: bool = False) -> bool:
                 c,
                 _asker(row),
                 person,
-                f"Send this {row['channel']} {row['operation']}?",
+                prompt or f"Send this {row['channel']} {row['operation']}?",
                 shows=[SUBJECT + row["id"]],
                 subject=SUBJECT + row["id"],
                 content=content(row),
@@ -500,17 +512,19 @@ def settle(
 ) -> bool:
     """Write an outcome: done, failed, canceled, blocked or unknown. Ended rows lose their payload and keep their
     metadata. With `token`, only while that claim still holds the row. True when written."""
+    unused_permit = state == "blocked" and row["provider_attempted_at"] is not None
     extra = {
         "receipt": _dump({**_load(row["receipt"], {}), **(receipt or {})}),
         "updated_at": H.now(),
         **({"payload": ""} if state in ENDED else {}),
+        **({"provider_attempted_at": None} if unused_permit else {}),
     }
     if not O.finish(
         c,
         TABLE,
         row["id"],
         state,
-        attempts=row["attempts"],
+        attempts=row["attempts"] - int(unused_permit),
         error=error,
         due_at=row["next_attempt_at"],
         extra=extra,
@@ -554,12 +568,18 @@ def ask_owner(c: Any, row: Any) -> None:
 
     task = H.task(c, row["task_id"]) if row["task_id"] else None
     people = owner_asks.people_for(c, task, row["actor"])
-    what = f"{row['channel']} {row['operation']} on {row['destination']}"[:200]
+    adapter = ADAPTERS.get(row["channel"])
+    what = (
+        adapter.action_label(row["destination"])
+        if adapter and adapter.action_label
+        else f"{row['channel']} {row['operation']} on {row['destination']}"
+    )[:200]
+    provider = (adapter.provider_name if adapter else "") or row["channel"]
     made = owner_asks.ask(
         c,
         None,
         people,
-        f"Tico can't tell whether its {what} went through: check {row['channel']}, and confirm it in Tico if it did.",
+        f"Tico can't tell whether its {what} went through: check {provider}, and confirm it in Tico if it did.",
         title=f"Check a {what}",
         body=f"Outbound action {row['id']} (/api/v2/outbound-actions/{row['id']}). If it went: "
         f"`tico outbound confirm-sent {row['id']}`. Tico never sends it again on its own.",
@@ -698,6 +718,50 @@ def next_due(store: Any) -> float | None:
     return None if when is None else max(0.0, when.timestamp() - time.time())
 
 
+def _recheck_policy(c: Any, row: dict[str, Any], audience: str) -> str | DispatchStopped | None:
+    """Recheck the live claim's policy and OK. If it can go, return how to use its OK, if any."""
+    policy = decide(c, actor=row["actor"], channel=row["channel"], audience=audience, destination=row["destination"])
+    c.execute(
+        "UPDATE outbound_actions SET audience=?,policy_decision=? WHERE id=?", (audience, _dump(policy), row["id"])
+    )
+    token = row["claim_token"]
+    if policy["choice"] == "never":
+        settle(c, row, "blocked", error=policy["why"], token=token)
+        return DispatchStopped("blocked")
+    rid = row["approval_id"]
+    if rid and task_asks.standing(c, rid) in STOPS:
+        settle(c, row, "blocked", error=STOPPED, token=token)
+        return DispatchStopped("blocked")
+    approval = _approval(c, row)
+    if policy["choice"] != "ask_first" or approval is not None:
+        return approval
+    if not request_approval(c, row, renew=bool(rid)):
+        settle(c, row, "blocked", error=NOBODY_TO_ASK, token=token)
+        return DispatchStopped("blocked")
+    # No provider call was made. The next approval needs a fresh permit.
+    O.finish(
+        c,
+        TABLE,
+        row["id"],
+        "waiting_approval",
+        attempts=row["attempts"] - int(row["provider_attempted_at"] is not None),
+        error="",
+        due_at=row["next_attempt_at"],
+        extra={"provider_attempted_at": None, "updated_at": H.now()},
+        token=token,
+    )
+    return DispatchStopped("waiting_approval")
+
+
+def recheck_dispatch_policy(c: Any, row: Any, audience: str) -> DispatchStopped | None:
+    """In the adapter's final authorization transaction, stop a permitted action if policy or its claim changed."""
+    current = get(c, row["id"])
+    if not current or current["state"] != "attempting" or current["claim_token"] != row["claim_token"]:
+        return DispatchStopped("lost")
+    result = _recheck_policy(c, current, audience)
+    return result if isinstance(result, DispatchStopped) else None
+
+
 def _permit(store: Any, claimed: Claimed) -> dict[str, Any] | str:
     """Everything before the provider call, in one durable transaction: the policy and the adapter's checks again
     (the audience derived anew), then the fenced write, which needs this claim and an empty `provider_attempted_at`,
@@ -733,36 +797,9 @@ def _permit(store: Any, claimed: Claimed) -> dict[str, Any] | str:
             settle(c, row, "blocked", error=str(refused.detail), token=claimed.token)
             return "blocked"
         audience = audience if audience in AUDIENCES else "external"
-        policy = decide(
-            c, actor=row["actor"], channel=row["channel"], audience=audience, destination=row["destination"]
-        )
-        c.execute(
-            "UPDATE outbound_actions SET audience=?,policy_decision=? WHERE id=?", (audience, _dump(policy), row["id"])
-        )
-        if policy["choice"] == "never":
-            settle(c, row, "blocked", error=policy["why"], token=claimed.token)
-            return "blocked"
-        rid = row["approval_id"]
-        if rid and task_asks.standing(c, rid) in STOPS:
-            settle(c, row, "blocked", error=STOPPED, token=claimed.token)
-            return "blocked"
-        approval = _approval(c, row)
-        if policy["choice"] == "ask_first" and approval is None:
-            if not request_approval(c, row, renew=bool(row["approval_id"])):  # filed while the claim still holds
-                settle(c, row, "blocked", error=NOBODY_TO_ASK, token=claimed.token)
-                return "blocked"
-            O.finish(
-                c,
-                TABLE,
-                row["id"],
-                "waiting_approval",
-                attempts=row["attempts"],
-                error="",
-                due_at=row["next_attempt_at"],
-                extra={"updated_at": H.now()},
-                token=claimed.token,
-            )
-            return "waiting_approval"
+        approval = _recheck_policy(c, row, audience)
+        if isinstance(approval, DispatchStopped):
+            return approval.state
         now = H.now()
         fenced = c.execute(
             "UPDATE outbound_actions SET provider_attempted_at=?,attempts=attempts+1,updated_at=? "
@@ -793,6 +830,8 @@ def attempt(store: Any, claimed: Claimed) -> str:
         with store.transaction() as c:
             settle(c, row, "unknown", error=f"{type(exc).__name__}: {exc}"[:300], token=claimed.token)
         return "unknown"
+    if isinstance(answer, DispatchStopped):
+        return answer.state
     with store.transaction() as c:
         if isinstance(answer, SafeRejection):
             if answer.counted and row["attempts"] >= MAX_SAFE_RETRIES:
@@ -1247,7 +1286,7 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
 
 
 # The channels that ship. Each module imports this one only inside its functions, so either may be imported first.
-from . import outbound_jira
+from . import outbound_jira, outbound_sms
 
 register(
     Adapter(
@@ -1259,3 +1298,5 @@ register(
         freeze=outbound_jira.freeze,
     )
 )
+
+outbound_sms.register_adapters()

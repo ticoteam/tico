@@ -223,6 +223,14 @@ def test_the_guard_refuses_private_addresses_proxies_and_follows_no_redirect(mon
         egress.post("http://hooks.acme.example/x", b"{}", {}, allow_http=True, transport=transport)
 
 
+def test_egress_keeps_a_kilobyte_by_default_and_clamps_negative_limits(monkeypatch):
+    monkeypatch.setattr(egress, "resolve", lambda host: PUBLIC)
+    url = "https://hooks.acme.example/x"
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, content=b"x" * 2048))
+    assert egress.post(url, b"", {}, transport=transport).head == "x" * 1024
+    assert egress.post(url, b"", {}, transport=transport, response_bytes=-1).head == ""
+
+
 def test_a_blocked_address_at_send_time_is_a_failed_attempt_with_the_reason(api, net, monkeypatch):
     made = make(api)
     post(api, f"webhooks/{made['id']}/send", {"type": "custom.a"})

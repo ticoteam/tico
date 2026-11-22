@@ -103,7 +103,7 @@ def retry_after(headers: httpx.Headers) -> float | None:
         pass
     try:
         when = email.utils.parsedate_to_datetime(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     if when.tzinfo is None:
         when = when.replace(tzinfo=UTC)

@@ -4,7 +4,7 @@ endpoint's owner turned it on, plain http to this machine for a receiver being b
 Every send resolves the name again and connects to the address it checked, so a second lookup (DNS rebinding) cannot
 send it elsewhere; TLS (SNI and the certificate check) and Host still use the name. No redirect is followed, the
 environment's proxy settings are ignored (a proxy would reach what the check kept out), the URL carries no sign-in, and
-the answer is read only as far as its first kilobyte. One send has a total budget (DEADLINE) for the name lookup,
+the answer is read up to a byte limit (a kilobyte by default). One send has a total budget (DEADLINE) for the name lookup,
 connecting and reading: httpx's own timeout restarts on every byte, so a server that drips bytes would otherwise hold
 a worker past the point where a crashed send is handed to another.
 """
@@ -14,6 +14,7 @@ import re
 import socket
 import threading
 import time
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
@@ -35,7 +36,7 @@ class Blocked(Exception):
 @dataclass
 class Answer:
     status: int
-    headers: dict = field(default_factory=dict)
+    headers: httpx.Headers = field(default_factory=httpx.Headers)
     head: str = ""
 
 
@@ -139,9 +140,19 @@ def address_for(parts, allow_http=False, budget=None):
     return str(addresses[0])
 
 
-def post(url, body, headers, *, allow_http=False, transport=None):
+def post(
+    url,
+    body,
+    headers,
+    *,
+    allow_http=False,
+    transport=None,
+    response_bytes: int = HEAD_BYTES,
+    headers_only_statuses: Collection[int] = (),
+):
     """POST `body` (bytes) with `headers`; the Answer, or Blocked / httpx.HTTPError. `transport` stands in for the
-    network in tests; the address is checked and pinned either way."""
+    network in tests; the address is checked and pinned either way. `response_bytes` bounds the answer kept.
+    `headers_only_statuses` identifies answers the caller can act on without reading the body."""
     parts = check(url, allow_http)
     ends = time.monotonic() + DEADLINE
     address = address_for(parts, allow_http, budget=DEADLINE)
@@ -159,17 +170,15 @@ def post(url, body, headers, *, allow_http=False, transport=None):
                 "POST", pinned, content=body, headers=sent, extensions={"sni_hostname": parts.hostname}
             ) as response:
                 head = b""
-                for chunk in response.iter_bytes():
-                    head += chunk
-                    if len(head) >= HEAD_BYTES or time.monotonic() > ends:
-                        break
-                if time.monotonic() > ends:
-                    raise Blocked(late)
-                return Answer(
-                    response.status_code,
-                    {k.lower(): v for k, v in response.headers.items()},
-                    head[:HEAD_BYTES].decode("utf-8", "replace"),
-                )
+                limit = max(0, response_bytes)
+                if limit and response.status_code not in headers_only_statuses:
+                    for chunk in response.iter_bytes():
+                        head += chunk[: limit - len(head)]
+                        if len(head) >= limit or time.monotonic() > ends:
+                            break
+                    if time.monotonic() > ends:
+                        raise Blocked(late)
+                return Answer(response.status_code, response.headers, head.decode("utf-8", "replace"))
         except Blocked:
             raise
         except Exception as exc:

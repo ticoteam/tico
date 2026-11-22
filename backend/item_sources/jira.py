@@ -41,6 +41,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 from urllib.parse import quote, urlsplit
 
+from ..tool_services import RECORD_INTEGRATION, SHARED_KEY
 from . import Condition, Item, hosts
 
 if TYPE_CHECKING:
@@ -119,14 +120,6 @@ def ref(key: str, connection_id: str) -> str:
 
 # ----------------------------------------------------------------------------- the pass: reads through the connection
 
-# A record integration Tico reads in the background: an API tool for everyone that an administrator marked as holding
-# records (`record_owner`), never one a bot keeps for itself (its keys go to computers, it made it), and its key a
-# shared company API key (no sign-in, no holder). Nothing else is read without someone asking.
-INTEGRATION = (
-    "tl.audience IS NULL AND COALESCE(tl.kind, 'api') = 'api' AND tl.record_owner <> '' "
-    "AND tl.delivery <> 'computer' AND tl.created_by NOT LIKE 'bot:%'"
-)
-SHARED_KEY = "k.ciphertext IS NOT NULL AND k.kind <> 'login' AND COALESCE(k.holder, '') = ''"
 WRITE_KEY = "AND k.access_level = 'read_write'"  # a write goes only with a read and write key
 
 
@@ -137,7 +130,7 @@ def integrations(conn: "sqlite3.Connection", connection_id: str | None = None) -
     found: dict[str, str] = {}
     for tool_id, base_url, sites in conn.execute(
         f"SELECT DISTINCT tl.id, tl.base_url, tl.sites FROM tools tl JOIN credentials k ON k.tool_id = tl.id "
-        f"WHERE {INTEGRATION} AND {SHARED_KEY} {one}",
+        f"WHERE {RECORD_INTEGRATION} AND {SHARED_KEY} {one}",
         (connection_id,) if connection_id is not None else (),
     ).fetchall():
         host = jira_site(base_url, sites)
@@ -222,7 +215,7 @@ def key_of(conn: "sqlite3.Connection", connection_id: str, *, write: bool = Fals
     """The shared key `connect` uses on a record integration: for a read its read key first, else its read and write
     key; for a write (`write`) only a read and write key, the oldest. None when it has none."""
     return conn.execute(
-        f"SELECT k.* FROM credentials k JOIN tools tl ON tl.id = k.tool_id WHERE tl.id=? AND {INTEGRATION} "
+        f"SELECT k.* FROM credentials k JOIN tools tl ON tl.id = k.tool_id WHERE tl.id=? AND {RECORD_INTEGRATION} "
         f"AND {SHARED_KEY} {WRITE_KEY if write else ''} ORDER BY k.access_level <> 'read', k.created_at, k.id LIMIT 1",
         (connection_id,),
     ).fetchone()

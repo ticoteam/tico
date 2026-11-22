@@ -14,7 +14,7 @@ import pytest
 from backend.config import Settings
 from backend.entities import rules as D
 from backend.entities import store as S
-from backend.store import Store
+from backend.store import H, Store
 from backend.tests.helpers.directory_graph import boot, copy_of
 
 NOW = "2026-10-01T00:00:00Z"
@@ -215,3 +215,31 @@ def test_a_channel_term_narrows_a_rule_and_phones_resolve(directory):
         assert D.check(c, ACTOR, [], "mail", contacts=["+15550100100"])["outcome"] == "clear"
     with pytest.raises(D.ScopeError):
         D.parse_scope(["channel:fax"])
+
+
+def test_sms_rule_scopes_and_conditions_follow_the_whole_merge_chain(directory):
+    original = "company/river"
+    with directory.transaction() as c:
+        _link(c, "lnk-acme-river", "company/acme", "customer_of", original)
+        _rule(c, "r-direct", [f"entity:{original}", "channel:sms"])
+        _rule(c, "r-link", [f"link:works_at:{original}", "channel:sms"])
+        _rule(c, "r-condition", ["entity:person/sam", "channel:sms"], applies_when=f"self customer_of {original}")
+        drop = original
+        for i in range(6):
+            keep = f"company/river-{i}"
+            _entity(c, keep, "organization", f"River Capital {i}")
+            S.merge(c, H.TICO_ACTOR, keep, drop)
+            drop = keep
+    with directory.read() as c:
+        verdict = D.check(c, ACTOR, "person/sam", "close_sms")
+    assert {rule["id"] for rule in verdict["held"]} == {"r-direct", "r-link", "r-condition"}
+
+
+def test_sms_rules_fail_closed_when_a_merge_chain_has_a_cycle(directory):
+    with directory.transaction() as c:
+        c.execute("UPDATE entities SET status='merged', merged_into_id='person/sam' WHERE id='person/jane'")
+        c.execute("UPDATE entities SET status='merged', merged_into_id='person/jane' WHERE id='person/sam'")
+        _rule(c, "r-cycle", ["entity:person/sam", "channel:sms"])
+    with directory.read() as c:
+        verdict = D.check(c, ACTOR, "person/jane", "sms")
+    assert verdict["outcome"] == "held" and verdict["error"] == "ValueError"

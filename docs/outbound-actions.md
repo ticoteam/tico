@@ -1,10 +1,9 @@
 # Outbound actions
 
-The outbound gate is one queue for the sends and outside writes Tico makes for a company: a Jira transition or
-comment, and later texts and webhook calls. Code in `backend/outbound_actions.py`; table `outbound_actions`.
+The outbound gate queues Jira transitions and comments, Twilio texts and Close texts. See
+`backend/outbound_actions.py` and the `outbound_actions` table.
 
-Jira is the first channel with a sender (below). Email and Slack keep their own paths (`email_sends`, `slack_posts`)
-until the planned consolidation step.
+Email and Slack use `email_sends` and `slack_posts` until their planned consolidation.
 
 ## Queue an action
 
@@ -136,6 +135,32 @@ with a shared write key is the administrator's explicit opt-in for Tico to keep 
 also needs a merged PR in a real release tag. No Slack reply in the task's thread yet: it comes back when Slack sends
 move into this queue, where org rules and privacy apply to every send.
 
+## SMS
+
+Use `operation: "send"`, an E.164 phone number as the destination and the provider's Tools connection as
+`connection_id`.
+
+| Channel | Payload | Tools connection |
+|---|---|---|
+| `sms` | `{"from":"+12025550100","body":"Your appointment is ready."}` | Twilio at `https://api.twilio.com`. Use the Twilio template with an Account SID and Auth Token or API key pair, or a Basic password key with the Account SID as its username. Grouped templates can keep the Account SID as a credential. |
+| `close_sms` | `{"from":"+12025550100","body":"Your appointment is ready."}`. Add `lead_id` to link the SMS to a Close lead. | Close CRM at `https://api.close.com` with a Basic user API key. The sender must be an internal Close number. |
+
+Both connections must be Everyone API tools marked as record integrations by an administrator. The bot needs
+Read and write on each shared key used. Such a connection is reserved for the queue: through the Tools proxy it only
+reads (GET and HEAD); every other request, MCP calls included, is refused, so use another connection for other writes
+to Twilio or Close. The Twilio
+account is frozen in the approval preview. Both channels are external and default to Ask first. A Contacts block on
+`channel:sms` applies to both. The destination is matched by canonical number against Contacts phone fields and phone
+identifiers. Rules follow merges of contacts and rule targets. The sender checks policy again in the transaction
+that authorizes the exact credential it will use. If policy now requires an OK, the action waits for approval.
+
+Twilio creates a Message. Close creates an SMS activity with status `outbox`. The receipt's `provider_id` records
+provider acceptance. A 429 requeues using the first Retry-After value (capped at one day) or a one-minute fallback. A vault outage
+before dispatch also requeues. These endpoints
+have no documented lookup by a client reference. A lost or unreadable answer goes to the owner with the action
+still unknown, with no automatic resend. [Twilio Messages API](https://www.twilio.com/docs/messaging/api/message-resource)
+[Close SMS API](https://developer.close.com/api/resources/activities/sms/create)
+
 ## Adding a channel
 
 Register an `Adapter(channel, prepare, dispatch, reconcile=None)`:
@@ -148,5 +173,6 @@ Register an `Adapter(channel, prepare, dispatch, reconcile=None)`:
   failed, or None when its record cannot tell.
 - `defaults`, optional: the channel's own choice per audience when the company set none.
 - `freeze(c, connection_id, destination)`, optional: fields frozen into the payload at enqueue (what an OK shows).
+- `approval_prompt`, `action_label(destination)` and `provider_name`, optional: text for approval and owner asks.
 
 Import the module at the end of `backend/outbound_actions.py`, so it registers whenever the gate is loaded.
