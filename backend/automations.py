@@ -2055,8 +2055,8 @@ def _found_done(c, aid, state, ended=False):
     finishing (`ended`), stops it too and is found again by the next run, once: failing again it is passed over and
     counted as dropped. Items finished past a stop are kept in `done`, so the retry never repeats them. The watermark
     moves no further than the last item this run found: an item past it that it never saw is not passed over. A
-    together find's thread holds all its items (`found`), each counted on its own: handed off once its task started
-    (`settled`), whatever the run did after, and left new with no try when the spend cap or screening stopped it."""
+    together find's thread holds all its items (`found`), each counted on its own: handed off only once its task started
+    (`settled`), whatever the run did after, and left new with no try when its turn did not start."""
     found = c.execute("SELECT found_since FROM automations WHERE id=?", (aid,)).fetchone()
     mark = _mark(found[0] if found else "")
     finished = {p: True for p in mark["done"]}
@@ -2067,13 +2067,14 @@ def _found_done(c, aid, state, ended=False):
             (str(value.get("at") or ""), str(value.get("id") or ""))
         ]
         reach = max(reach, *places)
-        if thread.get("settled") is False:
-            for place in places:
-                finished.setdefault(place, False)
-        elif thread["state"] == E.DONE or thread.get("settled"):
+        together = bool(thread.get("found"))
+        if thread.get("settled") is True or (not together and thread["state"] == E.DONE):
             for place in places:
                 mark["tried"].pop(place[1], None)
                 finished[place] = True
+        elif thread.get("settled") is False or (together and thread["state"] == E.DONE):
+            for place in places:  # stopped by the cap or screening, or done without its turn: new, no try
+                finished.setdefault(place, False)
         elif thread["state"] == E.FAILED or ended:
             if not thread.get("counted"):  # once per thread, however often the run is saved
                 thread["counted"] = True

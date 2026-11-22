@@ -961,9 +961,23 @@ def test_a_batch_given_up_after_its_turn_started_or_was_capped_counts_no_try(api
     with api.app.state.store.transaction() as c:  # the tick gives up on a run from its last save (`_fail`)
         automations._found_done(c, aid, {"threads": [{**thread, "settled": False}]}, ended=True)
     assert found_mark(api, aid)["tried"] == {}  # capped: the items stay new, no try
+    before = found_mark(api, aid)
+    with api.app.state.store.transaction() as c:  # done with no turn started: not handed off
+        automations._found_done(c, aid, {"threads": [{**thread, "state": "done"}]})
+    assert found_mark(api, aid) == before
     with api.app.state.store.transaction() as c:
         automations._found_done(c, aid, {"threads": [{**thread, "settled": True}]}, ended=True)
     assert (found_mark(api, aid)["at"], found_mark(api, aid)["id"]) == tuple(found[-1])  # handed off: done
+
+
+def test_a_batch_run_by_hand_with_a_listening_sample_still_hands_its_items_to_a_task(api):
+    aid = make(api, DIGEST, trigger=DAILY)
+    tasks_titled(api, "one", "two")
+    sample = {"input": {"listening": {"items": [{"id": "x"}], "delivered": {"x": ["sort"]}}}}
+    run = post(api, f"automations/{aid}/run", sample)["run"]
+    assert [s["status"] for s in run["steps"]] == ["ok", "ok"]  # a replay's `delivered` is a listening run's alone
+    assert len(sql(api, "SELECT id FROM tasks WHERE title='Test · 2 items'")) == 1
+    assert post(api, f"automations/{aid}/run", {})["run"]["steps"][0]["outputs"]["count"] == 0
 
 
 def test_run_now_is_refused_while_a_run_of_an_earlier_together_version_is_unfinished(api):
