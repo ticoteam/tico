@@ -23,6 +23,9 @@ when it is sent) over the name's lookup, connecting, TLS and the answer, and at 
 A read that saves clears the due mark only when it is the mark the read began under: a mark made while the read was
 out survives for the next pass. A read Jira refuses keeps the metadata as it was, with `read_error` and `refused_at`,
 and is tried again after RETRY_S. The key never leaves the read: it is not logged, stored or put in an error.
+After each read of an issue a task was filed for (saved, or Jira's 404), backend/release_closeout.py `watch` asks the
+task's owner once when the issue was withdrawn, closed or deleted outside Tico, and takes the ask back when it is
+active again.
 
 Writes (a transition, a comment) go only through the outbound gate's Jira sender (backend/outbound_jira.py), through the
 same record integrations with a shared read and write key (`connect` with `write`, `writable`) and the same bounded
@@ -150,7 +153,8 @@ def integration(conn: "sqlite3.Connection", connection_id: str) -> bool:
 
 def due_reads(conn: "sqlite3.Connection", now: str, per_connection: int = PER_CONNECTION) -> list[tuple[str, str, str]]:
     """(key, connection, due mark) of each issue to read now, at most `per_connection` of each record integration
-    (`integration`): one an open task links whose metadata is missing, never read, marked due or older than REREAD_S,
+    (`integration`): one an open task links (or a Done task whose release close-out is frozen or has a Jira write not
+    ended yet, backend/release_closeout.py) whose metadata is missing, never read, marked due or older than REREAD_S,
     unless a read of it failed within RETRY_S. Marked ones first, across connections, then the longest unread. The due
     mark ('' for none) is what the read began under."""
     H = _h()
@@ -159,7 +163,10 @@ def due_reads(conn: "sqlite3.Connection", now: str, per_connection: int = PER_CO
         "SELECT key, connection_id, due FROM (SELECT MIN(l.item_key) AS key, l.connection_id, "
         "COALESCE(MAX(m.due_at), '') AS due, ROW_NUMBER() OVER (PARTITION BY l.connection_id "
         "ORDER BY MAX(m.due_at) IS NULL, MIN(COALESCE(m.read_at, '')), MIN(l.item_key)) AS n FROM task_links l "
-        "JOIN tasks t ON t.id = l.task_id AND t.status = 'open' "
+        "JOIN tasks t ON t.id = l.task_id AND (t.status = 'open' OR t.status = 'done' AND l.is_primary = 1 "
+        "AND (json_extract(CASE WHEN json_valid(l.detail) THEN l.detail END, '$.pending') IS NOT NULL "
+        "OR EXISTS (SELECT 1 FROM outbound_actions o WHERE o.occurrence_key >= 'closeout:' || t.id || ':' "
+        "AND o.occurrence_key < 'closeout:' || t.id || ';' AND o.state NOT IN ('done', 'failed', 'canceled')))) "
         "JOIN json_each(?) i ON i.value = l.connection_id "
         "LEFT JOIN item_metadata m ON m.source = l.source AND m.item_type = l.item_type AND m.item_key = l.item_key "
         "AND m.connection_id = l.connection_id "
@@ -458,6 +465,7 @@ def refresh(
     """The pass: each of `due_reads` read through its connection with no transaction held, then saved with the version
     taken before its read; no read starts once the pass has spent PASS_BUDGET_S. Returns how many issues' metadata
     changed."""
+    from .. import release_closeout as RC
     from .github import version_now
 
     H = _h()
@@ -497,6 +505,9 @@ def refresh(
                 failed(
                     conn, key, connection_id, "Jira's answer has no status" if 200 <= status < 300 else _refused(status)
                 )
+                if status == 404:
+                    RC.watch(conn, key, connection_id, gone=True)
             elif save_issue(conn, key, connection_id, fields, version, due_seen):
                 changed += 1
+                RC.watch(conn, key, connection_id)
     return changed

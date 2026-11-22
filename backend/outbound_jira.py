@@ -15,6 +15,10 @@ background reads. Jira is an outside system, so the audience is external; the ch
   writes). A lookup answer that is cut off or not the shape asked for is no answer: nothing is written then. Found, it is done with
   no write; `reconcile` uses the same lookup to settle an unknown row done, and nothing else settles one: a row it
   cannot prove stays unknown for the owner (Jira's 404 also means the key cannot see the issue).
+- **Release close-out.** An action with `closeout: true` in its payload (backend/release_closeout.py) reads the issue
+  right before the write (a transition does anyway, a comment adds one read). While the issue is withdrawn (a To Do
+  status other than the payload's `ready`), gone (404) or closed in a Done status other than the payload's `done`, it
+  waits PAUSED_S and tries again, not counted as a retry: it resumes by itself once the issue is back.
 - **Answers.** 429 is a safe rejection (Retry-After, else a minute). Anything that fails before the write (the key, a
   lookup Jira did not answer or answered unreadably) is safe too: nothing was sent. Jira's 400, 401, 403 or 404 to a
   write is a certain refusal; any other answer, or none, is unknown.
@@ -46,6 +50,7 @@ COMMENTS_LOOKED_AT = 100  # the newest comments searched for the marker
 COMMENTS_PAGE = 20  # read a page at a time, halved while a page is cut off
 COMMENTS_READ = 2 * 1024 * 1024  # bytes of a comments page read: one long comment, escaped, still fits
 RETRY_S = 60.0  # a safe rejection without its own wait
+PAUSED_S = 3600.0  # a release close-out write waits this long while its issue is withdrawn, gone or closed otherwise
 BUSY_S = 5.0
 AGENT = "Tico-outbound"
 REFUSALS = (400, 401, 403, 404)
@@ -257,14 +262,33 @@ def _comment(on: Connection, row: Any) -> dict[str, Any] | None:
     return None
 
 
-def _found(on: Connection, row: Any, payload: dict[str, str]) -> dict[str, Any] | None:
-    """The action's effect, when Jira already shows it: the issue in the status, or a comment ending in the marker
-    among the newest COMMENTS_LOOKED_AT."""
+def _fields(on: Connection, row: Any) -> dict[str, Any]:
+    """The issue's status as one read shows it (item_sources/jira.py `fields_of`); _Unreadable when it has none."""
+    fields = JS.fields_of(_get(on, _issue(row), {"fields": JS.FIELDS}), str(row["connection_id"]))
+    if fields is None:
+        raise _Unreadable("Jira's answer has no status")
+    return fields
+
+
+def paused(fields: dict[str, Any], raw: dict[str, Any]) -> str:
+    """Why a release close-out write waits ('' when it may go): the issue withdrawn (backend/release_closeout.py
+    `judged`: a To Do status other than the Ready it was filed in, never with none saved), or closed in a Done status
+    other than the action's own `done` target."""
+    from . import release_closeout
+
+    state = release_closeout.judged(fields, raw.get("ready"))
+    if state == "closed" and str(fields.get("status") or "").casefold() != str(raw.get("done") or "").casefold():
+        return f"The issue was closed in Jira as {fields.get('status')}: waiting until it is back"
+    return "The issue was withdrawn in Jira: waiting until it is back in Ready" if state == "withdrawn" else ""
+
+
+def _found(
+    on: Connection, row: Any, payload: dict[str, str], fields: dict[str, Any] | None = None
+) -> dict[str, Any] | None:
+    """The action's effect, when Jira already shows it: the issue in the status (`fields`, when already read), or a
+    comment ending in the marker among the newest COMMENTS_LOOKED_AT."""
     if row["operation"] == "transition":
-        fields = JS.fields_of(_get(on, _issue(row), {"fields": JS.FIELDS}), str(row["connection_id"]))
-        if fields is None:
-            raise _Unreadable("Jira's answer has no status")
-        status = str(fields["status"])
+        status = str((fields or _fields(on, row))["status"])
         return {"status": status} if status.casefold() == payload["to"].casefold() else None
     return _comment(on, row)
 
@@ -306,7 +330,9 @@ def dispatch(store: Any, row: Any) -> Any:
     """The one write, after asking whether its effect is already there: a receipt, a SafeRejection, Refused, or a raise
     (unknown) when the write may have landed."""
     OA = _oa()
-    payload = _payload(str(row["operation"]), json.loads(row["payload"] or "{}"))
+    raw = json.loads(row["payload"] or "{}")
+    payload = _payload(str(row["operation"]), raw)
+    closeout = isinstance(raw, dict) and bool(cast("dict[str, Any]", raw).get("closeout"))
     try:
         on = _connect(store, row)
     except JS.Unreadable as exc:
@@ -316,11 +342,17 @@ def dispatch(store: Any, row: Any) -> Any:
     except Exception:  # noqa: BLE001 - the key could not be read: nothing was sent
         return OA.SafeRejection(RETRY_S, "The connection's key could not be read")
     try:
-        already = _found(on, row, payload)
+        fields = _fields(on, row) if closeout or row["operation"] == "transition" else None
+        why = paused(fields, cast("dict[str, Any]", raw)) if closeout and fields else ""
+        if why:
+            return OA.SafeRejection(PAUSED_S, why, counted=False)
+        already = _found(on, row, payload, fields)
         transition = ("", "")
         if not already and row["operation"] == "transition":
             transition = _transition(on, row, payload["to"])
     except _Answer as exc:
+        if closeout and exc.reply.status == 404:  # gone, or the key cannot see it now: the close-out waits
+            return OA.SafeRejection(PAUSED_S, "Jira no longer shows the issue: waiting until it is back", counted=False)
         if exc.reply.status in REFUSALS:
             raise OA.Refused(f"Jira answered {exc.reply.status} before the write") from None
         return OA.SafeRejection(exc.reply.retry_after or RETRY_S, f"Jira answered {exc.reply.status}")
@@ -349,6 +381,8 @@ def dispatch(store: Any, row: Any) -> Any:
         raise RuntimeError("Jira could not be reached" + (" (timed out)" if late else "")) from None
     if reply.status == 429:
         return OA.SafeRejection(reply.retry_after or RETRY_S, "Jira answered 429")
+    if closeout and reply.status == 404:  # the issue went between the read and the write: nothing written, it waits
+        return OA.SafeRejection(PAUSED_S, "Jira no longer shows the issue: waiting until it is back", counted=False)
     if reply.status in REFUSALS:
         raise OA.Refused(f"Jira refused the {row['operation']} ({reply.status})")
     if not 200 <= reply.status < 300:

@@ -2,7 +2,7 @@
 """The outbound gate: one queue for every send and outside write (docs/outbound-actions.md).
 
 A row is one action on one channel: where it goes, its frozen `payload` (wiped once the row ends) and the caller's
-`metadata` (kept, never read by the server). `enqueue` is the one way in, idempotent on `occurrence_key`. A channel
+`metadata` (kept, never read by the server, except its `_tico` key: the server's own notes, `asked`). `enqueue` is the one way in, idempotent on `occurrence_key`. A channel
 sends only through its registered adapter: Jira (backend/outbound_jira.py) is the first.
 
 - **Policy.** `decide` runs at enqueue and again before every attempt: a floor that only tightens (the company's Never
@@ -60,6 +60,7 @@ STALE = 120  # seconds an `attempting` row may hold its claim before recovery lo
 SWEEP = 60.0  # the longest the worker sleeps: recovery and reconciling run at most this often
 MAX_SAFE_RETRIES = 10  # safe rejections (rate limits) before a row is failed
 SUBJECT = "outbound:"
+RESERVED = "closeout:"  # occurrence keys only Tico itself queues (backend/release_closeout.py), so none can suppress it
 ENDED = ("done", "failed", "canceled")  # terminal: the payload is wiped
 OPEN = ("waiting_approval", "queued", "blocked")  # a person may cancel these; an unknown one may have gone
 AUDIENCES = ("internal", "external")
@@ -92,10 +93,12 @@ LIST_FIELDS = (
 
 # ----------------------------------------------------------------------------------------------- adapter interface
 class SafeRejection(NamedTuple):
-    """The provider refused without acting (a rate limit): tried again after `retry_after` seconds."""
+    """The provider refused without acting (a rate limit): tried again after `retry_after` seconds. `counted` False
+    for a wait the adapter chose (the record is paused outside), which never uses up MAX_SAFE_RETRIES."""
 
     retry_after: float
     error: str = "rate limited"
+    counted: bool = True
 
 
 class Settled(NamedTuple):
@@ -259,6 +262,16 @@ def approval_tasks(c: Any, approval_ids: Any) -> dict[str, str]:
     return {str(r[0]): str(r[1]) for r in found}
 
 
+SERVER = "_tico"  # metadata's server-kept key (the owner's ask, the last lookup); a caller's is dropped at enqueue
+
+
+def asked(row: Any) -> dict[str, str]:
+    """The server's notes on the row: `ask` (the requirement id of the owner's ask about its unknown outcome) and
+    `looked` (when its outcome was last looked up at the provider)."""
+    notes = _load(row["metadata"], {}).get(SERVER)
+    return cast("dict[str, str]", notes) if isinstance(notes, dict) else {}
+
+
 def public(c: Any, row: Any, *, full: bool = False, tasks: dict[str, str] | None = None) -> dict[str, Any]:
     """The row as the API shows it. `full` (one action's detail) adds the metadata, receipt and payload."""
     out = {k: row[k] for k in LIST_FIELDS}
@@ -379,6 +392,8 @@ def enqueue(
     ):
         if len(str(value or "")) > most:
             raise Problem("validation", f"{name} is at most {most} characters", 422)
+    if key.startswith(RESERVED) and actor != H.TICO_ACTOR:
+        raise Problem("validation", f"Occurrence keys starting {RESERVED!r} are Tico's own", 422)
     found = c.execute("SELECT * FROM outbound_actions WHERE occurrence_key=?", (key,)).fetchone()
     if found:
         return dict(found), False
@@ -418,7 +433,7 @@ def enqueue(
         "occurrence_key": key,
         "actor": actor,
         "payload": _dump(payload),
-        "metadata": _dump(metadata or {}),
+        "metadata": _dump({k: v for k, v in (metadata or {}).items() if k != SERVER}),
         "policy_decision": _dump(policy),
         "state": state,
         "send_after": after or now,
@@ -516,7 +531,45 @@ def settle(
     if state == "unknown":
         LOG.warning("outbound action %s (%s) has an unknown outcome", row["id"], row["channel"])
         H.event(c, H.TICO_ACTOR, "outbound.unknown", row["id"], {"channel": row["channel"]})
+        adapter = ADAPTERS.get(row["channel"])
+        if adapter is None or adapter.reconcile is None:
+            ask_owner(c, row)  # nothing can look it up: the owner is asked at once
+    elif asked(row).get("ask"):
+        from . import owner_asks
+
+        owner_asks.withdraw(c, asked(row)["ask"], f"It is {state} now", row["task_id"])
     return True
+
+
+UNKNOWN_LOOK_S = 3600  # after its first lookup, an unknown row is looked up at most this often
+
+
+def ask_owner(c: Any, row: Any) -> None:
+    """One ask of the owner for an external action whose outcome stays unknown (backend/owner_asks.py), on a small task
+    of its own (the action, the confirm command, its link) for the first who can read the action's task among its
+    owner and the people asked for its OK. Taken back, and that task closed, when the row settles (`settle`)."""
+    if row["audience"] != "external" or asked(row).get("ask"):
+        return
+    from . import owner_asks
+
+    task = H.task(c, row["task_id"]) if row["task_id"] else None
+    people = owner_asks.people_for(c, task, row["actor"])
+    what = f"{row['channel']} {row['operation']} on {row['destination']}"[:200]
+    made = owner_asks.ask(
+        c,
+        None,
+        people,
+        f"Tico can't tell whether its {what} went through: check {row['channel']}, and confirm it in Tico if it did.",
+        title=f"Check a {what}",
+        body=f"Outbound action {row['id']} (/api/v2/outbound-actions/{row['id']}). If it went: "
+        f"`tico outbound confirm-sent {row['id']}`. Tico never sends it again on its own.",
+    )
+    if made:
+        c.execute(
+            "UPDATE outbound_actions SET metadata=json_set(metadata, '$._tico.ask', ?) WHERE id=?", (made[0], row["id"])
+        )
+    else:
+        H.event(c, H.TICO_ACTOR, "outbound.unasked", row["id"], {"why": "Nobody who can read its task to ask"})
 
 
 STOPS = (task_asks.SENT_BACK, task_asks.WITHDRAWN)  # an OK sent back, taken back, or its task closed: it stops
@@ -530,10 +583,14 @@ def apply(c: Any, seen: Any, found: "Settled | None") -> None:
     the worker that made the attempt may still reach the provider. What it cannot settle goes to the back of the
     line."""
     if found is None or found.state not in RESOLVED:
-        c.execute(
-            "UPDATE outbound_actions SET updated_at=? WHERE id=? AND state='unknown' AND updated_at=?",
-            (H.now(), seen["id"], seen["updated_at"]),
-        )
+        now = H.now()
+        moved = c.execute(
+            "UPDATE outbound_actions SET updated_at=?, metadata=json_set(metadata, '$._tico.looked', ?) "
+            "WHERE id=? AND state='unknown' AND updated_at=?",
+            (now, now, seen["id"], seen["updated_at"]),
+        ).rowcount
+        if moved:
+            ask_owner(c, get(c, seen["id"]))  # it stays unknown after a look: its owner is asked, once
         return
     row = get(c, seen["id"])
     if row and row["state"] == "unknown" and row["updated_at"] == seen["updated_at"]:
@@ -581,8 +638,9 @@ def recover(store: Any, now: str | None = None) -> int:
 
 
 def reconcile_pass(store: Any, limit: int = 100) -> int:
-    """Unknown rows whose adapter can ask the provider, the least recently looked at first. Each adapter call runs
-    outside any transaction; what it found is written only while the row is still as it was read (`apply`)."""
+    """Unknown rows whose adapter can ask the provider, the least recently looked at first (after its first lookup, at
+    most every UNKNOWN_LOOK_S). Each adapter call runs outside any transaction; what it found is written only while
+    the row is still as it was read (`apply`)."""
     channels = [name for name, adapter in ADAPTERS.items() if adapter.reconcile]
     if not channels:
         return 0
@@ -591,8 +649,8 @@ def reconcile_pass(store: Any, limit: int = 100) -> int:
             dict(r)
             for r in c.execute(
                 f"SELECT * FROM outbound_actions WHERE state='unknown' AND channel IN ({','.join('?' * len(channels))}) "
-                "ORDER BY updated_at LIMIT ?",
-                (*channels, limit),
+                "AND coalesce(json_extract(metadata, '$._tico.looked'), '') < ? ORDER BY updated_at LIMIT ?",
+                (*channels, H.shift(H.now(), seconds=-UNKNOWN_LOOK_S), limit),
             )
         ]
     for row in rows:
@@ -737,7 +795,7 @@ def attempt(store: Any, claimed: Claimed) -> str:
         return "unknown"
     with store.transaction() as c:
         if isinstance(answer, SafeRejection):
-            if row["attempts"] >= MAX_SAFE_RETRIES:
+            if answer.counted and row["attempts"] >= MAX_SAFE_RETRIES:
                 error = f"{answer.error} after {row['attempts']} attempts"
                 if settle(c, row, "failed", error=error, token=claimed.token):
                     return "failed"
@@ -748,7 +806,7 @@ def attempt(store: Any, claimed: Claimed) -> str:
                 TABLE,
                 row["id"],
                 "queued",
-                attempts=row["attempts"],
+                attempts=row["attempts"] if answer.counted else max(0, int(row["attempts"]) - 1),
                 error=answer.error,
                 due_at=H.shift(H.now(), seconds=max(0.0, float(answer.retry_after))),
                 extra={"provider_attempted_at": None, "updated_at": H.now()},
@@ -887,12 +945,33 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
         """The owner or an admin, as a person (auth.bot_admin)."""
         return who.role in ("owner", "human") and bool(auth.bot_admin(who))
 
+    def reads(c: Any, who: Any, task: Any) -> bool:
+        """Whether `who`, as the request reads (its task actor and attempt kept), reads the task: auth.task_row."""
+        try:
+            auth.task_row(c, who, task)
+        except Problem:
+            return False
+        return True
+
     def visible(c: Any, who: Any, row: Any) -> bool:
-        """Whoever queued it, the owner or an admin, and the parties to its OK (task_asks.party: the person asked)."""
+        """Whoever queued it, the owner or an admin, the parties to its OK (task_asks.party: the person asked), and the
+        person asked about its unknown outcome."""
         if row["actor"] == who.actor or admin(who):
             return True
+        ask = asked(row).get("ask")
+        is_asked = bool(ask) and bool(
+            c.execute("SELECT 1 FROM requirements WHERE id=? AND person_id=?", (ask, who.actor)).fetchone()
+        )
+        task = H.task(c, row["task_id"]) if is_asked and row["task_id"] else None
+        if is_asked and (not row["task_id"] or (task and reads(c, who, task))):
+            return True  # the person asked about its unknown outcome (`ask_owner`), while they still read its task
         found = task_asks.grant(c, row["approval_id"]) if row["approval_id"] else None
-        return bool(found) and task_asks.party(c, who.actor, found)
+        if not (found and task_asks.party(c, who.actor, found)):
+            return False
+        if not row["task_id"]:
+            return True
+        task = task or H.task(c, row["task_id"])
+        return bool(task) and reads(c, who, task)  # a party to its OK, while the request still reads its task
 
     def one(c: Any, who: Any, oid: str) -> dict[str, Any]:
         row = get(c, oid)

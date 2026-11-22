@@ -219,11 +219,18 @@ def released(
     """Where the task's merges (into `repo` alone, when given) are released, as "v1.2.0 of owner/name", from the
     releases Tico has saved, counted as In a release counts them (pre-releases unless explicitly disabled). Empty
     while any of them is in no release yet, and when nothing merged."""
+    return sorted(f"{tag} of {where}" for where, tag in released_in(conn, task_id, repo, visit_id))
+
+
+def released_in(
+    conn: "sqlite3.Connection", task_id: str, repo: str | None = None, visit_id: str | None = None
+) -> list[tuple[str, str]]:
+    """`released` as sorted (release repo, tag) pairs: the actual tags that hold every merge of the task."""
     GS = _gs()
     settings = _settings(conn, task_id, visit_id)
     if settings is None:
         return []
-    out: list[str] = []
+    out: list[tuple[str, str]] = []
     for link in GS.prs_of(conn, task_id):
         metadata: Row | None = link["metadata"]
         if not metadata or metadata["state"] != "merged" or not metadata.get("merged_sha"):
@@ -236,7 +243,7 @@ def released(
         )
         if release is None:
             return []
-        out.append(f"{release['tag']} of {where}")
+        out.append((where, str(release["tag"])))
     return sorted(set(out))
 
 

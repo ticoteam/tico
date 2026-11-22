@@ -510,6 +510,8 @@ def register_core(
         # named: the create is refused as already filed, after every check a filing makes. The item, not the title,
         # makes it one task. Read as whoever the create acts as (a person's own request: that person).
         primary = found = None
+        if getattr(body, "primary_status", None) and not getattr(body, "primary_link", None):
+            raise Problem("primary_status", "primary_status goes with primary_link", 422)
         if getattr(body, "primary_link", None):  # only a JSON create's (M.TaskFile): never an upload's form
             try:
                 primary, held_by = IS.lookup(c, body.primary_link)
@@ -847,6 +849,11 @@ def register_core(
             # The item this task is filed for: its primary link (the partial unique index keeps it one task's).
             H.task_link(c, who.actor, row["id"], primary[1], item=primary[0], mover=True)
             IS.claim(c, row["id"], primary[0])
+            if getattr(body, "primary_status", None):
+                # The status it is filed in is its Ready: a withdrawal is a move to another To Do status.
+                from . import release_closeout
+
+                release_closeout.remember_ready(c, row["id"], body.primary_status)
         # A bot's finding on a pipeline task's own pull request is that task's review verdict, not a person's task.
         H.review_finding_route(c, who.actor, row["id"], row["owner_id"])
         # The parent it was filed under is a relation written here too, and reads back first.
@@ -951,8 +958,10 @@ def register_core(
             if org_rule_check.holds(rc) or saved_retry(request, who) or held
             else ask_ingest.preflight(store, app.state.judge, request.state.identity, body.owner, body.title, body.body)
         )
-        # A retry of a create sent before `primary_link` existed hashed the body without it.
-        legacy = body.model_dump(exclude={"primary_link"}) if body.primary_link is None else None
+        # The hash leaves both out when absent (M.TaskFile.model_dump), as before they existed; a create saved while
+        # only `primary_link` existed hashed it as null.
+        plain = body.primary_link is None and body.primary_status is None
+        legacy = {**body.model_dump(), "primary_link": None} if plain else None
 
         def attempt(ingest, judged):
             return ask_ingest.judged(

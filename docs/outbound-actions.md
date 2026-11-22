@@ -75,7 +75,13 @@ A bot that is onboarding, paused or archived queues nothing, and its queued acti
 - **Unknown.** Never sent again on its own, never put back in line: the worker that made the attempt may still reach
   the provider. The adapter's reconcile (outside any transaction) may settle it done or failed from the provider's own
   record; the original attempt's own answer arriving after all (matched by the row and its attempt marker) settles it;
-  otherwise it is logged and waits until a person confirms it went. It is never canceled or marked not sent. A new action (a new
+  otherwise it is logged and waits until a person confirms it went. It is never canceled or marked not sent. An
+  external one still unknown after a lookup (at once when its channel has no lookup) asks its owner once
+  (backend/owner_asks.py, a people-only OK) on a small task of its own (the action id, its link and the exact
+  `tico outbound confirm-sent` command), filed for the first who can read the action's task among that task's owner
+  (a person), the bot's manager and the company's default person; nobody is asked when none can. The row keeps it
+  (kept in the row's metadata under `_tico`, which the server owns); that person may read the action and confirm it went while they still read its task. After its first lookup a row is looked up at most hourly (`_tico.looked`), and the ask is taken
+  back (its own task closed) when the row settles: a lookup, a late answer, confirm-sent. A new action (a new
   occurrence key) is safe only once the original attempt provably can no longer act: finding no record of it at the
   provider is not proof, since a paused worker may still reach it. Its OK's task stays open until it ends.
 
@@ -113,6 +119,22 @@ uses the same lookup to settle an unknown row done; a row it cannot prove stays 
 rejection after its Retry-After (else a minute), as is anything that fails before the write, a lookup answer cut off
 or not the shape asked for included. Jira's 400, 401, 403 or
 404 to the write is a certain refusal; any other answer, or none, is unknown.
+
+### Release close-out
+
+backend/release_closeout.py queues the Jira side of a released task filed for a Jira issue (its one primary link):
+once every merged PR of the task is in an actual release tag (the In a release reading of saved releases, no new
+GitHub call), the task's forward or done move out of its Release visit queues a `transition` to `Done` (Jira's default
+Done status name) and one `comment` naming each tag with its GitHub release link, as Tico itself, with occurrence keys
+`closeout:<task>:<repo>@<newest tag>:jira:<operation>` (the newest release holding its merges; none is queued when one
+published at the same time or later was announced for the task already, so a reopen or a removed PR adds nothing).
+Only Tico itself may queue a `closeout:` key (422 for anyone else). Both carry `closeout:
+true`, the issue's saved Ready and the `done` target in their payload: the sender reads the issue right before the
+write, and while it is withdrawn, gone (404, at the read or the write) or closed in another Done status it waits an
+hour and tries again (not counted as a retry, so the retry cap never ends it). Each is on its own: one refused is logged (`closeout.skipped`) and the other goes. A record integration
+with a shared write key is the administrator's explicit opt-in for Tico to keep linked issues in step, and a close-out
+also needs a merged PR in a real release tag. No Slack reply in the task's thread yet: it comes back when Slack sends
+move into this queue, where org rules and privacy apply to every send.
 
 ## Adding a channel
 

@@ -489,6 +489,7 @@ def run(args, who=None):
                 "from_message",
                 "after",
                 "primary_link",
+                "primary_status",
             ):
                 fields[field] = getattr(args, field, None)
             return unwrap(hubtools.task_create(client, {k: v for k, v in fields.items() if v is not None}))
