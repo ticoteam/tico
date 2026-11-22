@@ -1884,7 +1884,7 @@ def test_long_default_plan_names_fit_the_write_api_even_with_a_three_digit_suffi
     setup(api)
     company(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE humans SET name=? WHERE id='ana'", ("A" * 120,))
+        c.execute("UPDATE humans SET name=? WHERE id='ana'", ("🌿" * 120,))
     plan = add(api, "codex_login", codex_file(), name=None)
     base = plan["name"]
     assert base.endswith("'s ChatGPT plan") and len(base) <= 76
@@ -1896,8 +1896,10 @@ def test_long_default_plan_names_fit_the_write_api_even_with_a_three_digit_suffi
         )
     duplicate = add(api, "codex_login", codex_file(account="acct-2"), name=None)
     assert duplicate["name"] == f"{base} 100"
+    assert len(duplicate["name"]) == 80
     edited = post(api, f"model-subscriptions/{duplicate['id']}", {"name": duplicate["name"]})
     assert edited["name"] == duplicate["name"]
+    post(api, f"model-subscriptions/{duplicate['id']}", {"name": duplicate["name"] + "🌿"}, expected=422)
 
 
 def test_the_migration_numbers_a_batch_of_long_names_across_existing_collisions(api):

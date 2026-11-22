@@ -282,7 +282,8 @@ Signing a saved subscription in again is **Reconnect**, and asks first when runn
 person in the company, now or later. A plan is for its owner's own bots, not shared ones; the sign-in step says so. Owners
 and admins add, edit, reconnect and remove them in **Settings > Models**. The person who added a plan or API key can
 also remove it there. Default names use the owner's display name, as in **Ana's Claude plan** or **Ana's ChatGPT
-plan**, and fall back to **Claude plan** or **ChatGPT plan**. The list shows the plan's usage to all members, its
+plan**, and fall back to **Claude plan** or **ChatGPT plan**. On upgrade, Tico replaces legacy email names on saved
+logins, including Claude logins since converted to setup tokens. The list shows the plan's usage to all members, its
 account email to its owner and admins, and only the agents each viewer can read.
 
 Give a computer at most one subscription per tool (Claude Code, Codex). One subscription can be given to many computers.

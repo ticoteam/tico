@@ -6,14 +6,17 @@ EMAIL_NAME = re.compile(r'(?:[^\s@]+|"[^"]+")@[^\s@]+(?:\s+[0-9]+)?')
 
 
 def up(conn):
-    labels = {"claude_login": "Claude plan", "codex_login": "ChatGPT plan"}
+    labels = {"claude_login": "Claude plan", "claude_token": "Claude plan", "codex_login": "ChatGPT plan"}
     taken = {name.strip().lower() for (name,) in conn.execute("SELECT name FROM model_subscriptions")}
-    # A reconnect can replace the preview while leaving the old account email in the public name.
+    # Reconnecting can replace the preview or turn a full login into a setup token while leaving its public name.
+    # The conversion audit distinguishes those setup tokens from plans that only ever used a token.
     plans = conn.execute(
         "SELECT s.id,s.name,s.kind,h.name FROM model_subscriptions s "
         "LEFT JOIN humans h ON s.owner_id<>'' AND "
         "h.id=CASE WHEN s.owner_id LIKE 'human:%' THEN substr(s.owner_id,7) ELSE s.owner_id END "
-        "WHERE s.kind IN ('claude_login','codex_login') AND instr(s.name,'@')>0 "
+        "WHERE instr(s.name,'@')>0 AND (s.kind IN ('claude_login','codex_login') OR "
+        "(s.kind='claude_token' AND EXISTS (SELECT 1 FROM events e "
+        "WHERE e.action='subscription.converted' AND e.target=s.id AND json_extract(e.detail,'$.from')='claude_login'))) "
         "ORDER BY s.created_at,s.id"
     ).fetchall()
     # The API caps names at 80 and plans at 200, but key imports can put more rows in an older database.

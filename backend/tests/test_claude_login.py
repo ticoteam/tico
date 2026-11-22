@@ -5,6 +5,7 @@ the login and the others get the new token; usage is read on a schedule from Cla
 import json
 import time
 from datetime import datetime, timedelta, timezone
+from importlib import import_module
 
 from backend import claude_login as CL
 from backend import model_subscriptions as MS
@@ -166,6 +167,26 @@ def test_a_setup_token_plan_reconnected_with_a_full_login_keeps_its_owner_comput
     # The emergency path back: a pasted setup-token makes it a setup-token plan again, still the same plan.
     post(api, f"model-subscriptions/{sid}", {"secret": TOKEN, "confirm": True})
     assert [(s["id"], s["kind"]) for s in listed(api)] == [(sid, "claude_token")]
+
+
+def test_the_name_migration_hides_the_account_email_of_a_login_converted_to_a_setup_token(api):
+    setup(api)
+    company(api)
+    email = "account@acme.example"
+    plan = add(api, "claude_login", full(email), name=f"{email} 2")
+    reconnected = post(api, f"model-subscriptions/{plan['id']}", {"secret": TOKEN, "confirm": True})
+    assert reconnected["kind"] == "claude_token" and reconnected["name"] == f"{email} 2"
+
+    migration = import_module("backend.migrations.20261122215020_plan_display_names")
+    with api.app.state.store.transaction() as c:
+        migration.up(c)
+    [member] = get(api, "model-subscriptions", "cara-test")["subscriptions"]
+    assert (member["id"], member["kind"], member["name"], member["preview"]) == (
+        plan["id"],
+        "claude_token",
+        "Ana's Claude plan",
+        "",
+    )
 
 
 def test_a_kept_key_reconnected_as_a_full_login_is_retired_and_never_hands_out_the_login(api):
