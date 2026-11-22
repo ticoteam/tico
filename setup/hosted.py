@@ -96,7 +96,8 @@ def gather(args, s: Settings, dry: bool) -> None:
         raise MissingInput(f"--domain must be a name under {zone}, the zone given with --hosted-zone")
     s.hosted_zone = zone
     if preset:
-        s.support = "off" if getattr(args, "no_support", False) else "on"
+        # As install.sh --recommended. --no-support only stops setup offering to send a failed check (its help).
+        s.support = "on"
         # Only from the environment: setup's saved copy of the .env never holds it (contract.SERVER_ONLY_KEYS).
         invite = os.environ.get("TICO_GATEWAY_INVITE", "")
         if invite and not st.INVITE_RE.fullmatch(invite):

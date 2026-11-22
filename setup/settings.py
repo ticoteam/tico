@@ -179,7 +179,7 @@ class Settings:
     # sha256 of the setup handoff secret from TICO_SETUP_HANDOFF (hosted.read_handoff); the secret is never kept here
     setup_handoff_hash: str = ""
     preset: str = ""  # recommended: subscriptions plus Gateway, Support
-    support: str = ""  # with the preset: on, or off with --no-support
+    support: str = ""  # with the preset: on
     gateway_invite: str = ""
     inbound_key: str = ""  # existing company Inbox credential; setup never issues one
     inbound_url: str = ""  # optional server endpoint; blank keeps the server's HQ default
