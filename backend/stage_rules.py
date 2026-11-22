@@ -830,7 +830,7 @@ def sweep_snoozes(store: Any) -> list[str]:
             str(r[0])
             for r in c.execute(
                 "SELECT t.id FROM tasks t JOIN snoozes z ON z.task_id = t.id AND z.ended_at IS NULL "
-                "WHERE t.status='open' AND z.by_id LIKE 'bot:%' ORDER BY t.id"
+                "WHERE t.status='open' AND z.wait_thread_id IS NULL AND z.by_id LIKE 'bot:%' ORDER BY t.id"
             ).fetchall()
         ]
     refused: list[tuple[str, dict[str, Any], str]] = []
@@ -841,6 +841,8 @@ def sweep_snoozes(store: Any) -> list[str]:
             if not row or not row.get("snooze"):
                 continue
             snooze: Any = row["snooze"]
+            if snooze.get("wait_thread_id"):
+                continue
             why, until = str(snooze.get("why") or ""), snooze.get("until_at")
             fixed, asked = snooze_rules(c, row, str(snooze.get("by_id")), why, until)
         found = fixed or ask_snooze(row, why, until, asked, store=store, unjudged=unjudged)
@@ -850,7 +852,7 @@ def sweep_snoozes(store: Any) -> list[str]:
     with store.transaction() as c:
         for task_id, rule, line in refused:
             row = E.task(c, task_id)
-            if not row or not row.get("snooze"):
+            if not row or not row.get("snooze") or row["snooze"].get("wait_thread_id"):
                 continue
             E.unsnooze(c, task_id, _core.TICO_ACTOR, line)
             record(c, task_id, rule, line, _core.TICO_ACTOR, data={"sweep": True})

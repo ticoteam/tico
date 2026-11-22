@@ -545,6 +545,12 @@ change), but the note is handed on, so the next stage and the person who OKs QA 
 - A bot should give an end date. With none, the task shows "Snoozed" and the manager bot is told once (C1). A bot's own
   idea in Product's Ideas is filed snoozed, and only a person ends that snooze (Ideas: say it once).
 - After 3 snoozes by a bot in one stage, the next goes to the manager bot. A bot can't put a task off forever.
+- To wait for a customer, use `tico task snooze` with `--wait-thread-id`, `--wait-sender`, `--wait-after-seq`
+  and `--until`. Use the outbound message's global sequence or use `--wait-provider-reply-id` with its saved
+  provider ID. The fallback date is required. A reply from that sender in the thread or one under it ends the
+  wait as intake saves the reply. The visit starts again at zero tries and the bot whose turn it is wakes now.
+  If the reply arrived first, the snooze is refused. Customer waits are exempt from the bot snooze limit and stage
+  snooze rules. While the visit stays open, the matching reply or the fallback date ends the wait.
 
 ### Handoff: Product to Engineering
 

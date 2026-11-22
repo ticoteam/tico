@@ -520,22 +520,34 @@ def task_reassign(api, args):
     "someone unsnoozes it; its owner is then woken once. Give a date wherever there is one (\"vendor replies by Nov "
     "14\"); with none it is On ice and the manager bot is told. A bot's fourth snooze in one stage goes to the manager "
     "bot instead. Any move ends a snooze. `from_pipeline` + `from_stage` instead of `id`: all that stage's open tasks "
-    "(a person's change only).",
+    "(a person's change only). A single task can wait for a customer's reply: give `wait_thread_id`, `wait_sender`, "
+    "`until` as the fallback, and either `wait_after_seq` or `wait_provider_reply_id` for the outbound message.",
     {
         "id": TASK_ID,
         **FROM_STAGE,
         "until": _s("An ISO-8601 date (the start of that day, Pacific) or date-time with a zone"),
         "why": WHY,
         "version": VERSION,
+        "wait_thread_id": _s("The thread ID the reply must be in or under"),
+        "wait_sender": _s("The expected sender's participant ID"),
+        "wait_after_seq": {"type": "integer", "minimum": 1, "description": "The outbound message's global sequence"},
+        "wait_provider_reply_id": _s("The saved outbound message's provider ID"),
     },
     writes=True,
 )
 def task_snooze(api, args):
     stage = _from_stage(args, "Snoozing")
+    wait = {
+        name: args[name]
+        for name in ("wait_thread_id", "wait_sender", "wait_after_seq", "wait_provider_reply_id")
+        if args.get(name) is not None
+    }
     if stage:
+        if wait:
+            raise ValueError("A customer wait is for one task")
         body = {**stage, **_why(args, "until"), **_why(args)}
         return api.post("tasks/snooze", body, key=_key(args))
-    body = {"version": _seen(args), **_why(args, "until"), **_why(args)}
+    body = {"version": _seen(args), **_why(args, "until"), **_why(args), **wait}
     return api.post(f"tasks/{args['id']}/snooze", body, key=_key(args))
 
 

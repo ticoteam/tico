@@ -210,7 +210,7 @@ def check(
         rolled_back = False
         try:
             if wake_up:
-                E.unsnooze(conn, task_id, SYSTEM)
+                E.unsnooze(conn, task_id, SYSTEM, expired_at=at)
                 done["snoozes_ended"] += 1
             else:
                 read = read or _read(conn, task_id, seen)  # the one read `_one` and the span check share
@@ -414,7 +414,7 @@ _OWN_SNOOZES = (
     "SELECT t.id FROM tasks t JOIN snoozes z ON z.task_id = t.id AND z.ended_at IS NULL AND z.by_id = t.owner_id "
     "JOIN stages s ON s.id = t.stage_id "
     "WHERE t.pipeline_id IS NOT NULL AND t.status='open' AND s.kind='work' AND s.by_hand=0 "
-    "AND t.owner_id LIKE 'bot:%' ORDER BY z.created_at, z.id"
+    "AND z.wait_thread_id IS NULL AND t.owner_id LIKE 'bot:%' ORDER BY z.created_at, z.id"
 )
 
 

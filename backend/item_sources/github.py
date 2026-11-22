@@ -1611,7 +1611,7 @@ def _end_bot_snooze(conn: "sqlite3.Connection", row: Row, why: str) -> bool:
     """End the task's snooze as SYSTEM when a bot set it; a person's snooze stays. True when one ended."""
     E = _engine()
     snoozed: Row = row.get("snooze") or {}
-    if not E.is_bot(snoozed.get("by_id")):
+    if snoozed.get("wait_thread_id") or not E.is_bot(snoozed.get("by_id")):
         return False
     E.unsnooze(conn, str(row["id"]), E.SYSTEM, why)
     return True

@@ -39,6 +39,12 @@ def asked(conn: sqlite3.Connection, message_id: str, person: str, agent: str, co
     )
 
 
+def thread_ancestors(conv: Row) -> list[str]:
+    """The thread itself and every thread above it, from its stored path."""
+    root = str(conv.get("root_id") or conv["id"])
+    return [part for part in str(conv.get("path") or "").split("/") if part] or [root, str(conv["id"])]
+
+
 def replied(conn: sqlite3.Connection, reply: Row, conv: Row | None) -> None:
     """An agent wrote `reply` in `conv`: it consumes every wait on that agent in this thread or one above it, and each
     person waiting is told once, before the write commits (at once on a connection outside a store transaction)."""
@@ -48,7 +54,7 @@ def replied(conn: sqlite3.Connection, reply: Row, conv: Row | None) -> None:
         return
     root = str(conv.get("root_id") or conv["id"])
     # The reply's thread and every thread above it (its path, "/<root>/.../<id>/"): a wait in a sibling is not answered.
-    above = [part for part in str(conv.get("path") or "").split("/") if part] or [root, str(conv["id"])]
+    above = thread_ancestors(conv)
     try:
         people = [
             str(row[0])

@@ -458,6 +458,19 @@ class TaskSnooze(Contract):
     until: str | None = Field(default=None, min_length=10, max_length=40)
     why: Why | None = None
     version: Version | None = None
+    wait_thread_id: ID | None = None
+    wait_sender: ID | None = None
+    wait_after_seq: int | None = Field(default=None, strict=True, gt=0, le=2**63 - 1)
+    wait_provider_reply_id: ID | None = None
+
+    @model_validator(mode="after")
+    def customer_wait(self):
+        if any((self.wait_thread_id, self.wait_sender, self.wait_after_seq, self.wait_provider_reply_id)) and (
+            not (self.wait_thread_id and self.wait_sender and self.until)
+            or bool(self.wait_after_seq) == bool(self.wait_provider_reply_id)
+        ):
+            raise ValueError("A customer wait needs a thread, sender, fallback date, and one outbound message anchor")
+        return self
 
 
 class TaskWhy(Contract):
