@@ -3,11 +3,11 @@
 
 A row is one action on one channel: where it goes, its frozen `payload` (wiped once the row ends) and the caller's
 `metadata` (kept, never read by the server). `enqueue` is the one way in, idempotent on `occurrence_key`. A channel
-sends only through its registered adapter; none ships yet (Jira is first), so tests register a fake one.
+sends only through its registered adapter: Jira (backend/outbound_jira.py) is the first.
 
 - **Policy.** `decide` runs at enqueue and again before every attempt: a floor that only tightens (the company's Never
   for the channel and audience, a Contacts rule that blocks or escalates), then the default for the channel and audience
-  (the company's setting, else On its own inside and Ask first outside). Ask first waits on one OK bound to the frozen
+  (the company's setting, else the channel's own default, else On its own inside and Ask first outside). Ask first waits on one OK bound to the frozen
   content (backend/task_asks.py, subject `outbound:<id>`).
 - **Lease.** The worker claims a due row through backend/outbox.py (`queued` to `attempting`, with a claim token).
 - **Fence.** Before any provider call, ONE durable write under that token, and only while `provider_attempted_at` is
@@ -26,7 +26,7 @@ Rows are never pruned: nothing here deletes a row.
 import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timezone
 from typing import Any, Callable, NamedTuple, cast
 
@@ -119,15 +119,19 @@ class Adapter:
       enqueue, and again at each attempt) and answers (audience, destination); an audience it cannot tell is external.
       A Problem refuses (blocks) it.
     - `dispatch(store, row)` makes the one provider call: a receipt dict or a SafeRejection, or it raises.
-    - `reconcile(store, row)`, where the provider can be asked: a Settled, or None when it cannot tell."""
+    - `reconcile(store, row)`, where the provider can be asked: a Settled, or None when it cannot tell.
+
+    `defaults` are the channel's own policy default per audience, in place of DEFAULTS, until the company sets one (a
+    record write to a record integration is bookkeeping, not a message to people: On its own)."""
 
     channel: str
     prepare: Callable[..., tuple[str, str]]
     dispatch: Callable[..., Any]
     reconcile: Callable[..., "Settled | None"] | None = None
+    defaults: dict[str, str] = field(default_factory=lambda: dict[str, str]())
 
 
-ADAPTERS: dict[str, Adapter] = {}  # no channel ships yet: the first is Jira
+ADAPTERS: dict[str, Adapter] = {}  # each channel's sender; Jira registers itself (the import at the end)
 
 
 def register(adapter: Adapter) -> Adapter:
@@ -177,13 +181,20 @@ def bot_stopped(c: Any, actor: str) -> str:
     return ""
 
 
+def default_for(channel: str, audience: str) -> str:
+    """The choice when the company set none: the channel's own default (Adapter.defaults), else DEFAULTS."""
+    adapter = ADAPTERS.get(channel)
+    return (adapter.defaults.get(audience) if adapter else None) or DEFAULTS[audience]
+
+
 def decide(c: Any, *, actor: str, channel: str, audience: str, destination: str) -> dict[str, Any]:
     """The policy for one action now: {"choice", "why", "floor"}. The floor only tightens; the default is the company's
-    setting for the channel and audience, else DEFAULTS. Enqueue and every attempt read it the same way."""
+    setting for the channel and audience, else the channel's own (`default_for`). Enqueue and every attempt read it the
+    same way."""
     company = company_policy(c).get(f"{channel}:{audience}")
     if company == "never":
         return {"choice": "never", "why": f"The company never sends {channel} to {audience} audiences", "floor": True}
-    default = company or DEFAULTS[audience]
+    default = company or default_for(channel, audience)
     from .entities import rules as DR
 
     address = str(destination or "").strip().lower()
@@ -525,7 +536,13 @@ def apply(c: Any, seen: Any, found: "Settled | None") -> None:
 # ------------------------------------------------------------------------------------------------------ the worker
 BELL = background.Bell()
 _workers = background.Loop("outbound-actions", ring)
-_state: dict[str, Any] = {"swept": 0.0, "store": None}
+_state: dict[str, Any] = {"swept": 0.0, "store": None, "vault": None}
+
+
+def vault() -> Any:
+    """The server's credential vault (backend/credentials.py), for an adapter that sends with a connection's key; None
+    before the app installs the gate."""
+    return _state["vault"]
 
 
 class Claimed(NamedTuple):
@@ -843,7 +860,9 @@ class OutboundPolicyUpdate(Contract):
 def policy_view(c: Any) -> dict[str, Any]:
     stored = company_policy(c)
     channels = sorted(ADAPTERS)
-    effective = {f"{ch}:{aud}": stored.get(f"{ch}:{aud}") or DEFAULTS[aud] for ch in channels for aud in AUDIENCES}
+    effective = {
+        f"{ch}:{aud}": stored.get(f"{ch}:{aud}") or default_for(ch, aud) for ch in channels for aud in AUDIENCES
+    }
     return {"settings": stored, "effective": effective, "choices": list(CHOICES), "channels": channels}
 
 
@@ -854,6 +873,8 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
         OutboundActionResult,
         OutboundPolicy,
     )
+
+    _state["vault"] = getattr(app.state, "vault", None)  # an adapter sends with a connection's key (`vault`)
 
     def admin(who: Any) -> bool:
         """The owner or an admin, as a person (auth.bot_admin)."""
@@ -1137,3 +1158,10 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
             return {"action": public(c, get(c, oid)), "created": False}
 
         return mutate(request, Empty(), work, durable=True)
+
+
+# The channels that ship, each registering its adapter as it is imported (after everything above: they import this
+# module).
+from . import outbound_jira
+
+SHIPPED = (outbound_jira.ADAPTER,)
