@@ -1,6 +1,6 @@
 # pyright: strict
 """Sources: places outside Tico a task can wait on or link to (docs/dev/pipelines-v3.md "Sources and items"). One module
-each, named in SOURCES: GitHub (`github.py`) and Jira (`jira.py`: links and their state).
+each, named in SOURCES: GitHub, Jira, and Close.
 
 A source module has `SOURCE` (its id), `NAME`, `ITEMS` (its item types) and `CONDITIONS` (what a requirement of kind
 `item` can ask of one of its items), `match_link(url)` (the item a link is), optionally `match_key(item_type, text)` (an
@@ -21,7 +21,7 @@ from types import ModuleType
 from typing import Any, cast
 from urllib.parse import urlsplit
 
-SOURCES = ("github", "jira")
+SOURCES = ("github", "jira", "close")
 
 
 @dataclass(frozen=True)
@@ -58,6 +58,10 @@ def source(source_id: object) -> ModuleType | None:
         from . import jira
 
         return jira
+    if source_id == "close":
+        from . import close
+
+        return close
     return None
 
 
@@ -128,6 +132,8 @@ def outside_item(
     url: str,
     connection_id: str = "",
     sources: tuple[str, ...] = SOURCES,
+    *,
+    for_lookup: bool = False,
 ) -> tuple[str, str, str, str] | None:
     """(source, item type, key, connection) of the item a link's URL is, among `sources`, or None when it is none's
     item. A site source's item takes the connection that serves its site: `connection_id` when given (ValueError when
@@ -138,7 +144,12 @@ def outside_item(
     host = site_of(found[0], url)
     if host is None:
         return (*found, connection_id)
-    tools = serving(conn, host)
+    if found[0] == "close" and not for_lookup:
+        from . import close
+
+        tools = sorted(close.integrations(conn))
+    else:
+        tools = serving(conn, host)
     if connection_id:
         if connection_id not in tools:
             raise ValueError(f"That connection is not the one for {host}")
@@ -153,7 +164,8 @@ def parse_ref(conn: sqlite3.Connection, text: str) -> tuple[str, str, str, str]:
     link's URL (its site's connection, `outside_item`). ValueError, saying what is wrong, for anything else."""
     text = text.strip()
     if text.startswith(("http://", "https://")):
-        item = outside_item(conn, text)
+        # Looking up an existing link uses the tool's host even after its key is removed.
+        item = outside_item(conn, text, for_lookup=True)
         if not item:
             raise ValueError(f"{text} is not a link to an item of a connected source")
         return item
@@ -177,30 +189,38 @@ def parse_ref(conn: sqlite3.Connection, text: str) -> tuple[str, str, str, str]:
 
 
 ALREADY_FILED = "This item is already filed"  # a primary link held by a task the caller may not read: never named
-PRIMARY_SOURCES = ("jira",)  # the sources a task may be filed for (`primary_of`); GitHub PRs link the ordinary way
+PRIMARY_SOURCES = ("jira", "close")
 
 
 def primary_of(conn: sqlite3.Connection, text: str) -> tuple[tuple[str, str, str, str], str]:
-    """(item, URL to link) of a task create's primary link (POST /api/v2/tasks `primary_link`): a Jira issue of a record
-    integration (jira.integrations, only ever a tool everyone sees), named as `jira:issue:<key>@<connection>` (linked
-    by its page on the connection's site) or by its URL (the one integration on that site). ValueError, the same words
-    for a missing, hidden or other tool and anything else."""
-    from . import jira
+    """(item, URL to link) of a task create's primary link: a typed reference or URL of a record integration.
+    ValueError, with the same words for a missing, hidden or other tool and anything else."""
+    from . import close, jira
 
-    refusal = "A primary link is a Jira issue of a record integration: jira:issue:<key>@<connection>, or its URL"
+    refusal = (
+        "A primary link needs a record integration: jira:issue:<key>@<connection>, "
+        "close:opportunity:<id>@<connection>, or its URL"
+    )
     text = text.strip()
     if text.startswith(("http://", "https://")):
         found = match_link(text, PRIMARY_SOURCES)
-        host = jira.site(text) if found else None
-        on = [tool_id for tool_id, site in sorted(jira.integrations(conn).items()) if site == host]
-        if not found or len(on) != 1:
+        if not found:
+            raise ValueError(refusal)
+        if found[0] == "close":
+            on = list(close.integrations(conn))
+        else:
+            host = jira.site(text)
+            on = [tool_id for tool_id, site in jira.integrations(conn).items() if site == host]
+        if len(on) != 1:
             raise ValueError(refusal)
         return (*found, on[0]), text
     try:
         item = parse_ref(conn, text)
     except ValueError:
         raise ValueError(refusal) from None
-    usable = jira.integrations(conn, item[3]) if item[0] in PRIMARY_SOURCES and item[3] else {}
+    if item[0] == "close" and close.integrations(conn, item[3]):
+        return item, close.url_of(item[2])
+    usable = jira.integrations(conn, item[3]) if item[0] == "jira" else {}
     if item[3] not in usable:
         raise ValueError(refusal)
     return item, f"https://{usable[item[3]]}/browse/{item[2]}"
@@ -208,7 +228,7 @@ def primary_of(conn: sqlite3.Connection, text: str) -> tuple[tuple[str, str, str
 
 def lookup(conn: sqlite3.Connection, text: str) -> tuple[tuple[tuple[str, str, str, str], str], str | None]:
     """A primary link (`primary_of`) and the id of the task holding it already, or None: what a create and its dry run
-    read before anything else. ValueError for a primary link that names no Jira issue."""
+    read before anything else. ValueError for a primary link that names no eligible outside item."""
     primary = primary_of(conn, text)
     return primary, primary_task(conn, primary[0])
 

@@ -68,6 +68,7 @@ import sqlite3
 import threading
 import weakref
 from types import SimpleNamespace
+from typing import Any, NamedTuple
 
 from clients import judge as J
 from . import bot_settings as BS
@@ -155,6 +156,13 @@ AUDIENCE = {}
 PATH = contextvars.ContextVar("org_rule_path", default="")
 CHECK_FAILED = "The rule check could not run, so nothing was written. Try again."
 SUMMARY_RULES, SUMMARY_CHARS, SUMMARY_NAMES = 3, 200, 10  # a hold summary's rule previews, their length, its names
+
+
+class ReplayPreparation(NamedTuple):
+    """Ask-ingest verdict and optional inputs read before the replay's write transaction."""
+
+    ingest: Any
+    inputs: Any
 
 
 def replayer(operation, prepare=None, audience=None):
@@ -2935,6 +2943,10 @@ def _rechecked(c, hold, check, audience=None, auth=None):
     return apply(c, verdict)
 
 
+def _hold_nonce_matches(hold, nonce):
+    return bool(nonce) and secrets.compare_digest(str(nonce).encode(), hold["nonce"].encode())
+
+
 def send(c, who, hold_id, nonce, ingest=None, table=None, check=None, auth=None, audience=None):
     """Send anyway: the normal write runs once, as the bot, with the hold's one-shot nonce; no Decide call for the
     rules it was held on. `check` is `recheck`'s answer: rules changed since the hold are checked again first. The
@@ -2947,7 +2959,7 @@ def send(c, who, hold_id, nonce, ingest=None, table=None, check=None, auth=None,
     require_hold_meeting(c, who.actor, hold)
     if hold["state"] != "held":
         raise Problem("conflict", "This hold is already decided", 409)
-    if not nonce or not secrets.compare_digest(str(nonce), hold["nonce"]):
+    if not _hold_nonce_matches(hold, nonce):
         raise Problem("conflict", "This hold changed; open it again", 409)
     fn = (table or REPLAY).get(hold["operation"])
     if fn is None:
@@ -2972,7 +2984,11 @@ def send(c, who, hold_id, nonce, ingest=None, table=None, check=None, auth=None,
     # by the rule's editor or an Admin, recorded as one (`org_rule_hold.waived`, with `decided_by`).
     waived = "org_rule_hold.waived" if hold.get("check_kind") == "structured" else ""
     _decide(c, who, hold, "sent", waived)
-    result = fn(c, bot, hold, stored.get("replay") or {}, ingest, gate)
+    replay = stored.get("replay") or {}
+    if isinstance(ingest, ReplayPreparation):
+        result = fn(c, bot, hold, replay, ingest.ingest, gate, ingest.inputs)
+    else:
+        result = fn(c, bot, hold, replay, ingest, gate)
     return {"hold": view_hold(c, who, _hold(c, hold_id), "reviewer"), "result": result}
 
 
@@ -3561,13 +3577,14 @@ def install(app, store, auth, mutate):
             )
             if ready:
                 require_hold_meeting(c, who.actor, hold)
+                ready = _hold_nonce_matches(hold, body.nonce)
             if ready and hold["operation"] in prepare:
                 ident = replay_identity(c, hold, auth)
         if ready:
             # Both outside the write: rules changed since the hold are a new check, and ask ingest runs as it would
             # have for the original write (the rules it was held on are not asked again).
             check = recheck(store, app.state.judge, hold, audience, auth)
-            if ident is not None:
+            if ident is not None and not holds(check[1]):
                 stored = json.loads(hold["payload"] or "{}")
                 try:
                     ingest = prepare[hold["operation"]](store, ident, stored.get("replay") or {})
@@ -3577,7 +3594,7 @@ def install(app, store, auth, mutate):
 
         return ask_ingest.judged(
             store,
-            ingest,
+            ingest.ingest if isinstance(ingest, ReplayPreparation) else ingest,
             lambda: mutate(
                 request, body, lambda c: send(c, who, hold_id, body.nonce, ingest, table, check, auth, audience)
             ),

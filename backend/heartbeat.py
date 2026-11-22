@@ -294,6 +294,17 @@ def jira_items(ctx: Context) -> tuple[str, bool]:
     return (f"{changed} issues changed", False) if changed else ("Nothing due", True)
 
 
+def close_items(ctx: Context) -> tuple[str, bool]:
+    app: Any = getattr(ctx, "app", None)
+    vault: Any = getattr(getattr(app, "state", None), "vault", None)
+    if vault is None:
+        return "No credential vault", True
+    from .item_sources import close
+
+    changed = close.refresh(ctx.store, vault)
+    return (f"{changed} opportunities changed", False) if changed else ("Nothing due", True)
+
+
 def source_actions(ctx: Context) -> tuple[str, bool]:
     # The owed source actions, the Merge stage's queue and dequeue calls (backend/source_actions.py `run`).
     github = _engine_github(ctx)
@@ -461,6 +472,16 @@ STEPS = [
         MINUTE,
         jira_items,
         failure="jira_items",
+        capture="scheduler",
+        outside=True,
+    ),
+    Step(
+        "close_items",
+        "Close opportunity metadata",
+        "poll",
+        MINUTE,
+        close_items,
+        failure="close_items",
         capture="scheduler",
         outside=True,
     ),

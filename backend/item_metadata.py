@@ -116,6 +116,47 @@ def save(
     return True
 
 
+def save_read(
+    conn: "sqlite3.Connection", item: tuple[str, str, str, str], fields: Row, version: int, due_seen: str = ""
+) -> bool:
+    """Save what a read saw of an item at `version` (newest wins, item_metadata.save) and clear a failed read's marks.
+    The due mark is cleared only when it is still `due_seen`, the one the read began under: a newer mark stays. Whether
+    it was saved."""
+    scoped = "source=? AND item_type=? AND item_key=? AND connection_id=?"
+    source, item_type, key, connection_id = item
+    found = conn.execute(f"SELECT due_at FROM item_metadata WHERE {scoped}", item).fetchone()
+    due_now = str(found[0] or "") if found else ""
+    if not save(conn, source, item_type, key, fields, version, connection_id=connection_id):
+        return False
+    after = conn.execute(f"SELECT due_at FROM item_metadata WHERE {scoped}", item).fetchone()[0]
+    # A tie at the same version keeps or sets its own mark (item_metadata.save); else a mark newer than the read's stays.
+    kept = after or (due_now if due_now and due_now != due_seen else None)
+    conn.execute(f"UPDATE item_metadata SET read_error=NULL, refused_at=NULL, due_at=? WHERE {scoped}", (kept, *item))
+    return True
+
+
+def failed_read(
+    conn: "sqlite3.Connection",
+    item: tuple[str, str, str, str],
+    why: str,
+    version: int,
+    *,
+    refused_at: str | None = None,
+) -> bool:
+    """Keep the last good fields and record a failure unless a newer read has already been saved."""
+    H = _h()
+    now = H.now()
+    found = conn.execute(
+        "INSERT INTO item_metadata (id, source, item_type, item_key, connection_id, metadata_version, "
+        "read_error, refused_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(source, item_type, item_key, connection_id) DO UPDATE SET "
+        "metadata_version=excluded.metadata_version, read_error=excluded.read_error, refused_at=excluded.refused_at, "
+        "updated_at=excluded.updated_at WHERE item_metadata.metadata_version <= excluded.metadata_version",
+        (H.new_id(), *item, version, why[:300], refused_at or now, now, now),
+    )
+    return found.rowcount > 0
+
+
 def mark_due(conn: "sqlite3.Connection", source: str, item_type: str, key: str, connection_id: str = "") -> None:
     """Ask for a full read of an item on the next pass, whatever its age (it is not final)."""
     conn.execute(

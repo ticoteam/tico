@@ -3547,7 +3547,7 @@ def task_link(
                 refuse(conn, actor, "connection", str(error))
             outside = None
     if connection_id and not outside:
-        refuse(conn, actor, "connection", "a connection names where an outside item came from: link a Jira issue")
+        refuse(conn, actor, "connection", "a connection is for a Jira issue or Close opportunity link")
     if wake_once is not None and (kind != "pr" or not app):
         refuse(
             conn, actor, "kind", "a one-shot wake needs a pull request link in the connected GitHub App's organization"
@@ -3947,6 +3947,10 @@ def task_unlink(conn, actor, task_id, link_id, mover=None):
         event(conn, actor, 'task.unlink', task_id, {'url': have['url'], 'cleanup': True})
         return have
     conn.execute("DELETE FROM task_links WHERE id=?", (link_id,))
+    if have.get("is_primary") and have.get("source") == "close":
+        from . import release_closeout
+
+        release_closeout.unlink_close(conn, have)
     conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (now(), task_id))
     _task_event(conn, task_id, actor, "link", have["url"], None, "removed")
     event(conn, actor, "task.unlink", task_id, {"url": have["url"]})

@@ -1113,7 +1113,7 @@ def register_completion(
             return [rule_target(c, bot, M.NoteCreate.model_validate(replay["body"]).to)]
 
         def task_create(c, bot, replay):
-            body = M.TaskCreate.model_validate(replay["body"])
+            body = M.TaskFile.model_validate(replay["body"])
             return [rule_target(c, bot, body.owner), *(org_rule_check.company(c) if rule_public(body) else [])]
 
         def task_update(c, bot, replay):

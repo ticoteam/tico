@@ -394,11 +394,13 @@ def task_dry_run(c, auth, who, body):
 
     problems, warnings = [], []
     if getattr(body, "primary_link", None):
-        # Its form only (a Jira issue, a connection on one Jira site): which task holds it, the create alone reads.
+        # Its form only: the create alone reads from a provider to match the entity.
         from . import item_sources as IS
 
         try:
-            IS.primary_of(c, body.primary_link)
+            item, _ = IS.primary_of(c, body.primary_link)
+            if getattr(body, "primary_status", None) and item[0] != "jira":
+                problems.append("primary_status is for a Jira primary link")
         except ValueError as error:
             problems.append(str(error))
     if getattr(body, "entity", None):

@@ -291,7 +291,6 @@ def watch(conn: "sqlite3.Connection", key: str, connection_id: str, *, gone: boo
 
 
 def _watch(conn: "sqlite3.Connection", key: str, connection_id: str, gone: bool) -> None:
-    from . import owner_asks
     from .item_sources import primary_task
 
     H = _h()
@@ -307,40 +306,88 @@ def _watch(conn: "sqlite3.Connection", key: str, connection_id: str, gone: bool)
     if task.get("status") != "open" and not detail.get("pending") and not unfinished(conn, task_id):
         return
     fields = _fields(conn, link)
-    state, asked = ("gone" if gone else judged(fields, detail.get("ready"))), str(detail.get("ask") or "")
+    state = "gone" if gone else judged(fields, detail.get("ready"))
     if detail.get("standing", "active") != state:
         detail["standing"] = state
         _save_detail(conn, link, detail)
     if state == "active":
-        if asked:
-            detail.pop("ask")
-            detail.pop("asked", None)
-            _save_detail(conn, link, detail)
-            owner_asks.withdraw(conn, asked, f"{key} is back in Jira", task_id)
+        _withdraw_outside(conn, task_id, link, detail, f"{key} is back in Jira")
         if detail.get("pending"):
             close_out(conn, task_id, str(detail["pending"]))
         return
     ours = str(fields.get("status") or "").casefold() == DONE_STATUS.casefold() and closed_out(conn, task_id)
     if state == "closed" and ours:  # Tico's own close-out closed it (any other Done status asks): a question left over
-        if asked:  # from a "Won't Do" before it is moot now
-            for k in ("ask", "asked"):
-                detail.pop(k, None)
-            _save_detail(conn, link, detail)
-            owner_asks.withdraw(conn, asked, f"{key} is Done in Jira", task_id, advance=False)
+        _withdraw_outside(conn, task_id, link, detail, f"{key} is Done in Jira", advance=False)
         return
-    if detail.get("asked") == state:
-        return  # asked about this standing already
     line = LINES[state].format(key=key, status=fields.get("status") or "")
-    people = owner_asks.people_for(conn, task)
-    found = owner_asks.ask(conn, task_id, people, line, title=line, body=str(link["url"]))
+    if _ask_outside(conn, task, link, detail, state, line, "Asked again: Jira changed"):
+        H.event(conn, H.TICO_ACTOR, "closeout.held", task_id, {"issue": key, "why": state, "asked": True})
+
+
+def _withdraw_outside(
+    conn: "sqlite3.Connection", task_id: str, link: Row, detail: Row, why: str, *, advance: bool = True
+) -> None:
+    from . import owner_asks
+
+    asked = str(detail.get("ask") or "")
     if asked:
-        owner_asks.withdraw(conn, asked, "Asked again: Jira changed", task_id, advance=False)
-    if not found:  # nobody could be asked yet: the next read tries again rather than counting this one as asked
-        if asked:
-            detail.pop("ask", None)
-            detail.pop("asked", None)
-            _save_detail(conn, link, detail)
-        return
+        owner_asks.withdraw(conn, asked, why, task_id, advance=advance, raise_on_failure=True)
+        # Advancing the task can write this link's detail (a close-out marker): start from the stored copy.
+        stored = conn.execute("SELECT detail FROM task_links WHERE id=?", (link["id"],)).fetchone()
+        fresh = _detail({"detail": stored[0]}) if stored else dict(detail)
+        fresh.pop("ask", None)
+        fresh.pop("asked", None)
+        detail.clear()
+        detail.update(fresh)
+        _save_detail(conn, link, detail)
+
+
+def _ask_outside(
+    conn: "sqlite3.Connection", task: Row, link: Row, detail: Row, state: str, line: str, why: str
+) -> bool:
+    """Ask the owner once per outside standing. If nobody can be asked, the next read can try again."""
+    from . import owner_asks
+
+    if detail.get("asked") == state:
+        return False
+    task_id = str(task["id"])
+    found = owner_asks.ask(conn, task_id, owner_asks.people_for(conn, task), line, title=line, body=str(link["url"]))
+    _withdraw_outside(conn, task_id, link, detail, why, advance=False)
+    if not found:
+        return False
     detail.update(ask=found[0], asked=state)
     _save_detail(conn, link, detail)
-    H.event(conn, H.TICO_ACTOR, "closeout.held", task_id, {"issue": key, "why": state, "asked": True})
+    return True
+
+
+def watch_close(conn: "sqlite3.Connection", item: tuple[str, str, str, str], status: str) -> None:
+    """Only a primary Close opportunity can ask its task's owner to settle, once per standing."""
+    _guarded(conn, item[2], lambda: _watch_close(conn, item, status))
+
+
+def unlink_close(conn: "sqlite3.Connection", link: Row) -> None:
+    """Take back a Close link's ask when its task no longer tracks that opportunity."""
+    from . import owner_asks
+
+    asked = str(_detail(link).get("ask") or "")
+    owner_asks.withdraw(conn, asked, "The Close opportunity was unlinked", str(link["task_id"]), raise_on_failure=True)
+
+
+def _watch_close(conn: "sqlite3.Connection", item: tuple[str, str, str, str], status: str) -> None:
+    found = conn.execute(
+        "SELECT l.* FROM task_links l JOIN tasks t ON t.id=l.task_id AND t.status='open' "
+        "WHERE l.is_primary=1 AND l.source=? AND l.item_type=? AND l.item_key=? AND l.connection_id=?",
+        item,
+    ).fetchone()
+    if found is None:
+        return
+    link: Row = dict(found)
+    task_id, detail = str(link["task_id"]), _detail(link)
+    key = item[2]
+    if status == "active":
+        _withdraw_outside(conn, task_id, link, detail, f"{key} is active again in Close")
+    else:
+        task: Row = _h().task(conn, task_id)
+        standing = "is no longer visible" if status == "gone" else f"was {status}"
+        line = f"{key} {standing} in Close: keep working on it, or close this task to settle it?"
+        _ask_outside(conn, task, link, detail, status, line, "Asked again: Close changed")

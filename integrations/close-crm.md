@@ -2,11 +2,12 @@
 service: close-crm
 title: Close CRM
 kind: api
-summary: Close call and Notetaker transcripts imported into Meetings by the runner's close-calls job; a bot may also read the CRM with a read-only key.
-access: "The runner's `close-calls` job imports transcripts; a bot that declares it calls the Close REST API at https://api.close.com/api/v1/ with CLOSE_API_KEY (HTTP Basic, the key as username, empty password); no shared connector"
+summary: Close call transcripts import into Meetings, and linked opportunities can be read from open tasks.
+access: "The runner uses CLOSE_API_KEY for transcript imports. Opportunity links use an administrator-marked record integration and its shared company key (HTTP Basic, key as username, empty password)."
 credentials:
   - CLOSE_API_KEY in secrets/close-calls.env on one runner computer, read only by the close-calls job
   - CLOSE_API_KEY stored in Tools → Credentials and granted to the bot, for a bot that reads the Close account
+  - Shared company API key on an Everyone Close CRM tool marked as holding records, for opportunity links
 declared_as: |
   - service: close-crm
     identity: "the team's Close account"
@@ -20,7 +21,7 @@ aliases: [close]
 
 ## What it is
 
-Close is a sales CRM. Tico reads it in two ways:
+Close is a sales CRM. Tico reads it in these ways.
 
 - **Meetings.** The runner's `close-calls` job (`runner_support/close_calls.py`) polls completed Close
   calls and Notetaker meetings every five minutes and imports their speaker turns and Close's
@@ -28,8 +29,11 @@ Close is a sales CRM. Tico reads it in two ways:
   runner computer. It reads only and never downloads Close audio. Setup:
   [Meetings](../docs/meetings.md#close).
 - **A bot's own reads.** A bot that declares `close-crm` in its `tools:` calls the API itself
-  with the key in its environment. There is no shared connector: the bot's playbook and these
-  rules keep it read-only.
+  with the key in its environment. The bot's playbook and these rules keep it read-only.
+- **Linked opportunities.** Tico reads the status, value and lead of opportunities linked to open tasks
+  through a record integration. File a task with `--primary-link close:opportunity:oppo_X@<tool id>`.
+  A won or lost primary opportunity asks the task owner whether to settle it.
+  [Outside items and intake](../docs/dev/pipelines-v3.md#outside-items)
 
 ## What data it has
 

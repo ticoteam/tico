@@ -44,6 +44,7 @@ ORDER = [
     "item_metadata",
     "source_actions",
     "jira_items",
+    "close_items",
     "jev_verdicts",
     "idea_checks",
     "related_input",
@@ -459,7 +460,15 @@ def test_the_heartbeat_jobs_schedule_follows_the_interval(api):
 
 
 # ----------------------------------------------------------------------------- the outside polls' own worker (P07)
-OUTSIDE = ["github_sync", "ci_sweep", "repository_waits", "item_metadata", "source_actions", "jira_items"]
+OUTSIDE = [
+    "github_sync",
+    "ci_sweep",
+    "repository_waits",
+    "item_metadata",
+    "source_actions",
+    "jira_items",
+    "close_items",
+]
 
 
 def outside_of(api, scheduler, **kw):
