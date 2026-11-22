@@ -22,6 +22,7 @@ stored key is a tool's and how its tool is made, shared by the data migration (o
 import base64
 import functools
 import re
+import sqlite3
 
 from .slugs import slugify
 
@@ -557,6 +558,23 @@ def slug(text):
     return slugify(str(text or ""), limit=48, fallback="tool")
 
 
+# The tables whose rows name a tool as the connection an outside item or record came through (backend/item_sources).
+CONNECTION_TABLES = ("task_links", "item_metadata", "entity_external_refs")
+
+
+def referenced(conn, tid):
+    """Whether an outside reference still names `tid` as its connection. A deleted tool's id is then never given to a
+    new tool, so a new connection never inherits the old one's items and records (`PROJ-7` of another site). A file
+    from before the columns has none."""
+    for table in CONNECTION_TABLES:
+        try:
+            if conn.execute(f"SELECT 1 FROM {table} WHERE connection_id=? LIMIT 1", (tid,)).fetchone():
+                return True
+        except sqlite3.OperationalError:
+            continue
+    return False
+
+
 def insert_tool(conn, service, name, delivery, created_by, created_at, updated_at=None, tid=None, first=None):
     """A new tools row for a key's service (or its own name), its fields from SERVICES; the id is free in `tools`. The
     first tool of a known service takes the service's name, a second keeps its key's name so the two can be told
@@ -567,7 +585,7 @@ def insert_tool(conn, service, name, delivery, created_by, created_at, updated_a
     base = slug(service or name)
     if tid is None:
         tid, n = base, 1
-        while conn.execute("SELECT 1 FROM tools WHERE id=?", (tid,)).fetchone():
+        while conn.execute("SELECT 1 FROM tools WHERE id=?", (tid,)).fetchone() or referenced(conn, tid):
             n += 1
             tid = f"{base}-{n}"
     first = tid == base if first is None else first

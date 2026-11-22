@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any, cast
 from fastapi import Request
 from pydantic import Field
 
+from backend.api_answers.contacts import ContactsRecordResult
+from backend.api_contract import api_v2
 from backend.entities import store as ES
 from backend.models import Contract
 from backend.store import Problem
@@ -119,7 +121,7 @@ def install(
     app: "FastAPI",
     store: "Store",
     auth: "Auth",
-    mutate: "Callable[[Request, Contract, Callable[[sqlite3.Connection], Any]], Any]",
+    mutate: "Callable[..., Any]",
 ) -> None:
     def read() -> "AbstractContextManager[sqlite3.Connection]":
         # The store's read connection, typed for the Directory's functions (as heartbeat.py types its transaction).
@@ -266,6 +268,9 @@ def install(
             body = ES.card(c, actor, found[0]["id"])
             if body is not None:
                 with_document_files(c, request, body)
+                from backend import api_tools
+
+                api_tools.shown_connections(c, request.state.identity, auth, body.get("refs") or [])  # pyright: ignore[reportUnknownMemberType]
         if body is None:
             raise Problem("not_found", f"No entity {ref} that you can see", 404)
         trace(request, found[0]["id"])
@@ -458,15 +463,34 @@ def install(
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/entities/external-refs")
+    @app.post(
+        "/api/v2/entities/external-refs",
+        **api_v2(
+            "Contacts",
+            "recordEntityExternalRef",
+            "Record that an entity is a record in another system (a CRM account, a Jira customer): system, record type "
+            "and id, through a connection (the id of a tool you can see; empty for none). Saving the same record again "
+            "updates its url, revision and status; one already on another entity, or erased at its owner's request, is "
+            "refused. status gone keeps the pointer off the card. The answer names the record and its entity by id only",
+            ContactsRecordResult,
+        ),
+    )
     def contacts_external_ref(request: Request, body: ContactsExternalRef):
-        """Record that an entity is a record in another system (a CRM account, a Jira customer), through a connection
-        (a tool's id; empty for none). Saving the same record again updates it; one already on another entity is
-        refused. `status` gone keeps the pointer but takes it off the card."""
+        """Record that an entity is a record in another system, through a connection. The answer, which is also what a
+        retry is answered with, holds only the record's and the entity's ids, and a retry checks the entity is still
+        one the caller sees."""
         actor = caller(request)
+        who = request.state.identity
+
+        def still_visible(c: sqlite3.Connection) -> None:
+            if not ES.get(c, actor, body.ref):
+                raise Problem("not_found", f"No entity {body.ref} that you can see", 404)
 
         def work(c: sqlite3.Connection):
+            from backend import api_tools
+
             entity_id = ES.target(c, actor, body.ref)
+            api_tools.check_connection(c, who, auth, body.connection_id)  # pyright: ignore[reportUnknownMemberType]
             row = ES.external_ref(
                 c,
                 actor,
@@ -479,9 +503,9 @@ def install(
                 revision=body.revision,
                 status=body.status,
             )
-            return {**row, "entity": entity_id}
+            return {"id": row["id"], "entity": entity_id}
 
-        return mutate(request, body, work)
+        return mutate(request, body, work, check=still_visible)
 
 
 __all__ = ["install"]

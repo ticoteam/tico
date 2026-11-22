@@ -1151,15 +1151,23 @@ same metadata and the rest is identical.
 An item outside Tico is (connection, source, item type, key). The connection is the `tools` row it came through
 (`tools.record_owner` says whether that tool or Tico owns its records), '' for none: every GitHub item, the company's one
 GitHub App. A link to a registered source's item is stored typed on `task_links` (`source`, `item_type`, `item_key`,
-`connection_id`): a GitHub PR when it is in the App's organization, a Jira issue
-(`https://<site>.atlassian.net/browse/PROJ-12`, key `PROJ-12`) whenever its URL is linked, with the `connection_id` the
-link sends. `item_metadata` rows, metadata reads, the task lookups and the due reads all key on the connection too, so two
-Jira sites' `PROJ-12` never read, wake or move each other's tasks. At most one task holds an item's primary link
+`connection_id`): a GitHub PR when it is in the App's organization; a Jira issue
+(`https://<site>.atlassian.net/browse/PROJ-12`, key `PROJ-12`) with the connection serving its site, the one tool whose
+base URL or sites are on that host. A link that names a connection for another site is refused, so is one on a site two
+connections serve unless it names one, and a link on a site none serves stays a plain link. A task holds one typed row
+per item, whatever URL names it; a plain link to the same URL becomes that row once the site has a connection.
+`item_metadata` rows, metadata reads, the task lookups and the due reads all key on the connection, so two Jira sites'
+`PROJ-12` never read, wake or move each other's tasks. At most one task holds an item's primary link
 (`task_links.is_primary`, the task an intake made for it). `GET /api/v2/tasks?link=jira:issue:PROJ-12@<tool id>` (or the
-item's URL; `tico task list --link`) finds the tasks that link one item. A source registers in
-`backend/item_sources/__init__.py` with `match_link(url)` and, optionally, `match_key(item_type, text)`. A Contacts
-entity's records in other systems are `entity_external_refs`, one per (system, type, id, connection), written by
-`POST /api/v2/entities/external-refs` (`tico contacts record`).
+item's URL; `tico task list --link`) finds the tasks that link one item; a Jira item always names its connection.
+
+A connection id is a tool's id under the tools' one visibility rule (`api_tools.visible`): one the caller may not see is
+answered as one that does not exist, and is shown as null on a link or a record. A deleted tool's id is never given to a
+new tool while an outside reference still names it. A source registers in `backend/item_sources/__init__.py` with
+`match_link(url)` and, optionally, `match_key(item_type, text)` and `site(url)`. A Contacts entity's records in other
+systems are `entity_external_refs`, one per (system, type, id, connection), written by
+`POST /api/v2/entities/external-refs` (`tico contacts record`): the answer holds ids only, a record on another entity is
+refused without naming it, and a record erased at its owner's request is not written again.
 
 ### Modules
 

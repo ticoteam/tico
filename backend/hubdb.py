@@ -3470,9 +3470,10 @@ def task_link(
     once, in the task's conversation. It never changes the task's status (`github.py`).
 
     A link to an item of a source (backend/item_sources) is stored typed: its source, item type and key. A GitHub PR is
-    one in the connected App's organization; any other source's item is typed whatever the link's kind, with
-    `connection_id`, the `tools` row it came through ('' for none), so the same key through two connections is two
-    items."""
+    one in the connected App's organization; any other source's item is typed whatever the link's kind, with the
+    connection (a `tools` row) it came through: `connection_id`, or for a site source (Jira) the one serving the link's
+    site (item_sources.outside_item). A task holds one typed row per item; linking it again by any URL answers that row.
+    The caller checks that its reader may see the connection (api_tools.check_connection)."""
     _writer(conn, actor, task_id=task_id)
     row = task(conn, task_id)
     if not row:
@@ -3495,8 +3496,12 @@ def task_link(
         refuse(conn, actor, "kind", f"a link is {'|'.join(LINK_KINDS)}, not {kind}")
     from . import item_sources as IS
 
-    # Another source's item (GitHub's PR is typed below, only in the App's organization).
-    outside = IS.match_link(url, tuple(s for s in IS.SOURCES if s != "github"))
+    # Another source's item (GitHub's PR is typed below, only in the App's organization): (source, type, key,
+    # connection). A site source's item (Jira's) takes the connection serving its site, or stays a plain link.
+    try:
+        outside = IS.outside_item(conn, url, connection_id, tuple(s for s in IS.SOURCES if s != "github"))
+    except ValueError as error:
+        refuse(conn, actor, "connection", str(error))
     if connection_id and not outside:
         refuse(conn, actor, "connection", "a connection names where an outside item came from: link a Jira issue")
     if wake_once is not None and (kind != "pr" or not app):
@@ -3516,6 +3521,22 @@ def task_link(
             )
         )
         have = next((p for p in candidates if PR.same(p, url)), None)
+    elif outside:
+        # One typed row per item on a task, whatever URL names it; the same URL linked before as a plain link (before
+        # its site had a connection) becomes that item's row.
+        scoped = "source=? AND item_type=? AND item_key=? AND connection_id=?"
+        have = _one(conn, f"SELECT * FROM task_links WHERE task_id=? AND {scoped}", (task_id, *outside))
+        bare = (
+            None
+            if have
+            else _one(conn, "SELECT * FROM task_links WHERE task_id=? AND url=? AND source IS NULL", (task_id, url))
+        )
+        if bare:
+            conn.execute(
+                "UPDATE task_links SET source=?,item_type=?,item_key=?,connection_id=?,updated_at=? WHERE id=?",
+                (*outside, now(), bare["id"]),
+            )
+            have = _one(conn, "SELECT * FROM task_links WHERE id=?", (bare["id"],))
     else:
         have = _one(conn, "SELECT * FROM task_links WHERE task_id=? AND url=?", (task_id, url))
     if have:
@@ -3560,11 +3581,9 @@ def task_link(
     )
     match = PR_URL.match(url)
     if outside:
-        # The item the link is, once per task and connection: a second link to it keeps none.
+        # The item the link is (no row of this task has it: one that did was returned above).
         conn.execute(
-            "UPDATE task_links SET source=?,item_type=?,item_key=?,connection_id=? WHERE id=? AND NOT EXISTS (SELECT 1 "
-            "FROM task_links d WHERE d.task_id=? AND d.source=? AND d.item_type=? AND d.item_key=? AND d.connection_id=?)",
-            (*outside, connection_id, link["id"], task_id, *outside, connection_id),
+            "UPDATE task_links SET source=?,item_type=?,item_key=?,connection_id=? WHERE id=?", (*outside, link["id"])
         )
         link = _one(conn, "SELECT * FROM task_links WHERE id=?", (link["id"],))
     elif kind == "pr" and match:

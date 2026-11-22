@@ -843,9 +843,10 @@ def external_ref(
     status: str = "active",
 ) -> Row:
     """Record that an entity is a record in another system: (connection, system, type, id), the connection being the
-    tool it came through ('' for none). Saving the same record again updates its url, revision and status and answers
-    the same row, so a retry or a resync lands once. A record already on another entity is refused, naming it: the two
-    are one party, so merge them. Two connections may hold the same id as two records."""
+    tool it came through ('' for none; the caller checks its reader may see it). Saving the same record again updates its
+    url, revision and status and answers the same row, so a retry or a resync lands once. A record already on another
+    entity is refused without naming it (that entity may be hidden from the writer). A record erased at its owner's
+    request is not written again. Two connections may hold the same id as two records."""
     _writer(c, actor)
     _live(c, actor, entity_id)
     system = _required(c, actor, system, "system")
@@ -861,18 +862,16 @@ def external_ref(
     have = _one(c, f"SELECT * FROM entity_external_refs WHERE {where}", key)
     now = H.now()
     if have is None:
+        # Erased records are suppressed by (system, type, id), as erase hashed them, whatever the connection.
+        if is_suppressed(c, "external", "\x1f".join((system, kind, external))):
+            _refuse(c, actor, "suppressed", "That was erased at its owner's request; it is not created again")
         c.execute(
             "INSERT INTO entity_external_refs (id, entity_id, connection_id, system, external_type, external_id, url, "
             "revision, synced_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (_id("xref"), entity_id, connection_id, system, kind, external, url.strip(), revision.strip(), now, status),
         )
     elif have["entity_id"] != entity_id:
-        _refuse(
-            c,
-            actor,
-            "conflict",
-            f"{system} {kind} {external} is already {have['entity_id']}'s record; merge the two if they are one",
-        )
+        _refuse(c, actor, "conflict", "That record is already another contact's; merge the two if they are one")
     else:
         c.execute(
             "UPDATE entity_external_refs SET url = ?, revision = ?, status = ?, synced_at = ? WHERE id = ?",

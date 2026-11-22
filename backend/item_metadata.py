@@ -136,19 +136,6 @@ def linked(conn: "sqlite3.Connection", source: str, item_type: str, key: str, co
     )
 
 
-def linking(conn: "sqlite3.Connection", source: str, item_type: str, key: str, connection_id: str = "") -> list[str]:
-    """Every task that links this item, whatever its status, oldest link first: the tasks an outside item names
-    (`GET /api/v2/tasks?link=`), which the caller narrows to the ones its reader may see."""
-    return [
-        str(found[0])
-        for found in conn.execute(
-            "SELECT task_id FROM task_links WHERE source=? AND item_type=? AND item_key=? AND connection_id=? "
-            "GROUP BY task_id ORDER BY MIN(created_at), task_id",
-            (source, item_type, key, connection_id),
-        ).fetchall()
-    ]
-
-
 def of_task(conn: "sqlite3.Connection", task_id: str, source: str, item_type: str) -> list[Row]:
     """The items of one type linked to a task, oldest link first (links made in one millisecond in the order they were
     made): its `task_links` rows, each with `metadata` (`get`, through the link's own connection) or None."""
@@ -197,13 +184,16 @@ def prime_of_task(conn: "sqlite3.Connection", task_ids: "Iterable[str]", source:
     keys = [(k, via) for k, via in keys if (GET_SQL, source, item_type, k, via) not in values]
     if keys:
         # `item_key` is COLLATE NOCASE: a link's key finds its row whatever the case of either, so both sides are
-        # matched as NOCASE compares them (ASCII letters only), as `get` finds it. The connection matches exactly.
+        # matched as NOCASE compares them (ASCII letters only), as `get` finds it. The connection matches exactly: only
+        # the (key, connection) pairs asked for are read.
         items = {
             (nocase(str(row["item_key"])), str(row["connection_id"])): row
             for row in _rows(
                 conn,
-                "SELECT * FROM item_metadata WHERE source=? AND item_type=? AND item_key IN (SELECT value FROM json_each(?))",
-                (source, item_type, json.dumps(sorted({k for k, _ in keys}))),
+                # CROSS JOIN keeps the pairs outermost, so each is one search of item_metadata_item.
+                "SELECT m.* FROM json_each(?) p CROSS JOIN item_metadata m ON m.source=? AND m.item_type=? "
+                "AND m.item_key = json_extract(p.value, '$[0]') AND m.connection_id = json_extract(p.value, '$[1]')",
+                (json.dumps(keys), source, item_type),
             )
         }
         for k, via in keys:

@@ -93,6 +93,9 @@ def register(app, auth, mover, mutate, person_only, settings, store, task_view):
             if body.remove:
                 H.task_unlink(c, who.actor, task_id, body.remove, mover=mover(c, who))
             elif body.url:
+                from . import api_tools
+
+                api_tools.check_connection(c, who, auth, body.connection_id)
                 H.task_link(
                     c,
                     who.actor,
@@ -107,9 +110,13 @@ def register(app, auth, mover, mutate, person_only, settings, store, task_view):
                 )
             else:
                 raise Problem("kind", "Send a url to add or remove with a link id", 422)
-            return {"links": H.task_links(c, task_id)}
+            from . import api_tools
 
-        return mutate(request, body, work)
+            return {"links": api_tools.shown_connections(c, who, auth, H.task_links(c, task_id))}
+
+        # A retry of a link sent before `connection_id` existed hashed the body without it.
+        legacy = body.model_dump(exclude={"connection_id"}) if body.connection_id is None else None
+        return mutate(request, body, work, retry_body=lambda _c, _result: legacy)
 
     @app.post(
         "/api/v2/tasks/{tid}/relations",

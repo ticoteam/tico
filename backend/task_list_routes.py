@@ -97,7 +97,8 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 "exact": "true: an owner or requester that names nobody answers 422, never the list without that "
                 "filter (a client asking for one person's tasks must not get every task)",
                 "link": "<source>:<type>:<key>[@<connection_id>] (jira:issue:PROJ-12@tool_1, github:pr:acme/app#7) or "
-                "the item's URL: only the tasks linking that outside item through that connection (none: '')",
+                "the item's URL (a Jira link takes its site's connection): only the tasks linking that outside item "
+                "through that connection. A Jira item always names its connection",
             },
         ),
     )
@@ -198,15 +199,14 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
             if waiting_on is not None:
                 waits_on = waited_on(c, waiting_on, visible_sql, narrow)
                 filters["ids"] = [t for t in filters["ids"] if t in waits_on] if "ids" in filters else sorted(waits_on)
-            if link is not None:
-                linking = linked_to(c, link)
-                filters["ids"] = [t for t in filters["ids"] if t in linking] if "ids" in filters else sorted(linking)
             hidden = frozenset(teammate_access.Known(c, who, auth).people if (owners or requesters or turn) else ())
             match = task_match.parse(
                 H.now(), search, owners, stages, requesters, labels, turn, due, late, hidden=hidden
             )
             if match.sql:
                 filters["match"] = match.sql
+            if link is not None:
+                filters["match"] = [*filters.get("match", ()), linked_to(c, who, link)]
             if after is not None:
                 if changed_after is not None or offset:
                     raise Problem("after", "after is a page's start: not with changed_after or offset", 422)
@@ -329,17 +329,23 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
             brief_rows(rows)
             return result
 
-    def linked_to(c, ref):
-        """The ids of the tasks that link the outside item `ref` names (any reader's: the list's visibility narrows
-        them). 422 `link` for a reference that names no source's item."""
-        from . import item_metadata as IM
+    def linked_to(c, who, ref):
+        """The list's `link` filter: a WHERE fragment, with its arguments, keeping the tasks that link the outside item
+        `ref` names. 422 `link` for a reference that names no source's item, and `connection` for a connection the
+        reader may not see (answered as one that does not exist)."""
+        from . import api_tools
         from . import item_sources as IS
 
         try:
-            source, item_type, key, connection_id = IS.parse_ref(ref)
+            item = IS.parse_ref(c, ref)
         except ValueError as error:
             raise Problem("link", str(error), 422) from None
-        return set(IM.linking(c, source, item_type, key, connection_id))
+        api_tools.check_connection(c, who, auth, item[3])
+        return (
+            "EXISTS (SELECT 1 FROM task_links l WHERE l.task_id=tasks.id AND l.source=? AND l.item_type=? "
+            "AND l.item_key=? AND l.connection_id=?)",
+            item,
+        )
 
     def keyset_token(key):
         return base64.urlsafe_b64encode(json.dumps(key, separators=(",", ":")).encode()).decode().rstrip("=")
@@ -666,6 +672,10 @@ def readers(auth):
             )
         ]
         value["links"] = H.task_links(c, row["id"])
+        if who is not None:
+            from . import api_tools
+
+            api_tools.shown_connections(c, who, auth, value["links"])
         value["children_summary"] = H.children_summary(c, row["id"], visible_sql)
         value["pr_state"] = H.pr_state(value["links"])
         counts = c.execute(

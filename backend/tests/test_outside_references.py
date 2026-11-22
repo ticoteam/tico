@@ -1,8 +1,9 @@
 """Outside references (docs/dev/pipelines-v3.md "Outside items"): an item outside Tico is (connection, source, item type,
-key). A Jira issue link is stored typed with the connection it came through while a GitHub PR link is typed exactly as
-before; two connections holding the same key never read, find or wake each other's tasks; one task at most holds an
-item's primary link; a Contacts record in another system is saved once per connection; and the migration keeps the
-records an install already has."""
+key). A Jira issue link is typed with the connection serving its site while a GitHub PR link is typed exactly as before;
+two connections holding the same key never read, find or wake each other's tasks; a task holds one typed row per item;
+one task at most holds an item's primary link; a connection id never says a hidden tool exists and is never given to a
+new tool; a Contacts record in another system is saved once per connection, names no hidden entity and honors erasure;
+and the migration keeps the records an install already has."""
 
 import shutil
 import sqlite3
@@ -10,24 +11,33 @@ from contextlib import closing
 
 import pytest
 
+from backend import api_tools
 from backend import hubdb as H
 from backend import item_metadata as IM
 from backend import migrations
+from backend import tool_services as TS
+from backend.entities import erase as ER
+from backend.entities import store as ES
+from backend.item_sources import github as GS
+from backend.store import digest, encode
 from backend.tests.helpers.api import get, headers, post  # noqa: F401
 from backend.tests.helpers.mcp import call
 from backend.tests.helpers.migrations import at_floor
 
-ISSUE = "https://acme.atlassian.net/browse/proj-7"
+ACME = "https://acme.atlassian.net/browse/proj-7"
+BETA = "https://beta.atlassian.net/browse/PROJ-7"
 PR = "https://github.com/ticoteam/tico/pull/12"
+SITES = {"tool_a": "https://acme.atlassian.net", "tool_b": "https://beta.atlassian.net"}
+NOBODY = '{"people": [], "teams": [], "bots": []}'  # an Only listed tool that lists nobody: only its owner sees it
 
 
-def _tools(api, *ids):
+def _tools(api, *ids, audience=None):
     with api.app.state.store.transaction() as c:
         for tid in ids:
             c.execute(
                 "INSERT INTO tools(id,name,service,base_url,auth_scheme,check_path,delivery,created_by,created_at,"
-                "updated_at) VALUES(?,?,'Jira','','bearer','','proxy','human:ana',?,?)",
-                (tid, tid, H.now(), H.now()),
+                "updated_at,audience) VALUES(?,?,'Jira',?,'bearer','','proxy','human:ana',?,?,?)",
+                (tid, tid, SITES.get(tid, "https://acme.atlassian.net"), H.now(), H.now(), audience),
             )
 
 
@@ -35,35 +45,43 @@ def _task(api, title):
     return post(api, "tasks", {"owner": "ben", "title": title, "body": "Please."})["id"]
 
 
-def _link(api, task_id, url, expected=200, **more):
-    return post(api, f"tasks/{task_id}/links", {"url": url, **more}, expected=expected)
+def _link(api, task_id, url, expected=200, token="ana-test", **more):
+    return post(api, f"tasks/{task_id}/links", {"url": url, **more}, token=token, expected=expected)
+
+
+def _rows(api, task_id):
+    with api.app.state.store.read() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM task_links WHERE task_id=? ORDER BY created_at", (task_id,))]
 
 
 def _row(api, task_id, url):
-    with api.app.state.store.read() as c:
-        return dict(c.execute("SELECT * FROM task_links WHERE task_id=? AND url=?", (task_id, url)).fetchone())
+    return next(r for r in _rows(api, task_id) if r["url"] == url)
 
 
-def test_a_pr_link_is_typed_as_before_and_a_jira_link_is_typed_with_its_connection(api):
+def _found(api, ref, token="ana-test"):
+    r = api.get("/api/v2/tasks", params={"status": "all", "link": ref}, headers=headers(token))
+    return [row["id"] for row in r.json()["tasks"]] if r.status_code == 200 else r.json()["error"]["code"]
+
+
+def test_a_pr_link_is_typed_as_before_and_a_jira_link_takes_its_sites_connection(api):
     with api.app.state.store.transaction() as c:
         c.execute(
             "INSERT INTO github_app(id,app_id,slug,client_id,org,administration,ciphertext,nonce,created_at,created_by) "
             "VALUES('app',1,'example-app','client','ticoteam',0,X'00',X'00',?,?)",
             (H.now(), "human:ana"),
         )
-    _tools(api, "tool_a")
+    _tools(api, "tool_a", "tool_b")
     task = _task(api, "Ship the importer")
 
     _link(api, task, PR)
     pr = _row(api, task, PR)
     assert (pr["kind"], pr["source"], pr["item_type"], pr["item_key"]) == ("pr", "github", "pr", "ticoteam/tico#12")
     assert (pr["connection_id"], pr["is_primary"]) == ("", 0)
-    outside_org = "https://github.com/other/app/pull/3"
-    _link(api, task, outside_org)
-    assert (_row(api, task, outside_org)["kind"], _row(api, task, outside_org)["source"]) == ("url", None)
+    _link(api, task, "https://github.com/other/app/pull/3")
+    assert _row(api, task, "https://github.com/other/app/pull/3")["source"] is None
 
-    _link(api, task, ISSUE, connection_id="tool_a")
-    issue = _row(api, task, ISSUE)
+    _link(api, task, ACME)  # no connection named: the one serving acme.atlassian.net
+    issue = _row(api, task, ACME)
     assert (issue["kind"], issue["source"], issue["item_type"], issue["item_key"], issue["connection_id"]) == (
         "url",
         "jira",
@@ -71,21 +89,56 @@ def test_a_pr_link_is_typed_as_before_and_a_jira_link_is_typed_with_its_connecti
         "PROJ-7",
         "tool_a",
     )
-    board = "https://acme.atlassian.net/jira/software/projects/OPS/boards/1?selectedIssue=OPS-3"
-    _link(api, task, board)
-    assert (_row(api, task, board)["item_key"], _row(api, task, board)["connection_id"]) == ("OPS-3", "")
+    _link(api, task, "https://gamma.atlassian.net/browse/OPS-1")  # a site nothing serves: a plain link
+    assert _row(api, task, "https://gamma.atlassian.net/browse/OPS-1")["source"] is None
 
-    refused = _link(api, task, "https://acme.atlassian.net/browse/PROJ-8", 422, connection_id="tool_nope")
-    assert refused["error"]["code"] == "connection"
-    refused = _link(api, task, "https://docs.acme.example/plan", 422, connection_id="tool_a")
-    assert refused["error"]["code"] == "connection"
+    # The connection of another site, one that does not exist, or no item at all: refused.
+    for url, connection in (
+        (BETA.replace("PROJ-7", "PROJ-8"), "tool_a"),
+        (ACME, "tool_nope"),
+        ("https://d.example", "tool_a"),
+    ):
+        assert _link(api, task, url, 422, connection_id=connection)["error"]["code"] == "connection"
+
+
+def test_a_jira_url_resolves_to_its_sites_connection_and_an_ambiguous_site_is_refused(api):
+    _tools(api, "tool_a", "tool_b")
+    first, second = _task(api, "Refund for site A"), _task(api, "Refund for site B")
+    _link(api, first, ACME)
+    _link(api, second, BETA)
+
+    assert _found(api, ACME) == [first]
+    assert _found(api, BETA) == [second]
+    assert _found(api, "jira:issue:proj-7@tool_a") == [first]
+    assert _found(api, "jira:issue:PROJ-7") == "link"  # a Jira item is one connection's
+    assert _found(api, "jira:epic:PROJ-7@tool_a") == "link"
+
+    _tools(api, "tool_c")  # a second connection on acme.atlassian.net
+    third = _task(api, "Refund again")
+    assert _link(api, third, ACME.replace("7", "9"), 422)["error"]["code"] == "connection"
+    assert _found(api, ACME) == "link"
+    _link(api, third, ACME.replace("7", "9"), connection_id="tool_c")
+    assert _row(api, third, ACME.replace("7", "9"))["connection_id"] == "tool_c"
+
+
+def test_a_task_holds_one_typed_row_per_item_whatever_url_names_it(api):
+    task = _task(api, "Customer escalation")
+    _link(api, task, ACME)  # before acme has a connection: a plain link
+    assert _row(api, task, ACME)["source"] is None
+    _tools(api, "tool_a")
+    _link(api, task, ACME)  # the same URL again, now that the site has one: that row becomes the item's
+    board = "https://acme.atlassian.net/jira/software/projects/PROJ/boards/1?selectedIssue=PROJ-7"
+    _link(api, task, board)  # another URL for the same item: the same row
+    rows = _rows(api, task)
+    assert [(r["url"], r["source"], r["connection_id"]) for r in rows] == [(ACME, "jira", "tool_a")]
+    assert _found(api, board) == [task]
 
 
 def test_two_connections_holding_one_jira_key_never_cross(api):
     _tools(api, "tool_a", "tool_b")
     first, second = _task(api, "Refund for site A"), _task(api, "Refund for site B")
-    _link(api, first, ISSUE, connection_id="tool_a")
-    _link(api, second, ISSUE, connection_id="tool_b")
+    _link(api, first, ACME)
+    _link(api, second, BETA)
     store = api.app.state.store
     with store.transaction() as c:
         assert IM.save(c, "jira", "issue", "PROJ-7", {"state": "open"}, 1, connection_id="tool_a")
@@ -102,60 +155,116 @@ def test_two_connections_holding_one_jira_key_never_cross(api):
             for task in (first, second)
         }
         assert states == {first: ["open"], second: ["done"]}
-        assert IM.linking(c, "jira", "issue", "PROJ-7", "tool_a") == [first]
         assert IM.linked(c, "jira", "issue", "PROJ-7", "tool_b") and not IM.linked(c, "jira", "issue", "PROJ-7")
         now = H.now()
         assert IM.due_reads(c, "jira", "issue", now, connection_id="tool_a") == ["PROJ-7"]
         assert IM.due_reads(c, "jira", "issue", now, connection_id="tool_b") == []
 
-    def found(query):
-        return [row["id"] for row in get(api, "tasks?status=all&" + query)["tasks"]]
-
-    assert found("link=jira:issue:proj-7@tool_a") == [first]
-    assert found("link=jira:issue:PROJ-7@tool_b") == [second]
-    assert found("link=jira:issue:PROJ-7") == []
-    assert found("link=" + ISSUE) == []  # a URL names no connection
-    bad = api.get("/api/v2/tasks?link=jira:epic:PROJ-7", headers=headers())
-    assert bad.status_code == 422 and bad.json()["error"]["code"] == "link"
     err, listed = call(api, "tico_task_list", {"link": "jira:issue:PROJ-7@tool_b", "snoozed": "all"})
     assert not err and [row["id"] for row in listed["result"]] == [second]
+
+
+def test_githubs_own_reads_ignore_another_connections_metadata(api):
+    with api.app.state.store.transaction() as c:
+        fields = {"state": "open", "head_sha": "a" * 40, "checks_state": "success"}
+        IM.save(c, "github", "pr", "ticoteam/tico#5", fields, 1, connection_id="tool_x")
+    with api.app.state.store.read_transaction() as c:
+        assert GS.runs_checks(c, "ticoteam/tico") is False
+        assert GS._open_at_head(c, "ticoteam/tico", "a" * 40) == []
 
 
 def test_one_task_at_most_holds_the_primary_link_to_an_item_of_one_connection(api):
     _tools(api, "tool_a", "tool_b")
     tasks = [_task(api, f"Customer ask {n}") for n in range(3)]
-    for task, connection in zip(tasks, ("tool_a", "tool_b", "tool_a"), strict=True):
-        _link(api, task, ISSUE, connection_id=connection)
+    for task, url in zip(tasks, (ACME, BETA, ACME), strict=True):
+        _link(api, task, url)
     with api.app.state.store.transaction() as c:
-        primary = "UPDATE task_links SET is_primary=1 WHERE task_id=? AND url=?"
-        c.execute(primary, (tasks[0], ISSUE))
-        c.execute(primary, (tasks[1], ISSUE))  # the same key through another connection is another item
+        primary = "UPDATE task_links SET is_primary=1 WHERE task_id=?"
+        c.execute(primary, (tasks[0],))
+        c.execute(primary, (tasks[1],))  # the same key through another connection is another item
         with pytest.raises(sqlite3.IntegrityError):
-            c.execute(primary, (tasks[2], ISSUE))
+            c.execute(primary, (tasks[2],))
 
 
-def test_a_contacts_record_is_saved_once_per_connection(api):
+def test_a_hidden_tool_is_answered_as_no_connection_and_never_shown(api):
+    _tools(api, "tool_a", audience=NOBODY)
+    task = post(api, "tasks", {"owner": "ben", "title": "Ben's ticket", "body": "Please."}, token="ben-test")["id"]
+    hidden = _link(api, task, ACME, 422, token="ben-test", connection_id="tool_a")["error"]
+    missing = _link(api, task, ACME, 422, token="ben-test", connection_id="tool_zz")["error"]
+    assert (hidden["code"], hidden["detail"].replace("tool_a", "X")) == (
+        missing["code"],
+        missing["detail"].replace("tool_zz", "X"),
+    )
+    _link(api, task, ACME)  # ana sees the tool; the link is typed with it
+    shown = {link["url"]: link for link in get(api, f"tasks/{task}/links", token="ben-test")["links"]}
+    assert shown[ACME]["connection_id"] is None
+    assert get(api, f"tasks/{task}/links")["links"][0]["connection_id"] == "tool_a"
+    assert _found(api, "jira:issue:PROJ-7@tool_a", token="ben-test") == "connection"
+
+
+def test_a_deleted_tools_id_is_never_given_to_a_new_tool_while_references_name_it(api):
+    _tools(api, "tool_a")
+    _link(api, _task(api, "Old site"), ACME)
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM tools WHERE id='tool_a'")
+        assert api_tools._unique_id(c, "tool_a") != "tool_a"
+        assert TS.insert_tool(c, "", "tool_a", "proxy", "human:ana", H.now(), tid=None) != "tool_a"
+
+
+def test_a_contacts_record_is_saved_once_per_connection_and_names_no_other_entity(api):
     _tools(api, "tool_a", "tool_b")
     with api.app.state.store.transaction() as c:
-        from backend.entities import store as ES
-
         acme = ES.upsert(c, "human:ana", "organization", match={"domain": "acme.example"}, name="Acme")["id"]
         other = ES.upsert(c, "human:ana", "organization", match={"domain": "other.example"}, name="Other")["id"]
     record = {"ref": acme, "system": "jira", "external_type": "customer", "external_id": "10042"}
 
     first = post(api, "entities/external-refs", {**record, "connection_id": "tool_a"}, key="ref-1")
+    assert set(first) == {"id", "entity"}  # the stored receipt holds no provider id or URL
     again = post(api, "entities/external-refs", {**record, "connection_id": "tool_a", "url": "https://x.example/1"})
-    assert again["id"] == first["id"] and again["url"] == "https://x.example/1" and again["entity"] == acme
+    assert again == first
     err, through_b = call(api, "tico_contacts_record", {**record, "connection_id": "tool_b"})
     assert not err and through_b["id"] != first["id"]
     with api.app.state.store.read() as c:
-        rows = c.execute("SELECT connection_id FROM entity_external_refs ORDER BY connection_id").fetchall()
-    assert [r[0] for r in rows] == ["tool_a", "tool_b"]
+        assert [r[0] for r in c.execute("SELECT url FROM entity_external_refs ORDER BY connection_id")] == [
+            "https://x.example/1",
+            "",
+        ]
 
     taken = post(api, "entities/external-refs", {**record, "ref": other, "connection_id": "tool_a"}, expected=422)
-    assert taken["error"]["code"] == "conflict" and acme in taken["error"]["detail"]
+    assert taken["error"]["code"] == "conflict" and acme not in taken["error"]["detail"]
     card = get(api, f"entities/card?ref={acme}")
     assert sorted(ref["connection_id"] for ref in card["refs"]) == ["tool_a", "tool_b"]
+
+
+def test_an_erased_record_is_not_written_again_nor_replayed(api):
+    with api.app.state.store.transaction() as c:
+        jane = ES.upsert(c, "human:ana", "person", match={"email": "jane@example.test"}, name="Jane")["id"]
+        kim = ES.upsert(c, "human:ana", "person", match={"email": "kim@example.test"}, name="Kim")["id"]
+    record = {"ref": jane, "system": "close", "external_type": "contact", "external_id": "cl_4411"}
+    post(api, "entities/external-refs", record, key="jane-ref")
+    with api.app.state.store.transaction() as c:
+        ER.erase(c, "human:ana", jane, "request")
+
+    replay = api.post("/api/v2/entities/external-refs", json=record, headers=headers("ana-test", "jane-ref"))
+    assert replay.status_code == 404
+    refused = post(api, "entities/external-refs", {**record, "ref": kim}, expected=422)
+    assert refused["error"]["code"] == "suppressed"
+
+
+def test_a_link_retried_from_before_connections_existed_replays(api):
+    task = _task(api, "Read the brief")
+    body = {"url": "https://docs.acme.example/brief"}
+    post(api, f"tasks/{task}/links", body, key="link-1")
+    legacy = {"url": body["url"], "title": None, "remove": None, "kind": None, "wake_once": None}
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE idempotency SET request_hash=? WHERE key='link-1'", (digest(encode(legacy)),))
+    assert post(api, f"tasks/{task}/links", body, key="link-1")["links"][0]["url"] == body["url"]
+
+
+def test_the_record_write_is_in_the_contract(api):
+    document = api.get("/api/v2/openapi.json", headers=headers()).json()
+    op = document["paths"]["/api/v2/entities/external-refs"]["post"]
+    assert op["operationId"] == "recordEntityExternalRef" and op["tags"] == ["Contacts"]
 
 
 def test_the_migration_keeps_records_and_scopes_the_unique_keys_to_the_connection(tmp_path):
