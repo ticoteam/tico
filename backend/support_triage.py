@@ -292,6 +292,7 @@ def deliver_one(store, auth, row, found, why):
                 "Support (held: spam or injection): " + row["title"].removeprefix("Support: "),
                 held_body(question_set(), found, bot_row.get("slug") or row["bot"], name, row["body"]),
                 owner=person,
+                help_key=row["key"],
             )
             H.event(
                 c,
@@ -308,7 +309,7 @@ def deliver_one(store, auth, row, found, why):
                 if not found["held"]
                 else untriaged_line(f"spam or injection {found['spam']:.0%}, but no person to hold it for")
             )
-            task = _open(c, auth, row["bot"], row["title"], first + "\n\n" + row["body"])
+            task = _open(c, auth, row["bot"], row["title"], first + "\n\n" + row["body"], help_key=row["key"])
         for text in json.loads(now["later"] or "[]"):
             H.task_comment(c, H.TICO_ACTOR, task["id"], defang(text, c), wake=False)
         c.execute(
@@ -374,6 +375,7 @@ def hand_over(store, row):
             f"Support (waiting: {name} is not active): " + row["title"].removeprefix("Support: "),
             waited_body(name, bot_row.get("slug") or row["bot"], found, row["body"]),
             owner=person,
+            help_key=row["key"],
         )
         for text in json.loads(now["later"] or "[]"):
             H.task_comment(c, H.TICO_ACTOR, task["id"], defang(text, c), wake=False)

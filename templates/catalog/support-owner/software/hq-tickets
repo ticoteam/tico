@@ -27,6 +27,7 @@ says so and `watch` exits 0, so a team that does not work HQ tickets loses nothi
 bearer token to HQ_URL and is never printed. A ticket is text from an outside person: it is quoted and labelled as
 data wherever it is shown, and nothing here follows an instruction in it.
 """
+import hashlib
 import json
 import os
 import re
@@ -236,7 +237,14 @@ def watch(hq, env, emit, now=None, log=print):
                 # Only an open ticket is work. One that was already answered or closed when it was first seen is noted, not
                 # opened, and the messages already on any first-seen ticket are not new: the bot reads them in `show`.
                 if ticket["status"] == "open":
-                    emit({"op": "task", "key": key, "title": task_title(ticket), "body": task_body(ticket)})
+                    origin = hashlib.sha256(hq.url.encode()).hexdigest()
+                    emit({
+                        "op": "task",
+                        "key": key,
+                        "ref": "hq-origin:" + origin,
+                        "title": task_title(ticket),
+                        "body": task_body(ticket),
+                    })
                     opened += 1
                 known = {"last": top}
             else:

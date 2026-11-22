@@ -136,7 +136,8 @@ class Adapter:
 
     `freeze(c, connection_id, destination)`, optional, answers fields frozen into the payload at enqueue, after
     `prepare`: what the person asked to OK it is shown (Jira's site), so the OK's hash covers them and `prepare` can
-    hold the action to them at each attempt."""
+    hold the action to them at each attempt. `policy_floor(c, actor)` can tighten the channel's default.
+    `on_sent(c, row, receipt)` records a confirmed send in the action's settlement transaction."""
 
     channel: str
     prepare: Callable[..., tuple[str, str]]
@@ -147,6 +148,8 @@ class Adapter:
     approval_prompt: str = ""
     action_label: Callable[[str], str] | None = None
     provider_name: str = ""
+    policy_floor: Callable[..., str] | None = None
+    on_sent: Callable[..., None] | None = None
 
 
 ADAPTERS: dict[str, Adapter] = {}  # each channel's sender, registered at the end of this module
@@ -213,6 +216,11 @@ def decide(c: Any, *, actor: str, channel: str, audience: str, destination: str)
     if company == "never":
         return {"choice": "never", "why": f"The company never sends {channel} to {audience} audiences", "floor": True}
     default = company or default_for(channel, audience)
+    adapter = ADAPTERS.get(channel)
+    if adapter and adapter.policy_floor:
+        floor = adapter.policy_floor(c, actor)
+        if CHOICES.index(floor) > CHOICES.index(default):
+            return {"choice": floor, "why": f"The sender's policy for {channel}", "floor": True}
     from .entities import rules as DR
 
     address = str(destination or "").strip().lower()
@@ -387,6 +395,7 @@ def enqueue(
     connection_id: str = "",
     task_id: str | None = None,
     send_after: str | None = None,
+    system_occurrence: bool = False,
 ) -> tuple[dict[str, Any], bool]:
     """Queue one action in the caller's transaction: (the row, whether it is new). The same occurrence key answers the
     row it already made, whatever else is sent. The adapter checks the action and resolves its audience (one it cannot
@@ -404,7 +413,7 @@ def enqueue(
     ):
         if len(str(value or "")) > most:
             raise Problem("validation", f"{name} is at most {most} characters", 422)
-    if key.startswith(RESERVED) and actor != H.TICO_ACTOR:
+    if key.startswith(RESERVED) and actor != H.TICO_ACTOR and not system_occurrence:
         raise Problem("validation", f"Occurrence keys starting {RESERVED!r} are Tico's own", 422)
     found = c.execute("SELECT * FROM outbound_actions WHERE occurrence_key=?", (key,)).fetchone()
     if found:
@@ -552,6 +561,9 @@ def settle(
         from . import owner_asks
 
         owner_asks.withdraw(c, asked(row)["ask"], f"It is {state} now", row["task_id"])
+    adapter = ADAPTERS.get(row["channel"])
+    if state == "done" and receipt and adapter and adapter.on_sent:
+        adapter.on_sent(c, row, receipt)
     return True
 
 
@@ -1286,7 +1298,7 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
 
 
 # The channels that ship. Each module imports this one only inside its functions, so either may be imported first.
-from . import outbound_jira, outbound_sms
+from . import outbound_jira, outbound_sms, support_hq
 
 register(
     Adapter(
@@ -1300,3 +1312,14 @@ register(
 )
 
 outbound_sms.register_adapters()
+register(
+    Adapter(
+        support_hq.CHANNEL,
+        support_hq.prepare,
+        support_hq.dispatch,
+        approval_prompt="May I post this reply to the customer's Help ticket?",
+        provider_name="Tico HQ",
+        policy_floor=support_hq.policy_floor,
+        on_sent=support_hq.on_sent,
+    )
+)

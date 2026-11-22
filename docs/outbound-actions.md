@@ -1,6 +1,6 @@
 # Outbound actions
 
-The outbound gate queues Jira transitions and comments, Twilio texts and Close texts. See
+The outbound gate queues Jira transitions and comments, Twilio texts, Close texts and Help replies. See
 `backend/outbound_actions.py` and the `outbound_actions` table.
 
 Email and Slack use `email_sends` and `slack_posts` until their planned consolidation.
@@ -92,6 +92,20 @@ One thread per server (`start`, restarted by the scheduler's tick), rung by each
 action, and otherwise asleep until the next row is due. At most once a minute, after its due row, it recovers stale
 claims, cancels actions whose OK was sent back, and makes a few provider lookups for unknown rows. Sleep when idle stays up for a row in flight or due within 15 minutes and wakes for a later
 one. A rehearsal copy never runs the worker, and a dev copy empties the table.
+
+## Help tickets
+
+The Support Agent can queue `help-ticket` actions for its own open tasks filed by the matching HQ watcher.
+Use the HQ ticket ID as the destination and the Support task as `task_id`. The `reply` operation takes `{"body":
+"<reply>"}`. Use `answer` for a docs answer on a ticket triaged as a question, with the same body plus
+`last_message_id` (the latest customer message ID from `hq-tickets show`, or zero for the original request).
+HQ's confirmed receipt records the reply on the task and settles an `answer` through the task's normal Done step.
+An answer with a newer customer message waits for the Support Agent to read it and queue a fresh answer.
+
+Help replies default to Ask first. The Support Agent's effective sending mode can tighten the outbound policy.
+For a Support-filed Engineering subtask with a linked Tico GitHub issue, its PR merge or Done queues one follow-up
+on the Support task through the same gate. A merge or Done does not establish that a release is available.
+See [Support setup](support.md#set-it-up) for the staff credential.
 
 ## Jira
 

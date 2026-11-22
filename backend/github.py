@@ -944,6 +944,9 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             # One wake per merge per task: an armed link's last result rides on the merge's own wake.
             merged.append({**link, "no_ship": wake_once})
             wake_once = False
+            from . import support_hq
+
+            support_hq.engineering_finished(c, task["id"])
         current = c.execute("SELECT * FROM task_links WHERE id=?", (link["id"],)).fetchone()
         changed = [
             field for field in ("state", "repo", "number", "branch", "checks") if current[field] != link.get(field)

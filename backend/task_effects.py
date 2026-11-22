@@ -311,6 +311,11 @@ def moved(
         release_closeout.moved(conn, str(after["id"]), str(left.get("id") or ""))
     if old == new:
         return
+    pipeline: Row = after.get("pipeline") or {}
+    if new == "done" and pipeline.get("preset") == "engineering":
+        from . import support_hq
+
+        support_hq.engineering_finished(conn, after["id"])
     from . import delivery, reconnects, rule_due, run_triggers
 
     reconnects_: Any = reconnects

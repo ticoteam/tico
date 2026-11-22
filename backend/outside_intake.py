@@ -9,7 +9,7 @@ import uuid
 from datetime import timezone
 from email.utils import getaddresses
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import quote
 
 from . import auth, mailbox_access, threads
@@ -17,6 +17,9 @@ from .entities.ingest import automated
 from .entities import store as entities
 from .mail_lib.gmail import dkim_tags
 from .store import H
+
+if TYPE_CHECKING:
+    from .auth import Auth
 
 GMAIL_LABEL = "Tico Intake"
 DEADLINE_HOURS = 24
@@ -262,4 +265,33 @@ def process(c: sqlite3.Connection, connection_id: str, ref: str, payload: dict[s
         or payload.get("triage")
     ):
         return triage(c, connection_id, ref, payload, started_at)
+    return "matched"
+
+
+def wake_relationship(c: sqlite3.Connection, authority: "Auth", connection_id: str, message_id: str) -> str:
+    """Only an enrolled worker gets a wake, sponsored by the current owner of the source inbox."""
+    from . import relationship_runs
+
+    if not c.execute(
+        "SELECT 1 FROM assignments a JOIN bots b ON b.id=a.bot WHERE a.bot=? AND b.state='active'",
+        (relationship_runs.BOT,),
+    ).fetchone():
+        return "ok"
+    root = c.execute(
+        "SELECT t.id, t.entity_id FROM messages m JOIN conversations t ON t.id=m.conversation_id "
+        "WHERE m.id=? AND m.deleted_at IS NULL AND t.deleted_at IS NULL "
+        "AND t.audience='entity' AND t.connection_id=? AND t.entity_id IS NOT NULL",
+        (message_id, connection_id),
+    ).fetchone()
+    if root:
+        owner = eligible_owner(c, mailboxes.row_by_id(c, connection_id))
+        sponsor = authority.identity_for_actor(c, f"human:{owner}")
+        relationship_runs.enqueue(
+            c,
+            authority,
+            sponsor,
+            root["entity_id"],
+            "Review the new arrival in this relationship's source thread.",
+            thread_id=root["id"],
+        )
     return "ok"

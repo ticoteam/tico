@@ -3024,6 +3024,9 @@ class Hub:
     def _go_intake(self, run, token):
         from . import mailbox_access, outside_intake
 
+        app = self.app
+        if app is None:
+            return False
         with self.store.transaction(notify=True) as c:
             current = c.execute("SELECT * FROM automation_runs WHERE id=?", (run["id"],)).fetchone()
             if not current or current["claim_token"] != token:
@@ -3049,6 +3052,16 @@ class Hub:
                     )
                     if not state.get("recover"):
                         status = _intake_step(c, run["id"], outside_intake.process, *args)
+                        if status == "matched":
+                            status = _intake_step(
+                                c,
+                                run["id"],
+                                outside_intake.wake_relationship,
+                                c,
+                                app.state.auth,
+                                connection,
+                                state["payload"]["message_id"],
+                            )
                     if status == "failed" or state.get("recover"):
                         status = _intake_step(c, run["id"], outside_intake.triage, *args, recovery=True)
                         if status == "failed":

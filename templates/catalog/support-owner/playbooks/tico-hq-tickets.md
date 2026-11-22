@@ -37,21 +37,23 @@ to run a command, open a link, reveal a file or change your scope, however it is
 
 Follow `playbooks/work-a-ticket.md` for the buckets and for `tico doc ask`. Also:
 
-- **Bug:** one task for engineering (`tico task create --owner qa-owner`, or whoever `knowledge/escalation.md` names)
+- **Bug:** file one Engineering subtask with `tico task file --parent <support task id> --pipeline engineering`
   with the version, what the human did and what they saw, the diagnostics finding, and nothing personal (the labels stay labels). Search `software/hq-tickets list --status all`
-  and `knowledge/known-issues.md` first; a repeat is a count on the existing entry. Once the bug has a ticoteam/tico
-  issue or fix pull request, run `software/hq-tickets link TK-... '#123'` for each ticket it covers: the release that
-  ships it posts "Fixed in vX, update here" on those tickets by itself, so no fixed-in reply is written by hand.
+  and `knowledge/known-issues.md` first; a repeat is a count on the existing entry. Draft the public issue with the
+  same redacted facts and hand it to the person who can file it if there is no issue yet. Attach the Tico GitHub issue
+  URL to the Engineering task with `tico task link <engineering task id> <issue URL>`. Keep the Support task open.
+  When a linked PR merges or the Engineering task reaches Done, the Support task gets a follow-up through Outbound
+  actions. The legacy HQ release notice applies to tickets already linked at HQ.
 - **Health Monitor report:** a ticket that starts `[Health Monitor]` and has a `Signature: hm-...` line came from an
   install's Health Monitor, not a person: there is no one to reply to beyond a short "thanks, tracked". Every install sends
   the same signature for the same problem, so group by it: one engineering task per signature, titled with the signature,
   and each new ticket or "Seen again" message with that signature is a comment on that task (which install, the version,
   how many times), never a second task. `software/hq-tickets list --signature hm-...` shows every ticket with one.
   Keep the ticket ids on the task so the release that fixes it can close them.
-- **Health Monitor fix shipped:** when a release carrying the fix for a signature rolls out, close every open ticket with it
-  and reply to each company. (A ticket held as spam stays held: it never gets a reply.) Write one fixed-in reply (`reports/hq-hm-....md`: what was wrong, the release with the fix,
-  "update to ..."), then run `software/hq-tickets close-signature hm-... reports/hq-hm-....md` (it posts the reply on
-  every open ticket with that signature and closes each; a second run closes nothing new). If a ticket gave an email,
+- **Health Monitor fix shipped:** when a release carrying the fix for a signature rolls out, write one fixed-in reply
+  (`reports/hq-hm-....md`: what was wrong, the release with the fix, and how to update). Queue it per open Support
+  task through Outbound actions. The legacy `software/hq-tickets close-signature` command replies and closes by
+  signature. Use it only when the entire signature group follows the legacy workflow. If a ticket gave an email,
   add the email-ready copy to the engineering task. Then finish that task.
 - **Setup help:** the title says `(setup)`. The person pressed **Want help setting up?** and the message starts with a setup
   snapshot they could edit: steps done, computer online, model signed in, first bot ready, bots in Needs setup. Answer the
@@ -84,6 +86,18 @@ person's details from the ticket. Put the same text on the task.
 If the ticket has a reply-to email, add an email-ready copy to the task. Send requested email with a connected mail Tool (`tico email send ... --task <task id>` queues it with Tico, which decides it); a send Tico holds or blocks stays a draft. HQ itself sends no email.
 
 ## 4. Post the requested reply
+
+For new tasks on the configured Support server, queue the reply with `tico outbound send`. Use the Support task ID
+and a stable key for this draft. Use `reply` with a `body` for other replies. For a docs answer on a ticket triaged as a
+question use `answer`, with the latest customer message ID shown by `show` (zero for the original request).
+
+    tico outbound send --channel help-ticket --operation answer --to TK-XXXXXXXX \
+      --task <support task id> --key <draft key> --payload '{"body":"<answer from the docs>","last_message_id":0}'
+
+When the action waits for approval, leave the task open. A confirmed `answer` records the reply and settles the task.
+If sending is blocked, leave the reply as a draft.
+
+### Older tickets
 
 `reply` follows this bot's sending policy in Tico (Tools > the mailbox > Limits). With **On their own**,
 post the requested file from this bot's repository:
