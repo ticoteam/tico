@@ -12,7 +12,17 @@ SCHEMAS.update(
                 "title": "s",
                 "audience": {
                     "type": "string",
-                    "enum": ["company", "team", "members", "task", "home", "personal", "participants", "meeting"],
+                    "enum": [
+                        "company",
+                        "team",
+                        "members",
+                        "task",
+                        "home",
+                        "personal",
+                        "participants",
+                        "meeting",
+                        "entity",
+                    ],
                 },
                 "audience_group_id": "n",
                 "owner_id": "n",

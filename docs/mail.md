@@ -24,12 +24,28 @@ keeps no copy of mail. Opening a message or thread checks access and records `ma
 The server watches every active mailbox its Workspace key or a person's own Connect Google grant covers
 (`backend/gmail_watch.py`, a drain worker): about
 every 90 seconds it asks Gmail for the history since the mailbox's last check, reads each new message once, runs the
-mailbox's message automations, notes bounces and feeds the Directory, then keeps only where it got to. Drafts are not
-heard. A mailbox's first check starts its watch a day back and hears all of that day's mail, oldest first, over as many
-passes as it takes; older mail never starts a run. A failed check keeps where it got to and shows why on Tools > the
-mailbox; a refused Google sign-in also asks its person to reconnect. No computer touches mail: the server also sends
+mailbox's message automations, notes bounces and feeds the Directory, then saves its cursor. Drafts are not
+heard. A mailbox's first check starts its watch a day back. Catch-up lists at most 20,000 messages and processes those
+oldest first over as many passes as it takes. Older mail never starts a run. If the saved watch start is invalid,
+the watch starts again at the current time. A failed check keeps where it got to and
+shows why on Tools > the mailbox. A refused Google sign-in also asks its person to reconnect. The server also sends
 every queued email and carries out every automation mail action. A finished automation run keeps no message body or
 snippet.
+
+To enroll incoming conversations in relationship history, use a Gmail filter that applies the label **Tico Intake**
+on arrival in a watched personal inbox that feeds the Directory. Intake skips automated mail, mailing lists and
+bounces. When Gmail reports a DMARC pass or an aligned DKIM pass, Tico looks for a unique Directory contact with
+the exact From address. For a match, it saves the thread and a bounded copy of the body before advancing the Gmail
+cursor. Other senders go to a private triage task for the inbox owner with a link to Gmail, due in 24 hours.
+The task flags an unverified sender. An authenticated sender without an exact match can get a domain suggestion.
+People need access to both the contact and the inbox to read the thread. Matched arrivals are logged in history,
+which also checks access to the source of each recorded activity.
+Relationship-agent wakes are deferred until relationship run lanes ship. History is available through
+`tico contacts activity <ref>`, `tico_contacts_activity` in MCP, and `GET /api/v2/entities/activity`.
+The inbox owner can release or drop held runs in the Conversation intake routine or through
+`tico automation held <id> release|drop`. The Automation runs card and audit entries for intake and outside thread
+changes require access to the inbox. Saved arrivals stay held while the inbox is stopped, shared, or lacks an active
+owner. They resume when the inbox has an eligible owner and go to triage if overdue.
 
 ## Organizing live
 

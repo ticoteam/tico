@@ -12,7 +12,8 @@ from typing import TYPE_CHECKING, Annotated, Any, cast
 from fastapi import Request
 from pydantic import Field
 
-from backend.api_answers.contacts import ContactsRecordResult
+from backend import threads
+from backend.api_answers.contacts import ContactsActivityHistory, ContactsRecordResult
 from backend.api_contract import api_v2
 from backend.entities import store as ES
 from backend.models import Contract
@@ -424,6 +425,44 @@ def install(
         if body is None:
             raise Problem("not_found", f"No history you can see for {ref}", 404)
         return body
+
+    @app.get(
+        "/api/v2/entities/activity",
+        **api_v2(
+            "Contacts",
+            "getEntityActivity",
+            "List an entity's outside conversations and activities whose sources you can read, newest first. Pass next as after",
+            ContactsActivityHistory,
+        ),
+    )
+    def contacts_activity(request: Request, ref: str, after: str | None = None, limit: int = 50):
+        caller(request)
+        with cast("AbstractContextManager[sqlite3.Connection]", store.read_transaction()) as c:
+            who = request.state.identity
+            principals = cast("tuple[str, ...]", threads.entity_readers(c, who, auth))  # pyright: ignore[reportUnknownMemberType]
+            if not principals:
+                raise Problem("not_found", "Entity not found", 404)
+            found = resolve(c, principals[0], ref)
+            if found is None:
+                raise Problem("ambiguous", f"More than one entity matches {ref}; name one by id", 409)
+            entity_id = str(found["id"])
+            if not all(ES.visible_entity(c, actor, entity_id) for actor in principals[1:]):
+                raise Problem("not_found", "Entity not found", 404)
+            viewer = threads.viewer(auth, who)  # pyright: ignore[reportUnknownMemberType]
+            task_scope = auth.task_sql(c, who)  # pyright: ignore[reportUnknownMemberType]
+            thread_scope = threads.entity_scope(c, viewer, "th")  # pyright: ignore[reportUnknownMemberType]
+            try:
+                return ES.activity_history(
+                    c,
+                    entity_id,
+                    readers=principals,
+                    thread_scope=thread_scope,
+                    task_scope=task_scope,
+                    after=after,
+                    limit=limit,
+                )
+            except ValueError as error:
+                raise page_error(error) from None
 
     @app.post("/api/v2/entities/types")
     def contacts_type_add(request: Request, body: ContactsTypeCreate):

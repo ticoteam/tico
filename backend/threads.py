@@ -61,8 +61,8 @@ from . import secret_drop
 from . import task_text_keys
 from .store import H, Problem
 
-AUDIENCES = ("company", "team", "members", "task", "home", "personal", "participants", "meeting")
-PRIVATE_AUDIENCES = ("members", "personal", "participants", "meeting")
+AUDIENCES = ("company", "team", "members", "task", "home", "personal", "participants", "meeting", "entity")
+PRIVATE_AUDIENCES = ("members", "personal", "participants", "meeting", "entity")
 PUBLIC_AUDIENCES = ("company", "team")
 # refs keys that cannot name a private task, a meeting or another message: a message carrying only these skips the
 # per-message check once its thread is readable. Anything else marks it `restricted`.
@@ -108,7 +108,8 @@ REASONS = (
 ADDRESSED = ("dm", "mention", "ask", "assign", "addressed", "home", "sub_thread", "reply")
 STATES = ("pending", "delivered", "read", "capped", "held", "failed", "moot")
 NOTIFY = ("live", "mentions", "digest", "muted")
-OUTSIDE_PREFIXES = ("slack:",)
+DELIVERY_PREFIXES = ("slack:",)
+OUTSIDE_PREFIXES = (*DELIVERY_PREFIXES, "ext:")
 LOOP_GUARD_PER_HOUR = int(os.environ.get("TICO_THREAD_LOOP_GUARD") or 6)
 NOTES_PER_RUN = 50  # the notes one run carries, as H.notes_waiting's default
 NOTES_READ = 500  # waiting notes one claim looks through for those
@@ -556,6 +557,8 @@ def denial(c, v, row):
         return None
     if v.is_bot:
         return _bot_denial(c, v, row, root, audience)
+    if audience == "entity":
+        return None if _entity_readable(c, v, root) else _MISSING
     if not v.is_person:
         return _MISSING
     # A meeting's chat is read by whoever reads the meeting (live_privacy, checked above).
@@ -632,6 +635,8 @@ def _bot_denial(c, v, row, root, audience):
     agent (agent token) never gets company or team standing read: there only its participation counts."""
     from .auth import _own_ask_to_a_person
 
+    if audience == "entity":
+        return _MISSING
     if v.runner_turn and _bot_grant(c, v, row):
         return None
     if _bot_standing(c, v, root, audience) or _own_ask_to_a_person(v.who, row):
@@ -662,6 +667,8 @@ def audience_has(c, thread, actor, *, viewer_=None):
     if not v.is_bot:
         return denial(c, v, root) is None
     audience = audience_of(root)
+    if audience == "entity":
+        return False
     if audience == "task":
         return _task_readable(c, v, root.get("task_id"))
     if actor in (root.get("participants") or []):
@@ -934,6 +941,57 @@ def _grant_sql(v, id_sql, root_sql, t):
     )
 
 
+def entity_readers(c, who, auth=None):
+    if auth is not None:
+        who = auth.run_viewer(c, who)
+    return tuple(dict.fromkeys(a for a in (who.actor, getattr(who, "task_actor", "")) if a))
+
+
+def entity_scope(c, v, root, inner=lambda name: name):
+    """The common entity and inbox gate for direct, SQL and batched thread reads: worked out once per reader, alias
+    and table naming per read snapshot (read_cache), since a page of thread reads asks it once per thread."""
+    key = ("entity_scope", v.who, v.is_person, root, inner("entity_sources"))
+    return read_cache.value(c, key, lambda: _entity_scope(c, v, root, inner))
+
+
+def _entity_scope(c, v, root, inner):
+    from . import mailbox_access
+    from .entities import visible
+
+    if not v.is_person or not v.in_good_standing(c):
+        return "0"
+    readers = entity_readers(c, v.who, v.auth)
+    if not readers:
+        return "0"
+    terms = [f"{root}.deleted_at IS NULL", f"{root}.entity_id IS NOT NULL"]
+    for actor in readers:
+        boxes = [box["id"] for box in mailbox_access.mailboxes_for(c, actor) if box["id"]]
+        if not boxes:
+            return "0"
+        terms.append(f"{root}.connection_id IN {_qlist(boxes)}")
+        clause, params = visible.clause(
+            visible.reader(c, actor), entity_id=f"{root}.entity_id", sources=inner("entity_sources")
+        )
+        terms.append(clause.replace("?", "{}").format(*map(_q, params)))
+    return " AND ".join(terms)
+
+
+def _entity_readable(c, v, root):
+    scope = entity_scope(c, v, "er")
+    return c.execute(f"SELECT 1 FROM conversations er WHERE er.id=? AND ({scope})", (root["id"],)).fetchone()
+
+
+def outside_audit_gate(kind, ident, inboxes, inner=lambda name: name):
+    """Thread and message audit entries inherit the source inbox of the root, including after deletion."""
+    rooms, messages = inner("conversations"), inner("messages")
+    return (
+        f"NOT EXISTS (SELECT 1 FROM {rooms} t JOIN {rooms} root ON root.id=coalesce(t.root_id,t.id) "
+        f"WHERE t.id=CASE {kind} WHEN 'thread' THEN {ident} WHEN 'message' THEN "
+        f"(SELECT conversation_id FROM {messages} WHERE id={ident}) END "
+        f"AND root.audience='entity' AND root.connection_id NOT IN {inboxes})"
+    )
+
+
 def readable_sql(
     c,
     v,
@@ -968,6 +1026,12 @@ def readable_sql(
     x = (alias + ".") if alias else ""
     me = _q(v.actor)
     fence = f"({x}task_id IS NULL OR {x}task_id IN ({tasks}))"
+    entity = only is None or "entity" in only
+    non_entity = "1"
+    if entity and (v.is_bot or meeting):
+        root_id = f"COALESCE({x}root_id,{x}id)"
+        non_entity = f"{root_id} NOT IN (SELECT er.id FROM {t('conversations')} er WHERE er.audience='entity')"
+        fence += f" AND {non_entity}" if v.is_bot else f" AND ({non_entity} OR {x}deleted_at IS NULL)"
     if v.is_bot:
         internal = v.runner_turn
         grant = _grant_sql(v, x + "id", x + "root_id", t) if internal else "0"
@@ -1009,6 +1073,7 @@ def readable_sql(
     home = f"{owner_sql} IS NOT NULL AND {owner_sql} NOT IN {_qlist(sorted(hidden))}" if hidden is not None else "0"
     member = f"EXISTS (SELECT 1 FROM {t('thread_members')} tm WHERE tm.thread_id={r}.id AND tm.actor IN {names})"
     meeting_term = meeting(f"{r}.id") if meeting else "0"
+    entity_term = entity_scope(c, v, r, t) if entity else "0"
     participant = "1" if owner else f"EXISTS (SELECT 1 FROM {_PARTICIPANTS.format(r=r)} WHERE value={me})"
     # A legacy root (no stored audience) reads as _legacy_denial: by scope, with shared rooms' members read live. A task
     # room is read before its scope: in a CASE, so its participants (a JSON array per room) are never parsed for it.
@@ -1031,11 +1096,12 @@ def readable_sql(
         f"OR {member}) "
         f"AND (COALESCE({r}.room_key,'')<>'{STRATEGY_ROOM}' OR {1 if owner else 0}) "
         f"WHEN 'participants' THEN {participant} "
-        f"WHEN 'meeting' THEN {meeting_term} ELSE 0 END END"
+        f"WHEN 'meeting' THEN {meeting_term} "
+        f"WHEN 'entity' THEN ({entity_term}) ELSE 0 END END"
     )
     if not person or not v.in_good_standing(c):
         return "0"
-    bound = f" OR {meeting(x + 'id')}" if meeting else ""
+    bound = f" OR ({non_entity} AND {meeting(x + 'id')})" if meeting else ""
     # A migrated Home's root also opens to its shared room's old readers (legacy_reader_only).
     if shared:
         bound += (
@@ -1118,7 +1184,10 @@ def readable_ids(c, v, ids):
         }
         for row in rows:
             cid = row["id"]
-            needs_python = row["audience"] in ("meeting", "task") or row["task_id"] or v.is_bot
+            if v.is_bot and row["audience"] == "entity":
+                v._threads[cid] = False
+                continue
+            needs_python = row["audience"] in ("entity", "meeting", "task") or row["task_id"] or v.is_bot
             if cid in candidates and not needs_python:
                 from .live_privacy import sources
                 from .task_privacy import actor as principals
@@ -1261,6 +1330,8 @@ def _record(c, message, conv):
             message.get("created_at") or _now(),
         ),
     )
+    if message.get("direction") == "inbound":
+        return {}  # outside text is provenance, without mentions, deliveries or outgoing webhooks
     thread = thread_row(c, conv["id"]) if conv else None
     if thread is None:
         return {}
@@ -2025,7 +2096,7 @@ def _insert_delivery(c, message, recipient, thread, root, mode, reason, *, state
             _cause(message.get("sender_id")),
             state,
             int(message.get("revision") or 0),
-            now if recipient.startswith(OUTSIDE_PREFIXES) else None,
+            now if recipient.startswith(DELIVERY_PREFIXES) else None,
             message.get("created_at") or now,
             now,
         ),
@@ -2755,7 +2826,9 @@ def _post(
     found = mentions(c, thread, text, author=actor)
     target = None
     if to_actor:
-        target = H.resolve_actor(c, to_actor) or (to_actor if str(to_actor).startswith(OUTSIDE_PREFIXES) else None)
+        if str(to_actor).startswith("ext:"):
+            raise Problem("recipient", "An outside author cannot receive a thread post", 422)
+        target = H.resolve_actor(c, to_actor) or (to_actor if str(to_actor).startswith(DELIVERY_PREFIXES) else None)
         if not target:
             raise Problem("not_found", "Unknown recipient", 404)
         # Addressing is an answer about who exists: anyone not in the thread with the author takes the See gate.
@@ -2935,8 +3008,11 @@ def _insert_thread(
     task_id=None,
     kind="chat",
     participants=(),
+    thread_id=None,
+    entity_id=None,
+    connection_id="",
 ):
-    tid = _new_id()
+    tid = thread_id or _new_id()
     now = _now()
     if parent is not None:
         root = root_of(c, parent)
@@ -2949,8 +3025,8 @@ def _insert_thread(
     c.execute(
         "INSERT INTO conversations(id,kind,subject,task_id,participants,created_at,last_message_at,closed_at,"
         "scope,owner_id,room_key,audience,audience_group_id,parent_id,parent_message_id,root_id,path,"
-        "last_seq,last_unread_seq,archived_at,updated_at) VALUES(?,?,?,?,?,?,NULL,NULL,?,?,NULL,?,?,?,?,?,?,"
-        "0,0,NULL,?)",
+        "last_seq,last_unread_seq,archived_at,updated_at,entity_id,connection_id) VALUES(?,?,?,?,?,?,NULL,NULL,?,?,NULL,"
+        "?,?,?,?,?,?,0,0,NULL,?,?,?)",
         # The legacy scope as hubdb writes it (scope is NOT NULL). Who reads a thread is its root's audience.
         (
             tid,
@@ -2968,6 +3044,8 @@ def _insert_thread(
             root_id,
             path,
             now,
+            entity_id,
+            connection_id,
         ),
     )
     return thread_row(c, tid)
@@ -3133,7 +3211,7 @@ def _require_write(c, v, target):
         return
     from . import teammate_access
 
-    if str(target).startswith(OUTSIDE_PREFIXES):
+    if str(target).startswith(DELIVERY_PREFIXES):
         return  # an outside destination: not a teammate here
     try:
         levels = teammate_access.levels_for(c, v.who, target, auth=v.auth)
@@ -3586,7 +3664,9 @@ def refuse_while_private_call(c, root):
 def add_member(c, principal, thread_id, actor, *, role="member"):
     me, v, root = _root_for_membership(c, principal, thread_id)
     refuse_while_private_call(c, root)
-    target = actor if str(actor).startswith(("group:",) + OUTSIDE_PREFIXES) else H.resolve_actor(c, actor)
+    if str(actor).startswith("ext:"):
+        raise Problem("not_found", "Unknown teammate", 404)
+    target = actor if str(actor).startswith(("group:",) + DELIVERY_PREFIXES) else H.resolve_actor(c, actor)
     if not target:
         raise Problem("not_found", "Unknown teammate", 404)
     if role not in ("owner", "member"):
@@ -5855,12 +5935,15 @@ def _sidebar_page(c, v, cursor, limit, sort):
 def add_outside_delivery(c, thread_id, recipient, *, added_by=H.TICO_ACTOR):
     """Link an outside destination (`slack:<channel>`) to a thread: every later message gets a
     delivery for it."""
-    if not str(recipient).startswith(OUTSIDE_PREFIXES):
+    if not str(recipient).startswith("slack:"):
         raise Problem("recipient", "An outside destination is slack:<channel>", 422)
     row = thread_row(c, thread_id)
     if row is None:
         raise Problem("not_found", "Thread not found", 404)
-    refuse_while_private_call(c, root_of(c, row))
+    root = root_of(c, row)
+    if audience_of(root) == "entity":
+        raise Problem("audience", "An outside inbox thread cannot be bridged to Slack", 422)
+    refuse_while_private_call(c, root)
     now = _now()
     c.execute(
         "INSERT OR IGNORE INTO thread_members(id,thread_id,actor,role,added_by,created_at,updated_at) "
@@ -5877,7 +5960,7 @@ def remove_outside_member(c, principal, thread_id, actor):
     write (an actor string) is Tico's only. Idempotent: a destination not linked returns removed False."""
     who, v = _actor_of(principal)
     recipient = str(actor or "")
-    if not recipient.startswith(OUTSIDE_PREFIXES):
+    if not recipient.startswith(DELIVERY_PREFIXES):
         raise Problem("recipient", "An outside destination is slack:<channel>", 422)
     if v is not None:
         row = require(c, v, thread_id)
@@ -5903,7 +5986,7 @@ def remove_outside_member(c, principal, thread_id, actor):
 
 def outside_due(c, prefix, limit=50):
     """Outside deliveries due to send for one destination kind, oldest first."""
-    if prefix not in OUTSIDE_PREFIXES and prefix + ":" not in OUTSIDE_PREFIXES:
+    if prefix not in DELIVERY_PREFIXES and prefix + ":" not in DELIVERY_PREFIXES:
         raise Problem("recipient", "slack:", 422)
     prefix = prefix if prefix.endswith(":") else prefix + ":"
     rows = c.execute(

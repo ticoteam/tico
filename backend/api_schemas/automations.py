@@ -52,6 +52,10 @@ SCHEMAS.update(
                 "version": "i",
                 "can_edit": "b",
                 "can_pause": "b",
+                "can_end_hold": {
+                    "type": "boolean",
+                    "description": "For conversation intake, whether the caller owns the inbox and can release or drop held runs",
+                },
                 "destinations": {
                     "type": ["array", "null"],
                     "items": {"type": "object"},

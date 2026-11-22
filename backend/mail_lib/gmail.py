@@ -76,6 +76,16 @@ def headers_of(part: Json | None) -> dict[str, Any]:
     return out
 
 
+def dkim_tags(value: str) -> dict[str, str]:
+    """A DKIM tag list (`v=1; a=rsa-sha256; ...`) as {tag: value}, folding whitespace removed."""
+    out: dict[str, str] = {}
+    for part in value.split(";"):
+        name, eq, tagged = part.partition("=")
+        if eq:
+            out[name.strip().lower()] = re.sub(r"\s+", "", tagged)
+    return out
+
+
 def charset_of(part: Json | None) -> str:
     headers: list[Json] = (part or {}).get("headers") or []
     for h in headers:
@@ -288,6 +298,7 @@ def normalize(msg: Json, label_names: dict[str, str] | None = None, tz_name: str
     """Raw Gmail message dict -> the shape every command prints and every rule reads."""
     tz = zone(tz_name)
     payload: Json = msg.get("payload") or {}
+    raw_headers: list[Json] = payload.get("headers") or []
     hdrs = headers_of(payload)
     plain, rich, atts = bodies_and_attachments(payload)
     text, html_text = _joined(plain, rich)
@@ -324,6 +335,10 @@ def normalize(msg: Json, label_names: dict[str, str] | None = None, tz_name: str
         or "method=request" in str(hdrs.get("content-type", "")).lower()
         or any(a["name"].lower().endswith(".ics") for a in atts),
         "headers": hdrs,
+        "from_header_count": sum(str(h.get("name", "")).lower() == "from" for h in raw_headers),
+        "dkim_signatures": [
+            str(h.get("value") or "") for h in raw_headers if str(h.get("name", "")).lower() == "dkim-signature"
+        ],
         "send_facts": {
             **{
                 key: str(hdrs.get(key) or "")[:1000]

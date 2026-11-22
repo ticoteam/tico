@@ -3564,7 +3564,10 @@ class Execution:
         to protect and the operator check is the whole authority. A conversation a person
         is in stays theirs.
         """
-        if not any(str(p).startswith("human:") for p in conv["participants"]):
+        from . import threads
+
+        root = threads.root_of(c, conv)
+        if threads.audience_of(root) != "entity" and not any(str(p).startswith("human:") for p in conv["participants"]):
             return True
         try:
             self.auth.conversation(c, who, conv["id"])

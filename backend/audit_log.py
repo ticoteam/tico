@@ -45,7 +45,7 @@ def _row(r):
     }
 
 
-def rows(c, obj=None, actor=None, limit=LIMIT, before=None, versions=False):
+def rows(c, obj=None, actor=None, limit=LIMIT, before=None, versions=False, who=None):
     """Newest first, paged by `before`: the last row's `<at>|<id>`, so rows sharing a time are never skipped. A page
     stops at LIST_BYTES too (a row carries whole objects), and the next page starts at the first row it left out.
     `versions`: only the rows whose object carries a version (an org rule's own, not its due dates')."""
@@ -56,6 +56,22 @@ def rows(c, obj=None, actor=None, limit=LIMIT, before=None, versions=False):
         if value:
             sql += f" AND {column}=?"
             args.append(value)
+    if who is not None:
+        from . import mailbox_access, threads
+        from .automations import INTAKE_AUTOMATION, readable_intake_ids
+
+        inboxes = mailbox_access.readable_intake_inboxes(c, who)
+        sql += " AND (object NOT GLOB ? OR object IN (SELECT value FROM json_each(?)))"
+        args += [
+            "automation:" + INTAKE_AUTOMATION + "*",
+            json.dumps(["automation:" + aid for aid in readable_intake_ids(c, who, inboxes=inboxes)]),
+        ]
+        sql += " AND " + threads.outside_audit_gate(
+            "substr(audit_log.object,1,instr(audit_log.object,':')-1)",
+            "substr(audit_log.object,instr(audit_log.object,':')+1)",
+            "(SELECT value FROM json_each(?))",
+        )
+        args.append(json.dumps(sorted(inboxes)))
     if before:
         at, _, row_id = before.partition("|")
         sql += " AND (created_at<? OR (created_at=? AND id<?))"
@@ -81,12 +97,14 @@ def install(app, store, auth):
         **api_v2(
             "Team",
             "listAudit",
-            "Who changed caps, spend, groups and automations, newest first (owner: all; others: their own)",
+            "Who changed caps, spend, groups and automations, newest first (owner: company; others: their own). "
+            "Conversation intake and outside thread changes also require inbox access.",
             "AuditPage",
         ),
     )
     def audit_view(request: Request, object: str | None = None, limit: int = LIMIT, before: str | None = None):
-        """Who changed what. The owner reads every row; anyone else reads only their own changes."""
+        """Who changed what. The owner reads company changes; anyone else reads only their own changes.
+        Intake and outside thread changes also require access to the inbox."""
         who = request.state.identity
         auth.domain(who)
         from .org_rules import redact_audit
@@ -94,7 +112,7 @@ def install(app, store, auth):
 
         with store.read() as c:
             mine = None if who.role == "owner" else who.actor
-            page = rows(c, obj=object, actor=mine, limit=limit, before=before)
+            page = rows(c, obj=object, actor=mine, limit=limit, before=before, who=who)
             redact_audit(c, auth, who, page["rows"])
             risk.redact_audit(c, auth, who, page["rows"])  # a matter's facts follow its task's privacy
             return page

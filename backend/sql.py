@@ -1203,6 +1203,18 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None, private=No
         "AND (action<>'alerts.accepted' OR json_extract(detail,'$.kind')='test' OR "
         "json_extract(detail,'$.task_id') IN (SELECT id FROM tasks))"
     )
+    if want("events"):
+        from . import mailbox_access, threads
+        from .automations import INTAKE_AUTOMATION, readable_intake_ids
+
+        inboxes = mailbox_access.readable_intake_inboxes(c, who)
+        events += (
+            f" AND (coalesce(target,'') NOT GLOB {q(INTAKE_AUTOMATION + '*')} "
+            f"OR target IN {qlist(sorted(readable_intake_ids(c, who, inboxes=inboxes)))})"
+        )
+        events += " AND " + threads.outside_audit_gate(
+            "substr(source.action,1,instr(source.action,'.')-1)", "source.target", qlist(sorted(inboxes)), inner
+        )
     # Imported drafts do not enter company search, exports or the audit feed.
     meetings = f"({meetings}) AND review_state='live'"
     events = f"({events}) AND target NOT IN (SELECT id FROM {inner('meetings')} WHERE review_state<>'live')"

@@ -339,7 +339,10 @@ export const endHoldAction = defineAction({
   kind: 'change',
   input: z.strictObject({ routine: id, action: z.enum(['release', 'drop'] as const) }),
   // Dropped runs are skipped for good: the person's own press.
-  can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false && !(i.action === 'drop' && ctx.via === 'tico'),
+  can: (ctx, i) => {
+    const routine = cached(ctx, i.routine);
+    return (routine?.can_end_hold ?? routine?.can_edit) !== false && !(i.action === 'drop' && ctx.via === 'tico');
+  },
   run: (_ctx, i) => said(endHold(i.routine, i.action)).then(() => undefined),
   did: (i) => (i.action === 'release' ? 'Released' : 'Dropped'),
   target: (i) => ({ kind: 'routine', id: i.routine }),

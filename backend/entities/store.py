@@ -25,6 +25,7 @@ from datetime import date, datetime
 from typing import Any, NoReturn, cast
 
 from backend import hubdb as H
+from backend.access import PUBLIC_MAIL
 from backend.entities import visible as V
 from backend.slugs import slugify
 
@@ -66,6 +67,7 @@ MOVES = {
     "entity_notes": "SELECT id FROM entity_notes WHERE entity_id = :drop",
     "entity_mentions": "SELECT id FROM entity_mentions WHERE entity_id = :drop",
     "entity_activities": "SELECT id FROM entity_activities WHERE entity_id = :drop",
+    "conversations": "SELECT id FROM conversations WHERE entity_id = :drop",
     "entity_external_refs": "SELECT id FROM entity_external_refs WHERE entity_id = :drop",
     "entity_sources": (
         "SELECT s.id FROM entity_sources s WHERE s.entity_id = :drop AND NOT EXISTS (SELECT 1 FROM entity_sources k "
@@ -1556,6 +1558,10 @@ ERASE_STATEMENTS: tuple[tuple[str, str], ...] = (
     ("entity_watches", "DELETE FROM entity_watches WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
     # A task stays; it only stops naming the erased entity, and the entity's page links go (the pages stay).
     ("tasks", "UPDATE tasks SET entity_id = '' WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
+    (
+        "conversations",
+        "UPDATE conversations SET entity_id = NULL WHERE entity_id IN (SELECT value FROM json_each(:ids))",
+    ),
     ("page_links", "DELETE FROM page_links WHERE target IN (SELECT 'entity:' || value FROM json_each(:ids))"),
     ("market_figures", "DELETE FROM market_figures WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
     # A matter (backend/risk.py) stays with its task; it only stops naming the erased party, place or product.
@@ -2447,6 +2453,105 @@ def matching(c: sqlite3.Connection, type_key: str, match: Mapping[str, object]) 
     before it creates, so an existing entity is found without its name or values being written again. It reads every
     entity, not what a reader may see, so only the system's ingest calls it."""
     return _match(c, type_key, match)
+
+
+def verified_sender(
+    c: sqlite3.Connection, actor: str, channel: str, connection_id: str, provider_id: str
+) -> str | None:
+    """Resolve a sender ID vouched for by the adapter, scoped to that exact connection."""
+    if not provider_id:
+        return None
+    if channel == "gmail":
+        return _sender_match(c, actor, [("email", provider_id)])
+    row = _one(
+        c,
+        "SELECT entity_id FROM entity_external_refs WHERE system=? AND connection_id=? "
+        "AND external_type='sender' AND external_id=? AND status='active'",
+        (channel, connection_id, provider_id),
+    )
+    if row is None:
+        return None
+    found = _visible_rows(c, V.reader(c, actor), follow_merges(c, [row["entity_id"]]))
+    return str(found[0]["id"]) if found else None
+
+
+def suggested_sender(c: sqlite3.Connection, actor: str, sender: str) -> str | None:
+    """An exact visible contact, suggested in the triage task even when it is the only match."""
+    sender = sender.strip().lower()
+    phone = _normal_identifier("phone", sender)
+    if "@" in sender:
+        checks = [("email", sender)]
+        domain = sender.rpartition("@")[2]
+    elif PHONE_CONTACT.fullmatch(phone):
+        checks = [("phone", phone)]
+        domain = ""
+    else:
+        checks = []
+        domain = sender
+    if domain and domain not in PUBLIC_MAIL:
+        checks.append(("domain", domain))
+    return _sender_match(c, actor, checks)
+
+
+def _sender_match(c: sqlite3.Connection, actor: str, checks: list[tuple[str, str]]) -> str | None:
+    matches = identifier_entities(c, checks)
+    reader = V.reader(c, actor)
+    for check in checks:
+        ids = list(dict.fromkeys(matches.get(check, [])))
+        if ids:
+            return ids[0] if len(ids) == 1 and V.visible(c, reader, ids[0]) else None
+    return None
+
+
+def activity_history(
+    c: sqlite3.Connection,
+    entity_id: str,
+    *,
+    readers: tuple[str, ...],
+    thread_scope: str,
+    task_scope: str,
+    after: str | None,
+    limit: int,
+) -> dict[str, Any]:
+    """Page the visible relationship history over a single ordering for conversations and activities."""
+    boxes, tools = V.activity_connections(c, readers)
+    args: list[object] = [entity_id, entity_id, json.dumps(sorted(boxes)), json.dumps(sorted(tools))]
+    limit = _limit(limit)
+    cursor = ""
+    if after:
+        decoded: object = _decode(after)
+        marker = cast("list[object]", decoded) if isinstance(decoded, list) else []
+        if len(marker) != 3 or not all(isinstance(part, str) for part in marker):
+            raise ValueError("the cursor is not one this list returned")
+        cursor = "WHERE (occurred_at, type, id) < (?, ?, ?)"
+        args.extend(marker)
+    rows = _rows(
+        c,
+        "WITH outside AS (SELECT th.id, coalesce(th.last_message_at, th.created_at) AS occurred_at, "
+        "coalesce(th.subject, '') AS summary FROM conversations th "
+        f"WHERE th.entity_id=? AND th.parent_id IS NULL AND th.audience='entity' AND ({thread_scope})), "
+        "history AS ("
+        "SELECT id, 'thread' AS type, 'conversation' AS kind, occurred_at, summary, NULL AS subject_id FROM outside "
+        "UNION ALL "
+        "SELECT a.id, 'activity', a.kind, a.occurred_at, substr(a.summary, 1, 1000), a.subject_id "
+        "FROM entity_activities a WHERE a.entity_id=? AND (coalesce(a.external_ref, '') = '' OR EXISTS ("
+        "SELECT 1 FROM entity_external_refs x WHERE x.id=a.external_ref AND x.entity_id=a.entity_id "
+        "AND CASE WHEN x.system='gmail' THEN "
+        "x.connection_id IN (SELECT value FROM json_each(?)) "
+        "ELSE x.connection_id IN (SELECT value FROM json_each(?)) END)) AND ("
+        "(coalesce(a.subject_type, '') = '' AND coalesce(a.subject_id, '') = '') OR "
+        f"(a.subject_type='task' AND EXISTS (SELECT 1 FROM tasks WHERE tasks.id=a.subject_id AND ({task_scope}))) OR "
+        "(a.subject_type='thread' AND EXISTS (SELECT 1 FROM conversations child WHERE child.id=a.subject_id "
+        "AND child.deleted_at IS NULL AND coalesce(child.root_id,child.id) IN (SELECT id FROM outside)))) "
+        f") SELECT * FROM history {cursor} ORDER BY occurred_at DESC, type DESC, id DESC LIMIT ?",
+        [*args, limit + 1],
+    )
+    more = len(rows) > limit
+    rows = rows[:limit]
+    return {
+        "rows": rows,
+        "next": _encode([rows[-1][k] for k in ("occurred_at", "type", "id")]) if more else None,
+    }
 
 
 def has_sources(c: sqlite3.Connection, entity_id: str) -> bool:

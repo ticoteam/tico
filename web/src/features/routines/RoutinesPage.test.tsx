@@ -267,6 +267,27 @@ describe('One routine', () => {
     await waitFor(() => expect(within(p).queryByText('3 held')).toBeNull());
   });
 
+  it.each([false, true])('uses inbox authorization for read-only intake hold controls (%s)', async (canEndHold) => {
+    const id = 'auto_builtin_intake:inbox';
+    const sent = record((url, method) =>
+      method === 'POST' && url.endsWith(`/automations/${encodeURIComponent(id)}/held`) ? ok(routine({ id })) : nothing(),
+    );
+    const p = await openRoutine({
+      id,
+      readonly: true,
+      can_edit: false,
+      can_end_hold: canEndHold,
+      hold: { held: 1, dropped: 0, rule: 'flood', since: '2026-11-01T00:00:00Z', task: null },
+    });
+    const release = within(p).queryByRole('button', { name: 'Release' });
+    expect(Boolean(release)).toBe(canEndHold);
+    expect(Boolean(within(p).queryByRole('button', { name: 'Drop' }))).toBe(canEndHold);
+    if (release) {
+      fireEvent.click(release);
+      await waitFor(() => expect(sent[0]).toMatchObject({ method: 'POST', body: { action: 'release' } }));
+    }
+  });
+
   it('lists its last runs and runs it now @s528', async () => {
     const sent = record((url, method) => (method === 'POST' && url.endsWith('/automations/r1/run') ? ok({ run: { id: 'run2', status: 'queued', steps: null } }) : nothing()));
     queryClient.setQueryData(runsQuery('r1').queryKey, [{ id: 'run1', automation_id: 'r1', status: 'failed', started_at: '2026-11-18T07:00:00Z', error: 'Ran out of time', steps: null, version: 1 }] as never);

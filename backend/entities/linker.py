@@ -285,22 +285,29 @@ def _save_cursor(c: sqlite3.Connection, source: str, cursor: list[Any]) -> None:
 
 def _messages(c: sqlite3.Connection, cursor: list[Any], limit: int) -> tuple[list[Any], list[Text]]:
     rows = c.execute(
-        "SELECT seq, id, body, refs FROM messages WHERE seq IS NOT NULL AND seq > ? ORDER BY seq LIMIT ?",
+        "SELECT seq, id, CASE WHEN direction IS NOT 'inbound' THEN body END, "
+        "CASE WHEN direction IS NOT 'inbound' THEN refs END, direction FROM messages "
+        "WHERE seq IS NOT NULL AND seq > ? ORDER BY seq LIMIT ?",
         (cursor[0], limit),
     ).fetchall()
-    texts = [Text("message", str(row[1]), revision_of(row[2] or ""), row[2] or "", _turn_of(row[3])) for row in rows]
+    texts = [
+        Text("message", str(row[1]), revision_of(row[2] or ""), row[2] or "", _turn_of(row[3]))
+        for row in rows
+        if row[4] != "inbound"
+    ]
     return ([rows[-1][0]] if rows else cursor), texts
 
 
 def _message_revisions(c: sqlite3.Connection, cursor: list[Any], limit: int) -> tuple[list[Any], list[Text]]:
     rows = c.execute(
-        "SELECT created_at, id, message_id FROM message_revisions WHERE (created_at, id) > (?, ?) "
-        "ORDER BY created_at, id LIMIT ?",
+        "SELECT r.created_at, r.id, r.message_id, m.direction FROM message_revisions r "
+        "LEFT JOIN messages m ON m.id=r.message_id WHERE (r.created_at, r.id) > (?, ?) "
+        "ORDER BY r.created_at, r.id LIMIT ?",
         (cursor[0], cursor[1], limit),
     ).fetchall()
     if not rows:
         return cursor, []
-    ids = list(dict.fromkeys(str(row[2]) for row in rows))
+    ids = list(dict.fromkeys(str(row[2]) for row in rows if row[3] != "inbound"))
     current = {
         str(row[0]): row
         for row in c.execute(

@@ -100,7 +100,7 @@ def _org_name(domain: str) -> str:
     return base.replace("-", " ").strip().title() or domain
 
 
-def _automated(address: str, headers: Mapping[str, object]) -> bool:
+def automated(address: str, headers: Mapping[str, object]) -> bool:
     """A sender that is a machine: a no-reply or postmaster address, list mail, or bulk mail its client marks as such."""
     local = address.partition("@")[0]
     if local.startswith(NO_REPLY) or local in MACHINE_LOCAL:
@@ -188,9 +188,9 @@ def from_mail(c: sqlite3.Connection, mailbox_id: str, headers: Mapping[str, obje
         org = (self_id, False) if self_id else None
     else:
         org = _organization(c, domain)
-    automated = _automated(address, headers)
+    is_automated = automated(address, headers)
     person: tuple[str, bool] | None = None
-    if not automated:
+    if not is_automated:
         person = _entity(c, "person", {"email": address}, _name(headers.get("from_header")))
     if org:
         _record(c, org[0], "mailbox", mailbox_id, created=org[1], visibility="restricted")

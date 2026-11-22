@@ -5,7 +5,8 @@ Each pass checks the mailboxes it watches (`watched`: a credential on the server
 INTERVAL seconds ago or more, oldest first, WORKERS at a time: Gmail's history since the mailbox's history id, each new
 message read once, then the same three calls a computer's sync made (`automations.on_mail`,
 `email_sending.record_bounces`, Directory `ingest.from_mail`), then where it got to is saved. Nothing of the message is
-stored: an automation run sees its body while it runs (the run drops it when it ends).
+stored for ordinary mail: an automation run sees its body while it runs (the run drops it when it ends).
+Explicitly labeled intake mail is saved with its run before advancing the Gmail cursor.
 
 Where a check gets to is saved message by message, never past one it has not heard: the pass's budget is checked
 before each message, and the next pass goes on from there. A history record is heard whole before its id is saved (one
@@ -110,10 +111,10 @@ def drain(store: Any, budget: Left | None = None) -> int:
     return heard
 
 
-def _epoch(stamp: str) -> int:
+def _epoch(stamp: str) -> int | None:
     at = cast("Callable[[str], Any]", H.parse_ts)(stamp)
     if at is None:
-        raise ValueError("not a timestamp: " + str(stamp))
+        return None
     return int((at.replace(tzinfo=timezone.utc) if at.tzinfo is None else at).timestamp())
 
 
@@ -145,6 +146,9 @@ def _message(item: Json, labels: dict[str, str], domains: list[str], known: bool
         has_unsubscribe=bool(item["unsubscribe"]),
         known_sender=known,
         send_facts=dict(item.get("send_facts") or {}),
+        headers=dict(item.get("headers") or {}),
+        from_header_count=item.get("from_header_count", 0),
+        dkim_signatures=list(item.get("dkim_signatures") or []),
     )
 
 
@@ -208,10 +212,15 @@ class Reader:
 
 def _catch_up(c: Conn, box: Json, now: str) -> Json:
     """Where catching up starts: Gmail's history id now, and the time to list mail after."""
+    from .automations import MAIL_LOOKBACK_HOURS
+
     address, watch = str(box["address"]), str(box["watching_since_at"])
     after = _epoch(watch)
-    if box["checked_at"]:
-        after = max(after, _epoch(str(box["checked_at"] or now)) - int(RECHECK_BACK.total_seconds()))
+    checked = _epoch(str(box["checked_at"]))
+    if checked is not None:
+        after = max(after or 0, checked - int(RECHECK_BACK.total_seconds()))
+    if after is None:
+        after = (_epoch(now) or 0) - MAIL_LOOKBACK_HOURS * 3600
     return {"history_id": str(_gmail("profile")(c, address)), "after": after, "id": ""}
 
 
@@ -277,10 +286,24 @@ def _gather(c: Conn, box: Json, now: str, budget: Left | None) -> tuple[list[Sim
 
 def check(store: Any, box: Json, budget: Left | None = None) -> int:
     """One mailbox's check: read Gmail, then hear each new message in one write. Returns the messages heard."""
-    from . import automations, email_sending, reconnects
+    from . import automations, email_sending, outside_intake, reconnects
     from .entities import ingest
 
     address, now = str(box["address"]), _now()
+    watch = box["watching_since_at"]
+    if watch is not None and _epoch(str(watch)) is None:
+        # Keep the new start even if Gmail is unavailable during the repair. Gmail's times are whole seconds, so the new
+        # start is this second's beginning: a message received later in this same second still counts.
+        start = now[:19] + ".000000Z"
+        with store.transaction() as c:
+            repaired = c.execute(
+                "UPDATE mailboxes SET watching_since_at=?,catch_up=NULL "
+                "WHERE id=? AND status='active' AND watching_since_at=? AND history_id IS ? AND catch_up IS ?",
+                (start, box["id"], watch, box["history_id"], box["catch_up"]),
+            ).rowcount
+        if not repaired:
+            return 0
+        box = {**box, "watching_since_at": start, "catch_up": None}
     try:
         with store.read() as c:
             messages, state = _gather(c, box, now, budget)
@@ -290,17 +313,22 @@ def check(store: Any, box: Json, budget: Left | None = None) -> int:
     _TRIED.pop(address, None)
     on_mail = cast("Callable[..., Any]", automations.on_mail)
     bounces = cast("Callable[..., Any]", email_sending.record_bounces)
-    with store.transaction() as c:
-        current = c.execute("SELECT status,history_id,catch_up FROM mailboxes WHERE id=?", (box["id"],)).fetchone()
+    with store.transaction(notify=True) as c:
+        current = c.execute("SELECT * FROM mailboxes WHERE id=?", (box["id"],)).fetchone()
         if (
             not current
             or current["status"] != "active"
+            or current["watching_since_at"] != box["watching_since_at"]
             or (current["history_id"], current["catch_up"]) != (box["history_id"], box["catch_up"])
         ):
             return 0  # stopped, or checked by another pass meanwhile: that check's mail is its own
+        inbox = dict(current)
         for message in messages:
             facts = cast("Json", message.send_facts)
+            taken = outside_intake.from_gmail(c, inbox, message, str(state["watching_since_at"]))
             bounces(c, address, message.from_addr, message.body + "\n" + str(facts.get("delivery-status") or "")[:4096])
+            if taken:
+                continue
             on_mail(c, address, message, state["watching_since_at"])
             headers = {
                 "from_addr": message.from_addr,

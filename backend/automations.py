@@ -192,7 +192,9 @@ def view(c, row, who=None, detail=False, chart=None, jobs=None, flow=None):
         out["counts"] = {"today": {"runs": today["runs"] if today else 0, "dropped": today["dropped"] if today else 0}}
     if who is not None:
         out["can_edit"] = may_change(c, who, flow, chart)
-        out["can_pause"] = may_pause(c, who, flow, out["can_edit"])
+        out["can_pause"] = not row["id"].startswith(INTAKE_AUTOMATION) and may_pause(c, who, flow, out["can_edit"])
+        if row["id"].startswith(INTAKE_AUTOMATION):
+            out["can_end_hold"] = _may_end_intake_hold(c, who, row["id"])
     return out
 
 
@@ -477,16 +479,48 @@ def may_pause(c, who, flow, can_edit=None):
     return may_change(c, who, flow) if can_edit is None else can_edit
 
 
-def may_see(c, who, flow):
+def _intake_inbox(c, who, aid):
+    from . import mailbox_access
+
+    readers = mailbox_access.intake_readers(who)
+    if not readers:
+        return None
+    box = mailbox_access.row_by_id(c, aid.removeprefix(INTAKE_AUTOMATION))
+    if not box or any(mailbox_access.level(c, reader, box["address"]) == "none" for reader in readers):
+        return None
+    return box
+
+
+def _may_end_intake_hold(c, who, aid):
+    box = _intake_inbox(c, who, aid)
+    return bool(box and box["person_id"] == H.actor_id(who.actor))
+
+
+def readable_intake_ids(c, who, *, inboxes=None):
+    """The inbox gate for audit readers that filter runs or hold changes by automation id."""
+    from . import mailbox_access
+
+    if inboxes is None:
+        inboxes = mailbox_access.readable_intake_inboxes(c, who)
+    return {
+        aid
+        for (aid,) in c.execute("SELECT id FROM automations WHERE id GLOB ?", (INTAKE_AUTOMATION + "*",))
+        if aid.removeprefix(INTAKE_AUTOMATION) in inboxes
+    }
+
+
+def may_see(c, who, flow, chart=None, *, aid=""):
     """Seeing follows the change rule."""
-    return may_change(c, who, {**flow, "readonly": False})
+    if aid.startswith(INTAKE_AUTOMATION):
+        return _intake_inbox(c, who, aid) is not None
+    return may_change(c, who, {**flow, "readonly": False}, chart)
 
 
 def may_reference(c, who, aid):
     """A chat message may name automation `aid` (refs.automation) when it exists and `who` may see it: the same rule as
     GET /api/v2/automations/{aid}."""
     row = _row(c, aid) if isinstance(aid, str) else None
-    return bool(row) and may_see(c, who, flow_of(row))
+    return bool(row) and may_see(c, who, flow_of(row), aid=aid)
 
 
 def _seen_if_builtin(c, who, flow):
@@ -499,6 +533,8 @@ def deletable(c, who, aid):
     it before it hands a person a Confirm card for a delete, so no card fails on the tap."""
     row = _row(c, aid)
     if not row:
+        raise Problem("not_found", "No such automation", 404)
+    if aid.startswith(INTAKE_AUTOMATION) and _intake_inbox(c, who, aid) is None:
         raise Problem("not_found", "No such automation", 404)
     if not _seen_if_builtin(c, who, flow_of(row)):
         raise Problem(
@@ -1562,30 +1598,75 @@ def _queue(c, row, payload, ref="", *, manual=False, chain=()):
         _count(c, row["id"], "dropped")
         _counted(c, row["id"], "dropped")
     else:
-        rid = "run_" + H.new_id()
-        state = E.start(payload, manual=manual)
-        c.execute(
-            "INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started_at,status,saved_state,chain) "
-            "VALUES(?,?,?,?,?,?,?,?)",
-            (
-                rid,
-                row["id"],
-                row["version"],
-                stored,
-                H.now(),
-                "held" if on_hold else "queued",
-                json.dumps(state, default=str),
-                json.dumps(list(chain)),
-            ),
-        )
-        _count(c, row["id"], "runs")
-        if on_hold:
-            _counted(c, row["id"], "arrivals")
-        else:
-            _ring(c)
+        rid = _insert_run(c, row, payload, stored, on_hold, manual=manual, chain=chain)
     if tripped:
         _hold_told(c, row, tripped[0], tripped[1], hold_of(c, row["id"])["held"])
     return rid
+
+
+def _insert_run(c, row, payload, ref, on_hold, *, manual=False, chain=()):
+    rid = "run_" + H.new_id()
+    c.execute(
+        "INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started_at,status,saved_state,chain) "
+        "VALUES(?,?,?,?,?,?,?,?)",
+        (
+            rid,
+            row["id"],
+            row["version"],
+            ref,
+            H.now(),
+            "held" if on_hold else "queued",
+            json.dumps(E.start(payload, manual=manual), default=str),
+            json.dumps(list(chain)),
+        ),
+    )
+    _count(c, row["id"], "runs")
+    if on_hold:
+        _counted(c, row["id"], "arrivals")
+    else:
+        _ring(c)
+    return rid
+
+
+INTAKE_AUTOMATION = "auto_builtin_intake:"
+
+
+def replay_intake(c, connection_id, ref):
+    prior = c.execute(
+        "SELECT id,status,saved_state FROM automation_runs WHERE automation_id=? AND trigger_ref=? "
+        "AND trigger_ref LIKE 'intake:%'",
+        (INTAKE_AUTOMATION + connection_id, ref),
+    ).fetchone()
+    if prior and prior["status"] == "failed" and prior["saved_state"]:
+        state = json.loads(prior["saved_state"])
+        if state.get("payload") and not state.get("replayed"):
+            state.update(replayed=True, recover=True)
+            c.execute(
+                "UPDATE automation_runs SET status='queued',finished_at=NULL,wake_at=NULL,saved_state=? WHERE id=?",
+                (json.dumps(state), prior["id"]),
+            )
+            _ring(c)
+    return prior["id"] if prior else None
+
+
+def queue_intake(c, connection_id, owner_id, ref, payload):
+    """Persist an authenticated arrival even when ordinary automation triggers would drop it."""
+    aid = INTAKE_AUTOMATION + connection_id
+    row = _row(c, aid)
+    owner = "person:" + owner_id
+    if row is None:
+        flow = F.check(
+            {
+                "name": "Conversation intake",
+                "owner": owner,
+                "builtin": True,
+                "readonly": True,
+                "trigger": {"type": "event", "name": "mail.intake"},
+            }
+        )
+        _save(c, H.TICO_ACTOR, aid, flow, None, audit=False)
+        row = _row(c, aid)
+    return _insert_run(c, row, payload, ref, _runnable(c, aid) == "held")
 
 
 def _turn_chain(c):
@@ -1796,7 +1877,10 @@ def on_mail(c, mailbox, message, watch=None):
     received before the mailbox's watch began is old mail a check listed again, and no automation hears it.
     A message with no received time (0) is heard as it always was."""
     epoch = int(getattr(message, "epoch", 0) or 0)
-    if watch and 0 < epoch < H.parse_ts(watch).timestamp():
+    since = H.parse_ts(watch)
+    if since and since.tzinfo is None:
+        since = since.replace(tzinfo=timezone.utc)
+    if since and 0 < epoch < since.timestamp():
         return []
     raw = list(getattr(message, "attachments", None) or [])
     attachments = [a.get("name") if isinstance(a, dict) else str(a) for a in raw]
@@ -2858,11 +2942,19 @@ class Hub:
             if run["claim_token"] != token:
                 log.warning("automation run %s: its claim lapsed before it started; left to the claim that has it", rid)
                 return False
-            row = c.execute("SELECT * FROM automations WHERE id=?", (run["automation_id"],)).fetchone()
-            version = c.execute(
-                "SELECT flow FROM automation_versions WHERE automation_id=? AND n=?",
-                (run["automation_id"], run["version"]),
-            ).fetchone()
+            if run["automation_id"].startswith(INTAKE_AUTOMATION):
+                flow_rows = None
+            else:
+                flow_rows = (
+                    c.execute("SELECT * FROM automations WHERE id=?", (run["automation_id"],)).fetchone(),
+                    c.execute(
+                        "SELECT flow FROM automation_versions WHERE automation_id=? AND n=?",
+                        (run["automation_id"], run["version"]),
+                    ).fetchone(),
+                )
+        if flow_rows is None:
+            return self._go_intake(run, token)
+        row, version = flow_rows
         state = json.loads(run["saved_state"] or "{}")
         try:
             # What it does comes from the run's version; its owner, cap and the rest are as they are now.
@@ -2928,6 +3020,62 @@ class Hub:
             if status not in ("waiting", "held"):
                 _ring(c)  # queued again, or done: a run of this automation that the cap held back can start now
         return True
+
+    def _go_intake(self, run, token):
+        from . import mailbox_access, outside_intake
+
+        with self.store.transaction(notify=True) as c:
+            current = c.execute("SELECT * FROM automation_runs WHERE id=?", (run["id"],)).fetchone()
+            if not current or current["claim_token"] != token:
+                return False
+            state = json.loads(current["saved_state"])
+            status = current["status"]
+            wake_at = None
+            if status == "running":
+                aid = current["automation_id"]
+                connection = aid.removeprefix(INTAKE_AUTOMATION)
+                box = mailbox_access.row_by_id(c, connection)
+                if not outside_intake.eligible_owner(c, box):
+                    status = "held"
+                else:
+                    status = "queued" if state.get("recover") else _runnable(c, aid)
+                if status == "queued":
+                    args = (
+                        c,
+                        connection,
+                        current["trigger_ref"],
+                        state["payload"],
+                        current["started_at"],
+                    )
+                    if not state.get("recover"):
+                        status = _intake_step(c, run["id"], outside_intake.process, *args)
+                    if status == "failed" or state.get("recover"):
+                        status = _intake_step(c, run["id"], outside_intake.triage, *args, recovery=True)
+                        if status == "failed":
+                            state.update(status=status, recover=True, error="The inbox handoff will be retried.")
+                            wake_at = H.shift(H.now(), hours=1)
+            if status not in ("held", "failed"):
+                state = {"status": status}
+            c.execute(
+                "UPDATE automation_runs SET status=?,saved_state=?,finished_at=?,wake_at=?,claimed_at=NULL,claim_token=NULL "
+                "WHERE id=?",
+                (status, json.dumps(state), None if status == "held" else H.now(), wake_at, run["id"]),
+            )
+            if status != "held":
+                _ring(c)
+        return True
+
+
+def _intake_step(c, rid, work, *args, **kwargs):
+    c.execute("SAVEPOINT intake_step")
+    try:
+        return work(*args, **kwargs)
+    except Exception as exc:  # noqa: BLE001 - one arrival's failure must leave the drain running
+        c.execute("ROLLBACK TO intake_step")
+        log.warning("intake run %s: %s failed (%s)", rid, work.__name__, type(exc).__name__)
+        return "failed"
+    finally:
+        c.execute("RELEASE intake_step")
 
 
 # ---------------------------------------------------------------------------------------------------- mail actions
@@ -3355,20 +3503,45 @@ def tick(store, at=None, drain=True):
         c.execute(
             f"UPDATE automation_runs SET status={RUNNABLE},wake_at=NULL WHERE status='waiting' AND wake_at<=?", (now,)
         )
+        from . import mailbox_access, outside_intake
+
+        # A held arrival resumes when the inbox has an eligible owner. A run guard holds it until the deadline.
+        deadline = H.shift(now, hours=-outside_intake.DEADLINE_HOURS)
+        due_intake = (
+            "trigger_ref LIKE 'intake:%' "
+            f"AND ((status='held' AND (started_at<=? OR ({RUNNABLE})='queued')) "
+            "OR (status='failed' AND wake_at<=?))"
+        )
+        for (aid,) in c.execute(
+            f"SELECT DISTINCT automation_id FROM automation_runs WHERE automation_id GLOB ? AND {due_intake}",
+            (INTAKE_AUTOMATION + "*", deadline, now),
+        ).fetchall():
+            box = mailbox_access.row_by_id(c, aid.removeprefix(INTAKE_AUTOMATION))
+            if outside_intake.eligible_owner(c, box):
+                c.execute(
+                    "UPDATE automation_runs SET status='queued',finished_at=NULL,wake_at=NULL,"
+                    "saved_state=CASE WHEN status='failed' OR started_at<=? THEN json_set(saved_state,'$.recover',1) "
+                    f"ELSE saved_state END WHERE automation_id=? AND {due_intake}",
+                    (deadline, aid, deadline, now),
+                )
         # A run cut off (the server stopped mid-run) goes on from its last save; its effects are not done twice.
         for run in c.execute(
-            "SELECT id, saved_state FROM automation_runs WHERE status='running' AND claimed_at<?",
+            "SELECT id, automation_id, saved_state FROM automation_runs WHERE status='running' AND claimed_at<?",
             (H.shift(now, minutes=-STALE_MINUTES),),
         ).fetchall():
             state = json.loads(run["saved_state"] or "{}")
             state["resumes"] = int(state.get("resumes") or 0) + 1
-            if not state.get("threads") or state["resumes"] > MAX_RESUMES:
+            intake = run["automation_id"].startswith(INTAKE_AUTOMATION)
+            if intake and state["resumes"] > MAX_RESUMES:
+                state["recover"] = True
+            if not intake and (not state.get("threads") or state["resumes"] > MAX_RESUMES):
                 _fail(c, run["id"], state, now, "it was cut off more than %d times" % MAX_RESUMES)
             else:
                 c.execute(
-                    f"UPDATE automation_runs SET status={RUNNABLE},claimed_at=NULL,claim_token=NULL,saved_state=? "
+                    f"UPDATE automation_runs SET status=CASE WHEN ? THEN 'queued' ELSE {RUNNABLE} END,"
+                    "claimed_at=NULL,claim_token=NULL,saved_state=? "
                     "WHERE id=?",
-                    (json.dumps(state, default=str), run["id"]),
+                    (intake and bool(state.get("recover")), json.dumps(state, default=str), run["id"]),
                 )
         # One dropped mid-step whose step was never saved (the server stopped first): it is not resumed, but what its
         # turns cost meanwhile is charged to it and their holds released.
@@ -3700,7 +3873,7 @@ def prune(c, now):
     old = H.shift(now, days=-KEEP_DAYS)
     c.execute(
         "UPDATE automation_runs SET saved_state=NULL WHERE saved_state IS NOT NULL AND finished_at IS NOT NULL "
-        "AND finished_at<?",
+        "AND finished_at<? AND wake_at IS NULL",
         (old,),
     )
     c.execute("DELETE FROM automation_effects WHERE created_at<?", (old,))
@@ -3899,6 +4072,11 @@ def install(app, store, auth, mutate):
         row = _row(c, aid)
         if not row:
             raise Problem("not_found", "No such automation", 404)
+        if aid.startswith(INTAKE_AUTOMATION):
+            if _intake_inbox(c, who, aid) is None:
+                raise Problem("not_found", "No such automation", 404)
+            if rule is may_see:
+                return row
         if not (rule or may_change)(c, who, flow_of(row)):
             raise Problem(
                 "forbidden", f"Only its owner, the people above its owner or its group's lead may {what}", 403
@@ -3945,9 +4123,7 @@ def install(app, store, auth, mutate):
             # reads each one's last run, hold and more), and one past them, which tells the pager there is more.
             flows = ((r, flow_of(r)) for r in rows)
             visible = (
-                (r, flow)
-                for r, flow in flows
-                if AO.shown(flow, hidden) and may_change(c, who, {**flow, "readonly": False}, chart)
+                (r, flow) for r, flow in flows if AO.shown(flow, hidden) and may_see(c, who, flow, chart, aid=r["id"])
             )
             built = (
                 {**view(c, dict(r), who, chart=chart, jobs=jobs, flow=flow), "pending": pending.get(r["id"], 0)}
@@ -4131,6 +4307,8 @@ def install(app, store, auth, mutate):
 
         def work(c):
             row = found(c, who, aid, "change this automation", rule=lambda c, who, flow: True)
+            if aid.startswith(INTAKE_AUTOMATION):
+                raise Problem("readonly", "This built-in shows work Tico runs itself", 409)
             before = flow_of(row)
             changes = body.model_dump(exclude_unset=True)
             summary = changes.pop("summary", None)
@@ -4333,17 +4511,23 @@ def install(app, store, auth, mutate):
         **api_v2(
             "Automations",
             "endAutomationHold",
-            "End the run guard's hold: `release` queues its held runs, oldest first; `drop` skips them. `moved` is how many",
+            "End the run guard's hold: `release` queues its held runs, oldest first; `drop` skips them. "
+            "For conversation intake, only the inbox owner may do this. `moved` is how many",
             "AutomationHeld",
         ),
     )
     def automations_held(request: Request, aid: str, body: HeldAction):
         """End the run guard's hold: `release` queues its held runs, oldest first; `drop` skips them. Whoever may
-        change the automation may do either."""
+        change the automation may do either. For intake, its inbox owner decides."""
         who = request.state.identity
 
         def work(c):
-            row = found(c, who, aid, "release or drop its held runs")
+            if aid.startswith(INTAKE_AUTOMATION):
+                row = found(c, who, aid, rule=may_see)
+                if not _may_end_intake_hold(c, who, aid):
+                    raise Problem("forbidden", "Only the inbox owner may release or drop held intake runs", 403)
+            else:
+                row = found(c, who, aid, "release or drop its held runs")
             n = _unhold(c, aid, who.actor, body.action, _via(who))
             if n is None:
                 raise Problem("not_on_hold", "The automation is not on hold", 409)

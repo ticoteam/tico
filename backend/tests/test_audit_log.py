@@ -8,8 +8,9 @@ from urllib.parse import urlencode
 
 import pytest
 
-from backend import audit_log
-from backend.tests.helpers.api import get  # noqa: F401
+from backend import audit_log, mailbox_access, outside_intake
+from backend.entities import store as entities
+from backend.tests.helpers.api import get, headers, post
 
 
 def _write(api, *changes):
@@ -64,6 +65,55 @@ def test_the_cli_and_the_tool_read_the_same_rows_and_a_member_reads_only_their_o
     assert [r["actor"] for r in rest["rows"]] == ["human:ana"]
     err, mine = mcp(api, "tico_audit", {}, token="ben-test")
     assert not err and {r["actor"] for r in mine["rows"]} == {"human:ben"}, mine
+
+
+def test_outside_thread_and_message_changes_in_audit_require_access_to_the_root_inbox(api):
+    store = api.app.state.store
+    _write(api, ("human:ana", "task_cap:1", None, {"per_day": 5}))
+    sender = "person@customer.example"
+    with store.transaction() as c:
+        mailbox = mailbox_access.ensure_mailbox(c, "ben@acme.example", person_id="ben", created_by="human:ben")["id"]
+        entity = entities.upsert(c, "human:ben", "person", match={"email": sender})["id"]
+        outside_intake.save_message(
+            c,
+            channel="gmail",
+            connection_id=mailbox,
+            owner_id="ben",
+            source_thread_id="support",
+            source_message_id="mail-1",
+            sender=sender,
+            verified_id=sender,
+            title="Outside subject",
+            body="Outside message",
+        )
+        root = c.execute("SELECT id FROM conversations WHERE entity_id=?", (entity,)).fetchone()[0]
+        parent = c.execute("SELECT id FROM messages WHERE conversation_id=?", (root,)).fetchone()[0]
+    reply = post(api, f"threads/{root}/messages", {"text": "Internal note", "parent_message_id": parent}, "ben-test")
+    child = reply["thread_id"]
+    for tid, patch in ((child, {"title": "Follow-up"}), (root, {"title": "Support"}), (root, {"archived": True})):
+        response = api.patch(f"/api/v2/threads/{tid}", json=patch, headers=headers("ben-test"))
+        assert response.status_code == 200, response.text
+
+    objects = (f"thread:{root}", f"thread:{child}", f"message:{reply['id']}")
+    events = {
+        "sql": "SELECT target FROM events WHERE action='thread.updated' AND target IN (?,?)",
+        "params": [root, child],
+    }
+    assert [r["object"] for r in get(api, "audit?limit=1")["rows"]] == ["task_cap:1"]
+    assert get(api, "audit?limit=1")["next"] is None
+    assert post(api, "sql", events)["rows"] == []
+    for obj, count in zip(objects, (2, 1, 1), strict=True):
+        assert get(api, f"audit?object={obj}") == {"rows": [], "next": None}
+        assert len(get(api, f"audit?object={obj}", token="ben-test")["rows"]) == count
+
+    with store.transaction() as c:
+        grant = mailbox_access.grant(c, "human:ben", mailbox, "person", "ana", "read")
+    assert set(objects) <= {r["object"] for r in get(api, "audit")["rows"]}
+    assert len(post(api, "sql", events)["rows"]) == 3
+    with store.transaction() as c:
+        mailbox_access.revoke(c, "human:ben", mailbox, grant["id"])
+    assert set(objects).isdisjoint(r["object"] for r in get(api, "audit")["rows"])
+    assert post(api, "sql", events)["rows"] == []
 
 
 def test_pages_never_skip_a_row_by_count_by_shared_time_or_by_byte_budget(api, monkeypatch):

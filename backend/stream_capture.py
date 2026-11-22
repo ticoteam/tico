@@ -169,6 +169,16 @@ def export(c, who, auth, aid, full=True):
     attempt, msg = require_run(c, who, auth, aid)
     from .org_rule_check import hides_run
 
+    from . import threads
+
+    root = threads.root_of(c, msg["conversation_id"]) if msg else None
+    if (root and threads.audience_of(root) == "entity") or c.execute(
+        "SELECT 1 FROM attempt_conversations ac JOIN conversations t ON t.id=ac.conversation_id "
+        "JOIN conversations r ON r.id=coalesce(t.root_id,t.id) WHERE ac.attempt_id=? AND r.audience='entity' LIMIT 1",
+        (aid,),
+    ).fetchone():
+        raise Problem("not_found", "This run touched an outside conversation", 404)
+
     if hides_run(c, attempt):
         # Its reply is not checked yet, or was held (backend/org_rule_check.py): the stream and events would show it.
         raise Problem("not_found", "This run's stream is held back until its reply is checked", 404)

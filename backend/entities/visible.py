@@ -120,16 +120,18 @@ def reader(c: sqlite3.Connection, who: str) -> Reader:
     return Reader(actor, key, system=False, sensitive=sensitive, grants=grants)
 
 
-def clause(r: Reader, alias: str = "e") -> tuple[str, list[object]]:
+def clause(
+    r: Reader, alias: str = "e", *, entity_id: str = "", sources: str = "entity_sources"
+) -> tuple[str, list[str]]:
     """A WHERE fragment that keeps the entities of `alias` this reader may see, and its parameters."""
     if r.system:
         return "1 = 1", []
-    eid = f"{alias}.id"
+    eid = entity_id or f"{alias}.id"
     parts = [
-        f"NOT EXISTS (SELECT 1 FROM entity_sources s WHERE s.entity_id = {eid})",
-        f"EXISTS (SELECT 1 FROM entity_sources s WHERE s.entity_id = {eid} AND s.visibility = 'company')",
+        f"NOT EXISTS (SELECT 1 FROM {sources} s WHERE s.entity_id = {eid})",
+        f"EXISTS (SELECT 1 FROM {sources} s WHERE s.entity_id = {eid} AND s.visibility = 'company')",
     ]
-    params: list[object] = []
+    params: list[str] = []
     grants: list[str] = []
     for source_type, ids in r.grants.items():
         if ids is None:
@@ -140,7 +142,7 @@ def clause(r: Reader, alias: str = "e") -> tuple[str, list[object]]:
             params.extend([source_type, json.dumps(list(ids))])
     if grants:
         parts.append(
-            f"EXISTS (SELECT 1 FROM entity_sources s WHERE s.entity_id = {eid} AND s.visibility = 'restricted' "
+            f"EXISTS (SELECT 1 FROM {sources} s WHERE s.entity_id = {eid} AND s.visibility = 'restricted' "
             f"AND ({' OR '.join(grants)}))"
         )
     return "(" + " OR ".join(parts) + ")", params
@@ -151,6 +153,33 @@ def visible(c: sqlite3.Connection, who: str | Reader, entity_id: str) -> bool:
     r = who if isinstance(who, Reader) else reader(c, who)
     cl, params = clause(r)
     return c.execute(f"SELECT 1 FROM entities e WHERE e.id = ? AND {cl}", [entity_id, *params]).fetchone() is not None
+
+
+def activity_connections(c: sqlite3.Connection, actors: tuple[str, ...]) -> tuple[set[str], set[str]]:
+    """The mailbox and tool connections each effective reader of an activity can use."""
+    from backend import credentials
+
+    read_grants = cast("Callable[[sqlite3.Connection, str], frozenset[str]]", credentials.granted)  # pyright: ignore[reportUnknownMemberType]
+
+    boxes: list[set[str]] = []
+    tools: list[set[str]] = []
+    for actor in actors:
+        boxes.append({str(box["id"]) for box in _mailbox_rows(c, actor) if box["id"]})
+        keys = read_grants(c, actor)
+        tools.append(
+            {
+                str(row[0])
+                for row in c.execute(
+                    "SELECT DISTINCT t.id FROM tools t JOIN credentials k ON k.tool_id=t.id "
+                    "WHERE k.holder=? OR k.id IN (SELECT value FROM json_each(?))",
+                    (actor, json.dumps(sorted(keys))),
+                )
+            }
+        )
+    return (
+        boxes[0].intersection(*boxes[1:]) if boxes else set(),
+        tools[0].intersection(*tools[1:]) if tools else set(),
+    )
 
 
 def note_visible(r: Reader, note: Mapping[str, Any]) -> bool:
