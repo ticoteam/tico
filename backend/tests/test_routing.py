@@ -95,28 +95,34 @@ def test_a_routed_task_is_filed_as_its_persons_on_the_support_pipeline(app):
         rules = {r[0] for r in c.execute("SELECT id FROM stage_rules WHERE pipeline_id=?", (row["pipeline_id"],))}
         assert rules == {"sr_support_waits", "sr_urgent_support"}
     assert "names no owner" in str(_route(app, expected=422, owner="ops"))
-    general = _route(app, pipeline="general")  # General's first stage is the assignee's too
-    assert H.is_human(_held(app, general)[0])
+    assert "goes to Support" in json.dumps(_route(app, expected=422, pipeline="general"))
+    with _db(app) as c:  # Support has a manager to wake even with no General Manager bot: the company's person
+        assert c.execute("SELECT manager_id FROM pipelines WHERE id=?", (row["pipeline_id"],)).fetchone()[0]
+    named = _route(app, pipeline=row["pipeline_id"])  # naming Support itself is fine
+    assert H.is_human(_held(app, named)[0])
 
 
-def test_routing_is_refused_where_the_first_stage_is_not_the_assignees(app):
+def test_routing_is_refused_when_support_is_changed_to_be_moved_by_hand_or_retired(app):
+    sid = _support(app)
+    with _db(app) as c:  # moved by hand: no timer would ever look at it
+        c.execute("UPDATE stages SET by_hand=1 WHERE pipeline_id=? AND kind='work'", (sid,))
+    assert "moved by hand" in json.dumps(_route(app, expected=422))
+    _support(app, retired_at=H.now())
+    assert "retired" in json.dumps(_route(app, expected=422))
+
+
+def test_a_routed_create_a_company_rule_would_hold_is_refused_not_held(app):
+    from backend.tests.helpers.org_rules import org
+    from backend.tests.test_org_rule_check import NEEDLE, Judge, color_rule
+
+    org(app)
+    app.app.state.judge = Judge(app.app.state.store)
+    color_rule(app)
+    bot(app, "ops")
+    refused = _route(app, token="ops-test", expected=422, message=f"Their {NEEDLE} red.")
+    assert "Held by a company rule" in json.dumps(refused)
     with _db(app) as c:
-        now = H.now()
-        c.execute(
-            "INSERT INTO pipelines (id, name, manager_id, created_at, updated_at) VALUES ('ops','Ops',NULL,?,?)",
-            (now, now),
-        )
-        for i, (kind, name, owner) in enumerate((("work", "Run", "bot:ops"), ("done", "Done", None))):
-            c.execute(
-                "INSERT INTO stages (id, pipeline_id, position, kind, name, owner, created_at, updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?)",
-                (f"ops-{name.lower()}", "ops", i, kind, name, owner, now, now),
-            )
-    refused = _route(app, expected=422, pipeline="ops")
-    assert "first stage" in json.dumps(refused)
-    with _db(app) as c:  # held by the assignee but moved by hand: no timer would ever look at it
-        c.execute("UPDATE stages SET owner='assignee', by_hand=1 WHERE id='ops-run'")
-    assert "moved by hand" in json.dumps(_route(app, expected=422, pipeline="ops"))
+        assert not c.execute("SELECT 1 FROM org_rule_holds").fetchone()  # nothing held to Send anyway later
 
 
 def test_everyone_off_goes_to_the_inbox_fallback(app):
@@ -236,6 +242,26 @@ def test_both_support_timers_on_one_task_give_its_manager_one_wake(app, time_mac
         T.sweep(c)
     wakes = _wakes(app, "bot:ops")
     assert len(wakes) == 1 and wakes[0].count(_title(app, task_id)) == 1
+
+
+def test_a_due_date_late_label_does_not_quiet_the_support_timers(app, time_machine):
+    _support(app, manager_id="bot:ops")
+    task_id = _route(app, labels=["urgent"], private=False, due="2030-01-07T12:00:00Z")
+    time_machine.move_to(START + timedelta(hours=25), tick=False)
+    with _db(app) as c:  # Late by its due date: a person's task gets the label alone, and wakes nobody
+        c.execute("UPDATE visits SET late_told_at=? WHERE task_id=? AND left_at IS NULL", (H.now(), task_id))
+        T.sweep(c)
+    wakes = _wakes(app, "bot:ops")
+    assert len(wakes) == 1 and _title(app, task_id) in wakes[0]
+
+
+def test_the_dry_run_reports_a_filed_item_as_found_without_routing(app, jira):
+    link = f"jira:issue:PROJ-78@{jira.tools['acme.atlassian.net']}"
+    first = _create(app, link)
+    shown = post(
+        app, "tasks/dry-run", {"title": "Fix the export", "route": True, "private": True, "primary_link": link}
+    )
+    assert shown["found"] is True and shown["task"] == (first.get("task") or first)["id"], shown
 
 
 def _wakes(api, manager):

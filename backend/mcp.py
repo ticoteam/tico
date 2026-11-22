@@ -414,16 +414,47 @@ def task_dry_run(c, auth, who, body):
     routed_to = None
     from . import routing
 
+    found = None
+    if routed and getattr(body, "primary_link", None):
+        # A readable task already holding the item comes back, as the create answers (found), with nothing routed.
+        from . import item_sources as IS
+
+        try:
+            held_by = IS.lookup(c, body.primary_link)[1]
+        except ValueError:
+            held_by = None
+        if held_by:
+            try:
+                auth.task(c, who, held_by)
+                found = held_by
+            except Problem:
+                pass
+    if found:
+        return {"ok": not problems, "found": True, "task": found, "problems": problems}
     if routed:
         probe = H.CLOSE_PROBE.set(True)  # an unknown entity or parent is a problem here, not a recorded refusal
         try:
+            from . import page_links
+            from .entities import store as ES
+
             parent_ref = getattr(body, "parent", None)
+            parent_id = auth.resolve_task(c, who, parent_ref) if parent_ref else None
+            if parent_id:
+                auth.task(c, who, parent_id)  # an unreadable parent is its 404, as the create says
+            reader = page_links.entity_reader(c, auth, who)
+            entity = getattr(body, "entity", None)
+            entity_id = ""
+            if entity:
+                if reader is None:
+                    raise Problem("not_found", "Entity not found", 404)
+                entity_id = str(ES.target(c, reader, entity))
             actual_bot = who.task_actor or (who.actor if who.role == "bot" else "")
             routed_to = routing.person_for_create(
-                c, who, body, auth.resolve_task(c, who, parent_ref) if parent_ref else None, actual_bot
-            )[0]
+                c, who, body, parent_id, actual_bot, entity_id, auth.task_sql(c, auth.run_viewer(c, who))
+            )
         except (Problem, H.Refused) as refused:
-            problems.append(refused.detail)
+            if refused.detail not in problems:
+                problems.append(refused.detail)
         finally:
             H.CLOSE_PROBE.reset(probe)
     pipeline_id = getattr(body, "pipeline", None) or ((routing.support_id(c) or "support") if routed else GENERAL)

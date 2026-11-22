@@ -550,7 +550,7 @@ def register_core(
             # Nothing is filed (the item's task comes back, or the create is refused as filed): no one is picked.
             body, unassigned = body.model_copy(update={"owner": who.actor}), False
         elif routed:
-            work = routing.prepare(c, who, body, parent_id, actual_bot)
+            work = routing.prepare(c, who, body, parent_id, actual_bot, *routed_inputs(c, who, body, parent_id))
             person = routed_to
             if not person or not task_requirements.active_person(c, person):
                 raise Problem("route", "The person routing picked can no longer take it: send it again", 409)
@@ -969,16 +969,21 @@ def register_core(
         # A create carrying a person's request reads the item as that person, at the write: its cap is checked as ever.
         # A routed create's person is picked first (a saved retry's answer comes back without one), so the cap, reach
         # and the org rule check below are for them.
-        routed_to = None if saved_retry(request, who) else routed_preview(who, body)
+        saved = saved_retry(request, who)
+        routed_to = None if saved else routed_preview(who, body)
         cap_before_preflight(request, who, routed_to or body.owner, body.parent, body.primary_link, body.request_id)
-        rc = rule_check(
-            who,
-            "task_create",
-            rule_create_text(body),
-            lambda c: [
-                rule_target(c, who, routed_to or body.owner),
-                *(org_rule_check.company(c) if rule_public(body) else []),
-            ],
+        rc = (
+            None
+            if saved and getattr(body, "route", False)
+            else rule_check(
+                who,
+                "task_create",
+                rule_create_text(body),
+                lambda c: [
+                    rule_target(c, who, routed_to or body.owner),
+                    *(org_rule_check.company(c) if rule_public(body) else []),
+                ],
+            )
         )
         if getattr(body, "route", False) and org_rule_check.holds(rc):
             raise Problem("route", ROUTED_HELD, 422)
@@ -1032,11 +1037,22 @@ def register_core(
             try:
                 parent_id = auth.resolve_task(c, who, body.parent) if body.parent else None
                 actual_bot = who.task_actor or (who.actor if who.role == "bot" else "")
-                return routing.person_for_create(c, who, body, parent_id, actual_bot)[0]
+                return routing.person_for_create(
+                    c, who, body, parent_id, actual_bot, *routed_inputs(c, who, body, parent_id)
+                )
             except H.Refused:
                 return None
             finally:
                 H.CLOSE_PROBE.reset(probe)
+
+    def routed_inputs(c, who, body, parent_id):
+        """(entity id, readable-task SQL) routing reads for a routed create: the entity as the effective reader sees it
+        (for_entity), and the tasks that reader may read (auth.task_sql). An unreadable parent is its normal 404 first,
+        before any privacy refusal can say it exists."""
+        if parent_id:
+            auth.task(c, who, parent_id)
+        entity_id = for_entity(c, who, getattr(body, "entity", None))
+        return entity_id, auth.task_sql(c, auth.run_viewer(c, who))
 
     def _held_item(c, who, primary_link):
         """`readable` when a task the caller may read already holds the primary link a create names, `hidden` when one

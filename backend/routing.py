@@ -13,7 +13,7 @@ is made, and the task is then filed with them as owner and assignee, so every se
 runs once against the real recipient. The first of:
 
 1. the recent helper: the newest person who worked another task of the same relationship (`tasks.entity_id`) in the
-   last RECENT_HOURS (its history, or comments on it; company-visible tasks only), and is on;
+   last RECENT_HOURS (its history, or comments on it; company-visible tasks the filer reads only), and is on;
 2. the relationship's owner (`entities.owner_*`) when a person: on, or async when the work is not urgent;
 3. anyone on in that owner's roster team, the first by id;
 4. the inbox fallback: the pipeline's manager, else its owner, when a person, else the company's person
@@ -22,9 +22,9 @@ runs once against the real recipient. The first of:
 Every candidate, the fallback included, must be an active person. Private work is never routed (`prepare` refuses
 it): assigning never decides who reads private work. Work is urgent when it carries the tag `urgent` (task_tags).
 
-Routed work with no pipeline goes on the company's Support pipeline (`support_pipeline`), made the first time it is
-needed: one work stage held by the task's assignee and not by hand. Two default stage rules give its overdue waits to
-the pipeline's manager: Support waits (24 h quiet) and Urgent support waits (1 h quiet on an urgent task, told at once
+Routed work goes only on the company's Support pipeline (`support_pipeline`), made the first time it is needed: one
+work stage held by the task's assignee and not by hand, managed by the General Manager bot, else the company's person.
+Two default stage rules give its overdue waits to that manager: Support waits (24 h quiet) and Urgent support waits (1 h quiet on an urgent task, told at once
 rather than in the hourly batch, backend/stage_rule_timers.py).
 """
 
@@ -145,6 +145,7 @@ class Work:
     entity_id: str
     requester: str
     urgent: bool
+    visible_sql: str = "0"  # which tasks the filer reads (auth.task_sql): only those shape the pick
 
 
 def urgent(conn: Any, task_id: str) -> bool:
@@ -178,12 +179,12 @@ def _recent(conn: Any, work: Work, since: str) -> list[tuple[str, str]]:
     if not work.entity_id:
         return []
     # tasks_entity is partial (entity_id <> ''): the literal predicate lets SQLite use it. Private work never shapes
-    # a company-visible assignment, so only company-visible tasks count.
+    # a company-visible assignment, nor work the filer cannot read: only company-visible tasks they read count.
     ids = [
         str(r[0])
         for r in conn.execute(
             "SELECT id FROM tasks WHERE entity_id <> '' AND entity_id = ? AND private = 0 "
-            "AND updated_at >= ? ORDER BY updated_at DESC LIMIT ?",
+            f"AND updated_at >= ? AND ({work.visible_sql}) ORDER BY updated_at DESC LIMIT ?",
             (work.entity_id, since, RELATED_MOST),
         )
     ]
@@ -258,14 +259,19 @@ def choose(conn: Any, work: Work, at: datetime) -> tuple[str, str]:
 PRIVATE_REFUSAL = "Private tasks aren't routed; assign someone who can see it"
 
 
-def prepare(conn: Any, who: Any, body: Any, parent_id: str | None, actual_bot: str) -> Work:
-    """The checks a create with `route: true` makes before anything is written, and what routing then reads. Refused
-    (422): an owner named, a meeting's task, a first stage that is not the assignee's (the Support pipeline's is), and
-    private work (explicitly, under a private parent, in a private pipeline or by the filer's private default):
-    routing never decides who reads private work."""
-    from . import task_engine
+SUPPORT_ONLY = "Routed work goes to Support: leave pipeline out, or name Support"
+
+
+def prepare(
+    conn: Any, who: Any, body: Any, parent_id: str | None, actual_bot: str, entity_id: str, visible_sql: str
+) -> Work:
+    """The checks a create with `route: true` makes before anything is written, and what routing then reads. The
+    caller has resolved the entity (as the effective reader), read the parent (an unreadable one is its 404) and says
+    which tasks the filer reads (`visible_sql`). Refused (422): an owner named, a meeting's task, any pipeline but
+    Support (its timers own every routed wait), a Support retired or changed so its first stage is not the assignee's
+    or is moved by hand, and private work (explicitly, under a private parent, in a private pipeline or by the filer's
+    private default): routing never decides who reads private work."""
     from . import task_privacy as _task_privacy
-    from .entities import store as ES
     from .store import Problem
 
     H = _h()
@@ -273,12 +279,15 @@ def prepare(conn: Any, who: Any, body: Any, parent_id: str | None, actual_bot: s
         raise Problem("route", "A routed task names no owner: Tico picks the person", 422)
     if body.live_meeting_id:
         raise Problem("route", "A meeting's task names its owner: route work that is not from a meeting", 422)
-    pipeline_id: str | None = body.pipeline or support_id(conn)
-    refused = first_stage_refusal(conn, pipeline_id) if pipeline_id else ""
+    support, retired = _support(conn)
+    if body.pipeline and body.pipeline != support:
+        raise Problem("route", SUPPORT_ONLY, 422)
+    if retired:
+        raise Problem("route", "The Support pipeline is retired: routed work has nowhere to go. Name its owner", 422)
+    refused = first_stage_refusal(conn, support) if support else ""
     if refused:
         raise Problem("route", refused, 422)
     parent: Row | None = H.task(conn, parent_id) if parent_id else None
-    pipe: Row = (task_engine.pipeline(conn, pipeline_id) or {}) if pipeline_id else {}
     task_privacy: Any = _task_privacy  # untyped module
     if parent and H.task_private(conn, parent):
         raise Problem("route", PRIVATE_REFUSAL, 422)  # its owner would read the private task above it
@@ -286,21 +295,23 @@ def prepare(conn: Any, who: Any, body: Any, parent_id: str | None, actual_bot: s
         body = body.model_copy(update={"private": False, "from_private": False})
     elif body.private is None and task_privacy.private_execution(conn, who):
         raise Problem("route", PRIVATE_REFUSAL, 422)  # a run on private work files private work
-    if task_privacy.new_task(conn, who, body, None, parent, actual_bot)[2] or pipe.get("private"):
+    if task_privacy.new_task(conn, who, body, None, parent, actual_bot)[2]:
         raise Problem("route", PRIVATE_REFUSAL, 422)
-    entity = getattr(body, "entity", None)
     return Work(
-        pipeline_id=pipeline_id,
-        entity_id=str(ES.target(conn, who.actor, entity)) if entity else "",
+        pipeline_id=support,
+        entity_id=entity_id,
         requester=str(who.actor),
         urgent=URGENT in H._labels(body.labels),  # pyright: ignore[reportPrivateUsage]
+        visible_sql=visible_sql,
     )
 
 
-def person_for_create(conn: Any, who: Any, body: Any, parent_id: str | None, actual_bot: str) -> tuple[str, str]:
-    """(person, entity id) for a create with `route: true` (`prepare`, then `choose`), before anything is written."""
-    work = prepare(conn, who, body, parent_id, actual_bot)
-    return choose(conn, work, now())[0], work.entity_id
+def person_for_create(
+    conn: Any, who: Any, body: Any, parent_id: str | None, actual_bot: str, entity_id: str, visible_sql: str
+) -> str:
+    """The person a create with `route: true` goes to (`prepare`, then `choose`), before anything is written."""
+    work = prepare(conn, who, body, parent_id, actual_bot, entity_id, visible_sql)
+    return choose(conn, work, now())[0]
 
 
 def first_stage_refusal(conn: Any, pipeline_id: str) -> str:
@@ -349,26 +360,30 @@ SUPPORT_RECORD: Row = {
 }
 
 
-def support_id(conn: Any) -> str | None:
-    """The company's Support pipeline when it has one: its id, General when it retired it, None before it is made."""
+def _support(conn: Any) -> tuple[str | None, bool]:
+    """(id, retired) of the company's Support pipeline; (None, False) before it is made."""
     found = conn.execute(
         "SELECT id, retired_at FROM pipelines WHERE preset=? ORDER BY created_at, id LIMIT 1", (SUPPORT,)
     ).fetchone()
-    if not found:
-        return None
-    return str(found[0]) if not found[1] else "general"
+    return (str(found[0]), bool(found[1])) if found else (None, False)
+
+
+def support_id(conn: Any) -> str | None:
+    """The company's live Support pipeline, or None (not made yet, or retired)."""
+    found, retired = _support(conn)
+    return None if retired else found
 
 
 def support_pipeline(conn: Any) -> str:
-    """The company's Support pipeline id, made the first time routed work is filed. A retired one is not made again:
-    routed work then goes to General."""
+    """The company's Support pipeline id, made the first time routed work is filed (a retired one is refused before,
+    by `prepare`). Its manager is the General Manager bot, else the company's person, so its timers wake someone."""
     import copy
 
     from . import pipeline_settings as PS
     from . import stage_rules as _stage_rules
     from . import task_engine
 
-    have = support_id(conn)
+    have, _ = _support(conn)
     if have:
         return have
     record: Row = copy.deepcopy(SUPPORT_RECORD)
@@ -378,7 +393,9 @@ def support_pipeline(conn: Any) -> str:
         "SELECT 1 FROM pipelines WHERE name=? COLLATE NOCASE AND retired_at IS NULL", (record["name"],)
     ).fetchone():
         record["name"] = "Routed support"
-    record["manager_id"] = PS._general_manager(conn)  # pyright: ignore[reportPrivateUsage]
+    from . import waiting_on
+
+    record["manager_id"] = PS._general_manager(conn) or waiting_on.company_person(conn)  # pyright: ignore[reportPrivateUsage]
     used: set[str] = set()
     for stage in (*record["stages"], record["done"], record["closed"]):
         stage["id"] = PS._free_stage_id(conn, stage["id"], used)  # pyright: ignore[reportPrivateUsage]

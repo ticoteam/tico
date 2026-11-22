@@ -1239,19 +1239,18 @@ that would route a create the check judged for nobody (a primary link's claim go
 again. A saved retry's answer comes back without routing; a primary link a readable task already holds returns that
 task before anything is routed. Refused (422): with an owner, with a live meeting, private work
 (explicitly, under a private parent even with `private: false`, in a private pipeline or by the filer's private
-default: "Private tasks aren't routed; assign someone who can see it"), in a pipeline whose first stage is not the
-task's assignee's or is moved by hand, when nobody
-can sign in, or when a stage rule holds the person out on entry (nothing is filed). With no pipeline it goes on the company's
-Support pipeline (preset `support`), made the first time a routed task is filed: one work stage, Open, held by the
-task's assignee and not by hand. Its default rules give overdue waits to its manager (the General Manager): Support
+default: "Private tasks aren't routed; assign someone who can see it"), in any pipeline but Support ("Routed work goes to Support"), with Support retired or changed so its first stage is
+not the task's assignee's or is moved by hand, when nobody
+can sign in, or when a stage rule holds the person out on entry (nothing is filed). It goes on the company's Support pipeline (preset `support`), made the first time a routed task is filed: one work stage, Open, held by the
+task's assignee and not by hand. Its default rules give overdue waits to its manager (the General Manager, else the company's person): Support
 waits (24 h quiet, in the hourly batch) and Urgent support waits (1 h quiet on a task tagged `urgent`: the manager is
 woken in the same pass, in its one wake of that pass: everything waiting when its hour is open, else only the urgent
 tasks, which do not use up its hour). A timer rule with a tag
-condition marks whether the task had the tag, so a tag added to a quiet task is noticed. A retired Support is not made again: routed work then goes to General. The dry run names the
-person routing would pick.
+condition marks whether the task had the tag, so a tag added to a quiet task is noticed. The dry run names the person routing would pick, or reports a filed item's task as found. A
+Late label from a due date does not quiet the Support timers: only their own marks dedupe them.
 
 The pick is the first of: the newest person who worked another recent company-visible task of the relationship (its
-history or comments, the last 48 hours, at most 20 tasks) and is on, not counting the filer; the relationship's owner
+history or comments, the last 48 hours, at most 20 tasks, only those the filer reads) and is on, not counting the filer; the relationship's owner
 (`entities.owner_*`) when on, or async and the work is not tagged `urgent`; anyone on in that owner's roster team,
 the first by id; else the inbox fallback, the pipeline's manager or owner when a person, else the company's
 person (`waiting_on.company_person`). Every one, the fallback included, must be an active person.

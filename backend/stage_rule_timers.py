@@ -151,6 +151,12 @@ def sweep(conn: Any, at: str | None = None) -> dict[str, int]:
     return done
 
 
+def _support_rule(rule: Row) -> bool:
+    """Support waits or Urgent support waits (backend/routing.py)."""
+    SR = _mod("stage_rules")
+    return bool({SR.SUPPORT_WAITS, SR.URGENT_SUPPORT} & {rule.get("id"), rule.get("builtin")})
+
+
 def _urgent_rule(rule: Row) -> bool:
     return _mod("stage_rules").URGENT_SUPPORT in (rule.get("id"), rule.get("builtin"))
 
@@ -270,7 +276,10 @@ def _then(conn: Any, rule: Row, task: Row, done: dict[str, int]) -> str:
         _tell_owner(conn, rule, task, said)
         done["told"] += 1
         return "told"
-    outcome = "late" if task.get("late_told_at") else "pending" if _manager(conn, task) else "no_manager"
+    # Late's own mark dedupes a manager's tell only where Late told the manager; the Support timers are routed
+    # work's one manager tell (a person's task Late by its due date is a label alone), so only their marks dedupe them.
+    late = bool(task.get("late_told_at")) and not _support_rule(rule)
+    outcome = "late" if late else "pending" if _manager(conn, task) else "no_manager"
     if outcome != "pending":
         # No manager will hear of it: a task the ladder stopped on asks a person instead (never_stuck.ask_person).
         E, NS = _mod("task_engine"), _mod("never_stuck")
@@ -395,7 +404,7 @@ def _wake_manager(conn: Any, manager: str, at: str, only_rule: str = "") -> bool
             or _quiet_on_auto_dream(conn, rule, str(task_id))
         ):
             outcome[key] = "dropped"
-        elif late_told_at:
+        elif late_told_at and not _support_rule(rule):
             outcome[key] = "late"  # Late listed it while it waited for this wake: the manager has it already
         else:
             outcome[key] = "named"
