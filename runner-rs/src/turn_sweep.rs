@@ -1,4 +1,4 @@
-//! What a turn leaves running when it ends, found and stopped (hosts::claude `read_loop`). A tool command's
+//! What a Claude or Codex turn leaves running when it ends, found and stopped. A tool command's
 //! background job, a dev server, a browser or a busy loop the bot never ended would otherwise run on after the turn,
 //! on a machine other bots share.
 //!
@@ -289,8 +289,24 @@ pub fn sweep(turn: &Turn) -> Vec<Stopped> {
     stopped
 }
 
+/// Stop the leftovers off the async runtime and prepare the diagnostic for the attempt's redactor.
+pub async fn finish(target: Turn, host: &str) -> Option<Value> {
+    let stopped = tokio::task::spawn_blocking(move || sweep(&target))
+        .await
+        .ok()?;
+    if stopped.is_empty() {
+        return None;
+    }
+    crate::util::log(&format!(
+        "{host}: turn ended: stopped {} processes it left running ({})",
+        stopped.len(),
+        programs(&stopped)
+    ));
+    Some(report(&stopped))
+}
+
 /// What the turn's diagnostics say of a sweep: how many it stopped and its most common commands, each cut short.
-/// The drive loop scrubs the run's secrets out of the event.
+/// The runner scrubs the run's secrets out of the event.
 pub fn report(stopped: &[Stopped]) -> Value {
     let mut counts: Vec<(String, usize)> = vec![];
     for s in stopped {
@@ -454,9 +470,84 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn codex_sweeps_and_reports_leftovers_after_reaping_its_app_server() {
+        let dir = std::env::temp_dir().join(format!("turn-sweep-codex-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pids_file = dir.join("pids.json");
+        crate::util::write_script(
+            &dir.join("codex"),
+            r#"#!/usr/bin/env python3
+import json, os, subprocess, sys
+for line in sys.stdin:
+    msg = json.loads(line)
+    if 'id' not in msg:
+        continue
+    result = {}
+    if msg['method'] == 'thread/start':
+        # Apply the shell's explicit environment, without inheriting the app-server's mark.
+        env = msg['params']['config']['shell_environment_policy']['set']
+        assert env['TICO_TURN_MARK'] == os.environ['TICO_TURN_MARK'] != 'old-mark'
+        pids = [os.getpid()]
+        for detached in ([False, True] if sys.platform == 'linux' else [False]):
+            child = subprocess.Popen(['/bin/sleep', '900'], env=env, start_new_session=detached,
+                                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            pids.append(child.pid)
+        with open(os.environ['FAKE_PIDS'], 'w') as f:
+            json.dump(pids, f)
+        result = {'thread': {'id': 'th'}}
+    print(json.dumps({'id': msg['id'], 'result': result}), flush=True)
+"#,
+        );
+        let env: crate::env::Env = [
+            (
+                "PATH".into(),
+                format!("{}:{}", dir.display(), std::env::var("PATH").unwrap()),
+            ),
+            ("FAKE_PIDS".into(), pids_file.display().to_string()),
+            (MARK_ENV.into(), "old-mark".into()),
+        ]
+        .into();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let codex = crate::hosts::codex::CodexHost::on_home(env.clone(), tx, None);
+        let host = crate::hosts::Host::Codex(codex.clone());
+        host.set_attempt("attempt");
+        host.start().await.unwrap();
+        host.start_thread(
+            "ops",
+            &crate::hosts::Settings {
+                env,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let pids: Vec<u32> = serde_json::from_slice(&std::fs::read(pids_file).unwrap()).unwrap();
+        let report = codex.finish_turn().await;
+        let survivors: Vec<u32> = pids.iter().copied().filter(|&pid| alive(pid)).collect();
+        for &pid in pids
+            .iter()
+            .filter(|pid| report.is_none() || survivors.contains(pid))
+        {
+            // SAFETY: the test's app-server or one of its test jobs, even if the process table cannot see them.
+            unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+        assert!(survivors.is_empty(), "processes survived: {survivors:?}");
+        let report = report.expect("a cleanup diagnostic");
+        assert_eq!(report["leftover_processes"]["count"], pids.len() - 1);
+        assert_eq!(
+            report["leftover_processes"]["top"],
+            json!([{"command": "/bin/sleep 900", "count": pids.len() - 1}])
+        );
+        assert!(codex.finish_turn().await.is_none());
+    }
+
     /// A kept shell stays with what it runs; the reaping parent stays alone.
     #[test]
     fn a_kept_tree_stays_whole() {
+        use std::os::unix::process::CommandExt;
+
         let dir =
             std::env::temp_dir().join(format!("turn-sweep-keep-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -469,16 +560,20 @@ mod tests {
         let mut kept = std::process::Command::new(&shell)
             .current_dir(&dir)
             .env(MARK_ENV, &mark)
+            .process_group(0)
             .spawn()
             .unwrap();
         let mut stray = std::process::Command::new("sleep")
             .arg("900")
             .env(MARK_ENV, &mark)
+            .process_group(kept.id() as i32)
             .spawn()
             .unwrap();
         let worker = wait_for(&[dir.join("worker.pid")])[0];
         let stopped = sweep(&Turn {
             mark,
+            groups: vec![kept.id()],
+            keep: vec![kept.id()],
             keep_trees: vec![kept.id()],
             ..Default::default()
         });
@@ -494,13 +589,10 @@ mod tests {
             kept_up && worker_up,
             "the kept shell or its job was stopped"
         );
-        if cfg!(target_os = "linux") {
-            // Only Linux reads the mark; on a Mac the stray is in no group of the turn.
-            assert_eq!(
-                stopped.iter().map(|s| s.pid).collect::<Vec<_>>(),
-                vec![stray.id()]
-            );
-        }
+        assert_eq!(
+            stopped.iter().map(|s| s.pid).collect::<Vec<_>>(),
+            vec![stray.id()]
+        );
     }
 
     /// The turn's harness is gone and its pid now belongs to another turn's harness, which leads a group of its own

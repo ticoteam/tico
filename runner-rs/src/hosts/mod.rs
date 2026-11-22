@@ -923,7 +923,7 @@ fn clip(text: &str) -> String {
 pub struct Stopper(tokio::sync::mpsc::UnboundedSender<Stop>);
 
 enum Stop {
-    Term(std::time::Duration),
+    Term(std::time::Duration, bool),
     Kill,
     Signal(i32),
 }
@@ -932,7 +932,12 @@ impl Stopper {
     /// SIGTERM now, SIGKILL after `grace` if the process has not exited by then. A process already reaped is
     /// left alone.
     pub fn terminate(&self, grace: std::time::Duration) {
-        let _ = self.0.send(Stop::Term(grace));
+        let _ = self.0.send(Stop::Term(grace, true));
+    }
+
+    /// Stop the child with the same grace, leaving its group to the turn sweep after reaping it.
+    pub fn terminate_child(&self, grace: std::time::Duration) {
+        let _ = self.0.send(Stop::Term(grace, false));
     }
 
     /// SIGKILL now, so the process runs none of its own cleanup (Claude's ends its background shells).
@@ -1071,7 +1076,10 @@ pub fn own(
                             unsafe { libc::kill(pid as i32, signal); }
                         }
                     }
-                    Some(Stop::Term(grace)) => {
+                    Some(Stop::Term(grace, whole_group)) => {
+                        if !whole_group {
+                            group = None;
+                        }
                         if let Some(pid) = child.id() {
                             unsafe { libc::kill(group.map_or(pid as i32, |g| -g), libc::SIGTERM); }
                             termed = true;
@@ -1143,14 +1151,16 @@ impl Host {
         }
     }
 
-    /// Record this harness's raw stream into `capture`; false for a harness the runner does not capture yet.
-    /// The run this host's turn belongs to: a Claude host marks its own process spawn, `system/init` and `result`.
+    /// Identify a fresh attempt host for Claude's flight marks and Codex's end-of-turn sweep.
     pub fn set_attempt(&self, aid: &str) {
-        if let Host::Claude(h) = self {
-            h.set_attempt(aid);
+        match self {
+            Host::Claude(h) => h.set_attempt(aid),
+            Host::Codex(h) => h.prepare_sweep(),
+            _ => (),
         }
     }
 
+    /// Record this harness's raw stream into `capture`; false for a harness the runner does not capture yet.
     pub fn set_capture(&self, capture: &std::sync::Arc<crate::capture::Capture>) -> bool {
         match self {
             Host::Claude(h) => h.set_capture(capture.clone()),

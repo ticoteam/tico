@@ -18,6 +18,7 @@ use super::{
     shell_reads_only, tool_summary, Events, HostError, Settings,
 };
 use crate::env::Env;
+use crate::turn_sweep::{self, MARK_ENV};
 use crate::util::{diagnostic, iso, log, py_dumps, text_of};
 
 const REQUEST_TIMEOUT: u64 = 120;
@@ -239,6 +240,8 @@ struct Shared {
     /// True once the app-server process this host last started has been reaped. Never taken by `stop`, so it still
     /// tells after a stop that was cut off (`running`, `stop_and_reap`).
     reaped: Mutex<Option<tokio::sync::watch::Receiver<bool>>>,
+    /// The fresh app-server and any replacement started while recovering this attempt.
+    sweep: Mutex<Option<turn_sweep::Turn>>,
     active_turn: Mutex<HashMap<String, String>>,
     done_turns: Mutex<HashSet<String>>,
     token_seen: Mutex<HashMap<String, [i64; 3]>>,
@@ -275,6 +278,7 @@ impl CodexHost {
             child: Mutex::new(None),
             exited: tokio::sync::Mutex::new(None),
             reaped: Mutex::new(None),
+            sweep: Mutex::new(None),
             active_turn: Mutex::new(HashMap::new()),
             done_turns: Mutex::new(HashSet::new()),
             token_seen: Mutex::new(HashMap::new()),
@@ -306,8 +310,8 @@ impl CodexHost {
             return Ok(());
         }
         // An earlier app-server that stopped answering but still runs is ended first: it may be using this login.
-        if self.running() {
-            self.stop_and_reap().await;
+        if self.running() && !self.stop_and_reap().await {
+            return Err(failed("could not reap the previous codex app-server"));
         }
         let mut command = super::harness_command(None, "codex");
         command
@@ -318,9 +322,27 @@ impl CodexHost {
             .env_clear()
             .envs(&self.0.env);
         super::new_group(&mut command);
-        let mut child = command
-            .spawn()
-            .map_err(|e| failed(format!("could not start codex app-server: {e}")))?;
+        let mut child = {
+            let mut sweep = self.0.sweep.lock().unwrap();
+            if let Some(target) = sweep.as_ref() {
+                command.env(MARK_ENV, &target.mark);
+            }
+            let child = command
+                .spawn()
+                .map_err(|e| failed(format!("could not start codex app-server: {e}")))?;
+            if let (Some(target), Some(pid)) = (sweep.as_mut(), child.id()) {
+                target.groups.push(pid);
+                let stem = self
+                    .0
+                    .env
+                    .get(crate::turn_limits::SCOPE_ENV)
+                    .map(String::as_str);
+                target
+                    .cgroups
+                    .extend(crate::turn_limits::scope_dir(stem, pid));
+            }
+            child
+        };
         self.0.allocation.mark();
         let _stderr =
             crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &self.0.env);
@@ -352,7 +374,9 @@ impl CodexHost {
             let code = super::return_code(&status);
             let _ = diagnostics.send(json!({"kind": "error", "error": crate::run_diagnostics::process_reason(code, &_stderr.tail()), "exit_code": code, "process_exit": true}));
             flag.store(true, Ordering::SeqCst);
-            let _ = reaped_tx.send(true);
+            if status.is_ok() {
+                let _ = reaped_tx.send(true);
+            }
             let _ = relay_tx.send(status);
         });
         *self.0.reaped.lock().unwrap() = Some(reaped_rx);
@@ -394,7 +418,12 @@ impl CodexHost {
         drop(self.0.stdin.lock().await.take());
         let child = self.0.child.lock().unwrap().take();
         if let Some((stopper, _)) = child {
-            stopper.terminate(Duration::from_secs(5));
+            let grace = Duration::from_secs(5);
+            if self.0.sweep.lock().unwrap().is_some() {
+                stopper.terminate_child(grace);
+            } else {
+                stopper.terminate(grace);
+            }
             if let Some(exited) = self.0.exited.lock().await.take() {
                 let _ = tokio::time::timeout(Duration::from_secs(6), exited).await;
             }
@@ -404,7 +433,7 @@ impl CodexHost {
 
     /// Whether the app-server process is still there, answering or not: from its start until it is reaped. `alive`
     /// is about the protocol and turns false sooner (stdout closed, a stop begun), while the process can live on.
-    pub fn running(&self) -> bool {
+    fn running(&self) -> bool {
         self.0
             .reaped
             .lock()
@@ -415,12 +444,28 @@ impl CodexHost {
 
     /// `stop`, then wait until the process has been reaped. Safe after a stop that was cut off: that stop's TERM and
     /// its KILL five seconds later still come from the reaper task (super::own), and this waits for them.
-    pub async fn stop_and_reap(&self) {
+    async fn stop_and_reap(&self) -> bool {
         self.stop().await;
         let reaped = self.0.reaped.lock().unwrap().clone();
-        if let Some(mut reaped) = reaped {
-            let _ = reaped.wait_for(|gone| *gone).await;
+        match reaped {
+            Some(mut reaped) => reaped.wait_for(|gone| *gone).await.is_ok(),
+            None => false,
         }
+    }
+
+    pub(super) fn prepare_sweep(&self) {
+        *self.0.sweep.lock().unwrap() = Some(turn_sweep::Turn {
+            mark: uuid::Uuid::new_v4().to_string(),
+            ..Default::default()
+        });
+    }
+
+    pub(crate) async fn finish_turn(&self) -> Option<Value> {
+        if !self.stop_and_reap().await {
+            return None;
+        }
+        let target = self.0.sweep.lock().unwrap().take()?;
+        turn_sweep::finish(target, "codex").await
     }
 
     pub fn track_allocation(&self, turn: std::sync::Arc<std::sync::atomic::AtomicBool>) {
@@ -983,7 +1028,11 @@ impl CodexHost {
 
     fn thread_params(&self, settings: &Settings) -> Value {
         let mut cfg = self.0.base_config.clone();
-        let env = env_for_config(&settings.env);
+        let mut env = env_for_config(&settings.env);
+        // Codex's shell policy inherits only core variables. Detached commands on Linux need the mark too.
+        if let Some(target) = self.0.sweep.lock().unwrap().as_ref() {
+            env.insert(MARK_ENV.into(), json!(target.mark));
+        }
         if !env.is_empty() {
             cfg.insert(
                 "shell_environment_policy".into(),

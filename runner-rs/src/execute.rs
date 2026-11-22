@@ -1977,6 +1977,19 @@ impl Runner {
         let _ = self.state.append(aid, "diagnostic", &json!({"text": text}));
     }
 
+    async fn stop_host(&self, host: &Host, aid: &str, redactor: Option<&Arc<Redactor>>) {
+        if let Host::Codex(codex) = host {
+            if let Some(report) = codex.finish_turn().await {
+                let clean = redactor.map_or(std::borrow::Cow::Borrowed(&report), |r| {
+                    r.scrub_json(&report)
+                });
+                let _ = self.state.append(aid, "diagnostic", &clean);
+            }
+        } else {
+            host.stop().await;
+        }
+    }
+
     fn run_deadline(
         &self,
         aid: &str,
@@ -3357,7 +3370,7 @@ impl Runner {
             // The primary's thread stays this conversation's: the fallback runs in a side session, from the task's
             // checkpoint or what the prompt replays, and the next turn on the primary resumes its own.
             if let Some(h) = &host {
-                h.stop().await;
+                self.stop_host(h, &aid, redactor.as_ref()).await;
             }
             fallback = Some(hop.harness.clone());
             drove = Drove::interrupted();
@@ -3833,7 +3846,7 @@ impl Runner {
                 && !personal
                 && (matches!(h, Host::Pi(_)) || persistent && matches!(h, Host::Antigravity(_)));
             if !keeps || drove.outcome != "completed" {
-                h.stop().await;
+                self.stop_host(h, &aid, redactor.as_ref()).await;
             }
             if let Host::Antigravity(warm) = h {
                 // Its token file is blanked; only a turn that completed leaves the process running.
