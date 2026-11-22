@@ -21,7 +21,7 @@ CONDITIONS: dict[str, Condition] = {}
 KEY = re.compile(r"^([A-Za-z][A-Za-z0-9_]*-[1-9][0-9]*)$")
 # Jira Cloud's issue page: https://<site>.atlassian.net/browse/PROJ-123, and the board view's ?selectedIssue=PROJ-123.
 ISSUE_URL = re.compile(
-    r"^https://[A-Za-z0-9-]+\.atlassian\.net/(?:browse/([A-Za-z][A-Za-z0-9_]*-[1-9][0-9]*)(?:[/?#]\S*)?$"
+    r"^(?i:https://[a-z0-9-]+\.atlassian\.net)/(?:browse/([A-Za-z][A-Za-z0-9_]*-[1-9][0-9]*)(?:[/?#]\S*)?$"
     r"|\S*[?&]selectedIssue=([A-Za-z][A-Za-z0-9_]*-[1-9][0-9]*)(?:[&#]\S*)?$)"
 )
 

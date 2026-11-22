@@ -95,4 +95,10 @@ def up(conn):
         "CREATE UNIQUE INDEX task_links_primary_item ON task_links(source, item_type, item_key, connection_id) "
         "WHERE is_primary = 1 AND source IS NOT NULL"
     )
+    # Every read by item names its connection (item_metadata due_reads, linked, tasks_of; the list's ?link=).
+    conn.execute("DROP INDEX IF EXISTS task_links_item_key")
+    conn.execute(
+        "CREATE INDEX task_links_item_key ON task_links(source, item_type, connection_id, item_key) "
+        "WHERE source IS NOT NULL"
+    )
     _external_refs(conn)

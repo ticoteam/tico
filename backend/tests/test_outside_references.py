@@ -291,6 +291,29 @@ def test_a_record_retry_is_shown_only_while_its_saved_entity_is_seen(api):
     assert retry.status_code == 404 and jane not in retry.text
 
 
+def test_a_record_retry_follows_a_merge_of_its_entity(api):
+    with api.app.state.store.transaction() as c:
+        box = MA.ensure_mailbox(c, "ana@acme.example", person_id="ana", created_by="human:ana")
+        other_box = MA.ensure_mailbox(c, "ana.sales@acme.example", person_id="ana", created_by="human:ana")
+        jane = ES.upsert(c, "human:ana", "person", match={"email": "jane@example.test"}, name="Jane")["id"]
+    record = {"ref": jane, "system": "jira", "external_type": "customer", "external_id": "7"}
+    post(api, "entities/external-refs", record, token="ben-test", key="merge-ref")
+    with api.app.state.store.transaction() as c:
+        ES.add_source(c, "human:ana", jane, "mailbox", box["id"], visibility="restricted")
+        janet = ES.upsert(c, "human:ana", "person", match={"email": "janet@example.test"}, name="Janet")["id"]
+        ES.add_source(c, "human:ana", janet, "mailbox", other_box["id"], visibility="restricted")
+        ES.merge(c, "human:ana", janet, jane)  # Jane's source moves to Janet: Jane's own row is left with none
+    retry = api.post("/api/v2/entities/external-refs", json=record, headers=headers("ben-test", "merge-ref"))
+    assert retry.status_code == 404
+
+
+def test_tico_is_not_a_system_a_record_names(api):
+    with api.app.state.store.transaction() as c:
+        acme = ES.upsert(c, "human:ana", "organization", match={"domain": "acme.example"}, name="Acme")["id"]
+    record = {"ref": acme, "system": "Tico", "external_type": "file", "external_id": "f_1"}
+    assert post(api, "entities/external-refs", record, expected=422)["error"]["code"] == "kind"
+
+
 def test_erasing_a_record_suppresses_it_on_its_connection_only(api):
     _tools(api, "tool_a", "tool_b")
     with api.app.state.store.transaction() as c:

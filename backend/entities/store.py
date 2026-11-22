@@ -850,6 +850,9 @@ def external_ref(
     _writer(c, actor)
     _live(c, actor, entity_id)
     system = _required(c, actor, system, "system")
+    if system.lower() == "tico":
+        # Tico's own pointers (a document's file, `document_files`) are written by Tico, never through this.
+        _refuse(c, actor, "kind", "system tico is Tico's own; name the other system the record is in")
     kind = _required(c, actor, external_type, "record type")
     external = _required(c, actor, external_id, "record id")
     connection_id = str(connection_id or "").strip()
@@ -2096,8 +2099,9 @@ def self_summary(c: sqlite3.Connection, who: str) -> dict[str, Any] | None:
 
 
 def visible_entity(c: sqlite3.Connection, who: str, entity_id: str) -> bool:
-    """Whether `who` sees the entity `entity_id` names: an erased one is gone, a hidden one is not seen."""
-    return _one(c, "SELECT 1 FROM entities WHERE id = ?", (entity_id,)) is not None and V.visible(c, who, entity_id)
+    """Whether `who` sees the entity `entity_id` names, as `card` does: a merged one is the one it was merged into, an
+    erased one is gone, a hidden one is not seen."""
+    return bool(_visible_rows(c, V.reader(c, who), _follow(c, [entity_id])))
 
 
 def card(c: sqlite3.Connection, who: str, entity_id: str) -> dict[str, Any] | None:

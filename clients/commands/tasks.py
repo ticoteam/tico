@@ -1513,6 +1513,7 @@ TASK = (
             Arg("kind", "--session", action="store_const", const="session"),
             Arg("wake_once", "--wake-once", action="store_const", const=True),
             Arg("wake_once", "--no-wake-once", action="store_const", const=False),
+            Arg("connection_id", flag="--connection", metavar="TOOL_ID"),
         ),
         example="tico task link T1 https://github.com/acme/app/pull/12 --title 'Fix PR'",
         run=_link,
