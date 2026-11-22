@@ -51,7 +51,12 @@ anew by the channel's adapter.
 
 An audience the adapter cannot tell is external. Ask first waits on one OK (backend/task_asks.py, subject
 `outbound:<id>`) bound to the frozen action, asked of the bot's manager when that is a person who is here and the bot
-may ask, else the company's default person. With nobody to ask, the action is `blocked` and says so.
+may ask, else the company's default person. With nobody to ask, the action is `blocked` and says so. Who may OK it
+is checked again when the OK is given and before it is used: an OK from someone no longer the bot's manager (or the
+default person) is asked again of someone who is. An OK sent back or taken back, or whose task closed, stops the
+action: a queued one is `blocked` at its next attempt, a waiting one `canceled` by the sweep; neither is asked again.
+
+A bot that is onboarding, paused or archived queues nothing, and its queued actions are `blocked` before they go.
 
 ## States
 
@@ -78,8 +83,8 @@ may ask, else the company's default person. With nobody to ask, the action is `b
 ## The worker
 
 One thread per server (`start`, restarted by the scheduler's tick), rung by each commit that queues or approves an
-action, and otherwise asleep until the next row is due (at most a minute, when it also recovers stale claims and
-reconciles unknown rows). Sleep when idle stays up for a row in flight or due within 15 minutes and wakes for a later
+action, and otherwise asleep until the next row is due. At most once a minute, after its due row, it recovers stale
+claims, cancels actions whose OK was sent back, and makes a few provider lookups for unknown rows. Sleep when idle stays up for a row in flight or due within 15 minutes and wakes for a later
 one. A rehearsal copy never runs the worker, and a dev copy empties the table.
 
 ## Adding a channel

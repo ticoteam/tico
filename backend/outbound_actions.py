@@ -111,8 +111,9 @@ class Refused(Exception):
 class Adapter:
     """One channel's sender, each called outside any database transaction except `prepare`:
 
-    - `prepare(c, settings, actor, destination, payload)` checks an action (at enqueue, and again at each attempt) and
-      answers (audience, destination); an audience it cannot tell is external. A Problem refuses (blocks) it.
+    - `prepare(c, settings, actor, destination, payload, *, operation, connection_id, task_id)` checks an action (at
+      enqueue, and again at each attempt) and answers (audience, destination); an audience it cannot tell is external.
+      A Problem refuses (blocks) it.
     - `dispatch(store, row)` makes the one provider call: a receipt dict or a SafeRejection, or it raises.
     - `reconcile(store, row)`, where the provider can be asked: a Settled, or None when it cannot tell."""
 
@@ -138,6 +139,20 @@ def company_policy(c) -> dict[str, str]:
     return {k: v for k, v in stored.items() if v in CHOICES} if isinstance(stored, dict) else {}
 
 
+def bot_stopped(c, actor) -> str:
+    """Why a bot may send nothing now ("" when it may): still onboarding, or paused or archived."""
+    if not H.is_bot(actor):
+        return ""
+    from . import lifecycle
+
+    slug = H.actor_id(actor)
+    if lifecycle.is_onboarding(c, slug):
+        return "The bot is still onboarding: it sends nothing outside yet"
+    if (H.bot(c, slug) or {}).get("state") != "active":
+        return "The bot is not active: it sends nothing while paused or archived"
+    return ""
+
+
 def decide(c, *, actor, channel, audience, destination) -> dict[str, Any]:
     """The policy for one action now: {"choice", "why", "floor"}. The floor only tightens; the default is the company's
     setting for the channel and audience, else DEFAULTS. Enqueue and every attempt read it the same way."""
@@ -146,10 +161,16 @@ def decide(c, *, actor, channel, audience, destination) -> dict[str, Any]:
         return {"choice": "never", "why": f"The company never sends {channel} to {audience} audiences", "floor": True}
     default = company or DEFAULTS[audience]
     from . import org_rule_check
+    from .entities import rules as DR
 
     address = str(destination or "").strip().lower()
     contacts = [address] if "@" in address or address.startswith("+") else []
-    verdict = org_rule_check.structured_check(c, actor or H.TICO_ACTOR, channel, contacts=contacts)
+    # Only a channel the Contacts rules name (DR.CHANNEL_OF): any other would read as chat.
+    verdict = (
+        org_rule_check.structured_check(c, actor or H.TICO_ACTOR, channel, contacts=contacts)
+        if channel in DR.CHANNEL_OF
+        else None
+    )
     if verdict and verdict["outcome"] == "held":
         floor = "never" if any(rule["effect"] == "block" for rule in verdict["held"]) else "ask_first"
         if CHOICES.index(floor) > CHOICES.index(default):
@@ -329,7 +350,19 @@ def enqueue(
         known = ", ".join(sorted(ADAPTERS)) or "none yet"
         raise Problem("validation", f"Tico has no sender for {channel!r} (it sends: {known})", 422)
     after = _when(send_after)
-    audience, destination = adapter.prepare(c, settings, actor, str(destination or "").strip(), payload)
+    stopped = bot_stopped(c, actor)
+    if stopped:
+        raise Problem("onboarding" if "onboarding" in stopped else "bot_inactive", stopped, 409)
+    audience, destination = adapter.prepare(
+        c,
+        settings,
+        actor,
+        str(destination or "").strip(),
+        payload,
+        operation=operation,
+        connection_id=connection_id,
+        task_id=task_id,
+    )
     if len(str(destination or "")) > 500:
         raise Problem("validation", "destination is at most 500 characters", 422)
     audience = audience if audience in AUDIENCES else "external"
@@ -350,7 +383,7 @@ def enqueue(
         "policy_decision": _dump(policy),
         "state": state,
         "send_after": after or now,
-        "next_attempt_at": now,
+        "next_attempt_at": max(now, after or now),
         "task_id": task_id,
         "last_error": policy["why"] if state == "blocked" else "",
         "created_at": now,
@@ -365,7 +398,7 @@ def enqueue(
         made = get(c, made["id"]) or made
     elif state == "queued":
         _after_commit(c, ring)
-    H.event(c, actor or H.TICO_ACTOR, "outbound.queued", made["id"], {"channel": channel, "state": state})
+    H.event(c, actor or H.TICO_ACTOR, "outbound.queued", made["id"], {"channel": channel, "state": made["state"]})
     return made, True
 
 
@@ -379,9 +412,19 @@ def ok_given(c, grant, ctx=None) -> None:
     now = H.now()
     c.execute(
         "UPDATE outbound_actions SET state='queued',next_attempt_at=?,updated_at=? WHERE id=? AND state='waiting_approval'",
-        (now, now, row["id"]),
+        (max(now, row["send_after"]), now, row["id"]),
     )
     _after_commit(c, ring)
+
+
+def may_ok(c, person, grant) -> str | None:
+    """Who may OK an action now (task_asks.MAY_OK, checked when the OK is given and again before it is used): the
+    person it was asked of, while they are still one of those it would be asked of now (`_people_for`)."""
+    if str(grant.get("asked_of_id") or "") != person:
+        return "Only the person it was asked of may OK this"
+    if person not in _people_for(c, str(grant.get("asked_by_id") or "")):
+        return "They are no longer the bot's manager or the company's default person"
+    return None
 
 
 def _approval(c, row) -> str | None:
@@ -435,6 +478,8 @@ def settle(c, row, state, *, receipt=None, error="", token=None) -> bool:
     return True
 
 
+STOPS = (task_asks.SENT_BACK, task_asks.WITHDRAWN)  # an OK sent back, taken back, or its task closed: it stops
+STOPPED = "Its OK was sent back or taken back, or its task closed"
 RESOLVED = ("done", "failed")  # what a reconcile may settle an unknown row as
 
 
@@ -565,7 +610,19 @@ def _permit(store, claimed: Claimed) -> dict[str, Any] | str:
         try:
             if adapter is None:
                 raise Problem("validation", f"Tico has no sender for {row['channel']!r}", 422)
-            audience, _ = adapter.prepare(c, store.settings, row["actor"], row["destination"], content(row)["payload"])
+            stopped = bot_stopped(c, row["actor"])
+            if stopped:
+                raise Problem("bot_inactive", stopped, 409)
+            audience, _ = adapter.prepare(
+                c,
+                store.settings,
+                row["actor"],
+                row["destination"],
+                content(row)["payload"],
+                operation=row["operation"],
+                connection_id=row["connection_id"],
+                task_id=row["task_id"],
+            )
         except Problem as exc:
             settle(c, row, "blocked", error=exc.detail, token=claimed.token)
             return "blocked"
@@ -578,6 +635,10 @@ def _permit(store, claimed: Claimed) -> dict[str, Any] | str:
         )
         if policy["choice"] == "never":
             settle(c, row, "blocked", error=policy["why"], token=claimed.token)
+            return "blocked"
+        rid = row["approval_id"]
+        if rid and task_asks.standing(c, rid) in STOPS:
+            settle(c, row, "blocked", error=STOPPED, token=claimed.token)
             return "blocked"
         approval = _approval(c, row)
         if policy["choice"] == "ask_first" and approval is None:
@@ -666,18 +727,42 @@ def late_answer(c, row, state, *, receipt=None, error="") -> bool:
     )
 
 
+def retire_pass(store, limit=500) -> int:
+    """Actions waiting for an OK that was sent back or taken back, or whose task closed: canceled (payload wiped),
+    never asked again."""
+    with store.read() as c:
+        rows = [
+            dict(r)
+            for r in c.execute(
+                "SELECT * FROM outbound_actions WHERE state='waiting_approval' AND approval_id<>'' "
+                "ORDER BY updated_at LIMIT ?",
+                (limit,),
+            )
+        ]
+        stopped = [r for r in rows if task_asks.standing(c, r["approval_id"]) in STOPS]
+    for row in stopped:
+        with store.transaction() as c:
+            now = get(c, row["id"])
+            if now and now["state"] == "waiting_approval" and now["approval_id"] == row["approval_id"]:
+                settle(c, now, "canceled", error=STOPPED)
+    return len(stopped)
+
+
+RECONCILE_CAP = 20  # provider lookups per sweep, so a due row never waits behind many
+
+
 def step(store, now=None) -> bool:
-    """One worker turn: the backstop (recovery and reconciling) at most every SWEEP seconds, then one due row. True
-    when it attempted one (so the caller looks again at once)."""
+    """One worker turn: one due row, then the backstop (recovery, retiring stopped OKs, a few reconciles) at most
+    every SWEEP seconds. True when it attempted one (so the caller looks again at once)."""
+    claimed = claim(store, now)
+    if claimed:
+        attempt(store, claimed)
     if time.monotonic() - _state["swept"] >= SWEEP:
         _state["swept"] = time.monotonic()
         recover(store, now)
-        reconcile_pass(store)
-    claimed = claim(store, now)
-    if not claimed:
-        return False
-    attempt(store, claimed)
-    return True
+        retire_pass(store)
+        reconcile_pass(store, RECONCILE_CAP)
+    return claimed is not None
 
 
 def _loop(store, halt):
@@ -774,6 +859,7 @@ def install(app, store, auth, mutate):
         ),
     )
     def get_policy(request: Request):
+        auth.domain(request.state.identity)
         with store.read() as c:
             return policy_view(c)
 
@@ -791,6 +877,8 @@ def install(app, store, auth, mutate):
 
         who = request.state.identity
         require_person(who)
+        if getattr(who, "support", None):
+            raise Problem("forbidden", "Tico support does not set the company's outbound policy", 403)
         if not admin(who):
             raise Problem("forbidden", "Only the owner or an admin sets the outbound policy", 403)
         for key, value in body.settings.items():
@@ -872,6 +960,7 @@ def install(app, store, auth, mutate):
     )
     def listing(request: Request, state: str = "", channel: str = "", cursor: str = "", limit: int = 50):
         who = request.state.identity
+        auth.domain(who)
         if state and state not in STATES:
             raise Problem("validation", f"state is one of {', '.join(STATES)}", 422)
         cap = min(100, max(1, limit))
@@ -894,7 +983,10 @@ def install(app, store, auth, mutate):
                 sql += " AND channel=?"
                 args.append(channel)
             if cursor:
-                at = c.execute("SELECT created_at FROM outbound_actions WHERE id=?", (cursor,)).fetchone()
+                at = c.execute(
+                    "SELECT created_at FROM outbound_actions WHERE id=? AND (?=1 OR actor=?)",
+                    (cursor, int(admin(who)), who.actor),
+                ).fetchone()
                 if at:
                     sql += " AND (created_at<? OR (created_at=? AND id<?))"
                     args += [at[0], at[0], cursor]
@@ -922,10 +1014,15 @@ def install(app, store, auth, mutate):
     )
     def detail(request: Request, oid: str):
         who = request.state.identity
+        auth.domain(who)
         with store.read() as c:
             row = one(c, who, oid)
-            if row["state"] != "waiting_approval" or not row["approval_id"]:
+            waiting = row["state"] == "waiting_approval" and row["approval_id"]
+            if not waiting:
                 return {"action": public(c, row, full=True), "shown_hash": None}
+            if not task_asks.own_click(who):  # nothing to record: the hash alone
+                shown = task_asks.show(c, who.actor, row["approval_id"], content(row), own_click=False)
+                return {"action": public(c, row, full=True), "shown_hash": shown}
         with store.transaction() as c:  # the person is shown what an OK binds: recorded (task_asks.show)
             row = one(c, who, oid)
             shown = None
@@ -1006,7 +1103,7 @@ def install(app, store, auth, mutate):
     def confirm_sent(request: Request, oid: str):
         who = request.state.identity
         # A person as themselves (their own token too), never Agent Ops, the Assistant or a run acting for them.
-        if who.role not in ("owner", "human") or who.via or who.task_actor:
+        if who.role not in ("owner", "human") or who.via or who.task_actor or getattr(who, "support", None):
             raise Problem("forbidden", "Only a person, as themselves, confirms it went", 403)
 
         def work(c):

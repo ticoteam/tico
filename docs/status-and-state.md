@@ -504,7 +504,8 @@ Transitions (`backend/outbound_actions.py`): insert `queued`, `waiting_approval`
 `unknown`, `blocked` or `waiting_approval` (the policy checked again), or back to `queued` (a safe rejection, or a stale
 claim never attempted); a stale claim that was attempted goes to `unknown`; `unknown` to `done` or `failed` from the
 provider (the adapter's reconcile, or the attempt's own late answer) or to `done` on a person's word (`confirm-sent`),
-never back to `queued` and never canceled; `waiting_approval`, `queued` or `blocked` to `canceled` by a person.
+never back to `queued` and never canceled; `waiting_approval`, `queued` or `blocked` to `canceled` by a person, and `waiting_approval` to `canceled` when its OK is
+sent back or taken back or its task closes.
 
 ## Outside the stable set
 

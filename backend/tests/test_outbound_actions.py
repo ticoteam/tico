@@ -25,7 +25,7 @@ class Fake:
     def __init__(self):
         self.calls, self.answers, self.found = [], [], None
 
-    def prepare(self, c, settings, actor, destination, payload):
+    def prepare(self, c, settings, actor, destination, payload, **context):
         if destination.startswith("long:"):  # the provider's own spelling of it is much longer
             destination = "inside:" + "x" * 600
         return ("internal" if destination.startswith("inside:") else "external"), destination
@@ -400,3 +400,37 @@ def test_only_the_person_themselves_confirms_an_unknown_action_went(api, store, 
     path = f"/api/v2/outbound-actions/{row['id']}/confirm-sent"
     assert api.post(path, json={}, headers=headers("ben-via-agent-ops")).status_code == 403
     assert api.post(path, json={}, headers=headers("ben-test")).json()["action"]["state"] == "done"
+
+
+def test_an_ok_from_someone_no_longer_eligible_does_not_let_it_go(store, fake):
+    row, rid = approved_by_ben(store)
+    with store.transaction() as c:  # Ben is still here, but no longer Ops's manager
+        c.execute("UPDATE bot_config SET reports_to=NULL WHERE bot='ops'")
+    assert OA.attempt(store, OA.claim(store)) == "waiting_approval" and fake.calls == []
+    with store.read() as c:
+        again = OA.get(c, row["id"])["approval_id"]
+        assert again != rid and task_asks.grant(c, again)["asked_of_id"] == "human:ana"
+
+
+def test_a_paused_bot_queues_nothing_and_sends_nothing(store, fake):
+    row, _ = add(store)
+    with store.transaction() as c:
+        c.execute("UPDATE bots SET state='paused' WHERE slug='ops' OR id='ops'")
+    assert OA.attempt(store, OA.claim(store)) == "blocked" and fake.calls == []
+    with pytest.raises(OA.Problem) as refused:
+        add(store, key="k2")
+    assert refused.value.status == 409
+
+
+def test_a_sent_back_ok_stops_the_action_without_asking_again(store, fake):
+    row, rid = approved_by_ben(store)
+    with store.transaction() as c:  # the OK is taken back before it goes
+        task_asks.revoke(c, rid)
+    assert OA.attempt(store, OA.claim(store)) == "blocked" and fake.calls == []
+    assert row_of(store, row["id"])["approval_id"] == rid  # not asked again
+    waiting, _ = add(store, key="k2", destination="https://partner.example/other")
+    with store.transaction() as c:  # its ask is closed while it waits
+        task_asks.withdraw(c, OA.get(c, waiting["id"])["approval_id"], "Not now")
+    assert OA.retire_pass(store) == 1
+    after = row_of(store, waiting["id"])
+    assert (after["state"], after["payload"]) == ("canceled", "")

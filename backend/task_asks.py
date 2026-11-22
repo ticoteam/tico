@@ -118,6 +118,13 @@ def _outbound_ok(conn: "sqlite3.Connection", grant: Row, ctx: "Context | None") 
     return module.ok_given(conn, grant, ctx)
 
 
+def _outbound_may_ok(conn: "sqlite3.Connection", person: str, grant: Row) -> str | None:
+    from . import outbound_actions
+
+    module: Any = outbound_actions  # its functions are typed loosely
+    return module.may_ok(conn, person, grant)
+
+
 def _rule_ok(conn: "sqlite3.Connection", grant: Row, ctx: "Context | None") -> object:
     from . import org_rules
 
@@ -249,6 +256,7 @@ MAY_OK: dict[str, Callable[..., str | None]] = {
     "proposal": _proposal_may_ok,
     "growth": _growth_may_ok,
     "file": _file_may_ok,
+    "outbound": _outbound_may_ok,
 }
 CHECKS_ITSELF = ("email_send", "letter")
 # Kinds whose OK anyone its MAY_OK rule lets OK it may give, not only the person it waits on: a bot's Growth proposal is
