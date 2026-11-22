@@ -470,7 +470,7 @@ def parser():
     from clients.commands import risk as risk_commands
     from clients.commands import market as market_commands
     from clients.commands import company_page, finance, listening as listening_commands, threads as thread_commands
-    from clients.commands import calls, webhooks
+    from clients.commands import calls, outbound, webhooks
     from clients.commands import contacts as contacts_commands
     from clients.commands import products as products_commands
     from clients.commands import page_history as page_history_commands
@@ -953,6 +953,7 @@ def parser():
 
     cli_spec.add(sub, automations_commands.EVENT_TYPES)  # tico event-types: clients/commands/automations.py
     cli_spec.add(sub, webhooks.CLI)  # tico trigger: clients/commands/webhooks.py
+    cli_spec.add(sub, outbound.CLI)  # tico outbound: clients/commands/outbound.py
     cli_spec.add(sub, webhooks.RELAY)  # tico relay: clients/commands/webhooks.py
     cli_spec.add(sub, calls.CALL)  # tico call: clients/commands/calls.py
     cli_spec.add(sub, webhooks.SLEEP)
