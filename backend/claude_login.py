@@ -3,7 +3,7 @@
 
 Connect runs `claude auth login --claudeai` on a Linux computer through the sign-in relay, in a home of its own, and the
 computer sends back the login (`claudeAiOauth` from `.credentials.json`) with the account it is (`oauthAccount` from
-`.claude.json`). The plan is named by its email and is one per account (`account`: lower(email)|organization uuid): a
+`.claude.json`). There is one plan per account (`account`: lower(email)|organization uuid): a
 second Connect of the same account is a Reconnect of the first, and a Reconnect of a setup-token plan (`claude_token`)
 turns that same plan into a full login, keeping its owner, its computers and its history (its old readings go).
 

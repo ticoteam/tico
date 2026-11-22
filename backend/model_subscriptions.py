@@ -94,6 +94,7 @@ from .api_contract import api_v2
 
 STATUSES = ("new", "working", "needs_reconnect")
 MAX_SUBSCRIPTIONS = 200
+MAX_NAME = 80
 MAX_VALUE = 64 * 1024
 
 # What each kind is, the name a new one gets when the person gives none (`default_name`), the runtime it signs in, and
@@ -181,7 +182,7 @@ class SubscriptionWrite(Contract):
     plan defaults to whoever adds it; an API key has none). `confirm` accepts that a reconnect stops and restarts the
     live runs on every computer given it."""
 
-    name: str | None = Field(default=None, max_length=80)
+    name: str | None = Field(default=None, max_length=MAX_NAME)
     owner_id: str | None = Field(default=None, max_length=120)
     kind: str | None = Field(default=None, max_length=40)
     secret: SecretStr | None = Field(default=None, max_length=MAX_VALUE)
@@ -195,7 +196,7 @@ class SubscriptionConnect(Contract):
     restarts the live runs on every computer given it."""
 
     kind: str | None = Field(default=None, max_length=40)
-    name: str | None = Field(default=None, max_length=80)
+    name: str | None = Field(default=None, max_length=MAX_NAME)
     owner_id: str | None = Field(default=None, max_length=120)
     subscription: str | None = Field(default=None, max_length=80)
     confirm: bool = False
@@ -1194,6 +1195,7 @@ def view(c, sub, ctx=None):
         "computers": list(dict.fromkeys(computers)),
         "usage": _usage(c, sub, ctx),
         "usage_refresh": SR.plan_view(ctx["meta"].get(SR.plan_key(sub["id"]))),
+        "expired": claude_login.expired(sub),
         # A full login runs out about a month after its sign-in: when to reconnect, shown a few days before.
         "reconnect_by": claude_login.reconnect_by(sub),
         "added_by": sub["added_by"],
@@ -1637,11 +1639,18 @@ def _confirm_reconnect(c, settings, given):
         _confirm({"running": running, "sessions": sum(p["sessions"] for p in plans)}, {"computers": len(given)})
 
 
-def default_name(c, kind, preview=""):
-    """The name of a new subscription whose adder gave none: a ChatGPT login's account email (its `preview`, when it has
-    one), else its plan or provider ("Claude", "ChatGPT"), numbered from the second of that name on ("Claude 2"). It is
-    renamed under its row's Edit."""
-    base = preview if kind in ("codex_login", "claude_login") and "@" in preview else KINDS[kind]["name"]
+def default_name(c, kind, owner=""):
+    """Name a plan for its owner when they have a display name, and an API key for its provider."""
+    spec = KINDS[kind]
+    base = spec["name"]
+    if owned(kind):
+        person = H.human(c, owner) if owner else None
+        display_name = ((person or {}).get("name") or "").strip()
+        base = spec["label"]
+        if display_name and "@" not in display_name:
+            ending = f"'s {base}"
+            owner_limit = MAX_NAME - len(ending) - len(f" {MAX_SUBSCRIPTIONS}")
+            base = display_name[:owner_limit].rstrip() + ending
     taken = {r["name"].strip().lower() for r in c.execute("SELECT name FROM model_subscriptions")}
     n, name = 1, base
     while name.lower() in taken:
@@ -1782,8 +1791,8 @@ def save(c, vault, settings, who, body, sid=None, signed_on=""):
     if c.execute("SELECT count(*) FROM model_subscriptions").fetchone()[0] >= MAX_SUBSCRIPTIONS:
         raise Problem("limit", f"The company has {MAX_SUBSCRIPTIONS} subscriptions; remove one first", 422)
     value, preview = checked(body.kind, body.secret.get_secret_value())
-    name = (body.name or "").strip() or default_name(c, body.kind, preview)
     owner = _default_owner(c, who, body, body.kind)
+    name = (body.name or "").strip() or default_name(c, body.kind, owner)
     sid = H.new_id()
     cid = _keep_value(c, vault, {"id": sid, "credential_id": None}, value, preview, who.actor, now)
     c.execute(
@@ -2652,10 +2661,10 @@ def connect(c, settings, who, body):
     is called (`name`: the one given, else `default_name`). With no computer online on a company whose cloud computer
     can be started, it starts that one and answers `waking` with no sign-in: asked again, it queues once that is up.
 
-    A Claude plan is signed in with a full login (`claude auth login --claudeai`, kind `claude_login`) on a computer
-    that can (backend/claude_login.py `can_sign_in`), and named by its email; only when none can does a new plan, or a
-    setup-token plan's Reconnect, fall back to `claude setup-token`. A setup-token plan reconnected this way becomes a full
-    login. A full login's Reconnect needs such a computer."""
+    A Claude plan signs in with a full login (`claude auth login --claudeai`, kind `claude_login`) on a computer
+    that can (backend/claude_login.py `can_sign_in`). Without one, a new plan or a setup-token plan's Reconnect uses
+    `claude setup-token`. Reconnecting a setup-token plan on a computer that can sign in makes it a full login.
+    A full login's Reconnect needs such a computer."""
     from . import claude_login, model_login
 
     name, sid = (body.name or "").strip(), body.subscription or ""
@@ -2678,22 +2687,21 @@ def connect(c, settings, who, body):
     # A reconnect keeps its owner; a new one is checked now, before anyone signs in.
     owner = "" if sid else _default_owner(c, who, body, kind)
 
-    def answer(login, runner):
+    def answer(login, runner, plan_name):
         return {
             **model_login.view(login),
             "computer": runner["label"],
             "not_yours": runner["owner_id"] != H.actor_id(who.actor),
-            "name": sub["name"] if sub else target["name"],
+            "name": plan_name,
             "waking": False,
         }
 
-    # Asked again (a reloaded page): the sign-in already going picks back up, wherever it runs. Looked for before a
-    # name is made up for it: the one it was given is on its row.
+    # A reloaded page picks up the sign-in already going, wherever it runs.
     model_login.sweep(c)
     claude = ("claude_token", "claude_login")
     same = claude if kind in claude else (kind,)
     target = c.execute(
-        f"SELECT l.id, s.name FROM model_logins l JOIN subscription_connects s ON s.login_id=l.id "
+        f"SELECT l.id,s.name,s.kind,s.owner_id FROM model_logins l JOIN subscription_connects s ON s.login_id=l.id "
         f"WHERE l.kind='connect' AND l.requested_by=? AND s.kind IN ({','.join('?' * len(same))}) "
         f"AND s.subscription_id=? AND {model_login.ACTIVE_SQL}"
         + (" AND s.name=?" if name else "")
@@ -2702,15 +2710,14 @@ def connect(c, settings, who, body):
     ).fetchone()
     if target:
         going = c.execute("SELECT * FROM model_logins WHERE id=?", (target["id"],)).fetchone()
-        return answer(going, model_login._runner(c, going["runner_id"]))
+        plan_name = sub["name"] if sub else target["name"] or default_name(c, target["kind"], target["owner_id"])
+        return answer(going, model_login._runner(c, going["runner_id"]), plan_name)
     computers = _connect_computers(c, spec["runtime"], who)
     if kind in claude:
         full = [r for r in computers if claude_login.can_sign_in(r)]
         if full or kind == "claude_login":
             computers, kind = full, "claude_login"
-    # A ChatGPT login or a full Claude login is named for its account's email once it is saved (`connected`), so it
-    # gets no name yet.
-    target = {"name": name or ("" if sid or kind in ("codex_login", "claude_login") else default_name(c, kind))}
+    plan_name = sub["name"] if sub else name or default_name(c, kind, owner)
     if not computers and kind == "claude_login" and sub and sub["kind"] == "claude_login":
         raise Problem(
             "offline",
@@ -2731,7 +2738,7 @@ def connect(c, settings, who, body):
                 "state": "requested",
                 "computer": "",
                 "not_yours": False,
-                "name": sub["name"] if sub else target["name"],
+                "name": plan_name,
                 "waking": True,
             }
         raise Problem(
@@ -2751,12 +2758,13 @@ def connect(c, settings, who, body):
         raise Problem(
             "state", f"You are connecting another subscription on {runner['label']}; finish or cancel that first", 409
         )
+    # The default name is numbered when saved, so concurrent sign-ins still get distinct names.
     c.execute(
         "INSERT INTO subscription_connects(login_id,kind,name,subscription_id,owner_id) VALUES(?,?,?,?,?)",
-        (login["id"], kind, "" if sid else target["name"], sid, owner),
+        (login["id"], kind, "" if sid else name, sid, owner),
     )
     H.event(c, who.actor, "subscription.connect", sid or login["id"], {"kind": kind, "runner": runner["id"]})
-    return answer(login, runner)
+    return answer(login, runner, plan_name)
 
 
 def connected(c, vault, settings, who, login_id, body):
@@ -2843,9 +2851,14 @@ def install(app, store, auth, mutate, settings):
         _reader(who)
         with store.read() as c:
             manages = _may_manage(auth, who)
-            subscriptions = [
-                sub | {"can_remove": may_remove(who, sub["added_by"], manages=manages)} for sub in listed(c, settings)
-            ]
+            subscriptions = listed(c, settings)
+            bots = {agent["id"] for sub in subscriptions for agent in sub["agents"]}
+            access = auth.bot_accesses(c, who, sorted(bots)) if bots else {}
+            for sub in subscriptions:
+                sub["can_remove"] = may_remove(who, sub["added_by"], manages=manages)
+                if owned(sub["kind"]) and not manages and sub["owner_id"] != who.actor:
+                    sub["preview"] = ""
+                sub["agents"] = [agent for agent in sub["agents"] if access[agent["id"]]["read"]]
             return {"subscriptions": subscriptions, "kinds": kinds(), "connect": connect_ready(c)}
 
     @app.post(

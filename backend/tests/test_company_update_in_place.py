@@ -491,6 +491,26 @@ def assert_email_cutover(c, cutover_at):
             assert json.loads(row["receipt"]) == {"message_id": "gmail-id"}
 
 
+def seed_plan_name_collision(c):
+    owner_id, owner_name = c.execute("SELECT id,name FROM humans ORDER BY id LIMIT 1").fetchone()
+    name = f"{owner_name}'s ChatGPT plan"
+    c.execute(
+        "INSERT INTO model_subscriptions(id,name,kind,sealed,preview,owner_id,added_by,created_at,updated_at) "
+        "VALUES('old-plan','old@acme.example','codex_login','','old@acme.example',?,?,'2026-11-19','2026-11-19')",
+        (f"human:{owner_id}", f"human:{owner_id}"),
+    )
+    c.execute(
+        "INSERT INTO credentials(id,name,kind,env,ciphertext,created_at,updated_at,updated_by) "
+        "VALUES('old-key',?,'env','OPENAI_API_KEY',X'01','2026-11-19','2026-11-19','tico')",
+        (name,),
+    )
+    c.execute(
+        "INSERT INTO credential_grants(id,credential_id,subject,granted_by,created_at) "
+        "VALUES('old-grant','old-key','computers','tico','2026-11-19')"
+    )
+    return name
+
+
 def test_the_pending_migrations_apply_in_any_order(company, tmp_path, monkeypatch):
     """Migrations merge in any order and an install may be anywhere between two releases, so the files this company
     has not run must give the same database whichever runs first (CLAUDE.md, Conventions)."""
@@ -499,6 +519,9 @@ def test_the_pending_migrations_apply_in_any_order(company, tmp_path, monkeypatc
     # Compare data as well as schema when this cutover is among the pending files.
     slack_cutover = any(m.version.endswith("_slack_outbound") for m in pending)
     email_cutover = any(m.version.endswith("_email_outbound") for m in pending)
+    plan_cutover = {"plan_display_names", "computer_keys_to_subscriptions"} <= {
+        m.version.split("_", 1)[1] for m in pending
+    }
     slack_states = {
         "ready": "queued",
         "retry": "queued",
@@ -519,6 +542,8 @@ def test_the_pending_migrations_apply_in_any_order(company, tmp_path, monkeypatc
         with closing(sqlite3.connect(path, isolation_level=None)) as c:
             c.row_factory = sqlite3.Row
             c.execute("PRAGMA foreign_keys=ON")
+            if plan_cutover:
+                key_name = seed_plan_name_collision(c)
             if email_cutover:
                 for state in EMAIL_CUTOVER_STATES:
                     seed_old_email(c, state)
@@ -543,6 +568,13 @@ def test_the_pending_migrations_apply_in_any_order(company, tmp_path, monkeypatc
                 except Exception as exc:
                     pytest.fail(f"Migration {migration.path.name} fails on a running company when run {name}: {exc!r}")
             assert c.execute("PRAGMA foreign_key_check").fetchall() == [], f"{name}: rows refer to missing rows"
+            if plan_cutover:
+                assert [row[0] for row in c.execute("SELECT name FROM model_subscriptions WHERE id='old-plan'")] == [
+                    f"{key_name} 2"
+                ]
+                assert [
+                    row[0] for row in c.execute("SELECT name FROM model_subscriptions WHERE credential_id='old-key'")
+                ] == [key_name]
             if email_cutover:
                 assert_email_cutover(c, cutover_at)
             if slack_cutover:

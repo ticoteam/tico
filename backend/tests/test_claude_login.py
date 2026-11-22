@@ -1,10 +1,11 @@
-"""Full Claude logins (backend/claude_login.py): a Claude plan connected with `claude auth login --claudeai`, named by
-its email, one plan per account; turns get only an access token in their own file; one computer at a time refreshes
+"""Full Claude logins (backend/claude_login.py): a Claude plan connected with `claude auth login --claudeai`, one
+plan per account; turns get only an access token in their own file; one computer at a time refreshes
 the login and the others get the new token; usage is read on a schedule from Claude's usage endpoint."""
 
 import json
 import time
 from datetime import datetime, timedelta, timezone
+from importlib import import_module
 
 from backend import claude_login as CL
 from backend import model_subscriptions as MS
@@ -103,7 +104,7 @@ def at(**delta):
     return (datetime.now(timezone.utc) + timedelta(**delta)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def test_a_full_login_is_named_by_its_email_and_connecting_the_same_account_again_reconnects_it(api):
+def test_a_full_login_is_named_for_its_owner_and_connecting_the_same_account_again_reconnects_it(api):
     setup(api)
     company(api)
     # Only a computer on an older runner: Connect stays the setup-token sign-in there.
@@ -114,11 +115,11 @@ def test_a_full_login_is_named_by_its_email_and_connecting_the_same_account_agai
     m = computer(api)
     assert get(api, "model-subscriptions")["connect"] == ["claude_token", "codex_login"]  # never listed on its own
     login = post(api, "model-subscriptions/connect", {"kind": "claude_token"})
-    assert login["runner_id"] == m["runner_id"]
+    assert login["runner_id"] == m["runner_id"] and login["name"] == "Ana's Claude plan"
     assert [w["subscription_kind"] for w in asked(api, m)] == ["claude_login"]
     assert send(api, m, login, full())["state"] == "done"
     [sub] = listed(api)
-    assert (sub["kind"], sub["name"], sub["preview"]) == ("claude_login", "ana@acme.example", "ana@acme.example")
+    assert (sub["kind"], sub["name"], sub["preview"]) == ("claude_login", login["name"], "ana@acme.example")
     assert sub["reconnect_by"] is None
     assert anywhere(api, access(1)) == [] and anywhere(api, refresh(1)) == []  # sealed
     # The same account connected again is that plan's Reconnect: one plan, the next revision.
@@ -129,7 +130,7 @@ def test_a_full_login_is_named_by_its_email_and_connecting_the_same_account_agai
     # Another account is a plan of its own; reconnecting one plan with the other's account is refused.
     other = post(api, "model-subscriptions/connect", {"kind": "claude_token"})
     send(api, m, other, full("ben@acme.example", n=3))
-    assert sorted(s["name"] for s in listed(api)) == ["ana@acme.example", "ben@acme.example"]
+    assert sorted(s["name"] for s in listed(api)) == [login["name"], login["name"] + " 2"]
     refused = post(api, f"model-subscriptions/{sub['id']}", {"secret": full("ben@acme.example", n=4)}, expected=409)
     assert refused["error"]["code"] == "account"
 
@@ -166,6 +167,26 @@ def test_a_setup_token_plan_reconnected_with_a_full_login_keeps_its_owner_comput
     # The emergency path back: a pasted setup-token makes it a setup-token plan again, still the same plan.
     post(api, f"model-subscriptions/{sid}", {"secret": TOKEN, "confirm": True})
     assert [(s["id"], s["kind"]) for s in listed(api)] == [(sid, "claude_token")]
+
+
+def test_the_name_migration_hides_the_account_email_of_a_login_converted_to_a_setup_token(api):
+    setup(api)
+    company(api)
+    email = "account@acme.example"
+    plan = add(api, "claude_login", full(email), name=f"{email} 2")
+    reconnected = post(api, f"model-subscriptions/{plan['id']}", {"secret": TOKEN, "confirm": True})
+    assert reconnected["kind"] == "claude_token" and reconnected["name"] == f"{email} 2"
+
+    migration = import_module("backend.migrations.20261122215020_plan_display_names")
+    with api.app.state.store.transaction() as c:
+        migration.up(c)
+    [member] = get(api, "model-subscriptions", "cara-test")["subscriptions"]
+    assert (member["id"], member["kind"], member["name"], member["preview"]) == (
+        plan["id"],
+        "claude_token",
+        "Ana's Claude plan",
+        "",
+    )
 
 
 def test_a_kept_key_reconnected_as_a_full_login_is_retired_and_never_hands_out_the_login(api):
@@ -542,8 +563,12 @@ def test_a_login_near_its_end_says_by_when_to_reconnect(api):
     sid = add(api, "claude_login", full(days=3), name=None)["id"]
     [sub] = listed(api)
     assert sub["id"] == sid and sub["reconnect_by"] and sub["reconnect_by"] < at(days=4)
-    with api.app.state.store.read() as c:
+    assert sub["expired"] is False
+    with api.app.state.store.transaction() as c:
         assert H.parse_ts(MS.row(c, sid)["login_expires_at"])
+        c.execute("UPDATE claude_logins SET access_expires_at=? WHERE subscription_id=?", (at(minutes=-1), sid))
+    [expired] = listed(api)
+    assert expired["expired"] is True and expired["status"] == sub["status"]
 
 
 def test_a_poll_with_nothing_to_write_is_answered_off_the_write_lock_as_the_write_lock_would(api, monkeypatch):

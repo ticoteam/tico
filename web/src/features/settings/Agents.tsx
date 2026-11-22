@@ -19,6 +19,7 @@ import { poll } from '@/lib';
 import { Section } from '@/pagekinds';
 import { modelName } from '@/features/team/routing';
 import { AgentList } from './AgentList';
+import { editSubscriptionName } from './actions';
 import { GatewayLines } from './Gateway';
 import { installCommands, type Command, type ComputerKind, type RunnerConfig } from './install';
 import { Foot, Line, Meter, SwitchLine, Verb, Word, act, usd, useVisible } from './parts';
@@ -200,7 +201,7 @@ function EditSubDialog({ s, owned, onClose }: { s: Subscription; owned: boolean;
   const people = (access.data?.people ?? []).filter((p) => !p.left && p.can_sign_in !== false);
   const save = async () => {
     setBusy(true);
-    const ok = await act('settings.editSubscription', { subscription: s.id, name: name.trim(), ...(owned && owner !== was ? { owner } : {}) });
+    const ok = await act('settings.editSubscription', { subscription: s.id, name, ...(owned && owner !== was ? { owner } : {}) });
     setBusy(false);
     if (ok) onClose();
   };
@@ -214,7 +215,7 @@ function EditSubDialog({ s, owned, onClose }: { s: Subscription; owned: boolean;
           <Button variant="quiet" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" busy={busy} disabled={!name.trim() || name.trim().length > 80} onClick={() => save()}>
+          <Button variant="primary" busy={busy} disabled={!editSubscriptionName.safeParse(name).success} onClick={() => save()}>
             Save
           </Button>
         </>

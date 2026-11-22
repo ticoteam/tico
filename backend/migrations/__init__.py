@@ -43,8 +43,12 @@ from .. import hubdb as H
 DIRECTORY = Path(__file__).parent
 BASELINE = "baseline.sql"
 CUTOVER_PREREQUISITES = {
-    "20261122144410_slack_outbound": ("20261122001930_outbound_actions",),
-    "20261122194833_email_outbound": ("20261118234339_email_send_tasks", "20261122001930_outbound_actions"),
+    "20261122144410_slack_outbound": ("20261122001930_outbound_actions.sql",),
+    "20261122194833_email_outbound": ("20261118234339_email_send_tasks.sql", "20261122001930_outbound_actions.sql"),
+    "20261122215020_plan_display_names": (
+        "20261117061243_computer_keys_to_subscriptions.py",
+        "20261117085930_drop_computer_keys.py",
+    ),
 }
 RETIRED_LIST = "retired.txt"
 # Older releases recorded their pre-file history as `legacy_user_version_<N>` and `legacy_cloud_<N>` rows with this
@@ -270,10 +274,11 @@ def _broken_references(conn):
 def _run(conn, migration):
     """One migration in one transaction with its row, so a failure rolls back both. `conn` must be in autocommit."""
     module = _module(migration) if migration.kind == "py" else None
-    # A storage cutover needs the source columns and destination table even on an install at the floor.
-    for version in CUTOVER_PREREQUISITES.get(migration.version, ()):
-        if not conn.execute("SELECT 1 FROM schema_migrations WHERE version=?", (version,)).fetchone():
-            _run(conn, _migration(migration.path.with_name(version + ".sql")))
+    # A cutover can need both the tables and the data made by an earlier migration on an install at the floor.
+    for filename in CUTOVER_PREREQUISITES.get(migration.version, ()):
+        path = migration.path.with_name(filename)
+        if not conn.execute("SELECT 1 FROM schema_migrations WHERE version=?", (path.stem,)).fetchone():
+            _run(conn, _migration(path))
     keys_off = bool(module and getattr(module, "FOREIGN_KEYS_OFF", False))
     prior = conn.execute("PRAGMA foreign_keys").fetchone()[0]
     if keys_off:

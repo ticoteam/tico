@@ -104,6 +104,14 @@ const id = (what: string) => z.string().check(z.minLength(1), z.maxLength(200), 
 const setting = (key: string) => ({ kind: 'setting', id: key });
 const bare = (actor: string) => actor.replace(/^human:/, '');
 
+const MAX_SUBSCRIPTION_NAME = 80;
+// The API and JSON Schema count code points. Zod's maxLength counts UTF-16 units.
+const subscriptionName = z.string().check(
+  z.trim(),
+  z.refine((name) => [...name].length <= MAX_SUBSCRIPTION_NAME, { message: `must be at most ${MAX_SUBSCRIPTION_NAME} characters` }),
+).register(z.globalRegistry, { maxLength: MAX_SUBSCRIPTION_NAME });
+export const editSubscriptionName = subscriptionName.check(z.minLength(1));
+
 export const openSection = defineAction({
   id: 'settings.open',
   title: 'Open a settings section',
@@ -462,7 +470,7 @@ export const addKey = defineAction({
   id: 'settings.addKey',
   title: 'Add a model key',
   kind: 'change',
-  input: z.strictObject({ kind: id('a subscription kind'), secret: z.string().check(z.minLength(8), z.maxLength(20000), z.describe('the key')), name: z.optional(z.string().check(z.maxLength(80))) }),
+  input: z.strictObject({ kind: id('a subscription kind'), secret: z.string().check(z.minLength(8), z.maxLength(20000), z.describe('the key')), name: z.optional(subscriptionName) }),
   tico: false,
   run: async (ctx, { kind, secret, name }) => {
     const added = await addSubscription(kind, secret, name);
@@ -552,7 +560,7 @@ export const editSub = defineAction({
   kind: 'change',
   input: z.strictObject({
     subscription: id('a subscription id'),
-    name: z.string().check(z.minLength(1), z.maxLength(80)),
+    name: editSubscriptionName,
     owner: z.optional(z.string().check(z.maxLength(200), z.describe('a person id, for a plan'))),
   }),
   // Who holds a plan's sign-in is the person's own press; a new name stays Tico's.

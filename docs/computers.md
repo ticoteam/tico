@@ -52,7 +52,7 @@ A plan the person adds later joins on its own, and one given to someone else lea
 never part of a person's plans. The line under the picker says which plan is in use and why ("On Plan 2 · Plan 1 at its
 limit until Fri 09:00"); `tico subscription list` shows the same for agents.
 
-The plan is named after itself (*Claude*, then *Claude 2*) and its owner is the person who signed in; change either
+The plan defaults to a name like *Ana's Claude plan* and its owner is the person who signed in. Change either
 under the row's **⋯ → Edit**. An API key is its own small form: the key and, if you like, a name. **Paste instead**,
 behind the sign-in, is the fallback when no computer can run it: the token from `claude setup-token`, or Codex's
 `auth.json` (pasted, or picked with **Choose auth.json**). **Reconnect** is the same sheet from step 2.
@@ -281,7 +281,10 @@ Signing a saved subscription in again is **Reconnect**, and asks first when runn
 **Owner** is the person whose plan it is. Whoever adds a plan is its owner, unless an owner or admin names another active
 person in the company, now or later. A plan is for its owner's own bots, not shared ones; the sign-in step says so. Owners
 and admins add, edit, reconnect and remove them in **Settings > Models**. The person who added a plan or API key can
-also remove it there. The list shows each name, kind, owner, status, computers and usage.
+also remove it there. Default names use the owner's display name, as in **Ana's Claude plan** or **Ana's ChatGPT
+plan**, and fall back to **Claude plan** or **ChatGPT plan**. On upgrade, Tico replaces legacy email names on saved
+logins, including Claude logins since converted to setup tokens. The list shows the plan's usage to all members, its
+account email to its owner and admins, and only the agents each viewer can read.
 
 Give a computer at most one subscription per tool (Claude Code, Codex). One subscription can be given to many computers.
 Every bot on that computer then runs that tool on it. A bot with no fallback of its own, or whose named fallback is another
@@ -356,8 +359,8 @@ such button.
 
 #### Full Claude logins
 
-A Claude plan connected with `claude auth login --claudeai` is a full login, as Orca and t3code use: it is named by its
-account's email, and is one plan per account in the company (connecting the same account again reconnects that plan).
+A Claude plan connected with `claude auth login --claudeai` is a full login, as Orca and t3code use. There is one plan
+per account in the company. Connecting the same account again reconnects that plan.
 A setup-token plan reconnected this way becomes a full login and keeps its owner, computers and history; pasting a
 setup-token into a full login's Reconnect turns it back. It is offered only from a Linux computer, since a Mac keeps the
 login in its Keychain, and runs only on computers whose runner says `claude_login_v1`.
