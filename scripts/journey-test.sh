@@ -145,7 +145,7 @@ esac
 WORK="$(mktemp -d)"
 DIR="$WORK/install"
 mkdir -p "$DIR" "$WORK/releases/download"
-RESULTS=() STATE_ID="" FAILED=0 SEED_THREAD="" SEED_TASK="" SEED_CONVERSATION="" CAND_READY=0
+RESULTS=() STATE_ID="" FAILED=0 SEED_THREAD="" SEED_TASK="" SEED_CONVERSATION="" CAND_READY=0 AGENT_OPS_NAMED=0
 REFUSED=journey-refused-$RUN   # the candidate's one-off start on the previous release's data (fresh-start)
 
 dc() { docker compose -p "$PROJECT" --project-directory "$DIR" "$@"; }
@@ -218,6 +218,20 @@ last_seen() {  # the computers' last contact: runner_states (migration 0062) onc
 }
 seen_since() { [[ "$(last_seen)" > "$1" ]]; }
 agent_ops_ready() { get operations | json 'sys.exit(0 if d["machines"][0]["readiness"]["bots"]["botops"]["ready"] else 1)'; }
+agent_ops_ready_since() {  # a readiness report newer than $1 that finds Agent Ops ready
+  [[ "$(sql "SELECT coalesce(max(readiness_at),'') FROM runner_states")" > "$1" ]] && agent_ops_ready
+}
+unname_agent_ops() {
+  dc exec -T server python - <<'PY'
+import sqlite3
+c = sqlite3.connect("/data/hub.sqlite")
+c.execute(
+    "UPDATE bot_settings SET extra = json_remove(extra, '$.name'), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"
+    " WHERE bot_id = 'botops' AND json_valid(extra)"
+)
+c.commit()
+PY
+}
 
 reply_to() {  # conversation nonce: the fake harness's answer to that ask, into $WORK/reply
   get "conversations/$1/messages" | python3 -c '
@@ -387,17 +401,20 @@ step_seed() {
   if [ "$(server_tag)" = v0.6.200 ]; then
     # v0.6.200 seeds Agent Ops with no name in its config while its template's bot.yaml names its slug, so a v0.6.200
     # runner never finds the checkout ready ("Configuration differs from server"). Later servers send the slug as the
-    # name (backend/execution.py assigned, test_agent_ops_name.py); this release's seed gets it written in instead.
-    dc exec -T server python - <<'PY' || { say "could not name v0.6.200's Agent Ops"; return 1; }
+    # name (backend/execution.py assigned); this release's seed gets it written in, and the step after the upgrade
+    # takes it out again, so the candidate server's own fallback is what the old runner's readiness rests on.
+    AGENT_OPS_NAMED="$(dc exec -T server python - <<'PY'
 import sqlite3
 c = sqlite3.connect("/data/hub.sqlite")
-c.execute(
+n = c.execute(
     "UPDATE bot_settings SET extra = json_set(COALESCE(NULLIF(extra, ''), '{}'), '$.name',"
     " (SELECT slug FROM bots WHERE id = 'botops')), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"
     " WHERE bot_id = 'botops' AND json_extract(COALESCE(NULLIF(extra, ''), '{}'), '$.name') IS NULL"
-)
+).rowcount
 c.commit()
+print(n)
 PY
+)" || { say "could not name v0.6.200's Agent Ops"; return 1; }
   fi
   operator="$(get me | json 'd["actor"].split(":",1)[1]')"
   code="$(post enrollments "{\"operator\": \"$operator\"}" | json 'd["code"]')" || return 1
@@ -560,6 +577,17 @@ step_old_runner() {
   local task
   # The update moved the server only; the computer still runs the previous release's runner, and its `hub`.
   [ "$(docker inspect --format '{{.Config.Image}}' "$RUNNER" | sed 's/.*://')" = "$PREV" ] || { say "the runner is not on $PREV"; return 1; }
+  if [ "$AGENT_OPS_NAMED" = 1 ]; then
+    # The name the v0.6.200 seed wrote in goes, so only the candidate server's fallback names Agent Ops. The restarted
+    # $PREV runner probes afresh; its report after the restart must find Agent Ops ready.
+    unname_agent_ops || { say "could not take out the seed's Agent Ops name"; return 1; }
+    [ -z "$(sql "SELECT coalesce(json_extract(COALESCE(NULLIF(extra, ''), '{}'), '$.name'), '') FROM bot_settings WHERE bot_id = 'botops'")" ] ||
+      { say "Agent Ops still has a stored name"; return 1; }
+    docker rm -f "$RUNNER" >/dev/null 2>&1   # stopped first: no report of its own lands after the mark below
+    local before; before="$(sql "SELECT coalesce(max(readiness_at),'') FROM runner_states")"
+    start_runner "$PREV" --code "" || return 1
+    retry 180 agent_ops_ready_since "$before" || { say "Agent Ops with no stored name is not ready on the $PREV runner against $CAND"; return 1; }
+  fi
   task="$(new_task "Acme pricing page")" || return 1
   ask old worktree="$task" || return 1
   if [ "$(current_room "$SEED_CONVERSATION")" != "$SEED_CONVERSATION" ]; then
