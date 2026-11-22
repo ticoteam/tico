@@ -302,8 +302,8 @@ def _links(conn: Any, a: Row, b: Row) -> list[Row]:
     return [
         dict(row)
         for row in conn.execute(
-            "SELECT url, title, kind FROM task_links WHERE task_id=? AND kind NOT IN ('pr','session','worktree') "
-            "ORDER BY created_at",
+            "SELECT url, title, kind, connection_id FROM task_links WHERE task_id=? "
+            "AND kind NOT IN ('pr','session','worktree') ORDER BY created_at",
             (a["id"],),
         )
         if row["url"] not in have
@@ -444,7 +444,16 @@ def merge(
         TR._insert(conn, actor, from_id, to_id, kind, ts)
         TR._history(conn, actor, from_id, to_id, kind, True, f"from {_num(a)}", at=ts)
     for link in links:
-        H.task_link(conn, actor, b["id"], link["url"], link.get("title"), kind=link["kind"], mover=mover)
+        H.task_link(
+            conn,
+            actor,
+            b["id"],
+            link["url"],
+            link.get("title"),
+            kind=link["kind"],
+            mover=mover,
+            connection_id=link.get("connection_id") or "",
+        )
     # A's open subtasks go under B before A closes, so the close finds none to close.
     moved: list[str] = []
     for child in _open_children(conn, a["id"]):

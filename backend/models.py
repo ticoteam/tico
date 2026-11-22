@@ -686,6 +686,9 @@ class TaskLink(Contract):
     kind: Literal["session"] | None = None
     # A pull request link: true wakes the owner once when its checks finish, it is reviewed or it ships; false disarms.
     wake_once: bool | None = None
+    # A link to an outside item (a Jira issue): the connection (a tool's id) it came through, so the same key in two
+    # connections is two items (backend/item_sources).
+    connection_id: str | None = Field(default=None, max_length=200)
 
 
 class TaskRelation(Contract):

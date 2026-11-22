@@ -2,8 +2,10 @@
 """Item metadata: Tico's saved copy of what a source said of one item (docs/dev/pipelines-v3.md "Sources and items").
 
 Requirements read saved metadata only; nothing here calls a source. One `item_metadata` row per item (source, item
-type, item key). A task reaches its items through its `task_links` rows that name one (`source`, `item_type`,
-`item_key`). The source's module (backend/item_sources) says what `fields` hold and reads them.
+type, item key, connection). A task reaches its items through its `task_links` rows that name one (`source`,
+`item_type`, `item_key`, `connection_id`). The source's module (backend/item_sources) says what `fields` hold and reads
+them. The connection is the `tools` row the item came through, '' for none (GitHub's): every read, lookup and due read
+keys on it, so two connections holding the same key never read, wake or move each other's tasks.
 
 - Newest wins. `metadata_version` is when the read or webhook that saw the metadata began, in ms. A save with an older
   version than the row's changes nothing, so a slow read can't undo a webhook that came after it began. Two saves at
@@ -53,22 +55,22 @@ def _loaded(row: Row) -> Row:
     return row
 
 
-def get(conn: "sqlite3.Connection", source: str, item_type: str, key: str) -> Row | None:
+def get(conn: "sqlite3.Connection", source: str, item_type: str, key: str, connection_id: str = "") -> Row | None:
     """One item's saved metadata (an `item_metadata` row with `fields` loaded), or None when Tico has none yet."""
     from . import read_cache
 
     values: dict[Any, Any] | None = read_cache.cache(conn)
-    cached = (GET_SQL, source, item_type, str(key))
+    cached = (GET_SQL, source, item_type, str(key), connection_id)
     if values is not None and cached in values:
         kept: Row | None = values[cached]
         return _loaded(dict(kept)) if kept else None
-    found = _rows(conn, GET_SQL, (source, item_type, key))
+    found = _rows(conn, GET_SQL, (source, item_type, key, connection_id))
     if values is not None:  # kept for the read snapshot as stored; `prime_of_task` reads its tasks' items together
         values[cached] = dict(found[0]) if found else None
     return _loaded(found[0]) if found else None
 
 
-GET_SQL = "SELECT * FROM item_metadata WHERE source=? AND item_type=? AND item_key=?"
+GET_SQL = "SELECT * FROM item_metadata WHERE source=? AND item_type=? AND item_key=? AND connection_id=?"
 
 
 def save(
@@ -81,6 +83,7 @@ def save(
     *,
     final: bool = False,
     title: str | None = None,
+    connection_id: str = "",
 ) -> bool:
     """Save what the source said of an item, as seen by a read or webhook that began at `version`. `fields` replaces the
     saved fields (the source merges first). False, and nothing written, when the saved metadata is newer. Saved at the
@@ -88,7 +91,7 @@ def save(
     unknown, so the next pass reads the source (`due_reads`)."""
     H = _h()
     now = H.now()
-    old = get(conn, source, item_type, key)
+    old = get(conn, source, item_type, key, connection_id)
     if old and int(old["metadata_version"]) > version:
         return False
     text = json.dumps(fields)
@@ -107,33 +110,48 @@ def save(
     else:
         conn.execute(
             "INSERT INTO item_metadata (title, fields, metadata_version, read_at, final_at, updated_at, id, source, "
-            "item_type, item_key, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (*values, H.new_id(), source, item_type, key, now),
+            "item_type, item_key, connection_id, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (*values, H.new_id(), source, item_type, key, connection_id, now),
         )
     return True
 
 
-def mark_due(conn: "sqlite3.Connection", source: str, item_type: str, key: str) -> None:
+def mark_due(conn: "sqlite3.Connection", source: str, item_type: str, key: str, connection_id: str = "") -> None:
     """Ask for a full read of an item on the next pass, whatever its age (it is not final)."""
     conn.execute(
-        "UPDATE item_metadata SET due_at=? WHERE source=? AND item_type=? AND item_key=? AND final_at IS NULL",
-        (_h().now(), source, item_type, key),
+        "UPDATE item_metadata SET due_at=? WHERE source=? AND item_type=? AND item_key=? AND connection_id=? "
+        "AND final_at IS NULL",
+        (_h().now(), source, item_type, key, connection_id),
     )
 
 
-def linked(conn: "sqlite3.Connection", source: str, item_type: str, key: str) -> bool:
+def linked(conn: "sqlite3.Connection", source: str, item_type: str, key: str, connection_id: str = "") -> bool:
     """Whether any task links this item."""
     return (
         conn.execute(
-            "SELECT 1 FROM task_links WHERE source=? AND item_type=? AND item_key=? LIMIT 1", (source, item_type, key)
+            "SELECT 1 FROM task_links WHERE source=? AND item_type=? AND item_key=? AND connection_id=? LIMIT 1",
+            (source, item_type, key, connection_id),
         ).fetchone()
         is not None
     )
 
 
+def linking(conn: "sqlite3.Connection", source: str, item_type: str, key: str, connection_id: str = "") -> list[str]:
+    """Every task that links this item, whatever its status, oldest link first: the tasks an outside item names
+    (`GET /api/v2/tasks?link=`), which the caller narrows to the ones its reader may see."""
+    return [
+        str(found[0])
+        for found in conn.execute(
+            "SELECT task_id FROM task_links WHERE source=? AND item_type=? AND item_key=? AND connection_id=? "
+            "GROUP BY task_id ORDER BY MIN(created_at), task_id",
+            (source, item_type, key, connection_id),
+        ).fetchall()
+    ]
+
+
 def of_task(conn: "sqlite3.Connection", task_id: str, source: str, item_type: str) -> list[Row]:
     """The items of one type linked to a task, oldest link first (links made in one millisecond in the order they were
-    made): its `task_links` rows, each with `metadata` (`get`) or None."""
+    made): its `task_links` rows, each with `metadata` (`get`, through the link's own connection) or None."""
     from . import read_cache
 
     values: dict[Any, Any] | None = read_cache.cache(conn)
@@ -144,7 +162,10 @@ def of_task(conn: "sqlite3.Connection", task_id: str, source: str, item_type: st
         links = _rows(conn, OF_TASK_SQL, (task_id, source, item_type))
         if values is not None:  # kept for the read snapshot; `prime_of_task` reads many tasks' together
             values[key] = tuple(dict(link) for link in links)
-    return [{**link, "metadata": get(conn, source, item_type, str(link["item_key"]))} for link in links]
+    return [
+        {**link, "metadata": get(conn, source, item_type, str(link["item_key"]), str(link.get("connection_id") or ""))}
+        for link in links
+    ]
 
 
 OF_TASK_SQL = "SELECT * FROM task_links WHERE task_id=? AND source=? AND item_type=? ORDER BY created_at, rowid"
@@ -170,21 +191,23 @@ def prime_of_task(conn: "sqlite3.Connection", task_ids: "Iterable[str]", source:
         found[str(link["task_id"])].append(link)
     for task_id, links in found.items():
         values.setdefault((OF_TASK_SQL, task_id, source, item_type), tuple(links))
-    keys = sorted({str(link["item_key"]) for links in found.values() for link in links})
-    keys = [k for k in keys if (GET_SQL, source, item_type, k) not in values]
+    keys = sorted(
+        {(str(link["item_key"]), str(link.get("connection_id") or "")) for links in found.values() for link in links}
+    )
+    keys = [(k, via) for k, via in keys if (GET_SQL, source, item_type, k, via) not in values]
     if keys:
         # `item_key` is COLLATE NOCASE: a link's key finds its row whatever the case of either, so both sides are
-        # matched as NOCASE compares them (ASCII letters only), as `get` finds it.
+        # matched as NOCASE compares them (ASCII letters only), as `get` finds it. The connection matches exactly.
         items = {
-            nocase(str(row["item_key"])): row
+            (nocase(str(row["item_key"])), str(row["connection_id"])): row
             for row in _rows(
                 conn,
                 "SELECT * FROM item_metadata WHERE source=? AND item_type=? AND item_key IN (SELECT value FROM json_each(?))",
-                (source, item_type, json.dumps(keys)),
+                (source, item_type, json.dumps(sorted({k for k, _ in keys}))),
             )
         }
-        for k in keys:
-            values.setdefault((GET_SQL, source, item_type, k), items.get(nocase(k)))
+        for k, via in keys:
+            values.setdefault((GET_SQL, source, item_type, k, via), items.get((nocase(k), via)))
 
 
 _ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
@@ -195,15 +218,15 @@ def nocase(text: str) -> str:
     return text.translate(_ASCII_LOWER)
 
 
-def tasks_of(conn: "sqlite3.Connection", source: str, item_type: str, key: str) -> list[str]:
+def tasks_of(conn: "sqlite3.Connection", source: str, item_type: str, key: str, connection_id: str = "") -> list[str]:
     """The open tasks on the engine that link this item, oldest link first."""
     return [
         str(found[0])
         for found in conn.execute(
             "SELECT l.task_id FROM task_links l JOIN tasks t ON t.id = l.task_id WHERE l.source=? AND l.item_type=? "
-            "AND l.item_key=? AND t.status='open' AND t.pipeline_id IS NOT NULL "
+            "AND l.item_key=? AND l.connection_id=? AND t.status='open' AND t.pipeline_id IS NOT NULL "
             "GROUP BY l.task_id ORDER BY MIN(l.created_at), l.task_id",
-            (source, item_type, key),
+            (source, item_type, key, connection_id),
         ).fetchall()
     ]
 
@@ -237,20 +260,26 @@ _WAITING_TASKS = (
 
 
 def due_reads(
-    conn: "sqlite3.Connection", source: str, item_type: str, now: str, limit: int = REREAD_BATCH
+    conn: "sqlite3.Connection",
+    source: str,
+    item_type: str,
+    now: str,
+    limit: int = REREAD_BATCH,
+    connection_id: str = "",
 ) -> list[str]:
-    """The keys of the items an open task waits on whose metadata is missing or older than REREAD_S, oldest read first,
-    at most `limit`. A final item is not read again. An item marked due (`mark_due`) is read once more whatever links
-    it: a task closed while the source changed the item anyway so leaves no metadata stale for ever."""
+    """The keys of one connection's items an open task waits on whose metadata is missing or older than REREAD_S, oldest
+    read first, at most `limit`. A final item is not read again. An item marked due (`mark_due`) is read once more
+    whatever links it: a task closed while the source changed the item anyway so leaves no metadata stale for ever."""
     cutoff = _h().shift(now, seconds=-REREAD_S)
     found = conn.execute(
         "SELECT MIN(l.item_key), MIN(CASE WHEN m.due_at IS NOT NULL THEN '' ELSE COALESCE(m.read_at, '') END) AS seen "
         f"FROM task_links l LEFT JOIN ({_WAITING_TASKS}) w ON w.id = l.task_id "
         "LEFT JOIN item_metadata m ON m.source = l.source AND m.item_type = l.item_type AND m.item_key = l.item_key "
-        "WHERE l.source=? AND l.item_type=? AND l.item_key IS NOT NULL AND l.item_key <> '' "
+        "AND m.connection_id = l.connection_id "
+        "WHERE l.source=? AND l.item_type=? AND l.connection_id=? AND l.item_key IS NOT NULL AND l.item_key <> '' "
         "AND (w.id IS NOT NULL AND (m.id IS NULL OR m.final_at IS NULL AND (m.read_at < ? OR m.due_at IS NOT NULL)) "
         "OR m.final_at IS NULL AND m.due_at IS NOT NULL) "
         "GROUP BY lower(l.item_key) ORDER BY seen, lower(l.item_key) LIMIT ?",
-        (source, source, source, item_type, cutoff, limit),
+        (source, source, source, item_type, connection_id, cutoff, limit),
     ).fetchall()
     return [str(key) for key, _ in found]

@@ -497,6 +497,7 @@ def task_label(api, args):
             "release ships it, so you can end the turn instead of polling. It "
             "never changes the task's status. false disarms it",
         },
+        "connection_id": _s("An outside item (a Jira issue): the connection's tool id it came through"),
         "on_behalf_of": ASKED,
     },
     required=("id", "url"),
@@ -510,6 +511,7 @@ def task_link(api, args):
             "title": args.get("title"),
             **({"kind": "session"} if args.get("kind") == "session" else {}),
             **({"wake_once": args["wake_once"]} if args.get("wake_once") is not None else {}),
+            **({"connection_id": args["connection_id"]} if args.get("connection_id") else {}),
         },
         key=_key(args),
     )

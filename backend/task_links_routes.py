@@ -103,6 +103,7 @@ def register(app, auth, mover, mutate, person_only, settings, store, task_view):
                     mover=mover(c, who),
                     wake_once=body.wake_once,
                     release_repo=settings.release_repo,
+                    connection_id=body.connection_id or "",
                 )
             else:
                 raise Problem("kind", "Send a url to add or remove with a link id", 422)

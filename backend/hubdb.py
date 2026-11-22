@@ -3460,12 +3460,19 @@ def worktree_heads(detail):
 
 
 @private_task_write
-def task_link(conn, actor, task_id, url, title=None, kind=None, mover=None, wake_once=None, release_repo=""):
+def task_link(
+    conn, actor, task_id, url, title=None, kind=None, mover=None, wake_once=None, release_repo="", connection_id=""
+):
     """Attach a link to a task.
 
     `wake_once` arms (True) or disarms (False) one wake on a pull request link: the next time its checks
     finish, it gets an approving or change-requesting review, or a release ships it, the task's owner hears
-    once, in the task's conversation. It never changes the task's status (`github.py`)."""
+    once, in the task's conversation. It never changes the task's status (`github.py`).
+
+    A link to an item of a source (backend/item_sources) is stored typed: its source, item type and key. A GitHub PR is
+    one in the connected App's organization; any other source's item is typed whatever the link's kind, with
+    `connection_id`, the `tools` row it came through ('' for none), so the same key through two connections is two
+    items."""
     _writer(conn, actor, task_id=task_id)
     row = task(conn, task_id)
     if not row:
@@ -3474,6 +3481,9 @@ def task_link(conn, actor, task_id, url, title=None, kind=None, mover=None, wake
     url = str(url or "").strip()
     if kind == "session":
         return _task_session_link(conn, actor, task_id, url, title)
+    connection_id = str(connection_id or "").strip()
+    if connection_id and not _one(conn, "SELECT 1 FROM tools WHERE id=?", (connection_id,)):
+        refuse(conn, actor, "connection", f"no connection {connection_id}: a connection is a tool's id")
     if not re.match(r"^https?://\S+$", url):
         refuse(conn, actor, "kind", "a link is an http(s) URL")
     kind = kind or link_kind(url)
@@ -3483,6 +3493,12 @@ def task_link(conn, actor, task_id, url, title=None, kind=None, mover=None, wake
         kind = "url"
     if kind not in LINK_KINDS:
         refuse(conn, actor, "kind", f"a link is {'|'.join(LINK_KINDS)}, not {kind}")
+    from . import item_sources as IS
+
+    # Another source's item (GitHub's PR is typed below, only in the App's organization).
+    outside = IS.match_link(url, tuple(s for s in IS.SOURCES if s != "github"))
+    if connection_id and not outside:
+        refuse(conn, actor, "connection", "a connection names where an outside item came from: link a Jira issue")
     if wake_once is not None and (kind != "pr" or not app):
         refuse(
             conn, actor, "kind", "a one-shot wake needs a pull request link in the connected GitHub App's organization"
@@ -3543,7 +3559,15 @@ def task_link(conn, actor, task_id, url, title=None, kind=None, mover=None, wake
         link,
     )
     match = PR_URL.match(url)
-    if kind == "pr" and match:
+    if outside:
+        # The item the link is, once per task and connection: a second link to it keeps none.
+        conn.execute(
+            "UPDATE task_links SET source=?,item_type=?,item_key=?,connection_id=? WHERE id=? AND NOT EXISTS (SELECT 1 "
+            "FROM task_links d WHERE d.task_id=? AND d.source=? AND d.item_type=? AND d.item_key=? AND d.connection_id=?)",
+            (*outside, connection_id, link["id"], task_id, *outside, connection_id),
+        )
+        link = _one(conn, "SELECT * FROM task_links WHERE id=?", (link["id"],))
+    elif kind == "pr" and match:
         conn.execute(
             "UPDATE task_links SET repo=?,number=?,updated_at=? WHERE id=?",
             (match.group(1) + "/" + match.group(2), int(match.group(3)), now(), link["id"]),
