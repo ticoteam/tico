@@ -454,6 +454,7 @@ export interface Computer {
   screen?: string;
   performance?: string;
   may_manage?: boolean;
+  gateway_fallback?: boolean;
   cloud_machine?: { size?: string; placement?: string; shared?: boolean } | null;
   readiness?: {
     disk?: { free_bytes?: number; total_bytes?: number };

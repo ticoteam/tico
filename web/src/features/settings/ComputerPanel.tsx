@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
+import { useRouter } from '@tanstack/react-router';
 import { useState } from 'react';
 import { run } from '@/actions/run';
-import { agentsQuery, computersQuery as teamComputers, modelName, whoHref } from '@/features/team/routing';
+import { agentsQuery, computersQuery, modelName, whoHref, type AgentRow, type Computer } from '@/features/team/routing';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
@@ -13,8 +14,7 @@ import { Segmented } from '@/kit/Segmented';
 import { toast } from '@/kit/Toast';
 // The Settings kind has no panel prop (List and Record do); the slot itself draws it beside the page.
 import { PanelSlot, SidePanel } from '@/pagekinds';
-import { Line, SwitchLine, act, useAgentFaces } from './parts';
-import { computersQuery } from './queries';
+import { Line, SwitchLine, act, useAdmin, useAgentFaces } from './parts';
 
 type Mode = 'off' | 'view' | 'control';
 const SCREEN: { value: Mode; label: string }[] = [
@@ -23,9 +23,19 @@ const SCREEN: { value: Mode; label: string }[] = [
   { value: 'control', label: 'Control' },
 ];
 
-/** The facts a sheet shows: what the server sends, sizes and places as it names them (none is offered here). */
-function state(c: { online: boolean; restarting?: unknown }): string {
+export function computerState(c: { online: boolean; restarting?: unknown }): string {
   return c.restarting ? 'Restarting' : c.online ? 'Online' : 'Offline';
+}
+
+export function computerKind(c: Computer): string {
+  if (!c.cloud_machine) return 'Your own';
+  return c.cloud_machine.shared ? 'Cloud shared' : 'Cloud';
+}
+
+/** The roster limits assignments to agents the viewer may see, including those they may see but not read. */
+export function agentsOnComputer(c: Computer, roster: AgentRow[]): AgentRow[] {
+  const assigned = c.bots;
+  return roster.filter((r) => assigned ? assigned.includes(r.id) : r.machine?.runner_id === c.id);
 }
 
 /**
@@ -33,18 +43,18 @@ function state(c: { online: boolean; restarting?: unknown }): string {
  * the screen setting, Restart, Rename and Remove. Restart waits for running turns on the hub (POST …/restart).
  */
 export function ComputerPanel({ id, onClose }: { id: string; onClose: () => void }) {
-  const computers = useQuery(teamComputers);
-  const settings = useQuery(computersQuery);
+  const router = useRouter();
+  const computers = useQuery(computersQuery);
   const roster = useQuery(agentsQuery);
   const agents = useAgentFaces();
+  const admin = useAdmin();
   const [asking, setAsking] = useState<'restart' | 'rename' | 'remove' | null>(null);
   const c = computers.data?.find((x) => x.id === id);
-  const own = settings.data?.find((x) => x.id === id);
   const [name, setName] = useState(c?.label ?? '');
   if (!c || c.revoked_at) return null;
   const label = c.label || c.id;
   const manage = c.may_manage !== false;
-  const on = (roster.data ?? []).filter((r) => r.machine?.runner_id === c.id || c.bots?.includes(r.id));
+  const on = agentsOnComputer(c, roster.data ?? []);
   const restart = async () => {
     setAsking(null);
     const r = await run('computers.restart', { id: c.id }, { via: 'click' });
@@ -52,7 +62,11 @@ export function ComputerPanel({ id, onClose }: { id: string; onClose: () => void
   };
   const remove = async () => {
     setAsking(null);
-    if (await act('settings.removeComputer', { computer: c.id })) onClose();
+    const { pathname } = router.latestLocation;
+    if (await act('settings.removeComputer', { computer: c.id })) {
+      const current = router.latestLocation;
+      if (current.pathname === pathname && (current.search.open === c.id || current.search.open === `computer:${c.id}`)) onClose();
+    }
   };
   const cancel = (
     <Button variant="quiet" onClick={() => setAsking(null)}>
@@ -73,15 +87,17 @@ export function ComputerPanel({ id, onClose }: { id: string; onClose: () => void
               <Button disabled={!!c.restarting} onClick={() => setAsking('restart')}>
                 Restart
               </Button>
-              <Button
-                variant="quiet"
-                onClick={() => {
-                  setName(c.label ?? '');
-                  setAsking('rename');
-                }}
-              >
-                Rename
-              </Button>
+              {admin && (
+                <Button
+                  variant="quiet"
+                  onClick={() => {
+                    setName(c.label ?? '');
+                    setAsking('rename');
+                  }}
+                >
+                  Rename
+                </Button>
+              )}
               <Button variant="quiet" onClick={() => setAsking('remove')}>
                 Remove
               </Button>
@@ -91,8 +107,8 @@ export function ComputerPanel({ id, onClose }: { id: string; onClose: () => void
       >
         <div className="rail-sec">
           <Facts label={label}>
-            <LabelValue label="State">{state(c)}</LabelValue>
-            <LabelValue label="Kind">{c.cloud_machine ? (c.cloud_machine.shared ? 'Shared, in the cloud' : 'In the cloud') : 'Your own'}</LabelValue>
+            <LabelValue label="State">{computerState(c)}</LabelValue>
+            <LabelValue label="Kind">{computerKind(c)}</LabelValue>
             {c.cloud_machine?.size && <LabelValue label="Size">{c.cloud_machine.size}</LabelValue>}
             {c.cloud_machine?.placement && <LabelValue label="Place">{c.cloud_machine.placement}</LabelValue>}
             {c.platform && <LabelValue label="Platform">{c.platform}</LabelValue>}
@@ -108,11 +124,11 @@ export function ComputerPanel({ id, onClose }: { id: string; onClose: () => void
                 />
               </Line>
             )}
-            {own && (
+            {typeof c.gateway_fallback === 'boolean' && (
               <SwitchLine
                 label="Fall back to Tico Gateway"
-                checked={own.gateway_fallback === true}
-                disabled={!manage}
+                checked={c.gateway_fallback}
+                disabled={!admin}
                 onChange={(v) => void act('settings.gatewayFallback', { computer: c.id, on: v })}
               />
             )}

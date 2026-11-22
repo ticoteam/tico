@@ -1,7 +1,7 @@
 # Computers
 
-A computer runs your bots. **Settings → Computers** lists every computer: its bots, which subscription Claude Code and
-Codex use there, the other AI tools' logins, and what it is doing now. To add a computer, click **Add computer** or see
+A computer runs your bots. **Settings → Computers** lists each enrolled computer's name, kind, state, runner version
+and agent count. To add a computer, click **Add computer** or see
 [Install](install.md#add-computers-to-run-your-bots).
 
 Re-enrolling the same physical computer can leave an older registration behind. The hourly cleanup removes that
@@ -28,10 +28,10 @@ A subscription is a login or key the company saves once and gives to computers. 
 computer, and a run uses, in order, that computer's subscription for the run's AI tool, the login signed in on the
 computer, then Tico Gateway where that computer falls back to it. Otherwise the run waits.
 
-Each computer's window has **Fall back to Tico Gateway**, under Connections, off for every computer until an owner or
+Each computer's panel has **Fall back to Tico Gateway**, off for every computer until an owner or
 admin turns it on. When every plan given to a computer for a tool is at its limit (or needs reconnecting) and it has no
 login of its own, its bots wait for the first plan to reset unless that switch is on; with it on they run on Tico
-Gateway meanwhile. The line under the computer's plan picker says which: "on the Gateway" or "waiting".
+Gateway meanwhile.
 
 1. Open **Settings → Agents**, then click **Add** beside **Subscriptions and keys**.
 2. Tap **Claude plan** or **ChatGPT plan**. The sign-in starts at once on one of the company's computers. With none
@@ -39,9 +39,14 @@ Gateway meanwhile. The line under the computer's plan picker says which: "on the
 3. Tap **Open Claude** or **Open ChatGPT** and sign in with the account that has the plan. Claude's page hands back a
    code: paste it in the sheet and click **Send code**. For ChatGPT, copy the code the sheet shows and enter it
    on ChatGPT's page. The sheet closes once Tico has saved the result, and the list shows the new row.
-4. Open **Settings → Computers** and pick the subscription in the computer's **Claude Code** or **Codex** column.
+4. Find the subscription ID with `tico subscription list` and the computer ID with `tico computer list`.
+   Assign the plan using those IDs and its runtime:
 
-Instead of one plan, the picker can name a person under **People** ("Ana's plans · 3"): the computer then uses every
+   ```sh
+   tico settings set models.computer_subscription '{"runner_id":"computer-id","runtime":"claude","subscription":"subscription-id"}'
+   ```
+
+To use one person's plans, replace `"subscription":"subscription-id"` with `"person":"person-id"`. The computer uses every
 plan that person owns for that tool, one at a time. A turn starts on the plan with usage left whose weekly reset comes
 soonest, and stays on it until it reaches its limit or needs reconnecting. The next turn then moves to the next plan
 (never in the middle of one). Claude Code carries on the same conversation there; if it can't, the turn starts a new
@@ -49,8 +54,7 @@ session told what was said since, and says so. Codex starts a fresh session. A p
 it is back under 90% or that window resets. A plan with no usage reading yet comes after those with one. When every plan
 is at its limit, turns run as for a single plan at its limit: the computer's own login, then the Gateway, else they wait.
 A plan the person adds later joins on its own, and one given to someone else leaves. API keys have no owner and are
-never part of a person's plans. The line under the picker says which plan is in use and why ("On Plan 2 · Plan 1 at its
-limit until Fri 09:00"); `tico subscription list` shows the same for agents.
+never part of a person's plans. `tico subscription list` shows which plan is in use and why.
 
 The plan defaults to a name like *Ana's Claude plan* and its owner is the person who signed in; change either
 under the row's **Edit** action. When a sign-in cannot run, **Paste instead** takes the token from
@@ -59,8 +63,8 @@ sign in again or paste a replacement. If running work would restart, Tico asks f
 
 Switching a computer's subscription stops that tool's running tasks on that computer and starts them again, and every
 session of that tool there starts fresh. When tasks are running, Tico asks first and says how many. Removing a
-subscription does the same on each computer that had it. A computer below the minimum release (0.6.0-rc.1) is paused, and shows no
-picker, until it updates.
+subscription does the same on each computer that had it. A computer below the minimum release (0.6.0-rc.1) is paused
+until it updates.
 
 Settings → Models lists subscriptions under each owner's avatar and name, yours first, with API keys under **No
 owner**. Inside a group each tool's plans are in the order a person's plans are used: the plan in use names its computer,
@@ -74,7 +78,7 @@ turns on other providers. See [the Gateway boundary](ai-gateway.md#pick-a-tico-m
 
 ## Turn counts
 
-The computers list, each computer's pop-up and **Settings → General → Health → Details** show four counts:
+**Settings → Health** reports four turn counts:
 
 | Count | What it means |
 |---|---|
@@ -210,7 +214,7 @@ To restore the defaults, enter **40** and **100** and click **Save** again.
 
 If saving fails, read the error beside the button and correct the values before trying again.
 If the card is missing, ask an owner or admin to change the levels.
-Check **Settings → General → Health → Details** for the company count and **Settings → Computers** for individual wait reasons.
+Check **Settings → Health** for the company count and individual wait reasons.
 Changing the levels does not add computer capacity or clear a login, quota or overload wait.
 
 ## Connections
@@ -383,52 +387,31 @@ login in its Keychain, and runs only on computers whose runner says `claude_logi
 
 ## The computers list
 
-One row per computer. On a phone the table scrolls sideways inside its card.
+Each enrolled computer has one row, including computers with no agents. On a phone the row wraps onto two lines.
 
 | Column | What it shows |
 |---|---|
-| **Computer** | A status dot (hover for online, or offline · last seen *when*) and its name, with **Update** when an update is waiting and **Waiting** while a connection it was given is not reported yet. |
-| **Bots** | How many bots run on it. |
-| **Claude Code**, **Codex** | A picker: the company's subscriptions for that tool, then **Signed in here** when the computer has its own login, else **Gateway** (or **None** with the Gateway off). Owners and admins change it. |
-| Other AI tools | One chip per connection the computer reports, under that tool's column: its state (**Signed in**, **Sign in**, **Signed out**, or a problem such as **Expired**), then a thin bar and "N%" left when there is a reading. A small **red dot** means bots depend on it and it needs attention. A click opens the computer's pop-up. |
-| **Now** | What it is doing: for example **1 running · 55 queued**, **idle**, **asleep** (a cloud computer stopped to save) or **offline**. The full queue line, with wait reasons, is in its pop-up. |
+| **Computer** | Its name. |
+| **Kind** | **Cloud shared**, **Cloud** or **Your own**. |
+| **State** | **Online**, **Offline** or **Restarting**, as reported by Tico. |
+| **Version** | The reported runner version. |
+| **Agents** | How many assigned agents the viewer can see. |
 
-**Show revoked (N)** under the list shows computers that were revoked. **No computers yet** means none is
-registered: choose **Add computer**.
+Select a row to open the computer's panel with its details, agents and controls. Open an agent's **Computer** tab
+to manage the computer's own sign-ins. **Hosted servers** and **When idle** appear below the list where available.
 
 ## A computer's pop-up
 
-Click a row to open its pop-up. Owners and admins rename the computer with the pencil next to its name (1 to 100
-characters; a cloud machine made again keeps the name). Its sections, top to bottom:
+The panel shows the computer's **State**, **Kind**, **Platform** and runner **Version** where available. Cloud computers
+also show **Size** and **Place** when reported. Select an agent under **Agents** to open its page.
 
-1. **Connections**: one line per AI tool, the computer's login for it: the tool, "Computer's login" (or "Shared key"),
-   the signed-in account and plan, sign-in state, usage (weekly and, where the tool reports one, the 5-hour window) and
-   the bots using it. Each line has its actions: **Sign in**, **Switch account** and **Sign out** for a plan login. A
-   key is added, replaced and taken off in **Settings > Models**. **Add connection** at the end opens its own pop-up to
-   sign in an installed tool.
-2. **Screen**: an on/off switch, then **View** or **Control** when enabled (Beta). Enabling a screen that needs setup reveals the runner command, as described in [Install](install.md#screen).
-3. **Internet**: **Share internet with bots**, then the bots that may use it and the **Daily cap (GB)**, and today's
-   total, which opens to the sites that went through. Only on your own computer; an admin sees only the switch, to turn
-   it off. See [Share internet with bots](#share-internet-with-bots).
-4. **Bots on this computer**: each bot, read-only, with a red pill when its connection has a problem. **Assign on the
-   Bots page** opens Settings → Bots, where a bot's computer is chosen.
-5. **Versions and updates**: Tico, the OS and runner, each AI tool's version with **Installed** and **Enabled**, and
-   **Installation and updates**.
-6. **Settings**: **Keep for inbox bots only**, **Accepts members' bots** (admins), **Turns at once** (owners and admins:
-   empty is the computer's own capacity, 1 to 256 otherwise), **Performance diagnostics** and
-   **Performance**, and **Revoke computer** at the bottom.
-
-When the computer is offline, the pop-up says "Computer is offline" and its sign-in, usage refresh, screen and update
-actions are disabled until it is back. So are a connection's **Sign out**, **Switch account** and **Use the shared
-key**: they stay on the line, greyed, and say "Computer is offline" on hover; nothing is queued for later.
+When the computer supports screen sharing, its operator and admins can set **Screen** to **Off**, **View** or **Control**.
+They can also **Restart** or **Remove** the computer. Owners and admins can **Rename** it and change **Fall back to Tico Gateway**.
 
 ### Who sees and changes what
 
-Every member sees every working computer, its connections, their sign-in state, and the bots on it they may see. Only an admin or the computer's operator also sees the signed-in accounts, the usage of the
-computer's own login and key previews (others see which kind of key it is, not the preview), sees revoked computers, and
-gets the change controls: sign in and out, Add connection, screen, tools, performance,
-inbox-only and Revoke computer. The API refuses anyone else ([Permissions](permissions.md)). Agent Ops cannot sign a login
-out, because that stops bots.
+Every member sees the enrolled computers, the Gateway setting and the agents they may see on each computer. On an
+agent's **Computer** tab, the computer's operator and admins can manage its sign-ins. See [Permissions](permissions.md).
 
 ## Share internet with bots
 
@@ -436,11 +419,10 @@ A bot's browser can reach the web from another computer's internet connection: y
 cloud machine's. Sites that block data-center addresses then see an ordinary home connection. No proxy service is
 involved.
 
-1. On your own computer's pop-up, turn on **Share internet with bots**, tick the bots that may use it, and set the
-   **Daily cap (GB)** (5 GB by default). Only the computer's operator can turn it on or pick bots; it is off until they
-   do.
-2. In the bot's settings, set **Browse through** to that computer (owners, admins and the bot's managers). Only
-   computers that share with that bot are offered.
+1. The computer's operator turns on sharing and picks the bots with `tico computer browser-exit <computer> on --bots <bot-slugs>`.
+   Use `--cap-gb <GB>` to set the daily cap (5 GB by default).
+2. An owner, admin or bot manager sets the bot's exit with `tico bot browser-exit <bot> <computer>`. The computer must
+   share with that bot.
 
 The bot's browser then goes out through that computer for every site. Both runners connect out to Tico's relay, as for
 the computer screen; neither needs an open port. The browser's encrypted traffic passes through unread: Tico sees the
@@ -471,8 +453,8 @@ browser). It never falls back to going out directly. On a computer whose runner 
 ("Update Office server to use Browse through"). Changing a bot's
 **Browse through**, or turning sharing off, closes the connections already open.
 
-The day's total on the pop-up opens to a table of what went through: day, bot, site and bytes, kept 30 days. The
-computer's operator and admins see it.
+The computer's operator and admins can run `tico computer browser-exit <computer> --usage` to see the last seven days of
+traffic by day, bot and site. The API keeps 30 days.
 
 In turns of a bot with **Browse through** set, the runner sets `TICO_BROWSER_PROXY` (a proxy on `127.0.0.1` for that
 bot), adds `--proxy-server` to `CHROMIUM_FLAGS`, and puts `google-chrome`, `chromium` and their usual names first on
@@ -569,21 +551,10 @@ Choose **API key** when you pay the provider for each use:
 
 ### Add one
 
-In a computer's pop-up, **Add connection** (at the end of Connections) opens its own pop-up:
-
-1. **Which AI tool?** The tools installed on that computer. **Install another tool** goes to **Versions and updates**,
-   where the owner installs one.
-2. **Subscription** or **API key** ([which to choose](#subscription-or-api-key)). A tool with no subscription sign-in from the browser has Subscription greyed out.
-   A tool that signs in only from a terminal shows the command to run on the
-   computer here, with **Copy**.
-3. - **Subscription**: signs in the computer's login for that tool. The provider's sign-in follows in the same pop-up:
-     the browser relays the provider's link and code, and the provider writes the login on the computer. A tool
-     already signed in here has **Subscription** greyed out: change its account with **Switch account** on its line,
-     or add another computer for a second account.
-   - **API key**: links to **Settings > Models**, where the key is added and given to this computer (see
-     [API keys on a Computer](#api-keys-on-a-computer)).
-4. The new connection's chip appears on the computer's row once the computer reports it; the computer does not need a
-   restart.
+In an agent's **Computer** tab, open **Sign-ins on this computer**, choose **Add a sign-in**, and pick an installed AI
+tool that supports browser sign-in. Follow the provider's link and enter its code when prompted. The sign-in list
+updates when the computer reports the login. Add shared API keys in **Settings > Models** (see
+[API keys on a Computer](#api-keys-on-a-computer)).
 
 The computer must be online ("Computer is offline" otherwise). Every bot on the computer that runs that tool uses the
 new login from its next turn.
@@ -593,11 +564,11 @@ new login from its next turn.
 | Grok Build | Open the link and enter the device code shown in the pop-up | The computer checks Grok's local login store |
 | Cursor Agent | Open the browser link shown in the pop-up and finish signing in | The computer runs Cursor's status command |
 
-Both tools support **Sign out** and **Switch account**, keeping the old login until a new account is confirmed.
+Both tools support **Sign out** and switching accounts through the API.
 Cursor uses a file login so the computer's default login home stays separate on macOS as well as Linux. If Cursor
 was signed in through the macOS Keychain, sign in once from Tico to create this login; the Keychain entry stays untouched.
-A computer login with a custom auth-folder override must sign out and sign in to change accounts; **Switch account**
-refuses before it starts. See [harness sign-in details](harnesses.md#supported-harnesses).
+A computer login with a custom auth-folder override must sign out and sign in to change accounts. See
+[harness sign-in details](harnesses.md#supported-harnesses).
 
 On an isolated Docker Computer, Grok's default `~/.grok` folder belongs to the bot user so sign-in,
 token refresh and session saves work. This includes its credentials, `config.toml` and session history:
@@ -617,13 +588,11 @@ Settings > General > Health > Details shows "*computer name*: sign in to Codex" 
 
 ## Change or clear a login
 
-These are on each connection's line in a computer's pop-up, for the computer's operator and admins.
-
 ### Signing out and switching accounts
 
-In a computer's pop-up each signed-in Codex, Claude Code, Grok Build or Cursor Agent login has **Switch account** and **Sign out** on its line.
-The same people who may sign a login in see them: the Computer's operator, owners and admins. The Computer must be online
-and on a current runner; an older one answers `Update <computer> to sign out from here` and is never asked.
+In an agent's **Computer** tab, **Sign-ins on this computer** offers **Sign out** on each signed-in tool that supports it.
+The computer's operator, owners and admins can sign out. The computer must be online and on a current runner. An older
+runner answers `Update <computer> to sign out from here`.
 
 - **Sign out** first names the bots that stop: the active bots assigned to that Computer whose runtime is that login. The button stays off until they are named; if they can't be looked up, the dialog says so and offers
   **Try again**. The Computer then runs the CLI's own logout (`codex logout`, `claude auth logout`, `grok logout`, `cursor-agent logout`) as the user that
@@ -631,10 +600,10 @@ and on a current runner; an older one answers `Update <computer> to sign out fro
   shared-key sign-in already running there is waited for (up to 40 seconds) so it cannot sign the login back in; if it
   is still running, the sign-out fails with "try again in a minute". Bots and assignments stay: those bots wait, as for
   any signed-out login, until someone signs in again.
-- **Switch account** is a sign-in on the side. The Computer signs the new account in to a private folder inside the
-  login's home (`.tico-switch-<id>`, 0700, with copies of the files the CLI keeps beside the login). Once the new
-  account is signed in there, the dialog reads **Putting the new account in place**: the Computer asks Tico to go
-  ahead, and from Tico's yes the switch can no longer be canceled (it gets two more minutes of its own to finish).
+- To switch accounts with the API, send `switch: true` to `POST /api/v2/computers/{id}/logins`. The Computer signs the new
+  account in to a private folder inside the login's home (`.tico-switch-<id>`, 0700, with copies of the files the CLI keeps
+  beside the login). Once the new account is signed in, the Computer asks Tico to go ahead. Once Tico agrees, the switch
+  can no longer be canceled and has two more minutes to finish.
   Only then does it move the new login files in, keeping the old ones until it has checked the login again; if moving
   a file or that check fails, the old files go back. Canceling before that point, failing or running out of time leaves
   the old account working, and the side folder is removed (kept, and named in the message, only if the old files could

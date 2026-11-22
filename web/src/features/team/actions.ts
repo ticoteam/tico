@@ -267,6 +267,8 @@ export const profile = defineAction({
   target: ({ slug }) => onPage(slug),
 });
 
+export const moveAgentWithFeedback = (slug: string, computer: string) => said("Couldn't move it", () => moveAgent(slug, computer));
+
 export const moveComputer = defineAction({
   id: 'agents.move',
   title: 'Move an agent to another computer',
@@ -274,7 +276,8 @@ export const moveComputer = defineAction({
   input: z.strictObject({ slug, computer: z.string().check(z.minLength(1), z.maxLength(100), z.describe("a computer's id")) }),
   run: async ({ queryClient }, { slug, computer }) => {
     const label = queryClient.getQueryData(computersQuery.queryKey)?.find((c) => c.id === computer)?.label ?? 'the computer';
-    await said("Couldn't move it", () => moveAgent(slug, computer));
+    await moveAgentWithFeedback(slug, computer);
+    void queryClient.invalidateQueries({ queryKey: computersQuery.queryKey });
     return { label };
   },
   did: (_input, out) => `Moved it to ${out?.label ?? 'the computer'}. It starts there after its turn ends.`,
