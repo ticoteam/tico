@@ -11,7 +11,7 @@ changes.
 from backend import mailbox_access as MA
 from backend.entities import linker as LK
 from backend.entities import store as ES
-from backend.tests.helpers.api import get, setup_attempt  # noqa: F401  (api is the pytest fixture)
+from backend.tests.helpers.api import get, headers, post, setup_attempt  # noqa: F401  (api is the pytest fixture)
 
 ANA = "human:ana"
 
@@ -181,3 +181,21 @@ def test_the_pass_links_a_changed_doc_once_and_again_only_when_it_changes(api):
     assert again["texts"] == 1 and again["linked"] == 0
     with tx(api) as c:
         assert ES.mentions(c, ANA, "doc", "doc_pass") == []
+
+
+def test_inbound_outside_mail_and_its_revisions_do_not_link_company_contacts(api):
+    store = api.app.state.store
+    with tx(api) as c:
+        contact = person(c, "other@customer.example", "Outside customer")
+    sent = post(api, "chat/ops", {"text": "Write to other@customer.example"})
+    with tx(api) as c:
+        c.execute("UPDATE messages SET direction='inbound' WHERE id=?", (sent["id"],))
+    LK.run_pass(store)
+    changed = api.patch(
+        f"/api/v2/messages/{sent['id']}", json={"text": "Try other@customer.example again"}, headers=headers()
+    )
+    assert changed.status_code == 200, changed.text
+    LK.run_pass(store)
+    with tx(api) as c:
+        assert ES.mentions(c, ANA, "message", sent["id"]) == []
+        assert c.execute("SELECT mentions_count FROM entities WHERE id=?", (contact,)).fetchone()[0] == 0
