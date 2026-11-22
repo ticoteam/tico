@@ -9,7 +9,7 @@ import { queryClient } from '@/data';
 import { agentsQuery, computersQuery as teamComputers } from '@/features/team/exports';
 import { Toasts } from '@/kit/Toast';
 import { dragTo } from '@/test/drag';
-import { AddComputer, Computers } from './Agents';
+import { AddComputer, Agents, Computers } from './Agents';
 import {
   botAccessQuery,
   botMailQuery,
@@ -459,12 +459,72 @@ describe('Settings › Agents', () => {
     expect(row.textContent).toContain('Payment past due');
   });
 
-  it('a retired agent can be brought back by its owner @s693', async () => {
-    serve(() => ({ status: 200, body: {} }));
-    show(<SettingsPage section="agents" />, '/settings/agents');
+  it('counts a restored agent when its owner returns to the warm Computers list @s693', async () => {
+    function Page() {
+      const path = useLocation({ select: (where) => where.pathname });
+      const { open } = useSearch({ strict: false }) as { open?: string };
+      return path === '/settings/computers' ? <Computers open={open} /> : <Agents />;
+    }
+
+    let restored = false;
+    const gamma = { id: 'c3', slug: 'gamma', display_name: 'Gamma Agent', machine: { runner_id: 'r1' } };
+    serve((url, method) => {
+      if (url === '/api/v2/bots/c3/restore' && method === 'POST') {
+        restored = true;
+        return ok({ status: 'active', restored: true });
+      }
+      if (url === '/api/v2/bots?include_archived=1') return ok([{ ...gamma, state: restored ? 'active' : 'archived', owner_id: 'p1' }]);
+      if (url === '/api/employees') return ok(restored ? [...ROWS, gamma] : ROWS);
+      if (url === '/api/v2/operations') return ok({ computers: [{ ...MACHINES[0], bots: restored ? ['a1', 'c3'] : ['a1'] }] });
+      return undefined;
+    });
+    const router = show(<Page />, '/settings/computers');
+    const initial = await screen.findByRole('link', { name: /^Shared One/ });
+    expect(within(initial).getByText('1 agent')).toBeTruthy();
+    void router.navigate({ to: '/settings/$section', params: { section: 'agents' } });
     fireEvent.click(await screen.findByRole('button', { name: /Retired/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'Restore' }));
-    await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/bots/c3/restore', method: 'POST' }));
+    await waitFor(() => expect(queryClient.getQueryData(agentsQuery.queryKey)).toContainEqual(gamma));
+    expect(sent.at(-1)).toMatchObject({ url: '/api/v2/bots/c3/restore', method: 'POST' });
+    void router.navigate({ to: '/settings/$section', params: { section: 'computers' }, search: { open: 'computer:r1' } });
+    const row = await screen.findByRole('link', { name: /^Shared One/ });
+    expect(await within(row).findByText('2 agents')).toBeTruthy();
+    const panel = await screen.findByRole('complementary', { name: 'Shared One' });
+    expect(within(panel).getByRole('link', { name: /Gamma Agent/ })).toBeTruthy();
+  });
+
+  it('refreshes the computer assignments once after a partially successful bulk move settles', async () => {
+    const agents = [...ROWS, { id: 'c3', slug: 'gamma', machine: { runner_id: 'r1' } }];
+    queryClient.setQueryData(agentsQuery.queryKey, agents);
+    queryClient.setQueryData(teamComputers.queryKey, MACHINES);
+    let reads = 0;
+    let refuse!: (reply: Reply) => void;
+    const last = new Promise<Reply>((resolve) => { refuse = resolve; });
+    serve((url) => {
+      if (url === '/api/v2/operations') {
+        reads++;
+        return ok({ computers: [{ ...MACHINES[0], bots: ['c3'] }, { ...MACHINES[1], bots: ['a1', 'b2'] }] });
+      }
+      if (url === '/api/employees') return ok(agents.map((row) => row.slug === 'gamma' ? row : { ...row, machine: { runner_id: 'r2' } }));
+      if (url === '/api/v2/bots/gamma/transitions') return last;
+      if (url.endsWith('/transitions')) return ok({ id: 'tr1' });
+      return undefined;
+    });
+    show(<SettingsPage section="agents" />, '/settings/agents');
+    await screen.findByRole('checkbox', { name: 'Check Alpha Agent' });
+    let move!: ReturnType<typeof run>;
+    try {
+      await act(async () => {
+        move = run('settings.moveAgents', { agents: ['alpha', 'beta', 'gamma'], computer: 'r2' }, { via: 'click' });
+      });
+      expect(sent.filter((request) => request.url.endsWith('/transitions'))).toHaveLength(3);
+      expect(reads).toBe(0);
+    } finally {
+      refuse({ status: 403, body: { detail: 'Move refused' } });
+      await act(async () => { await move; });
+    }
+    expect(await move).toMatchObject({ ok: true, out: { moved: 2, failed: ['gamma'] } });
+    expect(reads).toBe(1);
   });
 
   it('groups the agents by team, and by computer when asked @n:se:settings-fleet', async () => {
@@ -648,6 +708,7 @@ describe('Settings › Computers', () => {
       return path === '/settings/computers' ? <SettingsPage section="computers" /> : <span>Agent settings</span>;
     }
     let moved = false;
+    let reads = 0;
     const agents = [{ ...ROWS[0]!, machine: { runner_id: 'r1', generation: 7 } }, ROWS[1]!];
     queryClient.setQueryData(teamComputers.queryKey, [
       { ...MACHINES[0]!, bots: ['a1', 'b2'] },
@@ -660,6 +721,7 @@ describe('Settings › Computers', () => {
         return ok({ id: 'tr1' });
       }
       if (url === '/api/v2/operations') {
+        reads++;
         return ok({
           computers: [
             { ...MACHINES[0], bots: moved ? ['b2'] : ['a1', 'b2'] },
@@ -678,6 +740,7 @@ describe('Settings › Computers', () => {
     const to = screen.getByRole('link', { name: /^Spare Two/ });
     expect(await within(from).findByText('1 agent')).toBeTruthy();
     expect(await within(to).findByText('1 agent')).toBeTruthy();
+    expect(reads).toBe(1);
   });
 
   it('counts only the assigned agents the operator can see in the roster', async () => {
@@ -725,6 +788,33 @@ describe('Settings › Computers', () => {
     }
     expect(await screen.findByRole('link', { name: /^Spare Two/ })).toBeTruthy();
     expect(screen.getByRole('complementary', { name: 'Spare Two' })).toBeTruthy();
+  });
+
+  it.each([false, true])('clears the removed computer’s selection and preserves a new selection (%s)', async (selectAnother) => {
+    function Page() {
+      const { open } = useSearch({ strict: false }) as { open?: string };
+      return <SettingsPage section="computers" open={open} />;
+    }
+
+    let finish!: (reply: Reply) => void;
+    const removal = new Promise<Reply>((resolve) => { finish = resolve; });
+    queryClient.setQueryData(teamComputers.queryKey, MACHINES);
+    serve((url) => url === '/api/v2/computers/r1/revoke' ? removal : undefined);
+    const router = show(<Page />, '/settings/computers?open=r1');
+    const panel = await screen.findByRole('complementary', { name: 'Shared One' });
+    fireEvent.click(within(panel).getByRole('button', { name: 'Remove' }));
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Remove' }));
+    try {
+      await waitFor(() => expect(screen.queryByRole('link', { name: /^Shared One/ })).toBeNull());
+      if (selectAnother) {
+        fireEvent.click(screen.getByRole('link', { name: /^Spare Two/ }));
+        await screen.findByRole('complementary', { name: 'Spare Two' });
+      }
+    } finally {
+      await act(async () => { finish(ok({})); });
+    }
+    expect(router.state.location.search).toEqual(selectAnother ? { open: 'computer:r2' } : {});
+    if (selectAnother) expect(screen.getByRole('complementary', { name: 'Spare Two' })).toBeTruthy();
   });
 
   it('a stopped hosted server starts for an owner, says why when held with a link to Tico support, and Tico cannot start it @s704', async () => {

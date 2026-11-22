@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { useRouter } from '@tanstack/react-router';
 import { useState } from 'react';
 import { run } from '@/actions/run';
 import { agentsQuery, computersQuery, modelName, whoHref, type AgentRow, type Computer } from '@/features/team/routing';
@@ -42,6 +43,7 @@ export function agentsOnComputer(c: Computer, roster: AgentRow[]): AgentRow[] {
  * the screen setting, Restart, Rename and Remove. Restart waits for running turns on the hub (POST …/restart).
  */
 export function ComputerPanel({ id, onClose }: { id: string; onClose: () => void }) {
+  const router = useRouter();
   const computers = useQuery(computersQuery);
   const roster = useQuery(agentsQuery);
   const agents = useAgentFaces();
@@ -60,7 +62,11 @@ export function ComputerPanel({ id, onClose }: { id: string; onClose: () => void
   };
   const remove = async () => {
     setAsking(null);
-    if (await act('settings.removeComputer', { computer: c.id })) onClose();
+    const { pathname } = router.latestLocation;
+    if (await act('settings.removeComputer', { computer: c.id })) {
+      const current = router.latestLocation;
+      if (current.pathname === pathname && (current.search.open === c.id || current.search.open === `computer:${c.id}`)) onClose();
+    }
   };
   const cancel = (
     <Button variant="quiet" onClick={() => setAsking(null)}>

@@ -1,10 +1,10 @@
 import * as z from 'zod/mini';
 import { defineAction } from '@/actions';
 import type { Ctx } from '@/actions';
-import { run } from '@/actions/run';
+import { refused, run } from '@/actions/run';
 import { meQuery } from '@/data';
 import { desktopApp, tellDesktopSigningOut } from '@/desktop';
-import { agentsQuery } from '@/features/team/routing';
+import { agentsQuery, computersQuery, moveAgentWithFeedback } from '@/features/team/routing';
 import { setMotionChoice } from '@/motion';
 import { setThemeChoice, type Theme } from '@/prefs';
 import {
@@ -695,11 +695,12 @@ export const moveAgents = defineAction({
     agents: z.array(z.string().check(z.minLength(1), z.maxLength(120), z.describe('an agent slug'))).check(z.maxLength(200)),
     computer: z.string().check(z.minLength(1), z.maxLength(100), z.describe("a computer's id")),
   }),
-  run: async (_ctx, { agents, computer }) => {
+  run: async (ctx, { agents, computer }) => {
     if (!agents.length) throw new Error('Pick at least one agent');
-    const done = await Promise.all(agents.map((slug) => run('agents.move', { slug, computer }, { via: 'click' })));
-    const failed = agents.filter((_slug, i) => !done[i]?.ok);
-    if (failed.length === agents.length) throw new Error(done[0] && !done[0].ok ? done[0].error : "Couldn't move them");
+    const done = await Promise.allSettled(agents.map((slug) => moveAgentWithFeedback(slug, computer)));
+    const failed = agents.filter((_slug, i) => done[i]?.status === 'rejected');
+    if (failed.length === agents.length) throw new Error(done[0]?.status === 'rejected' ? refused(done[0].reason).error : "Couldn't move them");
+    void ctx.queryClient.invalidateQueries({ queryKey: computersQuery.queryKey });
     return { moved: agents.length - failed.length, failed };
   },
   did: (_input, out) => (out ? `Moved ${out.moved}${out.failed.length ? `, ${out.failed.length} failed` : ''}` : 'Moved'),
@@ -739,6 +740,7 @@ export const restore = defineAction({
   run: async (ctx, { agent: bot }) => {
     await restoreAgent(bot);
     void ctx.queryClient.invalidateQueries({ queryKey: agentsQuery.queryKey });
+    void ctx.queryClient.invalidateQueries({ queryKey: computersQuery.queryKey });
   },
   did: () => 'Restored',
   target: ({ agent: bot }) => agent(bot),

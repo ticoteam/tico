@@ -947,10 +947,10 @@ export function restartComputer(id: string) {
 }
 
 /** Onto another computer: a transition, against the agent's computer generation and revision. */
-export async function moveAgent(slug: string, runner: string) {
+export function moveAgent(slug: string, runner: string) {
   const row = queryClient.getQueryData(agentsQuery.queryKey)?.find((r) => r.slug === slug);
   const label = queryClient.getQueryData(computersQuery.queryKey)?.find((c) => c.id === runner)?.label ?? null;
-  const out = await write({
+  return write({
     key: agentsQuery.queryKey,
     optimistic: patchRows(slug, { machine: { ...row?.machine, runner_id: runner, label } }),
     send: (idempotencyKey) =>
@@ -960,8 +960,6 @@ export async function moveAgent(slug: string, runner: string) {
         { idempotencyKey },
       ),
   });
-  void queryClient.invalidateQueries({ queryKey: computersQuery.queryKey });
-  return out;
 }
 
 /** Who it works for: the people it serves (POST .../owners), at least one. */

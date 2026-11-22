@@ -419,11 +419,10 @@ A bot's browser can reach the web from another computer's internet connection: y
 cloud machine's. Sites that block data-center addresses then see an ordinary home connection. No proxy service is
 involved.
 
-1. On your own computer's pop-up, turn on **Share internet with bots**, tick the bots that may use it, and set the
-   **Daily cap (GB)** (5 GB by default). Only the computer's operator can turn it on or pick bots; it is off until they
-   do.
-2. In the bot's settings, set **Browse through** to that computer (owners, admins and the bot's managers). Only
-   computers that share with that bot are offered.
+1. The computer's operator turns on sharing and picks the bots with `tico computer browser-exit <computer> on --bots <bot-slugs>`.
+   Use `--cap-gb <GB>` to set the daily cap (5 GB by default).
+2. An owner, admin or bot manager sets the bot's exit with `tico bot browser-exit <bot> <computer>`. The computer must
+   share with that bot.
 
 The bot's browser then goes out through that computer for every site. Both runners connect out to Tico's relay, as for
 the computer screen; neither needs an open port. The browser's encrypted traffic passes through unread: Tico sees the
@@ -454,8 +453,8 @@ browser). It never falls back to going out directly. On a computer whose runner 
 ("Update Office server to use Browse through"). Changing a bot's
 **Browse through**, or turning sharing off, closes the connections already open.
 
-The day's total on the pop-up opens to a table of what went through: day, bot, site and bytes, kept 30 days. The
-computer's operator and admins see it.
+The computer's operator and admins can run `tico computer browser-exit <computer> --usage` to see the last seven days of
+traffic by day, bot and site. The API keeps 30 days.
 
 In turns of a bot with **Browse through** set, the runner sets `TICO_BROWSER_PROXY` (a proxy on `127.0.0.1` for that
 bot), adds `--proxy-server` to `CHROMIUM_FLAGS`, and puts `google-chrome`, `chromium` and their usual names first on
@@ -552,21 +551,10 @@ Choose **API key** when you pay the provider for each use:
 
 ### Add one
 
-In a computer's pop-up, **Add connection** (at the end of Connections) opens its own pop-up:
-
-1. **Which AI tool?** The tools installed on that computer. **Install another tool** goes to **Versions and updates**,
-   where the owner installs one.
-2. **Subscription** or **API key** ([which to choose](#subscription-or-api-key)). A tool with no subscription sign-in from the browser has Subscription greyed out.
-   A tool that signs in only from a terminal shows the command to run on the
-   computer here, with **Copy**.
-3. - **Subscription**: signs in the computer's login for that tool. The provider's sign-in follows in the same pop-up:
-     the browser relays the provider's link and code, and the provider writes the login on the computer. A tool
-     already signed in here has **Subscription** greyed out: change its account with **Switch account** on its line,
-     or add another computer for a second account.
-   - **API key**: links to **Settings > Models**, where the key is added and given to this computer (see
-     [API keys on a Computer](#api-keys-on-a-computer)).
-4. The new connection's chip appears on the computer's row once the computer reports it; the computer does not need a
-   restart.
+In an agent's **Computer** tab, open **Sign-ins on this computer**, choose **Add a sign-in**, and pick an installed AI
+tool that supports browser sign-in. Follow the provider's link and enter its code when prompted. The sign-in list
+updates when the computer reports the login. Add shared API keys in **Settings > Models** (see
+[API keys on a Computer](#api-keys-on-a-computer)).
 
 The computer must be online ("Computer is offline" otherwise). Every bot on the computer that runs that tool uses the
 new login from its next turn.
@@ -576,11 +564,11 @@ new login from its next turn.
 | Grok Build | Open the link and enter the device code shown in the pop-up | The computer checks Grok's local login store |
 | Cursor Agent | Open the browser link shown in the pop-up and finish signing in | The computer runs Cursor's status command |
 
-Both tools support **Sign out** and **Switch account**, keeping the old login until a new account is confirmed.
+Both tools support **Sign out** and switching accounts through the API.
 Cursor uses a file login so the computer's default login home stays separate on macOS as well as Linux. If Cursor
 was signed in through the macOS Keychain, sign in once from Tico to create this login; the Keychain entry stays untouched.
-A computer login with a custom auth-folder override must sign out and sign in to change accounts; **Switch account**
-refuses before it starts. See [harness sign-in details](harnesses.md#supported-harnesses).
+A computer login with a custom auth-folder override must sign out and sign in to change accounts. See
+[harness sign-in details](harnesses.md#supported-harnesses).
 
 On an isolated Docker Computer, Grok's default `~/.grok` folder belongs to the bot user so sign-in,
 token refresh and session saves work. This includes its credentials, `config.toml` and session history:
@@ -600,13 +588,11 @@ Settings > General > Health > Details shows "*computer name*: sign in to Codex" 
 
 ## Change or clear a login
 
-These are on each connection's line in a computer's pop-up, for the computer's operator and admins.
-
 ### Signing out and switching accounts
 
-In a computer's pop-up each signed-in Codex, Claude Code, Grok Build or Cursor Agent login has **Switch account** and **Sign out** on its line.
-The same people who may sign a login in see them: the Computer's operator, owners and admins. The Computer must be online
-and on a current runner; an older one answers `Update <computer> to sign out from here` and is never asked.
+In an agent's **Computer** tab, **Sign-ins on this computer** offers **Sign out** on each signed-in tool that supports it.
+The computer's operator, owners and admins can sign out. The computer must be online and on a current runner. An older
+runner answers `Update <computer> to sign out from here`.
 
 - **Sign out** first names the bots that stop: the active bots assigned to that Computer whose runtime is that login. The button stays off until they are named; if they can't be looked up, the dialog says so and offers
   **Try again**. The Computer then runs the CLI's own logout (`codex logout`, `claude auth logout`, `grok logout`, `cursor-agent logout`) as the user that
@@ -614,10 +600,10 @@ and on a current runner; an older one answers `Update <computer> to sign out fro
   shared-key sign-in already running there is waited for (up to 40 seconds) so it cannot sign the login back in; if it
   is still running, the sign-out fails with "try again in a minute". Bots and assignments stay: those bots wait, as for
   any signed-out login, until someone signs in again.
-- **Switch account** is a sign-in on the side. The Computer signs the new account in to a private folder inside the
-  login's home (`.tico-switch-<id>`, 0700, with copies of the files the CLI keeps beside the login). Once the new
-  account is signed in there, the dialog reads **Putting the new account in place**: the Computer asks Tico to go
-  ahead, and from Tico's yes the switch can no longer be canceled (it gets two more minutes of its own to finish).
+- To switch accounts with the API, send `switch: true` to `POST /api/v2/computers/{id}/logins`. The Computer signs the new
+  account in to a private folder inside the login's home (`.tico-switch-<id>`, 0700, with copies of the files the CLI keeps
+  beside the login). Once the new account is signed in, the Computer asks Tico to go ahead. Once Tico agrees, the switch
+  can no longer be canceled and has two more minutes to finish.
   Only then does it move the new login files in, keeping the old ones until it has checked the login again; if moving
   a file or that check fails, the old files go back. Canceling before that point, failing or running out of time leaves
   the old account working, and the side folder is removed (kept, and named in the message, only if the old files could
