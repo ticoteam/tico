@@ -548,6 +548,18 @@ A busy ChatGPT login does not queue another bot's turn.
 Tico keeps using the original login in its own home. It never copies a login into another bot's home:
 copies can rotate apart when the provider refreshes the token.
 
+At the end of a turn, the runner sweeps leftover Claude and Codex processes and records what it stopped in the run's
+diagnostics. It waits for the Codex app-server to be reaped before sweeping, including when it replaces a failed
+app-server. On macOS it records descendants and their sessions and takes a final snapshot while the reaper still
+holds the app-server's session leader. It also checks surviving processes for a readable turn mark. A job with a
+hidden or cleared mark can escape if it starts a separate session, directly or through a shell, and every process
+that links it to the turn exits before the runner records that link. On Linux the runner uses the turn scope where
+available. In Docker the bot user reads the turn mark so the supervisor can identify detached jobs. The run records
+incomplete cleanup if the app-server cannot be reaped within the stop window or the Docker mark reader fails or times out.
+The supervisor can still stop jobs already identified before a mark reader failure. Diagnostics count confirmed exits
+and mask credentials from the current Codex sign-in file.
+Claude shells kept on a background wait can keep running.
+
 **Settings → General → Health → Details** counts this company fallback: a limited bot covered by it gets no "has no fallback
 model" finding. When a computer's default login (no subscription) keeps stopping on a usage limit, Health
 says so once per computer and tool, e.g. "Team box's default Codex login is out of quota", until a turn on

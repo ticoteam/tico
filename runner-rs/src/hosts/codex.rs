@@ -3,6 +3,7 @@
 //! what each thread's shell commands see; the operator's own MCP servers are stubbed so they start nothing.
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -18,6 +19,8 @@ use super::{
     shell_reads_only, tool_summary, Events, HostError, Settings,
 };
 use crate::env::Env;
+use crate::redact::Redactor;
+use crate::turn_sweep::{self, MARK_ENV};
 use crate::util::{diagnostic, iso, log, py_dumps, text_of};
 
 const REQUEST_TIMEOUT: u64 = 120;
@@ -234,11 +237,12 @@ struct Shared {
     next_id: AtomicI64,
     alive: AtomicBool,
     child: Mutex<Option<(super::Stopper, Arc<AtomicBool>)>>,
-    exited:
-        tokio::sync::Mutex<Option<oneshot::Receiver<std::io::Result<std::process::ExitStatus>>>>,
-    /// True once the app-server process this host last started has been reaped. Never taken by `stop`, so it still
-    /// tells after a stop that was cut off (`running`, `stop_and_reap`).
+    /// Confirms a successful wait even if the caller that started the stop was cancelled.
     reaped: Mutex<Option<tokio::sync::watch::Receiver<bool>>>,
+    /// The current app-server, swept before replacing it or ending the attempt.
+    sweep: Mutex<Option<turn_sweep::Turn>>,
+    sweep_redactor: Mutex<Option<Arc<Redactor>>>,
+    sweep_reports: Mutex<Vec<Value>>,
     active_turn: Mutex<HashMap<String, String>>,
     done_turns: Mutex<HashSet<String>>,
     token_seen: Mutex<HashMap<String, [i64; 3]>>,
@@ -273,8 +277,10 @@ impl CodexHost {
             next_id: AtomicI64::new(0),
             alive: AtomicBool::new(false),
             child: Mutex::new(None),
-            exited: tokio::sync::Mutex::new(None),
             reaped: Mutex::new(None),
+            sweep: Mutex::new(None),
+            sweep_redactor: Mutex::new(None),
+            sweep_reports: Mutex::new(Vec::new()),
             active_turn: Mutex::new(HashMap::new()),
             done_turns: Mutex::new(HashSet::new()),
             token_seen: Mutex::new(HashMap::new()),
@@ -305,9 +311,19 @@ impl CodexHost {
         if self.alive() {
             return Ok(());
         }
-        // An earlier app-server that stopped answering but still runs is ended first: it may be using this login.
-        if self.running() {
-            self.stop_and_reap().await;
+        // Even an already-reaped server can have leftovers. End their lifetime before starting
+        // the replacement, while the old process identities and scope still describe this turn.
+        let replacing = self.0.reaped.lock().unwrap().is_some();
+        if replacing {
+            self.stop_and_reap().await.map_err(failed)?;
+            let previous = self.0.sweep.lock().unwrap().take();
+            if let Some(previous) = previous {
+                if let Some(report) = self.sweep_reaped(previous).await {
+                    self.0.sweep_reports.lock().unwrap().push(report);
+                }
+                self.prepare_sweep();
+            }
+            self.0.reaped.lock().unwrap().take();
         }
         let mut command = super::harness_command(None, "codex");
         command
@@ -318,9 +334,30 @@ impl CodexHost {
             .env_clear()
             .envs(&self.0.env);
         super::new_group(&mut command);
-        let mut child = command
-            .spawn()
-            .map_err(|e| failed(format!("could not start codex app-server: {e}")))?;
+        let mut child = {
+            let mut sweep = self.0.sweep.lock().unwrap();
+            if let Some(target) = sweep.as_ref() {
+                command.env(MARK_ENV, &target.mark);
+            }
+            let child = command
+                .spawn()
+                .map_err(|e| failed(format!("could not start codex app-server: {e}")))?;
+            if let (Some(target), Some(pid)) = (sweep.as_mut(), child.id()) {
+                let tracking = turn_sweep::Tracking::new(pid);
+                #[cfg(target_os = "macos")]
+                turn_sweep::Tracking::watch(&tracking);
+                target.tracking = Some(tracking);
+                let stem = self
+                    .0
+                    .env
+                    .get(crate::turn_limits::SCOPE_ENV)
+                    .map(String::as_str);
+                target
+                    .cgroups
+                    .extend(crate::turn_limits::scope_dir(stem, pid));
+            }
+            child
+        };
         self.0.allocation.mark();
         let _stderr =
             crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &self.0.env);
@@ -333,34 +370,26 @@ impl CodexHost {
             "codex: app-server started pid {}",
             child.id().map_or("?".into(), |p| p.to_string())
         ));
-        let (stopper, exited) = super::own(child);
+        #[cfg(target_os = "macos")]
+        let before_reap = self
+            .0
+            .sweep
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|t| t.tracking.clone())
+            .map(|tracking| move || turn_sweep::Tracking::sample_before_reap(&tracking));
+        #[cfg(not(target_os = "macos"))]
+        let before_reap = None::<fn()>;
+        let (stopper, exited) = super::own_with_before_reap(child, before_reap);
         // `exited` resolves once; whether it has is kept here for `alive`.
         let gone = Arc::new(AtomicBool::new(false));
-        let (relay_tx, relay_rx) = oneshot::channel();
         let (reaped_tx, reaped_rx) = tokio::sync::watch::channel(false);
-        let (stdout_done, stdout_drained) = oneshot::channel();
-        let flag = gone.clone();
-        let diagnostics = self.0.tx.clone();
-        tokio::spawn(async move {
-            let status = exited
-                .await
-                .unwrap_or_else(|_| Err(std::io::Error::other("codex app-server reaper ended")));
-            _stderr.drained().await;
-            // Usage and completion notifications can still be in the pipe when the process exits.
-            // A tool that inherited the pipe must not keep the host alive.
-            let _ = tokio::time::timeout(Duration::from_millis(100), stdout_drained).await;
-            let code = super::return_code(&status);
-            let _ = diagnostics.send(json!({"kind": "error", "error": crate::run_diagnostics::process_reason(code, &_stderr.tail()), "exit_code": code, "process_exit": true}));
-            flag.store(true, Ordering::SeqCst);
-            let _ = reaped_tx.send(true);
-            let _ = relay_tx.send(status);
-        });
         *self.0.reaped.lock().unwrap() = Some(reaped_rx);
-        *self.0.child.lock().unwrap() = Some((stopper, gone));
-        *self.0.exited.lock().await = Some(relay_rx);
+        *self.0.child.lock().unwrap() = Some((stopper, gone.clone()));
         self.0.alive.store(true, Ordering::SeqCst);
         let host = self.clone();
-        tokio::spawn(async move {
+        let mut reader = tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {
                 let line = line.trim();
@@ -378,7 +407,32 @@ impl CodexHost {
             for (_, slot) in host.0.pending.lock().unwrap().drain() {
                 let _ = slot.send(Err(json!({"message": "codex app-server exited"})));
             }
-            let _ = stdout_done.send(());
+        });
+        let diagnostics = self.0.tx.clone();
+        let host = self.clone();
+        tokio::spawn(async move {
+            let status = exited
+                .await
+                .unwrap_or_else(|_| Err(std::io::Error::other("codex app-server reaper ended")));
+            _stderr.drained().await;
+            // Drain final usage/completion, then detach the old reader if a tool inherited the pipe.
+            if tokio::time::timeout(Duration::from_millis(100), &mut reader)
+                .await
+                .is_err()
+            {
+                reader.abort();
+                let _ = reader.await;
+                host.0.alive.store(false, Ordering::SeqCst);
+                for (_, slot) in host.0.pending.lock().unwrap().drain() {
+                    let _ = slot.send(Err(json!({"message": "codex app-server exited"})));
+                }
+            }
+            let code = super::return_code(&status);
+            let _ = diagnostics.send(json!({"kind": "error", "error": crate::run_diagnostics::process_reason(code, &_stderr.tail()), "exit_code": code, "process_exit": true}));
+            gone.store(true, Ordering::SeqCst);
+            if status.is_ok() {
+                let _ = reaped_tx.send(true);
+            }
         });
         let info = json!({"name": "tico-keeper", "title": "Tico keeper", "version": "0.1"});
         self.request(
@@ -391,36 +445,105 @@ impl CodexHost {
     }
 
     pub async fn stop(&self) {
-        drop(self.0.stdin.lock().await.take());
-        let child = self.0.child.lock().unwrap().take();
-        if let Some((stopper, _)) = child {
-            stopper.terminate(Duration::from_secs(5));
-            if let Some(exited) = self.0.exited.lock().await.take() {
-                let _ = tokio::time::timeout(Duration::from_secs(6), exited).await;
-            }
-        }
-        self.0.alive.store(false, Ordering::SeqCst);
+        let _ = self.stop_and_reap().await;
     }
 
-    /// Whether the app-server process is still there, answering or not: from its start until it is reaped. `alive`
-    /// is about the protocol and turns false sooner (stdout closed, a stop begun), while the process can live on.
-    pub fn running(&self) -> bool {
-        self.0
-            .reaped
+    /// Leave escalation and reaping with `own`, even if this caller times out or is cancelled.
+    async fn stop_and_reap(&self) -> Result<(), &'static str> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(6);
+        let reaped = self.0.reaped.lock().unwrap().clone();
+        let tracking = self
+            .0
+            .sweep
             .lock()
             .unwrap()
             .as_ref()
-            .is_some_and(|r| !*r.borrow())
+            .and_then(|t| t.tracking.clone());
+        if let Some(tracking) = tracking {
+            let _ = tokio::time::timeout(
+                Duration::from_millis(250),
+                tokio::task::spawn_blocking(move || turn_sweep::Tracking::sample(&tracking)),
+            )
+            .await;
+        }
+        tokio::time::timeout_at(deadline, async {
+            let child = self.0.child.lock().unwrap().take();
+            if let Some((stopper, _)) = child {
+                let grace = Duration::from_secs(5);
+                if self.0.sweep.lock().unwrap().is_some() {
+                    stopper.terminate_child(grace);
+                } else {
+                    stopper.terminate(grace);
+                }
+            }
+            drop(self.0.stdin.lock().await.take());
+            self.0.alive.store(false, Ordering::SeqCst);
+            if let Some(mut reaped) = reaped {
+                reaped
+                    .wait_for(|gone| *gone)
+                    .await
+                    .map_err(|_| "Could not reap the Codex app-server.")?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|_| "Timed out waiting for the Codex app-server to be reaped.")?
     }
 
-    /// `stop`, then wait until the process has been reaped. Safe after a stop that was cut off: that stop's TERM and
-    /// its KILL five seconds later still come from the reaper task (super::own), and this waits for them.
-    pub async fn stop_and_reap(&self) {
-        self.stop().await;
-        let reaped = self.0.reaped.lock().unwrap().clone();
-        if let Some(mut reaped) = reaped {
-            let _ = reaped.wait_for(|gone| *gone).await;
+    pub(super) fn set_attempt(&self, redactor: Option<Arc<Redactor>>) {
+        *self.0.sweep_redactor.lock().unwrap() = redactor;
+        self.prepare_sweep();
+    }
+
+    fn prepare_sweep(&self) {
+        *self.0.sweep.lock().unwrap() = Some(turn_sweep::Turn {
+            mark: uuid::Uuid::new_v4().to_string(),
+            ..Default::default()
+        });
+    }
+
+    async fn sweep_reaped(&self, target: turn_sweep::Turn) -> Option<Value> {
+        let mut redactor = self.0.sweep_redactor.lock().unwrap().clone();
+        let home = |key| self.0.env.get(key).filter(|value| !value.is_empty());
+        let codex_home = home("CODEX_HOME")
+            .map(PathBuf::from)
+            .or_else(|| home("HOME").map(|home| PathBuf::from(home).join(".codex")));
+        if let Some(home) = codex_home {
+            // The app-server can refresh the login after startup. Mask the current
+            // credentials before forming or clipping a command-line diagnostic.
+            let secrets = tokio::task::spawn_blocking(move || {
+                let auth = crate::model_subscriptions::read_codex_auth(&home.join("auth.json"))?;
+                Some(crate::model_subscriptions::secrets_in(&auth))
+            })
+            .await
+            .ok()
+            .flatten();
+            if let Some(secrets) = secrets {
+                redactor
+                    .get_or_insert_with(|| Arc::new(Redactor::new(&[])))
+                    .add(&secrets);
+            }
         }
+        turn_sweep::finish(target, "codex", redactor).await
+    }
+
+    pub(crate) async fn finish_turn(&self) -> Vec<Value> {
+        let mut reports = std::mem::take(&mut *self.0.sweep_reports.lock().unwrap());
+        if self.0.sweep.lock().unwrap().is_none() {
+            self.stop().await;
+            return reports;
+        }
+        let reaped = self.stop_and_reap().await;
+        let target = self.0.sweep.lock().unwrap().take();
+        if let Some(target) = target {
+            reports.extend(match reaped {
+                Ok(()) => self.sweep_reaped(target).await,
+                Err(error) => {
+                    Some(json!({"text": format!("Codex process cleanup incomplete. {error}")}))
+                }
+            });
+        }
+        reports
     }
 
     pub fn track_allocation(&self, turn: std::sync::Arc<std::sync::atomic::AtomicBool>) {
@@ -983,7 +1106,11 @@ impl CodexHost {
 
     fn thread_params(&self, settings: &Settings) -> Value {
         let mut cfg = self.0.base_config.clone();
-        let env = env_for_config(&settings.env);
+        let mut env = env_for_config(&settings.env);
+        // Codex's shell policy inherits only core variables. Detached commands on Linux need the mark too.
+        if let Some(target) = self.0.sweep.lock().unwrap().as_ref() {
+            env.insert(MARK_ENV.into(), json!(target.mark));
+        }
         if !env.is_empty() {
             cfg.insert(
                 "shell_environment_policy".into(),
@@ -1410,6 +1537,39 @@ fn steer_turn_over(message: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test(start_paused = true)]
+    async fn a_reaper_that_never_finishes_cannot_hold_the_attempt_open() {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let host = CodexHost::on_home(Default::default(), tx, None);
+        host.prepare_sweep();
+        let (still_waiting, reaped) = tokio::sync::watch::channel(false);
+        *host.0.reaped.lock().unwrap() = Some(reaped);
+        let start = tokio::time::Instant::now();
+        let report = host.finish_turn().await;
+        assert_eq!(start.elapsed(), Duration::from_secs(6));
+        assert!(report[0]["text"].as_str().unwrap().contains("Timed out"));
+        assert!(
+            still_waiting.send(true).is_ok(),
+            "the reaper still owns the watch"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_wait_reports_incomplete_cleanup() {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let host = CodexHost::on_home(Default::default(), tx, None);
+        host.prepare_sweep();
+        let (failed, reaped) = tokio::sync::watch::channel(false);
+        *host.0.reaped.lock().unwrap() = Some(reaped);
+        drop(failed);
+        let report = host.finish_turn().await;
+        assert!(report[0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Could not reap"));
+        assert!(report[0].get("leftover_processes").is_none());
+    }
+
     use super::*;
 
     #[tokio::test]

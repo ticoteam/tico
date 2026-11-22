@@ -33,8 +33,8 @@ def docker(*args, **kwargs):
     return subprocess.run(["docker", *args], capture_output=True, text=True, timeout=300, **kwargs)
 
 
-@pytest.fixture
-def volume():
+@pytest.fixture(scope="module")
+def runner_image():
     if not IMAGE:
         pytest.skip(
             "Set TICO_RUNNER_TEST_IMAGE to a freshly built runner image; the release check selects its candidate"
@@ -43,6 +43,11 @@ def volume():
         pytest.skip("Docker is not installed; runner isolation requires Docker and an explicitly selected image")
     if docker("image", "inspect", IMAGE).returncode != 0:
         pytest.fail(f"The explicitly selected runner image {IMAGE} is unavailable")
+    return IMAGE
+
+
+@pytest.fixture
+def volume(runner_image):
     name = "tico-isolation-test-" + uuid.uuid4().hex[:8]
     yield name
     docker("volume", "rm", "-f", name)
@@ -796,16 +801,52 @@ def test_handing_an_older_releases_session_to_the_bot_changes_no_owner_outside_i
         )
 
 
-def test_gateway_turn_users_block_siblings_and_clean_before_reuse(volume):
+@pytest.fixture(scope="module")
+def rust_probe(runner_image):
+    binary = os.environ.get("TICO_RUNNER_TEST_BINARY", "").strip() or probe_binary()
+    binary = Path(binary).resolve(strict=True)
+    assert binary.is_file() and os.access(binary, os.X_OK), binary
+    return binary
+
+
+def test_codex_sweep_finds_detached_bot_processes(volume, rust_probe):
+    result = docker(
+        "run",
+        "--rm",
+        "--user",
+        "0",
+        "--cap-drop",
+        "ALL",
+        *CAPS,
+        "--security-opt",
+        "no-new-privileges:true",
+        "--network",
+        "none",
+        "-e",
+        "TICO_TEST_DISPOSABLE=1",
+        "-v",
+        f"{volume}:/home/runner",
+        "-v",
+        f"{rust_probe}:/turn-user-probe:ro",
+        IMAGE,
+        "/turn-user-probe",
+        "--ignored",
+        "--exact",
+        "turn_sweep::tests::docker_codex_sweeps_the_bot_uid_without_supervisor_environ_access",
+        "--nocapture",
+        "--test-threads=1",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1 passed" in result.stdout and "0 failed" in result.stdout, result.stdout
+
+
+def test_gateway_turn_users_block_siblings_and_clean_before_reuse(volume, rust_probe):
     """The source-pinned Rust probe exercises the real pool and relay in the candidate image.
 
     On Linux the test builds the probe from this checkout (`cargo test --no-run`), so the release gate runs it;
     TICO_RUNNER_TEST_BINARY names a prebuilt one instead. No host home, credential or database is mounted.
     The probe verifies its fingerprint against the candidate's runner and all 64 passwd entries.
     """
-    binary = os.environ.get("TICO_RUNNER_TEST_BINARY", "").strip() or probe_binary()
-    binary = Path(binary).resolve(strict=True)
-    assert binary.is_file() and os.access(binary, os.X_OK), binary
     configured = docker(
         "run",
         "--rm",
@@ -844,7 +885,7 @@ def test_gateway_turn_users_block_siblings_and_clean_before_reuse(volume):
         "-v",
         f"{volume}:/home/runner",
         "-v",
-        f"{binary}:/turn-user-probe:ro",
+        f"{rust_probe}:/turn-user-probe:ro",
         "--entrypoint",
         "/turn-user-probe",
         IMAGE,

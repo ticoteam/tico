@@ -923,7 +923,7 @@ fn clip(text: &str) -> String {
 pub struct Stopper(tokio::sync::mpsc::UnboundedSender<Stop>);
 
 enum Stop {
-    Term(std::time::Duration),
+    Term(std::time::Duration, bool),
     Kill,
     Signal(i32),
 }
@@ -932,7 +932,12 @@ impl Stopper {
     /// SIGTERM now, SIGKILL after `grace` if the process has not exited by then. A process already reaped is
     /// left alone.
     pub fn terminate(&self, grace: std::time::Duration) {
-        let _ = self.0.send(Stop::Term(grace));
+        let _ = self.0.send(Stop::Term(grace, true));
+    }
+
+    /// Stop the child with the same grace, leaving its group to the turn sweep after reaping it.
+    pub fn terminate_child(&self, grace: std::time::Duration) {
+        let _ = self.0.send(Stop::Term(grace, false));
     }
 
     /// SIGKILL now, so the process runs none of its own cleanup (Claude's ends its background shells).
@@ -1010,7 +1015,17 @@ fn exited_unreaped(pid: i32) -> bool {
 /// ends its own tools on one. `kill` and `signal` reach the child alone, and after either the group is left to its
 /// caller: a turn that ends on its background wait keeps shells in that group.
 pub fn own(
+    child: tokio::process::Child,
+) -> (
+    Stopper,
+    tokio::sync::oneshot::Receiver<std::io::Result<std::process::ExitStatus>>,
+) {
+    own_with_before_reap(child, None::<fn()>)
+}
+
+pub(super) fn own_with_before_reap(
     mut child: tokio::process::Child,
+    before_reap: Option<impl FnOnce() + Send + 'static>,
 ) -> (
     Stopper,
     tokio::sync::oneshot::Receiver<std::io::Result<std::process::ExitStatus>>,
@@ -1023,9 +1038,9 @@ pub fn own(
     tokio::spawn(async move {
         // A group leader's exit is watched on each SIGCHLD without reaping it (`exited_unreaped`); any other child is
         // reaped by its wait directly. Without the signal stream, a group leader is too, and nothing follows its exit.
-        let mut exits = group.and_then(|_| {
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::child()).ok()
-        });
+        let mut exits = (group.is_some() || before_reap.is_some())
+            .then(|| tokio::signal::unix::signal(tokio::signal::unix::SignalKind::child()).ok())
+            .flatten();
         let watching = exits.is_some();
         let mut kill_at: Option<tokio::time::Instant> = None;
         let mut asking = true;
@@ -1052,6 +1067,9 @@ pub fn own(
             tokio::select! {
                 status = child.wait(), if !watching => break status,
                 _ = leader_exited => {
+                    if let Some(sample) = before_reap {
+                        let _ = tokio::task::spawn_blocking(sample).await;
+                    }
                     if let (Some(g), true) = (group, termed) {
                         // SAFETY: the child leads group `g` and is not reaped, so `g` is still its group.
                         unsafe { libc::kill(-g, libc::SIGKILL) };
@@ -1071,7 +1089,10 @@ pub fn own(
                             unsafe { libc::kill(pid as i32, signal); }
                         }
                     }
-                    Some(Stop::Term(grace)) => {
+                    Some(Stop::Term(grace, whole_group)) => {
+                        if !whole_group {
+                            group = None;
+                        }
                         if let Some(pid) = child.id() {
                             unsafe { libc::kill(group.map_or(pid as i32, |g| -g), libc::SIGTERM); }
                             termed = true;
@@ -1143,14 +1164,20 @@ impl Host {
         }
     }
 
-    /// Record this harness's raw stream into `capture`; false for a harness the runner does not capture yet.
-    /// The run this host's turn belongs to: a Claude host marks its own process spawn, `system/init` and `result`.
-    pub fn set_attempt(&self, aid: &str) {
-        if let Host::Claude(h) = self {
-            h.set_attempt(aid);
+    /// Identify a fresh attempt host for Claude's flight marks and Codex's end-of-turn sweep.
+    pub fn set_attempt(
+        &self,
+        aid: &str,
+        redactor: Option<std::sync::Arc<crate::redact::Redactor>>,
+    ) {
+        match self {
+            Host::Claude(h) => h.set_attempt(aid),
+            Host::Codex(h) => h.set_attempt(redactor),
+            _ => (),
         }
     }
 
+    /// Record this harness's raw stream into `capture`; false for a harness the runner does not capture yet.
     pub fn set_capture(&self, capture: &std::sync::Arc<crate::capture::Capture>) -> bool {
         match self {
             Host::Claude(h) => h.set_capture(capture.clone()),

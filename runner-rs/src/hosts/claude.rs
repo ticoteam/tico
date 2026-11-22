@@ -1607,26 +1607,14 @@ impl ClaudeHost {
                     .collect(),
                 keep,
                 keep_trees,
+                tracking: None,
             }
         };
-        let stopped = tokio::task::spawn_blocking(move || crate::turn_sweep::sweep(&target))
-            .await
-            .unwrap_or_default();
-        if stopped.is_empty() {
-            return;
+        if let Some(report) =
+            crate::turn_sweep::finish(target, &format!("claude[{}]", self.0.bot), None).await
+        {
+            self.emit(event("diagnostic", Some(tid), Some(turn), report));
         }
-        log(&format!(
-            "claude[{}]: turn ended: stopped {} processes it left running ({})",
-            self.0.bot,
-            stopped.len(),
-            crate::turn_sweep::programs(&stopped)
-        ));
-        self.emit(event(
-            "diagnostic",
-            Some(tid),
-            Some(turn),
-            crate::turn_sweep::report(&stopped),
-        ));
     }
 
     /// Claude read message `mid`; one missing or not written here stands for the oldest unread message.
