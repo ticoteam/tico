@@ -91,6 +91,24 @@ def test_an_expired_history_id_lists_again_without_hearing_anything_twice(watche
     assert heard(api, aid) == ["one", "two"]
 
 
+@pytest.mark.parametrize("watch_path", ["first_check", "history", "expired_history"])
+def test_bad_watch_timestamp_does_not_stop_ordinary_arrivals(watched, watch_path):
+    api, gmail, aid = watched
+    if watch_path != "first_check":
+        assert check(api, T0) == 0
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE mailboxes SET watching_since_at='invalid' WHERE address=?", (BOX,))
+    if watch_path == "first_check":
+        gmail.add(BOX, "old", epoch=epoch(T0 - timedelta(days=2)))
+    if watch_path == "expired_history":
+        gmail.expired.add(BOX)
+    later = T0 + timedelta(minutes=3)
+    gmail.add(BOX, "ordinary", epoch=epoch(later))
+    assert check(api, later) == 1
+    assert box_row(api)["history_id"] == str(gmail.history_id(BOX))
+    assert heard(api, aid) == ["ordinary"]
+
+
 def test_intake_commits_before_the_cursor_and_replay_returns_the_same_run(watched, monkeypatch):
     api, gmail, _ = watched
     store = api.app.state.store
@@ -165,6 +183,46 @@ def test_intake_arrivals_survive_a_full_hold_and_a_stale_claim(watched):
             "ok",
         ]
         assert c.execute("SELECT count(*) FROM tasks WHERE occurrence_step='triage'").fetchone()[0] == 2
+
+
+@pytest.mark.parametrize("stop_hours", [0, outside_intake.DEADLINE_HOURS + 1])
+def test_stopped_inbox_keeps_saved_arrivals_and_hears_new_ones_after_reactivation(watched, monkeypatch, stop_hours):
+    api, gmail, _ = watched
+    store = api.app.state.store
+    monkeypatch.setattr(google_workspace, "covers", lambda c, mailbox: True)
+    labels = ("INBOX", "Tico Intake")
+    gmail.add(BOX, "saved", epoch=epoch(T0), labels=labels)
+    assert check(api, T0) == 1
+    box = box_row(api)
+    assert box["history_id"] == str(gmail.history_id(BOX))
+    with store.transaction() as c:
+        MA.stop(c, "human:ana", box["id"])
+    later = T0 + timedelta(minutes=3)
+    gmail.add(BOX, "while-stopped", epoch=epoch(later), labels=labels)
+    with time_machine.travel(later, tick=False):
+        assert store.automations.drain() == 1
+        assert check(api, later) == 0
+        assert box_row(api)["history_id"] == box["history_id"]
+        with store.read() as c:
+            run = c.execute("SELECT * FROM automation_runs WHERE trigger_ref LIKE 'intake:%'").fetchone()
+            assert run["status"] == "held"
+            assert json.loads(run["saved_state"])["payload"]["source_message_id"] == "saved"
+            assert not c.execute("SELECT 1 FROM tasks WHERE occurrence_step='triage'").fetchone()
+    resume_at = later + timedelta(hours=stop_hours)
+    with time_machine.travel(resume_at, tick=False):
+        automations.tick(store, resume_at, drain=False)
+        assert store.automations.drain() == 0
+        assert post(api, "mailboxes", {"address": BOX})["mailbox"]["id"] == box["id"]
+        automations.tick(store, resume_at, drain=False)
+        assert check(api, resume_at) == 1
+        assert store.automations.drain() == 2
+        assert box_row(api)["history_id"] == str(gmail.history_id(BOX))
+    with store.read() as c:
+        assert c.execute("SELECT status FROM automation_runs WHERE id=?", (run["id"],)).fetchone()[0] == "ok"
+        tasks = c.execute("SELECT id,owner_id FROM tasks WHERE occurrence_step='triage'").fetchall()
+        assert len(tasks) == 2 and all(task["owner_id"] == "human:ana" for task in tasks)
+        text = "\n".join(H.task_words(c, task["id"]) for task in tasks)
+        assert "/#all/saved)" in text and "/#all/while-stopped)" in text
 
 
 @pytest.mark.parametrize("action, status", [("release", "ok"), ("drop", "skipped")])

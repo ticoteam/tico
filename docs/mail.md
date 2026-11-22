@@ -41,8 +41,10 @@ People need access to both the contact and the inbox to read the thread. Matched
 which also checks access to the source of each recorded activity.
 Relationship-agent wakes are deferred until relationship run lanes ship. History is available through
 `tico contacts activity <ref>`, `tico_contacts_activity` in MCP, and `GET /api/v2/entities/activity`.
-The inbox owner can release or drop held runs through `tico automation held <id> release|drop`. An arrival
-still held at its 24-hour deadline goes to the owner for triage.
+The inbox owner can release or drop held runs in the Conversation intake routine or through
+`tico automation held <id> release|drop`. The Automation runs card and audit entries for intake require access to
+the inbox. An arrival still held at its 24-hour deadline goes to the owner for triage. While an inbox is stopped,
+saved arrivals wait until it is reactivated, then resume processing or go to triage if overdue.
 
 ## Organizing live
 

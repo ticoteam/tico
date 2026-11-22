@@ -1875,7 +1875,10 @@ def on_mail(c, mailbox, message, watch=None):
     received before the mailbox's watch began is old mail a check listed again, and no automation hears it.
     A message with no received time (0) is heard as it always was."""
     epoch = int(getattr(message, "epoch", 0) or 0)
-    if watch and 0 < epoch < H.parse_ts(watch).timestamp():
+    since = H.parse_ts(watch)
+    if since and since.tzinfo is None:
+        since = since.replace(tzinfo=timezone.utc)
+    if since and 0 < epoch < since.timestamp():
         return []
     raw = list(getattr(message, "attachments", None) or [])
     attachments = [a.get("name") if isinstance(a, dict) else str(a) for a in raw]
@@ -3017,7 +3020,7 @@ class Hub:
         return True
 
     def _go_intake(self, run, token):
-        from . import outside_intake
+        from . import mailbox_access, outside_intake
 
         with self.store.transaction(notify=True) as c:
             current = c.execute("SELECT * FROM automation_runs WHERE id=?", (run["id"],)).fetchone()
@@ -3027,11 +3030,17 @@ class Hub:
             status = current["status"]
             wake_at = None
             if status == "running":
-                status = "queued" if state.get("recover") else _runnable(c, current["automation_id"])
+                aid = current["automation_id"]
+                connection = aid.removeprefix(INTAKE_AUTOMATION)
+                box = mailbox_access.row_by_id(c, connection)
+                if box and box["status"] == "stopped":
+                    status = "held"
+                else:
+                    status = "queued" if state.get("recover") else _runnable(c, aid)
                 if status == "queued":
                     args = (
                         c,
-                        current["automation_id"].removeprefix(INTAKE_AUTOMATION),
+                        connection,
                         current["trigger_ref"],
                         state["payload"],
                         current["started_at"],
@@ -3494,13 +3503,18 @@ def tick(store, at=None, drain=True):
         )
         from .outside_intake import DEADLINE_HOURS
 
+        # A stopped inbox's held arrivals resume on reconnect. A run guard still owns its arrivals until the deadline.
         intake_pattern = INTAKE_AUTOMATION + "*"
+        deadline = H.shift(now, hours=-DEADLINE_HOURS)
         c.execute(
             "UPDATE automation_runs SET status='queued',finished_at=NULL,wake_at=NULL,"
-            "saved_state=json_set(saved_state,'$.recover',1) "
+            "saved_state=CASE WHEN status='failed' OR started_at<=? THEN json_set(saved_state,'$.recover',1) "
+            "ELSE saved_state END "
             "WHERE automation_id GLOB ? AND trigger_ref LIKE 'intake:%' "
-            "AND ((status='held' AND started_at<=?) OR (status='failed' AND wake_at<=?))",
-            (intake_pattern, H.shift(now, hours=-DEADLINE_HOURS), now),
+            f"AND ((status='held' AND (started_at<=? OR ({RUNNABLE})='queued')) "
+            "OR (status='failed' AND wake_at<=?)) "
+            "AND EXISTS (SELECT 1 FROM mailboxes WHERE id=substr(automation_id,?) AND status='active')",
+            (deadline, intake_pattern, deadline, now, len(INTAKE_AUTOMATION) + 1),
         )
         # A run cut off (the server stopped mid-run) goes on from its last save; its effects are not done twice.
         for run in c.execute(

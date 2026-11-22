@@ -111,10 +111,10 @@ def drain(store: Any, budget: Left | None = None) -> int:
     return heard
 
 
-def _epoch(stamp: str) -> int:
+def _epoch(stamp: str) -> int | None:
     at = cast("Callable[[str], Any]", H.parse_ts)(stamp)
     if at is None:
-        raise ValueError("not a timestamp: " + str(stamp))
+        return None
     return int((at.replace(tzinfo=timezone.utc) if at.tzinfo is None else at).timestamp())
 
 
@@ -212,10 +212,15 @@ class Reader:
 
 def _catch_up(c: Conn, box: Json, now: str) -> Json:
     """Where catching up starts: Gmail's history id now, and the time to list mail after."""
+    from .automations import MAIL_LOOKBACK_HOURS
+
     address, watch = str(box["address"]), str(box["watching_since_at"])
     after = _epoch(watch)
-    if box["checked_at"]:
-        after = max(after, _epoch(str(box["checked_at"] or now)) - int(RECHECK_BACK.total_seconds()))
+    checked = _epoch(str(box["checked_at"]))
+    if checked is not None:
+        after = max(after or 0, checked - int(RECHECK_BACK.total_seconds()))
+    if after is None:
+        after = (_epoch(now) or 0) - MAIL_LOOKBACK_HOURS * 3600
     return {"history_id": str(_gmail("profile")(c, address)), "after": after, "id": ""}
 
 
