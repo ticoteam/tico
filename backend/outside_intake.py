@@ -150,7 +150,7 @@ def save_message(
     verified_id: str = "",
 ) -> str | None:
     """Save the message and its intake run in the adapter's write transaction. A replay returns the run."""
-    from . import automations
+    from . import automations, task_engine
 
     if not c.in_transaction:
         raise ValueError("Conversation intake requires the adapter's write transaction")
@@ -192,6 +192,7 @@ def save_message(
         c, actor, None, body, root, "say", {}, None, None, outside=(channel, connection_id, source_message_id)
     )
     payload["message_id"] = message["id"]
+    task_engine.customer_replied(c, message, root)
     return str(queue.queue_intake(c, connection_id, owner_id, ref, payload))
 
 

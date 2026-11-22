@@ -713,9 +713,13 @@ def register(
         anchor = task_engine.customer_wait_anchor(
             c, thread, body.wait_sender, body.wait_after_seq, body.wait_provider_reply_id
         )
+        missing = Problem("not_found", "Outbound message not found in that thread", 404)
         if not anchor:
-            raise Problem("not_found", "Outbound message not found in that thread", 404)
-        thread_api.require_message_read(c, auth, who, anchor)
+            raise missing
+        try:
+            thread_api.require_message_read(c, auth, who, anchor)
+        except Problem:
+            raise missing from None
         return body.wait_thread_id, body.wait_sender, int(anchor["seq"])
 
     def snooze_call(c: Any, who: Any, task_id: str, body: M.TaskSnooze, gate: Any, params: Any, ingest: Any) -> Any:
