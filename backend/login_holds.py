@@ -789,12 +789,14 @@ def after_turn(
     hop_profile = body.profile_used if body.fallback and body.profile_used is not None else profile
     claimed = (c.execute("SELECT created_at FROM attempts WHERE id=?", (attempt_id,)).fetchone() or [""])[0] or ""
     kept = {}
-    from .model_subscriptions import handed
+    from .model_subscriptions import handed, row
 
     for n, (rt, notice, limited) in enumerate(steps):
         # A step signed in with a company subscription met its limit (or worked) on that subscription, wherever it
         # runs; any other step on the computer's own login.
         given = handed(c, attempt_id, rt)
+        if given and not row(c, given["subscription_id"]):
+            continue  # a plan removed while the turn ran: its hold went with it (model_subscriptions.remove)
         last = n == len(steps) - 1
         on_gateway = gateway_notice(notice) or (n == 0 and primary_gateway) or (last and ended_gateway)
         if subscriptions_only and not given and not on_gateway:

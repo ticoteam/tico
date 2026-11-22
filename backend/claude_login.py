@@ -815,7 +815,8 @@ def usage_result(c: Any, runner_id: str, sid: str, body: "UsageResult") -> Any:
             LH: Any = login_holds
             login: str = LH.subscription_login(sid)
             held: dict[str, Any] = LH.get(c, "", login, "claude")
-            if held and LH.payment(held.get("error")):
+            # Only a read asked after the refusal: one already out says nothing of the plan since.
+            if held and LH.payment(held.get("error")) and request["requested_at"] >= (held.get("since") or ""):
                 # The plan answers again (it was paid): its next turn tries it now rather than at the next wait's end.
                 LH.try_now(c, "", login, "claude", now)
     else:
