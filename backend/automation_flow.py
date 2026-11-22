@@ -435,6 +435,7 @@ def _check_step(step, where, seen, depth, counts, targets=frozenset()):
     kind = step.get("type")
     _need(kind in STEP_TYPES, where, f"type is one of {', '.join(STEP_TYPES)}")
     _need(kind == "llm" or step.get("choose") is None, where, "choose is on an llm step")
+    _need(kind == "find" or "together" not in step, where, "together is on a find step")
     _need(isinstance(step.get("enabled", True), bool), where, "enabled is true or false")
     if kind == "filter":
         rules = step.get("rules", [])

@@ -187,6 +187,7 @@ def test_a_together_find_saves_only_on_a_schedule_with_one_bot_turn_that_reads_t
         (flow(TOGETHER, act("tell"), trigger=SCHEDULE), "step new", "one bot_turn"),
         (flow(TOGETHER, {**DIGEST, "prompt": "Sort {{item.subject}}"}, trigger=SCHEDULE), turn_at, "item.items"),
         (flow(TOGETHER, {**DIGEST, "prompt": "x" * 8000 + "{{item.items}}"}, trigger=SCHEDULE), turn_at, "8000"),
+        (flow(TOGETHER, {**DIGEST, "together": True}, trigger=SCHEDULE), turn_at, "together is on a find"),
     ]:
         with pytest.raises(Invalid) as caught:
             check(bad)

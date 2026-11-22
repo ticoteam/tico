@@ -2053,21 +2053,24 @@ def _found_done(c, aid, state, ended=False):
     """Move the automation's `find` watermark past the items finished in order. An item still being worked stops it
     (the next run finds it again if this one stops). An item whose thread failed, or that a run ended without
     finishing (`ended`), stops it too and is found again by the next run, once: failing again it is passed over and
-    counted as dropped. Items finished past a stop are kept in `done`, so the retry never repeats them. A together
-    find's thread holds all its items (`found`), each counted on its own; its turn stopped by the spend cap (done, not
-    `settled`) leaves them new with no try counted."""
+    counted as dropped. Items finished past a stop are kept in `done`, so the retry never repeats them. The watermark
+    moves no further than the last item this run found: an item past it that it never saw is not passed over. A
+    together find's thread holds all its items (`found`), each counted on its own: handed off once its task started
+    (`settled`), whatever the run did after, and left new with no try when the spend cap or screening stopped it."""
     found = c.execute("SELECT found_since FROM automations WHERE id=?", (aid,)).fetchone()
     mark = _mark(found[0] if found else "")
     finished = {p: True for p in mark["done"]}
+    reach = ("", "")
     for thread in (t for t in state.get("threads") or [] if t.get("item") is not None and not t.get("split")):
         value = thread.get("value") if isinstance(thread.get("value"), dict) else {}
         places = [(str(at), str(ident)) for at, ident in thread.get("found") or []] or [
             (str(value.get("at") or ""), str(value.get("id") or ""))
         ]
-        if thread["state"] == E.DONE and thread.get("found") and not thread.get("settled"):
+        reach = max(reach, *places)
+        if thread.get("settled") is False:
             for place in places:
                 finished.setdefault(place, False)
-        elif thread["state"] == E.DONE:
+        elif thread["state"] == E.DONE or thread.get("settled"):
             for place in places:
                 mark["tried"].pop(place[1], None)
                 finished[place] = True
@@ -2094,7 +2097,7 @@ def _found_done(c, aid, state, ended=False):
     for place in sorted(finished):
         if place <= cursor:
             continue
-        if not finished[place]:
+        if not finished[place] or place > reach:
             break
         cursor = place
     after = {
@@ -2653,7 +2656,8 @@ class HubServices:
                 label=ctx.get("label"),
                 about=ctx.get("about"),
                 run_model=ctx.get("run_model"),
-                occurrence=ctx["values"].get("due"),
+                # A together find runs on a schedule: a `due` it sees is a sample's, never an occurrence to reuse.
+                occurrence=None if F.together(self.flow) else ctx["values"].get("due"),
             )
             if found and found["action"] == "warn":
                 from . import screening
@@ -2861,9 +2865,10 @@ class Hub:
             settle_mail(c, state)  # in the same write as the save, so a result reported meanwhile is not lost
             if now["status"] == "skipped":
                 # Dropped (or its automation turned off or deleted) during the step: what the step did is saved (with
-                # the answers and costs of turns that ended meanwhile, taken above), the run stays skipped, and
-                # nothing it queued is sent.
+                # the answers and costs of turns that ended meanwhile, taken above), the items it finished are
+                # done, the run stays skipped, and nothing it queued is sent.
                 state["status"] = "skipped"
+                _found_done(c, run["automation_id"], state)
                 _cancel_mail(c, rid, state)
                 c.execute(
                     "UPDATE automation_runs SET cost=?,saved_state=?,claimed_at=NULL,claim_token=NULL WHERE id=?",
@@ -3490,6 +3495,19 @@ def _held_by_find(c, row):
             (row["id"],),
         ).fetchone()
     )
+
+
+def _batching(c, aid, flow):
+    """Whether a run would overlap a together find's: a run is unfinished, and this flow or that run's version has one."""
+    unfinished = [
+        json.loads(v[0])
+        for v in c.execute(
+            "SELECT v.flow FROM automation_runs r JOIN automation_versions v ON v.automation_id=r.automation_id "
+            "AND v.n=r.version WHERE r.automation_id=? AND r.status IN ('queued','running','waiting','held')",
+            (aid,),
+        )
+    ]
+    return bool(unfinished) and any(F.together(f) for f in [flow, *unfinished])
 
 
 def _due_pass(c, row, at):
@@ -4231,11 +4249,11 @@ def install(app, store, auth, mutate):
             flow = flow_of(row)
             if flow.get("readonly"):
                 raise Problem("readonly", "This built-in shows work Tico runs itself; it has nothing to run", 409)
-            if _hold_row(c, aid):
-                raise Problem("on_hold", "The automation is on hold: release or drop its held runs first", 409)
-            if F.together(flow) and _held_by_find(c, row):
+            if _batching(c, aid, flow):
                 # Two runs would hand the same new items to two turns: a together find runs one at a time.
                 raise Problem("already_running", "Already running", 409)
+            if _hold_row(c, aid):
+                raise Problem("on_hold", "The automation is on hold: release or drop its held runs first", 409)
             if not _approved(c, row) and (blocked := _stamp_blocked(c, auth, who, flow)):
                 raise Problem(
                     "forbidden",

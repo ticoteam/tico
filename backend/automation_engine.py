@@ -693,6 +693,9 @@ def _turn_outputs(started):
 
 def _turn(flow, state, thread, step, services, who, prompt, wait):
     started = _start(flow, state, thread, step, services, who, prompt, wait)
+    if thread.get("found"):
+        # A together find's items are handed off only once its task started (automations._found_done).
+        thread["settled"] = started is not None and not started.get("held")
     if started is None:
         # The cap stops spending, not the run: later filters, decisions and actions still go.
         _record(state, thread, step, "spend_cap")
@@ -702,8 +705,6 @@ def _turn(flow, state, thread, step, services, who, prompt, wait):
         # Screening held the webhook's text for a person (backend/screening.py): no turn, and the run goes on.
         _record(state, thread, step, "held", {"ref": ref})
         return
-    if thread.get("found"):
-        thread["settled"] = True  # its task started: the items a together find took are done (automations._found_done)
     outputs = _turn_outputs(started)
     if not wait:
         _record(state, thread, step, "ok", outputs)
@@ -896,6 +897,8 @@ def _reads(steps, name, destinations=None):
     used = re.compile(r"(?<![A-Za-z0-9_.-])" + re.escape(name) + r"\.")
     destinations = destinations or {}
     for step in steps:
+        if step.get("enabled", True) is False:  # a step turned off never runs, so it reads nothing
+            continue
         if step.get("type") == "paths":
             nested = [p.get("steps") or [] for p in step.get("paths") or []]
             if any(_reads(s, name, destinations) for s in nested + [(step.get("otherwise") or {}).get("steps") or []]):
@@ -934,6 +937,7 @@ def _find(flow, state, thread, step, services):
 
 ITEM_TEXT = 500  # what the run log keeps of each found item's text; the item's own steps read all of it
 FIT_MARGIN = 1000  # what a together find leaves free under MAX_PROMPT for what the turn's service adds to the prompt
+TOO_LONG = "The oldest item does not fit the prompt"
 MAIL_KEEPS = ("from", "subject", "date", "snippet", "mailbox", "id")  # a mail as a together find's list holds it
 
 
@@ -951,16 +955,25 @@ def _together(flow, state, thread, step, items, values):
     for item in items:
         more = taken + [_compact(item, step["source"])]
         prompt = F.render_prompt(turn["prompt"], {**values, "item": {"items": more, "count": len(more)}}, cap=10**9)
-        if taken and len(prompt) >= F.MAX_PROMPT - FIT_MARGIN:
+        if len(prompt) >= F.MAX_PROMPT - FIT_MARGIN:
             break
         taken = more
     kept = items[: len(taken)]
+    if items and not kept:
+        # Its prompt with the oldest item alone is too long: no turn, and the items wait for a shorter prompt.
+        _record(state, thread, step, "failed", {"count": 0, "together": True, "error": TOO_LONG})
+        thread["state"] = FAILED
+        return
     _record(state, thread, step, "ok", {"count": len(kept), "items": [_brief(i) for i in kept], "together": True})
     state["empty"] = not kept
     place = next(n for n, t in enumerate(state["threads"]) if t is thread)
-    one = _thread(0, {"items": taken, "count": len(taken)}, thread["outputs"], thread["trail"], thread["next"])
-    one["found"] = [[str(i.get("at") or ""), str(i.get("id") or "")] for i in kept]
-    state["threads"][place : place + 1] = [one] if kept else []
+    if not kept:
+        del state["threads"][place]
+        return
+    state["threads"][place] = {
+        **_thread(0, {"items": taken, "count": len(taken)}, thread["outputs"], thread["trail"], thread["next"]),
+        "found": [[str(i.get("at") or ""), str(i.get("id") or "")] for i in kept],
+    }
 
 
 def _compact(item, source):
