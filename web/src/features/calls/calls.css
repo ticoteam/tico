@@ -396,7 +396,7 @@ button.act-text{padding:0;border:0;background:none;color:inherit;font-family:inh
   .cw .cc-l{display:none}
   .cw .cc-leave{height:48px;padding:0 calc(var(--s-6) + var(--s-0))}
   .cw .win-ctl{gap:var(--s-2h);padding:var(--s-3) var(--s-3h) calc(var(--s-4) + var(--s-0))}
-  .cw>.win-side{flex:1;min-height:240px}
+  .cw>.win-side{flex:1;min-height:min(240px,30dvh)} /* gives way on a short screen, under the trail, so Join and Leave stay */
   .pc{--surface:var(--sheet);background:var(--sheet)}
   .pc .cw-faces{padding:var(--s-2h) var(--s-2) var(--s-0);overflow-x:auto;scrollbar-width:none}
   .cb{grid-template-columns:minmax(0,1fr) auto auto;column-gap:var(--s-1);height:52px;padding:0 var(--s-2) 0 var(--s-2h)}

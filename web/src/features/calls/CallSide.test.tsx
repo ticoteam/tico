@@ -150,13 +150,15 @@ describe('one conversation, not two side by side', () => {
     await vi.waitFor(() => expect(screen.getByRole('tab', { name: 'Chat' }).getAttribute('aria-selected')).toBe('true'));
   });
 
-  it('counts a call just left here as ended, as its page does, though the call still reads live', async () => {
+  it('counts a call just left here as ended, as its page does, though the call still reads live; its agents stay on', async () => {
     queryClient.setQueryData(callQuery(ROOM).queryKey, { id: ROOM, thread_id: 'th-tico', meeting_id: 'mt9', participants: [], bots: ['b1'], state: 'live' } as unknown as Call);
     queryClient.setQueryData(transcriptQuery('mt9').queryKey, { chunks: [], event_id: 0 });
     mine.now = { callId: ROOM, phase: 'ended' };
     show(`/call/${ROOM}`, true);
     await vi.waitFor(() => expect(screen.getByRole('tab', { name: /People/ }).getAttribute('aria-selected')).toBe('true'));
     expect(screen.queryByRole('tab', { name: 'Chat' })).toBeNull();
+    // you left; the call goes on with its agent in it
+    expect(screen.getByText('In the call')).toBeTruthy();
   });
 
   it('keeps its Chat tab while Tico is folded, and in any other room whatever Tico shows', async () => {

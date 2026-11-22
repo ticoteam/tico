@@ -69,7 +69,7 @@ export function CallSide({ room, ticoBeside = false }: CallSideProps) {
             <Person key={p.actor} actor={p.actor} inCall={p.in_call} />
           ))}
           {(call?.bots ?? []).map((b) => (
-            <Person key={b} actor={b.startsWith('bot:') ? b : `bot:${b}`} inCall={!ended} out={live ? { room, bot: b } : undefined} />
+            <Person key={b} actor={b.startsWith('bot:') ? b : `bot:${b}`} inCall={call?.state !== 'ended'} out={live ? { room, bot: b } : undefined} />
           ))}
         </div>
       )}
