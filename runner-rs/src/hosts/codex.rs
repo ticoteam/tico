@@ -18,6 +18,7 @@ use super::{
     shell_reads_only, tool_summary, Events, HostError, Settings,
 };
 use crate::env::Env;
+use crate::redact::Redactor;
 use crate::turn_sweep::{self, MARK_ENV};
 use crate::util::{diagnostic, iso, log, py_dumps, text_of};
 
@@ -239,6 +240,7 @@ struct Shared {
     reaped: Mutex<Option<tokio::sync::watch::Receiver<bool>>>,
     /// The current app-server, swept before replacing it or ending the attempt.
     sweep: Mutex<Option<turn_sweep::Turn>>,
+    sweep_redactor: Mutex<Option<Arc<Redactor>>>,
     sweep_reports: Mutex<Vec<Value>>,
     active_turn: Mutex<HashMap<String, String>>,
     done_turns: Mutex<HashSet<String>>,
@@ -276,6 +278,7 @@ impl CodexHost {
             child: Mutex::new(None),
             reaped: Mutex::new(None),
             sweep: Mutex::new(None),
+            sweep_redactor: Mutex::new(None),
             sweep_reports: Mutex::new(Vec::new()),
             active_turn: Mutex::new(HashMap::new()),
             done_turns: Mutex::new(HashSet::new()),
@@ -314,7 +317,8 @@ impl CodexHost {
             self.stop_and_reap().await.map_err(failed)?;
             let previous = self.0.sweep.lock().unwrap().take();
             if let Some(previous) = previous {
-                if let Some(report) = turn_sweep::finish(previous, "codex", None).await {
+                let redactor = self.0.sweep_redactor.lock().unwrap().clone();
+                if let Some(report) = turn_sweep::finish(previous, "codex", redactor).await {
                     self.0.sweep_reports.lock().unwrap().push(report);
                 }
                 self.prepare_sweep();
@@ -475,17 +479,19 @@ impl CodexHost {
         .map_err(|_| "Timed out waiting for the Codex app-server to be reaped.")?
     }
 
-    pub(super) fn prepare_sweep(&self) {
+    pub(super) fn set_attempt(&self, redactor: Option<Arc<Redactor>>) {
+        *self.0.sweep_redactor.lock().unwrap() = redactor;
+        self.prepare_sweep();
+    }
+
+    fn prepare_sweep(&self) {
         *self.0.sweep.lock().unwrap() = Some(turn_sweep::Turn {
             mark: uuid::Uuid::new_v4().to_string(),
             ..Default::default()
         });
     }
 
-    pub(crate) async fn finish_turn(
-        &self,
-        redactor: Option<Arc<crate::redact::Redactor>>,
-    ) -> Vec<Value> {
+    pub(crate) async fn finish_turn(&self) -> Vec<Value> {
         let mut reports = std::mem::take(&mut *self.0.sweep_reports.lock().unwrap());
         if self.0.sweep.lock().unwrap().is_none() {
             self.stop().await;
@@ -494,6 +500,7 @@ impl CodexHost {
         let reaped = self.stop_and_reap().await;
         let target = self.0.sweep.lock().unwrap().take();
         if let Some(target) = target {
+            let redactor = self.0.sweep_redactor.lock().unwrap().clone();
             reports.extend(match reaped {
                 Ok(()) => turn_sweep::finish(target, "codex", redactor).await,
                 Err(error) => {
@@ -1503,7 +1510,7 @@ mod tests {
         let (still_waiting, reaped) = tokio::sync::watch::channel(false);
         *host.0.reaped.lock().unwrap() = Some(reaped);
         let start = tokio::time::Instant::now();
-        let report = host.finish_turn(None).await;
+        let report = host.finish_turn().await;
         assert_eq!(start.elapsed(), Duration::from_secs(6));
         assert!(report[0]["text"].as_str().unwrap().contains("Timed out"));
         assert!(
@@ -1520,7 +1527,7 @@ mod tests {
         let (failed, reaped) = tokio::sync::watch::channel(false);
         *host.0.reaped.lock().unwrap() = Some(reaped);
         drop(failed);
-        let report = host.finish_turn(None).await;
+        let report = host.finish_turn().await;
         assert!(report[0]["text"]
             .as_str()
             .unwrap()

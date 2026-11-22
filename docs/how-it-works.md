@@ -550,8 +550,9 @@ copies can rotate apart when the provider refreshes the token.
 
 At the end of a turn, the runner sweeps leftover Claude and Codex processes and records what it stopped in the run's
 diagnostics. It waits for the Codex app-server to be reaped before sweeping, including when it replaces a failed
-app-server. On macOS it tracks the app-server's descendants and their sessions. On Linux it uses the turn scope
-where available. In Docker the bot user reads the turn mark so the supervisor can identify detached jobs.
+app-server. On macOS it tracks the app-server's descendants and their sessions and checks surviving processes for a
+readable turn mark. On Linux it uses the turn scope where available. In Docker the bot user reads the turn mark so
+the supervisor can identify detached jobs.
 If the app-server cannot be reaped within the stop window, the run records incomplete cleanup.
 Claude shells kept on a background wait can keep running.
 

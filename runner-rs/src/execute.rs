@@ -1977,9 +1977,9 @@ impl Runner {
         let _ = self.state.append(aid, "diagnostic", &json!({"text": text}));
     }
 
-    async fn stop_host(&self, host: &Host, aid: &str, redactor: Option<&Arc<Redactor>>) {
+    async fn stop_host(&self, host: &Host, aid: &str) {
         if let Host::Codex(codex) = host {
-            for report in codex.finish_turn(redactor.cloned()).await {
+            for report in codex.finish_turn().await {
                 let _ = self.state.append(aid, "diagnostic", &report);
             }
         } else {
@@ -2829,7 +2829,7 @@ impl Runner {
                 voice_scope = Some(scope);
             }
             h.track_allocation(flags.harness_allocated.clone());
-            h.set_attempt(&aid);
+            h.set_attempt(&aid, redactor.clone());
             if let Some(c) = &capture {
                 h.set_capture(c);
             }
@@ -3367,7 +3367,7 @@ impl Runner {
             // The primary's thread stays this conversation's: the fallback runs in a side session, from the task's
             // checkpoint or what the prompt replays, and the next turn on the primary resumes its own.
             if let Some(h) = &host {
-                self.stop_host(h, &aid, redactor.as_ref()).await;
+                self.stop_host(h, &aid).await;
             }
             fallback = Some(hop.harness.clone());
             drove = Drove::interrupted();
@@ -3457,7 +3457,7 @@ impl Runner {
                 }
                 let h = host.insert(self.make_host(&bot, &hop.runtime, &hop_env, selected.as_ref(), tx)?);
                 h.track_allocation(flags.harness_allocated.clone());
-                h.set_attempt(&aid);
+                h.set_attempt(&aid, redactor.clone());
                 if let Some(c) = &capture {
                     h.set_capture(c);
                 }
@@ -3843,7 +3843,7 @@ impl Runner {
                 && !personal
                 && (matches!(h, Host::Pi(_)) || persistent && matches!(h, Host::Antigravity(_)));
             if !keeps || drove.outcome != "completed" {
-                self.stop_host(h, &aid, redactor.as_ref()).await;
+                self.stop_host(h, &aid).await;
             }
             if let Host::Antigravity(warm) = h {
                 // Its token file is blanked; only a turn that completed leaves the process running.

@@ -1152,10 +1152,10 @@ impl Host {
     }
 
     /// Identify a fresh attempt host for Claude's flight marks and Codex's end-of-turn sweep.
-    pub fn set_attempt(&self, aid: &str) {
+    pub fn set_attempt(&self, aid: &str, redactor: Option<std::sync::Arc<crate::redact::Redactor>>) {
         match self {
             Host::Claude(h) => h.set_attempt(aid),
-            Host::Codex(h) => h.prepare_sweep(),
+            Host::Codex(h) => h.set_attempt(redactor),
             _ => (),
         }
     }

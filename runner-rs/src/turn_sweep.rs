@@ -2,7 +2,7 @@
 //! background job, a dev server, a browser or a busy loop the bot never ended would otherwise run on after the turn,
 //! on a machine other bots share.
 //!
-//! Codex uses the scope where available, an environment mark on Linux, and recorded ancestry
+//! Codex uses the scope where available, an environment mark, and recorded ancestry
 //! and sessions. Docker reads marks as the bot user while the supervisor verifies and signals
 //! candidates. Claude's sweep also preserves its background-wait shells and their reaper.
 
@@ -61,6 +61,8 @@ struct Proc {
     zombie: bool,
     #[cfg(target_os = "macos")]
     parent_id: u64,
+    #[cfg(target_os = "macos")]
+    uid: u32,
 }
 
 #[cfg(target_os = "linux")]
@@ -146,6 +148,7 @@ fn process(pid: u32) -> Option<Proc> {
         sid: (sid > 0).then_some(sid as u32),
         zombie: info.bsd.pbi_status == libc::SZOMB,
         parent_id: info.parent_unique_id,
+        uid: info.bsd.pbi_uid,
     })
 }
 
@@ -257,8 +260,28 @@ for pid in os.listdir('/proc'):
 }
 
 #[cfg(target_os = "macos")]
-fn marks(_: &Turn, _: &HashMap<u32, Proc>) -> HashMap<Process, bool> {
-    HashMap::new()
+fn marks(turn: &Turn, procs: &HashMap<u32, Proc>) -> HashMap<Process, bool> {
+    if turn.mark.is_empty() || turn.tracking.is_none() {
+        return HashMap::new();
+    }
+    let uid = unsafe { libc::geteuid() };
+    let prefix = format!("{MARK_ENV}=");
+    procs
+        .values()
+        .filter(|p| !p.zombie && p.uid == uid)
+        .filter_map(|p| {
+            let raw = procargs(p.id.pid)?;
+            let (argc, entries) = procargs_entries(&raw)?;
+            // Match only envp. A command argument can look like a turn mark.
+            let mark = entries
+                .skip(argc)
+                .take_while(|entry| !entry.is_empty())
+                .find_map(|entry| entry.strip_prefix(prefix.as_bytes()))?;
+            let now = process(p.id.pid)?;
+            (now.id == p.id && now.uid == uid && !now.zombie)
+                .then_some((p.id, mark == turn.mark.as_bytes()))
+        })
+        .collect()
 }
 
 /// Only live identities can vouch for a group or session. Never carry its numeric ID
@@ -376,9 +399,7 @@ fn join_args<'a>(args: impl Iterator<Item = &'a [u8]>) -> String {
 }
 
 #[cfg(target_os = "macos")]
-fn command_of(pid: u32) -> String {
-    // KERN_PROCARGS2 returns argc, the executable path, padding, argv, and
-    // possibly the environment. Keep only argc entries from argv.
+fn procargs(pid: u32) -> Option<Vec<u8>> {
     let mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as i32];
     let mut size = 0;
     let mut read = |buf: *mut libc::c_void| {
@@ -395,19 +416,30 @@ fn command_of(pid: u32) -> String {
         }
         .then_some(size)
     };
-    if let Some(n) = read(std::ptr::null_mut()).filter(|n| (4..=1 << 20).contains(n)) {
-        let mut raw = vec![0u8; n];
-        if let Some(n) = read(raw.as_mut_ptr().cast()) {
-            raw.truncate(n);
-            if let Some((argc, argv)) = raw.split_first_chunk::<4>() {
-                if let Some(path_end) = argv.iter().position(|b| *b == 0) {
-                    let tail = &argv[path_end + 1..];
-                    let argc = u32::from_ne_bytes(*argc) as usize;
-                    if let Some(first) = tail.iter().position(|b| *b != 0) {
-                        return join_args(tail[first..].split(|b| *b == 0).take(argc));
-                    }
-                }
-            }
+    let n = read(std::ptr::null_mut()).filter(|n| (4..=1 << 20).contains(n))?;
+    let mut raw = vec![0u8; n];
+    let n = read(raw.as_mut_ptr().cast())?;
+    raw.truncate(n);
+    Some(raw)
+}
+
+#[cfg(target_os = "macos")]
+fn procargs_entries(raw: &[u8]) -> Option<(usize, impl Iterator<Item = &[u8]>)> {
+    // KERN_PROCARGS2 returns argc, the executable path, padding, argv, then
+    // the environment when macOS allows access to it.
+    let (argc, path_and_args) = raw.split_first_chunk::<4>()?;
+    let argc = u32::from_ne_bytes(*argc) as usize;
+    let path_end = path_and_args.iter().position(|b| *b == 0)?;
+    let tail = &path_and_args[path_end + 1..];
+    let first = tail.iter().position(|b| *b != 0)?;
+    Some((argc, tail[first..].split(|b| *b == 0)))
+}
+
+#[cfg(target_os = "macos")]
+fn command_of(pid: u32) -> String {
+    if let Some(raw) = procargs(pid) {
+        if let Some((argc, entries)) = procargs_entries(&raw) {
+            return join_args(entries.take(argc));
         }
     }
     let mut name = [0; 256];
@@ -535,18 +567,26 @@ fn sweep(turn: &Turn, redactor: Option<&crate::redact::Redactor>) -> Vec<Stopped
             }
         }
     };
-    let first = leftovers(turn);
-    if first.is_empty() {
+    let mut left = leftovers(turn);
+    if left.is_empty() {
         return stopped;
     }
-    for p in first {
+    for &p in &left {
         stop(p, libc::SIGTERM);
     }
     let until = Instant::now() + GRACE;
     while Instant::now() < until {
         std::thread::sleep(Duration::from_millis(50));
-        if leftovers(turn).is_empty() {
-            return stopped;
+        // A full scan can read every process's environment. Wait on the known
+        // identities first, then look for anything they left behind.
+        if left
+            .iter()
+            .all(|id| !process(id.pid).is_some_and(|p| p.id == *id && !p.zombie))
+        {
+            left = leftovers(turn);
+            if left.is_empty() {
+                return stopped;
+            }
         }
     }
     for _ in 0..PASSES {
@@ -755,6 +795,54 @@ mod tests {
         exercise_codex_sweep(true).await;
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_marked_job_is_swept_after_its_unsampled_shell_exits() {
+        use std::os::unix::process::CommandExt;
+        use std::process::{Command, Stdio};
+
+        let mark = uuid::Uuid::new_v4().to_string();
+        let mut shell = Command::new("/bin/sh");
+        shell
+            .args([
+                "-c",
+                r#"python3 -c 'import os,time; print(os.getpid(), flush=True); os.close(1); time.sleep(900)' &"#,
+            ])
+            .env(MARK_ENV, &mark)
+            .stdin(Stdio::null())
+            .stderr(Stdio::null());
+        // SAFETY: setsid in the just-forked shell, as Codex does for tool commands.
+        unsafe {
+            shell.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            })
+        };
+        // This returns after the shell exits and the background Python has exec'd and printed its PID.
+        let out = shell.output().unwrap();
+        let pid = std::str::from_utf8(&out.stdout)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let job = process(pid).unwrap();
+        let stopped = sweep(
+            &Turn {
+                mark,
+                tracking: Some(Arc::new(Mutex::new(Tracking::default()))),
+                ..Default::default()
+            },
+            None,
+        );
+        let survived = signal(job.id, libc::SIGKILL);
+        assert!(out.status.success());
+        assert_eq!(job.ppid, 1, "the shell must exit before the sweep");
+        assert!(!survived, "the detached job survived");
+        assert_eq!(stopped.iter().map(|p| p.pid).collect::<Vec<_>>(), [pid]);
+    }
+
     async fn exercise_codex_sweep(restart: bool) {
         let dir = std::env::temp_dir().join(format!("turn-sweep-codex-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -777,10 +865,15 @@ for line in sys.stdin:
         env = msg['params']['config']['shell_environment_policy']['set']
         assert env['TICO_TURN_MARK'] == os.environ['TICO_TURN_MARK'] != 'old-mark'
         pids = [os.getpid()]
+        cwd = os.path.dirname(os.environ['FAKE_PIDS'])
+        os.mkfifo(os.path.join(cwd, 'hold'))
         # A plain tool, a job in a new group of the app-server session, and a
         # new session like Codex's pipe/PTY executor. On macOS these have no mark.
         for setup in ({}, {'preexec_fn': lambda: os.setpgid(0, 0)}, {'start_new_session': True}):
-            child = subprocess.Popen(['/bin/sleep', '900'], env=env if sys.platform == 'linux' else {},
+            args = ['/bin/sleep', '900'] if setup else [
+                '/bin/sh', '-c', 'read x < hold', os.environ['FAKE_SECRET']]
+            child = subprocess.Popen(args, cwd=cwd,
+                                     env=env if sys.platform == 'linux' else {},
                                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                      **setup)
             pids.append(child.pid)
@@ -790,19 +883,24 @@ for line in sys.stdin:
     print(json.dumps({'id': msg['id'], 'result': result}), flush=True)
 "#,
         );
+        let secret = "synthetic credential with a long tail ".repeat(4);
         let env: crate::env::Env = [
             (
                 "PATH".into(),
                 format!("{}:{}", dir.display(), std::env::var("PATH").unwrap()),
             ),
             ("FAKE_PIDS".into(), pids_file.display().to_string()),
+            ("FAKE_SECRET".into(), secret.clone()),
             (MARK_ENV.into(), "old-mark".into()),
         ]
         .into();
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let codex = crate::hosts::codex::CodexHost::on_home(env.clone(), tx, None);
         let host = crate::hosts::Host::Codex(codex.clone());
-        host.set_attempt("attempt");
+        host.set_attempt(
+            "attempt",
+            Some(Arc::new(crate::redact::Redactor::new(&[secret]))),
+        );
         host.start().await.unwrap();
         host.start_thread(
             "ops",
@@ -853,7 +951,7 @@ for line in sys.stdin:
             .await
             .unwrap();
         }
-        let reports = codex.finish_turn(None).await;
+        let reports = codex.finish_turn().await;
         let survivors: Vec<_> = identities
             .into_iter()
             .filter(|&p| signal(p, libc::SIGKILL))
@@ -872,10 +970,13 @@ for line in sys.stdin:
         let report = &reports[0];
         assert_eq!(report["leftover_processes"]["count"], pids.len() - 1);
         assert_eq!(
-            report["leftover_processes"]["top"],
-            json!([{"command": "/bin/sleep 900", "count": pids.len() - 1}])
+            report["leftover_processes"]["top"][0],
+            json!({"command": "/bin/sleep 900", "count": 2})
         );
-        assert!(codex.finish_turn(None).await.is_empty());
+        let text = report["text"].as_str().unwrap();
+        assert!(text.contains(crate::redact::MASK), "{text}");
+        assert!(!text.contains("synthetic"), "{text}");
+        assert!(codex.finish_turn().await.is_empty());
     }
 
     #[test]
