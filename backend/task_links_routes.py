@@ -111,7 +111,9 @@ def register(app, auth, mover, mutate, person_only, settings, store, task_view):
                 )
             else:
                 raise Problem("kind", "Send a url to add or remove with a link id", 422)
-            return {"links": H.task_links(c, task_id)}
+            from . import api_tools
+
+            return {"links": H.task_links(c, task_id, api_tools.connections_seen(c, who, auth))}
 
         # A retry of a link sent before `connection_id` existed hashed the body without it.
         legacy = body.model_dump(exclude={"connection_id"}) if body.connection_id is None else None

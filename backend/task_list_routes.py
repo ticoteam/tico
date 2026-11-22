@@ -672,7 +672,9 @@ def readers(auth):
                 "SELECT b.* FROM blobs b JOIN task_assets a ON a.blob_id=b.id WHERE a.task_id=?", (row["id"],)
             )
         ]
-        value["links"] = H.task_links(c, row["id"])
+        from . import api_tools
+
+        value["links"] = H.task_links(c, row["id"], api_tools.connections_seen(c, who, auth) if who else None)
         value["children_summary"] = H.children_summary(c, row["id"], visible_sql)
         value["pr_state"] = H.pr_state(value["links"])
         counts = c.execute(

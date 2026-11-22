@@ -198,10 +198,12 @@ def test_a_hidden_tool_is_answered_as_no_connection_and_never_shown(api):
     )
     _link(api, task, ACME)  # ana sees the tool; the link is typed with it, stored, never shown
     assert _row(api, task, ACME)["connection_id"] == "tool_a"
-    for token in ("ben-test", "ana-test"):
+    for token, source in (("ben-test", None), ("ana-test", "jira")):
         links = get(api, f"tasks/{task}/links", token=token)["links"]
         assert links and all("connection_id" not in link for link in links)
-        assert all("connection_id" not in link for link in get(api, f"tasks/{task}", token=token)["task"]["links"])
+        detail = get(api, f"tasks/{task}", token=token)["task"]["links"]
+        # Through a tool ben may not see, the link reads to him as a plain one.
+        assert [(link["source"], link["item_key"]) for link in links + detail] == [(source, source and "PROJ-7")] * 2
     assert _found(api, "jira:issue:PROJ-7@tool_a", token="ben-test") == "connection"
 
 
@@ -348,6 +350,8 @@ def test_a_hidden_tool_is_never_inferred_nor_read_back(api):
         headers=headers("ben-test"),
     )
     assert read.status_code == 200 and read.json()["rows"] == [[None]]
+    item = "SELECT source, item_type, item_key FROM task_links WHERE task_id='%s'" % other
+    assert api.post("/api/v2/sql", json={"sql": item}, headers=headers("ben-test")).json()["rows"] == [[None] * 3]
     shown = api.post(
         "/api/v2/sql",
         json={"sql": "SELECT connection_id FROM task_links WHERE task_id='%s'" % other},
@@ -366,6 +370,10 @@ def test_a_referenced_tool_keeps_its_site(api):
     refused = api.patch("/api/v2/api-tools/tool_a", json={"base_url": "https://beta.atlassian.net"}, headers=headers())
     assert refused.status_code == 409 and refused.json()["error"]["code"] == "connection_sites"
     assert _found(api, BETA) == "link"
+    path = api.patch(
+        "/api/v2/api-tools/tool_a", json={"base_url": "https://acme.atlassian.net/beta"}, headers=headers()
+    )
+    assert path.status_code == 409  # another endpoint on the same host is another connection too
 
 
 def test_a_record_erased_without_a_connection_stays_apart_from_each_connections(api):
@@ -379,6 +387,20 @@ def test_a_record_erased_without_a_connection_stays_apart_from_each_connections(
         ER.erase(c, "human:ana", jane, "request")
     assert post(api, "entities/external-refs", {**record, "ref": kim}, expected=422)["error"]["code"] == "suppressed"
     post(api, "entities/external-refs", {**record, "ref": kim, "connection_id": "tool_a"})
+
+
+def test_a_task_created_with_a_link_two_connections_serve_keeps_it_plain(api):
+    _tools(api, "tool_a", "tool_c")  # both on acme.atlassian.net
+    made = post(api, "tasks", {"owner": "ben", "title": "Filed with a link", "body": "Please.", "links": [ACME]})["id"]
+    assert [(r["url"], r["source"]) for r in _rows(api, made)] == [(ACME, None)]
+
+
+def test_a_url_is_linked_to_a_task_through_one_connection_only(api):
+    _tools(api, "tool_a", "tool_c")
+    task = _task(api, "One link per URL")
+    _link(api, task, ACME, connection_id="tool_a")
+    assert _link(api, task, ACME, 422, connection_id="tool_c")["error"]["code"] == "connection"
+    assert [r["connection_id"] for r in _rows(api, task)] == ["tool_a"]
 
 
 def test_a_merge_copies_a_stored_outside_link_after_its_tool_is_gone(api):

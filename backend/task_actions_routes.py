@@ -805,6 +805,7 @@ def register_core(
                 url,
                 mover=True,
                 visible=lambda tool_id: api_tools.connection_visible(c, who, auth, tool_id),
+                plain_when_unsure=True,
             )
         # A bot's finding on a pipeline task's own pull request is that task's review verdict, not a person's task.
         H.review_finding_route(c, who.actor, row["id"], row["owner_id"])

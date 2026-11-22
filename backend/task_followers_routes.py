@@ -77,7 +77,9 @@ def register(
                     "Remove a link from “" + H.task(c, task_id)["title"] + "”",
                 )
             H.task_unlink(c, who.actor, task_id, link_id, mover=mover(c, who))
-            return {"links": H.task_links(c, task_id)}
+            from . import api_tools
+
+            return {"links": H.task_links(c, task_id, api_tools.connections_seen(c, who, auth))}
 
         return mutate(request, M.Empty(), work)
 

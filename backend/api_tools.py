@@ -1368,18 +1368,36 @@ def _former(c, tid):
 
 
 def keep_sites(c, tool, base_url, sites):
-    """409 `connection_sites` when a change would move a tool that outside references name (TS.referenced) to other
-    hosts: its items' keys (Jira's `PROJ-7`) are its old site's, so another site is a new tool."""
+    """409 `connection_sites` when a change would move a tool that outside references name (TS.referenced) to another
+    endpoint (its base URL, normalized) or other hosts: its items' keys (Jira's `PROJ-7`, a CRM's customer 42) are its
+    old endpoint's, so another one is a new tool."""
     from . import item_sources as IS
 
+    def endpoint(url):
+        return str(url or "").strip().rstrip("/").lower()
+
     before = IS.hosts(_field(tool, "base_url"), _field(tool, "sites"))
-    if IS.hosts(base_url, sites) != before and TS.referenced(c, tool["id"]):
+    moved = endpoint(base_url) != endpoint(_field(tool, "base_url")) or IS.hosts(base_url, sites) != before
+    if moved and TS.referenced(c, tool["id"]):
         raise Problem(
             "connection_sites",
             f"{tool['name']} names outside items of {', '.join(sorted(before)) or 'its site'}: add a new tool for "
             "another site",
             409,
         )
+
+
+def connections_seen(c, who, auth):
+    """`connection_visible` for one reader, each tool judged once: what a read of task links is shown with
+    (H.task_links `shown`)."""
+    seen = {}
+
+    def shown(tool_id):
+        if tool_id not in seen:
+            seen[tool_id] = connection_visible(c, who, auth, tool_id)
+        return seen[tool_id]
+
+    return shown
 
 
 def connection_visible(c, who, auth, tool_id):

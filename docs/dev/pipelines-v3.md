@@ -1163,9 +1163,11 @@ A merge copies a stored link as it is, connection included.
 item's URL; `tico task list --link`) finds the tasks that link one item; a Jira item always names its connection.
 
 A connection id is a tool's id under the tools' one visibility rule (`api_tools.visible`): one the caller may not see is
-answered as one that does not exist. A task link's connection is stored, never shown in an answer; a Contacts record
-shows it as null, and `POST /api/v2/sql` reads it as NULL, to a caller who may not see the tool. Once outside references
-name a tool its hosts stay as they are (409 `connection_sites`): another site is a new tool.
+answered as one that does not exist. A task link's connection is stored, never shown in an answer; to a reader who may
+not see the tool the link reads as a plain one (no source, item type or key), in task answers and `POST /api/v2/sql`
+alike, and a Contacts record shows its connection as null. Once outside references name a tool its base URL and hosts
+stay as they are (409 `connection_sites`): another endpoint is a new tool. A task links a URL through one connection
+only; a task created with a link whose site two connections serve keeps it plain.
 A deleted tool's id is never given to a new tool while an outside reference, a deleted task's restorable link included,
 still names it. A source registers in `backend/item_sources/__init__.py` with
 `match_link(url)` and, optionally, `match_key(item_type, text)` and `site(url)`. A Contacts entity's records in other
