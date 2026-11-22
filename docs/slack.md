@@ -55,6 +55,9 @@ A bot's `service: slack` entry can instead read every channel the gateway can se
 channels are still refused. A channel named all is written `#all`. `all` widens reads only: a post still needs its
 channel on the list with posting on.
 
+A `service: slack` entry with no `can` may read and post. Write `can: [read]` to keep the bot read-only. Posting
+also needs the channel on the list with posting on, whatever the entry says.
+
 ## Link a channel to a thread
 
 A channel can be linked to a Tico thread, and the two carry each other's messages.
@@ -108,7 +111,8 @@ at a time (`limit`, `cursor`; follow `next_cursor`).
 | Socket Mode did not connect | The app-level token is wrong or lacks `connections:write`, or Socket Mode is off (the manifest turns it on). |
 | Missing scopes in `docker compose logs slack` | Paste the current manifest over the app's, then reinstall it. |
 | No reply in a channel | Tico must be invited to it, and the sender must be on the roster. |
-| A bot's Slack history says it does not declare Slack access or lacks `read` | Add `service: slack` with `can: [read]` to the bot's `tools:` in `bot.yaml`. |
+| A bot's Slack history says it does not declare Slack access or lacks `read` | Add `service: slack` to the bot's `tools:` in `bot.yaml`. With no `can` it may read and post; if `can:` is set, it must list `read`. |
+| A bot's Slack post says it may not post | Remove `can:` from its Slack entry, or add `post` to it; the channel must also be on the list with posting on. |
 | A bot's Slack history says it may not read the channel | Add the channel to the bot's Slack `channels:` or add the bot as a reader under Tools > Slack channels. |
 | Slack history says to invite @Tico | Check the channel name or ID and use `/invite @Tico` in the channel. |
 | Replies show as "Tico", not the bot | The `chat:write.customize` scope is missing; update the manifest and reinstall. |

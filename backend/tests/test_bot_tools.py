@@ -225,6 +225,21 @@ def test_a_manager_registers_a_tool_and_agent_ops_gets_the_exact_entry(api):
     assert next(t for t in tools_of(api)["tools"] if t["service"] == "posthog")["status"] == "ready"
 
 
+def test_a_slack_entry_with_no_can_takes_a_scope_change_and_the_task_keeps_it_without_can(api):
+    agent_ops(api)
+    machine = runner(api)
+    assign(api, machine, "ops")
+    # What the runner reports for a bot.yaml Slack entry with no `can`: an empty list.
+    reported = {"service": "slack", "identity": "Acme workspace", "can": [], "scope": {"channels": ["#ops"]}}
+    assert report(api, machine, "ops", [{**reported, "credential": "present"}]).status_code == 200
+    slack = next(t for t in tools_of(api)["tools"] if t["service"] == "slack")
+    post(api, f"bots/ops/tools/{slack['id']}/update", {"scope": {"dms": "no"}}, "ana-test")  # not a 422
+    [task] = agent_ops_tasks(api)
+    with api.app.state.store.read() as c:
+        body = H.task_words(c, task["id"])
+    assert "- service: slack" in body and "dms:" in body and "can:" not in body
+
+
 def test_a_credential_value_is_refused_and_nothing_is_kept(api):
     agent_ops(api)
     secrets = [
