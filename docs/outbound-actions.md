@@ -33,7 +33,8 @@ Or over the API, CLI or MCP:
 | `GET`/`PUT /api/v2/outbound-actions/policy` | the company's policy (`tico outbound policy`, `policy-set`) |
 
 Only a bot (or Tico itself) queues. The same `occurrence_key` always answers the action it already made. A
-`task_id` must be a task the bot reads, a `connection_id` a tool it may see, `send_after` an ISO time (stored in UTC). `metadata` is
+`task_id` must be a task the bot reads, a `connection_id` a tool it may see, `send_after` an ISO time (stored in UTC). Every listed field is bounded at enqueue (a destination at most 500
+characters), so every action fits on a list page. `metadata` is
 the caller's own record: kept, shown in the detail, never acted on.
 
 An action is seen by whoever queued it, the owner and admins, and the person asked to OK it.
@@ -49,8 +50,8 @@ anew by the channel's adapter.
    company and Ask first (`ask_first`) outside it. Relationship-level overrides come later.
 
 An audience the adapter cannot tell is external. Ask first waits on one OK (backend/task_asks.py, subject
-`outbound:<id>`) bound to the frozen action, asked of the bot's manager when that is a person, else the company's
-default person.
+`outbound:<id>`) bound to the frozen action, asked of the bot's manager when that is a person who is here and the bot
+may ask, else the company's default person. With nobody to ask, the action is `blocked` and says so.
 
 ## States
 
@@ -67,7 +68,9 @@ default person.
   it may still give it. A certain refusal is `failed`. Anything else is `unknown`.
 - **Unknown.** Never sent again on its own, never put back in line: the worker that made the attempt may still reach
   the provider. The adapter's reconcile (outside any transaction) may settle it done or failed from the provider's own
-  record; otherwise it is logged and a person settles it (`resolve`: sent or not sent) or cancels it.
+  record; otherwise it is logged and a person settles it (`resolve`: sent or not sent) or cancels it. Its OK's task
+  stays open until then. A receipt from the original attempt that arrives after all (matched by the row and its
+  attempt marker) wins over a person's not sent or cancel: the action is done, its receipt marked late.
 
 `payload` is wiped when an action is done, failed or canceled; `metadata` and `receipt` stay. Rows are never pruned.
 

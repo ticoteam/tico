@@ -31,6 +31,8 @@ class Fake:
     def dispatch(self, store, row):
         self.calls.append(row["id"])
         answer = self.answers.pop(0) if self.answers else {"provider_id": "p-" + row["id"][:4]}
+        if callable(answer):  # what happens while the provider is being called
+            answer = answer()
         if isinstance(answer, BaseException):
             raise answer
         return answer
@@ -182,13 +184,28 @@ def make_ben_ops_manager(store):
         c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='ops'")
 
 
-def ben_leaves(store):
+def leaves(store, pid):
     with store.transaction() as c:
         people = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         for person in people["people"]:
-            if person["id"] == "ben":
+            if person["id"] == pid:
                 person["hidden"] = True
         c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(people),))
+
+
+def ben_leaves(store):
+    leaves(store, "ben")
+
+
+def approved_by_ben(store):
+    """An outside action, OK'd by Ops's manager Ben."""
+    make_ben_ops_manager(store)
+    row, _ = add(store, destination="https://partner.example/hook")
+    with store.transaction() as c:
+        rid = OA.get(c, row["id"])["approval_id"]
+        shown = task_asks.show(c, "human:ben", rid, OA.content(row), own_click=True)
+        task_asks.give_ok(c, "human:ben", rid, shown, own_click=True, ctx=task_asks.Context())
+    return row, rid
 
 
 def test_the_person_asked_sees_the_action_and_one_ok_survives_a_safe_retry(api, store, fake):
@@ -301,3 +318,45 @@ def test_a_list_row_carries_a_bounded_error(api, store, fake):
     OA.attempt(store, OA.claim(store))
     item = get(api, "outbound-actions")["items"][0]
     assert item["id"] == row["id"] and len(item["last_error"]) == 300
+
+
+def test_a_late_receipt_beats_a_persons_not_sent(store, fake):
+    row, _ = add(store)
+
+    def meanwhile():  # the worker stalls in the call: it is taken for dead and a person says it did not go
+        OA.recover(store, later(OA.STALE + 1))
+        with store.transaction() as c:
+            OA.settle(c, OA.get(c, row["id"]), "failed", error="Not sent, Ana found")
+        return {"provider_id": "p-late"}
+
+    fake.answers = [meanwhile]
+    assert OA.attempt(store, OA.claim(store)) == "done"
+    after = row_of(store, row["id"])
+    receipt = json.loads(after["receipt"])
+    assert after["state"] == "done" and receipt["provider_id"] == "p-late" and receipt["was"] == "failed"
+
+
+def test_an_unknown_outcome_leaves_its_ok_task_open_until_it_is_settled(api, store, fake):
+    row, rid = approved_by_ben(store)
+    fake.answers = [RuntimeError("connection reset")]
+    assert OA.attempt(store, OA.claim(store)) == "unknown"
+    with store.read() as c:
+        task = task_asks.task_of(c, rid)
+        assert H.task(c, task)["status"] == "open"
+    api.post(f"/api/v2/outbound-actions/{row['id']}/resolve", json={"sent": True}, headers=headers())
+    with store.read() as c:
+        assert H.task(c, task)["status"] == "done"
+
+
+def test_an_ok_nobody_here_can_renew_blocks_the_action(store, fake):
+    row, _ = approved_by_ben(store)
+    ben_leaves(store)
+    leaves(store, "ana")  # the default person is gone too
+    assert OA.attempt(store, OA.claim(store)) == "blocked" and fake.calls == []
+    assert row_of(store, row["id"])["last_error"] == OA.NOBODY_TO_ASK
+
+
+def test_enqueue_bounds_what_a_list_shows(store, fake):
+    with pytest.raises(OA.Problem) as refused:
+        add(store, destination="inside:" + "x" * 600)
+    assert refused.value.status == 422 and "destination" in refused.value.detail

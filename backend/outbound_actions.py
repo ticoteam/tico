@@ -213,39 +213,55 @@ def public(c, row, *, full=False, tasks=None) -> dict[str, Any]:
     return out
 
 
-def _person_for(c, actor) -> str:
-    """Who is asked to OK an action: a bot's manager when that is a person who is here, else the company's default
-    person."""
+def _people_for(c, actor) -> list[str]:
+    """Who may be asked to OK an action, in order: a bot's manager, then the company's default person; only people
+    who are here."""
     from . import task_requirements as R
 
+    found = []
     if H.is_bot(actor):
         from . import ask_ingest
 
-        manager = ask_ingest.manager_of(c, actor)[0]
-        if manager and H.is_human(manager) and R.active_person(c, manager):
-            return manager
-    return H.human_actor(H.default_human(c))
+        found.append(ask_ingest.manager_of(c, actor)[0])
+    default = H.default_human(c)
+    found.append(H.human_actor(default) if default else None)
+    return [p for p in dict.fromkeys(found) if p and H.is_human(p) and R.active_person(c, p)]
 
 
 def _asker(row) -> str:
     return row["actor"] if H.is_bot(row["actor"]) else H.TICO_ACTOR
 
 
-def request_approval(c, row, *, renew=False) -> None:
-    """Ask a person for an OK of this exact action, on a task of its own. The same content asked again is the same
-    ask, unless `renew`: the old OK no longer lets it go (whoever gave it left), so a new one is asked."""
-    asked = task_asks.ask_ok(
-        c,
-        _asker(row),
-        _person_for(c, row["actor"]),
-        f"Send this {row['channel']} {row['operation']}?",
-        shows=[SUBJECT + row["id"]],
-        subject=SUBJECT + row["id"],
-        content=content(row),
-        matter=row["task_id"],
-        renew=renew,
-    )
-    c.execute("UPDATE outbound_actions SET approval_id=? WHERE id=?", (asked["requirement_id"], row["id"]))
+NOBODY_TO_ASK = "Nobody here may be asked to OK it: give the bot a manager, or set the company's default person"
+
+
+def request_approval(c, row, *, renew=False) -> bool:
+    """Ask a person for an OK of this exact action, on a task of its own: the first of `_people_for` the asker may
+    ask (an ask that is refused is undone and the next person tried). The same content asked again is the same ask,
+    unless `renew`: the old OK no longer lets it go (whoever gave it left), so a new one is asked. False when nobody
+    may be asked."""
+    for person in _people_for(c, row["actor"]):
+        c.execute("SAVEPOINT outbound_ask")
+        try:
+            asked = task_asks.ask_ok(
+                c,
+                _asker(row),
+                person,
+                f"Send this {row['channel']} {row['operation']}?",
+                shows=[SUBJECT + row["id"]],
+                subject=SUBJECT + row["id"],
+                content=content(row),
+                matter=row["task_id"],
+                renew=renew,
+            )
+        except (H.Refused, Problem):
+            c.execute("ROLLBACK TO outbound_ask")
+            c.execute("RELEASE outbound_ask")
+            continue
+        c.execute("RELEASE outbound_ask")
+        c.execute("UPDATE outbound_actions SET approval_id=? WHERE id=?", (asked["requirement_id"], row["id"]))
+        return True
+    return False
 
 
 def ring() -> None:
@@ -292,6 +308,16 @@ def enqueue(
     key = str(occurrence_key or "").strip()
     if not key:
         raise Problem("validation", "Say the action's occurrence_key: the same key never sends twice", 422)
+    for name, value, most in (
+        ("occurrence_key", key, 300),
+        ("channel", channel, 40),
+        ("operation", operation, 80),
+        ("destination", destination, 500),
+        ("connection_id", connection_id, 200),
+        ("task_id", task_id, 200),
+    ):
+        if len(str(value or "")) > most:
+            raise Problem("validation", f"{name} is at most {most} characters", 422)
     found = c.execute("SELECT * FROM outbound_actions WHERE occurrence_key=?", (key,)).fetchone()
     if found:
         return dict(found), False
@@ -329,7 +355,8 @@ def enqueue(
     made = get(c, row["id"])
     assert made is not None
     if state == "waiting_approval":
-        request_approval(c, made)
+        if not request_approval(c, made):
+            settle(c, made, "blocked", error=NOBODY_TO_ASK)
         made = get(c, made["id"]) or made
     elif state == "queued":
         _after_commit(c, ring)
@@ -387,6 +414,8 @@ def settle(c, row, state, *, receipt=None, error="", token=None) -> bool:
     ):
         return False
     rid, why = row["approval_id"], error or f"It was not sent ({state})"
+    if state == "unknown":
+        rid = ""  # its OK's task stays open until the outcome is known
     if rid and state == "done":
         task_asks.settle(c, rid, "Sent.")
     elif rid and state in ("blocked", "canceled"):
@@ -547,7 +576,9 @@ def _permit(store, claimed: Claimed) -> dict[str, Any] | str:
                 extra={"updated_at": H.now()},
                 token=claimed.token,
             )
-            request_approval(c, row, renew=bool(row["approval_id"]))
+            if not request_approval(c, row, renew=bool(row["approval_id"])):
+                settle(c, get(c, row["id"]), "blocked", error=NOBODY_TO_ASK)
+                return "blocked"
             return "waiting_approval"
         now = H.now()
         fenced = c.execute(
@@ -596,8 +627,24 @@ def attempt(store, claimed: Claimed) -> str:
                 token=claimed.token,
             )
             return "requeued"
-        settle(c, row, "done", receipt=dict(answer or {}), token=claimed.token)
+        if not settle(c, row, "done", receipt=dict(answer or {}), token=claimed.token):
+            return "done" if late_receipt(c, row, dict(answer or {})) else "lost"
     return "done"
+
+
+def late_receipt(c, row, receipt) -> bool:
+    """The provider's receipt for an attempt whose claim was cleared meanwhile (stale recovery made it unknown, and a
+    person may have said it was not sent, or canceled it). The receipt is evidence it went: it wins. Matched by the
+    row and its attempt marker, so a later attempt's row is never touched. True when written."""
+    now = get(c, row["id"])
+    if not now or now["provider_attempted_at"] != row["provider_attempted_at"]:
+        return False
+    if now["state"] not in ("unknown", "failed", "canceled"):
+        return False
+    was = now["state"]
+    settle(c, now, "done", receipt={**receipt, "late": True, "was": was})
+    H.event(c, H.TICO_ACTOR, "outbound.late_receipt", row["id"], {"was": was})
+    return True
 
 
 def step(store, now=None) -> bool:

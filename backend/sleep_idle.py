@@ -249,10 +249,12 @@ def later_sends(c, at):
             ).fetchone()
             if row and row[0] and (found := epoch(row[0])):
                 out.append(found)
-    # A queued email due later (its undo window, or its matter's not before), or an outbound action, wakes the server.
-    later = [t for t in email_due(c) + outbound_due(c) if t > at + SOON]
+    # A queued email due later (its undo window, or its matter's not before) wakes the server to go.
+    later = [t for t in email_due(c) if t > at + SOON]
     if later:
         out.append(min(later))
+    if found := outbound_next(c, at + SOON):  # and so does an outbound action held or waiting to retry
+        out.append(found)
     return out
 
 
@@ -271,15 +273,28 @@ def email_due(c):
     ]
 
 
-def outbound_due(c):
-    """When each queued outbound action may go (backend/outbound_actions.py): its retry time or its hold, whichever is
-    later; now for one being attempted."""
+def outbound_busy(c, by):
+    """Whether an outbound action (backend/outbound_actions.py) is being attempted, or may go by `by` (epoch seconds):
+    its retry time or its hold, whichever is later."""
+    return table(c, "outbound_actions") and bool(
+        c.execute(
+            "SELECT EXISTS(SELECT 1 FROM outbound_actions WHERE state='attempting' OR "
+            "(state='queued' AND max(next_attempt_at, send_after)<=?))",
+            (stamp(by),),
+        ).fetchone()[0]
+    )
+
+
+def outbound_next(c, after):
+    """When the first queued outbound action due after `after` (epoch seconds) may go, or None."""
     if not table(c, "outbound_actions"):
-        return []
-    rows = c.execute(
-        "SELECT state, max(next_attempt_at, send_after) FROM outbound_actions WHERE state IN ('queued','attempting')"
-    ).fetchall()
-    return [0.0 if r[0] == "attempting" else epoch(r[1]) or 0.0 for r in rows]
+        return None
+    row = c.execute(
+        "SELECT min(max(next_attempt_at, send_after)) FROM outbound_actions WHERE state='queued' "
+        "AND max(next_attempt_at, send_after)>?",
+        (stamp(after),),
+    ).fetchone()
+    return epoch(row[0]) if row and row[0] else None
 
 
 def online_computer(c):
@@ -314,7 +329,7 @@ def busy(c, at):
             ).fetchone()
         ):
             return "send_pending"
-    if any(t <= at + SOON for t in email_due(c) + outbound_due(c)):
+    if any(t <= at + SOON for t in email_due(c)) or outbound_busy(c, at + SOON):
         return "send_pending"
     if (times := routine_times(c, at)) and times[0] <= at + SOON:
         return "routine_due"
