@@ -171,27 +171,6 @@ def private_readers_line(args, body):
         print("tico: " + str(said["private_readers"]), file=sys.stderr)
 
 
-def primary_dry_run(args, body):
-    """A dry run with --primary-link: only the server reads the item and the task holding it, so its dry run answers
-    (backend/mcp.py task_dry_run): `- <problem>` lines and exit 1, `ok: found <id>`, or `ok: would create`."""
-    from clients.tico import Client
-
-    fields = {
-        "title": args.title,
-        "body": body,
-        "owner": args.owner,
-        "pipeline": getattr(args, "pipeline", None),
-        "primary_link": args.primary_link,
-    }
-    client = Client(os.environ["HUB_API_URL"], os.environ.get("HUB_TOKEN", ""))
-    said = client.post("tasks/dry-run", {k: v for k, v in fields.items() if v is not None})
-    if said.get("problems"):
-        print("\n".join(f"- {p}" for p in said["problems"]))
-        return 1
-    print(f"ok: found {said['found']}" if said.get("found") else f'ok: would create "{args.title.strip()}"')
-    return 0
-
-
 def cmd_task_dry_run(args, who):
     """`tico task create --dry-run`: print what a create would be refused for; write nothing.
 
@@ -210,11 +189,13 @@ def cmd_task_dry_run(args, who):
         )
     if who:
         raise CliError("--human is unavailable with HUB_API_URL; remote identity is the token")
+    if getattr(args, "primary_link", None):
+        raise CliError(
+            "--dry-run does not check --primary-link: only the create reads the item and the task holding it"
+        )
     slug = (os.environ.get("HUB_BOT") or os.environ.get("HUB_EMPLOYEE") or "").strip()
     actor = H.bot_actor(slug) if slug else None
     body = body_of(args)
-    if getattr(args, "primary_link", None):
-        return primary_dry_run(args, body)
     owner, problems, warnings = task_problems(actor, args.owner, args.title, body, getattr(args, "pipeline", None))
     if problems:
         print("\n".join(f"- {p}" for p in problems + [f"{w} (warning)" for w in warnings]))

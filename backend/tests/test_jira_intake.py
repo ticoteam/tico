@@ -335,19 +335,27 @@ def test_marked_issues_are_read_before_stale_ones_and_a_bad_answer_is_retried_al
     assert "no status" in _meta(api, "PROJ-21", acme)["read_error"]
 
 
-def test_a_read_still_out_at_its_deadline_fails_alone(api, jira, monkeypatch):
+def test_a_read_still_out_at_its_deadline_fails_alone_and_holds_its_place_until_it_ends(api, jira, monkeypatch):
     acme = jira.tools["acme.atlassian.net"]
-    jira.set("acme.atlassian.net", "PROJ-31", "To Do", "new", "2026-11-21T10:00:00.000+0000")
-    _create(api, f"jira:issue:PROJ-31@{acme}")
-    stuck, waited = threading.Event(), []
+    for key in ("PROJ-31", "PROJ-32"):
+        jira.set("acme.atlassian.net", key, "To Do", "new", "2026-11-21T10:00:00.000+0000")
+        _create(api, f"jira:issue:{key}@{acme}", title=key)
+    stuck, workers = threading.Event(), []
     jira.during = lambda: stuck.wait(30)  # Jira never answers (a lookup, connect or TLS that hangs)
-    monkeypatch.setattr(JS, "_wait", lambda worker, seconds: waited.append(seconds))  # the deadline passes at once
+    monkeypatch.setattr(JS, "_wait", lambda worker, seconds: workers.append((worker, seconds)))  # the deadline passes
+    monkeypatch.setattr(JS, "MAX_IN_FLIGHT", 1)
     try:
         assert _refresh(api) == 0
+        assert len(jira.seen) == 1  # the timed-out read is still out: no second read starts
     finally:
         stuck.set()
-    assert waited == [JS.TIMEOUT_S]
-    assert "timed out" in _meta(api, "PROJ-31", acme)["read_error"]
+        for worker, _ in workers:
+            worker.join(30)
+    assert [seconds for _, seconds in workers] == [JS.TIMEOUT_S]
+    timed_out = [
+        key for key in ("PROJ-31", "PROJ-32") if "timed out" in ((_meta(api, key, acme) or {}).get("read_error") or "")
+    ]
+    assert len(timed_out) == 1 and not JS.busy()
 
 
 def test_a_claim_on_a_task_the_caller_cannot_read_is_refused_without_naming_it(api, jira):
@@ -355,16 +363,13 @@ def test_a_claim_on_a_task_the_caller_cannot_read_is_refused_without_naming_it(a
     private = _id(_create(api, f"jira:issue:PROJ-41@{acme}", private=True))
     got = _create(api, f"jira:issue:PROJ-41@{acme}", token="cara-test", expected=409)
     assert got["error"]["detail"] == "This item is already filed" and private not in json.dumps(got)
+    # The dry run checks the primary link's form only: which task holds the item, the create alone reads.
     checked = post(
         api, "tasks/dry-run", {"title": "x", "owner": "ben", "primary_link": f"jira:issue:PROJ-41@{acme}"}, "cara-test"
     )
-    assert checked["problems"][0] == "This item is already filed" and private not in json.dumps(checked)
-    assert (
-        post(api, "tasks/dry-run", {"title": "x", "owner": "ben", "primary_link": f"jira:issue:PROJ-41@{acme}"})[
-            "found"
-        ]
-        == private
-    )
+    assert "found" not in checked and private not in json.dumps(checked)
+    wrong = post(api, "tasks/dry-run", {"title": "x", "owner": "ben", "primary_link": "jira:issue:nope@x"}, "cara-test")
+    assert wrong["ok"] is False
     # Only Jira issues are primary links for now: a GitHub PR links the ordinary way.
     pr = _create(api, "https://github.com/ticoteam/tico/pull/12", expected=422)
     assert pr["error"]["code"] == "primary_link"
@@ -411,7 +416,7 @@ def test_only_a_tool_on_one_jira_site_is_an_integration(api, jira):
     made = post(api, "triggers", {"name": "Records"})["trigger"]
     assert post(api, f"triggers/{made['id']}", {"connection_id": other}, expected=422)["error"]["code"] == "trigger"
     with api.app.state.store.read() as c:
-        assert JS.integrations(c) == set(jira.tools.values())
+        assert set(JS.integrations(c)) == set(jira.tools.values())
 
 
 def test_marked_issues_go_first_across_connections(api, jira):
@@ -433,3 +438,38 @@ def test_a_jira_bound_trigger_keeps_only_the_event_and_the_issue_key(api, jira):
     with api.app.state.store.read() as c:
         kept = c.execute("SELECT body FROM trigger_bodies WHERE trigger_id=?", (made["id"],)).fetchone()[0]
     assert json.loads(kept) == {"webhookEvent": "jira:issue_updated", "issue": {"key": "PROJ-81"}}
+
+
+def test_a_jira_bound_trigger_refuses_and_replays_only_the_event_and_the_issue_key(api, jira):
+    acme = jira.tools["acme.atlassian.net"]
+    _create(api, f"jira:issue:PROJ-91@{acme}")
+    made = post(api, "triggers", {"name": "Jira"})["trigger"]
+    event = {"webhookEvent": "jira:issue_updated", "issue": {"key": "PROJ-91", "fields": {"summary": "Secret plan"}}}
+    full = json.dumps(event).encode()
+    assert hook(api, made["url"], body=full, headers={"Idempotency-Key": "before"}).status_code == 202  # unbound
+    post(api, f"triggers/{made['id']}", {"connection_id": acme, "hourly": 2})
+    post(api, f"triggers/{made['id']}/deliveries/before/replay", {})  # kept before the binding: no Jira event
+    assert (_meta(api, "PROJ-91", acme) or {}).get("due_at") is None
+
+    assert hook(api, made["url"], body=full, headers={"Idempotency-Key": "first"}).status_code == 202
+    assert hook(api, made["url"], body=full, headers={"Idempotency-Key": "second"}).status_code == 429  # refused
+    with api.app.state.store.read() as c:
+        kept = dict(c.execute("SELECT delivery, body FROM trigger_bodies WHERE trigger_id=?", (made["id"],)).fetchall())
+    slim = {"webhookEvent": "jira:issue_updated", "issue": {"key": "PROJ-91"}}
+    assert json.loads(kept["first"]) == slim and json.loads(kept["second"]) == slim
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE item_metadata SET due_at=NULL WHERE item_key='PROJ-91'")
+    post(api, f"triggers/{made['id']}/deliveries/first/replay", {})  # kept since the binding: its event runs again
+    assert _meta(api, "PROJ-91", acme)["due_at"] is not None
+
+
+def test_only_a_tool_everyone_sees_holds_records(api, jira):
+    acme = jira.tools["acme.atlassian.net"]
+    r = api.patch(f"/api/v2/api-tools/{acme}", json={"audience": {"people": ["ana"]}}, headers=headers("ana-test"))
+    assert r.status_code == 200, r.text
+    with api.app.state.store.read() as c:  # made Only listed, it holds records no longer
+        assert c.execute("SELECT record_owner FROM tools WHERE id=?", (acme,)).fetchone()[0] == ""
+    assert _patch_tool(api, acme, {"record_owner": "outside"}, expected=422)["error"]["code"] == "record_owner"
+    hidden = _create(api, f"jira:issue:PROJ-95@{acme}", expected=422)["error"]["detail"]
+    missing = _create(api, "jira:issue:PROJ-95@no-such-tool", expected=422)["error"]["detail"]
+    assert hidden == missing  # a hidden tool answers as a missing one

@@ -791,6 +791,14 @@ def receive(
     at = received_at or H.now()
     preset = effective_preset(found)
     delivery = delivery_id or sender or P.body_id(preset, body) or P.fallback_id(headers, body, at)
+    signed_body, signed_headers = body, headers
+    if found["connection_id"]:
+        # A trigger bound to a Jira connection keeps, logs, refuses and hands on only the event's name and the issue's
+        # key, with signature headers hidden: the rest of Jira's payload is the connection's, read through it. The
+        # signature is checked on the bytes as sent, which no trigger reader sees.
+        from .item_sources import jira
+
+        body, headers = jira.bound_body(body, stored=recovering), P.redacted(headers)
     if preset in P.HQ_CHECKED:
         # Tico HQ checked this call with the provider's key (spec §3.4), so the install takes it only over its own relay.
         # This address never takes one: the install holds no key to check it with, whatever the headers say.
@@ -826,7 +834,7 @@ def receive(
                 recovering=recovering,
             )
         key = vault.cipher.unseal(c, sealed_as(trigger_id), found["signing_secret"])
-        ok, why = P.verify(preset, headers, body, key, H.parse_ts(at).timestamp())
+        ok, why = P.verify(preset, signed_headers, signed_body, key, H.parse_ts(at).timestamp())
         if not ok:
             return _refused(
                 c, found, delivery, body, headers, at, 401, "signature", why, via, secret, recovering=recovering
@@ -861,12 +869,6 @@ def receive(
             secret,
             "rate_limited",
         )
-    if found["connection_id"]:
-        # A trigger bound to a Jira connection keeps and hands on only the event's name and the issue's key: the rest of
-        # Jira's payload (summaries, people) is the connection's, read through it, never kept for the trigger's readers.
-        from .item_sources import jira
-
-        body = jira.slim(body)
     type_ = P.type_of(type_spec(found), headers, body)
     c.execute("INSERT INTO trigger_seen(trigger_id,delivery,seen_at) VALUES(?,?,?)", (trigger_id, delivery, at))
     c.execute(
@@ -937,7 +939,12 @@ def replay(c, who, auth, trigger_id, delivery):
         "INSERT INTO trigger_seen(trigger_id,delivery,seen_at,replay) VALUES(?,?,?,1)", (trigger_id, again, H.now())
     )
     headers = json.loads(stored["headers"] or "{}")
-    fired, results = _route(c, found, again, stored["type"], stored["via"], bytes(stored["body"]), headers, auth)
+    body = bytes(stored["body"])
+    if found["connection_id"]:
+        from .item_sources import jira
+
+        body = jira.bound_body(body, stored=True)  # a body kept before the binding is no Jira event
+    fired, results = _route(c, found, again, stored["type"], stored["via"], body, headers, auth)
     _log(
         c,
         trigger_id,

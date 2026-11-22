@@ -181,18 +181,29 @@ PRIMARY_SOURCES = ("jira",)  # the sources a task may be filed for (`primary_of`
 
 
 def primary_of(conn: sqlite3.Connection, text: str) -> tuple[tuple[str, str, str, str], str]:
-    """(item, URL to link) of a task create's primary link (POST /api/v2/tasks `primary_link`): a Jira issue as
-    `parse_ref` reads it, linked by its URL when given as one, else by the page its connection's site has for it
-    (jira.item_url). ValueError, saying what is wrong, for anything else."""
+    """(item, URL to link) of a task create's primary link (POST /api/v2/tasks `primary_link`): a Jira issue of a record
+    integration (jira.integrations, only ever a tool everyone sees), named as `jira:issue:<key>@<connection>` (linked
+    by its page on the connection's site) or by its URL (the one integration on that site). ValueError, the same words
+    for a missing, hidden or other tool and anything else."""
     from . import jira
 
-    item = parse_ref(conn, text)
-    if item[0] not in PRIMARY_SOURCES:
-        raise ValueError("A primary link is a Jira issue: jira:issue:<key>@<connection>, or its URL")
+    refusal = "A primary link is a Jira issue of a record integration: jira:issue:<key>@<connection>, or its URL"
+    usable = jira.integrations(conn)
     text = text.strip()
     if text.startswith(("http://", "https://")):
-        return item, text
-    return item, jira.item_url(conn, item[1], item[2], item[3])
+        found = match_link(text, PRIMARY_SOURCES)
+        host = jira.site(text) if found else None
+        on = [tool_id for tool_id, site in sorted(usable.items()) if site == host]
+        if not found or len(on) != 1:
+            raise ValueError(refusal)
+        return (*found, on[0]), text
+    try:
+        item = parse_ref(conn, text)
+    except ValueError:
+        raise ValueError(refusal) from None
+    if item[0] not in PRIMARY_SOURCES or item[3] not in usable:
+        raise ValueError(refusal)
+    return item, f"https://{usable[item[3]]}/browse/{item[2]}"
 
 
 def lookup(conn: sqlite3.Connection, text: str) -> tuple[tuple[tuple[str, str, str, str], str], str | None]:

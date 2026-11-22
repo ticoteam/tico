@@ -44,7 +44,7 @@ if TYPE_CHECKING:
     import sqlite3
 
 Row = dict[str, Any]
-Send = Callable[[str, dict[str, str], dict[str, str]], tuple[int, object]]
+Send = Callable[[str, dict[str, str], dict[str, str], float], tuple[int, object]]
 
 SOURCE, ISSUE = "jira", "issue"
 NAME = "Jira"
@@ -55,6 +55,9 @@ RETRY_S = 300  # a read Jira refused, or that could not be made, is tried again 
 PER_CONNECTION = 10  # reads of one connection's issues in one pass
 PASS_BUDGET_S = 30.0  # no read starts after a pass has spent this long reading
 TIMEOUT_S = 10.0
+MAX_IN_FLIGHT = 2  # reads out at once, a timed-out one counted until its thread ends
+_in_flight = [0]
+_in_flight_lock = threading.Lock()
 MAX_BODY = 512 * 1024
 FIELDS = "status,updated"
 CATEGORIES = ("new", "indeterminate", "done")  # Jira's status categories
@@ -99,25 +102,11 @@ SITE = re.compile(r"^[a-z0-9-]+\.atlassian\.net$")  # a Jira Cloud site, as ISSU
 
 def jira_site(base_url: object, sites: object) -> str | None:
     """The one Jira Cloud site a tool is on: its base URL and every site on one `<site>.atlassian.net` host, else None.
-    The one endpoint check behind a typed reference (`item_url`), a trigger's binding and the background reads
-    (`integrations`)."""
+    The one endpoint check behind a primary link (item_sources.primary_of), a trigger's binding and the background reads,
+    all through `integrations`."""
     on = hosts(base_url, sites)
     host = next(iter(on)) if len(on) == 1 else ""
     return host if SITE.match(host) else None
-
-
-def item_url(conn: "sqlite3.Connection", item_type: str, key: str, connection_id: str) -> str:
-    """The issue's page on its connection's Jira site (`jira_site`): what a primary link names. ValueError, saying why,
-    when the connection is no tool or is not on one Jira site."""
-    if item_type != ISSUE:
-        raise ValueError(f"Jira has no item type {item_type}")
-    tool = conn.execute("SELECT base_url, sites FROM tools WHERE id=?", (connection_id,)).fetchone()
-    if tool is None:
-        raise ValueError(f"No connection {connection_id}: a connection is a tool's id")
-    host = jira_site(tool[0], tool[1])
-    if host is None:
-        raise ValueError(f"{connection_id} is not on one Jira site (https://<site>.atlassian.net)")
-    return f"https://{host}/browse/{key}"
 
 
 def ref(key: str, connection_id: str) -> str:
@@ -157,22 +146,31 @@ def webhook(conn: "sqlite3.Connection", connection_id: str, payload: object) -> 
     return 1
 
 
-def slim(body: bytes) -> bytes:
-    """What a trigger bound to a Jira connection keeps of a call (backend/triggers.py): `webhookEvent` and `issue.key`
-    when they are text, as JSON, else `{}`."""
+EVENT = re.compile(r"^jira:[a-z_]{1,60}$")
+
+
+def bound_body(body: bytes, *, stored: bool = False) -> bytes:
+    """What a trigger bound to a Jira connection keeps and hands on of a call (backend/triggers.py): `webhookEvent`
+    (`jira:<event>`) and `issue.key` (a Jira key), each only when it reads as one, as JSON; else `{}`. A body kept
+    earlier (`stored`: a replay, a recovery) is used only when it is already that, so one kept before the binding is no
+    Jira event."""
     try:
         payload: object = json.loads(body)
     except (ValueError, RecursionError):
         payload = None
     data = cast("dict[str, object]", payload) if isinstance(payload, dict) else {}
     issue = data.get("issue")
-    key = cast("dict[str, object]", issue).get("key") if isinstance(issue, dict) else None
+    named = cast("dict[str, object]", issue).get("key") if isinstance(issue, dict) else None
+    key = match_key(ISSUE, named) if isinstance(named, str) and len(named) <= 255 else None
     event = data.get("webhookEvent")
     kept: Row = {
-        **({"webhookEvent": event} if isinstance(event, str) else {}),
-        **({"issue": {"key": key}} if isinstance(key, str) else {}),
+        **({"webhookEvent": event} if isinstance(event, str) and EVENT.match(event) else {}),
+        **({"issue": {"key": key}} if key else {}),
     }
-    return json.dumps(kept).encode()
+    slim = json.dumps(kept).encode()
+    if stored and body != slim:
+        return b"{}"
+    return slim
 
 
 # ----------------------------------------------------------------------------- the pass: reads through the connection
@@ -187,22 +185,26 @@ INTEGRATION = (
 SHARED_KEY = "k.ciphertext IS NOT NULL AND k.kind <> 'login' AND COALESCE(k.holder, '') = ''"
 
 
-def integrations(conn: "sqlite3.Connection") -> set[str]:
-    """The ids of the record integrations on one Jira site (`jira_site`) with a shared key: the tools Tico reads issues
-    through, and a trigger may be bound to (backend/triggers.py)."""
-    return {
-        str(tool_id)
-        for tool_id, base_url, sites in conn.execute(
-            f"SELECT DISTINCT tl.id, tl.base_url, tl.sites FROM tools tl JOIN credentials k ON k.tool_id = tl.id "
-            f"WHERE {INTEGRATION} AND {SHARED_KEY}"
-        ).fetchall()
-        if jira_site(base_url, sites)
-    }
+def integrations(conn: "sqlite3.Connection", connection_id: str | None = None) -> dict[str, str]:
+    """{tool id: Jira site} of the record integrations on one Jira site (`jira_site`) with a shared key, or of the one
+    `connection_id` names: the tools Tico reads issues through, a trigger may be bound to (backend/triggers.py), and a
+    primary link may name (item_sources.primary_of)."""
+    one = "AND tl.id=? " if connection_id is not None else ""
+    found: dict[str, str] = {}
+    for tool_id, base_url, sites in conn.execute(
+        f"SELECT DISTINCT tl.id, tl.base_url, tl.sites FROM tools tl JOIN credentials k ON k.tool_id = tl.id "
+        f"WHERE {INTEGRATION} AND {SHARED_KEY} {one}",
+        (connection_id,) if connection_id is not None else (),
+    ).fetchall():
+        host = jira_site(base_url, sites)
+        if host:
+            found[str(tool_id)] = host
+    return found
 
 
 def integration(conn: "sqlite3.Connection", connection_id: str) -> bool:
-    """Whether a tool is one of `integrations`."""
-    return connection_id in integrations(conn)
+    """Whether a tool is one of `integrations` (that one tool read alone)."""
+    return bool(integrations(conn, connection_id))
 
 
 def due_reads(conn: "sqlite3.Connection", now: str, per_connection: int = PER_CONNECTION) -> list[tuple[str, str, str]]:
@@ -272,10 +274,20 @@ def request(
     return url, {**headers, "Accept": "application/json", "User-Agent": "Tico-item-read"}, {**params, "fields": FIELDS}
 
 
-def send(url: str, headers: dict[str, str], params: dict[str, str]) -> tuple[int, object]:
+class Busy(Exception):
+    """MAX_IN_FLIGHT reads are still out (one that timed out stays counted until its thread ends): no read starts."""
+
+
+def busy() -> bool:
+    with _in_flight_lock:
+        return _in_flight[0] >= MAX_IN_FLIGHT
+
+
+def send(url: str, headers: dict[str, str], params: dict[str, str], seconds: float = TIMEOUT_S) -> tuple[int, object]:
     """One GET (`_get`) with one deadline over all of it, the name's lookup, connecting, TLS and the answer: it runs on
-    a thread of its own, and at TIMEOUT_S the caller stops waiting (`_wait`) and its answer, if one ever comes, is
-    dropped. (status, the JSON answer or None); raises when the call failed or ran out of time."""
+    a thread of its own, and after `seconds` (at most TIMEOUT_S) the caller stops waiting (`_wait`) and its answer, if
+    one ever comes, is dropped; the thread counts against MAX_IN_FLIGHT until it ends. (status, the JSON answer or
+    None); raises when the call failed or ran out of time, Busy when MAX_IN_FLIGHT reads are out."""
     answers: list[tuple[int, object]] = []
     errors: list[BaseException] = []
 
@@ -284,15 +296,23 @@ def send(url: str, headers: dict[str, str], params: dict[str, str]) -> tuple[int
             answers.append(_get(url, headers, params))
         except BaseException as error:  # noqa: BLE001 - handed to the caller, which raises it
             errors.append(error)
+        finally:
+            with _in_flight_lock:
+                _in_flight[0] -= 1
 
+    with _in_flight_lock:
+        if _in_flight[0] >= MAX_IN_FLIGHT:
+            raise Busy()
+        _in_flight[0] += 1
     worker = threading.Thread(target=run, name="jira-read", daemon=True)
     worker.start()
-    _wait(worker, TIMEOUT_S)
+    wait = min(seconds, TIMEOUT_S)
+    _wait(worker, wait)
     if answers:
         return answers[0]
     if errors:
         raise errors[0]
-    raise TimeoutError(f"Jira took longer than {TIMEOUT_S:g} seconds to answer")
+    raise TimeoutError(f"Jira took longer than {wait:g} seconds to answer")
 
 
 def _wait(worker: threading.Thread, seconds: float) -> None:
@@ -415,7 +435,8 @@ def refresh(
         due = due_reads(conn, at)
     changed, started = 0, clock()
     for key, connection_id, due_seen in due:
-        if clock() - started > PASS_BUDGET_S:
+        left = PASS_BUDGET_S - (clock() - started)
+        if left <= 0 or busy():  # out of time, or reads still out: the rest wait for the next pass
             break
         try:
             with store.transaction() as conn:
@@ -427,7 +448,9 @@ def refresh(
             continue
         version = version_now()
         try:
-            status, answer = call(url, headers, params)
+            status, answer = call(url, headers, params, left)
+        except Busy:
+            break
         except Exception as exc:  # noqa: BLE001 - Jira down or the address refused: the metadata waits for a retry
             why = "Jira could not be reached" + (" (timed out)" if "Timeout" in type(exc).__name__ else "")
             with store.transaction() as conn:

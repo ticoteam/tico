@@ -1496,6 +1496,10 @@ def update_tool(c, who, tool_id, body, admins, auth=None):
     if body.record_owner is not None and body.record_owner != (_field(tool, "record_owner") or ""):
         if not _admin(c, who, admins):
             raise Problem("forbidden", "Only an administrator marks a tool as holding records", 403)
+        if body.record_owner and audience_of(tool) is not None:
+            raise Problem(
+                "record_owner", f"{tool['name']} is Only listed: a tool holding records is one everyone sees", 422
+            )
         c.execute("UPDATE tools SET record_owner=?,updated_at=? WHERE id=?", (body.record_owner, H.now(), tool_id))
         H.event(c, who.actor, "tool.record_owner_changed", tool_id, {"after": body.record_owner})
         tool = dict(tool_row(c, tool_id))
@@ -1594,7 +1598,9 @@ def set_audience(c, who, tool, value, admins, auth=None):
     if stored == _field(tool, "audience"):
         return
     before = audience_of(tool)
-    c.execute("UPDATE tools SET audience=?, updated_at=? WHERE id=?", (stored, H.now(), tool["id"]))
+    # A record integration is a tool everyone sees (backend/item_sources/jira.py): made Only listed, it is one no longer.
+    record = ",record_owner=''" if stored is not None else ""
+    c.execute(f"UPDATE tools SET audience=?{record}, updated_at=? WHERE id=?", (stored, H.now(), tool["id"]))
     H.event(
         c,
         who.actor,

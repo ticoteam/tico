@@ -1175,7 +1175,8 @@ owner's request is not written again on its connection, '' being its own (one er
 
 **A Jira issue's state** is read in the background only through a record integration: an API tool for everyone on one
 Jira Cloud site (`<site>.atlassian.net`, the same check a typed `jira:issue:KEY@<tool id>` reference and a trigger's
-binding make) that an administrator marked as holding records (`record_owner` outside or tico; `tico tool edit <id> --record-owner
+binding make) that an administrator marked as holding records (only a tool everyone sees can be marked; making it
+Only listed clears the mark) (`record_owner` outside or tico; `tico tool edit <id> --record-owner
 outside`), not one a bot keeps for itself, with a shared company API key (no sign-in, no holder). Tico sends
 `GET <base URL>/rest/api/3/issue/<key>?fields=status,updated` with that key; nothing else is read without someone
 asking, and no one's own access is borrowed. `item_metadata.fields` holds `state` (open, or closed when Jira's status
@@ -1184,10 +1185,12 @@ task API returns the link rows only. An issue is never final, since issues reope
 integration (`tico trigger update <id> --connection-id <tool id>`; only a record integration can be bound, deleting the
 tool unbinds it, and a deleted trigger made again starts unbound) takes Jira's webhook, and a `jira:issue_*` event
 marks that connection's linked copy of the issue due, writing a due row for an issue not read yet; the payload only
-names the issue, one that does not read as an issue event is ignored, the trigger keeps and hands on only the event's
-name and the issue's key (not Jira's full payload), and the delivery's answer and log say nothing about it. The heartbeat's own `jira_items` step, after the merge queue's, reads marked issues first (across connections), then those
-missing or an hour old, at most 10 per connection and 30 seconds of reading a pass; each request has one 10-second
-deadline over the lookup, connecting, TLS and the answer (it runs on a thread of its own and is dropped at the deadline). A read clears the due mark only when it is the mark the read began under, so a webhook that lands mid-read is
+names the issue, one that does not read as an issue event is ignored, the trigger keeps, logs, refuses and hands on only the
+event's name and the issue's key, from the moment the call arrives, with signature headers hidden (a body kept before
+the binding is replayed as no Jira event), and the delivery's answer and log say nothing about it. The heartbeat's own `jira_items` step, after the merge queue's, reads marked issues first (across connections), then those
+missing or an hour old, at most 10 per connection and 30 seconds of reading a pass; each request has one deadline (10
+seconds, or what is left of the pass) over the lookup, connecting, TLS and the answer: it runs on a thread of its own,
+dropped at the deadline, and at most 2 such threads are out at once (one that timed out counts until it ends). A read clears the due mark only when it is the mark the read began under, so a webhook that lands mid-read is
 read next pass. A read Jira refuses, or whose answer is not an issue's, keeps the metadata as it was with
 `read_error` and is tried again after 5 minutes. An issue moved to another project gets a new key: a task filed for the
 old key keeps it, and one filed for the new key shows as a duplicate to merge.
@@ -1196,13 +1199,15 @@ old key keeps it, and one filed for the new key shows as a duplicate to merge.
 
 Find-or-create is the ordinary create: `POST /api/v2/tasks` with `primary_link`, a Jira issue for now
 (`jira:issue:PROJ-12@<tool id>` or the issue's URL; `tico task create --primary-link ...`, MCP `tico_task_create`).
-The org rule check runs as for any create. Then, in the same write, a task the caller may read that already holds that
+Only a record integration's issue can be named (a hidden or missing tool answers the same). The org rule check runs
+as for any create. Then, in the same write, a task the caller may read that already holds that
 item's primary link comes back (`found: true`) as it is, with nothing filed, reopened or moved, and the steps only
 filing needs (ask ingest's judgment, the owner's cap, reach) are skipped. A task the caller may not read is never named:
 the create runs every check a filing makes and is refused with 409 "This item is already filed". Otherwise the task is
 filed in its pipeline's first stage and linked to the item as its primary link (the item, not the title, makes it one
 task). The partial unique index `task_links_primary_item` makes a second primary task impossible, so two creates at once
-give one task. The dry run (`POST /api/v2/tasks/dry-run`) reads the primary link the same way. A merge moves the
+give one task. The dry run (`POST /api/v2/tasks/dry-run`) checks only the primary link's form; `tico task create --dry-run` with
+`--primary-link` is refused. A merge moves the
 primary link to the kept task (with the exact connection-scoped row); a deleted task restored after another task was
 filed for its item gets its link back as a secondary one.
 
