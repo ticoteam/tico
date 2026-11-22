@@ -64,6 +64,7 @@ LIST_FILTERS = frozenset(
         "counts",
         "exact",
         "link",
+        "entity",
     }
 )
 # `on_behalf_of`, read by the Agent Ops middleware (above).
@@ -99,6 +100,8 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 "link": "<source>:<type>:<key>[@<connection_id>] (jira:issue:PROJ-12@tool_1, github:pr:acme/app#7) or "
                 "the item's URL (a Jira link takes its site's connection): only the tasks linking that outside item "
                 "through that connection. A Jira item always names its connection",
+                "entity": "A Contacts entity (an id, email or domain you can see; a merged one is the one it went "
+                "into): only the tasks for it. One you cannot see lists none",
             },
         ),
     )
@@ -138,6 +141,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
         counts: str | None = None,
         exact: bool = False,
         link: str | None = None,
+        entity: str | None = None,
     ):
         """Tasks this reader may read. `pipeline` and `stage` (ids) keep a pipeline's or a stage's tasks;
         `waiting_on` (a person or a bot) keeps the open tasks with a wait on them (waiting_on.py: a person's or a
@@ -207,6 +211,15 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 filters["match"] = match.sql
             if link is not None:
                 filters["match"] = [*filters.get("match", ()), linked_to(c, link)]
+            if entity is not None:
+                from .entities import store as ES
+
+                # One the reader cannot see lists nothing, as one that is not there does.
+                found = ES.get(c, who.actor, entity)
+                if len(found) > 1:
+                    raise Problem("entity", f"More than one entity matches {entity}; name one by id", 422)
+                chosen = found[0]["id"] if found else ""
+                filters["match"] = [*filters.get("match", ()), ("tasks.entity_id=? AND ?<>''", (chosen, chosen))]
             if after is not None:
                 if changed_after is not None or offset:
                     raise Problem("after", "after is a page's start: not with changed_after or offset", 422)

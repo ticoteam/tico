@@ -4779,6 +4779,7 @@ def task_create(
     human_id=None,
     asks=None,
     instructions=None,
+    entity_id="",
 ):
     """Rule 5. Anyone may open a task for any active owner; a human owner's General task is linted (rule 7), and so is
     a bot's own task that asks a person (`asks`: the person its question is for, backend/person_asks.py).
@@ -5064,14 +5065,16 @@ def task_create(
             "occurrence_step": occurrence_step or None,
             "rule_due_id": (rule_due_id or None) if occurrence else None,
             "human_id": human_id,
+            "entity_id": entity_id or "",
         }
         conn.execute(
             "INSERT INTO tasks (id, title, body, requester_id, owner_id, status, due_at, "
             "conversation_id, created_at, updated_at, done_at, closed_at, closed_by_id, note, lane, rank, "
-            "goal_id, number, private, occurrence, occurrence_step, rule_due_id, human_id) VALUES "
+            "goal_id, number, private, occurrence, occurrence_step, rule_due_id, human_id, entity_id) VALUES "
             "(:id, :title, :body, :requester_id, :owner_id, :status, :due_at, "
             ":conversation_id, :created_at, :updated_at, :done_at, :closed_at, :closed_by_id, :note, "
-            ":lane, :rank, :goal_id, :number, :private, :occurrence, :occurrence_step, :rule_due_id, :human_id)",
+            ":lane, :rank, :goal_id, :number, :private, :occurrence, :occurrence_step, :rule_due_id, :human_id, "
+            ":entity_id)",
             row,
         )
         _building(conn, row["id"])  # its first stage is part of task.created, not a change
@@ -5117,6 +5120,8 @@ def task_create(
                 _task_event(conn, row['id'], actor, field, None, value, '')
         if goal_id:
             _task_event(conn, row["id"], actor, "goal_id", None, goal_id, "")
+        if entity_id:
+            _task_event(conn, row["id"], actor, "entity_id", None, entity_id, "")
         if human_id:
             _task_human_reads(conn, actor, task(conn, row["id"]) or row)
             _task_event(conn, row["id"], actor, "human_id", None, human_id, "")
@@ -5347,8 +5352,10 @@ def task_update(
     public_allowance=0,
     seen_version=None,
     human_id=None,
+    entity_id=None,
 ):
-    """Edit a task's fields: title, due date, note, labels, lane, rank, goal, number, privacy, roles, size, its
+    """Edit a task's fields: title, due date, note, labels, lane, rank, goal, the Contacts entity it is for
+    (`entity_id`, "" for none; the caller resolved it as one the editor sees), number, privacy, roles, size, its
     Human and its public text. One edit raises the task's version once. `seen_version` is the version the caller looked
     at: an edit against an older one is refused.
 
@@ -5406,6 +5413,7 @@ def task_update(
                 ("title", title),
                 ("due", due),
                 ("goal", goal_id),
+                ("entity", entity_id),
                 ("private", private),
                 ("roles", roles),
                 ("human", human_id),
@@ -5440,6 +5448,7 @@ def task_update(
                 lane,
                 rank,
                 goal_id,
+                entity_id,
                 number,
                 title,
                 private,
@@ -5559,6 +5568,10 @@ def task_update(
         sets.append("goal_id=:goal_id")
         args["goal_id"] = goal_id or None
         _task_event(conn, task_id, actor, "goal_id", row.get("goal_id"), goal_id or None, note or "")
+    if entity_id is not None and entity_id != (row.get("entity_id") or ""):
+        sets.append("entity_id=:entity_id")
+        args["entity_id"] = entity_id
+        _task_event(conn, task_id, actor, "entity_id", row.get("entity_id") or None, entity_id or None, note or "")
     if human_id is not None:
         human_id = task_human(conn, actor, human_id) if human_id else None
         if human_id != row.get("human_id"):

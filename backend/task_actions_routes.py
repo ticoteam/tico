@@ -674,6 +674,7 @@ def register_core(
             ask_ingest.skipped(c, ingest, "not_applied")
         if body.goal_id and not G.goal(c, body.goal_id):
             raise Problem("not_found", "Unknown goal", 404)
+        entity_id = for_entity(c, who, body.entity)
         requester_actor = None
         if who.role == "bot" and owner == who.actor and not unassigned and not parent_id and who.attempt_id and private:
             origin = c.execute(
@@ -745,6 +746,7 @@ def register_core(
             wake_refs=wake_refs,
             human_id=body.human,
             asks=owner if asks_person and holder != owner else None,
+            entity_id=entity_id,
         )
         c.execute("UPDATE tasks SET acceptance=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
         if asks_person:
@@ -1030,6 +1032,15 @@ def register_core(
         with store.read() as c:
             return check(c, auth, who, body)
 
+    def for_entity(c, who, ref):
+        """The Contacts entity a task names (`entity`): its id as the caller sees it, a merged one's kept entity, or ""
+        for none. One the caller cannot see is refused, as any Contacts write is."""
+        if not ref:
+            return ""
+        from .entities import store as ES
+
+        return ES.target(c, who.actor, ref)
+
     def task_update_one(c, caller, tid, body, rule=None):
         """`POST /api/v2/tasks/{tid}`: field edits only (H.task_update). Where the task is and who has it change by
         its own routes (task_moves_routes)."""
@@ -1080,6 +1091,8 @@ def register_core(
             body, allowance = body.model_copy(update=warned), rule_summary_allowance(rule_gate, warned)
         fields = body.model_dump(exclude={"version", "on_behalf_of"})
         fields["human_id"] = fields.pop("human")  # the column's name: `human` is the API's, as `owner` is
+        entity = fields.pop("entity")
+        fields["entity_id"] = None if entity is None else for_entity(c, who, entity)
         if "size" in body.model_fields_set and body.size is None:
             fields["clear_size"] = True
         after = H.task_update(

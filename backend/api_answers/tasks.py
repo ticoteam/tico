@@ -159,6 +159,8 @@ class TaskFields(TypedDict):
     """A due-date routine's occurrence, "<automation_id>:<due_on>", on the task it opened: the due is its deadline, not a wake date."""
     owner_name: NotRequired[str]
     """Display name of owner (`owner_id` stays the actor id)"""
+    entity_id: NotRequired[str]
+    """The Contacts entity the task is for (an outside party's relationship), "" for none. Set with `entity` on create and update; list a relationship's tasks with `entity=`"""
     human_id: NotRequired[str | None]
     """The task's Human: the person accountable for it whoever owns it, first on its ladder (asks that name nobody go to them). Set with `human` on create and update; left out of a brief row when none"""
     requester_name: NotRequired[str]

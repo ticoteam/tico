@@ -205,6 +205,8 @@ class TaskCreate(Contract):
     due: str | None = None
     relations: list[TaskRelationRef] = Field(default_factory=list, max_length=20)
     goal_id: ID | None = None
+    # The Contacts entity it is for (an outside party's relationship): an id, email or domain you can see.
+    entity: str | None = Field(default=None, min_length=1, max_length=500)
     acceptance_criteria: list[str] = Field(default_factory=list, max_length=50)
     lane: Lane | None = None
     labels: list[str] = Field(default_factory=list, max_length=20)
@@ -268,7 +270,7 @@ class TaskFile(TaskCreate):
         """As the request's idempotency hash reads it: `primary_link` and `primary_status` left out when absent, so a
         create retried across the upgrade that added them hashes as it did."""
         out = super().model_dump(**kwargs)
-        for name in ("primary_link", "primary_status"):
+        for name in ("primary_link", "primary_status", "entity"):
             if out.get(name) is None:
                 out.pop(name, None)
         return out
@@ -309,6 +311,7 @@ class TaskUpdate(Contract):
     note: str | None = Field(default=None, max_length=200_000)
     due: str | None = None
     goal_id: str | None = Field(default=None, max_length=200)  # "" takes the goal off
+    entity: str | None = Field(default=None, max_length=500)  # the Contacts entity it is for; "" takes it off
     lane: Lane | None = None
     labels: list[str] | None = Field(default=None, max_length=20)
     rank: float | None = None

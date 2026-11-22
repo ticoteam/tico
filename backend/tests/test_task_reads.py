@@ -383,6 +383,7 @@ def test_every_filter_the_list_takes_still_answers(api):
         "counts": "stage",
         "exact": "true",
         "link": "github:pr:acme/app%231",
+        "entity": "acme.example",
         "on_behalf_of": "default",
     }
     assert set(values) == task_list_routes.LIST_FILTERS | {"on_behalf_of"}

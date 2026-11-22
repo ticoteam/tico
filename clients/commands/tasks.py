@@ -116,6 +116,7 @@ def task_context(api, args):
             "status pauses the task's release close-out"
         ),
         "goal_id": _s("The goal this task serves (tico_goal_list); optional"),
+        "entity": _s("The Contacts entity it is for (an outside party): its id, email or domain; optional"),
         "human": _s("Its Human: a person or `me`"),
         "after": {
             "type": "array",
@@ -160,6 +161,7 @@ def task_create(api, args):
         "number",
         "check_model",
         "check_role",
+        "entity",
         "visibility",
         "public_title",
         "public_summary",
@@ -791,6 +793,7 @@ def _first_stage_picks(api, pipeline):
             "Only tasks linking this outside item: <source>:<type>:<key>[@<connection_id>] "
             "(jira:issue:PROJ-12@<tool id>, github:pr:acme/app#7) or its URL"
         ),
+        "entity": _s("Only tasks for this Contacts entity: its id, email or domain"),
         "exact": {
             "type": "boolean",
             "default": False,
@@ -801,7 +804,7 @@ def _first_stage_picks(api, pipeline):
 def task_list(api, args):
     more = {
         name: args[name]
-        for name in ("sort", "number", "updated_since", "snoozed", "q", "pipeline", "stage", "link")
+        for name in ("sort", "number", "updated_since", "snoozed", "q", "pipeline", "stage", "link", "entity")
         if args.get(name)
     }
     if args.get("all") and not args.get("snoozed"):
@@ -859,6 +862,7 @@ def task_list(api, args):
             "description": "Tighten visibility; only the direct human requester can publish",
         },
         "goal_id": _s("The goal this task serves; an empty string takes it off"),
+        "entity": _s("The Contacts entity it is for: its id, email or domain; an empty string takes it off"),
         "human": _s("Its Human: a person, `me`, or \"\" for none"),
         "note": _s("What changed, in a sentence"),
         "version": VERSION,
@@ -869,7 +873,7 @@ def task_list(api, args):
 )
 def task_update(api, args):
     body = {"version": _seen(args)}
-    for field in ("title", "due", "labels", "private", "goal_id", "note"):
+    for field in ("title", "due", "labels", "private", "goal_id", "entity", "note"):
         if args.get(field) is not None:
             body[field] = args[field]
     if args.get("human") is not None:

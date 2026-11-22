@@ -564,9 +564,13 @@ tico task give <id> <requirement> --to <person> --version N
 tico task file --parent <id> [--pipeline general] [--owner X] "title"
 tico task snooze <id> [--until date] -m "why" --version N
 tico task create --owner X --title "..." [--pipeline general] [--parent <id>]
-tico task update <id> [--title] [--due] [--label] [--goal] --version N
-tico task list [--status open|done|closed] [--owner X] [--snoozed only|all]
+tico task update <id> [--title] [--due] [--label] [--goal] [--entity REF] --version N
+tico task list [--status open|done|closed] [--owner X] [--snoozed only|all] [--entity REF]
 ```
+
+A task may name the Contacts entity it is for (`entity`: an id, email or domain you can see; `""` takes it off). It shows
+as `entity_id`, `GET /api/v2/tasks?entity=` lists a relationship's tasks (one you cannot see lists none), and a merge of
+the entity moves its tasks to the kept one until unmerge.
 
 `tico task show` prints the version; pipeline, stage and owner; whose turn it is; what the stage needs to leave, met or
 not; the next stage; and the task that filed it. A refusal prints what is missing and the commands allowed next. A
@@ -576,7 +580,7 @@ refusal never counts toward a bot's quarantine.
 
 | Route | Body | Does |
 |---|---|---|
-| `POST /api/v2/tasks` | `title, message, owner, pipeline?, parent?, due?, labels?, private?` | create |
+| `POST /api/v2/tasks` | `title, message, owner, pipeline?, parent?, due?, labels?, private?, entity?` | create |
 | `GET /api/v2/tasks/{id}` | | the task, full |
 | `GET /api/v2/tasks` | | brief rows |
 | `POST /api/v2/tasks/{id}` | `version` + fields | field edits only |

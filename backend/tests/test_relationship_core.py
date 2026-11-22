@@ -1,0 +1,161 @@
+"""Relationship core: an outside party is one Contacts entity with one memory page, a status written together under a
+compare-and-set version, an owner, and its tasks. What's next across someone's accounts is one list read that shows
+only what the reader may see, and a merge moves the memory link and tasks so that unmerge puts them back exactly."""
+
+import pytest
+
+from backend import mailbox_access as MA
+from backend.entities import store as ES
+from backend.tests.helpers.api import get, headers, post
+from backend.tests.helpers.mcp import call
+from clients import hubcli, remotecli
+from backend.tests.test_directory_tools import Forward
+
+ANA = "human:ana"
+
+
+@pytest.fixture
+def cli(api, monkeypatch):
+    """`tico ...` argv in, as ana: the command's request goes to the app and its answer comes back."""
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: Forward(api, "ana-test"))
+    return lambda *argv: remotecli.run(hubcli.parser().parse_args(list(argv)))
+
+
+def org(api, domain, name):
+    with api.app.state.store.transaction() as c:
+        return ES.upsert(c, ANA, "organization", match={"domain": domain}, name=name)["id"]
+
+
+def page(api, name="memory.html"):
+    return post(api, "pages", {"name": name, "text": "<p>What we know</p>"})["page"]["file_id"]
+
+
+def test_a_stale_status_write_is_refused_and_changes_nothing(api, cli):
+    acme = org(api, "acme.example", "Acme")
+    assert cli("contacts", "get", acme)["status_version"] == 0
+    written = cli(
+        "contacts", "status", acme, "0", "--status", "active", "--next-step", "Send the renewal", "--due", "2026-12-01",
+        "--flag", "vip", "--flag", "billing issue",
+    )  # fmt: skip
+    assert written["status_version"] == 1 and written["flags"] == ["vip", "billing issue"]
+
+    stale = api.post(
+        "/api/v2/entities/status", json={"ref": acme, "version": 0, "status": "churned"}, headers=headers()
+    )
+    assert stale.status_code == 409 and stale.json()["error"]["status_version"] == 1
+    card = cli("contacts", "get", acme)
+    assert card["values"]["status"]["value"] == "active" and card["status_version"] == 1
+
+    # One by one is refused: the four change together, under the version.
+    one = api.post(
+        "/api/v2/entities", json={"type": "organization", "match": {"id": acme}, "values": {"status": "x"}},
+        headers=headers(),
+    )  # fmt: skip
+    assert one.status_code == 422
+
+    isError, cleared = call(api, "tico_contacts_status", {"ref": acme, "version": 1, "flags": ["vip"]})
+    assert isError is False and cleared["status"] is None and cleared["next_step_due"] is None
+    assert cleared["flags"] == ["vip"] and cleared["status_version"] == 2
+
+
+def test_an_entity_has_one_memory_page_found_by_the_page_list(api, cli):
+    acme = org(api, "acme.example", "Acme")
+    first, second = page(api), page(api, "other.html")
+    post(api, f"pages/{first}/links", {"target": "entity:acme.example", "role": "memory"})  # a reference resolves
+    post(api, f"pages/{first}/links", {"target": f"entity:{acme}", "role": "memory"})  # again: no change
+    refused = post(api, f"pages/{second}/links", {"target": f"entity:{acme}", "role": "memory"}, expected=409)
+    assert refused["error"]["code"] == "conflict"
+    post(api, f"pages/{second}/links", {"target": f"entity:{acme}", "role": "related"})
+    assert post(api, f"pages/{second}/links", {"target": "human:ana", "role": "memory"}, expected=422)
+
+    found = get(api, f"pages?linked=entity:{acme}&role=memory")["pages"]
+    assert [p["file_id"] for p in found] == [first]
+    shown = get(api, f"pages/{first}")["page"]["links"]
+    assert {"target": f"entity:{acme}", "role": "memory", "name": "Acme"}.items() <= next(
+        link for link in shown if link["role"] == "memory"
+    ).items()
+
+
+def test_whats_next_is_one_list_of_my_accounts_by_due_date_that_hides_what_the_reader_cannot_see(api, cli):
+    acme, beta, gamma = (
+        org(api, "acme.example", "Acme"),
+        org(api, "beta.example", "Beta"),
+        org(api, "g.example", "Gamma"),
+    )
+    with api.app.state.store.transaction() as c:
+        box = MA.ensure_mailbox(c, "ana@acme.example", person_id="ana", created_by=ANA)
+        ES.add_source(c, ANA, beta, "mailbox", box["id"], visibility="restricted")  # only ana sees Beta
+    for ref, due in ((acme, "2026-12-09"), (beta, "2026-12-01")):
+        cli("contacts", "owner", ref, "me")
+        cli("contacts", "status", ref, "0", "--next-step", "Call them", "--due", due)
+    cli("contacts", "owner", gamma, "me")  # no next step: last
+
+    mine = cli("contacts", "find", "organization", "--owner", "me", "--sort", "next")["rows"]
+    assert [(r["id"], r["relationship"]["next_step_due"]) for r in mine] == [
+        (beta, "2026-12-01"),
+        (acme, "2026-12-09"),
+        (gamma, None),
+    ]
+    assert mine[0]["relationship"]["next_step"] == "Call them"
+    paged = get(api, "entities/find/organization?owner=human:ana&sort=next&limit=1")
+    assert [
+        r["id"] for r in get(api, f"entities/find/organization?owner=human:ana&sort=next&after={paged['next']}")["rows"]
+    ] == [acme, gamma]
+
+    bens = get(api, "entities/find/organization?owner=human:ana&sort=next", token="ben-test")["rows"]
+    assert [r["id"] for r in bens] == [acme, gamma]
+    assert post(api, "entities/owner", {"ref": beta, "owner": ""}, token="ben-test", expected=422)
+
+
+def test_a_task_names_its_entity_and_merge_then_unmerge_puts_memory_and_tasks_back(api, cli):
+    acme, dup = org(api, "acme.example", "Acme"), org(api, "acme-old.example", "Acme Old")
+    kept_memory, dup_memory, dup_only = page(api), page(api, "dup.html"), page(api, "dup-only.html")
+    post(api, f"pages/{kept_memory}/links", {"target": f"entity:{acme}", "role": "memory"})
+    post(api, f"pages/{dup_memory}/links", {"target": f"entity:{dup}", "role": "memory"})
+    post(api, f"pages/{dup_only}/links", {"target": f"entity:{dup}", "role": "related"})
+
+    task = post(api, "tasks", {"owner": "ops", "title": "Send the renewal", "entity": "acme-old.example"})
+    assert task["entity_id"] == dup
+    other = post(api, "tasks", {"owner": "ops", "title": "Check the invoice"})
+    post(api, f"tasks/{other['id']}", {"entity": acme})
+
+    def tasks_for(ref):
+        return sorted(t["id"] for t in get(api, f"tasks?status=all&entity={ref}")["tasks"])
+
+    def links():
+        with api.app.state.store.read() as c:
+            return sorted(
+                tuple(r) for r in c.execute("SELECT page_id, target, role FROM page_links WHERE target LIKE 'entity:%'")
+            )
+
+    before = links()
+    assert tasks_for(dup) == [task["id"]] and tasks_for(acme) == [other["id"]]
+
+    cli("contacts", "merge", acme, dup)
+    # The kept entity has a memory page, so the dropped one's stays with it; its related page moves.
+    assert (dup_memory, f"entity:{dup}", "memory") in links()
+    assert (dup_only, f"entity:{acme}", "related") in links()
+    assert tasks_for(acme) == sorted([task["id"], other["id"]])
+
+    cli("contacts", "unmerge", dup)
+    assert links() == before
+    assert tasks_for(dup) == [task["id"]] and tasks_for(acme) == [other["id"]]
+
+    post(api, f"tasks/{task['id']}", {"entity": ""})
+    assert tasks_for(dup) == []
+    isError, listed = call(api, "tico_task_list", {"entity": acme, "status": ["open"]})
+    assert isError is False and [t["id"] for t in listed["result"]] == [other["id"]]
+
+
+def test_a_merge_moves_the_memory_page_when_the_kept_entity_has_none(api):
+    acme, dup = org(api, "acme.example", "Acme"), org(api, "acme-old.example", "Acme Old")
+    memory = page(api)
+    post(api, f"pages/{memory}/links", {"target": f"entity:{dup}", "role": "memory"})
+    with api.app.state.store.transaction() as c:
+        ES.merge(c, ANA, acme, dup)
+    assert [p["file_id"] for p in get(api, f"pages?linked=entity:{acme}&role=memory")["pages"]] == [memory]
+    with api.app.state.store.transaction() as c:
+        ES.unmerge(c, ANA, dup)
+    assert [p["file_id"] for p in get(api, f"pages?linked=entity:{dup}&role=memory")["pages"]] == [memory]
+    assert get(api, f"pages?linked=entity:{acme}&role=memory")["pages"] == []
