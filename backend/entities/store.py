@@ -2471,7 +2471,7 @@ def verified_sender(
     )
     if row is None:
         return None
-    found = _visible_rows(c, V.reader(c, actor), _follow(c, [row["entity_id"]]))
+    found = _visible_rows(c, V.reader(c, actor), follow_merges(c, [row["entity_id"]]))
     return str(found[0]["id"]) if found else None
 
 
