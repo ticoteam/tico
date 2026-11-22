@@ -76,6 +76,7 @@ def deps(ns=None, records=None, **kw) -> Deps:
     return Deps(
         resolver=r,
         public_resolvers=lambda: [("Google", r), ("Cloudflare", r)],
+        authoritative_resolvers=lambda zone: [],
         resolve_host=lambda h: "203.0.113.7",
         sleep=lambda s: None,
         compose_local=lambda: b"name: tico\n",
