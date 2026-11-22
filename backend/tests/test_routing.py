@@ -114,7 +114,7 @@ def test_routing_is_refused_when_support_is_changed_to_be_moved_by_hand_or_retir
 
 def test_a_routed_create_a_company_rule_would_hold_is_refused_not_held(app):
     from backend.tests.helpers.org_rules import org
-    from backend.tests.test_org_rule_check import NEEDLE, Judge, color_rule
+    from backend.tests.helpers.org_rule_check import NEEDLE, Judge, color_rule
 
     org(app)
     app.app.state.judge = Judge(app.app.state.store)
