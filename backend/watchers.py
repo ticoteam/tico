@@ -67,11 +67,10 @@ def live(task):
     return bool(task) and task["status"] != "closed"
 
 
-def _open(c, auth, bot, title, body, owner=None, *, incident=False, help_key="", company=None):
+def _open(c, auth, bot, title, body, owner=None, *, incident=False, help_key=""):
     owner = owner or "bot:" + bot
     conversation = rooms.task_conversation_id(c, auth, owner, H.TICO_ACTOR)
-    entity_id = support_hq.directory_entity(c, company)
-    task = H.task_create(
+    return H.task_create(
         c,
         H.TICO_ACTOR,
         defang(title, c).strip()[:300] or "From a watcher",
@@ -82,14 +81,17 @@ def _open(c, auth, bot, title, body, owner=None, *, incident=False, help_key="",
         lint=not owner.startswith("human:"),
         labels=["incident"] if incident else None,
         pipeline=support_hq.pipeline_for(c, bot, help_key),
-        entity_id=entity_id,
     )
-    if entity_id:
-        c.execute(
-            "UPDATE conversations SET entity_id=? WHERE id=? AND task_id=?",
-            (entity_id, task["conversation_id"], task["id"]),
-        )
-    return task
+
+
+def remember(c, bot, key, task_id, *, help_event=False):
+    now = H.now()
+    due = now if help_event and support_hq.can_verify(c, getattr(c, "settings", None), bot, key) else None
+    c.execute(
+        "INSERT INTO watcher_items(bot,key,task_id,created_at,verify_after) VALUES(?,?,?,?,?) "
+        "ON CONFLICT(bot,key) DO UPDATE SET task_id=excluded.task_id,verify_after=excluded.verify_after",
+        (bot, key, task_id, now, due),
+    )
 
 
 def _wake(c, bot, task, text, why):
@@ -164,10 +166,7 @@ def deliver(c, auth, bot, event, triage=None, *, help_event=False):
             return None
         _wake(c, bot, task, event.note or "This ended where it was watched.", "watcher-done")
         return task["id"]
-    c.execute(
-        "INSERT INTO watcher_items VALUES(?,?,?,?) ON CONFLICT(bot,key) DO UPDATE SET task_id=excluded.task_id",
-        (bot, event.key, task["id"], H.now()),
-    )
+    remember(c, bot, event.key, task["id"], help_event=help_event)
     return task["id"]
 
 
@@ -248,10 +247,7 @@ def install(app, store, auth, execution, mutate):
 
         def triage(c, event):
             bot = (H.resolve_bot(c, body.bot) or {}).get("id", body.bot)
-            if (
-                not support_hq.can_verify(c, store.settings, bot, event.key)
-                and support_triage.engine_for(store, c, getattr(app.state, "judge", None)) is None
-            ):
+            if support_triage.engine_for(store, c, getattr(app.state, "judge", None)) is None:
                 return False
             waited.append(event.key)
             return support_triage.hold(c, bot, event)
@@ -263,7 +259,10 @@ def install(app, store, auth, execution, mutate):
         result = mutate(request, body, work)
         if not waited:  # tickets that waited when the server last stopped
             with store.read() as c:
-                waited = c.execute("SELECT 1 FROM watcher_pending LIMIT 1").fetchall()
+                waited = (
+                    c.execute("SELECT 1 FROM watcher_pending LIMIT 1").fetchone()
+                    or c.execute("SELECT 1 FROM watcher_items WHERE verify_after<=? LIMIT 1", (H.now(),)).fetchone()
+                )
         if waited:
             support_triage.kick(app, store, auth)
         return result

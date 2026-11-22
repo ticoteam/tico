@@ -400,8 +400,9 @@ with the message and, unless the draft says otherwise, the version and install I
 | `kind` | `setup` when you started from **Want help setting up?**, `feedback` when you answered **How is Tico working for you?**; left out for an ordinary request. |
 | `diagnostics` | Only while "@diagnostics" is ticked: on by default for new requests, off for replies. **Review and edit** shows the exact attachment; edits are validated and redacted again before use. |
 
-When the install ID is included and the Gateway and HQ share an origin, the server uses its Gateway key in the HTTPS
-authorization header to verify the install. HQ can use that proof to link the ticket to the company.
+When the install ID is included and the Gateway and HQ share an HTTPS origin, the server uses its Gateway key in the
+authorization header to verify the install. That request bypasses environment proxies. HQ can use the proof to link the
+ticket to the company.
 
 **From the installer or `tico-setup doctor`:** when setup fails at a terminal, it asks "Send this to Tico support?
 [y/N]" and sends only on `y`: the failing checks and their fixes, OS, architecture and Tico version, redacted with the

@@ -844,6 +844,7 @@ def add_source(
 
 
 EXTERNAL_REF_STATUSES = ("active", "gone")  # gone: the record no longer exists outside (a card shows active ones)
+HQ_REF_SYSTEM = "tico-hq"
 
 
 def external_ref(
@@ -865,7 +866,7 @@ def external_ref(
     entity is refused without naming it (that entity may be hidden from the writer). A record erased at its owner's
     request is not written again. Two connections may hold the same id as two records."""
     _writer(c, actor)
-    _live(c, actor, entity_id)
+    entity = _live(c, actor, entity_id)
     system = _required(c, actor, system, "system")
     if system.lower() == "tico":
         # Tico's own pointers (a document's file, `document_files`) are written by Tico, never through this.
@@ -873,6 +874,10 @@ def external_ref(
     kind = _required(c, actor, external_type, "record type")
     external = _required(c, actor, external_id, "record id")
     connection_id = str(connection_id or "").strip()
+    if system.lower() == HQ_REF_SYSTEM and (
+        actor != H.TICO_ACTOR or kind != "company" or entity["type"] != "organization" or connection_id
+    ):
+        _refuse(c, actor, "kind", "system tico-hq is reserved for verified HQ company records")
     if status not in EXTERNAL_REF_STATUSES:
         _refuse(c, actor, "kind", f"a record's status is {' or '.join(EXTERNAL_REF_STATUSES)}")
     if connection_id and not c.execute("SELECT 1 FROM tools WHERE id = ?", (connection_id,)).fetchone():
@@ -882,11 +887,7 @@ def external_ref(
     have = _one(c, f"SELECT * FROM entity_external_refs WHERE {where}", key)
     now = H.now()
     if have is None:
-        # Erased records are suppressed by (system, type, id, connection); one erased before records had connections
-        # was hashed by (system, type, id) and stays suppressed on every connection.
-        legacy = "\x1f".join((system, kind, external))
-        scoped = external_suppression(system, kind, external, connection_id)
-        if is_suppressed(c, "external", scoped) or is_suppressed(c, "external", legacy):
+        if external_ref_suppressed(c, system, kind, external, connection_id):
             _refuse(c, actor, "suppressed", "That was erased at its owner's request; it is not created again")
         c.execute(
             "INSERT INTO entity_external_refs (id, entity_id, connection_id, system, external_type, external_id, url, "
@@ -1662,6 +1663,12 @@ def external_suppression(system: str, external_type: str, external_id: str, conn
     """What an erased record's suppression hashes: a versioned tuple, so a record with no connection ('') stays apart
     from each connection's and from a legacy (system, type, id) hash, which suppressed it on every connection."""
     return "v2:" + json.dumps([system, external_type, external_id, connection_id], separators=(",", ":"))
+
+
+def external_ref_suppressed(c: sqlite3.Connection, system: str, kind: str, external: str, connection_id: str) -> bool:
+    legacy = "\x1f".join((system, kind, external))
+    scoped = external_suppression(system, kind, external, connection_id)
+    return is_suppressed(c, "external", scoped) or is_suppressed(c, "external", legacy)
 
 
 def _hash_identifier(kind: str, value: object, salt: str) -> str:
@@ -2534,8 +2541,10 @@ def activity_history(
     limit: int,
 ) -> dict[str, Any]:
     """Page the visible relationship history over a single ordering for conversations and activities."""
+    from backend.support_hq import WATCHED_TASK
+
     boxes, tools = V.activity_connections(c, readers)
-    args: list[object] = [entity_id, entity_id, json.dumps(sorted(boxes)), json.dumps(sorted(tools))]
+    args: list[object] = [entity_id, entity_id, entity_id, json.dumps(sorted(boxes)), json.dumps(sorted(tools))]
     limit = _limit(limit)
     cursor = ""
     if after:
@@ -2550,11 +2559,13 @@ def activity_history(
         c,
         "WITH outside AS (SELECT th.id, coalesce(th.last_message_at, th.created_at) AS occurred_at, "
         "coalesce(th.subject, '') AS summary FROM conversations th "
-        "WHERE th.entity_id=? AND th.parent_id IS NULL AND th.deleted_at IS NULL AND ("
-        f"(th.audience='entity' AND ({thread_scope})) OR "
-        "(th.kind='task' AND coalesce(th.audience,'task')='task' AND EXISTS ("
-        "SELECT 1 FROM tasks WHERE tasks.id=th.task_id AND tasks.conversation_id=th.id "
-        f"AND tasks.entity_id=th.entity_id AND ({task_scope}))))), "
+        "WHERE th.entity_id=? AND th.parent_id IS NULL AND th.deleted_at IS NULL "
+        f"AND th.audience='entity' AND ({thread_scope}) UNION ALL "
+        "SELECT th.id, coalesce(th.last_message_at, th.created_at), coalesce(th.subject, '') "
+        f"FROM (SELECT id, conversation_id, entity_id, {WATCHED_TASK} AS help FROM tasks WHERE entity_id=? AND entity_id<>'' "
+        f"AND ({task_scope})) t JOIN conversations th ON th.id=t.conversation_id AND th.task_id=t.id "
+        "WHERE th.parent_id IS NULL AND th.deleted_at IS NULL AND th.kind='task' "
+        "AND coalesce(th.audience,'task')='task' AND (t.help OR th.entity_id=t.entity_id)), "
         "history AS ("
         "SELECT id, 'thread' AS type, 'conversation' AS kind, occurred_at, summary, NULL AS subject_id FROM outside "
         "UNION ALL "

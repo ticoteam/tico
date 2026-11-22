@@ -436,16 +436,13 @@ def enqueue(
         destination = destination.strip()
         payload = {**payload, "body": support_hq.reply_body(payload.get("body"))}
         key = support_hq.reply_key(destination, payload["body"])
-        # A stale draft may reuse its text only when the caller explicitly names a newer message.
+        # A stale reply needs a fresh draft, even when a caller now supplies a different message ID.
         base, tries = key, 1
-        latest = payload.get("last_message_id")
-        latest = latest if type(latest) is int and 0 <= latest < 2**63 else None
         while (
             tries < 20
             and c.execute(
-                "SELECT 1 FROM outbound_actions WHERE occurrence_key=? AND (state IN ('failed','canceled') "
-                "OR (state='blocked' AND last_error=? AND ? > coalesce(json_extract(payload,'$.last_message_id'),0)))",
-                (key, support_hq.STALE_REPLY, latest),
+                "SELECT 1 FROM outbound_actions WHERE occurrence_key=? AND state IN ('failed','canceled')",
+                (key,),
             ).fetchone()
         ):
             tries += 1

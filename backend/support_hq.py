@@ -26,6 +26,10 @@ CHANNEL = "help-ticket"
 TICKET = re.compile(r"TK-[A-Z2-7]{8}")
 WATCH_KEY = "hq:"
 ORIGIN_PREFIX = "hq-origin:"
+WATCHED_TASK = (
+    "EXISTS (SELECT 1 FROM watcher_items w JOIN watcher_refs r ON r.bot=w.bot AND r.key=w.key "
+    "WHERE w.task_id=tasks.id AND w.key GLOB 'hq:TK-*' AND r.ref GLOB 'hq-origin:*')"
+)
 STALE_REPLY = "The customer messages changed. Read the ticket and queue a fresh draft."
 FIX_REPLY = (
     "Engineering has finished work on the issue you reported. Thanks for reporting it. "
@@ -33,16 +37,18 @@ FIX_REPLY = (
 )
 
 
-def origin_ref() -> str:
-    return ORIGIN_PREFIX + hashlib.sha256(support.hq_url().encode()).hexdigest()
+def origin_ref(base: str | None = None) -> str:
+    return ORIGIN_PREFIX + hashlib.sha256((base or support.hq_url()).encode()).hexdigest()
 
 
-def watched(c: Connection, bot: str, key: str) -> bool:
+def watched(c: Connection, bot: str, key: str, base: str | None = None) -> bool:
     """This watcher first opened the ticket on the server's configured HQ."""
     return bool(
         TICKET.fullmatch(key.removeprefix(WATCH_KEY))
         and key.startswith(WATCH_KEY)
-        and c.execute("SELECT 1 FROM watcher_refs WHERE bot=? AND key=? AND ref=?", (bot, key, origin_ref())).fetchone()
+        and c.execute(
+            "SELECT 1 FROM watcher_refs WHERE bot=? AND key=? AND ref=?", (bot, key, origin_ref(base))
+        ).fetchone()
     )
 
 
@@ -75,51 +81,84 @@ def can_verify(c: Connection, settings: Any, bot: str, key: str) -> bool:
     return bool(_read_staff(settings) and (_support_bot(c) or {}).get("id") == bot and watched(c, bot, key))
 
 
-def verified_company(store: Any, bot: str, key: str) -> tuple[str, str] | None:
+def _company(base: str, staff: str, key: str) -> tuple[tuple[str, str] | None, int | float | None]:
     """Resolve the company from HQ's staff response. Watcher events can supply ticket IDs, not identity proofs."""
-    base = str(support.hq_url())
-    with store.read() as c:
-        if not can_verify(c, store.settings, bot, key):
-            return None
-    staff = _read_staff(store.settings)
-    if not staff:
-        return None
     ticket_id = key.removeprefix(WATCH_KEY)
     try:
         response = support._ask_hq("GET", f"/v1/staff/tickets/{ticket_id}", staff=staff, base=base)
+        if response.status_code == 429:
+            wait = outbound_http.retry_after(response.headers)
+            return None, min(86400, max(60, wait)) if wait is not None else 60
+        if response.status_code >= 500 or response.status_code == 408:
+            return None, 60
         ticket: object = response.json() if response.is_success else None
     except (Problem, ValueError):
-        return None
+        return None, 60
     if not isinstance(ticket, dict):
-        return None
+        return None, None
     record = cast(Row, ticket)
     install_id: object = record.get("verified_install_id")
     if record.get("ticket_id") != ticket_id or not isinstance(install_id, str) or not install_id.strip():
-        return None
+        return None, None
     company_id: object = record.get("verified_company_id")
     if not isinstance(company_id, str) or not company_id.strip():
-        return None
+        return None, None
+    company_id = company_id.strip()
     company: object = record.get("company")
     details = cast(Row, company) if isinstance(company, dict) else {}
     name: object = details.get("name") if details.get("id") == company_id else None
-    return company_id, name.strip() if isinstance(name, str) and name.strip() else company_id
+    return (company_id, name.strip() if isinstance(name, str) and name.strip() else company_id), None
 
 
-def directory_entity(c: Connection, company: tuple[str, str] | None) -> str:
-    if company is None:
-        return ""
+def verify_due(store: Any, at: str | None = None, *, limit: int = 10) -> None:
+    """Opening a task never waits for HQ. Retry only the read, outside the write transaction."""
+    at = at or H.now()
+    staff = _read_staff(store.settings)
+    if not staff:
+        return
+    base = str(support.hq_url())
+    with store.read() as c:
+        rows = [
+            dict(row)
+            for row in c.execute(
+                "SELECT bot,key,task_id,verify_after FROM watcher_items WHERE verify_after<=? ORDER BY verify_after LIMIT ?",
+                (at, limit),
+            )
+        ]
+        bot = (_support_bot(c) or {}).get("id")
+        eligible = {(bot, r["key"]) for r in rows if r["bot"] == bot and watched(c, r["bot"], r["key"], base)}
+    for row in rows:
+        bot, key, task_id, due = row["bot"], row["key"], row["task_id"], row["verify_after"]
+        company, wait = _company(base, staff, key) if (bot, key) in eligible else (None, None)
+        next_at = H.shift(max(at, H.now()), seconds=wait) if wait is not None else None
+        with store.transaction() as c:
+            if not c.execute(
+                "UPDATE watcher_items SET verify_after=? WHERE bot=? AND key=? AND task_id=? AND verify_after=?",
+                (next_at, bot, key, task_id, due),
+            ).rowcount:
+                continue
+            task = H.task(c, task_id)
+            if company and task and not task["entity_id"] and can_verify(c, store.settings, bot, key):
+                with batch_work.isolated(c, "help_company_link", task_id, private=True):
+                    if entity_id := directory_entity(c, company):
+                        H.task_update(c, H.TICO_ACTOR, task_id, entity_id=entity_id)
+
+
+def directory_entity(c: Connection, company: tuple[str, str]) -> str:
     company_id, name = company
-    system, kind = "tico-hq", "company"
-    existing = entities.verified_external_ref(c, H.TICO_ACTOR, system, "", kind, company_id)
+    system, kind = entities.HQ_REF_SYSTEM, "company"
+    existing = entities.verified_external_ref(c, H.TICO_ACTOR, system, "", kind, company_id, company_only=True)
     if existing:
-        return existing
-    # The external-ref writer enforces suppression and conflicts. Roll back any new entity if it refuses the link.
-    with batch_work.isolated(c, "help_company_link", "", private=True):
-        created = entities.upsert(c, H.TICO_ACTOR, "organization", match={}, name=name)
-        entity_id = str(created["id"])
-        entities.external_ref(c, H.TICO_ACTOR, entity_id, system, kind, company_id)
-        return entity_id
-    return ""
+        return existing if entities.entity_facts(c, [existing])[existing]["type"] == "organization" else ""
+    if c.execute(
+        "SELECT 1 FROM entity_external_refs WHERE system=? AND connection_id='' AND external_type=? AND external_id=?",
+        (system, kind, company_id),
+    ).fetchone() or entities.external_ref_suppressed(c, system, kind, company_id, ""):
+        return ""
+    created = entities.upsert(c, H.TICO_ACTOR, "organization", match={}, name=name)
+    entity_id = str(created["id"])
+    entities.external_ref(c, H.TICO_ACTOR, entity_id, system, kind, company_id)
+    return entity_id
 
 
 def _ticket(c: Connection, actor: str, task_id: str | None, key: str | None = None) -> Row | None:
@@ -211,7 +250,9 @@ def _stale(store: Any, row: Row) -> "DispatchStopped":
     from . import outbound_actions as OA
 
     with store.transaction() as c:
-        saved = OA.settle(c, row, "blocked", error=STALE_REPLY, token=row["claim_token"])
+        saved = OA.settle(c, row, "blocked", error=STALE_REPLY, token=row["claim_token"]) or OA.late_answer(
+            c, row, "blocked", error=STALE_REPLY
+        )
     return OA.DispatchStopped("blocked" if saved else "lost")
 
 

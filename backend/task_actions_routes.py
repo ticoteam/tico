@@ -278,7 +278,7 @@ def register_core(
                 can_comment = False
             from . import task_reads
 
-            history = task_reads.readable_history(c, who, H.task_history(c, tid, provenance=True), related_sql)
+            history = task_reads.readable_history(c, auth, who, H.task_history(c, tid, provenance=True), related_sql)
             lines = SRC.lookup(c, SRC.actors_of(history))
             for event in history:
                 event["source"] = SRC.source_of(lines, event)  # reads `data`, which the answer leaves out

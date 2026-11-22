@@ -64,7 +64,11 @@ TASK_KEYS = {
 }
 # Columns naming a Directory record that may be gone by the time the task comes back (erased or purged since): a restore
 # clears each one whose record is gone and keeps the rest of the row.
-DIRECTORY_REFS = {"matters": ("party_entity_id", "place_id", "product_id"), "tasks": ("entity_id",)}
+DIRECTORY_REFS = {
+    "matters": ("party_entity_id", "place_id", "product_id"),
+    "tasks": ("entity_id",),
+    "conversations": ("entity_id",),
+}
 # Rows that are work done on the task: any one of them refuses the run.
 TASK_WORK = (
     "attempts",
@@ -467,7 +471,7 @@ def _without_gone_records(c, table, row):
     ]
     # tasks.entity_id is NOT NULL: no entity is ''.
     row = {**row, **dict.fromkeys(gone, "" if table == "tasks" else None)} if gone else row
-    if table == "tasks" and row.get("entity_id"):
+    if table in ("tasks", "conversations") and row.get("entity_id"):
         from .entities import store as ES
 
         row = {**row, "entity_id": ES.kept(c, row["entity_id"])}  # merged since: the entity it went into
@@ -574,7 +578,7 @@ def restore_tasks(c, ids, actor=None):
         messages = []
         for _e, snap in snapshots:
             for conv in snap["rows"].get("conversations", []):
-                _insert(c, "conversations", conv)
+                _insert(c, "conversations", _without_gone_records(c, "conversations", conv))
             for msg in snap["rows"].get("messages", []):
                 _insert(c, "messages", msg)
                 messages.append(msg["id"])

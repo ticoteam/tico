@@ -158,7 +158,36 @@ def gone(c, visible_sql, was, matched):
 _SUMMARY_LABELS = {"closed": "Closed with it", "open": "Still open", "kept": "Still closed from when it closed"}
 
 
-def readable_history(c, who, history, visible_sql):
+def help_tasks(c, ids):
+    """The page's tasks filed by the HQ watcher, which carry company links verified by HQ."""
+    if not ids:
+        return set()
+    from .support_hq import WATCHED_TASK
+
+    return {
+        r[0]
+        for r in c.execute(
+            f"SELECT id FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND {WATCHED_TASK}",
+            (json.dumps(sorted(ids)),),
+        )
+    }
+
+
+def visible_entities(c, auth, who, ids):
+    """The linked Directory records every effective reader may see, checked together."""
+    if not ids:
+        return set()
+    from .entities import store as ES
+    from .threads import entity_readers
+
+    viewer = auth.run_viewer(c, who)
+    readers = entity_readers(c, viewer)
+    if not readers or viewer.role == "none":
+        return set()
+    return set.intersection(*(ES.visible_ids(c, actor, ids) for actor in readers))
+
+
+def readable_history(c, auth, who, history, visible_sql):
     """A task's history rows (H.task_history) as `who` may read them, as the task's own read gives them: rows whose
     content they may not read go, and so does a row naming a task they may not open; a subtask summary names only
     subtasks they may open; and a bound OK keeps no words for anyone but its parties. `visible_sql` is their task rule
@@ -168,6 +197,17 @@ def readable_history(c, who, history, visible_sql):
     from . import task_privacy as privacy
 
     history = privacy.content_readable_rows(c, privacy.actor(who), history)
+    linked = [e for e in history if e.get("field") == "entity_id"]
+    help_ids = help_tasks(c, {e["task_id"] for e in linked})
+    entity_changes = {e[k] for e in linked if e["task_id"] in help_ids for k in ("old", "new") if e.get(k)}
+    visible = visible_entities(c, auth, who, entity_changes)
+    history = [
+        e
+        for e in history
+        if e.get("field") != "entity_id"
+        or e["task_id"] not in help_ids
+        or all(not e.get(k) or e[k] in visible for k in ("old", "new"))
+    ]
     named = sorted({str(e[k]) for e in history for k in ("old", "new") if e.get(k)})
     if named:
         # The named tasks that exist and that the reader may not read, in one statement.

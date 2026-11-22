@@ -241,6 +241,9 @@ def _ask_hq(method, path, *, body=None, secret="", wait=HQ_WAIT, idem="", staff=
     """One request to HQ, or a Problem the person can act on. Nothing from HQ's answer is logged. `wait` is longer for
     a long poll (backend/support_access.py). `idem` is sent as Idempotency-Key: the same report sent again (a retry
     after a crash or a lost answer) is the same ticket at an HQ that keeps keys."""
+    base = base if base is not None else hq_url()
+    if install_key and not base.startswith("https://"):
+        install_key = ""
     headers = {"Accept": "application/json", "User-Agent": "tico-support"}
     if secret:
         headers["X-Ticket-Secret"] = secret
@@ -249,8 +252,8 @@ def _ask_hq(method, path, *, body=None, secret="", wait=HQ_WAIT, idem="", staff=
     if idem:
         headers["Idempotency-Key"] = idem
     try:
-        with httpx.Client(timeout=wait, transport=TRANSPORT, follow_redirects=False) as http:
-            return http.request(method, (base if base is not None else hq_url()) + path, json=body, headers=headers)
+        with httpx.Client(timeout=wait, transport=TRANSPORT, follow_redirects=False, trust_env=not install_key) as http:
+            return http.request(method, base + path, json=body, headers=headers)
     except httpx.HTTPError as exc:
         diagnostics.RING.handle(
             logging.LogRecord(
@@ -265,12 +268,13 @@ def _ask_hq(method, path, *, body=None, secret="", wait=HQ_WAIT, idem="", staff=
 def _install_key(store, vault, settings, base):
     from . import gateway_connection
 
+    if not base.startswith("https://"):
+        return ""
     try:
         with store.read() as c:
             key, target, _ = gateway_connection.target(c, vault, settings)
-    except Problem as exc:
-        if exc.code != "vault_unavailable":
-            raise
+    except (Problem, ValueError, AttributeError):
+        # A missing or unreadable credential leaves the support request usable without proof.
         return ""
     if re.fullmatch(r"[!-~]+", key):
         try:

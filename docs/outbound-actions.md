@@ -118,12 +118,13 @@ The server keys the reply by HQ, ticket and normalized body. `answer`, `reply` a
 action for the same draft, including when its delivery is unknown.
 HQ's receipt or a person's confirmation via `tico outbound confirm-sent` records the reply on the task and settles an
 `answer` if the task is still open, owned by the Support Agent and has no newer customer message.
-HQ checks the draft's message ID as it records the reply. A newer customer message blocks the action and the
-Support Agent reads the ticket and queues a fresh draft.
+HQ checks the draft's message ID as it records the reply. A changed message ID blocks the draft. The Support Agent
+reads the ticket and queues a revised draft with the current customer message ID.
 
 Help replies default to Ask first. The Support Agent's effective sending mode can tighten the outbound policy.
 For a Support-filed Engineering subtask with a linked Tico GitHub issue, its PR merge or Done queues one follow-up
-on the Support task through the same gate. A merge or Done does not establish that a release is available.
+on the Support task through the same gate. If the draft becomes stale, Support writes the next reply. A merge or Done
+does not establish that a release is available.
 See [Support setup](support.md#set-it-up) for the staff credential.
 
 ## Jira

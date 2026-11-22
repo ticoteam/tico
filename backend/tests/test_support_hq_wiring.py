@@ -16,12 +16,14 @@ import pytest
 from backend import outbound_actions as OA
 from backend import (
     bot_settings,
+    gateway_connection,
     mailbox_access,
     outside_intake,
     pipeline_settings,
     relationship_runs,
     routing,
     support,
+    support_hq,
     support_triage,
     watchers,
 )
@@ -152,7 +154,8 @@ def flow(api, tmp_path, monkeypatch):
         events = poll()
         assert len(events) == 1
         monkeypatch.setattr(support_triage, "engine_for", lambda *_: True if decide else None)
-        assert report(api, runner, *events)["tasks"] == {}
+        opened = report(api, runner, *events)["tasks"]
+        assert list(opened) == ([] if decide else [events[0]["key"]])
         verdict = {
             "spam": 0.95 if held else 0,
             "kind": kind,
@@ -247,7 +250,7 @@ def engineering_task(api, parent, token):
     )
 
 
-def queue_answer(api, task, token, last_message_id=0):
+def queue_answer(api, task, token, last_message_id=0, body=ANSWER):
     return post(
         api,
         "outbound-actions",
@@ -257,7 +260,7 @@ def queue_answer(api, task, token, last_message_id=0):
             "destination": TICKET,
             "occurrence_key": "docs-answer",
             "task_id": task,
-            "payload": {"body": ANSWER, "last_message_id": last_message_id},
+            "payload": {"body": body, "last_message_id": last_message_id},
         },
         token=token,
     )["action"]
@@ -284,6 +287,7 @@ def test_verified_help_tickets_share_the_company_and_appear_in_directory_history
     monkeypatch.setenv("TICO_GATEWAY_URL", URL + "/v1/gateway")
     first = intake(decide=False)
     hq.next_ticket = "TK-BCDEFGHJ"
+    hq.revise = lambda: hq.ticket.update(verified_company_id=" " + COMPANY)
     second = intake(decide=False)
     assert hq.submissions == [(URL + "/v1/support", f"Bearer {GATEWAY}")] * 2
     with api.app.state.store.read() as c:
@@ -291,10 +295,7 @@ def test_verified_help_tickets_share_the_company_and_appear_in_directory_history
         entity = first["entity_id"]
         assert entity and entity == second["entity_id"]
         assert entities.verified_external_ref(c, H.TICO_ACTOR, "tico-hq", "", "company", COMPANY) == entity
-        assert {r[0] for r in c.execute("SELECT id FROM conversations WHERE entity_id=?", (entity,))} == {
-            first["conversation_id"],
-            second["conversation_id"],
-        }
+        assert c.execute("SELECT count(*) FROM conversations WHERE entity_id=?", (entity,)).fetchone()[0] == 0
     history = get(api, f"entities/activity?ref={entity}")
     assert {r["id"] for r in history["rows"]} == {first["conversation_id"], second["conversation_id"]}
     with api.app.state.store.transaction() as c:
@@ -302,6 +303,107 @@ def test_verified_help_tickets_share_the_company_and_appear_in_directory_history
         H.task_update(c, H.TICO_ACTOR, first["id"], private=True)
     history = get(api, f"entities/activity?ref={entity}", token="cara-test")
     assert [r["id"] for r in history["rows"]] == [second["conversation_id"]]
+    with api.app.state.store.transaction() as c:
+        other = entities.upsert(c, H.TICO_ACTOR, "organization", match={}, name="New company")["id"]
+        H.task_update(c, H.TICO_ACTOR, second["id"], entity_id=other)
+    assert not get(api, f"entities/activity?ref={entity}", token="cara-test")["rows"]
+    assert [r["id"] for r in get(api, f"entities/activity?ref={other}")["rows"]] == [second["conversation_id"]]
+
+
+@pytest.mark.parametrize("kind,restricted", [("organization", True), ("person", False)])
+def test_verified_help_does_not_use_a_restricted_or_non_company_ref(api, flow, monkeypatch, kind, restricted):
+    _, _, _, _, intake, _ = flow
+    monkeypatch.setenv("TICO_GATEWAY_KEY", GATEWAY)
+    monkeypatch.setenv("TICO_GATEWAY_URL", URL)
+    with api.app.state.store.transaction() as c:
+        entity = entities.upsert(c, H.TICO_ACTOR, kind, match={}, name="Private contact")["id"]
+        if restricted:
+            entities.add_source(c, H.TICO_ACTOR, entity, "finance_book", "private-book", visibility="restricted")
+        # Simulate a reference written before the namespace and type were enforced.
+        c.execute(
+            "INSERT INTO entity_external_refs(id,entity_id,system,external_type,external_id,status,synced_at) "
+            "VALUES(?,?,'tico-hq','company',?,'active',?)",
+            (H.new_id(), entity, COMPANY, H.now()),
+        )
+    task = intake(decide=False)
+    assert not get(api, f"tasks/{task}")["task"]["entity_id"]
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM entities WHERE name='Acme'").fetchone()
+
+
+def test_directory_writers_cannot_claim_hq_company_references(api):
+    with api.app.state.store.transaction() as c:
+        entity = entities.upsert(c, H.TICO_ACTOR, "organization", match={}, name="Unrelated company")["id"]
+    body = {"ref": entity, "system": " Tico-HQ ", "external_type": "company", "external_id": COMPANY}
+    post(api, "entities/external-refs", body, expected=422)
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM entity_external_refs WHERE external_id=?", (COMPANY,)).fetchone()
+
+
+def test_verified_help_leaves_an_erased_company_unbound_without_a_health_error(api, flow, monkeypatch):
+    hq, _, _, _, intake, _ = flow
+    monkeypatch.setenv("TICO_GATEWAY_KEY", GATEWAY)
+    monkeypatch.setenv("TICO_GATEWAY_URL", URL)
+    first = intake(decide=False)
+    entity = get(api, f"tasks/{first}")["task"]["entity_id"]
+    with api.app.state.store.transaction() as c:
+        entities.erase_rows(c, H.TICO_ACTOR, entity, "Erased by request")
+    hq.next_ticket = "TK-BCDEFGHJ"
+    second = intake(decide=False)
+    assert not get(api, f"tasks/{second}")["task"]["entity_id"]
+    with api.app.state.store.read() as c:
+        assert not c.execute(
+            "SELECT 1 FROM service_health WHERE service GLOB 'background:help_company_link:*'"
+        ).fetchone()
+        assert not c.execute("SELECT 1 FROM entity_external_refs WHERE external_id=?", (COMPANY,)).fetchone()
+
+
+def test_directory_link_visibility_is_checked_in_task_details_lists_and_history(api, flow, monkeypatch):
+    _, _, _, _, intake, _ = flow
+    monkeypatch.setenv("TICO_GATEWAY_KEY", GATEWAY)
+    monkeypatch.setenv("TICO_GATEWAY_URL", URL)
+    task = intake(decide=False)
+    entity = get(api, f"tasks/{task}")["task"]["entity_id"]
+    assert entity
+    with api.app.state.store.transaction() as c:
+        entities.add_source(c, H.TICO_ACTOR, entity, "finance_book", "private-book", visibility="restricted")
+    detail = get(api, f"tasks/{task}", token="cara-test")
+    assert not detail["task"]["entity_id"]
+    assert entity not in json.dumps(detail["events"])
+    listed = get(api, "tasks", token="cara-test")["tasks"]
+    assert not next(row for row in listed if row["id"] == task)["entity_id"]
+
+
+@pytest.mark.parametrize("failure", ["timeout", 429])
+def test_hq_verification_retries_without_holding_the_task(api, flow, monkeypatch, failure):
+    hq, runner, _, poll, _, _ = flow
+    store = api.app.state.store
+    monkeypatch.setenv("TICO_GATEWAY_KEY", GATEWAY)
+    monkeypatch.setenv("TICO_GATEWAY_URL", URL)
+    monkeypatch.setattr(support_triage, "engine_for", lambda *_: None)
+    post(api, "support/tickets", {"message": "How do I add another computer?"})
+    looked_up = []
+
+    def first_fails(request):
+        looked_up.append(request.url.path)
+        if len(looked_up) == 1:
+            if failure == "timeout":
+                raise httpx.ReadTimeout("HQ was slow")
+            return httpx.Response(failure, headers={"Retry-After": "120"})
+        return hq(request)
+
+    monkeypatch.setattr(support, "TRANSPORT", httpx.MockTransport(first_fails))
+    (event,) = poll()
+    task = report(api, runner, event)["tasks"][event["key"]]
+    assert not looked_up
+    at = H.now()
+    support_hq.verify_due(store, at)
+    support_hq.verify_due(store, H.shift(at, seconds=119 if failure == 429 else 59))
+    assert len(looked_up) == 1 and not get(api, f"tasks/{task}")["task"]["entity_id"]
+    support_hq.verify_due(store, H.shift(at, seconds=121))
+    support_hq.verify_due(store, H.shift(at, seconds=3600))
+    assert len(looked_up) == 2
+    assert get(api, f"tasks/{task}")["task"]["entity_id"]
 
 
 def test_support_sends_no_gateway_key_without_install_id_or_to_a_different_origin(api, flow, monkeypatch):
@@ -313,6 +415,39 @@ def test_support_sends_no_gateway_key_without_install_id_or_to_a_different_origi
     monkeypatch.setenv("TICO_GATEWAY_URL", "https://other.acme.example/v1/gateway")
     post(api, "support/tickets", {"message": "I still need help"})
     assert hq.submissions == [(URL + "/v1/support", None)] * 2
+
+
+def test_gateway_proofs_require_https_and_disable_environment_proxies(api, flow, monkeypatch):
+    hq, *_ = flow
+    make_client = httpx.Client
+    clients = []
+
+    def client(**options):
+        clients.append(options)
+        return make_client(**options)
+
+    monkeypatch.setattr(support.httpx, "Client", client)
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.acme.example")
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.acme.example")
+    monkeypatch.setenv("TICO_GATEWAY_KEY", GATEWAY)
+    for base in ("http://localhost:9000", URL):
+        monkeypatch.setenv("TICO_HQ_URL", base)
+        monkeypatch.setenv("TICO_GATEWAY_URL", base)
+        post(api, "support/tickets", {"message": "I need help"})
+        hq.next_ticket = "TK-BCDEFGHJ"
+    assert hq.submissions == [("http://localhost:9000/v1/support", None), (URL + "/v1/support", f"Bearer {GATEWAY}")]
+    assert clients[-1]["trust_env"] is False and clients[-1]["follow_redirects"] is False
+
+
+def test_help_still_files_when_gateway_proof_cannot_be_read(api, flow, monkeypatch):
+    hq, *_ = flow
+
+    def unreadable(*_):
+        raise ValueError("Cannot unseal Gateway key")
+
+    monkeypatch.setattr(gateway_connection, "target", unreadable)
+    post(api, "support/tickets", {"message": "I need help"})
+    assert hq.submissions == [(URL + "/v1/support", None)]
 
 
 def test_docs_answer_settles_only_after_hq_receipt_and_followup_reopens(api, flow):
@@ -348,11 +483,32 @@ def test_hq_rejects_a_reply_when_the_customer_writes_between_lookup_and_post(api
     assert queue_answer(api, task, token)["id"] == action["id"]
 
     hq.before_reply = None
-    fresh = queue_answer(api, task, token, last_message_id=1)
+    assert queue_answer(api, task, token, last_message_id=1)["id"] == action["id"]
+    revised = ANSWER + " It also covers the new question."
+    fresh = queue_answer(api, task, token, last_message_id=1, body=revised)
     assert fresh["id"] != action["id"] and fresh["state"] == "waiting_approval"
     approve(api, fresh)
     assert OA.step(api.app.state.store)
-    assert hq.reply_versions == [0, 1] and hq.replies == [ANSWER]
+    assert hq.reply_versions == [0, 1] and hq.replies == [revised]
+
+
+def test_definite_stale_rejection_settles_after_claim_recovery(api, flow):
+    hq, _, token, _, intake, _ = flow
+    task = intake()
+    action = queue_answer(api, task, token)
+    approve(api, action)
+    store = api.app.state.store
+
+    def race():
+        assert OA.recover(store, H.shift(H.now(), seconds=OA.STALE + 1)) == 1
+        assert get(api, f"outbound-actions/{action['id']}")["action"]["state"] == "unknown"
+        hq.message("person", "New information")
+
+    hq.before_reply = race
+    assert OA.step(store)
+    blocked = get(api, f"outbound-actions/{action['id']}")["action"]
+    assert blocked["state"] == "blocked" and blocked["last_error"] == support_hq.STALE_REPLY
+    assert hq.replies == []
 
 
 def test_reply_command_uses_the_drafts_customer_message_id(api, flow, monkeypatch, tmp_path):
@@ -372,12 +528,31 @@ def test_reply_command_uses_the_drafts_customer_message_id(api, flow, monkeypatc
     assert get(api, f"outbound-actions/{old['id']}")["action"]["state"] == "blocked"
     assert hq.reply_versions == []
 
+    assert watcher.main(args + ["--last-message-id", "1"], env=env) == 1
+    revised = ANSWER + " Start with the section on pairing."
+    reply.write_text(revised)
     assert watcher.main(args + ["--last-message-id", "1"], env=env) == 0
     fresh, old = get(api, "outbound-actions?channel=help-ticket")["items"]
     assert fresh["state"] == "waiting_approval" and old["state"] == "blocked"
     approve(api, fresh)
     assert OA.step(api.app.state.store)
-    assert hq.reply_versions == [1] and hq.replies == [ANSWER]
+    assert hq.reply_versions == [1] and hq.replies == [revised]
+
+
+def test_engineering_done_cannot_revive_the_stale_merge_draft(api, flow):
+    hq, runner, token, poll, intake, _ = flow
+    parent = intake("setup")
+    child = engineering_task(api, parent, token)["id"]
+    post(api, f"tasks/{child}/links", {"url": PR})
+    hook(api, "pull_request", pr_event("closed", merged=True, state="closed", number=412))
+    (reply,) = get(api, "outbound-actions?channel=help-ticket")["items"]
+    approve(api, reply)
+    hq.message("person", "The issue changed while Engineering was working on it.")
+    assert OA.step(api.app.state.store)
+    report(api, runner, *poll())
+    post(api, f"tasks/{child}/done", {"version": get(api, f"tasks/{child}")["task"]["version"]})
+    (blocked,) = get(api, "outbound-actions?channel=help-ticket")["items"]
+    assert blocked["id"] == reply["id"] and blocked["state"] == "blocked" and hq.replies == []
 
 
 @pytest.mark.parametrize("paused_at_merge", [True, False])

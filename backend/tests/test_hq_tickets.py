@@ -319,6 +319,7 @@ def test_reply_requires_an_open_support_task_and_a_reachable_tico(rig, hq, tmp_p
     assert code == 1 and "--task" in text
     code, text = rig.cli("reply", tid, str(reply), "--task", "T1")
     assert code == 1 and "keep the reply as a draft" in text
+    assert rig.cli("reply", tid, str(reply), "--task", "T1", "--last-message-id", str(2**63))[0] == 2
     assert hq.seen == []
 
 
@@ -327,6 +328,9 @@ def test_signature_only_queues_supplied_tickets_that_carry_it(rig, hq, tmp_path,
     one = hq.file(f"Health Monitor\nSignature: {sig}")
     two = hq.file(f"Health Monitor\nSignature: {sig}")
     other = hq.file("A person's own words")
+    hq.person_writes(one, "Is the fix out yet?")
+    hq.person_writes(two, "I still see this")
+    hq._message(two, "staff", "We are looking into it")
     fixed = tmp_path / "fixed.md"
     fixed.write_text("Update to the latest release.\n")
     queued = []
@@ -342,8 +346,8 @@ def test_signature_only_queues_supplied_tickets_that_carry_it(rig, hq, tmp_path,
     assert queued == []
     assert rig.cli(*cmd, "--task", f"{two}=T2")[0] == 0
     assert [(row["destination"], row["task_id"], row["payload"]) for row in queued] == [
-        (one, "T1", {"body": fixed.read_text()}),
-        (two, "T2", {"body": fixed.read_text()}),
+        (one, "T1", {"body": fixed.read_text(), "last_message_id": 1}),
+        (two, "T2", {"body": fixed.read_text(), "last_message_id": 2}),
     ]
     assert all(req.get_method() == "GET" for req in hq.seen)
 

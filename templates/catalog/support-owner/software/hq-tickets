@@ -442,11 +442,19 @@ def signature_tasks(hq, signature, args):
         if flag != "--task" or not TICKET.fullmatch(ticket) or not task or ticket in tasks:
             raise Usage
         tasks[ticket] = task
-    for ticket in tasks:
+    verified = []
+    for ticket, task in tasks.items():
         found = hq.call("GET", f"/v1/staff/tickets/{ticket}")
-        if found.get("signature") != signature:
+        if found.get("ticket_id") != ticket or found.get("signature") != signature:
             raise Refused(f"{ticket} does not carry {signature}")
-    return tasks
+        try:
+            latest = max((message["id"] for message in found["messages"] if message["from"] == "person"), default=0)
+        except (KeyError, TypeError):
+            raise Refused(f"HQ did not return the messages for {ticket}") from None
+        if type(latest) is not int or not 0 <= latest < 2**63:
+            raise Refused(f"HQ did not return the messages for {ticket}")
+        verified.append((ticket, task, latest))
+    return verified
 
 
 def main(argv, env=None, out=print, opener=None, emit=None, now=None):
@@ -458,7 +466,7 @@ def main(argv, env=None, out=print, opener=None, emit=None, now=None):
             last, rest = option(rest, "--last-message-id")
             if len(rest) != 2:
                 raise Usage
-            if last is not None and not re.fullmatch(r"[0-9]{1,19}", last):
+            if last is not None and (not re.fullmatch(r"[0-9]{1,19}", last) or int(last) >= 2**63):
                 raise Usage
             task = task or env.get("HUB_TASK_ID", "").strip()
             if not task:
@@ -490,7 +498,7 @@ def main(argv, env=None, out=print, opener=None, emit=None, now=None):
         elif command == "close-signature" and len(args) >= 2 and SIGNATURE.fullmatch(args[0]):
             tasks = signature_tasks(hq, args[0], args[2:])
             text = read_reply(args[1])
-            results = [queue_reply(env, ticket, task, text, out) for ticket, task in tasks.items()]
+            results = [queue_reply(env, ticket, task, text, out, latest) for ticket, task, latest in tasks]
             return 0 if all(results) else 1
         else:
             raise Usage

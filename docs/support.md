@@ -35,7 +35,7 @@ order.
 | Field | |
 |---|---|
 | Message | Required, up to 4000 characters. Plain text. |
-| Email and install details | Your account's email, the version and the install ID go with a message that starts a new ticket. From the desktop app, the app's own version goes with them, labelled apart from the server's. When the Gateway and HQ share an origin, the server uses the Gateway key to authenticate the install to HQ. |
+| Email and install details | Your account's email, the version and the install ID go with a message that starts a new ticket. From the desktop app, the app's own version goes with them, labelled apart from the server's. When the Gateway and HQ share an HTTPS origin, the server uses the Gateway key to authenticate the install to HQ over a direct connection. |
 | Diagnostics | Off by default. The paperclip (Attach diagnostics) opens **Review and edit**; once attached, a **Diagnostics** line above the box has **Review** and **×** to remove it. Report this attaches them on its own. |
 | Computer performance | In Review and edit: how much of each computer's performance history goes with the diagnostics: None, 1 day (the default), 7 days or 14 days. Computers and bots are relabelled as everywhere else in the bundle. |
 | Review and edit | Inspect the exact JSON, remove sections, or edit fields. **Check edits** validates and redacts again; **Use diagnostics** attaches the reviewed result. |
@@ -385,9 +385,11 @@ For queued replies, set `TICO_HQ_STAFF_KEY` to HQ's full staff key in the Suppor
 `TICO_HQ_SUPPORT_BOT` there if the Support Agent's slug differs from `support-owner`. The watcher's `HQ_URL` must
 match the server's `TICO_HQ_URL` or its default HQ address. New tickets from that HQ go to the Support pipeline when
 available. The watcher records the HQ origin when it first opens a ticket. A person handles replies for older tasks
-that lack this record. The Support server reads the ticket again with `TICO_HQ_STAFF_READ_KEY` or `TICO_HQ_STAFF_KEY`
-before linking it to the company in Directory. HQ's verified company and install IDs are required for the link.
-The ticket thread appears in the company's relationship history for people who can read its Support task.
+that lack this record. The Support server opens the task and reads the ticket separately with `TICO_HQ_STAFF_READ_KEY`
+or `TICO_HQ_STAFF_KEY`. It retries temporary failures. With HQ's verified company and install IDs, it links the task to
+a company-visible organization through a reserved `tico-hq` reference. An existing record without that reference may
+need a Directory merge. The ticket thread appears in relationship history for people who can read the company and the
+Support task.
 
 ### By hand
 
