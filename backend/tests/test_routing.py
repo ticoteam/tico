@@ -19,7 +19,7 @@ from backend.store import H, encode
 from backend.tests.helpers.api import headers, post
 from backend.tests.helpers.company import bot
 from backend.tests.helpers.member_bots import agent_ops, turn  # noqa: F401
-from backend.tests.test_jira_intake import _create, jira  # noqa: F401
+from backend.tests.helpers.jira_intake import _create, jira  # noqa: F401
 
 START = datetime(2030, 1, 7, 10, 0, tzinfo=timezone.utc)  # a Monday, inside Calendar's default hours (UTC)
 TITLES = itertools.cycle(["Acme", "Globex", "Initech", "Umbrella", "Hooli", "Stark", "Wayne", "Wonka", "Soylent"])
