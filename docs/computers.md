@@ -1,7 +1,7 @@
 # Computers
 
-A computer runs your bots. **Settings → Computers** lists every computer: its bots, which subscription Claude Code and
-Codex use there, the other AI tools' logins, and what it is doing now. To add a computer, click **Add computer** or see
+A computer runs your bots. **Settings → Computers** lists each enrolled computer's name, kind, state, runner version
+and agent count. To add a computer, click **Add computer** or see
 [Install](install.md#add-computers-to-run-your-bots).
 
 Re-enrolling the same physical computer can leave an older registration behind. The hourly cleanup removes that
@@ -39,7 +39,7 @@ Gateway meanwhile. The line under the computer's plan picker says which: "on the
 3. Tap **Open Claude** or **Open ChatGPT** and sign in with the account that has the plan. Claude's page hands back a
    code: paste it in the sheet and click **Send code**. For ChatGPT, copy the code the sheet shows and enter it
    on ChatGPT's page. The sheet closes once Tico has saved the result, and the list shows the new row.
-4. Open **Settings → Computers** and pick the subscription in the computer's **Claude Code** or **Codex** column.
+4. To assign the subscription to a computer, use `tico settings set models.computer_subscription`.
 
 Instead of one plan, the picker can name a person under **People** ("Ana's plans · 3"): the computer then uses every
 plan that person owns for that tool, one at a time. A turn starts on the plan with usage left whose weekly reset comes
@@ -74,7 +74,7 @@ turns on other providers. See [the Gateway boundary](ai-gateway.md#pick-a-tico-m
 
 ## Turn counts
 
-The computers list, each computer's pop-up and **Settings → General → Health → Details** show four counts:
+**Settings → Health** reports four turn counts:
 
 | Count | What it means |
 |---|---|
@@ -210,7 +210,7 @@ To restore the defaults, enter **40** and **100** and click **Save** again.
 
 If saving fails, read the error beside the button and correct the values before trying again.
 If the card is missing, ask an owner or admin to change the levels.
-Check **Settings → General → Health → Details** for the company count and **Settings → Computers** for individual wait reasons.
+Check **Settings → Health** for the company count and individual wait reasons.
 Changing the levels does not add computer capacity or clear a login, quota or overload wait.
 
 ## Connections
@@ -383,18 +383,18 @@ login in its Keychain, and runs only on computers whose runner says `claude_logi
 
 ## The computers list
 
-One row per computer. On a phone the table scrolls sideways inside its card.
+Each enrolled computer has one row, including computers with no agents. On a phone the row wraps onto two lines.
 
 | Column | What it shows |
 |---|---|
-| **Computer** | A status dot (hover for online, or offline · last seen *when*) and its name, with **Update** when an update is waiting and **Waiting** while a connection it was given is not reported yet. |
-| **Bots** | How many bots run on it. |
-| **Claude Code**, **Codex** | A picker: the company's subscriptions for that tool, then **Signed in here** when the computer has its own login, else **Gateway** (or **None** with the Gateway off). Owners and admins change it. |
-| Other AI tools | One chip per connection the computer reports, under that tool's column: its state (**Signed in**, **Sign in**, **Signed out**, or a problem such as **Expired**), then a thin bar and "N%" left when there is a reading. A small **red dot** means bots depend on it and it needs attention. A click opens the computer's pop-up. |
-| **Now** | What it is doing: for example **1 running · 55 queued**, **idle**, **asleep** (a cloud computer stopped to save) or **offline**. The full queue line, with wait reasons, is in its pop-up. |
+| **Computer** | Its name. |
+| **Kind** | **Cloud shared**, **Cloud** or **Your own**. |
+| **State** | **Online**, **Offline** or **Restarting**, as reported by Tico. |
+| **Version** | The reported runner version. |
+| **Agents** | How many assigned agents the viewer can see. |
 
-**Show revoked (N)** under the list shows computers that were revoked. **No computers yet** means none is
-registered: choose **Add computer**.
+Select a row to open the computer's panel with its details, agents and controls. Open an agent's **Computer** tab
+to manage the computer's own sign-ins. **Hosted servers** and **When idle** appear below the list where available.
 
 ## A computer's pop-up
 

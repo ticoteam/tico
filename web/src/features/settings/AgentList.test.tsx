@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query';
-import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
+import { createMemoryHistory, createRootRoute, createRouter, RouterProvider, useSearch } from '@tanstack/react-router';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -492,6 +492,7 @@ const byComputer = () => {
     if (label) machines[0]!.label = (sent.at(-1)?.body as { label: string }).label;
     if (url === '/api/v2/operations') return { status: 200, body: { computers: machines, machines } };
     if (url === '/api/employees') return { status: 200, body: agents };
+    if (url === '/api/v2/sleep') return ok({ sleep: { hosted: false } });
     return { status: 200, body: {} };
   });
 };
@@ -556,22 +557,59 @@ describe('Settings › Agents › a computer', () => {
 });
 
 describe('Settings › Computers', () => {
-  it('external agents are one dimmed Coming soon line with nothing to press @s703', async () => {
-    serve();
-    queryClient.setQueryData(computersQuery.queryKey, [{ id: 'r1', label: 'Studio', online: true }] as never);
-    show(<Computers />, '/settings/computers');
-    const section = await screen.findByRole('region', { name: 'External agents' });
-    expect(within(section).getByText('Coming soon')).toBeTruthy();
-    expect(within(section).getByText('Agents made and run outside Tico').closest('.row')?.getAttribute('aria-disabled')).toBe('true');
-    expect(within(section).queryByRole('button', { name: /pair|add|connect/i })).toBeNull();
-    expect(within(section).queryByRole('link')).toBeNull();
+  it('lists each active computer once with its reported kind, state, version and agent count @s1075', async () => {
+    const computers = [
+      { id: 'r1', label: 'Shared One', cloud_machine: { shared: true }, online: true, version: '0.0.9', bots: ['a1', 'b2'] },
+      { id: 'r2', label: 'Build Cloud', cloud_machine: { shared: false }, online: true, restarting: '2026-11-22T20:00:00Z', version: '0.0.8', bots: ['c3'] },
+      { id: 'r3', label: 'Studio', online: false, version: '0.0.7', bots: [] },
+      { id: 'r4', label: 'Revoked', online: false, revoked_at: '2026-11-22T20:00:00Z' },
+    ];
+    queryClient.setQueryData(['directory'], { actors: [], byId: {} });
+    serve((url) => {
+      if (url === '/api/v2/operations') return ok({ computers });
+      if (url === '/api/v2/sleep') return ok({ sleep: { hosted: true, hours: 0 } });
+      return undefined;
+    });
+    show(<SettingsPage section="computers" />, '/settings/computers');
+    const shared = await screen.findByRole('link', { name: /^Shared One/ });
+    const cloud = screen.getByRole('link', { name: /^Build Cloud/ });
+    const own = screen.getByRole('link', { name: /^Studio/ });
+    for (const [row, facts] of [
+      [shared, ['Cloud shared', 'Online', '0.0.9', '2 agents']],
+      [cloud, ['Cloud', 'Restarting', '0.0.8', '1 agent']],
+      [own, ['Your own', 'Offline', '0.0.7', '0 agents']],
+    ] as const) {
+      for (const fact of facts) expect(within(row).getByText(fact)).toBeTruthy();
+    }
+    expect(screen.getAllByRole('link').filter((link) => link.getAttribute('href')?.startsWith('/settings/computers?open='))).toHaveLength(3);
+    expect(screen.queryByRole('region', { name: 'External agents' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Add computer' })).toBeTruthy();
+    expect(await screen.findByRole('region', { name: 'When idle' })).toBeTruthy();
+  });
+
+  it('opens the selected machine’s existing panel from its row and closes it again', async () => {
+    function Page() {
+      const { open } = useSearch({ strict: false }) as { open?: string };
+      return <SettingsPage section="computers" open={open} />;
+    }
+    byComputer();
+    const router = show(<Page />, '/settings/computers');
+    const row = await screen.findByRole('link', { name: /^Spare Two/ });
+    expect(row.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(row);
+    const panel = await screen.findByRole('complementary', { name: 'Spare Two' });
+    expect(router.state.location.search).toEqual({ open: 'computer:r2' });
+    expect(row.getAttribute('aria-expanded')).toBe('true');
+    fireEvent.click(within(panel).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('complementary', { name: 'Spare Two' })).toBeNull());
+    expect(row.getAttribute('aria-expanded')).toBe('false');
   });
 
   it('a stopped hosted server starts for an owner, says why when held with a link to Tico support, and Tico cannot start it @s704', async () => {
     serve((url) =>
       url === '/api/v2/hosted-servers/h1/start' ? ok({ state: 'paused', message: 'Out of credit', credit_url: 'https://help.example.test/credit' }) : undefined,
     );
-    queryClient.setQueryData(computersQuery.queryKey, [] as never);
+    queryClient.setQueryData(teamComputers.queryKey, []);
     queryClient.setQueryData(hostedQuery.queryKey, { state: 'ok', servers: [{ server_id: 'h1', kind: 'tico', power: 'stopped' }] });
     show(<Computers />, '/settings/computers');
     const line = (await screen.findByText('Tico server')).closest('.row') as HTMLElement;

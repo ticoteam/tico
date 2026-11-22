@@ -1,11 +1,11 @@
 import { isCancelledError, type FetchQueryOptions, type QueryClient } from '@tanstack/react-query';
 import { lazyRouteComponent, type AsyncRouteComponent } from '@tanstack/react-router';
 import { configQuery, meQuery } from '@/data';
+import { computersQuery } from '@/features/team/routing';
 import {
   accessQuery,
   billingQuery,
   changelogQuery,
-  computersQuery,
   contactTypesQuery,
   healthQuery,
   historyQuery,

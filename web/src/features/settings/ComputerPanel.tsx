@@ -23,8 +23,7 @@ const SCREEN: { value: Mode; label: string }[] = [
   { value: 'control', label: 'Control' },
 ];
 
-/** The facts a sheet shows: what the server sends, sizes and places as it names them (none is offered here). */
-function state(c: { online: boolean; restarting?: unknown }): string {
+export function computerState(c: { online: boolean; restarting?: unknown }): string {
   return c.restarting ? 'Restarting' : c.online ? 'Online' : 'Offline';
 }
 
@@ -91,7 +90,7 @@ export function ComputerPanel({ id, onClose }: { id: string; onClose: () => void
       >
         <div className="rail-sec">
           <Facts label={label}>
-            <LabelValue label="State">{state(c)}</LabelValue>
+            <LabelValue label="State">{computerState(c)}</LabelValue>
             <LabelValue label="Kind">{c.cloud_machine ? (c.cloud_machine.shared ? 'Shared, in the cloud' : 'In the cloud') : 'Your own'}</LabelValue>
             {c.cloud_machine?.size && <LabelValue label="Size">{c.cloud_machine.size}</LabelValue>}
             {c.cloud_machine?.placement && <LabelValue label="Place">{c.cloud_machine.placement}</LabelValue>}

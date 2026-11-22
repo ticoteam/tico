@@ -44,6 +44,8 @@ export const useEveryone = (): Face[] => useDirectory(everyoneOf) ?? NONE;
 /** Every agent, without status lines. */
 export const useAgentFaces = (): Face[] => useDirectory(agentsOf) ?? NONE;
 
+export const agentsWord = (n: number) => `${n} ${n === 1 ? 'agent' : 'agents'}`;
+
 /** What a section says to a member when its read is for owners and admins (the kind's no-access body). */
 export const NO_ACCESS = { text: 'Owners and admins only.' };
 

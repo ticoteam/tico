@@ -380,9 +380,8 @@ describe('Settings › People › the owner', () => {
 
 describe('Settings › Computers › when idle', () => {
   it('the computers-sleep switch sends at once @s705', async () => {
-    serve(() => ({ status: 404, body: { detail: 'not_found' } }));
+    serve((url) => (url === '/api/v2/operations' ? ok({ computers: [] }) : { status: 404, body: { detail: 'not_found' } }));
     queryClient.setQueryData(accessQuery.queryKey, ACCESS);
-    queryClient.setQueryData(computersQuery.queryKey, []);
     queryClient.setQueryData(sleepQuery.queryKey, { hosted: true, managed: false, hours: 2, runners: false });
     show(<SettingsPage section="computers" />, '/settings/computers', () => loadSection(queryClient, 'computers'));
     const sw = await screen.findByRole('switch', { name: "Agents' computers sleep too" });

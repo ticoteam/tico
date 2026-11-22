@@ -22,8 +22,8 @@ import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
 import { ValueButton } from '@/kit/ValueButton';
 import { Section } from '@/pagekinds';
-import { ComputerPanel } from './ComputerPanel';
-import { Foot, Line, SwitchLine, Verb, Word, act, useAgentFaces, useFaces, usd, type Face } from './parts';
+import { ComputerPanel, computerState } from './ComputerPanel';
+import { Foot, Line, SwitchLine, Verb, Word, act, agentsWord, useAgentFaces, useFaces, usd, type Face } from './parts';
 import {
   SAFE_RETRY,
   accessQuery,
@@ -73,8 +73,6 @@ function useMayRestore() {
   return (b: BotListed) =>
     admin || (!!mine && (bare(b.owner_id ?? '') === mine || (b.bot_owners ?? []).some((o) => bare(o.id) === mine)));
 }
-
-const agentsWord = (n: number) => `${n} ${n === 1 ? 'agent' : 'agents'}`;
 
 const toggled = (s: Set<string>, id: string, on: boolean) => {
   const next = new Set(s);
@@ -670,8 +668,7 @@ interface Group {
   slugs: string[];
 }
 
-/** `section`: Agents (grouped as the person picks) or Computers (always by computer, one folding section each). */
-export function AgentList({ open, section = 'agents' }: { open?: string; section?: 'agents' | 'computers' }) {
+export function AgentList({ open }: { open?: string }) {
   const navigate = useNavigate();
   const all = useAgentFaces();
   const faces = useFaces();
@@ -680,8 +677,7 @@ export function AgentList({ open, section = 'agents' }: { open?: string; section
   const bots = useQuery({ ...botsQuery, retry: false });
   const mayRestore = useMayRestore();
   const [q, setQ] = useState('');
-  const fixed = section === 'computers';
-  const [by, setBy] = useState<By>(fixed || open?.startsWith('computer:') ? 'computer' : 'team');
+  const [by, setBy] = useState<By>(open?.startsWith('computer:') ? 'computer' : 'team');
   const [picked, setPicked] = useState<Set<string>>(() => new Set());
   const [changing, setChanging] = useState(false);
   const [editing, setEditing] = useState<Change | null>(null);
@@ -815,12 +811,10 @@ export function AgentList({ open, section = 'agents' }: { open?: string; section
                 {q.trim() && <span className="tools-n">{agentsWord(shown.length)}</span>}
               </>
             )}
-            {!fixed && (
-              <span className="fl-by">
-                <span>Group by</span>
-                <Segmented label="Group by" options={BY} value={by} onValueChange={setBy} />
-              </span>
-            )}
+            <span className="fl-by">
+              <span>Group by</span>
+              <Segmented label="Group by" options={BY} value={by} onValueChange={setBy} />
+            </span>
           </div>
           <div className="tbl-head g-bots g-fleet">
             <Checkbox
@@ -849,13 +843,13 @@ export function AgentList({ open, section = 'agents' }: { open?: string; section
                 m && (
                   <Link
                     to="/settings/$section"
-                    params={{ section }}
+                    params={{ section: 'agents' }}
                     search={opened === m.id ? {} : { open: `computer:${m.id}` }}
                     className={opened === m.id ? 'fl-sum is-on' : 'fl-sum'}
                     aria-label={`Open ${m.label || m.id}`}
                     aria-expanded={opened === m.id}
                   >
-                    <Word fine={m.online}>{m.restarting ? 'Restarting' : m.online ? 'Online' : 'Offline'}</Word>
+                    <Word fine={m.online}>{computerState(m)}</Word>
                     <Icon name="panel" />
                   </Link>
                 )
@@ -876,8 +870,8 @@ export function AgentList({ open, section = 'agents' }: { open?: string; section
           })}
         </div>
       )}
-      {opened && <ComputerPanel id={opened} onClose={() => void navigate({ to: '/settings/$section', params: { section }, search: {} })} />}
-      {!fixed && retired.length > 0 && (
+      {opened && <ComputerPanel id={opened} onClose={() => void navigate({ to: '/settings/$section', params: { section: 'agents' }, search: {} })} />}
+      {retired.length > 0 && (
         <Section name="Retired" count={retired.length} defaultOpen={false} target="setting:retired">
           {retired.map((b) => {
             const key = b.id ?? b.slug ?? '';

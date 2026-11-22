@@ -20,6 +20,7 @@ import { Section } from '@/pagekinds';
 import { modelName } from '@/features/team/routing';
 import { AgentList } from './AgentList';
 import { editSubscriptionName } from './actions';
+import { ComputerList } from './ComputerList';
 import { GatewayLines } from './Gateway';
 import { installCommands, type Command, type ComputerKind, type RunnerConfig } from './install';
 import { Foot, Line, Meter, SwitchLine, Verb, Word, act, usd, useVisible } from './parts';
@@ -706,25 +707,10 @@ function Sleep() {
   );
 }
 
-/** One folding section per computer: its state (it opens the computer's panel), its agents and their models. Add
-    computer is the page's filled button. */
 export function Computers({ open }: { open?: string }) {
-  const computers = useQuery(computersQuery);
-  if (!computers.data) return null;
-  // An old address names the computer alone (?open=<id>); the list opens it as computer:<id>.
-  const at = open && computers.data.some((c) => c.id === open) ? `computer:${open}` : open;
   return (
     <>
-      <AgentList open={at} section="computers" />
-      {/* Owner, Nov 19: agents made and run outside Tico are not in the first build; one dimmed line. */}
-      <Section name="External agents" target="setting:external">
-        <div className="row is-off" aria-disabled="true" title="Agents made and run outside Tico">
-          <span className="row-title">
-            Agents made and run outside Tico
-            <Pill>Coming soon</Pill>
-          </span>
-        </div>
-      </Section>
+      <ComputerList open={open} />
       <Hosted />
       <Sleep />
     </>
