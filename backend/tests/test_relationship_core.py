@@ -296,3 +296,31 @@ def test_a_changes_read_by_entity_needs_its_visible_id_and_stops_when_access_goe
         ES.add_source(c, ANA, acme, "mailbox", box["id"], visibility="restricted")  # ben no longer sees Acme
     lost = get(api, f"tasks?entity={acme}&changed_after={cursor}", token="ben-test", expected=422)
     assert lost["error"]["code"] == "entity"
+
+
+def test_an_assistant_acting_for_a_person_writes_status_and_owner_with_that_persons_rights(api):
+    from backend.tests.helpers.api import put
+    from backend.tests.helpers.assistant import assistant_turn
+
+    caras, anas, acme = org(api, "c.example", "Caras"), org(api, "a.example", "Anas"), org(api, "acme.example", "Acme")
+    with api.app.state.store.transaction() as c:
+        for person, entity in (("cara", caras), ("ana", anas)):
+            box = MA.ensure_mailbox(c, f"{person}@acme.example", person_id=person, created_by=f"human:{person}")
+            ES.add_source(c, f"human:{person}", entity, "mailbox", box["id"], visibility="restricted")
+    access = get(api, "bots/ops/access")
+    only_ana = {"people": ["ana"]}
+    put(api, "bots/ops/access", {"see": only_ana, "read": only_ana, "write": only_ana, "revision": access["revision"]})
+
+    _r, attempt = assistant_turn(api, "cara-test", text="Mark the Caras account active")
+    token = attempt["token"]
+    written = post(api, "entities/status", {"ref": caras, "version": 0, "status": "active"}, token=token)
+    assert written["status"] == "active"  # visible to Cara alone, written through his Assistant
+    assert post(api, "entities/owner", {"ref": caras, "owner": "me"}, token=token)["owner"] == "human:cara"
+    hidden = post(api, "entities/status", {"ref": anas, "version": 0, "status": "x"}, token=token, expected=422)
+    assert hidden["error"]["code"] == "not_found"  # hidden from Cara: refused, never written as the Assistant
+    assert post(api, "entities/owner", {"ref": acme, "owner": "bot:ops"}, token=token, expected=404)
+
+    post(api, "entities/owner", {"ref": acme, "owner": "me"}, token=token, key="cara-owner")
+    post(api, "entities/owner", {"ref": acme, "owner": "bot:ops"})  # Ana sees ops
+    replayed = post(api, "entities/owner", {"ref": acme, "owner": "me"}, token=token, key="cara-owner")
+    assert replayed["owner"] is None  # Cara may not see ops: the owner is hidden from him
