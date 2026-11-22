@@ -22,6 +22,8 @@ const PASSES: usize = 10;
 /// How many distinct commands the turn's report names.
 const TOP: usize = 5;
 const COMMAND_CHARS: usize = 120;
+#[cfg(target_os = "linux")]
+const MARK_READ_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// One ended turn: how to know its processes, and what of them stays.
 #[derive(Clone, Debug, Default)]
@@ -166,11 +168,36 @@ fn table() -> HashMap<u32, Proc> {
         .collect()
 }
 
+#[cfg(any(target_os = "linux", test))]
+async fn read_mark_output(
+    mut child: tokio::process::Child,
+    deadline: Duration,
+) -> Result<Vec<u8>, &'static str> {
+    use tokio::io::AsyncReadExt;
+
+    let mut stdout = child.stdout.take().expect("piped mark reader stdout");
+    let mut output = Vec::new();
+    let error = match tokio::time::timeout(deadline, async {
+        tokio::try_join!(child.wait(), stdout.read_to_end(&mut output))
+    })
+    .await
+    {
+        Ok(Ok((status, _))) if status.success() => return Ok(output),
+        Ok(_) => "Could not read Docker turn marks.",
+        Err(_) => "Timed out reading Docker turn marks.",
+    };
+    // The timeout covers both the child's exit and draining the pipe. Closing the pipe and
+    // killing the child also handles a helper stopped by another process under the bot UID.
+    drop(stdout);
+    let _ = child.kill().await;
+    Err(error)
+}
+
 #[cfg(target_os = "linux")]
-fn marks(turn: &Turn, procs: &HashMap<u32, Proc>) -> HashMap<Process, bool> {
+fn marks(turn: &Turn, procs: &HashMap<u32, Proc>) -> Result<HashMap<Process, bool>, &'static str> {
     use std::os::unix::fs::MetadataExt;
     if turn.mark.is_empty() {
-        return HashMap::new();
+        return Ok(HashMap::new());
     }
     let prefix = format!("{MARK_ENV}=");
     if let Some((uid, gid)) = crate::isolation::identity().filter(|_| turn.tracking.is_some()) {
@@ -181,7 +208,8 @@ fn marks(turn: &Turn, procs: &HashMap<u32, Proc>) -> HashMap<Process, bool> {
         } else {
             "/usr/bin/python3"
         };
-        let out = crate::isolation::std_command_as(Some((uid, gid)), interpreter)
+        let mut reader = crate::isolation::command_as(Some((uid, gid)), interpreter);
+        reader
             .args([
                 "-I",
                 "-S",
@@ -213,17 +241,19 @@ for pid in os.listdir('/proc'):
             ])
             .env_clear()
             .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
-            .output();
+            .kill_on_drop(true);
+        // Sweep runs on a blocking worker, leaving the runtime free to poll the child and timer.
+        let output = tokio::runtime::Handle::current().block_on(async {
+            let child = reader
+                .spawn()
+                .map_err(|_| "Could not start the Docker turn mark reader.")?;
+            read_mark_output(child, MARK_READ_TIMEOUT).await
+        })?;
         // The helper shares the bot UID. Independently check that its replies can
         // only authorize signals to this UID, never to the supervisor or a leased UID.
-        let Ok(out) = out else {
-            return HashMap::new();
-        };
-        if !out.status.success() {
-            return HashMap::new();
-        }
-        return String::from_utf8_lossy(&out.stdout)
+        return Ok(String::from_utf8_lossy(&output)
             .lines()
             .filter_map(|line| {
                 let mut fields = line.split_whitespace();
@@ -239,10 +269,10 @@ for pid in os.listdir('/proc'):
                     && std::fs::metadata(format!("/proc/{pid}")).ok()?.uid() == uid)
                     .then_some((p.id, ours))
             })
-            .collect();
+            .collect());
     }
     let uid = unsafe { libc::geteuid() };
-    procs
+    Ok(procs
         .values()
         .filter(|p| !p.zombie)
         .filter_map(|p| {
@@ -256,17 +286,17 @@ for pid in os.listdir('/proc'):
                 .find_map(|kv| kv.strip_prefix(prefix.as_bytes()))?;
             (process(p.id.pid)?.id == p.id).then_some((p.id, mark == turn.mark.as_bytes()))
         })
-        .collect()
+        .collect())
 }
 
 #[cfg(target_os = "macos")]
-fn marks(turn: &Turn, procs: &HashMap<u32, Proc>) -> HashMap<Process, bool> {
+fn marks(turn: &Turn, procs: &HashMap<u32, Proc>) -> Result<HashMap<Process, bool>, &'static str> {
     if turn.mark.is_empty() || turn.tracking.is_none() {
-        return HashMap::new();
+        return Ok(HashMap::new());
     }
     let uid = unsafe { libc::geteuid() };
     let prefix = format!("{MARK_ENV}=");
-    procs
+    Ok(procs
         .values()
         .filter(|p| !p.zombie && p.uid == uid)
         .filter_map(|p| {
@@ -281,16 +311,18 @@ fn marks(turn: &Turn, procs: &HashMap<u32, Proc>) -> HashMap<Process, bool> {
             (now.id == p.id && now.uid == uid && !now.zombie)
                 .then_some((p.id, mark == turn.mark.as_bytes()))
         })
-        .collect()
+        .collect())
 }
 
-/// Only live identities can vouch for a group or session. Never carry its numeric ID
-/// across snapshots, and make a fresh tracker for every app-server incarnation.
+/// A group or session needs a verified member, or its original leader still held by the reaper.
+/// Make a fresh tracker for every app-server incarnation.
 #[derive(Debug, Default)]
 pub struct Tracking {
     members: HashSet<Process>,
     #[cfg(target_os = "macos")]
     unique_ids: HashSet<u64>,
+    #[cfg(target_os = "macos")]
+    root_session: Option<u32>,
 }
 
 impl Tracking {
@@ -298,6 +330,10 @@ impl Tracking {
         let mut tracking = Self::default();
         if let Some(root) = process(pid) {
             tracking.remember(&root);
+            #[cfg(target_os = "macos")]
+            {
+                tracking.root_session = root.sid.filter(|&sid| sid == pid);
+            }
         }
         Arc::new(Mutex::new(tracking))
     }
@@ -350,6 +386,22 @@ impl Tracking {
     pub fn sample(tracking: &Mutex<Self>) {
         let procs = table();
         tracking.lock().unwrap().observe(&procs);
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn sample_before_reap(tracking: &Mutex<Self>) {
+        let procs = table();
+        let mut tracking = tracking.lock().unwrap();
+        if let Some(sid) = tracking.root_session {
+            // The unreaped leader pins this session number, even after an intermediate shell exits.
+            // Keep identities of the survivors so later scans can follow the session safely.
+            for p in procs.values().filter(|p| !p.zombie && p.sid == Some(sid)) {
+                if process(p.id.pid).is_some_and(|now| now.id == p.id && now.sid == Some(sid)) {
+                    tracking.remember(p);
+                }
+            }
+        }
+        tracking.observe(&procs);
     }
 
     #[cfg(target_os = "macos")]
@@ -458,9 +510,16 @@ fn clip(text: &str, chars: usize) -> String {
 }
 
 /// The turn's processes still running, spared ones aside.
-fn leftovers(turn: &Turn) -> Vec<Process> {
+fn leftovers(turn: &Turn, mark_error: &mut Option<&'static str>) -> Vec<Process> {
     let procs = table();
-    let marks = marks(turn, &procs);
+    let marks = if mark_error.is_some() {
+        HashMap::new()
+    } else {
+        marks(turn, &procs).unwrap_or_else(|error| {
+            *mark_error = Some(error);
+            HashMap::new()
+        })
+    };
     let tracked = turn.tracking.as_ref().map(|tracking| {
         let mut tracking = tracking.lock().unwrap();
         tracking.observe(&procs);
@@ -552,8 +611,12 @@ fn scrub_command(command: &str, redactor: Option<&crate::redact::Redactor>) -> S
 }
 
 /// Stops what `turn` left running. Blocking, with a short grace and bounded SIGKILL passes.
-fn sweep(turn: &Turn, redactor: Option<&crate::redact::Redactor>) -> Vec<Stopped> {
+fn sweep(
+    turn: &Turn,
+    redactor: Option<&crate::redact::Redactor>,
+) -> (Vec<Stopped>, Option<&'static str>) {
     let mut stopped = Vec::new();
+    let mut mark_error = None;
     let mut seen = HashSet::new();
     let mut stop = |p: Process, sig| {
         let command = (!seen.contains(&p)).then(|| command_of(p.pid));
@@ -567,9 +630,9 @@ fn sweep(turn: &Turn, redactor: Option<&crate::redact::Redactor>) -> Vec<Stopped
             }
         }
     };
-    let mut left = leftovers(turn);
+    let mut left = leftovers(turn, &mut mark_error);
     if left.is_empty() {
-        return stopped;
+        return (stopped, mark_error);
     }
     for &p in &left {
         stop(p, libc::SIGTERM);
@@ -583,14 +646,14 @@ fn sweep(turn: &Turn, redactor: Option<&crate::redact::Redactor>) -> Vec<Stopped
             .iter()
             .all(|id| !process(id.pid).is_some_and(|p| p.id == *id && !p.zombie))
         {
-            left = leftovers(turn);
+            left = leftovers(turn, &mut mark_error);
             if left.is_empty() {
-                return stopped;
+                return (stopped, mark_error);
             }
         }
     }
     for _ in 0..PASSES {
-        let left = leftovers(turn);
+        let left = leftovers(turn, &mut mark_error);
         if left.is_empty() {
             break;
         }
@@ -599,7 +662,7 @@ fn sweep(turn: &Turn, redactor: Option<&crate::redact::Redactor>) -> Vec<Stopped
         }
         std::thread::sleep(Duration::from_millis(20));
     }
-    stopped
+    (stopped, mark_error)
 }
 
 /// Stop the leftovers off the async runtime and prepare the diagnostic.
@@ -608,18 +671,29 @@ pub async fn finish(
     host: &str,
     redactor: Option<Arc<crate::redact::Redactor>>,
 ) -> Option<Value> {
-    let stopped = tokio::task::spawn_blocking(move || sweep(&target, redactor.as_deref()))
-        .await
-        .ok()?;
-    if stopped.is_empty() {
-        return None;
+    let (stopped, mark_error) =
+        tokio::task::spawn_blocking(move || sweep(&target, redactor.as_deref()))
+            .await
+            .ok()?;
+    let mut diagnostic = None;
+    if !stopped.is_empty() {
+        crate::util::log(&format!(
+            "{host}: turn ended: stopped {} processes it left running ({})",
+            stopped.len(),
+            programs(&stopped)
+        ));
+        diagnostic = Some(report(&stopped));
     }
-    crate::util::log(&format!(
-        "{host}: turn ended: stopped {} processes it left running ({})",
-        stopped.len(),
-        programs(&stopped)
-    ));
-    Some(report(&stopped))
+    if let Some(error) = mark_error {
+        let incomplete = format!("Codex process cleanup incomplete. {error}");
+        crate::util::log(&format!("{host}: {incomplete}"));
+        let note = diagnostic.get_or_insert_with(|| json!({}));
+        note["text"] = json!(match note["text"].as_str() {
+            Some(text) => format!("{text} {incomplete}"),
+            None => incomplete,
+        });
+    }
+    diagnostic
 }
 
 /// What the turn's diagnostics say of a sweep: how many it stopped and its most common commands, each cut short.
@@ -746,7 +820,7 @@ mod tests {
             keep_trees: vec![],
             tracking: None,
         };
-        let stopped = sweep(&turn, None);
+        let (stopped, _) = sweep(&turn, None);
         let gone: Vec<u32> = stopped.iter().map(|s| s.pid).collect();
         let survivors = (
             alive(harness_pid),
@@ -796,6 +870,89 @@ mod tests {
     }
 
     #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn a_protected_orphan_is_swept_from_the_session_recorded_at_launch() {
+        use std::process::Stdio;
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let mut command = tokio::process::Command::new("/bin/sh");
+        crate::hosts::new_group(&mut command);
+        let mut shell = command
+            .args([
+                "-c",
+                "read go; (/bin/sleep 900 </dev/null >/dev/null 2>&1 & echo $!); exit 0",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let tracking = Tracking::new(shell.id().unwrap());
+        let mut stdin = shell.stdin.take().unwrap();
+        let mut stdout = BufReader::new(shell.stdout.take().unwrap()).lines();
+        let at_exit = tracking.clone();
+        let (_stopper, reaped) = crate::hosts::own_with_before_reap(
+            shell,
+            Some(move || Tracking::sample_before_reap(&at_exit)),
+        );
+        // The intermediate parent and its job are both created after launch recording.
+        // No periodic scan runs in this test, so only the unreaped leader anchors the session.
+        stdin.write_all(b"go\n").await.unwrap();
+        let pid = stdout.next_line().await.unwrap().unwrap().parse().unwrap();
+        assert!(reaped.await.unwrap().unwrap().success());
+        let job = process(pid).unwrap();
+        let (stopped, _) = sweep(
+            &Turn {
+                mark: uuid::Uuid::new_v4().to_string(),
+                tracking: Some(tracking.clone()),
+                ..Default::default()
+            },
+            None,
+        );
+        let survived = signal(job.id, libc::SIGKILL);
+        assert_eq!(job.ppid, 1, "the job must be orphaned before the sweep");
+        assert!(
+            !tracking.lock().unwrap().unique_ids.contains(&job.parent_id),
+            "the intermediate shell must never be observed"
+        );
+        assert!(!survived, "the protected job survived");
+        assert_eq!(stopped.iter().map(|p| p.pid).collect::<Vec<_>>(), [pid]);
+    }
+
+    #[tokio::test]
+    async fn a_stopped_mark_reader_times_out_and_is_reaped() {
+        let mut child = tokio::process::Command::new("/bin/sh")
+            .args(["-c", "kill -STOP $$"])
+            .stdout(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let pid = child.id().unwrap();
+        // Wait for the stop without reaping so the deadline always sees a stopped child.
+        let stopped = tokio::task::spawn_blocking(move || {
+            let mut status = 0;
+            (unsafe { libc::waitpid(pid as i32, &mut status, libc::WUNTRACED) } == pid as i32)
+                && libc::WIFSTOPPED(status)
+        })
+        .await
+        .unwrap();
+        if !stopped {
+            let _ = child.kill().await;
+        }
+        assert!(stopped);
+        assert_eq!(
+            read_mark_output(child, Duration::from_millis(20)).await,
+            Err("Timed out reading Docker turn marks.")
+        );
+        // Only the reader owns this child. waitpid reports ECHILD once it was reaped.
+        let result = unsafe { libc::waitpid(pid as i32, std::ptr::null_mut(), libc::WNOHANG) };
+        assert_eq!(result, -1);
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ECHILD)
+        );
+    }
+
+    #[cfg(target_os = "macos")]
     #[test]
     fn a_marked_job_is_swept_after_its_unsampled_shell_exits() {
         use std::os::unix::process::CommandExt;
@@ -828,7 +985,7 @@ mod tests {
             .parse()
             .unwrap();
         let job = process(pid).unwrap();
-        let stopped = sweep(
+        let (stopped, _) = sweep(
             &Turn {
                 mark,
                 tracking: Some(Arc::new(Mutex::new(Tracking::default()))),
@@ -1062,7 +1219,7 @@ for line in sys.stdin:
             .spawn()
             .unwrap();
         let worker = wait_for(&[dir.join("worker.pid")])[0];
-        let stopped = sweep(
+        let (stopped, _) = sweep(
             &Turn {
                 mark,
                 groups: vec![kept.id()],
@@ -1118,7 +1275,7 @@ for line in sys.stdin:
             c.spawn().unwrap()
         };
         let tool = wait_for(&[dir.join("tool.pid")])[0];
-        let stopped = sweep(
+        let (stopped, _) = sweep(
             &Turn {
                 mark: uuid::Uuid::new_v4().to_string(),
                 groups: vec![other.id()],

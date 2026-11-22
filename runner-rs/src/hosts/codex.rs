@@ -370,7 +370,18 @@ impl CodexHost {
             "codex: app-server started pid {}",
             child.id().map_or("?".into(), |p| p.to_string())
         ));
-        let (stopper, exited) = super::own(child);
+        #[cfg(target_os = "macos")]
+        let before_reap = self
+            .0
+            .sweep
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|t| t.tracking.clone())
+            .map(|tracking| move || turn_sweep::Tracking::sample_before_reap(&tracking));
+        #[cfg(not(target_os = "macos"))]
+        let before_reap = None::<fn()>;
+        let (stopper, exited) = super::own_with_before_reap(child, before_reap);
         // `exited` resolves once; whether it has is kept here for `alive`.
         let gone = Arc::new(AtomicBool::new(false));
         let (reaped_tx, reaped_rx) = tokio::sync::watch::channel(false);
