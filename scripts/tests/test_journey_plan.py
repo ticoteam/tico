@@ -61,3 +61,14 @@ def run_journey(tmp_path, previous):
     )
     table = result.stdout.split('\nSTEP')[-1].splitlines()[1:]
     return result, [line.rsplit(None, 2)[0].strip() for line in table if line.strip()]
+
+
+def test_a_failed_step_says_why_above_the_step_table(tmp_path):
+    """The release gate shows only the journey's last 40 lines, and the container logs printed after a failure push
+    the step's own reason out of them (run 45032835765: "seed ... FAIL" with no reason). The summary repeats it."""
+    result, steps = run_journey(tmp_path, 'v0.6.208')
+    assert result.returncode == 1
+    assert steps[0] == 'install v0.6.208 (bundle, auth none)'
+    why = result.stdout.split('\nWhy it failed')[1].split('\nSTEP')[0]
+    assert 'install v0.6.208 (bundle, auth none): could not download the v0.6.208 bundle' in why
+    assert why in '\n'.join(result.stdout.splitlines()[-40:])

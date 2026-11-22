@@ -145,11 +145,11 @@ esac
 WORK="$(mktemp -d)"
 DIR="$WORK/install"
 mkdir -p "$DIR" "$WORK/releases/download"
-RESULTS=() STATE_ID="" FAILED=0 SEED_THREAD="" SEED_TASK="" SEED_CONVERSATION="" CAND_READY=0 AGENT_OPS_NAMED=0 AGENT_OPS_WAS=""
+RESULTS=() WHY=() STATE_ID="" FAILED=0 SEED_THREAD="" SEED_TASK="" SEED_CONVERSATION="" CAND_READY=0 AGENT_OPS_NAMED=0 AGENT_OPS_WAS=""
 REFUSED=journey-refused-$RUN   # the candidate's one-off start on the previous release's data (fresh-start)
 
 dc() { docker compose -p "$PROJECT" --project-directory "$DIR" "$@"; }
-say() { printf '  %s\n' "$*"; }
+say() { printf '  %s\n' "$*"; { printf '%s\n' "$*" >> "$WORK/said"; } 2>/dev/null || true; }   # said: the step's reasons, for its summary
 retry() { local end=$((SECONDS + $1)); shift; until "$@" >/dev/null 2>&1; do [ "$SECONDS" -lt "$end" ] || return 1; sleep 0.5; done; }
 api() {  # curl arguments; the owner token never leaves the server container
   # shellcheck disable=SC2016  # single quotes: the container's shell expands the token and "$@"
@@ -161,6 +161,7 @@ post() {
     printf '%s\n' "$response"
   else
     printf 'journey: POST %s failed: %s\n' "$path" "$response" >&2
+    { printf 'POST %s failed: %s\n' "$path" "$response" >> "$WORK/said"; } 2>/dev/null
     return 1
   fi
 }
@@ -729,8 +730,14 @@ run_step() {  # label function; after a failure the rest are skipped
   local label=$1 fn=$2 start=$SECONDS
   printf '==> %s\n' "$label"
   if [ "$FAILED" = 1 ]; then RESULTS+=("$label|SKIP|0"); return; fi
+  : > "$WORK/said"
   if "$fn"; then RESULTS+=("$label|PASS|$((SECONDS - start))")
-  else RESULTS+=("$label|FAIL|$((SECONDS - start))"); FAILED=1; failure_logs; fi
+  else
+    RESULTS+=("$label|FAIL|$((SECONDS - start))"); FAILED=1
+    # The container logs below push the step's own lines out of the release gate's tail: the summary repeats them.
+    WHY+=("$label: $(tail -n 5 "$WORK/said" | tr '\n' ' ' | cut -c1-600)")
+    failure_logs
+  fi
 }
 skip_step() {  # label [reason]: not run, not a failure, and the steps after it still run
   printf '==> %s\n' "$1"
@@ -780,6 +787,10 @@ if [ "$FAST" = 0 ]; then
   run_step "backup, wipe and restore (MinIO + file replica)" step_backup
 fi
 
+if [ "${#WHY[@]}" -gt 0 ]; then
+  printf '\nWhy it failed (the step'"'"'s own lines; nothing after the colon: it failed with no message):\n'
+  printf '  %s\n' "${WHY[@]}"
+fi
 printf '\n%-60s %-6s %s\n' STEP RESULT SECONDS
 status=0
 for row in "${RESULTS[@]}"; do
