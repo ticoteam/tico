@@ -226,12 +226,13 @@ def contacts_unmerge(api, args):
 
 @tool(
     "tico_contacts_status",
-    "Set a relationship's status, next step, its due date and flags together (an organization or a person). Each is "
-    "replaced; one left out is cleared. Send the status_version you read (tico_contacts_get): when someone wrote it "
-    "since, nothing changes and the answer is 409 status_changed; read it again. Only facts every reader may see.",
+    "Set a relationship's status, next step, its due date and flags together. Each is replaced; one left out is "
+    "cleared. Name the entity by its id and send the relationship.status_version you read with it (tico_contacts_get): "
+    "when someone wrote it since, nothing changes and the answer is 409 status_changed; read it again. An id merged "
+    "into another is refused (409 merged). Only facts every reader may see.",
     {
-        "ref": CONTACTS_REF,
-        "version": {"type": "integer", "minimum": 0, "description": "The status_version you read"},
+        "ref": _s("The entity's id, as tico_contacts_get gave it"),
+        "version": {"type": "integer", "minimum": 0, "description": "The relationship.status_version you read"},
         "status": _s("Where it stands, in a word or two: lead, active, at risk"),
         "next_step": _s("The one next thing to do"),
         "next_step_due": _s("YYYY-MM-DD the next step is due"),
@@ -256,7 +257,8 @@ def contacts_status(api, args):
 
 @tool(
     "tico_contacts_owner",
-    "Name the teammate who owns an entity (a relationship's owner): me, human:<id> or bot:<id>; an empty one clears it.",
+    "Name the teammate who owns an entity (a relationship's owner): me, human:<id> or bot:<id or slug>; an empty one "
+    "clears it. An id merged into another is refused (409 merged).",
     {"ref": CONTACTS_REF, "owner": _s("me, human:<id>, bot:<id>, or empty for none")},
     required=("ref", "owner"),
     writes=True,
@@ -546,12 +548,12 @@ CONTACTS = (
         "contacts status",
         "set a relationship's status, next step, due date and flags together, with the version you read",
         args=(
-            Arg("ref", metavar=_ID),
+            Arg("ref", metavar="ID"),
             Arg("version", metavar="VERSION", type=int),
             Arg("next_step_due", flag="--due", metavar="DATE"),
             Arg("flags", flag="--flag", action="append", metavar="FLAG"),
         ),
-        example="tico contacts status acme.com 3 --status active --next-step 'Send the renewal' --due 2026-12-01",
+        example="tico contacts status organization/acme 3 --status active --next-step 'Send the renewal' --due 2026-12-01",
     ),
     Command(
         "contacts owner",

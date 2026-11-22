@@ -20,7 +20,7 @@ import re
 import secrets
 import sqlite3
 import uuid
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import date, datetime
 from typing import Any, NoReturn, cast
 
@@ -82,9 +82,6 @@ PAGE_LINK_MOVES = (
     "AND k.role = 'related' AND k.page_id = p.page_id)) OR "
     "(p.role = 'memory' AND NOT EXISTS (SELECT 1 FROM page_links k WHERE k.target = :keep_target AND k.role = 'memory')))"
 )
-# A relationship's status (set_status): built-in values on organization and person, written together under the entity's
-# status_version. Each is attr_<type>_<key>; an attribute a company added under one of these keys is not one of them.
-STATUS_KEYS = ("status", "next_step", "next_step_due", "flags")
 # A single-value field the kept entity lacks moves; one it has stays on the merged row (which redirects to the kept one).
 Row = dict[str, Any]  # one row as a read returns it: column name to value
 
@@ -690,7 +687,6 @@ def upsert(
         attr = _attribute(c, actor, type_key, key)
         if attr["owner_type"] == "connection" and actor != f"connection:{attr['owner_id']}":
             _refuse(c, actor, "owner", f"{key} comes from its connection; change it there")
-        _not_status(c, actor, attr)
         _set_value(
             c,
             actor,
@@ -1176,21 +1172,41 @@ def clear_value(c: sqlite3.Connection, actor: str, entity_id: str, key: str, val
     attr = _attribute(c, actor, ent["type"], key)
     if attr["owner_type"] == "connection" and actor != f"connection:{attr['owner_id']}":
         _refuse(c, actor, "owner", f"{key} comes from its connection; change it there")
-    _not_status(c, actor, attr)
+    rows = _rows(
+        c, "SELECT * FROM entity_values WHERE entity_id = ? AND entity_attribute_id = ?", (ent["id"], attr["id"])
+    )
     if attr["multiple"] and value is not None:
         wanted = _coerce(c, actor, attr, value)["canonical"]
-        return _clear_rows(c, ent["id"], attr, lambda held: bool(held == wanted)) > 0
-    return _clear_rows(c, ent["id"], attr, None) > 0
+        rows = [row for row in rows if _value_of(row, attr["value_type"]) == wanted]
+    now = H.now()
+    for row in rows:
+        c.execute(
+            "INSERT INTO entity_value_history (id, entity_id, entity_attribute_id, value, source_type, source_id, "
+            "evidence_id, confidence, active_from, active_until) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                _id("hist"),
+                ent["id"],
+                attr["id"],
+                json.dumps(_value_of(row, attr["value_type"]), sort_keys=True),
+                row["source_type"],
+                row["source_id"],
+                row["evidence_id"],
+                row["confidence"],
+                row["updated_at"],
+                now,
+            ),
+        )
+        c.execute("DELETE FROM entity_values WHERE id = ?", (row["id"],))
+    return bool(rows)
 
 
-def _status_attr(type_key: str, key: str) -> str:
-    return f"attr_{type_key}_{key}"
-
-
-def _not_status(c: sqlite3.Connection, actor: str, attr: Row) -> None:
-    """A relationship's status values change together, under its status_version (set_status), never one by one."""
-    if attr["id"] in {_status_attr(attr["entity_type"], key) for key in STATUS_KEYS}:
-        _refuse(c, actor, "kind", f"{attr['key']} is part of the status; set it with tico contacts status")
+def unmerged(c: sqlite3.Connection, actor: str, entity_id: str) -> str | None:
+    """The entity `entity_id` was merged into, when it names a merged-away entity the reader sees through the kept one;
+    else None. A write that names a merged-away id is refused with this, never carried over to the kept entity."""
+    row = _one(c, "SELECT status FROM entities WHERE id = ?", (entity_id,))
+    if row is None or row["status"] != "merged" or not visible_entity(c, actor, entity_id):
+        return None
+    return _follow(c, [entity_id])[0]
 
 
 def set_status(
@@ -1206,65 +1222,68 @@ def set_status(
 ) -> Row | None:
     """Writes a relationship's status, next step, its due date and flags together, as `version` (the entity's
     status_version the writer read) becomes the next one. Each is replaced: an empty one is cleared. None when the
-    version is not the entity's now (someone else wrote it since): nothing is written, and the caller reads it again."""
+    version is not the entity's now (someone else wrote it since): nothing is written, and the caller reads it again.
+    The entity is named by its own id; a merged-away one is refused (_live), never its kept entity."""
     _writer(c, actor)
     ent = _live(c, actor, entity_id)
-    attrs = {
-        row["key"]: row
-        for row in _rows(
-            c,
-            "SELECT * FROM entity_attributes WHERE id IN (SELECT value FROM json_each(?)) AND archived_at IS NULL",
-            (json.dumps([_status_attr(ent["type"], key) for key in STATUS_KEYS]),),
-        )
+    due = str(next_step_due or "").strip()
+    if due:
+        try:
+            date.fromisoformat(due)
+        except ValueError:
+            _refuse(c, actor, "kind", "next_step_due needs a date as YYYY-MM-DD")
+    said = {
+        "status": str(status or "").strip(),
+        "next_step": str(next_step or "").strip(),
+        "flags": list(dict.fromkeys(str(flag).strip() for flag in flags if str(flag).strip())),
     }
-    if len(attrs) < len(STATUS_KEYS):
-        _refuse(c, actor, "kind", f"a {ent['type']} has no relationship status; an organization or a person has")
     if (
         c.execute(
-            "UPDATE entities SET status_version = status_version + 1, updated_at = ? WHERE id = ? AND status_version = ?",
-            (H.now(), ent["id"], int(version)),
+            "UPDATE entities SET relationship_status = ?, next_step_due = ?, status_version = status_version + 1, "
+            "updated_at = ? WHERE id = ? AND status_version = ?",
+            (json.dumps(said, sort_keys=True), due or None, H.now(), ent["id"], int(version)),
         ).rowcount
         == 0
     ):
         return None
-
-    def put(key: str, raw: str) -> None:
-        _set_value(
-            c, actor, ent["id"], attrs[key], raw, source_type="hub", source_id=actor, evidence_id=None, confidence=1.0
-        )
-
-    for key, raw in (("status", status), ("next_step", next_step), ("next_step_due", next_step_due)):
-        if str(raw or "").strip():
-            put(key, raw)
-        else:
-            _clear_rows(c, ent["id"], attrs[key], None)
-    wanted = list(dict.fromkeys(str(flag).strip() for flag in flags if str(flag).strip()))
-    _clear_rows(c, ent["id"], attrs["flags"], lambda value: value not in wanted)
-    for flag in wanted:
-        put("flags", flag)
     return relationship(c, ent["id"])
 
 
 def relationship(c: sqlite3.Connection, entity_id: str) -> Row:
     """An entity's relationship status as set_status keeps it, with the status_version a writer sends back."""
-    row = _one(c, f"SELECT e.id, e.status_version, {_STATUS_COLUMNS} FROM entities e WHERE e.id = ?", (entity_id,))
+    row = _one(c, "SELECT relationship_status, next_step_due, status_version FROM entities WHERE id = ?", (entity_id,))
     assert row is not None  # the caller read the entity
     return _status_of(row)
 
 
+def _status_of(row: Row) -> Row:
+    try:
+        said = json.loads(row["relationship_status"] or "{}")
+    except ValueError:
+        said = {}
+    said = cast(dict[str, Any], said) if isinstance(said, dict) else {}
+    return {
+        "status": said.get("status") or None,
+        "next_step": said.get("next_step") or None,
+        "next_step_due": row["next_step_due"],
+        "flags": list(said.get("flags") or []),
+        "status_version": row["status_version"],
+    }
+
+
 def set_owner(c: sqlite3.Connection, actor: str, entity_id: str, owner: str) -> str | None:
     """Names the teammate who owns an entity (a relationship's owner): human:<id> or bot:<id>, or '' for none. The
-    writer must see the entity, as for any Directory write, and the owner must be on the team. Returns the owner."""
+    caller resolved a bot by id as one it may see. The writer must see the entity, as for any Directory write, and a
+    merged-away one is refused (_live). Returns the owner."""
     _writer(c, actor)
     ent = _live(c, actor, entity_id)
     kind, _, ident = str(owner or "").strip().partition(":")
-    bot = _one(c, "SELECT id FROM bots WHERE (id = ? OR slug = ?) AND state <> 'archived'", (ident, ident))
     if not kind:
         owner_type, owner_id = None, None
     elif kind == "human" and c.execute("SELECT 1 FROM humans WHERE id = ?", (ident,)).fetchone():
         owner_type, owner_id = "human", ident
-    elif kind == "bot" and bot:
-        owner_type, owner_id = "bot", str(bot["id"])
+    elif kind == "bot" and c.execute("SELECT 1 FROM bots WHERE id = ? AND state <> 'archived'", (ident,)).fetchone():
+        owner_type, owner_id = "bot", ident
     else:
         _refuse(c, actor, "kind", "an owner is a person (human:<id>) or a bot (bot:<id>) on the team")
     c.execute(
@@ -1274,58 +1293,10 @@ def set_owner(c: sqlite3.Connection, actor: str, entity_id: str, owner: str) -> 
     return _owner({"owner_type": owner_type, "owner_id": owner_id})
 
 
-def _clear_rows(c: sqlite3.Connection, entity_id: str, attr: Row, which: Callable[[object], bool] | None) -> int:
-    """Removes an attribute's values on an entity (those `which` picks, by value; all when None), each to history.
-    Returns how many went."""
-    now, removed = H.now(), 0
-    for row in _rows(
-        c, "SELECT * FROM entity_values WHERE entity_id = ? AND entity_attribute_id = ?", (entity_id, attr["id"])
-    ):
-        value = _value_of(row, attr["value_type"])
-        if which is not None and not which(value):
-            continue
-        c.execute(
-            "INSERT INTO entity_value_history (id, entity_id, entity_attribute_id, value, source_type, source_id, "
-            "evidence_id, confidence, active_from, active_until) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                _id("hist"),
-                entity_id,
-                attr["id"],
-                json.dumps(value, sort_keys=True),
-                row["source_type"],
-                row["source_id"],
-                row["evidence_id"],
-                row["confidence"],
-                row["updated_at"],
-                now,
-            ),
-        )
-        c.execute("DELETE FROM entity_values WHERE id = ?", (row["id"],))
-        removed += 1
-    return removed
-
-
-# The status values of `e`, read in the same query as the row (a list sorted by next step due reads them all at once).
-_STATUS_COLUMNS = (
-    "(SELECT v.text_value FROM entity_values v WHERE v.entity_id = e.id "
-    "AND v.entity_attribute_id = 'attr_' || e.type || '_status') AS rel_status, "
-    "(SELECT v.text_value FROM entity_values v WHERE v.entity_id = e.id "
-    "AND v.entity_attribute_id = 'attr_' || e.type || '_next_step') AS rel_next_step, "
-    "(SELECT v.date_value FROM entity_values v WHERE v.entity_id = e.id "
-    "AND v.entity_attribute_id = 'attr_' || e.type || '_next_step_due') AS rel_next_step_due, "
-    "(SELECT json_group_array(v.text_value) FROM (SELECT text_value FROM entity_values v WHERE v.entity_id = e.id "
-    "AND v.entity_attribute_id = 'attr_' || e.type || '_flags' ORDER BY v.updated_at, v.id) v) AS rel_flags"
-)
-
-
-def _status_of(row: Row) -> Row:
-    return {
-        "status": row["rel_status"],
-        "next_step": row["rel_next_step"],
-        "next_step_due": row["rel_next_step_due"],
-        "flags": json.loads(row["rel_flags"] or "[]"),
-        "status_version": row["status_version"],
-    }
+def seen_entities(c: sqlite3.Connection, r: V.Reader, ids: Iterable[str]) -> dict[str, str]:
+    """{id: name} of the entities among `ids` the reader sees that are not merged away: what a page link to an entity
+    shows. A merged-away one is hidden until unmerge, whatever the kept entity shows. One read for all of them."""
+    return {str(row["id"]): str(row["name"]) for row in _visible_rows(c, r, list(ids)) if row["status"] != "merged"}
 
 
 def entity_facts(c: sqlite3.Connection, ids: Iterable[str]) -> dict[str, Row]:
@@ -1389,6 +1360,7 @@ def merge(c: sqlite3.Connection, actor: str, keep_id: str, drop_id: str) -> str:
                 f"UPDATE {table} SET entity_id = :keep WHERE id = :id", [{"keep": keep_id, "id": i} for i in ids]
             )
             tables[table] = ids
+    _tasks_moved(c, tables.get("tasks", []), keep_id)
     values = [row[0] for row in c.execute(VALUE_MOVES, params)]
     if values:
         c.executemany(
@@ -1433,7 +1405,6 @@ def merge(c: sqlite3.Connection, actor: str, keep_id: str, drop_id: str) -> str:
         "UPDATE entities SET status = 'merged', merged_into_id = ?, updated_at = ? WHERE id = ?",
         (keep_id, now, drop_id),
     )
-    _status_moved(c, keep_id, drop_id)
     c.execute(
         "INSERT INTO entity_merges (id, entity_id, into_entity_id, moved, prior, actor_type, actor_id, created_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1452,11 +1423,13 @@ def merge(c: sqlite3.Connection, actor: str, keep_id: str, drop_id: str) -> str:
     return keep_id
 
 
-def _status_moved(c: sqlite3.Connection, *ids: str) -> None:
-    """A merge or unmerge may move status values (VALUE_MOVES): a status write read before it is stale after it."""
+def _tasks_moved(c: sqlite3.Connection, ids: Sequence[str], entity_id: str) -> None:
+    """A task a merge or unmerge moved is a changed task: its version and updated_at advance, so an edit read before is
+    refused as stale and an updated_since reader sees it."""
     c.execute(
-        "UPDATE entities SET status_version = status_version + 1 WHERE id IN (SELECT value FROM json_each(?))",
-        (json.dumps(list(ids)),),
+        "UPDATE tasks SET version = version + 1, updated_at = ? WHERE id IN (SELECT value FROM json_each(?)) "
+        "AND entity_id = ?",
+        (H.now(), json.dumps(list(ids)), entity_id),
     )
 
 
@@ -1485,6 +1458,7 @@ def unmerge(c: sqlite3.Connection, actor: str, drop_id: str) -> str:
             f"UPDATE {table} SET entity_id = :drop WHERE id = :id AND entity_id = :keep",
             [{**back, "id": i} for i in ids],
         )
+    _tasks_moved(c, moved["tables"].get("tasks", []), drop_id)
     if moved["values"]:
         c.executemany(
             "UPDATE entity_values SET entity_id = :drop WHERE id = :id AND entity_id = :keep",
@@ -1532,7 +1506,6 @@ def unmerge(c: sqlite3.Connection, actor: str, drop_id: str) -> str:
         (prior["drop"]["status"], prior["drop"]["merged_into_id"], now, drop_id),
     )
     c.execute("UPDATE entity_merges SET undone_at = ? WHERE id = ?", (now, log["id"]))
-    _status_moved(c, keep_id, drop_id)
     _refresh_self_keys(c, keep_id)
     _refresh_self_keys(c, drop_id)
     return drop_id
@@ -2030,9 +2003,7 @@ def find(
         )
         args += [f"% {link} %", json.dumps(list(WORKS_AT)), _today(), f"% {link} %", *oparams]
     # Sorted by the next step's due date, a row with none comes last (its key is past any date).
-    due = "COALESCE((SELECT v.date_value FROM entity_values v WHERE v.entity_id = e.id AND v.entity_attribute_id = "
-    due += "'attr_' || e.type || '_next_step_due'), '9999-12-31')"
-    keys = (due + ", e.name_key, e.id") if sort == "next" else "e.name_key, e.id"
+    keys = "COALESCE(e.next_step_due, '9999-12-31'), e.name_key, e.id" if sort == "next" else "e.name_key, e.id"
     if after:
         start = _decode(after)
         if not isinstance(start, list) or len(cast(list[Any], start)) != (3 if sort == "next" else 2):
@@ -2042,7 +2013,7 @@ def find(
     condition = " AND ".join(where)
     rows = _rows(
         c,
-        f"SELECT e.*, {due} AS due_key, {_STATUS_COLUMNS} FROM entities e WHERE {condition} ORDER BY {keys} LIMIT ?",
+        f"SELECT e.* FROM entities e WHERE {condition} ORDER BY {keys} LIMIT ?",
         [*args, limit + 1],
     )
     more = len(rows) > limit
@@ -2063,7 +2034,9 @@ def find(
         "rows": shown,
         "next": (
             _encode(
-                [last["due_key"], last["name_key"], last["id"]] if sort == "next" else [last["name_key"], last["id"]]
+                [last["next_step_due"] or "9999-12-31", last["name_key"], last["id"]]
+                if sort == "next"
+                else [last["name_key"], last["id"]]
             )
             if more and rows
             else None
@@ -2369,7 +2342,7 @@ def card(c: sqlite3.Connection, who: str, entity_id: str) -> dict[str, Any] | No
         "summary": ent["summary"],
         "links_to_us": (ent["self_link_keys"] or "").split(),
         **detail,
-        "status_version": ent["status_version"],
+        "relationship": _status_of(ent),
         "values": values,
         "links": links,
         "refs": refs,

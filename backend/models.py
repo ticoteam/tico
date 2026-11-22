@@ -205,8 +205,6 @@ class TaskCreate(Contract):
     due: str | None = None
     relations: list[TaskRelationRef] = Field(default_factory=list, max_length=20)
     goal_id: ID | None = None
-    # The Contacts entity it is for (an outside party's relationship): an id, email or domain you can see.
-    entity: str | None = Field(default=None, min_length=1, max_length=500)
     acceptance_criteria: list[str] = Field(default_factory=list, max_length=50)
     lane: Lane | None = None
     labels: list[str] = Field(default_factory=list, max_length=20)
@@ -265,10 +263,12 @@ class TaskFile(TaskCreate):
     # With `primary_link`: the item's status when it was filed, as the source names it (Jira: the Ready status). A move
     # to another To Do status pauses the task's release close-out (backend/release_closeout.py).
     primary_status: str | None = Field(default=None, min_length=1, max_length=100)
+    # The Contacts entity it is for (an outside party's relationship): an id, email or domain you can see.
+    entity: str | None = Field(default=None, min_length=1, max_length=500)
 
     def model_dump(self, **kwargs: Any) -> dict[str, Any]:
-        """As the request's idempotency hash reads it: `primary_link` and `primary_status` left out when absent, so a
-        create retried across the upgrade that added them hashes as it did."""
+        """As the request's idempotency hash reads it: `primary_link`, `primary_status` and `entity` left out when
+        absent, so a create retried across the upgrade that added them hashes as it did."""
         out = super().model_dump(**kwargs)
         for name in ("primary_link", "primary_status", "entity"):
             if out.get(name) is None:
@@ -323,6 +323,14 @@ class TaskUpdate(Contract):
     # Agent Ops applying a person's own request to a task they own or requested (backend/app.py
     # delegated_identity): checked as that person, never as Agent Ops.
     on_behalf_of: ID | None = None
+
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+        """As the request's idempotency hash reads it: an unset `entity` left out, so an edit retried across the upgrade
+        that added it hashes as it did. "" (take it off) stays."""
+        out = super().model_dump(**kwargs)
+        if out.get("entity") is None:
+            out.pop("entity", None)
+        return out
 
     @model_validator(mode="before")
     @classmethod

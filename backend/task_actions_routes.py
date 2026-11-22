@@ -674,7 +674,7 @@ def register_core(
             ask_ingest.skipped(c, ingest, "not_applied")
         if body.goal_id and not G.goal(c, body.goal_id):
             raise Problem("not_found", "Unknown goal", 404)
-        entity_id = for_entity(c, who, body.entity)
+        entity_id = for_entity(c, who, getattr(body, "entity", None))  # POST /api/v2/tasks's TaskFile has it
         requester_actor = None
         if who.role == "bot" and owner == who.actor and not unassigned and not parent_id and who.attempt_id and private:
             origin = c.execute(
@@ -1091,7 +1091,7 @@ def register_core(
             body, allowance = body.model_copy(update=warned), rule_summary_allowance(rule_gate, warned)
         fields = body.model_dump(exclude={"version", "on_behalf_of"})
         fields["human_id"] = fields.pop("human")  # the column's name: `human` is the API's, as `owner` is
-        entity = fields.pop("entity")
+        entity = fields.pop("entity", None)
         fields["entity_id"] = None if entity is None else for_entity(c, who, entity)
         if "size" in body.model_fields_set and body.size is None:
             fields["clear_size"] = True

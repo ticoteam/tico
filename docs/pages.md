@@ -19,8 +19,9 @@ have a Spec, a QA report and any number of other pages.
   task with the document's name as its role.
 - **An entity's memory page.** An entity (an outside party's relationship) has at most one page linked as its `memory`:
   a second is refused (409). Find it with `tico page list --linked entity:<id> --role memory`; when there is none,
-  publish a page and link it. A merge moves the memory link only when the kept entity has none, and unmerge puts it
-  back.
+  publish a page and link it. A memory page is read by everyone who sees the entity: no narrowed audience, not a chat's
+  file, not on a private task (422 otherwise). A merge moves the memory link only when the kept entity has none; a link
+  left on the merged-away entity is hidden until unmerge puts things back.
 - **Who may write a version.** The team owner, a linked writer (a person or an active bot), a party to a linked task
   (a bot: its owner, requester, their managers or delegates, or one who can work it; any bot may comment on a task it
   reads, but that alone does not let it write the task's pages), or someone who may manage the page. Publishing adds the version's author as a linked writer.

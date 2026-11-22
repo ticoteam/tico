@@ -33,7 +33,7 @@ def page(api, name="memory.html"):
 
 def test_a_stale_status_write_is_refused_and_changes_nothing(api, cli):
     acme = org(api, "acme.example", "Acme")
-    assert cli("contacts", "get", acme)["status_version"] == 0
+    assert cli("contacts", "get", acme)["relationship"]["status_version"] == 0
     written = cli(
         "contacts", "status", acme, "0", "--status", "active", "--next-step", "Send the renewal", "--due", "2026-12-01",
         "--flag", "vip", "--flag", "billing issue",
@@ -44,19 +44,36 @@ def test_a_stale_status_write_is_refused_and_changes_nothing(api, cli):
         "/api/v2/entities/status", json={"ref": acme, "version": 0, "status": "churned"}, headers=headers()
     )
     assert stale.status_code == 409 and stale.json()["error"]["status_version"] == 1
-    card = cli("contacts", "get", acme)
-    assert card["values"]["status"]["value"] == "active" and card["status_version"] == 1
-
-    # One by one is refused: the four change together, under the version.
-    one = api.post(
-        "/api/v2/entities", json={"type": "organization", "match": {"id": acme}, "values": {"status": "x"}},
-        headers=headers(),
-    )  # fmt: skip
-    assert one.status_code == 422
+    shown = cli("contacts", "get", acme)["relationship"]
+    assert (shown["status"], shown["next_step_due"], shown["status_version"]) == ("active", "2026-12-01", 1)
+    by_domain = {"ref": "acme.example", "version": 1, "status": "x"}
+    assert post(api, "entities/status", by_domain, expected=422)["error"]["code"] == "validation"  # by its id only
 
     isError, cleared = call(api, "tico_contacts_status", {"ref": acme, "version": 1, "flags": ["vip"]})
     assert isError is False and cleared["status"] is None and cleared["next_step_due"] is None
     assert cleared["flags"] == ["vip"] and cleared["status_version"] == 2
+
+
+def test_a_write_naming_a_merged_away_id_is_refused_not_carried_to_the_kept_entity(api, cli):
+    acme, dup = org(api, "acme.example", "Acme"), org(api, "acme-old.example", "Acme Old")
+    cli("contacts", "status", dup, "0", "--status", "lead")  # dup at version 1, acme at 0
+    cli("contacts", "merge", acme, dup)
+    for path, body in (
+        ("entities/status", {"ref": dup, "version": 0, "status": "x"}),
+        ("entities/owner", {"ref": dup, "owner": "me"}),
+    ):
+        refused = post(api, path, body, expected=409)["error"]
+        assert refused["code"] == "merged" and refused["merged_into"] == acme
+    # A merge moves no status: each keeps its own, so unmerge is exact.
+    assert cli("contacts", "get", acme)["relationship"]["status"] is None
+    cli("contacts", "unmerge", dup)
+    assert cli("contacts", "get", dup)["relationship"] == {
+        "status": "lead",
+        "next_step": None,
+        "next_step_due": None,
+        "flags": [],
+        "status_version": 1,
+    }
 
 
 def test_an_entity_has_one_memory_page_found_by_the_page_list(api, cli):
@@ -66,15 +83,26 @@ def test_an_entity_has_one_memory_page_found_by_the_page_list(api, cli):
     post(api, f"pages/{first}/links", {"target": f"entity:{acme}", "role": "memory"})  # again: no change
     refused = post(api, f"pages/{second}/links", {"target": f"entity:{acme}", "role": "memory"}, expected=409)
     assert refused["error"]["code"] == "conflict"
-    post(api, f"pages/{second}/links", {"target": f"entity:{acme}", "role": "related"})
     assert post(api, f"pages/{second}/links", {"target": "human:ana", "role": "memory"}, expected=422)
 
     found = get(api, f"pages?linked=entity:{acme}&role=memory")["pages"]
     assert [p["file_id"] for p in found] == [first]
+    assert [p["file_id"] for p in get(api, "pages?linked=entity:acme.example&role=memory")["pages"]] == [first]
+
     shown = get(api, f"pages/{first}")["page"]["links"]
     assert {"target": f"entity:{acme}", "role": "memory", "name": "Acme"}.items() <= next(
         link for link in shown if link["role"] == "memory"
     ).items()
+    # Unlink resolves as link does; a task may still have documents named Memory, two of them.
+    post(api, f"pages/{second}/links", {"target": f"entity:{acme}", "role": "related"})
+    api.delete(
+        f"/api/v2/pages/{first}/links", params={"target": "entity:acme.example", "role": "memory"}, headers=headers()
+    )
+    assert get(api, f"pages?linked=entity:{acme}&role=memory")["pages"] == []
+    tid = post(api, "tasks", {"owner": "ops", "title": "Keep notes"})["id"]
+    for fid in (first, second):
+        post(api, f"pages/{fid}/links", {"target": f"task:{tid}", "role": "Memory"})
+    assert sum(link["role"] == "Memory" for link in get(api, f"pages/{first}")["page"]["links"]) == 1
 
 
 def test_whats_next_is_one_list_of_my_accounts_by_due_date_that_hides_what_the_reader_cannot_see(api, cli):
@@ -103,6 +131,9 @@ def test_whats_next_is_one_list_of_my_accounts_by_due_date_that_hides_what_the_r
         r["id"] for r in get(api, f"entities/find/organization?owner=human:ana&sort=next&after={paged['next']}")["rows"]
     ] == [acme, gamma]
 
+    assert (
+        post(api, "entities/owner", {"ref": acme, "owner": "bot:nobody"}, expected=404)["error"]["code"] == "not_found"
+    )
     bens = get(api, "entities/find/organization?owner=human:ana&sort=next", token="ben-test")["rows"]
     assert [r["id"] for r in bens] == [acme, gamma]
     assert post(api, "entities/owner", {"ref": beta, "owner": ""}, token="ben-test", expected=422)
@@ -135,6 +166,9 @@ def test_a_task_names_its_entity_and_merge_then_unmerge_puts_memory_and_tasks_ba
     cli("contacts", "merge", acme, dup)
     # The kept entity has a memory page, so the dropped one's stays with it; its related page moves.
     assert (dup_memory, f"entity:{dup}", "memory") in links()
+    shown = get(api, f"pages/{dup_memory}")["page"]["links"]
+    assert all(not link["target"].startswith("entity:") for link in shown)  # kept on the merged-away entity: hidden
+    assert [p["file_id"] for p in get(api, f"pages?linked=entity:{dup}&role=memory")["pages"]] == [kept_memory]
     assert (dup_only, f"entity:{acme}", "related") in links()
     assert tasks_for(acme) == sorted([task["id"], other["id"]])
 
@@ -159,3 +193,16 @@ def test_a_merge_moves_the_memory_page_when_the_kept_entity_has_none(api):
         ES.unmerge(c, ANA, dup)
     assert [p["file_id"] for p in get(api, f"pages?linked=entity:{dup}&role=memory")["pages"]] == [memory]
     assert get(api, f"pages?linked=entity:{acme}&role=memory")["pages"] == []
+
+
+def test_a_restored_task_whose_entity_was_erased_names_none(api):
+    from backend.entities import erase as ER
+
+    acme = org(api, "acme.example", "Acme")
+    task = post(api, "tasks", {"owner": "ops", "title": "Send the renewal", "entity": acme})
+    post(api, f"tasks/{task['id']}/delete", {})
+    with api.app.state.store.transaction() as c:
+        ER.erase(c, ANA, acme, "request")
+    post(api, f"tasks/{task['id']}/restore", {})
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT entity_id FROM tasks WHERE id=?", (task["id"],)).fetchone()[0] == ""
