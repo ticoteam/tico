@@ -141,6 +141,17 @@ def test_no_support_turns_the_presets_support_off():
     assert code == 0 and "TICO_SUPPORT=off" in out and "Tico Support off" in out
 
 
+def test_a_rerun_without_no_support_keeps_the_servers_support_off():
+    argv = ["--target", "ssh", "--ssh", "root@203.0.113.7", "--yes", "--hosted", "own", "--preset", "recommended"]
+    argv += [*HOSTED, "--company", "Acme"]
+    first = FakeShell()
+    assert go([*argv, "--no-support"], deps=over_ssh(first))[0] == 0
+    assert env_sent(first)["TICO_SUPPORT"] == "off"
+    again = FakeShell()
+    assert go(argv, deps=over_ssh(again))[0] == 0
+    assert env_sent(again)["TICO_SUPPORT"] == "off"
+
+
 def test_self_hosted_installs_leave_the_mark_and_the_preset_unset(monkeypatch):
     monkeypatch.setenv("TICO_OIDC_CLIENT_SECRET", "GOCSPX-supersecret")
     monkeypatch.setenv("TICO_GATEWAY_INVITE", INVITE)

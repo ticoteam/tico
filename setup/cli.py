@@ -229,7 +229,8 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--no-support",
         action="store_true",
-        help="when a check fails, do not offer to send it to Tico support (TICO_SUPPORT=off does the same)",
+        help="when a check fails, do not offer to send it to Tico support (TICO_SUPPORT=off does the same); with "
+        "--preset recommended it also turns Tico Support off on the server (TICO_SUPPORT=off), and re-runs keep it off",
     )
     p.add_argument("--error", help=argparse.SUPPRESS)  # support: the installer's error line
     p.add_argument("--step", type=int, default=0, help=argparse.SUPPRESS)  # support: the installer's exit code
