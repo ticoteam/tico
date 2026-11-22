@@ -8,37 +8,57 @@ key (backend/item_sources/jira.py `integration`, `writable`): the same rule, key
 background reads. Jira is an outside system, so the audience is external; the channel's own default for it is On its own
 (record bookkeeping, not a message to people) until the company sets another.
 
+- **Who.** A bot (or a person) queues one only while it holds Read and write on the connection (api_tools
+  `subject_level`), checked again before each attempt, so a grant taken back stops it; Tico itself always may.
 - **Once.** Before the write, the adapter asks whether its effect is already there: the issue already in the status, or
-  a comment carrying the action's marker (`marker`, the last line of every comment it writes). Found, it is done with
+  a comment whose last paragraph is exactly the action's marker (`marker`, the last paragraph of every comment it
+  writes). A lookup answer that is cut off or not the shape asked for is no answer: nothing is written then. Found, it is done with
   no write; `reconcile` uses the same lookup to settle an unknown row done, and nothing else settles one: a row it
   cannot prove stays unknown for the owner (Jira's 404 also means the key cannot see the issue).
 - **Answers.** 429 is a safe rejection (Retry-After, else a minute). Anything that fails before the write (the key, a
-  lookup Jira did not answer) is safe too: nothing was sent. Jira's 400, 401, 403 or 404 to a write is a certain
-  refusal; any other answer, or none, is unknown.
+  lookup Jira did not answer or answered unreadably) is safe too: nothing was sent. Jira's 400, 401, 403 or 404 to a
+  write is a certain refusal; any other answer, or none, is unknown.
+
+`backend/outbound_actions.py` registers the adapter (its end); this module imports it only inside functions, so either
+may be imported first.
 """
 
 import hashlib
 import json
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import quote
 
-from . import outbound_actions as OA
 from .item_sources import jira as JS
+from .store import H as _H
 from .store import Problem
 
+if TYPE_CHECKING:
+    from .outbound_actions import Settled
+
+H: Any = _H
 CHANNEL = "jira"
 OPERATIONS = ("transition", "comment")
+# A record write to a record integration is bookkeeping, not a message to people: On its own until the company says.
+DEFAULTS = {"external": "on_their_own", "internal": "on_their_own"}
 MAX_STATUS = 100
 MAX_COMMENT = 30_000  # Jira's own limit is 32,767 characters; the marker goes after it
 COMMENTS_LOOKED_AT = 100  # the newest comments searched for the marker
+COMMENTS_PAGE = 20  # read a page at a time, so a page of long comments stays under MAX_BODY
 RETRY_S = 60.0  # a safe rejection without its own wait
 BUSY_S = 5.0
 AGENT = "Tico-outbound"
 REFUSALS = (400, 401, 403, 404)
 
 
+def _oa() -> Any:
+    from . import outbound_actions
+
+    return outbound_actions
+
+
 def marker(occurrence_key: str) -> str:
-    """The short mark at the end of a comment the action writes: how a retry or a reconcile finds it."""
+    """The short mark ending a comment the action writes, as its own last paragraph: how a retry or a reconcile finds
+    it."""
     return f"[tico:{hashlib.sha256(occurrence_key.encode()).hexdigest()[:10]}]"
 
 
@@ -70,7 +90,8 @@ def prepare(
     task_id: str | None = None,
 ) -> tuple[str, str]:
     """(external, the issue key as Jira spells it), or a Problem: an unknown operation or payload, a destination that is
-    not an issue key, or a connection that is not a record integration with a shared read and write key."""
+    not an issue key, a connection that is not a record integration with a shared read and write key, or an actor other
+    than Tico itself without Read and write on it. Run at enqueue and again before each attempt."""
     _payload(operation, payload)
     key = JS.match_key(JS.ISSUE, destination)
     if key is None:
@@ -83,36 +104,61 @@ def prepare(
             "Tico writes to Jira only through a record integration on one Jira site with a shared read and write key",
             422,
         )
+    if actor != H.TICO_ACTOR:
+        from . import api_tools as _api_tools
+
+        tools: Any = _api_tools
+        if tools.subject_level(c, connection_id, actor) != "read_write":
+            raise Problem(
+                "forbidden",
+                "Writing to Jira through this connection needs Read and write on it: ask for it in Tools",
+                403,
+            )
     return "external", key
 
 
 class _Answer(Exception):
-    """Jira answered a call with something other than 2xx."""
+    """Jira answered a lookup with something other than 2xx."""
 
     def __init__(self, reply: JS.Reply):
         super().__init__(f"Jira answered {reply.status}")
         self.reply = reply
 
 
+class _Unreadable(Exception):
+    """A 2xx lookup answer that was cut off or is not the shape asked for: it tells nothing."""
+
+
 Connection = tuple[str, dict[str, str], dict[str, str]]
 
 
-def _connect(store: Any, row: Any) -> Connection:
-    """(API address, headers, query) through the connection's read and write key; Unreadable when it no longer has one."""
-    vault = OA.vault()
+def _connect(store: Any, row: Any, *, write: bool = True) -> Connection:
+    """(API address, headers, query) through the connection's shared key (its read and write key for a write); Unreadable
+    when it no longer has one."""
+    vault = _oa().vault()
     if vault is None:
         raise RuntimeError("No credential vault")
     with store.transaction() as c:
-        return JS.connect(c, vault, str(row["connection_id"]), write=True, agent=AGENT)
+        return JS.connect(c, vault, str(row["connection_id"]), write=write, agent=AGENT)
 
 
-def _call(on: Connection, method: str, path: str, query: dict[str, str] | None = None, body: object = None) -> object:
-    """One call to `path` under the issue; the JSON answer, or _Answer for anything but 2xx."""
+def _get(on: Connection, path: str, query: dict[str, str] | None = None) -> dict[str, object]:
+    """One lookup under the issue: Jira's JSON object, _Answer for anything but 2xx, _Unreadable for an answer cut off or
+    not an object."""
     base, headers, params = on
-    reply = JS.call(method, f"{base}{path}", headers, {**params, **(query or {})}, JS.TIMEOUT_S, body)
+    reply = JS.call("GET", f"{base}{path}", headers, {**params, **(query or {})}, JS.TIMEOUT_S)
     if not 200 <= reply.status < 300:
         raise _Answer(reply)
-    return reply.body
+    if reply.cut or not isinstance(reply.body, dict):
+        raise _Unreadable(f"Jira's answer to {path} could not be read")
+    return cast("dict[str, object]", reply.body)
+
+
+def _list(answer: dict[str, object], name: str) -> list[dict[str, Any]]:
+    got = answer.get(name)
+    if not isinstance(got, list):
+        raise _Unreadable(f"Jira's answer has no {name}")
+    return [cast("dict[str, Any]", x) for x in cast("list[object]", got) if isinstance(x, dict)]
 
 
 def _issue(row: Any) -> str:
@@ -120,59 +166,68 @@ def _issue(row: Any) -> str:
 
 
 def _text(node: object) -> str:
-    """Every text in an Atlassian Document Format node, joined."""
-    if isinstance(node, str):
-        return node
-    if isinstance(node, list):
-        return " ".join(_text(n) for n in cast("list[object]", node))
-    if isinstance(node, dict):
-        got = cast("dict[str, object]", node)
-        return " ".join(t for t in (_text(got.get("text")), _text(got.get("content"))) if t)
-    return ""
+    """The text of one Atlassian Document Format node, its children's joined."""
+    if not isinstance(node, dict):
+        return ""
+    got = cast("dict[str, object]", node)
+    text = got.get("text")
+    children = got.get("content")
+    inner = "".join(_text(n) for n in cast("list[object]", children)) if isinstance(children, list) else ""
+    return (text if isinstance(text, str) else "") + inner
+
+
+def _marked(body: object, mark: str) -> bool:
+    """Whether a comment's last paragraph is exactly `mark`."""
+    content = cast("dict[str, object]", body).get("content") if isinstance(body, dict) else None
+    last: object = cast("list[object]", content)[-1] if isinstance(content, list) and content else None
+    if not isinstance(last, dict):
+        return False
+    paragraph = cast("dict[str, object]", last)
+    return paragraph.get("type") == "paragraph" and _text(paragraph) == mark
 
 
 def _found(on: Connection, row: Any, payload: dict[str, str]) -> dict[str, Any] | None:
-    """The action's effect, when Jira already shows it: the issue in the status, or a comment with the marker."""
+    """The action's effect, when Jira already shows it: the issue in the status, or a comment ending in the marker
+    among the newest COMMENTS_LOOKED_AT."""
     if row["operation"] == "transition":
-        fields = JS.fields_of(_call(on, "GET", _issue(row), {"fields": JS.FIELDS}), str(row["connection_id"]))
-        status = str((fields or {}).get("status") or "")
+        fields = JS.fields_of(_get(on, _issue(row), {"fields": JS.FIELDS}), str(row["connection_id"]))
+        if fields is None:
+            raise _Unreadable("Jira's answer has no status")
+        status = str(fields["status"])
         return {"status": status} if status.casefold() == payload["to"].casefold() else None
-    answer = _call(on, "GET", _issue(row) + "/comment", {"orderBy": "-created", "maxResults": str(COMMENTS_LOOKED_AT)})
-    comments = cast("dict[str, object]", answer).get("comments") if isinstance(answer, dict) else None
     mark = marker(str(row["occurrence_key"]))
-    for comment in cast("list[object]", comments) if isinstance(comments, list) else []:
-        if isinstance(comment, dict) and mark in _text(cast("dict[str, object]", comment).get("body")):
-            return {"comment_id": str(cast("dict[str, object]", comment).get("id") or "")}
+    for start in range(0, COMMENTS_LOOKED_AT, COMMENTS_PAGE):
+        query = {"orderBy": "-created", "startAt": str(start), "maxResults": str(COMMENTS_PAGE)}
+        page = _list(_get(on, _issue(row) + "/comment", query), "comments")
+        for comment in page:
+            if _marked(comment.get("body"), mark):
+                return {"comment_id": str(comment.get("id") or "")}
+        if len(page) < COMMENTS_PAGE:
+            break
     return None
 
 
-def _transition(on: Connection, row: Any, to: str) -> str:
-    """The id of the transition Jira offers from the issue's status to `to` (its target status's name, else the
-    transition's own name); Refused when it offers none."""
-    answer = _call(on, "GET", _issue(row) + "/transitions")
-    offered = cast("dict[str, object]", answer).get("transitions") if isinstance(answer, dict) else None
-    choices = [cast("dict[str, Any]", t) for t in cast("list[object]", offered or []) if isinstance(t, dict)]
-    want = to.casefold()
+def _transition(on: Connection, row: Any, to: str) -> tuple[str, str]:
+    """(id, target status) of the transition Jira offers from the issue's status to the status named `to`; Refused when
+    it offers none."""
+    choices = _list(_get(on, _issue(row) + "/transitions"), "transitions")
 
     def target(t: dict[str, Any]) -> str:
         found = t.get("to")
         return str(cast("dict[str, Any]", found).get("name") or "") if isinstance(found, dict) else ""
 
-    def name(t: dict[str, Any]) -> str:
-        return str(t.get("name") or "")
-
-    for spelled in (target, name):  # the status it goes to first, then the transition's own name
-        for t in choices:
-            if spelled(t).casefold() == want and t.get("id"):
-                return str(t["id"])
-    names = ", ".join(sorted({target(t) or name(t) for t in choices} - {""})) or "none"
-    raise OA.Refused(f"Jira offers no transition to {to!r} from the issue's status (it offers: {names})"[:300])
+    for t in choices:
+        if target(t) and target(t).casefold() == to.casefold() and t.get("id"):
+            return str(t["id"]), target(t)
+    names = ", ".join(sorted({target(t) for t in choices} - {""})) or "none"
+    raise _oa().Refused(f"Jira offers no transition to {to!r} from the issue's status (it offers: {names})"[:300])
 
 
 def document(text: str, mark: str) -> dict[str, Any]:
-    """A comment as Jira's document format: a paragraph per blank-line-separated block (its lines kept), then the mark."""
+    """A comment as Jira's document format: a paragraph per blank-line-separated block (its lines kept), then the mark
+    as a paragraph of its own."""
     paragraphs: list[dict[str, Any]] = []
-    for block in [*text.split("\n\n"), mark]:
+    for block in text.split("\n\n"):
         lines = [line for line in block.split("\n") if line.strip()]
         content: list[dict[str, Any]] = []
         for i, line in enumerate(lines):
@@ -181,16 +236,14 @@ def document(text: str, mark: str) -> dict[str, Any]:
             content.append({"type": "text", "text": line})
         if content:
             paragraphs.append({"type": "paragraph", "content": content})
+    paragraphs.append({"type": "paragraph", "content": [{"type": "text", "text": mark}]})
     return {"type": "doc", "version": 1, "content": paragraphs}
-
-
-def _safe(error: _Answer) -> OA.SafeRejection:
-    return OA.SafeRejection(error.reply.retry_after or RETRY_S, f"Jira answered {error.reply.status}")
 
 
 def dispatch(store: Any, row: Any) -> Any:
     """The one write, after asking whether its effect is already there: a receipt, a SafeRejection, Refused, or a raise
     (unknown) when the write may have landed."""
+    OA = _oa()
     payload = _payload(str(row["operation"]), json.loads(row["payload"] or "{}"))
     try:
         on = _connect(store, row)
@@ -200,31 +253,36 @@ def dispatch(store: Any, row: Any) -> Any:
         return OA.SafeRejection(RETRY_S, "The connection's key could not be read")
     try:
         already = _found(on, row, payload)
-        transition = _transition(on, row, payload["to"]) if not already and row["operation"] == "transition" else ""
+        transition = ("", "")
+        if not already and row["operation"] == "transition":
+            transition = _transition(on, row, payload["to"])
     except _Answer as exc:
-        if exc.reply.status == 429:
-            return _safe(exc)
         if exc.reply.status in REFUSALS:
             raise OA.Refused(f"Jira answered {exc.reply.status} before the write") from None
-        return _safe(exc)
+        return OA.SafeRejection(exc.reply.retry_after or RETRY_S, f"Jira answered {exc.reply.status}")
     except JS.Busy:
         return OA.SafeRejection(BUSY_S, "Jira calls are busy")
     except OA.Refused:
         raise
+    except _Unreadable as exc:
+        return OA.SafeRejection(RETRY_S, str(exc))
     except Exception:  # noqa: BLE001 - a lookup Jira did not answer: nothing was written
         return OA.SafeRejection(RETRY_S, "Jira could not be reached before the write")
     if already:
         return {**already, "already": True}
     if row["operation"] == "transition":
-        method, path, body = "POST", _issue(row) + "/transitions", {"transition": {"id": transition}}
+        path, body = _issue(row) + "/transitions", {"transition": {"id": transition[0]}}
     else:
-        method, path = "POST", _issue(row) + "/comment"
+        path = _issue(row) + "/comment"
         body = {"body": document(payload["body"], marker(str(row["occurrence_key"])))}
     base, headers, params = on
     try:
-        reply = JS.call(method, f"{base}{path}", headers, params, JS.TIMEOUT_S, body)
+        reply = JS.call("POST", f"{base}{path}", headers, params, JS.TIMEOUT_S, body)
     except JS.Busy:
         return OA.SafeRejection(BUSY_S, "Jira calls are busy")
+    except Exception as exc:  # noqa: BLE001 - it may have landed: unknown, in words that never carry the key
+        late = "Timeout" in type(exc).__name__
+        raise RuntimeError("Jira could not be reached" + (" (timed out)" if late else "")) from None
     if reply.status == 429:
         return OA.SafeRejection(reply.retry_after or RETRY_S, "Jira answered 429")
     if reply.status in REFUSALS:
@@ -232,24 +290,19 @@ def dispatch(store: Any, row: Any) -> Any:
     if not 200 <= reply.status < 300:
         raise RuntimeError(f"Jira answered {reply.status}")  # it may have acted: unknown
     if row["operation"] == "transition":
-        return {"transition_id": transition, "status": payload["to"]}
+        return {"transition_id": transition[0], "status": transition[1]}
     got = reply.body
     return {"comment_id": str(cast("dict[str, object]", got).get("id") or "") if isinstance(got, dict) else ""}
 
 
-def reconcile(store: Any, row: Any) -> "OA.Settled | None":
+def reconcile(store: Any, row: Any) -> "Settled | None":
     """An unknown row settled from Jira's own record: done when its effect is there (`_found`), else None. No record of
     it proves nothing (the attempt may still land, and Jira's 404 also means the key cannot see the issue), so it waits
-    for the owner's confirm-sent."""
+    for the owner's confirm-sent. It only reads: the connection's read key will do."""
     payload = _payload(str(row["operation"]), json.loads(row["payload"] or "{}"))
     try:
-        on = _connect(store, row)
+        on = _connect(store, row, write=False)
         found = _found(on, row, payload)
-    except (JS.Unreadable, _Answer):
+    except (JS.Unreadable, _Answer, _Unreadable):
         return None
-    return OA.Settled("done", {**found, "reconciled": True}) if found else None
-
-
-ADAPTER = OA.register(
-    OA.Adapter(CHANNEL, prepare, dispatch, reconcile, defaults={"external": "on_their_own", "internal": "on_their_own"})
-)
+    return _oa().Settled("done", {**found, "reconciled": True}) if found else None

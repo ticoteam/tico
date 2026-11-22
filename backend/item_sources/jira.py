@@ -244,11 +244,13 @@ def busy() -> bool:
 
 
 class Reply(NamedTuple):
-    """Jira's answer to one call: its status, the JSON answer or None, and the seconds its Retry-After asks for."""
+    """Jira's answer to one call: its status, the JSON answer (None when it is not JSON or was cut off), the seconds its
+    Retry-After asks for, and whether the answer was longer than MAX_BODY (`cut`: its body is then None)."""
 
     status: int
     body: object
     retry_after: float | None = None
+    cut: bool = False
 
 
 def send(url: str, headers: dict[str, str], params: dict[str, str], seconds: float = TIMEOUT_S) -> tuple[int, object]:
@@ -355,11 +357,12 @@ def _call(
                         break
                 if time.monotonic() > ends:
                     raise late
+                cut = len(got) > MAX_BODY
                 try:
-                    answer: object = json.loads(got)
+                    answer: object = None if cut else json.loads(got)
                 except ValueError:
                     answer = None
-                return Reply(response.status_code, answer, _retry_after(response.headers.get("retry-after")))
+                return Reply(response.status_code, answer, _retry_after(response.headers.get("retry-after")), cut)
         except Exception as error:
             if time.monotonic() > ends and error is not late:
                 raise late from error

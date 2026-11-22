@@ -93,19 +93,23 @@ one. A rehearsal copy never runs the worker, and a dev copy empties the table.
 `backend/outbound_jira.py`. Destination: the issue key (`HM-12`); `connection_id`: the Jira connection, which must be a
 record integration (an Everyone API tool an administrator marked as holding records, on one Jira site) with a shared
 read and write key: the same rule, key lookup and deadline-bounded call as the background reads
-(backend/item_sources/jira.py). Anything else is refused at enqueue and blocked at an attempt. The audience is external,
+(backend/item_sources/jira.py). The bot (or person) queuing it must hold Read and write on that connection; Tico itself
+always may. Anything else is refused at enqueue and blocked at an attempt, so a grant taken back stops a queued action.
+While an action to it may still go or is unknown, the connection's base URL and sites cannot move to another site
+(tool_services.referenced). The audience is external,
 but a record write is bookkeeping, not a message to people, so `jira` goes On its own until the company sets
 `jira:external` to Ask first or Never.
 
 | operation | payload | the write |
 |---|---|---|
-| `transition` | `{"to": "Done"}` | the transition Jira offers from the issue's status whose target status (else whose own name) is `to`; none offered is a certain refusal |
-| `comment` | `{"body": "text"}` (at most 30,000 characters) | a comment, blank lines making paragraphs, ending with the action's marker `[tico:<10 hex of sha256(occurrence_key)>]` |
+| `transition` | `{"to": "Done"}` | the transition Jira offers from the issue's status whose target status is `to`; none offered is a certain refusal |
+| `comment` | `{"body": "text"}` (at most 30,000 characters) | a comment, blank lines making paragraphs, ending with the action's marker `[tico:<10 hex of sha256(occurrence_key)>]` as its own last paragraph |
 
 Before the write it asks whether the effect is already there (the issue already in the status; a comment among the
-newest 100 carrying the marker): found, the action is done with no write (`"already": true` in the receipt). Reconcile
+newest 100, read 20 at a time, whose last paragraph is exactly the marker): found, the action is done with no write (`"already": true` in the receipt). Reconcile
 uses the same lookup to settle an unknown row done; a row it cannot prove stays unknown for the owner. A 429 is a safe
-rejection after its Retry-After (else a minute), as is anything that fails before the write. Jira's 400, 401, 403 or
+rejection after its Retry-After (else a minute), as is anything that fails before the write, a lookup answer cut off
+or not the shape asked for included. Jira's 400, 401, 403 or
 404 to the write is a certain refusal; any other answer, or none, is unknown.
 
 ## Adding a channel

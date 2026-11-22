@@ -562,16 +562,29 @@ def slug(text):
 CONNECTION_TABLES = ("task_links", "item_metadata", "entity_external_refs")
 
 
+# An outbound action that may still go (or whose outcome is not known yet): its destination (Jira's `HM-12`) is the
+# connection's endpoint's, so the endpoint stays while one is pending (backend/outbound_actions.py).
+PENDING_OUTBOUND = "state IN ('waiting_approval','queued','attempting','unknown')"
+
+
 def referenced(conn, tid):
-    """Whether an outside reference still names `tid` as its connection, a restorable deleted task's link included. A
-    deleted tool's id is then never given to a new tool, so a new connection never inherits the old one's items and
-    records (`PROJ-7` of another site). A file from before the columns has none."""
+    """Whether an outside reference still names `tid` as its connection, a restorable deleted task's link or a pending
+    outbound action included. A deleted tool's id is then never given to a new tool, so a new connection never inherits
+    the old one's items and records (`PROJ-7` of another site), and its endpoint never moves under an action waiting to
+    go there (api_tools.keep_sites). A file from before the columns has none."""
     for table in CONNECTION_TABLES:
         try:
             if conn.execute(f"SELECT 1 FROM {table} WHERE connection_id=? LIMIT 1", (tid,)).fetchone():
                 return True
         except sqlite3.OperationalError:
             continue
+    try:
+        if conn.execute(
+            f"SELECT 1 FROM outbound_actions WHERE connection_id=? AND {PENDING_OUTBOUND} LIMIT 1", (tid,)
+        ).fetchone():
+            return True
+    except sqlite3.OperationalError:
+        pass
     try:  # a deleted task's links come back with it (backend/task_delete.py keeps them in task_trash.rows)
         return bool(
             conn.execute(

@@ -131,7 +131,7 @@ class Adapter:
     defaults: dict[str, str] = field(default_factory=lambda: dict[str, str]())
 
 
-ADAPTERS: dict[str, Adapter] = {}  # each channel's sender; Jira registers itself (the import at the end)
+ADAPTERS: dict[str, Adapter] = {}  # each channel's sender, registered at the end of this module
 
 
 def register(adapter: Adapter) -> Adapter:
@@ -1160,8 +1160,15 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
         return mutate(request, Empty(), work, durable=True)
 
 
-# The channels that ship, each registering its adapter as it is imported (after everything above: they import this
-# module).
+# The channels that ship. Each module imports this one only inside its functions, so either may be imported first.
 from . import outbound_jira
 
-SHIPPED = (outbound_jira.ADAPTER,)
+register(
+    Adapter(
+        outbound_jira.CHANNEL,
+        outbound_jira.prepare,
+        outbound_jira.dispatch,
+        outbound_jira.reconcile,
+        defaults=dict(outbound_jira.DEFAULTS),
+    )
+)
