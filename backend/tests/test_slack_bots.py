@@ -485,6 +485,14 @@ def test_post_gates_list_posting_off_unknown_id_length_and_post_verb(slack):
     assert refused({"channel": "#general", "text": "hi"}, 403)["code"] == "slack_access"
 
 
+def test_a_slack_entry_with_no_can_may_post_and_an_explicit_can_read_is_read_only(slack):
+    with slack.store.read() as c:
+        SB.need(c, "ops", {"service": "slack", "scope": {"channels": ["#general"]}}, "post")  # no `can` key: may post
+        with pytest.raises(SB.Problem) as refused:
+            SB.need(c, "ops", {"service": "slack", "can": ["read"]}, "post")
+    assert refused.value.code == "slack_access" and "`post`" in refused.value.detail
+
+
 def test_channels_all_never_widens_a_post(slack):
     entry(slack, scope={"channels": "all", "dms": "yes"})
     unlisted = call(slack, "POST", "slack/posts", 403, json={"channel": "#random", "text": "hi"}).json()
