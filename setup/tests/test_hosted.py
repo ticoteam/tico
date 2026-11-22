@@ -156,6 +156,11 @@ def test_a_rerun_without_no_support_keeps_the_servers_support_off():
     rest = [a for a in argv[:i] + argv[i + 2 :] if a != "--non-interactive"] + ["--skip-dns-wait"]
     assert cli.main(rest, deps=over_ssh(prompted), io=io) == 0, io.text
     assert io.asked and env_sent(prompted)["TICO_SUPPORT"] == "off"
+    # ... and without --preset again: the saved choice still reaches the server.
+    bare, io = FakeShell(), DomainAsked(interactive=True)
+    rest = [a for a in rest if a not in ("--preset", "recommended")]
+    assert cli.main(rest, deps=over_ssh(bare), io=io) == 0, io.text
+    assert env_sent(bare)["TICO_SUPPORT"] == "off"
 
 
 class DomainAsked(CaptureIO):

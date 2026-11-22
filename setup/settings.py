@@ -296,6 +296,8 @@ class Settings:
                 TICO_SUPPORT=self.support or "on",
                 TICO_GATEWAY_INVITE=self.gateway_invite,
             )
+        if self.support == "off":  # an install that turned Support off keeps it off, with or without the preset again
+            e["TICO_SUPPORT"] = "off"
         if self.company_file_data and self.plan_bucket:
             # Only where it is and its sha256: the server copies the plan to a file at first boot (remote.py pull-env.sh).
             e.update(

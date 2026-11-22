@@ -97,3 +97,21 @@ def test_run_all_checks_the_runner_hostname_only_when_there_is_one(monkeypatch):
     assert [c.detail for c in verify.run_all(**kw, runner_host="r.example.com") if c.name == "Runner hostname"] == [
         "r.example.com"
     ]
+
+
+def test_dns_is_checked_again_once_https_came_up_after_a_wait(monkeypatch):
+    dns_live, https_tries = iter([False, True]), iter([False, True])
+    monkeypatch.setattr(verify, "check_dns", lambda *a: verify.Check("DNS", next(dns_live), "x"))
+    monkeypatch.setattr(verify, "_https_checks", lambda *a: [verify.Check("HTTPS certificate", next(https_tries), "x")])
+    out = verify.run_all(
+        domain="t.example.com",
+        provider="google",
+        client_id="c",
+        front_door="caddy",
+        records=[],
+        resolvers=[],
+        shell=None,
+        wait_https=60,
+        sleep=lambda s: None,
+    )
+    assert [(c.name, c.ok) for c in out] == [("DNS", True), ("HTTPS certificate", True)]

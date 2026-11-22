@@ -293,6 +293,8 @@ def run_all(
         waited += delay
         delay = min(delay + 3, 15)
         https = _https_checks(domain, provider, client_id, front_door, issuer)
+    if waited and not dns_check.ok:  # DNS may have gone live while HTTPS was waited for
+        dns_check = check_dns(domain, records, resolvers, sleep)
     out = [dns_check, *https]
     if runner_host:
         out.append(check_runner_host(runner_host))

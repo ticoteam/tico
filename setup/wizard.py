@@ -1329,7 +1329,7 @@ def _aws(
         compose=compose,
         compose_url=url,
         env_param=(d.param_name, s.aws_region),
-        env_keys=list(envfile.parse(env_text)),
+        env_keys=envfile.keys(env_text),
         wait_for_ip=ip,
     )
     iid, created = d.launch_or_reuse(prep, script)
@@ -1383,7 +1383,7 @@ def _aws(
             compose_url=url,
             plan=bool(plan_s3),
             env_param=(d.param_name, s.aws_region),
-            env_keys=list(envfile.parse(env_text)),
+            env_keys=envfile.keys(env_text),
         )
         res = runner.run(f"sh -c {shlex.quote(rerun)}")
         if res.returncode:

@@ -85,9 +85,13 @@ def bootstrap_script(
             f"  echo {q(failed)} >&2; exit 1",
             "fi",
             f"printf '%s\\n' \"$join\" > {d}/join.env",
-            "for key in TICO_JOIN_URL TICO_JOIN_CODE TICO_JOIN_LABEL; do",
-            f'  grep -q "^$key=" {d}/join.env || {{ rm -f {d}/join.env; echo {q(failed)} "(no $key)" >&2; exit 1; }}',
-            "done",
+            # Only the three assignments, each set and the URL a web address, read in a subshell: nothing is removed
+            # until they are.
+            f"if grep -qvE '^TICO_JOIN_(URL|CODE|LABEL)=.' {d}/join.env || ! ( set -a; . {d}/join.env; "
+            '[ -n "${TICO_JOIN_CODE:-}" ] && [ -n "${TICO_JOIN_LABEL:-}" ] && '
+            'case "${TICO_JOIN_URL:-}" in http://?*|https://?*) true;; *) false;; esac ) >/dev/null 2>&1; then',
+            f"  rm -f {d}/join.env; echo {q(failed + ' (missing or malformed values)')} >&2; exit 1",
+            "fi",
         ]
     else:
         L += [f"echo {env_b64} | base64 -d > {d}/join.env"]

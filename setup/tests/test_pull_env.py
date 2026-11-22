@@ -72,14 +72,24 @@ def test_a_failed_or_partial_read_keeps_the_old_env_and_fails_loudly(tmp_path, m
     assert docker == ""  # never restarted on a bad .env
 
 
-def test_a_runner_rejoin_whose_join_settings_cannot_be_read_keeps_the_running_runner(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "aws",
+    [
+        "echo TICO_JOIN_URL=https://t.example.com; exit 255",
+        "printf 'TICO_JOIN_URL=https://t.example.com\\nTICO_JOIN_CODE=\\nTICO_JOIN_LABEL=build-1\\n'",
+        "printf 'TICO_JOIN_URL=https://t.example.com\\nTICO_JOIN_CODE=a b\\nTICO_JOIN_LABEL=build-1\\n'",
+        "printf 'TICO_JOIN_URL=t.example.com\\nTICO_JOIN_CODE=abc\\nTICO_JOIN_LABEL=build-1\\n'",
+    ],
+    ids=["aws-failed", "empty-code", "malformed-assignment", "not-a-url"],
+)
+def test_a_runner_rejoin_whose_join_settings_cannot_be_read_keeps_the_running_runner(tmp_path, monkeypatch, aws):
     root, bin_dir = tmp_path / "runner", tmp_path / "bin"
     monkeypatch.setattr(contract, "RUNNER_DIR", str(root))
     root.mkdir()
     bin_dir.mkdir()
     (root / ".env").write_text("TICO_RUNNER_TOKEN=keep\n")
     for name, body in {
-        "aws": "echo TICO_JOIN_URL=https://t.example.com; exit 255",
+        "aws": aws,
         "docker": f'echo "$@" >> {tmp_path}/docker.log',
     }.items():
         (bin_dir / name).write_text(f"#!/bin/sh\n{body}\n")

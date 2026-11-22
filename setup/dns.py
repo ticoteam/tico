@@ -160,9 +160,11 @@ class Zone:
 
 
 def detect_zone(domain: str, resolver: Resolver) -> Zone | None:
-    """Walk up from the domain to the first name that has its own NS records: that is where records live."""
+    """Walk up from the domain to the first name that has its own NS records: that is where records live. A name below
+    the registered domain starts at its parent: asking public resolvers about the name before its record exists would
+    have them cache "no such name" for the DNS wait."""
     labels = domain.lower().rstrip(".").split(".")
-    for i in range(len(labels) - 1):
+    for i in range(0 if len(labels) <= 2 else 1, len(labels) - 1):
         cand = ".".join(labels[i:])
         try:
             ns = resolver.query(cand, NS)
@@ -218,8 +220,11 @@ def manual_instructions(records: list[Record], zone: Zone) -> list[str]:
 def _matches(domain: str, records: list[Record], res: Resolver) -> bool:
     """Whether res answers as planned. Raises OSError when it does not answer."""
     if records[0].type == "CNAME":  # a proxied tunnel name resolves to Cloudflare's addresses
-        if res.query(domain, A) or res.query(domain, AAAA):
-            return True
+        try:
+            if res.query(domain, A) or res.query(domain, AAAA):
+                return True
+        except OSError:
+            pass  # the CNAME itself still tells
         return any("cfargotunnel.com" in t for t in res.query(domain, CNAME))
     want4 = {r.value for r in records if r.type == "A"}
     want6 = {r.value for r in records if r.type == "AAAA"}

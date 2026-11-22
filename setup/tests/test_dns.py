@@ -82,3 +82,36 @@ def test_an_a_record_never_asks_for_aaaa():
             return super().query(name, rtype)
 
     assert dns.resolves_to("t.example.com", REC, NoAAAA(LIVE))
+
+
+def test_a_tunnel_cname_passes_when_its_address_lookups_fail():
+    class AddressesTimeOut(FakeResolver):
+        def query(self, name, rtype):
+            if rtype in (dns.A, dns.AAAA):
+                raise TimeoutError("timed out")
+            return super().query(name, rtype)
+
+    rec = [dns.Record("CNAME", "t.example.com", "abc.cfargotunnel.com", proxied=True)]
+    assert dns.resolves_to(
+        "t.example.com", rec, AddressesTimeOut({("t.example.com", dns.CNAME): ["abc.cfargotunnel.com"]})
+    )
+
+
+def test_zone_discovery_never_asks_about_the_install_hostname_itself():
+    asked = []
+
+    class Logged(FakeResolver):
+        def query(self, name, rtype):
+            asked.append(name)
+            return super().query(name, rtype)
+
+    z = dns.detect_zone("tico.example.com", Logged(ns={"example.com": NETLIFY_NS}))
+    assert z.name == "example.com" and asked == ["example.com"]
+    assert dns.detect_zone("example.com", FakeResolver(ns={"example.com": NETLIFY_NS})).name == "example.com"
+
+
+def test_env_keys_split_on_newlines_only():
+    from setup import envfile
+
+    text = envfile.render({"TICO_TEAM_NAME": "Acme West=North", "TICO_DOMAIN": "t.example.com"})
+    assert sorted(envfile.keys(text)) == ["TICO_DOMAIN", "TICO_TEAM_NAME"]
