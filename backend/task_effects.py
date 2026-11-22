@@ -303,11 +303,12 @@ def moved(
         # The next stage has another owner. What follows the owner already happened (`owner_moved`).
         _publish_owner(conn, before, after, actor, revision)
     if kind in ("forward", "done"):
-        # A task filed for a Jira issue whose merges are in a release closes the loop outside, once
+        # Leaving Release: a task filed for a Jira issue whose merges are in a release closes the loop outside, once
         # (backend/release_closeout.py).
         from . import release_closeout
 
-        release_closeout.moved(conn, str(after["id"]))
+        left: Row = before.get("visit") or {}
+        release_closeout.moved(conn, str(after["id"]), str(left.get("id") or ""))
     if old == new:
         return
     from . import delivery, reconnects, rule_due, run_triggers

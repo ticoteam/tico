@@ -5,11 +5,12 @@ Tico) and by the outbound gate (backend/outbound_actions.py: an action whose out
 
 The ask is an ordinary OK on a task (task_engine.add_requirement), asked by Tico: it is in the person's Needs you and,
 like any OK, holds the task in its stage until it is answered, pushed past or withdrawn. On a task that is no longer
-open (a close-out after Done), a small private task is filed for the person first, and closed again when the ask is
-withdrawn.
+open (a close-out after Done), or one nobody listed may be asked on, a small private task is filed for the person
+first, and closed again when the ask is withdrawn.
 
-Who is asked (`person_for`): the task's owner when that is a person who is here; else, for a bot's task or none, the
-people the outbound gate asks for an OK (the bot's manager, then the company's default person).
+Who is asked (`people_for`), the first who can read the task: the task's owner when that is a person who is here, then
+the people the outbound gate asks for an OK (the bot's manager, then the company's default person). The OK is
+people-only, so no bot answers or pushes past it.
 """
 
 import logging
@@ -34,48 +35,71 @@ def _engine() -> Any:
     return task_engine
 
 
-def person_for(conn: "sqlite3.Connection", task: Row | None, actor: str = "") -> str | None:
-    """The person to ask: the task's owner when a person who is here, else the first of the outbound gate's people for
-    the task's owner bot (or `actor` when there is no task): its manager, then the company's default person."""
+def people_for(conn: "sqlite3.Connection", task: Row | None, actor: str = "") -> list[str]:
+    """Whom to ask, in order: the task's owner when a person who is here, then the outbound gate's people for the
+    task's owner bot (or `actor` when there is no task): its manager, then the company's default person."""
     from . import outbound_actions as OA
     from . import task_requirements as R
 
     H = _h()
     owner = str((task or {}).get("owner_id") or "")
-    if H.is_human(owner) and R.active_person(conn, owner):
-        return owner
-    people = OA._people_for(conn, owner or actor)  # pyright: ignore[reportPrivateUsage]
-    return people[0] if people else None
+    first = [owner] if H.is_human(owner) and R.active_person(conn, owner) else []
+    return list(dict.fromkeys(first + OA._people_for(conn, owner or actor)))  # pyright: ignore[reportPrivateUsage]
 
 
-def ask(
-    conn: "sqlite3.Connection", task_id: str | None, person: str, line: str, *, title: str, body: str
-) -> tuple[str, str] | None:
-    """Ask `person` `line` on the task (filed first when there is none or it is not open): (requirement id, task id),
-    or None when the ask was refused (nothing is written then)."""
+def _ask_on(conn: "sqlite3.Connection", task_id: str, person: str, line: str) -> str | None:
+    """A people-only OK (no bot answers or pushes past it) asked by Tico on an open task, or None when refused (the
+    person cannot read the task or has left): nothing is written then."""
     H, E = _h(), _engine()
     conn.execute("SAVEPOINT owner_ask")
     try:
-        row: Row | None = H.task(conn, task_id) if task_id else None
-        if not row or row.get("status") != "open":
+        asked: Row = E.add_requirement(conn, task_id, H.TICO_ACTOR, "ok", person, line)
+        conn.execute("UPDATE requirements SET who_oks='people_only' WHERE id=?", (asked["requirement_id"],))
+    except Exception as exc:  # noqa: BLE001 - a refused ask
+        conn.execute("ROLLBACK TO owner_ask")
+        conn.execute("RELEASE owner_ask")
+        LOG.info("Asking %s on %s failed: %s", person, task_id, exc)
+        return None
+    conn.execute("RELEASE owner_ask")
+    return str(asked["requirement_id"])
+
+
+def ask(
+    conn: "sqlite3.Connection", task_id: str | None, people: list[str], line: str, *, title: str, body: str
+) -> tuple[str, str] | None:
+    """Ask the first of `people` who can be asked `line` on the open task; else (no task, not open, or nobody there can
+    be asked) on a private task filed for the first person: (requirement id, task id), or None with nobody to ask."""
+    H = _h()
+    row: Row | None = H.task(conn, task_id) if task_id else None
+    if row and row.get("status") == "open":
+        for person in people:
+            found = _ask_on(conn, str(row["id"]), person, line)
+            if found:
+                return found, str(row["id"])
+    for person in people:
+        conn.execute("SAVEPOINT owner_file")
+        try:
             made: Row = H.task_create(
                 conn, H.TICO_ACTOR, title[:300], body, person, deduplicate=False, lint=False, private=True
             )
-            row = H.task(conn, str(made["id"]))
-            assert row is not None
-        asked: Row = E.add_requirement(conn, str(row["id"]), H.TICO_ACTOR, "ok", person, line)
-    except Exception as exc:  # noqa: BLE001 - a refused ask (the person can't read the task, left): nothing written
-        conn.execute("ROLLBACK TO owner_ask")
-        conn.execute("RELEASE owner_ask")
-        LOG.info("Asking %s failed: %s", person, exc)
-        return None
-    conn.execute("RELEASE owner_ask")
-    return str(asked["requirement_id"]), str(row["id"])
+            found = _ask_on(conn, str(made["id"]), person, line)
+            if not found:
+                raise LookupError(person)
+        except Exception:  # noqa: BLE001 - this person cannot be asked: the next one
+            conn.execute("ROLLBACK TO owner_file")
+            conn.execute("RELEASE owner_file")
+            continue
+        conn.execute("RELEASE owner_file")
+        return found, str(made["id"])
+    return None
 
 
-def withdraw(conn: "sqlite3.Connection", requirement_id: str, why: str, own_task: str | None) -> None:
-    """Take back an ask (one already answered or past is left as it is). When it is on a task other than `own_task`,
-    the task `ask` filed for it alone, that task is closed too."""
+def withdraw(
+    conn: "sqlite3.Connection", requirement_id: str, why: str, own_task: str | None, *, advance: bool = True
+) -> None:
+    """Take back an ask (one already answered or past is left as it is); `advance` False when another ask is about to
+    take its place. When it is on a task other than `own_task`, the task `ask` filed for it alone, that task is closed
+    too."""
     if not requirement_id:
         return
     H, E = _h(), _engine()
@@ -87,7 +111,7 @@ def withdraw(conn: "sqlite3.Connection", requirement_id: str, why: str, own_task
     task_id = str(found[0])
     conn.execute("SAVEPOINT owner_withdraw")
     try:
-        E.withdraw_requirement(conn, requirement_id, H.TICO_ACTOR, why)
+        E.withdraw_requirement(conn, requirement_id, H.TICO_ACTOR, why, advance_task=advance)
         row: Row | None = H.task(conn, task_id)
         if task_id != own_task and row and row.get("status") == "open":
             E.move(conn, task_id, E.CLOSED, H.TICO_ACTOR, why)
@@ -95,18 +119,3 @@ def withdraw(conn: "sqlite3.Connection", requirement_id: str, why: str, own_task
         conn.execute("ROLLBACK TO owner_withdraw")
         LOG.warning("Taking back ask %s failed: %s", requirement_id, exc)
     conn.execute("RELEASE owner_withdraw")
-
-
-def open_ask(conn: "sqlite3.Connection", requirement_id: str) -> bool:
-    """Whether an ask still waits: not withdrawn, not answered, on a visit its task has not left."""
-    if not requirement_id:
-        return False
-    return (
-        conn.execute(
-            "SELECT 1 FROM requirements r JOIN visits v ON v.id = r.visit_id WHERE r.id=? AND r.withdrawn_at IS NULL "
-            "AND v.left_at IS NULL AND NOT EXISTS (SELECT 1 FROM answers a WHERE a.requirement_id = r.id "
-            "AND a.undone_at IS NULL)",
-            (requirement_id,),
-        ).fetchone()
-        is not None
-    )

@@ -526,7 +526,7 @@ def settle(
     return True
 
 
-UNKNOWN_LOOK_S = 3600  # an unknown row whose owner was asked is looked up at most this often
+UNKNOWN_LOOK_S = 3600  # after its first lookup, an unknown row is looked up at most this often
 
 
 def ask_owner(c: Any, row: Any) -> None:
@@ -537,14 +537,11 @@ def ask_owner(c: Any, row: Any) -> None:
     from . import owner_asks
 
     task = H.task(c, row["task_id"]) if row["task_id"] else None
-    person = owner_asks.person_for(c, task, row["actor"])
-    if not person:
-        return
     what = f"{row['channel']} {row['operation']} on {row['destination']}"[:200]
     asked = owner_asks.ask(
         c,
         row["task_id"],
-        person,
+        owner_asks.people_for(c, task, row["actor"]),
         f"Tico can't tell whether its {what} went through: check {row['channel']}, and confirm it in Tico if it did.",
         title=f"Check a {what}",
         body=f"Outbound action {row['id']}: if it went, `tico outbound confirm-sent {row['id']}`. Tico never sends it "
@@ -565,9 +562,10 @@ def apply(c: Any, seen: Any, found: "Settled | None") -> None:
     the worker that made the attempt may still reach the provider. What it cannot settle goes to the back of the
     line."""
     if found is None or found.state not in RESOLVED:
+        now = H.now()
         moved = c.execute(
-            "UPDATE outbound_actions SET updated_at=? WHERE id=? AND state='unknown' AND updated_at=?",
-            (H.now(), seen["id"], seen["updated_at"]),
+            "UPDATE outbound_actions SET updated_at=?, reconciled_at=? WHERE id=? AND state='unknown' AND updated_at=?",
+            (now, now, seen["id"], seen["updated_at"]),
         ).rowcount
         if moved:
             ask_owner(c, get(c, seen["id"]))  # it stays unknown after a look: its owner is asked, once
@@ -618,8 +616,8 @@ def recover(store: Any, now: str | None = None) -> int:
 
 
 def reconcile_pass(store: Any, limit: int = 100) -> int:
-    """Unknown rows whose adapter can ask the provider, the least recently looked at first (one whose owner was asked
-    at most every UNKNOWN_LOOK_S). Each adapter call runs outside any transaction; what it found is written only while
+    """Unknown rows whose adapter can ask the provider, the least recently looked at first (after its first lookup, at
+    most every UNKNOWN_LOOK_S). Each adapter call runs outside any transaction; what it found is written only while
     the row is still as it was read (`apply`)."""
     channels = [name for name, adapter in ADAPTERS.items() if adapter.reconcile]
     if not channels:
@@ -629,7 +627,7 @@ def reconcile_pass(store: Any, limit: int = 100) -> int:
             dict(r)
             for r in c.execute(
                 f"SELECT * FROM outbound_actions WHERE state='unknown' AND channel IN ({','.join('?' * len(channels))}) "
-                "AND (owner_ask_id='' OR updated_at<?) ORDER BY updated_at LIMIT ?",
+                "AND (reconciled_at IS NULL OR reconciled_at<?) ORDER BY updated_at LIMIT ?",
                 (*channels, H.shift(H.now(), seconds=-UNKNOWN_LOOK_S), limit),
             )
         ]
@@ -926,9 +924,18 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
         return who.role in ("owner", "human") and bool(auth.bot_admin(who))
 
     def visible(c: Any, who: Any, row: Any) -> bool:
-        """Whoever queued it, the owner or an admin, and the parties to its OK (task_asks.party: the person asked)."""
+        """Whoever queued it, the owner or an admin, the parties to its OK (task_asks.party: the person asked), and the
+        person asked about its unknown outcome."""
         if row["actor"] == who.actor or admin(who):
             return True
+        asked = (
+            row["owner_ask_id"]
+            and c.execute(
+                "SELECT 1 FROM requirements WHERE id=? AND person_id=?", (row["owner_ask_id"], who.actor)
+            ).fetchone()
+        )
+        if asked:
+            return True  # the person asked about its unknown outcome (`ask_owner`)
         found = task_asks.grant(c, row["approval_id"]) if row["approval_id"] else None
         return bool(found) and task_asks.party(c, who.actor, found)
 

@@ -1192,14 +1192,16 @@ shows as a duplicate to merge.
 
 #### Withdrawn or closed outside
 
-After each read of a task's primary Jira issue, backend/release_closeout.py `watch` judges it: active in an In
-Progress category status or in its Ready status (the first To Do category status read for the task, kept on the link
-as `detail.ready`), withdrawn in another To Do status, closed in a Done category status, gone when Jira answers 404.
-Anything but active, while the task is open and Tico has not closed it out itself, asks the task's owner (a person;
-for a bot's task its manager, then the company's default person) ONE OK on the task (backend/owner_asks.py): "keep
-working on it, or close this task?" ("settle it" when closed). Like any OK it holds the task in its stage, so the
-release close-out is frozen; OK or push past keeps the task and lets the close-out go, closing the task settles it.
-Active again takes the ask back: the same task moves on and its close-out resumes. Secondary links are informational.
+Jira's saved standing of a task's primary issue alone decides whether its release close-out may run
+(backend/release_closeout.py): active in an In Progress category status or in its Ready status (the status of the
+link's first saved read when that was a To Do one, kept as `detail.ready`; when the first read was already further on,
+any later To Do status is a withdrawal), withdrawn in another To Do status, closed in a Done category status, gone when
+Jira answers 404. Anything but active when the task leaves Release freezes the close-out: nothing is queued, and the
+visit is kept (`detail.pending`) so the Jira pass keeps reading the issue of the Done task. After each read, a
+non-active standing asks the task's owner (a person; else its bot's manager, then the company's default person, the
+first who can read it) a people-only OK on the task (backend/owner_asks.py), one per standing: a new standing replaces
+the ask. That is how the owner hears of it; no answer unfreezes anything. Putting the issue back in Jira does: active
+again takes the ask back (the same task moves on) and runs a pending close-out. Secondary links are informational.
 
 #### Intake
 
