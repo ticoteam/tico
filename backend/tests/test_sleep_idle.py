@@ -536,11 +536,11 @@ def test_a_queued_email_keeps_the_server_up_when_due_and_wakes_it_when_held_for_
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, "human:ana", "Records request", "x", "human:ana", lint=False)["id"]
         c.execute(
-            "INSERT INTO email_sends(id,mailbox,actor,bot,via,content_sha256,idempotency_key,recipients,attachments,"
-            "subject,body_sha256,raw,draft_id,thread_id,reply_to_id,approval_id,classification,decision,state,created_at,"
-            "send_after,task_id) VALUES('es_1','legal@acme.example','bot:ops','ops','','c','k','[]','[]','s','b','raw',"
-            "'','','','','{}','{}','pending',?,?,?)",
-            (sleep_idle.stamp(at), sleep_idle.stamp(at + 90), task),
+            "INSERT INTO outbound_actions(id,channel,audience,operation,destination,occurrence_key,"
+            "actor,metadata,state,send_after,next_attempt_at,created_at,updated_at,task_id,payload) "
+            "VALUES('es_1','email','external','send','legal@acme.example','email:send:es_1','bot:ops',"
+            "json_object('idempotency_key','k','bot','ops'),'queued',?,?,?,?,?,json_object('raw','raw'))",
+            (sleep_idle.stamp(at + 90), sleep_idle.stamp(at + 90), sleep_idle.stamp(at), sleep_idle.stamp(at), task),
         )
     with api.app.state.store.read() as c:
         assert sleep_idle.busy(c, at) == "send_pending"

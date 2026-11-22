@@ -263,8 +263,8 @@ def email_due(c):
     from . import email_sending
 
     rows = c.execute(
-        "SELECT s.state, s.send_after, " + email_sending.DATES_SQL + " FROM email_sends s "
-        "WHERE s.state IN ('pending','dispatching')"
+        "SELECT s.state, s.send_after, " + email_sending.DATES_SQL + " FROM outbound_email s "
+        "WHERE s.queue_state IN ('queued','attempting')"
     ).fetchall()
     return [
         0.0 if r[0] == "dispatching" else epoch(max(r[1], email_sending.latest_bound((r[2] or "").split(",")))) or 0.0
@@ -277,8 +277,8 @@ def outbound_busy(c, by):
     its retry time or its hold, whichever is later."""
     return table(c, "outbound_actions") and bool(
         c.execute(
-            "SELECT EXISTS(SELECT 1 FROM outbound_actions WHERE state='attempting' OR "
-            "(state='queued' AND max(next_attempt_at, send_after)<=?))",
+            "SELECT EXISTS(SELECT 1 FROM outbound_actions WHERE channel<>'email' AND (state='attempting' OR "
+            "(state='queued' AND max(next_attempt_at, send_after)<=?)))",
             (stamp(by),),
         ).fetchone()[0]
     )
@@ -289,7 +289,7 @@ def outbound_next(c, after):
     if not table(c, "outbound_actions"):
         return None
     row = c.execute(
-        "SELECT min(max(next_attempt_at, send_after)) FROM outbound_actions WHERE state='queued' "
+        "SELECT min(max(next_attempt_at, send_after)) FROM outbound_actions WHERE state='queued' AND channel<>'email' "
         "AND max(next_attempt_at, send_after)>?",
         (stamp(after),),
     ).fetchone()

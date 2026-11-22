@@ -298,7 +298,7 @@ def test_real_gmail_send_anchors_a_wait_that_intake_wakes(inbox, fake_gmail):
             "Sent an email in Gmail.",
         )
         assert H._json(sent["refs"], {})["provider_timestamp_ms"] == sent_ms
-        assert tuple(conn.execute("SELECT state,raw FROM email_sends WHERE id=?", (queued["id"],)).fetchone()) == (
+        assert tuple(conn.execute("SELECT state,raw FROM outbound_email WHERE id=?", (queued["id"],)).fetchone()) == (
             "sent",
             "",
         )

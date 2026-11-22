@@ -208,9 +208,10 @@ keeps no copy of mail, so there is nothing to sync, retain or sweep.
 
 ## Shared sending policy and queue
 
-The server's `backend/email_sending.py` owns the effective company/inbox/bot sending policy, who can OK,
-bot/inbox/company caps and the durable undo queue. Automation sends go through the same queue as bot sends, and
-calendar invitations too. Pending work survives restarts, and an uncertain delivery never retries automatically. See
+The server's `backend/email_sending.py` owns the effective company/inbox/bot sending policy, who can OK, and the
+bot/inbox/company caps. Automation, bot and calendar sends use the email channel of `outbound_actions` for frozen
+content, undo deadlines and delivery receipts. Pending work survives restarts. Check Gmail before issuing another
+send after an unconfirmed delivery. See
 [Turning sending on](mail.md#turning-sending-on) for settings, migration behavior, cancellation and the API.
 
 ## Tests and rollout

@@ -114,7 +114,7 @@ def test_finance_yes_records_the_reminder_but_the_frozen_email_still_needs_its_o
         payload = found["content"]
         assert payload["recipients"] == [EMAIL] and payload["mailbox"] == BOX, payload
         assert payload["body_sha256"] == delivery.digest(text)
-        queued = c.execute("SELECT * FROM email_sends WHERE id=?", (found["subject"].removeprefix("email_send:"),))
+        queued = c.execute("SELECT * FROM outbound_email WHERE id=?", (found["subject"].removeprefix("email_send:"),))
         queued = queued.fetchone()
         assert queued["state"] == "waiting_approval" and payload["content_sha256"] == queued["content_sha256"]
         assert not c.execute("SELECT * FROM email_send_previews").fetchone()
@@ -162,7 +162,7 @@ def test_a_bots_early_reminder_needs_no_finance_ok_and_waits_only_where_the_send
         assert made.status == "committed", made
         assert made.result["delivery"] == "send_approval" and made.result["send_approval_id"], made.result
         queued = c.execute(
-            "SELECT state, classification FROM email_sends WHERE operation_key=?", (f"invoice:{iid}:{stage}",)
+            "SELECT state, classification FROM outbound_email WHERE operation_key=?", (f"invoice:{iid}:{stage}",)
         )
         row = queued.fetchone()
         assert row["state"] == "waiting_approval" and json.loads(row["classification"])["legal_or_money"] is True
@@ -180,7 +180,7 @@ def test_a_bots_early_reminder_goes_on_its_own_where_the_sending_policy_allows_a
         assert made.status == "committed", made
         assert made.result["delivery"] == "sending_policy" and made.result["send_approval_id"] is None, made.result
         send_id = made.result["send_id"]
-        row = c.execute("SELECT * FROM email_sends WHERE id=?", (send_id,)).fetchone()
+        row = c.execute("SELECT * FROM outbound_email WHERE id=?", (send_id,)).fetchone()
         assert row["state"] == "pending" and row["approval_id"] == "" and row["via"] == "finance", dict(row)
         assert _send_approvals(c) == []
         follow = c.execute("SELECT send_approval_id FROM fin_invoice_reminders WHERE invoice_id=?", (iid,)).fetchone()
@@ -208,7 +208,9 @@ def test_a_bots_final_stage_reminder_still_waits_for_a_finance_admin_and_its_ema
         give(c, OWNER, asked.approval_id)
         done = FA.approval_decided(c, asked.approval_id, AT)
         assert done.status == "committed" and done.result["delivery"] == "send_approval", done
-        row = c.execute("SELECT state FROM email_sends WHERE operation_key=?", (f"invoice:{iid}:{FINAL}",)).fetchone()
+        row = c.execute(
+            "SELECT state FROM outbound_email WHERE operation_key=?", (f"invoice:{iid}:{FINAL}",)
+        ).fetchone()
         assert row["state"] == "waiting_approval"
 
 
@@ -224,12 +226,23 @@ def test_a_bots_early_reminder_waits_where_the_company_asks_about_money_or_wants
         _company_sends_on_its_own(c, **{ask: True})
         made = act(c, BOT, "invoice_remind", {"invoice_id": iid, "stage": 7})
         assert made.status == "committed" and made.result["delivery"] == "send_approval", made
-        row = c.execute("SELECT state, decision FROM email_sends WHERE id=?", (_sent_ids(c)[0],)).fetchone()
+        row = c.execute("SELECT state, decision FROM outbound_email WHERE id=?", (_sent_ids(c)[0],)).fetchone()
         assert row["state"] == "waiting_approval" and reason in json.loads(row["decision"])["reasons"], dict(row)
 
 
 def _sent_ids(c) -> list[str]:
-    return [str(r[0]) for r in c.execute("SELECT id FROM email_sends ORDER BY created_at, rowid")]
+    return [str(r[0]) for r in c.execute("SELECT id FROM outbound_email ORDER BY created_at, rowid")]
+
+
+def _permit_send(c, row, found):
+    from backend import email_sending as S, outbound_email as OE
+
+    now = H.now()
+    OE.queue(c, row["id"], now, S.dump(found))
+    assert OE.claim(c, row, now, S.SERVER, S.dump(found), "external")
+    leased = OE.get(c, row["id"])
+    assert S._permit(c, leased, found)
+    return leased
 
 
 def _sends(books, c, send_id: str) -> None:
@@ -238,11 +251,14 @@ def _sends(books, c, send_id: str) -> None:
     from backend.auth import Auth
 
     long_ago = "2000-01-01T00:00:00.000000Z"  # earlier sends went out well before: no pacing wait
-    c.execute("UPDATE email_sends SET provider_attempted_at=?, claimed_at=? WHERE state='sent'", (long_ago, long_ago))
-    row = c.execute("SELECT * FROM email_sends WHERE id=?", (send_id,)).fetchone()
+    c.execute(
+        "UPDATE outbound_actions SET provider_attempted_at=?, claimed_at=? WHERE channel='email' AND state='done'",
+        (long_ago, long_ago),
+    )
+    row = c.execute("SELECT * FROM outbound_email WHERE id=?", (send_id,)).fetchone()
     found = S.decision(c, Auth(books), row, dispatch=True)
     assert found["outcome"] == "allow", found
-    S._permit(c, row, found)
+    row = _permit_send(c, row, found)
     S._finish(c, row, "sent", "msg-" + send_id)
 
 
@@ -268,7 +284,7 @@ def test_each_stage_is_its_own_email_day_1_then_7_then_60(books):
         give(c, OWNER, asked.approval_id)
         done = FA.approval_decided(c, asked.approval_id, final_at)
         assert done.status == "committed" and done.result["delivery"] == "send_approval", done
-        states = [r[0] for r in c.execute("SELECT state FROM email_sends ORDER BY created_at, rowid")]
+        states = [r[0] for r in c.execute("SELECT state FROM outbound_email ORDER BY created_at, rowid")]
         assert states == ["sent", "sent", "waiting_approval"], states
         delivered = c.execute("SELECT stage FROM fin_invoice_reminders WHERE delivered_at IS NOT NULL ORDER BY stage")
         assert [r[0] for r in delivered] == [1, 7]
@@ -286,7 +302,7 @@ def test_an_early_stage_first_run_once_the_invoice_is_60_days_late_waits_like_th
         give(c, OWNER, asked.approval_id)
         done = FA.approval_decided(c, asked.approval_id, AT)
         assert done.status == "committed" and done.result["delivery"] == "send_approval", done
-        assert c.execute("SELECT state FROM email_sends").fetchone()[0] == "waiting_approval"
+        assert c.execute("SELECT state FROM outbound_email").fetchone()[0] == "waiting_approval"
 
 
 def test_an_early_reminder_asked_before_day_60_and_decided_after_it_asks_a_finance_admin_again(books):
@@ -316,7 +332,7 @@ def test_an_early_reminder_asked_before_day_60_and_decided_after_it_asks_a_finan
         give(c, OWNER, asked.approval_id)
         again = FA.approval_decided(c, asked.approval_id, "2026-11-05T12:00:00.000000Z")  # day 65
         assert again.status == "needs_approval" and again.approval_id != asked.approval_id, again
-        assert c.execute("SELECT count(*) FROM email_sends").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM outbound_email").fetchone()[0] == 0
 
 
 def test_a_policy_sent_reminder_that_the_queue_later_asks_about_shows_that_ok(books):
@@ -333,9 +349,9 @@ def test_a_policy_sent_reminder_that_the_queue_later_asks_about_shows_that_ok(bo
         send_id = made.result["send_id"]
         assert [(e["approval_id"], e["send_id"]) for e in delivery.pending(c)] == [(None, send_id)]
         _company_sends_on_its_own(c, mode="ask_first")
-        c.execute("UPDATE email_sends SET send_after=? WHERE id=?", ("2000-01-01T00:00:00.000000Z", send_id))
+        c.execute("UPDATE outbound_actions SET send_after=? WHERE id=?", ("2000-01-01T00:00:00.000000Z", send_id))
         S._lease(c, Auth(books), BOX, "r1")
-        approval = c.execute("SELECT approval_id FROM email_sends WHERE id=?", (send_id,)).fetchone()[0]
+        approval = c.execute("SELECT approval_id FROM outbound_email WHERE id=?", (send_id,)).fetchone()[0]
         assert approval and [(e["approval_id"], e["send_id"]) for e in delivery.pending(c)] == [(approval, send_id)]
 
 
@@ -360,7 +376,7 @@ def test_finance_does_not_queue_email_when_the_requester_lacks_inbox_send_access
         c.execute("UPDATE mailboxes SET kind='personal',person_id='ben' WHERE id=?", (row[0],))
         refused = act(c, OWNER, "invoice_remind", {"invoice_id": iid, "stage": 7})
         assert refused.status == "failed" and "sender cannot send" in refused.reason
-        assert c.execute("SELECT count(*) FROM email_sends").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM outbound_email").fetchone()[0] == 0
 
 
 def test_a_failed_send_raises_one_needs_you_and_a_retry_that_delivers_clears_it(books):
@@ -395,15 +411,15 @@ def _sent_by_the_queue(books, c, send_id: str, status: str, detail: str = "") ->
 
     auth = Auth(books)
     sid = task_asks.grant(c, send_id)["subject"].removeprefix("email_send:")
-    row = c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone()
+    row = c.execute("SELECT * FROM outbound_email WHERE id=?", (sid,)).fetchone()
     shown = S.shown_to(c, Identity(OWNER, "human"), row)
     task_asks.give_ok(c, OWNER, send_id, shown, own_click=True, ctx=task_asks.Context(auth=auth))
-    row = c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone()
+    row = c.execute("SELECT * FROM outbound_email WHERE id=?", (sid,)).fetchone()
     found = S.decision(c, auth, row, dispatch=True)
     assert found["approved"], found
-    S._permit(c, row, found)
+    row = _permit_send(c, row, found)
     S._finish(c, row, status, "msg-1" if status == "sent" else "", detail)
-    return dict(c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone())
+    return dict(c.execute("SELECT * FROM outbound_email WHERE id=?", (sid,)).fetchone())
 
 
 def test_the_queue_records_a_delivered_invoice_email_on_the_invoice(books):

@@ -29,7 +29,7 @@ from datetime import timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, Protocol, cast
 
-from . import drains, gmail_live, google_workspace
+from . import drains, gmail_live, google_workspace, outbound_email
 from .store import H, Problem
 
 LOG = logging.getLogger("tico.gmail_watch")
@@ -158,11 +158,7 @@ def _known(c: Conn, address: str, sender: str) -> bool | None:
     cannot say (the automation reads it as unknown)."""
     if not sender or sender == address:
         return None
-    if c.execute(
-        "SELECT 1 FROM email_sends WHERE mailbox=? AND state='sent' "
-        "AND EXISTS (SELECT 1 FROM json_each(recipients) WHERE value=?) LIMIT 1",
-        (address, sender),
-    ).fetchone():
+    if outbound_email.reached(c, address, sender):
         return True
     from . import mail_facts
 

@@ -375,11 +375,11 @@ def test_an_older_computers_abandoned_lease_is_recovered_and_its_old_lease_fence
     stale = H.shift(H.now(), minutes=-6)
     with inbox.app.state.store.transaction() as c:
         c.execute(
-            "UPDATE email_sends SET state='dispatching',runner_id=?,lease_id='old',claimed_at=? WHERE id=?",
+            "UPDATE outbound_actions SET state='attempting',metadata=json_set(metadata,'$.runner_id',?),claim_token='old',claimed_at=? WHERE id=?",
             (machine["runner_id"], stale, first["id"]),
         )
         c.execute(
-            "UPDATE email_sends SET state='dispatching',runner_id=?,lease_id='permitted',claimed_at=?,"
+            "UPDATE outbound_actions SET state='attempting',metadata=json_set(metadata,'$.runner_id',?),claim_token='permitted',claimed_at=?,"
             "provider_attempted_at=? WHERE id=?",
             (machine["runner_id"], stale, stale, second["id"]),
         )
@@ -387,9 +387,55 @@ def test_an_older_computers_abandoned_lease_is_recovered_and_its_old_lease_fence
     path = "connectors/email/sends/" + first["id"] + "/dispatch"
     post(inbox, path, {"mailbox": BOX, "lease_id": "old"}, token=machine["token"], expected=405)  # no route
     with inbox.app.state.store.read() as c:
-        rows = {r["id"]: r for r in c.execute("SELECT * FROM email_sends").fetchall()}
+        rows = {r["id"]: r for r in c.execute("SELECT * FROM outbound_email").fetchall()}
     assert rows[first["id"]]["state"] == "sent"
     assert rows[second["id"]]["state"] == "unknown" and not rows[second["id"]]["raw"]
+
+
+def test_cutover_reports_uncertain_delivery_once_and_withdraws_an_unused_ok(inbox):
+    queued = queue(inbox)
+    approved(inbox, queued)
+    with inbox.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE outbound_actions SET state='unknown',payload='',last_error=?,"
+            "metadata=json_set(metadata,'$.cutover_unconfirmed',1) WHERE id=?",
+            (S.UNCONFIRMED, queued["id"]),
+        )
+    assert dispatch(inbox) == dispatch(inbox) == []
+    with inbox.app.state.store.read() as c:
+        assert task_asks.standing(c, queued["approval_id"]) == task_asks.WITHDRAWN
+        assert (
+            c.execute(
+                "SELECT count(*) FROM events WHERE action='email.unknown' AND target=?", (queued["id"],)
+            ).fetchone()[0]
+            == 1
+        )
+        for sql in (S._CUTOVER_EXISTS, S._CUTOVER_BATCH):
+            assert c.execute(sql).fetchone() is None
+            scans = [
+                row[3] for row in c.execute("EXPLAIN QUERY PLAN " + sql) if row[3].startswith("SCAN outbound_actions")
+            ]
+            assert scans == ["SCAN outbound_actions USING INDEX outbound_email_cutover"]
+
+
+def test_email_lease_is_released_when_the_permit_refuses(inbox, monkeypatch):
+    autonomous(inbox)
+    queued = queue(inbox)
+    store, auth = inbox.app.state.store, inbox.app.state.auth
+
+    def refuse(c, row, found):
+        assert row["state"] == "dispatching" and row["lease_id"]
+        return False
+
+    monkeypatch.setattr(S, "_permit", refuse)
+    with store.transaction() as c:
+        assert S._lease(c, auth, BOX, S.SERVER, permit=True) is None
+        row = c.execute(
+            "SELECT state,claim_token,provider_attempted_at FROM outbound_actions WHERE id=?", (queued["id"],)
+        )
+        assert tuple(row.fetchone()) == ("queued", None, None)
+        leased = S._lease(c, auth, BOX, S.SERVER)
+        assert (leased["id"], leased["state"]) == (queued["id"], "dispatching")
 
 
 def test_one_hundred_waiting_approvals_do_not_starve_a_due_send(inbox):
@@ -403,7 +449,7 @@ def test_one_hundred_waiting_approvals_do_not_starve_a_due_send(inbox):
     due = queue(inbox, raw=mime(body="Authorized human send"))
     assert len(dispatch(inbox)) == 1
     with inbox.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM email_sends WHERE id=?", (due["id"],)).fetchone()[0] == "sent"
+        assert c.execute("SELECT state FROM outbound_email WHERE id=?", (due["id"],)).fetchone()[0] == "sent"
 
 
 def test_approver_must_load_authorized_frozen_preview_and_download_exact_attachment(inbox):
@@ -412,7 +458,7 @@ def test_approver_must_load_authorized_frozen_preview_and_download_exact_attachm
     with inbox.app.state.store.read() as c:
         task = task_asks.task_of(c, queued["approval_id"])
         unseen = task_asks.content_hash(
-            S.content(c.execute("SELECT * FROM email_sends WHERE id=?", (queued["id"],)).fetchone())
+            S.content(c.execute("SELECT * FROM outbound_email WHERE id=?", (queued["id"],)).fetchone())
         )
     # Knowing what it says is not having seen it: the OK needs the preview the server showed Cara.
     post(
@@ -446,12 +492,12 @@ def test_the_preview_names_to_cc_and_bcc_apart_and_the_ok_carries_its_answer_to_
     assert approved(inbox, queued)["answer_id"] == stored
 
 
-@pytest.mark.parametrize("state", ["canceled", "blocked", "failed", "declined"])
+@pytest.mark.parametrize("state", ["canceled", "blocked", "failed"])
 def test_new_intent_can_retry_a_definite_non_send_but_same_operation_cannot(inbox, state):
     autonomous(inbox)
     first = queue(inbox, operation_id="first-operation")
     with inbox.app.state.store.transaction() as c:
-        c.execute("UPDATE email_sends SET state=?,raw='' WHERE id=?", (state, first["id"]))
+        c.execute("UPDATE outbound_actions SET state=?,payload='' WHERE id=?", (state, first["id"]))
     assert queue(inbox, operation_id="first-operation")["id"] == first["id"]
     new = queue(inbox, operation_id="new-operation")
     assert new["id"] != first["id"] and new["state"] == "pending"
@@ -462,7 +508,7 @@ def test_sent_or_unknown_delivery_remains_deduplicated_for_a_new_operation(inbox
     autonomous(inbox)
     first = queue(inbox)
     with inbox.app.state.store.transaction() as c:
-        c.execute("UPDATE email_sends SET state='unknown',raw='' WHERE id=?", (first["id"],))
+        c.execute("UPDATE outbound_actions SET state='unknown',payload='' WHERE id=?", (first["id"],))
     assert queue(inbox, operation_id="new-intent")["id"] == first["id"]
 
 
@@ -479,7 +525,13 @@ def test_rehearsal_keeps_restrictions_but_discards_send_permits_and_proofs(inbox
     _, unclassified = devcopy.build(inbox.app.state.store.settings.db_path, dest)
     assert not unclassified
     with closing(sqlite3.connect(dest)) as c:
-        for table in ("email_sends", "email_send_operations", "email_send_previews", "email_legacy_automations"):
+        for table in (
+            "outbound_actions",
+            "email_sends",
+            "email_send_operations",
+            "email_send_previews",
+            "email_legacy_automations",
+        ):
             assert c.execute("SELECT count(*) FROM " + table).fetchone()[0] == 0
         assert c.execute("SELECT scope FROM email_sending_policies").fetchall() == [("company",)]
         assert c.execute("SELECT mailbox,address FROM email_suppressed_recipients").fetchall() == [(BOX, CONTACT)]

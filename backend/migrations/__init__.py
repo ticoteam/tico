@@ -42,7 +42,10 @@ from .. import hubdb as H
 
 DIRECTORY = Path(__file__).parent
 BASELINE = "baseline.sql"
-SLACK_CUTOVER = "20261122144410_slack_outbound"
+CUTOVER_PREREQUISITES = {
+    "20261122144410_slack_outbound": ("20261122001930_outbound_actions",),
+    "20261122194833_email_outbound": ("20261118234339_email_send_tasks", "20261122001930_outbound_actions"),
+}
 RETIRED_LIST = "retired.txt"
 # Older releases recorded their pre-file history as `legacy_user_version_<N>` and `legacy_cloud_<N>` rows with this
 # checksum. They name steps every database at the floor ran; nothing reads them.
@@ -267,11 +270,10 @@ def _broken_references(conn):
 def _run(conn, migration):
     """One migration in one transaction with its row, so a failure rolls back both. `conn` must be in autocommit."""
     module = _module(migration) if migration.kind == "py" else None
-    # Moving rows into a table on main still needs its CREATE on an install at the floor.
-    if module and migration.version == SLACK_CUTOVER:
-        create = "20261122001930_outbound_actions"
-        if not conn.execute("SELECT 1 FROM schema_migrations WHERE version=?", (create,)).fetchone():
-            _run(conn, _migration(migration.path.with_name(create + ".sql")))
+    # A storage cutover needs the source columns and destination table even on an install at the floor.
+    for version in CUTOVER_PREREQUISITES.get(migration.version, ()):
+        if not conn.execute("SELECT 1 FROM schema_migrations WHERE version=?", (version,)).fetchone():
+            _run(conn, _migration(migration.path.with_name(version + ".sql")))
     keys_off = bool(module and getattr(module, "FOREIGN_KEYS_OFF", False))
     prior = conn.execute("PRAGMA foreign_keys").fetchone()[0]
     if keys_off:

@@ -479,7 +479,7 @@ def test_a_booking_is_made_once_with_its_meet_link_and_its_invitation_queued(api
     again = post(api, "calendar/appointments", BOOKING, key="book-1")["action"]
     assert again["id"] == action["id"] and again["status"] == "succeeded" and len(google.posts()) == 1
     with api.app.state.store.read() as c:
-        send = c.execute("SELECT * FROM email_sends WHERE calendar_action_id=?", (action["id"],)).fetchone()
+        send = c.execute("SELECT * FROM outbound_email WHERE calendar_action_id=?", (action["id"],)).fetchone()
         assert send["id"] == action["result"]["invitation_send_id"] and send["mailbox"] == ANA
     tick(api)  # the watcher sees Tico's own event and does not announce it again
     assert actions(api) == [("created", action["result"]["event_id"])]
@@ -492,7 +492,7 @@ def test_a_booking_google_never_answered_is_unknown_and_not_retried(api, google)
     assert action["status"] == "unknown" and "check the calendar" in action["error"]
     assert len(google.posts()) == 1
     with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM email_sends").fetchone()
+        assert not c.execute("SELECT 1 FROM outbound_email").fetchone()
     google.down = False
     tick(api)
     assert len(google.posts()) == 1 and get(api, "calendar/actions/" + action["id"])["action"]["status"] == "unknown"

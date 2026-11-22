@@ -88,7 +88,7 @@ def queue(
     snap: Json | None = None  # the frozen message, read only when this action has no send yet
     with cast("AbstractContextManager[Conn]", store.read()) as c:
         prior = c.execute(
-            "SELECT * FROM email_sends WHERE automation_action_id=? ORDER BY rowid DESC LIMIT 1", (aid,)
+            "SELECT * FROM outbound_email WHERE automation_action_id=? ORDER BY rowid DESC LIMIT 1", (aid,)
         ).fetchone()
         sent: Json | None = cast("Callable[[Any], Json | None]", ES.public)(prior) if prior else None
         if sent is None:

@@ -1,10 +1,10 @@
 # Outbound actions
 
-The outbound gate queues Jira transitions and comments, Twilio and Close texts, Help replies, and Slack posts,
-replies and DMs.
+The outbound gate queues Jira transitions and comments, Twilio and Close texts, Help replies, Slack posts,
+replies and DMs, and Gmail sends.
 See `backend/outbound_actions.py` and the `outbound_actions` table.
 
-Email keeps its own queue, `email_sends`. The Slack gateway sends the Slack channel of the shared queue.
+The Slack gateway sends Slack actions. The server's email drain sends email actions.
 
 ## Queue an action
 
@@ -34,8 +34,7 @@ Or over the API, CLI or MCP:
 
 Only a bot (or Tico itself) queues. The same `occurrence_key` always answers the action it already made. A
 `task_id` must be a task the bot reads, a `connection_id` a tool it may see, `send_after` an ISO time (stored in UTC). Every listed field is bounded at enqueue (a destination at most 500
-characters), so every action fits on a list page. `metadata` is
-the caller's own record: kept, shown in the detail, never acted on.
+characters), so every action fits on a list page. These routes keep caller-provided `metadata` in the action detail.
 
 An action is seen by whoever queued it, the owner and admins, and the person asked to OK it. Slack status uses
 the existing Slack post endpoint. Slack actions can also be listed with `tico outbound list --channel slack` or
@@ -93,10 +92,21 @@ A bot that is onboarding, paused or archived queues nothing, and its queued acti
 
 ## The worker
 
-One thread per server (`start`, restarted by the scheduler's tick) handles actions for every channel except Slack.
-A commit that queues or approves an action wakes its worker. The Slack gateway owns Slack claims and recovery. At most once a minute, after its due row, it recovers stale
-claims, cancels actions whose OK was sent back, and makes a few provider lookups for unknown rows. Sleep when idle stays up for a row in flight or due within 15 minutes and wakes for a later
-one. A rehearsal copy never runs the worker, and a dev copy empties the table.
+One thread per server (`start`, restarted by the scheduler's tick) handles Jira, SMS and Help actions.
+A commit that queues or approves one wakes the worker. At most once a minute, it recovers stale claims, cancels
+actions whose OK was sent back, and makes a few provider lookups for unknown rows. Sleep when idle stays up for
+a row in flight or due within 15 minutes and wakes for a later one. A dev copy empties the table.
+
+## Email
+
+`backend/email_sending.py` applies mailbox policy, pacing, bounce suppression, and the undo window before dispatch.
+Its Gmail adapter writes the provider attempt and consumes the exact-content OK in the same transaction.
+The queue wipes frozen MIME when a send ends and keeps its recipients, subject, and delivery receipt.
+Use the [email routes and commands](mail.md#turning-sending-on) for the mailbox-scoped audit, preview, approval and undo.
+
+On upgrade, queued mail keeps its send ID, deadline, frozen content and approval. In-flight mail becomes unknown
+and its approval, automation and invoice records receive an unconfirmed outcome. The operation ledger keeps its
+request hashes and send IDs for retries. The legacy `email_sends` table holds the pre-upgrade audit with MIME removed.
 
 ## Help tickets
 

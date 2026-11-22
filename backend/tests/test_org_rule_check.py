@@ -2348,7 +2348,7 @@ def test_the_send_queue_checks_a_bots_own_email_against_the_rules(ruled, monkeyp
         [hold] = sql(api, "SELECT author FROM org_rule_holds WHERE operation='mail'")
         assert hold["author"] == "bot:ops"
         return
-    [row] = sql(api, "SELECT raw, content_sha256, classification FROM email_sends WHERE id=?", (sent["id"],))
+    [row] = sql(api, "SELECT raw, content_sha256, classification FROM outbound_email WHERE id=?", (sent["id"],))
     text = base64.urlsafe_b64decode(row["raw"] + "=" * (-len(row["raw"]) % 4)).decode()
     assert "Warning:" in text and "favorite color is gold" in text
     assert json.loads(row["classification"])["source_sha256"] != row["content_sha256"]

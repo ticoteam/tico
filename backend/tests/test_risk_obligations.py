@@ -46,11 +46,18 @@ def risk_of(api, key, token="ana-test"):
 def email(api, ident, state, actor="human:ana"):
     with api.app.state.store.transaction() as c:
         c.execute(
-            "INSERT INTO email_sends(id,mailbox,actor,bot,via,content_sha256,idempotency_key,recipients,attachments,"
-            "subject,body_sha256,raw,draft_id,thread_id,reply_to_id,approval_id,classification,decision,state,"
-            "created_at,send_after) VALUES(?,'legal@acme.example',?,'','','h',?,'[]','[]','Premium paid','b','','',"
-            "'','','','{}','{}',?,?,?)",
-            (ident, actor, "k-" + ident, state, H.now(), H.now()),
+            "INSERT INTO outbound_actions(id,channel,audience,operation,destination,occurrence_key,"
+            "actor,metadata,state,send_after,next_attempt_at,created_at,updated_at) "
+            "VALUES(?,'email','external','send','legal@acme.example',?,?,"
+            "json_object('idempotency_key',?,'subject','Premium paid'),?,?,?,?,?)",
+            (
+                ident,
+                "email:send:" + ident,
+                actor,
+                "k-" + ident,
+                {"sent": "done", "pending": "queued"}[state],
+                *(H.now(),) * 4,
+            ),
         )
 
 

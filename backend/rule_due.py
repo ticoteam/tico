@@ -462,7 +462,7 @@ def check_proof(c, auth, who, kind, ref):
             raise Problem("not_found", "That file is not one you can read", 404)
         return kind, ref
     if kind == "email":
-        row = c.execute("SELECT id, mailbox, actor, state FROM email_sends WHERE id=?", (ref,)).fetchone()
+        row = c.execute("SELECT id, mailbox, actor, state FROM outbound_email WHERE id=?", (ref,)).fetchone()
         if not row or not _email_readable(c, who, row):
             raise Problem("not_found", "That email is not one you can read", 404)
         if row["state"] != "sent":
@@ -498,7 +498,7 @@ def proof_view(c, auth, who, proof, memo):
             shown = bool(row) and files.file_visible(c, auth, who, row, memo.setdefault("files", {}))
             name = row["title"] if shown else None
         elif kind == "email":
-            row = c.execute("SELECT mailbox, actor, subject FROM email_sends WHERE id=?", (ref,)).fetchone()
+            row = c.execute("SELECT mailbox, actor, subject FROM outbound_email WHERE id=?", (ref,)).fetchone()
             shown = bool(row) and _email_readable(c, who, row)
             name = row["subject"] if shown else None
         memo[key] = {"kind": kind, "ref": ref if shown else None, "name": name}

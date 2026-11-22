@@ -5,6 +5,7 @@ enqueue and again at dispatch, and one OK from the person asked.
 A fake `webhook` adapter stands in for a provider (Jira's own is tested in test_outbound_jira.py)."""
 
 import json
+from contextlib import contextmanager
 from dataclasses import replace
 
 import pytest
@@ -13,6 +14,7 @@ from backend import outbound_actions as OA
 from backend import sleep_idle
 from backend import task_asks
 from backend.store import H
+from backend.tests.helpers.statement_scope import measuring, recorder
 from backend.tests.helpers.tasks_board import api, get, headers  # noqa: F401  (fixture)
 
 
@@ -98,6 +100,74 @@ def test_a_worker_whose_claim_lapsed_cannot_call_the_provider(store, fake):
     assert second.id == first.id and second.token != first.token
     assert OA.attempt(store, first) == "lost" and fake.calls == []
     assert OA.attempt(store, second) == "done" and fake.calls == [row["id"]]
+
+
+def test_email_claims_and_frozen_content_belong_to_the_mailbox_gate(api, store):
+    now = H.now()
+    with store.transaction() as c:
+        c.executemany(
+            "INSERT INTO outbound_actions(id,channel,audience,operation,destination,occurrence_key,payload,"
+            "state,send_after,next_attempt_at,created_at,updated_at,claimed_at,claim_token,provider_attempted_at) "
+            "VALUES(?,'email','external','send','ops@acme.example',?,json_object('raw','private'),?,?,?,?,?,?,?,?)",
+            [
+                ("queued-mail", "email:send:queued-mail", "queued", now, now, now, now, None, None, None),
+                ("leased-mail", "email:send:leased-mail", "attempting", now, now, now, now, now, "email-lease", None),
+            ],
+        )
+    assert OA.next_due(store) is None
+    assert OA.claim(store) is None
+    assert OA.recover(store, later(OA.STALE + 1)) == 0
+    assert OA.attempt(store, OA.Claimed("leased-mail", "email-lease")) == "lost"
+    assert api.get("/api/v2/outbound-actions?channel=email", headers=headers()).json()["items"] == []
+    for suffix in ("", "/cancel", "/confirm-sent", "/approve"):
+        path = "/api/v2/outbound-actions/queued-mail" + suffix
+        response = (
+            api.post(path, json={"shown_hash": "unseen"} if suffix == "/approve" else {}, headers=headers())
+            if suffix
+            else api.get(path, headers=headers())
+        )
+        assert response.status_code == 404, response.text
+    assert row_of(store, "queued-mail")["state"] == "queued"
+    assert row_of(store, "leased-mail")["state"] == "attempting"
+
+
+def test_outbound_list_treats_private_email_cursors_as_missing(api, store, fake):
+    visible, _ = add(store)
+    earlier = H.shift(visible["created_at"], seconds=-60)
+    with store.transaction() as c:
+        c.execute(
+            "INSERT INTO outbound_actions(id,channel,audience,operation,destination,occurrence_key,actor,"
+            "state,send_after,next_attempt_at,created_at,updated_at) VALUES("
+            "'private-mail','email','external','send','ops@acme.example','email:send:private-mail','bot:ops','done',?,?,?,?)",
+            (earlier, earlier, earlier, earlier),
+        )
+    first = get(api, "outbound-actions?cursor=missing")
+    assert [row["id"] for row in first["items"]] == [visible["id"]]
+    assert get(api, "outbound-actions?cursor=private-mail") == first
+    assert get(api, f"outbound-actions?cursor={visible['id']}")["items"] == []
+
+
+@pytest.mark.parametrize("by_state", [False, True])
+def test_admin_outbound_list_uses_a_non_email_index(api, store, fake, monkeypatch, by_state):
+    visible, _ = add(store)
+    query = f"outbound-actions?limit=1&state={visible['state']}" if by_state else "outbound-actions?limit=1"
+    index = "outbound_actions_non_email_state" if by_state else "outbound_actions_non_email_created"
+    read = store.read
+    statements = []
+
+    @contextmanager
+    def traced_read():
+        with read() as c:
+            c.set_trace_callback(recorder(statements))
+            yield c
+
+    monkeypatch.setattr(store, "read", traced_read)
+    with measuring(statements):
+        assert [row["id"] for row in get(api, query)["items"]] == [visible["id"]]
+    [sql] = [s for s in statements if "FROM outbound_actions" in s and "ORDER BY created_at DESC, id DESC" in s]
+    with read() as c:
+        plan = [row[3] for row in c.execute("EXPLAIN QUERY PLAN " + sql)]
+    assert any(f"USING INDEX {index}" in step for step in plan), plan
 
 
 def test_the_same_claim_replayed_after_its_attempt_calls_nothing(store, fake):

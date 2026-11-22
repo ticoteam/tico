@@ -126,7 +126,7 @@ def issue(
     )
 
 
-SENT_PREFIX = "send:"  # an invoice email the sending policy let go with no OK: "send:<email_sends id>"
+SENT_PREFIX = "send:"  # an invoice email the sending policy let go with no OK: "send:<email send id>"
 
 
 def asked(follow: str) -> bool:
@@ -139,7 +139,7 @@ def follow_ids(c: Any, follow: str) -> tuple[str | None, str | None]:
     has no OK, unless the queue asked for one since (the policy tightened during its undo window): then that OK."""
     if follow.startswith(SENT_PREFIX):
         sid = follow.removeprefix(SENT_PREFIX)
-        row = c.execute("SELECT approval_id FROM email_sends WHERE id=?", (sid,)).fetchone()
+        row = c.execute("SELECT approval_id FROM outbound_email WHERE id=?", (sid,)).fetchone()
         return (str(row[0]) if row and row[0] else None), sid
     row = c.execute("SELECT subject FROM ok_grants WHERE requirement_id=?", (follow,)).fetchone()
     subject = str(row[0]) if row else ""

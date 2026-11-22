@@ -83,7 +83,7 @@ def lose_the_lease(api, mid):
 def sends(api, aid):
     with api.app.state.store.read() as c:
         return c.execute(
-            "SELECT s.* FROM email_sends s JOIN automation_mail_actions a ON a.id=s.automation_action_id "
+            "SELECT s.* FROM outbound_email s JOIN automation_mail_actions a ON a.id=s.automation_action_id "
             "WHERE a.automation_id=?",
             (aid,),
         ).fetchall()
@@ -147,7 +147,7 @@ def test_a_send_claimed_after_sending_went_off_is_only_drafted(api, box):
     M.drain_workspace_mail(api.app.state.store)
     with api.app.state.store.read() as c:
         row = c.execute("SELECT * FROM automation_mail_actions WHERE id=?", (mid,)).fetchone()
-        assert c.execute("SELECT count(*) FROM email_sends").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM outbound_email").fetchone()[0] == 0
     assert (row["state"], row["action"], json.loads(row["result"])["send_off"]) == ("done", "draft", True)
     assert len(box.drafts(BOX)) == 1 and box.sent == []
 
@@ -845,7 +845,7 @@ def test_a_lost_send_answer_replays_after_the_draft_is_changed_or_gone(api, box)
     assert post(api, "email/sends", body, key="send-1")["send"]["id"] == first["id"]
     box.down.discard(BOX)
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM email_sends").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM outbound_email").fetchone()[0] == 1
 
 
 def test_the_same_words_after_a_newer_message_are_a_new_reply_to_its_sender(api, box):

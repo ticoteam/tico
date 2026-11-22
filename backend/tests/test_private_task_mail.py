@@ -61,7 +61,7 @@ def test_a_private_run_drafts_and_queues_a_send_and_the_ok_goes_only_to_its_appr
     give_ok(inbox, queued["approval_id"], token="cara-test")
     assert len(dispatch(inbox) + dispatch(inbox)) == 1  # the first pass lets it go, a later one sends it
     with inbox.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM email_sends WHERE id=?", (queued["id"],)).fetchone()[0] == "sent"
+        assert c.execute("SELECT state FROM outbound_email WHERE id=?", (queued["id"],)).fetchone()[0] == "sent"
         assert task_asks.grant(c, queued["approval_id"])["ok_by_id"] == "human:cara"
 
 
