@@ -159,15 +159,13 @@ _SUMMARY_LABELS = {"closed": "Closed with it", "open": "Still open", "kept": "St
 
 
 def help_tasks(c, ids):
-    """The page's tasks filed by the HQ watcher, which carry company links verified by HQ."""
+    """The page's tasks filed by the HQ watcher, including earlier tasks for a ticket."""
     if not ids:
         return set()
-    from .support_hq import WATCHED_TASK
-
     return {
         r[0]
         for r in c.execute(
-            f"SELECT id FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND {WATCHED_TASK}",
+            "SELECT task_id FROM hq_help_tasks WHERE task_id IN (SELECT value FROM json_each(?))",
             (json.dumps(sorted(ids)),),
         )
     }
@@ -185,6 +183,13 @@ def visible_entities(c, auth, who, ids):
     if not readers or viewer.role == "none":
         return set()
     return set.intersection(*(ES.visible_ids(c, actor, ids) for actor in readers))
+
+
+def hidden_help_links(c, auth, who, linked):
+    """The linked Help tasks whose Directory record the reader cannot see."""
+    help_ids = help_tasks(c, linked.keys())
+    visible = visible_entities(c, auth, who, {linked[task_id] for task_id in help_ids})
+    return {task_id for task_id in help_ids if linked[task_id] not in visible}
 
 
 def readable_history(c, auth, who, history, visible_sql):

@@ -341,14 +341,19 @@ def test_signature_only_queues_supplied_tickets_that_carry_it(rig, hq, tmp_path,
         return {"action": {"id": body["task_id"], "state": "waiting_approval"}}
 
     monkeypatch.setattr(tickets_cli, "tico_post", queue)
-    cmd = ("close-signature", sig, str(fixed), "--task", f"{one}=T1")
-    assert rig.cli(*cmd, "--task", f"{other}=T3")[0] == 1
+    cmd = ("close-signature", sig, str(fixed), "--task", f"{one}=T1@1")
+    assert rig.cli(*cmd[:-1], f"{one}=T1")[0] == 2
+    assert rig.cli(*cmd, "--task", f"{other}=T3@0")[0] == 1
     assert queued == []
-    assert rig.cli(*cmd, "--task", f"{two}=T2")[0] == 0
+    assert rig.cli(*cmd, "--task", f"{two}=T2@2")[0] == 0
     assert [(row["destination"], row["task_id"], row["payload"]) for row in queued] == [
         (one, "T1", {"body": fixed.read_text(), "last_message_id": 1}),
         (two, "T2", {"body": fixed.read_text(), "last_message_id": 2}),
     ]
+    queued.clear()
+    hq.person_writes(two, "The problem changed after you read this.")
+    assert rig.cli(*cmd, "--task", f"{two}=T2@2")[0] == 1
+    assert queued == []
     assert all(req.get_method() == "GET" for req in hq.seen)
 
 

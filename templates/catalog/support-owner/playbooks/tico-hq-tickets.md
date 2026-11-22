@@ -51,10 +51,11 @@ Follow `playbooks/work-a-ticket.md` for the buckets and for `tico doc ask`. Also
   and each new ticket or "Seen again" message with that signature is a comment on that task (which install, the version,
   how many times), never a second task. `software/hq-tickets list --signature hm-...` shows every ticket with one.
   Keep the ticket ids on the task so the release that fixes it can close them.
-- **Health Monitor fix shipped:** when a release carrying the fix for a signature rolls out, write one fixed-in reply
+- **Health Monitor fix shipped.** When a release carrying the fix for a signature rolls out, read each ticket with
+  `show` and record its latest customer message ID (zero for the original request). Write one fixed-in reply
   (`reports/hq-hm-....md`: what was wrong, the release with the fix, and how to update). Queue it per open Support
-  task through Outbound actions. `software/hq-tickets close-signature <signature> <file> --task <ticket>=<task>`
-  queues that reply with each ticket's latest customer message ID. If a draft is blocked as stale, read that ticket
+  task through Outbound actions. `software/hq-tickets close-signature <signature> <file> --task <ticket>=<task>@<message-id>`
+  requires the message ID the draft was written against for each ticket. If a draft is blocked as stale, read that ticket
   and queue a revised draft with `reply --last-message-id`. A person can close the HQ tickets after their replies are
   confirmed.
 - **Setup help:** the title says `(setup)`. The person pressed **Want help setting up?** and the message starts with a setup

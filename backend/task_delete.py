@@ -45,6 +45,7 @@ TASK_ROWS = (
     "task_requesters",
     "task_check_models",
     "task_run_models",
+    "hq_help_tasks",
     "meeting_task_links",
     "call_follow_ups",
     "maintenance_listings",

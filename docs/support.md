@@ -387,9 +387,10 @@ match the server's `TICO_HQ_URL` or its default HQ address. New tickets from tha
 available. The watcher records the HQ origin when it first opens a ticket. A person handles replies for older tasks
 that lack this record. The Support server opens the task and reads the ticket separately with `TICO_HQ_STAFF_READ_KEY`
 or `TICO_HQ_STAFF_KEY`. It retries temporary failures. With HQ's verified company and install IDs, it links the task to
-a company-visible organization through a reserved `tico-hq` reference. An existing record without that reference may
-need a Directory merge. The ticket thread appears in relationship history for people who can read the company and the
-Support task.
+a company-visible organization through a reserved `tico-hq` reference created by the verifier. A legacy reference in
+that namespace without verification leaves the task unlinked. When merging a duplicate in the Directory, keep the
+verified organization. Each ticket thread remains in relationship history for people who can read both the company
+and its Support task, including when a follow-up opens a new task.
 
 ### By hand
 

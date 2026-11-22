@@ -310,21 +310,22 @@ def test_verified_help_tickets_share_the_company_and_appear_in_directory_history
     assert [r["id"] for r in get(api, f"entities/activity?ref={other}")["rows"]] == [second["conversation_id"]]
 
 
-@pytest.mark.parametrize("kind,restricted", [("organization", True), ("person", False)])
-def test_verified_help_does_not_use_a_restricted_or_non_company_ref(api, flow, monkeypatch, kind, restricted):
+@pytest.mark.parametrize("kind,restricted", [("organization", True), ("organization", False), ("person", False)])
+def test_verified_help_does_not_use_a_restricted_or_legacy_ref(api, flow, monkeypatch, kind, restricted):
     _, _, _, _, intake, _ = flow
     monkeypatch.setenv("TICO_GATEWAY_KEY", GATEWAY)
     monkeypatch.setenv("TICO_GATEWAY_URL", URL)
     with api.app.state.store.transaction() as c:
         entity = entities.upsert(c, H.TICO_ACTOR, kind, match={}, name="Private contact")["id"]
         if restricted:
+            entities.external_ref(c, H.TICO_ACTOR, entity, "tico-hq", "company", COMPANY)
             entities.add_source(c, H.TICO_ACTOR, entity, "finance_book", "private-book", visibility="restricted")
-        # Simulate a reference written before the namespace and type were enforced.
-        c.execute(
-            "INSERT INTO entity_external_refs(id,entity_id,system,external_type,external_id,status,synced_at) "
-            "VALUES(?,?,'tico-hq','company',?,'active',?)",
-            (H.new_id(), entity, COMPANY, H.now()),
-        )
+        else:
+            c.execute(
+                "INSERT INTO entity_external_refs(id,entity_id,system,external_type,external_id,status,synced_at) "
+                "VALUES(?,?,'tico-hq','company',?,'active',?)",
+                (H.new_id(), entity, COMPANY, H.now()),
+            )
     task = intake(decide=False)
     assert not get(api, f"tasks/{task}")["task"]["entity_id"]
     with api.app.state.store.read() as c:
@@ -338,6 +339,21 @@ def test_directory_writers_cannot_claim_hq_company_references(api):
     post(api, "entities/external-refs", body, expected=422)
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM entity_external_refs WHERE external_id=?", (COMPANY,)).fetchone()
+
+
+def test_directory_writers_can_merge_duplicates_into_the_verified_company(api):
+    with api.app.state.store.transaction() as c:
+        verified = entities.upsert(c, H.TICO_ACTOR, "organization", match={}, name="Acme")["id"]
+        other = entities.upsert(c, H.TICO_ACTOR, "organization", match={}, name="Acme duplicate")["id"]
+        entities.external_ref(c, H.TICO_ACTOR, verified, "tico-hq", "company", COMPANY)
+    post(api, "entities/merge", {"keep": other, "drop": verified}, expected=422)
+    post(api, "entities/merge", {"keep": verified, "drop": other})
+    post(api, "entities/unmerge", {"drop": other})
+    with api.app.state.store.transaction() as c:
+        entities.merge(c, H.TICO_ACTOR, other, verified)
+    post(api, "entities/unmerge", {"drop": verified}, expected=422)
+    with api.app.state.store.read() as c:
+        assert entities.verified_external_ref(c, H.TICO_ACTOR, "tico-hq", "", "company", COMPANY) == other
 
 
 def test_verified_help_leaves_an_erased_company_unbound_without_a_health_error(api, flow, monkeypatch):
@@ -372,6 +388,48 @@ def test_directory_link_visibility_is_checked_in_task_details_lists_and_history(
     assert entity not in json.dumps(detail["events"])
     listed = get(api, "tasks", token="cara-test")["tasks"]
     assert not next(row for row in listed if row["id"] == task)["entity_id"]
+
+
+def test_replaced_help_task_keeps_company_history_and_visibility(api, flow, monkeypatch):
+    hq, runner, _, poll, intake, _ = flow
+    monkeypatch.setenv("TICO_GATEWAY_KEY", GATEWAY)
+    monkeypatch.setenv("TICO_GATEWAY_URL", URL)
+    first = get(api, f"tasks/{intake(decide=False)}")["task"]
+    entity = first["entity_id"]
+    post(api, f"tasks/{first['id']}/move", {"to": "closed", "why": "Resolved", "version": first["version"]})
+    hq.message("person", "This came back.")
+    second_id = report(api, runner, *poll())["tasks"]["hq:" + TICKET]
+    support_hq.verify_due(api.app.state.store)
+    second = get(api, f"tasks/{second_id}")["task"]
+    assert second["id"] != first["id"] and second["entity_id"] == entity
+    history = get(api, f"entities/activity?ref={entity}", token="cara-test")
+    assert {r["id"] for r in history["rows"]} == {first["conversation_id"], second["conversation_id"]}
+    post(api, f"tasks/{first['id']}/delete", {})
+    post(api, f"tasks/{first['id']}/restore", {})
+    with api.app.state.store.transaction() as c:
+        entities.add_source(c, H.TICO_ACTOR, entity, "finance_book", "private-book", visibility="restricted")
+    detail = get(api, f"tasks/{first['id']}", token="cara-test")
+    assert not detail["task"]["entity_id"] and entity not in json.dumps(detail["events"])
+    listed = get(api, "tasks?status=closed", token="cara-test")["tasks"]
+    assert not next(row for row in listed if row["id"] == first["id"])["entity_id"]
+
+
+def test_needs_you_rechecks_help_company_visibility_on_held_pages(api, flow, monkeypatch):
+    _, _, _, _, intake, _ = flow
+    monkeypatch.setenv("TICO_GATEWAY_KEY", GATEWAY)
+    monkeypatch.setenv("TICO_GATEWAY_URL", URL)
+    task = intake(decide=False)
+    entity = get(api, f"tasks/{task}")["task"]["entity_id"]
+    for line in ("Check the answer", "Check the timing"):
+        post(api, f"tasks/{task}/asks", {"to": "cara", "line": line, "kind": "ok"})
+    page = get(api, "needs-you?limit=1", token="cara-test")
+    assert page["next"] and page["items"][0]["task"]["entity_id"] == entity
+    with api.app.state.store.transaction() as c:
+        entities.add_source(c, H.TICO_ACTOR, entity, "finance_book", "private-book", visibility="restricted")
+    held = get(api, f"needs-you?limit=1&cursor={page['next']}", token="cara-test")
+    assert held["restart"] and "entity_id" not in held["items"][0]["task"]
+    fresh = get(api, "needs-you", token="cara-test")
+    assert len(fresh["items"]) == 2 and all("entity_id" not in item["task"] for item in fresh["items"])
 
 
 @pytest.mark.parametrize("failure", ["timeout", 429])
@@ -621,7 +679,7 @@ def test_help_commands_share_one_action_even_after_hq_loses_the_receipt(api, flo
     monkeypatch.setattr(watcher, "settings", lambda env: (hq, ""))
     env = {"HUB_TASK_ID": task}
     first = queue_answer(api, task, token)
-    bulk = ["close-signature", signature, str(reply), "--task", f"{TICKET}={task[:12]}"]
+    bulk = ["close-signature", signature, str(reply), "--task", f"{TICKET}={task[:12]}@0"]
     assert watcher.main(bulk, env=env) == 0
     (action,) = get(api, "outbound-actions?channel=help-ticket")["items"]
     assert action["id"] == first["id"] and action["state"] == "waiting_approval"

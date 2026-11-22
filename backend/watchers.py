@@ -86,6 +86,8 @@ def _open(c, auth, bot, title, body, owner=None, *, incident=False, help_key="")
 
 def remember(c, bot, key, task_id, *, help_event=False):
     now = H.now()
+    if help_event and support_hq.watched(c, bot, key):
+        c.execute("INSERT OR IGNORE INTO hq_help_tasks(task_id) VALUES(?)", (task_id,))
     due = now if help_event and support_hq.can_verify(c, getattr(c, "settings", None), bot, key) else None
     c.execute(
         "INSERT INTO watcher_items(bot,key,task_id,created_at,verify_after) VALUES(?,?,?,?,?) "

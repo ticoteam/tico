@@ -874,9 +874,8 @@ def external_ref(
     kind = _required(c, actor, external_type, "record type")
     external = _required(c, actor, external_id, "record id")
     connection_id = str(connection_id or "").strip()
-    if system.lower() == HQ_REF_SYSTEM and (
-        actor != H.TICO_ACTOR or kind != "company" or entity["type"] != "organization" or connection_id
-    ):
+    hq_ref = system.lower() == HQ_REF_SYSTEM
+    if hq_ref and (actor != H.TICO_ACTOR or kind != "company" or entity["type"] != "organization" or connection_id):
         _refuse(c, actor, "kind", "system tico-hq is reserved for verified HQ company records")
     if status not in EXTERNAL_REF_STATUSES:
         _refuse(c, actor, "kind", f"a record's status is {' or '.join(EXTERNAL_REF_STATUSES)}")
@@ -889,11 +888,14 @@ def external_ref(
     if have is None:
         if external_ref_suppressed(c, system, kind, external, connection_id):
             _refuse(c, actor, "suppressed", "That was erased at its owner's request; it is not created again")
+        ref_id = _id("xref")
         c.execute(
             "INSERT INTO entity_external_refs (id, entity_id, connection_id, system, external_type, external_id, url, "
             "revision, synced_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (_id("xref"), entity_id, connection_id, system, kind, external, url.strip(), revision.strip(), now, status),
+            (ref_id, entity_id, connection_id, system, kind, external, url.strip(), revision.strip(), now, status),
         )
+        if hq_ref:
+            c.execute("INSERT INTO hq_company_refs(ref_id) VALUES(?)", (ref_id,))
     elif have["entity_id"] != entity_id:
         _refuse(c, actor, "conflict", "That record is already another contact's; merge the two if they are one")
     else:
@@ -1368,6 +1370,19 @@ def remove_source(c: sqlite3.Connection, actor: str, entity_id: str, source_type
     return True
 
 
+def _check_hq_ref_move(c: sqlite3.Connection, actor: str, entity_id: str, ids: Sequence[str]) -> None:
+    if (
+        actor != H.TICO_ACTOR
+        and ids
+        and c.execute(
+            "SELECT 1 FROM entity_external_refs WHERE entity_id=? AND lower(system)=? "
+            "AND id IN (SELECT value FROM json_each(?)) LIMIT 1",
+            (entity_id, HQ_REF_SYSTEM, json.dumps(list(ids))),
+        ).fetchone()
+    ):
+        _refuse(c, actor, "kind", "Keep the organization with the HQ company reference")
+
+
 def merge(c: sqlite3.Connection, actor: str, keep_id: str, drop_id: str) -> str:
     """Merges `drop` into `keep`: the drop's identifiers, links, values, notes, mentions, activities, external refs and
     sources move to the kept entity, and the drop redirects to it. The move is logged (entity_merges) so unmerge reverses
@@ -1383,14 +1398,10 @@ def merge(c: sqlite3.Connection, actor: str, keep_id: str, drop_id: str) -> str:
         _refuse(c, actor, "kind", f"a {drop['type']} merges only into a {drop['type']}")
     now = H.now()
     params = {"keep": keep_id, "drop": drop_id}
-    tables: dict[str, list[Any]] = {}
-    for table, sql in MOVES.items():
-        ids = [row[0] for row in c.execute(sql, params)]
-        if ids:
-            c.executemany(
-                f"UPDATE {table} SET entity_id = :keep WHERE id = :id", [{"keep": keep_id, "id": i} for i in ids]
-            )
-            tables[table] = ids
+    tables = {table: ids for table, sql in MOVES.items() if (ids := [row[0] for row in c.execute(sql, params)])}
+    _check_hq_ref_move(c, actor, drop_id, tables.get("entity_external_refs", []))
+    for table, ids in tables.items():
+        c.executemany(f"UPDATE {table} SET entity_id = :keep WHERE id = :id", [{"keep": keep_id, "id": i} for i in ids])
     _tasks_moved(c, tables.get("tasks", []), keep_id)
     values = [row[0] for row in c.execute(VALUE_MOVES, params)]
     if values:
@@ -1482,6 +1493,7 @@ def unmerge(c: sqlite3.Connection, actor: str, drop_id: str) -> str:
     if keep is not None and keep["status"] == "merged":
         _refuse(c, actor, "merged", f"{keep_id} is merged into {keep['merged_into_id']} since; unmerge {keep_id} first")
     moved, prior = json.loads(log["moved"]), json.loads(log["prior"])
+    _check_hq_ref_move(c, actor, keep_id, moved["tables"].get("entity_external_refs", []))
     now = H.now()
     back = {"drop": drop_id, "keep": keep_id}
     for table, ids in moved["tables"].items():
@@ -2492,8 +2504,9 @@ def verified_external_ref(
     row = _one(
         c,
         "SELECT entity_id FROM entity_external_refs WHERE system=? AND connection_id=? "
-        "AND external_type=? AND external_id=? AND status='active'",
-        (system, connection_id, external_type, provider_id),
+        "AND external_type=? AND external_id=? AND status='active' "
+        "AND (? OR id IN (SELECT ref_id FROM hq_company_refs))",
+        (system, connection_id, external_type, provider_id, system.lower() != HQ_REF_SYSTEM),
     )
     if row is None:
         return None
@@ -2541,8 +2554,6 @@ def activity_history(
     limit: int,
 ) -> dict[str, Any]:
     """Page the visible relationship history over a single ordering for conversations and activities."""
-    from backend.support_hq import WATCHED_TASK
-
     boxes, tools = V.activity_connections(c, readers)
     args: list[object] = [entity_id, entity_id, entity_id, json.dumps(sorted(boxes)), json.dumps(sorted(tools))]
     limit = _limit(limit)
@@ -2562,10 +2573,11 @@ def activity_history(
         "WHERE th.entity_id=? AND th.parent_id IS NULL AND th.deleted_at IS NULL "
         f"AND th.audience='entity' AND ({thread_scope}) UNION ALL "
         "SELECT th.id, coalesce(th.last_message_at, th.created_at), coalesce(th.subject, '') "
-        f"FROM (SELECT id, conversation_id, entity_id, {WATCHED_TASK} AS help FROM tasks WHERE entity_id=? AND entity_id<>'' "
+        "FROM (SELECT id, conversation_id, entity_id FROM tasks WHERE entity_id=? AND entity_id<>'' "
         f"AND ({task_scope})) t JOIN conversations th ON th.id=t.conversation_id AND th.task_id=t.id "
         "WHERE th.parent_id IS NULL AND th.deleted_at IS NULL AND th.kind='task' "
-        "AND coalesce(th.audience,'task')='task' AND (t.help OR th.entity_id=t.entity_id)), "
+        "AND coalesce(th.audience,'task')='task' AND (th.entity_id=t.entity_id "
+        "OR EXISTS (SELECT 1 FROM hq_help_tasks WHERE task_id=t.id))), "
         "history AS ("
         "SELECT id, 'thread' AS type, 'conversation' AS kind, occurred_at, summary, NULL AS subject_id FROM outside "
         "UNION ALL "

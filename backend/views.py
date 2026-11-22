@@ -1941,7 +1941,7 @@ BRIEF_FIELDS = (
 )
 
 
-def _briefs(c, ids, visible, viewer=None):
+def _briefs(c, auth, who, ids, visible, viewer):
     """The brief task (docs/dev/pipelines-v3-cutover.md, "The task as JSON") of each id, read together, its turn as
     `viewer` sees it (task_reads.brief)."""
     from . import task_reads
@@ -1951,9 +1951,11 @@ def _briefs(c, ids, visible, viewer=None):
     rows = H.tasks(c, ids=sorted(ids), limit=None, order="finished", visible=visible)
     task_reads.brief(c, rows, visible, viewer)
     briefs = {row["id"]: {k: row.get(k) for k in BRIEF_FIELDS} for row in rows}
-    for row in rows:
-        if entity_id := row.get("entity_id"):
-            briefs[row["id"]]["entity_id"] = entity_id
+    linked = {row["id"]: row["entity_id"] for row in rows if row.get("entity_id")}
+    hidden = task_reads.hidden_help_links(c, auth, who, linked)
+    for task_id, entity_id in linked.items():
+        if task_id not in hidden:
+            briefs[task_id]["entity_id"] = entity_id
     return briefs
 
 
@@ -1976,7 +1978,7 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
     wanted = {i["task_id"] for i in raw if i.get("task_id")} | {t for i in raw for t in i.get("tasks") or ()}
     wanted |= {m["task_id"] for m in mentions if m.get("task_id")}
     readable = _readable_task_ids(c, visible, wanted)
-    briefs = {} if count_only else _briefs(c, readable, visible, waiting_on.turn_viewer(who))
+    briefs = {} if count_only else _briefs(c, auth, who, readable, visible, waiting_on.turn_viewer(who))
     items = []
     questions = [it for it in raw if it["kind"] == "question"]
     raw = [it for it in raw if it["kind"] != "question"]
@@ -2171,11 +2173,13 @@ def needs_shown(c, auth, who, task_view=None, **how):
 
 def needs_still_shown(c, auth, who, items):
     """Whether items cut from a held build (backend/needs_cache.py) still show only what the caller may read: each
-    page ask's title (files.readable_titles), and what each OK is about (a Finance action's payee and amount) to its
-    parties alone (task_asks.parties_to_all, one statement for them all)."""
-    from . import task_asks
+    page ask's title, an OK's details, and each Help task's Directory link."""
+    from . import task_asks, task_reads
     from .files import readable_titles
 
+    linked = {task["id"]: task["entity_id"] for item in items if (task := item.get("task")) and task.get("entity_id")}
+    if task_reads.hidden_help_links(c, auth, who, linked):
+        return False
     told = [item for item in items if item.get("about")]
     pages = [(p["file_id"], int(p["version"])) for item in told if (p := _asked_page(item))]
     if pages and len(readable_titles(c, auth, who, pages)) < len(set(pages)):

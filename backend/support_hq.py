@@ -26,10 +26,6 @@ CHANNEL = "help-ticket"
 TICKET = re.compile(r"TK-[A-Z2-7]{8}")
 WATCH_KEY = "hq:"
 ORIGIN_PREFIX = "hq-origin:"
-WATCHED_TASK = (
-    "EXISTS (SELECT 1 FROM watcher_items w JOIN watcher_refs r ON r.bot=w.bot AND r.key=w.key "
-    "WHERE w.task_id=tasks.id AND w.key GLOB 'hq:TK-*' AND r.ref GLOB 'hq-origin:*')"
-)
 STALE_REPLY = "The customer messages changed. Read the ticket and queue a fresh draft."
 FIX_REPLY = (
     "Engineering has finished work on the issue you reported. Thanks for reporting it. "

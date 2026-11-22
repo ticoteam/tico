@@ -522,6 +522,8 @@ KEEP = (
             "entity_attributes",
             "entity_values",
             "entity_external_refs",
+            "hq_company_refs",
+            "hq_help_tasks",
             "entity_connections",
             "entity_notes",
             "entity_views",
