@@ -26,7 +26,8 @@ The server watches every active mailbox its Workspace key or a person's own Conn
 every 90 seconds it asks Gmail for the history since the mailbox's last check, reads each new message once, runs the
 mailbox's message automations, notes bounces and feeds the Directory, then saves its cursor. Drafts are not
 heard. A mailbox's first check starts its watch a day back. Catch-up lists at most 20,000 messages and processes those
-oldest first over as many passes as it takes. Older mail never starts a run. A failed check keeps where it got to and
+oldest first over as many passes as it takes. Older mail never starts a run. If the saved watch start is invalid,
+the watch starts again at the current time. A failed check keeps where it got to and
 shows why on Tools > the mailbox. A refused Google sign-in also asks its person to reconnect. The server also sends
 every queued email and carries out every automation mail action. A finished automation run keeps no message body or
 snippet.
@@ -42,9 +43,9 @@ which also checks access to the source of each recorded activity.
 Relationship-agent wakes are deferred until relationship run lanes ship. History is available through
 `tico contacts activity <ref>`, `tico_contacts_activity` in MCP, and `GET /api/v2/entities/activity`.
 The inbox owner can release or drop held runs in the Conversation intake routine or through
-`tico automation held <id> release|drop`. The Automation runs card and audit entries for intake require access to
-the inbox. An arrival still held at its 24-hour deadline goes to the owner for triage. While an inbox is stopped,
-saved arrivals wait until it is reactivated, then resume processing or go to triage if overdue.
+`tico automation held <id> release|drop`. The Automation runs card and audit entries for intake and outside thread
+changes require access to the inbox. Saved arrivals stay held while the inbox is stopped, shared, or lacks an active
+owner. They resume when the inbox has an eligible owner and go to triage if overdue.
 
 ## Organizing live
 

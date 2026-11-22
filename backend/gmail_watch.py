@@ -290,6 +290,18 @@ def check(store: Any, box: Json, budget: Left | None = None) -> int:
     from .entities import ingest
 
     address, now = str(box["address"]), _now()
+    watch = box["watching_since_at"]
+    if watch is not None and _epoch(str(watch)) is None:
+        # Keep the new start even if Gmail is unavailable during the repair.
+        with store.transaction() as c:
+            repaired = c.execute(
+                "UPDATE mailboxes SET watching_since_at=?,catch_up=NULL "
+                "WHERE id=? AND status='active' AND watching_since_at=? AND history_id IS ? AND catch_up IS ?",
+                (now, box["id"], watch, box["history_id"], box["catch_up"]),
+            ).rowcount
+        if not repaired:
+            return 0
+        box = {**box, "watching_since_at": now, "catch_up": None}
     try:
         with store.read() as c:
             messages, state = _gather(c, box, now, budget)
@@ -304,6 +316,7 @@ def check(store: Any, box: Json, budget: Left | None = None) -> int:
         if (
             not current
             or current["status"] != "active"
+            or current["watching_since_at"] != box["watching_since_at"]
             or (current["history_id"], current["catch_up"]) != (box["history_id"], box["catch_up"])
         ):
             return 0  # stopped, or checked by another pass meanwhile: that check's mail is its own

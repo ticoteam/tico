@@ -79,9 +79,11 @@ def _verified_from(message: SimpleNamespace, sender: str) -> bool:
     return False
 
 
-def _owner(c: sqlite3.Connection, box: dict[str, Any]) -> str:
+def eligible_owner(c: sqlite3.Connection, box: dict[str, Any] | None) -> str:
+    if not box or box["status"] != "active" or box["kind"] != "personal":
+        return ""
     person = str(box.get("person_id") or "")
-    if not person or box["kind"] != "personal" or standing(c, person):
+    if not person or standing(c, person):
         return ""
     if mailboxes.level(c, f"human:{person}", box["address"]) == "none":
         return ""
@@ -99,7 +101,7 @@ def from_gmail(c: sqlite3.Connection, box: dict[str, Any], message: SimpleNamesp
     if since and 0 < int(message.epoch) < since.timestamp():
         return False
     sender = str(message.from_addr)
-    owner = _owner(c, box)
+    owner = eligible_owner(c, box)
     if (
         not owner
         or not mailboxes.feeds_directory(c, box)
@@ -204,9 +206,9 @@ def triage(
 ) -> str:
     """Hand the arrival to its inbox owner. Gmail keeps the original when the sender has no matched thread."""
     box = mailboxes.row_by_id(c, connection_id)
-    owner = _owner(c, box) if box else ""
-    if not owner:
-        return "skipped"
+    owner = eligible_owner(c, box)
+    if not box or not owner:
+        return "held"
     due = hub.shift(started_at, hours=DEADLINE_HOURS)
     subject = "Triage outside conversation" if payload.get("sender_verified") else "Triage unverified sender"
     mailbox = quote(str(box["address"]), safe="")

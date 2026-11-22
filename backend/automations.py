@@ -3035,7 +3035,7 @@ class Hub:
                 aid = current["automation_id"]
                 connection = aid.removeprefix(INTAKE_AUTOMATION)
                 box = mailbox_access.row_by_id(c, connection)
-                if box and box["status"] == "stopped":
+                if not outside_intake.eligible_owner(c, box):
                     status = "held"
                 else:
                     status = "queued" if state.get("recover") else _runnable(c, aid)
@@ -3503,21 +3503,27 @@ def tick(store, at=None, drain=True):
         c.execute(
             f"UPDATE automation_runs SET status={RUNNABLE},wake_at=NULL WHERE status='waiting' AND wake_at<=?", (now,)
         )
-        from .outside_intake import DEADLINE_HOURS
+        from . import mailbox_access, outside_intake
 
-        # A stopped inbox's held arrivals resume on reconnect. A run guard still owns its arrivals until the deadline.
-        intake_pattern = INTAKE_AUTOMATION + "*"
-        deadline = H.shift(now, hours=-DEADLINE_HOURS)
-        c.execute(
-            "UPDATE automation_runs SET status='queued',finished_at=NULL,wake_at=NULL,"
-            "saved_state=CASE WHEN status='failed' OR started_at<=? THEN json_set(saved_state,'$.recover',1) "
-            "ELSE saved_state END "
-            "WHERE automation_id GLOB ? AND trigger_ref LIKE 'intake:%' "
+        # A held arrival resumes when the inbox has an eligible owner. A run guard holds it until the deadline.
+        deadline = H.shift(now, hours=-outside_intake.DEADLINE_HOURS)
+        due_intake = (
+            "trigger_ref LIKE 'intake:%' "
             f"AND ((status='held' AND (started_at<=? OR ({RUNNABLE})='queued')) "
-            "OR (status='failed' AND wake_at<=?)) "
-            "AND EXISTS (SELECT 1 FROM mailboxes WHERE id=substr(automation_id,?) AND status='active')",
-            (deadline, intake_pattern, deadline, now, len(INTAKE_AUTOMATION) + 1),
+            "OR (status='failed' AND wake_at<=?))"
         )
+        for (aid,) in c.execute(
+            f"SELECT DISTINCT automation_id FROM automation_runs WHERE automation_id GLOB ? AND {due_intake}",
+            (INTAKE_AUTOMATION + "*", deadline, now),
+        ).fetchall():
+            box = mailbox_access.row_by_id(c, aid.removeprefix(INTAKE_AUTOMATION))
+            if outside_intake.eligible_owner(c, box):
+                c.execute(
+                    "UPDATE automation_runs SET status='queued',finished_at=NULL,wake_at=NULL,"
+                    "saved_state=CASE WHEN status='failed' OR started_at<=? THEN json_set(saved_state,'$.recover',1) "
+                    f"ELSE saved_state END WHERE automation_id=? AND {due_intake}",
+                    (deadline, aid, deadline, now),
+                )
         # A run cut off (the server stopped mid-run) goes on from its last save; its effects are not done twice.
         for run in c.execute(
             "SELECT id, automation_id, saved_state FROM automation_runs WHERE status='running' AND claimed_at<?",

@@ -92,21 +92,26 @@ def test_an_expired_history_id_lists_again_without_hearing_anything_twice(watche
 
 
 @pytest.mark.parametrize("watch_path", ["first_check", "history", "expired_history"])
-def test_bad_watch_timestamp_does_not_stop_ordinary_arrivals(watched, watch_path):
+def test_bad_watch_timestamp_starts_a_new_window_for_catch_up_and_history(watched, watch_path):
     api, gmail, aid = watched
     if watch_path != "first_check":
         assert check(api, T0) == 0
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE mailboxes SET watching_since_at='invalid' WHERE address=?", (BOX,))
-    if watch_path == "first_check":
-        gmail.add(BOX, "old", epoch=epoch(T0 - timedelta(days=2)))
     if watch_path == "expired_history":
         gmail.expired.add(BOX)
     later = T0 + timedelta(minutes=3)
+    gmail.add(BOX, "old", epoch=epoch(T0 + timedelta(minutes=1)))
     gmail.add(BOX, "ordinary", epoch=epoch(later))
-    assert check(api, later) == 1
+    check(api, later)
     assert box_row(api)["history_id"] == str(gmail.history_id(BOX))
+    assert H.parse_ts(box_row(api)["watching_since_at"]) == later
     assert heard(api, aid) == ["ordinary"]
+    gmail.expired.discard(BOX)
+    gmail.add(BOX, "late-history-old", epoch=epoch(later - timedelta(seconds=1)))
+    gmail.add(BOX, "late-history-new", epoch=epoch(later + timedelta(minutes=1)))
+    assert check(api, later + timedelta(minutes=2)) == 2
+    assert heard(api, aid) == ["late-history-new", "ordinary"]
 
 
 def test_intake_commits_before_the_cursor_and_replay_returns_the_same_run(watched, monkeypatch):
@@ -223,6 +228,47 @@ def test_stopped_inbox_keeps_saved_arrivals_and_hears_new_ones_after_reactivatio
         assert len(tasks) == 2 and all(task["owner_id"] == "human:ana" for task in tasks)
         text = "\n".join(H.task_words(c, task["id"]) for task in tasks)
         assert "/#all/saved)" in text and "/#all/while-stopped)" in text
+
+
+def test_reconnecting_as_shared_keeps_the_saved_arrival_until_a_person_owns_the_inbox(api, monkeypatch):
+    store = api.app.state.store
+    address = "support@acme.example"
+    monkeypatch.setattr(google_workspace, "covers", lambda c, mailbox: True)
+    with time_machine.travel(T0, tick=False):
+        with store.transaction() as c:
+            box = MA.ensure_mailbox(c, address, person_id="ana", created_by="human:ana")
+            aid = automations.INTAKE_AUTOMATION + box["id"]
+            rid = automations.queue_intake(c, box["id"], "ana", "intake:saved", {"source_message_id": "saved"})
+            MA.stop(c, "human:ana", box["id"])
+        result = post(api, "mailboxes", {"address": address, "shared": True})["mailbox"]
+        assert (result["id"], result["kind"]) == (box["id"], "shared")
+        store.automations.drain()
+        assert get(api, f"automations/{aid}/runs")["runs"][0]["status"] == "held"
+
+    overdue = T0 + timedelta(hours=outside_intake.DEADLINE_HOURS + 1)
+    with time_machine.travel(overdue, tick=False):
+        automations.tick(store, overdue, drain=False)
+        assert store.automations.drain() == 0
+        with store.transaction() as c:
+            run = c.execute("SELECT * FROM automation_runs WHERE id=?", (rid,)).fetchone()
+            assert run["status"] == "held" and not run["finished_at"]
+            assert json.loads(run["saved_state"])["payload"]["source_message_id"] == "saved"
+            assert not c.execute("SELECT 1 FROM tasks WHERE occurrence_step='triage'").fetchone()
+            MA.stop(c, "human:ana", box["id"])
+        result = post(api, "mailboxes", {"address": address})["mailbox"]
+        assert (result["id"], result["kind"]) == (box["id"], "personal")
+        automations.tick(store, overdue, drain=False)
+        assert store.automations.drain() == 0  # awaiting its person
+        with store.transaction() as c:
+            MA.link_person(c, "ana", address)
+        automations.tick(store, overdue, drain=False)
+        assert store.automations.drain() == 1
+
+    with store.read() as c:
+        assert c.execute("SELECT status FROM automation_runs WHERE id=?", (rid,)).fetchone()[0] == "ok"
+        (task,) = c.execute("SELECT id,owner_id FROM tasks WHERE occurrence_step='triage'").fetchall()
+        assert task["owner_id"] == "human:ana"
+        assert "/#all/saved)" in H.task_words(c, task["id"])
 
 
 @pytest.mark.parametrize("action, status", [("release", "ok"), ("drop", "skipped")])
