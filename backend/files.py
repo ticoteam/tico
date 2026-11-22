@@ -411,7 +411,7 @@ def page_audience_visible(c, auth, who, row, cache):
     return True
 
 
-def file_visible(c, auth, who, row, cache):
+def file_visible(c, auth, who, row, cache) -> bool:
     """Whether `who` may know this file exists: its scope's visibility, or a person's pin of it to the Dashboard or a
     team page they see (backend/cards.py widened), and never a runner's. A private task's file is never widened, except
     to the Rules Owner run a person asked to read it (asked_to_read)."""

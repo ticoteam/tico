@@ -1423,7 +1423,7 @@ class Auth:
 
         return read_cache.value(c, ("relationship_read_scope", who.attempt_id), checked, shared=True)
 
-    def run_viewer(self, c, who):
+    def run_viewer(self, c: Any, who: "Identity") -> "Identity":
         """Whom a lease of the shared Assistant reads as, in either form (its own run, or a person's own chat as them):
         the person whose own chat it is (rooms.run_scope), by their own rights; nobody (NOBODY: reads nothing, never the
         Assistant itself) when that person is gone. Anyone else reads as themselves."""
