@@ -89,7 +89,7 @@ a body or an address. The ticket secret goes in the `X-Ticket-Secret` header; an
 | `GET /v1/staff/tickets?status=open\|answered\|closed\|all&since=<UTC time>&limit=&source=` | staff key | Oldest activity first. `since` is `YYYY-MM-DDTHH:MM:SSZ` and matches `updated_at`, which moves when the human writes or the team replies. Each ticket has `body`, `email`, `version`, `install_id`, `email_pending`, `signature` (a Check health `hm-...`, or empty), `has_diagnostics`, `kind`, `source` (`person`, `bot_report`, `botops`, `health_monitor`, `hq_alert`, `website` or `unknown`; `source=` lists only that one) and `messages`, and on a
 setup-website ticket `attachment: {label, parts}` (`show` adds the `note` and `plan` text). `&signature=hm-...` lists only tickets with one signature, so the team works them together. |
 | `GET /v1/staff/tickets/{id}` | staff key | One ticket, with its `diagnostics` bundle when the human attached one (support.md, PRIVACY.md). No other route returns it. |
-| `POST /v1/staff/tickets/{id}/reply` | staff key | `{body}` (up to 8000 characters). Sets the ticket to `answered`; with an email on the ticket it is marked `email_pending`. HQ sends no email. `409` when closed. |
+| `POST /v1/staff/tickets/{id}/reply` | staff key | `{body}` (up to 8000 characters). Sets the ticket to `answered`. If it has an address, HQ marks it `email_pending` and emails the reply through account mail when configured. `409` when closed. |
 | `POST /v1/staff/tickets/{id}/status` | staff key | `{status: "open"\|"answered"\|"closed", email_sent?: true}`. |
 | `POST /v1/staff/tickets/by-signature/close` | staff key | `{signature, body}`: when a release ships a Check health fix, the same reply on every open or answered ticket with that signature, then each closed. A ticket with an email keeps `email_pending` (HQ sends no mail; the Support bot drafts it). Running it again closes nothing new. |
 | `DELETE /v1/staff/tickets/{id}` | staff key | Delete on request. The rows are overwritten in the file. |
@@ -110,6 +110,6 @@ source in ticoteam/tico-services. `TICO_HQ_URL` points an install at another add
 nothing; owner-only controls). `backend/tests/test_support.py` and `backend/tests/test_support_access.py` hold the install to
 the ticket routes above and the [support access routes](tico-hq.md#support-access) exactly: method, path, the
 `X-Ticket-Secret` header and the JSON fields. `backend/tests/test_hq_tickets.py` holds the Support Agent's `hq-tickets`
-and `gh-support` to the staff routes above and `POST /v1/staff/judge`. HQ's own tests (no address stored or logged; bad
+to the staff routes above and the Support server to `POST /v1/staff/judge`. HQ's own tests (no address stored or logged; bad
 input refused; the stats math, suppression and retention; tickets, the judge and the staff routes as HQ serves them) are in
 ticoteam/tico-services with its code.

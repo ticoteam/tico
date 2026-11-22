@@ -266,25 +266,28 @@ def control(api, bot_id, action):
     post(api, f"{path}/control", {"action": action, "expected_revision": revision})
 
 
-def test_legacy_replies_share_one_action_and_wait_for_the_outbound_ok(api, flow, monkeypatch, tmp_path):
+def test_help_commands_share_one_action_even_after_hq_loses_the_receipt(api, flow, monkeypatch, tmp_path):
     hq, _, token, _, intake, watcher = flow
     task = intake()
     signature = "hm-a1b2c3d4e5f6"
     hq.ticket["signature"] = signature
     reply = tmp_path / "reply.md"
-    reply.write_text(ANSWER)
+    reply.write_bytes(f" {ANSWER}\r\n".encode())
     monkeypatch.setattr(watcher, "tico_post", lambda env, path, body: post(api, path, body, token=token))
     monkeypatch.setattr(watcher, "settings", lambda env: (hq, ""))
     env = {"HUB_TASK_ID": task}
-    assert watcher.main(["reply", TICKET, str(reply)], env=env) == 0
+    first = queue_answer(api, task, token)
     bulk = ["close-signature", signature, str(reply), "--task", f"{TICKET}={task[:12]}"]
     assert watcher.main(bulk, env=env) == 0
     (action,) = get(api, "outbound-actions?channel=help-ticket")["items"]
-    assert action["state"] == "waiting_approval"
+    assert action["id"] == first["id"] and action["state"] == "waiting_approval"
     assert hq.replies == []
     approve(api, action)
+    hq.lose_receipt = True
     assert OA.step(api.app.state.store)
-    assert watcher.main(bulk, env=env) == 0
+    assert watcher.main(["reply", TICKET, str(reply)], env=env) == 1
+    (retry,) = get(api, "outbound-actions?channel=help-ticket")["items"]
+    assert retry["id"] == first["id"] and retry["state"] == "unknown"
     assert not OA.step(api.app.state.store)
     assert hq.replies == [ANSWER]
 

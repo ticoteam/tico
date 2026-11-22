@@ -751,7 +751,13 @@ impl Watchers {
             "bot": bot, "name": spec.name, "started": started, "finished": now(), "exit": code.clamp(-255, 255),
             "timed_out": timed_out, "every": spec.every, "output": tail(REPORT_CAP), "events": found,
         });
-        if let Err(e) = ctx.client.post("runners/watchers", &body, None).await {
+        let report_client = if spec.name == "gh-support" {
+            // The server screens GitHub events with the HQ judge before taking the report.
+            ctx.client.with_read_timeout(60)
+        } else {
+            ctx.client.clone()
+        };
+        if let Err(e) = report_client.post("runners/watchers", &body, None).await {
             restore(&state, &saved); // the events did not arrive, so the program must see them again
             self.problem(
                 key,

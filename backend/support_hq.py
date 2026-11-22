@@ -25,7 +25,6 @@ CHANNEL = "help-ticket"
 TICKET = re.compile(r"TK-[A-Z2-7]{8}")
 WATCH_KEY = "hq:"
 ORIGIN_PREFIX = "hq-origin:"
-FIX_KEY = "closeout:help:"
 FIX_REPLY = (
     "Engineering has finished work on the issue you reported. Thanks for reporting it. "
     "If you still need help with this, reply here."
@@ -55,17 +54,32 @@ def pipeline_for(c: Connection, bot: str, key: str) -> str | None:
     return None
 
 
-def _staff(settings: Any) -> str:
+def staff_key(settings: Any) -> str:
     key = os.environ.get("TICO_HQ_STAFF_KEY", "").strip()
     return key if key and settings is not None and not support.off_reason(settings) else ""
+
+
+def judge_github(staff: str, text: str) -> str:
+    try:
+        answer = support._ask_hq("POST", "/v1/staff/judge", body={"text": text[:8000]}, staff=staff, wait=5)
+        verdict = answer.json().get("verdict") if answer.is_success else None
+    except (Problem, ValueError, AttributeError):
+        return "unchecked"
+    if answer.status_code in (401, 403, 404):
+        raise Problem("hq_judge_refused", f"HQ refused the GitHub support judge ({answer.status_code})", 424)
+    return str(verdict) if verdict in ("spam", "injection_risk", "legit") else "unchecked"
+
+
+def support_bot(c: Connection) -> Row | None:
+    return cast("Row | None", H.resolve_bot(c, os.environ.get("TICO_HQ_SUPPORT_BOT", "").strip() or "support-owner"))
 
 
 def _ticket(c: Connection, actor: str, task_id: str | None, key: str | None = None) -> Row | None:
     if not H.is_bot(actor) or not task_id:
         return None
     bot = H.actor_id(actor)
-    support_bot = H.resolve_bot(c, os.environ.get("TICO_HQ_SUPPORT_BOT", "").strip() or "support-owner")
-    if not support_bot or support_bot["id"] != bot:
+    configured = support_bot(c)
+    if not configured or configured["id"] != bot:
         return None
     predicate, params = ("w.key=?", (bot, task_id, key)) if key is not None else ("w.key LIKE 'hq:%'", (bot, task_id))
     row = c.execute(
@@ -84,6 +98,19 @@ def policy_floor(c: Connection, actor: str) -> str:
     return str(email_sending.effective(c, bot=H.actor_id(actor))["mode"])
 
 
+def reply_body(value: object) -> str:
+    if not isinstance(value, str) or support.CONTROL.search(value):
+        raise Problem("validation", "A Help reply needs a nonblank body of up to 8000 characters", 422)
+    body = value.replace("\r\n", "\n").replace("\r", "\n")
+    if not body.strip() or len(body) > 8000:
+        raise Problem("validation", "A Help reply needs a nonblank body of up to 8000 characters", 422)
+    return body.strip()
+
+
+def reply_key(ticket: str, body: str) -> str:
+    return f"closeout:help-reply:{origin_ref()}:{ticket}:{hashlib.sha256(body.encode()).hexdigest()}"
+
+
 def prepare(
     c: Connection,
     settings: Any,
@@ -100,13 +127,12 @@ def prepare(
     fields = {"body", "last_message_id"} if operation == "answer" else {"body"}
     if operation not in ("reply", "answer") or set(payload) != fields or not isinstance(payload["body"], str):
         raise Problem("validation", "Use reply with body, or answer with body and last_message_id", 422)
-    if not payload["body"].strip() or support.CONTROL.search(payload["body"]) or len(payload["body"]) > 8000:
-        raise Problem("validation", "A Help reply needs a nonblank body of up to 8000 characters", 422)
+    reply_body(payload["body"])
     if operation == "answer":
         last = payload["last_message_id"]
         if type(last) is not int or last < 0:
             raise Problem("validation", "last_message_id is the latest customer message ID, or zero", 422)
-    if not _staff(settings):
+    if not staff_key(settings):
         raise Problem("validation", "Help replies need a staff key on this server", 422)
     ticket = _ticket(c, actor, task_id, WATCH_KEY + destination)
     task = H.task(c, task_id) if ticket else None
@@ -129,7 +155,7 @@ def dispatch(store: Any, row: Row) -> "Row | SafeRejection | DispatchStopped":
     payload: Row = OA.content(row)["payload"]
     ticket_id = row["destination"]
     path = f"/v1/staff/tickets/{ticket_id}"
-    staff = _staff(store.settings)
+    staff = staff_key(store.settings)
     if not staff:
         raise OA.Refused("Help replies are disabled")
     try:
@@ -174,7 +200,7 @@ def dispatch(store: Any, row: Row) -> "Row | SafeRejection | DispatchStopped":
         except Problem as exc:
             problem: Any = exc
             raise OA.Refused(str(problem.detail)) from None
-        if row["occurrence_key"].startswith(FIX_KEY) and not _engineering_ready(c, row["task_id"], row["actor"]):
+        if OA.asked(row).get("help_engineering") and not _engineering_ready(c, row["task_id"], row["actor"]):
             raise OA.Refused("The Support Agent can no longer confirm the Engineering result")
         if stopped := OA.recheck_dispatch_policy(c, row, "external"):
             return stopped
@@ -241,7 +267,7 @@ def _engineering_ready(c: Connection, parent: str, actor: str, child: str | None
 def engineering_finished(c: Any, task_id: str) -> None:
     """The issue link and Support-filed subtask identify a bug handed to Engineering."""
     settings = getattr(c, "settings", None)
-    if not _staff(settings):
+    if not staff_key(settings):
         return
     from . import outbound_actions as OA
 
@@ -265,22 +291,21 @@ def engineering_finished(c: Any, task_id: str) -> None:
         or not _engineering_ready(c, parent, actor, task_id)
     ):
         return
-    key = f"{FIX_KEY}{origin_ref()}:{ticket['key']}"
-    if c.execute("SELECT 1 FROM outbound_actions WHERE occurrence_key=?", (key,)).fetchone():
-        return
     with batch_work.isolated(c, "help_engineering_reply", parent, private=True):
-        OA.enqueue(
+        _, created = OA.enqueue(
             c,
             settings,
             actor=actor,
             channel=CHANNEL,
             operation="reply",
             destination=ticket["key"].removeprefix(WATCH_KEY),
-            occurrence_key=key,
+            occurrence_key=CHANNEL,
             payload={"body": FIX_REPLY},
             task_id=parent,
-            system_occurrence=True,
+            server_metadata={"help_engineering": "yes"},
         )
+        if not created:
+            return
         H.task_comment(
             c,
             H.TICO_ACTOR,

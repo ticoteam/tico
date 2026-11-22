@@ -54,7 +54,7 @@ Follow `playbooks/work-a-ticket.md` for the buckets and for `tico doc ask`. Also
   (`reports/hq-hm-....md`: what was wrong, the release with the fix, and how to update). Queue it per open Support
   task through Outbound actions. `software/hq-tickets close-signature <signature> <file> --task <ticket>=<task>`
   queues that reply for each supplied ticket and Support task pair. A person can close the HQ tickets after their
-  replies are confirmed. If a ticket gave an email, add the email-ready copy to the Engineering task.
+  replies are confirmed.
 - **Setup help:** the title says `(setup)`. The person pressed **Want help setting up?** and the message starts with a setup
   snapshot they could edit: steps done, computer online, model signed in, first bot ready, bots in Needs setup. Answer the
   first "no" in it with the one next step from the docs; ask for **Setup check** only when the snapshot does not say enough.
@@ -63,7 +63,7 @@ Follow `playbooks/work-a-ticket.md` for the buckets and for `tico doc ask`. Also
   What they typed is the attachment marked **Untrusted public input** (`software/hq-tickets show`): their note, and their
   plan only if they ticked "send my plan". Never the chat: HQ has no field for it, so don't ask for it. Answer about
   planning and getting started in plain words; never ask for a key or a password (tools connect on their own install).
-  The reply shows on the page the setup page linked, and the email copy follows the usual sending rule.
+  The reply shows on the page the setup page linked.
 - **Feedback:** the title says `(feedback)`: an answer to "How is Tico working for you?". Thank them in a line; a problem
   in it is sorted like any other ticket, and a wish is a line for the product owner.
 - **Question:** answer from the docs; a `covered: false` is a task to the Librarian.
@@ -83,7 +83,8 @@ Write `reports/hq-TK-XXXXXXXX.md`: plain text (nothing is rendered as HTML in th
 `knowledge/voice.md`'s tone, ending with what happens next. No promise of a fix or a date. Never paste a token, a key or a
 person's details from the ticket. Put the same text on the task.
 
-If the ticket has a reply-to email, add an email-ready copy to the task. Send requested email with a connected mail Tool (`tico email send ... --task <task id>` queues it with Tico, which decides it); a send Tico holds or blocks stays a draft. HQ itself sends no email.
+HQ delivers the reply on the ticket and emails it when account mail is set up and the ticket has an address. Offer a
+manual email only after a person confirms the customer did not receive HQ's email.
 
 ## 4. Post the requested reply
 
@@ -97,7 +98,7 @@ For other replies, queue the reply file on the Support task:
 
     software/hq-tickets reply TK-XXXXXXXX reports/hq-TK-XXXXXXXX.md --task <support task id>
 
-Use one command per draft. If the server refuses the reply or sending is blocked, leave the draft on the task for a person.
+If the server refuses the reply or sending is blocked, leave the draft on the task for a person.
 
 ## 5. Keep the task open until the next step is complete
 

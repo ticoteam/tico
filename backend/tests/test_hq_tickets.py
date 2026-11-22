@@ -14,7 +14,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+import httpx
 import pytest
+
+from backend import support, watchers
+from backend.tests.helpers.watchers import hosted, report, task, tasks, wakes
 
 ROOT = Path(__file__).resolve().parents[2]
 STAFF = "k" * 32
@@ -31,7 +35,6 @@ def load(name):
 
 
 tickets_cli = load("hq-tickets")
-gh_support = load("gh-support")
 
 
 def documented(*routes):
@@ -60,7 +63,7 @@ class StaffHQ:
     a wrong key `401` and a field it does not take `422`."""
 
     def __init__(self):
-        self.tickets, self.next_message, self.seen, self.verdict = {}, 1, [], ("legit", "judged legit (0.99)")
+        self.tickets, self.next_message, self.seen = {}, 1, []
 
     @staticmethod
     def now():
@@ -165,10 +168,6 @@ class StaffHQ:
             ]
             rows.sort(key=lambda t: (t["updated"], t["ticket_id"]))
             return 200, {"tickets": [self.view(t) for t in rows[:limit]]}
-        if method == "POST" and path == "/v1/staff/judge":
-            if set(body or {}) != {"text"}:
-                return 422, {"error": "invalid"}
-            return 200, {"verdict": self.verdict[0], "reason": self.verdict[1]}
         found = re.fullmatch(r"/v1/staff/tickets/(TK-[A-Z2-7]{8})", path)
         ticket = self.tickets.get(found.group(1)) if found else None
         if method == "GET" and ticket:
@@ -178,11 +177,7 @@ class StaffHQ:
 
 @pytest.fixture
 def hq():
-    documented(
-        "GET /v1/staff/tickets",
-        "GET /v1/staff/tickets/{id}",
-        "POST /v1/staff/judge",
-    )
+    documented("GET /v1/staff/tickets", "GET /v1/staff/tickets/{id}")
     return StaffHQ()
 
 
@@ -404,29 +399,42 @@ def test_each_verdict_routes_and_the_watcher_files_only_what_it_should(rig, hq):
     assert [e["key"] for e in rig.watch()] == ["hq:" + ids["spam"]]
 
 
-def test_github_threads_get_the_same_verdicts_through_the_staff_judge_route(hq):
-    hq.verdict = ("spam", "judged spam (0.95)")
-    judge = gh_support.hq_judge({"HQ_STAFF_READ_KEY": STAFF, "HQ_URL": URL}, hq)
-    assert judge("hello")[0] == "spam"
-    (request,) = hq.seen
-    assert (request.get_method(), request.full_url, json.loads(request.data)) == (
-        "POST",
-        URL + "/v1/staff/judge",
-        {"text": "hello"},
-    )
-    assert gh_support.hq_judge({}, hq)("hello")[0] == "unchecked" and len(hq.seen) == 1  # no key: fails open
-    assert (
-        gh_support.hq_judge({"HQ_STAFF_READ_KEY": "w" * 32, "HQ_URL": URL}, hq)("hello")[0] == "unchecked"
-    )  # refused: open
+def test_github_report_uses_server_staff_key_and_replays_on_refusal(api, monkeypatch):
+    documented("POST /v1/staff/judge")
+    monkeypatch.setenv("TICO_HQ_URL", URL)
+    monkeypatch.setenv("TICO_SUPPORT", "on")
+    monkeypatch.setenv("TICO_HQ_SUPPORT_BOT", "ops")
+    monkeypatch.setenv("TICO_HQ_STAFF_KEY", "read-only-key")
+    seen = []
 
-    sent, counts = [], {"new": 2, "comments": 1, "closed": 0, "held": 0}
-    body = "GitHub issue x\n\n<thread-text>\n> the words\n</thread-text>\n\nWork it."
-    said = iter(["spam", "injection_risk", "legit"])
-    emit = gh_support.gated(sent.append, lambda text: (next(said), ""), counts)
-    emit({"op": "task", "key": "a", "title": "GitHub issue: a", "body": body})
-    emit({"op": "task", "key": "b", "title": "GitHub issue: b", "body": body})
-    emit({"op": "comment", "key": "c", "text": body, "title": "t", "body": body})
-    emit({"op": "done", "key": "d", "note": "closed"})
-    assert [e["key"] for e in sent] == ["b", "c", "d"] and counts == {"new": 1, "comments": 1, "closed": 0, "held": 1}
-    assert sent[0]["title"].startswith("[injection risk]") and sent[0]["body"].startswith("WARNING")
-    assert not sent[1]["body"].startswith("WARNING")
+    def hq(request):
+        assert request.method == "POST" and str(request.url) == URL + "/v1/staff/judge"
+        (text,) = json.loads(request.content).values()
+        seen.append(text)
+        if request.headers["authorization"] != "Bearer " + STAFF:
+            return httpx.Response(403)
+        return httpx.Response(200, json={"verdict": text.removeprefix("> "), "reason": ""})
+
+    monkeypatch.setattr(support, "TRANSPORT", httpx.MockTransport(hq))
+    runner = hosted(api)
+    spam, risky = (
+        task(f"gh:https://github.com/acme/app/issues/{n}", body=f"<thread-text>\n> {verdict}\n</thread-text>")
+        for n, verdict in enumerate(("spam", "injection_risk"), start=1)
+    )
+    report(api, runner, spam, risky, name="gh-support", expected=424)
+    assert tasks(api) == []
+    with api.app.state.store.read() as c:
+        assert watchers.problems(c, {runner["runner_id"]}) == [
+            ("ops", "gh-support", "exited 1: HQ refused the GitHub support judge (403)")
+        ]
+
+    monkeypatch.setenv("TICO_HQ_STAFF_KEY", STAFF)
+    report(api, runner, spam, risky, name="gh-support")
+    (only,) = tasks(api)
+    assert only["title"].startswith("[injection risk]") and only["body"].startswith("WARNING")
+    before = wakes(api)
+    report(api, runner, {"op": "comment", "key": risky["key"], "text": spam["body"]}, name="gh-support")
+    assert wakes(api) == before
+    assert set(seen) == {"> spam", "> injection_risk"}
+    with api.app.state.store.read() as c:
+        assert watchers.problems(c, {runner["runner_id"]}) == []

@@ -399,7 +399,7 @@ def enqueue(
     connection_id: str = "",
     task_id: str | None = None,
     send_after: str | None = None,
-    system_occurrence: bool = False,
+    server_metadata: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any], bool]:
     """Queue one action in the caller's transaction: (the row, whether it is new). The same occurrence key answers the
     row it already made, whatever else is sent. The adapter checks the action and resolves its audience (one it cannot
@@ -417,10 +417,16 @@ def enqueue(
     ):
         if len(str(value or "")) > most:
             raise Problem("validation", f"{name} is at most {most} characters", 422)
-    if key.startswith(RESERVED) and actor != H.TICO_ACTOR and not system_occurrence:
+    if key.startswith(RESERVED) and actor != H.TICO_ACTOR:
         raise Problem("validation", f"Occurrence keys starting {RESERVED!r} are Tico's own", 422)
+    if channel == support_hq.CHANNEL:
+        destination = destination.strip()
+        payload = {**payload, "body": support_hq.reply_body(payload.get("body"))}
+        key = support_hq.reply_key(destination, payload["body"])
     found = c.execute("SELECT * FROM outbound_actions WHERE occurrence_key=?", (key,)).fetchone()
     if found:
+        if channel == support_hq.CHANNEL and found["task_id"] != task_id:
+            raise Problem("conflict", "This Help reply belongs to another task", 409)
         return dict(found), False
     adapter = ADAPTERS.get(channel)
     if adapter is None:
@@ -448,6 +454,9 @@ def enqueue(
     policy = decide(c, actor=actor, channel=channel, audience=audience, destination=destination)
     state = {"on_their_own": "queued", "ask_first": "waiting_approval", "never": "blocked"}[policy["choice"]]
     now = H.now()
+    notes = {k: v for k, v in (metadata or {}).items() if k != SERVER}
+    if server_metadata:
+        notes[SERVER] = server_metadata
     row = {
         "id": H.new_id(),
         "connection_id": str(connection_id or ""),
@@ -458,7 +467,7 @@ def enqueue(
         "occurrence_key": key,
         "actor": actor,
         "payload": _dump(payload),
-        "metadata": _dump({k: v for k, v in (metadata or {}).items() if k != SERVER}),
+        "metadata": _dump(notes),
         "policy_decision": _dump(policy),
         "state": state,
         "send_after": after or now,
