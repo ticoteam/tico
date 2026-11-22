@@ -208,10 +208,12 @@ function Steps({ run }: { run: ChatMessage['run'] }) {
   );
 }
 
-/** The live browsers a message shows (`refs.shows`, `browser:<tool>/<account>`): an agent that needs a person to sign
-    in or finish a step by hand asks with one (backend/browser_commands.py). */
-export function browsersOf(m: Pick<ChatMessage, 'refs' | 'deleted'>): { tool: string; account: string }[] {
-  const shows = m.deleted ? [] : m.refs?.shows;
+/** The live browsers a message's open ❓ to `me` shows (`refs.shows`, `browser:<tool>/<account>`): an agent that needs
+    the person to sign in or finish a step by hand asks with one (backend/browser_commands.py). None once the question is
+    answered or given to someone else (`refs.question`, mirrored while it is open, backend/question_marks.py). */
+export function browsersOf(m: Pick<ChatMessage, 'refs' | 'deleted'>, me: string | undefined): { tool: string; account: string }[] {
+  const asked = m.refs?.question as { to?: string } | undefined;
+  const shows = m.deleted || !me || asked?.to !== me ? [] : m.refs?.shows;
   if (!Array.isArray(shows)) return [];
   return shows.flatMap((s) => {
     const [tool, account] = typeof s === 'string' && s.startsWith('browser:') ? s.slice(8).split('/') : [];
@@ -223,9 +225,9 @@ export function browsersOf(m: Pick<ChatMessage, 'refs' | 'deleted'>): { tool: st
 const BrowserDialog = lazy(() => import('@/features/team/exports').then((m) => ({ default: m.BrowserDialog })));
 
 /** Open the live browser a message asks the person to use, in place. */
-function Browsers({ m }: { m: ChatMessage }) {
+function Browsers({ m, me }: { m: ChatMessage; me: string | undefined }) {
   const [open, setOpen] = useState<{ tool: string; account: string } | null>(null);
-  const shown = browsersOf(m);
+  const shown = browsersOf(m, me);
   if (!shown.length) return null;
   return (
     <div className="msg-browsers">
@@ -404,7 +406,7 @@ export function Message({ m, variant, me, cont, onRetry, card, below, onReply, q
             <Steps run={m.run} />
             <Shelf m={m} onPicture={pics.openAt} />
             {aid && <Proposal aid={aid} />}
-            <Browsers m={m} />
+            <Browsers m={m} me={me} />
             {m.refs?.slack && <FromSlack m={m} onRead={() => setReading(true)} />}
           </div>
         </div>

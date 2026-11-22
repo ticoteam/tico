@@ -1,7 +1,8 @@
 import type { QueryClient } from '@tanstack/react-query';
 import { timelineQuery } from '@/conversation';
 import { threadQuery } from '@/features/threads/routing';
-import { CHAT, decisionOf, defaultTab, isPage, tabsOf, targetOf } from './model';
+import { meQuery } from '@/data';
+import { asksInChat, CHAT, decisionOf, defaultTab, isPage, tabsOf, targetOf } from './model';
 import { pageShownQuery, taskDetailQuery, taskFilesQuery, taskRefQuery, type TaskData } from './queries';
 import { waitSlugs, waitsOnYou } from './waits';
 
@@ -9,6 +10,13 @@ import { waitSlugs, waitsOnYou } from './waits';
 // here: the first load imports this file, and the task page comes through exports.ts with its route.
 export { taskRefQuery, taskDetailQuery };
 export { tabAddress as taskAddress } from './model';
+
+/** The phone's cards: the shell's mode once it has drawn (html[data-layout]), else the width it decides by (760 and
+    under, shell/layout.ts CARDS_AT). */
+const onCards = (): boolean => {
+  const mode = document.documentElement.dataset.layout;
+  return mode ? mode === 'cards' : window.innerWidth <= 760;
+};
 
 /** Load the task while the route loads its code. A refused read leaves the page to show the error. */
 export async function loadTask(client: QueryClient, param: string, tab?: string, openChat = false): Promise<{ task: TaskData; tab: string } | null> {
@@ -26,6 +34,12 @@ export async function loadTask(client: QueryClient, param: string, tab?: string,
     if (!tab && (await waitsOnYou(client, t))) {
       await files;
       return { task: t, tab: waitSlugs(1, tabsOf(t, client.getQueryData(fileQuery.queryKey)).map((x) => x.slug))[0]! };
+    }
+    // On a phone, a ❓ for the person in the task's chat opens the chat, where its box answers the agent asking (unless
+    // a page or a file waits on them: defaultTab's order).
+    if (!tab && onCards() && asksInChat(t, (await client.ensureQueryData(meQuery).catch(() => null))?.id)) {
+      await files;
+      return { task: t, tab: defaultTab(tabsOf(t, client.getQueryData(fileQuery.queryKey) ?? []), true) };
     }
     const selected = tab ? tabs.find((x) => x.slug === tab) : tabs[0];
     // An attached file can outrank the default document when the task is waiting for an answer: the file the ask is

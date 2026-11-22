@@ -30,6 +30,7 @@ queue the same occurrence twice; an open dream stops a second one of one bot any
 
 import logging
 from dataclasses import dataclass
+from typing import Any
 from datetime import datetime, timedelta, timezone
 
 from . import dream
@@ -44,17 +45,16 @@ LOG = logging.getLogger("tico.dream_auto")
 MIN_GAP_HOURS = 48  # between dreams of any kind; a bot's first must be this old
 MAX_PER_RUN = 3  # the default "Most bots per run" (backend/maintenance_steps/dream.py)
 MIN_NEED = 10  # turns, plus corrections weighed below, since the last dream
-STALE_HOURS = 72  # an open auto dream with no run under way this long after it was queued is closed (close_stale)
+STALE_HOURS = 72  # an open auto dream that never ran this long after it was queued is closed (close_stale)
 STALE_NOTE = (
     "Closed by Tico: this dream never got its turn. Nobody waits on it; the next Maintenance pass queues another when "
     "the agent needs one."
 )
-# Open auto dreams queued before a time, with no run of theirs under way: their `dream.auto` event names them
-# (events_action_target), and attempts_task finds a live run.
+# Open auto dreams queued before a time that never had a run: their `dream.auto` event names them
+# (events_action_target), and attempts_task finds any run of theirs.
 _STALE_SQL = (
     "SELECT t.id FROM events e JOIN tasks t ON t.id = e.target WHERE e.action = 'dream.auto' AND e.created_at < ? "
-    "AND t.status = 'open' AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.task_id = t.id "
-    "AND a.state IN ('leased', 'running'))"
+    "AND t.status = 'open' AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.task_id = t.id)"
 )
 CORRECTION_WEIGHT = 5  # one person's correction counts as this many turns
 WAIT_HOURS = 48  # how long a queued dream waits for a warm window before it is skipped
@@ -199,11 +199,12 @@ def _words(queued, held, over, not_due, limit):
     return "; ".join(parts)
 
 
-def close_stale(c, at):
-    """Close every open auto dream queued STALE_HOURS before `at` that has no run under way: one the release policy
+def close_stale(c: Any, at: datetime) -> list[str]:
+    """Close every open auto dream queued STALE_HOURS before `at` (a datetime) that never ran: one the release policy
     did not end (its job was never held, or it was woken again). Nobody waits on it, so it never goes to a person or a
-    manager (never_stuck._OPEN, stage_rule_timers). Returns the tasks closed."""
-    closed = []
+    manager (never_stuck._OPEN, stage_rule_timers); the never-stuck pass calls this, whether or not the Dream step is
+    on. Returns the tasks closed."""
+    closed: list[str] = []
     for (task_id,) in c.execute(_STALE_SQL, (stamp(at - timedelta(hours=STALE_HOURS)),)).fetchall():
         if H.attempt(c, H.task_close, H.TICO_ACTOR, task_id, STALE_NOTE) is not None:
             closed.append(task_id)
@@ -217,8 +218,6 @@ def run(store, auth, at, limit=MAX_PER_RUN, report=None):
     create = dream.creator(store)
     if create is None:
         raise Problem("conflict", "The dream's task path is not wired on this server", 409)
-    with store.transaction() as c:
-        stale = close_stale(c, at)
     with store.read() as c:
         judged = [
             verdict(c, row["id"], at) for row in c.execute("SELECT id FROM bots WHERE state='active' ORDER BY id")
@@ -261,7 +260,6 @@ def run(store, auth, at, limit=MAX_PER_RUN, report=None):
             held.append(v.name)
     if report is not None:
         report.update(
-            closed=stale,
             reason=_words(queued, held, over, len(judged) - len(due), limit),
             judged=len(judged),
             due=len(due),

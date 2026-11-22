@@ -143,6 +143,24 @@ afterEach(() => {
 });
 
 describe('task route loading', () => {
+  it('on a phone, a ❓ for the person in its chat opens Chat; on a computer, its page; another person’s ❓ does not', async () => {
+    const turn = { state: 'person', who: 'human:me', line: 'Keep it?', requirement_id: 'qmark:q1', ask: true };
+    const asked = task({ conversation_id: 'room', documents: [], to_leave: [], turn } as unknown as Partial<TaskData>);
+    serve((url) => (url.endsWith('/tasks/%2312') || url.endsWith('/tasks/t1') ? { status: 200, body: detail(asked) } : url.endsWith('/files?all=1') ? { status: 200, body: { files: [] } } : base(url)));
+    queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'person', slug: null });
+    document.documentElement.dataset.layout = 'cards';
+    try {
+      expect(await loadTask(queryClient, '12')).toMatchObject({ tab: 'chat' });
+      queryClient.setQueryData(['me'], { id: 'human:ana', email: '', role: 'person', slug: null });
+      expect((await loadTask(queryClient, '12'))?.tab).not.toBe('chat');
+      queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'person', slug: null });
+      document.documentElement.dataset.layout = 'sheets';
+      expect((await loadTask(queryClient, '12'))?.tab).not.toBe('chat');
+    } finally {
+      delete document.documentElement.dataset.layout;
+    }
+  });
+
   it('reuses a task read from an older id link when redirecting to its numbered address', async () => {
     serve(base);
     expect(await loadTask(queryClient, 't1')).toMatchObject({ task: { id: 't1', number: 12 } });

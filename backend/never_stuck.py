@@ -166,6 +166,12 @@ def check(
     _ready_snoozes(conn, done, failures)
     # A ❓ whose person can no longer answer it (a change the roster and readers hooks did not see) goes nowhere.
     question_marks.clear_gone(conn)
+    from . import dream_auto  # lazy: dream_auto reads the views, which read this module
+
+    # An auto dream that never ran goes quietly: nobody waits on it, and the ladder passes it over (_OPEN).
+    stamp = H.parse_ts(at)
+    if stamp is not None:
+        dream_auto.close_stale(conn, stamp)
     spans = wait_spans.open_spans(conn)  # each task's open wait span, compared with what the pass reads of it
     wanted: dict[str, wait_spans.Key | None] = {}  # and the span each should have, written after every read
     # A snooze of a task that was deleted, or is not on the engine, is no task's: it is left alone.
