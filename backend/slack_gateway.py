@@ -637,7 +637,7 @@ class Gateway:
         self._customize_warned = False
         self._names_retry = ""  # the time before which the list is not checked for channels named without an id
         self.pin_workspace = False  # tokens the owner pasted into Tico define the workspace
-        self._legacy_posts_after = ""
+        self._legacy_posts_after = ("", 0, "")
         self.heartbeat = None  # called every loop turn; the process uses it for health
         self._auth = None  # who may write to which bot (backend/bot_access.py)
         self.last_model, self.last_usage, self.last_calls = "", [], 0  # the last `ask`'s model, usage and calls
@@ -1727,6 +1727,18 @@ class Gateway:
         """Mark a message handled without posting it, so the next pass does not pick it up again."""
         OS.queue(c, row, bot, channel, thread_ts, "", error="Kept in Tico by their Slack settings", now=self.clock())
 
+    def can_originate(self, c, row):
+        return (
+            privacy.public_message(c, H.message(c, row["id"]))
+            and not c.execute(
+                "SELECT 1 FROM slack_posts WHERE message_id=? "
+                "UNION ALL SELECT 1 FROM outbound_actions WHERE id=? AND channel='slack' "
+                "UNION ALL SELECT 1 FROM slack_threads WHERE conversation_id=? "
+                "AND (channel NOT LIKE 'D%' OR recipient_actor=?) LIMIT 1",
+                (row["id"], row["id"], row["conversation_id"], row["recipient_id"]),
+            ).fetchone()
+        )
+
     def originate(self):
         """A bot message to a person with no Slack mapping yet: open (or reuse) their Tico DM.
 
@@ -1741,6 +1753,7 @@ class Gateway:
                     "WHERE m.kind IN ('say','notice') AND m.sender_id LIKE 'bot:%' "
                     "AND m.recipient_id LIKE 'human:%' AND m.deleted_at IS NULL "
                     "AND NOT EXISTS (SELECT 1 FROM outbound_actions a WHERE a.id=m.id AND a.channel='slack') "
+                    "AND NOT EXISTS (SELECT 1 FROM slack_posts p WHERE p.message_id=m.id) "
                     "AND NOT EXISTS (SELECT 1 FROM slack_threads t WHERE t.conversation_id=m.conversation_id "
                     "AND (t.channel NOT LIKE 'D%' OR t.recipient_actor=m.recipient_id)) "
                     "ORDER BY m.created_at LIMIT 20"
@@ -1752,12 +1765,7 @@ class Gateway:
             bot, pid = row["sender_id"][4:], row["recipient_id"][6:]
             slack_id = ""
             with self.store.transaction() as c:
-                if not privacy.public_message(c, H.message(c, row["id"])):
-                    continue
-                if c.execute(
-                    "SELECT 1 FROM slack_threads WHERE conversation_id=? AND (channel NOT LIKE 'D%' OR recipient_actor=?)",
-                    (row["conversation_id"], row["recipient_id"]),
-                ).fetchone():
+                if not self.can_originate(c, row):
                     continue
                 if self.stays_in_tico(c, row, bot, people):
                     self.keep_in_tico(c, row, bot)
@@ -1789,12 +1797,7 @@ class Gateway:
             if not channel:
                 continue
             with self.store.transaction() as c:
-                if not privacy.public_message(c, H.message(c, row["id"])):
-                    continue
-                if c.execute(
-                    "SELECT 1 FROM slack_threads WHERE conversation_id=? AND (channel NOT LIKE 'D%' OR recipient_actor=?)",
-                    (row["conversation_id"], row["recipient_id"]),
-                ).fetchone():
+                if not self.can_originate(c, row):
                     continue
                 now = self.clock()
                 c.execute(
@@ -1814,6 +1817,7 @@ class Gateway:
                 "JOIN slack_threads t ON t.conversation_id=m.conversation_id AND m.sender_id='bot:'||t.bot "
                 "WHERE m.created_at>t.created_at AND m.kind IN ('say','notice') AND m.recipient_id LIKE 'human:%' "
                 "AND m.deleted_at IS NULL "
+                "AND NOT EXISTS (SELECT 1 FROM slack_posts p WHERE p.message_id=m.id) "
                 "AND NOT EXISTS (SELECT 1 FROM outbound_actions a WHERE a.id=m.id AND a.channel='slack') ORDER BY m.created_at LIMIT 50"
             ).fetchall()
             people = roster(c) if rows else None
@@ -1970,7 +1974,7 @@ class Gateway:
         """Run the local guards in the same write as the attempt permit."""
         from . import automation_actions
 
-        evidence, rule = prepared
+        evidence, target, rule, jira_wait = prepared
         message = H.message(c, row["id"])
         text = str(OA.content(row)["payload"].get("text") or "")
         if (
@@ -2004,7 +2008,6 @@ class Gateway:
             bot = post["bot"]
             slack_bots.need(c, bot, slack_bots.slack_entry(c, self.settings, bot), "post")
             slack_bots.postable(c, self.settings, post["channel"])
-        closeout = {}
         if row["occurrence_key"].startswith(OA.RESERVED):
             from . import release_closeout
 
@@ -2017,8 +2020,12 @@ class Gateway:
                 return OA.GatewayCheck("external", {}, "canceled", "The task's Slack thread changed")
             if release_closeout.slack_actor(c, row["task_id"]) != row["actor"]:
                 return OA.GatewayCheck("internal", {}, "canceled", "The task's bot changed")
+            if rule is None:
+                return OA.GatewayCheck("internal", {}, "queued", "Org rules not checked", 1)
+            if release_closeout.jira_target(links[0]) != target:
+                return OA.GatewayCheck("internal", {}, "queued", "The primary Jira issue changed", 1)
             people = sorted(set(OR.company(c)) - {row["actor"]})
-            verdict, reviewed_people, warning = rule if rule is not None else (None, people, "")
+            verdict, reviewed_people, warning = rule
             if people != reviewed_people:
                 return OA.GatewayCheck("internal", {}, "queued", "Org rule audience changed", 1)
             verdict = OR.apply(c, verdict, text, {"closeout_id": row["id"], "text": text}, audience_now=people)
@@ -2026,8 +2033,9 @@ class Gateway:
                 return OA.GatewayCheck("internal", {}, "queued", "Org rule audience changed", 1)
             if verdict and verdict.get("held"):
                 return OA.GatewayCheck("internal", {}, "blocked", "Org rules held the release reply")
+            if jira_wait:
+                return OA.GatewayCheck("internal", {}, "queued", jira_wait.error, jira_wait.retry_after)
             post["text"] = OR.warned_text(verdict, OR.warned_text({"warn": warning}, text))
-            closeout = {"_closeout_jira": release_closeout.jira_target(links[0])}
         body, sent_text = self.rendered(c, post, message)
         if not self.customize:
             if not self._customize_warned:
@@ -2039,10 +2047,12 @@ class Gateway:
                 self._customize_warned = True
             body = {**body, "username": None, "icon_emoji": None, "icon_url": None}
         return OA.GatewayCheck(
-            "internal", {"_slack_thread": post["thread_ts"], "_slack_body": body, "_slack_text": sent_text, **closeout}
+            "internal", {"_slack_thread": post["thread_ts"], "_slack_body": body, "_slack_text": sent_text}
         )
 
     def closeout_rule(self, row, token):
+        from . import release_closeout
+
         with self.store.read() as c:
             live = c.execute(
                 "SELECT payload,metadata FROM outbound_actions WHERE id=? AND claim_token=? AND payload<>''",
@@ -2055,6 +2065,10 @@ class Gateway:
                 or H.task_private(c, H.task(c, row["task_id"]))
             ):
                 return None
+            links = release_closeout.primaries(c, row["task_id"])
+            if len(links) != 1:
+                return None
+            target = release_closeout.jira_target(links[0])
             people = sorted(set(OR.company(c)) - {row["actor"]})
             review = json.loads(live["metadata"]).get("_tico", {}).get("slack_rule_review", {})
             if review.get("people") != people:
@@ -2071,11 +2085,13 @@ class Gateway:
             context={"slack_channel": row["destination"]},
             skip={tuple(pair) for pair in review.get("rules", ())},
         )
-        return verdict, people, review.get("warning", "")
+        return target, (verdict, people, review.get("warning", ""))
 
     def deliver(self):
         """Claim and send only Slack actions. Unanswered provider attempts never automatically send again."""
-        self._legacy_posts_after = OS.adopt_pass(self.store, self._legacy_posts_after)
+        from . import outbound_jira
+
+        self._legacy_posts_after, _ = OS.adopt_pass(self.store, self._legacy_posts_after, self.clock())
         OA.recover(self.store, self.clock(), slack=True)
         results = []
         for _ in range(20):
@@ -2086,9 +2102,15 @@ class Gateway:
                 break
             row = claimed.row
             assert row is not None
-            rule = self.closeout_rule(row, claimed.token) if row["occurrence_key"].startswith(OA.RESERVED) else None
+            closeout = self.closeout_rule(row, claimed.token) if row["occurrence_key"].startswith(OA.RESERVED) else None
+            target, rule = closeout or (None, None)
             evidence = self.post_evidence(row["destination"])
-            outcome = OA.attempt_result(self.store, claimed, gateway=self, evidence=(evidence, rule))
+            jira_wait = (
+                outbound_jira.closeout_read(self.store, target)
+                if target and not isinstance(evidence, OA.GatewayCheck)
+                else None
+            )
+            outcome = OA.attempt_result(self.store, claimed, gateway=self, evidence=(evidence, target, rule, jira_wait))
             if outcome.state != "lost":
                 state = "queued" if outcome.state == "requeued" else outcome.state
                 results.append(

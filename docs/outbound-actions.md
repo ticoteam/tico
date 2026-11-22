@@ -40,7 +40,8 @@ the caller's own record: kept, shown in the detail, never acted on.
 An action is seen by whoever queued it, the owner and admins, and the person asked to OK it. Slack status uses
 the existing Slack post endpoint. Slack actions can also be listed with `tico outbound list --channel slack` or
 opened by id through the outbound API by the bot that queued them or
-an admin who can read its Tico message.
+an admin who can read its Tico message. Follow `next_cursor` until it is empty. A page can have no readable
+items and still have a continuation.
 
 ## The policy
 
@@ -155,8 +156,9 @@ hour and tries again (not counted as a retry, so the retry cap never ends it). E
 with a shared write key is the administrator's explicit opt-in for Tico to keep linked issues in step, and a close-out
 also needs a merged PR in a real release tag. A public task with an eligible bot also gets a reply in its oldest
 linked Slack thread in the configured workspace. The gateway checks that the task still has one primary Jira issue.
-The gateway reads Jira again immediately before posting. A withdrawn, missing, or differently closed issue defers
-the same action. A changed org-rule audience triggers another check. Send anyway resumes the held action through
+The gateway reads Jira before taking its send permit, then rechecks the Jira target, Slack thread, task privacy
+and org-rule audience inside the permit. A withdrawn, missing, or differently closed issue defers the same action.
+A changed org-rule audience triggers another check. Send anyway resumes the held action through
 the same dispatch checks. A settled Slack send records a `slack.post` event.
 Its independent occurrence key is
 `closeout:<task>:<repo>@<newest tag>:slack`. The gateway rechecks the task's privacy, thread, bot posting access and

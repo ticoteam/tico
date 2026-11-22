@@ -319,12 +319,14 @@ of the posted message so Tico can link to it. Keep the action as the dedupe reco
 the original worker has stopped.
 
 The migration copies existing Slack posts into the outbound queue with their message ids, sent text, retry times
-and dedupe markers. It holds copied pending posts for two minutes. Posts already being sent become unknown.
-The gateway checks the old row before permitting a send and reads later results during its normal tick. A sent
-result keeps the original Slack timestamp. An uncertain or in-flight result prevents an automatic resend.
+and dedupe markers. The server and new gateway also import posts created later by an older gateway. New outbound posts
+reserve their message ids in `slack_posts` so an older gateway skips them. They wait for a gateway that can read
+the outbound queue.
 
-The new gateway uses `slack_posts` only to read legacy results. A later release will remove it. Replace any
-separately supervised legacy gateway during the upgrade so it stops claiming posts before the two-minute hold ends.
+A copied pending post has a two-minute hold. The new gateway's send permit cancels the pending legacy row in
+the same write, so only one gateway can claim the post. An in-flight or uncertain legacy attempt stays unknown.
+A later sent receipt keeps the original Slack timestamp and audit entry. A definite rate limit can return an
+untouched post to the queue with the original Retry-After. Redaction removes the local text from both tables.
 
 ## What the tests cover
 

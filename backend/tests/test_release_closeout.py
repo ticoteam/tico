@@ -14,6 +14,7 @@ from backend import outbound_actions as OA
 from backend import task_calls as TC
 from backend import task_engine as E
 from backend import release_closeout as RC
+from backend.credentials import Vault
 from backend.item_sources import claim
 from backend.item_sources import github as F
 from backend.item_sources import jira as JS
@@ -39,23 +40,19 @@ def gh():
 def jira(company, monkeypatch):
     """A Jira site that is a record integration with a shared read and write key. `jira.read` runs one Jira pass."""
     now = H.now()
+    vault = Vault(company)
     with company.transaction() as c:
         c.execute(
             "INSERT INTO tools (id, name, service, base_url, auth_scheme, created_by, created_at, updated_at, "
             "record_owner) VALUES (?, 'Jira Acme', '', ?, 'bearer', 'human:ana', ?, ?, 'outside')",
             (TOOL, f"https://{HOST}", now, now),
         )
+        ciphertext, nonce = vault.cipher.encrypt(c, "cred-jira", "jira-synthetic-token")
         c.execute(
-            "INSERT INTO credentials (id, name, kind, ciphertext, created_at, updated_at, updated_by, tool_id, "
-            "access_level) VALUES ('cred-jira', 'Jira key', 'api_key', X'00', ?, ?, 'human:ana', ?, 'read_write')",
-            (now, now, TOOL),
+            "INSERT INTO credentials (id, name, kind, ciphertext, nonce, created_at, updated_at, updated_by, tool_id, "
+            "access_level) VALUES ('cred-jira', 'Jira key', 'api_key', ?, ?, ?, ?, 'human:ana', ?, 'read_write')",
+            (ciphertext, nonce, now, now, TOOL),
         )
-
-    class Vault:
-        class cipher:  # noqa: N801 - the vault's attribute
-            @staticmethod
-            def decrypt(c, credential):
-                return "jira-synthetic-token"
 
     class Jira:
         status = ("Ready", "new")
@@ -66,7 +63,7 @@ def jira(company, monkeypatch):
             self.status = (status, category)
             self.passes += 1
 
-            JS.refresh(company, Vault(), now=H.shift(H.now(), minutes=10 * self.passes), sender=self.answer)
+            JS.refresh(company, vault, now=H.shift(H.now(), minutes=10 * self.passes), sender=self.answer)
 
         def answer(self, *args):
             if self.status[0] == "timeout":
@@ -78,12 +75,12 @@ def jira(company, monkeypatch):
 
     issue = Jira()
 
-    def live(method, url, *args, **kwargs):
+    def live(method, url, request_headers, *args, **kwargs):
         assert method == "GET" and url.endswith("/" + ISSUE)
+        assert request_headers["Authorization"] == "Bearer jira-synthetic-token"
         status, body = issue.answer()
         return JS.Reply(status, body)
 
-    monkeypatch.setattr(OA, "vault", Vault)
     monkeypatch.setattr(JS, "call", live)
     return issue
 
@@ -241,6 +238,77 @@ def test_release_slack_cancels_if_task_no_longer_has_one_primary_issue(company, 
         row = actions(c, task_id)["post"]
         assert row["state"] == "canceled" and row["attempts"] == 0
     assert not gateway.slack.posts
+
+
+@pytest.mark.parametrize("change", ["privacy", "thread", "jira", "audience"])
+def test_slack_release_permit_checks_local_changes_during_the_live_jira_read(
+    company, released_slack, monkeypatch, change
+):
+    gateway, task_id, _, _ = released_slack
+    live = JS.call
+    reads = []
+
+    def change_while_jira_answers(*args, **kwargs):
+        result = live(*args, **kwargs)
+        with company.transaction() as c:
+            row = actions(c, task_id)["post"]
+            reads.append(row["provider_attempted_at"])
+            if change == "privacy":
+                c.execute("UPDATE tasks SET private=1 WHERE id=?", (task_id,))
+            elif change == "thread":
+                c.execute("DELETE FROM task_links WHERE task_id=? AND url LIKE '%1700000001000200%'", (task_id,))
+            elif change == "jira":
+                c.execute("UPDATE task_links SET item_key='HM-13' WHERE task_id=? AND source='jira'", (task_id,))
+            else:
+                c.execute(
+                    "UPDATE registry_metadata SET value=json_insert(value,'$.people[#]',json(?)) WHERE key='people'",
+                    (json.dumps({"id": "dana", "email": "dana@acme.example"}),),
+                )
+        return result
+
+    monkeypatch.setattr(JS, "call", change_while_jira_answers)
+    gateway.deliver()
+    with company.read() as c:
+        row = actions(c, task_id)["post"]
+        assert row["state"] == ("canceled" if change in ("privacy", "thread") else "queued")
+        assert row["attempts"] == 0 and row["provider_attempted_at"] is None
+    assert reads == [None] and gateway.slack.posts == []
+
+
+def test_slack_release_requeues_if_the_task_becomes_public_after_the_rule_check(company, released_slack, monkeypatch):
+    gateway, task_id, _, _ = released_slack
+    with company.transaction() as c:
+        c.execute("UPDATE tasks SET private=1 WHERE id=?", (task_id,))
+    evidence = gateway.post_evidence
+
+    def make_public(channel):
+        with company.transaction() as c:
+            c.execute("UPDATE tasks SET private=0 WHERE id=?", (task_id,))
+        return evidence(channel)
+
+    monkeypatch.setattr(gateway, "post_evidence", make_public)
+    gateway.deliver()
+    with company.read() as c:
+        row = actions(c, task_id)["post"]
+        assert row["state"] == "queued" and row["provider_attempted_at"] is None
+    assert not gateway.slack.posts
+    gateway.clock = lambda: row["next_attempt_at"]
+    gateway.deliver()
+    assert len(gateway.slack.posts) == 1
+
+
+@pytest.mark.parametrize("failure,delay", [(JS.Busy(), 5), (TimeoutError(), 60), (503, 60), (429, 17)])
+def test_slack_closeout_jira_read_uses_short_delays_on_transient_errors(company, jira, monkeypatch, failure, delay):
+    from backend.outbound_jira import closeout_read
+
+    def read(*args, **kwargs):
+        if isinstance(failure, Exception):
+            raise failure
+        return JS.Reply(failure, {}, retry_after=17 if failure == 429 else None)
+
+    monkeypatch.setattr(JS, "call", read)
+    result = closeout_read(company, {"connection_id": TOOL, "destination": ISSUE, "ready": "Ready", "done": "Done"})
+    assert result.retry_after == delay
 
 
 def test_release_slack_rechecks_an_org_rule_when_its_audience_moves(company, released_slack, monkeypatch):

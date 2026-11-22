@@ -60,7 +60,17 @@ COMPANY_PAGE_OWNER_TABLES = (
 # Table-valued functions SQLite reports like tables of the main schema.
 TABLE_FUNCTIONS = {"json_each", "json_tree"}
 SAFE_COLUMNS = {
-    "outbound_actions": {"id", "channel", "state", "attempts", "next_attempt_at", "created_at", "updated_at"}
+    "outbound_actions": {"id", "channel", "state", "attempts", "next_attempt_at", "created_at", "updated_at"},
+    "slack_posts": {
+        "message_id",
+        "bot",
+        "state",
+        "attempts",
+        "next_attempt_at",
+        "slack_ts",
+        "created_at",
+        "updated_at",
+    },
 }
 # Columns nobody reads through SQL. Tables not named in `guarded` (credentials, credential_keys,
 # credential_grants, credential_uses, idempotency, runners, runner_states, enrollments, session_epochs, bot_session_epochs, settings_changes,
@@ -602,6 +612,7 @@ _TABLE_DEPS: dict[str, tuple[str, ...]] = {
     "blobs": ("message_assets", "task_assets", "media_assets"),
     "task_file_reviews": ("bot_files", "blobs"),
     "outbound_actions": (READABLE_MESSAGES,),
+    "slack_posts": (READABLE_MESSAGES,),
 }
 
 # Every guarded table name exposed as a temp view (kept in sync with `guarded`).
@@ -694,6 +705,7 @@ GUARDED_TABLES = frozenset(
         "archives",
         "service_jobs",
         "outbound_actions",
+        "slack_posts",
         "read_index",
         "task_file_reviews",
         *COMPANY_PAGE_OWNER_TABLES,
@@ -1390,6 +1402,7 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None, private=No
         # they are denied to everyone, the owner included.
         **{table: "1" if owner else "0" for table in COMPANY_PAGE_OWNER_TABLES},
         "outbound_actions": f"channel='slack' AND id IN (SELECT id FROM {inner(READABLE_MESSAGES)})" if owner else "0",
+        "slack_posts": by_message if owner else "0",
         # Which history rows are settled (backend/read_deps.py): read by the message and run gates, by no caller.
         "read_index": "key IS NULL",
     }

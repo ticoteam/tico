@@ -82,6 +82,22 @@ def test_a_person_deletes_a_task_they_asked_for_and_nobody_else_can(api):
     assert r.status_code == 403
 
 
+def test_delete_scrubs_a_slack_post_queued_by_an_old_gateway(api):
+    task = post(api, "tasks", {"owner": "ops", "title": "Review the draft", "body": "Internal draft"})
+    msg = post(api, f"tasks/{task['id']}/comments", {"text": "Withdrawn Slack text"})["comment"]
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute(
+            "INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created_at,updated_at) "
+            "VALUES(?,'CEXAMPLE','','ops',?,'ready',?,?)",
+            (msg["id"], msg["body"], H.now(), H.now()),
+        )
+    post(api, f"tasks/{task['id']}/delete", {})
+    with store.read() as c:
+        legacy = c.execute("SELECT state,text FROM slack_posts WHERE message_id=?", (msg["id"],)).fetchone()
+        assert tuple(legacy) == ("canceled", "")
+
+
 def test_a_deleted_task_comes_back_whole_and_keeps_its_number(api):
     from backend.task_delete import purge_trash, restore_tasks
 

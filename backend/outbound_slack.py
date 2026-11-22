@@ -140,6 +140,24 @@ def conflict(message_id: str) -> NoReturn:
     raise Problem("conflict", "This Slack outbound action conflicts with an existing action", 409)
 
 
+def _post_key(c: Any, message_id: str) -> str:
+    base = POST_PREFIX + message_id
+    key, suffix = base, 0
+    # Before the namespace was reserved, other actions could use these keys.
+    while c.execute("SELECT 1 FROM outbound_actions WHERE occurrence_key=?", (key,)).fetchone():
+        suffix += 1
+        key = f"{base}:{suffix}"
+    return key
+
+
+def _insert(c: Any, row: dict[str, Any]) -> None:
+    if not c.execute(
+        f"INSERT INTO outbound_actions({','.join(row)}) VALUES({','.join('?' * len(row))}) ON CONFLICT DO NOTHING",
+        tuple(row.values()),
+    ).rowcount:
+        conflict(row["id"])
+
+
 def queue(
     c: Any,
     message: dict[str, Any],
@@ -158,22 +176,13 @@ def queue(
 
     conv = H.conversation(c, message["conversation_id"]) if message.get("conversation_id") else None
     mid, at = str(message["id"]), now or H.now()
-    if key is None:
-        base = POST_PREFIX + mid
-        key, suffix = base, 0
-        # Non-Slack actions can still have keys from before this namespace was reserved.
-        while c.execute(
-            "SELECT 1 FROM outbound_actions WHERE occurrence_key=? AND channel<>'slack'", (key,)
-        ).fetchone():
-            suffix += 1
-            key = f"{base}:{suffix}"
     row: dict[str, Any] = {
         "id": mid,
         "channel": CHANNEL,
         "audience": "external",  # only the gateway can classify the live destination
         "operation": "post",
         "destination": channel,
-        "occurrence_key": key,
+        "occurrence_key": key if key is not None else _post_key(c, mid),
         "actor": H.bot_actor(bot) if bot else H.TICO_ACTOR,
         "payload": json.dumps({"text": text}) if text and not error else "",
         "metadata": json.dumps({"thread_ts": thread_ts, "recipient_actor": recipient}),
@@ -185,22 +194,42 @@ def queue(
         "task_id": H.message_task_id(message, conv),
         "last_error": error,
     }
-    made = c.execute(
-        f"INSERT INTO outbound_actions({','.join(row)}) VALUES({','.join('?' * len(row))}) ON CONFLICT DO NOTHING",
-        tuple(row.values()),
-    ).rowcount
-    if not made:
-        conflict(mid)
+    _insert(c, row)
+    # Old gateways dedupe by message id, before choosing a destination of their own.
+    c.execute(
+        "INSERT OR IGNORE INTO slack_posts(message_id,channel,thread_ts,bot,text,state,error,created_at,updated_at,"
+        "recipient_actor) VALUES(?,?,?,?,'','canceled','outbound',?,?,?)",
+        (mid, channel, thread_ts, bot, at, at, recipient),
+    )
     if not error:
         db_path = c.execute("PRAGMA database_list").fetchone()[2]
         OA.after_commit(c, lambda: ring(db_path))
     return mid
 
 
+def _cancel_pending(c: Any, message_id: str, error: str) -> bool:
+    return bool(
+        c.execute(
+            "UPDATE slack_posts SET state='canceled',text='',error=?,updated_at=? "
+            "WHERE message_id=? AND state IN ('ready','retry','rate_limited')",
+            (error, H.now(), message_id),
+        ).rowcount
+    )
+
+
+def fence_legacy(c: Any, message_id: str) -> None:
+    """Take over a pending row while SQLite still holds the permit's write lock."""
+    if _cancel_pending(c, message_id, "migrated"):
+        c.execute("UPDATE outbound_actions SET metadata=json_remove(metadata,?) WHERE id=?", (LEGACY_MARK, message_id))
+
+
 def withdraw(c: Any, message_id: str, *, redact: bool = True) -> None:
     """Cancel an unsent copy. Deletion also wipes the local snapshot of what Slack already had."""
     from . import outbound_actions as OA
 
+    _cancel_pending(c, message_id, "The message was withdrawn")
+    if redact:
+        c.execute("UPDATE slack_posts SET text='' WHERE message_id=? AND text<>''", (message_id,))
     row = OA.get(c, message_id)
     if not row or row["channel"] != CHANNEL:
         return
@@ -225,26 +254,44 @@ def adopt_legacy(c: Any, row: dict[str, Any]) -> "AttemptResult | None":
     """Read the old gateway's result in the same transaction as the new gateway's permit."""
     from . import outbound_actions as OA
 
-    seen = json.loads(row["metadata"]).get("_tico", {}).get("slack_legacy")
-    if seen is None:
-        return None
     post = c.execute("SELECT * FROM slack_posts WHERE message_id=?", (row["id"],)).fetchone()
-    if not post:
+    if not post or (post["state"] == "canceled" and post["error"] in ("outbound", "migrated")):
         return None
+    seen = OA.asked(row).get("slack_legacy", "")
     mark = f"{post['state']}:{post['updated_at']}"
-    if mark == seen:
-        return None
-
     state = LEGACY_STATES[post["state"]]
+    if mark == seen and (row["state"] != "attempting" or state == "queued"):
+        return None
     error = post["error"] or ("ratelimited" if post["state"] == "rate_limited" else "")
-    c.execute("UPDATE outbound_actions SET metadata=json_set(metadata,?,?) WHERE id=?", (LEGACY_MARK, mark, row["id"]))
-    if row["state"] == "done" or (state != "done" and (row["state"] in OA.ENDED or row["provider_attempted_at"])):
+    if state in OA.ENDED or row["state"] == "done":
+        c.execute("UPDATE outbound_actions SET metadata=json_remove(metadata,?) WHERE id=?", (LEGACY_MARK, row["id"]))
+    else:
+        c.execute(
+            "UPDATE outbound_actions SET metadata=json_set(metadata,?,?) WHERE id=?", (LEGACY_MARK, mark, row["id"])
+        )
+    if row["state"] == "done" or (
+        state != "done" and (row["state"] in OA.ENDED or row["provider_attempted_at"] is not None)
+    ):
         return None
 
     attempts = max(row["attempts"], post["attempts"])
     if state == "queued":
-        if row["state"] not in ("queued", "attempting"):
-            return None  # A legacy retry cannot reopen a canceled, blocked or ambiguous send.
+        rejected = (
+            row["state"] == "unknown"
+            and seen.startswith("sending:")
+            and post["state"] == "rate_limited"
+            and not json.loads(row["metadata"]).get("redacted")
+            and bool(OA.content(row)["payload"].get("text"))
+        )
+        if not rejected and row["state"] not in ("queued", "attempting"):
+            return None
+        if rejected and (ask := OA.asked(row).get("ask")):
+            from . import owner_asks
+
+            owner_asks.withdraw(c, ask, "Slack rejected the old attempt. It will be retried.", row["task_id"])
+            c.execute(
+                "UPDATE outbound_actions SET metadata=json_remove(metadata,'$._tico.ask') WHERE id=?", (row["id"],)
+            )
         O.finish(
             c,
             OA.TABLE,
@@ -265,39 +312,102 @@ def adopt_legacy(c: Any, row: dict[str, Any]) -> "AttemptResult | None":
     receipt = {"ts": post["slack_ts"]} if state == "done" and post["slack_ts"] else {}
     if state == "done":
         row = {**row, "payload": json.dumps({"sent_text": post["text"]})}
-    OA.settle(c, {**row, "attempts": attempts}, state, receipt=receipt, error=error)
+    OA.settle(c, {**row, "attempts": attempts}, state, receipt=receipt, error=error, adopted=True)
     return OA.AttemptResult(state, receipt, error)
 
 
-def adopt_pass(store: Any, after: str) -> str:
-    """Check at most one batch of migrated ids each tick, without locking a quiet queue for writes."""
+def _import_legacy(c: Any, post: Any, now: str) -> None:
+    """Import the frozen destination and outcome of a message first queued by an old gateway."""
+    mid = post["message_id"]
+    state = LEGACY_STATES[post["state"]]
+    text = post["text"]
+    metadata = {"thread_ts": post["thread_ts"], "recipient_actor": post["recipient_actor"]}
+    if not text:
+        metadata["redacted"] = True
+    if state == "done" and text:
+        metadata["_tico"] = {"sent_text": text}
+    if state in ("queued", "unknown"):
+        metadata["_tico"] = {"slack_legacy": f"{post['state']}:{post['updated_at']}"}
+    message = H.message(c, mid)
+    conv = H.conversation(c, message["conversation_id"]) if message and message["conversation_id"] else None
+    _insert(
+        c,
+        {
+            "id": mid,
+            "channel": CHANNEL,
+            "audience": "external",
+            "operation": "post",
+            "destination": post["channel"],
+            "occurrence_key": _post_key(c, mid),
+            "actor": H.bot_actor(post["bot"]) if post["bot"] else H.TICO_ACTOR,
+            "payload": json.dumps({"text": text}) if text and state in ("queued", "unknown") else "",
+            "metadata": json.dumps(metadata),
+            "state": state,
+            "attempts": post["attempts"],
+            "send_after": H.shift(now, minutes=2)
+            if state == "queued" or post["state"] == "sending"
+            else post["created_at"],
+            "next_attempt_at": post["next_attempt_at"] or post["created_at"],
+            "receipt": json.dumps({"ts": post["slack_ts"]}) if post["slack_ts"] else "{}",
+            "last_error": post["error"] or ("ratelimited" if post["state"] == "rate_limited" else ""),
+            "created_at": post["created_at"],
+            "updated_at": post["updated_at"],
+            "task_id": H.message_task_id(message, conv) if message else None,
+        },
+    )
+
+
+def adopt_pass(store: Any, after: tuple[str, int, str], now: str) -> tuple[tuple[str, int, str], bool]:
+    """Check changes to known posts and discover newer legacy rows in bounded batches."""
     from . import outbound_actions as OA
 
+    changed_after, added_after, anchor = after
     with store.read() as c:
         rows = c.execute(
             f"SELECT a.id,(p.state || ':' || p.updated_at)<>a.seen AS changed FROM "
             f"(SELECT id,json_extract(metadata,'{LEGACY_MARK}') AS seen FROM outbound_actions "
             f"WHERE channel='slack' AND json_extract(metadata,'{LEGACY_MARK}') IS NOT NULL AND id>? "
             "ORDER BY id LIMIT ?) a LEFT JOIN slack_posts p ON p.message_id=a.id ORDER BY a.id",
-            (after, LEGACY_BATCH),
+            (changed_after, LEGACY_BATCH),
         ).fetchall()
-    if changed := [row["id"] for row in rows if row["changed"]]:
+        # Both gateways insert with implicit rowids, and live delivery retains the rows for dedupe.
+        if (
+            added_after
+            and not c.execute(
+                "SELECT 1 FROM slack_posts WHERE message_id=? AND rowid=?", (anchor, added_after)
+            ).fetchone()
+        ):
+            added_after, anchor = 0, ""  # The database can renumber rowids during a VACUUM.
+        added = c.execute(
+            "SELECT p.rowid,p.message_id,a.id AS copied FROM slack_posts p "
+            "LEFT JOIN outbound_actions a ON a.id=p.message_id WHERE p.rowid>? ORDER BY p.rowid LIMIT ?",
+            (added_after, LEGACY_BATCH),
+        ).fetchall()
+    changed = [row["id"] for row in rows if row["changed"]]
+    missing = [row["message_id"] for row in added if row["copied"] is None]
+    if changed or missing:
         with store.transaction() as c:
+            for mid in missing:
+                post = c.execute(
+                    "SELECT * FROM slack_posts WHERE message_id=? "
+                    "AND NOT EXISTS (SELECT 1 FROM outbound_actions WHERE id=?)",
+                    (mid, mid),
+                ).fetchone()
+                if post:
+                    _import_legacy(c, post, now)
             for mid in changed:
                 if row := OA.get(c, mid):
                     adopt_legacy(c, row)
-    return rows[-1]["id"] if len(rows) == LEGACY_BATCH else ""
+    if added:
+        added_after, anchor = added[-1]["rowid"], added[-1]["message_id"]
+    changed_after = rows[-1]["id"] if len(rows) == LEGACY_BATCH else ""
+    return (changed_after, added_after, anchor), len(added) == LEGACY_BATCH
 
 
 def dispatch(gateway: Any, row: dict[str, Any]) -> "dict[str, str] | SafeRejection":
     """The provider call that follows the gateway's durable permit."""
     from . import outbound_actions as OA
 
-    if target := row.get("_closeout_jira"):
-        from . import outbound_jira
-
-        if wait := outbound_jira.closeout_read(gateway.store, target):
-            return wait
     try:
         answer = gateway.slack.post_message(row["destination"], row["_slack_thread"] or None, **row["_slack_body"])
     except SlackError as exc:

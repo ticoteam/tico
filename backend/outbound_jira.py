@@ -164,8 +164,10 @@ def _connect(store: Any, row: Any, *, write: bool = True) -> Connection:
     """(API address, headers, query) through the connection's shared key (its read and write key for a write); Unreadable
     when it no longer has one."""
     vault = _oa().vault()
-    if vault is None:
-        raise RuntimeError("No credential vault")
+    if vault is None or getattr(vault, "store", store) is not store:
+        from .credentials import Vault
+
+        vault = Vault(store)
     connection_id = str(row["connection_id"])
     with store.transaction() as c:
         # The actor's level on the very key this write goes with, read in the same transaction that picks it: a key
@@ -290,11 +292,12 @@ def closeout_read(store: Any, target: dict[str, Any]) -> Any:
         if not reason:
             return None
     except _Answer as exc:
-        return OA.SafeRejection(
-            exc.reply.retry_after or PAUSED_S, "Waiting for the release issue in Jira", counted=False
-        )
+        wait = PAUSED_S if exc.reply.status == 404 else exc.reply.retry_after or RETRY_S
+        return OA.SafeRejection(wait, "Waiting for the release issue in Jira", counted=False)
+    except JS.Busy:
+        return OA.SafeRejection(BUSY_S, "Waiting for Jira calls to become available", counted=False)
     except Exception:  # noqa: BLE001 - a read that cannot confirm Jira's status must never allow a post
-        reason = "Waiting for the release issue in Jira"
+        return OA.SafeRejection(RETRY_S, "Waiting for the release issue in Jira", counted=False)
     return OA.SafeRejection(PAUSED_S, reason, counted=False)
 
 

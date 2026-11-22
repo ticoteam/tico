@@ -364,7 +364,7 @@ def test_a_post_is_attempted_once_and_a_crash_between_send_and_record_is_uncerta
     assert len(slack.posts) == 1
 
 
-def copy_legacy_post(gateway, hub, state):
+def copy_legacy_post(gateway, hub, state, *, migrated=True):
     mid = routed_reply(gateway, hub)
     thread = _thread_of_reply(hub, mid)
     migration = import_module("backend.migrations.20261122144410_slack_outbound")
@@ -382,8 +382,18 @@ def copy_legacy_post(gateway, hub, state):
                 gateway.clock(),
             ),
         ).fetchone()
-        migration._copy(c, dict(post), H.shift(gateway.clock(), minutes=2))
+        if migrated:
+            migration._copy(c, dict(post), H.shift(gateway.clock(), minutes=2))
     return mid
+
+
+def claim_legacy_post(c, mid, at):
+    # The old gateway checks only these states when its Slack preflight returns.
+    return c.execute(
+        "UPDATE slack_posts SET state='sending',attempts=attempts+1,updated_at=? "
+        "WHERE message_id=? AND state IN ('ready','rate_limited')",
+        (at, mid),
+    ).rowcount
 
 
 @pytest.mark.parametrize("prior", ["ready", "sending"])
@@ -401,12 +411,17 @@ def test_tick_adopts_an_old_gateway_post_sent_during_cutover(gateway, hub, prior
             "UPDATE slack_posts SET state='sent',slack_ts=?,attempts=1,updated_at=? WHERE message_id=?",
             (ts, gateway.clock(), mid),
         )
+        H.event(c, "bot:legal", "slack.post", mid, {"state": "sent"})
     assert gateway.tick()["posts"] == []
     with hub.read() as c:
         post = OA.get(c, mid)
         assert post["state"] == "done" and post["attempts"] == 1 and not post["provider_attempted_at"]
         assert not post["payload"] and json.loads(post["receipt"]) == {"ts": ts}
         assert json.loads(post["metadata"])["_tico"]["sent_text"] == "Frozen legacy reply"
+        assert not OA.asked(post).get("slack_legacy")
+        assert (
+            c.execute("SELECT count(*) FROM events WHERE action='slack.post' AND target=?", (mid,)).fetchone()[0] == 1
+        )
     gateway.clock.advance(61)
     assert gateway.tick()["posts"] == [] and not gateway.slack.posts
 
@@ -421,10 +436,12 @@ def test_permit_reads_the_legacy_post_after_the_tick_started(gateway, hub, monke
 
     def finish_old_post(channel):
         with hub.transaction() as c:
-            c.execute(
-                "UPDATE slack_posts SET state=?,slack_ts=?,attempts=1,updated_at=? WHERE message_id=?",
-                (legacy_state, ts, gateway.clock(), mid),
-            )
+            assert claim_legacy_post(c, mid, gateway.clock()) == 1
+            if legacy_state != "sending":
+                c.execute(
+                    "UPDATE slack_posts SET state=?,slack_ts=?,updated_at=? WHERE message_id=?",
+                    (legacy_state, ts, gateway.clock(), mid),
+                )
         return evidence(channel)
 
     monkeypatch.setattr(gateway, "post_evidence", finish_old_post)
@@ -439,8 +456,51 @@ def test_permit_reads_the_legacy_post_after_the_tick_started(gateway, hub, monke
     assert gateway.tick()["posts"] == [] and not gateway.slack.posts
 
 
-def test_cutover_keeps_a_later_retry_after_from_the_old_gateway(gateway, hub):
+def test_the_new_permit_fences_the_old_gateway_claim(gateway, hub, monkeypatch):
     mid = copy_legacy_post(gateway, hub, "ready")
+    post_message = gateway.slack.post_message
+
+    def post_with_old_gateway_waiting(*args, **kwargs):
+        with hub.transaction() as c:
+            assert OA.get(c, mid)["provider_attempted_at"]
+            assert claim_legacy_post(c, mid, gateway.clock()) == 0
+            old = c.execute("SELECT state,error FROM slack_posts WHERE message_id=?", (mid,)).fetchone()
+            assert tuple(old) == ("canceled", "migrated")
+        return post_message(*args, **kwargs)
+
+    monkeypatch.setattr(gateway.slack, "post_message", post_with_old_gateway_waiting)
+    gateway.clock.advance(120)
+    assert gateway.tick()["posts"] == [{"message_id": mid, "state": "sent", "slack_ts": "1700000001.000100"}]
+    assert gateway.tick()["posts"] == [] and len(gateway.slack.posts) == 1
+
+
+def test_discovers_posts_written_by_an_old_gateway_after_cutover(gateway, hub):
+    assert gateway.deliver() == []
+    mid = copy_legacy_post(gateway, hub, "ready", migrated=False)
+    assert gateway.originate() == gateway.mirror() == 0
+    assert gateway.deliver() == []
+    thread = _thread_of_reply(hub, mid)
+    with hub.transaction() as c:
+        row = OA.get(c, mid)
+        assert row["state"] == "queued" and row["destination"] == thread["channel"]
+        assert claim_legacy_post(c, mid, gateway.clock()) == 1
+        ts = "1700000050.000100"
+        c.execute("UPDATE slack_posts SET state='sent',slack_ts=? WHERE message_id=?", (ts, mid))
+    gateway.clock.advance(121)
+    assert gateway.deliver() == [] and not gateway.slack.posts
+    with hub.read() as c:
+        row = OA.get(c, mid)
+        assert row["state"] == "done" and json.loads(row["receipt"]) == {"ts": ts}
+        lines = gateway.exchanges(c, thread["channel"], thread["thread_ts"])
+        assert next(line["text"] for line in lines if line["ts"] == ts) == "Frozen legacy reply"
+
+
+@pytest.mark.parametrize("prior", ["ready", "sending"])
+def test_cutover_keeps_a_later_retry_after_from_the_old_gateway(gateway, hub, prior):
+    mid = copy_legacy_post(gateway, hub, prior)
+    if prior == "sending":
+        with hub.read() as c:
+            assert OA.get(c, mid)["state"] == "unknown"
     retry_at = H.shift(gateway.clock(), seconds=180)
     gateway.clock.advance(60)
     with hub.transaction() as c:
@@ -449,12 +509,34 @@ def test_cutover_keeps_a_later_retry_after_from_the_old_gateway(gateway, hub):
             (retry_at, gateway.clock(), mid),
         )
     assert gateway.tick()["posts"] == []
+    with hub.read() as c:
+        saved = OA.get(c, mid)
+        assert saved["state"] == "queued" and saved["next_attempt_at"] == retry_at
+        assert saved["provider_attempted_at"] is None
     gateway.clock.advance(119)
     assert gateway.tick()["posts"] == [] and not gateway.slack.posts
     gateway.clock.advance(1)
     assert gateway.tick()["posts"] == [{"message_id": mid, "state": "sent", "slack_ts": "1700000001.000100"}]
     with hub.read() as c:
         assert OA.get(c, mid)["attempts"] == 2
+
+
+@pytest.mark.parametrize("legacy_state", ["ready", "retry", "rate_limited", "sent"])
+def test_redaction_scrubs_legacy_only_posts_and_preserves_receipts(gateway, hub, legacy_state):
+    mid = copy_legacy_post(gateway, hub, legacy_state, migrated=False)
+    ts = "1700000050.000100" if legacy_state == "sent" else None
+    with hub.transaction() as c:
+        c.execute("UPDATE slack_posts SET slack_ts=? WHERE message_id=?", (ts, mid))
+        OS.withdraw(c, mid)
+        assert claim_legacy_post(c, mid, gateway.clock()) == 0
+        old = c.execute("SELECT state,text,slack_ts FROM slack_posts WHERE message_id=?", (mid,)).fetchone()
+        assert tuple(old) == ("sent" if ts else "canceled", "", ts)
+    assert gateway.deliver() == [] and not gateway.slack.posts
+    with hub.read() as c:
+        saved = OA.get(c, mid)
+        assert saved["state"] == ("done" if ts else "canceled")
+        assert json.loads(saved["receipt"]).get("ts") == ts
+        assert "Frozen legacy reply" not in saved["metadata"] and not saved["payload"]
 
 
 @pytest.mark.filterwarnings("ignore:.*backend.slack_gateway.*found in sys.modules:RuntimeWarning")

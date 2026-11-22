@@ -554,7 +554,14 @@ def _approval(c: Any, row: Any) -> str | None:
 
 # ------------------------------------------------------------------------------------------------------- settling
 def settle(
-    c: Any, row: Any, state: str, *, receipt: dict[str, Any] | None = None, error: str = "", token: str | None = None
+    c: Any,
+    row: Any,
+    state: str,
+    *,
+    receipt: dict[str, Any] | None = None,
+    error: str = "",
+    token: str | None = None,
+    adopted: bool = False,
 ) -> bool:
     """Write an outcome: done, failed, canceled, blocked or unknown. Ended rows lose their payload and keep their
     metadata. With `token`, only while that claim still holds the row. True when written."""
@@ -578,18 +585,19 @@ def settle(
     ):
         return False
     if row["channel"] == "slack" and state == "done":
-        H.event(
-            c,
-            row["actor"],
-            "slack.post",
-            row["id"],
-            {
-                "state": "sent",
-                "channel": row["destination"],
-                "thread_ts": _load(row["metadata"], {}).get("thread_ts") or "",
-                "error": "",
-            },
-        )
+        if not adopted:
+            H.event(
+                c,
+                row["actor"],
+                "slack.post",
+                row["id"],
+                {
+                    "state": "sent",
+                    "channel": row["destination"],
+                    "thread_ts": _load(row["metadata"], {}).get("thread_ts") or "",
+                    "error": "",
+                },
+            )
         payload = content(row)["payload"]
         sent_text = payload.get("sent_text", payload.get("text"))
         if sent_text:
@@ -598,6 +606,8 @@ def settle(
                 "WHERE id=? AND NOT coalesce(json_extract(metadata,'$.redacted'), 0)",
                 (sent_text, row["id"]),
             )
+    elif row["channel"] == "slack" and state in ("canceled", "blocked"):
+        outbound_slack.fence_legacy(c, row["id"])
     rid, why = row["approval_id"], error or f"It was not sent ({state})"
     if state == "unknown":
         rid = ""  # its OK's task stays open until the outcome is known
@@ -690,7 +700,13 @@ def apply(c: Any, seen: Any, found: "Settled | None") -> None:
 # ------------------------------------------------------------------------------------------------------ the worker
 BELL = background.Bell()
 _workers = background.Loop("outbound-actions", ring)
-_state: dict[str, Any] = {"swept": 0.0, "store": None, "vault": None}
+_state: dict[str, Any] = {
+    "swept": 0.0,
+    "store": None,
+    "vault": None,
+    "slack_after": ("", 0, ""),
+    "slack_more": False,
+}
 
 
 def vault() -> Any:
@@ -940,6 +956,8 @@ def _permit(
         ).fetchone()
         if not fenced:
             return "lost"
+        if row["channel"] == "slack":
+            outbound_slack.fence_legacy(c, row["id"])
         if approval == "use":
             task_asks.use(c, row["approval_id"], SUBJECT + row["id"], content(row), _asker(row))
         return {**dict(fenced), **fields}
@@ -1049,7 +1067,7 @@ RECONCILE_CAP = 20  # provider lookups per sweep, so a due row never waits behin
 
 def step(store: Any, now: str | None = None) -> bool:
     """One worker turn: one due row, then the backstop (recovery, retiring stopped OKs, a few reconciles) at most
-    every SWEEP seconds. True when it attempted one (so the caller looks again at once)."""
+    every SWEEP seconds. True when it attempted one or has more Slack rows to import."""
     claimed = claim(store, now)
     if claimed:
         attempt(store, claimed)
@@ -1058,7 +1076,13 @@ def step(store: Any, now: str | None = None) -> bool:
         recover(store, now)
         retire_pass(store)
         reconcile_pass(store, RECONCILE_CAP)
-    return claimed is not None
+        # The server's status readers also need receipts when only the old gateway is running.
+        _state["slack_more"] = True
+    if _state["slack_more"]:
+        _state["slack_after"], _state["slack_more"] = outbound_slack.adopt_pass(
+            store, _state["slack_after"], now or H.now()
+        )
+    return claimed is not None or bool(_state["slack_more"])
 
 
 def _loop(store: Any, halt: Any) -> None:
@@ -1076,6 +1100,9 @@ def _loop(store: Any, halt: Any) -> None:
 
 def start(store: Any) -> None:
     """Start (or restart, when it died) the worker. Safe to call again."""
+    if _state["store"] is not store:
+        _state["slack_after"] = ("", 0, "")
+        _state["slack_more"] = True
     _state["store"] = store
     _workers.start(_loop, store)
 
@@ -1300,6 +1327,12 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
         ),
     )
     def listing(request: Request, state: str = "", channel: str = "", cursor: str = "", limit: int = 50) -> Any:
+        from . import file_library as _file_library
+        from . import visuals as _visuals
+
+        cursors: Any = _file_library
+        visuals: Any = _visuals
+
         who = request.state.identity
         auth.domain(who)
         if state and state not in STATES:
@@ -1312,9 +1345,19 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
                 "policy_decision",
             )
         )
+        scan_cap = cap * 4
+
+        def cursor_key() -> bytes:
+            return b"outbound\0" + cast(bytes, visuals.key_for(app, store.settings))
+
         with store.read() as c:
-            sql, args = f"SELECT {fields} FROM outbound_actions WHERE 1", list[Any]()
-            if not admin(who):
+            sql = (
+                f"SELECT {fields} FROM outbound_actions WHERE (channel<>'slack' OR EXISTS "
+                "(SELECT 1 FROM messages m WHERE m.id=outbound_actions.id AND m.deleted_at IS NULL))"
+            )
+            args: list[Any] = []
+            is_admin = admin(who)
+            if not is_admin:
                 sql += " AND actor=?"
                 args.append(who.actor)
             if state:
@@ -1323,17 +1366,19 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
             if channel:
                 sql += " AND channel=?"
                 args.append(channel)
-            if cursor:
+            position: tuple[str, str] | None = None
+            if cursor.startswith("scan:"):
+                position = cursors.decode_cursor(cursor.removeprefix("scan:"), cursor_key())
+            elif cursor:
                 at = get(c, cursor)
-                if (
-                    at
-                    and (admin(who) or at["actor"] == who.actor)
-                    and (at["channel"] != "slack" or visible(c, who, at))
-                ):
-                    sql += " AND (created_at<? OR (created_at=? AND id<?))"
-                    args += [at["created_at"], at["created_at"], cursor]
+                if at and (is_admin or at["actor"] == who.actor) and (at["channel"] != "slack" or visible(c, who, at)):
+                    position = (at["created_at"], cursor)
+            if position:
+                sql += " AND (created_at,id)<(?,?)"
+                args.extend(position)
+            candidates = c.execute(sql + " ORDER BY created_at DESC, id DESC LIMIT ?", (*args, scan_cap + 1)).fetchall()
             rows: list[Any] = []
-            for r in c.execute(sql + " ORDER BY created_at DESC, id DESC", args):
+            for r in candidates[:scan_cap]:
                 if r["channel"] != "slack" or visible(c, who, r):
                     rows.append(r)
                     if len(rows) > cap:
@@ -1348,8 +1393,13 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
                     break
                 items.append(item)
                 spent += size
-            more = len(items) < len(rows)
-            return {"items": items, "next_cursor": items[-1]["id"] if more and items else None}
+            if len(items) < len(rows):
+                return {"items": items, "next_cursor": items[-1]["id"] if items else None}
+            if len(candidates) > scan_cap:
+                last = candidates[scan_cap - 1]
+                encoded: str = cursors.encode_cursor(last["created_at"], last["id"], cursor_key())
+                return {"items": items, "next_cursor": "scan:" + encoded}
+            return {"items": items, "next_cursor": None}
 
     @app.get(
         "/api/v2/outbound-actions/{oid}",

@@ -336,12 +336,19 @@ def delete_tasks(c, ids, apply=False, actor=None, keep_work=False):
         )
     actor = actor or H.TICO_ACTOR
     now = H.now()
-    from . import task_engine
+    from . import outbound_slack, task_engine
 
     task_engine.on_delete(c, ids, actor)  # a deleted task's snooze ends: nothing waits for its date
     relations = {tid: TR.snapshot_rows(c, tid) for tid in ids}
     for tid in ids:
         rows, convs, msgs, pointers = _snapshot(c, tid, relations[tid])
+        post_ids = set(_column(c, "SELECT id FROM outbound_actions WHERE channel='slack' AND id IN ({})", msgs))
+        post_ids.update(_column(c, "SELECT message_id FROM slack_posts WHERE message_id IN ({})", msgs))
+        post_ids.update(
+            r[0] for r in c.execute("SELECT id FROM outbound_actions WHERE channel='slack' AND task_id=?", (tid,))
+        )
+        for mid in post_ids:
+            outbound_slack.withdraw(c, mid)
         if tid in kept:
             for table in ("conversations", "messages", *{t for t, _ in MESSAGE_ROWS + CONVERSATION_ROWS}):
                 rows.pop(table, None)
@@ -364,14 +371,6 @@ def delete_tasks(c, ids, apply=False, actor=None, keep_work=False):
                 task.get("readers"),
             ),
         )
-        from . import outbound_slack
-
-        post_ids = set(_column(c, "SELECT id FROM outbound_actions WHERE channel='slack' AND id IN ({})", msgs))
-        post_ids.update(
-            r[0] for r in c.execute("SELECT id FROM outbound_actions WHERE channel='slack' AND task_id=?", (tid,))
-        )
-        for mid in post_ids:
-            outbound_slack.withdraw(c, mid)
         for table, column in MESSAGE_ROWS:
             _delete(c, table, column, msgs)
         for table, column in CONVERSATION_ROWS:

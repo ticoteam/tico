@@ -505,6 +505,57 @@ def test_outbound_slack_list_uses_message_access_before_paging(slack):
     call(slack, "GET", f"outbound-actions/{older}")
 
 
+def test_outbound_slack_list_bounds_unreadable_rows_and_can_page_past_them(slack, monkeypatch):
+    from backend import thread_api
+    from backend.store import Problem
+
+    def queue():
+        return call(slack, "POST", "slack/posts", json={"channel": "#general", "text": "Queued"}).json()["message_id"]
+
+    visible = queue()
+    hidden = {queue() for _ in range(4)}
+    with slack.store.transaction() as c:
+        c.executemany("UPDATE outbound_actions SET created_at='9999-01-01' WHERE id=?", ((mid,) for mid in hidden))
+    original = thread_api.require_message_read
+    checked = []
+
+    def reads(c, auth, who, message):
+        checked.append(message["id"])
+        if message["id"] in hidden:
+            raise Problem("not_found", "Message not found", 404)
+        return original(c, auth, who, message)
+
+    monkeypatch.setattr(thread_api, "require_message_read", reads)
+    path = "outbound-actions?channel=slack&limit=1"
+    first = call(slack, "GET", path).json()
+    assert first["items"] == [] and set(checked) == hidden
+    cursor = first["next_cursor"]
+    assert cursor and not any(mid in cursor for mid in hidden)
+    second = call(slack, "GET", path, params={"cursor": cursor}).json()
+    assert [item["id"] for item in second["items"]] == [visible] and second["next_cursor"] is None
+
+
+def test_new_server_post_has_a_legacy_dedupe_stub_and_owner_sql_reads_safe_columns(slack, monkeypatch):
+    from backend.tests.helpers.sql import query
+
+    made = call(slack, "POST", "slack/posts", json={"channel": "#general", "text": "Only in outbound"}).json()
+    mid = made["message_id"]
+    with slack.store.transaction() as c:
+        row = c.execute("SELECT state,error,text FROM slack_posts WHERE message_id=?", (mid,)).fetchone()
+        assert tuple(row) == ("canceled", "outbound", "")
+        # The same message and a receipt, as they would exist if an old gateway had created the post.
+        c.execute("DELETE FROM outbound_actions WHERE id=?", (mid,))
+        c.execute("UPDATE slack_posts SET state='sent',slack_ts='1700000050.000100' WHERE message_id=?", (mid,))
+    sql = "SELECT message_id, state, slack_ts FROM slack_posts"
+    assert query(slack.api, sql)["rows"] == [[mid, "sent", "1700000050.000100"]]
+    assert query(slack.api, sql, token="cara-test")["rows"] == []
+    query(slack.api, "SELECT text FROM slack_posts", expected=422)
+    monkeypatch.setitem(OA._state, "swept", -OA.SWEEP)
+    monkeypatch.setitem(OA._state, "slack_after", ("", 0, ""))
+    assert not OA.step(slack.store)
+    assert call(slack, "GET", f"slack/posts/{mid}").json()["state"] == "sent"
+
+
 def test_an_unexpected_slack_enqueue_conflict_is_logged_and_refused(slack, caplog):
     from backend.store import Problem
 
