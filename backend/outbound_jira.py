@@ -104,6 +104,9 @@ def prepare(
             "Tico writes to Jira only through a record integration on one Jira site with a shared read and write key",
             422,
         )
+    site = cast("dict[str, Any]", payload).get("site") if isinstance(payload, dict) else None
+    if site is not None and site != JS.integrations(c, connection_id).get(connection_id):
+        raise Problem("connection_sites", f"The connection is no longer on {site}, the site this action was for", 409)
     if actor != H.TICO_ACTOR:
         from . import api_tools as _api_tools
 
@@ -117,6 +120,12 @@ def prepare(
     return "external", key
 
 
+def freeze(c: Any, connection_id: str, destination: str) -> dict[str, Any]:
+    """The Jira site the action is for, frozen into its payload (and so into what an OK of it shows and binds):
+    `prepare` holds each attempt to it."""
+    return {"site": JS.integrations(c, connection_id).get(connection_id) or ""}
+
+
 class _Answer(Exception):
     """Jira answered a lookup with something other than 2xx."""
 
@@ -127,6 +136,10 @@ class _Answer(Exception):
 
 class _Unreadable(Exception):
     """A 2xx lookup answer that was cut off or is not the shape asked for: it tells nothing."""
+
+
+class _Cut(_Unreadable):
+    """A 2xx lookup answer longer than JS.MAX_BODY."""
 
 
 Connection = tuple[str, dict[str, str], dict[str, str]]
@@ -149,41 +162,65 @@ def _get(on: Connection, path: str, query: dict[str, str] | None = None) -> dict
     reply = JS.call("GET", f"{base}{path}", headers, {**params, **(query or {})}, JS.TIMEOUT_S)
     if not 200 <= reply.status < 300:
         raise _Answer(reply)
-    if reply.cut or not isinstance(reply.body, dict):
+    if reply.cut:
+        raise _Cut(f"Jira's answer to {path} was too long to read")
+    if not isinstance(reply.body, dict):
         raise _Unreadable(f"Jira's answer to {path} could not be read")
     return cast("dict[str, object]", reply.body)
 
 
 def _list(answer: dict[str, object], name: str) -> list[dict[str, Any]]:
+    """Every entry of the answer's `name` list, each an object; _Unreadable when one is not."""
     got = answer.get(name)
-    if not isinstance(got, list):
-        raise _Unreadable(f"Jira's answer has no {name}")
-    return [cast("dict[str, Any]", x) for x in cast("list[object]", got) if isinstance(x, dict)]
+    if not isinstance(got, list) or not all(isinstance(x, dict) for x in cast("list[object]", got)):
+        raise _Unreadable(f"Jira's answer has no readable {name}")
+    return [cast("dict[str, Any]", x) for x in cast("list[object]", got)]
 
 
 def _issue(row: Any) -> str:
     return f"/rest/api/3/issue/{quote(str(row['destination']))}"
 
 
-def _text(node: object) -> str:
-    """The text of one Atlassian Document Format node, its children's joined."""
-    if not isinstance(node, dict):
-        return ""
-    got = cast("dict[str, object]", node)
-    text = got.get("text")
-    children = got.get("content")
-    inner = "".join(_text(n) for n in cast("list[object]", children)) if isinstance(children, list) else ""
-    return (text if isinstance(text, str) else "") + inner
-
-
-def _marked(body: object, mark: str) -> bool:
-    """Whether a comment's last paragraph is exactly `mark`."""
+def _marked(comment: dict[str, Any], mark: str) -> bool:
+    """Whether a comment's last paragraph is one text node that is exactly `mark`. _Unreadable when the comment has no
+    readable body (a document whose content is a list): that tells nothing either way."""
+    body = comment.get("body")
     content = cast("dict[str, object]", body).get("content") if isinstance(body, dict) else None
-    last: object = cast("list[object]", content)[-1] if isinstance(content, list) and content else None
-    if not isinstance(last, dict):
-        return False
-    paragraph = cast("dict[str, object]", last)
-    return paragraph.get("type") == "paragraph" and _text(paragraph) == mark
+    if not isinstance(content, list):
+        raise _Unreadable("A comment on the issue has no readable body")
+    blocks = cast("list[object]", content)
+    last = cast("dict[str, object]", blocks[-1]) if blocks and isinstance(blocks[-1], dict) else {}
+    inner = last.get("content")
+    nodes = cast("list[object]", inner) if isinstance(inner, list) else []
+    node = cast("dict[str, object]", nodes[0]) if len(nodes) == 1 and isinstance(nodes[0], dict) else {}
+    return last.get("type") == "paragraph" and node.get("type") == "text" and node.get("text") == mark
+
+
+def _comment(on: Connection, row: Any) -> dict[str, Any] | None:
+    """The comment ending in the action's marker among the newest COMMENTS_LOOKED_AT, read COMMENTS_PAGE at a time. A
+    page too long to read is asked again from the same place at half the size, down to one comment; one comment still
+    too long, like any entry that cannot be read, is _Unreadable."""
+    mark = marker(str(row["occurrence_key"]))
+    start, size = 0, COMMENTS_PAGE
+    while start < COMMENTS_LOOKED_AT:
+        size = min(size, COMMENTS_LOOKED_AT - start)
+        query = {"orderBy": "-created", "startAt": str(start), "maxResults": str(size)}
+        try:
+            answer = _get(on, _issue(row) + "/comment", query)
+        except _Cut:
+            if size == 1:
+                raise
+            size //= 2
+            continue
+        page = _list(answer, "comments")
+        for comment in page:
+            if _marked(comment, mark):
+                return {"comment_id": str(comment.get("id") or "")}
+        total = answer.get("total")
+        start += len(page)
+        if not page or (isinstance(total, int) and start >= total) or (not isinstance(total, int) and len(page) < size):
+            break
+    return None
 
 
 def _found(on: Connection, row: Any, payload: dict[str, str]) -> dict[str, Any] | None:
@@ -195,16 +232,7 @@ def _found(on: Connection, row: Any, payload: dict[str, str]) -> dict[str, Any] 
             raise _Unreadable("Jira's answer has no status")
         status = str(fields["status"])
         return {"status": status} if status.casefold() == payload["to"].casefold() else None
-    mark = marker(str(row["occurrence_key"]))
-    for start in range(0, COMMENTS_LOOKED_AT, COMMENTS_PAGE):
-        query = {"orderBy": "-created", "startAt": str(start), "maxResults": str(COMMENTS_PAGE)}
-        page = _list(_get(on, _issue(row) + "/comment", query), "comments")
-        for comment in page:
-            if _marked(comment.get("body"), mark):
-                return {"comment_id": str(comment.get("id") or "")}
-        if len(page) < COMMENTS_PAGE:
-            break
-    return None
+    return _comment(on, row)
 
 
 def _transition(on: Connection, row: Any, to: str) -> tuple[str, str]:

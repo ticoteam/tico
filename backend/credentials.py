@@ -137,14 +137,21 @@ def ask_admin_detail(c, admins, what):
 
 
 def effective_grant(c, credential, subject):
-    return c.execute(
-        'SELECT g.* FROM credential_grants g LEFT JOIN credential_grants p ON p.id=g.parent_id '
+    """`subject`'s grant on the credential in force, or None. A grant a person passed on to their bot (`parent_id`)
+    holds only while theirs does, and never at more than theirs: under a person's Read it is Read, whatever level it
+    was stored at."""
+    row = c.execute(
+        'SELECT g.*, p.access_level AS parent_access_level FROM credential_grants g '
+        'LEFT JOIN credential_grants p ON p.id=g.parent_id '
         # By the bot's key, so the grant seeks its bot rather than scanning bot_config.
         "LEFT JOIN bot_config bc ON substr(g.subject,1,4)='bot:' AND bc.bot=substr(g.subject,5) "
         'WHERE g.credential_id=? AND g.subject=? AND g.revoked_at IS NULL '
         "AND (g.parent_id IS NULL OR (p.revoked_at IS NULL AND p.id IS NOT NULL AND p.subject='human:'||bc.owner_id))",
         (credential, subject),
     ).fetchone()
+    if row is not None and row['parent_access_level'] == 'read' and row['access_level'] != 'read':
+        return {**dict(row), 'access_level': 'read'}
+    return row
 
 
 def granted(c, subject):

@@ -794,7 +794,7 @@ describe('a rule to add', () => {
 });
 
 describe('an outbound action', () => {
-  const frozen = { channel: 'jira', operation: 'comment', destination: 'HM-12', payload: { body: 'Released in v1.2.\n\nThanks!' } };
+  const frozen = { channel: 'jira', operation: 'comment', destination: 'HM-12', payload: { body: 'Released in v1.2.\n\nThanks!', site: 'acme.atlassian.net' } };
   const actionTask = () => task({ title: 'Comment on HM-12', to_leave: [req({ line: 'Send this jira comment?', shows: ['outbound:a1'] })] });
   const ok = (content: unknown) => (url: string) =>
     url.endsWith('/api/v2/oks/r1') ? { body: { requirement_id: 'r1', subject: 'outbound:a1', content, shown_hash: 'h-action', standing: 'waiting' } } : null;
@@ -809,7 +809,7 @@ describe('an outbound action', () => {
     expect(pairs).toEqual([
       ['Channel', 'jira'],
       ['Action', 'comment'],
-      ['Where', 'HM-12'],
+      ['Where', 'acme.atlassian.net HM-12'],
       ['Text', 'Released in v1.2.\n\nThanks!'],
     ]);
     fireEvent.click(await ready(box));

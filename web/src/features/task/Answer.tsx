@@ -311,13 +311,15 @@ const PAYLOAD_LABELS: Record<string, string> = { to: 'Status', body: 'Text' };
 
 /** The outbound action an OK lets go, exactly as it was asked: where it goes, what it does, and its payload's words. */
 function ActionShown({ action }: { action: BoundAction }) {
-  const fields = Object.entries(action.payload).map(([k, v]) => [k, typeof v === 'string' ? v : JSON.stringify(v)] as const);
+  // The site an action is for (Jira's) is shown with its destination: `HM-12` alone does not say which Jira.
+  const { site, ...rest } = action.payload;
+  const fields = Object.entries(rest).map(([k, v]) => [k, typeof v === 'string' ? v : JSON.stringify(v)] as const);
   return (
     <div className="askcard-rule" data-target={`outbound:${action.channel}`}>
       <Facts label="The action">
         <LabelValue label="Channel">{action.channel}</LabelValue>
         <LabelValue label="Action">{action.operation}</LabelValue>
-        <LabelValue label="Where">{action.destination}</LabelValue>
+        <LabelValue label="Where">{typeof site === 'string' && site ? `${site} ${action.destination}` : action.destination}</LabelValue>
         {fields.map(([k, v]) => (
           <LabelValue key={k} label={PAYLOAD_LABELS[k] ?? k}>
             <span className="askcard-text">{v}</span>

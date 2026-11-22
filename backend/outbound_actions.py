@@ -122,13 +122,18 @@ class Adapter:
     - `reconcile(store, row)`, where the provider can be asked: a Settled, or None when it cannot tell.
 
     `defaults` are the channel's own policy default per audience, in place of DEFAULTS, until the company sets one (a
-    record write to a record integration is bookkeeping, not a message to people: On its own)."""
+    record write to a record integration is bookkeeping, not a message to people: On its own).
+
+    `freeze(c, connection_id, destination)`, optional, answers fields frozen into the payload at enqueue, after
+    `prepare`: what the person asked to OK it is shown (Jira's site), so the OK's hash covers them and `prepare` can
+    hold the action to them at each attempt."""
 
     channel: str
     prepare: Callable[..., tuple[str, str]]
     dispatch: Callable[..., Any]
     reconcile: Callable[..., "Settled | None"] | None = None
     defaults: dict[str, str] = field(default_factory=lambda: dict[str, str]())
+    freeze: Callable[..., dict[str, Any]] | None = None
 
 
 ADAPTERS: dict[str, Adapter] = {}  # each channel's sender, registered at the end of this module
@@ -397,6 +402,8 @@ def enqueue(
     )
     if len(str(destination or "")) > 500:
         raise Problem("validation", "destination is at most 500 characters", 422)
+    if adapter.freeze:
+        payload = {**payload, **adapter.freeze(c, connection_id, destination)}
     audience = audience if audience in AUDIENCES else "external"
     policy = decide(c, actor=actor, channel=channel, audience=audience, destination=destination)
     state = {"on_their_own": "queued", "ask_first": "waiting_approval", "never": "blocked"}[policy["choice"]]
@@ -1170,5 +1177,6 @@ register(
         outbound_jira.dispatch,
         outbound_jira.reconcile,
         defaults=dict(outbound_jira.DEFAULTS),
+        freeze=outbound_jira.freeze,
     )
 )

@@ -635,7 +635,12 @@ GRANT_KEYS_SQL = (
     "FROM credentials k LEFT JOIN tools t ON t.id=k.tool_id WHERE k.kind!='service' "
     "ORDER BY lower(coalesce(t.name, k.name)), k.id"
 )
-GRANT_LEVELS_SQL = "SELECT credential_id, access_level FROM credential_grants WHERE subject=? AND revoked_at IS NULL"
+# A grant passed on by a person is never at more than theirs (credentials.effective_grant).
+GRANT_LEVELS_SQL = (
+    "SELECT g.credential_id, CASE WHEN p.access_level='read' THEN 'read' ELSE g.access_level END AS access_level "
+    "FROM credential_grants g LEFT JOIN credential_grants p ON p.id=g.parent_id "
+    "WHERE g.subject=? AND g.revoked_at IS NULL"
+)
 LEVEL_WORDS = {"read": "Read", "read_write": "Read and write"}
 
 

@@ -45,6 +45,7 @@ class FakeJira:
         self.answer: tuple[int, dict] | None = None
         self.lose = False
         self.garble: str = ""  # a lookup path ending this answers 200 with a page that is not JSON
+        self.raw_comments: list | None = None  # the comments list exactly as answered, malformed entries and all
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         wanted = "Basic " + base64.b64encode(f"ops@acme.example:{TOKEN}".encode()).decode()
@@ -61,7 +62,12 @@ class FakeJira:
                 offered = [{"id": i, "name": n, "to": {"name": to}} for i, n, to in WORKFLOW.get(self.status[key], [])]
                 return httpx.Response(200, json={"transitions": offered})
             if what == "comment":
-                return httpx.Response(200, json={"comments": list(reversed(self.comments.get(key, [])))})
+                if self.raw_comments is not None:
+                    return httpx.Response(200, json={"comments": self.raw_comments})
+                newest = list(reversed(self.comments.get(key, [])))
+                start, most = int(request.url.params["startAt"]), int(request.url.params["maxResults"])
+                page = newest[start : start + most]
+                return httpx.Response(200, json={"startAt": start, "total": len(newest), "comments": page})
             status = {
                 "name": self.status[key],
                 "statusCategory": {"key": "done" if self.status[key] == "Done" else "new"},
@@ -340,3 +346,80 @@ def test_the_jira_sender_may_be_imported_first():
     root = Path(__file__).resolve().parents[2]
     done = subprocess.run([sys.executable, "-c", code], cwd=root, capture_output=True, text=True, timeout=120)
     assert done.returncode == 0, done.stderr[-2000:]
+
+
+def test_a_bot_given_a_key_by_a_person_who_only_reads_it_does_not_write(api, jira):
+    jira.status["HM-12"] = "To Do"
+    key = _key(api, jira.tool, "read_write")
+    with _store(api).transaction() as c:  # Ben reads it; he passes his grant on to cmo, his bot
+        c.execute("UPDATE bot_config SET owner_id='ben' WHERE bot='cmo'")
+        now = H.now()
+        c.execute(
+            "INSERT INTO credential_grants(id,credential_id,subject,granted_by,created_at,access_level) "
+            "VALUES('g-ben',?,'human:ben','human:ana',?,'read')",
+            (key, now),
+        )
+        c.execute(
+            "INSERT INTO credential_grants(id,credential_id,subject,granted_by,parent_id,created_at) "
+            "VALUES('g-cmo',?,'bot:cmo','human:ben','g-ben',?)",
+            (key, now),
+        )
+    with pytest.raises(OA.Problem) as refused:
+        with _store(api).transaction() as c:
+            OA.enqueue(
+                c,
+                _store(api).settings,
+                actor="bot:cmo",
+                channel="jira",
+                operation="comment",
+                destination="HM-12",
+                occurrence_key="cmo",
+                payload={"body": "x"},
+                connection_id=jira.tool,
+            )
+    assert refused.value.status == 403
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [[None], [{"id": "9"}], [{"id": "9", "body": {"type": "doc"}}]],
+    ids=["null", "no body", "body without content"],
+)
+def test_a_comment_that_cannot_be_read_writes_nothing_and_tries_again(api, jira, raw):
+    jira.status["HM-12"] = "To Do"
+    jira.raw_comments = raw
+    _queue(api, jira.tool, "comment", {"body": "Hi."})
+    assert _attempt(api) == "requeued" and jira.writes == []
+
+
+def test_a_last_paragraph_with_more_than_the_marker_is_not_the_marker(api, jira):
+    jira.status["HM-12"] = "To Do"
+    mention = {"type": "mention", "attrs": {"id": "u1"}}
+    last = {"type": "paragraph", "content": [{"type": "text", "text": OJ.marker("k1")}, mention]}
+    jira.comments["HM-12"] = [{"id": "9", "body": {"type": "doc", "version": 1, "content": [last]}}]
+    _queue(api, jira.tool, "comment", {"body": "Hi."})
+    assert _attempt(api) == "done" and len(jira.writes) == 1
+
+
+def test_long_comments_are_read_in_smaller_pages_and_one_too_long_writes_nothing(api, jira, monkeypatch):
+    jira.status["HM-12"] = "To Do"
+    long = {"type": "paragraph", "content": [{"type": "text", "text": "x" * 30_000}]}
+    jira.comments["HM-12"] = [
+        {"id": str(i), "body": {"type": "doc", "version": 1, "content": [long]}} for i in range(18)
+    ]
+    _queue(api, jira.tool, "comment", {"body": "Hi."})
+    assert _attempt(api) == "done" and len(jira.writes) == 1  # 20 of them pass MAX_BODY; 10 at a time do not
+    monkeypatch.setattr(JS, "MAX_BODY", 1000)
+    row = _queue(api, jira.tool, "comment", {"body": "Again."}, key="k2")
+    assert _attempt(api) == "requeued" and len(jira.writes) == 1
+    assert "too long" in _row(api, row["id"])["last_error"]
+
+
+def test_the_site_is_frozen_into_what_an_ok_shows(api, jira):
+    jira.status["HM-12"] = "To Do"
+    row = _queue(api, jira.tool, "comment", {"body": "Hi."}, key="k-site")
+    assert json.loads(row["payload"]) == {"body": "Hi.", "site": HOST}
+    assert OA.content(row)["payload"]["site"] == HOST  # what an OK of it shows and binds
+    with pytest.raises(OA.Problem) as refused:  # an action naming another site is not for this connection
+        _queue(api, jira.tool, "comment", {"body": "Hi.", "site": "beta.atlassian.net"}, key="k-other")
+    assert refused.value.status == 409
