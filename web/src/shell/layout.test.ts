@@ -26,7 +26,7 @@ const TABLE: Record<string, Record<number, string>> = {
   'panel only': { 1728: '300, 248, 796, 344', 1440: '300, 248, 508, 344', 1280: '300, 248, 656, edge', 1024: 'edge, 248, 664, edge' },
   agent: { 1920: '300, 248, 972, 360', 1440: '300, 248, 492, 360', 1360: 'edge, 248, 676, 360', 1100: 'edge, edge, 628, 360', 800: 'edge, edge, edge, 652' },
   task: { 1920: '300, 288, 392, 900', 1728: '300, 288, 392, 708', 1440: 'edge, 288, 392, 684', 1024: 'edge, edge, 392, 520', 900: 'edge, edge, edge, 752' },
-  call: { 1920: 'edge, 1468, 384', 1024: 'edge, 572, 384', 900: 'edge, 796, edge' },
+  call: { 1920: 'edge, edge, 1424, 384', 1024: 'edge, edge, 528, 384', 900: 'edge, edge, 752, edge' },
 };
 
 // the window width under which each sheet tucks, in order, at default sizes. A view a thread leads (a page with a
@@ -39,7 +39,7 @@ const TUCKS: Record<string, [SheetId, number][]> = {
   'panel only': [['panel', 1412], ['tico', 1104], ['menu', 840]],
   agent: [['tico', 1428], ['menu', 1164], ['chat', 952]],
   task: [['tico', 1500], ['list', 1236], ['chat', 984]],
-  call: [['side', 932]],
+  call: [['side', 976]],
 };
 
 describe('layout', () => {
@@ -164,8 +164,10 @@ describe('layout', () => {
     // kept per arrangement before: the page's is read until the person sets one
     expect(sheet(layout(1920, { name: 'chat', chat: false, panel: true }, { page: { fold: { menu: true }, w: { menu: 300 } } }), 'menu')).toMatchObject({ state: 'fold' });
     expect(sheet(layout(1920, 'agent', { page: { w: { menu: 300 } } }), 'menu').width).toBe(300);
-    // a call keeps its own: Tico tucks there by default
+    // a call keeps its own: Tico and the menu tuck there by default, the menu's edge still on the row
     expect(sheet(layout(1920, 'call', { fold: { tico: false } }), 'tico').state).toBe('fold');
+    expect(sheet(layout(1920, 'call', { fold: { menu: false } }), 'menu').state).toBe('fold');
+    expect(sheet(layout(1920, 'call', { call: { fold: { menu: false } } }), 'menu').state).toBe('open');
   });
 
   it('pulls saved widths inside the floor and ceiling', () => {
@@ -179,6 +181,7 @@ describe('layout', () => {
     expect(press(1200, 'chat', {}, 'page')).toEqual({ saved: {}, forward: 'page' });
     expect(press(1100, 'page', {}, 'tico').saved.fold?.tico).toBe(true);
     expect(press(1440, 'call', {}, 'tico').saved.call?.fold?.tico).toBe(false);
+    expect(press(1440, 'call', {}, 'menu').saved.call?.fold?.menu).toBe(false);
     expect(press(1200, 'chat', {}, 'chat', 'chat').forward).toBeNull(); // folding the opened one lets it go
   });
 

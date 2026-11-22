@@ -52,7 +52,13 @@ export function trailOf(path: string, n: TrailNames): TrailPart[] {
   let page = n.page;
   switch (top) {
     case undefined:
+      break;
     case 'call':
+      // a call is reached from the calendar (its meetings) and goes back there when it ends. Its title is always its
+      // own last part, even one that reads like a part above it; before it has loaded it is still a call.
+      add('Calendar', '/calendar');
+      add(page || 'Call');
+      page = '';
       break;
     case 'tasks':
     case 'task':

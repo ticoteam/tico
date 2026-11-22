@@ -46,9 +46,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function show(at: string) {
+function show(at: string, ticoBeside = false) {
   const root = createRootRoute({ component: () => <Outlet /> });
-  const page = createRoute({ getParentRoute: () => root, path: '/call/$room', component: () => <CallSide room={ROOM} /> });
+  const page = createRoute({ getParentRoute: () => root, path: '/call/$room', component: () => <CallSide room={ROOM} ticoBeside={ticoBeside} /> });
   const tasks = createRoute({ getParentRoute: () => root, path: '/tasks', component: () => <h1>Tasks</h1> });
   const router = createRouter({ routeTree: root.addChildren([page, tasks]), history: createMemoryHistory({ initialEntries: [at] }) });
   render(
@@ -97,6 +97,45 @@ describe('the call’s chat', () => {
     await vi.waitFor(() => expect(document.querySelector('[data-variant]')?.getAttribute('data-variant')).toBe('task'));
     expect(document.querySelector('[data-variant]')?.getAttribute('data-to')).toBe('Growth Manager');
     expect(document.body.textContent).not.toContain('Teammate');
+  });
+});
+
+describe('one conversation, not two side by side', () => {
+  it('in Tico’s own room with Tico’s sheet open beside it, the side leaves its Chat tab out and shows the transcript', async () => {
+    queryClient.setQueryData(callQuery(ROOM).queryKey, { id: ROOM, thread_id: 'th-tico', meeting_id: 'mt9', participants: [], bots: ['b1'], state: 'live' } as unknown as Call);
+    queryClient.setQueryData(transcriptQuery('mt9').queryKey, { chunks: [{ seq: 1, speaker: 'Ana', start_ms: 3_000, text: 'Are they gone?' }], event_id: 2 });
+    show(`/call/${ROOM}`, true);
+    expect(await screen.findByText('Are they gone?')).toBeTruthy();
+    expect(screen.queryByRole('tab', { name: 'Chat' })).toBeNull();
+    expect(screen.getByRole('tab', { name: 'Transcript' }).getAttribute('aria-selected')).toBe('true');
+    expect(document.querySelector('[data-variant]')).toBeNull();
+  });
+
+  it('on an ended call, whose page shows the transcript, opens on who was in it instead', async () => {
+    queryClient.setQueryData(callQuery(ROOM).queryKey, {
+      id: ROOM,
+      thread_id: 'th-tico',
+      meeting_id: 'mt9',
+      participants: [{ actor: 'human:ana', in_call: false }],
+      bots: ['b1'],
+      state: 'ended',
+    } as unknown as Call);
+    show(`/call/${ROOM}`, true);
+    expect(await screen.findByText('Left')).toBeTruthy();
+    expect(screen.getByRole('tab', { name: /People/ }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.queryByRole('tab', { name: 'Chat' })).toBeNull();
+  });
+
+  it('keeps its Chat tab while Tico is folded, and in any other room whatever Tico shows', async () => {
+    queryClient.setQueryData(callQuery(ROOM).queryKey, { id: ROOM, thread_id: 'th-tico', participants: [], bots: ['b1'], state: 'live' } as unknown as Call);
+    show(`/call/${ROOM}`);
+    await vi.waitFor(() => expect(document.querySelector('[data-variant]')?.getAttribute('data-variant')).toBe('tico'));
+    expect(screen.getByRole('tab', { name: 'Chat' })).toBeTruthy();
+    cleanup();
+    queryClient.setQueryData(callQuery(ROOM).queryKey, { id: ROOM, thread_id: 'th1', participants: [], bots: [], state: 'live' } as unknown as Call);
+    show(`/call/${ROOM}`, true);
+    await vi.waitFor(() => expect(document.querySelector('[data-variant]')?.getAttribute('data-variant')).toBe('task'));
+    expect(screen.getByRole('tab', { name: 'Chat' })).toBeTruthy();
   });
 });
 

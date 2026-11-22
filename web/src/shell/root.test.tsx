@@ -79,6 +79,7 @@ vi.mock('@/features/calls/exports', () => ({
 }));
 vi.mock('@/features/calls/routing', () => ({
   ringingQuery: q('ringing', { calls: [] }),
+  callQuery: (id: string) => q(`call:${id}`, { id, title: 'Pricing review' }),
   TOGGLE_MUTE: 'calls.toggleMute',
   useCall: () => ({ muted: false, phase: call.phase }),
   isCallActive: (c: { phase: string }) => c.phase === 'live',
@@ -308,6 +309,12 @@ describe('the root', () => {
     show('/call/abc');
     expect(await screen.findByText('call page')).toBeTruthy();
     expect(document.querySelector('.shell-frame')?.getAttribute('data-arrangement')).toBe('call');
+    // the menu is on the row, at its edge, and the trail leads back up: the company, the calendar, the call's own title
+    expect(document.querySelector('.shell-place[data-sheet="menu"]')).toBeTruthy();
+    const trail = screen.getByRole('navigation', { name: 'Breadcrumb' });
+    await vi.waitFor(() => expect(trail.textContent).toContain('Pricing review'));
+    expect(within(trail).getByRole('link', { name: 'Calendar' }).getAttribute('href')).toBe('/calendar');
+    expect(within(trail).getAllByRole('link')[0]?.getAttribute('href')).toBe('/');
   });
 });
 

@@ -5,7 +5,7 @@ import { useEffect, useSyncExternalStore } from 'react';
    title). It is what the tab's title shows, and what a message to Tico says the person was looking at.
    Read when a route has drawn, and when a page's head says its name changed (`showPageName`): never by watching the
    page, whose chats change on every streamed word. */
-const H1 = '.pane.page h1';
+const H1 = '.pane.page h1, .pane.cw h1'; // a call's page is its own pane (features/calls), its head the call's title
 
 export const pageName = (): string => document.querySelector(H1)?.textContent?.trim() ?? '';
 

@@ -8,7 +8,7 @@ import { CardsContext } from '@/kit/Popover';
 import { C, foldOf, forwardFor, layout, modeFor, press, specOf, TICO_MARK, type Arrangement, type ArrangementSpec, type Saved, type SheetId, type SheetLayout } from './layout';
 import { keepOne, useSheetMemory, withFold, withWidth, withoutWidth } from './memory';
 import { barFolded } from './pageOwner';
-import { SheetContext, type SheetControls } from './Sheet';
+import { OpenSheetsContext, SheetContext, type SheetControls } from './Sheet';
 import { Trail, TrailContext, type TrailPart } from './Trail';
 import './Frame.css';
 import './desktop.css';
@@ -423,8 +423,10 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
   const mark = (id: SheetId) =>
     id === 'tico' ? <Dot size={TICO_MARK} /> : id === 'chat' && bar ? bar.face : id === 'menu' && p.lips?.menu ? <span className="shell-edge-lip">{p.lips.menu}</span> : <Icon name={EDGE_ICON[id]} />;
   const top = sheets.length + 1; // the handles sit over every sheet
+  const openIds = sheets.filter(s => s.state === 'open').map(s => s.id).join(' ');
 
   return (
+    <OpenSheetsContext value={openIds}>
     <div className={p.trail ? 'app-tico shell-frame has-trail' : 'app-tico shell-frame'} data-arrangement={p.arr}>
       {p.trail ? <Trail parts={p.trail} /> : null}
       {sheets.map((s, i) => {
@@ -526,5 +528,6 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
           );
         })}
     </div>
+    </OpenSheetsContext>
   );
 }
