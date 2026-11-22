@@ -166,6 +166,80 @@ def test_intake_arrivals_survive_a_full_hold_and_a_stale_claim(watched):
         assert c.execute("SELECT count(*) FROM tasks WHERE occurrence_step='triage'").fetchone()[0] == 2
 
 
+def test_intake_failed_step_rolls_back_and_drain_hands_it_to_the_owner(watched, monkeypatch):
+    api, gmail, _ = watched
+    store = api.app.state.store
+    for mid in ("one", "two"):
+        gmail.add(BOX, mid, epoch=epoch(T0), labels=("INBOX", "Tico Intake"))
+    check(api, T0)
+    process = outside_intake.process
+
+    def fail_first(c, connection_id, ref, payload, started_at):
+        status = process(c, connection_id, ref, payload, started_at)
+        if payload["source_message_id"] == "one":
+            c.execute("UPDATE tasks SET title='Uncommitted title' WHERE occurrence_step='triage'")
+            raise RuntimeError("interrupted")
+        return status
+
+    monkeypatch.setattr(outside_intake, "process", fail_first)
+    with time_machine.travel(T0, tick=False):
+        assert store.automations.drain() == 2
+    with store.read() as c:
+        assert [r[0] for r in c.execute("SELECT status FROM automation_runs WHERE trigger_ref LIKE 'intake:%'")] == [
+            "ok",
+            "ok",
+        ]
+        tasks = list(c.execute("SELECT id,title,owner_id FROM tasks WHERE occurrence_step='triage'"))
+        assert len(tasks) == 2 and all(r["title"] == "Triage unverified sender" for r in tasks)
+        assert all(r["owner_id"] == "human:ana" for r in tasks)
+        assert sum("Automatic processing could not finish" in H.task_words(c, r["id"]) for r in tasks) == 1
+
+
+def test_intake_stale_claim_and_failed_handoff_requeue_the_same_run_once(watched, monkeypatch):
+    api, gmail, _ = watched
+    store = api.app.state.store
+    gmail.add(BOX, "stale", epoch=epoch(T0), labels=("INBOX", "Tico Intake"))
+    check(api, T0)
+    with store.transaction() as c:
+        run = c.execute("SELECT * FROM automation_runs WHERE trigger_ref LIKE 'intake:%'").fetchone()
+        state = json.loads(run["saved_state"])
+        state["resumes"] = automations.MAX_RESUMES
+        c.execute(
+            "UPDATE automation_runs SET status='running',claimed_at=?,claim_token='expired',saved_state=? WHERE id=?",
+            (run["started_at"], json.dumps(state), run["id"]),
+        )
+
+    def unavailable(*args, **kwargs):
+        raise RuntimeError("task creation unavailable")
+
+    later = T0 + timedelta(minutes=automations.STALE_MINUTES + 1)
+    with time_machine.travel(later, tick=False):
+        automations.tick(store, later, drain=False)
+        with monkeypatch.context() as patch:
+            patch.setattr(outside_intake, "triage", unavailable)
+            assert store.automations.drain() == 1
+            with store.transaction() as c:
+                assert (
+                    c.execute("SELECT status FROM automation_runs WHERE id=?", (run["id"],)).fetchone()[0] == "failed"
+                )
+                connection = run["automation_id"].removeprefix(automations.INTAKE_AUTOMATION)
+                assert automations.replay_intake(c, connection, run["trigger_ref"]) == run["id"]
+                assert (
+                    c.execute("SELECT status FROM automation_runs WHERE id=?", (run["id"],)).fetchone()[0] == "queued"
+                )
+            assert store.automations.drain() == 1
+        with store.transaction() as c:
+            assert automations.replay_intake(c, connection, run["trigger_ref"]) == run["id"]
+            assert c.execute("SELECT status FROM automation_runs WHERE id=?", (run["id"],)).fetchone()[0] == "failed"
+    retry_at = later + timedelta(hours=1)
+    with time_machine.travel(retry_at, tick=False):
+        automations.tick(store, retry_at, drain=False)
+        assert store.automations.drain() == 1
+    with store.read() as c:
+        assert c.execute("SELECT status FROM automation_runs WHERE id=?", (run["id"],)).fetchone()[0] == "ok"
+        assert c.execute("SELECT count(*) FROM tasks WHERE occurrence_step='triage'").fetchone()[0] == 1
+
+
 def test_intake_verifies_exact_sender_and_keeps_unverified_mail_in_owner_triage(watched):
     api, gmail, ordinary = watched
     store = api.app.state.store

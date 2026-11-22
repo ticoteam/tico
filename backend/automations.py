@@ -1595,6 +1595,24 @@ def _insert_run(c, row, payload, ref, on_hold, *, manual=False, chain=()):
 INTAKE_AUTOMATION = "auto_builtin_intake:"
 
 
+def replay_intake(c, connection_id, ref):
+    prior = c.execute(
+        "SELECT id,status,saved_state FROM automation_runs WHERE automation_id=? AND trigger_ref=? "
+        "AND trigger_ref LIKE 'intake:%'",
+        (INTAKE_AUTOMATION + connection_id, ref),
+    ).fetchone()
+    if prior and prior["status"] == "failed" and prior["saved_state"]:
+        state = json.loads(prior["saved_state"])
+        if state.get("payload") and not state.get("replayed"):
+            state.update(replayed=True, recover=True)
+            c.execute(
+                "UPDATE automation_runs SET status='queued',finished_at=NULL,wake_at=NULL,saved_state=? WHERE id=?",
+                (json.dumps(state), prior["id"]),
+            )
+            _ring(c)
+    return prior["id"] if prior else None
+
+
 def queue_intake(c, connection_id, owner_id, ref, payload):
     """Persist an authenticated arrival even when ordinary automation triggers would drop it."""
     aid = INTAKE_AUTOMATION + connection_id
@@ -2885,12 +2903,14 @@ class Hub:
             if run["claim_token"] != token:
                 log.warning("automation run %s: its claim lapsed before it started; left to the claim that has it", rid)
                 return False
-            row = c.execute("SELECT * FROM automations WHERE id=?", (run["automation_id"],)).fetchone()
-            version = c.execute(
-                "SELECT flow FROM automation_versions WHERE automation_id=? AND n=?",
-                (run["automation_id"], run["version"]),
-            ).fetchone()
-        if run["automation_id"].startswith(INTAKE_AUTOMATION):
+            intake = run["automation_id"].startswith(INTAKE_AUTOMATION)
+            if not intake:
+                row = c.execute("SELECT * FROM automations WHERE id=?", (run["automation_id"],)).fetchone()
+                version = c.execute(
+                    "SELECT flow FROM automation_versions WHERE automation_id=? AND n=?",
+                    (run["automation_id"], run["version"]),
+                ).fetchone()
+        if intake:
             return self._go_intake(run, token)
         state = json.loads(run["saved_state"] or "{}")
         try:
@@ -2967,25 +2987,46 @@ class Hub:
                 return False
             state = json.loads(current["saved_state"])
             status = current["status"]
+            wake_at = None
             if status == "running":
-                status = _runnable(c, current["automation_id"])
+                status = "queued" if state.get("recover") else _runnable(c, current["automation_id"])
                 if status == "queued":
-                    status = outside_intake.process(
+                    args = (
                         c,
                         current["automation_id"].removeprefix(INTAKE_AUTOMATION),
                         current["trigger_ref"],
                         state["payload"],
                         current["started_at"],
                     )
-            if status != "held":
+                    if not state.get("recover"):
+                        status = _intake_step(c, run["id"], outside_intake.process, *args)
+                    if status == "failed" or state.get("recover"):
+                        status = _intake_step(c, run["id"], outside_intake.triage, *args, recovery=True)
+                        if status == "failed":
+                            state.update(status=status, recover=True, error="The inbox handoff will be retried.")
+                            wake_at = H.shift(H.now(), hours=1)
+            if status not in ("held", "failed"):
                 state = {"status": status}
             c.execute(
-                "UPDATE automation_runs SET status=?,saved_state=?,finished_at=?,claimed_at=NULL,claim_token=NULL "
+                "UPDATE automation_runs SET status=?,saved_state=?,finished_at=?,wake_at=?,claimed_at=NULL,claim_token=NULL "
                 "WHERE id=?",
-                (status, json.dumps(state), None if status == "held" else H.now(), run["id"]),
+                (status, json.dumps(state), None if status == "held" else H.now(), wake_at, run["id"]),
             )
-            _ring(c)
+            if status != "held":
+                _ring(c)
         return True
+
+
+def _intake_step(c, rid, work, *args, **kwargs):
+    c.execute("SAVEPOINT intake_step")
+    try:
+        return work(*args, **kwargs)
+    except Exception as exc:  # noqa: BLE001 - one arrival's failure must leave the drain running
+        c.execute("ROLLBACK TO intake_step")
+        log.warning("intake run %s: %s failed (%s)", rid, work.__name__, type(exc).__name__)
+        return "failed"
+    finally:
+        c.execute("RELEASE intake_step")
 
 
 # ---------------------------------------------------------------------------------------------------- mail actions
@@ -3413,20 +3454,33 @@ def tick(store, at=None, drain=True):
         c.execute(
             f"UPDATE automation_runs SET status={RUNNABLE},wake_at=NULL WHERE status='waiting' AND wake_at<=?", (now,)
         )
+        from .outside_intake import DEADLINE_HOURS
+
+        intake_pattern = INTAKE_AUTOMATION + "*"
+        c.execute(
+            "UPDATE automation_runs SET status='queued',finished_at=NULL,wake_at=NULL,"
+            "saved_state=json_set(saved_state,'$.recover',1) "
+            "WHERE automation_id GLOB ? AND ((status='held' AND started_at<=?) OR (status='failed' AND wake_at<=?))",
+            (intake_pattern, H.shift(now, hours=-DEADLINE_HOURS), now),
+        )
         # A run cut off (the server stopped mid-run) goes on from its last save; its effects are not done twice.
         for run in c.execute(
-            "SELECT id, saved_state FROM automation_runs WHERE status='running' AND claimed_at<?",
+            "SELECT id, automation_id, saved_state FROM automation_runs WHERE status='running' AND claimed_at<?",
             (H.shift(now, minutes=-STALE_MINUTES),),
         ).fetchall():
             state = json.loads(run["saved_state"] or "{}")
             state["resumes"] = int(state.get("resumes") or 0) + 1
-            if not state.get("threads") or state["resumes"] > MAX_RESUMES:
+            intake = run["automation_id"].startswith(INTAKE_AUTOMATION)
+            if intake and state["resumes"] > MAX_RESUMES:
+                state["recover"] = True
+            if not intake and (not state.get("threads") or state["resumes"] > MAX_RESUMES):
                 _fail(c, run["id"], state, now, "it was cut off more than %d times" % MAX_RESUMES)
             else:
                 c.execute(
-                    f"UPDATE automation_runs SET status={RUNNABLE},claimed_at=NULL,claim_token=NULL,saved_state=? "
+                    f"UPDATE automation_runs SET status=CASE WHEN ? THEN 'queued' ELSE {RUNNABLE} END,"
+                    "claimed_at=NULL,claim_token=NULL,saved_state=? "
                     "WHERE id=?",
-                    (json.dumps(state, default=str), run["id"]),
+                    (intake and state.get("recover") is True, json.dumps(state, default=str), run["id"]),
                 )
         # One dropped mid-step whose step was never saved (the server stopped first): it is not resumed, but what its
         # turns cost meanwhile is charged to it and their holds released.
@@ -3758,7 +3812,7 @@ def prune(c, now):
     old = H.shift(now, days=-KEEP_DAYS)
     c.execute(
         "UPDATE automation_runs SET saved_state=NULL WHERE saved_state IS NOT NULL AND finished_at IS NOT NULL "
-        "AND finished_at<?",
+        "AND finished_at<? AND wake_at IS NULL",
         (old,),
     )
     c.execute("DELETE FROM automation_effects WHERE created_at<?", (old,))

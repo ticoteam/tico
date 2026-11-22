@@ -136,12 +136,9 @@ def save_message(
         raise ValueError("Conversation intake requires the adapter's write transaction")
     queue: Any = automations
     ref = "intake:" + hashlib.sha256(source_message_id.encode()).hexdigest()
-    prior = c.execute(
-        "SELECT id FROM automation_runs WHERE automation_id=? AND trigger_ref=? AND trigger_ref LIKE 'intake:%'",
-        (queue.INTAKE_AUTOMATION + connection_id, ref),
-    ).fetchone()
+    prior = queue.replay_intake(c, connection_id, ref)
     if prior:
-        return str(prior["id"])
+        return str(prior)
 
     payload: dict[str, Any] = {"source_message_id": source_message_id, "sender_verified": bool(verified_id)}
     verified = entities.verified_sender(c, f"human:{owner_id}", channel, connection_id, verified_id)
@@ -195,7 +192,11 @@ def triage(
     due = hub.shift(started_at, hours=DEADLINE_HOURS)
     subject = "Triage outside conversation" if payload.get("sender_verified") else "Triage unverified sender"
     mailbox = quote(str(box["address"]), safe="")
-    delivery = quote(str(payload.get("source_message_id") or ""), safe="")
+    source_id = payload.get("source_message_id")
+    if not source_id and payload.get("message_id"):
+        message = hub.message(c, payload["message_id"])
+        source_id = message["source_message_id"] if message else None
+    delivery = quote(str(source_id or ""), safe="")
     text = f"Review this arrival in [Gmail](https://mail.google.com/mail/u/{mailbox}/#all/{delivery})."
     if recovery:
         text += " Automatic processing could not finish."
@@ -219,8 +220,10 @@ def triage(
 
 
 def process(c: sqlite3.Connection, connection_id: str, ref: str, payload: dict[str, Any], started_at: str) -> str:
-    if not payload.get("message_id") or hub.parse_ts(hub.shift(started_at, hours=DEADLINE_HOURS)) <= hub.parse_ts(
-        hub.now()
+    if (
+        not payload.get("message_id")
+        or hub.parse_ts(hub.shift(started_at, hours=DEADLINE_HOURS)) <= hub.parse_ts(hub.now())
+        or payload.get("triage")
     ):
         return triage(c, connection_id, ref, payload, started_at)
     return "ok"
