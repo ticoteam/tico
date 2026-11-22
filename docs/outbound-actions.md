@@ -150,11 +150,11 @@ Read and write on each shared key used. The Tools proxy refuses non-GET requests
 SMS/Messages resources, and POST, PUT and PATCH to Close's SMS activities, including draft updates. The Twilio
 account is frozen in the approval preview. Both channels are external and default to Ask first. A Contacts block on
 `channel:sms` applies to both. The destination is matched by canonical number against Contacts phone fields and phone
-identifiers. Rules follow merges of contacts and rule targets. The sender checks the Contacts block again in the
-transaction that authorizes the exact credential it will use.
+identifiers. Rules follow merges of contacts and rule targets. The sender checks policy again in the transaction
+that authorizes the exact credential it will use. If policy now requires an OK, the action waits for approval.
 
 Twilio creates a Message. Close creates an SMS activity with status `outbox`. The receipt's `provider_id` records
-provider acceptance. A 429 requeues using Retry-After (capped at one day) or a one-minute fallback. A vault outage
+provider acceptance. A 429 requeues using the first Retry-After value (capped at one day) or a one-minute fallback. A vault outage
 before dispatch also requeues. These endpoints
 have no documented lookup by a client reference. A lost or unreadable answer goes to the owner with the action
 still unknown, with no automatic resend. [Twilio Messages API](https://www.twilio.com/docs/messaging/api/message-resource)

@@ -36,7 +36,7 @@ class Blocked(Exception):
 @dataclass
 class Answer:
     status: int
-    headers: dict = field(default_factory=dict)
+    headers: httpx.Headers = field(default_factory=httpx.Headers)
     head: str = ""
 
 
@@ -178,11 +178,7 @@ def post(
                             break
                     if time.monotonic() > ends:
                         raise Blocked(late)
-                return Answer(
-                    response.status_code,
-                    {k.lower(): v for k, v in response.headers.items()},
-                    head.decode("utf-8", "replace"),
-                )
+                return Answer(response.status_code, response.headers, head.decode("utf-8", "replace"))
         except Blocked:
             raise
         except Exception as exc:

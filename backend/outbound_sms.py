@@ -8,8 +8,6 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 from urllib.parse import urlencode
 
-import httpx
-
 from . import egress as _egress
 from . import outbound_http
 from . import tool_services as _tool_services
@@ -20,7 +18,7 @@ from .store import Problem
 from .tool_services import RECORD_INTEGRATION, SHARED_KEY
 
 if TYPE_CHECKING:
-    from .outbound_actions import SafeRejection
+    from .outbound_actions import DispatchStopped, SafeRejection
 
 H: Any = _H
 TS: Any = _tool_services
@@ -227,7 +225,7 @@ def _auth(c: Any, vault: Any, keys: _Keys, account: str) -> dict[str, str]:
     return cast("dict[str, str]", TS.apply_auth("basic_user", values["api_key"])[0])
 
 
-def dispatch(store: Any, row: Mapping[str, Any]) -> "dict[str, str] | SafeRejection":
+def dispatch(store: Any, row: Mapping[str, Any]) -> "dict[str, str] | SafeRejection | DispatchStopped":
     from . import outbound_actions as OA
 
     channel = row["channel"]
@@ -240,11 +238,9 @@ def dispatch(store: Any, row: Mapping[str, Any]) -> "dict[str, str] | SafeReject
         with store.transaction() as c:
             # Contact policy, authority and the exact credential used share the final authorization transaction.
             keys = _keys(c, channel, row["connection_id"], row["actor"])
-            policy = OA.decide(
-                c, actor=row["actor"], channel=channel, audience="external", destination=row["destination"]
-            )
-            if policy["choice"] == "never":
-                raise Problem("contact_blocked", policy["why"], 403)
+            stopped = OA.recheck_dispatch_policy(c, row, "external")
+            if stopped is not None:
+                return stopped
             account = _account(c, vault, keys)
             if channel == "sms":
                 _bound_account(payload, account)
@@ -275,7 +271,7 @@ def dispatch(store: Any, row: Mapping[str, Any]) -> "dict[str, str] | SafeReject
         content_type, id_key = "application/json", "id"
         id_shape = CLOSE_SMS_ID
     try:
-        answer = EGRESS.post(
+        answer: _egress.Answer = EGRESS.post(
             vendor["base_url"] + path,
             body,
             {**headers, "Content-Type": content_type, "Accept": "application/json"},
@@ -287,7 +283,7 @@ def dispatch(store: Any, row: Mapping[str, Any]) -> "dict[str, str] | SafeReject
         raise RuntimeError(f"{vendor['name']} did not return an answer") from None
     status = answer.status
     if status == 429:
-        asked = outbound_http.retry_after(httpx.Headers(answer.headers))
+        asked = outbound_http.retry_after(answer.headers)
         return OA.SafeRejection(min(asked, 86_400) if asked is not None else 60, f"{vendor['name']} answered 429")
     if status in (400, 401, 403, 404, 422):
         raise OA.Refused(f"{vendor['name']} refused the SMS ({status})")

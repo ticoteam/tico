@@ -39,7 +39,7 @@ class FakeSMS:
         self.requests = []
         self.accepted = 0
         self.next_status = 201
-        self.retry_after = "180"
+        self.retry_after = [b"180"]
         self.lose = False
         self.bad_receipt = False
         self.body = BODY
@@ -74,7 +74,8 @@ class FakeSMS:
         if self.next_status != 201:
             status, self.next_status = self.next_status, 201
             if status == 429:
-                return httpx.Response(status, headers={"Retry-After": self.retry_after}, stream=InterruptedBody())
+                headers = [(b"X-Provider-Detail", b"\xe9"), *((b"Retry-After", v) for v in self.retry_after)]
+                return httpx.Response(status, headers=headers, stream=InterruptedBody())
             return httpx.Response(status)
         self.accepted += 1
         if self.lose:
@@ -168,11 +169,11 @@ def _approve(api, action_id):
     return shown["action"]["payload"]
 
 
-def _policy(api, vendor):
+def _policy(api, vendor, mode="on_their_own"):
     response = api.put(
         "/api/v2/outbound-actions/policy",
         json={
-            "settings": {f"{vendor.channel}:external": "on_their_own"},
+            "settings": {f"{vendor.channel}:external": mode},
         },
         headers=headers(),
     )
@@ -221,7 +222,15 @@ def test_an_unproven_answer_asks_the_owner_and_never_resends(api, store, vendor,
     assert len(vendor.requests) == vendor.accepted == 1
 
 
-@pytest.mark.parametrize(("retry_after", "wait"), [("180", 180), ("1e100", 86_400)])
+@pytest.mark.parametrize(
+    ("retry_after", "wait"),
+    [
+        ([b"180", b"5"], 180),
+        ([b"1e100"], 86_400),
+        ([b"\xff", b"5"], 60),
+        ([b"Wed, 21 Oct 2015 07:28:00 +9999999999999999999999999999"], 60),
+    ],
+)
 def test_rate_limit_headers_requeue_with_the_same_ok_even_if_the_body_cannot_be_read(
     api, store, vendor, retry_after, wait
 ):
@@ -302,9 +311,33 @@ def test_opt_out_committed_after_the_permit_stops_dispatch(api, store, vendor, m
         return adapter.dispatch(store, permitted)
 
     monkeypatch.setitem(OA.ADAPTERS, vendor.channel, replace(adapter, dispatch=dispatch_after_opt_out))
-    assert _attempt(store) == "failed"
-    assert "Opted out" in _row(store, row["id"])["last_error"]
+    assert _attempt(store) == "blocked"
+    after = _row(store, row["id"])
+    assert after["provider_attempted_at"] is None and "Opted out" in after["last_error"]
     assert vendor.requests == []
+
+
+def test_ask_first_committed_after_the_permit_waits_for_approval(api, store, vendor, monkeypatch):
+    _policy(api, vendor)
+    row = _queue(store, vendor)
+    assert row["state"] == "queued" and not row["approval_id"]
+    adapter = OA.ADAPTERS[vendor.channel]
+
+    def dispatch_after_policy_change(store, permitted):
+        assert permitted["provider_attempted_at"]
+        if not permitted["approval_id"]:
+            _policy(api, vendor, "ask_first")
+        return adapter.dispatch(store, permitted)
+
+    monkeypatch.setitem(OA.ADAPTERS, vendor.channel, replace(adapter, dispatch=dispatch_after_policy_change))
+    assert _attempt(store) == "waiting_approval"
+    held = _row(store, row["id"])
+    assert held["state"] == "waiting_approval" and held["approval_id"]
+    assert held["claim_token"] is None and held["provider_attempted_at"] is None and held["attempts"] == 0
+    assert OA.claim(store) is None and vendor.requests == []
+    assert _approve(api, row["id"]) == json.loads(row["payload"])
+    assert _attempt(store) == "done"
+    assert len(vendor.requests) == vendor.accepted == 1
 
 
 def test_the_record_integration_and_write_grant_are_required(api, store, vendor):
