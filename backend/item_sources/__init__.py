@@ -176,19 +176,30 @@ def parse_ref(conn: sqlite3.Connection, text: str) -> tuple[str, str, str, str]:
     return source_id, item_type, spelled, connection.strip()
 
 
+ALREADY_FILED = "This item is already filed"  # a primary link held by a task the caller may not read: never named
+PRIMARY_SOURCES = ("jira",)  # the sources a task may be filed for (`primary_of`); GitHub PRs link the ordinary way
+
+
 def primary_of(conn: sqlite3.Connection, text: str) -> tuple[tuple[str, str, str, str], str]:
-    """(item, URL to link) of a task create's primary link (POST /api/v2/tasks `primary_link`): the item as `parse_ref`
-    reads it, linked by its URL when given as one, else by the page its source names for it (`item_url`, Jira's).
-    ValueError, saying what is wrong, for anything else."""
+    """(item, URL to link) of a task create's primary link (POST /api/v2/tasks `primary_link`): a Jira issue as
+    `parse_ref` reads it, linked by its URL when given as one, else by the page its connection's site has for it
+    (jira.item_url). ValueError, saying what is wrong, for anything else."""
+    from . import jira
+
     item = parse_ref(conn, text)
+    if item[0] not in PRIMARY_SOURCES:
+        raise ValueError("A primary link is a Jira issue: jira:issue:<key>@<connection>, or its URL")
     text = text.strip()
     if text.startswith(("http://", "https://")):
         return item, text
-    module = source(item[0])
-    item_url: Callable[[sqlite3.Connection, str, str, str], str] | None = getattr(module, "item_url", None)
-    if item_url is None:
-        raise ValueError(f"Name a {item[0]} item by its URL")
-    return item, item_url(conn, item[1], item[2], item[3])
+    return item, jira.item_url(conn, item[1], item[2], item[3])
+
+
+def lookup(conn: sqlite3.Connection, text: str) -> tuple[tuple[tuple[str, str, str, str], str], str | None]:
+    """A primary link (`primary_of`) and the id of the task holding it already, or None: what a create and its dry run
+    read before anything else. ValueError for a primary link that names no Jira issue."""
+    primary = primary_of(conn, text)
+    return primary, primary_task(conn, primary[0])
 
 
 def primary_task(conn: sqlite3.Connection, item: tuple[str, str, str, str]) -> str | None:

@@ -61,8 +61,8 @@ class FakeJira:
 
 @pytest.fixture
 def jira(api, monkeypatch):
-    """Two Jira sites, each a company-wide connection with its own read key, and a fake Jira behind both. Nobody is
-    given access to either: Tico reads with the connection's key, not a person's."""
+    """Two Jira sites, each a record integration (an administrator marked it as holding records) with a shared read
+    key, and a fake Jira behind both. Nobody is given access to either: Tico reads with the connection's key."""
     setup(api)
     vendor = FakeJira()
     monkeypatch.setattr(egress, "resolve", lambda host: [ipaddress.ip_address(PUBLIC)])
@@ -71,8 +71,15 @@ def jira(api, monkeypatch):
         made = post(api, "api-tools", {"name": name, "base_url": f"https://{host}", "auth_scheme": "basic_password"})
         body = {"name": "Jira read", "value": TOKENS[host], "username": "ops@acme.example", "access_level": "read"}
         post(api, f"api-tools/{made['id']}/keys", body)
+        _patch_tool(api, made["id"], {"record_owner": "outside"})
         vendor.tools[host] = made["id"]
     return vendor
+
+
+def _patch_tool(api, tool_id, body, token="ana-test", expected=200):
+    r = api.patch(f"/api/v2/api-tools/{tool_id}", json=body, headers=headers(token))
+    assert r.status_code == expected, r.text
+    return r.json()
 
 
 def _create(api, ref, title="Fix the export", token="ana-test", expected=200, **more):
@@ -120,7 +127,6 @@ def test_an_issues_state_is_read_only_through_a_company_wide_connection_and_save
         "state": "open",
         "status": "In Progress",
         "category": "indeterminate",
-        "summary": "Fix the export",
         "updated": "2026-11-21T10:00:00.000+0000",
         "connection_id": acme,
     }
@@ -128,14 +134,18 @@ def test_an_issues_state_is_read_only_through_a_company_wide_connection_and_save
     assert a["final_at"] is None and b["final_at"] is None  # an issue can always be reopened
     assert _refresh(api) == 0  # fresh: nothing is read again until the backstop or a webhook
 
-    # A private connection is never read, whoever on its tasks may use it.
-    r = api.patch(f"/api/v2/api-tools/{acme}", json={"audience": {"people": ["ana"]}}, headers=headers("ana-test"))
-    assert r.status_code == 200, r.text
-    put(api, f"api-tools/{acme}/access/human:ana", {"level": "read"})
-    _due(api, "PROJ-7", acme)
-    seen = len(jira.seen)
-    assert _refresh(api) == 0 and len(jira.seen) == seen
-    assert _meta(api, "PROJ-7", acme)["due_at"] is not None
+    # Nothing but a record integration with a shared key is read: unmarked, or a bot's own key on a computer.
+    for change, undo in (
+        ({"record_owner": ""}, {"record_owner": "outside"}),
+        ({"delivery": "computer"}, {"delivery": "proxy"}),
+    ):
+        _patch_tool(api, acme, change)
+        _due(api, "PROJ-7", acme)
+        seen = len(jira.seen)
+        assert _refresh(api) == 0 and len(jira.seen) == seen
+        assert _meta(api, "PROJ-7", acme)["due_at"] is not None
+        _patch_tool(api, acme, undo)
+    assert _patch_tool(api, acme, {"record_owner": ""}, token="cara-test", expected=403)  # an administrator's mark
 
 
 def test_a_trigger_bound_to_a_connection_marks_its_issue_due_and_ignores_what_it_cannot_read(api, jira):
@@ -272,3 +282,98 @@ def test_a_merge_into_a_task_linking_the_url_through_another_connection_keeps_th
     post(api, f"tasks/{filed}/merge", {"into": kept})
     rows = {(link["task_id"], link["connection_id"], link["is_primary"]) for link in _links(api, "PROJ-12")}
     assert (kept, acme, 1) in rows and (kept, "jira-acme-2", 0) in rows and (filed, acme, 0) in rows
+
+
+def test_a_trigger_binds_only_to_a_record_integration_and_loses_its_binding_with_it(api, jira):
+    acme = jira.tools["acme.atlassian.net"]
+    plain = post(api, "api-tools", {"name": "Plain Jira", "base_url": "https://gamma.atlassian.net"})["id"]
+    made = post(api, "triggers", {"name": "Jira"})["trigger"]
+    assert post(api, f"triggers/{made['id']}", {"connection_id": plain}, expected=422)["error"]["code"] == "trigger"
+    post(api, f"triggers/{made['id']}", {"connection_id": acme})
+    post(api, f"triggers/{made['id']}/delete", {})
+    again = post(api, "triggers", {"name": "Jira"})["trigger"]  # the same id made again starts unbound
+    assert again["id"] == made["id"] and again.get("connection_id", "") == ""
+    post(api, f"triggers/{made['id']}", {"connection_id": acme})
+    r = api.delete(f"/api/v2/api-tools/{acme}", headers=headers("ana-test"))
+    assert r.status_code == 200, r.text
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT connection_id FROM triggers WHERE id=?", (made["id"],)).fetchone()[0] == ""
+
+
+def test_a_webhook_during_the_first_read_is_kept(api, jira):
+    acme = jira.tools["acme.atlassian.net"]
+    jira.set("acme.atlassian.net", "PROJ-13", "To Do", "new", "2026-11-21T10:00:00.000+0000")
+    _create(api, f"jira:issue:PROJ-13@{acme}")
+    assert _meta(api, "PROJ-13", acme) is None  # never read
+    event = json.dumps({"webhookEvent": "jira:issue_updated", "issue": {"key": "PROJ-13"}})
+
+    def webhook_lands():
+        jira.during = None
+        with api.app.state.store.transaction() as c:
+            JS.webhook(c, acme, json.loads(event))
+
+    jira.during = webhook_lands
+    assert _refresh(api) == 1
+    assert _meta(api, "PROJ-13", acme)["due_at"] is not None  # the push is read on the next pass
+
+
+def test_marked_issues_are_read_before_stale_ones_and_a_bad_answer_is_retried_alone(api, jira, monkeypatch):
+    acme = jira.tools["acme.atlassian.net"]
+    for key in ("PROJ-21", "PROJ-22", "PROJ-23"):
+        jira.set("acme.atlassian.net", key, "To Do", "new", "2026-11-21T10:00:00.000+0000")
+        _create(api, f"jira:issue:{key}@{acme}", title=key)
+    _refresh(api)
+    with api.app.state.store.transaction() as c:  # all three an hour stale; PROJ-23 marked by a webhook
+        c.execute("UPDATE item_metadata SET read_at='2000-01-01T00:00:00Z'")
+        IM.mark_due(c, "jira", "issue", "PROJ-23", acme)
+    with api.app.state.store.read() as c:
+        assert [key for key, _, _ in JS.due_reads(c, "2026-11-22T00:00:00Z", per_connection=1)] == ["PROJ-23"]
+
+    # A 200 whose fields are not an issue's goes the failed read's way, and the rest of the pass still reads.
+    jira.issues[("acme.atlassian.net", "PROJ-21")]["status"] = ["not", "a", "status"]
+    assert _refresh(api) == 2
+    assert "no status" in _meta(api, "PROJ-21", acme)["read_error"]
+
+
+def test_a_read_that_runs_past_its_deadline_fails_alone(api, jira, monkeypatch):
+    import time
+
+    acme = jira.tools["acme.atlassian.net"]
+    jira.set("acme.atlassian.net", "PROJ-31", "To Do", "new", "2026-11-21T10:00:00.000+0000")
+    _create(api, f"jira:issue:PROJ-31@{acme}")
+    monkeypatch.setattr(JS, "TIMEOUT_S", 0.2)
+    jira.during = lambda: time.sleep(0.5)
+    assert _refresh(api) == 0
+    assert "timed out" in _meta(api, "PROJ-31", acme)["read_error"]
+
+
+def test_a_claim_on_a_task_the_caller_cannot_read_is_refused_without_naming_it(api, jira):
+    acme = jira.tools["acme.atlassian.net"]
+    private = _id(_create(api, f"jira:issue:PROJ-41@{acme}", private=True))
+    got = _create(api, f"jira:issue:PROJ-41@{acme}", token="cara-test", expected=409)
+    assert got["error"]["detail"] == "This item is already filed" and private not in json.dumps(got)
+    checked = post(
+        api, "tasks/dry-run", {"title": "x", "owner": "ben", "primary_link": f"jira:issue:PROJ-41@{acme}"}, "cara-test"
+    )
+    assert checked["problems"][0] == "This item is already filed" and private not in json.dumps(checked)
+    assert (
+        post(api, "tasks/dry-run", {"title": "x", "owner": "ben", "primary_link": f"jira:issue:PROJ-41@{acme}"})[
+            "found"
+        ]
+        == private
+    )
+    # Only Jira issues are primary links for now: a GitHub PR links the ordinary way.
+    pr = _create(api, "https://github.com/ticoteam/tico/pull/12", expected=422)
+    assert pr["error"]["code"] == "primary_link"
+
+
+def test_a_retry_from_before_the_new_fields_keeps_its_answer(api, jira):
+    from backend import models as M
+    from backend.store import digest, encode
+
+    body = {"owner": "ben", "title": "Old client", "message": "Hi."}
+    first = post(api, "tasks", body, key="old-create")
+    legacy = M.TaskCreate.model_validate(body).model_dump(exclude={"primary_link"})
+    with api.app.state.store.transaction() as c:  # what the server before this change stored for that key
+        c.execute("UPDATE idempotency SET request_hash=? WHERE key='old-create'", (digest(encode(legacy)),))
+    assert _id(post(api, "tasks", body, key="old-create")) == _id(first)

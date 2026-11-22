@@ -282,8 +282,8 @@ def item_metadata(ctx: Context) -> tuple[str, bool]:
 
 def jira_items(ctx: Context) -> tuple[str, bool]:
     # The Jira issues tasks link that a webhook marked due, were never read, or not read for an hour, each through its
-    # company-wide connection (backend/item_sources/jira.py `refresh`): a step of its own, capped per connection and in
-    # time, so GitHub's step and Jira's never hold up or fail each other.
+    # record integration (backend/item_sources/jira.py `refresh`): a step of its own after the merge queue's, capped per
+    # connection and in time, so GitHub's steps and Jira's never hold up or fail each other.
     app: Any = getattr(ctx, "app", None)
     vault: Any = getattr(getattr(app, "state", None), "vault", None)
     if vault is None:
@@ -445,22 +445,22 @@ STEPS = [
         outside=True,
     ),
     Step(
-        "jira_items",
-        "Jira issue metadata",
-        "poll",
-        MINUTE,
-        jira_items,
-        failure="jira_items",
-        capture="scheduler",
-        outside=True,
-    ),
-    Step(
         "source_actions",
         "Merge queue",
         "due",
         None,
         source_actions,
         failure="source_actions",
+        capture="scheduler",
+        outside=True,
+    ),
+    Step(
+        "jira_items",
+        "Jira issue metadata",
+        "poll",
+        MINUTE,
+        jira_items,
+        failure="jira_items",
         capture="scheduler",
         outside=True,
     ),

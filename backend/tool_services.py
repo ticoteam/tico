@@ -558,8 +558,9 @@ def slug(text):
     return slugify(str(text or ""), limit=48, fallback="tool")
 
 
-# The tables whose rows name a tool as the connection an outside item or record came through (backend/item_sources).
-CONNECTION_TABLES = ("task_links", "item_metadata", "entity_external_refs")
+# The tables whose rows name a tool as the connection an outside item or record came through (backend/item_sources),
+# and the triggers bound to one.
+CONNECTION_TABLES = ("task_links", "item_metadata", "entity_external_refs", "triggers")
 
 
 def referenced(conn, tid):

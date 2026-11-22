@@ -485,15 +485,20 @@ def register_core(
         actual_bot = source.task_actor or (source.actor if source.role == "bot" else "")
         # Find-or-create (docs/dev/pipelines-v3.md "Intake"): a create naming its outside item's primary link returns
         # the task already holding it, after the same rule check, and files nothing; the checks that only filing needs
-        # (the owner's cap, reach) are skipped for it. The item, not the title, makes it one task.
+        # (the owner's cap, reach) are skipped for it when the caller may read it. One the caller may not read is never
+        # named: the create is refused as already filed, after every check a filing makes. The item, not the title,
+        # makes it one task.
         primary = found = None
         if body.primary_link:
             try:
-                primary = IS.primary_of(c, body.primary_link)
+                primary, held_by = IS.lookup(c, body.primary_link)
             except ValueError as error:
                 raise Problem("primary_link", str(error), 422) from None
-            found = IS.primary_task(c, primary[0])
+            found = held_by if held_by and _readable_task(c, who, held_by) else None
+            hidden = bool(held_by) and not found
             same = lambda _c, _task_id: False  # another item's task with this title is other work
+        else:
+            hidden = False
         if body.from_private:
             # Older clients' name for `private: false` from a private task's run.
             body = body.model_copy(update={"private": False, "from_private": False})
@@ -626,13 +631,13 @@ def register_core(
             if ingest:
                 ask_ingest.skipped(c, ingest, "held")
             return org_rule_check.answer(rule_gate)
+        if hidden:
+            if ingest:
+                ask_ingest.skipped(c, ingest, "not_applied")
+            raise Problem("primary_link", IS.ALREADY_FILED, 409)
         if found:
             if ingest:
                 ask_ingest.skipped(c, ingest, "not_applied")
-            try:
-                auth.task(c, who, found)
-            except Problem:
-                raise Problem("primary_link", "A task you cannot see already holds this item", 409) from None
             held = H.task(c, found)
             return {
                 "task": task_view(held, c, visible_sql=auth.task_sql(c, who), who=who),
@@ -889,7 +894,7 @@ def register_core(
         with store.read() as c:
             if store.saved(c, who, request.url.path, request.headers.get("idempotency-key")):
                 return
-            if primary_link and _held_item(c, primary_link):
+            if primary_link and _held_item(c, who, primary_link) == "readable":
                 return  # it returns the task holding the item: nothing is sent to the owner
             original = auth.target(c, who, owner_ref, need="write")
             owner = auth.target(c, who, route(c, who.actor, original), need="write")
@@ -925,12 +930,17 @@ def register_core(
             rule_create_text(body),
             lambda c: [rule_target(c, who, body.owner), *(org_rule_check.company(c) if rule_public(body) else [])],
         )
-        # A write the rule check holds, or a saved retry, skips ask ingest's call.
+        # A write the rule check holds, a saved retry, or a create whose item a task already holds (nothing is filed)
+        # skips ask ingest's call.
+        with store.read() as c:
+            held = bool(body.primary_link) and _held_item(c, who, body.primary_link) is not None
         ingest = (
             None
-            if org_rule_check.holds(rc) or saved_retry(request, who)
+            if org_rule_check.holds(rc) or saved_retry(request, who) or held
             else ask_ingest.preflight(store, app.state.judge, request.state.identity, body.owner, body.title, body.body)
         )
+        # A retry of a create sent before `primary_link` existed hashed the body without it.
+        legacy = body.model_dump(exclude={"primary_link"}) if body.primary_link is None else None
         return ask_ingest.judged(
             store,
             ingest,
@@ -939,15 +949,27 @@ def register_core(
                 body,
                 lambda c: task_create(c, request.state.identity, body, ingest=ingest, rule=rc),
                 receipt=handoff_receipt(request.state.identity),
+                retry_body=lambda _c, _result: legacy,
             ),
         )
 
-    def _held_item(c, primary_link):
-        """Whether a task already holds the primary link a create names (a link it cannot read is the create's error)."""
+    def _held_item(c, who, primary_link):
+        """`readable` when a task the caller may read already holds the primary link a create names, `hidden` when one
+        it may not read does, else None (none, or a link that names no item: the create's own error)."""
         try:
-            return IS.primary_task(c, IS.primary_of(c, primary_link)[0]) is not None
+            held_by = IS.lookup(c, primary_link)[1]
         except ValueError:
+            return None
+        if not held_by:
+            return None
+        return "readable" if _readable_task(c, who, held_by) else "hidden"
+
+    def _readable_task(c, who, task_id):
+        try:
+            auth.task(c, who, task_id)
+        except Problem:
             return False
+        return True
 
     def handoff_receipt(who):
         """Who reads back a task the person's own Assistant turn filed (privacy.as_the_person): the person, when it is

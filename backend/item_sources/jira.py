@@ -10,17 +10,19 @@ keeps it (a second task filed for the new key shows as a duplicate to merge).
 
 Metadata (docs/dev/pipelines-v3.md "Outside items"): one `item_metadata` row per issue and connection. `fields` hold
 `state` (open, or closed when Jira's status category is done), `status` (its name), `category` (Jira's status category
-key: new, indeterminate or done), `summary`, `updated` (Jira's own stamp) and `connection_id`. An issue can always be
-reopened, so it is never final. Whoever sees a task sees its links' state.
+key: new, indeterminate or done), `updated` (Jira's own stamp) and `connection_id`; no summary is fetched. An issue can
+always be reopened, so it is never final.
 
-Reads use only a company-wide connection's own key: a tool whose audience is Everyone (api_tools.audience_of None), its
-read key when it has one, else its read and write key, sent as a GET. A private tool's issues are never read. How a read
-comes about:
+Background reads go only through a record integration (`integration`): an API tool for everyone that an administrator
+marked as holding records (`tools.record_owner`), not one a bot keeps for itself, with a shared company API key (no
+sign-in, no holder): its read key when it has one, else its read and write key, sent as a GET. Nothing else is read.
+How a read comes about:
 - Push: a Jira issue event to a trigger bound to the connection (backend/triggers.py) marks that connection's linked
-  copy of the issue due (`webhook`). The payload only names the issue; a payload that does not read as one is ignored.
-- The pass (the heartbeat's `jira_items` step, `refresh`): issues an open task links whose metadata is missing, marked
-  due, or older than REREAD_S (a slow backstop), at most PER_CONNECTION per connection and PASS_BUDGET_S of reading a
-  pass, so Jira never holds the other outside polls for long.
+  copy of the issue due (`webhook`), writing a due row for one not read yet. The payload only names the issue; a
+  payload that does not read as one is ignored.
+- The pass (the heartbeat's `jira_items` step, after the merge queue's, `refresh`): marked issues first, then those an
+  open task links whose metadata is missing or older than REREAD_S (a slow backstop), at most PER_CONNECTION per
+  connection and PASS_BUDGET_S of reading a pass, each request within TIMEOUT_S end to end.
 A read that saves clears the due mark only when it is the mark the read began under: a webhook's mark made while the
 read was out survives for the next pass. A read Jira refuses keeps the metadata as it was, with `read_error` and
 `refused_at`, and is tried again after RETRY_S. The key never leaves the read: it is not logged, stored or put in an
@@ -53,7 +55,8 @@ PER_CONNECTION = 10  # reads of one connection's issues in one pass
 PASS_BUDGET_S = 30.0  # no read starts after a pass has spent this long reading
 TIMEOUT_S = 10.0
 MAX_BODY = 512 * 1024
-FIELDS = "summary,status,updated"
+FIELDS = "status,updated"
+CATEGORIES = ("new", "indeterminate", "done")  # Jira's status categories
 TRANSPORT: Any = None  # tests: an httpx.MockTransport at the network edge
 LOG = logging.getLogger("tico.jira_source")
 
@@ -127,25 +130,58 @@ def webhook(conn: "sqlite3.Connection", connection_id: str, payload: object) -> 
     key = match_key(ISSUE, named) if isinstance(named, str) else None
     if not key or not IM.linked(conn, SOURCE, ISSUE, key, connection_id):
         return 0
-    IM.mark_due(conn, SOURCE, ISSUE, key, connection_id)
+    if IM.get(conn, SOURCE, ISSUE, key, connection_id) is None:
+        # Not read yet (a first read may be out): a row at version 0, never read and due, so the mark is there for the
+        # read to find, and any read replaces it.
+        now = _h().now()
+        conn.execute(
+            "INSERT INTO item_metadata (id, source, item_type, item_key, connection_id, fields, metadata_version, "
+            "due_at, created_at, updated_at) VALUES (?,?,?,?,?,'{}',0,?,?,?)",
+            (_h().new_id(), SOURCE, ISSUE, key, connection_id, now, now, now),
+        )
+    else:
+        IM.mark_due(conn, SOURCE, ISSUE, key, connection_id)
     return 1
 
 
 # ----------------------------------------------------------------------------- the pass: reads through the connection
 
+# A record integration Tico reads in the background: an API tool for everyone that an administrator marked as holding
+# records (`record_owner`), never one a bot keeps for itself (its keys go to computers, it made it), and its key a
+# shared company API key (no sign-in, no holder). Nothing else is read without someone asking.
+INTEGRATION = (
+    "tl.audience IS NULL AND COALESCE(tl.kind, 'api') = 'api' AND tl.record_owner <> '' "
+    "AND tl.delivery <> 'computer' AND tl.created_by NOT LIKE 'bot:%'"
+)
+SHARED_KEY = "k.ciphertext IS NOT NULL AND k.kind <> 'login' AND COALESCE(k.holder, '') = ''"
+
+
+def integration(conn: "sqlite3.Connection", connection_id: str) -> bool:
+    """Whether a tool is a record integration with a shared key: one Tico reads issues through, and a trigger may be
+    bound to (backend/triggers.py)."""
+    return (
+        conn.execute(
+            f"SELECT 1 FROM tools tl JOIN credentials k ON k.tool_id = tl.id WHERE tl.id=? AND {INTEGRATION} "
+            f"AND {SHARED_KEY} LIMIT 1",
+            (connection_id,),
+        ).fetchone()
+        is not None
+    )
+
 
 def due_reads(conn: "sqlite3.Connection", now: str, per_connection: int = PER_CONNECTION) -> list[tuple[str, str, str]]:
-    """(key, connection, due mark) of each issue to read now, longest unread first, at most `per_connection` of each
-    company-wide connection: one an open task links whose metadata is missing, never read, marked due or older than
-    REREAD_S, unless a read of it failed within RETRY_S. The due mark ('' for none) is what the read began under."""
+    """(key, connection, due mark) of each issue to read now, at most `per_connection` of each record integration
+    (`integration`): one an open task links whose metadata is missing, never read, marked due or older than REREAD_S,
+    unless a read of it failed within RETRY_S. Marked ones first, then the longest unread. The due mark ('' for none) is
+    what the read began under."""
     H = _h()
     cutoff, retry = H.shift(now, seconds=-REREAD_S), H.shift(now, seconds=-RETRY_S)
     found = conn.execute(
         "SELECT key, connection_id, due FROM (SELECT MIN(l.item_key) AS key, l.connection_id, "
         "COALESCE(MAX(m.due_at), '') AS due, ROW_NUMBER() OVER (PARTITION BY l.connection_id "
-        "ORDER BY MIN(COALESCE(m.read_at, '')), MIN(l.item_key)) AS n FROM task_links l "
+        "ORDER BY MAX(m.due_at) IS NULL, MIN(COALESCE(m.read_at, '')), MIN(l.item_key)) AS n FROM task_links l "
         "JOIN tasks t ON t.id = l.task_id AND t.status = 'open' "
-        "JOIN tools tl ON tl.id = l.connection_id AND tl.audience IS NULL "
+        f"JOIN tools tl ON tl.id = l.connection_id AND {INTEGRATION} "
         "LEFT JOIN item_metadata m ON m.source = l.source AND m.item_type = l.item_type AND m.item_key = l.item_key "
         "AND m.connection_id = l.connection_id "
         "WHERE l.source=? AND l.item_type=? AND l.connection_id <> '' "
@@ -164,31 +200,28 @@ class Unreadable(Exception):
 def request(
     conn: "sqlite3.Connection", vault: Any, key: str, connection_id: str
 ) -> tuple[str, dict[str, str], dict[str, str]]:
-    """(url, headers, query) of the read of one issue with the connection's own key: its read key, else its read and
-    write key. Unreadable when the connection is gone, private, has no https API address or stored key, or uses a key
-    template. Runs in a write transaction: decrypting may reseal the key in place."""
-    from .. import api_tools as _api_tools
+    """(url, headers, query) of the read of one issue with the connection's shared key (`integration`): its read key,
+    else its read and write key. Unreadable when the connection is gone or no longer a record integration with a shared
+    key, has no https API address, or uses a key template. Runs in a write transaction: decrypting may reseal the key in
+    place."""
     from .. import tool_services as _tool_services
 
-    AT: Any = _api_tools
     TS: Any = _tool_services
-    tool = conn.execute("SELECT * FROM tools WHERE id=?", (connection_id,)).fetchone()
+    tool = conn.execute("SELECT * FROM tools tl WHERE tl.id=?", (connection_id,)).fetchone()
     if tool is None:
         raise Unreadable("The connection is gone")
-    if AT.audience_of(tool) is not None:
-        raise Unreadable(f"{tool['name']} is not company-wide: Tico reads only an Everyone connection's issues")
     base = str(tool["base_url"] or "").rstrip("/")
     if not base.startswith("https://"):
         raise Unreadable(f"{tool['name']} has no https API address")
     if "auth_template" in tool.keys() and tool["auth_template"]:
         raise Unreadable(f"{tool['name']} uses a key template; Tico reads Jira with one key")
     credential = conn.execute(
-        "SELECT * FROM credentials WHERE tool_id=? AND ciphertext IS NOT NULL "
-        "ORDER BY access_level <> 'read', created_at, id LIMIT 1",
+        f"SELECT k.* FROM credentials k JOIN tools tl ON tl.id = k.tool_id WHERE tl.id=? AND {INTEGRATION} "
+        f"AND {SHARED_KEY} ORDER BY k.access_level <> 'read', k.created_at, k.id LIMIT 1",
         (connection_id,),
     ).fetchone()
     if credential is None:
-        raise Unreadable(f"{tool['name']} has no stored key")
+        raise Unreadable(f"{tool['name']} is not a record integration with a shared company key")
     secret = str(vault.cipher.decrypt(conn, credential))
     service = cast("dict[str, Any]", TS.SERVICES.get(tool["service"]) or {})
     username = str(credential["username"] or service.get("username") or "")
@@ -202,49 +235,67 @@ def request(
 
 
 def send(url: str, headers: dict[str, str], params: dict[str, str]) -> tuple[int, object]:
-    """One GET to a public https address, pinned to the IP it resolved to, no redirects, no proxy from the environment:
-    (status, the JSON answer or None). Raises when the call could not be made."""
+    """One GET to a public https address, pinned to the IP it resolved to, no redirects, no proxy from the environment,
+    all of it (the name's lookup, connecting, the answer) within TIMEOUT_S, as egress.post bounds its calls: (status,
+    the JSON answer or None). Raises when the call could not be made in time."""
+    import threading
+
     import httpx
 
     from .. import egress as _egress
 
     egress: Any = _egress
     parts = egress.check(url)
+    ends = time.monotonic() + TIMEOUT_S
     address = egress.address_for(parts, budget=TIMEOUT_S)
     pinned = httpx.URL(url, params=params or None).copy_with(host=address)
     host = str(parts.hostname) + (f":{parts.port}" if parts.port else "")
+    late = f"Jira took longer than {TIMEOUT_S:g} seconds to answer"
     with httpx.Client(timeout=TIMEOUT_S, follow_redirects=False, trust_env=False, transport=TRANSPORT) as client:
-        with client.stream(
-            "GET", pinned, headers={**headers, "Host": host}, extensions={"sni_hostname": parts.hostname}
-        ) as response:
-            body = b""
-            for chunk in response.iter_bytes():
-                body += chunk
-                if len(body) > MAX_BODY:
-                    break
-            try:
-                answer: object = json.loads(body)
-            except ValueError:
-                answer = None
-            return response.status_code, answer
+        # Closing the client from the timer ends a read blocked on a socket; the checks below catch the rest.
+        timer = threading.Timer(max(ends - time.monotonic(), 0.001), client.close)
+        timer.daemon = True
+        timer.start()
+        try:
+            with client.stream(
+                "GET", pinned, headers={**headers, "Host": host}, extensions={"sni_hostname": parts.hostname}
+            ) as response:
+                body = b""
+                for chunk in response.iter_bytes():
+                    body += chunk
+                    if len(body) > MAX_BODY or time.monotonic() > ends:
+                        break
+                if time.monotonic() > ends:
+                    raise TimeoutError(late)
+                try:
+                    answer: object = json.loads(body)
+                except ValueError:
+                    answer = None
+                return response.status_code, answer
+        except Exception as exc:
+            if time.monotonic() > ends and not isinstance(exc, TimeoutError):
+                raise TimeoutError(late) from exc
+            raise
+        finally:
+            timer.cancel()
 
 
 def fields_of(answer: object, connection_id: str) -> Row | None:
-    """The metadata fields of Jira's answer to an issue read, or None when it is not one."""
-    if not isinstance(answer, dict):
-        return None
-    got = cast("dict[str, object]", cast("dict[str, object]", answer).get("fields") or {})
-    status = cast("dict[str, object]", got.get("status") or {}) if isinstance(got.get("status"), dict) else {}
-    category = status.get("statusCategory")
-    category_key = str(cast("dict[str, object]", category).get("key") or "") if isinstance(category, dict) else ""
-    if not status:
+    """The metadata fields of Jira's answer to an issue read, or None when it is not one: `fields.status` an object with
+    a name and `statusCategory.key` one of Jira's three, and `fields.updated` text."""
+    got = cast("dict[str, object]", answer).get("fields") if isinstance(answer, dict) else None
+    status = cast("dict[str, object]", got).get("status") if isinstance(got, dict) else None
+    category = cast("dict[str, object]", status).get("statusCategory") if isinstance(status, dict) else None
+    key = cast("dict[str, object]", category).get("key") if isinstance(category, dict) else None
+    name = cast("dict[str, object]", status).get("name") if isinstance(status, dict) else None
+    updated = cast("dict[str, object]", got).get("updated") if isinstance(got, dict) else None
+    if key not in CATEGORIES or not isinstance(name, str) or not isinstance(updated, str):
         return None
     return {
-        "state": "closed" if category_key == "done" else "open",
-        "status": str(status.get("name") or ""),
-        "category": category_key,
-        "summary": str(got.get("summary") or ""),
-        "updated": str(got.get("updated") or ""),
+        "state": "closed" if key == "done" else "open",
+        "status": name,
+        "category": key,
+        "updated": updated,
         "connection_id": connection_id,
     }
 
@@ -261,8 +312,7 @@ def save_issue(
     item = (SOURCE, ISSUE, key, connection_id)
     found = conn.execute(f"SELECT due_at FROM item_metadata WHERE {scoped}", item).fetchone()
     due_now = str(found[0] or "") if found else ""
-    title = fields.get("summary") or None
-    if not IM.save(conn, SOURCE, ISSUE, key, fields, version, title=title, connection_id=connection_id):
+    if not IM.save(conn, SOURCE, ISSUE, key, fields, version, connection_id=connection_id):
         return False
     after = conn.execute(f"SELECT due_at FROM item_metadata WHERE {scoped}", item).fetchone()[0]
     # A tie at the same version keeps or sets its own mark (item_metadata.save); else a mark newer than the read's stays.

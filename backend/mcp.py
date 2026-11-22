@@ -393,6 +393,22 @@ def task_dry_run(c, auth, who, body):
     from . import pipeline_settings
 
     problems, warnings = [], []
+    if getattr(body, "primary_link", None):
+        # The create's own primary-link read (task_actions_routes.task_create): a task the caller may read that holds
+        # the item comes back with nothing filed and no filing checks; one it may not read is refused, never named.
+        from . import item_sources as IS
+
+        try:
+            held_by = IS.lookup(c, body.primary_link)[1]
+        except ValueError as error:
+            held_by = None
+            problems.append(str(error))
+        if held_by:
+            try:
+                auth.task(c, who, held_by)
+                return {"ok": True, "owner": None, "problems": [], "found": held_by}
+            except Problem:
+                problems.append(IS.ALREADY_FILED)
     title, text = str(body.title or "").strip(), str(body.body or "")
     pipeline_id = getattr(body, "pipeline", None) or GENERAL
     pipeline = pipeline_settings.read(c, pipeline_id)

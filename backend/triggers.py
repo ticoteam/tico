@@ -316,7 +316,7 @@ def create(c, who, settings, body):
         "created_by=excluded.created_by,updated_at=excluded.updated_at,deleted_at=NULL,signing_secret=NULL,"
         "preset='none',consumer='automations',type_from='',hourly=NULL,keep_days="
         + str(KEEP_DAYS)
-        + ",unheard='log',unheard_noted=NULL",
+        + ",unheard='log',unheard_noted=NULL,connection_id=''",
         (trigger_id, body.name.strip(), "webhook", digest(secret), who.actor, now, now),
     )
     H.event(c, who.actor, "trigger.created", trigger_id, {"name": body.name.strip()})
@@ -422,9 +422,16 @@ def update(c, who, settings, vault, trigger_id, body):
             raise Problem("trigger", "unheard is log or note", 422)
         sets["unheard"] = body.unheard
     if body.connection_id is not None:
+        from .item_sources import jira
+
         bound = body.connection_id.strip()
-        if bound and not c.execute("SELECT 1 FROM tools WHERE id=?", (bound,)).fetchone():
-            raise Problem("trigger", f"No connection {bound}: a connection is a tool's id", 422)
+        if bound and not jira.integration(c, bound):
+            raise Problem(
+                "trigger",
+                "A trigger is bound only to a record integration: an API tool for everyone, marked as holding records, "
+                "with a shared company key",
+                422,
+            )
         sets["connection_id"] = bound
     if body.preset is not None and body.preset != effective_preset(found):
         if body.preset not in P.PRESETS:
@@ -1207,6 +1214,10 @@ def install(app, settings, store, auth, mutate):
                     c, request.state.identity, settings, getattr(request.app.state, "vault", None), trigger_id, body
                 )
             },
+            # A retry of a change sent before `connection_id` existed hashed the body without it.
+            retry_body=lambda _c, _result: (
+                body.model_dump(exclude={"connection_id"}) if body.connection_id is None else None
+            ),
         )
 
     @app.post(
