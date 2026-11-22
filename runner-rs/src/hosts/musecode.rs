@@ -827,10 +827,12 @@ impl MuseCodeHost {
         env
     }
 
-    fn prompt_file(&self, text: &str) -> std::io::Result<PathBuf> {
+    fn prompt_file(&self, text: &str, identity: Option<(u32, u32)>) -> std::io::Result<PathBuf> {
         use std::os::unix::fs::OpenOptionsExt;
-        crate::isolation::mkdir(&self.0.state_dir, 0o700)?;
-        crate::isolation::chown(&self.0.state_dir);
+        crate::isolation::mkdir_as(&self.0.state_dir, 0o700, identity)?;
+        if identity.is_none() {
+            crate::isolation::chown(&self.0.state_dir);
+        }
         let path = self
             .0
             .state_dir
@@ -842,7 +844,7 @@ impl MuseCodeHost {
             .open(&path)?;
         if let Err(e) = f
             .write_all(text.as_bytes())
-            .and_then(|_| crate::isolation::chown_file(&f))
+            .and_then(|_| crate::isolation::chown_file_as(&f, identity))
         {
             let _ = std::fs::remove_file(&path);
             return Err(e);
@@ -858,7 +860,7 @@ impl MuseCodeHost {
         effort: Option<&str>,
     ) -> Command {
         let argv = self.argv(thread_id, settings, prompt, effort);
-        let mut command = super::harness_command(None, &argv[0]);
+        let mut command = super::harness_command(settings.identity, &argv[0]);
         command
             .args(&argv[1..])
             .stdin(Stdio::null())
@@ -891,14 +893,21 @@ impl MuseCodeHost {
                 .cloned()
                 .ok_or_else(|| failed(format!("unknown muse thread {thread_id}")))?;
             // The data folder first: nothing is handed to the bot user before a folder it must not have is refused.
-            prepare_data(&self.0.data_home)?;
-            prepare_config(&self.0.config_home)?;
+            if settings.identity.is_some() {
+                for home in [&self.0.data_home, &self.0.config_home] {
+                    crate::isolation::mkdir_as(home, 0o700, settings.identity)
+                        .map_err(|e| failed(format!("could not prepare private Muse home: {e}")))?;
+                }
+            } else {
+                prepare_data(&self.0.data_home)?;
+                prepare_config(&self.0.config_home)?;
+            }
             let env = self.env(&settings);
             let offset = session_log(&env, thread_id)
                 .and_then(|p| std::fs::metadata(p).ok())
                 .map_or(0, |m| m.len());
             let prompt = self
-                .prompt_file(text)
+                .prompt_file(text, settings.identity)
                 .map_err(|e| failed(format!("could not start muse: {e}")))?;
             let spawned = (|| {
                 // Drain stderr independently so a noisy harness cannot block its own exit.
@@ -1205,6 +1214,13 @@ mod tests {
             &host.command("thread", &settings, &prompt, None),
             &host.argv("thread", &settings, &prompt, None),
         );
+        let mut leased = settings.clone();
+        leased.identity = Some((10100, 10002));
+        super::super::isolationtests::prefix_as(
+            &host.command("thread", &leased, &prompt, None),
+            &host.argv("thread", &leased, &prompt, None),
+            10100,
+        );
         if !f.actual() {
             return;
         }
@@ -1214,7 +1230,7 @@ mod tests {
         prepare_config(&host.0.config_home).unwrap();
         prepare_data(&host.0.data_home).unwrap();
         let session = host.0.data_home.join("session-probe");
-        let prompt = host.prompt_file("fixture prompt").unwrap();
+        let prompt = host.prompt_file("fixture prompt", None).unwrap();
         f.run(
             host.command("thread", &settings, &prompt, None),
             &[&prompt, &auth],

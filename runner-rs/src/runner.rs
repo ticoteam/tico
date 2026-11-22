@@ -1260,7 +1260,7 @@ impl Runner {
             .await
             .unwrap_or_else(|e| Err(e.to_string()))
         {
-            log(&format!("Tico runner: Gateway turn users unavailable: {e}"));
+            log(&format!("Tico runner: turn users unavailable: {e}"));
         }
         let (state, workspace) = (self.state.directory.clone(), self.config.projects_dir());
         let _ = tokio::task::spawn_blocking(move || {

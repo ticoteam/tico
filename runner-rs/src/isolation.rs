@@ -34,11 +34,7 @@ pub fn enabled() -> bool {
     identity().is_some()
 }
 
-/// The `setpriv` arguments that switch to the bot user and empty every capability set.
-pub fn prefix() -> Option<Vec<String>> {
-    identity().map(prefix_for)
-}
-
+/// The `setpriv` arguments that switch users and empty every capability set.
 fn prefix_for((uid, gid): (u32, u32)) -> Vec<String> {
     // A leased turn user also gets the groups of the checkouts its turn runs in (crate::checkout_groups); every other
     // identity runs with none.
@@ -98,11 +94,12 @@ pub fn command_as(
 /// isolation is on, happens below the parent, and kills the program when the parent dies (setpriv `--pdeathsig`).
 pub fn command_under(
     parent: &[std::ffi::OsString],
+    id: Option<(u32, u32)>,
     program: impl AsRef<std::ffi::OsStr>,
 ) -> tokio::process::Command {
     let mut cmd = tokio::process::Command::new(&parent[0]);
     cmd.args(&parent[1..]);
-    if let Some(p) = prefix() {
+    if let Some(p) = id.or_else(identity).map(prefix_for) {
         cmd.args(&p).args(["--pdeathsig", "KILL"]);
         // SAFETY: the closure only calls umask.
         unsafe { cmd.pre_exec(umask_group) };
@@ -164,8 +161,12 @@ pub fn chown(path: &Path) {
 
 /// Hand the opened inode over without replacing a lock or following a swapped path.
 pub fn chown_file(file: &std::fs::File) -> std::io::Result<()> {
+    chown_file_as(file, None)
+}
+
+pub fn chown_file_as(file: &std::fs::File, id: Option<(u32, u32)>) -> std::io::Result<()> {
     use std::os::fd::AsRawFd;
-    if let Some((uid, gid)) = identity() {
+    if let Some((uid, gid)) = id.or_else(identity) {
         // SAFETY: fchown on a descriptor this process owns; the file's mode is preserved.
         if unsafe { libc::fchown(file.as_raw_fd(), uid, gid) } != 0 {
             return Err(std::io::Error::last_os_error());
@@ -176,6 +177,10 @@ pub fn chown_file(file: &std::fs::File) -> std::io::Result<()> {
 
 /// `mkdir -p` where every directory it creates belongs to the bot user when isolation is on.
 pub fn mkdir(path: &Path, mode: u32) -> std::io::Result<PathBuf> {
+    mkdir_as(path, mode, None)
+}
+
+pub fn mkdir_as(path: &Path, mode: u32, id: Option<(u32, u32)>) -> std::io::Result<PathBuf> {
     crate::repo_safety::outside_installation(path).map_err(std::io::Error::other)?;
     let missing: Vec<PathBuf> = path
         .ancestors()
@@ -187,7 +192,11 @@ pub fn mkdir(path: &Path, mode: u32) -> std::io::Result<PathBuf> {
         .mode(mode)
         .create(path)?;
     for part in missing {
-        chown(&part);
+        if let Some((uid, gid)) = id {
+            lchown(&part, uid, gid)?;
+        } else {
+            chown(&part);
+        }
     }
     Ok(path.to_path_buf())
 }

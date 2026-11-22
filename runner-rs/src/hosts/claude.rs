@@ -1150,12 +1150,12 @@ impl ClaudeHost {
                     .flatten()
                     .chain(reaper(path))
                     .collect();
-                let mut c = crate::isolation::command_under(&parent, &argv[0]);
+                let mut c = crate::isolation::command_under(&parent, t.settings.identity, &argv[0]);
                 c.args(&argv[1..]);
                 c
             }
             None => {
-                let mut c = super::harness_command(None, &argv[0]);
+                let mut c = super::harness_command(t.settings.identity, &argv[0]);
                 c.args(&argv[1..]);
                 c
             }

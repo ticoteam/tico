@@ -32,13 +32,18 @@ pub(super) fn child(test: &str) -> bool {
 }
 
 pub(super) fn prefix(command: &tokio::process::Command, argv: &[String]) {
+    let uid = std::env::var(crate::isolation::UID_ENV)
+        .unwrap()
+        .parse()
+        .unwrap();
+    prefix_as(command, argv, uid);
+}
+
+pub(super) fn prefix_as(command: &tokio::process::Command, argv: &[String], uid: u32) {
     let cmd = command.as_std();
     assert_eq!(cmd.get_program(), crate::isolation::SETPRIV);
     let mut expected = vec![
-        format!(
-            "--reuid={}",
-            std::env::var(crate::isolation::UID_ENV).unwrap()
-        ),
+        format!("--reuid={uid}"),
         "--regid=10002".into(),
         "--clear-groups".into(),
         "--inh-caps=-all".into(),

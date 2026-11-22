@@ -100,6 +100,11 @@ pub fn available() -> bool {
     matches!(POOL.get(), Some(Ok(Some(_))))
 } // never starts the pool's sweep: initialize does
 
+/// A configured pool with an initialization error must fail its relationship leases.
+pub(crate) fn configured() -> bool {
+    matches!(POOL.get(), Some(Ok(Some(_)) | Err(_)))
+}
+
 /// Existing workspace files may be owner-only. Widen only bot-owned ordinary workspace inodes,
 /// as their existing owner, so a leased user has the same file access through the shared group.
 pub async fn share_workspace(paths: Vec<PathBuf>) -> Result<(), String> {

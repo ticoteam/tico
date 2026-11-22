@@ -244,8 +244,10 @@ oldest turn is waiting to retry. Other relationships can run at the same time
 within the computer's turn limit. Every turn starts a fresh provider
 session in an attempt-specific scratch directory that is removed after the turn
 finishes. Strong per-run isolation requires the Docker runner with its turn UID
-pool enabled. Without that pool, including on Mac, turns run as the runner's
-user in mode-0700 scratch directories and share the ordinary bot trust level.
+pool enabled. A leased turn uses a fresh home and needs model authentication
+available to that turn. Without a pool, including on Mac, turns run as the
+runner's user in mode-0700 scratch directories and share the ordinary bot trust
+level.
 
 The wake names the relationship's memory page and open tasks that the person
 who started it can currently read. An intake wake can also grant the thread it

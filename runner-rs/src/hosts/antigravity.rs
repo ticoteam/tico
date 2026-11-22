@@ -274,7 +274,7 @@ impl AntigravityHost {
         provider: Option<&str>,
     ) -> Result<Command, HostError> {
         let argv = argv(&self.0.cmd, settings, effort, provider)?;
-        let mut command = super::harness_command(None, &argv[0]);
+        let mut command = super::harness_command(settings.identity, &argv[0]);
         command
             .args(&argv[1..])
             .stdin(Stdio::piped())
@@ -700,6 +700,13 @@ mod tests {
         super::super::isolationtests::prefix(
             &host.command(&settings, None, None).unwrap(),
             &argv(&f.argv(), &settings, None, None).unwrap(),
+        );
+        let mut leased = settings.clone();
+        leased.identity = Some((10100, 10002));
+        super::super::isolationtests::prefix_as(
+            &host.command(&leased, None, None).unwrap(),
+            &argv(&f.argv(), &leased, None, None).unwrap(),
+            10100,
         );
         if !f.actual() {
             return;

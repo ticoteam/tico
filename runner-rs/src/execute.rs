@@ -2145,6 +2145,7 @@ impl Runner {
         runtime: &str,
         env: &Env,
         profile: Option<&Profile>,
+        identity: Option<(u32, u32)>,
         tx: hosts::Events,
     ) -> Result<Host, Fail> {
         #[cfg(test)]
@@ -2164,39 +2165,55 @@ impl Runner {
         }
         #[cfg(test)]
         if let Some(env) = tests::HOST_CODEX.with(|env| env.borrow().clone()) {
-            return Ok(Host::Codex(CodexHost::on_home(env, tx, None)));
+            return Ok(Host::Codex(CodexHost::on_home_as(env, tx, None, identity)));
         }
+        let private_home = identity.and_then(|_| env.get("HOME")).map(Path::new);
         Ok(match runtime {
             "claude" => Host::Claude(ClaudeHost::new(
                 bot,
                 vec![crate::harness_tools::executable_for("claude")],
                 tx,
             )),
-            "codex" => Host::Codex(CodexHost::on_home(
-                env.clone(),
-                tx,
-                profile
-                    .and_then(|p| p.home("codex"))
-                    .map(|h| h.display().to_string())
-                    .as_deref(),
-            )),
+            "codex" => {
+                let home = private_home
+                    .map(|p| p.join(".codex"))
+                    .or_else(|| profile.and_then(|p| p.home("codex")));
+                Host::Codex(CodexHost::on_home_as(
+                    env.clone(),
+                    tx,
+                    home.as_deref().and_then(Path::to_str),
+                    identity,
+                ))
+            }
             "gemini" => Host::Gemini(GeminiHost::new(
                 bot,
-                &self.state.directory.join("gemini").join(bot),
+                &private_home
+                    .map(|p| p.join("gemini"))
+                    .unwrap_or_else(|| self.state.directory.join("gemini").join(bot)),
                 vec!["gemini".into()],
                 tx,
             )),
-            "musecode" => Host::MuseCode(crate::hosts::musecode::MuseCodeHost::on_config(
-                bot,
-                vec![crate::harness_tools::executable_for("musecode")],
-                None,
-                crate::isolation::bot_state(&self.state.directory).join("musecode"),
-                (
-                    crate::hosts::musecode::config_home(profile),
-                    crate::hosts::musecode::data_home(profile),
-                ),
-                tx,
-            )),
+            "musecode" => {
+                use crate::hosts::musecode::{config_home, data_home, MuseCodeHost};
+                let state = private_home
+                    .map(|p| p.join("musecode"))
+                    .unwrap_or_else(|| {
+                        crate::isolation::bot_state(&self.state.directory).join("musecode")
+                    });
+                let homes = if private_home.is_some() {
+                    (state.join("config"), state.join("data"))
+                } else {
+                    (config_home(profile), data_home(profile))
+                };
+                Host::MuseCode(MuseCodeHost::on_config(
+                    bot,
+                    vec![crate::harness_tools::executable_for("musecode")],
+                    None,
+                    state,
+                    homes,
+                    tx,
+                ))
+            }
             "pi" => Host::Pi(crate::hosts::pi::PiHost::new(
                 bot,
                 vec![crate::harness_tools::executable_for("pi")],
@@ -2473,11 +2490,9 @@ impl Runner {
             let ctx = EnvContext { url: &self.config.url(), projects_dir: &self.config.projects_dir(), state_dir: &self.state.directory };
             // Gateway requires a private user on Docker. With a pool, relationship turns always lease one
             // and ordinary turns lease one when the harness supports it.
-            let isolated = isolated_turn(
-                relationship,
-                crate::harness_tools::caps(&runtime, &text_of(&config["harness"])).isolated_user,
-                crate::turn_users::available(),
-            );
+            let harness = crate::harness_tools::caps(&runtime, &text_of(&config["harness"]));
+            let pool = if relationship { crate::turn_users::configured() } else { crate::turn_users::available() };
+            let isolated = isolated_turn(relationship, harness.isolated_user, pool);
             if crate::hosts::pi::is_gateway(model.as_deref()) || isolated {
                 // The user and relay this conversation's kept pi runs with (hosts/pi.rs Pool), when it has one.
                 // Only a turn that stays on the kept pi takes it: reclaim removes it from the pool, so any other turn
@@ -2580,6 +2595,14 @@ impl Runner {
             base_env = Some(env.clone());
             let turn_identity = vault.for_model(&mut env, model.as_deref(), isolated).map_err(Fail::runtime)?;
             if relationship {
+                if turn_identity.is_some() {
+                    // The selected login's profile paths must not redirect a private turn back to shared state.
+                    for key in std::iter::once(harness.profile_home).chain(harness.profile_home_overrides) {
+                        if !matches!(key.as_str(), "HOME" | "XDG_CONFIG_HOME") {
+                            env.remove(&key);
+                        }
+                    }
+                }
                 // The model's normal identity can use the directory. The attempt owns its lifetime.
                 if let Some((uid, gid)) = turn_identity.or_else(crate::isolation::identity) {
                     std::os::unix::fs::lchown(&execution_path, Some(uid), Some(gid))
@@ -2794,7 +2817,9 @@ impl Runner {
                 // Names this attempt's harness scopes, so a kill at the limit is told as such (crate::turn_limits).
                 env.insert(crate::turn_limits::SCOPE_ENV.into(), crate::turn_limits::scope_key(&aid));
             }
-            let made = if session_runtime != runtime {
+            let made = if session_runtime != runtime && relationship {
+                Host::Antigravity(AntigravityHost::new(&execution_path.join(".antigravity"), vec!["agy".into()], tx))
+            } else if session_runtime != runtime {
                 let make = |home: &Path, _: &Env| AntigravityHost::new(home, vec!["agy".into()], tx.clone());
                 // A fresh stateless chat turn starts a new process, never the last one's (warm.rs discard).
                 if fresh_chat || personal {
@@ -2805,7 +2830,7 @@ impl Runner {
                 env = turn_env;
                 Host::Antigravity(warm)
             } else {
-                self.make_host(&bot, &runtime, &env, selected.as_ref(), tx)?
+                self.make_host(&bot, &runtime, &env, selected.as_ref(), turn_identity, tx)?
             };
             let h = host.insert(made);
             if voice_call && matches!(h, Host::Codex(_)) {
@@ -3442,7 +3467,7 @@ impl Runner {
                 if !flags.harness_allocated.load(Ordering::SeqCst) {
                     self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
                 }
-                let h = host.insert(self.make_host(&bot, &hop.runtime, &hop_env, selected.as_ref(), tx)?);
+                let h = host.insert(self.make_host(&bot, &hop.runtime, &hop_env, selected.as_ref(), turn_identity, tx)?);
                 h.track_allocation(flags.harness_allocated.clone());
                 h.set_attempt(&aid);
                 if let Some(c) = &capture {
@@ -3843,7 +3868,7 @@ impl Runner {
             }
             if let Host::Pi(pi) = h {
                 // A primary pi on a leased user is kept with that user and its relay; a fallback's never is.
-                let held = if fallback.is_none() {
+                let held = if fallback.is_none() && !relationship {
                     crate::hosts::pi::Held {
                         user: vault.turn_user.take(),
                         relay: vault.relay.take(),
