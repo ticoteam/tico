@@ -1321,6 +1321,13 @@ class Auth:
             and above({r["bot"]: r["reports_to"] or "" for r in read_cache.configs(c)}, H.actor_id(who.actor), bot)
         ):
             from . import task_privacy
+            from . import threads
+
+            thread = threads.thread_row(c, message["conversation_id"])
+            root = threads.root_of(c, thread)
+            if root and threads.audience_of(root) == "entity":
+                self.conversation(c, who, message["conversation_id"])
+                return
 
             try:
                 if not str(message.get("sender_id") or "").startswith("human:") or task_privacy.message_tasks(

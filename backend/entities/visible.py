@@ -120,16 +120,18 @@ def reader(c: sqlite3.Connection, who: str) -> Reader:
     return Reader(actor, key, system=False, sensitive=sensitive, grants=grants)
 
 
-def clause(r: Reader, alias: str = "e") -> tuple[str, list[object]]:
+def clause(
+    r: Reader, alias: str = "e", *, entity_id: str = "", sources: str = "entity_sources"
+) -> tuple[str, list[str]]:
     """A WHERE fragment that keeps the entities of `alias` this reader may see, and its parameters."""
     if r.system:
         return "1 = 1", []
-    eid = f"{alias}.id"
+    eid = entity_id or f"{alias}.id"
     parts = [
-        f"NOT EXISTS (SELECT 1 FROM entity_sources s WHERE s.entity_id = {eid})",
-        f"EXISTS (SELECT 1 FROM entity_sources s WHERE s.entity_id = {eid} AND s.visibility = 'company')",
+        f"NOT EXISTS (SELECT 1 FROM {sources} s WHERE s.entity_id = {eid})",
+        f"EXISTS (SELECT 1 FROM {sources} s WHERE s.entity_id = {eid} AND s.visibility = 'company')",
     ]
-    params: list[object] = []
+    params: list[str] = []
     grants: list[str] = []
     for source_type, ids in r.grants.items():
         if ids is None:
@@ -140,7 +142,7 @@ def clause(r: Reader, alias: str = "e") -> tuple[str, list[object]]:
             params.extend([source_type, json.dumps(list(ids))])
     if grants:
         parts.append(
-            f"EXISTS (SELECT 1 FROM entity_sources s WHERE s.entity_id = {eid} AND s.visibility = 'restricted' "
+            f"EXISTS (SELECT 1 FROM {sources} s WHERE s.entity_id = {eid} AND s.visibility = 'restricted' "
             f"AND ({' OR '.join(grants)}))"
         )
     return "(" + " OR ".join(parts) + ")", params

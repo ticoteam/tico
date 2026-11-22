@@ -14,3 +14,20 @@ class ContactsRecordResult(TypedDict):
     """The record's id in Tico"""
     entity: str
     """The entity it is a record of"""
+
+
+class ContactsHistoryItem(TypedDict):
+    id: str
+    type: str
+    """Either thread or activity"""
+    kind: str
+    occurred_at: str
+    summary: str
+    subject_id: str | None
+
+
+@answer
+class ContactsActivityHistory(TypedDict):
+    rows: list[ContactsHistoryItem]
+    next: str | None
+    """Cursor for the next page"""

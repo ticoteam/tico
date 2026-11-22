@@ -289,6 +289,20 @@ def contacts_history(api, args):
 
 
 @tool(
+    "tico_contacts_activity",
+    "Outside conversations and activities you can read for an entity, newest first. Pass next as after.",
+    {
+        "ref": CONTACTS_REF,
+        "after": _s("The next cursor from the last page"),
+        "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+    },
+    required=("ref",),
+)
+def contacts_activity(api, args):
+    return api.get("entities/activity", ref=args["ref"], after=args.get("after"), limit=args.get("limit"))
+
+
+@tool(
     "tico_contacts_note",
     "A note on an entity. audience me is yours alone; company is shown to everyone who can see the entity.",
     {
@@ -566,6 +580,12 @@ CONTACTS = (
         "past values of an entity's fields, newest first",
         args=(Arg("ref", metavar=_ID),),
         example="tico contacts history acme.com --attribute status",
+    ),
+    Command(
+        "contacts activity",
+        "outside conversations and activities you can read for an entity",
+        args=(Arg("ref", metavar=_ID),),
+        example="tico contacts activity acme.com --limit 10",
     ),
     Command(
         "contacts note",

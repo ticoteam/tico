@@ -27,6 +27,7 @@ A thread's audience is one of these:
 | `task` | whoever may read the task it belongs to |
 | `participants` | the people in an older direct conversation, and the company owner |
 | `meeting` | the people who may see the meeting, as they do today |
+| `entity` | readers of both the Directory entity and the outside inbox on the root thread |
 
 - A new thread is private to its members. Its starter, or an admin, can make it public to a group or to the company.
   Making a thread public changes its audience, so it needs no Write on the group.
@@ -36,6 +37,7 @@ A thread's audience is one of these:
   Read** in the Home's **Thread settings** or on the notice each manager gets in their DM with the bot, or
   `tico thread open-earlier <thread>`. Until then readers see one **Earlier messages** row.
 - Sub-threads follow the audience of the thread they branch from.
+- Outside messages keep their provider authors. Inbound text does not make mentions or notify followers.
 - Mentions and follows never give access. Naming someone outside the thread leaves a warning for the author, and
   nothing else happens until that person is added.
 - Search returns only messages the searcher may read, and a thread they may not read is not named. A thread you may

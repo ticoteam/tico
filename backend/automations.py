@@ -1562,30 +1562,57 @@ def _queue(c, row, payload, ref="", *, manual=False, chain=()):
         _count(c, row["id"], "dropped")
         _counted(c, row["id"], "dropped")
     else:
-        rid = "run_" + H.new_id()
-        state = E.start(payload, manual=manual)
-        c.execute(
-            "INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started_at,status,saved_state,chain) "
-            "VALUES(?,?,?,?,?,?,?,?)",
-            (
-                rid,
-                row["id"],
-                row["version"],
-                stored,
-                H.now(),
-                "held" if on_hold else "queued",
-                json.dumps(state, default=str),
-                json.dumps(list(chain)),
-            ),
-        )
-        _count(c, row["id"], "runs")
-        if on_hold:
-            _counted(c, row["id"], "arrivals")
-        else:
-            _ring(c)
+        rid = _insert_run(c, row, payload, stored, on_hold, manual=manual, chain=chain)
     if tripped:
         _hold_told(c, row, tripped[0], tripped[1], hold_of(c, row["id"])["held"])
     return rid
+
+
+def _insert_run(c, row, payload, ref, on_hold, *, manual=False, chain=()):
+    rid = "run_" + H.new_id()
+    c.execute(
+        "INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started_at,status,saved_state,chain) "
+        "VALUES(?,?,?,?,?,?,?,?)",
+        (
+            rid,
+            row["id"],
+            row["version"],
+            ref,
+            H.now(),
+            "held" if on_hold else "queued",
+            json.dumps(E.start(payload, manual=manual), default=str),
+            json.dumps(list(chain)),
+        ),
+    )
+    _count(c, row["id"], "runs")
+    if on_hold:
+        _counted(c, row["id"], "arrivals")
+    else:
+        _ring(c)
+    return rid
+
+
+INTAKE_AUTOMATION = "auto_builtin_intake:"
+
+
+def queue_intake(c, connection_id, owner_id, ref, payload):
+    """Persist an authenticated arrival even when ordinary automation triggers would drop it."""
+    aid = INTAKE_AUTOMATION + connection_id
+    row = _row(c, aid)
+    owner = "person:" + owner_id
+    if row is None:
+        flow = F.check(
+            {
+                "name": "Conversation intake",
+                "owner": owner,
+                "builtin": True,
+                "readonly": True,
+                "trigger": {"type": "event", "name": "mail.intake"},
+            }
+        )
+        _save(c, H.TICO_ACTOR, aid, flow, None, audit=False)
+        row = _row(c, aid)
+    return _insert_run(c, row, payload, ref, _runnable(c, aid) == "held")
 
 
 def _turn_chain(c):
@@ -2863,6 +2890,8 @@ class Hub:
                 "SELECT flow FROM automation_versions WHERE automation_id=? AND n=?",
                 (run["automation_id"], run["version"]),
             ).fetchone()
+        if run["automation_id"].startswith(INTAKE_AUTOMATION):
+            return self._go_intake(run, token)
         state = json.loads(run["saved_state"] or "{}")
         try:
             # What it does comes from the run's version; its owner, cap and the rest are as they are now.
@@ -2927,6 +2956,29 @@ class Hub:
             listening.settle(c, rid)
             if status not in ("waiting", "held"):
                 _ring(c)  # queued again, or done: a run of this automation that the cap held back can start now
+        return True
+
+    def _go_intake(self, run, token):
+        from . import outside_intake
+
+        with self.store.transaction(notify=True) as c:
+            current = c.execute("SELECT * FROM automation_runs WHERE id=?", (run["id"],)).fetchone()
+            if not current or current["claim_token"] != token:
+                return False
+            state = json.loads(current["saved_state"])
+            status = current["status"]
+            if status == "running":
+                status = _runnable(c, current["automation_id"])
+                if status == "queued":
+                    status = outside_intake.process(c, state["payload"], current["started_at"])
+            if status != "held":
+                state = {"status": status}
+            c.execute(
+                "UPDATE automation_runs SET status=?,saved_state=?,finished_at=?,claimed_at=NULL,claim_token=NULL "
+                "WHERE id=?",
+                (status, json.dumps(state), None if status == "held" else H.now(), run["id"]),
+            )
+            _ring(c)
         return True
 
 

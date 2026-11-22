@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 import time_machine
 
-from backend import drains, gmail_watch, google_workspace
+from backend import automations, drains, gmail_watch, google_workspace, outside_intake
 from backend import mailbox_access as MA
 from backend.entities import store as ES
 from backend.store import H
@@ -87,6 +87,184 @@ def test_an_expired_history_id_lists_again_without_hearing_anything_twice(watche
     gmail.expired.add(BOX)  # Gmail no longer has the saved history id: the last hour is listed again
     assert check(api, T0 + timedelta(minutes=3)) == 2
     assert heard(api, aid) == ["one", "two"]
+
+
+def test_intake_commits_before_the_cursor_and_replay_returns_the_same_run(watched, monkeypatch):
+    api, gmail, _ = watched
+    store = api.app.state.store
+    gmail.add(BOX, "first", thread="support", epoch=epoch(T0), labels=("INBOX", "Tico Intake"))
+    box = box_row(api)
+    original = automations.queue_intake
+
+    def fail(*args):
+        raise RuntimeError("intake write interrupted")
+
+    monkeypatch.setattr(automations, "queue_intake", fail)
+    with pytest.raises(RuntimeError, match="intake write interrupted"):
+        check(api, T0)
+    assert box_row(api)["history_id"] == box["history_id"]
+    with store.read() as c:
+        assert not c.execute("SELECT 1 FROM messages WHERE source_message_id='first'").fetchone()
+
+    monkeypatch.setattr(automations, "queue_intake", original)
+    assert check(api, T0) == 1
+    assert box_row(api)["history_id"] == str(gmail.history_id(BOX))
+    with store.transaction() as c:
+        run = c.execute("SELECT id,status FROM automation_runs WHERE trigger_ref LIKE 'intake:%'").fetchone()
+        assert run["status"] == "queued"
+        same = outside_intake.save_message(
+            c,
+            channel="gmail",
+            connection_id=box["id"],
+            owner_id="ana",
+            source_thread_id="support",
+            source_message_id="first",
+            sender="person@customer.example",
+            title="Replay",
+            body="Replay",
+        )
+        assert same == run["id"]
+        assert c.execute("SELECT count(*) FROM messages WHERE source_message_id='first'").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM automation_runs WHERE trigger_ref LIKE 'intake:%'").fetchone()[0] == 1
+
+
+def test_intake_arrivals_survive_a_full_hold_and_a_stale_claim(watched):
+    api, gmail, _ = watched
+    store = api.app.state.store
+    gmail.add(BOX, "one", thread="support", epoch=epoch(T0), labels=("INBOX", "Tico Intake"))
+    check(api, T0)
+    with store.transaction() as c:
+        first = c.execute("SELECT * FROM automation_runs WHERE trigger_ref LIKE 'intake:%'").fetchone()
+        aid = first["automation_id"]
+        automations._hold(c, automations._row(c, aid), "flood")
+        c.execute("UPDATE holds SET details=? WHERE holdable_id=?", (json.dumps({"arrivals": 500}), aid))
+    gmail.add(BOX, "two", thread="support", epoch=epoch(T0 + timedelta(minutes=2)), labels=("INBOX", "Tico Intake"))
+    check(api, T0 + timedelta(minutes=3))
+    with store.transaction() as c:
+        assert [row[0] for row in c.execute("SELECT status FROM automation_runs WHERE automation_id=?", (aid,))] == [
+            "held",
+            "held",
+        ]
+        assert automations._unhold(c, aid, "human:ana", "release") == 2
+        c.execute(
+            "UPDATE automation_runs SET status='running',claimed_at=?,claim_token='expired' WHERE id=?",
+            (first["started_at"], first["id"]),
+        )
+    later = T0 + timedelta(minutes=automations.STALE_MINUTES + 1)
+    with time_machine.travel(later, tick=False):
+        automations.tick(store, later, drain=False)
+        assert not store.automations.go(automations.RunClaim(first["id"], "expired"))
+        store.automations.drain()
+    with store.read() as c:
+        assert [row[0] for row in c.execute("SELECT status FROM automation_runs WHERE automation_id=?", (aid,))] == [
+            "ok",
+            "ok",
+        ]
+        assert c.execute("SELECT count(*) FROM tasks WHERE occurrence_step='triage'").fetchone()[0] == 1
+
+
+def test_unknown_sender_opens_one_private_due_task_and_ingest_does_not_fan_out(watched):
+    api, gmail, _ = watched
+    store = api.app.state.store
+    with store.transaction() as c:
+        possible = ES.upsert(c, "human:ana", "person", match={"email": "person@customer.example"})["id"]
+    gmail.add(BOX, "one", thread="support", epoch=epoch(T0), labels=("INBOX", "Tico Intake"))
+    check(api, T0)
+    with store.read() as c:
+        thread = c.execute("SELECT * FROM conversations WHERE audience='entity'").fetchone()
+        assert thread["entity_id"] != possible  # From is only a suggestion
+        assert "ext:gmail:person@customer.example" in json.loads(thread["participants"])
+    root_id = thread["id"]
+    followed = api.put(f"/api/v2/threads/{root_id}/follow", json={"notify": "live"}, headers=headers())
+    assert followed.status_code == 200, followed.text
+
+    gmail.add(
+        BOX,
+        "two",
+        thread="support",
+        body="@ana @ops",
+        epoch=epoch(T0 + timedelta(minutes=2)),
+        labels=("INBOX", "Tico Intake"),
+    )
+    check(api, T0 + timedelta(minutes=3))
+    with time_machine.travel(T0 + timedelta(minutes=4), tick=False):
+        store.automations.drain()
+    with store.read() as c:
+        (task,) = c.execute("SELECT * FROM tasks WHERE occurrence_step='triage'")
+        assert (task["owner_id"], task["assignee_id"], task["private"]) == ("human:ana", "human:ana", 1)
+        assert task["entity_id"] == thread["entity_id"]
+        assert H.parse_ts(task["due_at"]) == T0 + timedelta(days=1)
+        assert c.execute("SELECT 1 FROM messages WHERE body LIKE ?", (f"%Possible contact {possible}.",)).fetchone()
+        two = c.execute("SELECT * FROM messages WHERE source_message_id='two'").fetchone()
+        assert (two["conversation_id"], two["direction"], two["channel"]) == (root_id, "inbound", "gmail")
+        for table in ("message_mentions", "message_deliveries", "jobs"):
+            assert not c.execute(f"SELECT 1 FROM {table} WHERE message_id=?", (two["id"],)).fetchone()
+
+
+def test_entity_and_inbox_gate_threads_subthreads_and_history_before_paging(watched):
+    api, _, _ = watched
+    store = api.app.state.store
+    mailbox = box_row(api)["id"]
+    with store.transaction() as c:
+        entity = ES.upsert(c, "human:ana", "person", match={}, name="Acme customer")["id"]
+        c.execute(
+            "INSERT INTO entity_external_refs(id,entity_id,connection_id,system,external_type,external_id) "
+            "VALUES('sender-ref',?,?,'gmail','sender','verified')",
+            (entity, mailbox),
+        )
+        outside_intake.save_message(
+            c,
+            channel="gmail",
+            connection_id=mailbox,
+            owner_id="ana",
+            source_thread_id="support",
+            source_message_id="verified-delivery",
+            sender="person@customer.example",
+            verified_id="verified",
+            title="Private subject",
+            body="Private body",
+        )
+        root = c.execute("SELECT id FROM conversations WHERE entity_id=?", (entity,)).fetchone()[0]
+        parent = c.execute("SELECT id FROM messages WHERE conversation_id=?", (root,)).fetchone()[0]
+        c.execute(
+            "INSERT INTO entity_activities (id,entity_id,kind,occurred_at,summary) "
+            "VALUES('visible-activity',?,'booking','2026-01-01','Visit')",
+            (entity,),
+        )
+    reply = post(api, f"threads/{root}/messages", {"text": "Internal note", "parent_message_id": parent})
+    child = reply["thread_id"]
+    assert child != root
+    for id_ in (root, child):
+        assert api.get(f"/api/v2/threads/{id_}/timeline", headers=headers("ben-test")).status_code == 404
+        assert api.get(f"/api/v2/threads/{id_}/timeline", headers=headers()).status_code == 200
+
+    url = "/api/v2/entities/activity"
+    params = {"ref": entity, "limit": 1}
+    response = api.get(url, params=params, headers=headers("ben-test"))
+    assert response.status_code == 200, response.text
+    answer = response.json()
+    assert [row["id"] for row in answer["rows"]] == ["visible-activity"]
+    assert answer["next"] is None
+    answer = api.get(url, params=params, headers=headers()).json()
+    assert [row["id"] for row in answer["rows"]] == [root]
+    page = api.get(url, params={**params, "after": answer["next"]}, headers=headers()).json()
+    assert [row["id"] for row in page["rows"]] == ["visible-activity"]
+    for token, expected in (("ana-test", 1), ("ben-test", 0)):
+        result = post(api, "sql", {"sql": f"SELECT body FROM messages WHERE id='{parent}'"}, token)
+        assert len(result["rows"]) == expected
+    with store.transaction() as c:
+        grant = MA.grant(c, "human:ana", mailbox, "person", "ben", "read")
+    assert api.get(f"/api/v2/threads/{child}/timeline", headers=headers("ben-test")).status_code == 200
+    with store.transaction() as c:
+        ES.add_source(c, "human:ana", entity, "note_me", "human:ana", visibility="restricted")
+    assert api.get(f"/api/v2/threads/{child}/timeline", headers=headers("ben-test")).status_code == 404
+    assert api.get(url, params=params, headers=headers("ben-test")).status_code == 404
+    with store.transaction() as c:
+        ES.add_source(c, "human:ana", entity, "hub", "human:ana", visibility="company")
+    assert api.get(f"/api/v2/threads/{child}/timeline", headers=headers("ben-test")).status_code == 200
+    with store.transaction() as c:
+        MA.revoke(c, "human:ana", mailbox, grant["id"])
+    assert api.get(f"/api/v2/threads/{child}/timeline", headers=headers("ben-test")).status_code == 404
 
 
 def test_gmail_down_leaves_the_history_id_and_says_why_then_catches_up(watched):

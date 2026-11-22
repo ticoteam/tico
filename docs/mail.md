@@ -24,12 +24,19 @@ keeps no copy of mail. Opening a message or thread checks access and records `ma
 The server watches every active mailbox its Workspace key or a person's own Connect Google grant covers
 (`backend/gmail_watch.py`, a drain worker): about
 every 90 seconds it asks Gmail for the history since the mailbox's last check, reads each new message once, runs the
-mailbox's message automations, notes bounces and feeds the Directory, then keeps only where it got to. Drafts are not
+mailbox's message automations, notes bounces and feeds the Directory, then saves its cursor. Drafts are not
 heard. A mailbox's first check starts its watch a day back and hears all of that day's mail, oldest first, over as many
 passes as it takes; older mail never starts a run. A failed check keeps where it got to and shows why on Tools > the
 mailbox; a refused Google sign-in also asks its person to reconnect. No computer touches mail: the server also sends
 every queued email and carries out every automation mail action. A finished automation run keeps no message body or
 snippet.
+
+To enroll incoming conversations in relationship history, use a Gmail filter that applies the label **Tico Intake**
+on arrival in a watched personal inbox that feeds the Directory. Tico saves the thread and a bounded copy of the
+message body before advancing the Gmail cursor. The inbox's person receives one private triage task per unidentified
+thread, due 24 hours after intake. An exact From address or domain can suggest a Directory contact for the person
+to review. The thread is visible only to readers of both the contact and the inbox. History is available through
+`tico contacts activity <ref>`, `tico_contacts_activity` in MCP, and `GET /api/v2/entities/activity`.
 
 ## Organizing live
 

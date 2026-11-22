@@ -2172,6 +2172,7 @@ def _write_message(
     *,
     check_cap=False,
     decided=None,
+    outside=None,
 ):
     if actor == "bot:librarian":
         body = librarian_text(body)
@@ -2203,7 +2204,9 @@ def _write_message(
 
     if isinstance(refs, dict) and wake_rule_engine.PARKED_NOTICE in refs:
         refs = {k: v for k, v in refs.items() if k != wake_rule_engine.PARKED_NOTICE}
-    decision = wake_rule_engine.judge(conn, actor, target, kind, refs, body, conv, in_reply_to, decided)
+    decision = (
+        None if outside else wake_rule_engine.judge(conn, actor, target, kind, refs, body, conv, in_reply_to, decided)
+    )
     if decision and decision.outcome in ("ask", "action"):
         decision = wake_rule_engine.carry_out(conn, decision, actor, target, kind, refs, body, conv)
     held = None
@@ -2226,8 +2229,12 @@ def _write_message(
         "read_at": read_at,
         "expires_at": expires_at,
         "wait_s": wait_s,
+        "channel": outside[0] if outside else None,
+        "direction": "inbound" if outside else None,
+        "connection_id": outside[1] if outside else "",
+        "source_message_id": outside[2] if outside else None,
     }
-    if delivered_at is None:
+    if delivered_at is None and not outside:
         _held_queue_admit(conn, actor, target, row["body"], row["refs"])
     # Native threads (backend/threads.py): the origin, revision and restricted flag; the insert trigger adds the seq.
     from . import threads
@@ -2252,11 +2259,17 @@ def _write_message(
     conn.execute(
         "INSERT INTO messages (id, conversation_id, sender_id, recipient_id, kind, body, refs, "
         "in_reply_to, created_at, delivered_at, read_at, expires_at, wait_s, origin_id, revision, restricted, "
-        "legacy_audience) VALUES (:id, :conversation_id, :sender_id, :recipient_id, :kind, :body, :refs, "
+        "legacy_audience, channel, direction, connection_id, source_message_id) "
+        "VALUES (:id, :conversation_id, :sender_id, :recipient_id, :kind, :body, :refs, "
         ":in_reply_to, :created_at, :delivered_at, :read_at, :expires_at, :wait_s, :origin_id, :revision, "
-        ":restricted, :legacy_audience)",
+        ":restricted, :legacy_audience, :channel, :direction, :connection_id, :source_message_id)",
         row,
     )
+    if outside:
+        conn.execute("UPDATE conversations SET last_message_at=? WHERE id=?", (row["created_at"], conv["id"]))
+        written = message(conn, row["id"])
+        threads.record(conn, written, conv)
+        return written
     if VIA.get() == "assistant" and kind in ("say", "steer") and is_human(actor) and is_bot(target):
         # The Assistant asked an agent for the person: the agent's first message in this thread (or one under it) comes
         # back to their Assistant chat (backend/assistant_relay.py). Kept on the server only, never in the message.
