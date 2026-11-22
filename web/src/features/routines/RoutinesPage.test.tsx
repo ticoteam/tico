@@ -231,6 +231,18 @@ describe('One routine', () => {
     expect((await screen.findByRole('menuitem', { name: 'Test run' })).getAttribute('aria-disabled')).toBe('true');
   });
 
+  it.each<[Partial<Routine>, string]>([
+    [{ created_by_id: 'human:me' }, 'Made by Ada Example'],
+    [{ created_by_id: 'human:me', created_via: 'botops' }, 'Made by Agent Ops for Ada Example'],
+    [{ created_by_id: 'human:me', created_via: 'assistant' }, "Made by Ada Example's Assistant"],
+    [{ created_by_id: 'human:me', created_via: 'token' }, 'Made by Ada Example with a token'],
+    [{ created_by_id: 'human:gone', created_via: 'token' }, 'Made by human:gone with a token'],
+  ])('says who made it and how, and shows an id the directory does not know as it is', async (made, line) => {
+    record();
+    const p = await openRoutine(made);
+    expect(within(p).getByText(line)).toBeTruthy();
+  });
+
   it('a routine that did not load says so in its panel, with Try again @s510', async () => {
     let n = 0;
     record((u) => (u.endsWith('/api/v2/automations/r7') ? (n++, failed()) : nothing()));

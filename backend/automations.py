@@ -106,6 +106,14 @@ def _via(who):
     return who.via or (f"token:{who.token_label}" if who.via_token and who.token_label else None)
 
 
+def _created_via(who):
+    """How an automation was made when its creator (`created_by_id`) did not make it by a direct call: through Agent Ops
+    or the Assistant, or with a personal token. None for a direct call, and for any other way in."""
+    if who.via in ("botops", "assistant"):
+        return who.via
+    return "token" if who.via_token else None
+
+
 # ---------------------------------------------------------------------------------------------------- the rows
 def _row(c, aid):
     row = c.execute("SELECT * FROM automations WHERE id=? AND deleted_at IS NULL", (aid,)).fetchone()
@@ -3963,7 +3971,7 @@ def install(app, store, auth, mutate):
         **api_v2(
             "Automations",
             "createAutomation",
-            "Save a new automation as version 1; a flow that fails its checks is refused with where and why. Agent Ops saves it off unless `enabled` is sent; a bot without rights to it saves a proposal (off, version 1 pending). An Assistant Message routine saves off with action, message_id and needs_confirm; only its person's card click enables it. A chooser without a mode defaults to Draft",
+            "Save a new automation as version 1; a flow that fails its checks is refused with where and why. An agent may save one for an owner whose automations it may change (its own, or those of agents it manages); without that right the call is refused (403), except that Agent Ops saves a bot's request as a proposal (off, version 1 pending). Agent Ops saves what it makes off unless `enabled` is sent. An Assistant Message routine saves off with action, message_id and needs_confirm; only its person's card click enables it. A chooser without a mode defaults to Draft",
             "Automation",
         ),
     )
@@ -3972,6 +3980,7 @@ def install(app, store, auth, mutate):
         that may not proposes it instead (off, version 1 pending). What Agent Ops builds is saved off unless `enabled` is
         sent."""
         who = request.state.identity
+        created_via = _created_via(who)
 
         def work(c):
             auth.domain(who)
@@ -3984,6 +3993,8 @@ def install(app, store, auth, mutate):
             if _by_agent_ops(who) and "enabled" not in body.model_fields_set:
                 fields["enabled"] = False  # what Agent Ops builds waits for a Turn on, unless the request said on
             flow = _checked(c, fields, store.settings)
+            if created_via:
+                flow["created_via"] = created_via  # server-only: AutomationIn has no such field, and an edit keeps it
             if flow["builtin"]:
                 raise Problem("forbidden", "Built-in automations come with Tico; the hub makes them", 403)
             # A step that sets its task's model is saved as a draft for a person who may set that model, as a bot's is.

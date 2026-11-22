@@ -175,3 +175,8 @@ def test_a_code_bots_own_turn_is_offered_the_developer_list_over_http(api):
     assert get(api, "me", token=token)["tool_profile"] == "developer"
     dev = {t["name"] for t in rpc(api, "tools/list", token=token)["result"]["tools"]}
     assert dev == hubtools.DEVELOPER_TOOLS & full
+
+
+def test_a_developer_is_offered_the_automation_create_and_get_tools():
+    names = {t["name"] for t in hubtools.listing(True, "bot", hubtools.DEVELOPER)}
+    assert {"tico_automation_create", "tico_automation_get"} <= names

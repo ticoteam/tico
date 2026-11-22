@@ -32,6 +32,13 @@ SCHEMAS.update(
                 "id": "s",
                 "name": "s",
                 "owner_id": "s",
+                "created_by_id": {"type": "string", "description": "Who created it: the person or bot it was made for"},
+                "created_via": {
+                    "type": "string",
+                    "enum": ["botops", "assistant", "token"],
+                    "description": "How it was made when not by a direct call: Agent Ops (botops), the Assistant, or a "
+                    "personal token. Absent for a direct call",
+                },
                 "enabled": "b",
                 "action": {"type": "object", "description": "Assistant Message create: the pending Confirm card"},
                 "message_id": "s",

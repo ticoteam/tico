@@ -149,11 +149,13 @@ def automation_template(api, args):
 
 @tool(
     "tico_automation_create",
-    "Save a new automation (version 1); a bad flow is refused on save, with why. In Assistant "
-    "chat a Message routine saves off and returns an approval card; only the person's click turns "
-    "it on, so omit `enabled` or set it false. Choose defaults to Draft; use Reply only when the "
-    "person explicitly asks for replies and the inbox permits sending. Agent Ops saves it off unless "
-    "`enabled` is sent. A bot without rights saves a proposal for a person to turn on.",
+    "Save a new automation (version 1); a bad flow is refused on save, with why. An agent may make and "
+    "turn on an automation for an owner whose automations it may change (its own, or those of agents it "
+    "manages); without that right the save is refused (403). Agent Ops saves it off unless `enabled` is "
+    "sent, and a bot's request it may not carry out is saved as a proposal for a person to turn on. In "
+    "Assistant chat a Message routine saves off and returns an approval card that only the person's click "
+    "turns on. Choose defaults to Draft; use Reply only when the person explicitly asks for replies and "
+    "the inbox permits sending.",
     {k: v for k, v in _AUTO_FIELDS.items()},
     required=("name", "owner", "trigger"),
     writes=True,
