@@ -467,6 +467,24 @@ def merge(
             if link["source"]
             else False,
         )
+    # An item A was filed for (its primary link) is B's now: a create naming it finds B, never the merged-away A
+    # (POST /api/v2/tasks `primary_link`). B first holds A's exact row for the item, connection included (B may link
+    # the same URL through another connection, which the copy above kept), then takes the claim.
+    scoped = "source=? AND item_type=? AND item_key=? AND connection_id=?"
+    for link in conn.execute(
+        "SELECT url, title, kind, source, item_type, item_key, connection_id FROM task_links WHERE task_id=? "
+        "AND is_primary=1 AND source IS NOT NULL",
+        (a["id"],),
+    ).fetchall():
+        item = (link["source"], link["item_type"], link["item_key"], link["connection_id"])
+        conn.execute(f"UPDATE task_links SET is_primary=0 WHERE task_id=? AND {scoped}", (a["id"], *item))
+        if not conn.execute(f"SELECT 1 FROM task_links WHERE task_id=? AND {scoped}", (b["id"], *item)).fetchone():
+            conn.execute(
+                "INSERT INTO task_links (id, task_id, kind, url, title, added_by, created_at, source, item_type, "
+                "item_key, connection_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (H.new_id(), b["id"], link["kind"], link["url"], link["title"], actor, ts, *item),
+            )
+        conn.execute(f"UPDATE task_links SET is_primary=1 WHERE task_id=? AND {scoped}", (b["id"], *item))
     # A's open subtasks go under B before A closes, so the close finds none to close.
     moved: list[str] = []
     for child in _open_children(conn, a["id"]):

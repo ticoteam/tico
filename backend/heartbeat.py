@@ -280,6 +280,20 @@ def item_metadata(ctx: Context) -> tuple[str, bool]:
     return (f"{changed} items changed", False) if changed else ("Nothing due", True)
 
 
+def jira_items(ctx: Context) -> tuple[str, bool]:
+    # The Jira issues open tasks link, read every 5 minutes (one marked due first) through each record integration
+    # (backend/item_sources/jira.py `refresh`): a step of its own after the merge queue's, capped per connection and in
+    # time, so GitHub's steps and Jira's never hold up or fail each other.
+    app: Any = getattr(ctx, "app", None)
+    vault: Any = getattr(getattr(app, "state", None), "vault", None)
+    if vault is None:
+        return "No credential vault", True
+    from .item_sources import jira as JS
+
+    changed = JS.refresh(ctx.store, vault)
+    return (f"{changed} issues changed", False) if changed else ("Nothing due", True)
+
+
 def source_actions(ctx: Context) -> tuple[str, bool]:
     # The owed source actions, the Merge stage's queue and dequeue calls (backend/source_actions.py `run`).
     github = _engine_github(ctx)
@@ -437,6 +451,16 @@ STEPS = [
         None,
         source_actions,
         failure="source_actions",
+        capture="scheduler",
+        outside=True,
+    ),
+    Step(
+        "jira_items",
+        "Jira issue metadata",
+        "poll",
+        MINUTE,
+        jira_items,
+        failure="jira_items",
         capture="scheduler",
         outside=True,
     ),

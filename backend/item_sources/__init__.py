@@ -1,6 +1,6 @@
 # pyright: strict
 """Sources: places outside Tico a task can wait on or link to (docs/dev/pipelines-v3.md "Sources and items"). One module
-each, named in SOURCES: GitHub (`github.py`) and Jira (`jira.py`, links only so far).
+each, named in SOURCES: GitHub (`github.py`) and Jira (`jira.py`: links and their state).
 
 A source module has `SOURCE` (its id), `NAME`, `ITEMS` (its item types) and `CONDITIONS` (what a requirement of kind
 `item` can ask of one of its items), `match_link(url)` (the item a link is), optionally `match_key(item_type, text)` (an
@@ -174,3 +174,60 @@ def parse_ref(conn: sqlite3.Connection, text: str) -> tuple[str, str, str, str]:
     if getattr(module, "site", None) and not connection.strip():
         raise ValueError(f"A {source_id} item is one connection's: add @<connection id>")
     return source_id, item_type, spelled, connection.strip()
+
+
+ALREADY_FILED = "This item is already filed"  # a primary link held by a task the caller may not read: never named
+PRIMARY_SOURCES = ("jira",)  # the sources a task may be filed for (`primary_of`); GitHub PRs link the ordinary way
+
+
+def primary_of(conn: sqlite3.Connection, text: str) -> tuple[tuple[str, str, str, str], str]:
+    """(item, URL to link) of a task create's primary link (POST /api/v2/tasks `primary_link`): a Jira issue of a record
+    integration (jira.integrations, only ever a tool everyone sees), named as `jira:issue:<key>@<connection>` (linked
+    by its page on the connection's site) or by its URL (the one integration on that site). ValueError, the same words
+    for a missing, hidden or other tool and anything else."""
+    from . import jira
+
+    refusal = "A primary link is a Jira issue of a record integration: jira:issue:<key>@<connection>, or its URL"
+    text = text.strip()
+    if text.startswith(("http://", "https://")):
+        found = match_link(text, PRIMARY_SOURCES)
+        host = jira.site(text) if found else None
+        on = [tool_id for tool_id, site in sorted(jira.integrations(conn).items()) if site == host]
+        if not found or len(on) != 1:
+            raise ValueError(refusal)
+        return (*found, on[0]), text
+    try:
+        item = parse_ref(conn, text)
+    except ValueError:
+        raise ValueError(refusal) from None
+    usable = jira.integrations(conn, item[3]) if item[0] in PRIMARY_SOURCES and item[3] else {}
+    if item[3] not in usable:
+        raise ValueError(refusal)
+    return item, f"https://{usable[item[3]]}/browse/{item[2]}"
+
+
+def lookup(conn: sqlite3.Connection, text: str) -> tuple[tuple[tuple[str, str, str, str], str], str | None]:
+    """A primary link (`primary_of`) and the id of the task holding it already, or None: what a create and its dry run
+    read before anything else. ValueError for a primary link that names no Jira issue."""
+    primary = primary_of(conn, text)
+    return primary, primary_task(conn, primary[0])
+
+
+def primary_task(conn: sqlite3.Connection, item: tuple[str, str, str, str]) -> str | None:
+    """The id of the task holding the item's primary link (the partial unique index task_links_primary_item lets one
+    task hold it), whatever its status, or None."""
+    found = conn.execute(
+        "SELECT task_id FROM task_links WHERE is_primary=1 AND source=? AND item_type=? AND item_key=? "
+        "AND connection_id=?",
+        item,
+    ).fetchone()
+    return str(found[0]) if found else None
+
+
+def claim(conn: sqlite3.Connection, task_id: str, item: tuple[str, str, str, str]) -> None:
+    """Make the task's link to the item its primary link. IntegrityError when another task holds it."""
+    conn.execute(
+        "UPDATE task_links SET is_primary=1 WHERE task_id=? AND source=? AND item_type=? AND item_key=? "
+        "AND connection_id=?",
+        (task_id, *item),
+    )

@@ -73,7 +73,7 @@ import re
 import sqlite3
 import threading
 from datetime import date, datetime, timedelta, timezone
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 
 from fastapi import Query, Request
 from pydantic import ConfigDict, Field, SecretStr
@@ -820,6 +820,7 @@ def _tool_view(tool):
         "vendor": TS.vendor_of(tool["service"], tool["name"], host=tool["base_url"] or _field(tool, "mcp_url") or ""),
         "private": _field(tool, "audience") is not None,
         "everyone_reads": bool(_field(tool, "everyone_reads")),
+        "record_owner": _field(tool, "record_owner") or "",
         # How its several keys and settings reach the vendor (backend/tool_templates.py); None for one key.
         "template": tool_templates.view(tool),
     }
@@ -1298,6 +1299,9 @@ class ToolUpdate(Contract):
     delivery: str | None = Field(default=None, pattern=r"^(proxy|computer)$")
     # "Everyone can read" (backend/default_read.py): every bot reads the tool with no grant while it is on.
     everyone_reads: bool | None = None
+    # Whether it holds records Tico reads in the background (backend/item_sources/jira.py `integration`): `outside` (the
+    # vendor owns them) or `tico`; '' for neither. An administrator's to set.
+    record_owner: Literal["", "outside", "tico"] | None = None
     # Who can see it: null is Everyone, an audience Only listed (`set_audience`). Left out, it stays as it is.
     audience: AccessAudience | None = None
 
@@ -1465,7 +1469,7 @@ def create_tool(c, who, body, admins, vault=None):
 
 def update_tool(c, who, tool_id, body, admins, auth=None):
     """A tool's settings, and its Who can see it (`audience`, which the owner may change too)."""
-    asked = body.model_dump(exclude_none=True, exclude={"audience", "everyone_reads"})
+    asked = body.model_dump(exclude_none=True, exclude={"audience", "everyone_reads", "record_owner"})
     audience_set = "audience" in body.model_fields_set
     if asked or not audience_set or getattr(who, "role", "") != "owner":
         # Its service, address, check or delivery: on an ads, payments or CRM tool a person's own (tool_access Rule P).
@@ -1489,6 +1493,16 @@ def update_tool(c, who, tool_id, body, admins, auth=None):
         tool = dict(tool_row(c, tool_id))
         if body.everyone_reads:  # every bot reads it now: requests for Read on it close themselves
             access_requests.settled(c, who, resource_type="tool", resource_id=tool_id, via="everyone-reads")
+    if body.record_owner is not None and body.record_owner != (_field(tool, "record_owner") or ""):
+        if not _admin(c, who, admins):
+            raise Problem("forbidden", "Only an administrator marks a tool as holding records", 403)
+        if body.record_owner and audience_of(tool) is not None:
+            raise Problem(
+                "record_owner", f"{tool['name']} is Only listed: a tool holding records is one everyone sees", 422
+            )
+        c.execute("UPDATE tools SET record_owner=?,updated_at=? WHERE id=?", (body.record_owner, H.now(), tool_id))
+        H.event(c, who.actor, "tool.record_owner_changed", tool_id, {"after": body.record_owner})
+        tool = dict(tool_row(c, tool_id))
     fields = {k: v for k, v in _clean(asked).items()}
     merged = tool | fields
     if any(merged[k] != tool[k] for k in ("service", "base_url", "auth_scheme", "check_path", "delivery")):
@@ -1584,7 +1598,9 @@ def set_audience(c, who, tool, value, admins, auth=None):
     if stored == _field(tool, "audience"):
         return
     before = audience_of(tool)
-    c.execute("UPDATE tools SET audience=?, updated_at=? WHERE id=?", (stored, H.now(), tool["id"]))
+    # A record integration is a tool everyone sees (backend/item_sources/jira.py): made Only listed, it is one no longer.
+    record = ",record_owner=''" if stored is not None else ""
+    c.execute(f"UPDATE tools SET audience=?{record}, updated_at=? WHERE id=?", (stored, H.now(), tool["id"]))
     H.event(
         c,
         who.actor,
@@ -2398,7 +2414,10 @@ def install(app, store, auth, settings):
     def update_api_tool(request: Request, tool_id: str, body: ToolUpdate):
         """A tool's settings and its Who can see it (`audience`: null for Everyone, or an audience for Only listed)."""
         return change(
-            request, body, setter, lambda c: update_tool(c, request.state.identity, tool_id, body, vault().admins, auth)
+            request,
+            _Receipt(body, omit_none=("record_owner",)),  # a retry from before record_owner fingerprints the same
+            setter,
+            lambda c: update_tool(c, request.state.identity, tool_id, body, vault().admins, auth),
         )
 
     def plain(request, fn):

@@ -20,6 +20,7 @@ from . import goals as G
 from .auth import Identity
 from .onboarding import AGENT_OPS
 from . import rooms
+from . import item_sources as IS
 from .store import H, Problem, encode
 from . import bot_settings as BS
 from . import (
@@ -33,6 +34,13 @@ from . import (
     task_followers_routes,
 )
 from .api_contract import ASK_REFUSED
+
+
+class ClaimGone(Exception):
+    """A find-or-create whose ask-ingest judgment was skipped because a task held its item finds the item free at the
+    write: the write is rolled back and the route judges the filing before trying again."""
+
+
 from .api_answers.tasks import TaskDetail, TaskResult, TaskRunModelResult
 
 from . import models as M
@@ -477,7 +485,7 @@ def register_core(
         level = auth.bot_accesses(c, them, [H.actor_id(bot)]).get(H.actor_id(bot))
         return not level or bool(level["read"])
 
-    def task_create(c, who, body, lint=True, ingest=None, same=None, rule=None, wake_refs=None):
+    def task_create(c, who, body, lint=True, ingest=None, same=None, rule=None, wake_refs=None, judged=True):
         """`POST /api/v2/tasks`: the task is made and put in the first stage of its pipeline (H.task_create). A task
         for a bot wakes it; `wake_refs` go on that wake (an auto dream's release policy, backend/dream_auto.py)."""
         source = who
@@ -496,6 +504,26 @@ def register_core(
             pass  # the person's own words to their Assistant, checked once the owner is known
         elif request_id:
             who = delegated_identity(c, who, request_id, new_task=True)
+        # Find-or-create (docs/dev/pipelines-v3.md "Intake"): a create naming its outside item's primary link returns
+        # the task already holding it, after the same rule check, and files nothing; the checks that only filing needs
+        # (the owner's cap, reach) are skipped for it when the caller may read it. One the caller may not read is never
+        # named: the create is refused as already filed, after every check a filing makes. The item, not the title,
+        # makes it one task. Read as whoever the create acts as (a person's own request: that person).
+        primary = found = None
+        if getattr(body, "primary_link", None):  # only a JSON create's (M.TaskFile): never an upload's form
+            try:
+                primary, held_by = IS.lookup(c, body.primary_link)
+            except ValueError as error:
+                raise Problem("primary_link", str(error), 422) from None
+            found = held_by if held_by and _readable_task(c, who, held_by) else None
+            hidden = bool(held_by) and not found
+            if not held_by and not judged:
+                # Ask ingest was skipped because a task held the item; it no longer does, so this is a filing after all:
+                # nothing is written, and the route judges it and tries again (`create_task`).
+                raise ClaimGone()
+            same = lambda _c, _task_id: False  # another item's task with this title is other work
+        else:
+            hidden = False
         parent_id = auth.resolve_task(c, who, body.parent) if body.parent else None
         others = [(auth.resolve_task(c, who, r.task), r.kind) for r in body.relations]
         from .shared_bots import route
@@ -523,9 +551,11 @@ def register_core(
             if body.visibility == "public":
                 raise Problem("meeting_audience", meeting_audience.REFUSAL, 409)
             body = body.model_copy(update={"private": True})
-        task_caps.check(c, who.actor, owner)  # the first hub check on a send (CONTRACT §1): nothing is written
+        if not found:
+            task_caps.check(c, who.actor, owner)  # the first hub check on a send (CONTRACT §1): nothing is written
         # A bot's task for a teammate out of its reach, or its question to one (docs/reach.md), is refused next.
-        reach.check(c, who, owner, "task", task_id=parent_id)
+        if not found:
+            reach.check(c, who, owner, "task", task_id=parent_id)
         asked_agent_ops = None
         if request_id and who.via == "assistant":
             # The Assistant handing a helper (Agent Ops, the Strategy Owner, the Librarian; assistant.HELPERS) what the
@@ -540,7 +570,8 @@ def register_core(
         # A subtask for a person under a private task with no person on it, filed by the bot that owns it, makes them
         # its reader.
         reach_to = privacy.reach_for(c, source, owner, H.task(c, parent_id) if parent_id else None)
-        auth.require_bot_contact(c, who, owner, task_id=parent_id, kind="task")
+        if not found:
+            auth.require_bot_contact(c, who, owner, task_id=parent_id, kind="task")
         # A subtask is the shape that parks the filer as `waiting` and makes it care when the
         # other one finishes. A bot set to `tasks` has opted out of that on both sides: it does
         # not wait, and its own completions are quiet, so parking on one would wait for ever.
@@ -611,6 +642,19 @@ def register_core(
             if ingest:
                 ask_ingest.skipped(c, ingest, "held")
             return org_rule_check.answer(rule_gate)
+        if hidden:
+            if ingest:
+                ask_ingest.skipped(c, ingest, "not_applied")
+            raise Problem("primary_link", IS.ALREADY_FILED, 409)
+        if found:
+            if ingest:
+                ask_ingest.skipped(c, ingest, "not_applied")
+            held = H.task(c, found)
+            return {
+                "task": task_view(held, c, visible_sql=auth.task_sql(c, who), who=who),
+                "found": True,
+                **org_rule_check.answer(rule_gate),
+            }
         public_warning = ""
         if rule_gate and rule_gate.get("warn"):
             approved = exact_approval(c, who.actor)
@@ -799,6 +843,10 @@ def register_core(
             c.execute("UPDATE tasks SET request_id=? WHERE id=?", (inherited_request or request_id, row["id"]))
         for url in body.links:
             H.task_link(c, who.actor, row["id"], url, mover=True, plain_when_unsure=True)
+        if primary:
+            # The item this task is filed for: its primary link (the partial unique index keeps it one task's).
+            H.task_link(c, who.actor, row["id"], primary[1], item=primary[0], mover=True)
+            IS.claim(c, row["id"], primary[0])
         # A bot's finding on a pipeline task's own pull request is that task's review verdict, not a person's task.
         H.review_finding_route(c, who.actor, row["id"], row["owner_id"])
         # The parent it was filed under is a relation written here too, and reads back first.
@@ -846,7 +894,7 @@ def register_core(
             **({"private_readers": row["private_readers"]} if row.get("private_readers") else {}),
         }
 
-    def cap_before_preflight(request, who, owner_ref, parent_ref=None):
+    def cap_before_preflight(request, who, owner_ref, parent_ref=None, primary_link=None, request_id=None):
         """The task cap (CONTRACT §1) and reach (docs/reach.md) before any LLM preflight: a refused send spends no
         judgment and writes nothing. A retry whose Idempotency-Key already has a saved answer is not checked: `mutate`
         replays that answer."""
@@ -857,6 +905,8 @@ def register_core(
         with store.read() as c:
             if store.saved(c, who, request.url.path, request.headers.get("idempotency-key")):
                 return
+            if primary_link and not request_id and _held_item(c, who, primary_link) == "readable":
+                return  # it returns the task holding the item: nothing is sent to the owner
             original = auth.target(c, who, owner_ref, need="write")
             owner = auth.target(c, who, route(c, who.actor, original), need="write")
             task_caps.check(c, who.actor, owner)
@@ -877,36 +927,71 @@ def register_core(
     @app.post(
         "/api/v2/tasks", **api_v2("Tasks", "createTask", "Create a task", TaskResult, responses={"422": ASK_REFUSED})
     )
-    def create_task(request: Request, body: M.TaskCreate):
+    def create_task(request: Request, body: M.TaskFile):
         who = request.state.identity
         if who.via == "botops" and who.role == "bot" and H.is_bot(who.task_actor) and who.task_actor != who.actor:
             # Agent Ops filing for a bot that asked it: a bot's request lends nothing, so Agent Ops files the task as itself,
             # with its own rights, and is its requester (who filed it).
             who = Identity(who.task_actor, "bot", runner_id=who.runner_id, attempt_id=who.attempt_id, agent=who.agent)
             request.state.identity = who
-        cap_before_preflight(request, who, body.owner, body.parent)
+        # A create carrying a person's request reads the item as that person, at the write: its cap is checked as ever.
+        cap_before_preflight(request, who, body.owner, body.parent, body.primary_link, body.request_id)
         rc = rule_check(
             who,
             "task_create",
             rule_create_text(body),
             lambda c: [rule_target(c, who, body.owner), *(org_rule_check.company(c) if rule_public(body) else [])],
         )
-        # A write the rule check holds, or a saved retry, skips ask ingest's call.
+        # A write the rule check holds, a saved retry, or a create whose item a task already holds (nothing is filed)
+        # skips ask ingest's call.
+        with store.read() as c:
+            held = bool(body.primary_link) and _held_item(c, who, body.primary_link) is not None
         ingest = (
             None
-            if org_rule_check.holds(rc) or saved_retry(request, who)
+            if org_rule_check.holds(rc) or saved_retry(request, who) or held
             else ask_ingest.preflight(store, app.state.judge, request.state.identity, body.owner, body.title, body.body)
         )
-        return ask_ingest.judged(
-            store,
-            ingest,
-            lambda: mutate(
-                request,
-                body,
-                lambda c: task_create(c, request.state.identity, body, ingest=ingest, rule=rc),
-                receipt=handoff_receipt(request.state.identity),
-            ),
-        )
+        # A retry of a create sent before `primary_link` existed hashed the body without it.
+        legacy = body.model_dump(exclude={"primary_link"}) if body.primary_link is None else None
+
+        def attempt(ingest, judged):
+            return ask_ingest.judged(
+                store,
+                ingest,
+                lambda: mutate(
+                    request,
+                    body,
+                    lambda c: task_create(c, request.state.identity, body, ingest=ingest, rule=rc, judged=judged),
+                    receipt=handoff_receipt(request.state.identity),
+                    retry_body=lambda _c, _result: legacy,
+                ),
+            )
+
+        try:
+            return attempt(ingest, not held or org_rule_check.holds(rc))  # a held create is never judged
+        except ClaimGone:  # the task holding the item went before the write: judge the filing, then file it
+            judged = ask_ingest.preflight(
+                store, app.state.judge, request.state.identity, body.owner, body.title, body.body
+            )
+            return attempt(judged, True)
+
+    def _held_item(c, who, primary_link):
+        """`readable` when a task the caller may read already holds the primary link a create names, `hidden` when one
+        it may not read does, else None (none, or a link that names no item: the create's own error)."""
+        try:
+            held_by = IS.lookup(c, primary_link)[1]
+        except ValueError:
+            return None
+        if not held_by:
+            return None
+        return "readable" if _readable_task(c, who, held_by) else "hidden"
+
+    def _readable_task(c, who, task_id):
+        try:
+            auth.task(c, who, task_id)
+        except Problem:
+            return False
+        return True
 
     def handoff_receipt(who):
         """Who reads back a task the person's own Assistant turn filed (privacy.as_the_person): the person, when it is
@@ -923,11 +1008,11 @@ def register_core(
     @org_rule_check.replayer("task_create", prepare=rule_prepare_task)
     def rule_replay_task(c, bot, hold, replay, ingest, gate=None):
         return task_create(
-            c, bot, M.TaskCreate.model_validate(replay["body"]), ingest=ingest, rule=org_rule_check.decided(gate)
+            c, bot, M.TaskFile.model_validate(replay["body"]), ingest=ingest, rule=org_rule_check.decided(gate)
         )
 
     @app.post("/api/v2/tasks/dry-run", **api_v2("Tasks", "checkTask", "The checks a create would fail; writes nothing"))
-    def task_dry_run(request: Request, body: M.TaskCreate):
+    def task_dry_run(request: Request, body: M.TaskFile):
         """The checks a create would fail, nothing written and no refusal counted."""
         from .mcp import task_dry_run as check
 

@@ -122,6 +122,11 @@ SCHEMAS['ApiToolSettings'] = obj(
             'type': 'boolean',
             'description': 'Everyone can read: every bot reads it with no grant, where Read can be held to reads',
         },
+        'record_owner': {
+            'enum': ['', 'outside', 'tico'],
+            'description': 'A record integration an administrator marked (outside: the vendor owns the records; tico: '
+            'Tico does): Tico reads its linked Jira issues in the background with its shared key; empty for none',
+        },
         'template': {
             'type': ['object', 'null'],
             'description': 'How its several keys and settings reach the vendor (a known vendor\'s id, or its own): '

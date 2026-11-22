@@ -242,8 +242,8 @@ That gives three kinds of stage, and no others:
    OKs it. The page is HTML: the attach refuses a version that is not (Markdown or plain text) with what to do instead,
    and a person's OK view draws a non-HTML page attached before that as Markdown.
 4. **An item.** Something a source keeps, read through one of the source's conditions. A source is a Python module
-   under `backend/item_sources/`; GitHub is the only one with conditions (Jira's issues are links only so far, see
-   "Outside items" below). Its item is a PR and its conditions are:
+   under `backend/item_sources/`; GitHub is the only one with conditions (Jira's issues are linked and their state read,
+   with no conditions yet, see "Outside items" below). Its item is a PR and its conditions are:
    - **PR open.** At least one PR is linked, and none was closed without merging.
    - **Checks pass.** Every linked PR is green at its newest commit: no check failed, none is running, and at least
      one ran and passed. Tico's own check runs are ignored.
@@ -1173,6 +1173,39 @@ systems are `entity_external_refs`, one per (system, type, id, connection), writ
 the caller still sees that entity, a record on another entity is refused without naming it, and a record erased at its
 owner's request is not written again on its connection, '' being its own (one erased before connections, on any).
 
+**A Jira issue's state** is read in the background only through a record integration: an API tool for everyone on one
+Jira Cloud site (`<site>.atlassian.net`, the same check a primary link makes) that an administrator marked as holding
+records (`record_owner` outside or tico; `tico tool edit <id> --record-owner outside`; only a tool everyone sees can be
+marked, and making it Only listed clears the mark), not one a bot keeps for itself, with a shared company API key (no
+sign-in, no holder). Tico sends `GET <base URL>/rest/api/3/issue/<key>?fields=status,updated` with that key; nothing
+else is read without someone asking, and no one's own access is borrowed. `item_metadata.fields` holds `state` (open,
+or closed when Jira's status category is done), `status`, `category`, `updated` (Jira's stamp) and `connection_id`; no
+summary is fetched, and the task API returns the link rows only. An issue is never final, since issues reopen. There
+is no Jira webhook yet: the heartbeat's own `jira_items` step, after the merge queue's, reads the issues open tasks link
+every 5 minutes (one marked due first, across connections), at most 10 per connection and 30 seconds of reading a pass.
+Each request has one deadline (10 seconds, or what is left of the pass when it is sent) over the lookup, connecting,
+TLS and the answer, and at most 2 are out at once (one that timed out counts until its thread ends). A read clears the
+due mark only when it is the mark the read began under, so a mark made mid-read is read next pass. A read Jira refuses,
+or whose answer is not an issue's, keeps the metadata as it was with `read_error` and is tried again after 5 minutes. An
+issue moved to another project gets a new key: a task filed for the old key keeps it, and one filed for the new key
+shows as a duplicate to merge.
+
+#### Intake
+
+Find-or-create is the ordinary create: `POST /api/v2/tasks` with `primary_link`, a Jira issue for now
+(`jira:issue:PROJ-12@<tool id>` or the issue's URL; `tico task create --primary-link ...`, MCP `tico_task_create`).
+Only a record integration's issue can be named (a hidden or missing tool answers the same). The org rule check runs
+as for any create. Then, in the same write, a task the caller may read that already holds that
+item's primary link comes back (`found: true`) as it is, with nothing filed, reopened or moved, and the steps only
+filing needs (ask ingest's judgment, the owner's cap, reach) are skipped. A task the caller may not read is never named:
+the create runs every check a filing makes and is refused with 409 "This item is already filed". Otherwise the task is
+filed in its pipeline's first stage and linked to the item as its primary link (the item, not the title, makes it one
+task). The partial unique index `task_links_primary_item` makes a second primary task impossible, so two creates at once
+give one task. The dry run (`POST /api/v2/tasks/dry-run`) checks only the primary link's form; `tico task create --dry-run` with
+`--primary-link` is refused. A merge moves the
+primary link to the kept task (with the exact connection-scoped row); a deleted task restored after another task was
+filed for its item gets its link back as a secondary one.
+
 ### Modules
 
 - `task_engine.py`: `move()` and the guard. Also the only writer of snoozes and of requirements added to a task.
@@ -1182,7 +1215,7 @@ owner's request is not written again on its connection, '' being its own (one er
 - `never_stuck.py`: the check, the ladder, Late, filling open slots.
 - `item_sources/github.py`: the GitHub source. PR and release metadata, the 5-minute GitHub read, webhook
   intake, its conditions and its one action, queue.
-- `item_sources/jira.py`: Jira issue links (no reads yet).
+- `item_sources/jira.py`: Jira issue links, and their state read through a record integration.
 - `item_metadata.py`: the saved metadata of every source's items, per connection, and what waits on it.
 - `source_actions.py`: a source's actions on entering a stage (act), their undo, and the retries.
 - `stage_effects.py`: file a linked task, queue and dequeue PRs, undo.

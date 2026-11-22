@@ -167,17 +167,25 @@ def tool_create(api, args):
         "check_path": _s("A cheap authenticated GET on the address"),
         "delivery": _s("proxy or computer", enum=["proxy", "computer"]),
         "everyone_reads": {"type": "boolean", "description": "Every bot reads it with no grant (on or off)"},
+        "record_owner": _s(
+            "Administrators: mark it as holding records Tico reads in the background with its shared key (outside: "
+            "the vendor owns them; tico: Tico does); empty for none",
+            enum=["", "outside", "tico"],
+        ),
         "audience": AUDIENCE_PROP,
     },
     required=("id",),
     writes=True,
 )
 def tool_edit(api, args):
-    body = _given(args, ("name", "service", "base_url", "auth_scheme", "check_path", "delivery", "everyone_reads"))
+    fields = ("name", "service", "base_url", "auth_scheme", "check_path", "delivery", "everyone_reads", "record_owner")
+    body = _given(args, fields)
     if "audience" in args:
         body["audience"] = args["audience"]
     if not body:
-        raise ValueError("Say what changes: name, address, auth, check path, delivery, everyone_reads or audience")
+        raise ValueError(
+            "Say what changes: name, address, auth, check path, delivery, everyone_reads, record_owner or audience"
+        )
     return _hide(_as_person(api).patch("api-tools/" + _api_tool(args), body, key=_key(args)))
 
 

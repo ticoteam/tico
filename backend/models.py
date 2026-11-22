@@ -254,6 +254,14 @@ class TaskCreate(Contract):
         return self
 
 
+class TaskFile(TaskCreate):
+    """POST /api/v2/tasks and its dry run (not an upload's form): a task create that may name its outside item."""
+
+    # The outside item it is filed for (backend/item_sources), `jira:issue:<key>@<connection>` or its URL: a task that
+    # already holds that item's primary link comes back instead (`found`), and nothing new is filed.
+    primary_link: str | None = Field(default=None, min_length=1, max_length=2000)
+
+
 class TaskRunModel(Contract):
     """A task's own model (backend/task_run_models.py). An absent `model` keeps the task's and changes only the
     effort or harness named; a null `model` clears it, so the task's runs use the bot's task model again."""

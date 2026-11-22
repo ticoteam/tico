@@ -393,6 +393,14 @@ def task_dry_run(c, auth, who, body):
     from . import pipeline_settings
 
     problems, warnings = [], []
+    if getattr(body, "primary_link", None):
+        # Its form only (a Jira issue, a connection on one Jira site): which task holds it, the create alone reads.
+        from . import item_sources as IS
+
+        try:
+            IS.primary_of(c, body.primary_link)
+        except ValueError as error:
+            problems.append(str(error))
     title, text = str(body.title or "").strip(), str(body.body or "")
     pipeline_id = getattr(body, "pipeline", None) or GENERAL
     pipeline = pipeline_settings.read(c, pipeline_id)
@@ -457,7 +465,7 @@ def task_dry_run(c, auth, who, body):
 
         dup = (
             None
-            if unassigned
+            if unassigned or getattr(body, "primary_link", None)  # the item, not the title, makes it one task
             else H._one(
                 c,
                 "SELECT id FROM tasks WHERE requester_id=? AND owner_id=? AND title=? AND status='open'",

@@ -405,6 +405,8 @@ class TaskList(TypedDict):
 @answer
 class TaskResult(TypedDict):
     task: Task
+    # A create with a primary link that a task already held: that task, and nothing new filed.
+    found: NotRequired[bool]
     private_readers: NotRequired[str]
     answer_id: NotRequired[str | None]
 
