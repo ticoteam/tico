@@ -474,9 +474,10 @@ def test_the_re_run_script_finishes_a_stopped_boot_only_once_the_app_reads_its_p
     root.mkdir()
     bin_dir.mkdir()
     (tmp_path / "object").write_bytes(plan)
-    (root / "pull-env.sh").write_text(
-        f"#!/bin/sh\nprintf 'TICO_COMPANY_FILE_S3=s3://{BUCKET}/k\\nTICO_COMPANY_FILE_S3_REGION=us-west-2\\n"
-        f"TICO_COMPANY_FILE_SHA256={sha}\\n' > {root}/.env\n"
+    # The stored parameter, which the re-run's own pull-env.sh reads with `aws ssm get-parameter`.
+    (tmp_path / "param").write_text(
+        f"TICO_DOMAIN=t.example.com\nTICO_AUTH_PROXY=owner-link\nTICO_COMPANY_FILE_S3=s3://{BUCKET}/k\n"
+        f"TICO_COMPANY_FILE_S3_REGION=us-west-2\nTICO_COMPANY_FILE_SHA256={sha}\n"
     )
     # `docker compose run|exec ... -c CODE SHA` runs CODE with this checkout's app reader against the mounted folder;
     # an image from before TICO_COMPANY_FILE cannot.
@@ -487,16 +488,18 @@ def test_the_re_run_script_finishes_a_stopped_boot_only_once_the_app_reads_its_p
         f'  while [ "$1" != "-c" ]; do shift; done\n  cd {repo} && TICO_COMPANY_FILE={plan_file} exec {sys.executable} "$@";;\nesac'
     )
     stubs = {
-        "aws": f'cp {tmp_path}/object "$7"',
+        "aws": f'if [ "$1" = ssm ]; then cat {tmp_path}/param; else cp {tmp_path}/object "$7"; fi',
         "chown": '[ -z "$TICO_TEST_CHOWN_FAILS" ]',
         "sleep": ":",
         "docker": docker,
     }
     for name, body in stubs.items():
         (bin_dir / name).write_text(f"#!/bin/sh\n{body}\n")
-    for f in [*bin_dir.iterdir(), root / "pull-env.sh"]:
+    for f in bin_dir.iterdir():
         f.chmod(0o755)
-    script = remote.rerun_script(compose=b"name: tico\n", compose_url="", plan=True)
+    script = remote.rerun_script(
+        compose=b"name: tico\n", compose_url="", plan=True, env_param=("/tico/t/env", "us-west-2")
+    )
     clean = {k: v for k, v in os.environ.items() if not k.startswith("TICO_")}
 
     def rerun(**extra):

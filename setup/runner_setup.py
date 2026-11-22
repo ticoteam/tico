@@ -76,8 +76,18 @@ def bootstrap_script(
     L += [f"mkdir -p {d}", "umask 077"]
     if env_param:
         name, region = env_param
+        failed = f"tico-setup runner: FAILED: could not read the join settings in {name}"
+        # Checked before join_lines, which on --rejoin removes the running runner and its .env. A command substitution:
+        # aws's own exit status, and its stdout a pipe (the snap aws-cli can write nothing to a file).
         L += [
-            f"aws ssm get-parameter --region {q(region)} --name {q(name)} --with-decryption --query Parameter.Value --output text | cat > {d}/join.env"
+            f"if ! join=$(aws ssm get-parameter --region {q(region)} --name {q(name)} --with-decryption "
+            "--query Parameter.Value --output text); then",
+            f"  echo {q(failed)} >&2; exit 1",
+            "fi",
+            f"printf '%s\\n' \"$join\" > {d}/join.env",
+            "for key in TICO_JOIN_URL TICO_JOIN_CODE TICO_JOIN_LABEL; do",
+            f'  grep -q "^$key=" {d}/join.env || {{ rm -f {d}/join.env; echo {q(failed)} "(no $key)" >&2; exit 1; }}',
+            "done",
         ]
     else:
         L += [f"echo {env_b64} | base64 -d > {d}/join.env"]
