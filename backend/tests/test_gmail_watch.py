@@ -176,26 +176,45 @@ def test_only_inbox_owner_ends_intake_hold_and_visibility_follows_mailbox(api, a
         aid = automations.INTAKE_AUTOMATION + box["id"]
         automations._hold(c, automations._row(c, aid), "flood")
 
+    card = post(api, "cards", {"template": "automation_runs", "settings": {"team": ""}})["card"]["id"]
+
+    def card_data():
+        return get(api, f"cards?ids={card}")["cards"][0]["data"]
+
     def listed(token):
         rows = get(api, "automations", token=token)["automations"]
         return aid in {row["id"] for row in rows}
 
     assert not listed("ana-test")
     assert listed("ben-test")
+    assert card_data() == {"total": 0, "failed": 0, "running": 0, "runs": []}
+    assert get(api, f"automations/{aid}", token="ben-test")["can_end_hold"]
     get(api, f"automations/{aid}/runs", expected=404)
     assert get(api, f"automations/runs?ids={aid}")["runs"] == []
     post(api, f"automations/{aid}/held", {"action": action}, expected=404)
     with store.transaction() as c:
-        MA.grant(c, "human:ben", box["id"], "person", "ana", "read")
+        grant = MA.grant(c, "human:ben", box["id"], "person", "ana", "read")
 
     assert listed("ana-test")
+    assert not get(api, f"automations/{aid}")["can_end_hold"]
+    data = card_data()
+    assert data["total"] == 1 and data["runs"][0]["id"] == rid
     assert get(api, f"automations/{aid}/runs")["runs"][0]["id"] == rid
     assert get(api, f"automations/runs?ids={aid}")["runs"][0]["id"] == rid
     post(api, f"automations/{aid}/held", {"action": action}, expected=403)
     result = post(api, f"automations/{aid}/held", {"action": action}, token="ben-test")
-    assert result["moved"] == 1 and result["readonly"] and not result["can_edit"]
+    assert result["moved"] == 1 and result["readonly"] and not result["can_edit"] and result["can_end_hold"]
     store.automations.drain()
     assert get(api, f"automations/{aid}/runs", token="ben-test")["runs"][0]["status"] == status
+    audit = f"audit?object=automation:{aid}&limit=1"
+    assert get(api, audit)["rows"][0]["after"][action] == 1
+    query = {"sql": "SELECT detail FROM events WHERE target=? AND action LIKE 'automation.hold_%'", "params": [aid]}
+    assert len(post(api, "sql", query)["rows"]) == 1
+    with store.transaction() as c:
+        MA.revoke(c, "human:ben", box["id"], grant["id"])
+    assert get(api, audit) == {"rows": [], "next": None}
+    assert post(api, "sql", query)["rows"] == []
+    assert get(api, audit, token="ben-test")["rows"][0]["after"][action] == 1
 
 
 def test_intake_failed_step_rolls_back_and_drain_hands_it_to_the_owner(watched, monkeypatch):

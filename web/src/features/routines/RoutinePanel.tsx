@@ -278,7 +278,7 @@ function VersionRow({ v, children }: { v: Version; children: ReactNode }) {
   );
 }
 
-/** The run guard held its runs: how many, and Release or Drop for whoever may change it (Drop asks first). */
+/** The run guard held its runs: how many, and Release or Drop for whoever can end the hold. */
 function HoldLine({ routine, held, dropped }: { routine: Routine; held: number; dropped: number }) {
   const [asking, setAsking] = useState(false);
   const end = (action: 'release' | 'drop') => press('routines.endHold', { routine: routine.id, action });
@@ -286,7 +286,7 @@ function HoldLine({ routine, held, dropped }: { routine: Routine; held: number; 
     <div className="rr-field" data-target={`hold:${routine.id}`}>
       <Word icon="pause">On hold</Word>
       <span className="row-sub">{dropped ? `${held} held, ${dropped} dropped` : `${held} held`}</span>
-      {routine.can_edit && (
+      {(routine.can_end_hold ?? routine.can_edit) && (
         <>
           <Verb onClick={() => end('release')}>Release</Verb>
           <Verb onClick={() => setAsking(true)}>Drop</Verb>

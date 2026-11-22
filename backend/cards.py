@@ -599,7 +599,7 @@ def automation_runs(ctx, s):
     for row in ctx.c.execute("SELECT id, name, owner_id, group_id, flow FROM automations WHERE deleted_at IS NULL"):
         if groups is not None and row["group_id"] not in groups and AU._key(row["owner_id"]) not in keys:
             continue
-        if AU.may_change(ctx.c, ctx.who, {**AU.flow_of(row), "readonly": False}, chart):
+        if AU.may_see(ctx.c, ctx.who, AU.flow_of(row), chart, aid=row["id"]):
             names[row["id"]] = row["name"]
     if not names:
         return {"total": 0, "failed": 0, "running": 0, "runs": []}

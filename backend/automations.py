@@ -193,6 +193,8 @@ def view(c, row, who=None, detail=False, chart=None, jobs=None, flow=None):
     if who is not None:
         out["can_edit"] = may_change(c, who, flow, chart)
         out["can_pause"] = not row["id"].startswith(INTAKE_AUTOMATION) and may_pause(c, who, flow, out["can_edit"])
+        if row["id"].startswith(INTAKE_AUTOMATION):
+            out["can_end_hold"] = _may_end_intake_hold(c, who, row["id"])
     return out
 
 
@@ -489,6 +491,20 @@ def _intake_inbox(c, who, aid):
     if delegate and mailbox_access.level(c, delegate, box["address"]) == "none":
         return None
     return box
+
+
+def _may_end_intake_hold(c, who, aid):
+    box = _intake_inbox(c, who, aid)
+    return bool(box and box["person_id"] == H.actor_id(who.actor))
+
+
+def readable_intake_ids(c, who):
+    """The inbox gate for audit readers that filter runs or hold changes by automation id."""
+    return {
+        aid
+        for (aid,) in c.execute("SELECT id FROM automations WHERE id GLOB ?", (INTAKE_AUTOMATION + "*",))
+        if _intake_inbox(c, who, aid) is not None
+    }
 
 
 def may_see(c, who, flow, chart=None, *, aid=""):
@@ -4486,8 +4502,7 @@ def install(app, store, auth, mutate):
         def work(c):
             if aid.startswith(INTAKE_AUTOMATION):
                 row = found(c, who, aid, rule=may_see)
-                box = _intake_inbox(c, who, aid)
-                if not box or box["person_id"] != H.actor_id(who.actor):
+                if not _may_end_intake_hold(c, who, aid):
                     raise Problem("forbidden", "Only the inbox owner may release or drop held intake runs", 403)
             else:
                 row = found(c, who, aid, "release or drop its held runs")
