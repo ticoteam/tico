@@ -733,6 +733,11 @@ def parser():
     )
     s.add_argument("--goal", help="the goal this task serves (tico goal list); optional")
     s.add_argument("--entity", help="the Contacts entity it is for: its id, email or domain; optional")
+    s.add_argument(
+        "--route",
+        action="store_true",
+        help="work that needs a person, no --owner: Tico routes it by availability (Support pipeline by default)",
+    )
     s.add_argument("--after", action="append", help="a task it merges after (repeat for more): Merge waits for it")
     s.add_argument(
         "--dry-run", dest="dry_run", action="store_true", help="print the checks a create would fail and write nothing"

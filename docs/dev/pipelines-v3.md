@@ -1227,6 +1227,27 @@ give one task. The dry run (`POST /api/v2/tasks/dry-run`) checks only the primar
 primary link to the kept task (with the exact connection-scoped row); a deleted task restored after another task was
 filed for its item gets its link back as a secondary one.
 
+#### Routing
+
+Work that needs a person, with no owner named, is filed with `route: true` (`tico task create --route`, MCP
+`tico_task_create`); naming an owner too is refused. With no pipeline it goes on the company's Support pipeline (preset
+`support`), made the first time it is needed: one work stage, Open, held by the task's assignee and not by hand, so Late,
+the stage rules and the manager (the General Manager) own every overdue wait. Its default rule Urgent support waits tells
+the manager about a task labelled `urgent` that is quiet for an hour, at once rather than in the hourly batch. A retired
+Support is not made again: routed work then goes to General.
+
+`routing.route` gives the task, in the create's transaction, to the first of: who worked it (or another task of its
+relationship, `tasks.entity_id`) in the last 48 hours and is on, not counting its requester; the relationship's owner
+(`entities.owner_*`), else the task's own person, when on, or async and the task is not urgent; anyone on in that owner's
+roster team, fewest open tasks first; else the inbox fallback, the pipeline's manager or owner when a person, else the
+company's default person. Each but the last must be an active person who may read the task. It sets both the owner and
+the assignee.
+
+A person's availability (`humans.availability`: on, async or off; `availability_until` ends it) is theirs to set, or any
+admin's: `PUT /api/v2/humans/{id}/availability` (`tico human availability-set`, MCP `tico_human_availability_set`), read
+with `GET` (`tico human availability`). Unset or ended, it comes from their Calendar working hours: on inside them,
+async outside; on when none are saved. The end is computed at read: nothing rewrites the row.
+
 ### Modules
 
 - `task_engine.py`: `move()` and the guard. Also the only writer of snoozes and of requirements added to a task.

@@ -74,6 +74,7 @@ _installed_store = None
 OWNER_ON_TEAM = "sr_owner_on_team"
 REAL_WAIT = "sr_real_wait"
 QUIET_BOT_TASKS = "sr_quiet_bot_tasks"
+URGENT_SUPPORT = "sr_urgent_support"
 # What a bot's snooze that its rules refuse is told: a wait that another task ends is a dependency, and a wait on a
 # person is an ask (the spec "A blocked task shows as Blocked, never Snoozed"). A snooze is only "look again on a date".
 BLOCKED = (
@@ -149,6 +150,21 @@ DEFAULTS: list[dict[str, Any]] = [
         "then_params": {},
         "reason": "6 h quiet on the bot's turn",
         "builtin": QUIET_BOT_TASKS,
+    },
+    {
+        # A timer on the Support pipeline (backend/routing.py): an urgent task quiet for an hour. Its tell goes to the
+        # manager at once, not in the hourly batch (stage_rule_timers, an urgent task's tell).
+        "id": URGENT_SUPPORT,
+        "name": "Urgent support waits",
+        "on": (("support", ("support-open",)),),
+        "event": "timer",
+        "timer": {"kind": "quiet", "hours": 1},
+        "cond": {"label": "urgent"},
+        "jev": "",
+        "then": "tell_manager",
+        "then_params": {},
+        "reason": "1 h quiet on an urgent task",
+        "builtin": URGENT_SUPPORT,
     },
 ]
 # What the engine still does in code, read-only on the Rules page ("in code"). Candidates for later default rules.
@@ -411,13 +427,15 @@ def matches(conn: Any, rule: Any, task_row: Any, *, owner: Any = ..., facts: Any
     if label:
         listed_tags: Any = task_row.get("tags") or []
         tags = {str(cast(dict[str, Any], t).get("name") if isinstance(t, dict) else t).lower() for t in listed_tags}
-        labels = task_row.get("labels_json")
+        # A view's `labels_json`, or the row's own `labels` column (the engine's task row, as timers read it).
+        labels: Any = task_row.get("labels_json") or task_row.get("labels")
         if isinstance(labels, str):
             try:
-                named: Any = json.loads(labels) or []
-                tags |= {str(x).lower() for x in named}
+                labels = json.loads(labels) or []
             except ValueError:
-                pass
+                labels = []
+        if isinstance(labels, list):
+            tags |= {str(x).lower() for x in cast(list[Any], labels)}
         if str(label).lower() not in tags:
             return False, ""
     if cond.get("requester_person") is not None:

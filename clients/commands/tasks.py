@@ -117,6 +117,12 @@ def task_context(api, args):
         ),
         "goal_id": _s("The goal this task serves (tico_goal_list); optional"),
         "entity": _s("The Contacts entity it is for (an outside party): its id, email or domain; optional"),
+        "route": {
+            "type": "boolean",
+            "description": "Work that needs a person, with no owner: Tico gives it to who helped last, its owner, "
+            "someone on in their team, or the inbox fallback, by availability (label urgent: nobody async). On the "
+            "Support pipeline when none is named",
+        },
         "human": _s("Its Human: a person or `me`"),
         "after": {
             "type": "array",
@@ -172,6 +178,7 @@ def task_create(api, args):
         "harness",
         "readers",
         "follow",
+        "route",
     ):
         if args.get(field) not in (None, "", [], False):
             body[field] = args[field]

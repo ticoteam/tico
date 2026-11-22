@@ -265,15 +265,28 @@ class TaskFile(TaskCreate):
     primary_status: str | None = Field(default=None, min_length=1, max_length=100)
     # The Contacts entity it is for (an outside party's relationship): an id, email or domain you can see.
     entity: str | None = Field(default=None, min_length=1, max_length=500)
+    # Work that needs a person, with no owner named: Tico routes it (backend/routing.py), to the Support pipeline when
+    # none is named. Tagged `urgent`, nobody async takes it.
+    route: StrictBool = False
 
     def model_dump(self, **kwargs: Any) -> dict[str, Any]:
         """As the request's idempotency hash reads it: `primary_link`, `primary_status` and `entity` left out when
-        absent, so a create retried across the upgrade that added them hashes as it did."""
+        absent, and `route` when false, so a create retried across the upgrade that added them hashes as it did."""
         out = super().model_dump(**kwargs)
         for name in ("primary_link", "primary_status", "entity"):
             if out.get(name) is None:
                 out.pop(name, None)
+        if not out.get("route"):
+            out.pop("route", None)
         return out
+
+
+class Availability(Contract):
+    """A person's availability for routed work (backend/routing.py). null clears it: their working hours decide."""
+
+    availability: Literal["on", "async", "off"] | None = None
+    # When the set value ends (ISO-8601 with a zone): then their working hours decide again.
+    until: str | None = Field(default=None, max_length=40)
 
 
 class TaskRunModel(Contract):

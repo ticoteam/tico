@@ -20,6 +20,7 @@ from . import goals as G
 from .auth import Identity
 from .onboarding import AGENT_OPS
 from . import rooms
+from . import routing
 from . import item_sources as IS
 from .store import H, Problem, encode
 from . import bot_settings as BS
@@ -533,10 +534,17 @@ def register_core(
         # No owner: a first stage that picks from several picks one as the task arrives (backend/stage_pick.py). The
         # filer stands in as its requester and reach, as for a task a stage files, and it enters with no assignee.
         unassigned = not body.owner
+        # Routed work (backend/routing.py): no owner named, Tico gives it to a person once it is filed, on the
+        # Support pipeline when none is named.
+        routed = bool(getattr(body, "route", False))
+        if routed and body.owner:
+            raise Problem("route", "A routed task names no owner: Tico picks the person", 422)
+        if routed and not body.pipeline:
+            body = body.model_copy(update={"pipeline": routing.support_pipeline(c)})
         if unassigned:
             from . import stage_pick
 
-            refused = stage_pick.no_owner_refusal(c, body.pipeline)
+            refused = "" if routed else stage_pick.no_owner_refusal(c, body.pipeline)
             if refused:
                 raise Problem("owner", refused, 422)
             body = body.model_copy(update={"owner": who.actor})
@@ -884,6 +892,8 @@ def register_core(
                 TRo.set_roles(c, who.actor, row["id"], body.roles, mover=mover(c, who) or None)
             except ValueError as exc:
                 raise Problem("roles", str(exc), 422)
+        if routed:
+            routing.route(c, row["id"])  # in this transaction: there is always a named owner
         note = " ".join(
             filter(
                 None,

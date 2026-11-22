@@ -419,7 +419,10 @@ def task_dry_run(c, auth, who, body):
     # No owner: the pipeline's first stage must pick one, and the filer stands in for the rest of the checks, as the
     # create does (app.task_create).
     unassigned = not body.owner
-    if unassigned:
+    routed = bool(getattr(body, "route", False))  # Tico picks the person (backend/routing.py)
+    if routed and body.owner:
+        problems.append("A routed task names no owner: Tico picks the person")
+    if unassigned and not routed:
         from . import stage_pick
 
         refused = stage_pick.no_owner_refusal(c, pipeline_id)

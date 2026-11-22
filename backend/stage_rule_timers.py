@@ -16,7 +16,8 @@ task's last activity, as it would have had the rule always been there.
 Then:
 
 - `tell_manager`: the pipeline's manager is told. All of one manager's matches go in one wake, "Stage rules: N tasks",
-  and a manager gets one such wake an hour at most: what matches meanwhile waits for the next. A task already listed as
+  and a manager gets one such wake an hour at most: what matches meanwhile waits for the next. An urgent task (label
+  `urgent`, backend/routing.py) is told at once, with whatever else waits for that manager. A task already listed as
   Late on this visit is not listed again.
 - `tell_owner`: the task's owner is told, on the task.
 - `move_back`: the task goes back to `then_params.stage` with no owner, through the wake rules' task move
@@ -45,6 +46,8 @@ def _mod(name: str) -> Any:
     # it, depend on every file in the PR test selection (scripts/pr_checks.py DependencyMap).
     if name == "never_stuck":
         from . import never_stuck as found
+    elif name == "routing":
+        from . import routing as found
     elif name == "rules":
         from . import rules as found
     elif name == "stage_rules":
@@ -73,7 +76,7 @@ SYSTEM = "system"
 # Open work tasks the pass works on: not snoozed or blocked, not in a by-hand stage. `active_at` is the last activity; the end of a
 # snooze counts, so a task set aside is not quiet the moment its snooze ends and its owner is woken.
 _TASKS = (
-    "SELECT t.id, t.title, t.number, t.owner_id, t.pipeline_id, t.stage_id, t.conversation_id, "
+    "SELECT t.id, t.title, t.number, t.owner_id, t.pipeline_id, t.stage_id, t.conversation_id, t.labels, "
     "v.id AS visit_id, v.entered_at, v.late_told_at, s.name AS stage_name, "
     "MAX(v.entered_at, COALESCE(v.last_change_at, ''), COALESCE((SELECT MAX(m.created_at) FROM messages m "
     "WHERE m.conversation_id = t.conversation_id AND m.sender_id <> 'keeper'), ''), "
@@ -203,6 +206,13 @@ def _judge(conn: Any, rule: Row, task: Row, at: str, done: dict[str, int]) -> No
         "INSERT OR IGNORE INTO stage_rule_marks(rule_id,task_id,mark,outcome,manager_id,matched_at) VALUES(?,?,?,?,?,?)",
         (rule["id"], task["id"], mark, outcome, manager, at),
     )
+    if manager and _urgent(task) and _wake_manager(conn, manager, at):
+        done["wakes"] += 1  # an urgent task's tell goes now, not in the hourly batch
+
+
+def _urgent(task: Row) -> bool:
+    """Whether the task carries the label `urgent` (backend/routing.py): its manager's tell is not batched."""
+    return bool(_mod("routing").urgent(task))
 
 
 # ----------------------------------------------------------------------------- If
