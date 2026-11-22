@@ -2545,11 +2545,16 @@ def activity_history(
             raise ValueError("the cursor is not one this list returned")
         cursor = "WHERE (occurred_at, type, id) < (?, ?, ?)"
         args.extend(marker)
+    # Help threads keep their task audience when linked to a company.
     rows = _rows(
         c,
         "WITH outside AS (SELECT th.id, coalesce(th.last_message_at, th.created_at) AS occurred_at, "
         "coalesce(th.subject, '') AS summary FROM conversations th "
-        f"WHERE th.entity_id=? AND th.parent_id IS NULL AND th.audience='entity' AND ({thread_scope})), "
+        "WHERE th.entity_id=? AND th.parent_id IS NULL AND th.deleted_at IS NULL AND ("
+        f"(th.audience='entity' AND ({thread_scope})) OR "
+        "(th.kind='task' AND coalesce(th.audience,'task')='task' AND EXISTS ("
+        "SELECT 1 FROM tasks WHERE tasks.id=th.task_id AND tasks.conversation_id=th.id "
+        f"AND tasks.entity_id=th.entity_id AND ({task_scope}))))), "
         "history AS ("
         "SELECT id, 'thread' AS type, 'conversation' AS kind, occurred_at, summary, NULL AS subject_id FROM outside "
         "UNION ALL "

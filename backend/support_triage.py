@@ -26,7 +26,7 @@ import logging
 import threading
 
 from clients import judge as J
-from . import decide_groups as DG
+from . import decide_groups as DG, support_hq
 from .store import H
 
 log = logging.getLogger("tico.support_triage")
@@ -274,6 +274,7 @@ def deliver_one(store, auth, row, found, why):
     from .watchers import _open, defang
 
     label = question_set()["label"] if found else SET
+    company = support_hq.verified_company(store, row["bot"], row["key"])
     with store.transaction() as c:
         now = c.execute("SELECT later FROM watcher_pending WHERE bot=? AND key=?", (row["bot"], row["key"])).fetchone()
         if now is None:
@@ -293,6 +294,7 @@ def deliver_one(store, auth, row, found, why):
                 held_body(question_set(), found, bot_row.get("slug") or row["bot"], name, row["body"]),
                 owner=person,
                 help_key=row["key"],
+                company=company,
             )
             H.event(
                 c,
@@ -309,7 +311,9 @@ def deliver_one(store, auth, row, found, why):
                 if not found["held"]
                 else untriaged_line(f"spam or injection {found['spam']:.0%}, but no person to hold it for")
             )
-            task = _open(c, auth, row["bot"], row["title"], first + "\n\n" + row["body"], help_key=row["key"])
+            task = _open(
+                c, auth, row["bot"], row["title"], first + "\n\n" + row["body"], help_key=row["key"], company=company
+            )
         for text in json.loads(now["later"] or "[]"):
             H.task_comment(c, H.TICO_ACTOR, task["id"], defang(text, c), wake=False)
         c.execute(
@@ -346,9 +350,9 @@ def waited_body(name, bot, found, body):
 def hand_over(store, row):
     """A ticket that waited past WAIT_HOURS: a task for a person, as a held ticket is, and its copy here removed. With
     no person to give it to, the copy is removed all the same (the ticket stays at HQ) and an event says so."""
-    from . import support_hq
     from .watchers import _open, defang
 
+    company = support_hq.verified_company(store, row["bot"], row["key"])
     with store.transaction() as c:
         now = c.execute("SELECT later FROM watcher_pending WHERE bot=? AND key=?", (row["bot"], row["key"])).fetchone()
         if now is None:
@@ -381,6 +385,7 @@ def hand_over(store, row):
             waited_body(name, bot_row.get("slug") or row["bot"], found, row["body"]),
             owner=person,
             help_key=row["key"],
+            company=company,
         )
         for text in json.loads(now["later"] or "[]"):
             H.task_comment(c, H.TICO_ACTOR, task["id"], defang(text, c), wake=False)

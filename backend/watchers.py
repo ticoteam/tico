@@ -67,10 +67,11 @@ def live(task):
     return bool(task) and task["status"] != "closed"
 
 
-def _open(c, auth, bot, title, body, owner=None, *, incident=False, help_key=""):
+def _open(c, auth, bot, title, body, owner=None, *, incident=False, help_key="", company=None):
     owner = owner or "bot:" + bot
     conversation = rooms.task_conversation_id(c, auth, owner, H.TICO_ACTOR)
-    return H.task_create(
+    entity_id = support_hq.directory_entity(c, company)
+    task = H.task_create(
         c,
         H.TICO_ACTOR,
         defang(title, c).strip()[:300] or "From a watcher",
@@ -81,7 +82,14 @@ def _open(c, auth, bot, title, body, owner=None, *, incident=False, help_key="")
         lint=not owner.startswith("human:"),
         labels=["incident"] if incident else None,
         pipeline=support_hq.pipeline_for(c, bot, help_key),
+        entity_id=entity_id,
     )
+    if entity_id:
+        c.execute(
+            "UPDATE conversations SET entity_id=? WHERE id=? AND task_id=?",
+            (entity_id, task["conversation_id"], task["id"]),
+        )
+    return task
 
 
 def _wake(c, bot, task, text, why):
@@ -239,10 +247,14 @@ def install(app, store, auth, execution, mutate):
         waited = []
 
         def triage(c, event):
-            if support_triage.engine_for(store, c, getattr(app.state, "judge", None)) is None:
-                return False  # Decide is off: the ticket goes on at once, as before
+            bot = (H.resolve_bot(c, body.bot) or {}).get("id", body.bot)
+            if (
+                not support_hq.can_verify(c, store.settings, bot, event.key)
+                and support_triage.engine_for(store, c, getattr(app.state, "judge", None)) is None
+            ):
+                return False
             waited.append(event.key)
-            return support_triage.hold(c, (H.resolve_bot(c, body.bot) or {}).get("id", body.bot), event)
+            return support_triage.hold(c, bot, event)
 
         def work(c):
             runner = execution.runner(c, who)

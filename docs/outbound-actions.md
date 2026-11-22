@@ -111,14 +111,15 @@ request hashes and send IDs for retries. The legacy `email_sends` table holds th
 ## Help tickets
 
 The Support Agent can queue `help-ticket` actions for its own open tasks filed by the matching HQ watcher.
-Use the HQ ticket ID as the destination and the Support task as `task_id`. The `reply` operation takes `{"body":
-"<reply>"}`. Use `answer` for a docs answer on a ticket triaged as a question, with the same body plus
-`last_message_id` (the latest customer message ID from `hq-tickets show`, or zero for the original request).
+Use the HQ ticket ID as the destination and the Support task as `task_id`. Include `body` and `last_message_id`
+(the latest customer message ID from `hq-tickets show`, or zero for the original request). Use `answer` for a docs
+answer on a ticket triaged as a question. A body-only `reply` applies to the original request (message ID zero).
 The server keys the reply by HQ, ticket and normalized body. `answer`, `reply` and `close-signature` return the same
 action for the same draft, including when its delivery is unknown.
 HQ's receipt or a person's confirmation via `tico outbound confirm-sent` records the reply on the task and settles an
 `answer` if the task is still open, owned by the Support Agent and has no newer customer message.
-An answer with a newer customer message waits for the Support Agent to read it and queue a fresh answer.
+HQ checks the draft's message ID as it records the reply. A newer customer message blocks the action and the
+Support Agent reads the ticket and queues a fresh draft.
 
 Help replies default to Ask first. The Support Agent's effective sending mode can tighten the outbound policy.
 For a Support-filed Engineering subtask with a linked Tico GitHub issue, its PR merge or Done queues one follow-up

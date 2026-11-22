@@ -94,11 +94,12 @@ task ID, a stable key for this draft, and the latest customer message ID shown b
     tico outbound send --channel help-ticket --operation answer --to TK-XXXXXXXX \
       --task <support task id> --key <draft key> --payload '{"body":"<answer from the docs>","last_message_id":0}'
 
-For other replies, queue the reply file on the Support task:
+For other replies, queue the reply file with the customer message ID the draft covers (zero for the original request):
 
-    software/hq-tickets reply TK-XXXXXXXX reports/hq-TK-XXXXXXXX.md --task <support task id>
+    software/hq-tickets reply TK-XXXXXXXX reports/hq-TK-XXXXXXXX.md --task <support task id> --last-message-id 0
 
-If the server refuses the reply or sending is blocked, leave the draft on the task for a person.
+If a newer customer message blocks the reply, read the ticket and queue a fresh draft. For other refusals, leave the
+draft on the task for a person.
 
 ## 5. Keep the task open until the next step is complete
 

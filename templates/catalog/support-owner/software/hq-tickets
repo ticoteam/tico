@@ -8,7 +8,7 @@
                                          carrying that Health Monitor signature
     hq-tickets show TK-XXXXXXXX          one ticket with its messages, and the diagnostics the person attached: a
                                          summary first, then the whole redacted bundle
-    hq-tickets reply TK-XXXXXXXX FILE [--task ID]
+    hq-tickets reply TK-XXXXXXXX FILE [--task ID] [--last-message-id ID]
                                          queue FILE on the Support task (defaults to HUB_TASK_ID)
     hq-tickets close-signature hm-... FILE --task TK-XXXXXXXX=ID [--task TK-YYYYYYYY=ID ...]
                                          queue the fixed-in reply on the listed Support tasks
@@ -407,9 +407,12 @@ def tico_post(env, path, body):
         raise TicoFailed(reason) from None
 
 
-def queue_reply(env, ticket, task, text, out):
+def queue_reply(env, ticket, task, text, out, last_message_id=None):
     # Both commands use the same occurrence for this ticket and draft, even with different task aliases.
     digest = hashlib.sha256(text.encode()).hexdigest()
+    payload = {"body": text}
+    if last_message_id is not None:
+        payload["last_message_id"] = last_message_id
     try:
         result = tico_post(
             env,
@@ -420,7 +423,7 @@ def queue_reply(env, ticket, task, text, out):
                 "destination": ticket,
                 "task_id": task,
                 "occurrence_key": f"help-reply:{ticket}:{digest}",
-                "payload": {"body": text},
+                "payload": payload,
             },
         )
     except TicoFailed as exc:
@@ -452,12 +455,15 @@ def main(argv, env=None, out=print, opener=None, emit=None, now=None):
     try:
         if command == "reply" and args and TICKET.fullmatch(args[0]):
             task, rest = option(args, "--task")
+            last, rest = option(rest, "--last-message-id")
             if len(rest) != 2:
+                raise Usage
+            if last is not None and not re.fullmatch(r"[0-9]{1,19}", last):
                 raise Usage
             task = task or env.get("HUB_TASK_ID", "").strip()
             if not task:
                 raise Refused("give the open Support task with --task; keep the reply as a draft")
-            return 0 if queue_reply(env, rest[0], task, read_reply(rest[1]), out) else 1
+            return 0 if queue_reply(env, rest[0], task, read_reply(rest[1]), out, int(last) if last is not None else None) else 1
         hq, why = settings(env)
         if hq is None:
             out("hq-tickets: " + why)

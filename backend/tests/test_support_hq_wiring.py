@@ -28,13 +28,15 @@ from backend import (
 from backend.entities import rules as directory_rules
 from backend.entities import store as entities
 from backend.store import H
-from backend.tests.helpers.api import claim, get, post, put
+from backend.tests.helpers.api import claim, get, post, put, unrelated_task_managers
 from backend.tests.helpers.company import bot
 from backend.tests.helpers.github import PR, SECRET, hook, pr_event
 from backend.tests.helpers.watchers import hosted, report, tasks
 
 URL = "https://hq.acme.example"
 STAFF = "test-hq-key"
+GATEWAY = "tgw_" + "A" * 43
+COMPANY = "co_acme"
 TICKET = "TK-ABCDEFGH"
 ANSWER = "In Help, open the guide to connecting a second computer."
 ISSUE = "https://github.com/ticoteam/tico/issues/13"
@@ -53,16 +55,22 @@ class HQ:
 
     def __init__(self):
         self.ticket = None
+        self.next_ticket = TICKET
+        self.submissions = []
         self.replies = []
+        self.reply_versions = []
         self.revise = None
+        self.before_reply = None
         self.lose_receipt = False
 
     def __call__(self, request):
         path = request.url.path
         if path == "/v1/support" and request.method == "POST":
             fields = json.loads(request.content)
+            bearer = request.headers.get("authorization")
+            self.submissions.append((str(request.url), bearer))
             self.ticket = {
-                "ticket_id": TICKET,
+                "ticket_id": self.next_ticket,
                 "body": fields["message"],
                 "install_id": fields.get("install_id"),
                 "version": fields.get("version"),
@@ -72,19 +80,35 @@ class HQ:
                 "status": "open",
                 "messages": [],
             }
-            return httpx.Response(201, json={"ticket_id": TICKET, "secret": "test-ticket-secret", "status": "open"})
+            if bearer == f"Bearer {GATEWAY}" and fields.get("install_id"):
+                self.ticket.update(
+                    verified_company_id=COMPANY,
+                    verified_install_id=fields["install_id"],
+                    company={"id": COMPANY, "name": "Acme"},
+                )
+            return httpx.Response(
+                201, json={"ticket_id": self.next_ticket, "secret": "test-ticket-secret", "status": "open"}
+            )
         assert request.headers.get("authorization") == f"Bearer {STAFF}"
         if path == "/v1/staff/tickets":
             return httpx.Response(200, json={"tickets": [self.ticket]})
-        assert path == f"/v1/staff/tickets/{TICKET}" or path == f"/v1/staff/tickets/{TICKET}/reply"
+        ticket = self.ticket["ticket_id"]
+        assert path in (f"/v1/staff/tickets/{ticket}", f"/v1/staff/tickets/{ticket}/reply")
         if path.endswith("/reply"):
-            body = json.loads(request.content)["body"]
+            if self.before_reply:
+                self.before_reply()
+            fields = json.loads(request.content)
+            self.reply_versions.append(fields["expected_last_message_id"])
+            newest = max((m["id"] for m in self.ticket["messages"] if m["from"] == "person"), default=0)
+            if fields["expected_last_message_id"] != newest:
+                return httpx.Response(409, json={"error": "stale_reply"})
+            body = fields["body"]
             self.replies.append(body)
             self.message("staff", body)
             self.ticket["status"] = "answered"
             if self.lose_receipt:
                 return httpx.Response(502)
-            return httpx.Response(200, json={"ticket_id": TICKET, "reply_id": len(self.ticket["messages"])})
+            return httpx.Response(200, json={"ticket_id": ticket, "reply_id": len(self.ticket["messages"])})
         if self.revise:
             self.revise()
         return httpx.Response(200, json=self.ticket)
@@ -123,11 +147,11 @@ def flow(api, tmp_path, monkeypatch):
         watcher.watch(hq, {"TICO_WATCHER_STATE": str(tmp_path / "watch")}, events.append, log=lambda _: None)
         return events
 
-    def intake(kind="question", *, held=False):
+    def intake(kind="question", *, held=False, decide=True):
         post(api, "support/tickets", {"message": "How do I add another computer?"})
         events = poll()
         assert len(events) == 1
-        monkeypatch.setattr(support_triage, "engine_for", lambda *_: True)
+        monkeypatch.setattr(support_triage, "engine_for", lambda *_: True if decide else None)
         assert report(api, runner, *events)["tasks"] == {}
         verdict = {
             "spam": 0.95 if held else 0,
@@ -137,11 +161,14 @@ def flow(api, tmp_path, monkeypatch):
             "held": held,
             "hold_at": 0.85,
         }
-        monkeypatch.setattr(support_triage, "ask_many", lambda *_: [(verdict, "")])
+        if decide:
+            monkeypatch.setattr(support_triage, "ask_many", lambda *_: [(verdict, "")])
         support_triage.drain(api.app.state.store, api.app.state.auth, None)
         assert report(api, runner, *events)["tasks"] == {}
         with api.app.state.store.read() as c:
-            return c.execute("SELECT task_id FROM watcher_items WHERE key=?", ("hq:" + TICKET,)).fetchone()[0]
+            return c.execute(
+                "SELECT task_id FROM watcher_items WHERE key=?", ("hq:" + hq.ticket["ticket_id"],)
+            ).fetchone()[0]
 
     return hq, runner, token, poll, intake, watcher
 
@@ -220,7 +247,7 @@ def engineering_task(api, parent, token):
     )
 
 
-def queue_answer(api, task, token):
+def queue_answer(api, task, token, last_message_id=0):
     return post(
         api,
         "outbound-actions",
@@ -230,7 +257,7 @@ def queue_answer(api, task, token):
             "destination": TICKET,
             "occurrence_key": "docs-answer",
             "task_id": task,
-            "payload": {"body": ANSWER, "last_message_id": 0},
+            "payload": {"body": ANSWER, "last_message_id": last_message_id},
         },
         token=token,
     )["action"]
@@ -247,6 +274,45 @@ def test_help_intake_is_deduplicated_and_does_not_treat_install_id_as_company_pr
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM conversations WHERE audience='entity'").fetchone()
         assert not c.execute("SELECT 1 FROM jobs WHERE bot_id=?", (H.RELATIONSHIP_WORKER,)).fetchone()
+
+
+def test_verified_help_tickets_share_the_company_and_appear_in_directory_history(api, flow, monkeypatch):
+    hq, _, _, _, intake, _ = flow
+    monkeypatch.delenv("TICO_HQ_STAFF_KEY")
+    monkeypatch.setenv("TICO_HQ_STAFF_READ_KEY", STAFF)
+    monkeypatch.setenv("TICO_GATEWAY_KEY", GATEWAY)
+    monkeypatch.setenv("TICO_GATEWAY_URL", URL + "/v1/gateway")
+    first = intake(decide=False)
+    hq.next_ticket = "TK-BCDEFGHJ"
+    second = intake(decide=False)
+    assert hq.submissions == [(URL + "/v1/support", f"Bearer {GATEWAY}")] * 2
+    with api.app.state.store.read() as c:
+        first, second = H.task(c, first), H.task(c, second)
+        entity = first["entity_id"]
+        assert entity and entity == second["entity_id"]
+        assert entities.verified_external_ref(c, H.TICO_ACTOR, "tico-hq", "", "company", COMPANY) == entity
+        assert {r[0] for r in c.execute("SELECT id FROM conversations WHERE entity_id=?", (entity,))} == {
+            first["conversation_id"],
+            second["conversation_id"],
+        }
+    history = get(api, f"entities/activity?ref={entity}")
+    assert {r["id"] for r in history["rows"]} == {first["conversation_id"], second["conversation_id"]}
+    with api.app.state.store.transaction() as c:
+        unrelated_task_managers(c, "ops")
+        H.task_update(c, H.TICO_ACTOR, first["id"], private=True)
+    history = get(api, f"entities/activity?ref={entity}", token="cara-test")
+    assert [r["id"] for r in history["rows"]] == [second["conversation_id"]]
+
+
+def test_support_sends_no_gateway_key_without_install_id_or_to_a_different_origin(api, flow, monkeypatch):
+    hq, *_ = flow
+    monkeypatch.setenv("TICO_GATEWAY_KEY", GATEWAY)
+    monkeypatch.setenv("TICO_GATEWAY_URL", URL + "/v1/gateway")
+    post(api, "support/tickets", {"message": "I need help", "include_ids": False})
+    hq.next_ticket = "TK-BCDEFGHJ"
+    monkeypatch.setenv("TICO_GATEWAY_URL", "https://other.acme.example/v1/gateway")
+    post(api, "support/tickets", {"message": "I still need help"})
+    assert hq.submissions == [(URL + "/v1/support", None)] * 2
 
 
 def test_docs_answer_settles_only_after_hq_receipt_and_followup_reopens(api, flow):
@@ -267,10 +333,59 @@ def test_docs_answer_settles_only_after_hq_receipt_and_followup_reopens(api, flo
     assert get(api, f"tasks/{task}")["task"]["status"] == "open"
 
 
+def test_hq_rejects_a_reply_when_the_customer_writes_between_lookup_and_post(api, flow):
+    hq, _, token, _, intake, _ = flow
+    task = intake()
+    action = queue_answer(api, task, token)
+    approve(api, action)
+    hq.before_reply = lambda: hq.message("person", "I have a different question now.")
+    assert OA.step(api.app.state.store)
+    blocked = get(api, f"outbound-actions/{action['id']}")["action"]
+    assert blocked["state"] == "blocked" and "fresh draft" in blocked["last_error"]
+    assert not OA.step(api.app.state.store)
+    assert hq.reply_versions == [0] and hq.replies == []
+    assert get(api, f"tasks/{task}")["task"]["status"] == "open"
+    assert queue_answer(api, task, token)["id"] == action["id"]
+
+    hq.before_reply = None
+    fresh = queue_answer(api, task, token, last_message_id=1)
+    assert fresh["id"] != action["id"] and fresh["state"] == "waiting_approval"
+    approve(api, fresh)
+    assert OA.step(api.app.state.store)
+    assert hq.reply_versions == [0, 1] and hq.replies == [ANSWER]
+
+
+def test_reply_command_uses_the_drafts_customer_message_id(api, flow, monkeypatch, tmp_path):
+    hq, runner, token, poll, intake, watcher = flow
+    task = intake()
+    hq.message("person", "The problem changed in the meantime.")
+    report(api, runner, *poll())
+    reply = tmp_path / "reply.md"
+    reply.write_text(ANSWER)
+    monkeypatch.setattr(watcher, "tico_post", lambda env, path, body: post(api, path, body, token=token))
+    args = ["reply", TICKET, str(reply)]
+    env = {"HUB_TASK_ID": task}
+    assert watcher.main(args, env=env) == 0
+    (old,) = get(api, "outbound-actions?channel=help-ticket")["items"]
+    approve(api, old)
+    assert OA.step(api.app.state.store)
+    assert get(api, f"outbound-actions/{old['id']}")["action"]["state"] == "blocked"
+    assert hq.reply_versions == []
+
+    assert watcher.main(args + ["--last-message-id", "1"], env=env) == 0
+    fresh, old = get(api, "outbound-actions?channel=help-ticket")["items"]
+    assert fresh["state"] == "waiting_approval" and old["state"] == "blocked"
+    approve(api, fresh)
+    assert OA.step(api.app.state.store)
+    assert hq.reply_versions == [1] and hq.replies == [ANSWER]
+
+
 @pytest.mark.parametrize("paused_at_merge", [True, False])
 def test_linked_engineering_subtask_can_queue_after_failed_merge_enqueue_and_sends_once(api, flow, paused_at_merge):
-    hq, _, token, _, intake, _ = flow
+    hq, runner, token, poll, intake, _ = flow
     parent = intake("setup")
+    hq.message("person", "Here's one more detail.")
+    report(api, runner, *poll())
     child = engineering_task(api, parent, token)
     child_id = child["id"]
     detail = get(api, f"tasks/{child_id}")
@@ -298,6 +413,7 @@ def test_linked_engineering_subtask_can_queue_after_failed_merge_enqueue_and_sen
     assert reply["state"] == "waiting_approval" and reply["task_id"] == parent and hq.replies == []
     approve(api, reply)
     assert OA.step(api.app.state.store)
+    assert hq.reply_versions == [1]
     assert len(hq.replies) == 1 and re.search(r"Engineering has finished", hq.replies[0])
     assert get(api, f"tasks/{parent}")["task"]["status"] == "open"
 
