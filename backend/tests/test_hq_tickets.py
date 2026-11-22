@@ -14,11 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-import httpx
 import pytest
-
-from backend import support, watchers
-from backend.tests.helpers.watchers import hosted, report, task, tasks, wakes
 
 ROOT = Path(__file__).resolve().parents[2]
 STAFF = "k" * 32
@@ -35,6 +31,7 @@ def load(name):
 
 
 tickets_cli = load("hq-tickets")
+gh_support = load("gh-support")
 
 
 def documented(*routes):
@@ -64,6 +61,7 @@ class StaffHQ:
 
     def __init__(self):
         self.tickets, self.next_message, self.seen = {}, 1, []
+        self.verdict = ("legit", "judged legit (0.99)")
 
     @staticmethod
     def now():
@@ -149,6 +147,10 @@ class StaffHQ:
 
     def route(self, method, path, query, body):
         q = {k: v[0] for k, v in query.items()}
+        if method == "POST" and path == "/v1/staff/judge":
+            if set(body or {}) != {"text"}:
+                return 422, {"error": "invalid"}
+            return 200, {"verdict": self.verdict[0], "reason": self.verdict[1]}
         if method == "GET" and path == "/v1/staff/tickets":
             status, since, limit, signature = (
                 q.get("status", ""),
@@ -285,7 +287,7 @@ def test_a_ticket_already_answered_when_first_seen_is_not_opened(rig, hq):
 def test_without_the_staff_key_watch_is_quiet_and_the_other_commands_say_why(rig, hq):
     assert rig.watch(HQ_STAFF_READ_KEY="") == []
     code, text = rig.cli("list", HQ_STAFF_READ_KEY="")
-    assert code == 2 and "HQ_STAFF_READ_KEY is not set" in text
+    assert code == 2 and "Set HQ_STAFF_READ_KEY or HQ_STAFF_KEY" in text
     code, text = rig.cli("list", HQ_URL="")
     assert code == 1 and "HQ_URL" in text
     assert hq.seen == []
@@ -296,14 +298,14 @@ def test_list_and_show_read_the_queue_and_the_key_is_never_printed(rig, hq):
     hq.person_writes(tid, "More detail")
     code, text = rig.cli("list")
     assert code == 0 and tid in text and "open" in text and "The board will not load" in text
-    code, text = rig.cli("show", tid)
+    code, text = rig.cli("show", tid, HQ_STAFF_READ_KEY="", HQ_STAFF_KEY=STAFF)
     assert (
         code == 0
         and "> The board will not load" in text
         and "> More detail" in text
         and "email reply pending" not in text
     )
-    code, text = rig.cli("list", HQ_STAFF_READ_KEY="w" * 32)
+    code, text = rig.cli("list", HQ_STAFF_READ_KEY="w" * 32, HQ_STAFF_KEY=STAFF)
     assert code == 1 and "refused the staff key" in text
     everything = text + json.dumps([r.full_url for r in hq.seen]) + "\n".join(rig.lines)
     assert STAFF not in everything and "w" * 32 not in everything
@@ -399,42 +401,33 @@ def test_each_verdict_routes_and_the_watcher_files_only_what_it_should(rig, hq):
     assert [e["key"] for e in rig.watch()] == ["hq:" + ids["spam"]]
 
 
-def test_github_report_uses_server_staff_key_and_replays_on_refusal(api, monkeypatch):
+def test_github_threads_get_the_same_verdicts_through_the_staff_judge_route(hq):
     documented("POST /v1/staff/judge")
-    monkeypatch.setenv("TICO_HQ_URL", URL)
-    monkeypatch.setenv("TICO_SUPPORT", "on")
-    monkeypatch.setenv("TICO_HQ_SUPPORT_BOT", "ops")
-    monkeypatch.setenv("TICO_HQ_STAFF_KEY", "read-only-key")
-    seen = []
-
-    def hq(request):
-        assert request.method == "POST" and str(request.url) == URL + "/v1/staff/judge"
-        (text,) = json.loads(request.content).values()
-        seen.append(text)
-        if request.headers["authorization"] != "Bearer " + STAFF:
-            return httpx.Response(403)
-        return httpx.Response(200, json={"verdict": text.removeprefix("> "), "reason": ""})
-
-    monkeypatch.setattr(support, "TRANSPORT", httpx.MockTransport(hq))
-    runner = hosted(api)
-    spam, risky = (
-        task(f"gh:https://github.com/acme/app/issues/{n}", body=f"<thread-text>\n> {verdict}\n</thread-text>")
-        for n, verdict in enumerate(("spam", "injection_risk"), start=1)
+    hq.verdict = ("spam", "judged spam (0.95)")
+    judge = gh_support.hq_judge({"HQ_STAFF_KEY": STAFF, "HQ_STAFF_READ_KEY": "read-only", "HQ_URL": URL}, hq)
+    assert judge("hello")[0] == "spam"
+    (request,) = hq.seen
+    assert (request.get_method(), request.full_url, json.loads(request.data)) == (
+        "POST",
+        URL + "/v1/staff/judge",
+        {"text": "hello"},
     )
-    report(api, runner, spam, risky, name="gh-support", expected=424)
-    assert tasks(api) == []
-    with api.app.state.store.read() as c:
-        assert watchers.problems(c, {runner["runner_id"]}) == [
-            ("ops", "gh-support", "exited 1: HQ refused the GitHub support judge (403)")
-        ]
+    assert (
+        gh_support.hq_judge({"HQ_STAFF_READ_KEY": STAFF, "HQ_URL": URL}, hq)("hello")[0] == "unchecked"
+        and len(hq.seen) == 1
+    )  # no key: fails open
+    assert (
+        gh_support.hq_judge({"HQ_STAFF_KEY": "w" * 32, "HQ_URL": URL}, hq)("hello")[0] == "unchecked"
+    )  # refused: open
 
-    monkeypatch.setenv("TICO_HQ_STAFF_KEY", STAFF)
-    report(api, runner, spam, risky, name="gh-support")
-    (only,) = tasks(api)
-    assert only["title"].startswith("[injection risk]") and only["body"].startswith("WARNING")
-    before = wakes(api)
-    report(api, runner, {"op": "comment", "key": risky["key"], "text": spam["body"]}, name="gh-support")
-    assert wakes(api) == before
-    assert set(seen) == {"> spam", "> injection_risk"}
-    with api.app.state.store.read() as c:
-        assert watchers.problems(c, {runner["runner_id"]}) == []
+    sent, counts = [], {"new": 2, "comments": 1, "closed": 0, "held": 0}
+    body = "GitHub issue x\n\n<thread-text>\n> the words\n</thread-text>\n\nWork it."
+    said = iter(["spam", "injection_risk", "legit"])
+    emit = gh_support.gated(sent.append, lambda text: (next(said), ""), counts)
+    emit({"op": "task", "key": "a", "title": "GitHub issue: a", "body": body})
+    emit({"op": "task", "key": "b", "title": "GitHub issue: b", "body": body})
+    emit({"op": "comment", "key": "c", "text": body, "title": "t", "body": body})
+    emit({"op": "done", "key": "d", "note": "closed"})
+    assert [e["key"] for e in sent] == ["b", "c", "d"] and counts == {"new": 1, "comments": 1, "closed": 0, "held": 1}
+    assert sent[0]["title"].startswith("[injection risk]") and sent[0]["body"].startswith("WARNING")
+    assert not sent[1]["body"].startswith("WARNING")

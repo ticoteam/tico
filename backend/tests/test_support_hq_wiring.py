@@ -8,6 +8,7 @@ from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.error import HTTPError
 
 import httpx
 import pytest
@@ -22,6 +23,7 @@ from backend import (
     routing,
     support,
     support_triage,
+    watchers,
 )
 from backend.entities import rules as directory_rules
 from backend.entities import store as entities
@@ -29,13 +31,21 @@ from backend.store import H
 from backend.tests.helpers.api import claim, get, post, put
 from backend.tests.helpers.company import bot
 from backend.tests.helpers.github import PR, SECRET, hook, pr_event
-from backend.tests.helpers.watchers import hosted, report
+from backend.tests.helpers.watchers import hosted, report, tasks
 
 URL = "https://hq.acme.example"
 STAFF = "test-hq-key"
 TICKET = "TK-ABCDEFGH"
 ANSWER = "In Help, open the guide to connecting a second computer."
 ISSUE = "https://github.com/ticoteam/tico/issues/13"
+
+
+def load_watcher(name):
+    script = Path(__file__).resolve().parents[2] / "templates/catalog/support-owner/software" / name
+    loader = importlib.machinery.SourceFileLoader(name.replace("-", "_") + "_wiring", str(script))
+    watcher = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(watcher)
+    return watcher
 
 
 class HQ:
@@ -106,10 +116,7 @@ def flow(api, tmp_path, monkeypatch):
     runner = hosted(api)
     token = bot(api, "ops")
 
-    script = Path(__file__).resolve().parents[2] / "templates/catalog/support-owner/software/hq-tickets"
-    loader = importlib.machinery.SourceFileLoader("hq_watcher_wiring", str(script))
-    watcher = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
-    loader.exec_module(watcher)
+    watcher = load_watcher("hq-tickets")
 
     def poll():
         events = []
@@ -137,6 +144,52 @@ def flow(api, tmp_path, monkeypatch):
             return c.execute("SELECT task_id FROM watcher_items WHERE key=?", ("hq:" + TICKET,)).fetchone()[0]
 
     return hq, runner, token, poll, intake, watcher
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_refused_github_judge_files_unchecked_and_reports_one_health_warning(api, monkeypatch, tmp_path, status):
+    watcher = load_watcher("gh-support")
+    runner = hosted(api)
+    issues = [
+        {
+            "number": number,
+            "title": "Missing board",
+            "body": "The board is empty.",
+            "state": "open",
+            "updated_at": "2026-10-01T12:05:00Z",
+            "html_url": f"https://github.com/acme/app/issues/{number}",
+        }
+        for number in (1, 2)
+    ]
+
+    def github(_method, url, _headers, _body):
+        return 200, {}, json.dumps(issues if "/issues?" in url else []).encode()
+
+    class RefusingJudge:
+        def open(self, request, *, timeout):
+            raise HTTPError(request.full_url, status, "refused", {}, None)
+
+    monkeypatch.setattr(watcher.urllib.request, "build_opener", lambda *_: RefusingJudge())
+    events, lines = [], []
+    env = {"GH_SUPPORT_REPOS": "acme/app", "HQ_STAFF_KEY": STAFF, "HQ_URL": URL}
+    code = watcher.main(
+        ["watch"],
+        env,
+        tmp_path,
+        http=github,
+        emit=events.append,
+        out=lines.append,
+        now=datetime(2026, 10, 1, 12, tzinfo=timezone.utc),
+    )
+    warnings = [line for line in lines if "warning" in line]
+    assert code == 1 and len(warnings) == 1 and lines[-1] == warnings[0]
+    assert f"HTTP {status}" in warnings[0] and "unchecked" in warnings[0] and STAFF not in warnings[0]
+    report(api, runner, *events, name="gh-support", code=code, output="\n".join(lines))
+    filed = tasks(api)
+    assert len(filed) == 2 and all(row["title"].startswith("GitHub issue:") for row in filed)
+    with api.app.state.store.read() as c:
+        (problem,) = watchers.problems(c, {runner["runner_id"]})
+    assert problem[:2] == ("ops", "gh-support") and problem[2].endswith(warnings[0])
 
 
 def approve(api, action):

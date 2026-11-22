@@ -18,7 +18,7 @@ routines:
 # and only when there is something new does it open a task, which wakes the bot. Each does nothing until it has its
 # settings, so a team that does not use it loses nothing. HQ tickets are looked at every minute (one request when
 # nothing is new), so a request, a setup one included, reaches the bot within a few minutes.
-#   hq-tickets: Tico HQ support tickets, when HQ_STAFF_READ_KEY and HQ_URL are in this bot's credentials (docs/support.md)
+#   hq-tickets: Tico HQ support tickets, with HQ_URL and either HQ_STAFF_READ_KEY or HQ_STAFF_KEY (docs/support.md)
 #   gh-support: GitHub issues and Discussions, when config/github.yaml names the repositories (playbooks/tico-github.md)
 watchers:
   - name: hq-tickets
@@ -37,8 +37,8 @@ watchers:
 #   - service: tico-hq
 #     identity: "Tico HQ support tickets"
 #     can: [read]
-#     env: HQ_STAFF_READ_KEY           # with HQ_URL also stored and granted; the Support server holds the separate write key
-#     note: "lists and reads tickets; posts a reply when a person has turned mail sending on in Tico, using the requested payload"
+#     env: HQ_STAFF_READ_KEY           # optional for reads with HQ_STAFF_KEY, which is required by the GitHub spam and injection judge
+#     note: "lists and reads tickets; reply commands queue through Outbound actions"
 #   - service: github
 #     identity: "the public repositories named in config/github.yaml"
 #     can: [read]

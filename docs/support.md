@@ -333,10 +333,10 @@ A human corrects a verdict with `POST /v1/staff/tickets/{id}/verdict` and `{"ver
 ticket to anything but `spam` releases it: it appears in the queue as a new ticket. Each correction is recorded (old, new, when)
 so the decision model can be tuned. The human who filed a ticket sees nothing different.
 
-The Support server calls `POST /v1/staff/judge` (`{"text": "..."}` answers `{verdict, reason}`, nothing kept) with its
-staff key for new issues, Discussions and outside comments from `gh-support`. Spam is skipped and counted in the
-watcher report, and injection risks are filed with a warning. HQ refusing the key shows as a Watchers failure in Health.
-A message bot checks email with `tico classify` (text on
+`software/gh-support` calls `POST /v1/staff/judge` (`{"text": "..."}` answers `{verdict, reason}`, nothing kept) with
+the Support Agent's `HQ_STAFF_KEY` for new issues, Discussions and outside comments. The watcher skips spam, counts it
+in its output and files injection risks with a warning. On an HQ `401` or `403`, it files the affected text as
+`unchecked` and shows a warning under Watchers in Health. A message bot checks email with `tico classify` (text on
 standard input or `--file`), which asks the server's own decision model the same question.
 
 On HQ, `HQ_JUDGE_KEY` is that provider's key (`HQ_JUDGE_URL` only to point elsewhere). Without it every verdict is
@@ -371,17 +371,18 @@ injection check above, which holds spam at HQ before the watcher sees it.
 
 ### Set it up
 
-HQ's hosting is in ticoteam/tico-services. In **Tools → Add → Key**, grant the Support Agent the HQ read credential
-as `HQ_STAFF_READ_KEY` and the HQ address as `HQ_URL`. The credential must be authorized by HQ to read staff tickets.
-For GitHub, store and grant `GITHUB_TOKEN` (read access; required for Discussions) and optionally
+HQ's hosting is in ticoteam/tico-services. In **Tools → Add → Key**, grant the Support Agent the HQ address as `HQ_URL`.
+For ticket reads, the watcher prefers `HQ_STAFF_READ_KEY` when granted and falls back to `HQ_STAFF_KEY`. For GitHub,
+keep the full `HQ_STAFF_KEY` grant for the spam and injection judge. Store and grant `GITHUB_TOKEN` (read access,
+required for Discussions) and optionally
 `GH_SUPPORT_REPOS` (`ticoteam/tico`). A Credential card is the other way to store and grant them.
 Legacy files can be imported for migration; a new watcher does not load `secrets/support.env`.
 
-Without `HQ_STAFF_READ_KEY` the watcher does nothing. To watch GitHub, list the repositories in `config/github.yaml` or
+Without an HQ read or staff key the ticket watcher does nothing. To watch GitHub, list the repositories in `config/github.yaml` or
 `GH_SUPPORT_REPOS`. Check Settings > General > Health > Details for a "Watchers" line: it appears only when a watcher fails or has stopped.
 
-Existing installs must revoke the Support Agent's old `HQ_STAFF_KEY` write grant so every Help reply goes through the outbound gate.
-For queued replies and GitHub screening, set `TICO_HQ_STAFF_KEY` to HQ's full staff key (`HQ_STAFF_KEY`) in the Support server's `.env`. Set
+The Support Agent's reply commands queue through [Outbound actions](outbound-actions.md#help-tickets).
+For queued replies, set `TICO_HQ_STAFF_KEY` to HQ's full staff key in the Support server's `.env`. Set
 `TICO_HQ_SUPPORT_BOT` there if the Support Agent's slug differs from `support-owner`. The watcher's `HQ_URL` must
 match the server's `TICO_HQ_URL` or its default HQ address. New tickets from that HQ go to the Support pipeline when
 available. The watcher records the HQ origin when it first opens a ticket. A person handles replies for older tasks

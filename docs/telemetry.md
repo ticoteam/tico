@@ -110,6 +110,6 @@ source in ticoteam/tico-services. `TICO_HQ_URL` points an install at another add
 nothing; owner-only controls). `backend/tests/test_support.py` and `backend/tests/test_support_access.py` hold the install to
 the ticket routes above and the [support access routes](tico-hq.md#support-access) exactly: method, path, the
 `X-Ticket-Secret` header and the JSON fields. `backend/tests/test_hq_tickets.py` holds the Support Agent's `hq-tickets`
-to the staff routes above and the Support server to `POST /v1/staff/judge`. HQ's own tests (no address stored or logged; bad
+and `gh-support` to the staff routes above and `POST /v1/staff/judge`. HQ's own tests (no address stored or logged; bad
 input refused; the stats math, suppression and retention; tickets, the judge and the staff routes as HQ serves them) are in
 ticoteam/tico-services with its code.

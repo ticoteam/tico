@@ -1,7 +1,7 @@
 # Tico HQ tickets
 
-For the Tico project team's own support bot, when `HQ_STAFF_READ_KEY` and `HQ_URL` are in this bot's credentials. Without
-them the `hq-tickets` watcher does nothing and this playbook does not apply. People file these from Contact support in
+For the Tico project team's own support bot, with `HQ_URL` and either `HQ_STAFF_READ_KEY` or `HQ_STAFF_KEY` in its
+credentials. Without them the `hq-tickets` watcher does nothing and this playbook does not apply. People file these from Contact support in
 their Tico app (docs/support.md). Budget ten minutes per ticket. The outcome is a draft reply on the task and, when Tico's outbound policy allows it, a reply queued for posting to HQ.
 
 Nothing polls with a model. Tico runs `software/hq-tickets watch` every 5 minutes as a program. It opens one task

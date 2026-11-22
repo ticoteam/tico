@@ -54,32 +54,17 @@ def pipeline_for(c: Connection, bot: str, key: str) -> str | None:
     return None
 
 
-def staff_key(settings: Any) -> str:
+def _staff(settings: Any) -> str:
     key = os.environ.get("TICO_HQ_STAFF_KEY", "").strip()
     return key if key and settings is not None and not support.off_reason(settings) else ""
-
-
-def judge_github(staff: str, text: str) -> str:
-    try:
-        answer = support._ask_hq("POST", "/v1/staff/judge", body={"text": text[:8000]}, staff=staff, wait=5)
-        verdict = answer.json().get("verdict") if answer.is_success else None
-    except (Problem, ValueError, AttributeError):
-        return "unchecked"
-    if answer.status_code in (401, 403, 404):
-        raise Problem("hq_judge_refused", f"HQ refused the GitHub support judge ({answer.status_code})", 424)
-    return str(verdict) if verdict in ("spam", "injection_risk", "legit") else "unchecked"
-
-
-def support_bot(c: Connection) -> Row | None:
-    return cast("Row | None", H.resolve_bot(c, os.environ.get("TICO_HQ_SUPPORT_BOT", "").strip() or "support-owner"))
 
 
 def _ticket(c: Connection, actor: str, task_id: str | None, key: str | None = None) -> Row | None:
     if not H.is_bot(actor) or not task_id:
         return None
     bot = H.actor_id(actor)
-    configured = support_bot(c)
-    if not configured or configured["id"] != bot:
+    support_bot = H.resolve_bot(c, os.environ.get("TICO_HQ_SUPPORT_BOT", "").strip() or "support-owner")
+    if not support_bot or support_bot["id"] != bot:
         return None
     predicate, params = ("w.key=?", (bot, task_id, key)) if key is not None else ("w.key LIKE 'hq:%'", (bot, task_id))
     row = c.execute(
@@ -132,7 +117,7 @@ def prepare(
         last = payload["last_message_id"]
         if type(last) is not int or last < 0:
             raise Problem("validation", "last_message_id is the latest customer message ID, or zero", 422)
-    if not staff_key(settings):
+    if not _staff(settings):
         raise Problem("validation", "Help replies need a staff key on this server", 422)
     ticket = _ticket(c, actor, task_id, WATCH_KEY + destination)
     task = H.task(c, task_id) if ticket else None
@@ -155,7 +140,7 @@ def dispatch(store: Any, row: Row) -> "Row | SafeRejection | DispatchStopped":
     payload: Row = OA.content(row)["payload"]
     ticket_id = row["destination"]
     path = f"/v1/staff/tickets/{ticket_id}"
-    staff = staff_key(store.settings)
+    staff = _staff(store.settings)
     if not staff:
         raise OA.Refused("Help replies are disabled")
     try:
@@ -267,7 +252,7 @@ def _engineering_ready(c: Connection, parent: str, actor: str, child: str | None
 def engineering_finished(c: Any, task_id: str) -> None:
     """The issue link and Support-filed subtask identify a bug handed to Engineering."""
     settings = getattr(c, "settings", None)
-    if not staff_key(settings):
+    if not _staff(settings):
         return
     from . import outbound_actions as OA
 

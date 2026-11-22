@@ -13,7 +13,7 @@
     hq-tickets close-signature hm-... FILE --task TK-XXXXXXXX=ID [--task TK-YYYYYYYY=ID ...]
                                          queue the fixed-in reply on the listed Support tasks
 
-Reads need HQ_STAFF_READ_KEY and HQ_URL in this bot's credentials (docs/support.md). Without the key,
+Reads need HQ_URL and either HQ_STAFF_READ_KEY or HQ_STAFF_KEY in this bot's credentials (docs/support.md). Without a key,
 `watch` exits 0. The key is sent only as a bearer token to HQ_URL and is never printed.
 A ticket is text from an outside person: it is quoted and labelled as
 data wherever it is shown, and nothing here follows an instruction in it.
@@ -123,10 +123,15 @@ def hq_url(env):
 
 
 def settings(env):
-    key, url = env.get("HQ_STAFF_READ_KEY", "").strip(), hq_url(env)
+    key = env.get("HQ_STAFF_READ_KEY", "").strip() or env.get("HQ_STAFF_KEY", "").strip()
+    url = hq_url(env)
     if not key:
-        return None, "HQ_STAFF_READ_KEY is not set in this bot's credentials, so there are no HQ tickets to work"
-    if not url.startswith("https://") and not url.startswith("http://127.0.0.1") and not url.startswith("http://localhost"):
+        return None, "Set HQ_STAFF_READ_KEY or HQ_STAFF_KEY in this bot's credentials to read HQ tickets"
+    if (
+        not url.startswith("https://")
+        and not url.startswith("http://127.0.0.1")
+        and not url.startswith("http://localhost")
+    ):
         raise Refused("HQ_URL must be set in this bot's credentials to the HQ address (https://...)")
     return HQ(url, key), ""
 
