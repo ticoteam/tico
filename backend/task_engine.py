@@ -39,6 +39,7 @@ NEXT, DONE, CLOSED, REOPEN = "next", "done", "closed", "reopen"
 LOG = logging.getLogger("tico.task_engine")
 MAX_DEPTH = 5  # sub-tasks nest at most this deep (C20)
 BOT_SNOOZES = 3  # a bot's snoozes in one stage before the manager bot gets the task
+CUSTOMER_WAIT_DAYS = 30
 # Seconds after a change before the never-stuck check looks at the task, and its gap before retrying a run that was cut
 # off. A run that finished is not woken this soon (never_stuck._ladder).
 FIRST_TRY_S = 120
@@ -2411,6 +2412,8 @@ def snooze(
     check_version(conn, by, row, seen_version)
     if row["status"] != "open":
         _refuse(conn, by, "task_ended", f"The task is {row['stage']['name']}. Reopen it first.", task_id)
+    if customer_wait:
+        why = why or "Waiting for a customer reply"
     _need_why(conn, by, why, "snooze it", task_id)
     ts = H.now()
     visit = row["visit"]
@@ -2419,9 +2422,12 @@ def snooze(
     if customer_wait:
         if not until or until <= ts:
             _refuse(conn, by, "task_customer_wait_date", "Give a fallback date in the future", task_id)
+        if is_bot(by) and until > H.shift(ts, days=CUSTOMER_WAIT_DAYS):
+            from .store import Problem
+
+            raise Problem("task_customer_wait_date", f"Choose a fallback within {CUSTOMER_WAIT_DAYS} days", 422)
         if _customer_already_replied(conn, *customer_wait):
             _refuse(conn, by, "task_customer_replied", "The customer has already replied", task_id)
-        why = why or "Waiting for a customer reply"
     # A stage rule on a bot's snooze whose If is fixed conditions only (no model call inside a write) blocks it here;
     # one with a Jev question was asked before the write (task_moves_routes, stage_rules.judge_snooze).
     blocked = "" if customer_wait else stage_rules_snooze(conn, row, by, why, until)
@@ -2510,8 +2516,8 @@ def unsnooze(
     are as they were. The task is due at once, and the never-stuck check wakes whoever has the turn on its next pass,
     as the next try (at level `person` nobody is woken: it is back in that person's Needs you). It can leave the stage
     one over its limit. `consequence` names the act that ends it by itself (an answer, a done, a reply): its history
-    row says so, so it is not a second decision of whoever acted. An active customer wait ends here only at its
-    fallback; explicit attempts to wake it early are refused."""
+    row says so, so it is not a second decision of whoever acted. A person can end a customer wait explicitly.
+    Other automatic unsnoozes leave it until its fallback."""
     row = task(conn, task_id)
     if not row:
         _refuse(conn, by, "not-found", "No such task")
@@ -2520,9 +2526,10 @@ def unsnooze(
     if row["snooze"].get("wait_thread_id") and not (
         expired_at and row["snooze"].get("until_at") and row["snooze"]["until_at"] <= expired_at
     ):
-        if manual:
+        if not manual:
+            return row
+        if not is_human(by):
             _keep_customer_wait(conn, row, by)
-        return row
     _person_ends_filed(conn, row, by)
     return _resume_snooze(conn, row, by, why, consequence)
 

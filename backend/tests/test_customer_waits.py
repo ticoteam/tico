@@ -7,6 +7,7 @@ from backend import task_engine as E
 from backend.store import H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import post
+from backend.tests.helpers.automation_api import as_bot
 
 OWNER = "bot:builder"
 CUSTOMER = "ext:email:customer"
@@ -266,3 +267,29 @@ def test_reply_without_a_matching_wait_only_probes_the_wait_index(c):
     assert len(reads) == 1 and "FROM snoozes" in reads[0]
     plan = c.execute("EXPLAIN QUERY PLAN " + reads[0]).fetchall()
     assert any("snoozes_wait_thread" in row[3] for row in plan)
+
+
+def test_bot_wait_defaults_its_reason_and_only_people_can_end_it_early(api, time_machine):
+    time_machine.move_to(datetime(2030, 1, 7, tzinfo=timezone.utc), tick=False)
+    store = api.app.state.store
+    with store.transaction() as conn:
+        X.bot(conn, "builder")
+        task = X.new_task(conn, X.ANA, "Follow up", assignee=OWNER)
+        thread = _thread(conn, participants=(X.ANA, OWNER, CUSTOMER))
+        sent = _message(conn, thread, OWNER)
+    bot_token = as_bot(api, "builder")
+    path = f"tasks/{task['id']}"
+    wait = {"wait_thread_id": thread, "wait_sender": CUSTOMER, "wait_after_seq": sent["seq"]}
+    later = {**wait, "until": H.shift(H.now(), days=31)}
+    denied = post(api, path + "/snooze", {**later, "version": task["version"]}, token=bot_token, expected=422)
+    assert denied["error"] == "task_customer_wait_date"
+    within_limit = {**wait, "until": H.shift(H.now(), days=30), "version": task["version"]}
+    parked = post(api, path + "/snooze", within_limit, token=bot_token)
+    assert parked["snooze"]["why"] == "Waiting for a customer reply"
+
+    denied = post(api, path + "/unsnooze", {}, token=bot_token, expected=409)
+    assert denied["error"] == "task_customer_wait"
+    with store.transaction() as conn:
+        assert E.unsnooze(conn, task["id"], X.ANA, consequence="answer")["snooze"]
+    assert post(api, path + "/unsnooze", {})["snooze"] is None
+    assert post(api, path + "/snooze", later)["snooze"]["waiting_for_reply"]
