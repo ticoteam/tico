@@ -151,6 +151,23 @@ def sweep(conn: Any, at: str | None = None) -> dict[str, int]:
     return done
 
 
+def _told_urgently(conn: Any, rule: Row, task: Row, mark: str) -> bool:
+    """Whether this is Support waits on a task Urgent support waits told (or is telling) its manager about in this same
+    quiet period: both read the same start, so the urgent mark is this one with the tag."""
+    SR = _mod("stage_rules")
+    if SR.SUPPORT_WAITS not in (rule.get("id"), rule.get("builtin")):
+        return False
+    base = mark.split("#", 1)[0]
+    return (
+        conn.execute(
+            "SELECT 1 FROM stage_rule_marks WHERE rule_id=? AND task_id=? AND mark IN (?, ?) "
+            "AND outcome IN ('pending', 'told')",
+            (SR.URGENT_SUPPORT, task["id"], base, base + "#urgent"),
+        ).fetchone()
+        is not None
+    )
+
+
 def _support_rule(rule: Row) -> bool:
     """Support waits or Urgent support waits (backend/routing.py)."""
     SR = _mod("stage_rules")
@@ -211,6 +228,14 @@ def _judge(conn: Any, rule: Row, task: Row, at: str, done: dict[str, int]) -> st
         "SELECT 1 FROM stage_rule_marks WHERE rule_id=? AND task_id=? AND mark=?", (rule["id"], task["id"], mark)
     ).fetchone():
         return None
+    if _told_urgently(conn, rule, task, mark):
+        # One quiet period, one tell: Urgent support waits already told the manager about this one.
+        conn.execute(
+            "INSERT OR IGNORE INTO stage_rule_marks(rule_id,task_id,mark,outcome,manager_id,matched_at) "
+            "VALUES(?,?,?,'urgent',NULL,?)",
+            (rule["id"], task["id"], mark, at),
+        )
+        return None
     problem: Any = _mod("store").Problem
     outcome = "no"
     conn.execute("SAVEPOINT stage_rule_timer")
@@ -224,7 +249,7 @@ def _judge(conn: Any, rule: Row, task: Row, at: str, done: dict[str, int]) -> st
         conn.execute("RELEASE stage_rule_timer")
         log.warning("Stage rule %s failed on task %s", rule["id"], task["id"], exc_info=True)
         outcome = "failed"
-    manager = _manager(conn, task) if outcome == "pending" else None
+    manager = _manager(conn, task, own=_support_rule(rule)) if outcome == "pending" else None
     conn.execute(
         "INSERT OR IGNORE INTO stage_rule_marks(rule_id,task_id,mark,outcome,manager_id,matched_at) VALUES(?,?,?,?,?,?)",
         (rule["id"], task["id"], mark, outcome, manager, at),
@@ -279,7 +304,7 @@ def _then(conn: Any, rule: Row, task: Row, done: dict[str, int]) -> str:
     # Late's own mark dedupes a manager's tell only where Late told the manager; the Support timers are routed
     # work's one manager tell (a person's task Late by its due date is a label alone), so only their marks dedupe them.
     late = bool(task.get("late_told_at")) and not _support_rule(rule)
-    outcome = "late" if late else "pending" if _manager(conn, task) else "no_manager"
+    outcome = "late" if late else "pending" if _manager(conn, task, own=_support_rule(rule)) else "no_manager"
     if outcome != "pending":
         # No manager will hear of it: a task the ladder stopped on asks a person instead (never_stuck.ask_person).
         E, NS = _mod("task_engine"), _mod("never_stuck")
@@ -328,12 +353,13 @@ def _tell_owner(conn: Any, rule: Row, task: Row, said: str) -> None:
     SR.record(conn, task["id"], rule, said, H.TICO_ACTOR, "told", {"to": owner})
 
 
-def _manager(conn: Any, task: Row) -> str | None:
+def _manager(conn: Any, task: Row, own: bool = False) -> str | None:
     """The pipeline's manager, when it may read the task and is not its owner: a manager is not told about its own
-    task, as the engine's own tells to the manager skip it (task_engine._tell_manager)."""
+    task, as the engine's own tells to the manager skip it (task_engine._tell_manager). With `own` (the Support timers,
+    routed work's one overdue tell), a manager who owns the task is told too: the company's person can be both."""
     found = conn.execute("SELECT manager_id FROM pipelines WHERE id=?", (task["pipeline_id"],)).fetchone()
     manager: str | None = found[0] if found else None
-    if not manager or manager == task.get("owner_id"):
+    if not manager or (manager == task.get("owner_id") and not own):
         return None
     row = H.task(conn, task["id"])
     return manager if row and H.task_private_readable(conn, manager, row) else None

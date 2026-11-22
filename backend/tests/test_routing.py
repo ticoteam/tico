@@ -18,6 +18,7 @@ from backend.entities import store as ES
 from backend.store import H, encode
 from backend.tests.helpers.api import headers, post
 from backend.tests.helpers.company import bot
+from backend.tests.helpers.member_bots import agent_ops, turn  # noqa: F401
 from backend.tests.test_jira_intake import _create, jira  # noqa: F401
 
 START = datetime(2030, 1, 7, 10, 0, tzinfo=timezone.utc)  # a Monday, inside Calendar's default hours (UTC)
@@ -262,6 +263,53 @@ def test_the_dry_run_reports_a_filed_item_as_found_without_routing(app, jira):
         app, "tasks/dry-run", {"title": "Fix the export", "route": True, "private": True, "primary_link": link}
     )
     assert shown["found"] is True and shown["task"] == (first.get("task") or first)["id"], shown
+
+
+def test_a_private_support_pipeline_refuses_routing(app):
+    _support(app, private=1)
+    assert "Private tasks aren't routed" in json.dumps(_route(app, expected=422))
+
+
+def test_a_support_manager_who_owns_the_task_is_still_told(app, time_machine):
+    _set(app, "off", "ana", "ben", "cara")
+    _support(app, manager_id="human:ana")
+    task_id = _route(app, private=False)
+    assert _held(app, task_id)[0] == "human:ana"  # the fallback, and Support's manager too
+    time_machine.move_to(START + timedelta(hours=25), tick=False)
+    with _db(app) as c:
+        T.sweep(c)
+    wakes = _wakes(app, "human:ana")
+    assert len(wakes) == 1 and _title(app, task_id) in wakes[0]
+
+
+def test_one_urgent_quiet_period_wakes_the_manager_once(app, time_machine):
+    _support(app, manager_id="bot:ops")
+    task_id = _route(app, labels=["urgent"], private=False)
+    time_machine.move_to(START + timedelta(hours=2), tick=False)
+    with _db(app) as c:
+        T.sweep(c)  # Urgent support waits tells the manager
+    time_machine.move_to(START + timedelta(hours=25), tick=False)
+    with _db(app) as c:
+        T.sweep(c)  # Support waits: the same quiet period, told already
+    wakes = _wakes(app, "bot:ops")
+    assert len(wakes) == 1 and _title(app, task_id) in wakes[0]
+
+
+def test_the_recent_helper_is_read_as_the_person_whose_request_is_carried(app, agent_ops):
+    """Agent Ops filing a person's request (request_id turn) routes as that person: a task they cannot read, here one
+    held by Ana's own inbox bot, names no helper for Cara's request, though Agent Ops itself reads it."""
+    from backend.tests.helpers.api import restrict
+
+    acme = _account(app, owner="human:ben")
+    with _db(app) as c:  # Ana's inbox bot: Ana and Agent Ops read its work, Cara does not
+        restrict(c, "inbox", people=["ana"], bots=["botops"])
+    made = post(app, "tasks", {"title": "Acme's renewal", "owner": "inbox", "entity": acme, "private": False})
+    inbox_task = (made.get("task") or made)["id"]
+    with _db(app) as c:
+        H._task_event(c, inbox_task, "human:ana", "comment", None, None, "Called them back")
+    attempt = turn(app, agent_ops, person="cara-test", text="Route Acme's question to whoever is on")
+    routed = _route(app, token=attempt["token"], entity=acme, request_id="turn")
+    assert _held(app, routed)[0] == "human:ben"  # its owner: Ana's work on a task Cara cannot read does not count
 
 
 def _wakes(api, manager):

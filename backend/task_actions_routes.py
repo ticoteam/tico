@@ -1034,15 +1034,22 @@ def register_core(
             if body.primary_link and _held_item(c, who, body.primary_link):
                 return None
             probe = H.CLOSE_PROBE.set(True)  # nothing is written here
+            lent = H.DELEGATION.get()
             try:
-                parent_id = auth.resolve_task(c, who, body.parent) if body.parent else None
                 actual_bot = who.task_actor or (who.actor if who.role == "bot" else "")
+                # The filer the write acts as (a person's request it carries: that person), as task_create resolves
+                # it, so the helper comes only from tasks they read and the write keeps this same choice.
+                handoff = who.role == "bot" and who.actor != "bot:" + AGENT_OPS and not who.via
+                if body.request_id and not handoff and who.via != "assistant":
+                    who = delegated_identity(c, who, body.request_id, new_task=True)
+                parent_id = auth.resolve_task(c, who, body.parent) if body.parent else None
                 return routing.person_for_create(
                     c, who, body, parent_id, actual_bot, *routed_inputs(c, who, body, parent_id)
                 )
             except H.Refused:
                 return None
             finally:
+                H.DELEGATION.set(lent)  # the write lends it again, under its own transaction
                 H.CLOSE_PROBE.reset(probe)
 
     def routed_inputs(c, who, body, parent_id):

@@ -268,8 +268,8 @@ def prepare(
     """The checks a create with `route: true` makes before anything is written, and what routing then reads. The
     caller has resolved the entity (as the effective reader), read the parent (an unreadable one is its 404) and says
     which tasks the filer reads (`visible_sql`). Refused (422): an owner named, a meeting's task, any pipeline but
-    Support (its timers own every routed wait), a Support retired or changed so its first stage is not the assignee's
-    or is moved by hand, and private work (explicitly, under a private parent, in a private pipeline or by the filer's
+    Support (its timers own every routed wait), a Support retired, made private, or changed so its first stage is not
+    the assignee's or is moved by hand, and private work (explicitly, under a private parent, in a private pipeline or by the filer's
     private default): routing never decides who reads private work."""
     from . import task_privacy as _task_privacy
     from .store import Problem
@@ -287,6 +287,8 @@ def prepare(
     refused = first_stage_refusal(conn, support) if support else ""
     if refused:
         raise Problem("route", refused, 422)
+    if support and conn.execute("SELECT private FROM pipelines WHERE id=?", (support,)).fetchone()[0]:
+        raise Problem("route", PRIVATE_REFUSAL, 422)  # a private Support makes every task in it private
     parent: Row | None = H.task(conn, parent_id) if parent_id else None
     task_privacy: Any = _task_privacy  # untyped module
     if parent and H.task_private(conn, parent):

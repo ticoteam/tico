@@ -1247,10 +1247,13 @@ waits (24 h quiet, in the hourly batch) and Urgent support waits (1 h quiet on a
 woken in the same pass, in its one wake of that pass: everything waiting when its hour is open, else only the urgent
 tasks, which do not use up its hour). A timer rule with a tag
 condition marks whether the task had the tag, so a tag added to a quiet task is noticed. The dry run names the person routing would pick, or reports a filed item's task as found. A
-Late label from a due date does not quiet the Support timers: only their own marks dedupe them.
+Late label from a due date does not quiet the Support timers: only their own marks dedupe them. They tell the manager
+even when the manager owns the task (the company's person can be both), and one urgent quiet period is told once: Support
+waits passes over a task Urgent support waits told in the same quiet period. A private Support refuses routed work.
 
 The pick is the first of: the newest person who worked another recent company-visible task of the relationship (its
-history or comments, the last 48 hours, at most 20 tasks, only those the filer reads) and is on, not counting the filer; the relationship's owner
+history or comments, the last 48 hours, at most 20 tasks, only those the filer reads, the person a carried request is
+from when there is one) and is on, not counting the filer; the relationship's owner
 (`entities.owner_*`) when on, or async and the work is not tagged `urgent`; anyone on in that owner's roster team,
 the first by id; else the inbox fallback, the pipeline's manager or owner when a person, else the company's
 person (`waiting_on.company_person`). Every one, the fallback included, must be an active person.
