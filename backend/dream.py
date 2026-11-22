@@ -30,7 +30,7 @@ from .views import human_only
 from .api_contract import api_v2
 
 LABEL = "dream"
-TITLE = "Dream"
+TITLE = "Tidy {name}'s instructions and memory"  # a dream's title names its bot, so a list tells one from the next
 RECENT_HOURS = 24  # a finished dream is still shown for this long
 SINCE_DAYS = 14  # a first dream reads this far back
 MAX_TEXT = 4000  # the question and the summary, as the panel shows them
@@ -38,6 +38,10 @@ DOING_TEXT = 200  # the one line the bot keeps in the task note while it dreams
 ENDED = "('done','closed')"  # a finished dream's status, as SQL
 MARK = "dream.start"  # the event dream_start writes on the task; its actor is the task's requester
 AUTO_MARK = "dream.auto"  # the event an auto dream's start writes; its actor is the system (H.TICO_ACTOR)
+# Not an auto dream, as SQL over a task alias `{t}` (format it): an index probe on events_action_target. Nobody waits on
+# an auto dream, so the never-stuck pass and the Quiet bot tasks rule pass it over; the auto pass closes one that never
+# got its turn (dream_auto.close_stale).
+NOT_AUTO = "NOT EXISTS(SELECT 1 FROM events e WHERE e.action='" + AUTO_MARK + "' AND e.target={t}.id)"
 # The marker as SQL over `tasks`: an index probe on events_task_origin (actor, action, target) per candidate row.
 MARKED = (
     f"EXISTS(SELECT 1 FROM events e WHERE e.target=tasks.id AND ((e.actor=tasks.requester_id AND e.action='{MARK}') "
@@ -331,7 +335,9 @@ def start(c, who, owner, task_create, reason=None, wake_refs=None):
 
     # The steps are Tico's, not the person's: they reach the bot in its run (task_wakes), never as the chat's first
     # message.
-    body = M.TaskCreate(title=TITLE, owner=owner, labels=[LABEL])
+    bot = H.bot(c, H.actor_id(owner)) or {}
+    title = TITLE.format(name=bot.get("display_name") or H.actor_id(owner))
+    body = M.TaskCreate(title=title, owner=owner, labels=[LABEL])
     made = task_create(c, who, body, lint=False, wake_refs={**(wake_refs or {}), task_wakes.INSTRUCTIONS: text})
     task = made.get("task") if isinstance(made, dict) else None
     if not task:

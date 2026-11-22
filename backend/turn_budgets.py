@@ -175,9 +175,9 @@ def _hold(c, settings, bot, window, runs, budget, now):
         settings,
         bot,
         f"{name} stopped: {runs} runs in the last {window}",
-        f"{_sentence(name, runs, window)}\n\nIts budget is {budget} runs per {window}. Check its last runs in Runs. "
-        f"Then release {name} (Settings > Bots > {name}, or `tico bot release {bot}`) or raise its budget "
-        f"(`tico bot budget {bot} --{window} N`). Everything queued for it is kept and starts after the release.",
+        f"{_sentence(name, runs, window)}\n\nIts budget is {budget} runs per {window}. If those runs were needed, "
+        f"press Release here, or raise its budget on {name}'s page. Everything queued for it is kept and starts after "
+        f"the release.",
     )
     holds.put(
         c,

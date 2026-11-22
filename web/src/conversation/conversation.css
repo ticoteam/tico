@@ -91,6 +91,8 @@ button.quote:hover span{color:var(--ink)}
 /* Long words, links and inline code wrap inside the message wherever they must; a code block keeps its lines and
    scrolls inside itself. A bubble and its column never grow past the row. */
 .msg-main,.bubble{overflow-wrap:anywhere}
+/* the live browser a message asks the person to use (Open browser) */
+.msg-browsers{display:flex;flex-wrap:wrap;gap:var(--s-2);margin-top:var(--s-2)}
 .msg code{overflow-wrap:anywhere}
 .msg pre{max-width:100%}
 .msg ul,.msg ol{grid-template-columns:minmax(0,1fr)}

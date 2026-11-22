@@ -177,11 +177,18 @@ def audit(c: sqlite3.Connection, actor: str, action: str, target: str, detail: M
 OK_LINE = "OK this in Finance? It is done once you OK it."
 
 
+def ok_line(what: str) -> str:
+    """The ask's line: what the action does, in its plan's words, then that the OK does it. Only the OK's parties read
+    it (task_asks.PRIVATE_LINE is everyone else's)."""
+    what = " ".join(str(what or "").split()).rstrip(".")
+    return f"OK in Finance: {what}. It is done once you OK it."[:400] if what else OK_LINE
+
+
 def ok_ask(c: sqlite3.Connection, requester: str, person: str, title: str, subject: str, content: object) -> str:
     """Ask `person` (one person by name) for an OK bound to exactly `content`, on a task of its own titled `title`
-    (backend/task_asks.py). The OK's requirement id."""
+    (backend/task_asks.py), its line saying what the action does (`ok_line`). The OK's requirement id."""
     asked = _A.ask_ok(
-        c, requester, person, OK_LINE, shows=[subject], subject=subject, content=content, title=title[:200]
+        c, requester, person, ok_line(title), shows=[subject], subject=subject, content=content, title=title[:200]
     )
     return str(asked["requirement_id"])
 

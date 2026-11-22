@@ -44,6 +44,18 @@ LOG = logging.getLogger("tico.dream_auto")
 MIN_GAP_HOURS = 48  # between dreams of any kind; a bot's first must be this old
 MAX_PER_RUN = 3  # the default "Most bots per run" (backend/maintenance_steps/dream.py)
 MIN_NEED = 10  # turns, plus corrections weighed below, since the last dream
+STALE_HOURS = 72  # an open auto dream with no run under way this long after it was queued is closed (close_stale)
+STALE_NOTE = (
+    "Closed by Tico: this dream never got its turn. Nobody waits on it; the next Maintenance pass queues another when "
+    "the agent needs one."
+)
+# Open auto dreams queued before a time, with no run of theirs under way: their `dream.auto` event names them
+# (events_action_target), and attempts_task finds a live run.
+_STALE_SQL = (
+    "SELECT t.id FROM events e JOIN tasks t ON t.id = e.target WHERE e.action = 'dream.auto' AND e.created_at < ? "
+    "AND t.status = 'open' AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.task_id = t.id "
+    "AND a.state IN ('leased', 'running'))"
+)
 CORRECTION_WEIGHT = 5  # one person's correction counts as this many turns
 WAIT_HOURS = 48  # how long a queued dream waits for a warm window before it is skipped
 WAKE_CLASS = "dream"  # the held job's class, as wake_presets labels it from refs.release_kind
@@ -187,6 +199,17 @@ def _words(queued, held, over, not_due, limit):
     return "; ".join(parts)
 
 
+def close_stale(c, at):
+    """Close every open auto dream queued STALE_HOURS before `at` that has no run under way: one the release policy
+    did not end (its job was never held, or it was woken again). Nobody waits on it, so it never goes to a person or a
+    manager (dream.NOT_AUTO). Returns the tasks closed."""
+    closed = []
+    for (task_id,) in c.execute(_STALE_SQL, (stamp(at - timedelta(hours=STALE_HOURS)),)).fetchall():
+        if H.attempt(c, H.task_close, H.TICO_ACTOR, task_id, STALE_NOTE) is not None:
+            closed.append(task_id)
+    return closed
+
+
 def run(store, auth, at, limit=MAX_PER_RUN, report=None):
     """The bots in need, most need first, up to `limit` queued in this pass. Each is one write transaction that resolves
     where the dream lands, judges that bot again and files it with its wake held on the release policy. A refusal or a
@@ -194,6 +217,8 @@ def run(store, auth, at, limit=MAX_PER_RUN, report=None):
     create = dream.creator(store)
     if create is None:
         raise Problem("conflict", "The dream's task path is not wired on this server", 409)
+    with store.transaction() as c:
+        stale = close_stale(c, at)
     with store.read() as c:
         judged = [
             verdict(c, row["id"], at) for row in c.execute("SELECT id FROM bots WHERE state='active' ORDER BY id")
@@ -236,6 +261,7 @@ def run(store, auth, at, limit=MAX_PER_RUN, report=None):
             held.append(v.name)
     if report is not None:
         report.update(
+            closed=stale,
             reason=_words(queued, held, over, len(judged) - len(due), limit),
             judged=len(judged),
             due=len(due),

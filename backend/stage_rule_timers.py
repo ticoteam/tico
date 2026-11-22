@@ -84,7 +84,9 @@ _TASKS = (
     "WHERE t.pipeline_id IS NOT NULL AND t.status = 'open' AND s.kind = 'work' AND s.by_hand = 0 "
     "AND NOT EXISTS (SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.ended_at IS NULL) "
     # Blocked by a task it depends on: nobody's turn, so no timer; its end sets last_change_at (task_depends.release).
-    f"AND NOT {task_depends.BLOCKED % 't'}"
+    f"AND NOT {task_depends.BLOCKED % 't'} "
+    # Nobody waits on an auto dream: its release policy and the auto pass end it, never a manager (dream.NOT_AUTO).
+    "AND NOT EXISTS(SELECT 1 FROM events e WHERE e.action='dream.auto' AND e.target=t.id)"
 )
 
 

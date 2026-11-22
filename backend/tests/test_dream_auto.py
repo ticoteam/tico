@@ -187,7 +187,8 @@ def test_memory_commits_reported_with_no_run_are_not_corrections_and_the_dream_i
     started = run(api)
     assert started == [verdict(api, "ops", now()).name]
     [row] = dream_rows(api, "ops")
-    assert row["requester_id"] == "human:ben" and H.task_labels(row) == ["dream"] and row["title"] == "Dream"
+    assert row["requester_id"] == "human:ben" and H.task_labels(row) == ["dream"]
+    assert row["title"].startswith("Tidy ") and row["title"].endswith("'s instructions and memory")
     with api.app.state.store.read() as c:
         first_line, _, _ = task_wakes.instructions(c, row["id"]).partition("\n")
         assert first_line.startswith("Auto dream: 0 turns and 2 corrections from people since ")
@@ -671,3 +672,28 @@ def test_a_thumbs_down_given_before_the_last_dream_does_not_count_again_when_edi
     with api.app.state.store.read() as c:
         assert DA.work(c, "ops", DA.stamp(now() - timedelta(days=2))) == (0, 0), "given before: not a new correction"
         assert DA.work(c, "ops", DA.stamp(now() - timedelta(days=6))) == (0, 1), "given after: one correction"
+
+
+def test_an_auto_dream_never_waits_on_a_person_and_one_that_never_ran_is_closed(api):
+    """Tico Team's walkthrough: an auto dream titled "Dream" waited days for a turn; the Quiet bot tasks rule told the
+    General Manager, who asked Chris "keep it queued, or close it?". Nobody waits on an auto dream: the never-stuck
+    pass and the timer rules pass it over, and the next pass closes one with no run under way STALE_HOURS on."""
+    from backend import never_stuck, stage_rule_timers
+
+    worked(api, "ops", 10)
+    aged(api)
+    assert run(api)
+    [row] = dream_rows(api, "ops")
+    with api.app.state.store.read() as c:
+        assert row["id"] not in {r[0] for r in c.execute(never_stuck._OPEN)}
+        assert row["id"] not in {r["id"] for r in c.execute(stage_rule_timers._TASKS)}
+        # A plain task of the bot's in the same stage is still watched.
+    plain = post(api, "tasks", {"owner": "ops", "title": "Review the launch note", "body": "Please review it."})
+    plain_id = (plain.get("task") or plain)["id"]
+    with api.app.state.store.read() as c:
+        assert plain_id in {r[0] for r in c.execute(never_stuck._OPEN)}
+    with api.app.state.store.transaction() as c:
+        assert DA.close_stale(c, now() + timedelta(hours=DA.STALE_HOURS - 1)) == []
+        assert DA.close_stale(c, now() + timedelta(hours=DA.STALE_HOURS + 1)) == [row["id"]]
+        assert H.task(c, row["id"])["status"] == "closed"
+        assert H.task(c, plain_id)["status"] == "open"

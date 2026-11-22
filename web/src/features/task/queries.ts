@@ -23,6 +23,8 @@ export type TaskData = TaskDetail['task'] & {
   children: TaskChild[];
   can_comment: boolean;
   mover: boolean;
+  /** The agent Tico stopped that this task is the notice for, when the person may release it; else null. */
+  stopped_agent: NonNullable<TaskDetail['stopped_agent']> | null;
   /** The task's note (a legal matter's case in brief): the task read carries it, the schema does not name it yet. */
   note?: string | null;
 };
@@ -38,6 +40,7 @@ function flat(d: TaskDetail): TaskData {
     children: d.children ?? [],
     can_comment: d.can_comment ?? false,
     mover: d.mover ?? false,
+    stopped_agent: d.stopped_agent ?? null,
   };
 }
 
@@ -171,6 +174,13 @@ export function moveTask(id: string, to: string, why?: string) {
 
 export const giveTask = (id: string, owner: string, setAnyway?: boolean) =>
   change(id, { owner_id: owner }, (idem) => post(`${taskPath(id)}/owner`, { owner, ...(setAnyway && { set_anyway: true }) }, idem));
+
+/** Release the agent Tico stopped that this task is the notice for (POST /api/v2/bots/{bot}/release): its queued work
+    starts again, and the server closes this task. The Release leaves the page at once and comes back if refused. */
+export const releaseAgent = (id: string, bot: string) =>
+  change(id, { stopped_agent: null }, (idem) =>
+    api.post<unknown>(`/api/v2/bots/${enc(bot)}/release`, {}, { idempotencyKey: idem }).then(() => readTask(id).then((task) => ({ task }) as unknown as TaskResult)),
+  );
 
 export const markDone = (id: string) => change(id, { status: 'done' }, (idem) => post(`${taskPath(id)}/done`, {}, idem));
 

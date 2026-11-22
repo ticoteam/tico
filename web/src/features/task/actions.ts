@@ -13,6 +13,7 @@ import {
   moveTask,
   newTaskPage,
   reconcileShots,
+  releaseAgent,
   relateTask,
   renameTask,
   setTaskDue,
@@ -42,6 +43,17 @@ async function said<T>(p: Promise<T>): Promise<T> {
     throw Object.assign(new Error(err.message), { status: err.status, code: `${err.code}: ${err.message ?? ''}${missing}` });
   }
 }
+
+/** A stopped agent's notice: Release lets its queued work start again (POST /api/v2/bots/{bot}/release). */
+export const releaseStopped = defineAction({
+  id: 'task.releaseAgent',
+  title: 'Release a stopped agent',
+  kind: 'change',
+  input: z.strictObject({ task, agent: z.string().check(z.minLength(1), z.maxLength(100)) }),
+  run: (_ctx, i) => said(releaseAgent(i.task, i.agent)),
+  did: () => 'Released',
+  target: (i) => ({ kind: 'task-release', id: i.task }),
+});
 
 export const rename = defineAction({
   id: 'task.rename',

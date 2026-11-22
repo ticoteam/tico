@@ -276,7 +276,9 @@ time{font-size:var(--t-xs);color:var(--muted);white-space:nowrap;font-variant-nu
   color:var(--ink-2);font-size:var(--t-sm);transition:background var(--dur-fast) var(--ease)}
 .li-play:hover{background:var(--hover)}
 .li-play.is-on{background:var(--well-2);box-shadow:inset 0 0 0 1px var(--line-strong)}
-.li-play>b{font-weight:var(--w-strong);font-variant-numeric:tabular-nums;padding-right:2px}
+.li-play>b{font-weight:var(--w-strong);font-variant-numeric:tabular-nums;padding-right:2px;white-space:nowrap}
+/* "Flow · 39" holds its line in a narrow list head: the pick beside it gives way first */
+.li-play.is-on{flex:none}
 /* in Flow the pressed mark is a label, not a button: the × beside it leaves */
 span.li-play.is-on:hover{background:var(--well-2)}
 .flow-on{display:inline-flex;align-items:center;gap:2px}

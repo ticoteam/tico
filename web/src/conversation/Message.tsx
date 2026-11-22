@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { useState, type MouseEvent, type ReactElement, type ReactNode } from 'react';
+import { lazy, Suspense, useState, type MouseEvent, type ReactElement, type ReactNode } from 'react';
 import { useAction } from '@/actions';
 import { meQuery, useActor } from '@/data';
 import { Avatar, type AvatarKind, type AvatarSize } from '@/kit/Avatar';
@@ -208,6 +208,41 @@ function Steps({ run }: { run: ChatMessage['run'] }) {
   );
 }
 
+/** The live browsers a message shows (`refs.shows`, `browser:<tool>/<account>`): an agent that needs a person to sign
+    in or finish a step by hand asks with one (backend/browser_commands.py). */
+export function browsersOf(m: Pick<ChatMessage, 'refs' | 'deleted'>): { tool: string; account: string }[] {
+  const shows = m.deleted ? [] : m.refs?.shows;
+  if (!Array.isArray(shows)) return [];
+  return shows.flatMap((s) => {
+    const [tool, account] = typeof s === 'string' && s.startsWith('browser:') ? s.slice(8).split('/') : [];
+    return tool && account ? [{ tool, account }] : [];
+  });
+}
+
+// Loaded when first opened: the live view is the team feature's, and the chat never imports a feature up front.
+const BrowserDialog = lazy(() => import('@/features/team/exports').then((m) => ({ default: m.BrowserDialog })));
+
+/** Open the live browser a message asks the person to use, in place. */
+function Browsers({ m }: { m: ChatMessage }) {
+  const [open, setOpen] = useState<{ tool: string; account: string } | null>(null);
+  const shown = browsersOf(m);
+  if (!shown.length) return null;
+  return (
+    <div className="msg-browsers">
+      {shown.map((b) => (
+        <Button key={`${b.tool}/${b.account}`} icon="globe" onClick={() => setOpen(b)}>
+          Open browser
+        </Button>
+      ))}
+      {open && (
+        <Suspense fallback={null}>
+          <BrowserDialog tool={open.tool} account={open.account} title={(m.body ?? '').split('\n')[0]?.trim().slice(0, 120) || 'Browser'} onClose={() => setOpen(null)} />
+        </Suspense>
+      )}
+    </div>
+  );
+}
+
 const ASKED: Record<string, string> = { done: 'Done', running: 'Doing it now', failed: 'Did not work', canceled: 'Turned down', expired: 'Expired' };
 
 /** An agent asks first: the filled button names the act, "Not now" turns it down. Answered, one quiet line. */
@@ -369,6 +404,7 @@ export function Message({ m, variant, me, cont, onRetry, card, below, onReply, q
             <Steps run={m.run} />
             <Shelf m={m} onPicture={pics.openAt} />
             {aid && <Proposal aid={aid} />}
+            <Browsers m={m} />
             {m.refs?.slack && <FromSlack m={m} onRead={() => setReading(true)} />}
           </div>
         </div>

@@ -43,9 +43,15 @@ def test_one_dream_at_a_time_through_the_task_create_path(api):
     assert dream(api)["dream"]["task"] == first["task"], "a second start returns the open dream"
     with api.app.state.store.read() as c:
         row = H.task(c, first["task"])
-        assert (row["owner_id"], row["requester_id"], row["title"]) == ("bot:ops", "human:ben", "Dream")
+        name = H.bot(c, "ops")["display_name"] or "ops"
+        # The title names the bot, so a list of dreams tells one bot's from the next.
+        assert (row["owner_id"], row["requester_id"], row["title"]) == (
+            "bot:ops",
+            "human:ben",
+            f"Tidy {name}'s instructions and memory",
+        )
         assert H.task_labels(row) == ["dream"]
-        assert c.execute("SELECT count(*) FROM tasks WHERE title='Dream'").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM tasks WHERE title LIKE 'Tidy %'").fetchone()[0] == 1
         # Filed as POST /api/v2/tasks files work for a bot: its run is queued.
         assert (
             c.execute(
@@ -64,7 +70,7 @@ def test_a_stateless_bot_is_refused(api):
         BS.update(c, "ops", {"stateless": True})
     assert dream(api, expected=409)["error"]["code"] == "stateless"
     with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM tasks WHERE title='Dream'").fetchone()
+        assert not c.execute("SELECT 1 FROM tasks WHERE title LIKE 'Tidy %'").fetchone()
 
 
 def test_someone_who_may_not_give_the_bot_work_is_refused(api):
@@ -79,7 +85,7 @@ def test_someone_who_may_not_give_the_bot_work_is_refused(api):
     r = api.post("/api/v2/bots/ops/dream", json={}, headers=headers("cara-test"))
     assert r.status_code in (403, 404), r.text
     with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM tasks WHERE title='Dream'").fetchone()
+        assert not c.execute("SELECT 1 FROM tasks WHERE title LIKE 'Tidy %'").fetchone()
     assert dream(api)["dream"]["task"]
 
 

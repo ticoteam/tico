@@ -104,6 +104,8 @@ _OPEN = (
     "AND NOT EXISTS (SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.ended_at IS NULL) "
     # A task blocked by one it depends on is nobody's turn, never Late, and goes on when that ends (task_depends).
     f"AND NOT {task_depends.BLOCKED % 't'} "
+    # Nobody waits on an auto dream: its release policy and the auto pass end it, never a manager (dream.NOT_AUTO).
+    "AND NOT EXISTS(SELECT 1 FROM events e WHERE e.action='dream.auto' AND e.target=t.id) "
     "ORDER BY v.entered_at, v.id"
 )
 

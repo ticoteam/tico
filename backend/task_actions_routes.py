@@ -10,7 +10,7 @@ from . import sources as SRC
 from . import ask_ingest, delivery
 from . import org_rule_check
 from .roadmaps import exact_approval
-from . import holds, task_caps, reach
+from . import bot_stops, holds, task_caps, reach
 from . import check_models, task_run_models, usage_limits
 from . import task_privacy as privacy
 from . import task_relations as TR
@@ -313,6 +313,9 @@ def register_core(
                 # page offers its form to whoever the server would accept. A person's task has no model to set.
                 "can_set_run_model": H.is_bot(row["owner_id"])
                 and task_run_models.may_set(c, auth, who, H.actor_id(row["owner_id"])),
+                # The agent Tico stopped that this task is the Needs-you item for, when the reader may release it
+                # (backend/bot_stops.py): the page puts its Release in place. Null on every other task.
+                "stopped_agent": bot_stops.stopped_on(c, auth, who, tid),
                 **privacy.page(c, who, row["conversation_id"], task_id=tid),
             }
 

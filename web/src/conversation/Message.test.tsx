@@ -367,3 +367,21 @@ describe('What a message holds besides words (thread-content.html)', () => {
     expect(within(dialog).getByText('Cedar')).toBeTruthy();
   });
 });
+
+describe('A question that shows a live browser', () => {
+  it('has Open browser, which opens that account\'s browser in place', async () => {
+    serve((url) => (url.includes('/browser') ? { status: 200, body: { ok: true } } : undefined));
+    const asked = { ...msg(1, 'bot:finance', 'Sign in to Stripe for the Wells import.\n\nOpen the browser below, finish there, then reply Done.'), refs: { shows: ['browser:stripe/acct-9'] } };
+    show([asked as ChatMessage]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Open browser' }));
+    expect(await screen.findByRole('dialog', { name: 'Sign in to Stripe for the Wells import.' })).toBeTruthy();
+    await waitFor(() => expect(calls.some((c) => c.method === 'POST' && c.url.includes('stripe') && c.url.includes('acct-9'))).toBe(true));
+  });
+
+  it('shows nothing for a message that shows no browser', async () => {
+    serve();
+    show([{ ...msg(1, 'bot:qa', 'See the page'), refs: { shows: ['page:f1@2'] } } as ChatMessage]);
+    await screen.findByText('See the page');
+    expect(screen.queryByRole('button', { name: 'Open browser' })).toBeNull();
+  });
+});
