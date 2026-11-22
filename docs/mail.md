@@ -32,10 +32,13 @@ every queued email and carries out every automation mail action. A finished auto
 snippet.
 
 To enroll incoming conversations in relationship history, use a Gmail filter that applies the label **Tico Intake**
-on arrival in a watched personal inbox that feeds the Directory. Tico saves the thread and a bounded copy of the
-message body before advancing the Gmail cursor. The inbox's person receives one private triage task per unidentified
-thread, due 24 hours after intake. An exact From address or domain can suggest a Directory contact for the person
-to review. The thread is visible only to readers of both the contact and the inbox. History is available through
+on arrival in a watched personal inbox that feeds the Directory. Intake skips automated mail, mailing lists and
+bounces. When Gmail reports a DMARC pass or an aligned DKIM pass, Tico looks for a unique Directory contact with
+the exact From address. For a match, it saves the thread and a bounded copy of the body before advancing the Gmail
+cursor. Other senders go to a private triage task for the inbox owner with a link to Gmail, due in 24 hours.
+The task flags an unverified sender. An authenticated sender without an exact match can get a domain suggestion.
+People need access to both the contact and the inbox to read the thread. Matched arrivals are logged in history.
+Relationship-agent wakes are deferred until relationship run lanes ship. History is available through
 `tico contacts activity <ref>`, `tico_contacts_activity` in MCP, and `GET /api/v2/entities/activity`.
 
 ## Organizing live

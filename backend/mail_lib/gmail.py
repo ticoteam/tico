@@ -324,6 +324,11 @@ def normalize(msg: Json, label_names: dict[str, str] | None = None, tz_name: str
         or "method=request" in str(hdrs.get("content-type", "")).lower()
         or any(a["name"].lower().endswith(".ics") for a in atts),
         "headers": hdrs,
+        "dkim_signatures": [
+            str(h.get("value") or "")
+            for h in payload.get("headers") or []
+            if str(h.get("name", "")).lower() == "dkim-signature"
+        ],
         "send_facts": {
             **{
                 key: str(hdrs.get(key) or "")[:1000]

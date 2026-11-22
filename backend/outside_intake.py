@@ -3,13 +3,16 @@
 
 import hashlib
 import json
+import re
 import sqlite3
 import uuid
-from datetime import datetime
+from email.utils import getaddresses
 from types import SimpleNamespace
 from typing import Any, cast
+from urllib.parse import quote
 
 from . import auth, mailbox_access, threads
+from .entities.ingest import _automated
 from .entities import store as entities
 from .store import H
 
@@ -19,6 +22,54 @@ hub: Any = H
 mailboxes: Any = mailbox_access
 thread_store: Any = threads
 standing = cast("Any", auth.standing)  # pyright: ignore[reportUnknownMemberType]
+_AUTH_TOKEN = re.compile(r'"(?:\\.|[^"\\])*"|\\.|[();]|[^\s();"]+')
+
+
+def _verified_from(message: SimpleNamespace, sender: str) -> bool:
+    """Use the first Authentication-Results field, which Gmail's receiving MX puts ahead of upstream results."""
+    headers = cast("dict[str, str]", message.headers)
+    raw = headers.get("authentication-results", "").lower()
+    if not raw or [address.lower() for _, address in getaddresses([str(message.from_header)])] != [sender]:
+        return False
+    domain = sender.rpartition("@")[2]
+    clauses: list[list[str]] = [[]]
+    depth = 0
+    for token in _AUTH_TOKEN.findall(raw):
+        if token == "(":
+            depth += 1
+        elif token == ")":
+            depth -= 1
+            if depth < 0:
+                return False
+        elif depth == 0:
+            if token == ";":
+                clauses.append([])
+            else:
+                clauses[-1].append(token)
+    if depth or clauses[0] != ["mx.google.com"]:
+        return False
+    for clause in clauses[1:]:
+        if not clause:
+            continue
+        result, *properties = clause
+        if result == "dmarc=pass" and f"header.from={domain}" in properties:
+            return True
+        if result != "dkim=pass":
+            continue
+        if f"header.d={domain}" in properties:
+            return True
+        # Gmail commonly reports header.b in place of header.d. Resolve it to exactly one DKIM signature.
+        prefix = next((p.removeprefix("header.b=") for p in properties if p.startswith("header.b=")), "")
+        if not prefix:
+            continue
+        signers: list[str] = []
+        for signature in cast("list[str]", message.dkim_signatures):
+            tags = dict(re.findall(r"(?:^|;)\s*([a-z]+)\s*=\s*([^;]+)", signature.lower()))
+            if "".join(tags.get("b", "").split()).startswith(prefix):
+                signers.append(tags.get("d", "").strip())
+        if signers == [domain]:
+            return True
+    return False
 
 
 def _owner(c: sqlite3.Connection, box: dict[str, Any]) -> str:
@@ -35,10 +86,18 @@ def from_gmail(c: sqlite3.Connection, box: dict[str, Any], message: SimpleNamesp
     labels = set(cast("list[str]", message.labels))
     if GMAIL_LABEL not in labels or labels.intersection(("SENT", "SPAM", "TRASH")) or message.is_internal:
         return False
-    if 0 < int(message.epoch) < datetime.fromisoformat(watch).timestamp():
+    since = hub.parse_ts(watch)
+    if since and 0 < int(message.epoch) < since.timestamp():
+        return False
+    sender = str(message.from_addr)
+    headers = cast("dict[str, str]", message.headers)
+    if (
+        sender == box["address"]
+        or _automated(sender, {**vars(message), "has_unsubscribe": "list-unsubscribe" in headers})
+        or message.send_facts.get("delivery-status")
+    ):
         return False
     owner = _owner(c, box)
-    sender = str(message.from_addr)
     if not owner or "@" not in sender or not message.thread_id or not message.msg_id:
         return False
     if not entities.is_suppressed(c, "email", sender):
@@ -52,6 +111,7 @@ def from_gmail(c: sqlite3.Connection, box: dict[str, Any], message: SimpleNamesp
             sender=sender,
             title=str(message.subject or ""),
             body=str(message.body or ""),
+            verified_id=sender if _verified_from(message, sender) else "",
         )
     return True
 
@@ -83,20 +143,22 @@ def save_message(
     if prior:
         return str(prior["id"])
 
+    payload: dict[str, Any] = {"source_message_id": source_message_id, "sender_verified": bool(verified_id)}
+    verified = entities.verified_sender(c, f"human:{owner_id}", channel, connection_id, verified_id)
+    if verified is None:
+        if verified_id:
+            payload["suggested"] = entities.suggested_sender(c, f"human:{owner_id}", sender)
+        return str(queue.queue_intake(c, connection_id, owner_id, ref, payload))
+
     key = json.dumps([channel, connection_id, source_thread_id])
     thread_id = str(uuid.uuid5(uuid.NAMESPACE_OID, key))
     root = thread_store.thread_row(c, thread_id)
     if root and (root["deleted_at"] or not root["entity_id"]):
         return None  # a replay or later arrival cannot reopen a deleted or erased conversation
-    actor = f"ext:{channel}:{verified_id or sender}"
-    verified = entities.verified_sender(c, f"human:{owner_id}", channel, connection_id, verified_id)
+    if root is not None and root["entity_id"] != verified:
+        return str(queue.queue_intake(c, connection_id, owner_id, ref, payload))
+    actor = f"ext:{channel}:{verified_id}"
     if root is None:
-        entity_id = verified
-        if entity_id is None:
-            system = str(hub.TICO_ACTOR)
-            entity = entities.upsert(c, system, "person", match={}, name=f"Unidentified sender {thread_id[:12]}")
-            entity_id = str(entity["id"])
-            entities.add_source(c, system, entity_id, "mailbox", connection_id, visibility="restricted")
         root = thread_store._insert_thread(
             c,
             actor,
@@ -104,7 +166,7 @@ def save_message(
             audience="entity",
             owner_id=f"human:{owner_id}",
             thread_id=thread_id,
-            entity_id=entity_id,
+            entity_id=verified,
             connection_id=connection_id,
         )
     else:
@@ -112,51 +174,53 @@ def save_message(
     message = hub._write_message(
         c, actor, None, body, root, "say", {}, None, None, outside=(channel, connection_id, source_message_id)
     )
-    return str(
-        queue.queue_intake(
-            c,
-            connection_id,
-            owner_id,
-            ref,
-            {"message_id": message["id"], "triage": verified is None or verified != root["entity_id"]},
-        )
-    )
+    payload["message_id"] = message["id"]
+    return str(queue.queue_intake(c, connection_id, owner_id, ref, payload))
 
 
-def process(c: sqlite3.Connection, payload: dict[str, Any], started_at: str) -> str:
-    """Settle the claim's human handoff in the same transaction as its receipt."""
-    message = hub.message(c, payload["message_id"])
-    root = thread_store.thread_row(c, message["conversation_id"]) if message else None
-    if not root or root["deleted_at"] or not root["entity_id"]:
-        return "skipped"
-    box = mailboxes.row_by_id(c, root["connection_id"])
+def triage(
+    c: sqlite3.Connection,
+    connection_id: str,
+    ref: str,
+    payload: dict[str, Any],
+    started_at: str,
+    *,
+    recovery: bool = False,
+) -> str:
+    """Hand the arrival to its inbox owner. Gmail keeps the original when the sender has no matched thread."""
+    box = mailboxes.row_by_id(c, connection_id)
     owner = _owner(c, box) if box else ""
-    if not owner or not entities.visible_entity(c, f"human:{owner}", root["entity_id"]):
+    if not owner:
         return "skipped"
     due = hub.shift(started_at, hours=DEADLINE_HOURS)
-    if payload["triage"] or hub.parse_ts(due) <= hub.parse_ts(hub.now()):
-        occurrence = f"intake:{root['id']}"
-        if not c.execute(
-            "SELECT 1 FROM tasks WHERE occurrence=? AND occurrence_step='triage'", (occurrence,)
-        ).fetchone():
-            actor = f"human:{owner}"
-            sender = str(message["sender_id"]).split(":", 2)[-1]
-            suggested = entities.suggested_sender(c, actor, sender)
-            text = f"Review the [outside thread](/threads/{root['id']}) and identify the sender."
-            if suggested:
-                text += f" Possible contact {suggested}."
-            hub.task_create(
-                c,
-                hub.TICO_ACTOR,
-                "Triage outside conversation",
-                text,
-                actor,
-                due=due,
-                private=True,
-                lint=False,
-                deduplicate=False,
-                entity_id=root["entity_id"],
-                occurrence=occurrence,
-                occurrence_step="triage",
-            )
+    subject = "Triage outside conversation" if payload.get("sender_verified") else "Triage unverified sender"
+    mailbox = quote(str(box["address"]), safe="")
+    delivery = quote(str(payload.get("source_message_id") or ""), safe="")
+    text = f"Review this arrival in [Gmail](https://mail.google.com/mail/u/{mailbox}/#all/{delivery})."
+    if recovery:
+        text += " Automatic processing could not finish."
+    elif suggested := payload.get("suggested"):
+        if entities.visible_entity(c, f"human:{owner}", str(suggested)):
+            text += f" Possible contact {suggested}."
+    hub.task_create(
+        c,
+        hub.TICO_ACTOR,
+        subject,
+        text,
+        f"human:{owner}",
+        due=due,
+        private=True,
+        lint=False,
+        deduplicate=False,
+        occurrence=f"{connection_id}:{ref}",
+        occurrence_step="triage",
+    )
+    return "ok"
+
+
+def process(c: sqlite3.Connection, connection_id: str, ref: str, payload: dict[str, Any], started_at: str) -> str:
+    if not payload.get("message_id") or hub.parse_ts(hub.shift(started_at, hours=DEADLINE_HOURS)) <= hub.parse_ts(
+        hub.now()
+    ):
+        return triage(c, connection_id, ref, payload, started_at)
     return "ok"

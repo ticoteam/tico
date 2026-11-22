@@ -16,6 +16,7 @@ from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
 
 BOX = "ana@acme.example"
 T0 = datetime(2026, 11, 16, 12, 0, tzinfo=timezone.utc)
+DMARC_PASS = {"Authentication-Results": "mx.google.com; dmarc=pass (p=reject) header.from=customer.example"}
 NOOP = {
     "id": "sort",
     "type": "filter",
@@ -92,7 +93,9 @@ def test_an_expired_history_id_lists_again_without_hearing_anything_twice(watche
 def test_intake_commits_before_the_cursor_and_replay_returns_the_same_run(watched, monkeypatch):
     api, gmail, _ = watched
     store = api.app.state.store
-    gmail.add(BOX, "first", thread="support", epoch=epoch(T0), labels=("INBOX", "Tico Intake"))
+    with store.transaction() as c:
+        ES.upsert(c, "human:ana", "person", match={"email": "person@customer.example"})
+    gmail.add(BOX, "first", thread="support", epoch=epoch(T0), labels=("INBOX", "Tico Intake"), headers=DMARC_PASS)
     box = box_row(api)
     original = automations.queue_intake
 
@@ -160,23 +163,18 @@ def test_intake_arrivals_survive_a_full_hold_and_a_stale_claim(watched):
             "ok",
             "ok",
         ]
-        assert c.execute("SELECT count(*) FROM tasks WHERE occurrence_step='triage'").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM tasks WHERE occurrence_step='triage'").fetchone()[0] == 2
 
 
-def test_unknown_sender_opens_one_private_due_task_and_ingest_does_not_fan_out(watched):
-    api, gmail, _ = watched
+def test_intake_verifies_exact_sender_and_keeps_unverified_mail_in_owner_triage(watched):
+    api, gmail, ordinary = watched
     store = api.app.state.store
     with store.transaction() as c:
         possible = ES.upsert(c, "human:ana", "person", match={"email": "person@customer.example"})["id"]
     gmail.add(BOX, "one", thread="support", epoch=epoch(T0), labels=("INBOX", "Tico Intake"))
     check(api, T0)
     with store.read() as c:
-        thread = c.execute("SELECT * FROM conversations WHERE audience='entity'").fetchone()
-        assert thread["entity_id"] != possible  # From is only a suggestion
-        assert "ext:gmail:person@customer.example" in json.loads(thread["participants"])
-    root_id = thread["id"]
-    followed = api.put(f"/api/v2/threads/{root_id}/follow", json={"notify": "live"}, headers=headers())
-    assert followed.status_code == 200, followed.text
+        assert not c.execute("SELECT 1 FROM conversations WHERE audience='entity'").fetchone()
 
     gmail.add(
         BOX,
@@ -185,20 +183,64 @@ def test_unknown_sender_opens_one_private_due_task_and_ingest_does_not_fan_out(w
         body="@ana @ops",
         epoch=epoch(T0 + timedelta(minutes=2)),
         labels=("INBOX", "Tico Intake"),
+        headers={
+            "Authentication-Results": "mx.google.com; dkim=pass header.i=@customer.example header.b=XyZa",
+            "DKIM-Signature": "v=1; d=customer.example; b=XyZabcdef",
+        },
     )
     check(api, T0 + timedelta(minutes=3))
     with time_machine.travel(T0 + timedelta(minutes=4), tick=False):
+        assert heard(api, ordinary) == []
         store.automations.drain()
     with store.read() as c:
+        thread = c.execute("SELECT * FROM conversations WHERE audience='entity'").fetchone()
+        assert thread["entity_id"] == possible
+        assert "ext:gmail:person@customer.example" in json.loads(thread["participants"])
         (task,) = c.execute("SELECT * FROM tasks WHERE occurrence_step='triage'")
         assert (task["owner_id"], task["assignee_id"], task["private"]) == ("human:ana", "human:ana", 1)
-        assert task["entity_id"] == thread["entity_id"]
+        assert not task["entity_id"]
+        assert "unverified sender" in task["title"]
         assert H.parse_ts(task["due_at"]) == T0 + timedelta(days=1)
-        assert c.execute("SELECT 1 FROM messages WHERE body LIKE ?", (f"%Possible contact {possible}.",)).fetchone()
+        assert not c.execute("SELECT 1 FROM messages WHERE source_message_id='one'").fetchone()
         two = c.execute("SELECT * FROM messages WHERE source_message_id='two'").fetchone()
-        assert (two["conversation_id"], two["direction"], two["channel"]) == (root_id, "inbound", "gmail")
+        assert (two["conversation_id"], two["direction"], two["channel"]) == (thread["id"], "inbound", "gmail")
         for table in ("message_mentions", "message_deliveries", "jobs"):
             assert not c.execute(f"SELECT 1 FROM {table} WHERE message_id=?", (two["id"],)).fetchone()
+
+
+def test_intake_ignores_machines_and_does_not_suggest_public_mail_domains(watched):
+    api, gmail, _ = watched
+    store = api.app.state.store
+    with store.transaction() as c:
+        ES.upsert(c, "human:ana", "organization", match={"domain": "gmail.com"})
+    for mid, sender, facts in (
+        ("auto", "person@customer.example", {"Auto-Submitted": "auto-replied"}),
+        ("list", "person@customer.example", {"List-Id": "support.customer.example"}),
+        ("bulk", "person@customer.example", {"List-Unsubscribe": "<mailto:list@customer.example>"}),
+        ("bounce", "mailer-daemon@customer.example", {}),
+        ("own", BOX, {}),
+        ("free", "someone@gmail.com", {"Authentication-Results": "mx.google.com; dmarc=pass header.from=gmail.com"}),
+    ):
+        gmail.add(
+            BOX,
+            mid,
+            sender=sender,
+            cc=("outside@customer.example",),
+            epoch=epoch(T0),
+            labels=("INBOX", "Tico Intake"),
+            headers=facts,
+        )
+    check(api, T0)
+    with time_machine.travel(T0, tick=False):
+        store.automations.drain()
+    with store.read() as c:
+        (run,) = c.execute("SELECT id FROM automation_runs WHERE trigger_ref LIKE 'intake:%'")
+        assert run["id"]
+        (task,) = c.execute("SELECT * FROM tasks WHERE occurrence_step='triage'")
+        assert task["title"] == "Triage outside conversation"
+        text = H.task_words(c, task["id"])
+        assert "/#all/free" in text
+        assert "Possible contact" not in text
 
 
 def test_entity_and_inbox_gate_threads_subthreads_and_history_before_paging(watched):
@@ -206,12 +248,7 @@ def test_entity_and_inbox_gate_threads_subthreads_and_history_before_paging(watc
     store = api.app.state.store
     mailbox = box_row(api)["id"]
     with store.transaction() as c:
-        entity = ES.upsert(c, "human:ana", "person", match={}, name="Acme customer")["id"]
-        c.execute(
-            "INSERT INTO entity_external_refs(id,entity_id,connection_id,system,external_type,external_id) "
-            "VALUES('sender-ref',?,?,'gmail','sender','verified')",
-            (entity, mailbox),
-        )
+        entity = ES.upsert(c, "human:ana", "person", match={"email": "person@customer.example"})["id"]
         outside_intake.save_message(
             c,
             channel="gmail",
@@ -220,7 +257,7 @@ def test_entity_and_inbox_gate_threads_subthreads_and_history_before_paging(watc
             source_thread_id="support",
             source_message_id="verified-delivery",
             sender="person@customer.example",
-            verified_id="verified",
+            verified_id="person@customer.example",
             title="Private subject",
             body="Private body",
         )

@@ -2970,7 +2970,13 @@ class Hub:
             if status == "running":
                 status = _runnable(c, current["automation_id"])
                 if status == "queued":
-                    status = outside_intake.process(c, state["payload"], current["started_at"])
+                    status = outside_intake.process(
+                        c,
+                        current["automation_id"].removeprefix(INTAKE_AUTOMATION),
+                        current["trigger_ref"],
+                        state["payload"],
+                        current["started_at"],
+                    )
             if status != "held":
                 state = {"status": status}
             c.execute(

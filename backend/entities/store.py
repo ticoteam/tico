@@ -25,6 +25,7 @@ from datetime import date, datetime
 from typing import Any, NoReturn, cast
 
 from backend import hubdb as H
+from backend.access import PUBLIC_MAIL
 from backend.entities import visible as V
 from backend.slugs import slugify
 
@@ -2460,6 +2461,8 @@ def verified_sender(
     """Resolve a sender ID vouched for by the adapter, scoped to that exact connection."""
     if not provider_id:
         return None
+    if channel == "gmail":
+        return _sender_match(c, actor, [("email", provider_id)])
     row = _one(
         c,
         "SELECT entity_id FROM entity_external_refs WHERE system=? AND connection_id=? "
@@ -2477,11 +2480,20 @@ def suggested_sender(c: sqlite3.Connection, actor: str, sender: str) -> str | No
     sender = sender.strip().lower()
     phone = _normal_identifier("phone", sender)
     if "@" in sender:
-        checks = [("email", sender), ("domain", sender.rpartition("@")[2])]
+        checks = [("email", sender)]
+        domain = sender.rpartition("@")[2]
     elif PHONE_CONTACT.fullmatch(phone):
         checks = [("phone", phone)]
+        domain = ""
     else:
-        checks = [("domain", sender)]
+        checks = []
+        domain = sender
+    if domain and domain not in PUBLIC_MAIL:
+        checks.append(("domain", domain))
+    return _sender_match(c, actor, checks)
+
+
+def _sender_match(c: sqlite3.Connection, actor: str, checks: list[tuple[str, str]]) -> str | None:
     matches = identifier_entities(c, checks)
     reader = V.reader(c, actor)
     for check in checks:

@@ -146,6 +146,8 @@ def _message(item: Json, labels: dict[str, str], domains: list[str], known: bool
         has_unsubscribe=bool(item["unsubscribe"]),
         known_sender=known,
         send_facts=dict(item.get("send_facts") or {}),
+        headers=dict(item.get("headers") or {}),
+        dkim_signatures=list(item.get("dkim_signatures") or []),
     )
 
 
@@ -304,6 +306,8 @@ def check(store: Any, box: Json, budget: Left | None = None) -> int:
             facts = cast("Json", message.send_facts)
             taken = outside_intake.from_gmail(c, inbox, message, str(state["watching_since_at"]))
             bounces(c, address, message.from_addr, message.body + "\n" + str(facts.get("delivery-status") or "")[:4096])
+            if taken:
+                continue
             on_mail(c, address, message, state["watching_since_at"])
             headers = {
                 "from_addr": message.from_addr,
@@ -312,8 +316,7 @@ def check(store: Any, box: Json, budget: Left | None = None) -> int:
                 "has_unsubscribe": message.has_unsubscribe,
                 "send_facts": facts,
             }
-            if not taken:
-                ingest.safely(c, "mail", ingest.from_mail, c, str(box["id"]), headers)
+            ingest.safely(c, "mail", ingest.from_mail, c, str(box["id"]), headers)
         c.execute(
             "UPDATE mailboxes SET history_id=?,catch_up=?,checked_at=?,check_error=NULL,"
             "watching_since_at=coalesce(watching_since_at,?) WHERE id=?",
