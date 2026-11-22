@@ -2709,6 +2709,8 @@ def connect(c, settings, who, body):
         (who.actor, *same, sid, *([name] if name else [])),
     ).fetchone()
     if target:
+        if body.confirm:
+            c.execute("UPDATE subscription_connects SET restart_confirmed=1 WHERE login_id=?", (target["id"],))
         going = c.execute("SELECT * FROM model_logins WHERE id=?", (target["id"],)).fetchone()
         plan_name = sub["name"] if sub else target["name"] or default_name(c, target["kind"], target["owner_id"])
         return answer(going, model_login._runner(c, going["runner_id"]), plan_name)
@@ -2760,8 +2762,9 @@ def connect(c, settings, who, body):
         )
     # The default name is numbered when saved, so concurrent sign-ins still get distinct names.
     c.execute(
-        "INSERT INTO subscription_connects(login_id,kind,name,subscription_id,owner_id) VALUES(?,?,?,?,?)",
-        (login["id"], kind, "" if sid else name, sid, owner),
+        "INSERT INTO subscription_connects(login_id,kind,name,subscription_id,owner_id,restart_confirmed) "
+        "VALUES(?,?,?,?,?,?)",
+        (login["id"], kind, "" if sid else name, sid, owner, int(body.confirm)),
     )
     H.event(c, who.actor, "subscription.connect", sid or login["id"], {"kind": kind, "runner": runner["id"]})
     return answer(login, runner, plan_name)
@@ -2792,7 +2795,7 @@ def connected(c, vault, settings, who, login_id, body):
             kind=target["kind"],
             name=target["name"] or None,
             secret=body.value,
-            confirm=True,
+            confirm=bool(target["restart_confirmed"]),
             owner_id=(target["owner_id"] or None) if not target["subscription_id"] else None,
         )
         try:

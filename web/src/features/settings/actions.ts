@@ -448,19 +448,21 @@ export const connect = defineAction({
   target: (input) => ('subscription' in input ? sub(input.subscription) : setting('subscriptions')),
 });
 
+const planSecret = z.string().check(z.minLength(1), z.maxLength(65536));
+
 export const pastePlan = defineAction({
   id: 'settings.pastePlan',
   title: 'Paste a plan credential',
   kind: 'change',
-  input: z.strictObject({
-    kind: z.enum(['claude_token', 'codex_login'] as const),
-    subscription: z.optional(id('a subscription id')),
-    secret: z.string().check(z.minLength(1), z.maxLength(65536)),
-    confirm: z.optional(z.boolean()),
-  }),
+  input: z.union([
+    z.strictObject({ kind: z.enum(['claude_token', 'codex_login']), secret: planSecret }),
+    z.strictObject({ subscription: id('a subscription id'), secret: planSecret, confirm: z.optional(z.boolean()) }),
+  ]),
   tico: false,
-  run: async (ctx, { kind, subscription, secret, confirm }) => {
-    const saved = subscription ? await replaceSubscriptionSecret(subscription, secret, confirm) : await addSubscription(kind, secret);
+  run: async (ctx, input) => {
+    const saved = 'subscription' in input
+      ? await replaceSubscriptionSecret(input.subscription, input.secret, input.confirm)
+      : await addSubscription(input.kind, input.secret);
     void ctx.queryClient.invalidateQueries({ queryKey: subscriptionsQuery.queryKey });
     return saved;
   },

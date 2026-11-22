@@ -260,14 +260,14 @@ describe('A model sign-in @s746', () => {
           ? { status: 200, body: { id: 'l1', runner_id: 'r1', state: 'waiting', url: PAGE, code: CODE, lines: [`Enter ${CODE}`] } }
           : { status: 404, body: { detail: 'not_found' } },
     );
-    const kind = { connect: false, help: '', kind: 'codex_login' as const, label: 'Codex', owned: false, runtime: 'codex' as const, secret_label: '' };
+    const kind = { connect: true, help: '', kind: 'codex_login' as const, label: 'ChatGPT plan', owned: true, runtime: 'codex' as const, secret_label: 'auth.json' };
     queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [kind], subscriptions: [] });
     queryClient.setQueryData(computersQuery.queryKey, []);
     show(<Agents />, '/settings/agents');
     fireEvent.click(await screen.findByRole('button', { name: 'Add' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: /Codex/ }));
-    const dialog = await screen.findByRole('dialog', { name: 'Connect Codex' });
-    expect((await within(dialog).findByRole('link', { name: 'Open page' })).getAttribute('href')).toBe(PAGE);
+    fireEvent.click(await screen.findByRole('menuitem', { name: /ChatGPT plan/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Connect ChatGPT plan' });
+    expect((await within(dialog).findByRole('link', { name: 'Open ChatGPT' })).getAttribute('href')).toBe(PAGE);
     expect(JSON.stringify(queryClient.getQueryCache().getAll().map((q) => [q.queryKey, q.state.data]))).not.toContain(CODE);
   });
 });

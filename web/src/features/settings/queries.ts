@@ -449,6 +449,7 @@ export interface SignIn {
   accepts_code?: boolean;
   message?: string | null;
   computer?: string | null;
+  not_yours?: boolean;
   name?: string | null;
   waking?: boolean;
 }
@@ -469,7 +470,7 @@ export const readSignIn = (runner: string, id: string, signal?: AbortSignal) =>
 export const sendSignInCode = (runner: string, id: string, code: string) =>
   api.post<SignIn>(`/api/v2/computers/${enc(runner)}/logins/${enc(id)}/code`, { code });
 
-export const cancelSignIn = (runner: string, id: string) => api.post(`/api/v2/computers/${enc(runner)}/logins/${enc(id)}/cancel`, {});
+export const cancelSignIn = (runner: string, id: string) => api.post<SignIn>(`/api/v2/computers/${enc(runner)}/logins/${enc(id)}/cancel`, {});
 
 /** One computer as GET /api/v2/operations draws it (ui/app/settings.ts SettingsMachine). */
 export interface Computer {

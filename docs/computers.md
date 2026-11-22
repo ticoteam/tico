@@ -268,8 +268,8 @@ installed, the person's own first, and runs the sign-in there: `claude auth logi
 below) on a Linux computer that runs Tico's latest runner, else `claude setup-token`, or `codex login` in a folder of its
 own. That computer's own login stays as it was. The page shows the link and any code, never the result, which the
 computer sends straight to Tico and keeps no copy of. If it has to run on someone else's computer, the page says so before
-the sign-in, since the result passes through that computer; cancel and paste to avoid that. With no such computer
-online, a company with Tico Cloud computers has its shared one started (made first, if it never was) and kept on until
+the sign-in, since the result passes through that computer. **Paste instead** ends the sign-in before showing the paste form.
+With no such computer online, a company with Tico Cloud computers has its shared one started (made first, if it never was) and kept on until
 the sign-in ends; if none is up within five minutes, or the company has no cloud computers, the sheet says **No
 computer online** and offers **Add a computer** and **Paste instead**. A sign-in the command reports as failed saves nothing. If the sign-in cannot
 accept the code and asks to retry, Tico ends that attempt and offers **Try again**. Open the new link and use the code
@@ -277,11 +277,12 @@ from that page; a code from the previous attempt does not carry over.
 The computer's runner log records the sign-in ID, stages, elapsed time, command exit code and a safe failure category
 (code rejected, OAuth network error, or another OAuth error). It never records the authorization link, code, token or
 raw command output. A generic code rejection cannot say whether that code expired, was reused or was incomplete.
-Signing a saved subscription in again is **Reconnect**, and asks first when running tasks would restart. It belongs to the company. A plan's
-**Owner** is the person whose plan it is. Whoever adds a plan is its owner, unless an owner or admin names another active
-person in the company, now or later. A plan is for its owner's own bots, not shared ones; the sign-in step says so. Owners
-and admins add, edit, reconnect and remove them in **Settings > Models**. The person who added a plan or API key can
-also remove it there. Default names use the owner's display name, as in **Ana's Claude plan** or **Ana's ChatGPT
+Signing a saved subscription in again is **Reconnect**, and asks first when running tasks would restart. If work starts during an
+unconfirmed sign-in, Tico keeps the previous credential; reconnect again to confirm the restart. A subscription belongs to the
+company. A plan's **Owner** is the person whose plan it is. Whoever adds a plan is its owner, unless an owner or admin names
+another active person in the company, now or later. A plan is for its owner's own bots, not shared ones; the sign-in step says
+so. Owners and admins add, edit, reconnect and remove them in **Settings > Agents**. The person who added a plan or API key
+can also remove it there. Default names use the owner's display name, as in **Ana's Claude plan** or **Ana's ChatGPT
 plan**, and fall back to **Claude plan** or **ChatGPT plan**. On upgrade, Tico replaces legacy email names on saved
 logins, including Claude logins since converted to setup tokens. The list shows the plan's usage to all members, its
 account email to its owner and admins, and only the agents each viewer can read.
