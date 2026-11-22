@@ -260,10 +260,8 @@ def request_approval(c, row, *, renew=False) -> bool:
             continue
         c.execute("RELEASE outbound_ask")
         old = row["approval_id"]
-        if old and old != asked["requirement_id"]:
-            # The OK it replaces ends with it: taken back when unused, its task closed when it was used.
-            task_asks.withdraw(c, old, "Asked again")
-            task_asks.not_done(c, old, "Asked again")
+        if old and old != asked["requirement_id"] and (task_asks.grant(c, old) or {}).get("used_at"):
+            task_asks.not_done(c, old, "Asked again")  # ask_ok took back an unused one; a used one's task ends here
         c.execute("UPDATE outbound_actions SET approval_id=? WHERE id=?", (asked["requirement_id"], row["id"]))
         return True
     return False
@@ -472,6 +470,11 @@ def recover(store, now=None) -> int:
     is `unknown`, first, in the same transaction, so it is never sent again on its own."""
     now = now or H.now()
     before = H.shift(now, seconds=-STALE)
+    with store.read() as c:  # an idle queue takes no write lock
+        if not c.execute(
+            "SELECT EXISTS(SELECT 1 FROM outbound_actions WHERE state='attempting' AND claimed_at<?)", (before,)
+        ).fetchone()[0]:
+            return 0
     with store.transaction() as c:
         stale = c.execute(
             "SELECT * FROM outbound_actions WHERE state='attempting' AND claimed_at<? AND provider_attempted_at IS NOT NULL",
@@ -516,6 +519,12 @@ def reconcile_pass(store, limit=100) -> int:
 def claim(store, now=None) -> Claimed | None:
     """The next due row (past its retry time and its hold), now `attempting` under a fresh claim token, or None."""
     now = now or H.now()
+    with store.read() as c:  # an idle queue takes no write lock
+        if not c.execute(
+            "SELECT EXISTS(SELECT 1 FROM outbound_actions WHERE state='queued' AND next_attempt_at<=? AND send_after<=?)",
+            (now, now),
+        ).fetchone()[0]:
+            return None
     with store.transaction() as c:
         rows = c.execute(
             "SELECT id FROM outbound_actions WHERE state='queued' AND next_attempt_at<=? AND send_after<=? "
@@ -620,10 +629,12 @@ def attempt(store, claimed: Claimed) -> str:
     with store.transaction() as c:
         if isinstance(answer, SafeRejection):
             if row["attempts"] >= MAX_SAFE_RETRIES:
-                settle(c, row, "failed", error=f"{answer.error} after {row['attempts']} attempts", token=claimed.token)
-                return "failed"
+                error = f"{answer.error} after {row['attempts']} attempts"
+                if settle(c, row, "failed", error=error, token=claimed.token):
+                    return "failed"
+                return "failed" if late_answer(c, row, "failed", error=error) else "lost"
             # One write: back in line, the attempt marker cleared, the provider's wait kept.
-            O.finish(
+            if not O.finish(
                 c,
                 TABLE,
                 row["id"],
@@ -633,7 +644,10 @@ def attempt(store, claimed: Claimed) -> str:
                 due_at=H.shift(H.now(), seconds=max(0.0, float(answer.retry_after))),
                 extra={"provider_attempted_at": None, "updated_at": H.now()},
                 token=claimed.token,
-            )
+            ):
+                # The claim was cleared (the row went unknown): the provider did nothing, and nothing retries an
+                # unknown row, so the refusal ends it.
+                return "failed" if late_answer(c, row, "failed", error=answer.error) else "lost"
             return "requeued"
         if not settle(c, row, "done", receipt=dict(answer or {}), token=claimed.token):
             return "done" if late_answer(c, row, "done", receipt=dict(answer or {})) else "lost"
@@ -968,7 +982,8 @@ def install(app, store, auth, mutate):
             if row["state"] == "unknown":
                 raise Problem(
                     "state",
-                    "It may have gone: confirm it went, or queue a new action (a new occurrence_key) if it did not",
+                    "It may have gone: confirm it went. Queue a new action (a new occurrence_key) only once the original "
+                    "attempt provably can no longer act; finding no record of it at the provider is not proof",
                     409,
                 )
             if row["state"] not in OPEN:
@@ -990,8 +1005,9 @@ def install(app, store, auth, mutate):
     )
     def confirm_sent(request: Request, oid: str):
         who = request.state.identity
-        if who.role not in ("owner", "human"):
-            raise Problem("forbidden", "A person confirms it went, from what they found at the provider", 403)
+        # A person as themselves (their own token too), never Agent Ops, the Assistant or a run acting for them.
+        if who.role not in ("owner", "human") or who.via or who.task_actor:
+            raise Problem("forbidden", "Only a person, as themselves, confirms it went", 403)
 
         def work(c):
             row = one(c, who, oid)

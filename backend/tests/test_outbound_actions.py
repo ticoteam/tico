@@ -384,3 +384,19 @@ def test_no_channel_ships_yet_so_every_action_is_refused(store):
     with pytest.raises(OA.Problem) as refused:
         add(store)
     assert refused.value.status == 422 and "no sender" in refused.value.detail
+
+
+def test_a_late_safe_rejection_ends_an_unknown_row_failed(store, fake):
+    row, _ = add(store)
+    fake.answers = [stalled(store, OA.SafeRejection(30, "ratelimited"))]
+    assert OA.attempt(store, OA.claim(store)) == "failed"
+    assert row_of(store, row["id"])["state"] == "failed"
+
+
+def test_only_the_person_themselves_confirms_an_unknown_action_went(api, store, fake):
+    row, _ = approved_by_ben(store)
+    fake.answers = [RuntimeError("connection reset")]
+    assert OA.attempt(store, OA.claim(store)) == "unknown"
+    path = f"/api/v2/outbound-actions/{row['id']}/confirm-sent"
+    assert api.post(path, json={}, headers=headers("ben-via-agent-ops")).status_code == 403
+    assert api.post(path, json={}, headers=headers("ben-test")).json()["action"]["state"] == "done"

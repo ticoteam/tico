@@ -82,7 +82,8 @@ def outbound_cancel(api, args):
 @tool(
     "tico_outbound_confirm_sent",
     "Confirm an outbound action whose outcome is unknown went out (it is done), from what you found at the provider. "
-    "A person's call. If it did not go, queue a new action with a new occurrence_key.",
+    "A person's own call, never made for them. A new action (new occurrence_key) is safe only once the original "
+    "attempt provably can no longer act; no record at the provider is not proof.",
     {"id": _s("Outbound action id")},
     required=("id",),
     writes=True,

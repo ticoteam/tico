@@ -29,7 +29,7 @@ Or over the API, CLI or MCP:
 | `GET /api/v2/outbound-actions/{id}` | one, with its payload and the `shown_hash` its OK sends back |
 | `POST /api/v2/outbound-actions/{id}/approve` | the person asked OKs it, by their own click in Tico |
 | `POST /api/v2/outbound-actions/{id}/cancel` | cancel one that has not gone (waiting, queued or blocked) |
-| `POST /api/v2/outbound-actions/{id}/confirm-sent` | a person confirms an unknown one went (`tico outbound confirm-sent`) |
+| `POST /api/v2/outbound-actions/{id}/confirm-sent` | a person, as themselves, confirms an unknown one went (`tico outbound confirm-sent`) |
 | `GET`/`PUT /api/v2/outbound-actions/policy` | the company's policy (`tico outbound policy`, `policy-set`) |
 
 Only a bot (or Tico itself) queues. The same `occurrence_key` always answers the action it already made. A
@@ -69,8 +69,9 @@ may ask, else the company's default person. With nobody to ask, the action is `b
 - **Unknown.** Never sent again on its own, never put back in line: the worker that made the attempt may still reach
   the provider. The adapter's reconcile (outside any transaction) may settle it done or failed from the provider's own
   record; the original attempt's own answer arriving after all (matched by the row and its attempt marker) settles it;
-  otherwise it is logged and waits until a person confirms it went. It is never canceled or marked not sent: a person
-  sure it did not go queues a new action (a new occurrence key). Its OK's task stays open until it ends.
+  otherwise it is logged and waits until a person confirms it went. It is never canceled or marked not sent. A new action (a new
+  occurrence key) is safe only once the original attempt provably can no longer act: finding no record of it at the
+  provider is not proof, since a paused worker may still reach it. Its OK's task stays open until it ends.
 
 `payload` is wiped when an action is done, failed or canceled; `metadata` and `receipt` stay. Rows are never pruned.
 
