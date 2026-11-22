@@ -377,7 +377,7 @@ def changes(c: Any, auth: Any, who: Any, task_id: str, bot: str, last: Row) -> l
             (task_id, last["finished_at"]),
         )
     ]
-    history = task_reads.readable_history(c, who, history, auth.task_sql(c, who))
+    history = task_reads.readable_history(c, auth, who, history, auth.task_sql(c, who))
     shown: list[Any] = files.readable_page_refs(c, auth, who, history)
     out: list[str] = []
     for item in reversed(shown):

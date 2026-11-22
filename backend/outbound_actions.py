@@ -436,12 +436,13 @@ def enqueue(
         destination = destination.strip()
         payload = {**payload, "body": support_hq.reply_body(payload.get("body"))}
         key = support_hq.reply_key(destination, payload["body"])
-        # A draft that ended without sending (failed or canceled) may be queued again under its next key.
+        # A stale reply needs a fresh draft, even when a caller now supplies a different message ID.
         base, tries = key, 1
         while (
             tries < 20
             and c.execute(
-                "SELECT 1 FROM outbound_actions WHERE occurrence_key=? AND state IN ('failed','canceled')", (key,)
+                "SELECT 1 FROM outbound_actions WHERE occurrence_key=? AND state IN ('failed','canceled')",
+                (key,),
             ).fetchone()
         ):
             tries += 1

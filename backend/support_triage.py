@@ -26,7 +26,7 @@ import logging
 import threading
 
 from clients import judge as J
-from . import decide_groups as DG
+from . import decide_groups as DG, support_hq
 from .store import H
 
 log = logging.getLogger("tico.support_triage")
@@ -271,7 +271,7 @@ def ask_many(store, primary, rows):
 def deliver_one(store, auth, row, found, why):
     """Open one waited ticket's task, held or not, and replay what arrived meanwhile as quiet notes. One transaction
     per ticket: a refusal (its bot paused) leaves this ticket waiting and no other."""
-    from .watchers import _open, defang
+    from .watchers import _open, defang, remember
 
     label = question_set()["label"] if found else SET
     with store.transaction() as c:
@@ -312,10 +312,7 @@ def deliver_one(store, auth, row, found, why):
             task = _open(c, auth, row["bot"], row["title"], first + "\n\n" + row["body"], help_key=row["key"])
         for text in json.loads(now["later"] or "[]"):
             H.task_comment(c, H.TICO_ACTOR, task["id"], defang(text, c), wake=False)
-        c.execute(
-            "INSERT INTO watcher_items VALUES(?,?,?,?) ON CONFLICT(bot,key) DO UPDATE SET task_id=excluded.task_id",
-            (row["bot"], row["key"], task["id"], H.now()),
-        )
+        remember(c, row["bot"], row["key"], task["id"], help_event=True)
         c.execute(
             "INSERT INTO watcher_triage(bot,key,label,held,detail,created_at) VALUES(?,?,?,?,?,?) "
             "ON CONFLICT(bot,key) DO NOTHING",
@@ -346,8 +343,7 @@ def waited_body(name, bot, found, body):
 def hand_over(store, row):
     """A ticket that waited past WAIT_HOURS: a task for a person, as a held ticket is, and its copy here removed. With
     no person to give it to, the copy is removed all the same (the ticket stays at HQ) and an event says so."""
-    from . import support_hq
-    from .watchers import _open, defang
+    from .watchers import _open, defang, remember
 
     with store.transaction() as c:
         now = c.execute("SELECT later FROM watcher_pending WHERE bot=? AND key=?", (row["bot"], row["key"])).fetchone()
@@ -384,10 +380,7 @@ def hand_over(store, row):
         )
         for text in json.loads(now["later"] or "[]"):
             H.task_comment(c, H.TICO_ACTOR, task["id"], defang(text, c), wake=False)
-        c.execute(
-            "INSERT INTO watcher_items VALUES(?,?,?,?) ON CONFLICT(bot,key) DO UPDATE SET task_id=excluded.task_id",
-            (row["bot"], row["key"], task["id"], H.now()),
-        )
+        remember(c, row["bot"], row["key"], task["id"], help_event=True)
         c.execute(
             "INSERT INTO watcher_triage(bot,key,label,held,detail,created_at) VALUES(?,?,?,?,?,?) "
             "ON CONFLICT(bot,key) DO NOTHING",
@@ -411,6 +404,7 @@ def sweep(store, at=None):
             hand_over(store, row)
         except Exception as exc:  # noqa: BLE001 the next sweep tries again
             log.error("A waiting support ticket for %s could not be handed over: %s", row["bot"], type(exc).__name__)
+    support_hq.verify_due(store, at, limit=1)
 
 
 def waiting(store, skip, most=1):
@@ -459,6 +453,7 @@ def drain(store, auth, primary):
             answered = [(None, "triage failed")] * len(rows)
         for row, (found, why) in zip(rows, answered, strict=True):
             _deliver(store, auth, row, found, why)
+    support_hq.verify_due(store)
 
 
 _RUNNING, _AGAIN = threading.Lock(), threading.Event()

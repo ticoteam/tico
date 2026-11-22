@@ -32,6 +32,7 @@ from typing import Annotated, Any, Literal, cast
 
 import httpx
 
+from clients import gateway
 from pydantic import Field
 
 from . import diagnostics, rule_links, support_asks, task_asks, team_rules
@@ -236,20 +237,23 @@ def clean_email(value):
     return value
 
 
-def _ask_hq(method, path, *, body=None, secret="", wait=HQ_WAIT, idem="", staff=""):
+def _ask_hq(method, path, *, body=None, secret="", wait=HQ_WAIT, idem="", staff="", base=None, install_key=""):
     """One request to HQ, or a Problem the person can act on. Nothing from HQ's answer is logged. `wait` is longer for
     a long poll (backend/support_access.py). `idem` is sent as Idempotency-Key: the same report sent again (a retry
     after a crash or a lost answer) is the same ticket at an HQ that keeps keys."""
+    base = base if base is not None else hq_url()
+    if install_key and not base.startswith("https://"):
+        install_key = ""
     headers = {"Accept": "application/json", "User-Agent": "tico-support"}
     if secret:
         headers["X-Ticket-Secret"] = secret
-    if staff:
-        headers["Authorization"] = "Bearer " + staff
+    if bearer := staff or install_key:
+        headers["Authorization"] = "Bearer " + bearer
     if idem:
         headers["Idempotency-Key"] = idem
     try:
-        with httpx.Client(timeout=wait, transport=TRANSPORT, follow_redirects=False) as http:
-            return http.request(method, hq_url() + path, json=body, headers=headers)
+        with httpx.Client(timeout=wait, transport=TRANSPORT, follow_redirects=False, trust_env=not install_key) as http:
+            return http.request(method, base + path, json=body, headers=headers)
     except httpx.HTTPError as exc:
         diagnostics.RING.handle(
             logging.LogRecord(
@@ -259,6 +263,27 @@ def _ask_hq(method, path, *, body=None, secret="", wait=HQ_WAIT, idem="", staff=
         raise Problem(
             "support_unreachable", "Could not reach Tico support. Try again in a moment.", 502, retryable=True
         ) from None
+
+
+def _install_key(store, vault, settings, base):
+    from . import gateway_connection
+
+    if not base.startswith("https://"):
+        return ""
+    try:
+        with store.read() as c:
+            key, target, _ = gateway_connection.target(c, vault, settings)
+    except (Problem, ValueError, AttributeError):
+        # A missing or unreadable credential leaves the support request usable without proof.
+        return ""
+    if re.fullmatch(r"[!-~]+", key):
+        try:
+            hq, configured = (httpx.URL(gateway.safe_base(url)) for url in (base, target))
+        except (ValueError, httpx.InvalidURL):
+            return ""
+        if (hq.scheme, hq.netloc) == (configured.scheme, configured.netloc):
+            return key
+    return ""
 
 
 def _refused_field(response):
@@ -592,12 +617,14 @@ class Support:
             found = cast(Any, checked)  # the check its caller made (or None: no agent)
         if before_send:
             before_send()
-        answer = _ask_hq("POST", "/v1/support", body=payload, idem=idem)
+        base = hq_url()
+        proof = _install_key(self.store, self.vault, self.settings, base) if payload.get("install_id") else ""
+        answer = _ask_hq("POST", "/v1/support", body=payload, idem=idem, base=base, install_key=proof)
         if answer.status_code == 422 and _refused_field(answer) == "fields":
             # An HQ from before source refuses it as an unknown field: the ticket goes again without it, keeping the
             # rest (Agent Ops' and the Health Monitor's messages start with their name, which is how such an HQ reads it).
             payload.pop("source")
-            answer = _ask_hq("POST", "/v1/support", body=payload, idem=idem)
+            answer = _ask_hq("POST", "/v1/support", body=payload, idem=idem, base=base, install_key=proof)
         if answer.status_code == 422 and {"app_version", "kind"} & set(payload) and _refused_field(answer) == "fields":
             # An HQ from before app_version or kind refuses unknown fields; the ticket still goes without them, and
             # names its kind in the message instead.
@@ -607,7 +634,7 @@ class Support:
             named = f"[{body.kind.capitalize()}] {message}"
             if body.kind != "support" and len(named) <= MAX_MESSAGE:
                 payload["message"] = named
-            answer = _ask_hq("POST", "/v1/support", body=payload, idem=idem)
+            answer = _ask_hq("POST", "/v1/support", body=payload, idem=idem, base=base, install_key=proof)
         if answer.status_code == 422 and "diagnostics" in payload:
             raise Problem(
                 "diagnostics_rejected",

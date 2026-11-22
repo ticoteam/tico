@@ -689,14 +689,11 @@ def deliver(store, auth, row, v, waited=False):
             first = warning_line(v) + "\n\n" if v and v["action"] != "pass" else ""
             task = _open_task(c, auth, row, v, None, row["title"], first + row["body"])
         if watcher:
-            from .watchers import defang
+            from .watchers import defang, remember
 
             for text in json.loads(now["later"] or "[]"):
                 H.task_comment(c, H.TICO_ACTOR, task["id"], defang(text, c), wake=False)
-            c.execute(
-                "INSERT INTO watcher_items VALUES(?,?,?,?) ON CONFLICT(bot,key) DO UPDATE SET task_id=excluded.task_id",
-                (row["bot"], row["key"], task["id"], H.now()),
-            )
+            remember(c, row["bot"], row["key"], task["id"])
             # Support triage's record of a held key: a later message on it is a note for the person, not a wake.
             c.execute(
                 "INSERT INTO watcher_triage(bot,key,label,held,detail,created_at) VALUES(?,?,?,?,?,?) "

@@ -117,10 +117,11 @@ A copy run from source (version `dev`: a checkout, a test, the never-stuck rig) 
 A ticket starting `[Health Monitor]` carries its signature. HQ keeps the signature with each ticket, so the staff list
 groups by it (`GET /v1/staff/tickets?signature=hm-...`). The Support bot groups tickets by signature: one engineering
 task per signature, and every other install's ticket or repeat is a comment on it
-(`templates/catalog/support-owner/playbooks/tico-hq-tickets.md`). When a release ships the fix, write a reply file and run
-`software/hq-tickets close-signature hm-... <file> --task <ticket>=<support-task>` with one `--task` per ticket to reply to.
-The command queues a reply for each supplied pair through Outbound actions. Staff can close each HQ ticket after its
-reply is confirmed. Each company reads its reply on its Support page.
+(`templates/catalog/support-owner/playbooks/tico-hq-tickets.md`). When a release ships the fix, read each ticket with
+`hq-tickets show` and record the latest customer message ID before writing the reply file. Use zero for the original
+request. Run `software/hq-tickets close-signature hm-... <file> --task <ticket>=<support-task>@<message-id>` with one
+`--task` per ticket. The command checks each reviewed ID before queuing replies through Outbound actions. Staff can
+close each HQ ticket after its reply is confirmed. Each company reads its reply on its Support page.
 
 ## Where it shows
 

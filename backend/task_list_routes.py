@@ -755,6 +755,8 @@ def readers(auth):
         if who is not None:
             from .files import readable_earlier, readable_page_refs
 
+            if (entity := value.get("entity_id")) and task_reads.hidden_help_links(c, auth, who, {row["id"]: entity}):
+                value["entity_id"] = ""
             # An OK's page from an earlier stage may live on another task: the file's own read check decides it. Pages
             # are read as the request reads (auth.run_viewer: a lease of the shared Assistant as its run's person).
             reader = auth.run_viewer(c, who)
@@ -875,9 +877,13 @@ def readers(auth):
 
         task_reads.brief(c, rows, visible_sql, waiting_on.turn_viewer(who))
         tags = list_tags(c, who, rows)
+        linked = {row["id"]: row["entity_id"] for row in rows if row.get("entity_id")}
+        hidden = task_reads.hidden_help_links(c, auth, who, linked)
         result = []
         for row in rows:
             value = plain_view(row, c)
+            if row["id"] in hidden:
+                value["entity_id"] = ""
             value.pop("checkpoint", None)  # up to a page of text per task; the full task view carries it
             value["tags"] = [dict(tags[tag["id"]]) for tag in value["tags"]]
             value.update(

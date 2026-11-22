@@ -43,18 +43,21 @@ Follow `playbooks/work-a-ticket.md` for the buckets and for `tico doc ask`. Also
   same redacted facts and hand it to the person who can file it if there is no issue yet. Attach the Tico GitHub issue
   URL to the Engineering task with `tico task link <engineering task id> <issue URL>`. Keep the Support task open.
   When a linked PR merges or the Engineering task reaches Done, the Support task gets a follow-up through Outbound
-  actions. HQ handles release notices for tickets already linked there.
+  actions. If the customer already wrote before the watcher opened the task, read the ticket and draft the follow-up
+  with `reply --last-message-id`. HQ handles release notices for tickets already linked there.
 - **Health Monitor report:** a ticket that starts `[Health Monitor]` and has a `Signature: hm-...` line came from an
   install's Health Monitor, not a person: there is no one to reply to beyond a short "thanks, tracked". Every install sends
   the same signature for the same problem, so group by it: one engineering task per signature, titled with the signature,
   and each new ticket or "Seen again" message with that signature is a comment on that task (which install, the version,
   how many times), never a second task. `software/hq-tickets list --signature hm-...` shows every ticket with one.
   Keep the ticket ids on the task so the release that fixes it can close them.
-- **Health Monitor fix shipped:** when a release carrying the fix for a signature rolls out, write one fixed-in reply
+- **Health Monitor fix shipped.** When a release carrying the fix for a signature rolls out, read each ticket with
+  `show` and record its latest customer message ID (zero for the original request). Write one fixed-in reply
   (`reports/hq-hm-....md`: what was wrong, the release with the fix, and how to update). Queue it per open Support
-  task through Outbound actions. `software/hq-tickets close-signature <signature> <file> --task <ticket>=<task>`
-  queues that reply for each supplied ticket and Support task pair. A person can close the HQ tickets after their
-  replies are confirmed.
+  task through Outbound actions. `software/hq-tickets close-signature <signature> <file> --task <ticket>=<task>@<message-id>`
+  requires the message ID the draft was written against for each ticket. If a draft is blocked as stale, read that ticket
+  and queue a revised draft with `reply --last-message-id`. A person can close the HQ tickets after their replies are
+  confirmed.
 - **Setup help:** the title says `(setup)`. The person pressed **Want help setting up?** and the message starts with a setup
   snapshot they could edit: steps done, computer online, model signed in, first bot ready, bots in Needs setup. Answer the
   first "no" in it with the one next step from the docs; ask for **Setup check** only when the snapshot does not say enough.
@@ -94,11 +97,12 @@ task ID, a stable key for this draft, and the latest customer message ID shown b
     tico outbound send --channel help-ticket --operation answer --to TK-XXXXXXXX \
       --task <support task id> --key <draft key> --payload '{"body":"<answer from the docs>","last_message_id":0}'
 
-For other replies, queue the reply file on the Support task:
+For other replies, queue the reply file with the customer message ID the draft covers (zero for the original request):
 
-    software/hq-tickets reply TK-XXXXXXXX reports/hq-TK-XXXXXXXX.md --task <support task id>
+    software/hq-tickets reply TK-XXXXXXXX reports/hq-TK-XXXXXXXX.md --task <support task id> --last-message-id 0
 
-If the server refuses the reply or sending is blocked, leave the draft on the task for a person.
+If a newer customer message blocks the reply, read the ticket and queue a fresh draft. For other refusals, leave the
+draft on the task for a person.
 
 ## 5. Keep the task open until the next step is complete
 

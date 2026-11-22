@@ -3,10 +3,39 @@ delete keeps that work in place instead."""
 
 import json
 
+import pytest
+
 from backend.task_delete import delete_tasks
 from backend import hubdb as H
 from backend import task_relations as TR
 from backend.tests.helpers.tasks_board import api, bot_token, get, headers, post  # noqa: F401  (the fixture)
+
+
+@pytest.mark.parametrize("merge", [False, True])
+def test_restore_repairs_the_directory_link_on_a_legacy_task_conversation(api, merge):
+    from backend.entities import store as ES
+
+    store = api.app.state.store
+    with store.transaction() as c:
+        entity = ES.upsert(c, H.TICO_ACTOR, "organization", match={}, name="Old company")["id"]
+    task = post(api, "tasks", {"owner": "ben", "title": "Help with setup", "body": "Help", "entity": entity})
+    with store.transaction() as c:
+        c.execute("UPDATE conversations SET entity_id=? WHERE id=?", (entity, task["conversation_id"]))
+    post(api, f"tasks/{task['id']}/delete", {})
+    with store.transaction() as c:
+        if merge:
+            kept = ES.upsert(c, H.TICO_ACTOR, "organization", match={}, name="Kept company")["id"]
+            ES.merge(c, H.TICO_ACTOR, kept, entity)
+        else:
+            ES.erase_rows(c, H.TICO_ACTOR, entity, "Erased by request")
+            kept = None
+    post(api, f"tasks/{task['id']}/restore", {})
+    with store.read() as c:
+        assert H.task(c, task["id"])["entity_id"] == (kept or "")
+        assert H.conversation(c, task["conversation_id"])["entity_id"] == kept
+    if kept:
+        history = get(api, f"entities/activity?ref={kept}")
+        assert [row["id"] for row in history["rows"]] == [task["conversation_id"]]
 
 
 def test_delete_removes_imported_tickets_and_refuses_one_with_work_outside_the_list(api):
