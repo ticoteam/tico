@@ -183,7 +183,7 @@ impl CursorHost {
     /// A new chat (`cursor-agent create-chat`): its id is the thread id.
     async fn new_chat(&self, settings: &Settings) -> Result<String, HostError> {
         let cmd = self.cmd();
-        let mut command = crate::isolation::command_as(settings.identity, &cmd[0]);
+        let mut command = crate::isolation::command(&cmd[0]);
         command
             .args(&cmd[1..])
             .arg("create-chat")

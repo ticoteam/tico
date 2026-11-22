@@ -382,8 +382,14 @@ pub fn stateless_chat(attempt: &Value) -> bool {
             && text_of(&attempt["task"]["id"]).is_empty()
 }
 
-fn isolated_turn(relationship: bool, harness_can_isolate: bool, pool_available: bool) -> bool {
-    pool_available && (relationship || harness_can_isolate)
+fn uses_turn_user(
+    harness: &crate::harness_tools::Capabilities,
+    gateway: bool,
+    pool_available: bool,
+    separation: crate::gateway_relay::Separation,
+) -> bool {
+    (harness.isolated_user && pool_available)
+        || (gateway && separation == crate::gateway_relay::Separation::Isolated)
 }
 
 /// The epoch that moves when this turn's thread is cleared, and the conversation it is recorded for: the bot's shared
@@ -2145,7 +2151,6 @@ impl Runner {
         runtime: &str,
         env: &Env,
         profile: Option<&Profile>,
-        identity: Option<(u32, u32)>,
         tx: hosts::Events,
     ) -> Result<Host, Fail> {
         #[cfg(test)]
@@ -2165,55 +2170,39 @@ impl Runner {
         }
         #[cfg(test)]
         if let Some(env) = tests::HOST_CODEX.with(|env| env.borrow().clone()) {
-            return Ok(Host::Codex(CodexHost::on_home_as(env, tx, None, identity)));
+            return Ok(Host::Codex(CodexHost::on_home(env, tx, None)));
         }
-        let private_home = identity.and_then(|_| env.get("HOME")).map(Path::new);
         Ok(match runtime {
             "claude" => Host::Claude(ClaudeHost::new(
                 bot,
                 vec![crate::harness_tools::executable_for("claude")],
                 tx,
             )),
-            "codex" => {
-                let home = private_home
-                    .map(|p| p.join(".codex"))
-                    .or_else(|| profile.and_then(|p| p.home("codex")));
-                Host::Codex(CodexHost::on_home_as(
-                    env.clone(),
-                    tx,
-                    home.as_deref().and_then(Path::to_str),
-                    identity,
-                ))
-            }
+            "codex" => Host::Codex(CodexHost::on_home(
+                env.clone(),
+                tx,
+                profile
+                    .and_then(|p| p.home("codex"))
+                    .map(|h| h.display().to_string())
+                    .as_deref(),
+            )),
             "gemini" => Host::Gemini(GeminiHost::new(
                 bot,
-                &private_home
-                    .map(|p| p.join("gemini"))
-                    .unwrap_or_else(|| self.state.directory.join("gemini").join(bot)),
+                &self.state.directory.join("gemini").join(bot),
                 vec!["gemini".into()],
                 tx,
             )),
-            "musecode" => {
-                use crate::hosts::musecode::{config_home, data_home, MuseCodeHost};
-                let state = private_home
-                    .map(|p| p.join("musecode"))
-                    .unwrap_or_else(|| {
-                        crate::isolation::bot_state(&self.state.directory).join("musecode")
-                    });
-                let homes = if private_home.is_some() {
-                    (state.join("config"), state.join("data"))
-                } else {
-                    (config_home(profile), data_home(profile))
-                };
-                Host::MuseCode(MuseCodeHost::on_config(
-                    bot,
-                    vec![crate::harness_tools::executable_for("musecode")],
-                    None,
-                    state,
-                    homes,
-                    tx,
-                ))
-            }
+            "musecode" => Host::MuseCode(crate::hosts::musecode::MuseCodeHost::on_config(
+                bot,
+                vec![crate::harness_tools::executable_for("musecode")],
+                None,
+                crate::isolation::bot_state(&self.state.directory).join("musecode"),
+                (
+                    crate::hosts::musecode::config_home(profile),
+                    crate::hosts::musecode::data_home(profile),
+                ),
+                tx,
+            )),
             "pi" => Host::Pi(crate::hosts::pi::PiHost::new(
                 bot,
                 vec![crate::harness_tools::executable_for("pi")],
@@ -2488,12 +2477,11 @@ impl Runner {
                 subscription: None,
             });
             let ctx = EnvContext { url: &self.config.url(), projects_dir: &self.config.projects_dir(), state_dir: &self.state.directory };
-            // Gateway requires a private user on Docker. With a pool, relationship turns always lease one
-            // and ordinary turns lease one when the harness supports it.
+            // Only the Gateway and harnesses that can sign in without the shared home can use a leased UID.
             let harness = crate::harness_tools::caps(&runtime, &text_of(&config["harness"]));
-            let pool = if relationship { crate::turn_users::configured() } else { crate::turn_users::available() };
-            let isolated = isolated_turn(relationship, harness.isolated_user, pool);
-            if crate::hosts::pi::is_gateway(model.as_deref()) || isolated {
+            let separation = crate::gateway_relay::separation();
+            let isolated = uses_turn_user(&harness, crate::hosts::pi::is_gateway(model.as_deref()), crate::turn_users::available(), separation);
+            if isolated {
                 // The user and relay this conversation's kept pi runs with (hosts/pi.rs Pool), when it has one.
                 // Only a turn that stays on the kept pi takes it: reclaim removes it from the pool, so any other turn
                 // would drop its lease. Left in the pool, idle eviction releases it the normal way.
@@ -2501,8 +2489,7 @@ impl Runner {
                 let kept = if runtime == "pi" && session_runtime == runtime && !fresh_chat && !personal { self.pi.reclaim(&owner) } else { None };
                 if let Some(held) = kept {
                     (vault.turn_user, vault.relay) = (held.user, held.relay);
-                } else if crate::gateway_relay::separation() != crate::gateway_relay::Separation::TrustGroup {
-                    // A cloud machine has no turn-user pool (no isolation): its Gateway turn runs on the relay alone.
+                } else {
                     let taken = self.during_drain(&aid, self.take_turn_user(&attempt, &flags, crate::turn_users::Lease::take)).await;
                     vault.turn_user = Some(taken.map_err(|e| self.lease_failed(&aid, e, &mut drove))?);
                 }
@@ -2511,7 +2498,6 @@ impl Runner {
             let own = if p.disposable && !personal_claim { crate::client::Client::new(&self.config.url(), &token, 10, 0).ok() } else { None };
             let own_tokens = crate::gitcred::TokenCache::new();
             let (client, tokens) = own.as_ref().map_or((&self.client, &*self.tokens), |c| (c, &own_tokens));
-            let separation = crate::gateway_relay::separation();
             // Three independent asks at once: the turn's credentials (over connections the runner keeps for them), its
             // GitHub token and its Gateway key. Each is applied below in the order it always was.
             let (built, granted, pinned) = tokio::join!(
@@ -2595,14 +2581,6 @@ impl Runner {
             base_env = Some(env.clone());
             let turn_identity = vault.for_model(&mut env, model.as_deref(), isolated).map_err(Fail::runtime)?;
             if relationship {
-                if turn_identity.is_some() {
-                    // The selected login's profile paths must not redirect a private turn back to shared state.
-                    for key in std::iter::once(harness.profile_home).chain(harness.profile_home_overrides) {
-                        if !matches!(key.as_str(), "HOME" | "XDG_CONFIG_HOME") {
-                            env.remove(&key);
-                        }
-                    }
-                }
                 // The model's normal identity can use the directory. The attempt owns its lifetime.
                 if let Some((uid, gid)) = turn_identity.or_else(crate::isolation::identity) {
                     std::os::unix::fs::lchown(&execution_path, Some(uid), Some(gid))
@@ -2830,7 +2808,7 @@ impl Runner {
                 env = turn_env;
                 Host::Antigravity(warm)
             } else {
-                self.make_host(&bot, &runtime, &env, selected.as_ref(), turn_identity, tx)?
+                self.make_host(&bot, &runtime, &env, selected.as_ref(), tx)?
             };
             let h = host.insert(made);
             if voice_call && matches!(h, Host::Codex(_)) {
@@ -3467,7 +3445,7 @@ impl Runner {
                 if !flags.harness_allocated.load(Ordering::SeqCst) {
                     self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
                 }
-                let h = host.insert(self.make_host(&bot, &hop.runtime, &hop_env, selected.as_ref(), turn_identity, tx)?);
+                let h = host.insert(self.make_host(&bot, &hop.runtime, &hop_env, selected.as_ref(), tx)?);
                 h.track_allocation(flags.harness_allocated.clone());
                 h.set_attempt(&aid);
                 if let Some(c) = &capture {
@@ -3916,7 +3894,9 @@ impl Runner {
         let refreshed = crate::model_subscriptions::finish(&mut vault.subscriptions);
         mask(&aid, &mut redactor, &mut vault, refreshed);
         let scratch = if relationship {
-            place.as_mut().and_then(crate::sessions::Place::take_scratch)
+            place
+                .as_mut()
+                .and_then(crate::sessions::Place::take_scratch)
         } else {
             None
         };
@@ -8997,11 +8977,25 @@ for line in sys.stdin:
     }
 
     #[test]
-    fn relationship_turn_identity_depends_on_the_pool_even_for_shared_user_harnesses() {
-        assert!(isolated_turn(true, false, true));
-        assert!(!isolated_turn(true, true, false));
-        assert!(!isolated_turn(false, false, true));
-        assert!(isolated_turn(false, true, true));
+    fn relationship_turn_identity_preserves_harness_sign_in() {
+        use crate::gateway_relay::Separation::{Isolated, NoRelay, TrustGroup};
+        for (runtime, harness) in [
+            ("claude", "claude"),
+            ("codex", "codex"),
+            ("gemini", "gemini"),
+            ("gemini", "antigravity"),
+            ("musecode", "musecode"),
+            ("grok", "grok"),
+            ("cursor", "cursor"),
+        ] {
+            let caps = crate::harness_tools::caps(runtime, harness);
+            assert!(!uses_turn_user(&caps, false, true, Isolated), "{harness}");
+        }
+        let pi = crate::harness_tools::caps("pi", "pi");
+        assert!(uses_turn_user(&pi, false, true, Isolated));
+        assert!(!uses_turn_user(&pi, false, false, NoRelay));
+        assert!(uses_turn_user(&pi, true, false, Isolated));
+        assert!(!uses_turn_user(&pi, true, false, TrustGroup));
     }
 
     #[tokio::test]
@@ -9031,7 +9025,11 @@ for line in sys.stdin:
             );
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(
-                std::fs::metadata(path.parent().unwrap()).unwrap().permissions().mode() & 0o777,
+                std::fs::metadata(path.parent().unwrap())
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
                 0o711
             );
             assert_eq!(

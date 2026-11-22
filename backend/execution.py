@@ -2473,6 +2473,16 @@ def claim_refusal(
     return why, config
 
 
+def relationship_readiness(ready):
+    # An isolated runner still needs its turn-user pool for the Gateway relay.
+    if (
+        ready.get("isolated") is True
+        and (ready.get("runtimes", {}).get(models_preset.GATEWAY_RUNTIME) or {}).get("turn_user") != "own"
+    ):
+        return {**ready, "isolated": False}
+    return ready
+
+
 def _claim_refusal(
     c,
     settings,
@@ -2502,8 +2512,10 @@ def _claim_refusal(
     if bot in held_bots and "maintaining" not in ignore_refusals:
         return "maintaining", None
     relationship = bot == relationship_runs.BOT
-    if relationship and ready.get("relationship_lanes") is not True:
-        return "readiness_unknown", None
+    if relationship:
+        if ready.get("relationship_lanes") is not True:
+            return "readiness_unknown", None
+        ready = relationship_readiness(ready)
     try:
         config = json.loads(config_json)
     except (ValueError, TypeError):
@@ -3284,10 +3296,12 @@ CLAIM_CONFIG_SQL = (
 
 def queued_jobs_sql(bots=None):
     """A bot's queued jobs in the order its claim takes them, each with whether the interrupted-work fence and a claim
-    scope let it through. With `bots`, the same rows for all of them at once (prime_claimables)."""
+    scope let it through and whether it is first in its relationship lane. With `bots`, the same rows for all of them
+    at once (prime_claimables)."""
     return (
         f"SELECT j.*,m.sender_id,{H.in_person_name_sql()} person_sent,{unfenced_sql()} free,{scoped_sql()} in_scope,"
-        f"{task_quarantine.free_sql(queued_task_sql())} quarantine_free FROM jobs j "
+        f"{task_quarantine.free_sql(queued_task_sql())} quarantine_free,{relationship_queue_head_sql()} lane_head "
+        "FROM jobs j "
         "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
         f"WHERE j.bot_id{'=?' if bots is None else ' IN (' + ','.join('?' * len(bots)) + ')'} "
         "AND j.state='queued' AND j.held=0 "
@@ -3497,6 +3511,8 @@ def job_reason(c, settings, runner, job, followed, ready, busy, live, loads):
         return "scoped"
     if not job["free"]:
         return "uncertain" if job["quarantine_free"] else holds.TASK_QUARANTINE
+    if not job["lane_head"]:
+        return "lane_held"
     if claim_waiting(c, job, loads):
         return holds.CLAIM_HELD
     return job_refusal(c, job, followed, ready, busy, live, runner=runner, loads=loads) or (
@@ -5359,6 +5375,8 @@ class Execution:
         # The company's models choice: the Gateway while the bot's subscription is not signed in here, and the
         # Gateway as its last fallback, on a computer that can run it (backend/models_preset.py).
         here = readiness_document(runner["readiness"])
+        if relationship:
+            here = relationship_readiness(here)
         # The computer's subscription for this runtime signs the turn in, so a missing or
         # refused sign-in here does not move it to the Gateway (backend/model_subscriptions.py).
         if subscribed is None:
@@ -5684,15 +5702,12 @@ class Execution:
                     "job_id": row["id"],
                     "bot": row["bot_id"],
                     "lane": lane,
-                    "credential_vault": not relationship
-                    and (
-                        bool(subscriptions)
-                        or c.execute(
-                            "SELECT 1 FROM credential_grants WHERE subject=? AND revoked_at IS NULL LIMIT 1",
-                            ("bot:" + row["bot_id"],),
-                        ).fetchone()
-                        is not None
-                    ),
+                    "credential_vault": bool(subscriptions)
+                    or c.execute(
+                        "SELECT 1 FROM credential_grants WHERE subject=? AND revoked_at IS NULL LIMIT 1",
+                        ("bot:" + row["bot_id"],),
+                    ).fetchone()
+                    is not None,
                     # The company subscriptions this turn signs in with: ids and kinds, never values, which the run
                     # reads from credential-runtime (backend/model_subscriptions.py).
                     **({"subscriptions": subscriptions} if subscriptions else {}),

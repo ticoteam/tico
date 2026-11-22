@@ -256,7 +256,7 @@ pub fn compact_at_set(value: &Value) -> Option<i64> {
 
 #[derive(Clone, Debug, Default)]
 pub struct Settings {
-    /// The turn's leased OS identity, when the runner isolates it from the shared bot user.
+    /// A leased OS identity for a harness that can use it.
     pub identity: Option<(u32, u32)>,
     pub cwd: String,
     pub model: Option<String>,

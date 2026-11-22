@@ -1260,13 +1260,15 @@ impl Runner {
             .await
             .unwrap_or_else(|e| Err(e.to_string()))
         {
-            log(&format!("Tico runner: turn users unavailable: {e}"));
+            log(&format!("Tico runner: Gateway turn users unavailable: {e}"));
         }
         let (state, workspace) = (self.state.directory.clone(), self.config.projects_dir());
         let _ = tokio::task::spawn_blocking(move || {
             let root = crate::sessions::TurnScratch::relationship_root(&state);
             if let Err(e) = crate::sessions::TurnScratch::sweep_relationships(&root) {
-                log(&format!("Tico runner: cannot clear old relationship scratch: {e}"));
+                log(&format!(
+                    "Tico runner: cannot clear old relationship scratch: {e}"
+                ));
             }
             crate::checkout_groups::initialize(&state);
             crate::checkout_groups::gate_workspace(&workspace);

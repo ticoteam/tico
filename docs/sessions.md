@@ -243,14 +243,16 @@ relationship run in queue order in its `entity:<id>` lane, including when the
 oldest turn is waiting to retry. Other relationships can run at the same time
 within the computer's turn limit. Every turn starts a fresh provider
 session in an attempt-specific scratch directory that is removed after the turn
-finishes. Strong per-run isolation requires the Docker runner with its turn UID
-pool enabled. A leased turn uses a fresh home and needs model authentication
-available to that turn. Without a pool, including on Mac, turns run as the
-runner's user in mode-0700 scratch directories and share the ordinary bot trust
-level.
+finishes. On Docker with a turn UID pool, pi and the Gateway use a leased UID
+and a fresh home. Claude Code, Codex, Gemini and other harnesses without leased
+user support run as the shared bot user so they can use the computer's saved
+sign-in. These turns have mode-0700 scratch and the same OS trust level as
+ordinary bot turns. Without a pool, turns that can run on the computer use its
+ordinary bot identity. The worker receives its own granted model keys.
 
-The wake names the relationship's memory page and open tasks that the person
-who started it can currently read. An intake wake can also grant the thread it
+The wake names the relationship's readable memory page and up to 25 open tasks
+the person who started it can currently read, newest first. It counts any
+additional readable open tasks. An intake wake can also grant the thread it
 came from. The server checks that thread's relationship, inbox and the waking
 person's current access. Suggested changes to shared memory or status stay in the
 run's answer for review.

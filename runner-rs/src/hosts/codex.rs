@@ -228,7 +228,6 @@ struct Shared {
     allocation: super::Allocation,
     tx: Events,
     env: Env,
-    identity: Option<(u32, u32)>,
     base_config: Map<String, Value>,
     stdin: tokio::sync::Mutex<Option<ChildStdin>>,
     pending: Mutex<HashMap<i64, oneshot::Sender<Reply>>>,
@@ -262,23 +261,12 @@ struct Shared {
 pub struct CodexHost(Arc<Shared>);
 
 impl CodexHost {
-    #[cfg(test)]
+    /// A host for a subscription profile: the servers silenced are the ones in that profile's config.toml.
     pub fn on_home(env: Env, tx: Events, codex_home: Option<&str>) -> CodexHost {
-        Self::on_home_as(env, tx, codex_home, None)
-    }
-
-    /// The servers silenced are the ones in this login's config.toml.
-    pub fn on_home_as(
-        env: Env,
-        tx: Events,
-        codex_home: Option<&str>,
-        identity: Option<(u32, u32)>,
-    ) -> CodexHost {
         CodexHost(Arc::new(Shared {
             allocation: super::Allocation::default(),
             tx,
             env,
-            identity,
             base_config: mcp_disable_config(codex_home),
             stdin: tokio::sync::Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
@@ -313,19 +301,6 @@ impl CodexHost {
         self.0.capture.lock().unwrap().clone()
     }
 
-    fn command(&self) -> tokio::process::Command {
-        let mut command = super::harness_command(self.0.identity, "codex");
-        command
-            .arg("app-server")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .env_clear()
-            .envs(&self.0.env);
-        super::new_group(&mut command);
-        command
-    }
-
     pub async fn start(&self) -> Result<(), HostError> {
         if self.alive() {
             return Ok(());
@@ -334,8 +309,16 @@ impl CodexHost {
         if self.running() {
             self.stop_and_reap().await;
         }
-        let mut child = self
-            .command()
+        let mut command = super::harness_command(None, "codex");
+        command
+            .arg("app-server")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .env_clear()
+            .envs(&self.0.env);
+        super::new_group(&mut command);
+        let mut child = command
             .spawn()
             .map_err(|e| failed(format!("could not start codex app-server: {e}")))?;
         self.0.allocation.mark();
@@ -1428,21 +1411,6 @@ fn steer_turn_over(message: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn relationship_app_server_starts_under_the_leased_uid() {
-        let host = CodexHost::on_home_as(
-            Env::new(),
-            tokio::sync::mpsc::unbounded_channel().0,
-            None,
-            Some((10100, 10002)),
-        );
-        super::super::isolationtests::prefix_as(
-            &host.command(),
-            &["codex".into(), "app-server".into()],
-            10100,
-        );
-    }
 
     #[tokio::test]
     async fn every_codex_fixture_gives_the_python_hosts_events() {

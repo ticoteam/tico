@@ -23,6 +23,7 @@ bot_settings: Any = _bot_settings
 BOT = _hubdb.RELATIONSHIP_WORKER
 ACTOR = "bot:" + BOT
 REF = "relationship_run"
+WAKE_TASK_LIMIT = 25
 ROW_ID = r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"
 FILE_ID = r"file-[0-9a-f]{24}"
 READ = re.compile(
@@ -151,7 +152,9 @@ def scope(c: Connection, attempt: str) -> Scope | None:
 
 def gate(c: Connection, auth: "Auth", who: "Identity", path: str, method: str) -> None:
     """Use existing object routes, with explicit opt-in for routes that can carry relationship data."""
-    if method in ("GET", "HEAD") and READ.fullmatch(path) and auth.relationship_scope(c, who):
+    read = method in ("GET", "HEAD") and READ.fullmatch(path)
+    model_auth = method == "GET" and path == "/api/v2/credential-runtime"
+    if (read or model_auth) and auth.relationship_scope(c, who):
         return
     raise Problem("forbidden", "This relationship run cannot use that route", 403)
 
@@ -214,18 +217,22 @@ def wake_context(c: Connection, auth: "Auth", who: "Identity", bound: Scope) -> 
         context.append(f"Memory page {page['id']}.")
 
     ids: list[str] = []
-    task = cast(Callable[..., object], auth.task)
+    omitted = 0
+    task_row = cast(Callable[..., object], auth.task_row)
     for row in c.execute(
-        "SELECT id FROM tasks WHERE entity_id=? AND status='open' ORDER BY created_at,id",
+        "SELECT * FROM tasks WHERE entity_id=? AND status='open' ORDER BY created_at DESC,id DESC",
         (bound.entity,),
     ):
         try:
-            task(c, who, row["id"], tags=False)
+            task_row(c, who, dict(row))
         except Problem as exc:
             if exc.status not in (403, 404):
                 raise
             continue
-        ids.append(str(row["id"]))
+        if len(ids) < WAKE_TASK_LIMIT:
+            ids.append(str(row["id"]))
+        else:
+            omitted += 1
     if ids:
-        context.append("Open tasks " + ", ".join(ids) + ".")
+        context.append("Open tasks " + ", ".join(ids) + (f" ({omitted} more)." if omitted else "."))
     return " ".join(context)

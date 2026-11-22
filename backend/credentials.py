@@ -89,6 +89,11 @@ def model_env(name, kind, env=''):
     return env or (name if name in providers.MODEL_KEY_NAMES and kind in ('api_key', 'token') else '')
 
 
+def relationship_model_key(row):
+    """Only explicitly granted standalone model keys can sign in the relationship worker."""
+    return not row['tool_id'] and row['kind'] in ('api_key', 'token') and row['env'] in providers.RUNTIME_KEY_NAMES
+
+
 def refuse_reserved(env, stored=''):
     """A credential arrives in a bot's turn under its variable; Tico's own and the computer's names are refused, since a
     run given one would lose it (runner-rs/src/env.rs). One stored under such a name before the rule is
@@ -1300,13 +1305,19 @@ def install_credentials(app, store, delegate=None, propose=None):
             migration_runner(c, who)
             bots = {r[0]: [] for r in c.execute('SELECT bot FROM assignments WHERE runner_id=?', (who.runner_id,))}
             stored = c.execute(
-                "SELECT id,env FROM credentials WHERE ciphertext IS NOT NULL AND env!='' AND kind!='login'"
+                "SELECT id,env,kind,tool_id FROM credentials WHERE ciphertext IS NOT NULL AND env!='' AND kind!='login'"
             ).fetchall()
             from . import tool_settings
 
             prime_granted(c, ['bot:' + bot for bot in bots])
             helds = [granted(c, 'bot:' + bot) for bot in bots]
-            for names, held, settings in zip(bots.values(), helds, tool_settings.names_each(c, helds), strict=True):
+            for (bot, names), held, settings in zip(
+                bots.items(), helds, tool_settings.names_each(c, helds), strict=True
+            ):
+                if bot == H.RELATIONSHIP_WORKER:
+                    explicit = explicitly_granted(c, 'bot:' + bot)
+                    names.extend(r['env'] for r in stored if r['id'] in explicit and relationship_model_key(r))
+                    continue
                 names.extend(r['env'] for r in stored if r['id'] in held)
                 names.extend(n for n in settings if n not in names)
             return {'bots': bots}
@@ -1685,20 +1696,24 @@ def install_credentials(app, store, delegate=None, propose=None):
 
     @app.get('/api/v2/credential-runtime')
     def runtime(request: Request, subscription_runtime: Literal["claude", "codex", "cursor", "musecode"] | None = None):
+        from . import relationship_runs, tool_proxy
+
         who = request.state.identity
         if who.role != 'bot':
             raise Problem('forbidden', 'An active bot run is required', 403)
         with store.transaction() as c:
             validate_identity(c, who)
             values = []
-            held, explicit = granted(c, who.actor), explicitly_granted(c, who.actor)
+            relationship = who.actor == relationship_runs.ACTOR
+            explicit = explicitly_granted(c, who.actor)
+            held = explicit if relationship else granted(c, who.actor)
             # A proxied tool's key stays here: the run gets a token for the proxy instead (backend/tool_proxy.py).
-            from . import tool_proxy
-
-            proxied = tool_proxy.proxied_tools(c)
+            proxied = {} if relationship else tool_proxy.proxied_tools(c)
             # A website account never reaches a run: its browser commands type it (backend/website_tools.py).
             for row in c.execute(RUN_ROWS):
                 if row['ciphertext'] is not None and row['id'] in held:
+                    if relationship and not relationship_model_key(row):
+                        continue
                     tool, way = held_at_read(c, proxied, row, who.actor, vault.cipher)
                     if way == 'skip':
                         continue
@@ -1741,6 +1756,8 @@ def install_credentials(app, store, delegate=None, propose=None):
                     values.append(
                         {'id': row['id'], 'name': row['name'], 'env': row['env'], 'kind': row['kind'], **value}
                     )
+            if relationship:
+                return {'credentials': values}
             # Never the Tico AI Gateway's key: a run reaches it through its runner (runner-gateway-credentials below).
             # The company subscriptions its claim handed it, for this run only (backend/model_subscriptions.py).
             from .model_subscriptions import run_values

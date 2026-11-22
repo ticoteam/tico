@@ -100,11 +100,6 @@ pub fn available() -> bool {
     matches!(POOL.get(), Some(Ok(Some(_))))
 } // never starts the pool's sweep: initialize does
 
-/// A configured pool with an initialization error must fail its relationship leases.
-pub(crate) fn configured() -> bool {
-    matches!(POOL.get(), Some(Ok(Some(_)) | Err(_)))
-}
-
 /// Existing workspace files may be owner-only. Widen only bot-owned ordinary workspace inodes,
 /// as their existing owner, so a leased user has the same file access through the shared group.
 pub async fn share_workspace(paths: Vec<PathBuf>) -> Result<(), String> {
@@ -337,7 +332,8 @@ impl Pool {
         // Restore owner-only workspace files to bot for the next turn. Sweep the whole shared home too:
         // leaving an inode owned by this UID there would give its next borrower owner rights.
         sweep(&self.home, uid, Some((self.bot, self.gid)))?;
-        let relationship_root = crate::isolation::turn_dir().join(crate::sessions::RELATIONSHIP_RUNS);
+        let relationship_root =
+            crate::isolation::turn_dir().join(crate::sessions::RELATIONSHIP_RUNS);
         sweep_relationship_user(&relationship_root, uid).map_err(|e| e.to_string())?;
         for path in [
             PathBuf::from("/tmp"),

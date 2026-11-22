@@ -355,25 +355,16 @@ impl GeminiHost {
         model: &str,
         effort: Option<&str>,
         servers: &[Value],
-        identity: Option<(u32, u32)>,
     ) -> std::io::Result<()> {
         use std::io::Write;
         use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
         std::fs::create_dir_all(&self.0.home)?;
-        let metadata = std::fs::symlink_metadata(&self.0.home)?;
-        if !metadata.is_dir() {
+        if !std::fs::symlink_metadata(&self.0.home)?.is_dir() {
             return Err(std::io::Error::other(
                 "Gemini home must be a directory, not a symbolic link",
             ));
         }
-        if let Some((uid, gid)) = identity {
-            if metadata.mode() & 0o777 != 0o700 {
-                std::fs::set_permissions(&self.0.home, std::fs::Permissions::from_mode(0o700))?;
-            }
-            if (metadata.uid(), metadata.gid()) != (uid, gid) {
-                std::os::unix::fs::lchown(&self.0.home, Some(uid), Some(gid))?;
-            }
-        } else if crate::isolation::enabled() {
+        if crate::isolation::enabled() {
             // Keep existing CLI sessions in place; only this host-state branch is traversable.
             if let Some(parent) = self.0.home.parent() {
                 if !std::fs::symlink_metadata(parent)?.is_dir() {
@@ -408,7 +399,7 @@ impl GeminiHost {
                     + "\n")
                     .as_bytes(),
             )?;
-            crate::isolation::chown_file_as(&f, identity)?;
+            crate::isolation::chown_file(&f)?;
             std::fs::rename(&tmp, self.0.home.join("settings.json"))
         })();
         let _ = std::fs::remove_file(&tmp);
@@ -432,7 +423,7 @@ impl GeminiHost {
 
     fn command(&self, thread_id: &str, t: &Thread) -> Command {
         let argv = self.argv(thread_id, t);
-        let mut command = super::harness_command(t.settings.identity, &argv[0]);
+        let mut command = super::harness_command(None, &argv[0]);
         command
             .args(&argv[1..])
             .stdin(Stdio::piped())
@@ -481,7 +472,6 @@ impl GeminiHost {
                 &model,
                 effort.or(t.settings.effort.as_deref()),
                 &t.settings.mcp_servers,
-                t.settings.identity,
             )
             .map_err(|e| failed(format!("could not write the Gemini settings: {e}")))?;
             let launched = self
@@ -831,13 +821,6 @@ mod tests {
             &host.command("thread", &thread),
             &host.argv("thread", &thread),
         );
-        let mut leased = thread.clone();
-        leased.settings.identity = Some((10100, 10002));
-        super::super::isolationtests::prefix_as(
-            &host.command("thread", &leased),
-            &host.argv("thread", &leased),
-            10100,
-        );
         if !f.actual() {
             return;
         }
@@ -845,7 +828,7 @@ mod tests {
         let session = home.join(".gemini/session.json");
         std::fs::write(&session, "saved CLI session").unwrap();
         std::os::unix::fs::symlink(&f.private, home.join("private-link")).unwrap();
-        host.prepare_home(DEFAULT_MODEL, None, &[], None).unwrap();
+        host.prepare_home(DEFAULT_MODEL, None, &[]).unwrap();
         f.run(
             host.command("thread", &thread),
             &[&session, &home.join("settings.json")],
