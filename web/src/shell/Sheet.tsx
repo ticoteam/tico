@@ -21,6 +21,12 @@ const NONE: SheetControls = { id: null, state: 'open', peek: false, folded: fals
 export const SheetContext = createContext<SheetControls>(NONE);
 export const useSheet = () => use(SheetContext);
 
+/* The sheets open in the row now, their ids space-separated (a string, so a reader draws again only when it changes).
+   Outside a Frame, and on a phone's cards, none: nothing sits side by side there. */
+export const OpenSheetsContext = createContext('');
+/** Whether another sheet is open beside this one (a call's side asks whether Tico's chat already shows). */
+export const useSheetOpen = (id: SheetId) => use(OpenSheetsContext).split(' ').includes(id);
+
 const FOLD_LABEL: Partial<Record<SheetId, string>> = { tico: 'Fold Tico', menu: 'Fold the menu', list: 'Fold the list', chat: 'Fold the chat', widgets: 'Hide widgets', side: 'Hide the side' };
 const CLOSE_LABEL: Partial<Record<SheetId, string>> = { chat: 'Close chat', panel: 'Close' };
 

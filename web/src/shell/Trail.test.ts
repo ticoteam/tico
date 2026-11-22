@@ -36,6 +36,11 @@ describe('the trail over every page', () => {
     ['/tags/urgent', 'urgent', ['TIDY → /', 'Tags → /tags', 'urgent']],
     ['/calendar', 'Calendar', ['TIDY → /', 'Calendar']],
     ['/next/calendar', 'Calendar', ['TIDY → /', 'Calendar']],
+    ['/call/r1', 'Call', ['TIDY → /', 'Calendar → /calendar', 'Call']],
+    ['/call/r1', 'Pricing review', ['TIDY → /', 'Calendar → /calendar', 'Pricing review']],
+    ['/call/r1', '', ['TIDY → /', 'Calendar → /calendar', 'Call']],
+    ['/call/r1', 'Calendar', ['TIDY → /', 'Calendar → /calendar', 'Calendar']],
+    ['/call/r1', 'TIDY', ['TIDY → /', 'Calendar → /calendar', 'TIDY']],
   ])('%s, its page named "%s"', (path, page, want) => {
     expect(show(trailOf(path, names(page)))).toEqual(want);
   });

@@ -5,7 +5,7 @@ import { ActionsRoot, run } from '@/actions';
 import { reportCallToDesktop, useCallWindow } from '@/desktop';
 import { ticoRoomQuery } from '@/conversation';
 import { configQuery, meQuery, pageOwnersQuery, recordVisit, useActor, useDirectory, useHeldCount, type Actor, type Directory } from '@/data';
-import { TOGGLE_MUTE, isCallActive, ringingQuery, useCall } from '@/features/calls/routing';
+import { TOGGLE_MUTE, callQuery, isCallActive, ringingQuery, useCall } from '@/features/calls/routing';
 import { useFileOpen } from '@/features/library/routing';
 import { AssetRecovery, DesktopMove, PlanLock } from '@/features/notices/exports';
 import { StartScreen, useStartGate } from '@/features/start/routing';
@@ -51,6 +51,7 @@ import {
   isTeammate,
   reportToDesktop,
   useCompanies,
+  useSheetOpen,
   useTabTitle,
   watchCallWindow,
   type Company,
@@ -63,7 +64,7 @@ import {
   type TrailPart,
 } from '@/shell';
 import { MenuLip, usePhoneCards } from '@/shell/phone';
-import { TicoSheet } from '@/tico';
+import { TicoSheet, useTicoPower } from '@/tico';
 import { dot } from '@/tico/dot';
 import { pageName, usePageName } from '@/tico/pageName';
 import { boardSearch, chatAddress, isFlowPath, leaveFlow, notePlace } from '@/lib';
@@ -269,7 +270,7 @@ function App() {
   } else if (arrangement === 'call' && a) {
     side = (
       <Suspense fallback={null}>
-        <CallSide room={decodeURIComponent(a)} />
+        <CallSideBeside room={decodeURIComponent(a)} />
       </Suspense>
     );
   } else if (arrangement === 'agent' && a) {
@@ -345,6 +346,14 @@ function App() {
   );
 }
 
+/** A call's side, told whether Tico's chat shows beside it (Tico's sheet open, and Tico on: off, the sheet says so
+    instead): in Tico's own room the side then leaves its Chat tab out, so one conversation never shows twice. */
+function CallSideBeside({ room }: { room: string }) {
+  const open = useSheetOpen('tico');
+  const on = useTicoPower()?.available !== false;
+  return <CallSide room={room} ticoBeside={open && on} />;
+}
+
 /* ---------------------------------------------------------------- the trail */
 
 /** The trail over every page (shell/Trail.tsx), with the names it needs: the company's, as the menu reads it; a
@@ -353,7 +362,11 @@ function useTrailParts(path: string, who: string): TrailPart[] {
   const { data: config } = useQuery(configQuery);
   const { data: pipelines } = useQuery(pipelinesQuery);
   const name = useDirectory((d) => (who ? (d.byId[who] ?? d.byId[`human:${who}`])?.name : undefined));
-  const page = usePageName();
+  const head = usePageName();
+  // a call's title comes with its data, after the route has drawn: read from the call itself, not its head
+  const room = /^\/call\/([^/]+)/.exec(path)?.[1];
+  const call = useQuery({ ...callQuery(room ? decodeURIComponent(room) : ''), enabled: !!room, select: (c) => c.title });
+  const page = room ? call.data || head : head;
   return trailOf(path, { company: config?.company_name || config?.app_name || '', pipelines, who: name, page });
 }
 

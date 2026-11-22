@@ -1,7 +1,7 @@
 export { Frame, foldSheet } from './Frame';
 export type { FrameProps, AgentBar } from './Frame';
 export { pageAt, fromPage, useBarFold, barFolded, type PageAt, type FromPage } from './pageOwner';
-export { Sheet, SheetHead, useSheet } from './Sheet';
+export { Sheet, SheetHead, useSheet, useSheetOpen } from './Sheet';
 export { PageFault } from './PageFault';
 export { tabTitle, useTabTitle } from './title';
 export { TrailContext, trailOf, upOf, useTrail, type TrailPart, type TrailNames } from './Trail';

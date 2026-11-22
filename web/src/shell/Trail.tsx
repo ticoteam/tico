@@ -52,7 +52,13 @@ export function trailOf(path: string, n: TrailNames): TrailPart[] {
   let page = n.page;
   switch (top) {
     case undefined:
+      break;
     case 'call':
+      // a call is reached from the calendar (its meetings) and goes back there when it ends. Its title is always its
+      // own last part, even one that reads like a part above it; before it has loaded it is still a call.
+      add('Calendar', '/calendar');
+      add(page || 'Call');
+      page = '';
       break;
     case 'tasks':
     case 'task':
@@ -122,12 +128,13 @@ export const useTrail = () => use(TrailContext);
 
 /* The trail on the frame's ground, over the sheets (on a phone, over the page): "TIDY › Tasks › Legal › <task>".
    A part goes where the menu would; when the step before in history is that very page, it goes back to it instead,
-   so a board comes back with its filters and place. */
-export function Trail({ parts }: { parts: readonly TrailPart[] }) {
+   so a board comes back with its filters and place. `direct`: on a card that is a step in history of its own (a
+   phone's call), going back would only lower the card, so every part goes where it says. */
+export function Trail({ parts, direct = false }: { parts: readonly TrailPart[]; direct?: boolean }) {
   const router = useRouter();
   useEffect(() => watchSteps(router), [router]);
   const back = (e: MouseEvent, to: string) => {
-    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0 || !stepBackIs(router, to)) return;
+    if (direct || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0 || !stepBackIs(router, to)) return;
     e.preventDefault();
     router.history.back();
   };

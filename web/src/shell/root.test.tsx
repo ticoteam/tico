@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query';
-import { createMemoryHistory, createRootRoute, createRoute, createRouter, Link, Outlet, RouterProvider } from '@tanstack/react-router';
+import { createBrowserHistory, createMemoryHistory, createRootRoute, createRoute, createRouter, Link, Outlet, RouterProvider } from '@tanstack/react-router';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
@@ -35,7 +35,8 @@ const { gate, q, catchUpRead, lists, owners, asks } = vi.hoisted(() => ({
 // the router module only: the app's pages are not needed to know what it draws for a page that breaks
 vi.mock('@/routeTree.gen', () => ({ routeTree: createRootRoute() }));
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
-vi.mock('@/tico/power', () => ({ useTicoPower: () => undefined }));
+const power = vi.hoisted(() => ({ now: undefined as { available: boolean } | undefined }));
+vi.mock('@/tico/power', () => ({ useTicoPower: () => power.now }));
 vi.mock('@/tico', async (orig) => ({
   ...(await orig<object>()),
    TicoSheet: () => <aside aria-label="Tico">Tico</aside> }));
@@ -73,12 +74,13 @@ vi.mock('@/features/start/routing', () => ({
 const call = vi.hoisted(() => ({ phase: 'idle' }));
 vi.mock('@/features/calls/exports', () => ({
   CallBar: () => <div>call bar</div>,
-  CallSide: () => null,
+  CallSide: ({ ticoBeside }: { ticoBeside?: boolean }) => <p>{ticoBeside ? 'Tico beside the call' : 'the call alone'}</p>,
   RingCard: () => null,
   StartCall: ({ open }: { open: boolean }) => (open ? <p>start call</p> : null),
 }));
 vi.mock('@/features/calls/routing', () => ({
   ringingQuery: q('ringing', { calls: [] }),
+  callQuery: (id: string) => q(`call:${id}`, { id, title: 'Pricing review' }),
   TOGGLE_MUTE: 'calls.toggleMute',
   useCall: () => ({ muted: false, phase: call.phase }),
   isCallActive: (c: { phase: string }) => c.phase === 'live',
@@ -144,9 +146,10 @@ const QA = { id: 'bot:qa', kind: 'agent', name: 'QA Owner', slug: 'qa', team: 'E
 const people = (...actors: { id: string }[]) =>
   queryClient.setQueryData(['directory'], { actors, byId: Object.fromEntries(actors.flatMap((a) => [[a.id, a], [a.id.slice(a.id.indexOf(':') + 1), a]])) });
 
-function show(at: string) {
+function show(at: string, browser = false) {
   const page = createRoute({ getParentRoute: () => root, path: '/', component: () => <main className="pane page"><h1>Home</h1></main> });
   const call = createRoute({ getParentRoute: () => root, path: '/call/$room', component: () => <main className="pane cw">call page</main> });
+  const calendar = createRoute({ getParentRoute: () => root, path: '/calendar', component: () => <main className="pane page"><h1>Calendar page</h1></main> });
   const task = createRoute({ getParentRoute: () => root, path: '/flow/$task', component: () => <main className="pane page"><h1>A task</h1></main> });
   const flow = createRoute({ getParentRoute: () => root, path: '/flow', component: () => <main className="pane page"><h1>Flow page</h1></main> });
   const editor = createRoute({ getParentRoute: () => root, path: '/tasks/$pipeline/edit', component: () => <main className="pane page"><h1>Edit pipeline</h1></main> });
@@ -163,7 +166,11 @@ function show(at: string) {
   });
   const open = createRoute({ getParentRoute: () => root, path: '/tasks/$pipeline/$task', component: () => <main className="pane page"><h1>An open task</h1></main> });
   const finance = createRoute({ getParentRoute: () => root, path: '/company/finance', component: () => <main className="pane page"><h1>Finance</h1></main> });
-  const router = createRouter({ routeTree: root.addChildren([page, call, task, flow, editor, board, open, finance]), context: { queryClient }, history: createMemoryHistory({ initialEntries: [at] }) });
+  const router = createRouter({ routeTree: root.addChildren([page, call, calendar, task, flow, editor, board, open, finance]),
+    context: { queryClient },
+    // the window's own history where a test needs what the phone's cards push onto it (shell/phone PhoneCards)
+    history: browser ? (window.history.replaceState(null, '', at), createBrowserHistory()) : createMemoryHistory({ initialEntries: [at] }),
+  });
   render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
@@ -308,6 +315,69 @@ describe('the root', () => {
     show('/call/abc');
     expect(await screen.findByText('call page')).toBeTruthy();
     expect(document.querySelector('.shell-frame')?.getAttribute('data-arrangement')).toBe('call');
+    // the menu is on the row, at its edge, and the trail leads back up: the company, the calendar, the call's own title
+    expect(document.querySelector('.shell-place[data-sheet="menu"]')).toBeTruthy();
+    const trail = screen.getByRole('navigation', { name: 'Breadcrumb' });
+    await vi.waitFor(() => expect(trail.textContent).toContain('Pricing review'));
+    expect(within(trail).getByRole('link', { name: 'Calendar' }).getAttribute('href')).toBe('/calendar');
+    expect(within(trail).getAllByRole('link')[0]?.getAttribute('href')).toBe('/');
+  });
+
+  it('tells the call’s side when Tico’s chat shows beside it: Tico open and on, not folded, not off', async () => {
+    // wide enough for Tico, the call and its side side by side
+    Object.defineProperty(window, 'innerWidth', { value: 1440, configurable: true });
+    window.dispatchEvent(new Event('resize'));
+    localStorage.clear();
+    const open = async () => {
+      show('/call/abc');
+      expect(await screen.findByText('the call alone')).toBeTruthy(); // Tico folds by default on a call
+      fireEvent.keyDown(document, { key: 'j', metaKey: true });
+      await waitFor(() => expect(document.querySelector('.shell-place[data-sheet="tico"]')?.hasAttribute('data-shut')).toBe(false));
+    };
+    try {
+      await open();
+      expect(await screen.findByText('Tico beside the call')).toBeTruthy();
+      cleanup();
+      localStorage.clear();
+      power.now = { available: false };
+      await open(); // open, but off: the sheet says so, not the chat
+      expect(screen.getByText('the call alone')).toBeTruthy();
+    } finally {
+      power.now = undefined;
+      localStorage.clear();
+      Object.defineProperty(window, 'innerWidth', { value: 1024, configurable: true });
+      window.dispatchEvent(new Event('resize'));
+    }
+  });
+
+  it('on a phone, heads the call’s card with the trail back up, whose Calendar goes to the calendar the call was opened from', async () => {
+    Object.defineProperty(window, 'innerWidth', { value: 390, configurable: true });
+    window.dispatchEvent(new Event('resize'));
+    // the window's own history: the call's card is a step on it (shell/phone PhoneCards), which a step back would only lower
+    let router: ReturnType<typeof show> | undefined;
+    try {
+      router = show('/calendar', true);
+      expect((await screen.findAllByText('Calendar page')).length).toBeGreaterThan(0);
+      const at = router;
+      await act(() => at.navigate({ to: '/call/$room', params: { room: 'abc' } }));
+      expect((await screen.findAllByText('call page')).length).toBeGreaterThan(0);
+      await waitFor(() => expect(document.documentElement.dataset.layout).toBe('cards'));
+      const trail = await waitFor(() => {
+        const t = document.querySelector<HTMLElement>('.ly-chat .shell-trail');
+        if (!t) throw new Error('no trail on the call card');
+        return t;
+      });
+      expect(within(trail).getByRole('link', { name: 'Fernhill' }).getAttribute('href')).toBe('/');
+      expect(within(trail).getByRole('link', { name: 'Calendar' }).getAttribute('href')).toBe('/calendar');
+      fireEvent.click(within(trail).getByRole('link', { name: 'Calendar' }));
+      await waitFor(() => expect(at.state.location.pathname).toBe('/calendar'));
+    } finally {
+      cleanup();
+      router?.history.destroy();
+      window.history.replaceState(null, '', '/');
+      Object.defineProperty(window, 'innerWidth', { value: 1024, configurable: true });
+      window.dispatchEvent(new Event('resize'));
+    }
   });
 });
 

@@ -32,15 +32,16 @@ export interface Saved extends Partial<Record<Arrangement, Memory>> {
   tico?: number;
   /* the menu's width, on every arrangement */
   menu?: number;
-  /* Tico's and the menu's hand folds, on every arrangement (Tico's on a call is the call's own) */
+  /* Tico's and the menu's hand folds, on every arrangement (on a call, the call's own) */
   fold?: Partial<Record<SheetId, boolean>>;
 }
 
 /* Tico and the menu are the same sheets on every page: going deeper (a panel, a second chat, a teammate's page) never
    opens, folds or resizes them (plan/layers.html). So their widths and hand folds are kept once, not per arrangement;
-   only a call keeps its own Tico fold, as Tico tucks there by default. Until the person sets one, the page's is read
-   (they were kept per arrangement before). */
-export const shared = (arr: Arrangement, id: SheetId): boolean => id === 'menu' || (id === 'tico' && arr !== 'call');
+   only a call keeps its own Tico and menu folds, as both tuck there by default to give the call the room (the menu's
+   edge and the trail still lead back to the company). Until the person sets one, the page's is read (they were kept
+   per arrangement before). */
+export const shared = (arr: Arrangement, id: SheetId): boolean => (id === 'menu' || id === 'tico') && arr !== 'call';
 export const foldOf = (s: Saved | null | undefined, arr: Arrangement, id: SheetId): boolean | undefined =>
   shared(arr, id) ? (s?.fold?.[id] ?? s?.page?.fold?.[id]) : s?.[arr]?.fold?.[id];
 export const widthOf = (s: Saved | null | undefined, arr: Arrangement, id: SheetId): number | undefined =>
@@ -132,7 +133,7 @@ export const ARR: Record<Arrangement, Arr> = {
   chat: { row: ['tico', 'menu', 'chat', 'page', 'panel'], stretch: 'page', lead: 'page' }, // the page leads only with no chat
   agent: { row: ['tico', 'menu', 'chat', 'widgets'], stretch: 'chat', lead: 'widgets' }, // the agent's page and settings
   task: { row: ['tico', 'list', 'chat', 'page'], stretch: 'page', spec: { chat: 'taskchat' }, lead: 'page' },
-  call: { row: ['tico', 'stage', 'side'], stretch: 'stage', foldByDefault: ['tico'], lead: 'stage' },
+  call: { row: ['tico', 'menu', 'stage', 'side'], stretch: 'stage', foldByDefault: ['tico', 'menu'], lead: 'stage' },
 };
 
 export const specOf = (arr: Arrangement, id: SheetId): Spec => SPEC[(ARR[arr].spec ?? {})[id] ?? (id as SpecId)];

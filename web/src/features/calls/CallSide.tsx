@@ -21,13 +21,29 @@ type Tab = 'chat' | 'transcript' | 'people';
 
 export interface CallSideProps {
   room: string;
+  /** Tico's sheet is open beside this one (the shell says): in Tico's own room its chat is already there. */
+  ticoBeside?: boolean;
 }
 
 /** Beside the call: its chat, what has been said, and who is in it. The shell puts it in the side sheet on a desk. */
-export function CallSide({ room }: CallSideProps) {
-  const [tab, setTab] = useState<Tab>('chat');
+export function CallSide({ room, ticoBeside = false }: CallSideProps) {
+  const [picked, setTab] = useState<Tab>('chat');
+  // another call opened here starts on its own first tab, not the one picked on the last
+  const [shown, setShown] = useState(room);
+  if (shown !== room) {
+    setShown(room);
+    setTab('chat');
+  }
   const call = useQuery(callQuery(room)).data;
+  const ticoRoom = useQuery(ticoRoomQuery).data;
+  // a call in Tico's own room has Tico's chat as its chat: with Tico's sheet open, it shows there and not here too
+  const noChat = ticoBeside && !!call && !!ticoRoom && ticoRoom === call.thread_id;
   const s = useCall();
+  // ended as the page reads it (CallPage): left here at once, or over when this window is not in it
+  const phase = s.callId === room ? s.phase : 'idle';
+  const ended = phase === 'ended' || (phase === 'idle' && call?.state === 'ended');
+  // in its place: who is in it on an ended call, whose page already shows the transcript; what is said on a live one
+  const tab = noChat && picked === 'chat' ? (ended ? 'people' : 'transcript') : picked;
   const live = s.callId === room && (s.phase === 'live' || s.phase === 'reconnecting');
   const inCall = call?.participants.filter((p) => p.in_call) ?? [];
   const small = useSmallWindow();
@@ -39,7 +55,7 @@ export function CallSide({ room }: CallSideProps) {
           value={tab}
           onValueChange={setTab}
           tabs={[
-            { value: 'chat', label: 'Chat' },
+            ...(noChat ? [] : [{ value: 'chat' as const, label: 'Chat' }]),
             { value: 'transcript', label: 'Transcript' },
             { value: 'people', label: 'People', after: <Count n={inCall.length} label={`${inCall.length} in the call`} /> },
           ]}
@@ -53,7 +69,7 @@ export function CallSide({ room }: CallSideProps) {
             <Person key={p.actor} actor={p.actor} inCall={p.in_call} />
           ))}
           {(call?.bots ?? []).map((b) => (
-            <Person key={b} actor={b.startsWith('bot:') ? b : `bot:${b}`} inCall out={live ? { room, bot: b } : undefined} />
+            <Person key={b} actor={b.startsWith('bot:') ? b : `bot:${b}`} inCall={call?.state !== 'ended'} out={live ? { room, bot: b } : undefined} />
           ))}
         </div>
       )}
