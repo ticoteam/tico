@@ -534,13 +534,13 @@ def register_core(
         # No owner: a first stage that picks from several picks one as the task arrives (backend/stage_pick.py). The
         # filer stands in as its requester and reach, as for a task a stage files, and it enters with no assignee.
         unassigned = not body.owner
-        # Routed work (backend/routing.py): no owner named, Tico gives it to a person once it is filed, on the
-        # Support pipeline when none is named.
+        # Routed work (backend/routing.py): Tico picks the person now, and the task is filed as theirs (owner and
+        # assignee), so every check below and its entry into the first stage are for them.
         routed = bool(getattr(body, "route", False))
-        if routed and body.owner:
-            raise Problem("route", "A routed task names no owner: Tico picks the person", 422)
-        if routed and not body.pipeline:
-            body = body.model_copy(update={"pipeline": routing.support_pipeline(c)})
+        routed_entity = ""
+        if routed:
+            person, routed_entity = routing.person_for_create(c, who, body, parent_id, actual_bot)
+            body, unassigned = body.model_copy(update={"owner": person}), False
         if unassigned:
             from . import stage_pick
 
@@ -626,20 +626,7 @@ def register_core(
         for other, _ in others:
             auth.task(c, who, other)
         parent = H.task(c, parent_id) if parent_id else None
-        asked_public = body.private is False
-        # Delegation retains the bot's sensitive default and cannot use a person's
-        # explicit-public choice to override either creator or assignee defaults.
-        if actual_bot and body.private is False:
-            body = body.model_copy(update={"private": None})
-        if actual_bot and H.private_tasks_default(c, actual_bot):
-            body = body.model_copy(update={"private": True})
-        defaults = H.private_tasks_default(c, who.actor) or H.private_tasks_default(c, owner)
-        # `private: false` is company-visible under a private parent too, unless a sensitive default keeps a bot's
-        # task private; the parent stays its readers' alone (task_relations shows it as "a private task").
-        public = asked_public and body.private is not True and not (actual_bot and defaults)
-        private = not public and bool(
-            (body.private if body.private is not None else defaults) or parent and H.task_private(c, parent)
-        )
+        body, public, private = privacy.new_task(c, who, body, owner, parent, actual_bot)
         if body.due and (not (parsed := H.parse_ts(body.due)) or parsed.tzinfo is None):
             raise Problem("date", "due must be an ISO-8601 date/time with a timezone", 422)
         # The org rule check (backend/org_rule_check.py), judged before the write: held, nothing is filed.
@@ -682,7 +669,10 @@ def register_core(
             ask_ingest.skipped(c, ingest, "not_applied")
         if body.goal_id and not G.goal(c, body.goal_id):
             raise Problem("not_found", "Unknown goal", 404)
-        entity_id = for_entity(c, who, getattr(body, "entity", None))  # POST /api/v2/tasks's TaskFile has it
+        entity_id = routed_entity if routed else for_entity(c, who, getattr(body, "entity", None))
+        if routed and not body.pipeline:
+            # Made only now, past every return that files nothing.
+            body = body.model_copy(update={"pipeline": routing.support_pipeline(c)})
         requester_actor = None
         if who.role == "bot" and owner == who.actor and not unassigned and not parent_id and who.attempt_id and private:
             origin = c.execute(
@@ -716,7 +706,8 @@ def register_core(
             H.task_reach(c, who.actor, parent, owner)
         # A bot's task for a person is the bot's own task with its question to them (backend/person_asks.py): Needs you
         # holds only what is asked of a person, so a plain task handed to them would reach no list they are told of.
-        asks_person = ask_ingest.gated(who, settings.assistant_bot) and H.is_human(owner)
+        # Routed work is the person's own task, not a bot's question to them.
+        asks_person = not routed and ask_ingest.gated(who, settings.assistant_bot) and H.is_human(owner)
         # The bot holds it when the person may read its work; else the task stays the person's, with the bot's question.
         holder = who.actor if asks_person and reads_bot(c, owner, who.actor) else owner
         row = H.task_create(
@@ -892,8 +883,6 @@ def register_core(
                 TRo.set_roles(c, who.actor, row["id"], body.roles, mover=mover(c, who) or None)
             except ValueError as exc:
                 raise Problem("roles", str(exc), 422)
-        if routed:
-            routing.route(c, row["id"])  # in this transaction: there is always a named owner
         note = " ".join(
             filter(
                 None,

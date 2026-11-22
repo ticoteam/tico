@@ -1,7 +1,9 @@
-"""Routing (backend/routing.py): availability on, async or off (set, ended by `until` at read, else working hours), and
-route(task): the recent helper, then the relationship or task owner (async only when not urgent), then anyone on in
-the owner's team, then the inbox fallback, so routed work always has a named person as owner and assignee. Routed
-work with no pipeline goes on the Support pipeline, whose urgent stage rule tells the manager at once.
+"""Routing (backend/routing.py), through `POST /api/v2/tasks` with `route: true`: the person is picked before the task
+is filed (the recent helper on the relationship, then its owner, async only when the work is not urgent, then anyone on
+in the owner's team, then the inbox fallback), and the task is filed as theirs, owner and assignee. A private task goes
+only to someone who may read it, or is refused. Availability is on, async or off: set (ended by `until` at read), else
+Calendar's effective working hours. Routed work lands on the Support pipeline, whose timers tell its manager: a day
+quiet in the hourly batch, an hour quiet on an urgent task at once.
 """
 
 import itertools
@@ -12,195 +14,247 @@ import pytest
 
 from backend import routing
 from backend import stage_rule_timers as T
-from backend import task_engine as E
+from backend.entities import store as ES
 from backend.store import H, encode
-from backend.tests.helpers import engine as X
-from backend.tests.helpers.api import headers
+from backend.tests.helpers.api import headers, post
+from backend.tests.helpers.company import bot
 
-START = datetime(2030, 1, 7, 9, 0, tzinfo=timezone.utc)  # a Monday
+START = datetime(2030, 1, 7, 9, 0, tzinfo=timezone.utc)  # a Monday, inside Calendar's default hours
+TITLES = itertools.cycle(["Acme", "Globex", "Initech", "Umbrella", "Hooli", "Stark", "Wayne", "Wonka", "Soylent"])
 
 
 @pytest.fixture
-def c(company, time_machine):
+def app(api, time_machine):
     time_machine.move_to(START, tick=False)
-    with company.transaction() as conn:
-        X.bot(conn, "filer")
-        yield conn
+    return api
 
 
-def _set(c, pid, value, until=None):
-    c.execute("UPDATE humans SET availability=?, availability_until=? WHERE id=?", (value, until, pid))
+def _db(api):
+    return api.app.state.store.transaction()
 
 
-def _all(c, value):
-    for pid in ("ana", "ben", "cara"):
-        _set(c, pid, value)
-
-
-CUSTOMERS = itertools.cycle(["Acme", "Globex", "Initech", "Umbrella", "Hooli", "Stark", "Wayne", "Wonka", "Soylent"])
-
-
-def _task(c, owner="bot:filer", labels=()):
-    """A company-visible task on Support, filed by a bot and held by `owner`; each for another customer."""
-    title = f"{next(CUSTOMERS)} can't sign in"
-    row = X.new_task(c, "bot:filer", title, routing.support_pipeline(c), assignee=owner)
-    c.execute("UPDATE tasks SET private=0, labels=? WHERE id=?", (json.dumps(list(labels)), row["id"]))
-    return row["id"]
-
-
-def _held(c, task_id):
-    row = H.task(c, task_id)
-    return row["owner_id"], row["assignee_id"]
-
-
-def _team(c, team, *pids):
-    found = c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()
-    roster = json.loads(found[0])
-    for person in roster["people"]:
-        if person["id"] in pids:
-            person["team"] = team
-    c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(roster),))
-
-
-def test_everyone_off_routes_to_the_inbox_fallback_as_owner_and_assignee(c):
-    _all(c, "off")
-    task_id = _task(c, owner="human:ben")
-    c.execute("UPDATE pipelines SET manager_id='human:cara' WHERE id=?", (H.task(c, task_id)["pipeline_id"],))
-    assert routing.route(c, task_id) == "human:cara"
-    assert _held(c, task_id) == ("human:cara", "human:cara")
-    # No person manages it: the company's default person, still a named owner.
-    other = _task(c, owner="human:ben")
-    c.execute("UPDATE pipelines SET manager_id=NULL WHERE id=?", (H.task(c, other)["pipeline_id"],))
-    assert routing.route(c, other) == "human:" + H.default_human(c)
-    assert _held(c, other)[1] == "human:" + H.default_human(c)
-
-
-def test_an_async_owner_takes_routine_work_but_not_urgent_work(c):
-    _all(c, "off")
-    _set(c, "ben", "async")
-    _set(c, "cara", "on")
-    _team(c, "support", "ben", "cara")
-    calm = _task(c, owner="human:ben")
-    assert routing.route(c, calm) == "human:ben"
-    urgent = _task(c, owner="human:ben", labels=["urgent"])
-    assert routing.route(c, urgent) == "human:cara"  # anyone on in the owner's team
-    assert _held(c, urgent) == ("human:cara", "human:cara")
-
-
-def test_the_recent_helper_wins_while_on(c):
-    _all(c, "on")
-    task_id = _task(c, owner="human:ben")
-    H._task_event(c, task_id, "human:cara", "comment", None, None, "Asked them for a screenshot")
-    assert routing.route(c, task_id) == "human:cara"
-    # Off, the helper is passed over: its owner takes it.
-    again = _task(c, owner="human:ben")
-    H._task_event(c, again, "human:cara", "comment", None, None, "Asked them for a screenshot")
-    _set(c, "cara", "off")
-    assert routing.route(c, again) == "human:ben"
-
-
-def test_help_older_than_two_days_does_not_count(c, time_machine):
-    _all(c, "on")
-    task_id = _task(c, owner="human:ben")
-    H._task_event(c, task_id, "human:cara", "comment", None, None, "Looked into it")
-    time_machine.move_to(START + timedelta(days=3), tick=False)
-    assert routing.route(c, task_id) == "human:ben"
-
-
-def test_the_relationship_owner_comes_from_the_tasks_entity(c):
-    """Read defensively: with tasks.entity_id (the relationship work) the entity's person owns the routing."""
-    if "entity_id" not in routing._columns(c, "tasks"):
-        c.execute("ALTER TABLE tasks ADD COLUMN entity_id TEXT NOT NULL DEFAULT ''")
-    c.execute(
-        "INSERT INTO entities(id, type, name, owner_type, owner_id, created_by, created_at, updated_at) "
-        "VALUES('acme', 'organization', 'Acme', 'human', 'cara', 'test', ?, ?)",
-        (H.now(), H.now()),
+def _route(api, token="ana-test", expected=200, **body):
+    """A routed task's id (or the refusal), each with its own title."""
+    r = api.post(
+        "/api/v2/tasks",
+        json={"title": f"{next(TITLES)} cannot sign in", "route": True, **body},
+        headers=headers(token),
     )
-    _all(c, "on")
-    task_id = _task(c, owner="human:ben")
-    c.execute("UPDATE tasks SET entity_id='acme' WHERE id=?", (task_id,))
-    assert routing.route(c, task_id) == "human:cara"
+    assert r.status_code == expected, r.text
+    data = r.json()
+    return data["task"]["id"] if expected == 200 else data
 
 
-def test_availability_until_ends_at_read_and_working_hours_decide(c, time_machine):
-    person = routing.person_row(c, "ben")
-    assert routing.effective(person, START) == "on"  # no working hours saved: on
-    c.execute("UPDATE humans SET work_starts='08:00', work_ends='17:00', time_zone='UTC' WHERE id='ben'")
-    person = routing.person_row(c, "ben")
-    assert routing.effective(person, START) == "on"
-    assert routing.effective(person, START.replace(hour=20)) == "async"
-    shown = routing.set_availability(c, "human:ben", "ben", "off", "2030-01-07T10:00:00Z", START)
-    assert shown["availability"] == "off" and shown["from"] == "set"
-    person = routing.person_row(c, "ben")
-    assert routing.effective(person, START + timedelta(minutes=59)) == "off"
-    later = START + timedelta(hours=2)
-    assert routing.view(person, later) | {"person": None} == {
-        "person": None,
-        "availability": "on",
-        "set": None,
-        "until": None,
-        "from": "working_hours",
-    }
-    assert person["availability"] == "off"  # nothing rewrote the row: the end is computed at read
+def _held(api, task_id):
+    with _db(api) as c:
+        row = H.task(c, task_id)
+        return row["owner_id"], row["assignee_id"]
 
 
-def test_urgent_support_waits_tell_the_manager_at_once(c, time_machine):
-    lead = X.bot(c, "lead")
-    task_id = _task(c, owner="human:ben", labels=["urgent"])
-    calm = _task(c, owner="human:ben")
-    c.execute("UPDATE pipelines SET manager_id=? WHERE id=?", (lead, H.task(c, task_id)["pipeline_id"]))
-    time_machine.move_to(START + timedelta(minutes=61), tick=False)
-    # The manager had its hourly wake ten minutes ago: a routine match waits for the next hour.
-    earlier = H.shift(H.now(), minutes=-10)
-    c.execute(
-        "INSERT INTO stage_rule_marks(rule_id,task_id,mark,outcome,manager_id,matched_at,told_at) "
-        "VALUES('r','t','m','told',?,?,?)",
-        (lead, earlier, earlier),
-    )
-    T.sweep(c)
-    wakes = c.execute(
-        "SELECT body FROM messages WHERE json_extract(refs, '$.wake') = 'stage_rules' AND recipient_id=?", (lead,)
-    ).fetchall()
-    assert len(wakes) == 1 and H.task(c, task_id)["title"] in wakes[0][0]
-    assert H.task(c, calm)["title"] not in wakes[0][0]  # the rule is for urgent work only
+def _set(api, value, *pids):
+    with _db(api) as c:
+        for pid in pids:
+            c.execute("UPDATE humans SET availability=?, availability_until=NULL WHERE id=?", (value, pid))
 
 
-def test_a_routed_task_lands_on_support_with_a_person(api):
-    from backend.tests.helpers.api import post
+def _account(api, owner="human:ben", domain="acme.example"):
+    with _db(api) as c:
+        entity = ES.upsert(c, "human:ana", "organization", match={"domain": domain}, name=domain)["id"]
+        ES.set_owner(c, "human:ana", entity, owner)
+        return entity
 
-    made = post(api, "tasks", {"title": "Refund question from Acme", "route": True})
-    task = made.get("task", made)
-    with api.app.state.store.read() as c:
-        row = E.task(c, task["id"])
-        assert row["pipeline"]["preset"] == routing.SUPPORT
-        assert row["stage"]["by_hand"] == 0
+
+def _team(api, team, *pids):
+    with _db(api) as c:
+        roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
+        for person in roster["people"]:
+            if person["id"] in pids:
+                person["team"] = team
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(roster),))
+
+
+def _support(api, **fields):
+    with _db(api) as c:
+        sid = routing.support_pipeline(c)
+        for key, value in fields.items():
+            c.execute(f"UPDATE pipelines SET {key}=? WHERE id=?", (value, sid))
+        return sid
+
+
+def test_a_routed_task_is_filed_as_its_persons_on_the_support_pipeline(app):
+    task_id = _route(app)
+    with _db(app) as c:
+        row = H.task(c, task_id)
+        assert c.execute("SELECT preset FROM pipelines WHERE id=?", (row["pipeline_id"],)).fetchone()[0] == "support"
         assert H.is_human(row["owner_id"]) and row["assignee_id"] == row["owner_id"]
-        rule = c.execute("SELECT pipeline_id FROM stage_rules WHERE id='sr_urgent_support'").fetchone()
-        assert rule[0] == row["pipeline_id"]
-    refused = api.post("/api/v2/tasks", json={"title": "Two owners", "route": True, "owner": "ops"}, headers=headers())
-    assert refused.status_code == 422 and "names no owner" in refused.text
+        # Filed as theirs: no "no owner" pick, no reassign after the fact.
+        kinds = [r[0] for r in c.execute("SELECT kind FROM history_events WHERE subject_id=?", (task_id,))]
+        assert "reassign" not in kinds
+        assert not c.execute("SELECT 1 FROM messages WHERE body LIKE '%has no owner%'").fetchone()
+        rules = {r[0] for r in c.execute("SELECT id FROM stage_rules WHERE pipeline_id=?", (row["pipeline_id"],))}
+        assert rules == {"sr_support_waits", "sr_urgent_support"}
+    assert "names no owner" in str(_route(app, expected=422, owner="ops"))
+    general = _route(app, pipeline="general")  # General's first stage is the assignee's too
+    assert H.is_human(_held(app, general)[0])
 
 
-def test_a_person_sets_their_own_availability_and_an_admin_anyones(api, time_machine):
-    time_machine.move_to(START, tick=False)
-    mine = api.put(
+def test_routing_is_refused_where_the_first_stage_is_not_the_assignees(app):
+    with _db(app) as c:
+        now = H.now()
+        c.execute(
+            "INSERT INTO pipelines (id, name, manager_id, created_at, updated_at) VALUES ('ops','Ops',NULL,?,?)",
+            (now, now),
+        )
+        for i, (kind, name, owner) in enumerate((("work", "Run", "bot:ops"), ("done", "Done", None))):
+            c.execute(
+                "INSERT INTO stages (id, pipeline_id, position, kind, name, owner, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (f"ops-{name.lower()}", "ops", i, kind, name, owner, now, now),
+            )
+    refused = _route(app, expected=422, pipeline="ops")
+    assert "first stage" in json.dumps(refused)
+
+
+def test_everyone_off_goes_to_the_inbox_fallback(app):
+    _set(app, "off", "ana", "ben", "cara")
+    first = _route(app)
+    assert _held(app, first) == ("human:ana", "human:ana")  # the company's person
+    _support(app, manager_id="human:cara")
+    second = _route(app)
+    assert _held(app, second) == ("human:cara", "human:cara")
+
+
+def test_an_async_owner_takes_routine_work_but_not_urgent_work(app):
+    acme = _account(app, owner="human:ben")
+    _set(app, "off", "ana")
+    _set(app, "async", "ben")
+    _team(app, "support", "ben", "cara")
+    assert _held(app, _route(app, entity=acme))[0] == "human:ben"
+    urgent = _route(app, entity=acme, labels=["urgent"])
+    assert _held(app, urgent) == ("human:cara", "human:cara")  # anyone on in the owner's team
+
+
+def test_the_recent_helper_on_the_relationship_wins_while_on(app):
+    acme = _account(app, owner="human:ben")
+    earlier = _route(app, entity=acme, private=False)
+    with _db(app) as c:
+        H._task_event(c, earlier, "human:cara", "comment", None, None, "Asked them for a screenshot")
+    assert _held(app, _route(app, entity=acme))[0] == "human:cara"
+    _set(app, "off", "cara")
+    assert _held(app, _route(app, entity=acme))[0] == "human:ben"
+
+
+def test_help_older_than_two_days_does_not_count(app, time_machine):
+    acme = _account(app, owner="human:ben")
+    earlier = _route(app, entity=acme, private=False)
+    with _db(app) as c:
+        H._task_event(c, earlier, "human:cara", "comment", None, None, "Looked into it")
+    time_machine.move_to(START + timedelta(days=7), tick=False)  # the next Monday
+    assert _held(app, _route(app, entity=acme))[0] == "human:ben"
+
+
+def test_private_work_goes_only_to_someone_who_may_read_it(app):
+    bot(app, "ops")
+    refused = _route(app, token="ops-test", expected=422, private=True)
+    assert "Nobody can take" in json.dumps(refused)
+    with _db(app) as c:
+        assert not c.execute("SELECT 1 FROM pipelines WHERE preset='support'").fetchone()  # nothing was made
+    shared = _route(app, token="ops-test", private=True, readers=["human:ana"])
+    assert _held(app, shared) == ("human:ana", "human:ana")
+
+
+def test_the_dry_run_names_the_person_routing_would_pick(app):
+    shown = post(app, "tasks/dry-run", {"title": "Refund question from Acme", "route": True})
+    assert shown["ok"] is True and shown["owner"] == "human:ana", shown
+
+
+def test_availability_ends_at_read_and_working_hours_decide(app):
+    with _db(app) as c:
+        ben = routing.person_row(c, "ben")
+        assert routing.effective(ben, START) == "on"
+        assert routing.effective(ben, datetime(2030, 1, 6, 0, 0, tzinfo=timezone.utc)) == "async"  # Sunday midnight
+        shown = routing.set_availability(c, "human:ben", "ben", "off", "2030-01-07T10:00:00Z", START)
+        assert shown["availability"] == "off" and shown["from"] == "set"
+        ben = routing.person_row(c, "ben")
+    assert routing.effective(ben, START + timedelta(minutes=59)) == "off"
+    later = routing.view(ben, START + timedelta(hours=2))
+    assert (later["availability"], later["set"], later["from"]) == ("on", None, "working_hours")
+    assert ben["availability"] == "off"  # nothing rewrote the row: the end is computed at read
+
+
+def _wakes(api, manager):
+    with _db(api) as c:
+        return [
+            r[0]
+            for r in c.execute(
+                "SELECT body FROM messages WHERE json_extract(refs, '$.wake') = 'stage_rules' AND recipient_id=?",
+                (manager,),
+            )
+        ]
+
+
+def _title(api, task_id):
+    with _db(api) as c:
+        return H.task(c, task_id)["title"]
+
+
+def test_urgent_support_waits_wake_the_manager_once_at_once_and_not_after_untagging(app, time_machine):
+    _support(app, manager_id="bot:ops")
+    first = _route(app, labels=["urgent"], private=False)
+    second = _route(app, labels=["urgent"], private=False)
+    untagged = _route(app, labels=["urgent"], private=False)
+    calm = _route(app, private=False)
+    assert post(app, f"tasks/{untagged}", {"labels": []})
+    time_machine.move_to(START + timedelta(minutes=61), tick=False)
+    with _db(app) as c:  # the manager's hourly wake went ten minutes ago: routine matches would wait
+        earlier = H.shift(H.now(), minutes=-10)
+        c.execute(
+            "INSERT INTO stage_rule_marks(rule_id,task_id,mark,outcome,manager_id,matched_at,told_at) "
+            "VALUES('r','t','m','told','bot:ops',?,?)",
+            (earlier, earlier),
+        )
+        T.sweep(c)
+    wakes = _wakes(app, "bot:ops")
+    assert len(wakes) == 1
+    assert _title(app, first) in wakes[0] and _title(app, second) in wakes[0]
+    assert _title(app, untagged) not in wakes[0] and _title(app, calm) not in wakes[0]
+
+
+def test_routine_support_work_held_by_a_person_goes_to_the_manager_after_a_quiet_day(app, time_machine):
+    _support(app, manager_id="bot:ops")
+    task_id = _route(app, private=False)
+    assert H.is_human(_held(app, task_id)[0])
+    time_machine.move_to(START + timedelta(hours=23), tick=False)
+    with _db(app) as c:
+        T.sweep(c)
+    assert _wakes(app, "bot:ops") == []
+    time_machine.move_to(START + timedelta(hours=25), tick=False)
+    with _db(app) as c:
+        T.sweep(c)
+    wakes = _wakes(app, "bot:ops")
+    assert len(wakes) == 1 and _title(app, task_id) in wakes[0] and "Support waits" in wakes[0]
+
+
+def test_a_person_sets_their_own_availability_and_an_admin_anyones(app):
+    mine = app.put(
         "/api/v2/humans/cara/availability",
         json={"availability": "async", "until": "2030-01-07T12:00:00Z"},
         headers=headers("cara-test"),
     )
     assert mine.status_code == 200, mine.text
     assert mine.json()["availability"] == "async"
-    others = api.put("/api/v2/humans/ben/availability", json={"availability": "off"}, headers=headers("cara-test"))
+    others = app.put("/api/v2/humans/ben/availability", json={"availability": "off"}, headers=headers("cara-test"))
     assert others.status_code == 403
-    admin = api.put("/api/v2/humans/cara/availability", json={"availability": "off"}, headers=headers("ben-test"))
+    admin = app.put("/api/v2/humans/cara/availability", json={"availability": "off"}, headers=headers("ben-test"))
     assert admin.status_code == 200 and admin.json()["set"] == "off"
-    cleared = api.put("/api/v2/humans/cara/availability", json={"availability": None}, headers=headers("ben-test"))
+    cleared = app.put("/api/v2/humans/cara/availability", json={"availability": None}, headers=headers("ben-test"))
     assert cleared.json()["from"] == "working_hours"
-    past = api.put(
+    past = app.put(
         "/api/v2/humans/cara/availability",
         json={"availability": "off", "until": "2029-01-01T00:00:00Z"},
         headers=headers("cara-test"),
     )
     assert past.status_code == 422
-    read = api.get("/api/v2/humans/cara/availability", headers=headers("ben-test"))
+    read = app.get("/api/v2/humans/cara/availability", headers=headers("ben-test"))
     assert read.status_code == 200 and read.json()["availability"] == "on"
+    assert app.get("/api/v2/humans/nobody/availability", headers=headers("ben-test")).status_code == 404

@@ -1230,23 +1230,29 @@ filed for its item gets its link back as a secondary one.
 #### Routing
 
 Work that needs a person, with no owner named, is filed with `route: true` (`tico task create --route`, MCP
-`tico_task_create`); naming an owner too is refused. With no pipeline it goes on the company's Support pipeline (preset
-`support`), made the first time it is needed: one work stage, Open, held by the task's assignee and not by hand, so Late,
-the stage rules and the manager (the General Manager) own every overdue wait. Its default rule Urgent support waits tells
-the manager about a task labelled `urgent` that is quiet for an hour, at once rather than in the hourly batch. A retired
-Support is not made again: routed work then goes to General.
+`tico_task_create`), optionally with `entity` (the relationship). Tico picks the person before anything is written
+(`routing.person_for_create`), and the task is filed as theirs, owner and assignee, so the cap, reach, contact checks,
+stage entry and create hooks all run once for them. Refused (422): with an owner, with a live meeting, in a pipeline
+whose first stage is not the task's assignee's, or when nobody may take it. With no pipeline it goes on the company's
+Support pipeline (preset `support`), made the first time a routed task is filed: one work stage, Open, held by the
+task's assignee and not by hand. Its default rules give overdue waits to its manager (the General Manager): Support
+waits (24 h quiet, in the hourly batch) and Urgent support waits (1 h quiet on a task tagged `urgent`, the manager woken
+in the same pass, once). A retired Support is not made again: routed work then goes to General. The dry run names the
+person routing would pick.
 
-`routing.route` gives the task, in the create's transaction, to the first of: who worked it (or another task of its
-relationship, `tasks.entity_id`) in the last 48 hours and is on, not counting its requester; the relationship's owner
-(`entities.owner_*`), else the task's own person, when on, or async and the task is not urgent; anyone on in that owner's
-roster team, fewest open tasks first; else the inbox fallback, the pipeline's manager or owner when a person, else the
-company's default person. Each but the last must be an active person who may read the task. It sets both the owner and
-the assignee.
+The pick is the first of: the newest person who worked another recent task of the relationship (its history or comments,
+the last 48 hours, at most 20 tasks), may read that task and is on, not counting the filer; the relationship's owner
+(`entities.owner_*`) when on, or async and the work is not tagged `urgent`; anyone on in that owner's roster team,
+fewest open tasks first; else the inbox fallback, the pipeline's manager or owner when a person, else the company's
+person (`waiting_on.company_person`). Every one, the fallback included, must be an active person who may read the task:
+for private work its filer, its readers, readers of its private parent or its pipeline's manager. Assigning never widens
+who reads it.
 
 A person's availability (`humans.availability`: on, async or off; `availability_until` ends it) is theirs to set, or any
 admin's: `PUT /api/v2/humans/{id}/availability` (`tico human availability-set`, MCP `tico_human_availability_set`), read
-with `GET` (`tico human availability`). Unset or ended, it comes from their Calendar working hours: on inside them,
-async outside; on when none are saved. The end is computed at read: nothing rewrites the row.
+with `GET` by whoever may see them on the team chart (`tico human availability`). Unset or ended, it comes from their
+effective Calendar working hours (`calendar_api.work_settings`: saved, else weekdays 08:00-18:00, in their saved zone
+else UTC): on inside them, async outside. The end is computed at read: nothing rewrites the row.
 
 ### Modules
 

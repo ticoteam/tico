@@ -16,8 +16,8 @@ task's last activity, as it would have had the rule always been there.
 Then:
 
 - `tell_manager`: the pipeline's manager is told. All of one manager's matches go in one wake, "Stage rules: N tasks",
-  and a manager gets one such wake an hour at most: what matches meanwhile waits for the next. An urgent task (label
-  `urgent`, backend/routing.py) is told at once, with whatever else waits for that manager. A task already listed as
+  and a manager gets one such wake an hour at most: what matches meanwhile waits for the next. A match of Urgent
+  support waits (backend/routing.py) wakes its manager in the same pass, once, with whatever else waits for it. A task already listed as
   Late on this visit is not listed again.
 - `tell_owner`: the task's owner is told, on the task.
 - `move_back`: the task goes back to `then_params.stage` with no owner, through the wake rules' task move
@@ -46,8 +46,6 @@ def _mod(name: str) -> Any:
     # it, depend on every file in the PR test selection (scripts/pr_checks.py DependencyMap).
     if name == "never_stuck":
         from . import never_stuck as found
-    elif name == "routing":
-        from . import routing as found
     elif name == "rules":
         from . import rules as found
     elif name == "stage_rules":
@@ -76,7 +74,7 @@ SYSTEM = "system"
 # Open work tasks the pass works on: not snoozed or blocked, not in a by-hand stage. `active_at` is the last activity; the end of a
 # snooze counts, so a task set aside is not quiet the moment its snooze ends and its owner is woken.
 _TASKS = (
-    "SELECT t.id, t.title, t.number, t.owner_id, t.pipeline_id, t.stage_id, t.conversation_id, t.labels, "
+    "SELECT t.id, t.title, t.number, t.owner_id, t.pipeline_id, t.stage_id, t.conversation_id, "
     "v.id AS visit_id, v.entered_at, v.late_told_at, s.name AS stage_name, "
     "MAX(v.entered_at, COALESCE(v.last_change_at, ''), COALESCE((SELECT MAX(m.created_at) FROM messages m "
     "WHERE m.conversation_id = t.conversation_id AND m.sender_id <> 'keeper'), ''), "
@@ -128,18 +126,30 @@ def rules(conn: Any) -> list[Row]:
 
 
 def sweep(conn: Any, at: str | None = None) -> dict[str, int]:
-    """One pass over every timer rule, then the managers' batched wakes. Returns counts of what it did."""
+    """One pass over every timer rule, then the managers' batched wakes. A manager told of a match of Urgent support
+    waits is woken now, once, whatever its last wake was; every other manager waits for its hour. Returns counts of
+    what it did."""
     at = str(at or H.now())
     done = {"told": 0, "moved": 0, "wakes": 0}
     found = rules(conn)
+    now: set[str] = set()  # managers with an urgent match this pass
     if found:
         tasks: list[Row] = [dict(r) for r in conn.execute(_TASKS).fetchall()]
         for rule in found:
             for task in tasks:
                 if _in_scope(rule, task):
-                    _judge(conn, rule, task, at, done)
+                    manager = _judge(conn, rule, task, at, done)
+                    if manager and _urgent_rule(rule):
+                        now.add(manager)
+    for manager in sorted(now):
+        if _wake_manager(conn, manager, at):
+            done["wakes"] += 1
     done["wakes"] += flush(conn, at)
     return done
+
+
+def _urgent_rule(rule: Row) -> bool:
+    return _mod("stage_rules").URGENT_SUPPORT in (rule.get("id"), rule.get("builtin"))
 
 
 def _in_scope(rule: Row, task: Row) -> bool:
@@ -177,17 +187,18 @@ def _due(conn: Any, rule: Row, task: Row, started: str, at: str) -> bool:
     return float((now - start).total_seconds()) >= seconds
 
 
-def _judge(conn: Any, rule: Row, task: Row, at: str, done: dict[str, int]) -> None:
+def _judge(conn: Any, rule: Row, task: Row, at: str, done: dict[str, int]) -> str | None:
+    """Judge one task under one rule; the manager a tell now waits for, if any."""
     if task.get("auto_dream") and _quiet_rule(rule):
-        return
+        return None
     started = _started(conn, rule, task)
     if not started or not _due(conn, rule, task, started, at):
-        return
+        return None
     mark = f"{task['visit_id']}@{started}"
     if conn.execute(
         "SELECT 1 FROM stage_rule_marks WHERE rule_id=? AND task_id=? AND mark=?", (rule["id"], task["id"], mark)
     ).fetchone():
-        return
+        return None
     problem: Any = _mod("store").Problem
     outcome = "no"
     conn.execute("SAVEPOINT stage_rule_timer")
@@ -206,13 +217,7 @@ def _judge(conn: Any, rule: Row, task: Row, at: str, done: dict[str, int]) -> No
         "INSERT OR IGNORE INTO stage_rule_marks(rule_id,task_id,mark,outcome,manager_id,matched_at) VALUES(?,?,?,?,?,?)",
         (rule["id"], task["id"], mark, outcome, manager, at),
     )
-    if manager and _urgent(task) and _wake_manager(conn, manager, at):
-        done["wakes"] += 1  # an urgent task's tell goes now, not in the hourly batch
-
-
-def _urgent(task: Row) -> bool:
-    """Whether the task carries the label `urgent` (backend/routing.py): its manager's tell is not batched."""
-    return bool(_mod("routing").urgent(task))
+    return manager
 
 
 # ----------------------------------------------------------------------------- If

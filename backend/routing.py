@@ -3,45 +3,48 @@
 
 A person's availability is `on`, `async` or `off` (`humans.availability`). They set their own, an admin sets anyone's;
 `availability_until` ends a set value, and past it the derived value applies again, computed at read with no timer.
-Nothing set (or expired) is derived from their working hours (Calendar settings: `work_starts`, `work_ends`,
-`work_days`, `time_zone`): on inside them, async outside; someone with no working hours saved is on.
+Nothing set (or ended) comes from their effective Calendar working hours (calendar_api.work_settings: what they saved,
+else Calendar's weekday defaults, in their saved zone else UTC; no Google call): on inside them, async outside.
 
-`route` runs once, when work needs a person (a task filed with `route`), in the caller's transaction. It gives the task
-to the first of:
+`choose` runs once, when work needs a person: `POST /api/v2/tasks` with `route: true` picks the person before the task
+is made, and the task is then filed with them as owner and assignee, so every send check, stage entry and create hook
+runs once against the real recipient. The first of:
 
-1. the recent helper: the last person who worked the task, or another task of its relationship, in the last
-   RECENT_HOURS (its history or its room), who is on;
-2. the relationship's owner (`entities.owner_*` through `tasks.entity_id`), else the task's own person: on, or async
-   when the task is not urgent;
-3. anyone on in that owner's team, fewest open tasks first;
-4. the inbox fallback: the pipeline's manager, else its owner, when a person, else the company's default person. So
-   there is always a named owner.
+1. the recent helper: the newest person who worked another task of the same relationship (`tasks.entity_id`) in the
+   last RECENT_HOURS (its history, or comments on it), may read that task, and is on;
+2. the relationship's owner (`entities.owner_*`) when a person: on, or async when the work is not urgent;
+3. anyone on in that owner's roster team, fewest open tasks first;
+4. the inbox fallback: the pipeline's manager, else its owner, when a person, else the company's person
+   (waiting_on.company_person).
 
-Each candidate but the last must be an active person who may read the task. It sets both the task's owner and its
-assignee. A task is urgent when it carries the label `urgent`.
+Every candidate, the fallback included, must be an active person who may read the task: assigning never widens who
+reads private work. When no fallback may, the create is refused (422). Work is urgent when it carries the tag
+`urgent` (task_tags; `urgent`).
 
 Routed work with no pipeline goes on the company's Support pipeline (`support_pipeline`), made the first time it is
-needed: one work stage held by the task's assignee and not by hand, so the stage timers (Late, stage rules) and the
-pipeline manager's tells own every overdue wait. Its default stage rule tells the manager about an urgent task quiet
-for an hour at once, not in the hourly batch (backend/stage_rule_timers.py).
+needed: one work stage held by the task's assignee and not by hand. Two default stage rules give its overdue waits to
+the pipeline's manager: Support waits (24 h quiet) and Urgent support waits (1 h quiet on an urgent task, told at once
+rather than in the hourly batch, backend/stage_rule_timers.py).
 """
 
 from __future__ import annotations
 
 import json
-from datetime import datetime, time, timedelta, timezone
-from typing import Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from typing import Any, cast
 
 Row = dict[str, Any]
 
 ON, ASYNC, OFF = "on", "async", "off"
 STATES = (ON, ASYNC, OFF)
 RECENT_HOURS = 48
+RELATED_MOST = 20  # the relationship's tasks a recent helper is looked for in, newest first
 URGENT = "urgent"
 SUPPORT = "support"  # the Support pipeline's preset
-SUPPORT_STAGE = "support-open"
-DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+# Whether a task carries the tag `urgent` (one index probe on task_tags); `%s` is the task id expression.
+URGENT_SQL = "EXISTS (SELECT 1 FROM task_tags tt JOIN tags g ON g.id = tt.tag_id WHERE tt.task_id = %s AND lower(g.key) = 'urgent')"
 
 
 def _h() -> Any:
@@ -50,35 +53,20 @@ def _h() -> Any:
     return hubdb
 
 
-def _engine() -> Any:
-    from . import task_engine
-
-    return task_engine
-
-
-# ----------------------------------------------------------------------------- availability
 def now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _zone(name: object) -> ZoneInfo:
-    try:
-        return ZoneInfo(str(name)) if name else ZoneInfo("UTC")
-    except (ZoneInfoNotFoundError, ValueError):
-        return ZoneInfo("UTC")
+def _stamp(at: datetime) -> str:
+    return at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 
+# ----------------------------------------------------------------------------- availability
 def from_hours(person: Row, at: datetime) -> str:
-    """On inside the person's working hours, async outside; on when they saved none."""
-    if not (person.get("work_starts") or person.get("work_ends") or person.get("work_days")):
-        return ON
-    from .calendar_api import WORK_DAYS, WORK_ENDS, WORK_STARTS
+    """On inside the person's effective working hours, async outside."""
+    from . import calendar_api
 
-    local = at.astimezone(_zone(person.get("time_zone")))
-    starts = time.fromisoformat(str(person.get("work_starts") or WORK_STARTS))
-    ends = time.fromisoformat(str(person.get("work_ends") or WORK_ENDS))
-    days = set(str(person.get("work_days") or WORK_DAYS).split(","))
-    return ON if DAYS[local.weekday()] in days and starts <= local.time() < ends else ASYNC
+    return ON if calendar_api.working_at(person, at) else ASYNC
 
 
 def _set_now(person: Row, at: datetime) -> str:
@@ -107,12 +95,13 @@ def view(person: Row, at: datetime) -> Row:
     }
 
 
+_PERSON = (
+    "SELECT id, time_zone, work_starts, work_ends, work_days, availability, availability_until FROM humans WHERE id IN "
+)
+
+
 def person_row(conn: Any, pid: str) -> Row | None:
-    found = conn.execute(
-        "SELECT id, time_zone, work_starts, work_ends, work_days, availability, availability_until "
-        "FROM humans WHERE id=?",
-        (pid,),
-    ).fetchone()
+    found = conn.execute(_PERSON + "(?)", (pid,)).fetchone()
     return dict(found) if found else None
 
 
@@ -132,9 +121,8 @@ def set_availability(conn: Any, by: str, pid: str, value: str | None, until: str
             raise Problem("validation", "until is an ISO-8601 time with a zone", 422)
         if end <= at:
             raise Problem("validation", "until is in the future", 422)
-        until = end.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
-    before = person_row(conn, pid)
-    if before is None:
+        until = _stamp(end)
+    if person_row(conn, pid) is None:
         raise Problem("not_found", "Person not found", 404)
     conn.execute("UPDATE humans SET availability=?, availability_until=? WHERE id=?", (value or "", until, pid))
     H.event(conn, by, "person.availability", "human:" + pid, {"availability": value, "until": until})
@@ -143,171 +131,199 @@ def set_availability(conn: Any, by: str, pid: str, value: str | None, until: str
     return view(after, at)
 
 
-# ----------------------------------------------------------------------------- route
-def _labels(row: Row) -> set[str]:
-    raw: Any = row.get("labels_json") if row.get("labels_json") is not None else row.get("labels")
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw)
-        except ValueError:
-            raw = []
-    items: list[Any] = list(raw) if isinstance(raw, list) else []  # type: ignore[arg-type]
-    return {str(x).lower() for x in items}
+# ----------------------------------------------------------------------------- choose
+@dataclass(frozen=True)
+class Work:
+    """What routing knows about work before it is filed."""
+
+    pipeline_id: str | None  # None: the Support pipeline, made only once the create files it
+    entity_id: str
+    requester: str
+    urgent: bool
+    may_read: Callable[[str], bool]  # whether a person may read the task once it is filed, not as its owner
 
 
-def urgent(row: Row) -> bool:
-    return URGENT in _labels(row)
+def urgent(conn: Any, task_id: str) -> bool:
+    """Whether the task carries the tag `urgent`."""
+    return bool(conn.execute("SELECT " + URGENT_SQL % "?", (task_id,)).fetchone()[0])
 
 
-def _columns(conn: Any, table: str) -> set[str]:
-    return {str(r[1]) for r in conn.execute(f"PRAGMA table_info({table})")}
-
-
-def relationship(conn: Any, row: Row) -> tuple[str | None, list[str]]:
-    """The task's relationship, read defensively (tasks.entity_id may not exist yet): its owner as `human:<id>` when a
-    person, and the ids of its other tasks. (None, []) for a task with none."""
-    if "entity_id" not in _columns(conn, "tasks"):
-        return None, []
-    found = conn.execute("SELECT entity_id FROM tasks WHERE id=?", (row["id"],)).fetchone()
-    entity = str(found[0] or "") if found else ""
-    if not entity:
-        return None, []
-    tasks = [str(r[0]) for r in conn.execute("SELECT id FROM tasks WHERE entity_id=? AND id<>?", (entity, row["id"]))]
-    owner = conn.execute("SELECT owner_type, owner_id FROM entities WHERE id=?", (entity,)).fetchone()
-    person = None
-    if owner and str(owner[0] or "") in ("human", "person") and owner[1]:
-        person = "human:" + str(owner[1]).removeprefix("human:")
-    return person, tasks
-
-
-def _recent(conn: Any, row: Row, related: list[str], since: str) -> list[str]:
-    """People who worked the task or its relationship's other tasks since `since`, newest first, not counting the
-    task's own requester (who asked for it is not its helper)."""
-    ids = [row["id"], *related]
-    marks = ",".join("?" * len(ids))
-    rooms = [str(r[0]) for r in conn.execute(f"SELECT conversation_id FROM tasks WHERE id IN ({marks})", ids) if r[0]]
-    rows: list[Any] = list(
-        conn.execute(
-            f"SELECT actor_id, created_at FROM history_events WHERE subject_type='task' AND subject_id IN ({marks}) "
-            "AND actor_id LIKE 'human:%' AND created_at >= ?",
-            (*ids, since),
-        )
-    )
-    if rooms:
-        rows += list(
-            conn.execute(
-                f"SELECT sender_id, created_at FROM messages WHERE conversation_id IN ({','.join('?' * len(rooms))}) "
-                "AND sender_id LIKE 'human:%' AND deleted_at IS NULL AND created_at >= ?",
-                (*rooms, since),
-            )
-        )
-    out: list[str] = []
-    for actor, _ in sorted(rows, key=lambda r: str(r[1]), reverse=True):
-        if actor != row.get("requester_id") and actor not in out:
-            out.append(str(actor))
-    return out
-
-
-def _team(conn: Any, actor: str) -> list[str]:
-    """The other people in `actor`'s team (their roster group), as `human:<id>`."""
+def _roster(conn: Any) -> list[Row]:
     found = conn.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()
     try:
         roster: Any = json.loads(found[0]) if found else {}
     except ValueError:
         roster = {}
-    people: list[Row] = [p for p in (roster.get("people") or []) if isinstance(p, dict)]  # type: ignore[union-attr]
-    pid = actor.removeprefix("human:")
-    team = next((str(p.get("team") or "") for p in people if p.get("id") == pid), "")
-    if not team:
+    listed: Any = cast(Row, roster).get("people") if isinstance(roster, dict) else None
+    return [cast(Row, p) for p in cast(list[Any], listed) if isinstance(p, dict)] if isinstance(listed, list) else []
+
+
+def _owner(conn: Any, entity_id: str) -> str | None:
+    """The relationship's owner as `human:<id>` when a person."""
+    if not entity_id:
+        return None
+    found = conn.execute("SELECT owner_type, owner_id FROM entities WHERE id=?", (entity_id,)).fetchone()
+    if not found or found[0] != "human" or not found[1]:
+        return None
+    return "human:" + str(found[1])
+
+
+def _recent(conn: Any, work: Work, since: str) -> list[tuple[str, str]]:
+    """(person, task id) for people who worked the relationship's other recent tasks since `since`, newest first:
+    their history or their comments on it. None for work with no relationship."""
+    if not work.entity_id:
         return []
-    return ["human:" + str(p["id"]) for p in people if str(p.get("team") or "") == team and p.get("id") != pid]
+    ids = [
+        str(r[0])
+        for r in conn.execute(
+            "SELECT id FROM tasks WHERE entity_id=? AND updated_at >= ? ORDER BY updated_at DESC LIMIT ?",
+            (work.entity_id, since, RELATED_MOST),
+        )
+    ]
+    if not ids:
+        return []
+    marks = ",".join("?" * len(ids))
+    rows = conn.execute(
+        f"SELECT actor_id, subject_id, created_at FROM history_events WHERE subject_type='task' "
+        f"AND subject_id IN ({marks}) AND actor_id LIKE 'human:%' AND created_at >= ? "
+        f"UNION ALL SELECT m.sender_id, json_extract(m.refs, '$.task'), m.created_at FROM messages m "
+        f"WHERE m.conversation_id IN (SELECT conversation_id FROM tasks WHERE id IN ({marks})) "
+        f"AND json_extract(m.refs, '$.task') IN ({marks}) AND m.sender_id LIKE 'human:%' AND m.deleted_at IS NULL "
+        f"AND m.created_at >= ? ORDER BY 3 DESC LIMIT 50",
+        (*ids, since, *ids, *ids, since),
+    ).fetchall()
+    return [(str(r[0]), str(r[1])) for r in rows if r[0] != work.requester]
 
 
-def _open_load(conn: Any, actor: str) -> int:
-    return int(conn.execute("SELECT COUNT(*) FROM tasks WHERE owner_id=? AND status='open'", (actor,)).fetchone()[0])
+def choose(conn: Any, work: Work, at: datetime) -> tuple[str, str]:
+    """Who gets the work, and the step that chose them (recent, owner, team, fallback). Refuses (422) when nobody may
+    take it: no active person who may read it, not even the fallback."""
+    from . import task_engine, task_requirements, waiting_on
+    from .store import Problem
 
-
-def fallback(conn: Any, row: Row) -> str | None:
-    """The inbox fallback for a task: its pipeline's manager, else its owner, when an active person who may read the
-    task; else the company's default person (who becomes its reader as its owner)."""
-    H, E = _h(), _engine()
-    pipe: Row = E.pipeline(conn, str(row.get("pipeline_id") or "")) or {}
-    for actor in (pipe.get("manager_id"), pipe.get("owner_id")):
-        if actor and H.is_human(actor) and _may_take(conn, row, str(actor)):
-            return str(actor)
-    default = H.default_human(conn)
-    return "human:" + default if default else None
-
-
-def _may_take(conn: Any, row: Row, actor: str) -> bool:
-    H, E = _h(), _engine()
-    if not E.R.active_person(conn, actor):
-        return False
-    return not H.task_private(conn, row) or bool(H.task_private_readable(conn, actor, row))
-
-
-def choose(conn: Any, row: Row, at: datetime) -> tuple[str | None, str]:
-    """Who `route` gives the task to, and the step that chose them (recent, owner, team, fallback)."""
     H = _h()
-    people: dict[str, Row] = {}
+    active: frozenset[str] = task_requirements._active_ids(conn)  # pyright: ignore[reportPrivateUsage]
+    states: dict[str, str] = {}
 
     def state(actor: str) -> str:
-        pid = actor.removeprefix("human:")
-        if pid not in people:
-            people[pid] = person_row(conn, pid) or {"id": pid}
-        return effective(people[pid], at)
+        if actor not in states:
+            person = person_row(conn, actor.removeprefix("human:"))
+            states[actor] = effective(person, at) if person else OFF
+        return states[actor]
+
+    def may_take(actor: str | None) -> bool:
+        return (
+            bool(actor) and H.is_human(actor) and str(actor).removeprefix("human:") in active and work.may_read(actor)
+        )
 
     def eligible(actor: str | None, allow_async: bool) -> bool:
-        if not actor or not H.is_human(actor) or not _may_take(conn, row, actor):
+        if not actor or not may_take(actor):
             return False
-        now = state(actor)
-        return now == ON or (allow_async and now == ASYNC)
+        return state(actor) == ON or (allow_async and state(actor) == ASYNC)
 
-    owner, related = relationship(conn, row)
-    if not owner:
-        mine = [a for a in (row.get("assignee_id"), row.get("owner_id")) if a and H.is_human(a)]
-        owner = str(mine[0]) if mine else None
-    since = (at.astimezone(ZoneInfo("UTC")) - timedelta(hours=RECENT_HOURS)).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
-    for helper in _recent(conn, row, related, since):
-        if eligible(helper, False):
+    since = _stamp(at - timedelta(hours=RECENT_HOURS))
+    for helper, task_id in _recent(conn, work, since):
+        related = H.task(conn, task_id)
+        if eligible(helper, False) and (
+            not H.task_private(conn, related) or H.task_private_readable(conn, helper, related)
+        ):
             return helper, "recent"
-    if eligible(owner, not urgent(row)):
+    owner = _owner(conn, work.entity_id)
+    if eligible(owner, not work.urgent):
+        assert owner is not None
         return owner, "owner"
     if owner:
-        team = [a for a in _team(conn, owner) if eligible(a, False)]
-        if team:
-            return min(team, key=lambda a: (_open_load(conn, a), a)), "team"
-    return fallback(conn, row), "fallback"
+        people = _roster(conn)
+        pid = owner.removeprefix("human:")
+        team = next((str(p.get("team") or "") for p in people if p.get("id") == pid), "")
+        mates = [
+            "human:" + str(p["id"])
+            for p in people
+            if team
+            and str(p.get("team") or "") == team
+            and p.get("id") != pid
+            and eligible("human:" + str(p["id"]), False)
+        ]
+        if mates:
+            load = dict(
+                conn.execute(
+                    f"SELECT owner_id, COUNT(*) FROM tasks WHERE status='open' AND owner_id IN ({','.join('?' * len(mates))}) "
+                    "GROUP BY owner_id",
+                    mates,
+                ).fetchall()
+            )
+            return min(mates, key=lambda a: (int(load.get(a) or 0), a)), "team"
+    pipe: Row = (task_engine.pipeline(conn, work.pipeline_id) or {}) if work.pipeline_id else {}
+    for actor in (pipe.get("manager_id"), pipe.get("owner_id"), waiting_on.company_person(conn)):
+        if may_take(actor):
+            return str(actor), "fallback"
+    raise Problem(
+        "route",
+        "Nobody can take this routed task: no one on the team who may read it is here. Share it with a person, or "
+        "name its owner",
+        422,
+    )
 
 
-WHY = {
-    "recent": "Routed to who worked on it in the last two days",
-    "owner": "Routed to its owner",
-    "team": "Routed to someone on in its owner's team",
-    "fallback": "Routed to the inbox fallback: nobody else eligible was on",
-}
+def person_for_create(conn: Any, who: Any, body: Any, parent_id: str | None, actual_bot: str) -> tuple[str, str]:
+    """(person, entity id) for a create with `route: true`, before anything is written (app.task_create and its dry
+    run). Its pipeline's first stage must be the assignee's (the Support pipeline's is). A private task goes only to a
+    person who reads it without owning it: its filer, its readers, readers of its private parent, or its pipeline's
+    manager."""
+    from . import task_engine
+    from . import task_privacy as _task_privacy
+    from .entities import store as ES
+    from .store import Problem
 
+    H = _h()
+    if body.owner:
+        raise Problem("route", "A routed task names no owner: Tico picks the person", 422)
+    if body.live_meeting_id:
+        raise Problem("route", "A meeting's task names its owner: route work that is not from a meeting", 422)
+    pipeline_id: str | None = body.pipeline or support_id(conn)
+    refused = first_stage_refusal(conn, pipeline_id) if pipeline_id else ""
+    if refused:
+        raise Problem("route", refused, 422)
+    entity_id = str(ES.target(conn, who.actor, body.entity)) if body.entity else ""
+    parent: Row | None = H.task(conn, parent_id) if parent_id else None
+    pipe: Row = (task_engine.pipeline(conn, pipeline_id) or {}) if pipeline_id else {}
+    task_privacy: Any = _task_privacy  # untyped module
+    private = bool(task_privacy.new_task(conn, who, body, None, parent, actual_bot)[2] or pipe.get("private"))
+    readers = {str(r) for r in body.readers or ()}
+    filer = {str(body.for_actor or ""), *([str(who.actor)] if H.is_human(who.actor) else [])}
 
-def route(conn: Any, task_id: str, at: datetime | None = None) -> str | None:
-    """Give an open task to a person, in the caller's transaction: owner and assignee both. Returns who, or None when
-    the company has nobody to give it to (no person at all)."""
-    H, E = _h(), _engine()
-    at = at or now()
-    row: Row | None = E.task(conn, task_id)
-    if not row or row.get("status") != "open":
-        return None
-    person, step = choose(conn, row, at)
-    if not person:
-        return None
-    E.reassign(conn, task_id, person, E.SYSTEM, WHY[step])
-    held: Row = E.task(conn, task_id) or {}
-    if held.get("assignee_id") != person:
-        E._write(  # pyright: ignore[reportPrivateUsage]
-            conn, task_id, assignee_id=person, version=int(held.get("version") or 0) + 1, updated_at=H.now()
+    def may_read(actor: str) -> bool:
+        return (
+            not private
+            or actor in filer
+            or actor == pipe.get("manager_id")
+            or bool(readers & {str(n) for n in H.reader_names(conn, actor)})
+            or bool(parent and H.task_private_readable(conn, actor, parent))
         )
-        E._event(conn, task_id, E.SYSTEM, "assignee_id", held.get("assignee_id"), person)  # pyright: ignore[reportPrivateUsage]
-    H.event(conn, E.SYSTEM, "task.routed", task_id, {"to": person, "step": step, "urgent": urgent(row)})
-    return person
+
+    work = Work(
+        pipeline_id=pipeline_id,
+        entity_id=entity_id,
+        requester=str(who.actor),
+        urgent=URGENT in H._labels(body.labels),  # pyright: ignore[reportPrivateUsage]
+        may_read=may_read,
+    )
+    return choose(conn, work, now())[0], entity_id
+
+
+def first_stage_refusal(conn: Any, pipeline_id: str) -> str:
+    """Why routed work cannot go in a pipeline ("" when it can): its first stage must be held by the task's assignee."""
+    from . import task_engine
+
+    pipe = task_engine.pipeline(conn, pipeline_id)
+    work = task_engine.main_work(task_engine.stages(conn, pipeline_id)) if pipe and not pipe.get("retired_at") else []
+    if not pipe or not work:
+        return f"No pipeline {pipeline_id}"
+    if work[0].get("owner") != "assignee":
+        return (
+            f"A routed task goes in a pipeline whose first stage the task's assignee holds; {pipe['name']}'s does not"
+        )
+    return ""
 
 
 # ----------------------------------------------------------------------------- the Support pipeline
@@ -321,7 +337,7 @@ SUPPORT_RECORD: Row = {
     "preset": SUPPORT,
     "stages": [
         {
-            "id": SUPPORT_STAGE,
+            "id": "support-open",
             "name": "Open",
             "purpose": "Answer it, settle it or hand it on. Say done when it is settled.",
             "owner": "assignee",
@@ -339,19 +355,28 @@ SUPPORT_RECORD: Row = {
 }
 
 
+def support_id(conn: Any) -> str | None:
+    """The company's Support pipeline when it has one: its id, General when it retired it, None before it is made."""
+    found = conn.execute(
+        "SELECT id, retired_at FROM pipelines WHERE preset=? ORDER BY created_at, id LIMIT 1", (SUPPORT,)
+    ).fetchone()
+    if not found:
+        return None
+    return str(found[0]) if not found[1] else "general"
+
+
 def support_pipeline(conn: Any) -> str:
-    """The company's Support pipeline id, made the first time routed work needs it. A retired one is not made again:
-    routed work then goes to General, as any task with no pipeline."""
+    """The company's Support pipeline id, made the first time routed work is filed. A retired one is not made again:
+    routed work then goes to General."""
     import copy
 
     from . import pipeline_settings as PS
     from . import stage_rules as _stage_rules
+    from . import task_engine
 
-    found = conn.execute(
-        "SELECT id, retired_at FROM pipelines WHERE preset=? ORDER BY created_at, id LIMIT 1", (SUPPORT,)
-    ).fetchone()
-    if found:
-        return str(found[0]) if not found[1] else "general"
+    have = support_id(conn)
+    if have:
+        return have
     record: Row = copy.deepcopy(SUPPORT_RECORD)
     taken = {str(r[0]) for r in conn.execute("SELECT id FROM pipelines")}
     record["id"] = next(pid for pid in ("support", *(f"support-{n}" for n in range(2, 100))) if pid not in taken)
@@ -363,7 +388,7 @@ def support_pipeline(conn: Any) -> str:
     used: set[str] = set()
     for stage in (*record["stages"], record["done"], record["closed"]):
         stage["id"] = PS._free_stage_id(conn, stage["id"], used)  # pyright: ignore[reportPrivateUsage]
-    saved: Row = PS.save(conn, _engine().SYSTEM, record)
+    saved: Row = PS.save(conn, task_engine.SYSTEM, record)
     stage_rules: Any = _stage_rules
-    stage_rules.ensure_defaults(conn)  # its urgent rule
+    stage_rules.ensure_defaults(conn)  # its two timers
     return str(saved["id"])

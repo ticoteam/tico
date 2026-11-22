@@ -316,11 +316,18 @@ def register_profile(app, auth, delegated_identity, mutate, settings, store, vis
         **api_v2("Team chart", "getAvailability", "A person's availability for routed work: on, async or off"),
     )
     def person_availability(request: Request, pid: str):
-        auth.domain(request.state.identity)
+        who = request.state.identity
+        auth.domain(who)
         pid = pid.removeprefix("human:")
         with store.read() as c:
             row, person = routing.person_row(c, pid), P.person(pid, views.roster(c))
-            if not row or not person or person.get("hidden"):
+            # Whom the caller may not see on the team chart is not here for them either (as their photo).
+            if (
+                not row
+                or not person
+                or person.get("hidden")
+                or not teammate_access.can(c, who, "see", "human:" + pid, auth)
+            ):
                 raise Problem("not_found", "Person not found", 404)
             return routing.view(row, routing.now())
 

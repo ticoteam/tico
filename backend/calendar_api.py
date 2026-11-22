@@ -438,12 +438,23 @@ def _settings_of(c: Any, cal: Row) -> Row:
     zone = human.get("time_zone")
     if not zone and cal["home"] == "google":
         zone = _google_zone(c, cal["email"])
+    return work_settings(human, zone)
+
+
+def work_settings(human: Row, zone: str | None = None) -> Row:
+    """A person's effective working hours from their `humans` row: what they saved, else Calendar's defaults (weekdays,
+    WORK_STARTS to WORK_ENDS), in their saved zone, else `zone`, else UTC. No Google call: routing reads it in a write."""
     return {
-        "time_zone": zone or "UTC",
+        "time_zone": human.get("time_zone") or zone or "UTC",
         "work_starts": human.get("work_starts") or WORK_STARTS,
         "work_ends": human.get("work_ends") or WORK_ENDS,
         "work_days": human.get("work_days") or WORK_DAYS,
     }
+
+
+def working_at(human: Row, at: datetime) -> bool:
+    """Whether `at` is inside the person's effective working hours (`work_settings`)."""
+    return bool(_working(work_settings(human), at, at + timedelta(seconds=1)))
 
 
 def _view(c: Any, auth: Any, who: Any, caller: Row, cal: Row) -> Row:

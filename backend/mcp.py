@@ -410,7 +410,20 @@ def task_dry_run(c, auth, who, body):
         if reader is None or len(ES.get(c, reader, body.entity)) != 1:
             problems.append(f"No one entity {body.entity} that you can see; name it by id")
     title, text = str(body.title or "").strip(), str(body.body or "")
-    pipeline_id = getattr(body, "pipeline", None) or GENERAL
+    routed = bool(getattr(body, "route", False))  # Tico picks the person (backend/routing.py), as the create does
+    routed_to = None
+    from . import routing
+
+    if routed:
+        try:
+            parent_ref = getattr(body, "parent", None)
+            actual_bot = who.task_actor or (who.actor if who.role == "bot" else "")
+            routed_to = routing.person_for_create(
+                c, who, body, auth.resolve_task(c, who, parent_ref) if parent_ref else None, actual_bot
+            )[0]
+        except Problem as refused:
+            problems.append(refused.detail)
+    pipeline_id = getattr(body, "pipeline", None) or ((routing.support_id(c) or "support") if routed else GENERAL)
     pipeline = pipeline_settings.read(c, pipeline_id)
     general = pipeline_id == GENERAL  # the lints shape asks in General, not another pipeline's tasks
     # The task that files it (`parent`); other relations are notes and never a parent.
@@ -418,17 +431,16 @@ def task_dry_run(c, auth, who, body):
     related_refs = [r.task for r in getattr(body, "relations", None) or [] if r.kind != "parent"]
     # No owner: the pipeline's first stage must pick one, and the filer stands in for the rest of the checks, as the
     # create does (app.task_create).
-    unassigned = not body.owner
-    routed = bool(getattr(body, "route", False))  # Tico picks the person (backend/routing.py)
-    if routed and body.owner:
-        problems.append("A routed task names no owner: Tico picks the person")
-    if unassigned and not routed:
+    unassigned = not body.owner and not routed
+    if unassigned:
         from . import stage_pick
 
         refused = stage_pick.no_owner_refusal(c, pipeline_id)
         if refused:
             problems.append(refused)
-    target = who.actor if unassigned else H.resolve_actor(c, body.owner)
+    if routed and not routed_to:
+        return {"ok": False, "problems": problems, "warnings": warnings}
+    target = routed_to or (who.actor if unassigned else H.resolve_actor(c, body.owner))
     if target and H.is_bot(target) and not auth.bot_access(c, who, H.actor_id(target))["see"]:
         target = None  # a bot the caller cannot see is not one they can name
     if not target or target == H.TICO_ACTOR:
@@ -517,8 +529,8 @@ def task_dry_run(c, auth, who, body):
                 problems += [f"{p} is not a bot or a person on the roster" for p in people if not H.resolve_actor(c, p)]
         except ValueError as exc:
             problems.append(str(exc))
-    if not pipeline or pipeline.get("retired_at"):
-        problems.append(f"No pipeline {pipeline_id}")
+    if (not pipeline or pipeline.get("retired_at")) and not (routed and not getattr(body, "pipeline", None)):
+        problems.append(f"No pipeline {pipeline_id}")  # routed work's Support pipeline is made by the create
     told = _private_readers_preview(c, auth, who, body, target, pipeline_id) if pipeline and target else None
     return {
         "ok": not problems,
