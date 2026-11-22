@@ -4,11 +4,11 @@ cause goes away. Used by the release close-out (backend/release_closeout.py: a J
 Tico) and by the outbound gate (backend/outbound_actions.py: an action whose outcome stays unknown).
 
 The ask is an ordinary OK on a task (task_engine.add_requirement), asked by Tico: it is in the person's Needs you and,
-like any OK, holds the task in its stage until it is answered, pushed past or withdrawn. On a task that is no longer
-open (a close-out after Done), or one nobody listed may be asked on, a small private task is filed for the person
-first, and closed again when the ask is withdrawn.
+like any OK, holds the task in its stage until it is answered, pushed past or withdrawn. With no task, or one that is no
+longer open (a close-out after Done, an unknown outbound outcome), a small private task is filed for the person first,
+and closed again when the ask is withdrawn.
 
-Who is asked (`people_for`), the first who can read the task: the task's owner when that is a person who is here, then
+Who is asked (`people_for`), the first who can read the task (nobody when none can): the task's owner when that is a person who is here, then
 the people the outbound gate asks for an OK (the bot's manager, then the company's default person). The OK is
 people-only, so no bot answers or pushes past it.
 """
@@ -36,15 +36,17 @@ def _engine() -> Any:
 
 
 def people_for(conn: "sqlite3.Connection", task: Row | None, actor: str = "") -> list[str]:
-    """Whom to ask, in order: the task's owner when a person who is here, then the outbound gate's people for the
-    task's owner bot (or `actor` when there is no task): its manager, then the company's default person."""
+    """Whom to ask, in order, each a person who is here and can read the task: its owner, then the outbound gate's
+    people for its owner bot (or `actor` when there is no task): the bot's manager, then the company's default person.
+    Empty when nobody can: nobody is asked then."""
     from . import outbound_actions as OA
     from . import task_requirements as R
 
     H = _h()
     owner = str((task or {}).get("owner_id") or "")
     first = [owner] if H.is_human(owner) and R.active_person(conn, owner) else []
-    return list(dict.fromkeys(first + OA._people_for(conn, owner or actor)))  # pyright: ignore[reportPrivateUsage]
+    people = list(dict.fromkeys(first + OA._people_for(conn, owner or actor)))  # pyright: ignore[reportPrivateUsage]
+    return [p for p in people if task is None or H.task_private_readable(conn, p, task)]
 
 
 def _ask_on(conn: "sqlite3.Connection", task_id: str, person: str, line: str) -> str | None:
@@ -67,8 +69,9 @@ def _ask_on(conn: "sqlite3.Connection", task_id: str, person: str, line: str) ->
 def ask(
     conn: "sqlite3.Connection", task_id: str | None, people: list[str], line: str, *, title: str, body: str
 ) -> tuple[str, str] | None:
-    """Ask the first of `people` who can be asked `line` on the open task; else (no task, not open, or nobody there can
-    be asked) on a private task filed for the first person: (requirement id, task id), or None with nobody to ask."""
+    """Ask the first of `people` who can be asked `line` on the open task; with no task, or one that is not open, on a
+    private task filed for the first person who can be asked (titled `title`, `body` its first message): (requirement
+    id, task id), or None with nobody to ask."""
     H = _h()
     row: Row | None = H.task(conn, task_id) if task_id else None
     if row and row.get("status") == "open":
@@ -76,6 +79,7 @@ def ask(
             found = _ask_on(conn, str(row["id"]), person, line)
             if found:
                 return found, str(row["id"])
+        return None
     for person in people:
         conn.execute("SAVEPOINT owner_file")
         try:

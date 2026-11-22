@@ -1192,21 +1192,25 @@ shows as a duplicate to merge.
 
 #### Withdrawn or closed outside
 
-Jira's saved standing of a task's primary issue alone decides whether its release close-out may run
-(backend/release_closeout.py): active in an In Progress category status or in its Ready status (the status of the
-link's first saved read when that was a To Do one, kept as `detail.ready`; when the first read was already further on,
-any later To Do status is a withdrawal), withdrawn in another To Do status, closed in a Done category status, gone when
-Jira answers 404. Anything but active when the task leaves Release freezes the close-out: nothing is queued, and the
-visit is kept (`detail.pending`) so the Jira pass keeps reading the issue of the Done task. After each read, a
-non-active standing asks the task's owner (a person; else its bot's manager, then the company's default person, the
-first who can read it) a people-only OK on the task (backend/owner_asks.py), one per standing: a new standing replaces
-the ask. That is how the owner hears of it; no answer unfreezes anything. Putting the issue back in Jira does: active
-again takes the ask back (the same task moves on) and runs a pending close-out. Secondary links are informational.
+Jira's last definitive standing of a task's primary issue alone decides whether its release close-out may run
+(backend/release_closeout.py), kept on the link and changed only by a read Jira answered (a timeout changes nothing):
+active in an In Progress category status or in its Ready status (the status it was filed in, saved at intake from
+`primary_status`), withdrawn in another To Do status, closed in a Done category status, gone when Jira answers 404. A
+link filed without `primary_status` has no saved Ready, and every To Do status counts as active for it: it never
+pauses for a withdrawal. Anything but active when the task leaves Release freezes the close-out: nothing is queued,
+and the visit is kept (`detail.pending`) so the Jira pass keeps reading the issue of the Done task (as it does while a
+close-out Jira write has not ended; the sender itself refuses a write whose issue was withdrawn since). After each
+answered read, a non-active standing asks the task's owner (a person; else its bot's manager, then the company's
+default person; only someone who can read the task) a people-only OK on the task (backend/owner_asks.py), one per
+standing: a new standing replaces the ask. That is how the owner hears of it; no answer unfreezes anything. Putting
+the issue back in Jira does: active again takes the ask back (the same task moves on) and runs a pending close-out.
+Secondary links are informational.
 
 #### Intake
 
 Find-or-create is the ordinary create: `POST /api/v2/tasks` with `primary_link`, a Jira issue for now
-(`jira:issue:PROJ-12@<tool id>` or the issue's URL; `tico task create --primary-link ...`, MCP `tico_task_create`).
+(`jira:issue:PROJ-12@<tool id>` or the issue's URL; `tico task create --primary-link ...`, MCP `tico_task_create`),
+and optionally `primary_status`, the status the issue is filed in (its Ready, `--primary-status`).
 Only a record integration's issue can be named (a hidden or missing tool answers the same). The org rule check runs
 as for any create. Then, in the same write, a task the caller may read that already holds that
 item's primary link comes back (`found: true`) as it is, with nothing filed, reopened or moved, and the steps only

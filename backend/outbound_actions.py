@@ -530,25 +530,29 @@ UNKNOWN_LOOK_S = 3600  # after its first lookup, an unknown row is looked up at 
 
 
 def ask_owner(c: Any, row: Any) -> None:
-    """One ask of the owner for an external action whose outcome stays unknown (backend/owner_asks.py): the action's
-    task's owner, else the people asked for its OK. Taken back when the row settles (`settle`)."""
+    """One ask of the owner for an external action whose outcome stays unknown (backend/owner_asks.py), on a small task
+    of its own (the action, the confirm command, its link) for the first who can read the action's task among its
+    owner and the people asked for its OK. Taken back, and that task closed, when the row settles (`settle`)."""
     if row["audience"] != "external" or row["owner_ask_id"]:
         return
     from . import owner_asks
 
     task = H.task(c, row["task_id"]) if row["task_id"] else None
+    people = owner_asks.people_for(c, task, row["actor"])
     what = f"{row['channel']} {row['operation']} on {row['destination']}"[:200]
     asked = owner_asks.ask(
         c,
-        row["task_id"],
-        owner_asks.people_for(c, task, row["actor"]),
+        None,
+        people,
         f"Tico can't tell whether its {what} went through: check {row['channel']}, and confirm it in Tico if it did.",
         title=f"Check a {what}",
-        body=f"Outbound action {row['id']}: if it went, `tico outbound confirm-sent {row['id']}`. Tico never sends it "
-        "again on its own.",
+        body=f"Outbound action {row['id']} (/api/v2/outbound-actions/{row['id']}). If it went: "
+        f"`tico outbound confirm-sent {row['id']}`. Tico never sends it again on its own.",
     )
     if asked:
         c.execute("UPDATE outbound_actions SET owner_ask_id=? WHERE id=?", (asked[0], row["id"]))
+    else:
+        H.event(c, H.TICO_ACTOR, "outbound.unasked", row["id"], {"why": "Nobody who can read its task to ask"})
 
 
 STOPS = (task_asks.SENT_BACK, task_asks.WITHDRAWN)  # an OK sent back, taken back, or its task closed: it stops
@@ -934,8 +938,9 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
                 "SELECT 1 FROM requirements WHERE id=? AND person_id=?", (row["owner_ask_id"], who.actor)
             ).fetchone()
         )
-        if asked:
-            return True  # the person asked about its unknown outcome (`ask_owner`)
+        task = H.task(c, row["task_id"]) if asked and row["task_id"] else None
+        if asked and (not row["task_id"] or (task and H.task_private_readable(c, who.actor, task))):
+            return True  # the person asked about its unknown outcome (`ask_owner`), while they still read its task
         found = task_asks.grant(c, row["approval_id"]) if row["approval_id"] else None
         return bool(found) and task_asks.party(c, who.actor, found)
 

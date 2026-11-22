@@ -6,26 +6,32 @@ merges are proven in an actual release tag, Tico closes the loop outside, each e
 left), with every merged PR in a saved release (item_sources/github_release.py `released_in` for that visit, the In a
 release reading of `github_release_commits`; no GitHub call here): the Release stage's own exit.
 
-**What.** Three independent effects, each with an occurrence key from (task, the release tags, destination and
-operation), so a replay, a second move or a resume adds nothing, and one failing or unknown never repeats the others:
+**What.** Three independent effects, each with an occurrence key from (task, the newest release tag holding its merges,
+destination and operation), so a replay, a second move, a resume or a reopen that adds nothing newer adds nothing, a
+release of new work closes out again, and one failing or unknown never repeats the others:
 
 - Jira transition of the issue to DONE_STATUS (outbound gate, backend/outbound_jira.py);
 - one Jira comment naming the release (tag and link);
 - a reply in the task's originating Slack thread (its oldest link to a Slack message), posted as the task's bot
   through the Slack post route's own write (slack_bots.queue_post, after the route's post permission, onboarding and
-  channel list gates), kept once by the `closeout-slack:` registry mark written in the same transaction. No Slack
-  link, no reply.
+  channel list gates, carrying the task so the gateway checks its privacy at delivery), kept once by the
+  `closeout-slack:` registry mark written in the same transaction. No Slack link, no reply.
 
-**Withdrawn or closed outside.** Jira's saved standing of the primary issue decides, nothing else: `active` in an In
-Progress category status or in its Ready status (the status of the link's first saved read when that was a To Do
-one, kept as `detail.ready`; "" when the first read was already further on, so any later To Do status is a
-withdrawal); `withdrawn` in another To Do status; `closed` in a Done category status; `gone` when Jira answers 404.
-Anything but active at close-out freezes it: nothing is queued, `closeout.frozen` is logged, and the visit is kept as
-`detail.pending`, so the Jira pass keeps reading the issue of the Done task. The pass (item_sources/jira.py `refresh`)
-calls `watch` after each read: a non-active standing asks the owner (backend/owner_asks.py, a people-only OK on the
-task), once per standing, a new standing replacing the ask; that is how the owner hears of it, and no answer
-unfreezes anything. The owner unfreezes by putting the issue back in Jira: active again takes the ask back and runs a
-pending close-out. Secondary Jira links are informational.
+Both Jira writes carry `closeout: true` and the issue's Ready status in their frozen payload: the sender reads the
+issue right before the write and refuses one withdrawn since (backend/outbound_jira.py).
+
+**Withdrawn or closed outside.** Jira's last definitive standing of the primary issue decides, nothing else, kept on
+the link as `detail.standing` and changed only by a read Jira answered (a timeout or other read error changes
+nothing): `active` in an In Progress category status or in its Ready status (the status it was filed in, saved at
+intake as `detail.ready`, POST /api/v2/tasks `primary_status`); `withdrawn` in another To Do status; `closed` in a
+Done category status; `gone` when Jira answers 404. A link with no saved Ready (filed without `primary_status`) takes
+every To Do status as active: it never pauses for a withdrawal. Anything but active at close-out freezes it: nothing
+is queued, `closeout.frozen` is logged, and the visit is kept as `detail.pending`, so the Jira pass keeps reading the
+issue of the Done task (as it does while a close-out Jira write is unfinished). The pass (item_sources/jira.py
+`refresh`) calls `watch` after each answered read: a non-active standing asks the owner (backend/owner_asks.py, a
+people-only OK on the task, of someone who can read it), once per standing, a new standing replacing the ask; that is
+how the owner hears of it, and no answer unfreezes anything. The owner unfreezes by putting the issue back in Jira:
+active again takes the ask back and runs a pending close-out. Secondary Jira links are informational.
 """
 
 import hashlib
@@ -47,7 +53,6 @@ SLACK_MARK = "closeout-slack:"
 # A Slack message link: https://<workspace>.slack.com/archives/<channel>/p<ts without its dot>[?thread_ts=<ts>&...]
 SLACK_LINK = re.compile(r"^https://[a-z0-9-]+\.slack\.com/archives/([CG][A-Z0-9]{6,})/p(\d{10})(\d{6})(?:\?(\S*))?$")
 TS = re.compile(r"^\d{6,12}\.\d{1,6}$")
-GONE = "Jira has no such issue"  # item_sources/jira.py `_refused(404)`
 LINES = {
     "withdrawn": "{key} left Ready in Jira ({status}): keep working on it, or close this task?",
     "closed": "{key} was closed in Jira ({status}): keep working on it, or close this task to settle it?",
@@ -83,37 +88,39 @@ def _save_detail(conn: "sqlite3.Connection", link: Row, detail: Row) -> None:
     link["detail"] = json.dumps(detail)
 
 
-def _metadata(conn: "sqlite3.Connection", link: Row) -> Row | None:
+def _fields(conn: "sqlite3.Connection", link: Row) -> Row:
     found = conn.execute(
-        "SELECT fields, read_error FROM item_metadata WHERE source='jira' AND item_type='issue' AND item_key=? "
-        "AND connection_id=?",
+        "SELECT fields FROM item_metadata WHERE source='jira' AND item_type='issue' AND item_key=? AND connection_id=?",
         (link["item_key"], link["connection_id"]),
     ).fetchone()
-    if not found:
-        return None
     try:
-        fields = json.loads(found[0] or "{}")
+        fields: object = json.loads(found[0] or "{}") if found else None
     except ValueError:
-        fields = {}
-    kept = cast("Row", fields) if isinstance(fields, dict) else {}
-    return {"fields": kept, "read_error": str(found[1] or "")}
+        fields = None
+    return cast("Row", fields) if isinstance(fields, dict) else {}
 
 
-def standing(conn: "sqlite3.Connection", link: Row) -> str:
-    """active, withdrawn, closed or gone (see the module); active while unread."""
-    found = _metadata(conn, link)
-    if not found:
-        return "active"
-    if found["read_error"].startswith(GONE):
-        return "gone"
-    fields: Row = found["fields"]
-    category, status = fields.get("category"), str(fields.get("status") or "")
+def judged(fields: Row, ready: object) -> str:
+    """The standing a read of the issue shows: closed (Done category), withdrawn (a To Do status other than `ready`,
+    the saved Ready; never with none saved) or active."""
+    category = fields.get("category")
     if category == "done":
         return "closed"
-    detail = _detail(link)
-    if category == "new" and "ready" in detail and status != detail["ready"]:
+    if category == "new" and isinstance(ready, str) and ready and fields.get("status") != ready:
         return "withdrawn"
     return "active"
+
+
+def standing(link: Row) -> str:
+    """The issue's last definitive standing (see the module); active until Jira answered a read."""
+    return str(_detail(link).get("standing") or "active")
+
+
+def remember_ready(conn: "sqlite3.Connection", task_id: str, status: str) -> None:
+    """Intake (POST /api/v2/tasks `primary_status`): the status the issue was filed in is its Ready."""
+    link = primary(conn, task_id)
+    if link and status.strip():
+        _save_detail(conn, link, {**_detail(link), "ready": status.strip()})
 
 
 def closed_out(conn: "sqlite3.Connection", task_id: str) -> bool:
@@ -125,6 +132,28 @@ def closed_out(conn: "sqlite3.Connection", task_id: str) -> bool:
         ).fetchone()
         is not None
     )
+
+
+def unfinished(conn: "sqlite3.Connection", task_id: str) -> bool:
+    """Whether a close-out Jira write of the task has not ended yet (the Jira pass keeps reading its issue)."""
+    return (
+        conn.execute(
+            "SELECT 1 FROM outbound_actions WHERE occurrence_key >= ? AND occurrence_key < ? "
+            "AND state NOT IN ('done', 'failed', 'canceled') LIMIT 1",
+            (f"{KEY_PREFIX}{task_id}:", f"{KEY_PREFIX}{task_id};"),
+        ).fetchone()
+        is not None
+    )
+
+
+def _newest(conn: "sqlite3.Connection", releases: list[tuple[str, str]]) -> tuple[str, str]:
+    """The newest of the releases holding the task's merges (published last)."""
+    found = conn.execute(
+        "SELECT r.repo, r.tag FROM github_releases r JOIN json_each(?) j ON r.repo = json_extract(j.value, '$[0]') "
+        "AND r.tag = json_extract(j.value, '$[1]') ORDER BY r.published_at DESC, r.tag DESC LIMIT 1",
+        (json.dumps(releases),),
+    ).fetchone()
+    return (str(found[0]), str(found[1])) if found else releases[-1]
 
 
 # ----------------------------------------------------------------------------- the close-out
@@ -144,12 +173,13 @@ def _guarded(conn: "sqlite3.Connection", what: str, run: Callable[[], int | None
 def moved(conn: "sqlite3.Connection", task_id: str, visit_id: str) -> int:
     """task_effects.moved, on a forward or done move out of `visit_id`: close out when the task has a primary Jira
     link."""
-    if not primary(conn, task_id):
+    link = primary(conn, task_id)
+    if not link:
         return 0
-    return _guarded(conn, task_id, lambda: close_out(conn, task_id, visit_id))
+    return _guarded(conn, task_id, lambda: close_out(conn, task_id, visit_id, link))
 
 
-def close_out(conn: "sqlite3.Connection", task_id: str, visit_id: str) -> int:
+def close_out(conn: "sqlite3.Connection", task_id: str, visit_id: str, link: Row | None = None) -> int:
     """Queue the close-out's three effects once (see the module), when the visit left asked In a release and the
     task's merges are in actual release tags. Frozen (the issue not active in Jira) it queues nothing and keeps the
     visit as pending. Each effect in its own savepoint: one refused (logged as `closeout.skipped`) leaves the others.
@@ -158,26 +188,27 @@ def close_out(conn: "sqlite3.Connection", task_id: str, visit_id: str) -> int:
     from .item_sources import github_release as GR
 
     H = _h()
-    link = primary(conn, task_id)
+    link = link or primary(conn, task_id)
     releases = GR.released_in(conn, task_id, visit_id=visit_id) if link and visit_id else []
     if not link or not releases:
         return 0
     detail = _detail(link)
-    if standing(conn, link) != "active":
+    if standing(link) != "active":
         _save_detail(conn, link, {**detail, "pending": visit_id})
         H.event(conn, H.TICO_ACTOR, "closeout.frozen", task_id, {"issue": link["item_key"]})
         return 0
     if detail.pop("pending", None):
         _save_detail(conn, link, detail)
-    named = "+".join(f"{repo}@{tag}" for repo, tag in releases)
+    named = "@".join(_newest(conn, releases))
     ref = named if len(named) <= 200 else hashlib.sha256(named.encode()).hexdigest()[:16]
     base = f"{KEY_PREFIX}{task_id}:{ref}"
     text = "\n".join(
         f"Released in {tag}: https://github.com/{repo}/releases/tag/{quote(tag, safe='')}" for repo, tag in releases
     )
     record = {"releases": [f"{repo}@{tag}" for repo, tag in releases], "task": task_id}
+    pause = {"closeout": True, **({"ready": detail["ready"]} if detail.get("ready") else {})}
     made = 0
-    for operation, payload in (("transition", {"to": DONE_STATUS}), ("comment", {"body": text})):
+    for operation, payload in (("transition", {"to": DONE_STATUS, **pause}), ("comment", {"body": text, **pause})):
         conn.execute("SAVEPOINT closeout")
         try:
             _, new = OA.enqueue(
@@ -255,7 +286,7 @@ def _slack_reply(conn: "sqlite3.Connection", task_id: str, mark: str, text: str)
         SB.need(conn, slug, SB.slack_entry(conn, None, slug), "post")
         SB.not_onboarding(conn, slug)
         entry = SB.postable(conn, None, thread[0])
-        posted = SB.queue_post(conn, slug, entry, thread[1], SB.check_text(text))
+        posted = SB.queue_post(conn, slug, entry, thread[1], SB.check_text(text), task_id=task_id)
         repositories.save_metadata(conn, mark, {"at": H.now(), "message_id": posted["message_id"]})
     except Exception as exc:  # noqa: BLE001 - not posted (no Slack access, channel not listed): the Jira writes stand
         conn.execute("ROLLBACK TO closeout_slack")
@@ -267,13 +298,13 @@ def _slack_reply(conn: "sqlite3.Connection", task_id: str, mark: str, text: str)
 
 
 # ----------------------------------------------------------------------------- withdrawn or closed outside
-def watch(conn: "sqlite3.Connection", key: str, connection_id: str) -> None:
-    """After the Jira pass read a primary issue: learn its Ready status from the first read, ask the owner once per
-    non-active standing, and once it is active again take the ask back and run a pending close-out."""
-    _guarded(conn, key, lambda: _watch(conn, key, connection_id))
+def watch(conn: "sqlite3.Connection", key: str, connection_id: str, *, gone: bool = False) -> None:
+    """After a read of a primary issue that Jira answered (`gone` for its 404): keep its standing, ask the owner once
+    per non-active standing, and once it is active again take the ask back and run a pending close-out."""
+    _guarded(conn, key, lambda: _watch(conn, key, connection_id, gone))
 
 
-def _watch(conn: "sqlite3.Connection", key: str, connection_id: str) -> None:
+def _watch(conn: "sqlite3.Connection", key: str, connection_id: str, gone: bool) -> None:
     from . import owner_asks
     from .item_sources import primary_task
 
@@ -284,13 +315,13 @@ def _watch(conn: "sqlite3.Connection", key: str, connection_id: str) -> None:
     if not task or not link:
         return
     task_id, detail = str(task["id"]), _detail(link)
-    if task.get("status") != "open" and not detail.get("pending"):
+    if task.get("status") != "open" and not detail.get("pending") and not unfinished(conn, task_id):
         return
-    fields: Row = (_metadata(conn, link) or {}).get("fields") or {}
-    if "ready" not in detail and fields.get("category"):
-        detail["ready"] = str(fields.get("status") or "") if fields["category"] == "new" else ""
+    fields = _fields(conn, link)
+    state, asked = ("gone" if gone else judged(fields, detail.get("ready"))), str(detail.get("ask") or "")
+    if detail.get("standing", "active") != state:
+        detail["standing"] = state
         _save_detail(conn, link, detail)
-    state, asked = standing(conn, link), str(detail.get("ask") or "")
     if state == "active":
         if asked:
             detail.pop("ask")
@@ -300,10 +331,11 @@ def _watch(conn: "sqlite3.Connection", key: str, connection_id: str) -> None:
         if detail.get("pending"):
             close_out(conn, task_id, str(detail["pending"]))
         return
-    if detail.get("asked") == state or closed_out(conn, task_id):
+    if detail.get("asked") == state or (state == "closed" and closed_out(conn, task_id)):
         return  # asked about this standing already, or Tico's own close-out closed it
     line = LINES[state].format(key=key, status=fields.get("status") or "")
-    found = owner_asks.ask(conn, task_id, owner_asks.people_for(conn, task), line, title=line, body=str(link["url"]))
+    people = owner_asks.people_for(conn, task)
+    found = owner_asks.ask(conn, task_id, people, line, title=line, body=str(link["url"]))
     if asked:
         owner_asks.withdraw(conn, asked, "Asked again: Jira changed", task_id, advance=False)
     detail.update(ask=found[0] if found else "", asked=state)

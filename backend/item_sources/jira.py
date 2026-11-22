@@ -153,8 +153,8 @@ def integration(conn: "sqlite3.Connection", connection_id: str) -> bool:
 
 def due_reads(conn: "sqlite3.Connection", now: str, per_connection: int = PER_CONNECTION) -> list[tuple[str, str, str]]:
     """(key, connection, due mark) of each issue to read now, at most `per_connection` of each record integration
-    (`integration`): one an open task links (or a Done task whose release close-out is frozen, backend/release_closeout.py
-    `pending`) whose metadata is missing, never read, marked due or older than REREAD_S,
+    (`integration`): one an open task links (or a Done task whose release close-out is frozen or has a Jira write not
+    ended yet, backend/release_closeout.py) whose metadata is missing, never read, marked due or older than REREAD_S,
     unless a read of it failed within RETRY_S. Marked ones first, across connections, then the longest unread. The due
     mark ('' for none) is what the read began under."""
     H = _h()
@@ -164,7 +164,9 @@ def due_reads(conn: "sqlite3.Connection", now: str, per_connection: int = PER_CO
         "COALESCE(MAX(m.due_at), '') AS due, ROW_NUMBER() OVER (PARTITION BY l.connection_id "
         "ORDER BY MAX(m.due_at) IS NULL, MIN(COALESCE(m.read_at, '')), MIN(l.item_key)) AS n FROM task_links l "
         "JOIN tasks t ON t.id = l.task_id AND (t.status = 'open' OR t.status = 'done' AND l.is_primary = 1 "
-        "AND json_extract(CASE WHEN json_valid(l.detail) THEN l.detail END, '$.pending') IS NOT NULL) "
+        "AND (json_extract(CASE WHEN json_valid(l.detail) THEN l.detail END, '$.pending') IS NOT NULL "
+        "OR EXISTS (SELECT 1 FROM outbound_actions o WHERE o.occurrence_key >= 'closeout:' || t.id || ':' "
+        "AND o.occurrence_key < 'closeout:' || t.id || ';' AND o.state NOT IN ('done', 'failed', 'canceled')))) "
         "JOIN json_each(?) i ON i.value = l.connection_id "
         "LEFT JOIN item_metadata m ON m.source = l.source AND m.item_type = l.item_type AND m.item_key = l.item_key "
         "AND m.connection_id = l.connection_id "
@@ -504,7 +506,7 @@ def refresh(
                     conn, key, connection_id, "Jira's answer has no status" if 200 <= status < 300 else _refused(status)
                 )
                 if status == 404:
-                    RC.watch(conn, key, connection_id)
+                    RC.watch(conn, key, connection_id, gone=True)
             elif save_issue(conn, key, connection_id, fields, version, due_seen):
                 changed += 1
                 RC.watch(conn, key, connection_id)

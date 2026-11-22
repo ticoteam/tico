@@ -260,6 +260,9 @@ class TaskFile(TaskCreate):
     # The outside item it is filed for (backend/item_sources), `jira:issue:<key>@<connection>` or its URL: a task that
     # already holds that item's primary link comes back instead (`found`), and nothing new is filed.
     primary_link: str | None = Field(default=None, min_length=1, max_length=2000)
+    # With `primary_link`: the item's status when it was filed, as the source names it (Jira: the Ready status). A move
+    # to another To Do status pauses the task's release close-out (backend/release_closeout.py).
+    primary_status: str | None = Field(default=None, min_length=1, max_length=100)
 
 
 class TaskRunModel(Contract):

@@ -725,6 +725,12 @@ def parser():
         help="the outside item it is for (jira:issue:PROJ-12@<tool id>, or its URL): a task already holding it comes "
         "back instead, and nothing new is filed",
     )
+    s.add_argument(
+        "--primary-status",
+        dest="primary_status",
+        help="with --primary-link: the item's status as it is filed (the Jira Ready status); a move to another To Do "
+        "status pauses the release close-out",
+    )
     s.add_argument("--goal", help="the goal this task serves (tico goal list); optional")
     s.add_argument("--after", action="append", help="a task it merges after (repeat for more): Merge waits for it")
     s.add_argument(

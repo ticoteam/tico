@@ -76,6 +76,8 @@ def jira(company, monkeypatch):
                         return "jira-synthetic-token"
 
             def sender(url, headers, params, seconds):
+                if self.status[0] == "timeout":
+                    raise TimeoutError("Jira took too long")
                 if self.status[0] is None:
                     return 404, {"errorMessages": ["Issue does not exist"]}
                 found = {"name": self.status[0], "statusCategory": {"key": self.status[1]}}
@@ -86,10 +88,13 @@ def jira(company, monkeypatch):
     return Jira()
 
 
-def filed(c, task_id, slack=True, private=False):
-    """The task's primary link to HM-12 (as find-or-create makes it), and its originating Slack thread."""
+def filed(c, task_id, slack=True, private=False, ready="Ready"):
+    """The task's primary link to HM-12 filed in `ready` (as find-or-create makes it with `primary_status`), and its
+    originating Slack thread."""
     H.task_link(c, "human:ana", task_id, f"https://{HOST}/browse/{ISSUE}", item=("jira", "issue", ISSUE, TOOL))
     claim(c, task_id, ("jira", "issue", ISSUE, TOOL))
+    if ready:
+        RC.remember_ready(c, task_id, ready)
     if slack:
         H.task_link(c, "human:ana", task_id, THREAD)
     c.execute("UPDATE tasks SET private=? WHERE id=?", (int(private), task_id))
@@ -146,6 +151,12 @@ def test_a_release_queues_the_jira_done_comment_and_slack_reply_once(company, gh
         [reply] = replies(c)
         assert (reply["channel"], reply["thread_ts"], reply["bot"]) == ("C0BUGS123", "1763700000.000100", "release")
         assert reply["text"] == f"Released in v1.0.0: {link}"
+        refs = c.execute("SELECT refs FROM messages WHERE id=?", (reply["message_id"],)).fetchone()[0]
+        assert json.loads(refs)["task"] == task_id  # the gateway checks the task's privacy at delivery
+        assert all(
+            json.loads(r["payload"])["closeout"] and json.loads(r["payload"])["ready"] == "Ready"
+            for r in found.values()
+        )
         # A replay of every trigger adds nothing: the move, the close-out itself, the release read again.
         visit = release_visit(c, task_id)
         assert RC.moved(c, task_id, visit) == 0 and RC.close_out(c, task_id, visit) == 0
@@ -272,16 +283,77 @@ def test_closed_outside_asks_once_per_standing_and_a_reopen_takes_it_back(compan
         assert [w for _, _, w in asks(c, task_id)] == [True, True]
 
 
-def test_ready_is_learned_only_from_the_first_read(company, jira):
+def test_with_no_saved_ready_a_to_do_status_never_pauses(company, gh, jira):
+    task_id = to_release(company, gh)
     with company.transaction() as c:
-        engineering(c)
-        task_id = new(c, 8)
-        filed(c, task_id)
-    jira.read("In Progress", "indeterminate")  # already further on at the first read
+        filed(c, task_id, slack=False, ready=None)  # filed before primary_status existed
     jira.read("Backlog")
+    released(company, gh)
     with company.transaction() as c:
-        [(_, line, _)] = asks(c, task_id)
-        assert line.startswith(f"{ISSUE} left Ready in Jira (Backlog)")
+        assert asks(c, task_id) == [] and set(actions(c, task_id)) == {"transition", "comment"}
+
+
+def test_a_read_error_after_a_404_keeps_the_pause(company, gh, jira):
+    task_id = to_release(company, gh)
+    with company.transaction() as c:
+        filed(c, task_id, slack=False)
+    jira.read("Ready")
+    jira.read(None)  # 404
+    jira.read("timeout")  # tells nothing: still gone
+    with company.transaction() as c:
+        rid = c.execute(
+            "SELECT r.id FROM requirements r JOIN visits v ON v.id = r.visit_id WHERE v.task_id=? AND r.added_by_id=?",
+            (task_id, H.TICO_ACTOR),
+        ).fetchone()[0]
+        TC.task_answer(c, asks(c, task_id)[0][0], task_id, rid, "ok", own_click=True)
+    released(company, gh)
+    with company.transaction() as c:
+        assert stage(c, task_id) == "Done" and actions(c, task_id) == {}
+
+
+def test_a_reopen_adding_a_pr_already_released_queues_nothing_new(company, gh, jira):
+    task_id = to_release(company, gh)
+    with company.transaction() as c:
+        filed(c, task_id)
+    released(company, gh, tag="v2.0.0")
+    with company.transaction() as c:
+        assert len(actions(c, task_id)) == 2
+        visit = release_visit(c, task_id)
+        # PR 2, already shipped in the older v1.0.0, is linked after a reopen; leaving Release again sees {v1, v2}.
+        H.task_link(c, "human:ana", task_id, f"https://github.com/{REPO}/pull/2", mover=True)
+    gh.open_pr(REPO, 2)
+    sha = gh.merge(REPO, 2)
+    with company.transaction() as c:
+        seen(c, gh, 2)
+        F.save_release(c, REPO, {"tag": "v1.0.0", "commit_sha": sha, "published_at": "2026-01-01T00:00:00.000000Z"}, 1)
+        old = next(r for r in F.releases(c, REPO, prereleases=True) if r["tag"] == "v1.0.0")
+        F.save_included(c, old["id"], sha, True)
+        assert RC.close_out(c, task_id, visit) == 0
+        assert len(actions(c, task_id)) == 2 and len(replies(c)) == 1
+
+
+def test_a_close_out_write_is_refused_when_the_issue_was_withdrawn_before_it_went(company, gh, jira, monkeypatch):
+    from backend import outbound_jira as OJ
+
+    task_id = to_release(company, gh)
+    with company.transaction() as c:
+        filed(c, task_id, slack=False)
+    released(company, gh)
+    sent: list[str] = []
+
+    def call(method, url, headers, params, seconds=10.0, body=None, most=None):
+        sent.append(method)
+        status = {"name": "Backlog", "statusCategory": {"key": "new"}}
+        return JS.Reply(200, {"fields": {"status": status, "updated": "2026-11-21T10:00:00.000+0000"}})
+
+    monkeypatch.setattr(OJ, "_connect", lambda store, row, write=True: (f"https://{HOST}", {}, {}))
+    monkeypatch.setattr(JS, "call", call)
+    while (claimed := OA.claim(company)) is not None:
+        assert OA.attempt(company, claimed) == "failed"
+    with company.transaction() as c:
+        assert {r["state"] for r in actions(c, task_id).values()} == {"failed"}
+        assert all("withdrawn in Jira" in r["last_error"] for r in actions(c, task_id).values())
+    assert set(sent) == {"GET"}  # read, never written
 
 
 def test_an_unknown_outcome_asks_its_owner_once_looks_up_hourly_and_settling_takes_the_ask_back(
@@ -315,20 +387,47 @@ def test_an_unknown_outcome_asks_its_owner_once_looks_up_hourly_and_settling_tak
         assert H.task(c, ask_task)["status"] != "open"
 
 
+def jira_tool(c):
+    now = H.now()
+    c.execute(
+        "INSERT INTO tools (id, name, service, base_url, auth_scheme, created_by, created_at, updated_at, "
+        "record_owner) VALUES (?, 'Jira Acme', '', ?, 'bearer', 'human:ana', ?, ?, 'outside')",
+        (TOOL, f"https://{HOST}", now, now),
+    )
+    c.execute(
+        "INSERT INTO credentials (id, name, kind, ciphertext, created_at, updated_at, updated_by, tool_id, "
+        "access_level) VALUES ('cred-jira', 'Jira key', 'api_key', X'00', ?, ?, 'human:ana', ?, 'read_write')",
+        (now, now, TOOL),
+    )
+
+
+def test_intake_saves_the_status_the_issue_was_filed_in_as_its_ready(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        jira_tool(c)
+    body = {
+        "title": "Fix the export",
+        "owner": "ben",
+        "primary_link": f"jira:issue:{ISSUE}@{TOOL}",
+        "primary_status": "Ready",
+    }
+    r = api.post("/api/v2/tasks", json=body, headers=headers("ana-test"))
+    assert r.status_code in (200, 201), r.text
+    with store.read() as c:
+        task_id = c.execute("SELECT task_id FROM task_links WHERE is_primary=1").fetchone()[0]
+        assert json.loads(RC.primary(c, task_id)["detail"])["ready"] == "Ready"
+    r = api.post(
+        "/api/v2/tasks",
+        json={"title": "No link", "owner": "ben", "primary_status": "Ready"},
+        headers=headers("ana-test"),
+    )
+    assert r.status_code == 422
+
+
 def test_the_person_asked_about_an_unknown_action_reads_and_confirms_it(api):
     store = api.app.state.store
-    now = H.now()
     with store.transaction() as c:
-        c.execute(
-            "INSERT INTO tools (id, name, service, base_url, auth_scheme, created_by, created_at, updated_at, "
-            "record_owner) VALUES (?, 'Jira Acme', '', ?, 'bearer', 'human:ana', ?, ?, 'outside')",
-            (TOOL, f"https://{HOST}", now, now),
-        )
-        c.execute(
-            "INSERT INTO credentials (id, name, kind, ciphertext, created_at, updated_at, updated_by, tool_id, "
-            "access_level) VALUES ('cred-jira', 'Jira key', 'api_key', X'00', ?, ?, 'human:ana', ?, 'read_write')",
-            (now, now, TOOL),
-        )
+        jira_tool(c)
         task = H.task_create(c, "human:ana", "Ship the export fix", "", "human:cara", lint=False)
         row, _ = OA.enqueue(
             c,
@@ -347,7 +446,13 @@ def test_the_person_asked_about_an_unknown_action_reads_and_confirms_it(api):
     assert api.get(url, headers=headers("cara-test")).status_code == 404  # nobody asked Cara yet
     with store.transaction() as c:
         OA.ask_owner(c, OA.get(c, row["id"]))
-        assert OA.get(c, row["id"])["owner_ask_id"]
+        ask_id = OA.get(c, row["id"])["owner_ask_id"]
+        ask_task = c.execute(
+            "SELECT v.task_id FROM requirements r JOIN visits v ON v.id = r.visit_id WHERE r.id=?", (ask_id,)
+        ).fetchone()[0]
+        assert ask_task != task["id"]  # a small task of its own, never an ask holding the open task
+        said = [str(m[0]) for m in c.execute("SELECT body FROM messages WHERE body LIKE '%confirm-sent%'")]
+        assert any(f"tico outbound confirm-sent {row['id']}" in m for m in said)
     assert api.get(url, headers=headers("cara-test")).status_code == 200
     r = api.post(url + "/confirm-sent", headers=headers("cara-test"))
     assert r.status_code == 200, r.text

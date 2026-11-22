@@ -15,6 +15,9 @@ background reads. Jira is an outside system, so the audience is external; the ch
   writes). A lookup answer that is cut off or not the shape asked for is no answer: nothing is written then. Found, it is done with
   no write; `reconcile` uses the same lookup to settle an unknown row done, and nothing else settles one: a row it
   cannot prove stays unknown for the owner (Jira's 404 also means the key cannot see the issue).
+- **Release close-out.** An action with `closeout: true` in its payload (backend/release_closeout.py) reads the issue
+  right before the write (a transition does anyway, a comment adds one read) and is refused when the issue is in a To
+  Do status other than the payload's `ready`: withdrawn in Jira since it was released.
 - **Answers.** 429 is a safe rejection (Retry-After, else a minute). Anything that fails before the write (the key, a
   lookup Jira did not answer or answered unreadably) is safe too: nothing was sent. Jira's 400, 401, 403 or 404 to a
   write is a certain refusal; any other answer, or none, is unknown.
@@ -257,14 +260,29 @@ def _comment(on: Connection, row: Any) -> dict[str, Any] | None:
     return None
 
 
-def _found(on: Connection, row: Any, payload: dict[str, str]) -> dict[str, Any] | None:
-    """The action's effect, when Jira already shows it: the issue in the status, or a comment ending in the marker
-    among the newest COMMENTS_LOOKED_AT."""
+def _fields(on: Connection, row: Any) -> dict[str, Any]:
+    """The issue's status as one read shows it (item_sources/jira.py `fields_of`); _Unreadable when it has none."""
+    fields = JS.fields_of(_get(on, _issue(row), {"fields": JS.FIELDS}), str(row["connection_id"]))
+    if fields is None:
+        raise _Unreadable("Jira's answer has no status")
+    return fields
+
+
+def withdrawn(fields: dict[str, Any], ready: object) -> bool:
+    """A release close-out's pause (backend/release_closeout.py `judged`): the issue in a To Do status other than the
+    Ready it was filed in. Never with no Ready saved."""
+    from . import release_closeout
+
+    return release_closeout.judged(fields, ready) == "withdrawn"
+
+
+def _found(
+    on: Connection, row: Any, payload: dict[str, str], fields: dict[str, Any] | None = None
+) -> dict[str, Any] | None:
+    """The action's effect, when Jira already shows it: the issue in the status (`fields`, when already read), or a
+    comment ending in the marker among the newest COMMENTS_LOOKED_AT."""
     if row["operation"] == "transition":
-        fields = JS.fields_of(_get(on, _issue(row), {"fields": JS.FIELDS}), str(row["connection_id"]))
-        if fields is None:
-            raise _Unreadable("Jira's answer has no status")
-        status = str(fields["status"])
+        status = str((fields or _fields(on, row))["status"])
         return {"status": status} if status.casefold() == payload["to"].casefold() else None
     return _comment(on, row)
 
@@ -306,7 +324,9 @@ def dispatch(store: Any, row: Any) -> Any:
     """The one write, after asking whether its effect is already there: a receipt, a SafeRejection, Refused, or a raise
     (unknown) when the write may have landed."""
     OA = _oa()
-    payload = _payload(str(row["operation"]), json.loads(row["payload"] or "{}"))
+    raw = json.loads(row["payload"] or "{}")
+    payload = _payload(str(row["operation"]), raw)
+    closeout = isinstance(raw, dict) and bool(cast("dict[str, Any]", raw).get("closeout"))
     try:
         on = _connect(store, row)
     except JS.Unreadable as exc:
@@ -316,7 +336,10 @@ def dispatch(store: Any, row: Any) -> Any:
     except Exception:  # noqa: BLE001 - the key could not be read: nothing was sent
         return OA.SafeRejection(RETRY_S, "The connection's key could not be read")
     try:
-        already = _found(on, row, payload)
+        fields = _fields(on, row) if closeout or row["operation"] == "transition" else None
+        if closeout and fields and withdrawn(fields, cast("dict[str, Any]", raw).get("ready")):
+            raise OA.Refused("The issue was withdrawn in Jira after it was released: nothing is written")
+        already = _found(on, row, payload, fields)
         transition = ("", "")
         if not already and row["operation"] == "transition":
             transition = _transition(on, row, payload["to"])

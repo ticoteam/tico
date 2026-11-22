@@ -77,10 +77,10 @@ A bot that is onboarding, paused or archived queues nothing, and its queued acti
   record; the original attempt's own answer arriving after all (matched by the row and its attempt marker) settles it;
   otherwise it is logged and waits until a person confirms it went. It is never canceled or marked not sent. An
   external one still unknown after a lookup (at once when its channel has no lookup) asks its owner once
-  (backend/owner_asks.py, a people-only OK): on the action's task, of the first who can read it among the task's
-  owner (a person), the bot's manager and the company's default person; on a task of its own when the task is not
-  open or none of them can be asked there. The row keeps it (`owner_ask_id`); that person may read the action and
-  confirm it went. After its first lookup a row is looked up at most hourly (`reconciled_at`), and the ask is taken
+  (backend/owner_asks.py, a people-only OK) on a small task of its own (the action id, its link and the exact
+  `tico outbound confirm-sent` command), filed for the first who can read the action's task among that task's owner
+  (a person), the bot's manager and the company's default person; nobody is asked when none can. The row keeps it
+  (`owner_ask_id`); that person may read the action and confirm it went while they still read its task. After its first lookup a row is looked up at most hourly (`reconciled_at`), and the ask is taken
   back (its own task closed) when the row settles: a lookup, a late answer, confirm-sent. A new action (a new
   occurrence key) is safe only once the original attempt provably can no longer act: finding no record of it at the
   provider is not proof, since a paused worker may still reach it. Its OK's task stays open until it ends.
@@ -126,9 +126,14 @@ backend/release_closeout.py queues the Jira side of a released task filed for a 
 every merged PR of the task is in an actual release tag (the In a release reading of saved releases, no new GitHub
 call), the task's forward or done move out of its Release visit queues a `transition` to `Done` (Jira's default
 Done status name) and one `comment` naming each tag with its GitHub release link, as Tico itself, with occurrence keys
-`closeout:<task>:<repo>@<tag>:jira:<operation>`. The reply in the task's Slack thread (its oldest link to a Slack
+`closeout:<task>:<repo>@<newest tag>:jira:<operation>` (the newest release holding its merges, so a reopen that ships
+nothing newer queues nothing). Both carry `closeout: true` and the issue's saved Ready status in their payload: the
+sender reads the issue right before the write and refuses one withdrawn since. A record integration with a shared
+write key is the administrator's explicit opt-in for Tico to keep linked issues in step, and a close-out also needs
+a merged PR in a real release tag. The reply in the task's Slack thread (its oldest link to a Slack
 message) goes through the Slack post route's own write (`slack_bots.queue_post`), once by the
-`closeout-slack:<task>:<repo>@<tag>` registry mark. Each is on its own: one refused is logged (`closeout.skipped`)
+`closeout-slack:<task>:<repo>@<newest tag>` registry mark, and carries the task, so the gateway checks its privacy at
+delivery. Each is on its own: one refused is logged (`closeout.skipped`)
 and the others go; a private task or an inactive bot gets no Slack reply. A primary issue that is not active in Jira
 freezes it until it is (docs/dev/pipelines-v3.md "Withdrawn or closed outside").
 

@@ -111,6 +111,10 @@ def task_context(api, args):
             "The outside item this task is for: jira:issue:PROJ-12@<connection tool id>, or its URL. When a task "
             "already holds it, that task comes back (found: true) and nothing new is filed"
         ),
+        "primary_status": _s(
+            "With primary_link: the item's status as it is filed (the Jira Ready status). A move to another To Do "
+            "status pauses the task's release close-out"
+        ),
         "goal_id": _s("The goal this task serves (tico_goal_list); optional"),
         "human": _s("Its Human: a person or `me`"),
         "after": {
@@ -151,6 +155,7 @@ def task_create(api, args):
         "top",
         "links",
         "primary_link",
+        "primary_status",
         "request_id",
         "number",
         "check_model",
