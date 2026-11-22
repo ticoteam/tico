@@ -4,22 +4,22 @@
 A person's availability is `on`, `async` or `off` (`humans.availability`). They set their own, an admin sets anyone's;
 `availability_until` ends a set value, and past it the derived value applies again, computed at read with no timer.
 Nothing set (or ended) comes from their effective Calendar working hours (calendar_api.work_settings: what they saved,
-else Calendar's weekday defaults, in their saved zone else UTC; no Google call): on inside them, async outside.
+else Calendar's weekday defaults, in their saved zone, else the company's (`company_zone`); no Google call): on inside
+them, async outside.
 
 `choose` runs once, when work needs a person: `POST /api/v2/tasks` with `route: true` picks the person before the task
 is made, and the task is then filed with them as owner and assignee, so every send check, stage entry and create hook
 runs once against the real recipient. The first of:
 
 1. the recent helper: the newest person who worked another task of the same relationship (`tasks.entity_id`) in the
-   last RECENT_HOURS (its history, or comments on it), may read that task, and is on;
+   last RECENT_HOURS (its history, or comments on it; company-visible tasks only), and is on;
 2. the relationship's owner (`entities.owner_*`) when a person: on, or async when the work is not urgent;
 3. anyone on in that owner's roster team, fewest open tasks first;
 4. the inbox fallback: the pipeline's manager, else its owner, when a person, else the company's person
    (waiting_on.company_person).
 
-Every candidate, the fallback included, must be an active person who may read the task: assigning never widens who
-reads private work. When no fallback may, the create is refused (422). Work is urgent when it carries the tag
-`urgent` (task_tags; `urgent`).
+Every candidate, the fallback included, must be an active person. Private work is never routed (`prepare` refuses
+it): assigning never decides who reads private work. Work is urgent when it carries the tag `urgent` (task_tags).
 
 Routed work with no pipeline goes on the company's Support pipeline (`support_pipeline`), made the first time it is
 needed: one work stage held by the task's assignee and not by hand. Two default stage rules give its overdue waits to
@@ -30,7 +30,6 @@ rather than in the hourly batch, backend/stage_rule_timers.py).
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
@@ -62,11 +61,20 @@ def _stamp(at: datetime) -> str:
 
 
 # ----------------------------------------------------------------------------- availability
+def company_zone() -> str:
+    """The zone a person with none saved is read in: the company's (updates.ZONE, where the company keeps its calendar:
+    its week, its daily updates). Tico has no other company time zone setting; UTC when that one is unset."""
+    from . import updates as _updates
+
+    updates: Any = _updates  # untyped module
+    return str(getattr(updates, "ZONE", "") or "UTC")
+
+
 def from_hours(person: Row, at: datetime) -> str:
     """On inside the person's effective working hours, async outside."""
     from . import calendar_api
 
-    return ON if calendar_api.working_at(person, at) else ASYNC
+    return ON if calendar_api.working_at(person, at, company_zone()) else ASYNC
 
 
 def _set_now(person: Row, at: datetime) -> str:
@@ -140,7 +148,6 @@ class Work:
     entity_id: str
     requester: str
     urgent: bool
-    may_read: Callable[[str], bool]  # whether a person may read the task once it is filed, not as its owner
 
 
 def urgent(conn: Any, task_id: str) -> bool:
@@ -169,14 +176,17 @@ def _owner(conn: Any, entity_id: str) -> str | None:
 
 
 def _recent(conn: Any, work: Work, since: str) -> list[tuple[str, str]]:
-    """(person, task id) for people who worked the relationship's other recent tasks since `since`, newest first:
-    their history or their comments on it. None for work with no relationship."""
+    """(person, task id) for people who worked the relationship's other recent company-visible tasks since `since`,
+    newest first: their history or their comments on it. None for work with no relationship."""
     if not work.entity_id:
         return []
+    # tasks_entity is partial (entity_id <> ''): the literal predicate lets SQLite use it. Private work never shapes
+    # a company-visible assignment, so only company-visible tasks count.
     ids = [
         str(r[0])
         for r in conn.execute(
-            "SELECT id FROM tasks WHERE entity_id=? AND updated_at >= ? ORDER BY updated_at DESC LIMIT ?",
+            "SELECT id FROM tasks WHERE entity_id <> '' AND entity_id = ? AND private = 0 "
+            "AND updated_at >= ? ORDER BY updated_at DESC LIMIT ?",
             (work.entity_id, since, RELATED_MOST),
         )
     ]
@@ -196,8 +206,8 @@ def _recent(conn: Any, work: Work, since: str) -> list[tuple[str, str]]:
 
 
 def choose(conn: Any, work: Work, at: datetime) -> tuple[str, str]:
-    """Who gets the work, and the step that chose them (recent, owner, team, fallback). Refuses (422) when nobody may
-    take it: no active person who may read it, not even the fallback."""
+    """Who gets the work, and the step that chose them (recent, owner, team, fallback). Every candidate is an active
+    person; the work is company-visible (`prepare` refuses private work). Refuses (422) when nobody can sign in."""
     from . import task_engine, task_requirements, waiting_on
     from .store import Problem
 
@@ -212,9 +222,7 @@ def choose(conn: Any, work: Work, at: datetime) -> tuple[str, str]:
         return states[actor]
 
     def may_take(actor: str | None) -> bool:
-        return (
-            bool(actor) and H.is_human(actor) and str(actor).removeprefix("human:") in active and work.may_read(actor)
-        )
+        return bool(actor) and H.is_human(actor) and str(actor).removeprefix("human:") in active
 
     def eligible(actor: str | None, allow_async: bool) -> bool:
         if not actor or not may_take(actor):
@@ -222,11 +230,8 @@ def choose(conn: Any, work: Work, at: datetime) -> tuple[str, str]:
         return state(actor) == ON or (allow_async and state(actor) == ASYNC)
 
     since = _stamp(at - timedelta(hours=RECENT_HOURS))
-    for helper, task_id in _recent(conn, work, since):
-        related = H.task(conn, task_id)
-        if eligible(helper, False) and (
-            not H.task_private(conn, related) or H.task_private_readable(conn, helper, related)
-        ):
+    for helper, _ in _recent(conn, work, since):
+        if eligible(helper, False):
             return helper, "recent"
     owner = _owner(conn, work.entity_id)
     if eligible(owner, not work.urgent):
@@ -257,19 +262,17 @@ def choose(conn: Any, work: Work, at: datetime) -> tuple[str, str]:
     for actor in (pipe.get("manager_id"), pipe.get("owner_id"), waiting_on.company_person(conn)):
         if may_take(actor):
             return str(actor), "fallback"
-    raise Problem(
-        "route",
-        "Nobody can take this routed task: no one on the team who may read it is here. Share it with a person, or "
-        "name its owner",
-        422,
-    )
+    raise Problem("route", "Nobody can take this routed task: no one on the team can sign in. Name its owner", 422)
 
 
-def person_for_create(conn: Any, who: Any, body: Any, parent_id: str | None, actual_bot: str) -> tuple[str, str]:
-    """(person, entity id) for a create with `route: true`, before anything is written (app.task_create and its dry
-    run). Its pipeline's first stage must be the assignee's (the Support pipeline's is). A private task goes only to a
-    person who reads it without owning it: its filer, its readers, readers of its private parent, or its pipeline's
-    manager."""
+PRIVATE_REFUSAL = "Private tasks aren't routed; assign someone who can see it"
+
+
+def prepare(conn: Any, who: Any, body: Any, parent_id: str | None, actual_bot: str) -> Work:
+    """The checks a create with `route: true` makes before anything is written, and what routing then reads. Refused
+    (422): an owner named, a meeting's task, a first stage that is not the assignee's (the Support pipeline's is), and
+    private work (explicitly, under a private parent, in a private pipeline or by the filer's private default):
+    routing never decides who reads private work."""
     from . import task_engine
     from . import task_privacy as _task_privacy
     from .entities import store as ES
@@ -284,31 +287,28 @@ def person_for_create(conn: Any, who: Any, body: Any, parent_id: str | None, act
     refused = first_stage_refusal(conn, pipeline_id) if pipeline_id else ""
     if refused:
         raise Problem("route", refused, 422)
-    entity_id = str(ES.target(conn, who.actor, body.entity)) if body.entity else ""
     parent: Row | None = H.task(conn, parent_id) if parent_id else None
     pipe: Row = (task_engine.pipeline(conn, pipeline_id) or {}) if pipeline_id else {}
     task_privacy: Any = _task_privacy  # untyped module
-    private = bool(task_privacy.new_task(conn, who, body, None, parent, actual_bot)[2] or pipe.get("private"))
-    readers = {str(r) for r in body.readers or ()}
-    filer = {str(body.for_actor or ""), *([str(who.actor)] if H.is_human(who.actor) else [])}
-
-    def may_read(actor: str) -> bool:
-        return (
-            not private
-            or actor in filer
-            or actor == pipe.get("manager_id")
-            or bool(readers & {str(n) for n in H.reader_names(conn, actor)})
-            or bool(parent and H.task_private_readable(conn, actor, parent))
-        )
-
-    work = Work(
+    if getattr(body, "from_private", False):  # older clients' name for `private: false` (app.task_create)
+        body = body.model_copy(update={"private": False, "from_private": False})
+    elif body.private is None and task_privacy.private_execution(conn, who):
+        raise Problem("route", PRIVATE_REFUSAL, 422)  # a run on private work files private work
+    if task_privacy.new_task(conn, who, body, None, parent, actual_bot)[2] or pipe.get("private"):
+        raise Problem("route", PRIVATE_REFUSAL, 422)
+    entity = getattr(body, "entity", None)
+    return Work(
         pipeline_id=pipeline_id,
-        entity_id=entity_id,
+        entity_id=str(ES.target(conn, who.actor, entity)) if entity else "",
         requester=str(who.actor),
         urgent=URGENT in H._labels(body.labels),  # pyright: ignore[reportPrivateUsage]
-        may_read=may_read,
     )
-    return choose(conn, work, now())[0], entity_id
+
+
+def person_for_create(conn: Any, who: Any, body: Any, parent_id: str | None, actual_bot: str) -> tuple[str, str]:
+    """(person, entity id) for a create with `route: true` (`prepare`, then `choose`), before anything is written."""
+    work = prepare(conn, who, body, parent_id, actual_bot)
+    return choose(conn, work, now())[0], work.entity_id
 
 
 def first_stage_refusal(conn: Any, pipeline_id: str) -> str:

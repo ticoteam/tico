@@ -452,9 +452,10 @@ def work_settings(human: Row, zone: str | None = None) -> Row:
     }
 
 
-def working_at(human: Row, at: datetime) -> bool:
-    """Whether `at` is inside the person's effective working hours (`work_settings`)."""
-    return bool(_working(work_settings(human), at, at + timedelta(seconds=1)))
+def working_at(human: Row, at: datetime, zone: str | None = None) -> bool:
+    """Whether `at` is inside the person's effective working hours (`work_settings`), in their saved zone, else
+    `zone`, else UTC."""
+    return bool(_working(work_settings(human, zone), at, at + timedelta(seconds=1)))
 
 
 def _view(c: Any, auth: Any, who: Any, caller: Row, cal: Row) -> Row:

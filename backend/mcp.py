@@ -415,14 +415,17 @@ def task_dry_run(c, auth, who, body):
     from . import routing
 
     if routed:
+        probe = H.CLOSE_PROBE.set(True)  # an unknown entity or parent is a problem here, not a recorded refusal
         try:
             parent_ref = getattr(body, "parent", None)
             actual_bot = who.task_actor or (who.actor if who.role == "bot" else "")
             routed_to = routing.person_for_create(
                 c, who, body, auth.resolve_task(c, who, parent_ref) if parent_ref else None, actual_bot
             )[0]
-        except Problem as refused:
+        except (Problem, H.Refused) as refused:
             problems.append(refused.detail)
+        finally:
+            H.CLOSE_PROBE.reset(probe)
     pipeline_id = getattr(body, "pipeline", None) or ((routing.support_id(c) or "support") if routed else GENERAL)
     pipeline = pipeline_settings.read(c, pipeline_id)
     general = pipeline_id == GENERAL  # the lints shape asks in General, not another pipeline's tasks

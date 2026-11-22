@@ -18,8 +18,9 @@ from backend.entities import store as ES
 from backend.store import H, encode
 from backend.tests.helpers.api import headers, post
 from backend.tests.helpers.company import bot
+from backend.tests.test_jira_intake import _create, jira  # noqa: F401
 
-START = datetime(2030, 1, 7, 9, 0, tzinfo=timezone.utc)  # a Monday, inside Calendar's default hours
+START = datetime(2030, 1, 7, 17, 0, tzinfo=timezone.utc)  # a Monday, 09:00 in the company's zone (Pacific)
 TITLES = itertools.cycle(["Acme", "Globex", "Initech", "Umbrella", "Hooli", "Stark", "Wayne", "Wonka", "Soylent"])
 
 
@@ -153,14 +154,40 @@ def test_help_older_than_two_days_does_not_count(app, time_machine):
     assert _held(app, _route(app, entity=acme))[0] == "human:ben"
 
 
-def test_private_work_goes_only_to_someone_who_may_read_it(app):
+def test_private_work_is_not_routed(app):
     bot(app, "ops")
-    refused = _route(app, token="ops-test", expected=422, private=True)
-    assert "Nobody can take" in json.dumps(refused)
+    refused = _route(app, token="ops-test", expected=422, private=True, readers=["human:ana"])
+    assert "Private tasks aren't routed" in json.dumps(refused)
+    made = post(app, "tasks", {"title": "Contract review for Acme", "owner": "ben", "private": True})
+    parent = (made.get("task") or made)["id"]
+    under = _route(app, expected=422, parent=parent)  # private by its parent
+    assert "Private tasks aren't routed" in json.dumps(under)
     with _db(app) as c:
         assert not c.execute("SELECT 1 FROM pipelines WHERE preset='support'").fetchone()  # nothing was made
-    shared = _route(app, token="ops-test", private=True, readers=["human:ana"])
-    assert _held(app, shared) == ("human:ana", "human:ana")
+
+
+def test_a_stage_rule_that_holds_the_person_out_files_nothing(app):
+    sid = _support(app)
+    with _db(app) as c:
+        now = H.now()
+        c.execute(
+            "INSERT INTO stage_rules (id, name, pipeline_id, stages, event, timer, cond, jev, then_do, then_params, "
+            "reason, status, builtin, created_by, created_at, updated_at) VALUES ('sr_people_out', 'No people', ?, "
+            "'[]', 'enters', '{}', ?, '', 'block', '{}', 'Bots only here', 'active', '', 'keeper', ?, ?)",
+            (sid, json.dumps({"owner_kind": "human"}), now, now),
+        )
+        before = c.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+    refused = _route(app, expected=422)
+    assert "routed work needs a named owner" in json.dumps(refused)
+    with _db(app) as c:
+        assert c.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == before
+
+
+def test_a_routed_create_for_a_filed_item_returns_its_task_before_routing(app, jira):
+    link = f"jira:issue:PROJ-77@{jira.tools['acme.atlassian.net']}"
+    first = _create(app, link)
+    again = post(app, "tasks", {"title": "Fix the export", "route": True, "private": True, "primary_link": link})
+    assert again.get("found") is True and (again.get("task") or again)["id"] == (first.get("task") or first)["id"]
 
 
 def test_the_dry_run_names_the_person_routing_would_pick(app):
@@ -173,13 +200,28 @@ def test_availability_ends_at_read_and_working_hours_decide(app):
         ben = routing.person_row(c, "ben")
         assert routing.effective(ben, START) == "on"
         assert routing.effective(ben, datetime(2030, 1, 6, 0, 0, tzinfo=timezone.utc)) == "async"  # Sunday midnight
-        shown = routing.set_availability(c, "human:ben", "ben", "off", "2030-01-07T10:00:00Z", START)
+        shown = routing.set_availability(c, "human:ben", "ben", "off", "2030-01-07T18:00:00Z", START)
         assert shown["availability"] == "off" and shown["from"] == "set"
         ben = routing.person_row(c, "ben")
     assert routing.effective(ben, START + timedelta(minutes=59)) == "off"
     later = routing.view(ben, START + timedelta(hours=2))
     assert (later["availability"], later["set"], later["from"]) == ("on", None, "working_hours")
     assert ben["availability"] == "off"  # nothing rewrote the row: the end is computed at read
+
+
+def test_a_tag_added_to_a_quiet_task_is_noticed(app, time_machine):
+    _support(app, manager_id="bot:ops")
+    task_id = _route(app, private=False)
+    time_machine.move_to(START + timedelta(minutes=61), tick=False)
+    with _db(app) as c:
+        T.sweep(c)  # quiet an hour, not urgent: judged and passed over
+    assert _wakes(app, "bot:ops") == []
+    assert post(app, f"tasks/{task_id}", {"labels": ["urgent"]})
+    time_machine.move_to(START + timedelta(minutes=65), tick=False)
+    with _db(app) as c:
+        T.sweep(c)
+    wakes = _wakes(app, "bot:ops")
+    assert len(wakes) == 1 and _title(app, task_id) in wakes[0]
 
 
 def _wakes(api, manager):
@@ -218,6 +260,14 @@ def test_urgent_support_waits_wake_the_manager_once_at_once_and_not_after_untagg
     assert len(wakes) == 1
     assert _title(app, first) in wakes[0] and _title(app, second) in wakes[0]
     assert _title(app, untagged) not in wakes[0] and _title(app, calm) not in wakes[0]
+    with _db(app) as c:  # a routine tell waiting for the manager's hour is still waiting
+        c.execute(
+            "INSERT INTO stage_rule_marks(rule_id,task_id,mark,outcome,manager_id,matched_at) "
+            "VALUES('sr_support_waits',?,'routine','pending','bot:ops',?)",
+            (calm, H.now()),
+        )
+        T.sweep(c)
+    assert len(_wakes(app, "bot:ops")) == 1
 
 
 def test_routine_support_work_held_by_a_person_goes_to_the_manager_after_a_quiet_day(app, time_machine):
@@ -238,7 +288,7 @@ def test_routine_support_work_held_by_a_person_goes_to_the_manager_after_a_quiet
 def test_a_person_sets_their_own_availability_and_an_admin_anyones(app):
     mine = app.put(
         "/api/v2/humans/cara/availability",
-        json={"availability": "async", "until": "2030-01-07T12:00:00Z"},
+        json={"availability": "async", "until": "2030-01-07T20:00:00Z"},
         headers=headers("cara-test"),
     )
     assert mine.status_code == 200, mine.text

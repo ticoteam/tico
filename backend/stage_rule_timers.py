@@ -17,7 +17,8 @@ Then:
 
 - `tell_manager`: the pipeline's manager is told. All of one manager's matches go in one wake, "Stage rules: N tasks",
   and a manager gets one such wake an hour at most: what matches meanwhile waits for the next. A match of Urgent
-  support waits (backend/routing.py) wakes its manager in the same pass, once, with whatever else waits for it. A task already listed as
+  support waits (backend/routing.py) wakes its manager in the same pass, once, with only the urgent tasks; it does not
+  use up the manager's hour. A rule with a tag condition marks whether the task had the tag, so adding it is noticed. A task already listed as
   Late on this visit is not listed again.
 - `tell_owner`: the task's owner is told, on the task.
 - `move_back`: the task goes back to `then_params.stage` with no owner, through the wake rules' task move
@@ -142,7 +143,7 @@ def sweep(conn: Any, at: str | None = None) -> dict[str, int]:
                     if manager and _urgent_rule(rule):
                         now.add(manager)
     for manager in sorted(now):
-        if _wake_manager(conn, manager, at):
+        if _wake_manager(conn, manager, at, _mod("stage_rules").URGENT_SUPPORT):
             done["wakes"] += 1
     done["wakes"] += flush(conn, at)
     return done
@@ -195,6 +196,9 @@ def _judge(conn: Any, rule: Row, task: Row, at: str, done: dict[str, int]) -> st
     if not started or not _due(conn, rule, task, started, at):
         return None
     mark = f"{task['visit_id']}@{started}"
+    label = str(rule["cond"].get("label") or "")
+    if label and _mod("stage_rules")._tagged(conn, {"id": task["id"]}, label):
+        mark += f"#{label.lower()}"  # a tag added to a task judged without it is judged again
     if conn.execute(
         "SELECT 1 FROM stage_rule_marks WHERE rule_id=? AND task_id=? AND mark=?", (rule["id"], task["id"], mark)
     ).fetchone():
@@ -340,8 +344,10 @@ def flush(conn: Any, at: str | None = None) -> int:
         ).fetchall()
     ]
     for manager in managers:
+        # An urgent wake (Urgent support waits, `sweep`) does not use up the manager's hour.
         if conn.execute(
-            "SELECT 1 FROM stage_rule_marks WHERE manager_id=? AND told_at > ? LIMIT 1", (manager, since)
+            "SELECT 1 FROM stage_rule_marks WHERE manager_id=? AND told_at > ? AND rule_id <> ? LIMIT 1",
+            (manager, since, _mod("stage_rules").URGENT_SUPPORT),
         ).fetchone():
             continue
         if _wake_manager(conn, manager, at):
@@ -353,15 +359,17 @@ def _named(row: Row) -> str:
     return f"#{row['number']} {row.get('title')}" if row.get("number") else str(row.get("title"))
 
 
-def _wake_manager(conn: Any, manager: str, at: str) -> bool:
-    """One wake, "Stage rules: N tasks", naming every task waiting to be told to this manager, each once. A task that
-    ended, that the manager may no longer read, or that Late listed while it waited is not named."""
+def _wake_manager(conn: Any, manager: str, at: str, only_rule: str = "") -> bool:
+    """One wake, "Stage rules: N tasks", naming every task waiting to be told to this manager (only `only_rule`'s,
+    when given: an urgent wake leaves routine tells for the hour), each once. A task that ended, that the manager may
+    no longer read, or that Late listed while it waited is not named."""
     R, SR = _mod("rules"), _mod("stage_rules")
     pending: list[Any] = conn.execute(
         "SELECT k.rule_id, k.task_id, k.mark, v.late_told_at FROM stage_rule_marks k LEFT JOIN tasks t "
         "ON t.id = k.task_id LEFT JOIN visits v ON v.task_id = k.task_id AND v.left_at IS NULL "
-        "WHERE k.outcome='pending' AND k.manager_id=? ORDER BY k.matched_at, t.number, k.task_id",
-        (manager,),
+        "WHERE k.outcome='pending' AND k.manager_id=? AND (? = '' OR k.rule_id = ?) "
+        "ORDER BY k.matched_at, t.number, k.task_id",
+        (manager, only_rule, only_rule),
     ).fetchall()
     listed: list[tuple[Row, Row]] = []
     outcome: dict[tuple[str, str, str], str] = {}  # each pending row's settling: named, late or dropped
