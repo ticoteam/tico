@@ -746,7 +746,7 @@ def register(
         **api_v2(
             "Tasks",
             "snoozeTask",
-            "Set a task aside in its stage, with a why, until `until` (an ISO-8601 date or date-time) or with none (on ice). With a wait thread, sender, and outbound anchor, a reply can end the snooze before its fallback date",
+            "Set a task aside in its stage, with a why, until `until` (an ISO-8601 date or date-time) or with none (on ice). With a root outside thread, sender, and outbound anchor, a reply can end the snooze before its fallback date",
             TaskResult,
         ),
     )

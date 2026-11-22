@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from backend import never_stuck, outside_intake, stage_rules, task_wakes
+from backend import mailbox_access, never_stuck, outside_intake, stage_rules, task_wakes
 from backend import task_engine as E
 from backend.item_sources import github
 from backend.store import H, digest, encode
@@ -10,6 +10,8 @@ from backend.task_rule_gate import TaskRules
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import post
 from backend.tests.helpers.automation_api import as_bot
+from backend.tests.helpers.email_sending import BOX, CONTACT, autonomous, dispatch, inbox, queue  # noqa: F401
+from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
 
 OWNER = "bot:builder"
 CUSTOMER = "ext:email:customer"
@@ -24,15 +26,15 @@ def c(company, time_machine):
         yield conn
 
 
-def _thread(c, parent=None, participants=(X.ANA, CUSTOMER), connection=CONNECTION, task_id=None):
+def _thread(c, parent=None, participants=(X.ANA, CUSTOMER), connection=CONNECTION):
     tid = H.new_id()
     root, path = (
         c.execute("SELECT root_id,path FROM conversations WHERE id=?", (parent,)).fetchone() if parent else (tid, "/")
     )
     c.execute(
-        "INSERT INTO conversations(id,kind,participants,parent_id,root_id,path,connection_id,task_id) "
-        "VALUES(?,'chat',?,?,?,?,?,?)",
-        (tid, H._dump(participants), parent, root, path + tid + "/", "" if parent else connection, task_id),
+        "INSERT INTO conversations(id,kind,participants,parent_id,root_id,path,connection_id) "
+        "VALUES(?,'chat',?,?,?,?,?)",
+        (tid, H._dump(participants), parent, root, path + tid + "/", "" if parent else connection),
     )
     return tid
 
@@ -66,8 +68,7 @@ def _park(c, task, thread, sent):
     )
 
 
-@pytest.mark.parametrize("subthread", [False, True], ids=["same-thread", "subthread"])
-def test_reply_wakes_the_turn_once_without_spending_a_try(c, subthread):
+def test_reply_wakes_the_turn_once_without_spending_a_try(c):
     task = X.new_task(c, OWNER, "Check with customer")
     tid = task["id"]
     thread = _thread(c)
@@ -76,9 +77,8 @@ def test_reply_wakes_the_turn_once_without_spending_a_try(c, subthread):
     parked = _park(c, task, thread, sent)
     assert not task_wakes.queued(c, tid, OWNER)
 
-    room = _thread(c, thread) if subthread else thread
-    reply = _reply(c, room, notify=True)
-    E.customer_replied(c, reply, H.conversation(c, room))
+    reply = _reply(c, thread, notify=True)
+    E.customer_replied(c, reply, H.conversation(c, thread))
 
     fresh = E.task(c, tid)
     assert fresh["snooze"] is None
@@ -89,17 +89,16 @@ def test_reply_wakes_the_turn_once_without_spending_a_try(c, subthread):
     assert c.execute("SELECT ended_at FROM snoozes WHERE id=?", (parked["snooze"]["id"],)).fetchone()[0]
 
 
-def test_wrong_sender_sibling_thread_and_earlier_reply_leave_the_wait(c):
+def test_wrong_sender_other_thread_and_earlier_reply_leave_the_wait(c):
     task = X.new_task(c, OWNER, "Check with customer")
-    root = _thread(c)
-    thread = _thread(c, root)
+    thread = _thread(c)
     earlier = _reply(c, thread)
     parked = _park(c, task, thread, _message(c, thread, OWNER))
 
     room = H.conversation(c, thread)
     E.customer_replied(c, earlier, room)
     _reply(c, thread, "ext:email:other", notify=True)
-    _reply(c, _thread(c, root), notify=True)
+    _reply(c, _thread(c), notify=True)
     _reply(c, thread, connection="support", notify=True)
     _reply(c, thread, connection="", notify=True)
     internal = _message(c, thread, CUSTOMER, direction=None, notify=True)
@@ -158,23 +157,19 @@ def test_snooze_refuses_a_reply_that_committed_first_and_requires_a_fallback(api
         task = X.new_task(conn, X.ANA, "Follow up", assignee=OWNER)
         thread = _thread(conn)
         sent = _message(conn, thread, OWNER)
-        reply_thread = _thread(conn, thread)
     path = f"tasks/{task['id']}/snooze"
     wait = {"wait_thread_id": thread, "wait_sender": CUSTOMER, "wait_after_seq": sent["seq"]}
     post(api, path, wait, expected=422)
     wait["until"] = H.shift(H.now(), days=1)
     with store.transaction() as conn:
-        _message(conn, reply_thread, CUSTOMER, direction=None)
-        _reply(conn, reply_thread, connection="support")
-        _reply(conn, reply_thread, connection="")
-        deleted = _reply(conn, reply_thread)
+        _message(conn, thread, CUSTOMER, direction=None)
+        _reply(conn, thread, connection="support")
+        _reply(conn, thread, connection="")
+        deleted = _reply(conn, thread)
         conn.execute("UPDATE messages SET deleted_at=? WHERE id=?", (H.now(), deleted["id"]))
-        removed_thread = _thread(conn, thread)
-        _reply(conn, removed_thread)
-        conn.execute("UPDATE conversations SET deleted_at=? WHERE id=?", (H.now(), removed_thread))
     assert post(api, path, wait)["snooze"]["waiting_for_reply"]
     with store.transaction() as conn:
-        _reply(conn, reply_thread, notify=True)
+        _reply(conn, thread, notify=True)
     post(api, path, wait, token="cara-test", expected=404)
     response = post(api, path, wait, expected=409)
     assert response["error"] == "task_customer_replied"
@@ -191,8 +186,8 @@ def test_snooze_requires_outside_provenance_and_hides_unreadable_anchors(api):
         hidden = H.task_create(conn, X.ANA, "Private work", "Look into it", X.ANA, private=True, lint=False)
         thread = _thread(conn, participants=(who, CUSTOMER))
         internal = _thread(conn, participants=(who, CUSTOMER), connection="")
-        secret_room = _thread(conn, thread, task_id=hidden["id"])
-        secret = _message(conn, secret_room, OWNER)
+        secret = _message(conn, thread, OWNER)
+        conn.execute("UPDATE messages SET refs=? WHERE id=?", (H._dump({"task": hidden["id"]}), secret["id"]))
         unrelated = _message(conn, _thread(conn), OWNER)
         internal_post = _message(conn, thread, who, direction=None)
         other_inbox = _message(conn, thread, OWNER, connection="support")
@@ -216,48 +211,108 @@ def test_snooze_requires_outside_provenance_and_hides_unreadable_anchors(api):
     ]
 
 
-def test_intake_commits_the_reply_and_wake_together(api):
-    store = api.app.state.store
+def test_customer_wait_refuses_a_subthread(api):
+    with api.app.state.store.transaction() as conn:
+        task = X.new_task(conn, X.ANA, "Follow up")
+        root = _thread(conn)
+        child = _thread(conn, root)
+        sent = _message(conn, child, X.ANA)
+    refused = post(
+        api,
+        f"tasks/{task['id']}/snooze",
+        {
+            "wait_thread_id": child,
+            "wait_sender": CUSTOMER,
+            "wait_after_seq": sent["seq"],
+            "until": H.shift(H.now(), days=1),
+        },
+        expected=422,
+    )
+    assert refused["error"] == "task_customer_wait_thread"
 
-    def arrive(conn, source_id):
+
+def test_real_gmail_send_anchors_a_wait_that_intake_wakes(inbox, fake_gmail):
+    autonomous(inbox)
+    store = inbox.app.state.store
+
+    def arrive(conn, box, source_id):
         return outside_intake.save_message(
             conn,
-            channel="email",
-            connection_id=CONNECTION,
-            owner_id="ana",
-            source_thread_id="outside-thread",
+            channel="gmail",
+            connection_id=box["id"],
+            owner_id=box["person_id"],
+            source_thread_id="thread",
             source_message_id=source_id,
-            sender="customer",
+            sender=CONTACT,
             title="Question",
             body="Reply",
         )
 
     with store.transaction() as conn:
-        assert arrive(conn, "first")
-        thread = conn.execute("SELECT id FROM conversations WHERE connection_id=?", (CONNECTION,)).fetchone()[0]
+        box = mailbox_access.row_by_address(conn, BOX)
+        other_box = mailbox_access.ensure_mailbox(conn, "cara@acme.example", person_id="cara", created_by="human:cara")
+        assert arrive(conn, box, "inbound")
+        assert arrive(conn, other_box, "inbound")
+        thread = conn.execute("SELECT id FROM conversations WHERE connection_id=?", (box["id"],)).fetchone()[0]
         X.bot(conn, "builder")
-        task = X.new_task(conn, OWNER, "Follow up")
-        _park(conn, task, thread, _message(conn, thread, OWNER))
+        task = X.new_task(conn, X.ANA, "Follow up", assignee=OWNER)
+
+    fake_gmail.send_answer = (200, {"id": "sent-reply", "threadId": "thread"})
+    queued = queue(inbox, reply_to_id="inbound", thread_id="thread")
+    [sent_mime] = dispatch(inbox)
+    assert b"Thanks for the update." in sent_mime
+    assert queue(inbox, reply_to_id="inbound", thread_id="thread")["id"] == queued["id"]
+    assert dispatch(inbox) == []
+    with store.read() as conn:
+        [sent] = conn.execute("SELECT * FROM messages WHERE direction='outbound'").fetchall()
+        assert (sent["conversation_id"], sent["connection_id"], sent["sender_id"]) == (thread, box["id"], X.ANA)
+        assert (sent["channel"], sent["source_message_id"], sent["body"]) == (
+            "gmail",
+            "sent-reply",
+            "Sent an email in Gmail.",
+        )
+        assert tuple(conn.execute("SELECT state,raw FROM email_sends WHERE id=?", (queued["id"],)).fetchone()) == (
+            "sent",
+            "",
+        )
+
+    parked = post(
+        inbox,
+        f"tasks/{task['id']}/snooze",
+        {
+            "wait_thread_id": thread,
+            "wait_sender": f"ext:gmail:{CONTACT}",
+            "wait_provider_reply_id": sent["source_message_id"],
+            "until": H.shift(H.now(), days=1),
+        },
+    )
+    assert parked["snooze"]["waiting_for_reply"]
     with store.transaction() as conn:
+        assert arrive(conn, other_box, "second")
+        assert E.task(conn, task["id"])["snooze"]
         conn.execute("SAVEPOINT reply")
-        assert arrive(conn, "second")
+        assert arrive(conn, box, "second")
         assert E.task(conn, task["id"])["snooze"] is None
         assert task_wakes.queued(conn, task["id"], OWNER)
         conn.execute("ROLLBACK TO reply")
         conn.execute("RELEASE reply")
-        assert not conn.execute("SELECT 1 FROM messages WHERE source_message_id='second'").fetchone()
+        assert not conn.execute(
+            "SELECT 1 FROM messages WHERE connection_id=? AND source_message_id='second'", (box["id"],)
+        ).fetchone()
         assert E.task(conn, task["id"])["snooze"]
         assert not task_wakes.queued(conn, task["id"], OWNER)
-        run = arrive(conn, "second")
-        assert run and arrive(conn, "second") == run
+        run = arrive(conn, box, "second")
+        assert run and arrive(conn, box, "second") == run
     with store.read() as conn:
-        assert conn.execute("SELECT 1 FROM messages WHERE source_message_id='second'").fetchone()
+        assert conn.execute(
+            "SELECT 1 FROM messages WHERE connection_id=? AND source_message_id='second'", (box["id"],)
+        ).fetchone()
         assert E.task(conn, task["id"])["snooze"] is None
         assert task_wakes.queued(conn, task["id"], OWNER)
 
 
 def test_reply_without_a_matching_wait_only_probes_the_wait_index(c):
-    room = _thread(c, _thread(c))
+    room = _thread(c)
     reply = _reply(c, room)
     thread = H.conversation(c, room)
     reads = []

@@ -2301,16 +2301,13 @@ def customer_wait_anchor(
     conn: "sqlite3.Connection", thread: Row, sender: str, seq: int | None, provider_reply_id: str | None
 ) -> Row | None:
     """Find the saved outbound message whose global sequence anchors this wait."""
-    from .assistant_relay import thread_ancestors
     from .store import Problem
 
     H = _h()
-    root_id = thread.get("root_id") or thread["id"]
-    root: Row = thread if root_id == thread["id"] else H.conversation(conn, root_id) or {}
-    connection = root.get("connection_id")
-    if not connection or root.get("deleted_at"):
-        raise Problem("task_customer_wait_thread", "Choose an outside thread on a customer connection", 422)
-    if not sender.startswith("ext:") or sender not in (root.get("participants") or []):
+    connection = thread.get("connection_id")
+    if not connection or thread.get("parent_id") or thread.get("deleted_at"):
+        raise Problem("task_customer_wait_thread", "Choose a root outside thread on a customer connection", 422)
+    if not sender.startswith("ext:") or sender not in (thread.get("participants") or []):
         raise Problem("task_customer_wait_sender", "Choose an outside participant of that thread", 422)
     if provider_reply_id:
         anchor: Row | None = H._one(
@@ -2326,31 +2323,20 @@ def customer_wait_anchor(
         or anchor.get("deleted_at")
         or anchor.get("direction") != "outbound"
         or anchor.get("connection_id") != connection
+        or anchor["conversation_id"] != thread["id"]
     ):
-        return None
-    room: Row = (
-        thread if anchor["conversation_id"] == thread["id"] else H.conversation(conn, anchor["conversation_id"]) or {}
-    )
-    if not room or room.get("deleted_at") or thread["id"] not in thread_ancestors(room):
         return None
     return H.message_view(conn, anchor)
 
 
 def _customer_already_replied(conn: "sqlite3.Connection", thread_id: str, sender: str, after: int) -> bool:
-    H = _h()
-    thread: Row = H.conversation(conn, thread_id) or {}
-    root_id = thread.get("root_id") or thread_id
-    root: Row = thread if root_id == thread_id else H.conversation(conn, root_id) or {}
-    connection = root.get("connection_id")
-    if not connection or root.get("deleted_at") or thread.get("deleted_at"):
-        return False
-    path = thread.get("path") or f"/{thread_id}/"
     return (
         conn.execute(
-            "SELECT 1 FROM conversations c CROSS JOIN messages m ON m.conversation_id=c.id "
-            "WHERE (c.id=? OR (c.root_id=? AND substr(c.path,1,length(?))=?)) AND m.sender_id=? AND m.seq>? "
-            "AND m.direction='inbound' AND m.connection_id=? AND m.deleted_at IS NULL AND c.deleted_at IS NULL LIMIT 1",
-            (thread_id, root_id, path, path, sender, after, connection),
+            "SELECT 1 FROM conversations c JOIN messages m ON m.conversation_id=c.id "
+            "WHERE c.id=? AND c.parent_id IS NULL AND c.deleted_at IS NULL AND c.connection_id<>'' "
+            "AND m.sender_id=? AND m.seq>? AND m.direction='inbound' "
+            "AND m.connection_id=c.connection_id AND m.deleted_at IS NULL LIMIT 1",
+            (thread_id, sender, after),
         ).fetchone()
         is not None
     )
@@ -2358,8 +2344,6 @@ def _customer_already_replied(conn: "sqlite3.Connection", thread_id: str, sender
 
 def customer_replied(conn: "sqlite3.Connection", reply: Row, thread: Row) -> None:
     """Authenticated intake passes its saved message and thread before committing."""
-    from .assistant_relay import thread_ancestors
-
     connection = reply.get("connection_id")
     sender = str(reply.get("sender_id") or "")
     if (
@@ -2368,22 +2352,17 @@ def customer_replied(conn: "sqlite3.Connection", reply: Row, thread: Row) -> Non
         or not sender.startswith("ext:")
         or not reply.get("seq")
         or reply.get("deleted_at")
+        or thread.get("parent_id")
         or thread.get("deleted_at")
+        or connection != thread.get("connection_id")
         or reply.get("conversation_id") != thread["id"]
     ):
         return
-    above = thread_ancestors(thread)
     waiting = conn.execute(
-        f"SELECT task_id, id FROM snoozes WHERE wait_thread_id IN ({','.join('?' for _ in above)}) "
-        "AND ended_at IS NULL AND wait_sender=? AND wait_after_seq<?",
-        (*above, sender, reply["seq"]),
+        "SELECT task_id, id FROM snoozes WHERE wait_thread_id=? AND ended_at IS NULL "
+        "AND wait_sender=? AND wait_after_seq<?",
+        (thread["id"], sender, reply["seq"]),
     ).fetchall()
-    if not waiting:
-        return
-    root_id = thread.get("root_id") or thread["id"]
-    root: Row = thread if root_id == thread["id"] else _h().conversation(conn, root_id) or {}
-    if root.get("deleted_at") or connection != root.get("connection_id"):
-        return
     for task_id, snooze_id in waiting:
         row = task(conn, str(task_id))
         if not row or row["status"] != "open" or _part(row, "snooze").get("id") != snooze_id:

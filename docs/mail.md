@@ -715,6 +715,9 @@ endpoints.
 The audit retains content/body hashes, recipients, attachment names/hashes, actor, policy decision, OK id,
 provider message id and delivery status. `/email/sends/{id}` supplies the authorized preview and `/email/sends/{id}/attachments/{part}` downloads frozen attachment bytes. MIME content is discarded after delivery or cancellation. Gmail sends the frozen raw MIME in a single request, with retries disabled; a source draft may remain in Gmail so a concurrent user edit is never deleted.
 
+A confirmed send in a Gmail thread already saved through intake adds a short receipt to that inbox's outside
+conversation. The receipt identifies the sender and Gmail message ID and can anchor a task waiting for a reply.
+
 Calendar creation is silent and checks inbox-level Never first. Invitations are frozen calendar attachments in the same queued email as their confirmation, so the OK, undo and dispatch checks apply before any invitation is sent. Before freezing, the server reads the new event up to five times, a second apart, for its Meet link; if Google has not made one, the booking fails and no invitation is queued. The frozen invitation and visible body include the join URL. Canceling a queued invitation leaves the silent calendar event in place. The booking's receipt is `succeeded`, `failed` or `unknown` (Google never answered); nothing is retried, so check the calendar before booking again after `unknown`.
 
 **After upgrading.** Nothing keeps an older permission: every send, including older automations and recipient scopes,

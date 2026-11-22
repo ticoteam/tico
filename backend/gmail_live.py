@@ -561,8 +561,8 @@ def _upload_body(raw, meta):
 
 
 def send(mailbox, token, raw, thread_id=""):
-    """Send exactly this frozen MIME once: (state, Gmail message id, detail). Gmail refusing it is `failed` (nothing
-    left); no answer, a server error or an answer without an id is `unknown`, never retried into a second copy."""
+    """Send frozen MIME once and return (state, Gmail message id, detail, Gmail thread id).
+    A provider refusal is failed. Without confirmation, delivery is unknown and is never retried."""
     path = urllib.parse.quote(mailbox, safe="") + "/messages/send"
     if len(raw) <= INLINE_RAW_MAX:
         body = {"raw": raw, **({"threadId": thread_id} if thread_id else {})}
@@ -575,10 +575,10 @@ def send(mailbox, token, raw, thread_id=""):
             UPLOAD + path + "?uploadType=multipart", token=token, body=body, content_type=content_type
         )
     if status in (200, 201) and found.get("id"):
-        return "sent", str(found["id"])[:200], "sent"
+        return "sent", str(found["id"])[:200], "sent", str(found.get("threadId") or thread_id)
     if 400 <= status < 500:
-        return "failed", "", f"Gmail refused the email (HTTP {status}); nothing was sent"
-    return "unknown", "", "Gmail did not confirm delivery"
+        return "failed", "", f"Gmail refused the email (HTTP {status}); nothing was sent", ""
+    return "unknown", "", "Gmail did not confirm delivery", ""
 
 
 def payload(c, mailbox, message_id):

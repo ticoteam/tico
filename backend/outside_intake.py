@@ -79,6 +79,11 @@ def _verified_from(message: SimpleNamespace, sender: str) -> bool:
     return False
 
 
+def conversation_id(channel: str, connection_id: str, source_thread_id: str) -> str:
+    key = json.dumps([channel, connection_id, source_thread_id])
+    return str(uuid.uuid5(uuid.NAMESPACE_OID, key))
+
+
 def eligible_owner(c: sqlite3.Connection, box: dict[str, Any] | None) -> str:
     if not box or box["status"] != "active" or box["kind"] != "personal":
         return ""
@@ -167,8 +172,7 @@ def save_message(
             payload["suggested"] = entities.suggested_sender(c, f"human:{owner_id}", sender)
         return str(queue.queue_intake(c, connection_id, owner_id, ref, payload))
 
-    key = json.dumps([channel, connection_id, source_thread_id])
-    thread_id = str(uuid.uuid5(uuid.NAMESPACE_OID, key))
+    thread_id = conversation_id(channel, connection_id, source_thread_id)
     root = thread_store.thread_row(c, thread_id)
     if root and (root["deleted_at"] or not root["entity_id"]):
         return None  # a replay or later arrival cannot reopen a deleted or erased conversation

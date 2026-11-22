@@ -2173,6 +2173,7 @@ def _write_message(
     check_cap=False,
     decided=None,
     outside=None,
+    outside_direction="inbound",
 ):
     if actor == "bot:librarian":
         body = librarian_text(body)
@@ -2230,7 +2231,7 @@ def _write_message(
         "expires_at": expires_at,
         "wait_s": wait_s,
         "channel": outside[0] if outside else None,
-        "direction": "inbound" if outside else None,
+        "direction": outside_direction if outside else None,
         "connection_id": outside[1] if outside else "",
         "source_message_id": outside[2] if outside else None,
     }

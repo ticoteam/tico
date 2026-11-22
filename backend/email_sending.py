@@ -1585,13 +1585,52 @@ def _outcome(c, row, status, detail=""):
         finance_delivery.outcome(c, dict(row), status, detail)
 
 
-def _finish(c, row, status, message="", detail=""):
-    c.execute(
+def _record_outside_send(c, row, message, thread_id):
+    from . import outside_intake
+
+    box = access.row_by_address(c, row["mailbox"])
+    if not box:
+        return
+    connection = box["id"]
+    thread = H.conversation(c, outside_intake.conversation_id("gmail", connection, thread_id))
+    if (
+        not thread
+        or thread["connection_id"] != connection
+        or thread["parent_id"]
+        or thread["deleted_at"]
+        or not thread["entity_id"]
+    ):
+        return
+    if c.execute(
+        "SELECT 1 FROM messages WHERE connection_id=? AND source_message_id=?", (connection, message)
+    ).fetchone():
+        return
+    H._write_message(
+        c,
+        row["actor"],
+        None,
+        "Sent an email in Gmail.",
+        thread,
+        "say",
+        {},
+        None,
+        None,
+        outside=("gmail", connection, message),
+        outside_direction="outbound",
+    )
+
+
+def _finish(c, row, status, message="", detail="", *, thread_id=""):
+    finished = c.execute(
         # `send_after` ends no earlier than now: a send held past its undo window is still shown once it ended.
         "UPDATE email_sends SET state=?,provider_message_id=?,detail=?,finished_at=?,raw='',"
-        "send_after=max(send_after,?) WHERE id=?",
+        "send_after=max(send_after,?) WHERE id=? AND state<>'sent'",
         (status, message, detail, H.now(), H.now(), row["id"]),
     )
+    if not finished.rowcount:
+        return
+    if status == "sent" and thread_id:
+        _record_outside_send(c, row, message, thread_id)
     moved(c, row["id"])
     H.event(c, row["actor"], "email." + status, row["id"], {"mailbox": row["mailbox"], "provider_message_id": message})
     settle_automation(c, row, status, detail, message)
@@ -1674,11 +1713,11 @@ def drain(store, auth, limit=20, budget=None):
                 break
             if not row:
                 break
-            status, message, detail = gmail_live.send(mailbox, token, row["raw"], row["thread_id"])
+            status, message, detail, thread_id = gmail_live.send(mailbox, token, row["raw"], row["thread_id"])
             with store.transaction(durable=True, notify=True) as c:
                 current = c.execute("SELECT * FROM email_sends WHERE id=?", (row["id"],)).fetchone()
                 if current and current["state"] == "dispatching" and current["lease_id"] == row["lease_id"]:
-                    _finish(c, current, status, message, detail)
+                    _finish(c, current, status, message, detail, thread_id=thread_id)
             sent += status == "sent"
     return sent
 
