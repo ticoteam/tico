@@ -252,7 +252,7 @@ function patchTasks(batch: TaskEvent[]): void {
     if (list !== data) queryClient.setQueryData(key, list);
     if (unsure) refetchSoon(key);
   }
-  // Flow needs the server's claimability, relationship names and page boundaries.
+  // Flow needs the server's claimability and page boundaries (relationship names come from their own query).
   for (const [key, data] of queryClient.getQueriesData<{ pages: TaskList[] }>({ queryKey: ['tasks', 'flow'] })) {
     const params = key[2] as Record<string, unknown>;
     if (!bulk && (!data || batch.some((e) => {

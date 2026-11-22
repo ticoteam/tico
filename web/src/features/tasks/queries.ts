@@ -667,6 +667,8 @@ export type ApprovalItem = FlowItem & { ask: NonNullable<FlowItem['ask']> & { re
 
 const FLOW_PAGE = 100; // The Contacts names read accepts up to 100 IDs.
 
+const NAMES_BACKSTOP_MS = 2 * 60 * 1000;
+
 export function useFlowGroups(items: readonly FlowItem[], pages: readonly (readonly Pick<FlowItem, 'entity_id'>[])[] = [items]) {
   const seen = new Set<string>();
   const batches: string[][] = [];
@@ -686,7 +688,8 @@ export function useFlowGroups(items: readonly FlowItem[], pages: readonly (reado
     queryFn: ({ signal }) => api.post<ContactsNamesResult>('/api/v2/entities/names', { ids }, { signal }),
     staleTime: 0,
     gcTime: 0,
-    refetchInterval: STATUS_BACKSTOP_MS,
+    // Names follow Contacts access live; a name lost while Flow stays open drops within two minutes.
+    refetchInterval: NAMES_BACKSTOP_MS,
     refetchOnWindowFocus: true,
   })) });
   const names = new Map(reads.flatMap((read) => read.isSuccess && !read.isFetching ? Object.entries(read.data.names) : []));
