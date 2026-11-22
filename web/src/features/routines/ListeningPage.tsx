@@ -417,18 +417,19 @@ function WatchSettings({ w, onClose }: { w: Routine; onClose: () => void }) {
   const t = w.trigger;
   const [name, setName] = useState(w.name ?? '');
   const [rules, setRules] = useState<KeepRule[]>((t.rules ?? []).map((r) => ({ do: r.do === 'drop' ? 'drop' : 'keep', tag: r.tag ?? '', text: r.text })));
-  const [endsAt, setEndsAt] = useState<string | null>(w.ends_at ?? null);
+  // the end date in this dialog: sent only once the person changed it here
+  const [endsAt, setEndsAt] = useState<{ value: string | null } | null>(null);
   const [busy, setBusy] = useState(false);
   const ready = !!name.trim() && rules.every((r) => r.text.trim() && (r.do === 'drop' || r.tag.trim()));
   const setRule = (i: number, patch: Partial<KeepRule>) => setRules(rules.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   const save = async () => {
     if (!ready) return;
     setBusy(true);
-    const ok = await press('listening.update', {
+    const ok = await press('listening.edit', {
       watch: w.id,
       name: name.trim(),
       rules: rules.map((r) => (r.do === 'drop' ? { do: 'drop', text: r.text.trim() } : { do: 'keep', tag: r.tag.trim(), text: r.text.trim() })),
-      ...(endsAt !== (w.ends_at ?? null) ? { endsAt } : {}),
+      ...(endsAt ? { endsAt: endsAt.value } : {}),
     });
     setBusy(false);
     if (ok) onClose();
@@ -452,7 +453,7 @@ function WatchSettings({ w, onClose }: { w: Routine; onClose: () => void }) {
       <div className="rr-form">
         <Field label="Name" value={name} onValueChange={setName} />
         <LabelValue label="Ends">
-          <Ends value={endsAt} onChange={setEndsAt} />
+          <Ends value={endsAt ? endsAt.value : w.ends_at} onChange={(value) => setEndsAt({ value })} />
         </LabelValue>
         <fieldset className="rr-list">
           <legend>
